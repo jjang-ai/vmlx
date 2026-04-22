@@ -1,0 +1,32 @@
+{
+  "milestone": "numerical-chat",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": { "passed": true, "command": "swift test", "exitCode": 0, "note": "No tests found — known pre-existing issue (missing test files on disk per AGENTS.md)" },
+    "typecheck": { "passed": true, "command": "swift build --product vmlxctl", "exitCode": 0 },
+    "lint": { "passed": true, "command": "scripts/lint-typed-mlx-scalars.sh", "exitCode": 0 }
+  },
+  "reviewsSummary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Added invariant #8 to architecture.md: bfloat16 upcast before logSoftmax requirement, documenting the 4 upcast locations across the codebase.",
+      "sourceFeature": "numerical-correctness-chat-logprobs"
+    }
+  ],
+  "suggestedGuidanceUpdates": [],
+  "rejectedObservations": [
+    {
+      "observation": "argPartition + negate pattern duplicated between LogprobsCollector.capture() and extractTopK helper",
+      "reason": "already-documented — invariant #3 in architecture.md already covers the argPartition convention; duplication is minor and existed before this feature"
+    }
+  ],
+  "previousRound": null
+}

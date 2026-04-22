@@ -1,0 +1,33 @@
+{
+  "featureId": "numerical-correctness-chat-logprobs",
+  "reviewedAt": "2026-04-22T11:30:00Z",
+  "commitId": "fee2b16",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Two targeted changes: (1) LogprobsCollector.capture() replaces argSort O(V log V) with argPartition O(V) for top-K extraction, consistent with the existing extractTopK helper; (2) flushLogprobs() added before the .toolCall handler in Stream.swift to ensure logprobs for tokens leading up to a tool call are emitted before the tool call chunk. Both changes are correct, well-commented, and follow existing patterns. The bfloat16→float32 upcast was already in place and correctly verified by the worker across all 3 locations (LogprobsCollector.capture, TokenIterator prompt logprobs, Engine.loglikelihood).",
+    "issues": [
+      {
+        "file": "Sources/vMLXLMCommon/Evaluate.swift",
+        "line": 389,
+        "severity": "non_blocking",
+        "description": "Minor duplication: the argPartition + negate + sort pattern is now duplicated between LogprobsCollector.capture() (lines 384-394) and the existing extractTopK static helper (lines 1207-1237). The two implementations differ slightly (capture works on a 1-D flatLogProbs while extractTopK slices a 3-D tensor first). Consider unifying them in a future cleanup, but this is not blocking — the duplication was there before (argSort in capture vs argPartition in extractTopK) and the new code is actually more consistent."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The argPartition + negate pattern for top-K extraction is now used in two places (LogprobsCollector.capture and extractTopK helper). This is a project convention for top-K logprob extraction that could be documented in architecture.md under a 'Performance Patterns' section.",
+      "evidence": "Evaluate.swift:384-394 (capture) and Evaluate.swift:1207-1237 (extractTopK) — both use negated argPartition(kth:n-1) then sort the n candidates descending."
+    },
+    {
+      "area": "knowledge",
+      "observation": "bfloat16 upcast is required before logSoftmax in 3 locations: LogprobsCollector.capture (Evaluate.swift:370-372), sampler (Evaluate.swift:463-464), prompt logprobs in TokenIterator (Evaluate.swift:1146-1148), and Engine.loglikelihood (Engine.swift:1677-1678). This is a known MLX requirement — logSoftmax on bfloat16 can produce NaN/-Inf.",
+      "evidence": "All 4 locations checked. The handoff correctly identifies 3 (sampler is not relevant to logprobs but also upcasts). architecture.md does not mention this pattern."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The feature makes two focused, correct changes: (1) argPartition O(V) replaces argSort O(V log V) in LogprobsCollector.capture() for top-K extraction — the negate-then-partition-then-sort approach correctly extracts the top-N logprobs in descending order, matching the existing extractTopK helper pattern; (2) flushLogprobs() is added before the .toolCall handler to ensure proper interleaving of logprobs and tool-call chunks per VAL-CHAT-002. The bfloat16→float32 upcast was already correctly in place across all relevant code paths. Code compiles cleanly. One non-blocking note about potential future deduplication of the argPartition pattern."
+}
