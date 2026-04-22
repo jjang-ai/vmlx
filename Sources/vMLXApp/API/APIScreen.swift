@@ -33,6 +33,19 @@ struct APIScreen: View {
     @State private var portBinding: Int = 8000
     @State private var lanBinding: Bool = false
 
+    /// O5 §291 — admin-token mirror. Loaded from GlobalSettings.adminToken
+    /// on screen appear; writes flow through `Server.applyAuthCredentials`
+    /// (iter-135 §161) so admin routes accept the new token immediately.
+    @State private var adminTokenField: String = ""
+    @State private var showAdminToken: Bool = false
+
+    /// Admin token used by the RoutesCard copy-curl substitution. Empty
+    /// string means admin routes are open; RouteCatalog.curl skips the
+    /// Authorization header in that case.
+    private var adminTokenForCurl: String? {
+        adminTokenField.isEmpty ? nil : adminTokenField
+    }
+
     enum SnippetFormat: String, CaseIterable, Identifiable {
         case openai, anthropic, ollama, curl, python, typescript
         var id: String { rawValue }
@@ -59,6 +72,11 @@ struct APIScreen: View {
                 sessionsCard
                 keysCard
                 HuggingFaceTokenCard()
+                RoutesCard(
+                    host: connectHost(hostBinding),
+                    port: portBinding,
+                    bearer: keys.first?.value,
+                    admin: adminTokenForCurl)
                 RequestLogPanel()
                 MCPPanel()
                 snippetsCard
@@ -285,6 +303,8 @@ struct APIScreen: View {
                 .foregroundStyle(Theme.Colors.textLow)
             keysCardGenerateRow
             keysCardList
+            Divider().opacity(0.3)
+            adminTokenRow
         }
         .padding(Theme.Spacing.lg)
         .background(card)
@@ -295,6 +315,61 @@ struct APIScreen: View {
             actions: { revokeDialogActions },
             message: { revokeDialogMessage }
         )
+    }
+
+    /// O5 §291 — admin token editor. Admin routes (/admin/*, /v1/cache/*)
+    /// are open when empty; set a token here to gate them. Applies
+    /// immediately — next admin request is checked against the new
+    /// value without a server restart (iter-135 §161 live-swap).
+    private var adminTokenRow: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            HStack(spacing: 6) {
+                Text("ADMIN TOKEN")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textLow)
+                Text("— gates /admin/* and /v1/cache/*")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textLow)
+                Spacer()
+                Button(showAdminToken ? "Hide" : "Reveal") {
+                    showAdminToken.toggle()
+                }
+                .buttonStyle(.borderless)
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.Colors.accent)
+            }
+            HStack(spacing: Theme.Spacing.sm) {
+                Group {
+                    if showAdminToken {
+                        TextField("Leave blank to keep admin routes open",
+                                  text: $adminTokenField)
+                    } else {
+                        SecureField("Leave blank to keep admin routes open",
+                                    text: $adminTokenField)
+                    }
+                }
+                .textFieldStyle(.plain)
+                .font(Theme.Typography.body)
+                .foregroundStyle(Theme.Colors.textHigh)
+                .padding(Theme.Spacing.sm)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.md)
+                        .fill(Theme.Colors.surfaceHi)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Theme.Radius.md)
+                                .stroke(Theme.Colors.border, lineWidth: 1)
+                        )
+                )
+                .onChange(of: adminTokenField) { _, _ in persistAdminToken() }
+                Button("Randomize") {
+                    adminTokenField = "adm-\(UUID().uuidString.lowercased().prefix(24))"
+                    persistAdminToken()
+                }
+                .buttonStyle(.plain)
+                .font(Theme.Typography.bodyHi)
+                .foregroundStyle(Theme.Colors.accent)
+            }
+        }
     }
 
     private var keysCardGenerateRow: some View {
@@ -572,7 +647,27 @@ struct APIScreen: View {
         portBinding = g.defaultPort
         lanBinding = (g.defaultHost == "0.0.0.0")
         bearerRequired = (g.apiKey != nil && !(g.apiKey ?? "").isEmpty)
+        adminTokenField = g.adminToken ?? ""
         keys = APIKeyManager.shared.list()
+    }
+
+    /// O5 §291 — persist admin token + hot-swap the live middleware so
+    /// admin/* routes accept the new token on the next request (no
+    /// restart). Mirrors the apiKey live-swap path at line 475.
+    private func persistAdminToken() {
+        Task {
+            var g = await app.engine.settings.global()
+            let newValue = adminTokenField.isEmpty ? nil : adminTokenField
+            if g.adminToken == newValue { return }
+            g.adminToken = newValue
+            await app.engine.applySettings(g)
+            // Apply to every running HTTPServerActor via the same
+            // AppState hook apiKey revoke uses.
+            for (_, srv) in app.httpServers {
+                await srv.applyAuthCredentials(apiKey: g.apiKey,
+                                               adminToken: newValue)
+            }
+        }
     }
 
     private func persistEndpoint() {
