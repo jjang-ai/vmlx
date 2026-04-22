@@ -380,22 +380,45 @@ public struct LogprobsCollector: LogitProcessor {
             let vocabSize = logProbs.dim(-1)
             let n = min(topLogprobs, vocabSize)
             // Use argPartition (O(V)) instead of argSort (O(V log V))
-            // to extract top-N alternatives. Negate logProbs so the
-            // k largest original values become the k smallest negated
-            // values, landing at positions [0, n) after partition.
-            // Then sort only those n entries descending by logprob.
+            // to extract top-N entries. Negate logProbs so the k largest
+            // original values become the k smallest negated values,
+            // landing at positions [0, n) after partition.
             let flatLogProbs = logProbs.reshaped(-1)
             let negated = -flatLogProbs
             let partIndices = argPartition(negated, kth: n - 1, axis: -1)
             let topIdx = partIndices[0..<n].asArray(Int.self)
-            // Sort the n candidates by logprob descending (O(n log n),
-            // negligible since n << V).
-            let sorted = topIdx.sorted { flatLogProbs[$0].item(Float.self) > flatLogProbs[$1].item(Float.self) }
-            for idx in sorted {
+
+            // Build the top_logprobs array with chosen token first,
+            // then alternatives sorted by descending logprob.
+            // This satisfies the OpenAI contract where top_logprobs[0]
+            // is always the chosen/generated token.
+            var chosenEntry: TopTokenLogprob?
+            var alternatives: [TopTokenLogprob] = []
+            alternatives.reserveCapacity(n)
+            for idx in topIdx {
                 let lpVal = flatLogProbs[idx].item(Float.self)
                 let tokStr = tokenizer.decode(tokenIds: [idx])
-                topAlts.append(TopTokenLogprob(token: tokStr, logprob: lpVal))
+                if idx == sampledToken {
+                    chosenEntry = TopTokenLogprob(token: tokStr, logprob: lpVal)
+                } else {
+                    alternatives.append(TopTokenLogprob(token: tokStr, logprob: lpVal))
+                }
             }
+
+            // If the chosen token wasn't in the top-N partition, create
+            // its entry from the already-extracted logprob.
+            if chosenEntry == nil {
+                chosenEntry = TopTokenLogprob(token: tokenStr, logprob: sampledLogprob)
+            }
+
+            // Sort alternatives descending by logprob, keep at most n-1.
+            alternatives.sort { $0.logprob > $1.logprob }
+            if alternatives.count > n - 1 {
+                alternatives = Array(alternatives.prefix(n - 1))
+            }
+
+            // Chosen token first, then sorted alternatives.
+            topAlts = [chosenEntry!] + alternatives
         }
 
         collectedLogprobs.append(TokenLogprob(
@@ -1165,7 +1188,9 @@ public struct TokenIterator: TokenIteratorProtocol {
                         if promptLogprobsTopK > 0 {
                             topAlts = Self.extractTopK(
                                 logProbs: logProbs, position: i,
-                                topK: promptLogprobsTopK, tokenizer: tokenizer
+                                topK: promptLogprobsTopK,
+                                chosenTokenId: tokenId, chosenLogprob: .nan,
+                                tokenizer: tokenizer
                             )
                         }
                         captured.append(TokenLogprob(
@@ -1182,7 +1207,9 @@ public struct TokenIterator: TokenIteratorProtocol {
                     if promptLogprobsTopK > 0 {
                         topAlts = Self.extractTopK(
                             logProbs: logProbs, position: i,
-                            topK: promptLogprobsTopK, tokenizer: tokenizer
+                            topK: promptLogprobsTopK,
+                            chosenTokenId: tokenId, chosenLogprob: logProb,
+                            tokenizer: tokenizer
                         )
                     }
                     captured.append(TokenLogprob(
@@ -1202,12 +1229,15 @@ public struct TokenIterator: TokenIteratorProtocol {
     }
 
     /// Extract top-K logprobs at a given position using argPartition
-    /// (O(V)) instead of argSort (O(V log V)). Returns entries sorted
-    /// by descending logprob.
+    /// (O(V)) instead of argSort (O(V log V)). Returns entries with
+    /// the chosen token first, followed by alternatives sorted by
+    /// descending logprob. Total entries ≤ topK.
     private static func extractTopK(
         logProbs: MLXArray,
         position: Int,
         topK: Int,
+        chosenTokenId: Int,
+        chosenLogprob: Float,
         tokenizer: Tokenizer
     ) -> [TopTokenLogprob] {
         // Slice out [1, 1, vocab] → reshape to [vocab]
@@ -1222,19 +1252,32 @@ public struct TokenIterator: TokenIteratorProtocol {
         let partitioned = argPartition(negated, kth: k - 1)
         let topIndices = partitioned[0..<k].asArray(Int.self)
 
-        // Sort the k indices by descending logprob
-        let sortedIndices = topIndices.sorted { a, b in
-            posLogProbs[a].item(Float.self) > posLogProbs[b].item(Float.self)
-        }
-
-        var result: [TopTokenLogprob] = []
-        result.reserveCapacity(k)
-        for idx in sortedIndices {
+        // Build entries: chosen token first, then sorted alternatives.
+        var chosenEntry: TopTokenLogprob?
+        var alternatives: [TopTokenLogprob] = []
+        alternatives.reserveCapacity(k)
+        for idx in topIndices {
             let lpVal = posLogProbs[idx].item(Float.self)
             let tokStr = tokenizer.decode(tokenIds: [idx])
-            result.append(TopTokenLogprob(token: tokStr, logprob: lpVal))
+            if idx == chosenTokenId {
+                chosenEntry = TopTokenLogprob(token: tokStr, logprob: lpVal)
+            } else {
+                alternatives.append(TopTokenLogprob(token: tokStr, logprob: lpVal))
+            }
         }
-        return result
+
+        if chosenEntry == nil {
+            let tokStr = tokenizer.decode(tokenIds: [chosenTokenId])
+            chosenEntry = TopTokenLogprob(token: tokStr, logprob: chosenLogprob)
+        }
+
+        // Sort alternatives descending, keep at most k-1.
+        alternatives.sort { $0.logprob > $1.logprob }
+        if alternatives.count > k - 1 {
+            alternatives = Array(alternatives.prefix(k - 1))
+        }
+
+        return [chosenEntry!] + alternatives
     }
 
     mutating func convertToToken(logits: MLXArray) -> MLXArray {

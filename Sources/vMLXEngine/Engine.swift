@@ -1715,7 +1715,9 @@ public actor Engine {
                     if promptTopK > 0 {
                         topAlts = Self._extractTopK(
                             logProbs: logProbs, position: i,
-                            topK: promptTopK, tokenizer: ctx.tokenizer)
+                            topK: promptTopK,
+                            chosenTokenId: tokenId, chosenLogprob: .nan,
+                            tokenizer: ctx.tokenizer)
                     }
                     promptLogprobs.append(TokenLogprob(
                         token: tokenStr, logprob: .nan,
@@ -1729,7 +1731,9 @@ public actor Engine {
                 if promptTopK > 0 {
                     topAlts = Self._extractTopK(
                         logProbs: logProbs, position: i,
-                        topK: promptTopK, tokenizer: ctx.tokenizer)
+                        topK: promptTopK,
+                        chosenTokenId: tokenId, chosenLogprob: logProb,
+                        tokenizer: ctx.tokenizer)
                 }
                 promptLogprobs.append(TokenLogprob(
                     token: tokenStr, logprob: logProb,
@@ -1755,14 +1759,31 @@ public actor Engine {
                 let negated = -lastLogProbs
                 let partitioned = argPartition(negated, kth: k - 1)
                 let topIndices = partitioned[0..<k].asArray(Int.self)
-                let sortedIndices = topIndices.sorted { a, b in
-                    lastLogProbs[a].item(Float.self) > lastLogProbs[b].item(Float.self)
-                }
-                for idx in sortedIndices {
+
+                // Build entries: chosen token first, then sorted alternatives.
+                var chosenEntry: TopTokenLogprob?
+                var alternatives: [TopTokenLogprob] = []
+                alternatives.reserveCapacity(k)
+                for idx in topIndices {
                     let lpVal = lastLogProbs[idx].item(Float.self)
                     let tokStr = ctx.tokenizer.decode(tokenIds: [idx])
-                    genTopAlts.append(TopTokenLogprob(token: tokStr, logprob: lpVal))
+                    if idx == sampledTokenId {
+                        chosenEntry = TopTokenLogprob(token: tokStr, logprob: lpVal)
+                    } else {
+                        alternatives.append(TopTokenLogprob(token: tokStr, logprob: lpVal))
+                    }
                 }
+
+                if chosenEntry == nil {
+                    chosenEntry = TopTokenLogprob(token: sampledTokenStr, logprob: genLogProb)
+                }
+
+                alternatives.sort { $0.logprob > $1.logprob }
+                if alternatives.count > k - 1 {
+                    alternatives = Array(alternatives.prefix(k - 1))
+                }
+
+                genTopAlts = [chosenEntry!] + alternatives
             }
 
             let generatedLogprob = TokenLogprob(
@@ -1789,6 +1810,8 @@ public actor Engine {
         logProbs: MLXArray,
         position: Int,
         topK: Int,
+        chosenTokenId: Int,
+        chosenLogprob: Float,
         tokenizer: vMLXLMCommon.Tokenizer
     ) -> [TopTokenLogprob] {
         let posLogProbs = logProbs[0..., position, 0...].reshaped(-1)
@@ -1799,18 +1822,32 @@ public actor Engine {
         let partitioned = argPartition(negated, kth: k - 1)
         let topIndices = partitioned[0..<k].asArray(Int.self)
 
-        let sortedIndices = topIndices.sorted { a, b in
-            posLogProbs[a].item(Float.self) > posLogProbs[b].item(Float.self)
-        }
-
-        var result: [TopTokenLogprob] = []
-        result.reserveCapacity(k)
-        for idx in sortedIndices {
+        // Build entries: chosen token first, then sorted alternatives.
+        var chosenEntry: TopTokenLogprob?
+        var alternatives: [TopTokenLogprob] = []
+        alternatives.reserveCapacity(k)
+        for idx in topIndices {
             let lpVal = posLogProbs[idx].item(Float.self)
             let tokStr = tokenizer.decode(tokenIds: [idx])
-            result.append(TopTokenLogprob(token: tokStr, logprob: lpVal))
+            if idx == chosenTokenId {
+                chosenEntry = TopTokenLogprob(token: tokStr, logprob: lpVal)
+            } else {
+                alternatives.append(TopTokenLogprob(token: tokStr, logprob: lpVal))
+            }
         }
-        return result
+
+        if chosenEntry == nil {
+            let tokStr = tokenizer.decode(tokenIds: [chosenTokenId])
+            chosenEntry = TopTokenLogprob(token: tokStr, logprob: chosenLogprob)
+        }
+
+        // Sort alternatives descending, keep at most k-1.
+        alternatives.sort { $0.logprob > $1.logprob }
+        if alternatives.count > k - 1 {
+            alternatives = Array(alternatives.prefix(k - 1))
+        }
+
+        return [chosenEntry!] + alternatives
     }
 
     // MARK: - HTTP route entry points (stubs — wired but not implemented)
