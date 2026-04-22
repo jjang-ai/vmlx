@@ -587,6 +587,7 @@ let package = Package(
                 "ChatReasoningRegressionTests.swift",
                 "APISurfaceRegressionTests.swift",
                 "ObservabilityRegressionTests.swift",
+                "ChatSettingsPersistenceTests.swift",
                 "HuggingFaceSearchTests.swift",
                 "IdleTimerTests.swift",
                 "IdleTimerResetOnStreamTests.swift",

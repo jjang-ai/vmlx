@@ -23,6 +23,47 @@
 //
 // Sendability: every struct here is a pure-value `Sendable`, no reference
 // fields. Safe to pass across actor boundaries.
+//
+// I6 §276 — APPLY-TIMING MATRIX. Every settable field falls in exactly one
+// of the three buckets below. UI surfaces (SessionConfigForm,
+// ChatSettingsPopover, TrayItem sliders, APIScreen) tag load-time fields
+// with a "Restart required" badge so users aren't confused when a slider
+// doesn't seem to do anything.
+//
+//   • **Per-request** — read on EVERY Stream.buildGenerateParameters call
+//     via `SettingsStore.resolved(sessionId:chatId:request:)`. Change
+//     applies on the next /v1/chat/completions (or in-app chat) turn
+//     with NO restart. Examples:
+//       temperature, topP, topK, minP, repetitionPenalty, maxTokens,
+//       enableThinking, reasoningEffort, stopSequences, toolChoice, tools,
+//       systemPrompt (per-chat override tier; the GLOBAL default still
+//       needs restart — tracked separately in N5), maxToolIterations,
+//       hideToolStatus, mcpEnabled, workingDirectory, shellEnabled,
+//       builtinToolsEnabled.
+//
+//   • **Per-load** — read by `Engine.LoadOptions(from: ResolvedSettings)`
+//     in `SettingsStore.swift:428` at `load(_:)` entry. Change applies
+//     on the NEXT model load; already-loaded engine keeps the old value
+//     until stop+start. Examples:
+//       kvCacheQuantization, enableTurboQuant, turboQuantBits, enableJANG,
+//       enablePrefixCache, enableSSMCompanion, enableSSMReDerive,
+//       enableDiskCache, diskCacheDir, diskCacheMaxGB, enableMemoryCache,
+//       memoryCachePercent, usePagedCache, pagedCacheBlockSize,
+//       maxCacheBlocks, smelt, flashMoe slot-bank size, idleSoftSec,
+//       idleDeepSec, idleEnabled.
+//
+//   • **Per-session** — server-binding fields read when the HTTP listener
+//     is first started for the session (HTTPServerActor.start). Some have
+//     live-swap paths (API key via §161, auth tokens via AuthTokenBox);
+//     everything else requires stop+start on the session. Examples:
+//       defaultHost, defaultPort, defaultLAN (per-global default),
+//       SessionSettings.host/port/lan, rateLimitPerMinute (live-swap TBD),
+//       allowedOrigins / corsOrigins (live-swap TBD), tlsKeyPath /
+//       tlsCertPath, gatewayEnabled / gatewayPort / gatewayLAN.
+//
+// Any new field added to these structs MUST be placed in the correct
+// bucket and documented with its timing classification in the field's
+// doc comment. Silent-drop fields were removed in I8 §274.
 
 import Foundation
 
