@@ -582,6 +582,7 @@ let package = Package(
                 "TurboQuantRegressionGuardTests.swift",
                 "JangStampAutoActivationTests.swift",
                 "TurboQuantRegressionTests.swift",
+                "ModelLoadingRegressionTests.swift",
                 "HuggingFaceSearchTests.swift",
                 "IdleTimerTests.swift",
                 "IdleTimerResetOnStreamTests.swift",
