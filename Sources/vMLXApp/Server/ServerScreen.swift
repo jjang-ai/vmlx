@@ -8,6 +8,7 @@ import vMLXTheme
 /// `AppState.selectedServerSessionId`.
 struct ServerScreen: View {
     @Environment(AppState.self) private var app
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         @Bindable var s = app
@@ -21,9 +22,29 @@ struct ServerScreen: View {
                 if let selected = currentSelection {
                     SessionView(session: selected)
                 } else {
-                    // No session yet — surface the Model Directories panel
-                    // directly so first-launch users can configure where to
-                    // scan for models BEFORE they hit the empty model picker.
+                    // S2 §308: first-run users see a hero "Load your first
+                    // model" CTA rather than just the directories panel,
+                    // which buries the action one step. The directories
+                    // panel still renders below so users who need custom
+                    // scan paths can set them inline without leaving the
+                    // screen.
+                    EmptyStateView(
+                        systemImage: "square.stack.3d.up",
+                        title: "Load your first model",
+                        caption: "Pick a local model to spin up a session. vMLX will start a HTTP listener, load weights, and be ready for chat + API.",
+                        cta: ("Open Downloads", {
+                            openWindow(id: "downloads")
+                        })
+                    )
+                    .frame(minHeight: 260)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.lg)
+                            .fill(Theme.Colors.surface)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: Theme.Radius.lg)
+                                    .stroke(Theme.Colors.border, lineWidth: 1)
+                            )
+                    )
                     ModelDirectoriesPanel()
                 }
             }
