@@ -105,9 +105,29 @@ public actor LogStore {
         self.ring = Ring(capacity: capacity)
     }
 
+    /// R4 §305 — current global minimum level. `append` early-returns
+    /// for lines below this, so bumping to `.error` silences all
+    /// debug/info/warn lines instantly without re-routing callers.
+    /// Default `.info` — mirrors prior behavior where the middleware's
+    /// own `minLevel=info` was the effective filter.
+    private var _globalMinLevel: Level = .info
+
+    /// Read the current global minimum log level.
+    public func currentMinLevel() -> Level { _globalMinLevel }
+
+    /// Change the current global minimum level. Callers pass the
+    /// desired threshold (e.g. `.debug` to start showing debug-level
+    /// emitters). Takes effect immediately for subsequent `append`.
+    public func setMinLevel(_ level: Level) {
+        _globalMinLevel = level
+    }
+
     // MARK: - Writing
 
     public func append(_ level: Level, category: String, _ message: String) {
+        // R4 §305 — drop below the live global threshold so operators
+        // can quiet / boost verbosity at runtime via /admin/log-level.
+        guard level >= _globalMinLevel else { return }
         let line = Line(level: level, category: category, message: message)
         ring.append(line)
         for (_, sub) in subscribers where line.level >= sub.minLevel {
