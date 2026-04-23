@@ -497,6 +497,8 @@ public enum OllamaRoutes {
             // typical_p got silent no-op. Route through the shared
             // helper so both Ollama-shape routes emit identical logs.
             Self.warnUnsupportedOllamaOptions(options, route: "/api/generate")
+            // §329 Ollama `think` accepts Bool OR "low"/"medium"/"high".
+            let (thinkBool, thinkEffort) = Self.parseOllamaThinkField(obj["think"])
             var chatReq = ChatRequest(
                 model: model,
                 messages: messages,
@@ -509,7 +511,8 @@ public enum OllamaRoutes {
                 repetitionPenalty: options["repeat_penalty"] as? Double,
                 stop: options["stop"] as? [String],
                 seed: options["seed"] as? Int,
-                enableThinking: obj["think"] as? Bool
+                enableThinking: thinkBool,
+                reasoningEffort: thinkEffort
             )
             // iter-110 §188: match /api/chat's post-init freq/presence
             // assignment. Ollama's options panel in Open WebUI exposes
@@ -858,6 +861,12 @@ public enum OllamaRoutes {
 
         let opts = (body["options"] as? [String: Any]) ?? [:]
         warnUnsupportedOllamaOptions(opts, route: "/api/chat")
+        // §329 Ollama `think` accepts Bool OR String ("low"/"medium"/
+        // "high"). Prior to this fix only the Bool form was read, so
+        // Ollama clients setting `think: "medium"` (Ollama 0.12+
+        // reasoning-effort API) got silent-drop — enableThinking
+        // stayed nil and reasoning_effort never wired.
+        let (thinkBool, thinkEffort) = Self.parseOllamaThinkField(body["think"])
         var req = ChatRequest(
             model: (body["model"] as? String) ?? "default",
             messages: messages,
@@ -870,8 +879,8 @@ public enum OllamaRoutes {
             repetitionPenalty: opts["repeat_penalty"] as? Double,
             stop: opts["stop"] as? [String],
             seed: opts["seed"] as? Int,
-            enableThinking: body["think"] as? Bool,
-            reasoningEffort: nil,
+            enableThinking: thinkBool,
+            reasoningEffort: thinkEffort,
             tools: tools,
             toolChoice: nil
         )
@@ -944,6 +953,34 @@ public enum OllamaRoutes {
         let repr = "\(rawKeepAlive)"
         FileHandle.standardError.write(Data(
             "[ollama] \(route): ignored `keep_alive: \(repr)` — vMLX idle-timer / soft-sleep rules are not yet per-request configurable. See iter-112 §190 FIXME.\n".utf8))
+    }
+
+    /// §329 — Parse the Ollama `think` field which accepts both Bool
+    /// (legacy) and String ("low"/"medium"/"high", Ollama 0.12+ reasoning
+    /// effort API). Returns (enableThinking, reasoningEffort).
+    ///
+    /// Shapes:
+    ///   - `true` → (true, nil)              — thinking on, default effort
+    ///   - `false` → (false, nil)            — thinking off
+    ///   - `"low"/"medium"/"high"` → (true, effort) — §223 auto-maps
+    ///     non-"none" effort to enable_thinking=true at the Stream layer,
+    ///     but set it explicitly here for clarity.
+    ///   - `"none"` / `""` → (false, "none")
+    ///   - anything else / missing → (nil, nil)
+    static func parseOllamaThinkField(_ raw: Any?) -> (Bool?, String?) {
+        if let b = raw as? Bool {
+            return (b, nil)
+        }
+        guard let s = raw as? String else { return (nil, nil) }
+        let lower = s.lowercased()
+        switch lower {
+        case "none", "":
+            return (false, "none")
+        case "low", "medium", "high":
+            return (true, lower)
+        default:
+            return (nil, nil)
+        }
     }
 
     static func warnUnsupportedOllamaOptions(
