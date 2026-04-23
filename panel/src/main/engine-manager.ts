@@ -47,25 +47,69 @@ export function getBundledPythonPath(): string | null {
 }
 
 /**
+ * Read the installed vmlx-engine version from filesystem metadata without
+ * spawning Python (which can take >10s on cold boot and time out, falsely
+ * reporting the engine as missing). Looks up the first `vmlx*.dist-info` or
+ * `vmlx_engine*.dist-info` directory next to the package and parses the
+ * `Version:` line from its METADATA file.
+ *
+ * mlxstudio#84: previously we executed `python3 -s -c "import vmlx_engine;
+ * print(vmlx_engine.__version__)"` with a 10 s timeout. MLX + mlx_vlm pull
+ * ~200 MB of shared libs on first import and routinely blow past 10 s on
+ * cold-disk M2. The timeout throws → we wrongly report installed=false and
+ * the renderer shows "Inference engine not found".
+ */
+function getBundledEngineVersionFromFilesystem(): string | null {
+  if (!app.isPackaged) return null
+  try {
+    const sitePackages = join(
+      process.resourcesPath,
+      'bundled-python',
+      'python',
+      'lib',
+      'python3.12',
+      'site-packages',
+    )
+    if (!existsSync(sitePackages)) return null
+
+    // Must also have the actual package dir — dist-info alone is a zombie
+    const pkgDir = join(sitePackages, 'vmlx_engine')
+    if (!existsSync(join(pkgDir, '__init__.py'))) return null
+
+    for (const entry of readdirSync(sitePackages)) {
+      if (!entry.endsWith('.dist-info')) continue
+      if (!entry.startsWith('vmlx-') && !entry.startsWith('vmlx_engine-')) continue
+      const metadata = join(sitePackages, entry, 'METADATA')
+      if (!existsSync(metadata)) continue
+      const content = readFileSync(metadata, 'utf-8')
+      const match = content.match(/^Version:\s*(.+)$/m)
+      if (match && /^\d+\.\d+\.\d+/.test(match[1].trim())) {
+        return match[1].trim()
+      }
+    }
+  } catch (_) {
+    /* fall through */
+  }
+  return null
+}
+
+/**
  * Check if vmlx-engine is installed and where
  */
 export async function checkEngineInstallation(): Promise<EngineInstallation> {
   console.log('[Engine Manager] Checking installation...')
 
-  // 0. Check bundled Python first (standalone distribution)
+  // 0. Check bundled Python first (standalone distribution).
+  // mlxstudio#84: use filesystem metadata instead of spawning Python — the
+  // subprocess import timed out on cold boot and wrongly reported missing.
   const bundledPython = getBundledPythonPath()
   if (bundledPython) {
-    try {
-      const ver = execSync(`"${bundledPython}" -s -c "import vmlx_engine; print(vmlx_engine.__version__)"`, {
-        encoding: 'utf-8',
-        timeout: 10000,
-        env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
-      }).trim()
-      console.log(`[Engine Manager] Found bundled Python with vmlx_engine ${ver}`)
-      return { installed: true, path: bundledPython, version: ver, method: 'bundled', bundled: true }
-    } catch (_) {
-      console.log('[Engine Manager] Bundled Python found but vmlx_engine import failed, falling through to system')
+    const fsVer = getBundledEngineVersionFromFilesystem()
+    if (fsVer) {
+      console.log(`[Engine Manager] Found bundled Python with vmlx_engine ${fsVer} (from dist-info)`)
+      return { installed: true, path: bundledPython, version: fsVer, method: 'bundled', bundled: true }
     }
+    console.log('[Engine Manager] Bundled Python present but vmlx_engine dist-info missing; trying system')
   }
 
   // 1. Check common paths
@@ -410,16 +454,32 @@ export function checkEngineVersion(): { current: string; bundled: string; needsU
   const bundledPython = getBundledPythonPath()
   if (!bundledPython) return { current: '', bundled: '', needsUpdate: false }
 
-  let current = ''
-  try {
-    current = execSync(`"${bundledPython}" -s -c "import vmlx_engine; print(getattr(vmlx_engine, '__version__', 'unknown'))"`, {
-      encoding: 'utf-8',
-      timeout: 10000,
-      env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
-    }).trim()
-  } catch (_) {
-    // Can't import vmlx_engine at all — needs install, not just update
-    current = 'unknown'
+  // mlxstudio#84: prefer filesystem dist-info lookup over spawning Python.
+  // The subprocess import timed out on cold boot (>10 s for MLX + mlx_vlm),
+  // reporting current='unknown', which triggered a pip --force-reinstall
+  // every startup. That reinstall runs *into the signed app bundle* where
+  // site-packages is read-only — it uninstalled vmlx_engine then failed to
+  // write the new copy, leaving the user with a broken install and the
+  // "Inference engine not found" error on next session launch.
+  //
+  // Also: `vmlx_engine.__version__` is hardcoded "1.0.3" inside the package
+  // __init__.py (independent of the wheel Version), so even when the import
+  // did succeed, current !== bundled was always true → reinstall every time.
+  let current = getBundledEngineVersionFromFilesystem() || ''
+  if (!current) {
+    try {
+      current = execFileSync(
+        bundledPython,
+        ['-s', '-c', "import importlib.metadata as m; print(m.version('vmlx'))"],
+        {
+          encoding: 'utf-8',
+          timeout: 30000,
+          env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
+        },
+      ).trim()
+    } catch (_) {
+      current = 'unknown'
+    }
   }
 
   const sourcePath = getBundledSourcePath()
@@ -434,16 +494,34 @@ export function checkEngineVersion(): { current: string; bundled: string; needsU
     return { current, bundled: '', needsUpdate: false }
   }
 
-  // Update if versions differ OR if source content changed (catches code changes without version bump)
-  let needsUpdate = !!(bundled && (current !== bundled))
+  // mlxstudio#84: only trigger update when we know the installed version AND
+  // it differs from source. Previously `current='unknown' !== bundled` was
+  // treated as "needs update" and kicked off a futile pip reinstall into the
+  // read-only signed app bundle, corrupting the existing install.
+  // Hard gate: in the packaged app, pip install into bundled site-packages
+  // ALWAYS fails (signed bundle + extended attrs), so `needsUpdate` must be
+  // false regardless of version comparison. Keep the live version diff for
+  // dev-tree runs where the bundled python is user-writable.
+  let needsUpdate = !!(
+    bundled
+    && current
+    && current !== 'unknown'
+    && current !== bundled
+    && !app.isPackaged
+  )
 
-  if (!needsUpdate && bundled && sourcePath) {
+  // mlxstudio#84: the hash-based content check below is only useful in dev
+  // mode. In the packaged app, site-packages is inside the signed bundle and
+  // a pip --force-reinstall will fail with EPERM — looping the check would
+  // just corrupt the install. Skip it for packaged builds where the bundled
+  // source and installed copy both come from the same DMG.
+  if (!needsUpdate && bundled && sourcePath && !app.isPackaged) {
     // Hash key source files to detect code changes without version bump
     const sourceHash = hashSourceFiles(sourcePath)
     if (sourceHash) {
       try {
         const installed = execFileSync(bundledPython, ['-s', '-c', 'import vmlx_engine; import pathlib; print(pathlib.Path(vmlx_engine.__file__).parent)'], {
-          encoding: 'utf-8', timeout: 10000,
+          encoding: 'utf-8', timeout: 30000,
           env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
         }).trim()
         if (installed && existsSync(installed)) {

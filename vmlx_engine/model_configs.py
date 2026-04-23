@@ -368,6 +368,37 @@ def register_all(registry=None):
         )
     )
 
+    # Kimi K2.6 (kimi_k25) — DeepseekV3 text backbone + MoonViT 27-block
+    # vision tower + PatchMergerMLP projector. Text wrapper class name
+    # in HuggingFace is Kimi_K25ForConditionalGeneration which registers
+    # model_type="kimi_k25"; mlx_vlm's kimi_vl module handles both the
+    # Kimi-VL-A3B (Moonlight) and K2.6 variants (identical vision +
+    # projector architecture), so load routes through the kimi_k25 →
+    # kimi_vl remap installed by jang_tools.load_jangtq_kimi_vlm.
+    #
+    # Tool/reasoning parsers: Kimi K2 uses TS-style tool calls (kimi_k2
+    # parser in mlx_lm.tool_parsers) with <think> reasoning tags shared
+    # with DeepSeek R1. Bundle is 2-bit MXTQ quantized — JANGTQ loader
+    # auto-detects via .tq_packed suffix. Cache type: "kv" at engine
+    # boundary (MLA is internal to DeepseekV3Attention, cache surface
+    # is standard KV).
+    _register(
+        ModelConfig(
+            family_name="kimi_k25",
+            model_types=["kimi_k25"],
+            cache_type="kv",
+            # "kimi" is the canonical parser name in VALID_TOOL_PARSERS
+            # (tests/test_model_config_registry.py); KimiToolParser registers
+            # the aliases ["kimi", "kimi_k2", "moonshot"] at import so this
+            # resolves to the same class as "kimi_k2".
+            tool_parser="kimi",
+            reasoning_parser="deepseek_r1",
+            think_in_template=True,
+            is_mllm=True,
+            priority=20,
+        )
+    )
+
     # ── GLM family (CRITICAL: different reasoning parsers per variant) ──
 
     # GPT-OSS: Harmony <|channel|> protocol reasoning

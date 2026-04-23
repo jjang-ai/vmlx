@@ -1154,6 +1154,40 @@ def _load_jang_v2_vlm(
         )
         return _load_jang_v2(path, jang_cfg, skip_eval=skip_eval, filter_expert_keys=filter_expert_keys)
 
+    # Kimi K2.6 (model_type="kimi_k25") — route through
+    # jang_tools.load_jangtq_kimi_vlm so the kimi_k25 → kimi_vl remap is
+    # installed in mlx_vlm.MODEL_REMAPPING + MODEL_CONFIG before dispatch,
+    # plus apply the VL-specific lower wired_limit (52% vs 70%) and the
+    # vision/language command-buffer split that keeps Metal's ~60 s
+    # watchdog from killing the first VL forward on 191 GB MoE bundles.
+    # See research/KIMI-K2.6-VMLX-INTEGRATION.md §1 for the runtime contract.
+    if config.get("model_type") == "kimi_k25":
+        try:
+            from jang_tools.load_jangtq_kimi_vlm import load_jangtq_kimi_vlm_model
+        except ImportError as _ie:
+            raise RuntimeError(
+                "Kimi K2.6 VLM requires jang_tools.load_jangtq_kimi_vlm but "
+                f"import failed: {_ie}. The bundled Python must include "
+                "jang_tools ≥ the release shipping load_jangtq_kimi_vlm.py."
+            ) from _ie
+        logger.info(
+            "Kimi K2.6 JANGTQ VLM detected — using Kimi-specific fast path "
+            "(jang_tools.load_jangtq_kimi_vlm: kimi_k25 remap + VL wired_limit "
+            "+ vision/language command-buffer split)"
+        )
+        _kimi_model, _kimi_processor = load_jangtq_kimi_vlm_model(path)
+        if not hasattr(_kimi_model, "config"):
+            _kimi_model.config = config
+        try:
+            _lang = getattr(_kimi_model, "language_model", None)
+            if _lang is not None:
+                _patch_turboquant_make_cache(_lang, jang_cfg, config)
+        except Exception as _pe:
+            logger.warning(f"  TurboQuant make_cache patch skipped: {_pe}")
+        elapsed = time.perf_counter() - start
+        logger.info(f"Kimi K2.6 JANGTQ VLM loaded in {elapsed:.1f}s (fast path)")
+        return _kimi_model, _kimi_processor
+
     model_class, _ = get_model_and_args(config=config)
 
     config.setdefault("text_config", {})

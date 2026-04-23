@@ -1,5 +1,5 @@
 {
-  "version": "1.3.35",
-  "url": "https://github.com/jjang-ai/mlxstudio/releases/tag/v1.3.35",
-  "notes": "Gemma 4 JANG expert key fix, smelt mode fixes (Router softmax, VLM call), state machine crash fix, chat defaults (temp 0.7, repeat 1.1), max speed session defaults, Quick Start Guide"
+  "version": "1.3.81",
+  "url": "https://github.com/jjang-ai/mlxstudio/releases/tag/v1.3.81",
+  "notes": "Fixes mlxstudio#83 (QwenCode/Opencode /init Metal OOM on hybrid VL models — auto-chunks prefill when predicted attention buffer exceeds the Metal cap, fixes a language_model attr fallback that silently skipped chunking), mlxstudio#84 (Inference engine not found loop on fresh installs — stops pip-reinstalling into the signed app bundle on every launch, reads version from dist-info instead of spawning Python; plus Cmd+/- zoom now persists across restarts), mlxstudio#31 part 1 (MCP command allowlist expanded: java for JetBrains IDEs, bun/bunx/deno, python3.10–3.13), Kimi K2.6 (kimi_k25) runtime support (mlx_vlm remap + kimi_k2 tool parser + deepseek_v3 L==1 MLA fp32 SDPA fix + Kimi-specific VL chunked prefill at 32 tokens + command-buffer split)."
 }

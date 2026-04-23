@@ -199,6 +199,7 @@ _STANDARD_ARCHITECTURES = {
     # Others
     "hermes",
     "kimi_k2",
+    "kimi_k25",       # Kimi K2.6 — DeepseekV3 backbone + MoonViT vision; loads via jang_tools.load_jangtq_kimi_vlm
     "exaone",
     "exaone3",
     "olmo",

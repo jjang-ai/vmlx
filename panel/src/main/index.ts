@@ -274,6 +274,40 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  // mlxstudio#84 part 2: persist webContents zoom across launches.
+  // Electron's default Cmd+/- (via the menu role `zoomIn`/`zoomOut`) mutates
+  // webContents.zoomFactor in memory only. Without this, every restart
+  // resets zoom to 1.0 and the user has to reapply their font-size choice.
+  //
+  // `zoom-changed` only fires for trackpad/mouse-wheel zoom, not for the
+  // keyboard accelerators — so we restore on load and snapshot on quit
+  // (covers both paths in one shot) and also listen to `zoom-changed` for
+  // real-time persistence when the user pinches to zoom.
+  mainWindow.webContents.on('did-finish-load', () => {
+    try {
+      const saved = db.getSetting('ui_zoom_factor')
+      if (saved) {
+        const z = parseFloat(saved)
+        if (Number.isFinite(z) && z >= 0.25 && z <= 5) {
+          mainWindow?.webContents.setZoomFactor(z)
+        }
+      }
+    } catch (_) { /* non-fatal */ }
+  })
+  mainWindow.webContents.on('zoom-changed', (_, direction) => {
+    try {
+      const wc = mainWindow?.webContents
+      if (!wc) return
+      const current = wc.getZoomFactor()
+      const step = 1.2
+      const next = direction === 'in'
+        ? Math.min(5, current * step)
+        : Math.max(0.25, current / step)
+      wc.setZoomFactor(next)
+      db.setSetting('ui_zoom_factor', String(next))
+    } catch (_) { /* non-fatal */ }
+  })
+
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
@@ -413,6 +447,17 @@ app.on('before-quit', async (e) => {
   if (isQuitting) return
   isQuitting = true
   e.preventDefault()
+  // mlxstudio#84 part 2: snapshot zoom factor now so Cmd+/- changes (which
+  // bypass the `zoom-changed` event) survive across restarts.
+  try {
+    const wc = mainWindow?.webContents
+    if (wc && !wc.isDestroyed()) {
+      const z = wc.getZoomFactor()
+      if (Number.isFinite(z) && z > 0) {
+        db.setSetting('ui_zoom_factor', String(z))
+      }
+    }
+  } catch (_) { /* non-fatal */ }
   try {
     stopMemoryEnforcer()
     destroyTray()

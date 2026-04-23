@@ -32,6 +32,16 @@ class TestMCPCommandValidator:
         validator.validate_command("python", "test-server")
         validator.validate_command("node", "test-server")
 
+    def test_mlxstudio_31_jvm_and_alt_js_runtimes_allowed(self):
+        """mlxstudio#31: java (for JetBrains IDE MCP servers) plus bun/deno
+        (alternative JS runtimes) must be on the allowlist. Without `java`,
+        users cannot connect IntelliJ/WebStorm's built-in MCP server."""
+        validator = MCPCommandValidator(check_path_exists=False)
+        validator.validate_command("java", "jetbrains-mcp")
+        validator.validate_command("bun", "bun-mcp")
+        validator.validate_command("bunx", "bunx-mcp")
+        validator.validate_command("deno", "deno-mcp")
+
     def test_disallowed_command_fails(self):
         """Test that disallowed commands are rejected."""
         validator = MCPCommandValidator(check_path_exists=False)

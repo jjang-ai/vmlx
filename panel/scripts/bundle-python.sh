@@ -55,6 +55,20 @@ echo "==> Installing mlx-audio (STT/TTS)..."
 "$PYTHON" -m pip install \
   librosa sounddevice miniaudio pyloudnorm numba
 
+# Install jang-tools from local source. Kimi K2.6 integration
+# (research/KIMI-K2.6-VMLX-INTEGRATION.md §1) depends on:
+#   jang_tools.load_jangtq, load_jangtq_vlm, load_jangtq_kimi_vlm,
+#   jang_tools.kimi_prune.generate_vl, jang_tools.turboquant.*.
+# Path is fixed-per-dev-machine; override via JANG_TOOLS_DIR env var.
+JANG_TOOLS_DIR="${JANG_TOOLS_DIR:-$HOME/jang/jang-tools}"
+if [ -d "$JANG_TOOLS_DIR" ]; then
+  echo "==> Installing jang-tools from $JANG_TOOLS_DIR..."
+  "$PYTHON" -m pip install --no-deps "$JANG_TOOLS_DIR"
+else
+  echo "==> WARNING: jang-tools source not found at $JANG_TOOLS_DIR"
+  echo "    Kimi K2.6 + JANGTQ bundles will not load in this build."
+fi
+
 # Install our customized vmlx-engine from source (--no-deps since all deps already installed)
 echo "==> Installing vmlx-engine from source..."
 "$PYTHON" -m pip install --no-deps "$REPO_DIR"
@@ -63,6 +77,65 @@ echo "==> Installing vmlx-engine from source..."
 echo "==> Verifying installation..."
 "$PYTHON" -c "import vmlx_engine; print(f'vmlx_engine {vmlx_engine.__version__} imported OK')"
 "$PYTHON" -m vmlx_engine.cli --help > /dev/null 2>&1 && echo "CLI OK"
+
+# Kimi K2.6 build-time patch: fp32 MLA L==1 SDPA fix on bundled mlx_lm.
+# Without this, Kimi decoding at bf16 drifts and produces repetition loops
+# after ~14 tokens. Doc: research/KIMI-K2.6-VMLX-INTEGRATION.md §1.2.
+# Idempotent — checks for the "JANG fast fix" marker before editing.
+echo "==> Applying Kimi K2.6 MLA fp32-SDPA patch to bundled mlx_lm..."
+"$PYTHON" <<'PYPATCH'
+from pathlib import Path
+from importlib.util import find_spec
+
+spec = find_spec("mlx_lm.models.deepseek_v3")
+if spec is None or spec.origin is None:
+    raise SystemExit("mlx_lm.models.deepseek_v3 not importable after bundle install")
+target = Path(spec.origin)
+src = target.read_text()
+if "JANG fast fix" in src and "q_sdpa" in src:
+    print(f"  patch already present in {target}")
+    raise SystemExit(0)
+
+ORIG = """        if L == 1:
+            q_nope = self.embed_q(q_nope)
+            k = v = kv_latent
+        else:
+            k = self.embed_q(kv_latent, transpose=False)
+            v = self.unembed_out(kv_latent)
+
+        output = scaled_dot_product_attention(
+            q_nope, k, v, cache=cache, scale=self.scale, mask=pe_scores
+        )
+        if L == 1:
+            output = self.unembed_out(output)"""
+
+NEW = """        if L == 1:
+            q_nope = self.embed_q(q_nope)
+            k = v = kv_latent
+            # JANG fast fix (2026-04-22): MLA absorb path at bf16 drifts ~7.0
+            # in logit magnitude per token vs prefill; cast just the SDPA
+            # inputs to float32 so attention accumulates in higher precision.
+            q_sdpa = q_nope.astype(mx.float32)
+            k_sdpa = k.astype(mx.float32)
+            v_sdpa = v.astype(mx.float32)
+            mask_sdpa = pe_scores.astype(mx.float32)
+        else:
+            k = self.embed_q(kv_latent, transpose=False)
+            v = self.unembed_out(kv_latent)
+            q_sdpa, k_sdpa, v_sdpa, mask_sdpa = q_nope, k, v, pe_scores
+
+        output = scaled_dot_product_attention(
+            q_sdpa, k_sdpa, v_sdpa, cache=cache, scale=self.scale, mask=mask_sdpa
+        )
+        if L == 1:
+            output = output.astype(kv_latent.dtype)
+            output = self.unembed_out(output)"""
+
+if ORIG not in src:
+    raise SystemExit(f"upstream mlx_lm.models.deepseek_v3 shape changed; review patch block at {target}")
+target.write_text(src.replace(ORIG, NEW))
+print(f"  patched {target}")
+PYPATCH
 
 # Clean up to reduce size
 echo "==> Cleaning up..."

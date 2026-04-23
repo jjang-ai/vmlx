@@ -665,6 +665,228 @@ class TestIssueGuards:
             # Gemma4 must have an architecture hint or explicit flag for tools
             assert g4.tool_parser is not None
 
+    def test_kimi_k26_runtime_contract(self):
+        """Kimi K2.6 (kimi_k25) runtime contract — see
+        research/KIMI-K2.6-VMLX-INTEGRATION.md.
+
+        Pins the five integration points that together make Kimi K2.6
+        JANGTQ_1L load + infer under vMLX:
+
+          1. `mlx_vlm.MODEL_REMAPPING["kimi_k25"] = "kimi_vl"` — dispatch
+             routing; installed from `vmlx_engine/__init__.py`.
+          2. `mlx_vlm.prompt_utils.MODEL_CONFIG["kimi_k25"]` — chat
+             template dispatch; if missing, apply_chat_template raises
+             "Unsupported model" even when the model loaded fine.
+          3. `model_config_registry` kimi_k25 family — is_mllm=True,
+             tool_parser="kimi_k2", reasoning_parser="deepseek_r1" (Kimi
+             K2 emits <think>...</think> tags).
+          4. `jang_tools.load_jangtq_kimi_vlm.load_jangtq_kimi_vlm_model`
+             importable — the Kimi VL loader that applies the VL-specific
+             lower wired_limit + vision/language command-buffer split.
+          5. `mlx_lm.models.deepseek_v3.DeepseekV3Attention` — L==1 MLA
+             absorb path casts q/k/v/mask to fp32 before SDPA (JANG fast
+             fix). Without this, decode produces repetition loops at bf16.
+        """
+        # 1 + 2: mlx_vlm routing
+        import vmlx_engine  # triggers remap installation in __init__
+        from mlx_vlm.utils import MODEL_REMAPPING
+        from mlx_vlm.prompt_utils import MODEL_CONFIG
+        assert MODEL_REMAPPING.get("kimi_k25") == "kimi_vl", (
+            "kimi_k25 → kimi_vl remap missing from mlx_vlm.MODEL_REMAPPING; "
+            "load dispatch will fail."
+        )
+        assert "kimi_k25" in MODEL_CONFIG, (
+            "kimi_k25 missing from mlx_vlm.prompt_utils.MODEL_CONFIG; "
+            "apply_chat_template will raise 'Unsupported model'."
+        )
+
+        # 3: registry family
+        from vmlx_engine.model_config_registry import ModelConfigRegistry
+        from vmlx_engine.model_configs import register_all
+        reg = ModelConfigRegistry()
+        register_all(reg)
+        cfg = next((c for c in reg._configs if c.family_name == "kimi_k25"), None)
+        assert cfg is not None, "kimi_k25 family not registered"
+        assert cfg.is_mllm is True, "kimi_k25 must be is_mllm=True"
+        assert cfg.tool_parser == "kimi"  # KimiToolParser aliases: kimi | kimi_k2 | moonshot
+        assert cfg.reasoning_parser == "deepseek_r1"
+        assert cfg.think_in_template is True
+
+        # 4: Kimi VL loader importable
+        import importlib
+        spec = importlib.util.find_spec("jang_tools.load_jangtq_kimi_vlm")
+        assert spec is not None, (
+            "jang_tools.load_jangtq_kimi_vlm not bundled; Kimi K2.6 VL loads "
+            "will fail. Run: pip install <jang-tools with load_jangtq_kimi_vlm.py>."
+        )
+
+        # 5: DeepseekV3 fp32 MLA L==1 absorb patch
+        import inspect, mlx_lm.models.deepseek_v3 as _dv3
+        src = inspect.getsource(_dv3.DeepseekV3Attention.__call__)
+        assert "JANG fast fix" in src, (
+            "mlx_lm.models.deepseek_v3 MLA L==1 fp32 absorb patch missing. "
+            "Re-apply from research/deepseek_v3_patched.py. Kimi K2.6 decode "
+            "will produce repetition loops without this."
+        )
+        assert "q_sdpa" in src and "mx.float32" in src
+
+        # 6: MLLMBatchGenerator prefill_step_size override for Kimi.
+        import vmlx_engine.mllm_batch_generator as _mbg
+        mbg_source = inspect.getsource(_mbg.MLLMBatchGenerator.__init__)
+        assert "kimi_k25" in mbg_source and "32" in mbg_source, (
+            "MLLMBatchGenerator.__init__ must clamp prefill_step_size to 32 "
+            "when Kimi K2.6 is detected (see "
+            "research/KIMI-K2.6-VMLX-INTEGRATION.md §1 — Metal command buffer "
+            "watchdog fires on one-shot 191 GB MoE prefill)."
+        )
+
+    def test_kimi_k26_cache_stack_mla_compat(self):
+        """Kimi K2.6 × full cache stack — MLA compatibility audit.
+
+        Kimi K2.6 uses DeepseekV3-style MLA (Multi-head Latent Attention)
+        where cache.keys holds kv_latent (B, 1, T, kv_lora_rank+rope) and
+        cache.values holds k_pe (B, 1, T, rope). Different D per tensor,
+        H=1 compressed-latent topology. The full cache stack must handle:
+
+          (a) prefix-cache head-count validation — returns 1 for MLA, not
+              the model config's pre-compression num_key_value_heads (32).
+          (b) prefix-cache model fingerprint — includes kv_lora_rank so
+              MLA blocks can't collide with non-MLA of same layer count.
+          (c) L2 disk (block_disk_store) round-trip — shape-preserving
+              serialization survives bf16→fp16 safetensors cast.
+          (d) scheduler KV-quant auto-disable — MLA compressed latents
+              must NOT be re-quantized (destroys already-compressed repr).
+
+        Mocks the model rather than loading Kimi-K2.6-REAP-30-JANGTQ_1L
+        (191 GB bundle, not available in CI).
+        """
+        import mlx.core as mx
+        from mlx_lm.models.cache import KVCache
+
+        # (a) prefix cache head count on MLA
+        class _KArgs:
+            kv_lora_rank = 512
+            num_key_value_heads = 32
+        class _KModel:
+            args = _KArgs()
+            config = _KArgs()
+            model_type = "kimi_k25"
+
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+        bapc = BlockAwarePrefixCache.__new__(BlockAwarePrefixCache)
+        bapc.model = _KModel()
+        bapc._n_kv_heads = None
+        bapc._allowed_n_kv_heads = None
+        n_kv = bapc._get_n_kv_heads()
+        assert n_kv == 1, (
+            f"Prefix cache head validation broken for MLA (kimi_k25): "
+            f"got n_kv={n_kv}, must be 1 (compressed-latent H=1 topology). "
+            f"Without H=1 the block-hash validator raises and 100% of "
+            f"Kimi cache hits miss."
+        )
+
+        # (b) prefix-cache model-fingerprint includes kv_lora_rank
+        from vmlx_engine import prefix_cache as _pc
+        import inspect as _inspect
+        pc_src = _inspect.getsource(_pc)
+        assert "kv_lora_rank" in pc_src, (
+            "Prefix cache model fingerprint must include kv_lora_rank "
+            "so MLA blocks aren't mistakenly reused on non-MLA models."
+        )
+
+        # (c) L2 disk block-serialize round-trip on MLA tensor shape
+        from vmlx_engine.block_disk_store import (
+            _serialize_block,
+            _deserialize_block,
+        )
+        B, H, T = 1, 1, 16
+        kv_latent = mx.random.normal((B, H, T, 576))  # kv_lora_rank + rope
+        k_pe = mx.random.normal((B, H, T, 64))
+        tensors, dtype, n = _serialize_block([("kv", kv_latent, k_pe)])
+        assert n == 1 and dtype != "unknown"
+        recovered = _deserialize_block(tensors, dtype)
+        assert len(recovered) == 1
+        _, rk, rv = recovered[0]
+        assert rk.shape == kv_latent.shape, (
+            f"Disk-cache MLA round-trip shape drift: "
+            f"{rk.shape} != {kv_latent.shape}"
+        )
+        assert rv.shape == k_pe.shape
+
+        # (d) scheduler auto-disables KV-quant for MLA
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+        s = MLLMScheduler.__new__(MLLMScheduler)
+        s.model = _KModel()
+        s.model.language_model = _KModel()
+        assert s._detect_mla() is True, (
+            "Scheduler._detect_mla() must return True for Kimi K2.6 / MLA. "
+            "If False, KV cache quantization will run and destroy Kimi's "
+            "already-compressed KV latents → garbage decode output."
+        )
+
+    def test_mlxstudio_83_mllm_oom_guard_and_lm_fallback(self):
+        """mlxstudio#83: long-prompt coding-CLI requests (e.g., Opencode `/init`)
+        must not trigger the Metal single-buffer OOM in
+        MLLMBatchGenerator._run_vision_encoding.
+
+        Two regression guards, both fixed in this commit:
+
+        1. The chunked-prefill block used `getattr(self.model,
+           'language_model', None)` which returned None for text-only models
+           routed through the MLLM path (smelt) or for models where the MLLM
+           wrapper doesn't expose `.language_model`. That silently skipped
+           chunking and fell through to the OOM-prone single-shot
+           `self.model(input_ids, **kwargs)`. The fix uses `self.language_model`
+           (already fallback-handled in __init__).
+
+        2. Hybrid SSM models gated chunking behind
+           VMLX_ALLOW_HYBRID_CHUNKED_PREFILL=1 by default. A coding CLI `/init`
+           with ~15 K tokens through a 32-head hybrid VL model allocates
+           heads * seq_len^2 * 2 = ~31 GB attention-score buffer, far above
+           the 9.5 GB Metal single-buffer cap. The fix auto-forces chunked
+           prefill when the predicted buffer size exceeds an 8 GB threshold,
+           overridable via VMLX_DISABLE_HYBRID_AUTO_CHUNK=1.
+        """
+        src = Path("/private/tmp/vmlx-1.3.66-build/vmlx_engine/mllm_batch_generator.py")
+        if not src.is_file():
+            # dev-only path hint; resolve relative to the package file instead.
+            import vmlx_engine.mllm_batch_generator as _m
+            src = Path(_m.__file__)
+        content = src.read_text()
+
+        # Guard 1: no `lm = getattr(self.model, 'language_model', None)`
+        # assignments inside the chunked / fast-path / fallback blocks of
+        # _run_vision_encoding. Those three call sites all got rewritten to
+        # `lm = self.language_model`. (Plain-prose mentions in comments are
+        # allowed — we only guard code assignments, matched line-by-line with
+        # whitespace leading to skip backtick-quoted comment references.)
+        rve_start = content.index("def _run_vision_encoding")
+        rve_end = content.index("def _process_prompts", rve_start)
+        rve_body = content[rve_start:rve_end]
+        import re as _re
+        bad_assignments = _re.findall(
+            r"^\s*lm\s*=\s*getattr\(self\.model,\s*['\"]language_model['\"]",
+            rve_body,
+            flags=_re.MULTILINE,
+        )
+        assert not bad_assignments, (
+            "mlxstudio#83 regression: _run_vision_encoding must use "
+            "self.language_model (fallback-handled in __init__) instead of "
+            "getattr(self.model, 'language_model', None) — the latter returns "
+            "None for text-only MLLM models and skips chunked prefill, "
+            "causing OOM on long coding-CLI prompts. Found %d bad assignment(s)."
+            % len(bad_assignments)
+        )
+
+        # Guard 2: the OOM-prediction auto-chunk override must be present.
+        assert "VMLX_DISABLE_HYBRID_AUTO_CHUNK" in rve_body, (
+            "mlxstudio#83 regression: hybrid-model OOM guard missing. Long "
+            "prompts through hybrid SSM VL models must force chunked prefill "
+            "when predicted attention buffer > Metal single-buffer cap."
+        )
+        assert "_predicted_attn_bytes" in rve_body
+        assert "_OOM_GUARD_BYTES" in rve_body
+
 
 class TestMLLMPrefixCacheFixed:
     """Ralph iter 11 — MLLMPrefixCacheManager FIXED.

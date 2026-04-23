@@ -1027,6 +1027,35 @@ class MLLMBatchGenerator:
         self.completion_batch_size = max(completion_batch_size, prefill_batch_size)
         self.prefill_step_size = prefill_step_size
 
+        # Kimi K2.6 (kimi_k25) — 191 GB 2-bit MoE bundles need a much smaller
+        # prefill chunk to stay under Metal's ~60 s command-buffer watchdog.
+        # See research/KIMI-K2.6-VMLX-INTEGRATION.md §1 — the Python reference
+        # `jang_tools.kimi_prune.generate_vl` uses 32 tokens/chunk; larger
+        # chunks trigger kIOGPUCommandBufferCallbackErrorTimeout on first
+        # VL forward. Detection is from config.model_type at outer OR text
+        # level so both the bundle's Kimi_K25ForConditionalGeneration wrapper
+        # AND an inner text_config variant trip the override.
+        try:
+            _mt_outer = getattr(getattr(model, "config", None), "model_type", None)
+            _mt_inner = getattr(
+                getattr(getattr(model, "config", None), "text_config", None),
+                "model_type",
+                None,
+            )
+            if "kimi_k25" in (_mt_outer, _mt_inner):
+                _kimi_step = 32
+                if self.prefill_step_size > _kimi_step:
+                    logger.info(
+                        "Kimi K2.6 detected — clamping prefill_step_size %d → %d "
+                        "to stay under Metal command-buffer watchdog",
+                        self.prefill_step_size, _kimi_step,
+                    )
+                    self.prefill_step_size = _kimi_step
+        except Exception:
+            # Non-fatal: if detection fails, default chunk size still avoids
+            # the worst of the OOM guard via mlxstudio#83 auto-chunk fallback.
+            pass
+
         # Request management
         self.unprocessed_requests: List[MLLMBatchRequest] = []
         self.active_batch: Optional[MLLMBatch] = None
@@ -1476,22 +1505,54 @@ class MLLMBatchGenerator:
         has_images = request.pixel_values is not None
         seq_len = input_ids.shape[1]
 
-        # vmlx#89: opt-in chunked prefill for hybrid SSM models on text-only
-        # requests. Hybrid models default to one-shot prefill because their
-        # mask computation uses cache-position indexing (fa_idx/ssm_idx) that
-        # was only tested for full-sequence processing. However, long prompts
-        # (>~34K tokens) trigger Metal single-buffer OOM (~72 GB cap per
-        # allocation) because `attention_scores` blows up to
-        # (1, heads, seq_len, seq_len) * 2 bytes — 147 GB at seq_len=48K.
+        # vmlx#89 / mlxstudio#83: opt-in chunked prefill for hybrid SSM models
+        # on text-only requests. Hybrid models default to one-shot prefill
+        # because their mask computation uses cache-position indexing
+        # (fa_idx/ssm_idx) that was only tested for full-sequence processing.
+        # However, long prompts (>~13K tokens at 32-head bfloat16) trigger
+        # Metal single-buffer OOM (~9.5 GB cap per allocation) because
+        # `attention_scores` blows up to (1, heads, seq_len, seq_len) * 2 bytes.
         #
         # Qwen3.5 hybrid (GatedDeltaNet + attention) was verified safe with
         # chunked prefill: both `KVCache.make_mask(N)` and `ArraysCache.state`
-        # carry across chunks correctly. Reporter opt-in so other hybrid
-        # architectures keep default behavior until verified.
+        # carry across chunks correctly. Other hybrid architectures may produce
+        # incorrect output when chunked, so we only override the opt-in default
+        # when one-shot prefill is *guaranteed* to OOM — a wrong answer beats
+        # a hard crash that kills the session.
         _allow_hybrid_chunked = os.environ.get(
             "VMLX_ALLOW_HYBRID_CHUNKED_PREFILL"
         ) in ("1", "true", "True", "yes", "on")
         _hybrid_blocks_chunk = self._is_hybrid and not _allow_hybrid_chunked
+
+        # mlxstudio#83: auto-force chunking when a one-shot forward would
+        # exceed the Metal single-buffer cap (reported by QwenCode/Opencode
+        # `/init` sending full-repo context through a hybrid model).
+        # Estimate attention_scores = heads * seq_len^2 * 2 bytes. Use a
+        # conservative 8 GB threshold (Metal cap is 9.5 GB on 64 GB Macs).
+        _OOM_GUARD_BYTES = 8 * 1024 * 1024 * 1024
+        _n_heads_guess = 32
+        try:
+            cfg = getattr(self.language_model, "config", None) or getattr(self.language_model, "args", None)
+            _h = getattr(cfg, "num_attention_heads", None) if cfg is not None else None
+            if isinstance(_h, int) and _h > 0:
+                _n_heads_guess = _h
+        except Exception:
+            pass
+        _predicted_attn_bytes = _n_heads_guess * seq_len * seq_len * 2
+        if (
+            _hybrid_blocks_chunk
+            and not has_images
+            and _predicted_attn_bytes > _OOM_GUARD_BYTES
+            and os.environ.get("VMLX_DISABLE_HYBRID_AUTO_CHUNK") not in ("1", "true", "True", "yes", "on")
+        ):
+            logger.warning(
+                "Hybrid model seq_len=%d (predicted attention buffer %.1f GB) would exceed "
+                "Metal single-buffer limit. Forcing chunked prefill; output may be incorrect "
+                "for hybrid families other than Qwen3.5. Set "
+                "VMLX_DISABLE_HYBRID_AUTO_CHUNK=1 to raise an error instead.",
+                seq_len, _predicted_attn_bytes / (1024**3),
+            )
+            _hybrid_blocks_chunk = False
 
         # TEXT-ONLY FAST PATH: use language_model directly, skip VLM wrapper.
         # The VLM wrapper adds overhead from vision encoder path and some VLM
@@ -1499,8 +1560,14 @@ class MLLMBatchGenerator:
         # Using language_model directly avoids this entirely.
         # Hybrid SSM models must go through the full model for correct mask
         # computation UNLESS the opt-in env var is set (vmlx#89).
+        # mlxstudio#83: self.language_model already falls back to self.model
+        # when the wrapped model has no `.language_model` attr (see __init__).
+        # Using `getattr(self.model, 'language_model', None)` here returned
+        # None for text-only models routed through MLLM path (e.g., smelt) and
+        # silently skipped chunking, falling through to the OOM-prone
+        # single-shot `self.model(input_ids, **kwargs)` at the bottom.
         if not has_images and not _hybrid_blocks_chunk:
-            lm = getattr(self.model, 'language_model', None)
+            lm = self.language_model
             if lm is not None and cache is not None:
                 if seq_len <= self.prefill_step_size * 2:
                     # Short text: single-shot through language_model
@@ -1517,7 +1584,7 @@ class MLLMBatchGenerator:
         # have been verified cache-aware (Qwen3.5 GatedDeltaNet + attention).
         if not has_images and seq_len > self.prefill_step_size * 2 and not _hybrid_blocks_chunk:
             # Use language_model directly for chunked text prefill
-            lm = getattr(self.model, 'language_model', None)
+            lm = self.language_model
             if lm is not None and cache is not None:
                 processed = 0
                 chunk_num = 0
@@ -1563,9 +1630,12 @@ class MLLMBatchGenerator:
         # For text-only requests, try language_model first to avoid passing
         # pixel_values to models that may not accept it (e.g. smelt-loaded VLM
         # where the VLM wrapper's __call__ signature differs from standard mlx-vlm).
+        # mlxstudio#83: use self.language_model (fallback-handled in __init__)
+        # instead of getattr(self.model, 'language_model', None) which returns
+        # None and silently falls through to the OOM-prone full-model forward.
         if not has_images:
-            lm = getattr(self.model, 'language_model', None)
-            if lm is not None:
+            lm = self.language_model
+            if lm is not None and lm is not self.model:
                 lm_kwargs = {}
                 if cache is not None:
                     lm_kwargs["cache"] = cache

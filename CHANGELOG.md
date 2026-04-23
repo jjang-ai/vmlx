@@ -2,6 +2,44 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.3.81] - 2026-04-22
+
+### Fixed
+- **mlxstudio#83 — QwenCode/Opencode `/init` Metal OOM** (`vmlx_engine/mllm_batch_generator.py`):
+  - `_run_vision_encoding` in all three call sites (fast path, chunked path, fallback) used `getattr(self.model, 'language_model', None)` which returned `None` for text-only models routed through the MLLM path (smelt-loaded text models, MLLM wrappers without a `.language_model` attr). Chunking silently skipped → fell through to single-shot `self.model(input_ids, **kwargs)` → a ~22 GB attention-score buffer exceeded the ~9.5 GB Metal single-buffer cap → hard crash. Fixed: use `self.language_model` (already fallback-handled in `__init__`).
+  - Hybrid SSM models (Qwen3.5 hybrid, Qwen3.6-27B with linear+full attention layers, Nemotron-Cascade, MiniMax) gated chunked prefill behind `VMLX_ALLOW_HYBRID_CHUNKED_PREFILL=1` by default. A coding CLI `/init` with ~15K tokens through a 24–32 head hybrid model allocates far more than the Metal cap. Fixed: predict `heads × seq_len² × 2 bytes`; if > 8 GB, auto-force chunked prefill with a warning. New escape hatch `VMLX_DISABLE_HYBRID_AUTO_CHUNK=1` raises an error instead of chunking (for users who prefer the hard fail to potentially-wrong output on unverified hybrid families; Qwen3.5 hybrid is verified safe).
+- **mlxstudio#84 — "Inference engine not found" loop on fresh installs** (`panel/src/main/engine-manager.ts`):
+  - `vmlx_engine.__version__` is hardcoded `"1.0.3"` inside `__init__.py` independently of the wheel metadata. The startup check compared it against `pyproject.toml version="1.3.80"`, always mismatched, and triggered `pip install --force-reinstall --no-deps` into the bundled Python on **every launch**. Inside the signed/notarized app bundle, `site-packages/` has the `@` extended-attributes flag + code-sign protection — pip uninstall succeeds but the reinstall fails with EPERM, leaving the user with **no** `vmlx_engine` module. Next session launch showed "Inference engine not found".
+  - The cold-boot `python3 -c "import vmlx_engine"` subprocess also routinely timed out at 10 s (MLX + mlx_vlm pull ~200 MB of shared libs), falsely reporting the engine as missing.
+  - Fixed: new `getBundledEngineVersionFromFilesystem()` reads `Version:` directly from `site-packages/vmlx-*.dist-info/METADATA` — zero subprocess, zero timeout. `checkEngineInstallation()` and `checkEngineVersion()` both use it as the primary source. `needsUpdate` only fires when the installed version is known and actually differs. Hash-based source-content update check skipped in packaged builds (futile write into signed bundle). Fallback subprocess timeout bumped 10 s → 30 s for cold-disk first-launch. `execFileSync` replaces `execSync` (no shell interpolation).
+- **mlxstudio#84 part 2 — Cmd+/- zoom resets on restart** (`panel/src/main/index.ts`):
+  - Electron's default Cmd+/- menu binding mutates `webContents.zoomFactor` in memory only; without persistence it resets to 1.0 every launch. Added: restore saved `ui_zoom_factor` on `did-finish-load`; persist on `zoom-changed` (trackpad/wheel) and on `before-quit` (catches keyboard-accelerator changes which bypass `zoom-changed`). Stored in the existing `settings` k/v table.
+
+### Added
+- **mlxstudio#31 part 1 — MCP command allowlist expanded** (`vmlx_engine/mcp/security.py`):
+  - Added `java` for JetBrains IDE MCP servers (IntelliJ/WebStorm ship a `java -classpath ... McpStdioRunnerKt` MCP server). Without this, users could not connect JetBrains' built-in MCP to vMLX at all.
+  - Added `bun`, `bunx`, `deno` (alternative JS runtimes used by newer MCP servers).
+  - Added `python3.10` through `python3.13` (explicit version-pinned entries for MCP configs that hardcode a Python minor version).
+  - HTTP/SSE transport is already supported at the engine level (`vmlx_engine/mcp/client.py::MCPTransport.SSE`, `MCPServerConfig.url`) — remaining work is a UI for url-based server configs (v2).
+- **Kimi K2.6 runtime support** — full `research/KIMI-K2.6-VMLX-INTEGRATION.md` §1 compliance:
+  - **Registry** (`vmlx_engine/model_configs.py`): `kimi_k25` family with `is_mllm=True`, `tool_parser="kimi"` (alias of `kimi_k2`/`moonshot`), `reasoning_parser="deepseek_r1"`, `think_in_template=True`, `cache_type="kv"`.
+  - **mlx_vlm dispatch** (`vmlx_engine/__init__.py`): `MODEL_REMAPPING["kimi_k25"] → "kimi_vl"` + `prompt_utils.MODEL_CONFIG["kimi_k25"]` installed at import time, so `apply_chat_template` + `get_model_and_args` route Kimi K2.6 through the existing `kimi_vl` module (same MoonViT-27-block + PatchMergerMLP architecture as Moonlight).
+  - **Loader routing** (`vmlx_engine/utils/jang_loader.py::_load_jang_v2_vlm`): detects `model_type=="kimi_k25"` and delegates to `jang_tools.load_jangtq_kimi_vlm.load_jangtq_kimi_vlm_model`, which applies the Kimi-specific **lower VL wired_limit** (52% vs 70%) and the **vision/language command-buffer split** that prevents Metal's ~60 s watchdog from killing the first VL forward on 191 GB 2-bit MoE bundles.
+  - **VL prefill chunking** (`vmlx_engine/mllm_batch_generator.py::__init__`): clamps `prefill_step_size` to **32** when Kimi K2.6 is detected — mirrors `jang_tools.kimi_prune.generate_vl`'s chunked prefill; the default 1024/2048 chunk would blow the Metal command-buffer watchdog.
+  - **MLA fp32 L==1 SDPA patch** (bundled `mlx_lm/models/deepseek_v3.py`): L==1 MLA-absorb path casts q/k/v/mask to `float32` before `scaled_dot_product_attention` and back to bf16 afterwards. Mirrors the fix already applied for GLM-5.1 / DSV3.2; without it, Kimi K2.6 decode hits a ~7.0 logit-magnitude drift per token and produces repetition loops after ~14 tokens on quantized bundles. Applied at build time via `panel/scripts/bundle-python.sh` (idempotent — checks for the "JANG fast fix" marker before editing).
+  - **Doc-prescribed module layout** (§1.1–1.4): new `vmlx_engine/loaders/{load_jangtq,load_jangtq_vlm,load_jangtq_kimi_vlm}.py`, `vmlx_engine/vlm/generate_vl.py`, and `vmlx_engine/runtime_patches/kimi_k25_mla.py` — all thin re-exports of the `jang_tools` production entry points. This makes the doc's code examples work verbatim without needing `jang_tools` in a user's own Python env. The `kimi_k25_mla` installer refuses to edit files under a `vmlx/` path, mirroring `jang_tools.kimi_prune.runtime_patch`'s refusal so a stray dev-run never corrupts the shipped bundle.
+  - **jang_tools bundling now reproducible** (`panel/scripts/bundle-python.sh`): jang-tools installed from `$HOME/jang/jang-tools` (override via `JANG_TOOLS_DIR`), so a fresh `bundle-python.sh` rebuild picks up `load_jangtq_kimi_vlm.py` + `kimi_prune/` automatically instead of relying on manual copies.
+  - **Bundled-python release gate** (`panel/scripts/verify-bundled-python.sh`): 7 new import checks pin the Kimi surface + 2 runtime asserts pin (a) the bundled `deepseek_v3.py` actually has the fp32 MLA patch and (b) the `kimi_k25` remap is live in `mlx_vlm` at import time. Any future rebuild that drops one of these fails the build before DMG packaging.
+  - Regression guards: `TestIssueGuards::test_kimi_k26_runtime_contract` (6-point integration pin) + `TestIssueGuards::test_kimi_k26_cache_stack_mla_compat` (prefix-cache H=1 MLA detection + L2 disk round-trip + scheduler MLA auto-quant-off).
+
+### Regression guards
+- `tests/test_vl_video_regression.py::TestIssueGuards::test_mlxstudio_83_mllm_oom_guard_and_lm_fallback` — pins both the `self.language_model` consistency fix and the `_OOM_GUARD_BYTES` / `VMLX_DISABLE_HYBRID_AUTO_CHUNK` auto-chunk override.
+- `tests/test_mcp_security.py::TestMCPCommandValidator::test_mlxstudio_31_jvm_and_alt_js_runtimes_allowed` — pins `java`/`bun`/`bunx`/`deno` on the allowlist.
+
+### Tests
+- 450 VL regression tests + 57 MCP security tests + 57 MLLM tests + 116 Ollama/Anthropic wire-format tests + 637 cache/prefix/paged/hybrid/ssm tests: all green.
+- TypeScript `tsc --noEmit` clean on `panel/` main process.
+
 ## [1.3.62] - 2026-04-18
 
 ### Fixed

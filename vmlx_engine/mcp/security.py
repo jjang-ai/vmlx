@@ -22,17 +22,29 @@ logger = logging.getLogger(__name__)
 # Whitelist of allowed MCP server commands
 # These are well-known, trusted MCP server executables
 ALLOWED_COMMANDS: Set[str] = {
-    # Node.js package runners (for official MCP servers)
+    # Node.js + JS/TS package runners (for official MCP servers)
     "npx",
     "npm",
     "node",
+    "bun",
+    "bunx",
+    "deno",
     # Python package runners
     "uvx",
     "uv",
     "python",
     "python3",
+    "python3.10",
+    "python3.11",
+    "python3.12",
+    "python3.13",
     "pip",
     "pipx",
+    # JVM runtime — mlxstudio#31: JetBrains IDEs ship an MCP server that's
+    # invoked as `java -classpath ... com.intellij.mcpserver.stdio.McpStdioRunnerKt`.
+    # Without `java` on the allowlist, users cannot connect IntelliJ/WebStorm
+    # built-in MCP servers to vMLX.
+    "java",
     # Official MCP servers (when installed globally)
     "mcp-server-filesystem",
     "mcp-server-sqlite",

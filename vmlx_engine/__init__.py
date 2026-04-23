@@ -83,6 +83,26 @@ try:
 except Exception:
     pass
 
+# Kimi K2.6 (`kimi_k25` model_type) reuses the `kimi_vl` module in mlx_vlm
+# for vision + multi-modal projector. Install the remap at import time
+# (setdefault = idempotent) so apply_chat_template + get_model_and_args
+# route kimi_k25 through kimi_vl without needing jang_tools to be
+# imported first. See research/KIMI-K2.6-VMLX-INTEGRATION.md §1.
+try:
+    from mlx_vlm import utils as _mlx_vlm_utils
+    _mapping = getattr(_mlx_vlm_utils, "MODEL_REMAPPING", None)
+    if _mapping is not None:
+        _mapping.setdefault("kimi_k25", "kimi_vl")
+except Exception:
+    pass
+
+try:
+    from mlx_vlm.prompt_utils import MODEL_CONFIG as _KV_MODEL_CONFIG
+    if "kimi_k25" not in _KV_MODEL_CONFIG and "kimi_vl" in _KV_MODEL_CONFIG:
+        _KV_MODEL_CONFIG["kimi_k25"] = _KV_MODEL_CONFIG["kimi_vl"]
+except Exception:
+    pass
+
 # All imports are lazy to allow usage on non-Apple Silicon platforms
 # (e.g., CI running on Linux) where mlx_lm is not available.
 
