@@ -638,6 +638,9 @@ let package = Package(
                 // §346 T6 — JANGTQ config mxtq_bits accepts both flat Int
                 // and per-role dict. Qwen3.6-JANGTQ4 garbage root cause.
                 "JANGTQConfigBitsDecodingTests.swift",
+                // §347 lm-eval Phase 1 — tokenizer endpoints (/v1/tokenize,
+                // /v1/detokenize, /v1/tokenizer_info + unprefixed aliases).
+                "TokenizerRoutesRegistrationTests.swift",
                 // Metal-dependent tests excluded — `swift test` can't load
                 // the default.metallib from the SwiftPM bundle path;
                 // JangDFlashDrafter, JangDFlashSpecDec, VisionEmbeddingCache,

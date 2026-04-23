@@ -1549,6 +1549,124 @@ public enum OpenAIRoutes {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
         }
+
+        // MARK: - §347 — Tokenizer endpoints (lm-evaluation-harness Phase 1)
+        //
+        // Three routes exposing the loaded tokenizer over HTTP so lm-eval
+        // callers can run `tokenizer_backend="remote"` without bundling
+        // a local HuggingFace checkout. Same shape the `lm_eval`
+        // RemoteTokenizer adapter calls.
+        //
+        // Also registers the unprefixed aliases `/tokenizer_info`,
+        // `/tokenize`, `/detokenize` because lm-eval strips the
+        // `/v1/completions` suffix from `base_url` before hitting these
+        // endpoints — a call to `base_url=".../v1/completions"` issues
+        // tokenize requests at `.../tokenize`, not `.../v1/tokenize`.
+        //
+        // Tokenizer protocol gaps that leak into the response shape:
+        //   - `padToken` is not on the Tokenizer protocol → we stand in
+        //     with `unknownToken` (matches transformers' fallback convention).
+        //   - `chatTemplate` raw-string accessor isn't available — the
+        //     template is internal to the loader and only invoked via
+        //     `applyChatTemplate`. We emit `null` and clients fall back
+        //     to a client-side bundled template.
+
+        @Sendable
+        func tokenizerInfoResponse() async -> Response {
+            guard let container = await engine.loaded else {
+                return Self.errorJSON(.serviceUnavailable,
+                    "no model loaded — load a model first via POST /v1/sessions or vmlxctl serve")
+            }
+            let info: [String: Any] = await container.perform { ctx in
+                let tok = ctx.tokenizer
+                var out: [String: Any] = [
+                    "eos_token": tok.eosToken as Any,
+                    "bos_token": tok.bosToken as Any,
+                    // Tokenizer protocol lacks padToken; unknownToken is
+                    // transformers' canonical fallback and matches what
+                    // `lm_eval.models.local_completions.RemoteTokenizer`
+                    // accepts.
+                    "pad_token": tok.unknownToken as Any,
+                    "chat_template": NSNull(),
+                ]
+                // Convenience: token IDs so callers can assert on eos/bos
+                // without a second /v1/tokenize round-trip.
+                out["eos_token_id"] = tok.eosTokenId as Any
+                out["unknown_token_id"] = tok.unknownTokenId as Any
+                return out
+            }
+            return Self.json(info)
+        }
+
+        @Sendable
+        func tokenizeHandler(_ req: Request) async throws -> Response {
+            var req = req
+            let body = try await req.collectBody(upTo: 32 * 1024 * 1024)
+            let data = Data(buffer: body)
+            guard let obj = try? JSONSerialization.jsonObject(with: data)
+                as? [String: Any]
+            else {
+                return Self.errorJSON(.badRequest, "invalid JSON body")
+            }
+            guard let text = obj["text"] as? String else {
+                return Self.errorJSON(.badRequest,
+                    "missing required field: \"text\" (string)")
+            }
+            let addSpecial = (obj["add_special_tokens"] as? Bool) ?? true
+            guard let container = await engine.loaded else {
+                return Self.errorJSON(.serviceUnavailable, "no model loaded")
+            }
+            let tokens: [Int] = await container.perform { ctx in
+                ctx.tokenizer.encode(text: text, addSpecialTokens: addSpecial)
+            }
+            return Self.json([
+                "tokens": tokens,
+                "count": tokens.count,
+            ])
+        }
+
+        @Sendable
+        func detokenizeHandler(_ req: Request) async throws -> Response {
+            var req = req
+            let body = try await req.collectBody(upTo: 32 * 1024 * 1024)
+            let data = Data(buffer: body)
+            guard let obj = try? JSONSerialization.jsonObject(with: data)
+                as? [String: Any]
+            else {
+                return Self.errorJSON(.badRequest, "invalid JSON body")
+            }
+            guard let tokens = obj["tokens"] as? [Int] else {
+                return Self.errorJSON(.badRequest,
+                    "missing required field: \"tokens\" (array of integers)")
+            }
+            let skipSpecial = (obj["skip_special_tokens"] as? Bool) ?? false
+            guard let container = await engine.loaded else {
+                return Self.errorJSON(.serviceUnavailable, "no model loaded")
+            }
+            let text: String = await container.perform { ctx in
+                ctx.tokenizer.decode(tokenIds: tokens, skipSpecialTokens: skipSpecial)
+            }
+            return Self.json(["text": text])
+        }
+
+        router.get("/v1/tokenizer_info") { _, _ -> Response in
+            await tokenizerInfoResponse()
+        }
+        router.get("/tokenizer_info") { _, _ -> Response in
+            await tokenizerInfoResponse()
+        }
+        router.post("/v1/tokenize") { req, _ -> Response in
+            try await tokenizeHandler(req)
+        }
+        router.post("/tokenize") { req, _ -> Response in
+            try await tokenizeHandler(req)
+        }
+        router.post("/v1/detokenize") { req, _ -> Response in
+            try await detokenizeHandler(req)
+        }
+        router.post("/detokenize") { req, _ -> Response in
+            try await detokenizeHandler(req)
+        }
     }
 
     // MARK: - Helpers
