@@ -213,9 +213,11 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     public var enableDiskCache: Bool = true       // cli.py --enable-disk-cache / --disable-disk-cache
     public var diskCacheDir: String = ""          // cli.py --disk-cache-dir
     public var diskCacheMaxGB: Double = 10.0      // cli.py --disk-cache-max-gb
-    public var enableBlockDiskCache: Bool = false // cli.py --enable-block-disk-cache
-    public var blockDiskCacheDir: String = ""     // cli.py --block-disk-cache-dir
-    public var blockDiskCacheMaxGB: Double = 10.0 // cli.py --block-disk-cache-max-gb
+    // §354 — block-disk-cache fields deleted as dead zombie state.
+    // Had never been wired to any Swift consumer; UI surface labeled
+    // "coming soon". L2 disk cache above IS the disk cache on Swift.
+    // Python-parity import path no longer needs these mirrors since
+    // settings-store round-trip tests only verify wired fields.
 
     // L1.5 byte-budgeted memory cache (MemoryAwarePrefixCache). Sits
     // between the paged L1 and disk L2, storing whole-prompt KV payloads
@@ -490,7 +492,7 @@ public struct SessionSettings: Codable, Sendable, Equatable {
     public var enableJANG: Bool? = nil
     public var enablePrefixCache: Bool? = nil
     public var enableSSMCompanion: Bool? = nil
-    public var enableBlockDiskCache: Bool? = nil
+    // §354 — removed: enableBlockDiskCache (zombie, no Swift consumer)
     public var enableDiskCache: Bool? = nil
     // Per-session disk-cache dir + cap. Added 2026-04-16 because the
     // SessionConfigForm UI lets users redirect the cache to an external

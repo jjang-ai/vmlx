@@ -336,7 +336,6 @@ public actor SettingsStore {
         if let v = s?.enableJANG { out.enableJANG = v; trace["enableJANG"] = .session } else { trace["enableJANG"] = .global }
         if let v = s?.enablePrefixCache { out.enablePrefixCache = v; trace["enablePrefixCache"] = .session } else { trace["enablePrefixCache"] = .global }
         if let v = s?.enableSSMCompanion { out.enableSSMCompanion = v; trace["enableSSMCompanion"] = .session } else { trace["enableSSMCompanion"] = .global }
-        if let v = s?.enableBlockDiskCache { out.enableBlockDiskCache = v; trace["enableBlockDiskCache"] = .session } else { trace["enableBlockDiskCache"] = .global }
         if let v = s?.enableDiskCache { out.enableDiskCache = v; trace["enableDiskCache"] = .session } else { trace["enableDiskCache"] = .global }
         if let v = s?.diskCacheDir { out.diskCacheDir = v; trace["diskCacheDir"] = .session } else { trace["diskCacheDir"] = .global }
         if let v = s?.diskCacheMaxGB { out.diskCacheMaxGB = v; trace["diskCacheMaxGB"] = .session } else { trace["diskCacheMaxGB"] = .global }
@@ -449,9 +448,8 @@ extension Engine.LoadOptions {
         self.enableDiskCache = r.enableDiskCache
         self.diskCacheDir = r.diskCacheDir
         self.diskCacheMaxGB = r.diskCacheMaxGB
-        self.enableBlockDiskCache = r.enableBlockDiskCache
-        self.blockDiskCacheDir = r.blockDiskCacheDir
-        self.blockDiskCacheMaxGB = r.blockDiskCacheMaxGB
+        // §354 — removed: enableBlockDiskCache / blockDiskCacheDir /
+        // blockDiskCacheMaxGB (zombies, no Swift consumer).
         self.kvCacheQuantization = r.kvCacheQuantization
         self.kvCacheGroupSize = r.kvCacheGroupSize
         self.turboQuantBits = r.turboQuantBits

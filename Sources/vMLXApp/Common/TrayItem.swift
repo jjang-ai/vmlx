@@ -566,14 +566,25 @@ struct TrayItem: View {
 
     private var cacheSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Toggle(
-                "TurboQuant KV cache",
-                isOn: Binding(
-                    get: { draft.enableTurboQuant },
-                    set: { draft.enableTurboQuant = $0; schedulePush() }))
+            // §354 — single source of truth for KV cache kind. The old
+            // separate "TurboQuant KV cache" Bool toggle was redundant
+            // with the picker below (SettingsStore derived the Bool
+            // from the picker anyway). Removed. TurboQuant is the
+            // default. Bits stepper renders only when picker selects
+            // turboquant.
+            LabeledField("KV cache") {
+                Picker("", selection: Binding(
+                    get: { draft.kvCacheQuantization },
+                    set: { draft.kvCacheQuantization = $0; schedulePush() })) {
+                    Text("TurboQuant").tag("turboquant")
+                    Text("Q8").tag("q8")
+                    Text("Q4").tag("q4")
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
                 .font(.system(size: 11))
-                .toggleStyle(.switch)
-            if draft.enableTurboQuant {
+            }
+            if draft.kvCacheQuantization.lowercased() == "turboquant" {
                 LabeledField("TQ bits") {
                     Stepper(
                         value: Binding(
