@@ -634,6 +634,9 @@ let package = Package(
                 "SchemaArgumentCoercionTests.swift",
                 // §340 — MCP clipboard import (Claude Desktop format).
                 "MCPClipboardImportTests.swift",
+                // §346 T6 — JANGTQ config mxtq_bits accepts both flat Int
+                // and per-role dict. Qwen3.6-JANGTQ4 garbage root cause.
+                "JANGTQConfigBitsDecodingTests.swift",
                 // Metal-dependent tests excluded — `swift test` can't load
                 // the default.metallib from the SwiftPM bundle path;
                 // JangDFlashDrafter, JangDFlashSpecDec, VisionEmbeddingCache,
