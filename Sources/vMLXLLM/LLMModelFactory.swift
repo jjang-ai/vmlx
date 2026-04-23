@@ -70,7 +70,7 @@ public enum LLMTypeRegistry {
             "openelm": create(OpenElmConfiguration.self, OpenELMModel.init),
             "internlm2": create(InternLM2Configuration.self, InternLM2Model.init),
             "deepseek_v3": { data in
-                try Self.makeDeepseekV3OrRefuseMXTQ(family: "deepseek_v3", data: data)
+                try Self.makeDeepseekV3OrJANGTQ(family: "deepseek_v3", data: data)
             },
             // Audit 2026-04-16 parity: deepseek_v2 + deepseek_v32 + kimi_k25
             // all share the DeepSeek V3 MLA architecture. Python `mlx_lm`
@@ -87,13 +87,13 @@ public enum LLMTypeRegistry {
             // so users aren't left with an affine loader silently
             // mangling the 2-bit codebook weights.
             "deepseek_v2": { data in
-                try Self.makeDeepseekV3OrRefuseMXTQ(family: "deepseek_v2", data: data)
+                try Self.makeDeepseekV3OrJANGTQ(family: "deepseek_v2", data: data)
             },
             "deepseek_v32": { data in
-                try Self.makeDeepseekV3OrRefuseMXTQ(family: "deepseek_v32", data: data)
+                try Self.makeDeepseekV3OrJANGTQ(family: "deepseek_v32", data: data)
             },
             "kimi_k25": { data in
-                try Self.makeDeepseekV3OrRefuseMXTQ(family: "kimi_k25", data: data)
+                try Self.makeDeepseekV3OrJANGTQ(family: "kimi_k25", data: data)
             },
             // GLM-5.1 smoke-test alias (Ralph iter 12, S02 quick-win).
             // GLM-5.1 declares model_type=glm_moe_dsa with an MLA attention
@@ -240,16 +240,19 @@ public enum LLMTypeRegistry {
     ///     --bits 2
     /// The affine output (~233 GB vs 191 GB JANGTQ) loads natively
     /// with the existing DeepseekV3Model + QuantizedSwitchLinear.
-    fileprivate static func makeDeepseekV3OrRefuseMXTQ(
+    /// Dispatch for the four DeepSeek V3 MLA family model_types
+    /// (`deepseek_v3`, `deepseek_v2`, `deepseek_v32`, `kimi_k25`).
+    /// JANGTQ (mxtq weight_format) bundles route to
+    /// `DeepseekV3JANGTQModel` — routed-expert projections run through
+    /// `TurboQuantSwitchGLU`. Affine bundles fall through to the
+    /// existing `DeepseekV3Model` skeleton. §318 — Kimi K2.6 native.
+    fileprivate static func makeDeepseekV3OrJANGTQ(
         family: String, data: Data
     ) throws -> any LanguageModel {
         if FormatSniff.isMXTQ(from: data) {
-            throw ModelFactoryError.unsupportedModelType(
-                "\(family) JANGTQ (mxtq) is not yet supported natively on vMLX Swift. " +
-                "Convert to affine-2bit with jang-tools Path A first: " +
-                "`python -m jang_tools.convert_jangtq_to_affine --in <src> --out <dst> --bits 2`. " +
-                "Tracking: jang/research/KIMI-K2.6-VMLX-INTEGRATION.md §2.2.5."
-            )
+            let config = try JSONDecoder.json5().decode(
+                DeepseekV3JANGTQConfiguration.self, from: data)
+            return DeepseekV3JANGTQModel(config)
         }
         let config = try JSONDecoder.json5().decode(
             DeepseekV3Configuration.self, from: data)
