@@ -28,6 +28,7 @@ import vMLXTheme
 struct TrayItem: View {
     @Environment(AppState.self) private var app
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.appLocale) private var appLocale
     @AppStorage("vmlx.appearance") private var appearanceRaw: String =
         AppearanceMode.dark.rawValue
 
@@ -184,7 +185,7 @@ struct TrayItem: View {
             Image(systemName: "rectangle.on.rectangle")
                 .foregroundStyle(.secondary)
                 .font(.system(size: 11))
-            Picker("Session", selection: Binding(
+            Picker(L10n.Tray.session.render(appLocale), selection: Binding(
                 get: { app.selectedServerSessionId ?? app.sessions.first?.id ?? UUID() },
                 set: { newId in
                     app.selectedServerSessionId = newId
@@ -223,29 +224,29 @@ struct TrayItem: View {
     private var lifecycleSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                lifecycleButton("Start", icon: "play.fill",
+                lifecycleButton(L10n.Tray.start.render(appLocale), icon: "play.fill",
                                 enabled: canStart, tint: .green) {
                     app.onTrayStartServer()
                 }
-                lifecycleButton("Stop", icon: "stop.fill",
+                lifecycleButton(L10n.Tray.stop.render(appLocale), icon: "stop.fill",
                                 enabled: canStop, tint: .red) {
                     app.onTrayStopServer()
                 }
-                lifecycleButton("Restart", icon: "arrow.clockwise",
+                lifecycleButton(L10n.Tray.restart.render(appLocale), icon: "arrow.clockwise",
                                 enabled: canRestart, tint: .orange) {
                     app.onTrayRestartServer()
                 }
             }
             HStack(spacing: 6) {
-                lifecycleButton("Soft Sleep", icon: "moon",
+                lifecycleButton(L10n.Tray.softSleep.render(appLocale), icon: "moon",
                                 enabled: canSoftSleep, tint: .blue) {
                     app.onTraySoftSleepServer()
                 }
-                lifecycleButton("Deep Sleep", icon: "moon.zzz.fill",
+                lifecycleButton(L10n.Tray.deepSleep.render(appLocale), icon: "moon.zzz.fill",
                                 enabled: canDeepSleep, tint: .purple) {
                     app.onTrayDeepSleepServer()
                 }
-                lifecycleButton("Wake", icon: "sun.max.fill",
+                lifecycleButton(L10n.Tray.wake.render(appLocale), icon: "sun.max.fill",
                                 enabled: canWake, tint: .yellow) {
                     app.onTrayWakeServer()
                 }
@@ -294,7 +295,7 @@ struct TrayItem: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer()
-            Button("Pick…") {
+            Button(L10n.Tray.pick.render(appLocale)) {
                 openAppWindow()
                 app.mode = .server
             }
@@ -761,11 +762,11 @@ struct TrayItem: View {
                     .truncationMode(.middle)
             }
             if logTail.isEmpty {
-                Text("No recent logs.")
+                Text(L10n.Tray.noRecentLogs.render(appLocale))
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
             }
-            Button("Open Logs") {
+            Button(L10n.Tray.openLogs.render(appLocale)) {
                 openAppWindow()
                 app.mode = .server
             }
@@ -779,7 +780,7 @@ struct TrayItem: View {
 
     private var footerRow: some View {
         HStack(spacing: 10) {
-            Menu("Appearance") {
+            Menu(L10n.Settings.appearance.render(appLocale)) {
                 ForEach(AppearanceMode.allCases) { mode in
                     Button(action: { appearanceRaw = mode.rawValue }) {
                         HStack {
@@ -802,11 +803,11 @@ struct TrayItem: View {
             LanguagePickerCompact()
 
             Spacer()
-            Button("Open vMLX") { openAppWindow() }
+            Button(L10n.Menu.openVMLX.render(appLocale)) { openAppWindow() }
                 .buttonStyle(.plain)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.accentColor)
-            Button("Quit") { NSApp.terminate(nil) }
+            Button(L10n.Menu.quit.render(appLocale)) { NSApp.terminate(nil) }
                 .buttonStyle(.plain)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.red)
