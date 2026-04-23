@@ -309,6 +309,20 @@ pushed to origin.
   fetches had no timeout (60s default) + no size cap (gigabyte
   streams held in RAM). Now 20s timeout, 64 MB (image) / 512 MB
   (video) size caps, data(for:URLRequest) path.
+- `0532c98` §338 **(vmlx#47) JSON-Schema tool arg coercion** — MCP
+  tool calls rejected `{"page":"3"}` because schema expected
+  integer. New `coerceToolArguments` walks `inputSchemaJSON` and
+  coerces String→Int, String→Double, String→Bool, and non-lossy
+  Double→Int leaves before dispatch. 11 unit tests cover every
+  path.
+- `074b626` §339 **(mlxstudio#82/#85/#96) image-folder discovery** —
+  user-added model folders hid image/diffusion pipelines because
+  walkUserDir only recognized `config.json` at model roots. Flux /
+  Z-Image / SD ship `model_index.json` at the root and store their
+  `config.json` files inside transformer/vae subdirs (already
+  rejected as submodules). Now accepts either marker; buildEntry
+  forces modality=.image when model_index.json is present so the
+  Image-tab filter doesn't hide non-obviously-named folders.
 - `aa0e0c0` §337 **SSM re-derive VL guard** — `maybeReDeriveSSMState`
   used a text-only forward to derive clean SSM state, but for a VLM
   request where real generation mixed image embeddings into the
