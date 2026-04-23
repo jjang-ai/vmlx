@@ -2655,6 +2655,21 @@ extension Engine {
             }
             pendingBuffer = ""
         }
+        // §344 — parser-dispatch path also drains a residual via
+        // `finishStreaming(fullText:)`. Gemma 4's parser holds back up to 18
+        // chars as a `<|channel>thought` marker window, and on very short
+        // replies (<18 chars) those bytes are otherwise lost. Mirrors the
+        // live Stream loop at Stream.swift:1705.
+        if let parser,
+           let residual = parser.finishStreaming(fullText: parserCur)
+        {
+            if let r = residual.reasoning, !r.isEmpty {
+                if effectiveThinking { reasoning += r } else { content += r }
+            }
+            if let c = residual.content, !c.isEmpty {
+                content += c
+            }
+        }
         return (reasoning, content)
     }
 
