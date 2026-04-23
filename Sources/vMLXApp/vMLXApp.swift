@@ -93,6 +93,15 @@ struct vMLXApp: App {
     private var appearance: AppearanceMode {
         AppearanceMode(rawValue: appearanceRaw) ?? .dark
     }
+    /// §349 — UI language. Stored in UserDefaults (NOT the engine
+    /// SettingsStore) so the translation layer is a purely visual
+    /// concern. `AppLocalePreference.seedIfAbsent()` runs in RootView
+    /// on first appearance to match the system language once.
+    @AppStorage(AppLocalePreference.userDefault)
+    private var uiLanguageRaw: String = AppLocale.fromSystem().rawValue
+    private var uiLocale: AppLocale {
+        AppLocale(rawValue: uiLanguageRaw) ?? .en
+    }
     /// Publish appState into the delegate on first access so it can
     /// flush settings during `applicationWillTerminate`. `init()` on
     /// App structs can't capture `@State` safely, but `body` is called
@@ -108,9 +117,13 @@ struct vMLXApp: App {
         WindowGroup {
             RootView()
                 .environment(appState)
+                .environment(\.appLocale, uiLocale)
                 .preferredColorScheme(appearance.colorScheme)
                 .background(Theme.Colors.background)
-                .onAppear { linkDelegate() }
+                .onAppear {
+                    linkDelegate()
+                    AppLocalePreference.seedIfAbsent()
+                }
                 .frame(minWidth: 1100, minHeight: 720)
         }
         .windowStyle(.hiddenTitleBar)
@@ -118,6 +131,7 @@ struct vMLXApp: App {
         WindowGroup(id: "downloads") {
             DownloadsWindow()
                 .environment(appState)
+                .environment(\.appLocale, uiLocale)
                 .preferredColorScheme(appearance.colorScheme)
                 .background(Theme.Colors.background)
         }
@@ -131,8 +145,22 @@ struct vMLXApp: App {
         MenuBarExtra("vMLX", systemImage: TrayItem.icon(for: appState.engineState)) {
             TrayItem()
                 .environment(appState)
+                .environment(\.appLocale, uiLocale)
         }
         .menuBarExtraStyle(.window)
+
+        // §349 — standard macOS Settings window. Reachable via Cmd-,
+        // from any vMLX window, the menu bar (vMLX → Settings…), and
+        // the in-app View menu entry below. Hosts the language picker
+        // + appearance mode in a single General section for now; more
+        // sections (Cache, Network, Shortcuts) slot in later without
+        // changing the scene.
+        Settings {
+            SettingsScreen()
+                .environment(appState)
+                .environment(\.appLocale, uiLocale)
+                .preferredColorScheme(appearance.colorScheme)
+        }
 
         // Scene-level `.commands { ... }` block registers File/View/Window
         // menu-bar entries so users can hit standard macOS shortcuts.

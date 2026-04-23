@@ -778,7 +778,7 @@ struct TrayItem: View {
     // MARK: - Footer
 
     private var footerRow: some View {
-        HStack {
+        HStack(spacing: 10) {
             Menu("Appearance") {
                 ForEach(AppearanceMode.allCases) { mode in
                     Button(action: { appearanceRaw = mode.rawValue }) {
@@ -793,6 +793,14 @@ struct TrayItem: View {
                 }
             }
             .font(.system(size: 11))
+
+            // §349 — language picker is part of the tray footer
+            // (top-level visible) so users can flip UI language
+            // without digging into Settings. Compact variant renders
+            // the current language's endonym ("日本語") so the active
+            // pick is visible before opening the menu.
+            LanguagePickerCompact()
+
             Spacer()
             Button("Open vMLX") { openAppWindow() }
                 .buttonStyle(.plain)

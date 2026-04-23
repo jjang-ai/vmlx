@@ -30,6 +30,7 @@ import AppKit
 
 struct ChatSettingsPopover: View {
     @Environment(AppState.self) private var app
+    @Environment(\.appLocale) private var appLocale: AppLocale
     let chatId: UUID
     let sessionId: UUID?
 
@@ -86,7 +87,8 @@ struct ChatSettingsPopover: View {
         HStack(spacing: Theme.Spacing.sm) {
             Image(systemName: "slider.horizontal.3")
                 .foregroundStyle(Theme.Colors.accent)
-            Text("Chat Settings")
+            // §349 — localized popover title.
+            Text(L10n.Chat.chatSettings.render(appLocale))
                 .font(Theme.Typography.bodyHi)
                 .foregroundStyle(Theme.Colors.textHigh)
             Spacer()
@@ -146,7 +148,8 @@ struct ChatSettingsPopover: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 // enableThinking tri-state
                 HStack {
-                    Text("Enable Thinking").font(Theme.Typography.body)
+                    // §349 — localized "Enable Thinking" label.
+                    Text(L10n.Chat.enableThinking.render(appLocale)).font(Theme.Typography.body)
                         .foregroundStyle(Theme.Colors.textHigh)
                     Spacer()
                     Picker("", selection: Binding<Int>(
@@ -172,7 +175,8 @@ struct ChatSettingsPopover: View {
                 }
 
                 HStack {
-                    Text("Reasoning Effort").font(Theme.Typography.body)
+                    // §349 — localized "Reasoning Effort" label.
+                    Text(L10n.Chat.reasoningEffort.render(appLocale)).font(Theme.Typography.body)
                         .foregroundStyle(Theme.Colors.textHigh)
                     Spacer()
                     Picker("", selection: Binding<String>(
@@ -286,7 +290,8 @@ struct ChatSettingsPopover: View {
         DisclosureGroup(isExpanded: $openTools) {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 HStack {
-                    Text("Tool Choice").font(Theme.Typography.body)
+                    // §349 — localized "Tool Choice" label.
+                    Text(L10n.Chat.toolChoice.render(appLocale)).font(Theme.Typography.body)
                         .foregroundStyle(Theme.Colors.textHigh)
                     Spacer()
                     Picker("", selection: Binding<String>(
@@ -428,7 +433,8 @@ struct ChatSettingsPopover: View {
 
     private var effectiveValuesFooter: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            Text("Effective values")
+            // §349 — localized "Effective values" label.
+            Text(L10n.Chat.effectiveValues.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
             if let r = resolved {
