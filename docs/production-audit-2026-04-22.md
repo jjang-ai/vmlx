@@ -309,6 +309,17 @@ pushed to origin.
   fetches had no timeout (60s default) + no size cap (gigabyte
   streams held in RAM). Now 20s timeout, 64 MB (image) / 512 MB
   (video) size caps, data(for:URLRequest) path.
+- `aa0e0c0` §337 **SSM re-derive VL guard** — `maybeReDeriveSSMState`
+  used a text-only forward to derive clean SSM state, but for a VLM
+  request where real generation mixed image embeddings into the
+  prompt tokens, the derived state is wrong at every position and
+  would corrupt future-turn mamba layers. Plus SSMStateCache.store
+  was called with mediaSalt=nil, producing a salt-less entry real VL
+  fetches never hit. Skip re-derive when userInput has any image or
+  video. Full audit confirmed BatchEngine/PagedCacheManager/DiskCache
+  all thread mediaSalt correctly; shouldSkipSSMStorage elides hybrid+
+  thinking SSM companions at store-time already; MLA prefill clamp
+  §323 flows through BatchScheduler via request.parameters.
 - `80865f3` §335-336 **mlxstudio #83 + #88 Gemma4 VLM**:
   (#83) Long-prompt Metal-buffer overflow — Gemma4 was the only
   VLM not chunking prefill. Single unchunked forward on a 30-100k
