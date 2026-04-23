@@ -26,7 +26,13 @@ Two forcing functions:
 
 As of 2026-04-13 PM, the vendoring is complete: `Cmlx` + all 8 MLX
 Swift targets live next to our `vMLX*` targets under one
-`Package.swift`.
+`Package.swift`. Current `dev` HEAD adds §341 (Jinja `not in` for
+Nemotron templates), §342 (MCP toggle resolver), §343/§344/§345
+(multi-family thinking-leak audits — Qwen3.6, Gemma4, MiniMax),
+§346 (JANGTQ `mxtq_bits` flat Int OR per-role dict decode — unblocks
+Qwen3.6-JANGTQ4), §338 (JSON-Schema tool argument coercion, vmlx#47),
+§339 (image model folder discovery, mlxstudio #82/#85/#96), and §340
+(one-click MCP import from Claude Desktop clipboard format).
 
 ---
 
@@ -351,6 +357,30 @@ Prioritized list in `PROGRESS.md`. Headline items:
   OlmoE, LFM2MoE, GLM4MoE, BailingMoe, PhiMoE, NemotronH SwitchMLP,
   Gemma4 sibling layout, MiniMax, Mistral3 SwitchGLU (2026-04-14).
   Remaining families TBD — tracked in Flash MoE README.
+
+### Recently fixed
+
+- **JANGTQ MXTQ PRNG parity** — `NumPyPCG64.swift` ships a bit-identical
+  PCG64 port; `JangMXTQDequant` uses it for sign generation. The older
+  `TQHadamard.generateRandomSigns` drand48 path is deprecated with a
+  "do NOT revert" marker. MiniMax-M2.7-JANGTQ-CRACK decodes at 46.59
+  tok/s (Python reference: 44.3). Resolved iter-93, 2026-04-20.
+- **JANGTQ `mxtq_bits` per-role dict** — §346. `JangLoader` now accepts
+  both a flat `Int` and a per-role `{shared_expert, routed_expert, ...}`
+  dict, which unblocks Qwen3.6-JANGTQ4 (previously emitted garbage).
+- **Nemotron Jinja templates** — §341. Jinja runtime now correctly
+  evaluates `not in` operator for Nemotron/Cascade chat templates.
+- **Thinking-leak audit** — §343/§344/§345. Qwen3.6, Gemma4, and MiniMax
+  reasoning parsers drained at EOS via `parser.finishStreaming`; §15
+  reasoning-off → `.content` reroute verified across families.
+- **MCP one-click import** — §340. Paste a Claude Desktop
+  `mcpServers` JSON blob; the app imports allowlisted entries
+  (`MCPClipboardImport.swift`).
+- **JSON-Schema tool argument coercion** — §338 (vmlx#47). Tool args
+  are coerced to declared schema types before dispatch so stringly-typed
+  LLM output lands cleanly in the bash/tool handlers.
+- **Image model folder discovery** — §339 (mlxstudio #82/#85/#96).
+  Image tab auto-detects Flux / Qwen-Image / Z-Image layouts from disk.
 
 ### Known deferred items (2026-04-14)
 
