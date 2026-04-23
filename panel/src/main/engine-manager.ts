@@ -145,7 +145,7 @@ export async function checkEngineInstallation(): Promise<EngineInstallation> {
 /**
  * Get version from vmlx-engine binary
  */
-async function getVersionFromBinary(path: string): Promise<string> {
+export async function getVersionFromBinary(path: string): Promise<string> {
   // Get version via Python package metadata (works with editable installs)
   try {
     const { readFileSync } = await import('fs')
@@ -176,6 +176,29 @@ async function getVersionFromBinary(path: string): Promise<string> {
   } catch (_) { /* not supported */ }
 
   return 'unknown'
+}
+
+export function isVersionAtLeast(version: string | undefined, minimum: string): boolean {
+  if (!version) return false
+
+  const parse = (value: string): number[] | null => {
+    const match = value.match(/^(\d+)\.(\d+)\.(\d+)/)
+    if (!match) return null
+    return match.slice(1).map(Number)
+  }
+
+  const current = parse(version)
+  const target = parse(minimum)
+  if (!current || !target) return false
+
+  for (let i = 0; i < Math.max(current.length, target.length); i++) {
+    const a = current[i] ?? 0
+    const b = target[i] ?? 0
+    if (a > b) return true
+    if (a < b) return false
+  }
+
+  return true
 }
 
 /**

@@ -13,12 +13,14 @@ import { resolveImageModelFromDirectoryName } from '../shared/imageModels'
 export type { ServerConfig, DetectedProcess } from './server'
 import type { ServerConfig, DetectedProcess } from './server'
 import { detectModelConfigFromDir } from './model-config-registry'
-import { getBundledPythonPath } from './engine-manager'
+import { getBundledPythonPath, getVersionFromBinary, isVersionAtLeast } from './engine-manager'
 
 /** Result of findEnginePath: either bundled Python or a system binary */
 type EnginePath =
-  | { type: 'bundled'; pythonPath: string }
-  | { type: 'system'; binaryPath: string }
+  | { type: 'bundled'; pythonPath: string; version: string }
+  | { type: 'system'; binaryPath: string; version: string }
+
+const DEFAULT_REPETITION_PENALTY_MIN_VERSION = '1.3.37'
 
 interface ManagedProcess {
   process: ChildProcess | null
@@ -486,7 +488,7 @@ export class SessionManager extends EventEmitter {
     if (modelSettings?.reasoning_mode === 'on') config.defaultEnableThinking = true
     else if (modelSettings?.reasoning_mode === 'off') config.defaultEnableThinking = false
 
-    const engineResult = this.findEnginePath()
+    const engineResult = await this.findEnginePath()
     if (!engineResult) throw new Error('vmlx-engine not found. Please install it first.')
 
     // Image models may use mflux named models (e.g., "schnell") that are NOT filesystem paths
@@ -594,7 +596,21 @@ export class SessionManager extends EventEmitter {
     this.loadProgressState.delete(sessionId) // Reset loading progress for fresh start
     this.emit('session:starting', { sessionId, modelPath: session.modelPath })
 
-    const args = this.buildArgs(config)
+    const supportsDefaultRepetitionPenalty =
+      engineResult.type === 'bundled' ||
+      isVersionAtLeast(engineResult.version, DEFAULT_REPETITION_PENALTY_MIN_VERSION)
+
+    if (config.defaultRepetitionPenalty != null && config.defaultRepetitionPenalty > 0 && !supportsDefaultRepetitionPenalty) {
+      const versionLabel = engineResult.version === 'unknown'
+        ? 'an older or unknown external vmlx-engine build'
+        : `vmlx-engine ${engineResult.version}`
+      this.pushLog(
+        sessionId,
+        `[INFO] ${versionLabel} does not support --default-repetition-penalty yet. Starting without that default. Upgrade to v${DEFAULT_REPETITION_PENALTY_MIN_VERSION} or newer to enable it.`
+      )
+    }
+
+    const args = this.buildArgs(config, { supportsDefaultRepetitionPenalty })
 
     // Ensure PATH includes pyenv/homebrew so the engine finds its Python
     const extraPath = [
@@ -1676,9 +1692,13 @@ export class SessionManager extends EventEmitter {
 
   // ─── Helpers (from ServerManager) ──────────────────────────────────
 
-  buildArgs(config: ServerConfig): string[] {
+  buildArgs(
+    config: ServerConfig,
+    options: { supportsDefaultRepetitionPenalty?: boolean } = {}
+  ): string[] {
     const args = ['serve', config.modelPath]
     const isImage = config.modelType === 'image'
+    const supportsDefaultRepetitionPenalty = options.supportsDefaultRepetitionPenalty ?? true
 
     // Server settings — always pass explicitly (both text and image)
     args.push('--host', config.host)
@@ -1972,8 +1992,8 @@ export class SessionManager extends EventEmitter {
     // (slider convention matching temp/top-p). Default 110 = 1.10, which
     // prevents Gemma 4 word-loops and 2-bit quant dash-loops on external
     // API clients (Ollama, OpenAI SDK, Anthropic SDK, raw curl).
-    if ((config as any).defaultRepetitionPenalty != null && (config as any).defaultRepetitionPenalty > 0) {
-      args.push('--default-repetition-penalty', ((config as any).defaultRepetitionPenalty / 100).toFixed(2))
+    if (supportsDefaultRepetitionPenalty && config.defaultRepetitionPenalty != null && config.defaultRepetitionPenalty > 0) {
+      args.push('--default-repetition-penalty', (config.defaultRepetitionPenalty / 100).toFixed(2))
     }
 
     // Embedding model
@@ -2016,18 +2036,18 @@ export class SessionManager extends EventEmitter {
     return args
   }
 
-  findEnginePath(): EnginePath | null {
+  async findEnginePath(): Promise<EnginePath | null> {
     // Bundled Python: use python3 -m vmlx_engine.cli instead of vmlx-engine binary
     // This avoids shebang path issues in relocatable Python builds
     const bundledPython = getBundledPythonPath()
     if (bundledPython) {
       try {
-        execSync(`"${bundledPython}" -s -c "import vmlx_engine"`, {
+        const version = execSync(`"${bundledPython}" -s -c "import vmlx_engine; print(getattr(vmlx_engine, '__version__', 'unknown'))"`, {
           encoding: 'utf-8',
           timeout: 10000,
           env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
-        })
-        return { type: 'bundled', pythonPath: bundledPython }
+        }).trim() || 'unknown'
+        return { type: 'bundled', pythonPath: bundledPython, version }
       } catch (_) {
         console.log('[SESSIONS] Bundled Python found but vmlx_engine import failed, trying system')
       }
@@ -2056,7 +2076,9 @@ export class SessionManager extends EventEmitter {
     } catch (_) { }
 
     for (const loc of locations) {
-      if (existsSync(loc)) return { type: 'system', binaryPath: loc }
+      if (existsSync(loc)) {
+        return { type: 'system', binaryPath: loc, version: await getVersionFromBinary(loc) }
+      }
     }
 
     // Fallback: check PATH via login shell (picks up pyenv, nvm, etc.)
@@ -2066,14 +2088,18 @@ export class SessionManager extends EventEmitter {
           `${shell} -lc "which vmlx-engine"`,
           { encoding: 'utf-8', timeout: 5000 }
         ).trim()
-        if (result && existsSync(result)) return { type: 'system', binaryPath: result }
+        if (result && existsSync(result)) {
+          return { type: 'system', binaryPath: result, version: await getVersionFromBinary(result) }
+        }
       } catch (_) { }
     }
 
     // Last resort: plain which
     try {
       const result = execSync('which vmlx-engine', { encoding: 'utf-8', timeout: 3000 }).trim()
-      if (result && existsSync(result)) return { type: 'system', binaryPath: result }
+      if (result && existsSync(result)) {
+        return { type: 'system', binaryPath: result, version: await getVersionFromBinary(result) }
+      }
     } catch (_) { }
 
     // Development fallback: project .venv relative to source directory
@@ -2082,13 +2108,13 @@ export class SessionManager extends EventEmitter {
       const venvPython = join(sourceDir, '.venv', 'bin', 'python3')
       if (existsSync(venvPython)) {
         try {
-          execFileSync(venvPython, ['-s', '-c', 'import vmlx_engine'], {
+          const version = execFileSync(venvPython, ['-s', '-c', "import vmlx_engine; print(getattr(vmlx_engine, '__version__', 'unknown'))"], {
             encoding: 'utf-8',
             timeout: 10000,
             env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
-          })
+          }).trim() || 'unknown'
           console.log(`[SESSIONS] Using project venv: ${venvPython}`)
-          return { type: 'bundled', pythonPath: venvPython }
+          return { type: 'bundled', pythonPath: venvPython, version }
         } catch (_) { }
       }
     } catch (_) { }

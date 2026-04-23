@@ -50,6 +50,7 @@ interface SessionConfig {
     numDraftTokens: number
     defaultTemperature: number
     defaultTopP: number
+    defaultRepetitionPenalty: number
     embeddingModel: string
     additionalArgs: string
     enableJit: boolean
@@ -97,6 +98,7 @@ const DEFAULT_CONFIG: SessionConfig = {
     numDraftTokens: 3,
     defaultTemperature: 0,
     defaultTopP: 0,
+    defaultRepetitionPenalty: 110,
     embeddingModel: '',
     additionalArgs: '',
     enableJit: false,
@@ -120,10 +122,12 @@ type DetectedConfig = {
 function buildCommandPreview(
     modelPath: string,
     config: SessionConfig,
-    detected?: DetectedConfig
+    detected?: DetectedConfig,
+    options: { supportsDefaultRepetitionPenalty?: boolean } = {}
 ): string {
     const parts = ['vmlx-engine serve', modelPath]
     const isVLM = config.isMultimodal ?? !!detected?.isMultimodal
+    const supportsDefaultRepetitionPenalty = options.supportsDefaultRepetitionPenalty ?? true
 
     parts.push('--host', config.host)
     parts.push('--port', config.port.toString())
@@ -233,6 +237,9 @@ function buildCommandPreview(
     if (config.defaultTopP && config.defaultTopP > 0) {
         parts.push('--default-top-p', (config.defaultTopP / 100).toFixed(2))
     }
+    if (supportsDefaultRepetitionPenalty && config.defaultRepetitionPenalty > 0) {
+        parts.push('--default-repetition-penalty', (config.defaultRepetitionPenalty / 100).toFixed(2))
+    }
 
     // Embedding model
     if (config.embeddingModel) parts.push('--embedding-model', config.embeddingModel)
@@ -255,8 +262,12 @@ function buildCommandPreview(
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
 
-function preview(overrides: Partial<SessionConfig> = {}, detected?: DetectedConfig): string {
-    return buildCommandPreview('/models/test-model', { ...DEFAULT_CONFIG, ...overrides }, detected)
+function preview(
+    overrides: Partial<SessionConfig> = {},
+    detected?: DetectedConfig,
+    options?: { supportsDefaultRepetitionPenalty?: boolean }
+): string {
+    return buildCommandPreview('/models/test-model', { ...DEFAULT_CONFIG, ...overrides }, detected, options)
 }
 
 function hasFlag(output: string, flag: string): boolean {
@@ -730,6 +741,20 @@ describe('Generation Defaults', () => {
         const out = preview({ defaultTopP: 100 })
         expect(getFlagValue(out, '--default-top-p')).toBe('1.00')
     })
+
+    it('sets default repetition penalty (converted from ×100 integer)', () => {
+        const out = preview({ defaultRepetitionPenalty: 110 })
+        expect(getFlagValue(out, '--default-repetition-penalty')).toBe('1.10')
+    })
+
+    it('omits default repetition penalty for older external engines', () => {
+        const out = preview(
+            { defaultRepetitionPenalty: 110 },
+            undefined,
+            { supportsDefaultRepetitionPenalty: false }
+        )
+        expect(hasFlag(out, '--default-repetition-penalty')).toBe(false)
+    })
 })
 
 describe('Embedding Model', () => {
@@ -874,6 +899,7 @@ describe('Default IP and New Settings', () => {
         expect(DEFAULT_CONFIG.corsOrigins).toBe('*')
         expect(DEFAULT_CONFIG.maxContextLength).toBe(0)
         expect(DEFAULT_CONFIG.enableJit).toBe(false)
+        expect(DEFAULT_CONFIG.defaultRepetitionPenalty).toBe(110)
     })
 })
 
@@ -999,6 +1025,7 @@ describe('Feature Interaction', () => {
         expect(hasFlag(out, '--num-draft-tokens')).toBe(false)
         expect(hasFlag(out, '--default-temperature')).toBe(false)
         expect(hasFlag(out, '--default-top-p')).toBe(false)
+        expect(getFlagValue(out, '--default-repetition-penalty')).toBe('1.10')
         expect(hasFlag(out, '--embedding-model')).toBe(false)
         expect(hasFlag(out, '--served-model-name')).toBe(false)
     })
@@ -1244,7 +1271,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         'mcpConfig', 'enableAutoToolChoice', 'toolCallParser', 'reasoningParser',
         'isMultimodal', 'servedModelName',
         'speculativeModel', 'numDraftTokens',
-        'defaultTemperature', 'defaultTopP',
+        'defaultTemperature', 'defaultTopP', 'defaultRepetitionPenalty',
         'embeddingModel', 'additionalArgs',
         'enableJit', 'logLevel', 'corsOrigins', 'maxContextLength',
     ]
@@ -1293,6 +1320,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized).toContain('--max-tokens')
         expect(normalized).toContain('--continuous-batching')
         expect(normalized).toContain('--use-paged-cache')
+        expect(normalized).toContain('--default-repetition-penalty')
     })
 
     it('mutual exclusion: disk cache NOT emitted when paged cache is active', () => {
