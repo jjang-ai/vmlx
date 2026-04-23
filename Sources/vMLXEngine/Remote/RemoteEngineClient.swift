@@ -262,10 +262,20 @@ public actor RemoteEngineClient {
     /// Used by the UI to populate a picker of what's available on the
     /// remote endpoint before the user hits Send.
     public func listModels() async throws -> [String] {
+        // §333 — 10s timeout on list-models. URLSession.shared default
+        // is 60s; with no override a remote endpoint that's reachable
+        // but silently hung (wrong port, mid-deploy, firewall black-
+        // hole) would freeze the model picker for a full minute
+        // before surfacing an error. 10s is generous for a fast
+        // GET /v1/models while still failing fast on dead hosts.
+        // Streaming requests (stream/streamOpenAI/etc.) intentionally
+        // keep the default since a 60s+ decode is normal for a cold
+        // model load on the other side.
         switch kind {
         case .openai:
             let url = endpoint.appendingPathComponent("v1").appendingPathComponent("models")
             var req = URLRequest(url: url)
+            req.timeoutInterval = 10
             applyAuth(to: &req)
             let (data, response) = try await URLSession.shared.data(for: req)
             try checkHTTP(response, body: data)
@@ -276,6 +286,7 @@ public actor RemoteEngineClient {
         case .ollama:
             let url = endpoint.appendingPathComponent("api").appendingPathComponent("tags")
             var req = URLRequest(url: url)
+            req.timeoutInterval = 10
             applyAuth(to: &req)
             let (data, response) = try await URLSession.shared.data(for: req)
             try checkHTTP(response, body: data)
