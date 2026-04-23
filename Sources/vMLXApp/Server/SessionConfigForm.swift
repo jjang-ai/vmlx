@@ -229,10 +229,21 @@ struct SessionConfigForm: View {
                            range: 0...1440, step: 1, format: "%.0f min")
         }
 
-        toggleRow("TurboQuant",       boolBinding(\.enableTurboQuant,      default: globalDefaults.enableTurboQuant))
-        // TQ bits stepper gated on the TurboQuant toggle. Audit 2026-04-16:
-        // was only in Tray; per-session override is now possible.
-        if s.enableTurboQuant ?? globalDefaults.enableTurboQuant {
+        // §354 — "KV cache quantization" picker below is the SINGLE
+        // source of truth. The old separate `enableTurboQuant` Bool
+        // toggle was redundant (SettingsStore.resolved() derives the
+        // Bool from the picker string at line ~410), and showing both
+        // let users set them to disagree. Toggle removed.
+        //
+        // TurboQuant bits stepper still renders — gated on the picker
+        // currently reading "turboquant". The orphan `enableBlockDiskCache`
+        // toggle was also removed: it's a Python-parity field that has
+        // never had a Swift consumer. The L2 disk cache below IS the
+        // disk cache on Swift. If a future block-level store lands it
+        // will have its own field + clear semantics.
+        if (s.kvCacheQuantization ?? globalDefaults.kvCacheQuantization)
+            .lowercased() == "turboquant"
+        {
             Stepper(value: Binding(
                 get: { s.turboQuantBits ?? globalDefaults.turboQuantBits },
                 set: { s.turboQuantBits = $0; commit() }
@@ -243,22 +254,6 @@ struct SessionConfigForm: View {
         }
         toggleRow("Prefix cache",     boolBinding(\.enablePrefixCache,     default: globalDefaults.enablePrefixCache))
         toggleRow("SSM companion",    boolBinding(\.enableSSMCompanion,    default: globalDefaults.enableSSMCompanion))
-        // iter-54: Block disk cache is orphaned Python-parity — the
-        // engine reads `enableDiskCache` + `diskCacheDir/MaxGB` for
-        // L2. `enableBlockDiskCache` + `blockDiskCache{Dir,MaxGB}`
-        // fields exist in SettingsTypes for forward-compat with a
-        // planned block-level store but have no Swift consumer. Keep
-        // the toggle visible so Python users migrating don't wonder
-        // where the field went, but badge it clearly.
-        toggleRow("Block disk cache (coming soon, use L2 below)",
-                  boolBinding(\.enableBlockDiskCache,
-                              default: globalDefaults.enableBlockDiskCache))
-        Text("Block disk cache is a Python-parity field for a planned block-level KV store. The Swift engine uses the L2 disk cache below instead — toggle has no effect today.")
-            .font(Theme.Typography.caption)
-            .foregroundStyle(Theme.Colors.textLow)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.leading, 4)
-            .padding(.bottom, 2)
         toggleRow("L2 disk cache",    boolBinding(\.enableDiskCache,       default: globalDefaults.enableDiskCache))
         // Directory + GB cap: previously only in Tray, not per-session.
         // Audit 2026-04-16 — disk cache dir was unconfigurable anywhere
