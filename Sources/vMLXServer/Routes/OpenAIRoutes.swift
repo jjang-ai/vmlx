@@ -411,6 +411,27 @@ public enum OpenAIRoutes {
                let include = so["include_usage"] as? Bool {
                 chatReq.streamOptions = .init(includeUsage: include)
             }
+            // §352 — silent drop fix: /v1/completions legacy handler builds
+            // ChatRequest programmatically via the positional init and
+            // FORGOT to forward `logprobs` + `top_logprobs`. The legacy
+            // route's whole point of distinction from /v1/chat/completions
+            // is its flat-array logprobs shape (`tokens`/`token_logprobs`/
+            // `text_offset` — lm-evaluation-harness keys on it), so a
+            // missing wire here silently breaks every loglikelihood task.
+            // Accept both encodings:
+            //   logprobs: true         → enable, no top-k
+            //   logprobs: 3  (int N)   → enable + topLogprobs=N (lm-eval
+            //                            `local-completions` sends ints,
+            //                            OpenAI's legacy spec says 0..5)
+            if let flag = obj["logprobs"] as? Bool {
+                chatReq.logprobs = flag
+            } else if let n = obj["logprobs"] as? Int {
+                chatReq.logprobs = true
+                chatReq.topLogprobs = n
+            }
+            if let n = obj["top_logprobs"] as? Int {
+                chatReq.topLogprobs = n
+            }
             // iter-119 §145: pre-flight validation, same class as iter-67
             // §96 for /v1/responses. /v1/completions was the last chat-
             // shape route skipping validate() — bad temperature /
