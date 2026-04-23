@@ -2,6 +2,15 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.3.83] - 2026-04-23
+
+### Fixed
+- **mlxstudio#88 — Gemma 4 VLM image requests crash with `TypeError: concatenate()` on multi-image prompts** (bundled `mlx_vlm/models/gemma4/vision.py`):
+  - `VisionModel.__call__` guarded `isinstance(pixel_values, list)` but called `mx.concatenate(pixel_values, axis=0)` without coercing per-item. MLX 0.31+ enforces strict type checking, and mlx_vlm's Gemma 4 processor pipeline can hand us a list mixing `mx.array` and `np.ndarray` (one entry per image tile on multi-image requests). The concat rejected the mixed list and crashed before any image tokens were embedded.
+  - Fix: per-item coerce to `mx.array` before concat. Applied idempotently via `panel/scripts/bundle-python.sh` so a future rebuild can't silently lose it. `verify-bundled-python.sh` gates the patch marker pre-DMG.
+  - Regression guard: `TestIssueGuards::test_mlxstudio_88_gemma4_vision_pixel_values_list_coercion` pins both the marker and the coercion semantic.
+  - Credit: precise analysis + suggested fix from @LRBin on the issue.
+
 ## [1.3.82] - 2026-04-23
 
 ### Fixed

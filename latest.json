@@ -1,5 +1,5 @@
 {
-  "version": "1.3.82",
-  "url": "https://github.com/jjang-ai/mlxstudio/releases/tag/v1.3.82",
-  "notes": "HOTFIX for mlxstudio#87 / #84 follow-up. v1.3.81 missed the 10-second subprocess-timeout pattern in sessions.ts::findEnginePath — on cold-disk first launch the bundled-Python verification probe timed out, fell through to the system-binary search, and spawned any stale user-installed vmlx-engine found at /opt/homebrew/bin or ~/.local/bin. That stale binary's Python frequently lacked vmlx_engine or jang_tools, producing 'ModuleNotFoundError' reports. Fixed: filesystem dist-info verification (shared with engine-manager.ts) + in packaged mode, never fall through to a system binary."
+  "version": "1.3.83",
+  "url": "https://github.com/jjang-ai/mlxstudio/releases/tag/v1.3.83",
+  "notes": "Fixes mlxstudio#88 — Gemma 4 VLM image requests crashed with `TypeError: concatenate(): incompatible function arguments` on multi-image prompts. Upstream mlx_vlm.models.gemma4.vision.VisionModel.__call__ handled `isinstance(list)` but didn't coerce per-item, and MLX 0.31+ rejects non-mx.array items. The Gemma 4 processor pipeline can hand us a list mixing mx.array + np.ndarray on multi-image requests, so we now per-item coerce before concat. Applied idempotently in bundle-python.sh + verify gated."
 }

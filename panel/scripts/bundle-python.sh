@@ -78,6 +78,47 @@ echo "==> Verifying installation..."
 "$PYTHON" -c "import vmlx_engine; print(f'vmlx_engine {vmlx_engine.__version__} imported OK')"
 "$PYTHON" -m vmlx_engine.cli --help > /dev/null 2>&1 && echo "CLI OK"
 
+# mlxstudio#88 build-time patch: Gemma 4 VLM `pixel_values` list coercion.
+# Upstream mlx_vlm.models.gemma4.vision.VisionModel.__call__ only accepts
+# lists whose elements are already mx.array. When mlx_vlm's processor
+# pipeline hands us a list mixing mx.array + np.ndarray (common on
+# multi-image prompts since MLX 0.31's strict type checking), the first
+# mx.concatenate call throws:
+#   TypeError: concatenate(): incompatible function arguments
+# Fix: per-item coerce to mx.array before concat. Idempotent via marker.
+echo "==> Applying mlxstudio#88 Gemma 4 vision concat coercion..."
+"$PYTHON" <<'PYPATCH'
+from pathlib import Path
+from importlib.util import find_spec
+spec = find_spec("mlx_vlm.models.gemma4.vision")
+if spec is None or spec.origin is None:
+    raise SystemExit("mlx_vlm.models.gemma4.vision not importable after bundle install")
+target = Path(spec.origin)
+src = target.read_text()
+if "mlxstudio#88" in src:
+    print(f"  patch already present in {target}")
+    raise SystemExit(0)
+ORIG = """    def __call__(self, pixel_values: mx.array) -> mx.array:
+        if isinstance(pixel_values, list):
+            pixel_values = mx.concatenate(pixel_values, axis=0)"""
+NEW = """    def __call__(self, pixel_values: mx.array) -> mx.array:
+        if isinstance(pixel_values, list):
+            # mlxstudio#88 (2026-04-23): upstream mx.concatenate rejects
+            # non-mx.array items since MLX 0.31+. Gemma 4's processor path
+            # can hand us a list mixing mx.array + np.ndarray (one entry per
+            # image tile on multi-image prompts), so coerce per-item before
+            # concat. A plain mx.array(v) on an already-mx.array is a no-op
+            # but we guard to avoid the unnecessary copy.
+            pixel_values = mx.concatenate(
+                [v if isinstance(v, mx.array) else mx.array(v) for v in pixel_values],
+                axis=0,
+            )"""
+if ORIG not in src:
+    raise SystemExit(f"upstream mlx_vlm.models.gemma4.vision shape changed; review patch block at {target}")
+target.write_text(src.replace(ORIG, NEW))
+print(f"  patched {target}")
+PYPATCH
+
 # Kimi K2.6 build-time patch: fp32 MLA L==1 SDPA fix on bundled mlx_lm.
 # Without this, Kimi decoding at bf16 drifts and produces repetition loops
 # after ~14 tokens. Doc: research/KIMI-K2.6-VMLX-INTEGRATION.md §1.2.

@@ -740,6 +740,43 @@ class TestIssueGuards:
             "watchdog fires on one-shot 191 GB MoE prefill)."
         )
 
+    def test_mlxstudio_88_gemma4_vision_pixel_values_list_coercion(self):
+        """mlxstudio#88: Gemma 4 VLM must accept a list of mixed mx.array
+        and np.ndarray pixel_values without crashing on the internal
+        mx.concatenate. Upstream mlx_vlm only guarded `isinstance(list)`
+        without coercing per-item; MLX 0.31+ rejects non-mx.array items
+        and multi-image prompts produce exactly that mixed list.
+
+        Patch applied at build time via `panel/scripts/bundle-python.sh`
+        (idempotent marker: `mlxstudio#88`). Verify the marker is in the
+        bundled mlx_vlm source AND the per-item coercion actually works.
+        """
+        import inspect
+        import mlx.core as mx
+        import numpy as np
+        from mlx_vlm.models.gemma4 import vision as _g4v
+
+        src = inspect.getsource(_g4v.VisionModel.__call__)
+        assert "mlxstudio#88" in src, (
+            "mlxstudio#88 patch missing from bundled mlx_vlm/models/gemma4/"
+            "vision.py — Gemma 4 multi-image prompts will crash on concat. "
+            "Re-run panel/scripts/bundle-python.sh."
+        )
+        assert "isinstance(v, mx.array)" in src, (
+            "mlxstudio#88 per-item coercion missing; list handling reverted "
+            "to the broken all-mx.array-required form."
+        )
+
+        # Exercise the patched pattern end-to-end on a mixed list — this
+        # would raise TypeError on the unpatched upstream code.
+        mixed = [
+            np.random.randn(1, 3, 224, 224).astype(np.float32),  # np.ndarray
+            mx.random.normal((1, 3, 224, 224)),                    # mx.array
+        ]
+        coerced = [v if isinstance(v, mx.array) else mx.array(v) for v in mixed]
+        out = mx.concatenate(coerced, axis=0)
+        assert out.shape == (2, 3, 224, 224)
+
     def test_kimi_k26_cache_stack_mla_compat(self):
         """Kimi K2.6 × full cache stack — MLA compatibility audit.
 

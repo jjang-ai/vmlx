@@ -79,6 +79,24 @@ except Exception as e:
     print(f"  FAIL gemma4 class import: {type(e).__name__}: {e}")
     sys.exit(1)
 
+# mlxstudio#88: Gemma 4 vision `pixel_values` list coercion patch must be
+# baked into bundled mlx_vlm. If this fails, the Gemma 4 VLM crashes on
+# multi-image requests with `TypeError: concatenate(): incompatible function
+# arguments` because upstream only handles all-mx.array lists.
+try:
+    import inspect
+    import mlx_vlm.models.gemma4.vision as _g4v
+    _src = inspect.getsource(_g4v.VisionModel.__call__)
+    if "mlxstudio#88" in _src and "isinstance(v, mx.array)" in _src:
+        print("  ok   Gemma 4 vision pixel_values list coercion in bundled mlx_vlm")
+    else:
+        print("  FAIL Gemma 4 vision pixel_values coercion patch missing from bundled mlx_vlm/models/gemma4/vision.py")
+        print("       re-run bundle-python.sh (mlxstudio#88)")
+        sys.exit(1)
+except Exception as e:
+    print(f"  FAIL Gemma 4 vision patch check: {type(e).__name__}: {e}")
+    sys.exit(1)
+
 # Kimi K2.6 §1.2 fp32 MLA L==1 SDPA patch must be baked into bundled mlx_lm.
 # If this fails, the bundled deepseek_v3.py wasn't patched at build time and
 # Kimi K2.6 decode will produce repetition loops after ~14 tokens.
