@@ -64,9 +64,13 @@ public actor Engine {
         public var enableDiskCache: Bool = true
         public var diskCacheDir: String = ""
         public var diskCacheMaxGB: Double = 10.0
-        // §354 — block-disk-cache fields deleted (were Python-parity
-        // orphans with no Swift consumer). L2 disk cache above IS the
-        // disk cache on Swift.
+        // §355 — block-level disk cache. See
+        // Sources/vMLXLMCommon/Cache/BlockDiskCache.swift for the real
+        // storage layer. Default OFF until live paged-cache integration
+        // lands; storage round-trip tests pass independently.
+        public var enableBlockDiskCache: Bool = false
+        public var blockDiskCacheDir: String = ""
+        public var blockDiskCacheMaxGB: Double = 10.0
         public var kvCacheQuantization: String = "none"
         public var kvCacheGroupSize: Int = 64
         public var turboQuantBits: Int = 4

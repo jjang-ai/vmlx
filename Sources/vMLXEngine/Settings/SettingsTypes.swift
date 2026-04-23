@@ -213,11 +213,22 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     public var enableDiskCache: Bool = true       // cli.py --enable-disk-cache / --disable-disk-cache
     public var diskCacheDir: String = ""          // cli.py --disk-cache-dir
     public var diskCacheMaxGB: Double = 10.0      // cli.py --disk-cache-max-gb
-    // §354 — block-disk-cache fields deleted as dead zombie state.
-    // Had never been wired to any Swift consumer; UI surface labeled
-    // "coming soon". L2 disk cache above IS the disk cache on Swift.
-    // Python-parity import path no longer needs these mirrors since
-    // settings-store round-trip tests only verify wired fields.
+    // §355 — block-level disk cache.
+    //
+    // Stores PAGED KV blocks (64-token chunks) keyed by block-content
+    // hash. Complements the L2 whole-prompt disk cache above with
+    // finer-grained cross-prompt reuse: two different prompts that
+    // share a long system-prompt prefix hit the SAME cached blocks
+    // even though their tails diverge.
+    //
+    // Default OFF until PagedCacheManager integration lands + live
+    // verification against a real model proves no correctness
+    // regression. The storage layer (BlockDiskCache.swift) is
+    // complete and round-trip tested on its own. See
+    // docs/audit/block-disk-cache-design.md for the full plan.
+    public var enableBlockDiskCache: Bool = false
+    public var blockDiskCacheDir: String = ""
+    public var blockDiskCacheMaxGB: Double = 10.0
 
     // L1.5 byte-budgeted memory cache (MemoryAwarePrefixCache). Sits
     // between the paged L1 and disk L2, storing whole-prompt KV payloads
@@ -492,7 +503,7 @@ public struct SessionSettings: Codable, Sendable, Equatable {
     public var enableJANG: Bool? = nil
     public var enablePrefixCache: Bool? = nil
     public var enableSSMCompanion: Bool? = nil
-    // §354 — removed: enableBlockDiskCache (zombie, no Swift consumer)
+    public var enableBlockDiskCache: Bool? = nil  // §355 — block-level disk cache opt-in
     public var enableDiskCache: Bool? = nil
     // Per-session disk-cache dir + cap. Added 2026-04-16 because the
     // SessionConfigForm UI lets users redirect the cache to an external

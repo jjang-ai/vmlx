@@ -120,6 +120,11 @@ struct vMLXApp: App {
                 .environment(\.appLocale, uiLocale)
                 .preferredColorScheme(appearance.colorScheme)
                 .background(Theme.Colors.background)
+                // §F4 — make every Text in the window copy-selectable.
+                // Applies to error banners, notifications, settings
+                // labels, help text, message bodies. Individual Text
+                // views can still opt-out with `.textSelection(.disabled)`.
+                .textSelection(.enabled)
                 .onAppear {
                     linkDelegate()
                     AppLocalePreference.seedIfAbsent()
@@ -134,6 +139,7 @@ struct vMLXApp: App {
                 .environment(\.appLocale, uiLocale)
                 .preferredColorScheme(appearance.colorScheme)
                 .background(Theme.Colors.background)
+                .textSelection(.enabled)
         }
         .windowResizability(.contentSize)
 
@@ -160,6 +166,7 @@ struct vMLXApp: App {
                 .environment(appState)
                 .environment(\.appLocale, uiLocale)
                 .preferredColorScheme(appearance.colorScheme)
+                .textSelection(.enabled)
         }
 
         // Scene-level `.commands { ... }` block registers File/View/Window
@@ -1411,6 +1418,7 @@ fileprivate func handleModelDrop(_ providers: [NSItemProvider], state: AppState)
 private struct Sidebar: View {
     @Binding var mode: AppState.Mode
     @Environment(AppState.self) private var appState
+    @Environment(\.appLocale) private var appLocale: AppLocale
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
@@ -1429,7 +1437,7 @@ private struct Sidebar: View {
                         Image(systemName: icon(for: m))
                             .frame(width: 16)
                             .foregroundStyle(mode == m ? Theme.Colors.textHigh : Theme.Colors.textMid)
-                        Text(m.rawValue)
+                        Text(label(for: m))
                             .font(Theme.Typography.bodyHi)
                             .foregroundStyle(mode == m ? Theme.Colors.textHigh : Theme.Colors.textMid)
                         Spacer()
@@ -1465,6 +1473,16 @@ private struct Sidebar: View {
         case .image:  return "photo.on.rectangle"
         case .terminal: return "terminal"
         case .api:    return "network"
+        }
+    }
+
+    private func label(for m: AppState.Mode) -> String {
+        switch m {
+        case .chat:     return L10n.Mode.chat.render(appLocale)
+        case .server:   return L10n.Mode.server.render(appLocale)
+        case .image:    return L10n.Mode.image.render(appLocale)
+        case .terminal: return L10n.Mode.terminal.render(appLocale)
+        case .api:      return L10n.Mode.api.render(appLocale)
         }
     }
 }
