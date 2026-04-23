@@ -1864,6 +1864,17 @@ public actor Engine {
     /// embedding model. Runs tokenize -> forward -> pool -> normalize for
     /// each input. Returns one Float vector per input.
     public func generateEmbeddings(inputs: [String]) async throws -> [[Float]] {
+        // L5 §316 — JIT re-hydrate the embedding model if deep-sleep
+        // dropped it but we have a recorded path. Mirrors the chat
+        // wakeFromStandby + image rehydrateImageBackendIfNeeded
+        // pathways. If the server never had an embedding model loaded,
+        // embeddingModelPath is nil and we skip straight to the
+        // .notLoaded throw below.
+        if embeddingContainer == nil, let path = embeddingModelPath {
+            try await loadEmbeddingModel(at: path)
+            await logs.append(.info, category: "engine",
+                "embedding model re-hydrated on JIT wake: \(path.lastPathComponent)")
+        }
         guard let container = self.embeddingContainer else {
             // Iter-32: was `.notImplemented` which mapped to HTTP 500.
             // No-embedding-model is a real user-actionable config
@@ -2567,6 +2578,16 @@ public actor Engine {
         // image-model preload path re-runs via Engine.preloadImageModel
         // when the admin-wake flow re-hydrates from config.
         fluxBackend = nil
+        // L5 §316 — also unload the embedding model. Prior state:
+        // `/v1/embeddings` kept its weights resident through
+        // /admin/deep-sleep, so a server with `--embedding-model` saw
+        // partial GPU memory drop. Next /v1/embeddings call
+        // JIT-reloads via the embeddingModelPath retained below.
+        if embeddingContainer != nil {
+            embeddingContainer = nil
+            await logs.append(.info, category: "engine",
+                "deep sleep — embedding model unloaded")
+        }
         // iter-85 §113: drop MLX's pooled Metal buffer cache so the RSS
         // reduction is visible to Activity Monitor. Without this call a
         // user who deep-sleeps a 30GB model still sees the process
