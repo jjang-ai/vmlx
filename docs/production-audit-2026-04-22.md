@@ -194,18 +194,59 @@ pushed to origin.
   duplication stays under ~300 LOC. Cache/parser wiring audit proved
   already green (silver allowlist `kimi_k25` → deepseek_r1 +
   KimiToolCallParser + cacheType=mla; TQ auto-activation skips MLA).
-  Commit `f91af12`.
+  Commit `f91af12`. **This is the spec's Path B (§2.2.5) for routed
+  experts — supersedes the Path A conversion recommendation for
+  text-only load.**
 - [ ] K3 Port `KimiMoonViT.swift` — 27-block MoonViT ViT, ~500 LOC
-  from `mlx_vlm.models.kimi_vl.vision.VisionModel`.
+  from `mlx_vlm.models.kimi_vl.vision.VisionModel`. DEFERRED —
+  requires Qwen2VLVisionBlock-shaped rewrite + div-fixed pos-emb +
+  sd2_tpool. Precedents exist in Qwen25VL.swift +
+  Qwen3VL.swift but configuration diverges enough to warrant its
+  own file.
 - [ ] K4 Ship `KimiVLM.swift` wrapper — calls `chunkedPrefillEmbedding`
   with `prefillStepSize: 32` (NOT default 512 — monolithic Metal
-  buffer hits watchdog on 191 GB MoE).
-- [ ] K5 mm_projector rename sanitize step: `mm_projector.proj.0` →
-  `multi_modal_projector.linear_1` at load time.
+  buffer hits watchdog on 191 GB MoE). **Note**: the prefill clamp
+  now lives at the scheduler level (§323) — `buildGenerateParameters`
+  pins MLA models to ≤32 automatically, so even if K4 forgets to
+  pass the explicit override the runtime is safe.
+- [x] K5 §325 — `renameKimiMMProjectorKeys(_:)` helper shipped at
+  `Sources/vMLXVLM/Models/KimiVLMSanitize.swift`. Pure key-rewriting,
+  idempotent, safe on both affine and JANGTQ bundles. Covers the
+  three-pair mapping (`pre_norm` / `proj.0` → `linear_1` / `proj.2` →
+  `linear_2`). Future KimiVLMModel.sanitize() just calls this.
+  Commit `b7651d8`.
 - [ ] K6 Register `"kimi_k25"` in `VLMModelFactory` routing to
-  `KimiVLMModel`.
+  `KimiVLMModel`. Blocked on K3 + K4.
 - [ ] K7 Test harness — text + VL coherence against local
-  Kimi-K2.6-REAP-30-JANG_1L (after Path A conversion).
+  Kimi-K2.6-REAP-30-JANG_1L (after Path A conversion). Text path is
+  ready to live-test today via K2 native JANGTQ load; VL blocked on K3/K4.
+- [x] K8 §323 — MLA prefill auto-clamp. `buildGenerateParameters`
+  pins `prefillStepSize ≤ 32` whenever loaded model's cacheType is
+  "mla". Spec §2.6 #6-#8 mandate. Commit `647797b`.
+- [x] K9 §324 — `kimi_k25` silver allowlist stamped
+  `thinkInTemplate: true`. Without this the UI loses the thinking
+  toggle + `reasoning_effort` doesn't auto-map to `enable_thinking`
+  per §223. Spec §2.6 #16. Commit `647797b`.
+
+### Spec audit matrix (`research/KIMI-K2.6-VMLX-INTEGRATION.md` → vMLX Swift)
+
+| Spec item | Swift status | Commit / ref |
+|---|---|---|
+| `kimi_k25` dispatch | ✓ LLMModelFactory | (pre-existing) |
+| MLA L==1 fp32 SDPA | ✓ prefill-style avoids drift | DeepseekV3.swift |
+| JANGTQ routed experts | ✓ native Path B | `f91af12` K2 |
+| mm_projector rename | ✓ sanitize helper | `b7651d8` K5 |
+| MoonViT vision tower | ✗ deferred | K3 |
+| KimiVLM wrapper | ✗ deferred | K4 |
+| VLMFactory register | ✗ blocked on K3+K4 | K6 |
+| VL prefill chunking | ✓ via ChunkedPrefillVLM | (pre-existing) |
+| Text prefill chunking for ≥100 GB | ✓ MLA auto-clamp ≤32 | `647797b` §323 |
+| Tool parser (Kimi TS-style) | ✓ KimiToolCallParser | (pre-existing) |
+| Thinking-by-default | ✓ thinkInTemplate=true | `647797b` §324 |
+| Layer-by-layer warmup | ✗ not yet — Swift-specific | deferred |
+| Dedicated MLX.Stream | Unverified — Swift runtime detail | pending verify |
+| wired_limit auto-tune | Unverified | pending audit |
+| Hidden-size detection | ✓ via text_config parse | (pre-existing) |
 
 ## Commits this audit chain
 
@@ -219,6 +260,9 @@ pushed to origin.
 - `ae86a3c` O2 §319: RequestLoggerMiddleware honors live /admin/log-level swap
 - `31dae08` §320-322: three regression-guard fixes (audio JIT wake position +
   embed .notLoaded throw hoist + ChatSettings Coming-soon explainer)
+- `647797b` §323-324 K8/K9: Kimi K2.6 integration — MLA prefill clamp +
+  thinking-by-default stamp
+- `b7651d8` K5 §325: Kimi VL mm_projector rename helper
 
 ## Harness state (updated each iteration)
 
