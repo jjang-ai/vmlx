@@ -89,7 +89,7 @@ EOF
 )
 T2_RESP=$(curl -sf --max-time 60 -H 'Content-Type: application/json' \
     -d "$T2_REQ" "$BASE/v1/chat/completions")
-T2_CACHED=$(echo "$T2_RESP" | python3 -c 'import sys,json;d=json.load(sys.stdin);c=d.get("usage",{}).get("cached_tokens",0);print(c)' 2>/dev/null)
+T2_CACHED=$(echo "$T2_RESP" | python3 -c 'import sys,json;d=json.load(sys.stdin);u=d.get("usage",{});c=u.get("prompt_tokens_details",{}).get("cached_tokens",u.get("cached_tokens",0));print(c)' 2>/dev/null)
 T2_CONTENT=$(echo "$T2_RESP" | python3 -c 'import sys,json;print(json.load(sys.stdin)["choices"][0]["message"]["content"])' 2>/dev/null)
 if [[ "${T2_CACHED:-0}" -gt 0 ]]; then
     pass "T2 cache hit: cached_tokens=$T2_CACHED, content='$T2_CONTENT'"
