@@ -368,6 +368,19 @@ public enum OpenAIRoutes {
             )
             chatReq.frequencyPenalty = obj["frequency_penalty"] as? Double
             chatReq.presencePenalty = obj["presence_penalty"] as? Double
+            // §330 — stream_options pass-through. /v1/chat/completions
+            // reads streamOptions.include_usage at line 150 to decide
+            // whether to emit a final usage-only SSE chunk. Legacy
+            // /v1/completions constructs ChatRequest programmatically
+            // via the positional init which doesn't accept
+            // streamOptions, so OpenAI SDK clients calling the legacy
+            // completions API with `stream_options={"include_usage":true}`
+            // got a stream that never included usage — a silent drop
+            // visible as "my token counts always read zero" in the SDK.
+            if let so = obj["stream_options"] as? [String: Any],
+               let include = so["include_usage"] as? Bool {
+                chatReq.streamOptions = .init(includeUsage: include)
+            }
             // iter-119 §145: pre-flight validation, same class as iter-67
             // §96 for /v1/responses. /v1/completions was the last chat-
             // shape route skipping validate() — bad temperature /
@@ -653,6 +666,15 @@ public enum OpenAIRoutes {
             // without init params — set them after construction.
             chatReq.frequencyPenalty = obj["frequency_penalty"] as? Double
             chatReq.presencePenalty = obj["presence_penalty"] as? Double
+            // §330 — mirror /v1/chat/completions stream_options wiring.
+            // /v1/responses constructs ChatRequest programmatically so
+            // the Codable decode path for stream_options never runs;
+            // clients passing `stream_options: {include_usage: true}`
+            // got a stream with no final usage chunk.
+            if let so = obj["stream_options"] as? [String: Any],
+               let include = so["include_usage"] as? Bool {
+                chatReq.streamOptions = .init(includeUsage: include)
+            }
             // iter-67 (§96) — /v1/responses was the last chat-style route
             // skipping `chatReq.validate()`. Chat/completions (line 93) +
             // Anthropic /v1/messages (line 43) both call it; Responses
