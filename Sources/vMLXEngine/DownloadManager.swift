@@ -71,6 +71,37 @@ public actor DownloadManager {
             self.localPath = localPath
             self.requiresHFAuth = requiresHFAuth
         }
+
+        // §327 — custom decoder defaults the newer `requiresHFAuth`
+        // field (added in O7 §293) to `false` when the on-disk sidecar
+        // was written by a pre-§293 build. Without this, the synthesized
+        // Codable decoder throws `keyNotFound` on every upgraded user's
+        // first launch and they lose their entire job history (the
+        // outer SidecarPayload decode fails too, so loadSidecar returns
+        // []). Same treatment for `localPath`/`etaSeconds`/`error`
+        // which are already Optional and decode to nil on absence.
+        enum CodingKeys: String, CodingKey {
+            case id, repo, displayName, totalBytes, receivedBytes
+            case bytesPerSecond, etaSeconds, status, error, startedAt
+            case localPath, requiresHFAuth
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.id = try c.decode(UUID.self, forKey: .id)
+            self.repo = try c.decode(String.self, forKey: .repo)
+            self.displayName = try c.decode(String.self, forKey: .displayName)
+            self.totalBytes = try c.decode(Int64.self, forKey: .totalBytes)
+            self.receivedBytes = try c.decode(Int64.self, forKey: .receivedBytes)
+            self.bytesPerSecond = try c.decode(Double.self, forKey: .bytesPerSecond)
+            self.etaSeconds = try c.decodeIfPresent(Double.self, forKey: .etaSeconds)
+            self.status = try c.decode(Status.self, forKey: .status)
+            self.error = try c.decodeIfPresent(String.self, forKey: .error)
+            self.startedAt = try c.decode(Date.self, forKey: .startedAt)
+            self.localPath = try c.decodeIfPresent(URL.self, forKey: .localPath)
+            self.requiresHFAuth =
+                try c.decodeIfPresent(Bool.self, forKey: .requiresHFAuth) ?? false
+        }
     }
 
     public enum Status: String, Sendable, Codable {
