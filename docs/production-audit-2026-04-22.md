@@ -79,8 +79,10 @@ pushed to origin.
 
 ## Block 3: LIVE HARNESS COVERAGE
 
-- [ ] H1 Ship `.claude/image-lifecycle-verify.sh` covering I2/I3/L1-L4
-  as bash harness with RAM/GPU delta measurement via `/metrics`.
+- [x] H1 `.claude/image-lifecycle-verify.sh` shipped — 12/12 checks
+  across S1 boot + I3 placeholder warning + L1 soft-sleep + L2 deep-
+  sleep + L3/L4 JIT-rehydrate + I7 edit route 400. Live-run
+  `PASSED: 12  FAILED: 0`, deep-wake+gen 2s. Commit `b0ecd1a`.
 - [ ] H2 Extend `.claude/live-verify.sh` with S19-S23 covering
   `/admin/log-level` live swap + `x-vmlx-trace-id` on streaming.
 - [ ] H3 Extend `.claude/lifecycle-verify.sh` with S6 covering
@@ -167,9 +169,10 @@ pushed to origin.
 - `7cac93b` I1/I3 §311: honest placeholder_output warning on image gen
 - `b04ea03` I7 §312: image routes classify user-error Flux as 400
 - `6397e1d` L1/L2/L3/L4 §313: deep-sleep drains FluxBackend + JIT re-hydrate
+- `b0ecd1a` H1 §314: image-lifecycle-verify.sh harness (12/12 green) + progress tracker moved out of .claude/
 
 ## Harness state (updated each iteration)
 
 - `bash .claude/live-verify.sh` — 44/44 ✓ (iter 3 post-L1-L4)
 - `bash .claude/lifecycle-verify.sh` — 13/13 ✓ (iter 3)
-- `bash .claude/image-lifecycle-verify.sh` — NOT YET SHIPPED (H1 row open)
+- `bash .claude/image-lifecycle-verify.sh` — 12/12 ✓ (iter 4 post-H1)
