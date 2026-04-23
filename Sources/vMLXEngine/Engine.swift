@@ -2104,11 +2104,26 @@ public actor Engine {
             // response, but this is a vMLX extension mirroring
             // /v1/images/edits (§248) and Flux DALLE-2-compatible tooling.
             var entry: [String: Any] = ["seed": perSettings.seed]
-            if responseFormat == "b64_json" {
+            // I8 §315 — three response_format values are honored:
+            //   "url"       → file:// URL (default)
+            //   "b64_json"  → base64-encoded PNG bytes under `b64_json`
+            //   "bytes"     → raw base64 under `bytes` (PR #99 B1; the
+            //                 sibling "b64_json" key is preserved for
+            //                 OpenAI SDK compat, "bytes" surfaces the
+            //                 same payload under the newer key so
+            //                 future-versioned clients can switch).
+            // Any other value falls back to "url" to match OpenAI's
+            // permissive default.
+            switch responseFormat {
+            case "b64_json":
                 if let data = try? Data(contentsOf: url) {
                     entry["b64_json"] = data.base64EncodedString()
                 }
-            } else {
+            case "bytes":
+                if let data = try? Data(contentsOf: url) {
+                    entry["bytes"] = data.base64EncodedString()
+                }
+            default:
                 entry["url"] = url.absoluteString
             }
             entries.append(entry)
@@ -2220,11 +2235,26 @@ public actor Engine {
                 settings: perSettings
             )
             var entry: [String: Any] = ["seed": perSettings.seed]
-            if responseFormat == "b64_json" {
+            // I8 §315 — three response_format values are honored:
+            //   "url"       → file:// URL (default)
+            //   "b64_json"  → base64-encoded PNG bytes under `b64_json`
+            //   "bytes"     → raw base64 under `bytes` (PR #99 B1; the
+            //                 sibling "b64_json" key is preserved for
+            //                 OpenAI SDK compat, "bytes" surfaces the
+            //                 same payload under the newer key so
+            //                 future-versioned clients can switch).
+            // Any other value falls back to "url" to match OpenAI's
+            // permissive default.
+            switch responseFormat {
+            case "b64_json":
                 if let data = try? Data(contentsOf: url) {
                     entry["b64_json"] = data.base64EncodedString()
                 }
-            } else {
+            case "bytes":
+                if let data = try? Data(contentsOf: url) {
+                    entry["bytes"] = data.base64EncodedString()
+                }
+            default:
                 entry["url"] = url.absoluteString
             }
             entries.append(entry)
