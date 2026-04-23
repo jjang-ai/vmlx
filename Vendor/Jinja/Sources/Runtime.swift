@@ -663,6 +663,49 @@ struct Interpreter {
             return BooleanValue(value: false)
         } else if (node.operation.value == "~") {
             return StringValue(value: "\(left.value)\(right.value)")
+        } else if node.operation.value == "in" || node.operation.value == "not in" {
+            // §341 — top-level membership handler so `not in` works for
+            // every (left, right) type combination before the
+            // numeric-vs-numeric branch short-circuits to
+            // "Unknown operation type: not in". Handles:
+            //   - NumericValue in ArrayValue (int or double, mixed)
+            //   - StringValue in String/Array/Object
+            //   - BooleanValue in ArrayValue
+            //   - NullValue / UndefinedValue paths already return false
+            //     in the guard above, so left/right are concrete here.
+            // Falls through to `false` when the right side isn't a
+            // searchable container — matches Python Jinja's lenient
+            // `"foo" in 42` returning False rather than raising.
+            let member: Bool = {
+                // Helper for cross-type numeric equality.
+                func numericEq(_ a: Any, _ b: Any) -> Bool {
+                    if let ai = a as? Int, let bi = b as? Int { return ai == bi }
+                    if let ad = a as? Double, let bd = b as? Double { return ad == bd }
+                    if let ai = a as? Int, let bd = b as? Double { return Double(ai) == bd }
+                    if let ad = a as? Double, let bi = b as? Int { return ad == Double(bi) }
+                    return false
+                }
+                if let rightArr = right as? ArrayValue {
+                    for item in rightArr.value {
+                        if let l = left as? StringValue, let r = item as? StringValue,
+                           l.value == r.value { return true }
+                        if let l = left as? NumericValue, let r = item as? NumericValue,
+                           numericEq(l.value, r.value) { return true }
+                        if let l = left as? BooleanValue, let r = item as? BooleanValue,
+                           l.value == r.value { return true }
+                    }
+                    return false
+                }
+                if let rightStr = right as? StringValue, let l = left as? StringValue {
+                    return rightStr.value.contains(l.value)
+                }
+                if let rightObj = right as? ObjectValue, let l = left as? StringValue {
+                    return rightObj.value.keys.contains(l.value)
+                }
+                // Unsupported combination → false (Python-Jinja-compatible).
+                return false
+            }()
+            return BooleanValue(value: node.operation.value == "in" ? member : !member)
         } else if let left = left as? NumericValue, let right = right as? NumericValue {
             switch node.operation.value {
             case "+":
