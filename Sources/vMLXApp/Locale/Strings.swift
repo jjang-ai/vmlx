@@ -216,6 +216,55 @@ public enum L10n {
             ko: "적용 중인 값",
             zh: "当前生效值"
         )
+        // Section labels in ChatSettingsPopover
+        public static let sectionSampling = L10nEntry(
+            en: "Sampling — this chat (overrides global)",
+            ja: "サンプリング — このチャット(グローバル設定を上書き)",
+            ko: "샘플링 — 현재 대화 (전역 설정 무시)",
+            zh: "采样 — 当前对话(覆盖全局)"
+        )
+        public static let sectionReasoning = L10nEntry(
+            en: "Reasoning",
+            ja: "推論",
+            ko: "추론",
+            zh: "推理"
+        )
+        public static let sectionSystemPrompt = L10nEntry(
+            en: "System Prompt",
+            ja: "システムプロンプト",
+            ko: "시스템 프롬프트",
+            zh: "系统提示"
+        )
+        public static let sectionStopSequences = L10nEntry(
+            en: "Stop Sequences",
+            ja: "停止シーケンス",
+            ko: "중지 시퀀스",
+            zh: "停止序列"
+        )
+        public static let sectionTools = L10nEntry(
+            en: "Tools",
+            ja: "ツール",
+            ko: "도구",
+            zh: "工具"
+        )
+        public static let sectionBuiltInTools = L10nEntry(
+            en: "Built-in Tools",
+            ja: "組み込みツール",
+            ko: "내장 도구",
+            zh: "内置工具"
+        )
+        public static let sectionWorkingDirectory = L10nEntry(
+            en: "Working Directory",
+            ja: "作業ディレクトリ",
+            ko: "작업 디렉터리",
+            zh: "工作目录"
+        )
+        public static let addStop = L10nEntry(
+            en: "Add stop",
+            ja: "停止を追加",
+            ko: "중지 추가",
+            zh: "添加停止"
+        )
     }
 
     // MARK: - Common actions / dialogs
@@ -287,6 +336,42 @@ public enum L10n {
             ko: "도움말",
             zh: "帮助"
         )
+        public static let rename = L10nEntry(
+            en: "Rename…",
+            ja: "名前を変更…",
+            ko: "이름 바꾸기…",
+            zh: "重命名…"
+        )
+        public static let reset = L10nEntry(
+            en: "Reset",
+            ja: "リセット",
+            ko: "재설정",
+            zh: "重置"
+        )
+        public static let resetAll = L10nEntry(
+            en: "Reset all",
+            ja: "すべてリセット",
+            ko: "모두 재설정",
+            zh: "全部重置"
+        )
+        public static let exportAsMarkdown = L10nEntry(
+            en: "Export as Markdown…",
+            ja: "Markdownとしてエクスポート…",
+            ko: "Markdown으로 내보내기…",
+            zh: "导出为 Markdown…"
+        )
+        public static let deleteChat = L10nEntry(
+            en: "Delete chat",
+            ja: "チャットを削除",
+            ko: "대화 삭제",
+            zh: "删除对话"
+        )
+        public static let deleteAll = L10nEntry(
+            en: "Delete all",
+            ja: "すべて削除",
+            ko: "모두 삭제",
+            zh: "全部删除"
+        )
         public static let regenerate = L10nEntry(
             en: "Regenerate",
             ja: "再生成",
@@ -316,18 +401,6 @@ public enum L10n {
             ja: "再試行",
             ko: "재시도",
             zh: "重试"
-        )
-        public static let reset = L10nEntry(
-            en: "Reset",
-            ja: "リセット",
-            ko: "재설정",
-            zh: "重置"
-        )
-        public static let resetAll = L10nEntry(
-            en: "Reset all",
-            ja: "すべてリセット",
-            ko: "전체 재설정",
-            zh: "全部重置"
         )
         public static let open = L10nEntry(
             en: "Open",
