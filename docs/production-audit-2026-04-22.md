@@ -291,6 +291,24 @@ pushed to origin.
   `stream_options: {include_usage: true}`. Legacy completions +
   Responses routes dropped it because the positional init doesn't
   accept streamOptions. Post-init assignment fixes both.
+- `26fa5ea` §331 **CORSAllowlistMiddleware — security hole**:
+  2+-entry `allowedOrigins` mapped to `.originBased` which echoed
+  ANY request Origin with no allowlist gating. Users thought they
+  had restricted CORS to `["example.com", "app.com"]` but
+  effectively had `.all`. New wrapper middleware strips Origin for
+  disallowed values + 403s preflight requests.
+- `41a343e` §332 explicit `ORPHAN` tag on 6 unused GlobalSettings
+  fields (continuousBatching, streamInterval, prefixCacheSize,
+  prefixCacheMaxBytes, cacheMemoryMB, memoryAwareCache). Python-
+  parity fields that never got Swift wiring. Regression guard
+  pins the orphan set so future work must consciously wire or
+  un-tag.
+- `995b07d` §333 RemoteEngineClient.listModels timeout — picker
+  froze 60s on dead remote hosts; capped at 10s.
+- `670df1b` §334 **user-URL DoS caps** — `image_url` + `video_url`
+  fetches had no timeout (60s default) + no size cap (gigabyte
+  streams held in RAM). Now 20s timeout, 64 MB (image) / 512 MB
+  (video) size caps, data(for:URLRequest) path.
 
 ## Harness state (updated each iteration)
 
