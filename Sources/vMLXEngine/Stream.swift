@@ -2405,6 +2405,17 @@ extension Engine {
     ) -> GenerateParameters {
         var params = GenerateParameters()
         params.prefillStepSize = resolved.settings.prefillStepSize
+
+        // §323 KIMI-K2.6-VMLX-INTEGRATION.md §2.6 #6-#8 — always chunk
+        // prefill on DSV3-family MLA bundles (kimi_k25, deepseek_v3/v2/v32).
+        // Default 1024 trips the Metal watchdog on 100 GB+ MoE because the
+        // per-kernel JIT compile dominates cold first-forward. Clamp to
+        // 32 unless the operator explicitly set it lower. Python parity:
+        // `jang_tools.kimi_prune.generate_vl` uses `prefill_step_size=16/32`.
+        let cacheTypeIsMLAForPrefill = (self.modelCapabilities?.cacheType == "mla")
+        if cacheTypeIsMLAForPrefill && params.prefillStepSize > 32 {
+            params.prefillStepSize = 32
+        }
         params.maxTokens = request.maxTokens ?? resolved.maxTokens
         params.temperature = Float(request.temperature ?? resolved.temperature)
         params.topP = Float(request.topP ?? resolved.topP)
