@@ -180,10 +180,14 @@ pushed to origin.
 - [x] K1 §317 — factory refuses mxtq bundles with actionable error
   message pointing at jang-tools Path A conversion. Prevents silent
   weight mangling on affine loader. Commit `ceaec3b`.
-- [ ] K2 Port `DeepseekV3JANGTQModel` — mirror `MiniMaxJANGTQ` pattern
-  (swap `DeepseekV3MoE.switchMLP: SwitchGLU` → `TurboQuantSwitchGLU`).
-  Scope ~300 LOC. Unblocks native Kimi K2.6 JANGTQ_1L load without
-  the 42 GB expansion to affine.
+- [x] K2 §318 — `DeepseekV3JANGTQModel` ported. Covers model_types
+  deepseek_v3 / deepseek_v2 / deepseek_v32 / kimi_k25. Reuses the
+  internal `DeepseekV3Attention` / `DeepseekV3MLP` / `MoEGate` classes
+  via `DeepseekV3JANGTQConfiguration.asDeepseekV3()` mirror so
+  duplication stays under ~300 LOC. Cache/parser wiring audit proved
+  already green (silver allowlist `kimi_k25` → deepseek_r1 +
+  KimiToolCallParser + cacheType=mla; TQ auto-activation skips MLA).
+  Commit `f91af12`.
 - [ ] K3 Port `KimiMoonViT.swift` — 27-block MoonViT ViT, ~500 LOC
   from `mlx_vlm.models.kimi_vl.vision.VisionModel`.
 - [ ] K4 Ship `KimiVLM.swift` wrapper — calls `chunkedPrefillEmbedding`
@@ -203,6 +207,8 @@ pushed to origin.
 - `b04ea03` I7 §312: image routes classify user-error Flux as 400
 - `6397e1d` L1/L2/L3/L4 §313: deep-sleep drains FluxBackend + JIT re-hydrate
 - `b0ecd1a` H1 §314: image-lifecycle-verify.sh harness (12/12 green) + progress tracker moved out of .claude/
+- `ceaec3b` K1 §317: factory refuses mxtq bundles on DeepSeek family (superseded by K2)
+- `f91af12` K2 §318: DeepseekV3JANGTQModel — native Kimi K2.6 JANGTQ load + registration tests
 
 ## Harness state (updated each iteration)
 

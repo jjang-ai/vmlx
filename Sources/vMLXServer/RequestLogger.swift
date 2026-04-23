@@ -39,11 +39,18 @@ import vMLXEngine
 /// test fires.
 public struct RequestLoggerMiddleware<Context: RequestContext>: RouterMiddleware {
     let engine: Engine
-    let minLevel: LogStore.Level
 
+    /// `minLevel` is retained for source compatibility but no longer
+    /// gates the append. `LogStore.append` owns the threshold check via
+    /// its live-swappable `_globalMinLevel` (R4 §305 / S3 §309 /
+    /// §319 O2-live-swap fix). Middleware-level filtering here would
+    /// shadow `/admin/log-level` bumps — `warn`-initialized middleware
+    /// would silently drop info-level request lines even after an
+    /// operator lowered the global threshold to `trace`/`debug`. Pass
+    /// every line to LogStore and let the global filter decide.
     public init(engine: Engine, minLevel: LogStore.Level = .info) {
         self.engine = engine
-        self.minLevel = minLevel
+        _ = minLevel
     }
 
     public func handle(
@@ -64,25 +71,23 @@ public struct RequestLoggerMiddleware<Context: RequestContext>: RouterMiddleware
                 if status >= 400 { return .warn }
                 return .info
             }()
-            if level >= minLevel {
-                // R1 §302: stamp trace id on the log line so the
-                // APIScreen request log + any downstream consumer can
-                // correlate a row with the client's response envelope.
-                // Populated by OpenAIRoutes Q1 — SSE + non-streaming
-                // chat/completions/responses set `x-vmlx-trace-id`.
-                let tidSuffix: String
-                if let hname = HTTPField.Name("x-vmlx-trace-id"),
-                   let tid = response.headers[hname], !tid.isEmpty
-                {
-                    tidSuffix = " [tid=\(tid)]"
-                } else {
-                    tidSuffix = ""
-                }
-                await engine.logs.append(
-                    level, category: "server",
-                    "\(method) \(path) -> \(status) (\(Self.fmt(elapsedMs))ms)\(tidSuffix)"
-                )
+            // R1 §302: stamp trace id on the log line so the
+            // APIScreen request log + any downstream consumer can
+            // correlate a row with the client's response envelope.
+            // Populated by OpenAIRoutes Q1 — SSE + non-streaming
+            // chat/completions/responses set `x-vmlx-trace-id`.
+            let tidSuffix: String
+            if let hname = HTTPField.Name("x-vmlx-trace-id"),
+               let tid = response.headers[hname], !tid.isEmpty
+            {
+                tidSuffix = " [tid=\(tid)]"
+            } else {
+                tidSuffix = ""
             }
+            await engine.logs.append(
+                level, category: "server",
+                "\(method) \(path) -> \(status) (\(Self.fmt(elapsedMs))ms)\(tidSuffix)"
+            )
             return response
         } catch {
             let elapsedMs = Self.elapsedMs(since: start)
