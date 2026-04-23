@@ -92,7 +92,7 @@ struct ChatSettingsPopover: View {
                 .font(Theme.Typography.bodyHi)
                 .foregroundStyle(Theme.Colors.textHigh)
             Spacer()
-            Button("Reset all") { resetAll() }
+            Button(L10n.Common.resetAll.render(appLocale)) { resetAll() }
                 .buttonStyle(.borderless)
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.danger)
@@ -139,7 +139,7 @@ struct ChatSettingsPopover: View {
                    fallback: { resolved?.settings.defaultMaxTokens ?? 0 })
             }
             .padding(.top, Theme.Spacing.xs)
-        } label: { sectionLabel("Sampling — this chat (overrides global)") }
+        } label: { sectionLabel(L10n.Chat.sectionSampling.render(appLocale)) }
         .tint(Theme.Colors.textMid)
     }
 
@@ -201,7 +201,7 @@ struct ChatSettingsPopover: View {
                 }
             }
             .padding(.top, Theme.Spacing.xs)
-        } label: { sectionLabel("Reasoning") }
+        } label: { sectionLabel(L10n.Chat.sectionReasoning.render(appLocale)) }
         .tint(Theme.Colors.textMid)
     }
 
@@ -232,7 +232,7 @@ struct ChatSettingsPopover: View {
                 }
             }
             .padding(.top, Theme.Spacing.xs)
-        } label: { sectionLabel("System Prompt") }
+        } label: { sectionLabel(L10n.Chat.sectionSystemPrompt.render(appLocale)) }
         .tint(Theme.Colors.textMid)
     }
 
@@ -282,7 +282,7 @@ struct ChatSettingsPopover: View {
                 }
             }
             .padding(.top, Theme.Spacing.xs)
-        } label: { sectionLabel("Stop Sequences") }
+        } label: { sectionLabel(L10n.Chat.sectionStopSequences.render(appLocale)) }
         .tint(Theme.Colors.textMid)
     }
 
@@ -332,7 +332,7 @@ struct ChatSettingsPopover: View {
                           traceKey: "hideToolStatusDefault")
             }
             .padding(.top, Theme.Spacing.xs)
-        } label: { sectionLabel("Tools") }
+        } label: { sectionLabel(L10n.Chat.sectionTools.render(appLocale)) }
         .tint(Theme.Colors.textMid)
     }
 
@@ -368,7 +368,7 @@ struct ChatSettingsPopover: View {
                     .padding(.top, 2)
             }
             .padding(.top, Theme.Spacing.xs)
-        } label: { sectionLabel("Built-in Tools") }
+        } label: { sectionLabel(L10n.Chat.sectionBuiltInTools.render(appLocale)) }
         .tint(Theme.Colors.textMid)
     }
 
@@ -406,7 +406,7 @@ struct ChatSettingsPopover: View {
                 }
             }
             .padding(.top, Theme.Spacing.xs)
-        } label: { sectionLabel("Working Directory") }
+        } label: { sectionLabel(L10n.Chat.sectionWorkingDirectory.render(appLocale)) }
         .tint(Theme.Colors.textMid)
     }
 
