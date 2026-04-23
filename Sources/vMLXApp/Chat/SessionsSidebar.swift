@@ -7,6 +7,7 @@ import vMLXTheme
 
 struct SessionsSidebar: View {
     @Bindable var vm: ChatViewModel
+    @Environment(\.appLocale) private var appLocale
 
     var body: some View {
         VStack(spacing: 0) {
@@ -128,6 +129,7 @@ private struct SessionRow: View {
     @State private var showDeleteConfirm = false
     @State private var isRenaming = false
     @State private var renameDraft = ""
+    @Environment(\.appLocale) private var appLocale
 
     var body: some View {
         Button(action: { if !isRenaming { onSelect() } }) {
@@ -177,10 +179,10 @@ private struct SessionRow: View {
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
         .contextMenu {
-            Button("Rename…") { startRename() }
-            Button("Export as Markdown…") { onExport() }
+            Button(L10n.Common.rename.render(appLocale)) { startRename() }
+            Button(L10n.Common.exportAsMarkdown.render(appLocale)) { onExport() }
             Divider()
-            Button("Delete chat", role: .destructive) {
+            Button(L10n.Common.deleteChat.render(appLocale), role: .destructive) {
                 showDeleteConfirm = true
             }
         }
@@ -189,8 +191,8 @@ private struct SessionRow: View {
             isPresented: $showDeleteConfirm,
             titleVisibility: .visible
         ) {
-            Button("Delete", role: .destructive) { onDelete() }
-            Button("Cancel", role: .cancel) { }
+            Button(L10n.Common.delete.render(appLocale), role: .destructive) { onDelete() }
+            Button(L10n.Common.cancel.render(appLocale), role: .cancel) { }
         } message: {
             Text("\"\(session.title)\" and all its messages will be permanently removed. This can't be undone.")
         }
@@ -217,6 +219,7 @@ private struct SessionRow: View {
 private struct ClearAllButton: View {
     @Bindable var vm: ChatViewModel
     @State private var showConfirm = false
+    @Environment(\.appLocale) private var appLocale
 
     var body: some View {
         Button {
@@ -244,8 +247,8 @@ private struct ClearAllButton: View {
             isPresented: $showConfirm,
             titleVisibility: .visible
         ) {
-            Button("Delete all", role: .destructive) { vm.clearAllSessions() }
-            Button("Cancel", role: .cancel) { }
+            Button(L10n.Common.deleteAll.render(appLocale), role: .destructive) { vm.clearAllSessions() }
+            Button(L10n.Common.cancel.render(appLocale), role: .cancel) { }
         } message: {
             Text("All \(vm.sessions.count) chats and their messages will be permanently removed. This can't be undone.")
         }

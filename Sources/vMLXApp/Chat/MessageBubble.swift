@@ -28,6 +28,7 @@ struct MessageBubble: View {
     var onBranch: (() -> Void)? = nil
 
     @State private var hovered = false
+    @Environment(\.appLocale) private var appLocale
     @State private var editing = false
     @State private var draft: String = ""
     @State private var showDeleteConfirm = false
@@ -140,8 +141,8 @@ struct MessageBubble: View {
             isPresented: $showDeleteConfirm,
             titleVisibility: .visible
         ) {
-            Button("Delete", role: .destructive) { onDelete() }
-            Button("Cancel", role: .cancel) { }
+            Button(L10n.Common.delete.render(appLocale), role: .destructive) { onDelete() }
+            Button(L10n.Common.cancel.render(appLocale), role: .cancel) { }
         } message: {
             Text("The message will be permanently removed from this chat. This can't be undone.")
         }
@@ -212,11 +213,11 @@ struct MessageBubble: View {
                         )
                 )
             HStack(spacing: Theme.Spacing.sm) {
-                Button("Cancel") { editing = false }
+                Button(L10n.Common.cancel.render(appLocale)) { editing = false }
                     .buttonStyle(.plain)
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textMid)
-                Button("Save") {
+                Button(L10n.Common.save.render(appLocale)) {
                     onEdit(draft)
                     editing = false
                 }
