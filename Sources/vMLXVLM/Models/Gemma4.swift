@@ -895,7 +895,32 @@ public class Gemma4: Module, VLMModel, KVCacheDimensionProvider {
         }
 
         let paddedCache = padCache(cache)
-        let out = languageModel(input.text.tokens, inputEmbedding: emb, cache: paddedCache)
+        // §335 — chunked prefill, prevents Metal-buffer overflow on
+        // long prompts. Every other VLM in the tree already chunks via
+        // `chunkedPrefillEmbedding` (see Qwen2VL / Qwen25VL / Gemma3
+        // / FastVLM / Idefics3 / LFM2VL / Mistral3 / Mistral4VLM /
+        // Pixtral / GlmOcr). Gemma4 was the last holdout — a single
+        // full-sequence `languageModel(...)` forward produced
+        // intermediate activations proportional to sequence length,
+        // so a 40k+ token prompt (QwenCode / OpenCode CLI /init dump)
+        // blew past the Metal max-buffer cap on 64-GB Macs
+        // (mlxstudio #83: "Attempting to allocate 21.9 GB > 9.5 GB").
+        //
+        // Helper quirk: `chunkedPrefillEmbedding` takes `[KVCache]`
+        // (non-nil), but Gemma4's `padCache` returns `[KVCache?]?`
+        // with nil entries for layers without attention caches.
+        // Walk the padded list and pass only the non-nil entries
+        // to the helper for the materialization barrier — the
+        // forward call inside `step` still receives the full padded
+        // shape so layer→cache indexing remains aligned.
+        let nonNilCache = (paddedCache ?? []).compactMap { $0 }
+        let out = chunkedPrefillEmbedding(
+            inputEmbedding: emb,
+            cache: nonNilCache,
+            prefillStepSize: windowSize ?? 512
+        ) { chunk in
+            languageModel(nil, inputEmbedding: chunk, cache: paddedCache)
+        }
         return .logits(.init(logits: out))
     }
 
