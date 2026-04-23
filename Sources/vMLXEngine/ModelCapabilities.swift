@@ -315,16 +315,22 @@ public enum ModelTypeTable {
               modelTypes: ["minimax", "minimax_m2", "minimax_m2_5"],
               toolParser: "minimax", reasoningParser: "qwen3",
               thinkInTemplate: true, priority: 20),
+        // Kimi K2.6 family — DeepSeek V3 MLA architecture. Chat template
+        // unconditionally appends `<think>` to the assistant prefix
+        // (KIMI-K2.6-VMLX-INTEGRATION.md §2.6 #16). thinkInTemplate=true
+        // keeps the UI showing the thinking toggle + lets clients set
+        // `enable_thinking=false` via reasoning_effort=none when they
+        // want short-answer output. Same policy as MiniMax / Nemotron.
         .init(family: "kimi_k25",
               modelTypes: ["kimi_k25", "deepseek_v2", "deepseek_v32"],
               cacheType: "mla",
               toolParser: "kimi", reasoningParser: "deepseek_r1",
-              priority: 10),
+              thinkInTemplate: true, priority: 10),
 
-        // ── Kimi / Moonshot ──
+        // ── Kimi / Moonshot (older K2) ──
         .init(family: "kimi", modelTypes: ["kimi_k2"],
               toolParser: "kimi", reasoningParser: "deepseek_r1",
-              priority: 20),
+              thinkInTemplate: true, priority: 20),
 
         // ── Misc LLMs ──
         // Audit 2026-04-16: silver rows for families registered in
