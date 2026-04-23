@@ -518,7 +518,21 @@ public actor ModelLibrary {
             "safety_checker", "feature_extractor", "image_encoder",
         ]
         while let (dir, depth) = queue.popLast() {
-            if fm.fileExists(atPath: dir.appendingPathComponent("config.json").path) {
+            // §339 (mlxstudio #85/#82/#96) — image / diffusion pipelines
+            // ship a root-level `model_index.json` (Flux, SD, Z-Image)
+            // instead of `config.json`. Prior to this guard the walker
+            // only recognized `config.json` dirs, so any image model a
+            // user added via "Add folder" never appeared in the picker
+            // — symptom surfaces as "swift version cannot add model
+            // folder" (mlxstudio #85 Chinese report) and "Moved image
+            // models still not opening" (#82). Accept either marker;
+            // buildEntry() classifies image-modality via the same
+            // model_index.json signal.
+            let hasConfig = fm.fileExists(
+                atPath: dir.appendingPathComponent("config.json").path)
+            let hasModelIndex = fm.fileExists(
+                atPath: dir.appendingPathComponent("model_index.json").path)
+            if hasConfig || hasModelIndex {
                 // Reject diffusion sub-module dirs (parent owns model_index.json).
                 let name = dir.lastPathComponent.lowercased()
                 let parent = dir.deletingLastPathComponent()
@@ -592,6 +606,20 @@ public actor ModelLibrary {
                 modality = .rerank
             }
         }
+        // §339 (mlxstudio #85/#82/#96) — diffusion pipelines ship a
+        // root-level `model_index.json` instead of `config.json`. The
+        // walker now accepts either marker, and here we force image-
+        // modality classification when model_index.json is present —
+        // without this, a user-added Flux / Z-Image / SD dir with a
+        // non-matching folder name (say `my-custom-flux-weights/`)
+        // would land as modality=.unknown and the picker filter
+        // (`modality == .image`) would hide it from the Image tab.
+        let hasRootModelIndex = FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent("model_index.json").path)
+        if hasRootModelIndex {
+            modality = .image
+        }
+
         // Image: diffusion pipelines ship a `model_index.json`, not `config.json`.
         // Most of those won't be picked up by this scanner (no config.json), but
         // if a user points at a Flux/SD dir that has a config.json inside the
