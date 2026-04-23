@@ -13,7 +13,8 @@ import { resolveImageModelFromDirectoryName } from '../shared/imageModels'
 export type { ServerConfig, DetectedProcess } from './server'
 import type { ServerConfig, DetectedProcess } from './server'
 import { detectModelConfigFromDir } from './model-config-registry'
-import { getBundledPythonPath } from './engine-manager'
+import { getBundledPythonPath, verifyBundledEngineOnFilesystem } from './engine-manager'
+import { app as electronApp } from 'electron'
 
 /** Result of findEnginePath: either bundled Python or a system binary */
 type EnginePath =
@@ -2017,20 +2018,41 @@ export class SessionManager extends EventEmitter {
   }
 
   findEnginePath(): EnginePath | null {
-    // Bundled Python: use python3 -m vmlx_engine.cli instead of vmlx-engine binary
-    // This avoids shebang path issues in relocatable Python builds
+    // Bundled Python: use python3 -m vmlx_engine.cli instead of vmlx-engine binary.
+    // This avoids shebang path issues in relocatable Python builds.
+    //
+    // mlxstudio#87 hotfix: previously we verified the bundle by spawning
+    // `python3 -s -c "import vmlx_engine"` with a 10 s timeout. On a cold-disk
+    // first launch, MLX + mlx_vlm shared libs take >10 s to import, the
+    // subprocess times out, we fall through to the system-binary search,
+    // find any stale user-installed `vmlx-engine` (old brew pip install, say
+    // from months ago), and spawn it. That binary's Python has no
+    // `vmlx_engine` / `jang_tools` → user sees "ModuleNotFoundError" and
+    // blames the vMLX build.
+    //
+    // Fix: in a packaged app, bundled Python is authoritative. We verify
+    // its presence via a filesystem dist-info read (no subprocess, no timeout),
+    // and if it passes, we NEVER fall through to a system binary — a stale
+    // user install will never win over a freshly-shipped DMG.
     const bundledPython = getBundledPythonPath()
     if (bundledPython) {
-      try {
-        execSync(`"${bundledPython}" -s -c "import vmlx_engine"`, {
-          encoding: 'utf-8',
-          timeout: 10000,
-          env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
-        })
+      if (verifyBundledEngineOnFilesystem()) {
         return { type: 'bundled', pythonPath: bundledPython }
-      } catch (_) {
-        console.log('[SESSIONS] Bundled Python found but vmlx_engine import failed, trying system')
       }
+      if (electronApp.isPackaged) {
+        // Bundled Python exists but dist-info is missing — the DMG is broken
+        // OR a prior pip --force-reinstall corrupted the install. Refuse to
+        // spawn a system binary that would almost certainly be older and
+        // missing features: that path produced the ModuleNotFoundError
+        // reports we've seen. Fail fast with a clear message instead.
+        console.error(
+          '[SESSIONS] Bundled Python present but vmlx_engine dist-info is missing. ' +
+          'Reinstall vMLX from the latest DMG — spawning a system binary would ship ' +
+          'outdated code.'
+        )
+        return null
+      }
+      console.log('[SESSIONS] Bundled Python missing vmlx_engine dist-info; trying system (dev mode)')
     }
 
     // System binary search

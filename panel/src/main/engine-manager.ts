@@ -59,6 +59,17 @@ export function getBundledPythonPath(): string | null {
  * cold-disk M2. The timeout throws → we wrongly report installed=false and
  * the renderer shows "Inference engine not found".
  */
+/**
+ * Return true if the bundled site-packages contains a usable vmlx_engine
+ * install (package dir with __init__.py + matching dist-info METADATA).
+ * Fast filesystem check — no subprocess, no timeout. Used by
+ * sessions.findEnginePath to decide whether to trust the bundled Python
+ * or fall through to a system binary. See mlxstudio#87.
+ */
+export function verifyBundledEngineOnFilesystem(): boolean {
+  return getBundledEngineVersionFromFilesystem() !== null
+}
+
 function getBundledEngineVersionFromFilesystem(): string | null {
   if (!app.isPackaged) return null
   try {

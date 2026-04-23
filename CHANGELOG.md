@@ -2,6 +2,13 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.3.82] - 2026-04-23
+
+### Fixed
+- **mlxstudio#87 / #84 follow-up — "ModuleNotFoundError: No module named 'vmlx_engine'" / 'jang_tools'** when launching a session (`panel/src/main/sessions.ts::findEnginePath`):
+  - v1.3.81 fixed the same 10-second subprocess-timeout pattern in `engine-manager.ts::checkEngineInstallation` but **missed** the identical pattern in `sessions.ts::findEnginePath`. On a cold-disk first launch, the `python3 -s -c "import vmlx_engine"` verification probe took > 10 s (MLX + mlx_vlm shared libs), timed out, fell through to the system-binary search, and spawned any stale user-installed `vmlx-engine` found at `/opt/homebrew/bin/vmlx-engine`, `~/.local/bin/vmlx-engine`, etc. That stale binary's Python frequently lacked `vmlx_engine` or `jang_tools` → user saw `ModuleNotFoundError` and blamed the fresh DMG.
+  - Fix: `findEnginePath` now verifies the bundled install via the filesystem dist-info read (shared helper `verifyBundledEngineOnFilesystem` in `engine-manager.ts` — no subprocess, no timeout). In packaged mode, if the bundle is broken it fails fast with a clear error instead of falling through to a system binary — a stale user install can never win over a freshly-shipped DMG. System-binary fallback is preserved for dev mode (non-packaged `app.getAppPath()`).
+
 ## [1.3.81] - 2026-04-22
 
 ### Fixed
