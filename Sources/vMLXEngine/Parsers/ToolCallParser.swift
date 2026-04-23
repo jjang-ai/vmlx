@@ -536,8 +536,25 @@ public final class KimiToolCallParser: ToolCallParser {
         let pattern = #"(?s)<\|tool_call_begin\|>(.*?)<\|tool_call_argument_begin\|>(.*?)<\|tool_call_end\|>"#
         var calls: [ParsedToolCall] = []
         for m in ParserUtils.regexMatches(modelOutput, pattern: pattern) where m.count >= 3 {
-            let name = m[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            var name = m[1].trimmingCharacters(in: .whitespacesAndNewlines)
             let args = m[2].trimmingCharacters(in: .whitespacesAndNewlines)
+            // §326 KIMI-K2.6-VMLX-INTEGRATION.md wire format: the raw
+            // name is `functions.<tool_name>:<index>` (e.g.
+            // `functions.search_web:0`). Strip the `functions.` prefix
+            // and the trailing `:N` index so the emitted name matches
+            // what the caller registered. Mirrors
+            // `KimiK2ToolCallParser.parse()` in vMLXLMCommon — without
+            // this strip, every Kimi K2.6 tool call surfaced as
+            // `functions.<name>:0` which no tool registry recognizes.
+            if let lastColon = name.lastIndex(of: ":"),
+               let tail = Int(name[name.index(after: lastColon)...]),
+               tail >= 0 {
+                name = String(name[..<lastColon])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if name.hasPrefix("functions.") {
+                name = String(name.dropFirst("functions.".count))
+            }
             calls.append(ParsedToolCall(id: generateToolId(), name: name, arguments: args))
         }
         if calls.isEmpty {
