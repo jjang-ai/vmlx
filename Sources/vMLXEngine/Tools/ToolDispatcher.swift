@@ -75,8 +75,23 @@ extension Engine {
         _ call: ChatRequest.ToolCall
     ) async -> ToolDispatchResult {
         let argsData = call.function.arguments.data(using: .utf8) ?? Data()
-        let arguments = (try? JSONSerialization.jsonObject(with: argsData))
+        let rawArguments = (try? JSONSerialization.jsonObject(with: argsData))
             as? [String: Any] ?? [:]
+        // §338 (vmlx#47) — LLMs occasionally emit tool arguments with
+        // numeric values wrapped in quotes (`{"page":"3"}` instead of
+        // `{"page":3}`). MCP servers that do strict JSON-Schema
+        // validation reject these as `Invalid arguments`. Walk the
+        // tool's declared `inputSchema` and coerce numeric/bool
+        // strings to their declared leaf types before dispatch.
+        // Non-destructive: values the schema doesn't cover or that
+        // don't cleanly coerce pass through unchanged.
+        var arguments = rawArguments
+        if let tool = await self.mcp.findTool(namespaced: call.function.name),
+           let schema = (try? JSONSerialization.jsonObject(
+                with: tool.inputSchemaJSON)) as? [String: Any]
+        {
+            arguments = coerceToolArguments(rawArguments, schema: schema)
+        }
         do {
             let result = try await self.mcp.executeTool(
                 namespaced: call.function.name,

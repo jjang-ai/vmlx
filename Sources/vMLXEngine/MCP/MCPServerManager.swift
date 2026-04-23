@@ -202,6 +202,14 @@ public actor MCPServerManager {
         config.servers.keys.sorted().compactMap { statuses[$0] }
     }
 
+    /// §338 (vmlx#47) — look up a tool by its namespaced name
+    /// (`server__tool`) so callers can access its `inputSchemaJSON`
+    /// for pre-dispatch argument coercion. Nil if the tool isn't
+    /// known yet; caller should proceed with the raw arguments.
+    public func findTool(namespaced fullName: String) -> MCPTool? {
+        listTools().first { $0.fullName == fullName }
+    }
+
     // MARK: - Execution
 
     /// Execute a tool by its namespaced name (`server__tool`). If the

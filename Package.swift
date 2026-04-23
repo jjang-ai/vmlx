@@ -628,6 +628,10 @@ let package = Package(
                 // normalization guards (full HTTP roundtrip lives in
                 // the live-verify harness).
                 "CORSAllowlistMiddlewareTests.swift",
+                // §338 (vmlx#47) tool-argument schema coercion — Int/
+                // Bool/Number coercion against JSON Schema before MCP
+                // dispatch, matching the Python fix.
+                "SchemaArgumentCoercionTests.swift",
                 // Metal-dependent tests excluded — `swift test` can't load
                 // the default.metallib from the SwiftPM bundle path;
                 // JangDFlashDrafter, JangDFlashSpecDec, VisionEmbeddingCache,
