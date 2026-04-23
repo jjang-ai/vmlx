@@ -179,7 +179,8 @@ struct SessionDashboard: View {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "arrow.down.doc.fill")
                         .font(.system(size: 13, weight: .semibold))
-                    Text("Load a model")
+                    // §349 — localized CTA.
+                    Text(L10n.Server.loadModel.render(appLocale))
                         .font(.system(size: 14, weight: .semibold))
                 }
                 .foregroundStyle(.white)
@@ -197,7 +198,8 @@ struct SessionDashboard: View {
                 }
                 .frame(width: 380)
             }
-            Text("Models are detected from `~/.cache/huggingface/hub/`.\nUse the Downloads window to pull new ones.")
+            // §349 — localized models-source hint.
+            Text(L10n.Server.modelsSourceHint.render(appLocale))
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.Colors.textLow)
                 .multilineTextAlignment(.center)
@@ -388,11 +390,13 @@ enum SessionHeuristics {
 private struct CreateSessionPopover: View {
     @Binding var isPresented: Bool
     @State private var pickedPath: URL? = nil
+    @Environment(\.appLocale) private var appLocale: AppLocale
     let onCreate: (URL) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            Text("New session")
+            // §349 — localized "New session" popover title.
+            Text(L10n.Server.newSession.render(appLocale))
                 .font(Theme.Typography.bodyHi)
                 .foregroundStyle(Theme.Colors.textHigh)
             ModelPickerRow(path: $pickedPath)

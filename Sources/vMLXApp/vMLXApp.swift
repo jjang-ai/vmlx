@@ -172,13 +172,13 @@ struct vMLXApp: App {
             // wired to ChatViewModel.newSession so Cmd-N from any tab
             // lands on a fresh chat.
             CommandGroup(replacing: .newItem) {
-                Button("New Chat") {
+                Button(L10n.Menu.newChat.render(uiLocale)) {
                     appState.mode = .chat
                     appState.chatViewModelRef?.newSession()
                 }
                 .keyboardShortcut("n", modifiers: [.command])
 
-                Button("Reopen Last Closed Chat") {
+                Button(L10n.Menu.reopenLastClosed.render(uiLocale)) {
                     appState.mode = .chat
                     appState.chatViewModelRef?.reopenLastClosed()
                 }
@@ -191,10 +191,11 @@ struct vMLXApp: App {
             // so SwiftUI doesn't route Cmd-Z to the system text-edit
             // undo (which wouldn't know about our DB-backed actions).
             CommandGroup(replacing: .undoRedo) {
-                Button(appState.chatViewModelRef?.topUndoLabel.map { "Undo \($0)" }
-                       ?? "Undo") {
+                Button(appState.chatViewModelRef?.topUndoLabel
+                        .map { "\(L10n.Menu.undo.render(uiLocale)) \($0)" }
+                       ?? L10n.Menu.undo.render(uiLocale)) {
                     if let label = appState.chatViewModelRef?.undo() {
-                        appState.flashBanner("Undid: \(label)")
+                        appState.flashBanner("Undid: \(label)")  // L10N-EXEMPT: transient banner, TODO localize separately
                     }
                 }
                 .keyboardShortcut("z", modifiers: [.command])
@@ -204,29 +205,42 @@ struct vMLXApp: App {
             // View menu — tab switching. Cmd-1..Cmd-5 route to the five
             // top-level modes so keyboard users can navigate without
             // touching the sidebar.
-            CommandMenu("View") {
-                Button("Chat")     { appState.mode = .chat }
+            CommandMenu(L10n.Menu.view.render(uiLocale)) {
+                Button(L10n.Mode.chat.render(uiLocale))     { appState.mode = .chat }
                     .keyboardShortcut("1", modifiers: [.command])
-                Button("Server")   { appState.mode = .server }
+                Button(L10n.Mode.server.render(uiLocale))   { appState.mode = .server }
                     .keyboardShortcut("2", modifiers: [.command])
-                Button("Image")    { appState.mode = .image }
+                Button(L10n.Mode.image.render(uiLocale))    { appState.mode = .image }
                     .keyboardShortcut("3", modifiers: [.command])
-                Button("Terminal") { appState.mode = .terminal }
+                Button(L10n.Mode.terminal.render(uiLocale)) { appState.mode = .terminal }
                     .keyboardShortcut("4", modifiers: [.command])
-                Button("API")      { appState.mode = .api }
+                Button(L10n.Mode.api.render(uiLocale))      { appState.mode = .api }  // L10N-EXEMPT: product term
                     .keyboardShortcut("5", modifiers: [.command])
                 Divider()
-                Button("Command Palette…") {
+                Button(L10n.Menu.commandPalette.render(uiLocale)) {
                     appState.showCommandBar.toggle()
                 }
                 .keyboardShortcut("k", modifiers: [.command])
+            }
+
+            // §349 — quick access to the Settings window so users can
+            // flip UI language without memorizing Cmd-,. The standard
+            // Settings shortcut still works; this is just a second
+            // discovery path from the app menu. Button text reads
+            // through the L10n catalog so it renders in the active
+            // UI locale (en / ja / ko / zh-Hans).
+            CommandGroup(after: .appSettings) {
+                Button(L10n.Menu.languageAndSettings.render(uiLocale)) {
+                    NSApp.sendAction(Selector(("showSettingsWindow:")),
+                                     to: nil, from: nil)
+                }
             }
 
             // Window → Downloads. Uses the named WindowGroup defined
             // above so macOS-level "bring window forward" logic works.
             CommandGroup(after: .windowArrangement) {
                 Divider()
-                Button("Downloads") { openDownloadsWindow() }
+                Button(L10n.Menu.downloads.render(uiLocale)) { openDownloadsWindow() }
                     .keyboardShortcut("d", modifiers: [.command, .shift])
             }
         }
