@@ -298,8 +298,21 @@ public struct ChatRequest: Codable, Sendable {
                 }
                 if raw.hasPrefix("http://") || raw.hasPrefix("https://") {
                     guard let u = URL(string: raw) else { return nil }
+                    // §334 — bound remote fetch by time + size. Prior
+                    // to this, URLSession.shared.data(from:) used the
+                    // default 60s timeout and had NO size cap: a
+                    // malicious `video_url` could hang the request
+                    // path for a full minute + stream megabytes into
+                    // process memory before the catch/return-nil on
+                    // the `data.write(to: tmp)` line. Videos over
+                    // ~512 MB are unlikely to be legitimate in a chat
+                    // context — cap the read to 512 MB and fail fast
+                    // on hangs at 20 s.
                     do {
-                        let (data, _) = try await URLSession.shared.data(from: u)
+                        var req = URLRequest(url: u)
+                        req.timeoutInterval = 20
+                        let (data, _) = try await URLSession.shared.data(for: req)
+                        guard data.count <= 512 * 1024 * 1024 else { return nil }
                         let ext = (u.pathExtension.isEmpty ? "mp4" : u.pathExtension)
                         let tmp = FileManager.default.temporaryDirectory
                             .appendingPathComponent("vmlx-video-\(UUID().uuidString).\(ext)")
@@ -347,8 +360,16 @@ public struct ChatRequest: Codable, Sendable {
                 // HTTP(S) URL
                 if raw.hasPrefix("http://") || raw.hasPrefix("https://") {
                     guard let u = URL(string: raw) else { return nil }
+                    // §334 — same timeout + size cap as
+                    // `loadVideoLocalURL`. Images are typically
+                    // <10 MB; cap at 64 MB which comfortably holds
+                    // any legitimate 4K RGBA image plus metadata
+                    // overhead. 20 s timeout matches the video path.
                     do {
-                        let (data, _) = try await URLSession.shared.data(from: u)
+                        var req = URLRequest(url: u)
+                        req.timeoutInterval = 20
+                        let (data, _) = try await URLSession.shared.data(for: req)
+                        guard data.count <= 64 * 1024 * 1024 else { return nil }
                         return data
                     } catch {
                         return nil
