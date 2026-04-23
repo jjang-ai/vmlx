@@ -244,8 +244,8 @@ pushed to origin.
 | Tool parser (Kimi TS-style) | ✓ KimiToolCallParser | (pre-existing) |
 | Thinking-by-default | ✓ thinkInTemplate=true | `647797b` §324 |
 | Layer-by-layer warmup | ✗ not yet — Swift-specific | deferred |
-| Dedicated MLX.Stream | Unverified — Swift runtime detail | pending verify |
-| wired_limit auto-tune | Unverified | pending audit |
+| Dedicated MLX.Stream | API exists (`Stream.setDefault`/`runWith`), unused in generate loop. Multi-session risk makes a blanket opt-in unsafe — `mlx_set_default_stream` is process-global so concurrent TokenIterators would clobber each other. Deferred pending a `withNewDefaultStream`-based refactor that uses TaskLocal for per-Task isolation. | K10 deferred |
+| wired_limit auto-tune | Unverified | K11 pending audit |
 | Hidden-size detection | ✓ via text_config parse | (pre-existing) |
 
 ## Commits this audit chain
