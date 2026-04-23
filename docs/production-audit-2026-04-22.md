@@ -309,6 +309,19 @@ pushed to origin.
   fetches had no timeout (60s default) + no size cap (gigabyte
   streams held in RAM). Now 20s timeout, 64 MB (image) / 512 MB
   (video) size caps, data(for:URLRequest) path.
+- `80865f3` §335-336 **mlxstudio #83 + #88 Gemma4 VLM**:
+  (#83) Long-prompt Metal-buffer overflow — Gemma4 was the only
+  VLM not chunking prefill. Single unchunked forward on a 30-100k
+  token QwenCode /init prompt blew past Metal's 9.5 GB buffer cap
+  on 64-GB Macs. Fix: use `chunkedPrefillEmbedding` helper with
+  the nil-padded cache quirk handled.
+  (#88) Python pixel_values concatenate TypeError — Swift is
+  already type-safe (`[MLXArray]` explicit typing). Guards pin
+  both pixel-list sites so a refactor to `Any` can't re-open
+  the Python bug class.
+  New VLM-coverage test lists the 5 remaining unchunked VLMs
+  (Qwen35/Qwen35MoEJANGTQ/Qwen3VL/SmolVLM2/Paligemma) as
+  known risks for subsequent iterations.
 
 ## Harness state (updated each iteration)
 
