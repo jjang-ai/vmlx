@@ -1545,12 +1545,33 @@ class MLLMBatchGenerator:
             and _predicted_attn_bytes > _OOM_GUARD_BYTES
             and os.environ.get("VMLX_DISABLE_HYBRID_AUTO_CHUNK") not in ("1", "true", "True", "yes", "on")
         ):
-            logger.warning(
-                "Hybrid model seq_len=%d (predicted attention buffer %.1f GB) would exceed "
-                "Metal single-buffer limit. Forcing chunked prefill; output may be incorrect "
-                "for hybrid families other than Qwen3.5. Set "
-                "VMLX_DISABLE_HYBRID_AUTO_CHUNK=1 to raise an error instead.",
-                seq_len, _predicted_attn_bytes / (1024**3),
+            # Family-specific safety: Qwen3.5 GatedDeltaNet (qwen3_next /
+            # qwen3_5_moe text-config) was verified cache-aware end-to-end.
+            # Other hybrid families (Nemotron-Cascade, MiniMax M2, Granite
+            # Hybrid, etc.) take the chunked path as OOM-prevention fallback —
+            # correctness should be spot-checked by the caller for those.
+            _mt = "unknown"
+            try:
+                cfg_outer = getattr(self.model, "config", None)
+                cfg_inner = getattr(cfg_outer, "text_config", None) if cfg_outer is not None else None
+                _mt = (
+                    getattr(cfg_inner, "model_type", None)
+                    or getattr(cfg_outer, "model_type", None)
+                    or "unknown"
+                )
+            except Exception:
+                pass
+            _verified = _mt in ("qwen3_next", "qwen3_5_moe", "qwen3_5_vl", "qwen3_5")
+            logger.info(
+                "Hybrid model (family=%s) seq_len=%d: one-shot attention buffer "
+                "%.1f GB exceeds Metal single-buffer limit (~9.5 GB). Enabling "
+                "chunked prefill — %s. Set VMLX_DISABLE_HYBRID_AUTO_CHUNK=1 to "
+                "raise an OOM error instead of chunking.",
+                _mt, seq_len, _predicted_attn_bytes / (1024**3),
+                (
+                    "verified safe on Qwen3.5 GatedDeltaNet" if _verified
+                    else "spot-check output for correctness on non-Qwen3.5 hybrid families"
+                ),
             )
             _hybrid_blocks_chunk = False
 
@@ -2821,8 +2842,39 @@ class MLLMBatchGenerator:
         Returned cache covers exactly `tokens` worth of processing — no
         gen_prompt_len suffix, no generation output. Safe to store with
         is_complete=True.
+
+        SSM re-derive requires contiguous state math across the full prompt.
+        Chunking the forward pass broke on the 2nd chunk for fresh
+        ``make_cache()`` output because ArraysCache's offset/mask machinery
+        (``lengths``/``left_padding``) is only populated when the cache goes
+        through ``BatchKVCache`` wrappers. Prefer one-shot when the attention
+        buffer fits under the Metal single-buffer cap; skip gracefully
+        otherwise (the live prefill's SSM stash still serves as a
+        possibly-contaminated companion for thinking-model prompts).
         """
         if not tokens or self.language_model is None:
+            return None
+        seq_len = len(tokens)
+        _OOM_GUARD_BYTES = 8 * 1024 * 1024 * 1024
+        _n_heads_guess = 32
+        try:
+            cfg = getattr(self.language_model, "config", None) or getattr(
+                self.language_model, "args", None
+            )
+            _h = getattr(cfg, "num_attention_heads", None) if cfg is not None else None
+            if isinstance(_h, int) and _h > 0:
+                _n_heads_guess = _h
+        except Exception:
+            pass
+        _predicted_attn_bytes = _n_heads_guess * seq_len * seq_len * 2
+        if _predicted_attn_bytes > _OOM_GUARD_BYTES:
+            logger.info(
+                "MLLM SSM re-derive: skipping clean prefill for %d-token prompt "
+                "(predicted attention buffer %.1f GB exceeds Metal single-buffer "
+                "limit; re-derive requires contiguous state math that chunking "
+                "breaks). Live prefill's SSM stash will be used as the companion.",
+                seq_len, _predicted_attn_bytes / (1024**3),
+            )
             return None
         try:
             fresh_cache = (
@@ -2833,28 +2885,25 @@ class MLLMBatchGenerator:
             if fresh_cache is None:
                 from mlx_lm.models.cache import KVCache
                 fresh_cache = [KVCache() for _ in range(len(self.language_model.layers))]
-            chunk_size = 2048
-            for start in range(0, len(tokens), chunk_size):
-                chunk = tokens[start : start + chunk_size]
-                input_ids = mx.array([chunk])
-                _ = self.language_model(input_ids, cache=fresh_cache)
-                materialize: List[Any] = []
-                for c in fresh_cache:
-                    if hasattr(c, "keys") and c.keys is not None:
-                        if isinstance(c.keys, tuple):
-                            materialize.extend(c.keys)
-                            materialize.extend(c.values)
-                        else:
-                            materialize.extend([c.keys, c.values])
-                    elif hasattr(c, "cache") and isinstance(c.cache, list):
-                        for arr in c.cache:
-                            if hasattr(arr, "shape"):
-                                materialize.append(arr)
-                if materialize:
-                    mx.eval(*materialize)
+            input_ids = mx.array([tokens])
+            _ = self.language_model(input_ids, cache=fresh_cache)
+            materialize: List[Any] = []
+            for c in fresh_cache:
+                if hasattr(c, "keys") and c.keys is not None:
+                    if isinstance(c.keys, tuple):
+                        materialize.extend(c.keys)
+                        materialize.extend(c.values)
+                    else:
+                        materialize.extend([c.keys, c.values])
+                elif hasattr(c, "cache") and isinstance(c.cache, list):
+                    for arr in c.cache:
+                        if hasattr(arr, "shape"):
+                            materialize.append(arr)
+            if materialize:
+                mx.eval(materialize)
             return fresh_cache
         except Exception as ex:
-            logger.warning(f"MLLM clean SSM prefill failed: {ex}")
+            logger.warning(f"MLLM clean SSM prefill failed (non-fatal): {ex}")
             return None
 
     def run_idle_rederive(self) -> bool:

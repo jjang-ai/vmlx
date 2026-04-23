@@ -82,6 +82,14 @@ def ollama_chat_to_openai(body: dict) -> dict:
     # Ollama 0.7+ supports think at top level: {"model": "...", "think": true}
     if body.get("think") is not None:
         req["enable_thinking"] = body["think"]
+    # vMLX extensions on Ollama-shaped bodies: clients that set reasoning_effort
+    # (Mistral 4 / GPT-OSS: "none"/"low"/"medium"/"high") or supply custom
+    # chat_template_kwargs must reach the parser. Without this passthrough,
+    # Mistral 4 on the Ollama adapter loses reasoning-effort level entirely.
+    if body.get("reasoning_effort") is not None:
+        req["reasoning_effort"] = body["reasoning_effort"]
+    if isinstance(body.get("chat_template_kwargs"), dict):
+        req["chat_template_kwargs"] = body["chat_template_kwargs"]
     # Ollama's `format` field → OpenAI `response_format`. Two shapes:
     #   "format": "json"     → {"type": "json_object"}
     #   "format": <schema>   → {"type": "json_schema", "json_schema": {...}}

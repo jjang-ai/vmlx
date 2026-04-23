@@ -187,7 +187,7 @@ class TestVideoFallback:
 class TestVlmLoaderIntegration:
     def test_v2_vlm_path_installs_fallback(self, monkeypatch):
         """_load_jang_v2_vlm has try-import _install_video_fallback."""
-        src = Path("/private/tmp/vmlx-1.3.55-build/vmlx_engine/utils/jang_loader.py")
+        src = Path("/private/tmp/vmlx-1.3.66-build/vmlx_engine/utils/jang_loader.py")
         text = src.read_text()
         # Pin two call sites that must stay in sync
         assert text.count("_install_video_fallback(processor)") >= 2, (
@@ -229,7 +229,7 @@ class TestApplyChatTemplate:
 class TestMultimodalPromotion:
     def test_panel_chat_ts_promotes_on_attachment(self):
         """panel/src/main/ipc/chat.ts must force chatIsMultimodal=true on attach."""
-        src = Path("/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/chat.ts").read_text()
+        src = Path("/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/chat.ts").read_text()
         # Marker comments and the promotion line must both be present
         assert "mlxstudio#69" in src
         assert "hasAttachments && !chatIsMultimodal" in src
@@ -572,7 +572,7 @@ class TestVlmMultiturnCacheContracts:
         """After load, config must remain accessible for chat template + cache
         shape inference. v1.3.58 amend explicitly re-attaches if missing."""
         loader_src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/utils/jang_loader.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/utils/jang_loader.py"
         ).read_text()
         assert 'hasattr(_vlm_model, "config")' in loader_src, (
             "JANGTQ VLM fast path must ensure config is attached — chat "
@@ -924,6 +924,74 @@ class TestIssueGuards:
         assert "_predicted_attn_bytes" in rve_body
         assert "_OOM_GUARD_BYTES" in rve_body
 
+    def test_mlxstudio_83_auto_chunk_message_is_info_with_family(self):
+        """v1.3.84 follow-up: the auto-chunk trigger message must be INFO (not
+        WARNING) and carry family-aware wording. It previously read as a crash
+        warning even though chunking is correct-by-design on Qwen3.5
+        GatedDeltaNet; users saw it every long Opencode `/init` and assumed
+        something was broken.
+        """
+        import vmlx_engine.mllm_batch_generator as _m
+        src = Path(_m.__file__).read_text()
+        rve_start = src.index("def _run_vision_encoding")
+        rve_end = src.index("def _process_prompts", rve_start)
+        rve_body = src[rve_start:rve_end]
+
+        # The auto-chunk branch must log at INFO level (not WARNING).
+        guard_block_start = rve_body.index("VMLX_DISABLE_HYBRID_AUTO_CHUNK")
+        guard_block = rve_body[guard_block_start : guard_block_start + 2000]
+        assert "logger.info(" in guard_block, (
+            "v1.3.84 regression: auto-chunk trigger must logger.info — "
+            "chunking is intended behavior, not a crash warning."
+        )
+        # Forbid logger.warning inside the same branch.
+        next_logger_warning = guard_block.find("logger.warning(")
+        assert next_logger_warning == -1, (
+            "v1.3.84 regression: auto-chunk trigger is INFO-level, not WARNING."
+        )
+        # Family-aware wording must mention the verified family.
+        assert "Qwen3.5 GatedDeltaNet" in guard_block, (
+            "v1.3.84 regression: auto-chunk message must name Qwen3.5 "
+            "GatedDeltaNet as the family verified cache-aware."
+        )
+        assert "spot-check" in guard_block, (
+            "v1.3.84 regression: non-Qwen3.5 hybrid families must get the "
+            "spot-check-correctness wording."
+        )
+
+    def test_v1384_ssm_rederive_skips_oom_prompts_not_chunks(self):
+        """v1.3.84: `_prefill_for_clean_ssm` previously chunked long prompts in
+        fixed 2048-token slices. That broke on the 2nd chunk with
+        `broadcast_shapes (1,16,2048,64) vs (1,1,1024,64)` because fresh
+        `make_cache()` output does not carry the `lengths`/`left_padding`
+        offset machinery that `BatchKVCache` wrappers populate in the main
+        decode path. Re-derive now prefers one-shot (SSM state math requires
+        contiguous prefill) and skips gracefully when the prompt would exceed
+        the Metal single-buffer cap — the live prefill's (contaminated for
+        thinking models) SSM stash still serves as the companion.
+        """
+        import inspect
+        import vmlx_engine.mllm_batch_generator as _m
+        src = inspect.getsource(_m.MLLMBatchGenerator._prefill_for_clean_ssm)
+
+        # No fixed-chunk loop remains.
+        assert "chunk_size = 2048" not in src, (
+            "v1.3.84 regression: chunked prefill removed from "
+            "_prefill_for_clean_ssm — broadcast_shapes bug returns."
+        )
+        assert "for start in range(0, len(tokens), chunk_size)" not in src
+        # OOM-skip path and one-shot call must both be present.
+        assert "_OOM_GUARD_BYTES" in src
+        assert "skipping clean prefill" in src, (
+            "v1.3.84 regression: long prompts must log INFO + skip, not chunk."
+        )
+        assert "mx.array([tokens])" in src, (
+            "v1.3.84 regression: _prefill_for_clean_ssm must do one-shot "
+            "forward over the full prompt."
+        )
+        # Non-fatal: still catches + logs at WARNING level.
+        assert "non-fatal" in src
+
 
 class TestMLLMPrefixCacheFixed:
     """Ralph iter 11 — MLLMPrefixCacheManager FIXED.
@@ -943,7 +1011,7 @@ class TestMLLMPrefixCacheFixed:
 
     def test_cache_guard_uses_is_not_none(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/models/mllm.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/models/mllm.py"
         ).read_text()
         idx = src.find("Store cache for future reuse")
         assert idx > 0
@@ -955,7 +1023,7 @@ class TestMLLMPrefixCacheFixed:
 
     def test_store_passes_real_token_ids(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/models/mllm.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/models/mllm.py"
         ).read_text()
         assert "_cache_token_ids" in src, (
             "generate() must capture real token_ids for the store path"
@@ -1045,7 +1113,7 @@ class TestGitHubIssueGuards:
         no-PLE variant. Fixed in v1.3.60 by dropping the projection keys when
         the module is absent."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/utils/jang_loader.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/utils/jang_loader.py"
         ).read_text()
         assert "per_layer_model_projection" in src, (
             "Gemma 3n PLE handling must be present (vmlx#87)"
@@ -1070,7 +1138,7 @@ class TestGitHubIssueGuards:
         chat.ts. Already covered by TestMultimodalPromotion, re-pin for
         issue traceability."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/chat.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/chat.ts"
         ).read_text()
         assert "mlxstudio#69" in src
         assert "chatIsMultimodal = true" in src
@@ -1081,7 +1149,7 @@ class TestGitHubIssueGuards:
         tool_calls. Version bump pinned; the wrapper logic is covered by
         runtime tests."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         assert '"0.12.' in src or '"0.13' in src, (
             "Ollama /api/version must report modern version for Copilot"
@@ -1140,7 +1208,7 @@ class TestReasoningOnOffRegressions:
         """server.py must contain the §15 suppress→content routing.
         If someone removes it, thinking-ignoring models leave empty bubbles."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         assert "§15" in src, (
             "§15 anchor comments must stay in server.py — removing them is a "
@@ -1155,7 +1223,7 @@ class TestReasoningOnOffRegressions:
     def test_mistral4_reasoning_effort_auto_map(self):
         """Mistral 4 needs enable_thinking → reasoning_effort auto-map."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # Two auto-map sites: OpenAI chat path + Anthropic path
         assert src.count('reasoning_effort"] = "high"') >= 2, (
@@ -1176,7 +1244,7 @@ class TestReasoningOnOffRegressions:
         contains the Gemma 4 branch AND all 3 paths call it.
         """
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # The Gemma 4 branch lives inside _resolve_enable_thinking now
         assert 'in ("gemma4", "gemma4_text")' in src, (
@@ -1215,7 +1283,7 @@ class TestReasoningOnOffRegressions:
         """_merge_ct_kwargs must normalize enable_thinking to real bool.
         Guards: bool('false') == True would silently enable thinking."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         idx = src.find("def _merge_ct_kwargs")
         assert idx >= 0
@@ -1230,7 +1298,7 @@ class TestReasoningOnOffRegressions:
         """When enable_thinking=False, server strips <think>…</think> from
         prior assistant messages (3 call sites)."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         assert "_THINK_STRIP_RE" in src, (
             "Need a regex constant for stripping <think> blocks from prior turns"
@@ -1256,7 +1324,7 @@ class TestReasoningStrippingPreservesToolCalls:
         """The strip logic must preserve tool_calls even when content is
         empty after <think> removal."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # The fix replaces bare `continue` with targeted content replacement
         # and preserves tool_calls. Key anchor: the message is mutated in
@@ -1291,7 +1359,7 @@ class TestMiniMaxThinkInPromptNonStream:
 
     def test_non_stream_reset_state_passes_think_in_prompt(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # Both non-stream reset_state sites must pass think_in_prompt
         count = src.count("think_in_prompt=_think_in_prompt_ns")
@@ -1304,7 +1372,7 @@ class TestMiniMaxThinkInPromptNonStream:
         """Non-stream must consult both _template_completes_thinking and
         _template_always_thinks to match stream-path semantics."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # Anchor the helper references in the non-stream derivation block
         nonstream_marker = "think_in_prompt derivation failed non-stream"
@@ -1337,7 +1405,7 @@ class TestAllFourApiPathsWireThinkInPrompt:
     def test_all_reset_state_sites_pass_think_in_prompt(self):
         import re as _re
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # Find every `request_parser.reset_state(` call and confirm
         # think_in_prompt appears within the next ~150 chars
@@ -1360,7 +1428,7 @@ class TestAllFourApiPathsWireThinkInPrompt:
         """Ollama chat endpoint delegates to create_chat_completion so
         the fix applies uniformly."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # Find ollama_chat body
         idx = src.find("async def ollama_chat")
@@ -1375,7 +1443,7 @@ class TestAllFourApiPathsWireThinkInPrompt:
         """Anthropic non-stream collects via stream_chat_completion, which
         has the correct think_in_prompt wiring."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         idx = src.find("async def create_anthropic_message")
         assert idx > 0
@@ -1398,7 +1466,7 @@ class TestVmlx89HybridChunkedPrefillOptIn:
 
     def test_opt_in_env_var_documented_in_source(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/mllm_batch_generator.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/mllm_batch_generator.py"
         ).read_text()
         assert "VMLX_ALLOW_HYBRID_CHUNKED_PREFILL" in src, (
             "vmlx#89 fix must expose VMLX_ALLOW_HYBRID_CHUNKED_PREFILL "
@@ -1416,7 +1484,7 @@ class TestVmlx89HybridChunkedPrefillOptIn:
             # Reload module to re-evaluate env var reads — but we test the
             # source-level semantics, not at runtime (env var is read per-call).
             src = Path(
-                "/private/tmp/vmlx-1.3.55-build/vmlx_engine/mllm_batch_generator.py"
+                "/private/tmp/vmlx-1.3.66-build/vmlx_engine/mllm_batch_generator.py"
             ).read_text()
             # The boolean gate must evaluate to False when env is unset
             assert "_hybrid_blocks_chunk = self._is_hybrid and not _allow_hybrid_chunked" in src
@@ -1427,7 +1495,7 @@ class TestVmlx89HybridChunkedPrefillOptIn:
     def test_gate_blocks_both_fast_path_and_chunked_path(self):
         """Both prefill paths (fast + chunked) must respect the same gate."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/mllm_batch_generator.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/mllm_batch_generator.py"
         ).read_text()
         # Both gates must reference the same variable
         assert src.count("not _hybrid_blocks_chunk") >= 2, (
@@ -1466,7 +1534,7 @@ class TestEnableThinkingPriorityChain:
             )
         # Server default (--default-enable-thinking) must still be consulted
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # The helper body references the module-level default
         assert src.count("_default_enable_thinking") >= 3, (
@@ -1518,7 +1586,7 @@ class TestToolsReasoningInteraction:
         _resolve_enable_thinking — called from all 3 API paths. Verify
         both the branch exists and the helper is wired up."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         import re as _re
         # Branch still exists (inside the helper now)
@@ -1539,7 +1607,7 @@ class TestToolsReasoningInteraction:
     def test_mistral4_reasoning_effort_both_polarities(self):
         """Mistral 4 auto-map covers thinking=True (→high) AND False (→none)."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         assert src.count('reasoning_effort"] = "high"') >= 2, (
             "Mistral 4 True→high auto-map missing in one of the API paths"
@@ -1553,7 +1621,7 @@ class TestToolsReasoningInteraction:
         the tool_calls field MUST be preserved. Past regression: early
         `continue` dropped the entire message when content was empty."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # The mutation path: msg["content"] = _THINK_STRIP_RE.sub("", msg["content"])
         # followed by (implicit) preservation of the rest of the dict fields
@@ -1667,7 +1735,7 @@ class TestVmlx91InstrumentationWired:
 
     def test_mllm_batch_generator_calls_fetch_longest_prefix_on_ssm_miss(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/mllm_batch_generator.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/mllm_batch_generator.py"
         ).read_text()
         assert "fetch_longest_prefix" in src, (
             "mllm_batch_generator.py must consult fetch_longest_prefix on "
@@ -1703,7 +1771,7 @@ class TestVmlx91ResumeOptInEndToEnd:
         ON). The old ENABLE opt-in gate is gone — st-adam's report
         proved default-off was the bug."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/mllm_batch_generator.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/mllm_batch_generator.py"
         ).read_text()
         assert "VMLX_DISABLE_SSM_PREFIX_RESUME" in src, (
             "v1.3.66 default-on gate must be present — without the "
@@ -1721,7 +1789,7 @@ class TestVmlx91ResumeOptInEndToEnd:
         (first-ever request or cache fully evicted) the full-prefill
         fallback must still fire — we never get stuck blocking."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/mllm_batch_generator.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/mllm_batch_generator.py"
         ).read_text()
         assert "Full prefill required" in src, (
             "Fallback full-prefill must remain for the no-checkpoint case"
@@ -1821,7 +1889,7 @@ class TestMlxstudio73ReconstructFailReleasesBlocks:
     def test_reconstruct_failure_releases_block_refs(self):
         """Source contains release_cache call on the reconstruct-fail path."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/scheduler.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/scheduler.py"
         ).read_text()
         # Find the 'Reconstruction failed, treat as cache miss' branch
         idx = src.find("Reconstruction failed, treat as cache miss")
@@ -1946,7 +2014,7 @@ class TestVmlx83JitWarmupFailureRollback:
     def test_rollback_anchor_in_source(self):
         """Source contains the vmlx#83 rollback anchors."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         assert "vmlx#83" in src, "issue anchor must be present"
         # Both LLM and VLM branches need backup refs
@@ -2010,7 +2078,7 @@ class TestVmlx81SmeltAndFlashMoeOnJangtq:
         """server.py flash-moe setup must detect JANGTQ before calling
         ExpertIndex.build (which would find 0 MoE layers silently)."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # Locate _apply_flash_moe_patching vicinity — the server-side
         # entry point that wires the flash-moe loader onto the engine.
@@ -2112,10 +2180,10 @@ class TestVmlx81JangtqSmeltFlashMoeIncompat:
     def test_vmlx81_anchors_in_source(self):
         """vmlx#81 anchor in both smelt_loader and server flash-moe init."""
         smelt_src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/utils/smelt_loader.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/utils/smelt_loader.py"
         ).read_text()
         srv_src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         assert "vmlx#81" in smelt_src
         assert "vmlx#81" in srv_src
@@ -2176,7 +2244,7 @@ class TestVmlx92PldNonMllmGuard:
 
     def test_vmlx92_anchor_in_source(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/scheduler.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/scheduler.py"
         ).read_text()
         assert "vmlx#92" in src
         assert 'hasattr(self.batch_generator, "active_batch")' in src
@@ -2236,7 +2304,7 @@ class TestVmlx97PaintedMaskInpainting:
         """Server code path: all-black mask → HTTPException 400 with
         vmlx#97 anchor + workaround instructions."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # The anchor must be in the server
         assert "vmlx#97" in src, "server must carry vmlx#97 anchor"
@@ -2276,7 +2344,7 @@ class TestVmlx94MxMetalDeprecationCleanup:
     def test_scheduler_memory_pressure_uses_fallback_pattern(self):
         """Both sites must use `getattr(mx, 'X', None) or mx.metal.X`."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/scheduler.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/scheduler.py"
         ).read_text()
         # Memory-pressure guard lives in the admission loop
         assert 'getattr(mx, "get_active_memory", None)' in src, (
@@ -2294,7 +2362,7 @@ class TestVmlx94MxMetalDeprecationCleanup:
         import re as _re
         for rel in ("vmlx_engine/scheduler.py",):
             src = Path(
-                f"/private/tmp/vmlx-1.3.55-build/{rel}"
+                f"/private/tmp/vmlx-1.3.66-build/{rel}"
             ).read_text()
             # Capture bare mx.metal.get_active_memory() style calls that
             # aren't preceded by a hasattr/getattr/or-fallback. Simple
@@ -2411,7 +2479,7 @@ class TestVmlx96RelocatedMfluxModels:
         without mflux installed. Verifies the error message template
         includes `Known keys` and lists canonical class names."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/image_gen.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/image_gen.py"
         ).read_text()
         assert "Known keys:" in src, (
             "vmlx#96 regression: error template must surface known keys"
@@ -2424,7 +2492,7 @@ class TestVmlx96RelocatedMfluxModels:
         """Source pin: vmlx#96 anchor and the regex strip sequence both
         appear in image_gen.py."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/image_gen.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/image_gen.py"
         ).read_text()
         assert "vmlx#96" in src
         # Class-resolution second-chance strip must exist
@@ -2457,7 +2525,7 @@ class TestMlxstudio76UnrecognizedArgHint:
         """Running cli with a garbage flag triggers the hint."""
         import subprocess
         bpy = (
-            "/private/tmp/vmlx-1.3.55-build/panel/bundled-python/"
+            "/private/tmp/vmlx-1.3.66-build/panel/bundled-python/"
             "python/bin/python3.12"
         )
         r = subprocess.run(
@@ -2528,7 +2596,7 @@ class TestVmlx75DefaultRepetitionPenaltyArg:
         argparse returncode must not be 2 (which is "unrecognized args")."""
         import subprocess
         bpy = (
-            "/private/tmp/vmlx-1.3.55-build/panel/bundled-python/"
+            "/private/tmp/vmlx-1.3.66-build/panel/bundled-python/"
             "python/bin/python3.12"
         )
         # Reporter's full flag set from the issue body
@@ -2839,7 +2907,7 @@ class TestReasoningContractEndToEnd:
         """Panel must handle both canonical names: reasoning_content AND
         reasoning (legacy / alias). Regression source pin."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/chat.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/chat.ts"
         ).read_text()
         # The extractor line
         assert "choice?.reasoning_content || choice?.reasoning" in src, (
@@ -2855,7 +2923,7 @@ class TestReasoningContractEndToEnd:
         """Panel renderer must render ReasoningBox when reasoningContent
         is present and NOT equal to content."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/chat/MessageBubble.tsx"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/renderer/src/components/chat/MessageBubble.tsx"
         ).read_text()
         assert "ReasoningBox" in src
         assert "reasoningContent" in src
@@ -2869,7 +2937,7 @@ class TestReasoningContractEndToEnd:
         routes reasoning delta → content delta so the user sees
         something instead of empty SSE."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # The §15 anchor
         assert "§15" in src
@@ -2881,7 +2949,7 @@ class TestReasoningContractEndToEnd:
     def test_database_schema_has_reasoning_content_column(self):
         """Panel database must persist reasoningContent across sessions."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/database.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/database.ts"
         ).read_text()
         assert "ALTER TABLE messages ADD COLUMN reasoning_content TEXT" in src
         assert "reasoning_content" in src
@@ -2919,16 +2987,24 @@ class TestSSMCompanionIsCompleteFlag:
         """Source pin: mllm_batch_generator's SSM capture path gates
         is_complete on gen_prompt_len."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/mllm_batch_generator.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/mllm_batch_generator.py"
         ).read_text()
+        # v1.3.77→v1.3.78 branch rewrite: the computed bound variable was
+        # inlined into two explicit branches. Gates still hold:
+        # - read gen_prompt_len from the request
+        # - gpl==0 path stores is_complete=True (immediate)
+        # - gpl>0 path queues deferred clean re-prefill with _ssm_rederive_queue
         assert "_gpl_for_flag = getattr(req, '_gen_prompt_len', 0)" in src, (
             "SSM capture must read gen_prompt_len from the request"
         )
         assert "_is_complete_flag = (_gpl_for_flag == 0)" in src, (
-            "is_complete must be True only when gen_prompt_len is 0"
+            "is_complete-flag derivation from gpl must remain explicit for auditability"
         )
-        assert "is_complete=_is_complete_flag" in src, (
-            "store() must receive the computed is_complete flag"
+        assert "is_complete=True" in src, (
+            "gpl==0 path must still store with is_complete=True"
+        )
+        assert "_ssm_rederive_queue" in src, (
+            "gpl>0 path must queue deferred clean re-prefill"
         )
 
     def test_default_is_complete_true_for_non_gpl_store(self):
@@ -2960,7 +3036,7 @@ class TestMlxstudio78AdaptiveCacheLimit:
 
     def test_cache_limit_adaptive_source_pin(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/mllm_batch_generator.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/mllm_batch_generator.py"
         ).read_text()
         assert "mlxstudio#78" in src
         assert "safety_limit = int(free * 0.5)" in src
@@ -3191,7 +3267,7 @@ class TestSleepWakeContract:
     def test_sleep_transitions_are_guarded(self):
         """Source pin: soft-sleep-when-deep and double-enter return 409."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         assert 'Already in deep sleep' in src
         assert 'already_soft' in src
@@ -3203,7 +3279,7 @@ class TestSleepWakeContract:
         clears the prefix cache — we must never leave stale cache when
         the user asks for soft sleep."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # Locate admin_soft_sleep body
         idx = src.find("async def admin_soft_sleep")
@@ -3220,7 +3296,7 @@ class TestSleepWakeContract:
         """Source pin: admin_wake reads _pre_sleep_cache_limit and
         restores it on wake (both from soft and deep paths)."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         idx = src.find("async def admin_wake")
         assert idx > 0
@@ -3236,7 +3312,7 @@ class TestSleepWakeContract:
     def test_wake_from_deep_sleep_reloads_model(self):
         """Deep sleep unloads the model; wake must reload it from _cli_args."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         idx = src.find("async def admin_wake")
         body = src[idx:idx + 4000]
@@ -3250,7 +3326,7 @@ class TestSleepWakeContract:
     def test_flash_moe_deep_sleep_wake_fixed(self):
         """Memory: v1.3.36 fix for Flash MoE deep-sleep silent deactivation."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # The fix is admin_deep_sleep must clear loader and admin_wake
         # must restart it with the same args.
@@ -3290,7 +3366,7 @@ class TestSlidingWindowHybridInteraction:
         entries — rotating state can't be reconstructed block-by-block
         because each window overwrites the previous."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/prefix_cache.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/prefix_cache.py"
         ).read_text()
         # Either skip-rotating is explicit, or the classification is used
         # to route to a separate code path
@@ -3338,7 +3414,7 @@ class TestPagedCacheBoundaries:
         especially in error-handling branches (recently added in
         mlxstudio#73 fix)."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/scheduler.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/scheduler.py"
         ).read_text()
         # Count fetch_cache vs release_cache call sites
         import re
@@ -3381,7 +3457,7 @@ class TestL2DiskCacheIntegrity:
         scheduler must use a dir that mixes in the model hash/quant
         config so two different models can't collide."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/disk_cache.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/disk_cache.py"
         ).read_text()
         # A cache_dir arg is required to isolate models
         assert "cache_dir" in src
@@ -3429,7 +3505,7 @@ class TestL2DiskCacheIntegrity:
         """TurboQuant-native disk serialization (26× smaller) must still
         be present per memory note."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/disk_cache.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/disk_cache.py"
         ).read_text()
         assert "tq_native" in src.lower() or "TurboQuant" in src, (
             "TQ-native disk store saves 5.3× vs affine re-encoded KV"
@@ -3800,7 +3876,7 @@ class TestMlxstudio69ImageAttachmentForceMultimodal:
     def test_panel_force_multimodal_on_attachment(self):
         """Source pin: the force-multimodal branch with mlxstudio#69 anchor."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/chat.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/chat.ts"
         ).read_text()
         # Anchor must be present
         assert "mlxstudio#69" in src, (
@@ -3826,7 +3902,7 @@ class TestMlxstudio69ImageAttachmentForceMultimodal:
         builds (without `.kind` field) still work. Keep it tested so
         removing it doesn't break older client builds."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/chat.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/chat.ts"
         ).read_text()
         assert "inferKind" in src, (
             "inferKind back-compat helper missing — older renderer builds "
@@ -4283,7 +4359,7 @@ class TestMlxstudio78MetalWorkingSetGuard:
         check_metal_working_set_pressure (vs just check_memory_pressure
         from ms#63 which only watches system RAM)."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         count = src.count("Depends(check_metal_working_set_pressure)")
         # Chat completions + responses + anthropic + ollama chat/generate +
@@ -4342,7 +4418,7 @@ class TestContinuousBatchingConcurrency:
         queue. If this goes away, add-another-primitive discipline
         has been broken."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/engine_core.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/engine_core.py"
         ).read_text()
         assert "asyncio.Event()" in src, (
             "engine_core needs asyncio.Event per request for "
@@ -4365,7 +4441,7 @@ class TestAPIRequestCancellation:
         fire reliably from SSE streaming generators.
         """
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         hits = src.count("is_disconnected()")
         assert hits >= 3, (
@@ -4379,7 +4455,7 @@ class TestAPIRequestCancellation:
         default because `X or default` treats 0 as falsy. Must use
         `is not None` to preserve explicit-zero intent."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # Target both call sites
         import re
@@ -4427,7 +4503,7 @@ class TestPanelEngineIPCContract:
         """Panel reads both reasoning_content (new) and reasoning (legacy/alias)
         from streaming chunk delta.choices[].delta.{reasoning_content,reasoning}."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/chat.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/chat.ts"
         ).read_text()
         assert "reasoning_content" in src
         assert "delta" in src
@@ -4547,7 +4623,7 @@ class TestMs68CollectionErrorVsEmpty:
 
     def test_collection_errors_state_present(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/sessions/DownloadTab.tsx"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/renderer/src/components/sessions/DownloadTab.tsx"
         ).read_text()
         assert "ms#68" in src, "anchor missing"
         assert "const [collectionErrors," in src, (
@@ -4557,7 +4633,7 @@ class TestMs68CollectionErrorVsEmpty:
 
     def test_retry_handler_present(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/sessions/DownloadTab.tsx"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/renderer/src/components/sessions/DownloadTab.tsx"
         ).read_text()
         assert "retryCollectionFetch" in src, (
             "explicit retry entry point missing"
@@ -4569,7 +4645,7 @@ class TestMs68CollectionErrorVsEmpty:
 
     def test_error_ui_distinct_from_empty(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/sessions/DownloadTab.tsx"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/renderer/src/components/sessions/DownloadTab.tsx"
         ).read_text()
         assert "Failed to load" in src, (
             "error fallback must say 'Failed to load' — otherwise the UX "
@@ -4583,7 +4659,7 @@ class TestMs68CollectionErrorVsEmpty:
         """The catch branch of the fetch must populate collectionErrors,
         not just log to console."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/sessions/DownloadTab.tsx"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/renderer/src/components/sessions/DownloadTab.tsx"
         ).read_text()
         # Both catch sites (mount effect + handleCollectionTabChange)
         # must set the error state, not just log.
@@ -4601,7 +4677,7 @@ class TestVmlx94MxMetalDeprecation:
     def test_scheduler_uses_getattr_fallback(self):
         """scheduler.py memory-pressure guard must use getattr fallback."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/scheduler.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/scheduler.py"
         ).read_text()
         # The two functions vmlx#94 flagged:
         assert (
@@ -4638,7 +4714,7 @@ class TestVmlx94MxMetalDeprecation:
             "vmlx_engine/benchmark.py",
             "vmlx_engine/mllm_batch_generator.py",
         ):
-            fpath = Path("/private/tmp/vmlx-1.3.55-build") / relpath
+            fpath = Path("/private/tmp/vmlx-1.3.66-build") / relpath
             if not fpath.exists():
                 continue
             lines = fpath.read_text().splitlines()
@@ -4705,7 +4781,7 @@ class TestVmlx92PldGuardOnNonMllm:
     def test_guard_is_present_before_active_batch_access(self):
         """The hasattr check must come BEFORE any .active_batch touch."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/scheduler.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/scheduler.py"
         ).read_text()
         # Locate the guard line
         guard_line = 'if not hasattr(self.batch_generator, "active_batch"):'
@@ -4738,7 +4814,7 @@ class TestVmlx92PldGuardOnNonMllm:
         """When the guard fires we must return [], so the caller treats
         it as 'no drafts available' and continues normal decode."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/scheduler.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/scheduler.py"
         ).read_text()
         # The two-line block must be: `if not hasattr(...)` then `return []`
         body_start = src.index("def _try_speculative_decode")
@@ -4786,7 +4862,7 @@ class TestMs61ImageGalleryDeleteAndCopyPrompt:
 
     def test_ipc_handler_present_and_anchored(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/image.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/image.ts"
         ).read_text()
         assert "image:deleteGeneration" in src, (
             "IPC handler missing — preload call will fail"
@@ -4802,7 +4878,7 @@ class TestMs61ImageGalleryDeleteAndCopyPrompt:
 
     def test_database_has_single_row_lookup(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/database.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/database.ts"
         ).read_text()
         assert "getImageGeneration(id: string)" in src, (
             "single-row lookup needed so IPC can read the paths before "
@@ -4811,20 +4887,20 @@ class TestMs61ImageGalleryDeleteAndCopyPrompt:
 
     def test_preload_exposes_delete_generation(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/preload/index.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/preload/index.ts"
         ).read_text()
         assert "deleteGeneration:" in src
         assert "image:deleteGeneration" in src
 
     def test_env_types_declare_delete_generation(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/env.d.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/env.d.ts"
         ).read_text()
         assert "deleteGeneration:" in src
 
     def test_gallery_ui_has_copy_and_delete_buttons(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/image/ImageGallery.tsx"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/renderer/src/components/image/ImageGallery.tsx"
         ).read_text()
         # Copy prompt button
         assert "handleCopyPrompt" in src
@@ -4841,7 +4917,7 @@ class TestMs61ImageGalleryDeleteAndCopyPrompt:
 
     def test_image_tab_wires_delete_handler(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/image/ImageTab.tsx"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/renderer/src/components/image/ImageTab.tsx"
         ).read_text()
         assert "onDelete={async (gen) =>" in src, (
             "ImageTab must provide the onDelete callback; otherwise the "
@@ -4866,7 +4942,7 @@ class TestVmlx70BulkDeleteChats:
 
     def test_db_has_delete_all_chats(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/database.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/database.ts"
         ).read_text()
         assert "deleteAllChats(scope?:" in src or \
                "deleteAllChats(scope" in src, (
@@ -4890,7 +4966,7 @@ class TestVmlx70BulkDeleteChats:
 
     def test_ipc_handler_wired(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/chat.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/chat.ts"
         ).read_text()
         assert '"chat:deleteAll"' in src
         assert "vmlx#70" in src, "anchor required"
@@ -4898,21 +4974,21 @@ class TestVmlx70BulkDeleteChats:
 
     def test_preload_exposes_delete_all(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/preload/index.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/preload/index.ts"
         ).read_text()
         assert "deleteAll: (scope?:" in src
         assert "chat:deleteAll" in src
 
     def test_env_types_declare_delete_all(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/env.d.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/env.d.ts"
         ).read_text()
         assert "deleteAll: (scope?:" in src
         assert "deleted?: number" in src
 
     def test_ui_has_clear_button_with_confirm(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/chat/ChatList.tsx"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/renderer/src/components/chat/ChatList.tsx"
         ).read_text()
         # Anchor + handler + button + confirm + scope branching
         assert "vmlx#70" in src
@@ -4935,7 +5011,7 @@ class TestVmlx70BulkDeleteChats:
         pass modelPath so only that model's chats get nuked — not the
         user's entire cross-model history."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/chat/ChatList.tsx"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/renderer/src/components/chat/ChatList.tsx"
         ).read_text()
         # handleClearAll must conditionally pass {modelPath} vs undefined
         assert "modelPath ? { modelPath } : undefined" in src, (
@@ -4962,7 +5038,7 @@ class TestMs75HuggingFaceMirrorEndpoint:
 
     def test_main_process_exposes_getHfBaseUrl(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/models.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/models.ts"
         ).read_text()
         assert "export function getHfBaseUrl()" in src, (
             "getHfBaseUrl helper missing — callers would need to reimplement "
@@ -4979,7 +5055,7 @@ class TestMs75HuggingFaceMirrorEndpoint:
 
     def test_download_passes_hf_endpoint_env(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/models.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/models.ts"
         ).read_text()
         assert 'downloadEnv.HF_ENDPOINT = hfEndpoint.trim()' in src, (
             "HF_ENDPOINT must be forwarded to the download subprocess — "
@@ -4991,7 +5067,7 @@ class TestMs75HuggingFaceMirrorEndpoint:
         """Every direct `https://huggingface.co` fetch in the main
         process must route through getHfBaseUrl()."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/models.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/models.ts"
         ).read_text()
         # Count hardcoded HF URLs outside of comments/fallback/rewrites
         # The only remaining literal `https://huggingface.co` should be
@@ -5027,7 +5103,7 @@ class TestMs75HuggingFaceMirrorEndpoint:
         """Content Security Policy must whitelist hf-mirror.com and
         modelscope.cn or README images from those hosts render broken."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/index.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/index.ts"
         ).read_text()
         # Both mirror domains must appear in img-src AND connect-src
         img_src_idx = src.find("img-src")
@@ -5040,7 +5116,7 @@ class TestMs75HuggingFaceMirrorEndpoint:
 
     def test_settings_ui_has_mirror_input_with_validation(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/sessions/DownloadTab.tsx"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/renderer/src/components/sessions/DownloadTab.tsx"
         ).read_text()
         # Anchor + state + save handler + UI field + one-click preset
         assert "ms#75" in src
@@ -5076,7 +5152,7 @@ class TestVmlx57DeleteLocalModel:
 
     def test_ipc_handler_with_safety_gates(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/models.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/models.ts"
         ).read_text()
         assert '"models:deleteLocal"' in src, (
             "IPC handler missing — UI button will fail"
@@ -5101,7 +5177,7 @@ class TestVmlx57DeleteLocalModel:
 
     def test_ipc_stops_session_before_delete(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/models.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/models.ts"
         ).read_text()
         # Session manager is consulted and running sessions stopped
         assert "sessionManagerRef.stopSession" in src, (
@@ -5113,7 +5189,7 @@ class TestVmlx57DeleteLocalModel:
 
     def test_ipc_returns_useful_metadata(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/models.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/models.ts"
         ).read_text()
         # freedBytes via getDirectorySize
         assert "freedBytes" in src
@@ -5123,10 +5199,10 @@ class TestVmlx57DeleteLocalModel:
 
     def test_preload_and_env_types(self):
         pre = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/preload/index.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/preload/index.ts"
         ).read_text()
         env = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/env.d.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/env.d.ts"
         ).read_text()
         assert "deleteLocal: (modelPath: string)" in pre
         assert "models:deleteLocal" in pre
@@ -5136,7 +5212,7 @@ class TestVmlx57DeleteLocalModel:
 
     def test_ui_has_delete_button_in_model_list(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/sessions/CreateSession.tsx"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/renderer/src/components/sessions/CreateSession.tsx"
         ).read_text()
         assert "vmlx#57" in src
         # Trash icon + confirm dialog + IPC call + re-scan
@@ -5358,7 +5434,7 @@ class TestScannerSymlinkFollowing:
 
     def test_scanner_follows_symbolic_links(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/models.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/models.ts"
         ).read_text()
         assert "entry.isSymbolicLink()" in src, (
             "scanner symlink-branch missing; symlinked model dirs silently skipped"
@@ -5377,7 +5453,7 @@ class TestScannerSymlinkFollowing:
 
     def test_getdirsize_stat_follows_symlinks(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/models.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/models.ts"
         ).read_text()
         # getDirectorySize must stat() each entry (not rely on dirent)
         gds_idx = src.find("async function getDirectorySize")
@@ -5532,7 +5608,7 @@ class TestPanelUIContractFull:
         """Panel chat.ts must read reasoning_content (v2) OR reasoning (v1)
         — supports both old and new model server versions without change."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/chat.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/chat.ts"
         ).read_text()
         assert "reasoning_content" in src
         assert "reasoningContent +=" in src, (
@@ -5541,7 +5617,7 @@ class TestPanelUIContractFull:
 
     def test_db_persists_reasoning_column(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/database.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/database.ts"
         ).read_text()
         # Schema migration + write path + read path
         assert "ALTER TABLE messages ADD COLUMN reasoning_content TEXT" in src
@@ -5553,14 +5629,14 @@ class TestPanelUIContractFull:
         """Reload/navigate-away must restore reasoning_content from
         DB, not wipe it."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/chat/ChatInterface.tsx"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/renderer/src/components/chat/ChatInterface.tsx"
         ).read_text()
         assert "m.reasoningContent" in src
         assert "reasoningMap" in src
 
     def test_message_bubble_renders_reasoning_separately(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/renderer/src/components/chat/MessageBubble.tsx"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/renderer/src/components/chat/MessageBubble.tsx"
         ).read_text()
         assert "reasoningContent" in src
         # Renders in a separate ReasoningBlock / box with its own
@@ -5571,10 +5647,10 @@ class TestPanelUIContractFull:
     def test_tool_calls_persist_through_the_chain(self):
         """tool_calls must be JSON-serialized to DB and read back."""
         dbsrc = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/database.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/database.ts"
         ).read_text()
         chatsrc = Path(
-            "/private/tmp/vmlx-1.3.55-build/panel/src/main/ipc/chat.ts"
+            "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/chat.ts"
         ).read_text()
         assert "tool_calls_json" in dbsrc
         assert "toolCallsJson" in dbsrc
@@ -5635,7 +5711,7 @@ class TestMistral4VlmTextFallback:
         _load_jang_v2_vlm must detect mistral3+mistral4 and delegate to
         the text-only loader."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/utils/jang_loader.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/utils/jang_loader.py"
         ).read_text()
         # In the VLM loader, check for the fallback block
         vlm_idx = src.find("def _load_jang_v2_vlm")
@@ -5654,7 +5730,7 @@ class TestMistral4VlmTextFallback:
         """Regression guard — Qwen VL, Gemma 4 VL etc. must NOT be
         rerouted to the text-only path."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/utils/jang_loader.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/utils/jang_loader.py"
         ).read_text()
         vlm_idx = src.find("def _load_jang_v2_vlm")
         next_fn = src.find("\ndef _", vlm_idx + 10)
@@ -5746,7 +5822,7 @@ class TestResponseFormatJsonSuppressesToolParser:
 
     def test_source_has_rf_tool_suppression(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # Both non-stream + stream paths must suppress tools on json output
         count = src.count('_rf_type in ("json_object", "json_schema")')
@@ -5760,7 +5836,7 @@ class TestResponseFormatJsonSuppressesToolParser:
         """If caller passes both tools AND response_format, tool parsing
         should still run (tool_call arguments are JSON too, that's fine)."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # The guard must check `not request.tools`
         count = src.count("if not request.tools and not _suppress_tools:")
@@ -5844,7 +5920,7 @@ class TestBlockDiskStoreMetadataKeyCollision:
 
     def test_serializer_uses_non_reserved_key(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/block_disk_store.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/block_disk_store.py"
         ).read_text()
         # Writer must use the renamed key
         assert 'tensors["__vmlx_block_meta__"]' in src, (
@@ -5861,7 +5937,7 @@ class TestBlockDiskStoreMetadataKeyCollision:
         LRU (otherwise users would lose their entire L2 cache on
         upgrade)."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/block_disk_store.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/block_disk_store.py"
         ).read_text()
         assert 'data.get("__vmlx_block_meta__")' in src, (
             "loader must prefer new key"
@@ -5924,7 +6000,7 @@ class TestAudioSpeechBadModelError:
 
     def test_source_maps_repo_not_found_to_400(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         idx = src.find('"/v1/audio/speech"')
         assert idx > 0
@@ -5948,7 +6024,7 @@ class TestRerankRequestErrorHandling:
 
     def test_source_maps_load_errors_to_400(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # Rerank handler has its own error branch
         idx = src.find("def create_rerank")
@@ -5976,7 +6052,7 @@ class TestVLAndToolUseCombined:
         tools. Check the guard is narrow — `not request.tools` is part
         of the condition, so tools-present always lets the parser run."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # Both non-stream + stream sites must guard on `not request.tools`
         assert src.count("if not request.tools and not _suppress_tools:") >= 2, (
@@ -6019,7 +6095,7 @@ class TestVLAndToolUseCombined:
         """No code path may silently downgrade tool_choice='required'
         to 'auto' just because an image is in the request."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # Search for any branch that reassigns tool_choice when image present
         import re
@@ -6078,7 +6154,7 @@ class TestOllamaCRUDStubsNoOpContract:
 
     def test_stubs_return_200_status_success(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # Each stub must exist and return {"status": "success"}
         for endpoint in ["/api/pull", "/api/delete", "/api/copy", "/api/create"]:
@@ -6099,7 +6175,7 @@ class TestOllamaCRUDStubsNoOpContract:
         """Even no-ops must respect --api-key — otherwise an unauth'd
         /api/pull would be a way to probe if auth is enabled."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         for endpoint in ["/api/pull", "/api/delete", "/api/copy", "/api/create"]:
             idx = src.find(f'"{endpoint}"')
@@ -6121,7 +6197,7 @@ class TestRateLimit429WithRetryAfter:
 
     def test_source_emits_retry_after(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         # check_rate_limit dep must set Retry-After header. Slice wider
         # so the HTTPException-raising block is included.
@@ -6141,7 +6217,7 @@ class TestRateLimit429WithRetryAfter:
         Must be the rate-limiter's next-available window (>= 1s)."""
         # Pin that the retry_after variable comes from the limiter, not hardcoded 0
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/server.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
         assert 'retry_after = _rate_limiter.is_allowed(client_id)' in src or \
                'allowed, retry_after = _rate_limiter.is_allowed(client_id)' in src, (
@@ -6254,10 +6330,10 @@ class TestCacheLayerStackCombined:
 
     def test_scheduler_accepts_cache_flag_composition(self):
         sched_src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/scheduler.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/scheduler.py"
         ).read_text()
         prefix_src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/prefix_cache.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/prefix_cache.py"
         ).read_text()
         # Core knobs present
         assert "use_paged_cache" in sched_src
@@ -6283,7 +6359,7 @@ class TestCacheLayerStackCombined:
         focus. Pin that TurboQuant references exist across loader +
         scheduler + jang_tools delegation."""
         jang_loader = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/utils/jang_loader.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/utils/jang_loader.py"
         ).read_text()
         # TurboQuant fast path via jang_tools.load_jangtq_*
         assert "TurboQuant" in jang_loader, (
@@ -6293,7 +6369,7 @@ class TestCacheLayerStackCombined:
 
     def test_cli_exposes_cache_flags(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/cli.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/cli.py"
         ).read_text()
         for flag in [
             "--use-paged-cache",
@@ -6306,7 +6382,7 @@ class TestCacheLayerStackCombined:
         """Scheduler auto-enables prefix-cache when continuous batching
         is on (removes a common footgun). Pin this behavior."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/scheduler.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/scheduler.py"
         ).read_text()
         assert "Prefix cache requires continuous batching" in src or \
                "enabled automatically" in src, (
@@ -6341,7 +6417,7 @@ class TestTurboQuantDefaultAndSpeed:
         """jang_loader must have the MXTQ detection + delegation to
         jang_tools native fast path."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/utils/jang_loader.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/utils/jang_loader.py"
         ).read_text()
         # MXTQ detection (from first shard)
         assert "tq_packed" in src or "_is_mxtq" in src, (
@@ -6356,7 +6432,7 @@ class TestTurboQuantDefaultAndSpeed:
         """User must not need to pass a TurboQuant flag — it activates
         from the model's jang_config.capabilities block."""
         cli_src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/cli.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/cli.py"
         ).read_text()
         # No required `--enable-turboquant` or similar
         assert "--require-turboquant" not in cli_src
@@ -6368,7 +6444,7 @@ class TestTurboQuantDefaultAndSpeed:
         TurboQuantKVCache, SSM layers use ArraysCache. Both must
         coexist in the layer stack without mixing up types."""
         jang_src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/utils/jang_loader.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/utils/jang_loader.py"
         ).read_text()
         assert "hybrid" in jang_src.lower()
         # BatchKVCache.merge handles TurboQuantKVCache → KVCache via .state
@@ -6381,7 +6457,7 @@ class TestTurboQuantDefaultAndSpeed:
         across restart. This test pins the new key name + back-compat
         reader so a regression would be caught here."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/block_disk_store.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/block_disk_store.py"
         ).read_text()
         assert "__vmlx_block_meta__" in src, (
             "L2 disk serializer must use the non-reserved metadata key "
@@ -6397,7 +6473,7 @@ class TestTurboQuantDefaultAndSpeed:
         iter 3 with Qwen3.6-JANGTQ2 + Qwen3.5-VL JANGTQ — logs showed
         'JANGTQ VLM' / 'VLM fast path' messages."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/utils/jang_loader.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/utils/jang_loader.py"
         ).read_text()
         # VLM-specific detection must exist (is_mllm + has tq_packed)
         assert "_vlm_is_mxtq" in src or "JANGTQ VLM fast path" in src
@@ -6412,7 +6488,7 @@ class TestJangStampAutoDetectsParsers:
 
     def test_capabilities_populate_all_parser_fields(self):
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/model_config_registry.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/model_config_registry.py"
         ).read_text()
         # _try_jang_stamp must read each field from capabilities
         for field in ["reasoning_parser", "tool_parser", "think_in_template",
@@ -6520,7 +6596,7 @@ class TestQwen36VideoContentPathway:
     def test_video_url_content_part_extracted(self):
         """extract_multimodal_content must pick up video_url items."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/api/utils.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/api/utils.py"
         ).read_text()
         assert '"video_url"' in src, "engine must accept video_url items"
         # Video extraction branch present
@@ -6530,7 +6606,7 @@ class TestQwen36VideoContentPathway:
         """BatchedEngine.chat must pass video paths + video_max_frames
         through to the MLLM batch generator."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/engine/batched.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/engine/batched.py"
         ).read_text()
         assert "videos" in src
         assert "video_max_frames" in src
@@ -6543,7 +6619,7 @@ class TestQwen36VideoContentPathway:
         accept videos. Fallback absence would crash on first video
         request; clean import-error message if truly unavailable."""
         src = Path(
-            "/private/tmp/vmlx-1.3.55-build/vmlx_engine/utils/jang_loader.py"
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/utils/jang_loader.py"
         ).read_text()
         # Video fallback machinery must be present
         assert "_install_video_fallback" in src or \
@@ -7883,7 +7959,7 @@ class TestBundledPythonVerifyScript:
     because the gemma4 cherry-pick was dropped during a routine
     mlx_vlm version bump. This script + test pair catches that."""
 
-    _SCRIPT = "/private/tmp/vmlx-1.3.55-build/panel/scripts/verify-bundled-python.sh"
+    _SCRIPT = "/private/tmp/vmlx-1.3.66-build/panel/scripts/verify-bundled-python.sh"
 
     def test_verify_script_exists_and_executable(self):
         """Script must live at panel/scripts/verify-bundled-python.sh
