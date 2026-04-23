@@ -50,6 +50,27 @@ extension Engine {
         let resolved = vMLXFluxKit.ModelRegistry.lookupFuzzy(name: raw)?.name
             ?? raw.lowercased()
         try await flux.load(name: resolved, modelPath: modelPath, quantize: nil)
+        // L3 §313 — retain the path so JIT-wake + admin-wake can
+        // re-hydrate after deep-sleep without re-specifying the flag.
+        self.lastImageModelPath = modelPath
+    }
+
+    /// L3/L4 §313 — JIT re-hydration of the image backend when the
+    /// fluxBackend was dropped by deep-sleep but we know which path
+    /// to reload. Called by generateImage/editImage before dispatch.
+    /// No-op when a backend is already resident OR when no path is
+    /// recorded.
+    internal func rehydrateImageBackendIfNeeded() async throws {
+        guard lastImageModelPath != nil else { return }
+        if let existing = fluxBackend as? FluxEngine,
+           await existing.lastLoadedName != nil
+        {
+            return // already resident
+        }
+        guard let path = lastImageModelPath else { return }
+        try await preloadImageModel(at: path)
+        await self.log(.info, "engine",
+            "flux backend re-hydrated on JIT wake: \(path.lastPathComponent)")
     }
 
     // MARK: - Typed image generation (called from ImageScreen)

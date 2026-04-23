@@ -301,6 +301,14 @@ public actor Engine {
     /// FluxBackend.swift does the unsafe cast at the access site.
     internal var fluxBackend: Any?
 
+    /// L3 §313 — last image-model path preloaded via `preloadImageModel`.
+    /// Retained across deep-sleep so `/admin/wake` (and JIT-wake from
+    /// any /v1/images/* call) can re-hydrate without the caller having
+    /// to re-specify `--image-model`. Nil when serve(--image-model)
+    /// wasn't provided; next gen request falls back to fuzzy-lookup +
+    /// error if still no match.
+    internal var lastImageModelPath: URL?
+
     /// Live image-gen jobs keyed by UUID. UI subscribes via
     /// `Engine.imageGenStream(jobId:)` which fans out from the per-job bridge.
     internal var fluxJobs: [UUID: FluxJobBridge] = [:]
@@ -2016,6 +2024,9 @@ public actor Engine {
     /// request/response plumbing is now real so the day the DiT
     /// ports go in, the route works end-to-end with no further wiring.
     public func generateImage(request: [String: Any]) async throws -> [String: Any] {
+        // L3/L4 §313 — JIT-wake the image backend if deep-sleep dropped
+        // it but we have a recorded path. No-op when already resident.
+        try await rehydrateImageBackendIfNeeded()
         // iter-133 §208: image generation can take 5-30s per sample on
         // Flux/Z-Image — dashboards scraping for image-latency SLOs
         // had no timing field at all. OpenAI's images API doesn't
@@ -2139,6 +2150,7 @@ public actor Engine {
     /// typed call for external HTTP clients once the server-side
     /// multipart parsing is hooked up.
     public func editImage(request: [String: Any]) async throws -> [String: Any] {
+        try await rehydrateImageBackendIfNeeded()
         // iter-134 §209: mirror §208 — editImage is a per-sample
         // Flux/Qwen-Image-Edit forward with strength + mask
         // conditioning; takes the same 5-30s as generateImage on
@@ -2463,8 +2475,16 @@ public actor Engine {
         // Audit 2026-04-15 (lifecycle #4).
         _dflashDrafter = nil
         _dflashTarget = nil
+        // L1 §313 — also drain the FluxBackend's transient generation
+        // buffers (scheduler state, pending latents) so a soft-sleep
+        // on an image-loaded server matches chat-side semantics. The
+        // image weights stay resident; clearing only the buffers lets
+        // the next request start fresh without triggering a reload.
+        // Active job bridges are cleared; `fluxJobs` tracks per-request
+        // state that would otherwise leak across the sleep.
+        fluxJobs.removeAll()
         await logs.append(.info, category: "engine",
-            "soft sleep — caches cleared, DFlash adapters cleared, weights retained")
+            "soft sleep — caches cleared, DFlash adapters cleared, flux jobs drained, weights retained")
         transition(.standby(.soft))
     }
 
@@ -2499,6 +2519,24 @@ public actor Engine {
         // this releases the strong reference so the client's URLSession
         // + API key are deallocated alongside the local weights.
         remoteClient = nil
+        // L2 §313 — also unload the FluxBackend. Prior state: deep-sleep
+        // only dropped the chat model, so an image-loaded server saw
+        // zero GPU memory drop on `/admin/deep-sleep`. Now: drain job
+        // bridges AND unload the FluxEngine's resident model so the
+        // image weights actually leave the GPU. Next /v1/images/*
+        // request JIT-reloads the image model via the preload hook
+        // that serve(--image-model) already wired.
+        fluxJobs.removeAll()
+        if let flux = fluxBackend as? FluxEngine {
+            await flux.unload()
+            await logs.append(.info, category: "engine",
+                "deep sleep — flux backend unloaded")
+        }
+        // Drop the backend reference entirely; getOrCreateFluxBackend()
+        // will instantiate a fresh one on the next image call. The
+        // image-model preload path re-runs via Engine.preloadImageModel
+        // when the admin-wake flow re-hydrates from config.
+        fluxBackend = nil
         // iter-85 §113: drop MLX's pooled Metal buffer cache so the RSS
         // reduction is visible to Activity Monitor. Without this call a
         // user who deep-sleeps a 30GB model still sees the process
