@@ -135,15 +135,35 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     // Mac override: 1024 prefill step keeps first-token latency low on
     // long prompts where 2048 would stall the first render tick.
     public var prefillStepSize: Int = 1024         // cli.py default=2048 (server), 1024 (vMLX Mac)
-    public var continuousBatching: Bool = true    // cli.py --continuous-batching
-    public var streamInterval: Int = 1            // cli.py --stream-interval
+    /// §332 ORPHAN — Python-parity field, no Swift wiring. Real
+    /// batching/scheduling happens inside the scheduler's
+    /// GenerationLock + fair queue; there's no user-visible
+    /// "continuous" toggle. Kept on the struct so settings JSON dumps
+    /// + cluster-round-trip don't drop the key, but changing it has
+    /// zero runtime effect.
+    public var continuousBatching: Bool = true    // cli.py --continuous-batching (ORPHAN)
+    /// §332 ORPHAN — Python-parity. vMLX emits every token as soon as
+    /// the sampler produces it (see Stream.swift:988 `next()`), so
+    /// there's no stream-batching knob. Unused.
+    public var streamInterval: Int = 1            // cli.py --stream-interval (ORPHAN)
 
     // Prefix cache
     public var enablePrefixCache: Bool = true     // cli.py --enable-prefix-cache / --disable-prefix-cache
-    public var prefixCacheSize: Int = 100         // cli.py --prefix-cache-size
-    public var prefixCacheMaxBytes: Int64 = 0     // cli.py --prefix-cache-max-bytes (0 = unlimited)
-    public var cacheMemoryMB: Int = 0             // cli.py --cache-memory-mb (0 = auto)
-    public var memoryAwareCache: Bool = true      // inverse of cli.py --no-memory-aware-cache
+    /// §332 ORPHAN — Python-parity. The Swift prefix-cache uses an
+    /// LRU map with size controlled by `maxCacheBlocks`, not this
+    /// count. Setting has no effect.
+    public var prefixCacheSize: Int = 100         // cli.py --prefix-cache-size (ORPHAN)
+    /// §332 ORPHAN — Python-parity. Same as `prefixCacheSize` — size
+    /// control lives in the paged-cache block pool, not a byte cap.
+    public var prefixCacheMaxBytes: Int64 = 0     // cli.py --prefix-cache-max-bytes (ORPHAN)
+    /// §332 ORPHAN — Python-parity. Swift auto-derives a cache memory
+    /// budget from `WiredMemoryPolicies` + `GPU.maxRecommendedWorkingSetBytes`.
+    /// Manual override isn't hooked up. Setting has no effect.
+    public var cacheMemoryMB: Int = 0             // cli.py --cache-memory-mb (ORPHAN)
+    /// §332 ORPHAN — Python-parity. Memory-aware eviction is the only
+    /// code path in CacheCoordinator (see `MemoryAwarePrefixCache`);
+    /// there's no non-memory-aware fallback to toggle.
+    public var memoryAwareCache: Bool = true      // inverse of cli.py --no-memory-aware-cache (ORPHAN)
 
     // Paged cache
     public var usePagedCache: Bool = true         // cli.py --use-paged-cache
