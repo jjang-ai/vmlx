@@ -69,16 +69,32 @@ public enum LLMTypeRegistry {
             "cohere": create(CohereConfiguration.self, CohereModel.init),
             "openelm": create(OpenElmConfiguration.self, OpenELMModel.init),
             "internlm2": create(InternLM2Configuration.self, InternLM2Model.init),
-            "deepseek_v3": create(DeepseekV3Configuration.self, DeepseekV3Model.init),
+            "deepseek_v3": { data in
+                try Self.makeDeepseekV3OrRefuseMXTQ(family: "deepseek_v3", data: data)
+            },
             // Audit 2026-04-16 parity: deepseek_v2 + deepseek_v32 + kimi_k25
             // all share the DeepSeek V3 MLA architecture. Python `mlx_lm`
             // has dedicated files for each (deepseek_v2.py, deepseek_v32.py,
             // kimi_k25.py) but the Swift V3 model class handles the same
             // weights. Registering aliases prevents hard load failures
             // on real HF configs that declare any of these model_types.
-            "deepseek_v2": create(DeepseekV3Configuration.self, DeepseekV3Model.init),
-            "deepseek_v32": create(DeepseekV3Configuration.self, DeepseekV3Model.init),
-            "kimi_k25": create(DeepseekV3Configuration.self, DeepseekV3Model.init),
+            //
+            // §317 — JANGTQ (mxtq) bundles on any of these families are
+            // NOT YET supported natively in Swift (DeepseekV3JANGTQModel
+            // port pending — see jang/research/KIMI-K2.6-VMLX-INTEGRATION.md
+            // §2.2.5). Detect mxtq via weight_format sniff + throw a
+            // clean error pointing at the jang-tools Path A conversion
+            // so users aren't left with an affine loader silently
+            // mangling the 2-bit codebook weights.
+            "deepseek_v2": { data in
+                try Self.makeDeepseekV3OrRefuseMXTQ(family: "deepseek_v2", data: data)
+            },
+            "deepseek_v32": { data in
+                try Self.makeDeepseekV3OrRefuseMXTQ(family: "deepseek_v32", data: data)
+            },
+            "kimi_k25": { data in
+                try Self.makeDeepseekV3OrRefuseMXTQ(family: "kimi_k25", data: data)
+            },
             // GLM-5.1 smoke-test alias (Ralph iter 12, S02 quick-win).
             // GLM-5.1 declares model_type=glm_moe_dsa with an MLA attention
             // block (kv_lora_rank > 0) very close to DeepSeek V3 — the
@@ -209,6 +225,36 @@ public enum LLMTypeRegistry {
         creators: coreModels().merging(extendedModels()) { a, _ in a }
             .merging(additionalModels()) { a, _ in a }
     )
+
+    /// §317 — make a DeepseekV3 model OR throw a clean error when the
+    /// bundle declares `weight_format: "mxtq"` (JANGTQ). Kimi K2.6
+    /// REAP-30-JANGTQ_1L and DSV3.2 JANGTQ checkpoints use this
+    /// format; until DeepseekV3JANGTQModel ships natively in Swift,
+    /// the affine loader would silently mangle the 2-bit codebook
+    /// weights. Refusing with an actionable error is honest.
+    ///
+    /// Path A conversion from the jang-tools repo:
+    ///   python -m jang_tools.convert_jangtq_to_affine \
+    ///     --in  /path/Kimi-K2.6-REAP-30-JANGTQ_1L \
+    ///     --out /path/Kimi-K2.6-REAP-30-JANG_1L \
+    ///     --bits 2
+    /// The affine output (~233 GB vs 191 GB JANGTQ) loads natively
+    /// with the existing DeepseekV3Model + QuantizedSwitchLinear.
+    fileprivate static func makeDeepseekV3OrRefuseMXTQ(
+        family: String, data: Data
+    ) throws -> any LanguageModel {
+        if FormatSniff.isMXTQ(from: data) {
+            throw ModelFactoryError.unsupportedModelType(
+                "\(family) JANGTQ (mxtq) is not yet supported natively on vMLX Swift. " +
+                "Convert to affine-2bit with jang-tools Path A first: " +
+                "`python -m jang_tools.convert_jangtq_to_affine --in <src> --out <dst> --bits 2`. " +
+                "Tracking: jang/research/KIMI-K2.6-VMLX-INTEGRATION.md §2.2.5."
+            )
+        }
+        let config = try JSONDecoder.json5().decode(
+            DeepseekV3Configuration.self, from: data)
+        return DeepseekV3Model(config)
+    }
 }
 
 /// Registry of models and any overrides that go with them, e.g. prompt augmentation.
