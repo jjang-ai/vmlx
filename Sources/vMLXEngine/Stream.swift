@@ -1920,8 +1920,24 @@ extension Engine {
         // unnecessary AND unsafe. Also harden the detached branch with
         // an `isCancelled` guard inside the Task so a late-arriving
         // cancellation still short-circuits before touching MLX.
+        // §337 — skip re-derive on VL turns. `maybeReDeriveSSMState`
+        // constructs a text-only `LMInput` (no image/video) and runs a
+        // fresh forward pass; for a VLM request whose actual
+        // generation mixed image embeddings into the prompt tokens,
+        // the re-derived text-only SSM state doesn't reflect the real
+        // state at any token position — restoring it on a future turn
+        // would feed garbage into every mamba layer. The VL/hybrid
+        // intersection is rare today (Qwen3.5-VL hybrid + thinking
+        // being the clearest match), but when it occurs the wasted
+        // re-derive is worse than no re-derive. Skip when userInput
+        // has any image or video content; the SSM companion for this
+        // turn was already elided by `shouldSkipSSMStorage`, so the
+        // next VL turn will just re-prefill normally (matches the
+        // pre-§317 correctness baseline).
+        let isVLTurn = !userInput.images.isEmpty || !userInput.videos.isEmpty
         if collectedToolCalls.isEmpty,
            !Task.isCancelled,
+           !isVLTurn,
            let coord = coordinator,
            coord.isHybrid,
            capturedGenPromptLen > 0,
