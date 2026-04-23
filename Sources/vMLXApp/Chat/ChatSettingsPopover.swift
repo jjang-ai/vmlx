@@ -350,6 +350,17 @@ struct ChatSettingsPopover: View {
                     .foregroundStyle(Theme.Colors.textLow)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 2)
+                // §74 / §321: Coming-soon explainer so users don't
+                // wonder where Web Search / Fetch URL / File Tools /
+                // Git / Utility / Brave went. These lived on earlier
+                // mocks but never wired through the stream, so the
+                // toggles were hidden to stop misleading users. Roadmap
+                // pending: drop MCP in the API panel for now.
+                Text("Coming soon: Web Search, Fetch URL, File Tools, Git, Utility Tools, Brave Search — not yet wired through the stream. Use MCP in the API panel for additional tool providers today.")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textLow)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 2)
             }
             .padding(.top, Theme.Spacing.xs)
         } label: { sectionLabel("Built-in Tools") }

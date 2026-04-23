@@ -973,6 +973,13 @@ public enum OpenAIRoutes {
         //   - "verbose_json"  → full dict (text+language+duration+segments)
         //   - "srt" / "vtt"   → single-cue caption file for the clip
         router.post("/v1/audio/transcriptions") { req, _ -> Response in
+            // §320 JIT wake before body collection — fires concurrently
+            // with the (up to 128 MB) multipart upload so a standby
+            // server warms the Whisper decoder while bytes are still
+            // being read. Also satisfies the §94 regression-guard
+            // position check (wake must appear within 6000 chars of
+            // the route declaration).
+            await engine.wakeFromStandby()
             var req = req
             let body = try await req.collectBody(upTo: 128 * 1024 * 1024)
             let data = Data(buffer: body)
@@ -1112,8 +1119,7 @@ public enum OpenAIRoutes {
             if !modelName.isEmpty { dict["model"] = modelName }
             if let language { dict["language"] = language }
 
-            // iter-60: JIT wake for audio transcription too.
-            await engine.wakeFromStandby()
+            // (wake already fired at route entry, §320)
             // iter-136 §211: TTS got X-vMLX-TTS-TotalMs via §210;
             // transcriptions has the same wire-format split (text /
             // srt / vtt binaries vs json / verbose_json JSON) so the
