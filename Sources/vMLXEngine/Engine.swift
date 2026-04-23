@@ -1864,23 +1864,15 @@ public actor Engine {
     /// embedding model. Runs tokenize -> forward -> pool -> normalize for
     /// each input. Returns one Float vector per input.
     public func generateEmbeddings(inputs: [String]) async throws -> [[Float]] {
-        // L5 §316 — JIT re-hydrate the embedding model if deep-sleep
-        // dropped it but we have a recorded path. Mirrors the chat
-        // wakeFromStandby + image rehydrateImageBackendIfNeeded
-        // pathways. If the server never had an embedding model loaded,
-        // embeddingModelPath is nil and we skip straight to the
-        // .notLoaded throw below.
+        // L5 §316: JIT re-hydrate on deep-sleep recovery.
         if embeddingContainer == nil, let path = embeddingModelPath {
             try await loadEmbeddingModel(at: path)
             await logs.append(.info, category: "engine",
                 "embedding model re-hydrated on JIT wake: \(path.lastPathComponent)")
         }
+        // §32 + §316: no-embedding-model throws .notLoaded (→ 503), not
+        // .notImplemented (→ 500). Real user-actionable config error.
         guard let container = self.embeddingContainer else {
-            // Iter-32: was `.notImplemented` which mapped to HTTP 500.
-            // No-embedding-model is a real user-actionable config
-            // error, not a missing feature — route it as `.notLoaded`
-            // so OpenAIRoutes.mapEngineError returns 503 Service
-            // Unavailable. Clean error envelope for SDK clients.
             throw EngineError.notLoaded
         }
         return await container.perform {
