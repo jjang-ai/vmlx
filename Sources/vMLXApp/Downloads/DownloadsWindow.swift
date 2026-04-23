@@ -6,6 +6,7 @@ import vMLXTheme
 /// failed, cancelled. Per-row Pause / Resume / Cancel / Retry / Open-in-Finder.
 struct DownloadsWindow: View {
     @Environment(AppState.self) private var state
+    @Environment(\.appLocale) private var appLocale
 
     /// §250: tab between active-downloads list and Hub model search.
     /// Stored @State so each window instance keeps its own selection.
@@ -82,7 +83,7 @@ struct DownloadsWindow: View {
 
     private var header: some View {
         HStack {
-            Text("Downloads")
+            Text(L10n.Downloads.title.render(appLocale))
                 .font(Theme.Typography.title)
                 .foregroundStyle(Theme.Colors.textHigh)
             Spacer()
@@ -94,7 +95,7 @@ struct DownloadsWindow: View {
     private var footer: some View {
         HStack {
             Spacer()
-            Button("Clear completed") {
+            Button(L10n.Downloads.clearCompleted.render(appLocale)) {
                 Task { await state.downloadManager.clearCompleted() }
             }
             .buttonStyle(.plain)
@@ -120,10 +121,10 @@ struct DownloadsWindow: View {
                         Image(systemName: "arrow.down.circle")
                             .font(.system(size: 44, weight: .light))
                             .foregroundStyle(Theme.Colors.accent)
-                        Text("No downloads yet")
+                        Text(L10n.Downloads.empty.render(appLocale))
                             .font(Theme.Typography.title)
                             .foregroundStyle(Theme.Colors.textHigh)
-                        Text("Download an MLX model from HuggingFace")
+                        Text(L10n.Downloads.emptyHint.render(appLocale))
                             .font(Theme.Typography.body)
                             .foregroundStyle(Theme.Colors.textMid)
                     }
@@ -241,6 +242,7 @@ struct DownloadsWindow: View {
 private struct DownloadRow: View {
     let job: DownloadManager.Job
     @Environment(AppState.self) private var state
+    @Environment(\.appLocale) private var appLocale
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Spacing.md) {
@@ -296,7 +298,7 @@ private struct DownloadRow: View {
                             .font(Theme.Typography.caption)
                             .foregroundStyle(Theme.Colors.textMid)
                         Spacer()
-                        Button("Open Settings →") {
+                        Button(L10n.Downloads.openSettings.render(appLocale)) {
                             NotificationCenter.default.post(
                                 name: .vmlxOpenHuggingFaceTokenCard,
                                 object: nil)
@@ -325,26 +327,26 @@ private struct DownloadRow: View {
         let id = job.id
         switch job.status {
         case .downloading:
-            rowButton("pause.fill", "Pause") {
+            rowButton("pause.fill", L10n.Common.pause.render(appLocale)) {
                 Task { await state.downloadManager.pause(id) }
             }
-            rowButton("xmark", "Cancel") {
+            rowButton("xmark", L10n.Common.cancel.render(appLocale)) {
                 Task { await state.downloadManager.cancel(id) }
             }
         case .paused:
-            rowButton("play.fill", "Resume") {
+            rowButton("play.fill", L10n.Common.resume.render(appLocale)) {
                 Task { await state.downloadManager.resume(id) }
             }
-            rowButton("xmark", "Cancel") {
+            rowButton("xmark", L10n.Common.cancel.render(appLocale)) {
                 Task { await state.downloadManager.cancel(id) }
             }
         case .failed:
-            rowButton("arrow.clockwise", "Retry") {
+            rowButton("arrow.clockwise", L10n.Common.retry.render(appLocale)) {
                 Task { await state.downloadManager.resume(id) }
             }
         case .completed:
             if let path = job.localPath {
-                rowButton("folder", "Open") {
+                rowButton("folder", L10n.Common.open.render(appLocale)) {
                     NSWorkspace.shared.activateFileViewerSelecting([path])
                 }
             }
