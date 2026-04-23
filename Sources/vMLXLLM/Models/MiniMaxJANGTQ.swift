@@ -312,6 +312,53 @@ public struct MiniMaxJANGTQConfiguration: Codable, Sendable {
         case mxtqBits = "mxtq_bits"
         case mxtqSeed = "mxtq_seed"
     }
+
+    // §346 T6 — custom decode so `mxtq_bits` accepts either a flat Int
+    // (legacy) or a per-role dict `{routed_expert: N, shared_expert: N,
+    // ...}` (modern converter output). Default Codable synthesis rejects
+    // the dict form and would fail the whole config decode for a future
+    // JANGTQ4 bundle. Falls back to 2 only when both shapes are absent.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.modelType =
+            try container.decodeIfPresent(String.self, forKey: .modelType) ?? "minimax_m2"
+        self.hiddenSize = try container.decode(Int.self, forKey: .hiddenSize)
+        self.intermediateSize = try container.decode(Int.self, forKey: .intermediateSize)
+        self.attentionHeads = try container.decode(Int.self, forKey: .attentionHeads)
+        self.kvHeads = try container.decode(Int.self, forKey: .kvHeads)
+        self.maxPositionEmbeddings =
+            try container.decode(Int.self, forKey: .maxPositionEmbeddings)
+        self.numExpertsPerTok = try container.decode(Int.self, forKey: .numExpertsPerTok)
+        self.numLocalExperts = try container.decode(Int.self, forKey: .numLocalExperts)
+        self.sharedIntermediateSize =
+            try container.decode(Int.self, forKey: .sharedIntermediateSize)
+        self.hiddenLayers = try container.decode(Int.self, forKey: .hiddenLayers)
+        self.rmsNormEps = try container.decode(Float.self, forKey: .rmsNormEps)
+        self.ropeTheta = try container.decode(Float.self, forKey: .ropeTheta)
+        self.rotaryDim = try container.decode(Int.self, forKey: .rotaryDim)
+        self.vocabularySize = try container.decode(Int.self, forKey: .vocabularySize)
+        self.tieWordEmbeddings =
+            try container.decodeIfPresent(Bool.self, forKey: .tieWordEmbeddings) ?? false
+        self.scoringFunc =
+            try container.decodeIfPresent(String.self, forKey: .scoringFunc) ?? "sigmoid"
+        self.headDim = try container.decodeIfPresent(Int.self, forKey: .headDim)
+        self.useQkNorm =
+            try container.decodeIfPresent(Bool.self, forKey: .useQkNorm) ?? true
+        self.weightFormat =
+            try container.decodeIfPresent(String.self, forKey: .weightFormat) ?? "mxtq"
+        if let flat = try? container.decodeIfPresent(Int.self, forKey: .mxtqBits) {
+            self.mxtqBits = flat
+        } else if let dict = try? container.decodeIfPresent(
+            [String: Int].self, forKey: .mxtqBits),
+            let routed = dict["routed_expert"] ?? dict["shared_expert"]
+                ?? dict.values.first
+        {
+            self.mxtqBits = routed
+        } else {
+            self.mxtqBits = 2
+        }
+        self.mxtqSeed = try container.decodeIfPresent(Int.self, forKey: .mxtqSeed) ?? 42
+    }
 }
 
 // MARK: - LoRA

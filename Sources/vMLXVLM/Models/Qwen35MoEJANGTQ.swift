@@ -95,7 +95,26 @@ public struct Qwen35MoEJANGTQConfiguration: Codable, Sendable {
     public init(from decoder: Decoder) throws {
         self.base = try Qwen35Configuration(from: decoder)
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.mxtqBits = try container.decodeIfPresent(Int.self, forKey: .mxtqBits) ?? 2
+        // §346 T6 — Accept `mxtq_bits` in both shapes the JANG converter
+        // writes: (a) flat Int for legacy uniform-bit dumps (e.g. MiniMax
+        // M2.7 writes `mxtq_bits: 2`), and (b) per-role dict for modern
+        // mixed-precision bundles (e.g. Qwen3.6 JANGTQ4 writes
+        // `mxtq_bits: {"routed_expert": 4, "shared_expert": 4, ...}`).
+        // Previously only the flat Int path decoded — the dict path
+        // silently fell back to default=2 and the Metal kernel read
+        // 4-bit packed tq_packed tensors as 2-bit → complete garbage
+        // output. Matches `JangLoader.parseJang` which accepts both.
+        if let flat = try? container.decodeIfPresent(Int.self, forKey: .mxtqBits) {
+            self.mxtqBits = flat
+        } else if let dict = try? container.decodeIfPresent(
+            [String: Int].self, forKey: .mxtqBits),
+            let routed = dict["routed_expert"] ?? dict["shared_expert"]
+                ?? dict.values.first
+        {
+            self.mxtqBits = routed
+        } else {
+            self.mxtqBits = 2
+        }
         self.mxtqSeed = try container.decodeIfPresent(Int.self, forKey: .mxtqSeed) ?? 42
     }
 

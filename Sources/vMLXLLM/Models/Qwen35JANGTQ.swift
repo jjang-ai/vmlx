@@ -210,7 +210,20 @@ public struct Qwen35JANGTQTextConfiguration: Codable, Sendable {
 
         self.weightFormat =
             try container.decodeIfPresent(String.self, forKey: .weightFormat) ?? "mxtq"
-        self.mxtqBits = try container.decodeIfPresent(Int.self, forKey: .mxtqBits) ?? 2
+        // §346 T6 — accept `mxtq_bits` as flat Int OR per-role dict.
+        // See Qwen35MoEJANGTQ for the rationale; same bundles may be
+        // loaded through either the LLM-text or VLM factory path.
+        if let flat = try? container.decodeIfPresent(Int.self, forKey: .mxtqBits) {
+            self.mxtqBits = flat
+        } else if let dict = try? container.decodeIfPresent(
+            [String: Int].self, forKey: .mxtqBits),
+            let routed = dict["routed_expert"] ?? dict["shared_expert"]
+                ?? dict.values.first
+        {
+            self.mxtqBits = routed
+        } else {
+            self.mxtqBits = 2
+        }
         self.mxtqSeed = try container.decodeIfPresent(Int.self, forKey: .mxtqSeed) ?? 42
 
         let defaultRopeParameters: [String: StringOrNumber] = [
