@@ -270,6 +270,27 @@ pushed to origin.
   `KimiToolCallParser` now mirrors the correct logic from
   `vMLXLMCommon/Tool/Parsers/KimiK2ToolCallParser`. 3 regression tests
   added (all green).
+- `1c60fc7` §327: DownloadManager.Job forward-compat decoder —
+  **Production bug**: pre-§293 sidecars missing `requiresHFAuth`
+  caused `keyNotFound` on decode, silently wiping the entire
+  download job history on first launch of the upgraded build.
+  Custom `init(from:)` with `decodeIfPresent` defaults the field.
+  6/6 DownloadSidecarTests green post-fix.
+- `81f7a3c` §328: Anthropic `thinking.budget_tokens` → thinkingBudget
+  pass-through. **Production bug**: `budget_tokens: 2000` was only
+  used to pick an effort bucket; the numeric cap was silently
+  dropped because `ChatRequest.init(...)` didn't expose the
+  `thinkingBudget: Int?` parameter. Stream.swift's
+  `thinkingBudgetCharCap` now receives the user's budget.
+- `e685e28` §329: Ollama `think` accepts Bool OR String. Ollama
+  0.12+ reasoning-effort API (`think: "medium"`) was silent-drop
+  because only Bool was read. Shared `parseOllamaThinkField` helper
+  handles both shapes across /api/chat + /api/generate.
+- `53b859d` §330: `/v1/completions` + `/v1/responses` stream_options
+  pass-through. Only `/v1/chat/completions` (Codable decode) honored
+  `stream_options: {include_usage: true}`. Legacy completions +
+  Responses routes dropped it because the positional init doesn't
+  accept streamOptions. Post-init assignment fixes both.
 
 ## Harness state (updated each iteration)
 
