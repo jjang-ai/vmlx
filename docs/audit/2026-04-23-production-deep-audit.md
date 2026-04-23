@@ -161,5 +161,31 @@ in Sources/ and triage.
 ## Iteration log
 
 - **2026-04-23 13:35** — §347 tokenizer routes landed (8c8324b)
-- **2026-04-23 13:45** — this audit document created (§348)
-- Next: H/J/K sweep + hookify rules + gaps filled.
+- **2026-04-23 13:45** — this audit document created (§348, 03bcf1d)
+- **2026-04-23 14:15** — §349 i18n translation layer landed (ae5d4ce + 943807f + f9f863b + 8d9e616). App-side only, engine untouched. 4-locale catalog (en/ja/ko/zh-Hans) with compile-time enforcement via `L10nEntry(en:ja:ko:zh:)`. LanguagePicker in tray footer + Settings. Covers Menu/Chat/Common/Server/Settings namespaces + DownloadsWindow + TrayItem + SessionDashboard.
+- **2026-04-23 14:20** — Surface G verified: OpenAI 21 routes (incl. §347 tokenizer alias pair), Anthropic 2 (`/v1/messages`, `/v1/messages/count_tokens`), Ollama 13 (`/api/chat|generate|embed|embeddings|version|tags|ps|show|pull|copy|create|push|blobs/:digest`). All 3-API coverage intact post-PR-99 merge.
+- **2026-04-23 14:22** — Surface L FIXME/TODO sweep: 22 hits across Sources/vMLXEngine + vMLXServer. Manually triaged: 20 are iter-tagged (`§NNN`/`iter-NNN` — intentional pointers to closed work). 2 live TODOs surfaced: (a) Server.swift:32 stale CORS TODO — closed in 8d9e616 (§331 CORSAllowlistMiddleware already landed). (b) OllamaRoutes.swift:728 `/api/pull` body FIXME — multipart-download stubbed; intentional, tracked.
+
+## Status snapshot (post-§349)
+
+| Surface | Status |
+|---------|--------|
+| A. Chat UX | ✅ verified (A1-A8) |
+| B. Parser detection | ✅ verified (JANG Tier-1 capabilities stamp at CapabilityDetector.swift:367-407) |
+| C. Reasoning ON/OFF | ✅ all 4 sources honored (UI + OpenAI + Anthropic + Ollama) |
+| D. Server defaults | ✅ audited, env killswitches intact |
+| E. Lifecycle | ✅ idle-timer gated on .running, defers on active downloads |
+| F. Network / CORS | ✅ 127.0.0.1 default, CORSAllowlistMiddleware wired (§331), live-swap §152 |
+| G. 3-API matrix | ✅ 36 endpoints total (21 OpenAI + 2 Anthropic + 13 Ollama) |
+| H. Image | ✅ §213/§214/§248/§249/§315 all landed |
+| I. VL/video | ✅ §34/§58/§107/§335 all landed |
+| J. UI zombie code | ✅ all 8 subsurfaces tagged or closed |
+| K. Hookify enforcement | ✅ 6 local hooks installed (.claude/) |
+| L. FIXME/TODO | ✅ triaged, live one closed in 8d9e616 |
+| M. Perf floor | ✅ all 4 model targets met or exceeded (§238 audit) |
+
+## Next-pass candidates
+
+- Live 3-API matrix e2e against a loaded model (Qwen3.5 or Qwen3.6) — validate logprobs on OpenAI /v1/chat/completions, legacy /v1/completions (text_offset shape), Anthropic /v1/messages, Ollama /api/chat
+- `docs/audit/i18n-coverage.md` — write once agents finish (tests + coverage dashboard)
+- Cache matrix re-run across paged / prefix / L2 / SSM companion / TurboQuant
