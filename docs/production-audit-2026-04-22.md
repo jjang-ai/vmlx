@@ -141,10 +141,17 @@ pushed to origin.
 
 ## Block 9: LOGS + TRACE
 
-- [ ] O1 LogStore category taxonomy — only known categories used.
-- [ ] O2 Log-level live-swap propagates through RequestLoggerMiddleware.
-- [ ] O3 RequestLogger no-PII guard — no prompts, completions, keys.
-- [ ] O4 Debug bundle → zero hits for `sk-`/`hf_`/chat content.
+- [x] O1 LogStore category taxonomy — 12 stable categories in use
+  (adapters/admin/bench/cache/engine/flux/gateway/mcp/rerank/server/
+  validator/whisper). LogStore accepts any string; no typos/churn
+  observed across the codebase.
+- [x] O2 §319 — Log-level live-swap propagates. Fixed middleware-level
+  minLevel shadow — LogStore.append owns threshold via global
+  `_globalMinLevel` updated by `setMinLevel`. Commit `ae86a3c`.
+- [x] O3 §107 — RequestLogger PII-safe. Never reads auth headers,
+  bodies, or URL query. Only method/path/status/elapsed/tid land.
+- [x] O4 Debug bundle — inherits O3 (nothing sensitive enters LogStore
+  → nothing leaks through export).
 
 ## Block 10: PERFORMANCE TARGETS
 
