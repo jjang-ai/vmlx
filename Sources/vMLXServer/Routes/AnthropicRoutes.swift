@@ -773,12 +773,21 @@ public enum AnthropicRoutes {
             }
         }
 
-        // thinking.budget_tokens → rough reasoning_effort bucket, matching
-        // vmlx_engine/api/anthropic_adapter.py::_budget_to_effort.
+        // thinking.budget_tokens → both reasoning_effort bucket AND the
+        // direct `thinking_budget` cap. Bucket is used by per-family
+        // effort-to-sampler mapping; the numeric budget is enforced as a
+        // hard char-cap in Stream.swift (reasoningCharsEmitted vs
+        // thinkingBudgetCharCap). Prior to §328 the numeric value was
+        // silently dropped — every Anthropic client passing
+        // budget_tokens=2000 got unbounded thinking because the
+        // programmatic `ChatRequest.init(...)` didn't expose the
+        // thinkingBudget parameter.
         var effort: String? = nil
+        var budgetTokens: Int? = nil
         if let think = body["thinking"] as? [String: Any],
            let budget = think["budget_tokens"] as? Int
         {
+            budgetTokens = budget
             if budget >= 10_000 { effort = "high" }
             else if budget >= 2_000 { effort = "medium" }
             else if budget > 0 { effort = "low" }
@@ -800,7 +809,8 @@ public enum AnthropicRoutes {
             reasoningEffort: effort,
             tools: tools,
             toolChoice: toolChoice,
-            includeReasoning: body["include_reasoning"] as? Bool
+            includeReasoning: body["include_reasoning"] as? Bool,
+            thinkingBudget: budgetTokens
         )
     }
 }
