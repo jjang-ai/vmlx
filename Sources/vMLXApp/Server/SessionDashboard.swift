@@ -64,6 +64,7 @@ struct Session: Identifiable, Equatable {
 /// selected in the UI.
 struct SessionDashboard: View {
     @Environment(AppState.self) private var app
+    @Environment(\.appLocale) private var appLocale: AppLocale
     @Binding var selection: UUID?
     @State private var showCreatePopover = false
 
@@ -92,10 +93,11 @@ struct SessionDashboard: View {
     private var header: some View {
         HStack(alignment: .center, spacing: Theme.Spacing.md) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Server")
+                // §349 — localized title + subtitle.
+                Text(L10n.Server.title.render(appLocale))
                     .font(Theme.Typography.title)
                     .foregroundStyle(Theme.Colors.textHigh)
-                Text("Pick a model and start serving on a local port")
+                Text(L10n.Server.subtitle.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textMid)
             }
@@ -105,7 +107,8 @@ struct SessionDashboard: View {
             } label: {
                 HStack(spacing: Theme.Spacing.xs) {
                     Image(systemName: "arrow.down.doc.fill")
-                    Text("Load model")
+                    // §349 — localized "Load model" button.
+                    Text(L10n.Server.loadModel.render(appLocale))
                 }
                 .font(Theme.Typography.bodyHi)
                 .foregroundStyle(Theme.Colors.textHigh)
@@ -160,10 +163,11 @@ struct SessionDashboard: View {
                 .font(.system(size: 48, weight: .light))
                 .foregroundStyle(Theme.Colors.textLow)
             VStack(spacing: Theme.Spacing.sm) {
-                Text("No model loaded")
+                // §349 — localized empty-state title + hint.
+                Text(L10n.Server.noModelLoaded.render(appLocale))
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(Theme.Colors.textHigh)
-                Text("Pick a model from your local cache to start chatting,\nrun a server, or generate images.")
+                Text(L10n.Server.noModelHint.render(appLocale))
                     .font(Theme.Typography.body)
                     .foregroundStyle(Theme.Colors.textMid)
                     .multilineTextAlignment(.center)

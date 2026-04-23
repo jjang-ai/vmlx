@@ -241,11 +241,13 @@ struct EngineStateBanner: View {
 /// Tiny "Evaluating prompt…" header strip — NOT a full banner. Shown only
 /// while the engine is mid-prefill on a new turn (no tokens yet).
 private struct EvaluatingStrip: View {
+    @Environment(\.appLocale) private var appLocale: AppLocale
     var body: some View {
         HStack(spacing: Theme.Spacing.sm) {
             ProgressView()
                 .controlSize(.mini)
-            Text("Evaluating prompt…")
+            // §349 — localized via L10n catalog.
+            Text(L10n.Chat.evaluatingPrompt.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textMid)
             Spacer()
@@ -329,6 +331,7 @@ struct ColoredBanner: View {
 
 private struct ChatTopBar: View {
     @Environment(AppState.self) private var app
+    @Environment(\.appLocale) private var appLocale: AppLocale
     @Bindable var vm: ChatViewModel
     @State private var showSettings = false
     // showQuickSliders removed in UX-5 dedup pass — the QuickSlidersPopover
@@ -353,7 +356,8 @@ private struct ChatTopBar: View {
             ChatModelPicker(vm: vm)
 
             Toggle(isOn: $vm.reasoningEnabled) {
-                Text("Reasoning")
+                // §349 — localized "Reasoning" label.
+                Text(L10n.Chat.reasoning.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textMid)
             }
@@ -444,6 +448,7 @@ private struct ChatTopBar: View {
 /// `ChatViewModel.send()` guard).
 private struct ChatModelPicker: View {
     @Environment(AppState.self) private var app
+    @Environment(\.appLocale) private var appLocale: AppLocale
     @Bindable var vm: ChatViewModel
 
     @State private var entries: [ModelLibrary.ModelEntry] = []
@@ -534,7 +539,8 @@ private struct ChatModelPicker: View {
             // Primary picker menu — filter + select + per-row ▶/■
             Menu {
                 if entries.isEmpty {
-                    Text("No models discovered")
+                    // §349 — localized empty-state label.
+                    Text(L10n.Chat.noModelsDiscovered.render(appLocale))
                         .foregroundStyle(Theme.Colors.textLow)
                 } else {
                     TextField("Filter models…", text: $filterQuery)
