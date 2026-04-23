@@ -163,6 +163,39 @@ pushed to origin.
 - [ ] D3 `brew install ./packaging/homebrew/vmlx.rb` locally works.
 - [ ] D4 Auto-updater config: latest.json references DMG, app detects.
 
+## Block K: Kimi K2.6 JANGTQ port (from ../jang/research/KIMI-K2.6-VMLX-INTEGRATION.md)
+
+- [x] K0 Audit — what exists, what doesn't. Findings:
+  - ✓ `LLMModelFactory` registers `"kimi_k25": DeepseekV3Model`
+  - ✓ `DeepseekV3.swift` full MLA + MoE (prefill-style; no bf16 drift)
+  - ✓ `ChunkedPrefillVLM.swift`, `KimiK2ToolCallParser.swift`
+  - ✓ `TurboQuantSwitchGLU`, `TurboQuantKVCache`, `JangMXTQDequant`,
+    `TQHadamard`, `TQCodebook`, `TQEncoder`, `NumPyPCG64`
+  - ✓ Precedent JANGTQ ports: `MiniMaxJANGTQ`, `GLM4MoEJANGTQ`,
+    `Qwen35JANGTQ`
+  - ✗ `DeepseekV3JANGTQModel` (blocking Kimi K2.6-JANGTQ_1L native load)
+  - ✗ `KimiMoonViT.swift` (blocking Kimi K2.6 VL inputs)
+  - ✗ `KimiVLM.swift` wrapper
+  - ✗ `VLMModelFactory` "kimi_k25" entry
+- [x] K1 §317 — factory refuses mxtq bundles with actionable error
+  message pointing at jang-tools Path A conversion. Prevents silent
+  weight mangling on affine loader. Commit `ceaec3b`.
+- [ ] K2 Port `DeepseekV3JANGTQModel` — mirror `MiniMaxJANGTQ` pattern
+  (swap `DeepseekV3MoE.switchMLP: SwitchGLU` → `TurboQuantSwitchGLU`).
+  Scope ~300 LOC. Unblocks native Kimi K2.6 JANGTQ_1L load without
+  the 42 GB expansion to affine.
+- [ ] K3 Port `KimiMoonViT.swift` — 27-block MoonViT ViT, ~500 LOC
+  from `mlx_vlm.models.kimi_vl.vision.VisionModel`.
+- [ ] K4 Ship `KimiVLM.swift` wrapper — calls `chunkedPrefillEmbedding`
+  with `prefillStepSize: 32` (NOT default 512 — monolithic Metal
+  buffer hits watchdog on 191 GB MoE).
+- [ ] K5 mm_projector rename sanitize step: `mm_projector.proj.0` →
+  `multi_modal_projector.linear_1` at load time.
+- [ ] K6 Register `"kimi_k25"` in `VLMModelFactory` routing to
+  `KimiVLMModel`.
+- [ ] K7 Test harness — text + VL coherence against local
+  Kimi-K2.6-REAP-30-JANG_1L (after Path A conversion).
+
 ## Commits this audit chain
 
 - `29cb85b` fix(flux): WeightLoader falls through to transformer/ subdirs
