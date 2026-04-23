@@ -24,12 +24,11 @@ public struct Server {
     /// Allowed CORS origins. `["*"]` (default) → fully permissive
     /// `Access-Control-Allow-Origin: *`. A single entry other than
     /// `"*"` maps to Hummingbird's `.custom(origin)`. Two or more
-    /// non-wildcard entries → `.originBased` (Hummingbird echoes the
-    /// request's `Origin` header; gating a specific allowlist with
-    /// Hummingbird's built-in middleware requires a wrapper, so for
-    /// now we accept any origin but at least the CORS header reflects
-    /// the actual request origin rather than a blanket `*`. A stricter
-    /// allowlist is TODO for a follow-up middleware.
+    /// non-wildcard entries route through `CORSAllowlistMiddleware`
+    /// (see §331) which enforces a strict allowlist on every request
+    /// instead of echoing arbitrary origins back — the prior
+    /// "TODO follow-up middleware" note is closed. Live-swap is wired
+    /// via §152 so /admin/cors/update propagates without restart.
     public let allowedOrigins: [String]
     /// iter-135 §161: mutable auth credentials the middleware reads
     /// per-request. See `AuthTokenBox`. Callers swap values via
