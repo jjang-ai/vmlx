@@ -632,6 +632,8 @@ let package = Package(
                 // Bool/Number coercion against JSON Schema before MCP
                 // dispatch, matching the Python fix.
                 "SchemaArgumentCoercionTests.swift",
+                // §340 — MCP clipboard import (Claude Desktop format).
+                "MCPClipboardImportTests.swift",
                 // Metal-dependent tests excluded — `swift test` can't load
                 // the default.metallib from the SwiftPM bundle path;
                 // JangDFlashDrafter, JangDFlashSpecDec, VisionEmbeddingCache,

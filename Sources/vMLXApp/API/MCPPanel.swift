@@ -122,6 +122,17 @@ struct MCPPanel: View {
                 )
             Button("Browse…") { pickConfigPath() }
                 .buttonStyle(.borderless)
+            // §340 — one-click import from Claude Desktop / Cursor /
+            // Windsurf / Zed clipboard format. Reads the current
+            // system clipboard, parses the `mcpServers` block, and
+            // upserts each entry via the same path as manual add.
+            // Much faster than "Browse" when the user already has
+            // a working config somewhere.
+            Button("Paste JSON") {
+                Task { await pasteJSONImport() }
+            }
+            .buttonStyle(.borderless)
+            .help("Paste a Claude-Desktop-style mcp.json block from the clipboard and import every server.")
             Button {
                 Task { await reload() }
             } label: {
@@ -361,6 +372,57 @@ struct MCPPanel: View {
         } catch {
             lastError = "Save failed: \(error)"
         }
+    }
+
+    /// §340 — one-click import from the clipboard. Reads the current
+    /// pasteboard, runs it through `MCPClipboardImport.parse`, and
+    /// upserts every valid server. Surfaces a banner with
+    /// imported/skipped counts so users know what landed.
+    private func pasteJSONImport() async {
+        lastError = nil
+        #if canImport(AppKit)
+        guard let raw = NSPasteboard.general.string(forType: .string),
+              !raw.isEmpty
+        else {
+            lastError = "Clipboard is empty — copy your mcp.json block first."
+            return
+        }
+        do {
+            let result = try MCPClipboardImport.parse(json: raw)
+            guard result.hasAnyImported else {
+                let skips = result.skipped.map { "\($0.name): \($0.reason)" }
+                    .joined(separator: "; ")
+                lastError = "No importable servers. \(skips.isEmpty ? "" : "Skipped — \(skips)")"
+                return
+            }
+            var failed: [String] = []
+            for cfg in result.servers {
+                do {
+                    try await app.engine.upsertMCPServer(
+                        cfg, configPath: resolvedConfigURL())
+                } catch {
+                    failed.append("\(cfg.name): \(error)")
+                }
+            }
+            await refreshOnce()
+            var summary = "Imported \(result.servers.count - failed.count) of \(result.totalParsed) server(s)."
+            if !result.skipped.isEmpty {
+                let skips = result.skipped.map { $0.name }.joined(separator: ", ")
+                summary += " Skipped shape-invalid: \(skips)."
+            }
+            if !failed.isEmpty {
+                summary += " Save errors: \(failed.joined(separator: "; "))."
+            }
+            lastError = summary  // reused as info banner — the red
+                                 // styling is acceptable since we
+                                 // still surface both successes and
+                                 // failures in one line.
+        } catch {
+            lastError = "Import failed: \(error)"
+        }
+        #else
+        lastError = "Clipboard import requires macOS AppKit."
+        #endif
     }
 
     private func remove(_ name: String) async {
