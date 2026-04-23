@@ -263,6 +263,13 @@ pushed to origin.
 - `647797b` §323-324 K8/K9: Kimi K2.6 integration — MLA prefill clamp +
   thinking-by-default stamp
 - `b7651d8` K5 §325: Kimi VL mm_projector rename helper
+- `cd90e56` §326: Kimi K2.6 tool-call parser — strip `functions.` prefix
+  + `:N` suffix. **Production bug** — every Kimi K2 / K2.6 tool call
+  was collapsing to function-not-found because the raw wire name
+  `functions.search_web:0` was not being normalized. Engine-side
+  `KimiToolCallParser` now mirrors the correct logic from
+  `vMLXLMCommon/Tool/Parsers/KimiK2ToolCallParser`. 3 regression tests
+  added (all green).
 
 ## Harness state (updated each iteration)
 
