@@ -670,6 +670,173 @@ public enum L10n {
         )
     }
 
+    // MARK: - Server / SessionConfigForm (§356 — extend i18n coverage)
+
+    public enum SessionConfig {
+        public static let sectionSessionConfig = L10nEntry(
+            en: "SESSION CONFIG",
+            ja: "セッション設定",
+            ko: "세션 설정",
+            zh: "会话配置"
+        )
+        public static let sectionModel = L10nEntry(
+            en: "MODEL",
+            ja: "モデル",
+            ko: "모델",
+            zh: "模型"
+        )
+        public static let sectionEngine = L10nEntry(
+            en: "ENGINE",
+            ja: "エンジン",
+            ko: "엔진",
+            zh: "引擎"
+        )
+        public static let sectionCache = L10nEntry(
+            en: "CACHE",
+            ja: "キャッシュ",
+            ko: "캐시",
+            zh: "缓存"
+        )
+        public static let sectionNetwork = L10nEntry(
+            en: "NETWORK",
+            ja: "ネットワーク",
+            ko: "네트워크",
+            zh: "网络"
+        )
+        public static let sectionRemote = L10nEntry(
+            en: "REMOTE ENDPOINT",
+            ja: "リモートエンドポイント",
+            ko: "원격 엔드포인트",
+            zh: "远程端点"
+        )
+        public static let sectionAdvanced = L10nEntry(
+            en: "ADVANCED",
+            ja: "詳細設定",
+            ko: "고급",
+            zh: "高级"
+        )
+        public static let restartRequired = L10nEntry(
+            en: "Restart required — changes in this section apply only after the session is stopped and started again.",
+            ja: "再起動が必要 — このセクションの変更はセッションを停止して再起動した後にのみ適用されます。",
+            ko: "재시작 필요 — 이 섹션의 변경 사항은 세션을 중지하고 다시 시작한 후에만 적용됩니다.",
+            zh: "需要重启 — 此部分的更改仅在会话停止并重新启动后生效。"
+        )
+        public static let noModelsFound = L10nEntry(
+            en: "No models found",
+            ja: "モデルが見つかりません",
+            ko: "모델을 찾을 수 없음",
+            zh: "未找到模型"
+        )
+        public static let browse = L10nEntry(
+            en: "Browse…",
+            ja: "参照…",
+            ko: "찾아보기…",
+            zh: "浏览…"
+        )
+        public static let addCustomDir = L10nEntry(
+            en: "Add custom dir…",
+            ja: "カスタムフォルダを追加…",
+            ko: "사용자 지정 디렉토리 추가…",
+            zh: "添加自定义目录…"
+        )
+        public static let enableLANAccess = L10nEntry(
+            en: "Enable LAN access",
+            ja: "LAN アクセスを有効化",
+            ko: "LAN 액세스 활성화",
+            zh: "启用局域网访问"
+        )
+        public static let lanWarning = L10nEntry(
+            en: "Every device on your Wi-Fi will be able to reach this session's HTTP server. Make sure you trust the network before enabling — nothing gates access beyond the optional API-key bearer token. You can turn this off again at any time.",
+            ja: "Wi-Fi 上のすべてのデバイスがこのセッションの HTTP サーバーにアクセスできるようになります。有効化する前にネットワークを信頼していることを確認してください — オプションの API キーベアラートークン以外にアクセスを制限するものはありません。いつでもオフに戻せます。",
+            ko: "Wi-Fi의 모든 장치가 이 세션의 HTTP 서버에 연결할 수 있게 됩니다. 활성화하기 전에 네트워크를 신뢰하는지 확인하십시오 — 선택적 API 키 베어러 토큰 외에 액세스를 차단하는 것은 없습니다. 언제든지 다시 끌 수 있습니다.",
+            zh: "Wi-Fi 上的每个设备都将能够访问此会话的 HTTP 服务器。启用前请确保您信任该网络 — 除了可选的 API 密钥承载令牌外，没有任何限制。您可以随时将其关闭。"
+        )
+        public static let httpListenerHelp = L10nEntry(
+            en: "This session's dedicated HTTP listener. Per-session bind is independent from the global gateway — flip the Tray's Gateway toggle if you want one URL across all sessions instead.",
+            ja: "このセッション専用の HTTP リスナー。セッションごとのバインドはグローバルゲートウェイとは独立しています — すべてのセッションで 1 つの URL を使用したい場合はトレイのゲートウェイトグルを切り替えてください。",
+            ko: "이 세션 전용 HTTP 리스너입니다. 세션별 바인딩은 전역 게이트웨이와 독립적입니다 — 모든 세션에 대해 하나의 URL을 원한다면 트레이의 게이트웨이 토글을 전환하십시오.",
+            zh: "此会话的专用 HTTP 监听器。每个会话的绑定独立于全局网关 — 如果您希望所有会话使用一个 URL，请切换托盘的网关开关。"
+        )
+        public static let cacheKindHelp = L10nEntry(
+            en: "TurboQuant adapts per-layer bits from the KV distribution; Q4/Q8 are fixed-width fallbacks.",
+            ja: "TurboQuant は KV 分布からレイヤーごとのビット数を適応させます。Q4/Q8 は固定幅のフォールバックです。",
+            ko: "TurboQuant은 KV 분포에서 레이어별 비트 수를 적응시킵니다. Q4/Q8은 고정 너비 대체입니다.",
+            zh: "TurboQuant 根据 KV 分布自适应每层位数；Q4/Q8 是固定宽度的回退。"
+        )
+        public static let remoteEndpointHelp = L10nEntry(
+            en: "This session will skip local model loading. All chat / terminal traffic for chats bound to it goes over HTTP to the remote endpoint above. The local engine surface (sleep, cache, gateway) stays inactive while remote mode is on.",
+            ja: "このセッションはローカルモデルのロードをスキップします。バインドされたチャット/ターミナルトラフィックはすべて上記のリモートエンドポイントに HTTP 経由で送信されます。リモートモードがオンの間、ローカルエンジン機能 (スリープ、キャッシュ、ゲートウェイ) は非アクティブのままです。",
+            ko: "이 세션은 로컬 모델 로딩을 건너뜁니다. 바인딩된 채팅 / 터미널 트래픽은 모두 위의 원격 엔드포인트로 HTTP를 통해 전송됩니다. 원격 모드가 켜져 있는 동안 로컬 엔진 기능 (슬립, 캐시, 게이트웨이)은 비활성 상태로 유지됩니다.",
+            zh: "此会话将跳过本地模型加载。绑定到它的所有聊天/终端流量将通过 HTTP 发送到上面的远程端点。启用远程模式时，本地引擎功能（休眠、缓存、网关）保持非活动状态。"
+        )
+        public static let useRemoteEndpoint = L10nEntry(
+            en: "Use remote endpoint instead of local engine",
+            ja: "ローカルエンジンの代わりにリモートエンドポイントを使用",
+            ko: "로컬 엔진 대신 원격 엔드포인트 사용",
+            zh: "使用远程端点而非本地引擎"
+        )
+        public static let endpointURL = L10nEntry(
+            en: "Endpoint URL",
+            ja: "エンドポイント URL",
+            ko: "엔드포인트 URL",
+            zh: "端点 URL"
+        )
+        public static let proto = L10nEntry(
+            en: "Protocol",
+            ja: "プロトコル",
+            ko: "프로토콜",
+            zh: "协议"
+        )
+        public static let modelName = L10nEntry(
+            en: "Model name",
+            ja: "モデル名",
+            ko: "모델 이름",
+            zh: "模型名称"
+        )
+        public static let apiKey = L10nEntry(
+            en: "API key",
+            ja: "API キー",
+            ko: "API 키",
+            zh: "API 密钥"
+        )
+        public static let smeltHelp = L10nEntry(
+            en: "Smelt (partial expert loading) is Python-only today. Toggle persists but the Swift engine loads full experts and emits a `smelt mode is enabled but not wired` warning per request. DFlash below is the Swift equivalent for speculative decode.",
+            ja: "Smelt (部分的エキスパートロード) は現在 Python 専用です。トグルは保存されますが、Swift エンジンはフルエキスパートをロードし、リクエストごとに `smelt mode is enabled but not wired` 警告を出します。下の DFlash は投機的デコードの Swift 版です。",
+            ko: "Smelt (부분 전문가 로딩)은 현재 Python 전용입니다. 토글은 유지되지만 Swift 엔진은 전체 전문가를 로드하고 요청당 `smelt mode is enabled but not wired` 경고를 표시합니다. 아래 DFlash는 추측 디코딩의 Swift 등가물입니다.",
+            zh: "Smelt（部分专家加载）目前仅支持 Python。切换会保存但 Swift 引擎会加载完整专家，每次请求发出 `smelt mode is enabled but not wired` 警告。下方的 DFlash 是推测解码的 Swift 等效项。"
+        )
+        public static let distributedHelp = L10nEntry(
+            en: "Distributed compute across multiple Macs is planned for v1.1 (feat/distributed-rdma branch). Toggle persists to settings but has no runtime effect yet.",
+            ja: "複数の Mac にまたがる分散コンピューティングは v1.1 で予定されています (feat/distributed-rdma ブランチ)。トグルは設定に保存されますが、まだ実行時の効果はありません。",
+            ko: "여러 Mac에 걸친 분산 컴퓨팅은 v1.1에 계획되어 있습니다 (feat/distributed-rdma 브랜치). 토글은 설정에 저장되지만 아직 런타임 효과는 없습니다.",
+            zh: "跨多台 Mac 的分布式计算计划在 v1.1 中推出（feat/distributed-rdma 分支）。切换会保存到设置但尚未产生运行时效果。"
+        )
+        public static let turboquantBitsFormat = L10nEntry(
+            en: "TurboQuant bits: %lld",
+            ja: "TurboQuant ビット: %lld",
+            ko: "TurboQuant 비트: %lld",
+            zh: "TurboQuant 位数: %lld"
+        )
+        public static let diskCacheDirFormat = L10nEntry(
+            en: "Disk cache dir: %@",
+            ja: "ディスクキャッシュディレクトリ: %@",
+            ko: "디스크 캐시 디렉토리: %@",
+            zh: "磁盘缓存目录: %@"
+        )
+        public static let diskCacheMaxFormat = L10nEntry(
+            en: "Disk cache max: %lld GB",
+            ja: "ディスクキャッシュ最大: %lld GB",
+            ko: "디스크 캐시 최대: %lld GB",
+            zh: "磁盘缓存上限: %lld GB"
+        )
+        public static let defaultLabel = L10nEntry(
+            en: "default",
+            ja: "デフォルト",
+            ko: "기본값",
+            zh: "默认"
+        )
+    }
+
     // MARK: - Reusable picker/option labels
 
     public enum Option {

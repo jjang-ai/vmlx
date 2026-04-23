@@ -15,6 +15,7 @@ import vMLXTheme
 /// Electron parity: `panel/src/renderer/src/components/sessions/SessionConfigForm.tsx`.
 struct SessionConfigForm: View {
     @Environment(AppState.self) private var app
+    @Environment(\.appLocale) private var appLocale: AppLocale
     let sessionId: UUID
 
     // Local mirror of the persisted SessionSettings. Updated when the user
@@ -60,7 +61,7 @@ struct SessionConfigForm: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-                Text("SESSION CONFIG")
+                Text(L10n.SessionConfig.sectionSessionConfig.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
 
@@ -121,16 +122,16 @@ struct SessionConfigForm: View {
             isPresented: $pendingLANEnable,
             titleVisibility: .visible
         ) {
-            Button("Enable LAN access", role: .destructive) {
+            Button(L10n.SessionConfig.enableLANAccess.render(appLocale), role: .destructive) {
                 s.lan = true
                 commit()
             }
-            Button("Cancel", role: .cancel) {
+            Button(L10n.Common.cancel.render(appLocale), role: .cancel) {
                 s.lan = false
                 commit()
             }
         } message: {
-            Text("Every device on your Wi-Fi will be able to reach this session's HTTP server. Make sure you trust the network before enabling — nothing gates access beyond the optional API-key bearer token. You can turn this off again at any time.")
+            Text(L10n.SessionConfig.lanWarning.render(appLocale))
         }
     }
 
@@ -144,7 +145,7 @@ struct SessionConfigForm: View {
 
     private var modelSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            Text("MODEL")
+            Text(L10n.SessionConfig.sectionModel.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
             HStack {
@@ -248,7 +249,7 @@ struct SessionConfigForm: View {
                 get: { s.turboQuantBits ?? globalDefaults.turboQuantBits },
                 set: { s.turboQuantBits = $0; commit() }
             ), in: 3...8, step: 1) {
-                Text("TurboQuant bits: \(s.turboQuantBits ?? globalDefaults.turboQuantBits)")
+                Text(L10n.SessionConfig.turboquantBitsFormat.format(locale: appLocale, Int64(s.turboQuantBits ?? globalDefaults.turboQuantBits)))
             }
             .padding(.leading, 20)
         }
@@ -267,7 +268,11 @@ struct SessionConfigForm: View {
             // the global defaults as read-only info. Edit them via Tray →
             // Server section. Audit 2026-04-16 cleanup.
             HStack {
-                Text("Disk cache dir: \(globalDefaults.diskCacheDir.isEmpty ? "default" : globalDefaults.diskCacheDir)")
+                Text(L10n.SessionConfig.diskCacheDirFormat.format(
+                    locale: appLocale,
+                    (globalDefaults.diskCacheDir.isEmpty
+                        ? L10n.SessionConfig.defaultLabel.render(appLocale)
+                        : globalDefaults.diskCacheDir) as NSString))
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -275,7 +280,8 @@ struct SessionConfigForm: View {
             }
             .padding(.leading, 20)
             HStack {
-                Text("Disk cache max: \(Int(globalDefaults.diskCacheMaxGB)) GB")
+                Text(L10n.SessionConfig.diskCacheMaxFormat.format(
+                    locale: appLocale, Int64(globalDefaults.diskCacheMaxGB)))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -300,7 +306,7 @@ struct SessionConfigForm: View {
             Text("Q4").tag("q4")
         }
         .pickerStyle(.segmented)
-        Text("TurboQuant adapts per-layer bits from the KV distribution; Q4/Q8 are fixed-width fallbacks.")
+        Text(L10n.SessionConfig.cacheKindHelp.render(appLocale))
             .font(.caption)
             .foregroundStyle(.secondary)
     }
@@ -381,7 +387,7 @@ struct SessionConfigForm: View {
     // API responses) moved to `modelSection` since it's model-identity,
     // not network plumbing. See project_vmlx_session_sections.md.
     private var serverSection: some View {
-        Text("This session's dedicated HTTP listener. Per-session bind is independent from the global gateway — flip the Tray's Gateway toggle if you want one URL across all sessions instead.")
+        Text(L10n.SessionConfig.httpListenerHelp.render(appLocale))
             .font(Theme.Typography.caption)
             .foregroundStyle(Theme.Colors.textLow)
             .fixedSize(horizontal: false, vertical: true)
@@ -454,7 +460,7 @@ struct SessionConfigForm: View {
     /// path on disk is ignored (kept only as a display name).
     @ViewBuilder
     private var remoteSection: some View {
-        Toggle("Use remote endpoint instead of local engine",
+        Toggle(L10n.SessionConfig.useRemoteEndpoint.render(appLocale),
                isOn: remoteEnabledBinding)
             .toggleStyle(.switch)
 
@@ -464,7 +470,7 @@ struct SessionConfigForm: View {
                 remoteProtocolRow
                 remoteModelNameRow
                 remoteAPIKeyRow
-                Text("This session will skip local model loading. All chat / terminal traffic for chats bound to it goes over HTTP to the remote endpoint above. The local engine surface (sleep, cache, gateway) stays inactive while remote mode is on.")
+                Text(L10n.SessionConfig.remoteEndpointHelp.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
                     .fixedSize(horizontal: false, vertical: true)
@@ -492,7 +498,7 @@ struct SessionConfigForm: View {
 
     private var remoteEndpointRow: some View {
         HStack {
-            Text("Endpoint URL").frame(width: 140, alignment: .leading)
+            Text(L10n.SessionConfig.endpointURL.render(appLocale)).frame(width: 140, alignment: .leading)
             TextField("https://api.openai.com or http://192.168.1.50:8000",
                       text: Binding(
                         get: { s.remoteURL ?? "" },
@@ -505,7 +511,7 @@ struct SessionConfigForm: View {
 
     private var remoteProtocolRow: some View {
         HStack {
-            Text("Protocol").frame(width: 140, alignment: .leading)
+            Text(L10n.SessionConfig.proto.render(appLocale)).frame(width: 140, alignment: .leading)
             Picker("", selection: Binding(
                 get: { s.remoteProtocol ?? "openai" },
                 set: { s.remoteProtocol = $0; commit() }
@@ -520,7 +526,7 @@ struct SessionConfigForm: View {
 
     private var remoteModelNameRow: some View {
         HStack {
-            Text("Model name").frame(width: 140, alignment: .leading)
+            Text(L10n.SessionConfig.modelName.render(appLocale)).frame(width: 140, alignment: .leading)
             TextField("e.g. gpt-4o-mini, llama3.1, claude-sonnet-4-5",
                       text: Binding(
                         get: { s.remoteModelName ?? "" },
@@ -533,7 +539,7 @@ struct SessionConfigForm: View {
 
     private var remoteAPIKeyRow: some View {
         HStack {
-            Text("API key").frame(width: 140, alignment: .leading)
+            Text(L10n.SessionConfig.apiKey.render(appLocale)).frame(width: 140, alignment: .leading)
             SecureField("sk-... (left blank for unauthenticated remotes)",
                         text: Binding(
                           get: { s.remoteAPIKey ?? "" },
@@ -556,7 +562,7 @@ struct SessionConfigForm: View {
         // need to see the gap up-front.
         toggleRow("Smelt mode (Python engine only)",
                   boolBinding(\.smelt, default: globalDefaults.smelt))
-        Text("Smelt (partial expert loading) is Python-only today. Toggle persists but the Swift engine loads full experts and emits a `smelt mode is enabled but not wired` warning per request. DFlash below is the Swift equivalent for speculative decode.")
+        Text(L10n.SessionConfig.smeltHelp.render(appLocale))
             .font(Theme.Typography.caption)
             .foregroundStyle(Theme.Colors.textLow)
             .fixedSize(horizontal: false, vertical: true)
@@ -648,7 +654,7 @@ struct SessionConfigForm: View {
         // a "Coming soon" caption so users aren't surprised.
         toggleRow("Distributed (coming soon)",
                   boolBinding(\.distributed, default: globalDefaults.distributed))
-        Text("Distributed compute across multiple Macs is planned for v1.1 (feat/distributed-rdma branch). Toggle persists to settings but has no runtime effect yet.")
+        Text(L10n.SessionConfig.distributedHelp.render(appLocale))
             .font(Theme.Typography.caption)
             .foregroundStyle(Theme.Colors.textLow)
             .fixedSize(horizontal: false, vertical: true)
@@ -789,7 +795,7 @@ struct SessionConfigForm: View {
                         Image(systemName: "arrow.triangle.2.circlepath")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(Theme.Colors.warning)
-                        Text("Restart required — changes in this section apply only after the session is stopped and started again.")
+                        Text(L10n.SessionConfig.restartRequired.render(appLocale))
                             .font(Theme.Typography.caption)
                             .foregroundStyle(Theme.Colors.warning)
                             .fixedSize(horizontal: false, vertical: true)
@@ -879,6 +885,7 @@ struct SessionConfigForm: View {
 
 struct ModelPickerRow: View {
     @Environment(AppState.self) private var app
+    @Environment(\.appLocale) private var appLocale: AppLocale
     @Binding var path: URL?
     @State private var showImporter = false
     @State private var entries: [ModelLibrary.ModelEntry] = []
@@ -888,7 +895,7 @@ struct ModelPickerRow: View {
         HStack(spacing: Theme.Spacing.sm) {
             Menu {
                 if entries.isEmpty {
-                    Text("No models found").foregroundStyle(Theme.Colors.textLow)
+                    Text(L10n.SessionConfig.noModelsFound.render(appLocale)).foregroundStyle(Theme.Colors.textLow)
                 }
                 ForEach(entries) { entry in
                     Button {
@@ -898,8 +905,8 @@ struct ModelPickerRow: View {
                     }
                 }
                 Divider()
-                Button("Browse…") { showImporter = true }
-                Button("Add custom dir…") { pickUserDir() }
+                Button(L10n.SessionConfig.browse.render(appLocale)) { showImporter = true }
+                Button(L10n.SessionConfig.addCustomDir.render(appLocale)) { pickUserDir() }
             } label: {
                 HStack {
                     Text(displayForPath())
