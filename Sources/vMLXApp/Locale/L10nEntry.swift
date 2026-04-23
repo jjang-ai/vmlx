@@ -48,4 +48,19 @@ public struct L10nEntry: Sendable, Equatable {
     public func render(_ locale: AppLocale, _ args: CVarArg...) -> String {
         String(format: render(locale), arguments: args)
     }
+
+    /// Sibling helper — explicit positional-argument substitution.
+    /// Accepts `CVarArg` positional arguments against the locale's
+    /// format template (`%@` / `%d` / `%lld`). Call-site shape is
+    /// deliberately symmetric with `render(_:_...)`:
+    ///
+    ///     Text(L10n.Chat.tokensAndCharsFormat.format(
+    ///         locale: appLocale, tokens, chars))
+    ///
+    /// All four locales must contain the same placeholder count or
+    /// `String(format:)` will trap at runtime — the catalog is the
+    /// enforcement surface, not this helper.
+    public func format(locale: AppLocale, _ args: CVarArg...) -> String {
+        String(format: render(locale), arguments: args)
+    }
 }
