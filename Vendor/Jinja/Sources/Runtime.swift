@@ -1247,6 +1247,34 @@ struct Interpreter {
                 return try self.evaluateMacro(node: statement, environment: environment)
             case is NullLiteral:
                 return NullValue()
+            case let statement as SelectExpression:
+                // §350 — Jinja2 inline-if-without-else.
+                //
+                // The parser builds `{{- ',' if not loop.last -}}` as
+                // `SelectExpression(iterable: ',', test: not loop.last)`.
+                // Inside a `for` this is handled specially by
+                // `evaluateFor` (it filters the iterable). Standalone,
+                // the semantics are: evaluate the test; if truthy
+                // return the iterable value, otherwise return `""`.
+                //
+                // That matches Jinja2's `{{ value if cond }}` shortcut
+                // — see Jinja2's `ConditionalExpression` class.
+                //
+                // Before this branch, the node fell through to the
+                // default case and raised `Unknown node type:
+                // SelectExpression` at render time — breaking
+                // Gemma-4-family templates that use this idiom for
+                // comma separators between macro args. Canary was
+                // `testInlineIfWithoutElseUpstreamBugCanary` in
+                // `ChatTemplateReproTests.swift`.
+                let testResult = try self.evaluate(
+                    statement: statement.test, environment: environment)
+                if testResult.bool() {
+                    return try self.evaluate(
+                        statement: statement.iterable, environment: environment)
+                } else {
+                    return StringValue(value: "")
+                }
             default:
                 throw JinjaError.runtime(
                     "Unknown node type: \(type(of:statement)), statement: \(String(describing: statement))"
