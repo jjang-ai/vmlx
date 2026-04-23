@@ -216,9 +216,14 @@ pushed to origin.
 - `b0ecd1a` H1 §314: image-lifecycle-verify.sh harness (12/12 green) + progress tracker moved out of .claude/
 - `ceaec3b` K1 §317: factory refuses mxtq bundles on DeepSeek family (superseded by K2)
 - `f91af12` K2 §318: DeepseekV3JANGTQModel — native Kimi K2.6 JANGTQ load + registration tests
+- `ae86a3c` O2 §319: RequestLoggerMiddleware honors live /admin/log-level swap
+- `31dae08` §320-322: three regression-guard fixes (audio JIT wake position +
+  embed .notLoaded throw hoist + ChatSettings Coming-soon explainer)
 
 ## Harness state (updated each iteration)
 
 - `bash .claude/live-verify.sh` — 44/44 ✓ (iter 3 post-L1-L4)
 - `bash .claude/lifecycle-verify.sh` — 13/13 ✓ (iter 3)
 - `bash .claude/image-lifecycle-verify.sh` — 12/12 ✓ (iter 4 post-H1)
+- `swift test --filter RegressionConstantsTests` — 280/280 ✓ (post §320-322)
+- `swift test --filter ModelFactoryRegistrationTests` — 5/5 ✓ (post K2 port)
