@@ -98,6 +98,20 @@ public struct Server {
 
         let router = Router()
 
+        // §331 — allowlist gate BEFORE Hummingbird's CORSMiddleware.
+        // For 2+-entry allowlists, resolveAllowOrigin maps to
+        // `.originBased` which echoes ANY Origin header — no gating.
+        // The gate strips the Origin header for disallowed origins so
+        // the downstream CORSMiddleware skips Allow-Origin emission
+        // entirely (matching the "CORS denied" browser behavior).
+        // Preflight OPTIONS from disallowed origins gets a 403.
+        if allowedOrigins.count >= 2,
+           !allowedOrigins.contains("*"),
+           !allowedOrigins.filter({ !$0.isEmpty }).isEmpty
+        {
+            router.add(middleware: CORSAllowlistMiddleware(
+                allowedOrigins: allowedOrigins))
+        }
         // Middleware: CORS — now honors `allowedOrigins` from the
         // session's cors_origins setting (mirrors Python fastapi
         // CORSMiddleware config). Pre-iter-49 this was hardcoded

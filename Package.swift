@@ -539,6 +539,7 @@ let package = Package(
             dependencies: [
                 "vMLXEngine",
                 "vMLXLMCommon",
+                "vMLXServer",
             ],
             path: "Tests/vMLXTests",
             // Curated minimal set that compiles clean against framework
@@ -623,6 +624,10 @@ let package = Package(
                 // patches rope_parameters → rope_theta + routes to
                 // DeepseekV3Model. Also pins registry advertised set.
                 "ModelFactoryRegistrationTests.swift",
+                // §331 CORS allowlist middleware — constructor-level
+                // normalization guards (full HTTP roundtrip lives in
+                // the live-verify harness).
+                "CORSAllowlistMiddlewareTests.swift",
                 // Metal-dependent tests excluded — `swift test` can't load
                 // the default.metallib from the SwiftPM bundle path;
                 // JangDFlashDrafter, JangDFlashSpecDec, VisionEmbeddingCache,

@@ -89,6 +89,15 @@ public struct GatewayServer {
 
         let router = Router()
 
+        // §331 — allowlist gate before Hummingbird's CORSMiddleware.
+        // Matches Server.swift — see that file for the detailed comment.
+        if allowedOrigins.count >= 2,
+           !allowedOrigins.contains("*"),
+           !allowedOrigins.filter({ !$0.isEmpty }).isEmpty
+        {
+            router.add(middleware: CORSAllowlistMiddleware(
+                allowedOrigins: allowedOrigins))
+        }
         // iter-49: CORS now honors `allowedOrigins` (previously
         // hardcoded `.all`). See `Server.resolveAllowOrigin`.
         router.add(middleware: CORSMiddleware(
