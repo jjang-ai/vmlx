@@ -14,6 +14,7 @@ import vMLXTheme
 struct AdvancedServerCard: View {
 
     @Environment(AppState.self) private var app
+    @Environment(\.appLocale) private var appLocale: AppLocale
 
     @State private var expanded: Bool = false
     @State private var corsOriginsText: String = ""
@@ -56,7 +57,7 @@ struct AdvancedServerCard: View {
                     Image(systemName: expanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 10))
                         .foregroundStyle(Theme.Colors.textLow)
-                    Text("ADVANCED — CORS, RATE LIMIT, TLS")
+                    Text(L10n.Advanced.header.render(appLocale))
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.textLow)
                 }
@@ -91,7 +92,7 @@ struct AdvancedServerCard: View {
         HStack(spacing: 4) {
             Image(systemName: "arrow.clockwise")
                 .font(.system(size: 9))
-            Text("Restart required to apply")
+            Text(L10n.Advanced.restartRequired.render(appLocale))
                 .font(.system(size: 10, weight: .medium))
         }
         .foregroundStyle(Theme.Colors.warning)
@@ -100,7 +101,7 @@ struct AdvancedServerCard: View {
     // CORS
     private var corsRow: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("CORS allowed origins")
+            Text(L10n.Advanced.corsOrigins.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
             TextField("*",
@@ -118,7 +119,7 @@ struct AdvancedServerCard: View {
                         )
                 )
                 .onChange(of: corsOriginsText) { _, _ in dirty = true }
-            Text("Comma-separated. * means all. Single exact origin maps to Access-Control-Allow-Origin: <origin>. Multiple non-wildcard entries enable origin-echo mode.")
+            Text(L10n.Advanced.corsHint.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
                 .fixedSize(horizontal: false, vertical: true)
@@ -129,7 +130,7 @@ struct AdvancedServerCard: View {
     private var rateLimitRow: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text("Rate limit (requests / minute / IP)")
+                Text(L10n.Advanced.rateLimit.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
                 Spacer()
@@ -158,7 +159,7 @@ struct AdvancedServerCard: View {
     // TLS
     private var tlsRows: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            Text("TLS (HTTPS) — set BOTH to enable, leave blank for HTTP")
+            Text(L10n.Advanced.tlsHeader.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
             filePathRow(label: "Private key (PEM)",
@@ -189,7 +190,7 @@ struct AdvancedServerCard: View {
                         )
                 )
                 .onChange(of: binding.wrappedValue) { _, _ in dirty = true }
-            Button("Browse…") { browseFile(assignTo: binding) }
+            Button(L10n.MCPUI.browse.render(appLocale)) { browseFile(assignTo: binding) }
                 .buttonStyle(.plain)
                 .font(.system(size: 10))
                 .foregroundStyle(Theme.Colors.accent)
@@ -212,19 +213,19 @@ struct AdvancedServerCard: View {
             if oneSet {
                 Image(systemName: "exclamationmark.triangle")
                     .foregroundStyle(Theme.Colors.warning)
-                Text("Both key and cert must be set to enable TLS")
+                Text(L10n.Advanced.tlsBothRequired.render(appLocale))
                     .font(.system(size: 10))
                     .foregroundStyle(Theme.Colors.warning)
             } else if bothSet && (!keyOK || !certOK) {
                 Image(systemName: "exclamationmark.circle")
                     .foregroundStyle(Theme.Colors.danger)
-                Text("One of the TLS files is missing or unreadable")
+                Text(L10n.Advanced.tlsFileMissing.render(appLocale))
                     .font(.system(size: 10))
                     .foregroundStyle(Theme.Colors.danger)
             } else if bothSet && keyOK && certOK {
                 Image(systemName: "checkmark.circle")
                     .foregroundStyle(Theme.Colors.success)
-                Text("TLS will use https:// on next restart")
+                Text(L10n.Advanced.tlsWillUse.render(appLocale))
                     .font(.system(size: 10))
                     .foregroundStyle(Theme.Colors.success)
             }

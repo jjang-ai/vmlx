@@ -16,6 +16,7 @@ import vMLXTheme
 /// same lines with its full filter stack.
 struct RequestLogPanel: View {
     @Environment(AppState.self) private var app
+    @Environment(\.appLocale) private var appLocale: AppLocale
 
     @State private var lines: [LogStore.Line] = []
     @State private var paused: Bool = false
@@ -59,7 +60,7 @@ struct RequestLogPanel: View {
         HStack {
             Image(systemName: "network")
                 .foregroundStyle(Theme.Colors.accent)
-            Text("Live request log")
+            Text(L10n.RequestLog.liveHeader.render(appLocale))
                 .font(Theme.Typography.bodyHi)
                 .foregroundStyle(Theme.Colors.textHigh)
             Spacer()
@@ -220,7 +221,7 @@ struct RequestLogPanel: View {
             }
             .buttonStyle(.plain)
             Spacer()
-            Text("Shows the last \(maxBuffer) server-category log lines. Server tab's LogsPanel has full filters.")
+            Text(L10n.RequestLog.hintFormat.format(locale: appLocale, Int64(maxBuffer)))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
         }
@@ -346,23 +347,24 @@ private struct ReqLogScrollOffset: PreferenceKey {
 struct RequestInspectorSheet: View {
     let line: LogStore.Line
     let close: () -> Void
+    @Environment(\.appLocale) private var appLocale: AppLocale
 
     var body: some View {
         let parts = RequestLogPanel.parse(line.message)
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             HStack {
-                Text("Request inspector")
+                Text(L10n.RequestLog.inspector.render(appLocale))
                     .font(Theme.Typography.bodyHi)
                     .foregroundStyle(Theme.Colors.textHigh)
                 Spacer()
-                Button("Close") { close() }
+                Button(L10n.Common.close.render(appLocale)) { close() }
                     .keyboardShortcut(.cancelAction)
             }
             Divider()
             grid(parts: parts)
             Divider()
             VStack(alignment: .leading, spacing: 6) {
-                Text("Raw log line")
+                Text(L10n.RequestLog.rawLine.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
                 Text(line.message)
