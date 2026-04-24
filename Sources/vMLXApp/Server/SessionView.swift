@@ -103,6 +103,15 @@ struct SessionView: View {
                     if session.isJANG { Badge(text: "JANG", color: Theme.Colors.accentHi) }
                     if session.isMXTQ { Badge(text: "MXTQ", color: Theme.Colors.accentHi) }
                     Badge(text: session.family.uppercased(), color: Theme.Colors.textMid)
+                    // §359 — show configured alias here too (parity
+                    // with SessionCard). "as: <alias>" tells the user
+                    // the gateway is routing requests named <alias>
+                    // to this engine.
+                    if let alias = session.aliasSnapshot,
+                       !alias.isEmpty,
+                       alias != session.displayName {
+                        Badge(text: "as: \(alias)", color: Theme.Colors.accent)
+                    }
                 }
                 HStack(spacing: Theme.Spacing.md) {
                     // iter-132 §158: remote sessions store the endpoint
