@@ -61,8 +61,42 @@ what's **in flight**, and what's **deferred** with honest reason.
       `Vendor/Jinja/Sources/Runtime.swift`. Gemma 4 + DeepSeek V3 +
       GLM-5.1 templates run against this copy. Safe to edit further.
 
+## Shipped §359 (this follow-on batch)
+
+- [x] **Model alias end-to-end**. GatewayActor new
+      `registerEngine(_:canonicalName:alias:)` registers the session
+      under both canonical name AND user alias. Gateway `/v1/models`
+      no longer leaks the full on-disk catalog — only loaded models
+      appear. `resolve()` matches alias first, canonical second,
+      suffix fallback third.
+- [x] **modelAlias visible in SessionCard**. `Session.aliasSnapshot`
+      captured at start-time (alias is load-time-only, matching
+      semantics), rendered as a "as: <alias>" pill next to the model
+      name. Cleared on stop.
+- [x] **modelAlias restart-required caption** in SessionConfigForm —
+      parity with CORS caption.
+- [x] **removeUserDir canonicalization** — matches addUserDir path
+      normalization so removeDir never leaves ghost rows in user_dirs.
+- [x] **FSEvents watcher lifecycle confirmed** — `rebuildWatcher()`
+      nils the watcher, ARC triggers deinit, FSEventStreamStop +
+      FSEventStreamRelease fire cleanly. No leak.
+- [x] **Permissions audit** — vMLX.entitlements disables App Sandbox
+      (Developer ID DMG only). NSOpenPanel returns regular URLs, no
+      security-scoped bookmarks needed. Hardened runtime with
+      `allow-jit` + `disable-library-validation` for MLX Metal kernels.
+      External-drive path survival is NOT guaranteed — "missing on
+      disk" badge flips on ejection (already implemented).
+
 ## In flight — will land next batch
 
+- [ ] **Live alias re-register without Stop/Start.** Current behavior
+      requires session restart to take effect (documented via the
+      restart-required caption). A `reregisterSessionWithGateway(id)`
+      hook triggered by the "Served as" field's onCommit could make
+      alias changes live — but only for the gateway registry; the
+      underlying Engine.displayName shown in API responses is still
+      captured at load time, so partial live-swap would confuse more
+      than it helps.
 - [ ] **Model alias (nickname) end-to-end.** `s.modelAlias` is stored
       in SessionSettings and the "Served as" field in SessionConfigForm
       writes to it, but the gateway registers engines under

@@ -1065,6 +1065,9 @@ final class AppState {
                 sessions[idx2].host = bindHost
                 sessions[idx2].port = s.port
                 sessions[idx2].pid = Int(ProcessInfo.processInfo.processIdentifier)
+                // §359 — snapshot alias at start so SessionCard can
+                // render it as a badge. Cleared by stopSession.
+                sessions[idx2].aliasSnapshot = nil  // set after alias resolve below
             }
             // §359 — register ONLY the loaded model (+ optional alias),
             // not every model in the library. Previously the gateway
@@ -1087,6 +1090,13 @@ final class AppState {
                 canonicalName: canonicalName,
                 alias: alias
             )
+            // Populate Session.aliasSnapshot so SessionCard renders it
+            // as a badge. The snapshot is static for the session life —
+            // changing the alias in the form requires Stop + Start to
+            // repopulate, which matches the gateway-register lifecycle.
+            if let idx2 = sessions.firstIndex(where: { $0.id == id }) {
+                sessions[idx2].aliasSnapshot = alias?.isEmpty == true ? nil : alias
+            }
             await drainGatewayDuplicateWarnings()
             await ensureGatewayRunning()
         } catch {
@@ -1109,6 +1119,7 @@ final class AppState {
         await eng.stop()
         if let idx = sessions.firstIndex(where: { $0.id == id }) {
             sessions[idx].pid = nil
+            sessions[idx].aliasSnapshot = nil  // §359 — clear stale alias
         }
     }
 
