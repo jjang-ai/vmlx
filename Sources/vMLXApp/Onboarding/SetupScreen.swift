@@ -10,6 +10,7 @@ import vMLXTheme
 ///   3. Done — "Finish" button calls `AppState.markFirstLaunchComplete()`
 struct SetupScreen: View {
     @Environment(AppState.self) private var app
+    @Environment(\.appLocale) private var appLocale: AppLocale
     @ObservedObject private var hfAuth = HuggingFaceAuth.shared
     @State private var step: Int = 0
     @State private var entries: [ModelLibrary.ModelEntry] = []
@@ -38,11 +39,11 @@ struct SetupScreen: View {
 
     private var header: some View {
         HStack {
-            Text("Welcome to vMLX")
+            Text(L10n.Setup.welcome.render(appLocale))
                 .font(Theme.Typography.title)
                 .foregroundStyle(Theme.Colors.textHigh)
             Spacer()
-            Text("Step \(step + 1) of 3")
+            Text(L10n.Setup.stepOfFormat.format(locale: appLocale, Int64(step + 1)))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
         }
@@ -63,7 +64,7 @@ struct SetupScreen: View {
             Image(systemName: "sparkles")
                 .font(.system(size: 48))
                 .foregroundStyle(Theme.Colors.accent)
-            Text("Run state-of-the-art LLMs on Apple Silicon")
+            Text(L10n.Setup.runSOTA.render(appLocale))
                 .font(Theme.Typography.bodyHi)
                 .foregroundStyle(Theme.Colors.textHigh)
             Text("vMLX serves chat, embeddings, images, and tool calls over OpenAI / Anthropic / Ollama APIs — 100% on-device.")
@@ -79,7 +80,7 @@ struct SetupScreen: View {
         if loading {
             VStack(spacing: Theme.Spacing.md) {
                 ProgressView()
-                Text("Scanning Hugging Face cache…")
+                Text(L10n.Setup.scanningCache.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
             }
@@ -95,7 +96,7 @@ struct SetupScreen: View {
             }
         } else {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                Text("Pick a model to use for chat")
+                Text(L10n.Setup.pickModel.render(appLocale))
                     .font(Theme.Typography.bodyHi)
                     .foregroundStyle(Theme.Colors.textHigh)
                 ScrollView {
@@ -146,7 +147,7 @@ struct SetupScreen: View {
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.seal.fill")
                     .foregroundStyle(Theme.Colors.success)
-                Text("Hugging Face token stored — gated repos (Llama, Gemma, Mistral) are accessible.")
+                Text(L10n.Setup.tokenSaved.render(appLocale))
                     .foregroundStyle(Theme.Colors.textLow)
             }
             .font(Theme.Typography.caption)
@@ -155,14 +156,14 @@ struct SetupScreen: View {
                 Image(systemName: "key.horizontal")
                     .foregroundStyle(Theme.Colors.warning)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("No Hugging Face token yet — the starter model above is public, but gated repos (Llama, Gemma, Mistral) need one.")
+                    Text(L10n.Setup.tokenMissing.render(appLocale))
                         .foregroundStyle(Theme.Colors.textMid)
                     Button {
                         app.mode = .api
                         NotificationCenter.default.post(
                             name: .vmlxOpenHuggingFaceTokenCard, object: nil)
                     } label: {
-                        Text("Add a token →")
+                        Text(L10n.Setup.addTokenCTA.render(appLocale))
                             .foregroundStyle(Theme.Colors.accent)
                     }
                     .buttonStyle(.plain)
@@ -184,10 +185,10 @@ struct SetupScreen: View {
             Image(systemName: "checkmark.seal.fill")
                 .font(.system(size: 48))
                 .foregroundStyle(Theme.Colors.success)
-            Text("You're all set")
+            Text(L10n.Setup.allSet.render(appLocale))
                 .font(Theme.Typography.bodyHi)
                 .foregroundStyle(Theme.Colors.textHigh)
-            Text("Open the Server tab to start the engine, then head to Chat. Keys for remote clients live under the API tab.")
+            Text(L10n.Setup.allSetBody.render(appLocale))
                 .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Colors.textMid)
                 .multilineTextAlignment(.center)
@@ -198,16 +199,16 @@ struct SetupScreen: View {
     private var footer: some View {
         HStack {
             if step > 0 {
-                Button("Back") { step -= 1 }
+                Button(L10n.Setup.back.render(appLocale)) { step -= 1 }
                     .buttonStyle(.plain)
                     .foregroundStyle(Theme.Colors.textMid)
             }
             Spacer()
             if step < 2 {
-                Button(step == 0 ? "Get Started" : "Next") { step += 1 }
+                Button(L10n.Setup.next.render(appLocale)) { step += 1 }
                     .buttonStyle(.borderedProminent)
             } else {
-                Button("Finish") { app.markFirstLaunchComplete() }
+                Button(L10n.Setup.finish.render(appLocale)) { app.markFirstLaunchComplete() }
                     .buttonStyle(.borderedProminent)
             }
         }

@@ -12,6 +12,7 @@ import vMLXTheme
 /// clicking `Download` fires the same path as the existing Add-by-URL flow.
 struct ModelSearchPanel: View {
     @Environment(AppState.self) private var state
+    @Environment(\.appLocale) private var appLocale: AppLocale
 
     @State private var query: String = ""
     @State private var filter: FilterMode = .mlx
@@ -58,7 +59,7 @@ struct ModelSearchPanel: View {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(Theme.Colors.textMid)
-                TextField("Search HuggingFace models — e.g. qwen, gemma, flux",
+                TextField(L10n.Downloads2.searchPlaceholder.render(appLocale),
                           text: $query)
                     .textFieldStyle(.plain)
                     .font(Theme.Typography.body)
@@ -90,7 +91,7 @@ struct ModelSearchPanel: View {
                 if isSearching {
                     ProgressView().controlSize(.small)
                 } else {
-                    Text("Search")
+                    Text(L10n.Misc.searchBtn.render(appLocale))
                 }
             }
             .buttonStyle(.borderedProminent)
@@ -108,7 +109,7 @@ struct ModelSearchPanel: View {
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textMid)
             Spacer()
-            Button("Dismiss") { lastError = nil }
+            Button(L10n.Downloads2.dismiss.render(appLocale)) { lastError = nil }
                 .buttonStyle(.plain)
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
@@ -143,10 +144,10 @@ struct ModelSearchPanel: View {
             Image(systemName: "sparkle.magnifyingglass")
                 .font(.system(size: 36, weight: .light))
                 .foregroundStyle(Theme.Colors.textMid)
-            Text("Find MLX-compatible models")
+            Text(L10n.Downloads2.findModels.render(appLocale))
                 .font(Theme.Typography.bodyHi)
                 .foregroundStyle(Theme.Colors.textHigh)
-            Text("Search the HuggingFace Hub. Popular filters: MLX, VLM, image-gen.")
+            Text(L10n.Downloads2.findModelsHint.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textMid)
             Spacer()
@@ -202,6 +203,7 @@ private struct ModelSearchRow: View {
     let row: HuggingFaceSearchResult
     let inFlight: Bool
     let onDownload: () -> Void
+    @Environment(\.appLocale) private var appLocale: AppLocale
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Spacing.md) {
@@ -213,7 +215,7 @@ private struct ModelSearchRow: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if row.gated {
-                        Text("Gated")
+                        Text(L10n.Downloads2.gated.render(appLocale))
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(Theme.Colors.warning)
                             .padding(.horizontal, 5)
