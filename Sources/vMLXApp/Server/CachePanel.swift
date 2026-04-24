@@ -377,10 +377,10 @@ struct CachePanel: View {
                 isPresented: $showClearConfirm,
                 titleVisibility: .visible
             ) {
-                Button("Clear caches", role: .destructive) {
+                Button(L10n.Misc.clearCaches.render(appLocale), role: .destructive) {
                     Task { await clearCaches() }
                 }
-                Button("Cancel", role: .cancel) { }
+                Button(L10n.Common.cancel.render(appLocale), role: .cancel) { }
             } message: {
                 Text(L10n.ServerUI.dropCacheHelp.render(appLocale))
             }

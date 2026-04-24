@@ -122,7 +122,7 @@ struct LogsPanel: View {
             }
 
             // Search
-            TextField("Search", text: $searchText)
+            TextField(L10n.Common.search.render(appLocale), text: $searchText)
                 .textFieldStyle(.plain)
                 .font(Theme.Typography.body)
                 .padding(.horizontal, Theme.Spacing.sm)

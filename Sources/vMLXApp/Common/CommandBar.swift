@@ -7,6 +7,7 @@ import vMLXTheme
 /// by `AppState.showCommandBar` which RootView binds to a `.sheet`.
 struct CommandBar: View {
     @Environment(AppState.self) private var app
+    @Environment(\.appLocale) private var appLocale: AppLocale
     @Environment(\.dismiss) private var dismiss
 
     @State private var query: String = ""
@@ -51,7 +52,7 @@ struct CommandBar: View {
         HStack(spacing: Theme.Spacing.sm) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(Theme.Colors.textMid)
-            TextField("Type a command…", text: $query)
+            TextField(L10n.Misc.typeCommand.render(appLocale), text: $query)
                 .textFieldStyle(.plain)
                 .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Colors.textHigh)
@@ -71,7 +72,7 @@ struct CommandBar: View {
                     row(for: action, idx: idx)
                 }
                 if actions.isEmpty {
-                    Text("No matches")
+                    Text(L10n.Misc.noMatches.render(appLocale))
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.textLow)
                         .padding(Theme.Spacing.md)

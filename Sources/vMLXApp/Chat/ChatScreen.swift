@@ -543,34 +543,34 @@ private struct ChatModelPicker: View {
                     Text(L10n.Chat.noModelsDiscovered.render(appLocale))
                         .foregroundStyle(Theme.Colors.textLow)
                 } else {
-                    TextField("Filter models…", text: $filterQuery)
+                    TextField(L10n.Misc.filterModels.render(appLocale), text: $filterQuery)
                         .textFieldStyle(.plain)
                         .font(Theme.Typography.caption)
                     Divider()
 
                     let shown = filteredEntries
                     if shown.isEmpty {
-                        Text("No models match `\(filterQuery)`")
+                        Text(L10n.ChatUI.noModelsMatch.format(locale: appLocale, filterQuery as NSString))
                             .foregroundStyle(Theme.Colors.textLow)
                     } else {
                         ForEach(shown, id: \.id) { e in
                             Menu {
-                                Button("Select for this chat") {
+                                Button(L10n.Misc.selectForChat.render(appLocale)) {
                                     Task { await select(labelForEntry(e)) }
                                 }
                                 let s = loadState(for: e)
                                 switch s {
                                 case .running, .loading, .standby:
-                                    Button("Stop / unload from RAM") {
+                                    Button(L10n.Misc.stopUnload.render(appLocale)) {
                                         Task { await stopModel(for: e) }
                                     }
                                 case .stopped, .absent:
-                                    Button("Start / load into RAM") {
+                                    Button(L10n.Misc.startLoad.render(appLocale)) {
                                         Task { await startModel(for: e) }
                                     }
                                 }
                                 Divider()
-                                Button("Show in Server tab") {
+                                Button(L10n.Misc.showInServer.render(appLocale)) {
                                     if let sid = app.sessionId(forModelPath: e.canonicalPath) {
                                         app.selectedServerSessionId = sid
                                     }
@@ -594,7 +594,7 @@ private struct ChatModelPicker: View {
                         }
                     }
                     Divider()
-                    Button("Manage in Server tab") {
+                    Button(L10n.Misc.manageInServer.render(appLocale)) {
                         app.mode = .server
                     }
                 }

@@ -18,6 +18,7 @@ import vMLXTheme
 struct RoutesCard: View {
 
     @Environment(AppState.self) private var app
+    @Environment(\.appLocale) private var appLocale: AppLocale
 
     let host: String
     let port: Int
@@ -46,7 +47,7 @@ struct RoutesCard: View {
             filterChips
             Divider().opacity(0.3)
             if visibleRoutes.isEmpty {
-                Text("No routes match your filter.")
+                Text(L10n.Misc.noRoutesMatch.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
                     .padding(.vertical, Theme.Spacing.md)
@@ -76,14 +77,14 @@ struct RoutesCard: View {
 
     private var header: some View {
         HStack {
-            Text("API ROUTES")
+            Text(L10n.Misc.apiRoutes.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
             Text("\(visibleRoutes.count)/\(RouteCatalog.all.count)")
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
             Spacer()
-            TextField("Filter by path, family, or brief...",
+            TextField(L10n.Misc.routeFilterPlaceholder.render(appLocale),
                       text: $query)
                 .textFieldStyle(.plain)
                 .frame(width: 240)
@@ -202,7 +203,7 @@ struct RoutesCard: View {
             .font(.system(size: 10))
 
             if !route.sampleBody.isEmpty {
-                Text("Sample body")
+                Text(L10n.Misc.sampleBody.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
                 Text(route.sampleBody)
@@ -215,7 +216,7 @@ struct RoutesCard: View {
                             .fill(Theme.Colors.background)
                     )
             }
-            Text("Full curl")
+            Text(L10n.Misc.fullCurl.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
             Text(RouteCatalog.curl(for: route,

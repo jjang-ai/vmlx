@@ -410,8 +410,8 @@ private struct CreateSessionPopover: View {
             ModelPickerRow(path: $pickedPath)
             HStack {
                 Spacer()
-                Button("Cancel") { isPresented = false }
-                Button("Create") {
+                Button(L10n.Common.cancel.render(appLocale)) { isPresented = false }
+                Button(L10n.Misc.create.render(appLocale)) {
                     if let p = pickedPath {
                         onCreate(p)
                     }

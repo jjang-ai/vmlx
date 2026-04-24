@@ -16,6 +16,7 @@ struct SessionCard: View {
     let onWake: () -> Void
     let onReconnect: () -> Void
     let onDelete: () -> Void
+    @Environment(\.appLocale) private var appLocale: AppLocale
 
     @State private var loadingElapsed: Int = 0
     @State private var tickerTask: Task<Void, Never>? = nil
@@ -56,16 +57,16 @@ struct SessionCard: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            if case .standby = session.state { Button("Wake", action: onWake) }
+            if case .standby = session.state { Button(L10n.Misc.wake.render(appLocale), action: onWake) }
             // Stop is valid in `.running`, either standby depth, AND `.error`
             // (cleanly unload the dangling engine before reconnect). The
             // action-row button already allowed all three; the context menu
             // was silently gated to `.running` only, creating an
             // inconsistency where right-click-menu-Stop was hidden while
             // the card's inline Stop was live.
-            if canStop(session.state) { Button("Stop", action: onStop) }
-            if case .error = session.state { Button("Reconnect", action: onReconnect) }
-            Button("Open logs", action: onSelect)
+            if canStop(session.state) { Button(L10n.Misc.stopBtn.render(appLocale), action: onStop) }
+            if case .error = session.state { Button(L10n.Misc.reconnect.render(appLocale), action: onReconnect) }
+            Button(L10n.Misc.openLogs.render(appLocale), action: onSelect)
             Divider()
             // iter-124 §150 + §274: Delete refuses while the session is
             // mid-load. Letting the user `rm -rf` the model dir while
@@ -74,7 +75,7 @@ struct SessionCard: View {
             // The engine already marks the path `activeLoadPaths`, but
             // the context-menu Delete path bypassed that gate. Grey it
             // out during `.loading` so the user sees why it's disabled.
-            Button("Delete", role: .destructive, action: onDelete)
+            Button(L10n.Common.delete.render(appLocale), role: .destructive, action: onDelete)
                 .disabled({
                     if case .loading = session.state { return true }
                     return false
@@ -303,7 +304,7 @@ struct SessionCard: View {
                     .font(Theme.Typography.mono)
                     .foregroundStyle(Theme.Colors.textMid)
                 if let pid = session.pid {
-                    Text("PID \(pid)")
+                    Text(L10n.Misc.pidFormat2.format(locale: appLocale, Int64(pid)))
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.textLow)
                 }
@@ -327,14 +328,14 @@ struct SessionCard: View {
             } else {
                 switch session.state {
                 case .stopped, .error:
-                    actionButton("Start", color: Theme.Colors.accent, action: onStart)
+                    actionButton(L10n.Misc.start.render(appLocale), color: Theme.Colors.accent, action: onStart)
                 case .standby:
-                    actionButton("Wake", color: Theme.Colors.accent, action: onWake)
-                    actionButton("Stop", color: Theme.Colors.danger, action: onStop)
+                    actionButton(L10n.Misc.wake.render(appLocale), color: Theme.Colors.accent, action: onWake)
+                    actionButton(L10n.Misc.stopBtn.render(appLocale), color: Theme.Colors.danger, action: onStop)
                 case .running:
-                    actionButton("Stop", color: Theme.Colors.danger, action: onStop)
+                    actionButton(L10n.Misc.stopBtn.render(appLocale), color: Theme.Colors.danger, action: onStop)
                 case .loading:
-                    actionButton("Cancel", color: Theme.Colors.danger, action: onStop)
+                    actionButton(L10n.Common.cancel.render(appLocale), color: Theme.Colors.danger, action: onStop)
                 }
             }
             Spacer()

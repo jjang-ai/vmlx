@@ -21,6 +21,7 @@ struct GeneratedImage: Identifiable, Hashable {
 }
 
 struct ImageGallery: View {
+    @Environment(\.appLocale) private var appLocale: AppLocale
     let images: [GeneratedImage]
     let isGenerating: Bool
     let currentStep: Int
@@ -98,10 +99,10 @@ struct ImageGallery: View {
             Image(systemName: "photo.on.rectangle.angled")
                 .font(.system(size: 42))
                 .foregroundStyle(Theme.Colors.textLow)
-            Text("No images yet")
+            Text(L10n.Misc.noImagesYet.render(appLocale))
                 .font(Theme.Typography.title)
                 .foregroundStyle(Theme.Colors.textHigh)
-            Text("Pick a model, type a prompt, and hit Generate.")
+            Text(L10n.Misc.noImagesHint.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textMid)
         }

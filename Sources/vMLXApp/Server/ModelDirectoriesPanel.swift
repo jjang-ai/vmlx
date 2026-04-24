@@ -158,7 +158,7 @@ struct ModelDirectoriesPanel: View {
             .help("Pick a folder containing model directories to scan")
             Spacer()
             if let count = lastScanResultCount {
-                Text("Last scan: \(count) model\(count == 1 ? "" : "s")")
+                Text(L10n.ModelDirs.lastScanFormat.format(locale: appLocale, Int64(count)))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
             }
@@ -264,11 +264,11 @@ struct ModelDirectoriesPanel: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if isDefault {
-                    Text("HuggingFace cache (default — cannot be removed)")
+                    Text(L10n.ModelDirs.hfCacheDefault.render(appLocale))
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.textLow)
                 } else if isMissing {
-                    Text("Missing on disk — folder may have been deleted or the drive unmounted")
+                    Text(L10n.ModelDirs.missingOnDisk.render(appLocale))
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.warning)
                 }
@@ -310,10 +310,10 @@ struct ModelDirectoriesPanel: View {
             ),
             titleVisibility: .visible
         ) {
-            Button("Remove from scan list", role: .destructive) {
+            Button(L10n.Misc.removeFromScanList.render(appLocale), role: .destructive) {
                 Task { await removeDir(url) }
             }
-            Button("Cancel", role: .cancel) { }
+            Button(L10n.Common.cancel.render(appLocale), role: .cancel) { }
         } message: {
             Text("vMLX will stop scanning this folder for models. The folder and any files inside it stay on disk untouched.")
         }

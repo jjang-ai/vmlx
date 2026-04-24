@@ -19,6 +19,7 @@ import AppKit
 /// when remote > local; network failures return the last cached
 /// `UpdateInfo` so the UI isn't brittle on flaky links.
 struct UpdateAvailableBanner: View {
+    @Environment(\.appLocale) private var appLocale: AppLocale
     @State private var latest: UpdateInfo? = nil
 
     var body: some View {
@@ -31,7 +32,7 @@ struct UpdateAvailableBanner: View {
                         .font(Theme.Typography.bodyHi)
                         .foregroundStyle(Theme.Colors.textHigh)
                     Spacer()
-                    Button("Download") {
+                    Button(L10n.Misc.download.render(appLocale)) {
                         if let url = URL(string: info.htmlURL) {
                             #if canImport(AppKit)
                             NSWorkspace.shared.open(url)

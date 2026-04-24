@@ -189,7 +189,7 @@ struct TerminalScreen: View {
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
-                Button("I understand — enable Terminal mode") {
+                Button(L10n.TerminalUI.understandEnable.render(appLocale)) {
                     UserDefaults.standard.set(true, forKey: "terminalWarningAcknowledged")
                     showFirstRunWarning = false
                 }
