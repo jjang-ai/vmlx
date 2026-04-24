@@ -89,7 +89,10 @@ extension Engine {
 
         // -- Run cached multi-block speculative decode --
         let requestStart = Date()
+        // §373 — honor model's generation_config.json before falling back
+        // to global default. Same three-tier chain as Stream.swift.
         let maxNewTokens = max(1, request.maxTokens
+            ?? self.loadedModelDefaults.maxTokens
             ?? g.defaultMaxTokens)
 
         // Each block outcome yields its accepted tokens as a decoded

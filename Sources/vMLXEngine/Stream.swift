@@ -2492,13 +2492,25 @@ extension Engine {
         if cacheTypeIsMLAForPrefill && params.prefillStepSize > 32 {
             params.prefillStepSize = 32
         }
-        params.maxTokens = request.maxTokens ?? resolved.maxTokens
-        params.temperature = Float(request.temperature ?? resolved.temperature)
-        params.topP = Float(request.topP ?? resolved.topP)
-        params.topK = request.topK ?? resolved.topK
+        // §373 — three-tier sampling fallback chain (winner takes all):
+        //   1. explicit request field (OpenAI/Anthropic/Ollama/CLI client
+        //      passed `temperature`, `top_p`, etc.)
+        //   2. model's `generation_config.json` (loadedModelDefaults,
+        //      populated by `setLoadedModelPath` after every load)
+        //   3. engine-wide `resolved.*` default (0.7 temp, 0.9 topP, etc.)
+        // Step 2 is what makes Qwen's recommended temp=0.6 + top_p=0.95
+        // and Gemma's temp=1.0 + top_k=64 take effect by default for
+        // requests that omit those fields — matches mlx-lm Python parity
+        // and the UX promised by the "Model recommends: …" caption
+        // rendered in SessionConfigForm (§368).
+        let md = self.loadedModelDefaults
+        params.maxTokens = request.maxTokens ?? md.maxTokens ?? resolved.maxTokens
+        params.temperature = Float(request.temperature ?? md.temperature ?? resolved.temperature)
+        params.topP = Float(request.topP ?? md.topP ?? resolved.topP)
+        params.topK = request.topK ?? md.topK ?? resolved.topK
         params.minP = Float(request.minP ?? resolved.minP)
         params.repetitionPenalty = Float(
-            request.repetitionPenalty ?? resolved.repetitionPenalty)
+            request.repetitionPenalty ?? md.repetitionPenalty ?? resolved.repetitionPenalty)
         // iter-95 §173: wire OpenAI `frequency_penalty` +
         // `presence_penalty` through to the sampler. Evaluate.swift
         // has supported both since iter-25 (see `FrequencyPenalty`
