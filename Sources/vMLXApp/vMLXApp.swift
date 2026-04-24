@@ -291,6 +291,17 @@ final class AppState {
 
     var mode: Mode = .chat
 
+    /// §358 — persistent gateway status, so the tray + sidebar can show
+    /// the actual bound port (or "offline" badge) without relying on the
+    /// 3-second flashBanner. Populated every time `ensureGatewayRunning`
+    /// runs. Off when gateway is disabled in GlobalSettings.
+    enum GatewayStatus: Sendable, Equatable {
+        case disabled
+        case running(boundPort: Int, requestedPort: Int)
+        case failed(port: Int, message: String)
+    }
+    var gatewayStatus: GatewayStatus = .disabled
+
     /// Per-session engines. Each entry in `sessions` may own a live `Engine`
     /// actor keyed by session UUID. `defaultEngine` is the catch-all the UI
     /// falls back to when no session is selected (e.g. first launch, Chat
@@ -559,7 +570,10 @@ final class AppState {
     /// Idempotent: calling while already running does nothing.
     func ensureGatewayRunning() async {
         let global = await engine.settings.global()
-        guard global.gatewayEnabled else { return }
+        guard global.gatewayEnabled else {
+            gatewayStatus = .disabled
+            return
+        }
         let host = global.gatewayLAN ? "0.0.0.0" : "127.0.0.1"
         let level = LogStore.Level(rawValue: global.defaultLogLevel) ?? .info
         do {
@@ -572,8 +586,35 @@ final class AppState {
                 defaultEngine: engine,
                 allowedOrigins: global.corsOrigins
             )
+            // §358 — surface auto-bump + duplicate-model warnings as
+            // one-shot banners. If the requested gateway port was taken
+            // and we bumped to the next free slot, tell the user once
+            // so their API clients don't silently hit the wrong port.
+            if let note = await gateway.drainAutoBumpNote() {
+                flashBanner(note)
+            }
+            // Sync the in-memory gatewayStatus so the tray/sidebar can
+            // show "Gateway on :8081" (actual bound) vs configured 8080.
+            let bound = await gateway.port
+            let requested = await gateway.requestedPort
+            gatewayStatus = .running(boundPort: bound, requestedPort: requested)
         } catch {
             flashBanner("Gateway failed to start on \(host):\(global.gatewayPort) — \(error)")
+            gatewayStatus = .failed(port: global.gatewayPort,
+                                    message: "\(error)")
+        }
+    }
+
+    /// Drain duplicate-model-registration warnings from the gateway and
+    /// surface one flashBanner per offending display name. Called from
+    /// `startSession` right after `gateway.registerEngine` lands, since
+    /// that's the one spot where duplicates can appear.
+    func drainGatewayDuplicateWarnings() async {
+        let dupes = await gateway.drainDuplicateWarnings()
+        for name in dupes {
+            flashBanner(
+                "Duplicate model name \"\(name)\" — gateway will route requests to the last-loaded session. Rename one in Server → Model alias to resolve."
+            )
         }
     }
 
@@ -1026,6 +1067,10 @@ final class AppState {
                 sessions[idx2].pid = Int(ProcessInfo.processInfo.processIdentifier)
             }
             await gateway.registerEngine(eng)
+            // §358 — surface duplicate display-name registrations. If this
+            // session advertises a model that another session already did,
+            // tell the user once so they can rename via Server → Model alias.
+            await drainGatewayDuplicateWarnings()
             await ensureGatewayRunning()
         } catch {
             flashBanner("HTTP listener failed: \(error)")
@@ -1407,8 +1452,25 @@ fileprivate func handleModelDrop(_ providers: [NSItemProvider], state: AppState)
             Task { @MainActor in
                 let lib = await state.engine.modelLibrary
                 await lib.addUserDir(targetDir)
-                _ = await lib.scan(force: true)
-                state.flashBanner("Added \(targetDir.lastPathComponent) — rescanning model library")
+                let entries = await lib.scan(force: true)
+                // §358 — honest discovery toast. Count what we found IN
+                // the folder the user just added (not the full library),
+                // split by modality so "added 3 image + 7 text models"
+                // tells them the image-gen picker just got populated.
+                let lowered = targetDir.path.lowercased()
+                let inThisDir = entries.filter { entry in
+                    entry.canonicalPath.path.lowercased().hasPrefix(lowered)
+                }
+                let text = inThisDir.filter { $0.modality != .image }.count
+                let img  = inThisDir.filter { $0.modality == .image }.count
+                let parts: [String] = {
+                    var p: [String] = []
+                    if text > 0 { p.append("\(text) text") }
+                    if img > 0 { p.append("\(img) image") }
+                    return p
+                }()
+                let summary = parts.isEmpty ? "no models detected" : parts.joined(separator: " + ") + " models"
+                state.flashBanner("Added \(targetDir.lastPathComponent) — \(summary)")
             }
         }
     }

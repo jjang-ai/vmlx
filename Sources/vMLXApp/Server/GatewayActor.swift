@@ -25,8 +25,26 @@ actor GatewayActor {
 
     private var runTask: Task<Void, Error>?
     private(set) var host: String = "127.0.0.1"
+    /// Port the caller *requested* when start() was invoked.
+    private(set) var requestedPort: Int = 8080
+    /// Port we actually bound — may differ from `requestedPort` when the
+    /// requested port was taken (Ollama on 8080 is the common case) and
+    /// the `allowAutoBump` flag in `start()` kicked us to the next free
+    /// slot. UI should display this value, not `requestedPort`.
     private(set) var port: Int = 8080
     private(set) var lastError: String?
+
+    /// Last collision we auto-recovered from. Surfaced to the UI as a
+    /// one-line banner so the user knows we bumped off their originally
+    /// configured port (e.g. 8080 → 8081 when Ollama is running).
+    private(set) var lastAutoBumpNote: String?
+
+    /// Duplicate model-name registrations discovered since the last UI
+    /// pull. Keyed by model display name → list of engine ObjectIdentifiers
+    /// that tried to claim it. UI polls this via `drainDuplicateWarnings()`
+    /// to surface a one-shot banner ("two sessions both register 'llama-7b';
+    /// requests will route to the last-loaded one").
+    private var duplicateWarnings: [String] = []
 
     var isRunning: Bool { runTask != nil }
 
@@ -38,11 +56,30 @@ actor GatewayActor {
     func registerEngine(_ engine: Engine) async {
         let entries = await engine.modelLibrary.entries()
         for entry in entries {
+            // §358 — detect same-name collisions across engines. Previous
+            // behavior was silent last-writer-wins, which meant two sessions
+            // advertising the same display name would route all gateway
+            // traffic to whichever loaded last, with zero UI feedback.
+            // Record the collision for the UI's one-shot warning banner.
+            if let existing = registry[entry.displayName]?.engine,
+               existing !== engine {
+                duplicateWarnings.append(entry.displayName)
+            }
             registry[entry.displayName] = WeakEngineBox(engine: engine)
             if !insertionOrder.contains(entry.displayName) {
                 insertionOrder.append(entry.displayName)
             }
         }
+    }
+
+    /// Drain queued duplicate-name warnings. Each returned name represents
+    /// a model display-name that two or more engines tried to register; the
+    /// engine that registered last wins all gateway routing for that name.
+    /// Caller (AppState.observeEngine) surfaces these as flashBanners.
+    func drainDuplicateWarnings() -> [String] {
+        let w = duplicateWarnings
+        duplicateWarnings.removeAll()
+        return w
     }
 
     /// Drop every registry entry pointing at this engine. Called on session
@@ -110,7 +147,8 @@ actor GatewayActor {
         adminToken: String?,
         logLevel: LogStore.Level,
         defaultEngine: Engine,
-        allowedOrigins: [String] = ["*"]
+        allowedOrigins: [String] = ["*"],
+        allowAutoBump: Bool = true
     ) async throws {
         if let task = runTask, host == self.host, port == self.port, !task.isCancelled {
             return
@@ -118,18 +156,41 @@ actor GatewayActor {
         await stop()
 
         self.host = host
+        self.requestedPort = port
         self.port = port
         self.lastError = nil
+        self.lastAutoBumpNote = nil
 
-        guard Engine.isPortFree(port) else {
-            throw EngineError.portInUse(port)
+        // §358 — auto-bump on collision. Ollama binds 8080 by default,
+        // which is also our gateway default. Previous behavior threw a
+        // portInUse and the user saw a 3-sec banner but never a bound
+        // gateway, so cross-app routing silently died. Now: scan for
+        // the next free port in [port, port+32], record the bump, and
+        // bind there. UI reads `port` for display and `lastAutoBumpNote`
+        // for the one-shot "moved from 8080→8081 (was taken)" banner.
+        var bound = port
+        if !Engine.isPortFree(port) {
+            if allowAutoBump {
+                if let fallback = Self.findFreePort(startingAt: port + 1, limit: 32) {
+                    bound = fallback
+                    self.port = bound
+                    self.lastAutoBumpNote =
+                        "Gateway port \(port) was taken — bound to \(bound) instead. " +
+                        "Change the configured port in Tray → Server if you need a stable target."
+                } else {
+                    throw EngineError.portInUse(port)
+                }
+            } else {
+                throw EngineError.portInUse(port)
+            }
         }
+        let _ = bound  // suppress unused warning — already written to self.port
 
         // Capture self weakly inside the resolver closures so the gateway
         // doesn't pin this actor in memory if the user later disables it.
         let server = GatewayServer(
             host: host,
-            port: port,
+            port: self.port,
             apiKey: apiKey,
             adminToken: adminToken,
             logLevel: logLevel,
@@ -164,6 +225,27 @@ actor GatewayActor {
 
     private func recordRunError(_ message: String) {
         lastError = message
+    }
+
+    /// Drain the auto-bump note (one-shot) so the UI banner fires once
+    /// per actual bump. Called from AppState.ensureGatewayRunning right
+    /// after a successful start.
+    func drainAutoBumpNote() -> String? {
+        let note = lastAutoBumpNote
+        lastAutoBumpNote = nil
+        return note
+    }
+
+    /// Internal port scan — actor-isolated because Engine.isPortFree is
+    /// synchronous and cheap, so no need to escape the actor queue.
+    private static func findFreePort(startingAt start: Int, limit: Int) -> Int? {
+        var p = start
+        let end = min(start + limit, 65_535)
+        while p <= end {
+            if Engine.isPortFree(p) { return p }
+            p += 1
+        }
+        return nil
     }
 }
 
