@@ -1367,25 +1367,66 @@ public actor Engine {
     }
 
     /// §368 — parse generation_config.json into ModelGenerationDefaults.
+    /// §388 — extended to also read `jang_config.chat.sampling_defaults`
+    /// which jang bundles write per-model (DSV4 Flash/Pro stamp
+    /// `temperature=0.6, top_p=0.95` there; the upstream
+    /// `generation_config.json` defaults to 1.0/1.0 which is the
+    /// non-chat-optimized recommendation). jang_config.sampling_defaults
+    /// wins over generation_config.json when both exist — jang_config
+    /// is the curated chat-mode recommendation.
+    ///
     /// Swallows all errors; callers treat nil fields as "not recommended
     /// by the model, fall through to global default."
     public nonisolated static func readGenerationConfig(
         at modelURL: URL
     ) -> ModelGenerationDefaults {
         var out = ModelGenerationDefaults()
+
+        // Tier 1: generation_config.json (raw HF source)
         let cfgURL = modelURL.appendingPathComponent("generation_config.json")
-        guard let data = try? Data(contentsOf: cfgURL),
-              let obj = try? JSONSerialization.jsonObject(with: data)
-                        as? [String: Any] else { return out }
-        out.temperature = (obj["temperature"] as? NSNumber)?.doubleValue
-        out.topP = (obj["top_p"] as? NSNumber)?.doubleValue
-        out.topK = (obj["top_k"] as? NSNumber)?.intValue
-        // HuggingFace uses `max_new_tokens` in some configs and
-        // `max_length` in others. Prefer max_new_tokens since it's the
-        // generation-side limit (max_length caps the FULL sequence
-        // including prompt and the user almost never wants that).
-        out.maxTokens = (obj["max_new_tokens"] as? NSNumber)?.intValue
-        out.repetitionPenalty = (obj["repetition_penalty"] as? NSNumber)?.doubleValue
+        if let data = try? Data(contentsOf: cfgURL),
+           let obj = try? JSONSerialization.jsonObject(with: data)
+                        as? [String: Any]
+        {
+            out.temperature = (obj["temperature"] as? NSNumber)?.doubleValue
+            out.topP = (obj["top_p"] as? NSNumber)?.doubleValue
+            out.topK = (obj["top_k"] as? NSNumber)?.intValue
+            // HuggingFace uses `max_new_tokens` in some configs and
+            // `max_length` in others. Prefer max_new_tokens since it's the
+            // generation-side limit (max_length caps the FULL sequence
+            // including prompt and the user almost never wants that).
+            out.maxTokens = (obj["max_new_tokens"] as? NSNumber)?.intValue
+            out.repetitionPenalty = (obj["repetition_penalty"] as? NSNumber)?.doubleValue
+        }
+
+        // Tier 2 (wins): jang_config.chat.sampling_defaults — jang-curated
+        // chat-mode recommendation. Typically narrower/softer than the
+        // upstream generation_config.json defaults. Each field overrides
+        // tier 1 only when present; absent keys keep the tier-1 value.
+        let jangURL = modelURL.appendingPathComponent("jang_config.json")
+        if let data = try? Data(contentsOf: jangURL),
+           let obj = try? JSONSerialization.jsonObject(with: data)
+                        as? [String: Any],
+           let chat = obj["chat"] as? [String: Any],
+           let defaults = chat["sampling_defaults"] as? [String: Any]
+        {
+            if let t = (defaults["temperature"] as? NSNumber)?.doubleValue {
+                out.temperature = t
+            }
+            if let p = (defaults["top_p"] as? NSNumber)?.doubleValue {
+                out.topP = p
+            }
+            if let k = (defaults["top_k"] as? NSNumber)?.intValue {
+                out.topK = k
+            }
+            if let m = (defaults["max_new_tokens"] as? NSNumber)?.intValue {
+                out.maxTokens = m
+            }
+            if let r = (defaults["repetition_penalty"] as? NSNumber)?.doubleValue {
+                out.repetitionPenalty = r
+            }
+        }
+
         return out
     }
 

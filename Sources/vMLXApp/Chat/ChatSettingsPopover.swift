@@ -191,6 +191,12 @@ struct ChatSettingsPopover: View {
                         Text(L10n.Common.low.render(appLocale)).tag("low")
                         Text(L10n.Common.medium.render(appLocale)).tag("medium")
                         Text(L10n.Common.high.render(appLocale)).tag("high")
+                        // §388 — DSV4 Flash/Pro native "max" effort.
+                        // Models that don't understand "max" see it via
+                        // Stream.swift's effortImpliesThinking map as a
+                        // thinking-on hint and fall back to high-tier
+                        // sampler behavior.
+                        Text(L10n.Common.maxEffort.render(appLocale)).tag("max")
                     }
                     .pickerStyle(.menu)
                     .frame(width: 180)

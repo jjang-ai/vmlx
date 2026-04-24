@@ -553,8 +553,70 @@ public enum CapabilityDetector {
         let tokCfg = loadJSON(directory.appendingPathComponent("tokenizer_config.json"))
             ?? [:]
         if let s = tokCfg["chat_template"] as? String, !s.isEmpty { return s }
+
+        // §388 — DSV4 bundles ship a Python `encoding/encoding_dsv4.py`
+        // module but NO Jinja template in tokenizer_config.json (the
+        // jang_config.chat.has_tokenizer_chat_template flag literally
+        // says false). For Swift we can't exec Python, so we fall back
+        // to a built-in Jinja template authored against the DSV4
+        // encoding semantics documented in
+        // `research/DSV4-RUNTIME-ARCHITECTURE.md §4.3`:
+        //   - `<｜begin▁of▁sentence｜>` BOS
+        //   - `<｜User｜>{content}`
+        //   - `<｜Assistant｜>{content}<｜end▁of▁sentence｜>` for prior assistant
+        //   - chat mode (enable_thinking=false): final `<｜Assistant｜></think>`
+        //   - thinking mode: final `<｜Assistant｜>` (model opens its own
+        //     `<think>`) OR `<｜Assistant｜><think>` if the caller pre-stamped
+        //   - prior `<think>…</think>` blocks are stripped on multi-turn
+        //     (mirrors jang_config.chat.reasoning.drop_earlier_reasoning=true)
+        let cfg = loadJSON(directory.appendingPathComponent("config.json")) ?? [:]
+        if let mt = (cfg["model_type"] as? String)?.lowercased(), mt == "deepseek_v4" {
+            return Self.deepseekV4BuiltinTemplate
+        }
         return nil
     }
+
+    /// Built-in Jinja chat template for DeepSeek V4 Flash / Pro bundles
+    /// that don't ship `tokenizer_config.json::chat_template`. Covers
+    /// the three native modes (chat / thinking+high / thinking+max)
+    /// and drops earlier-turn `<think>…</think>` blocks per
+    /// `jang_config.chat.reasoning.drop_earlier_reasoning=true`.
+    ///
+    /// Multi-token role markers use the fullwidth bar U+FF5C literally
+    /// so the upstream tokenizer's `special_tokens_map.json` matches
+    /// without additional escape work on our side.
+    private static let deepseekV4BuiltinTemplate: String = """
+    {% if bos_token is defined and not bos_token is mapping %}{{ bos_token }}{% else %}<｜begin▁of▁sentence｜>{% endif %}
+    {%- set ns = namespace(has_sys=false) -%}
+    {%- for m in messages -%}
+    {%- if m.role == 'system' -%}
+    {{- m.content -}}
+    {%- set ns.has_sys = true -%}
+    {%- endif -%}
+    {%- endfor -%}
+    {%- for m in messages -%}
+    {%- if m.role == 'user' -%}
+    <｜User｜>{{ m.content }}
+    {%- elif m.role == 'assistant' -%}
+    <｜Assistant｜>
+    {%- set rc = m.reasoning_content if m.reasoning_content is defined else '' -%}
+    {%- if enable_thinking is defined and enable_thinking and rc -%}
+    <think>{{ rc }}</think>
+    {%- else -%}
+    </think>
+    {%- endif -%}
+    {{ m.content }}<｜end▁of▁sentence｜>
+    {%- elif m.role == 'tool' -%}
+    <tool_result>{{ m.content }}</tool_result>
+    {%- endif -%}
+    {%- endfor -%}
+    {%- if add_generation_prompt -%}
+    <｜Assistant｜>
+    {%- if enable_thinking is defined and not enable_thinking -%}
+    </think>
+    {%- endif -%}
+    {%- endif -%}
+    """
 
     /// Reconcile the silver-table cacheType default against config.json
     /// reality. Audit P1-CAP-1: pre-stamping `cacheType="mla"` in the
