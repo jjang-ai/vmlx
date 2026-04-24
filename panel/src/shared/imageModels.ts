@@ -22,6 +22,12 @@ export interface ImageModelDef {
   category: 'generate' | 'edit'
   /** Default inference steps */
   steps: number
+  /**
+   * Default classifier-free guidance scale. Schnell + Z-Image-Turbo are
+   * distilled and ignore guidance (set to 0 / 1). Dev + Klein default 3.5.
+   * Qwen-Image prefers 4.0, Kontext 2.5, Fill 30 (inpaint needs high).
+   */
+  guidance: number
   /** Display size string: '~6-24 GB' */
   size: string
   /** Allowed quantization options, e.g. [4, 8, 0] where 0 = full precision */
@@ -62,6 +68,7 @@ export const IMAGE_MODELS: ImageModelDef[] = [
     desc: 'Fastest generation (4 steps)',
     category: 'generate',
     steps: 4,
+    guidance: 0.0,
     size: '~6-24 GB',
     quantizeOptions: [4, 8, 0],
     repoMap: {
@@ -82,6 +89,7 @@ export const IMAGE_MODELS: ImageModelDef[] = [
     desc: 'Fast turbo generation (4 steps)',
     category: 'generate',
     steps: 4,
+    guidance: 1.0,
     size: '~6-24 GB',
     quantizeOptions: [4, 8, 0],
     repoMap: {
@@ -102,6 +110,7 @@ export const IMAGE_MODELS: ImageModelDef[] = [
     desc: 'High quality generation (20 steps)',
     category: 'generate',
     steps: 20,
+    guidance: 3.5,
     size: '~6-24 GB',
     quantizeOptions: [4, 8, 0],
     repoMap: {
@@ -122,6 +131,7 @@ export const IMAGE_MODELS: ImageModelDef[] = [
     desc: 'Fast & small (20 steps)',
     category: 'generate',
     steps: 20,
+    guidance: 3.5,
     size: '~4-8 GB',
     quantizeOptions: [4, 0],
     repoMap: {
@@ -141,6 +151,7 @@ export const IMAGE_MODELS: ImageModelDef[] = [
     desc: 'Medium quality (20 steps)',
     category: 'generate',
     steps: 20,
+    guidance: 3.5,
     size: '~8-18 GB',
     quantizeOptions: [0],
     repoMap: {
@@ -159,6 +170,7 @@ export const IMAGE_MODELS: ImageModelDef[] = [
     desc: 'Strong prompt understanding (20 steps)',
     category: 'generate',
     steps: 20,
+    guidance: 4.0,
     size: '~20-40 GB',
     quantizeOptions: [4, 0],
     repoMap: {
@@ -180,6 +192,7 @@ export const IMAGE_MODELS: ImageModelDef[] = [
     desc: 'Instruction-based editing (28 steps)',
     category: 'edit',
     steps: 28,
+    guidance: 4.0,
     size: '~54 GB',
     quantizeOptions: [0],
     repoMap: {
@@ -198,6 +211,7 @@ export const IMAGE_MODELS: ImageModelDef[] = [
     desc: 'Subject-consistent editing (24 steps)',
     category: 'edit',
     steps: 24,
+    guidance: 2.5,
     size: '~6-24 GB',
     quantizeOptions: [4, 0],
     repoMap: {
@@ -217,6 +231,7 @@ export const IMAGE_MODELS: ImageModelDef[] = [
     desc: 'Inpainting with mask (20 steps)',
     category: 'edit',
     steps: 20,
+    guidance: 30.0,
     size: '~24 GB',
     quantizeOptions: [0],
     repoMap: {
@@ -312,6 +327,17 @@ export function resolveImageModelFromDirectoryName(name: string): ImageModelDef 
 /** Get default inference steps for a model ID */
 export function getDefaultSteps(modelId: string): number {
   return getImageModel(modelId)?.steps ?? 4
+}
+
+/**
+ * Get default classifier-free guidance scale for a model ID. Mirrors the
+ * per-model recommendation table — Schnell/Z-Image-Turbo are distilled so
+ * guidance is effectively a no-op (0/1), Dev/Klein default 3.5, Qwen-Image
+ * prefers 4.0, Kontext 2.5, Fill 30 (inpainting needs strong guidance).
+ * Falls back to 3.5 for unknown model IDs — the canonical Flux Dev default.
+ */
+export function getDefaultGuidance(modelId: string): number {
+  return getImageModel(modelId)?.guidance ?? 3.5
 }
 
 /**

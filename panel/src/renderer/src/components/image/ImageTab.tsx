@@ -6,7 +6,7 @@ import { ImageHistory } from './ImageHistory'
 import { ImageTopBar } from './ImageTopBar'
 import { ImageSettings } from './ImageSettings'
 import { LogsPanel } from '../sessions/LogsPanel'
-import { getDefaultSteps, getImageModel } from '../../../../shared/imageModels'
+import { getDefaultSteps, getDefaultGuidance, getImageModel } from '../../../../shared/imageModels'
 import type { ImageServerSettings } from './ImageModelPicker'
 
 export interface ImageSessionInfo {
@@ -136,9 +136,18 @@ export function ImageTab() {
         const q = server.quantize ?? 0
         setQuantize(q)
 
-        // Restore proper default steps for this model
+        // Restore proper default steps + guidance for this model when the
+        // saved settings don't already carry values (generation_config-like
+        // recommendations from `shared/imageModels.ts`). User-saved values
+        // always win via the `prev` spread below.
         const defaultSteps = getDefaultSteps(name)
-        setSettings(prev => ({ ...prev, steps: defaultSteps, quantize: q }))
+        const defaultGuidance = getDefaultGuidance(name)
+        setSettings(prev => ({
+          ...prev,
+          steps: prev.steps || defaultSteps,
+          guidance: prev.guidance ?? defaultGuidance,
+          quantize: q,
+        }))
       }
     }).catch(() => {})
   }, [])
@@ -267,12 +276,17 @@ export function ImageTab() {
     // Reset ALL settings to defaults for the new model (not just steps/quantize).
     // Without this, guidance, strength, width, height, count, seed, negativePrompt
     // from the previous model would persist and confuse users.
+    // Steps + guidance come from the model's canonical defaults in
+    // `shared/imageModels.ts` (e.g. Schnell=4/0, Dev=20/3.5, Qwen=20/4,
+    // Fill=20/30) — mirrors the Python engine's DEFAULT_STEPS table so the
+    // UI doesn't silently clobber model-recommended values.
     const defaultSteps = getDefaultSteps(modelId)
+    const defaultGuidance = getDefaultGuidance(modelId)
     setSettings({
       steps: defaultSteps,
       width: 1024,
       height: 1024,
-      guidance: 3.5,
+      guidance: defaultGuidance,
       negativePrompt: '',
       seed: undefined,
       count: 1,
