@@ -644,6 +644,9 @@ let package = Package(
                 // §373 — generation_config.json fallback parity for
                 // Qwen/Gemma/Nemotron recommended temp/top_p/top_k.
                 "GenerationConfigDefaultsTests.swift",
+                // §378 — sampling fallback priority (request > session
+                // > generation_config > global) via resolutionTrace.
+                "SamplingFallbackPriorityTests.swift",
                 // Metal-dependent tests excluded — `swift test` can't load
                 // the default.metallib from the SwiftPM bundle path;
                 // JangDFlashDrafter, JangDFlashSpecDec, VisionEmbeddingCache,
