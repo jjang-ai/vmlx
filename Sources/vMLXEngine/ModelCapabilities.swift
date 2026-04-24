@@ -212,6 +212,20 @@ public enum ModelTypeTable {
               cacheType: "mla",
               toolParser: "deepseek", reasoningParser: "deepseek_r1",
               priority: 20),
+        // DeepSeek V4 (Flash 284B / Pro 1.6T) — mHC + hybrid CSA/HCA
+        // attention + sqrtsoftplus routing + 3 hash layers + DSML tool
+        // envelope. MLA latent head_dim=512. Full port lives in
+        // vMLXLLM/Models/DeepseekV4JANGTQ.swift. Native DSV4 reasoning
+        // distinguishes "chat" (prompt ends `</think>`, empty reasoning)
+        // from "thinking" (prompt ends `<think>`, model fills) with an
+        // optional `reasoning_effort ∈ {"high","max"}` hint. Our stream
+        // wiring maps `reasoning_effort=none` → chat mode and anything
+        // else → thinking mode via the existing enable_thinking rail.
+        // Tool parser is `dsml` (｜DSML｜-framed XML-ish blocks).
+        .init(family: "deepseek_v4", modelTypes: ["deepseek_v4"],
+              cacheType: "mla",
+              toolParser: "dsml", reasoningParser: "deepseek_r1",
+              thinkInTemplate: true, priority: 20),
         .init(family: "glm5", modelTypes: ["glm_moe_dsa"],
               cacheType: "mla",
               toolParser: "deepseek", reasoningParser: "deepseek_r1",

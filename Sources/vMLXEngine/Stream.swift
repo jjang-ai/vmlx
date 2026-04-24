@@ -577,7 +577,11 @@ extension Engine {
         let effortImpliesThinking: Bool? = request.reasoningEffort.flatMap {
             let v = $0.lowercased()
             if v == "none" || v.isEmpty { return false }
-            if v == "low" || v == "medium" || v == "high" { return true }
+            // §385 — `max` is DeepSeek V4's deep-reasoning level (paired
+            // with `high` in jang_config.chat.reasoning.reasoning_effort_levels).
+            // Was silently dropping to nil before because only low/medium/high
+            // were recognized; DSV4 callers passing effort=max got chat mode.
+            if v == "low" || v == "medium" || v == "high" || v == "max" { return true }
             return nil
         }
         var effectiveThinking: Bool = request.enableThinking
