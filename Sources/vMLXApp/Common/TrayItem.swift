@@ -70,25 +70,25 @@ struct TrayItem: View {
                 statsRow
                 Divider()
                 disclosureGroup(
-                    title: "Server binding", open: $showServer, icon: "network"
+                    title: L10n.TrayPanel.serverBinding.render(appLocale), open: $showServer, icon: "network"
                 ) { serverSection }
                 disclosureGroup(
-                    title: "Sampling (global defaults)", open: $showRuntime, icon: "slider.horizontal.3"
+                    title: L10n.TrayPanel.samplingGlobals.render(appLocale), open: $showRuntime, icon: "slider.horizontal.3"
                 ) { runtimeSection }
                 disclosureGroup(
-                    title: "Cache", open: $showCache, icon: "externaldrive.fill"
+                    title: L10n.TrayPanel.cache.render(appLocale), open: $showCache, icon: "externaldrive.fill"
                 ) { cacheSection }
                 disclosureGroup(
-                    title: "Flash MoE", open: $showMoE, icon: "bolt.fill"
+                    title: L10n.TrayPanel.flashMoE.render(appLocale), open: $showMoE, icon: "bolt.fill"
                 ) { moeSection }
                 disclosureGroup(
-                    title: "Adapter", open: $showAdapter, icon: "puzzlepiece.fill"
+                    title: L10n.TrayPanel.adapter.render(appLocale), open: $showAdapter, icon: "puzzlepiece.fill"
                 ) { adapterSection }
                 disclosureGroup(
-                    title: "Logging", open: $showLogging, icon: "text.alignleft"
+                    title: L10n.TrayPanel.logging.render(appLocale), open: $showLogging, icon: "text.alignleft"
                 ) { loggingSection }
                 disclosureGroup(
-                    title: "Recent logs", open: $showLogs, icon: "doc.text"
+                    title: L10n.TrayPanel.recentLogs.render(appLocale), open: $showLogs, icon: "doc.text"
                 ) { logsSection }
                 Divider()
                 footerRow
@@ -605,7 +605,7 @@ struct TrayItem: View {
                 }
             }
             Toggle(
-                "L2 disk cache",
+                L10n.TrayPanel.l2DiskCache.render(appLocale),
                 isOn: Binding(
                     get: { draft.enableDiskCache },
                     set: { draft.enableDiskCache = $0; schedulePush() }))
@@ -613,7 +613,7 @@ struct TrayItem: View {
                 .toggleStyle(.switch)
             if draft.enableDiskCache {
                 slider(
-                    label: "Disk budget (GB)",
+                    label: L10n.TrayPanel.diskBudgetGB.render(appLocale),
                     value: Binding(
                         get: { draft.diskCacheMaxGB },
                         set: { draft.diskCacheMaxGB = $0; schedulePush() }),
@@ -621,28 +621,28 @@ struct TrayItem: View {
                     format: "%.0f")
             }
             Toggle(
-                "Prefix cache",
+                L10n.TrayPanel.prefixCache.render(appLocale),
                 isOn: Binding(
                     get: { draft.enablePrefixCache },
                     set: { draft.enablePrefixCache = $0; schedulePush() }))
                 .font(.system(size: 11))
                 .toggleStyle(.switch)
             Toggle(
-                "Memory-aware prefix cache",
+                L10n.TrayPanel.memoryAwarePrefixCache.render(appLocale),
                 isOn: Binding(
                     get: { draft.enableMemoryCache },
                     set: { draft.enableMemoryCache = $0; schedulePush() }))
                 .font(.system(size: 11))
                 .toggleStyle(.switch)
             Toggle(
-                "SSM re-derive (hybrid+thinking)",
+                L10n.TrayPanel.ssmReDerive.render(appLocale),
                 isOn: Binding(
                     get: { draft.enableSSMReDerive },
                     set: { draft.enableSSMReDerive = $0; schedulePush() }))
                 .font(.system(size: 11))
                 .toggleStyle(.switch)
             slider(
-                label: "Cache memory %",
+                label: L10n.TrayPanel.cacheMemoryPercent.render(appLocale),
                 value: Binding(
                     get: { draft.memoryCachePercent * 100 },
                     set: { draft.memoryCachePercent = $0 / 100; schedulePush() }),
@@ -676,7 +676,7 @@ struct TrayItem: View {
     private var moeSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle(
-                "Enable Flash MoE (stream experts from SSD)",
+                L10n.TrayPanel.enableFlashMoE.render(appLocale),
                 isOn: Binding(
                     get: { draft.flashMoe },
                     set: { draft.flashMoe = $0; schedulePush() }))
@@ -684,7 +684,7 @@ struct TrayItem: View {
                 .toggleStyle(.switch)
             if draft.flashMoe {
                 slider(
-                    label: "Slot bank size",
+                    label: L10n.TrayPanel.slotBankSize.render(appLocale),
                     value: Binding(
                         get: { Double(draft.flashMoeSlotBank) },
                         set: { draft.flashMoeSlotBank = Int($0); schedulePush() }),
@@ -720,10 +720,10 @@ struct TrayItem: View {
 
     private var adapterSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Active LoRA adapter is managed via Server → Adapter panel.")
+            Text(L10n.TrayPanel.adapterBlurb.render(appLocale))
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
-            Button("Open Adapter panel") {
+            Button(L10n.TrayPanel.openAdapterPanel.render(appLocale)) {
                 openAppWindow()
                 app.mode = .server
             }
@@ -744,7 +744,7 @@ struct TrayItem: View {
     private var loggingSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Default level")
+                Text(L10n.TrayPanel.defaultLevel.render(appLocale))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 Spacer()
