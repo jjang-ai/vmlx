@@ -1255,6 +1255,12 @@ public enum L10n {
             ko: "Apple Silicon에서 최첨단 LLM 실행",
             zh: "在 Apple Silicon 上运行最先进的 LLM"
         )
+        public static let runSOTABlurb = L10nEntry(
+            en: "vMLX serves chat, embeddings, images, and tool calls over OpenAI / Anthropic / Ollama APIs — 100% on-device.",
+            ja: "vMLX は OpenAI / Anthropic / Ollama 互換APIで、チャット・埋め込み・画像・ツール呼び出しを提供 — 完全オンデバイス。",
+            ko: "vMLX는 OpenAI / Anthropic / Ollama API로 채팅, 임베딩, 이미지, 도구 호출을 제공 — 100% 온디바이스.",
+            zh: "vMLX 通过兼容 OpenAI / Anthropic / Ollama 的 API 提供聊天、嵌入、图像和工具调用 — 100% 在本地运行。"
+        )
         public static let scanningCache = L10nEntry(
             en: "Scanning Hugging Face cache…",
             ja: "Hugging Face キャッシュをスキャン中…",
