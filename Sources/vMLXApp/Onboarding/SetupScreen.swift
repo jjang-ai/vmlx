@@ -67,7 +67,7 @@ struct SetupScreen: View {
             Text(L10n.Setup.runSOTA.render(appLocale))
                 .font(Theme.Typography.bodyHi)
                 .foregroundStyle(Theme.Colors.textHigh)
-            Text("vMLX serves chat, embeddings, images, and tool calls over OpenAI / Anthropic / Ollama APIs — 100% on-device.")
+            Text(L10n.Setup.runSOTABlurb.render(appLocale))
                 .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Colors.textMid)
                 .multilineTextAlignment(.center)
