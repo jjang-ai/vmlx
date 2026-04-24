@@ -593,6 +593,7 @@ struct MCPServerEditor: View {
     let onSave: (MCPServerConfig) -> Void
     let onCancel: () -> Void
     @State private var error: String? = nil
+    @Environment(\.appLocale) private var appLocale: AppLocale
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
@@ -602,7 +603,7 @@ struct MCPServerEditor: View {
 
             Form {
                 Section {
-                    TextField("Name", text: $draft.name)
+                    TextField(L10n.Misc.name.render(appLocale), text: $draft.name)
                         .disabled(!draft.isNew)  // renaming changes the dict key
                         .help(draft.isNew
                             ? "Unique identifier — also the prefix on every tool name (server__tool)"
@@ -615,10 +616,10 @@ struct MCPServerEditor: View {
                 }
                 if draft.transport == .stdio {
                     Section("stdio") {
-                        TextField("Command", text: $draft.command)
+                        TextField(L10n.Misc.command.render(appLocale), text: $draft.command)
                             .help("Absolute path or PATH-resolvable executable")
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Args (one per line)")
+                            Text(L10n.Misc.argsHint.render(appLocale))
                                 .font(Theme.Typography.caption)
                                 .foregroundStyle(Theme.Colors.textLow)
                             TextEditor(text: $draft.argsText)
@@ -628,13 +629,13 @@ struct MCPServerEditor: View {
                     }
                 } else {
                     Section("sse") {
-                        TextField("URL", text: $draft.url)
+                        TextField(L10n.Misc.urlLabel.render(appLocale), text: $draft.url)
                             .help("Full https:// URL of the MCP SSE endpoint")
                     }
                 }
                 Section("Environment") {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("KEY=VALUE per line")
+                        Text(L10n.Misc.envKV.render(appLocale))
                             .font(Theme.Typography.caption)
                             .foregroundStyle(Theme.Colors.textLow)
                         TextEditor(text: $draft.envText)
@@ -643,9 +644,9 @@ struct MCPServerEditor: View {
                     }
                 }
                 Section("Runtime") {
-                    Toggle("Enabled", isOn: $draft.enabled)
+                    Toggle(L10n.Misc.enabledToggle.render(appLocale), isOn: $draft.enabled)
                     HStack {
-                        Text("Timeout")
+                        Text(L10n.Misc.timeout.render(appLocale))
                         Slider(value: $draft.timeoutSeconds, in: 1...300, step: 1) {
                             Text("Timeout seconds")
                         }
@@ -653,7 +654,7 @@ struct MCPServerEditor: View {
                             .monospacedDigit()
                             .frame(width: 44, alignment: .trailing)
                     }
-                    Toggle("Skip security validation (dev only)",
+                    Toggle(L10n.Misc.skipSecurity.render(appLocale),
                            isOn: $draft.skipSecurityValidation)
                 }
             }
@@ -666,7 +667,7 @@ struct MCPServerEditor: View {
 
             HStack {
                 Spacer()
-                Button("Cancel", action: onCancel)
+                Button(L10n.Common.cancel.render(appLocale), action: onCancel)
                     .keyboardShortcut(.cancelAction)
                 Button(draft.isNew ? "Add" : "Save") {
                     if draft.isNew && existingNames.contains(
