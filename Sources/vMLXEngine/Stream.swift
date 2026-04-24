@@ -2492,25 +2492,42 @@ extension Engine {
         if cacheTypeIsMLAForPrefill && params.prefillStepSize > 32 {
             params.prefillStepSize = 32
         }
-        // §373 — three-tier sampling fallback chain (winner takes all):
-        //   1. explicit request field (OpenAI/Anthropic/Ollama/CLI client
-        //      passed `temperature`, `top_p`, etc.)
-        //   2. model's `generation_config.json` (loadedModelDefaults,
-        //      populated by `setLoadedModelPath` after every load)
-        //   3. engine-wide `resolved.*` default (0.7 temp, 0.9 topP, etc.)
-        // Step 2 is what makes Qwen's recommended temp=0.6 + top_p=0.95
-        // and Gemma's temp=1.0 + top_k=64 take effect by default for
-        // requests that omit those fields — matches mlx-lm Python parity
-        // and the UX promised by the "Model recommends: …" caption
-        // rendered in SessionConfigForm (§368).
+        // §373 — sampling fallback priority (highest-to-lowest):
+        //   1. explicit request field (OpenAI/Anthropic/Ollama/CLI body)
+        //   2. user-set session/chat override (via SettingsStore cascade)
+        //   3. model's `generation_config.json` (loadedModelDefaults)
+        //   4. compiled-in global default (0.7 / 0.9 / etc.)
+        //
+        // The SettingsStore resolver collapses 1+2+4 into `resolved.*`
+        // and exposes the provenance via `resolutionTrace`. When the
+        // trace says `.global` we know nobody (request/chat/session)
+        // actually set it, so `resolved.temperature` is just the compiled
+        // builtin and we swap in the model's recommended value. When the
+        // trace says `.request/.chat/.session` the user made an explicit
+        // choice — keep it. This bug fix (revised from the first §373
+        // draft) stops silently overriding user session overrides with
+        // generation_config when the user has opinions.
         let md = self.loadedModelDefaults
-        params.maxTokens = request.maxTokens ?? md.maxTokens ?? resolved.maxTokens
-        params.temperature = Float(request.temperature ?? md.temperature ?? resolved.temperature)
-        params.topP = Float(request.topP ?? md.topP ?? resolved.topP)
-        params.topK = request.topK ?? md.topK ?? resolved.topK
+        let trace = resolved.resolutionTrace
+        func pickDouble(_ traceKey: String, _ modelDefault: Double?, _ resolvedValue: Double) -> Double {
+            if trace[traceKey] == .global, let m = modelDefault { return m }
+            return resolvedValue
+        }
+        func pickInt(_ traceKey: String, _ modelDefault: Int?, _ resolvedValue: Int) -> Int {
+            if trace[traceKey] == .global, let m = modelDefault { return m }
+            return resolvedValue
+        }
+        params.maxTokens = request.maxTokens
+            ?? pickInt("defaultMaxTokens", md.maxTokens, resolved.maxTokens)
+        params.temperature = Float(request.temperature
+            ?? pickDouble("defaultTemperature", md.temperature, resolved.temperature))
+        params.topP = Float(request.topP
+            ?? pickDouble("defaultTopP", md.topP, resolved.topP))
+        params.topK = request.topK
+            ?? pickInt("defaultTopK", md.topK, resolved.topK)
         params.minP = Float(request.minP ?? resolved.minP)
-        params.repetitionPenalty = Float(
-            request.repetitionPenalty ?? md.repetitionPenalty ?? resolved.repetitionPenalty)
+        params.repetitionPenalty = Float(request.repetitionPenalty
+            ?? pickDouble("defaultRepetitionPenalty", md.repetitionPenalty, resolved.repetitionPenalty))
         // iter-95 §173: wire OpenAI `frequency_penalty` +
         // `presence_penalty` through to the sampler. Evaluate.swift
         // has supported both since iter-25 (see `FrequencyPenalty`
