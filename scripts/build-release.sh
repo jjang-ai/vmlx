@@ -108,6 +108,40 @@ cp Sources/Cmlx/default.metallib "$APP_PATH/Contents/Resources/"
 find .build/arm64-apple-macosx/release -maxdepth 1 -name '*.bundle' \
      -type d -exec cp -R {} "$APP_PATH/Contents/Resources/" \;
 
+# §374 — compile Assets.xcassets (AppIcon + asset catalog) into the
+# bundle. xcodegen handles this inside Xcode builds, but our direct
+# SwiftPM build path skipped it — beta.9 shipped with a generic
+# default macOS icon because there was no AppIcon.icns in Resources
+# and no CFBundleIcon* key in Info.plist. `actool` generates BOTH:
+# - Resources/Assets.car (asset catalog binary)
+# - Resources/AppIcon.icns (for dock / Finder / about dialog)
+# - a partial Info.plist we merge back in
+echo "==> [3b/5] Compiling asset catalog (AppIcon)"
+PARTIAL_PLIST="$EXPORT_PATH/AppIcon-partial.plist"
+xcrun actool \
+    --compile "$APP_PATH/Contents/Resources" \
+    --platform macosx \
+    --minimum-deployment-target 14.0 \
+    --app-icon AppIcon \
+    --output-partial-info-plist "$PARTIAL_PLIST" \
+    --compress-pngs \
+    --enable-on-demand-resources NO \
+    --development-region en \
+    --errors --warnings --notices \
+    vMLX/Assets.xcassets >/dev/null
+# Merge AppIcon keys from the partial plist into Info.plist so the
+# OS picks up the icon at runtime (CFBundleIconFile +
+# CFBundleIconName).
+for key in CFBundleIconFile CFBundleIconName; do
+    val=$(/usr/libexec/PlistBuddy -c "Print :$key" "$PARTIAL_PLIST" 2>/dev/null || true)
+    if [[ -n "$val" ]]; then
+        /usr/libexec/PlistBuddy -c "Set :$key $val" \
+            "$APP_PATH/Contents/Info.plist" 2>/dev/null || \
+          /usr/libexec/PlistBuddy -c "Add :$key string $val" \
+            "$APP_PATH/Contents/Info.plist"
+    fi
+done
+
 echo "==> [4/5] Code signing with Developer ID + hardened runtime"
 codesign --force --deep --options runtime \
     --entitlements vMLX/vMLX.entitlements \
