@@ -147,12 +147,12 @@ struct DownloadsWindow: View {
                 .font(Theme.Typography.bodyHi)
                 .foregroundStyle(Theme.Colors.textHigh)
 
-            Text("From the **Image** tab, the model picker has a download button next to each Flux / Z-Image model. Click it and the download appears here automatically.")
+            Text(L10n.DownloadsUI.imageTabHint.render(appLocale))
                 .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Colors.textMid)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("From the CLI:")
+            Text(L10n.DownloadsUI.fromCLI.render(appLocale))
                 .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Colors.textMid)
                 .padding(.top, Theme.Spacing.xs)
@@ -179,7 +179,7 @@ struct DownloadsWindow: View {
             Label("Gated repos (Llama, Gemma, Mistral large)", systemImage: "lock.shield")
                 .font(Theme.Typography.bodyHi)
                 .foregroundStyle(Theme.Colors.textHigh)
-            Text("Some models require accepting a license on HuggingFace. To download them:")
+            Text(L10n.DownloadsUI.gatedLicenseHint.render(appLocale))
                 .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Colors.textMid)
             VStack(alignment: .leading, spacing: 4) {
@@ -214,7 +214,7 @@ struct DownloadsWindow: View {
             Label("Where downloads land", systemImage: "folder")
                 .font(Theme.Typography.bodyHi)
                 .foregroundStyle(Theme.Colors.textHigh)
-            Text("Files are stored in the standard HuggingFace cache. The Server tab's Model Library auto-detects them on the next scan.")
+            Text(L10n.DownloadsUI.cacheHint.render(appLocale))
                 .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Colors.textMid)
             Text("~/.cache/huggingface/hub/models--<org>--<repo>/snapshots/main/")
@@ -224,7 +224,7 @@ struct DownloadsWindow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Theme.Colors.surfaceHi)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
-            Text("Pause / cancel / retry are per-row in this window. Resumes use HTTP Range requests so paused downloads pick up from the exact byte they stopped — no re-downloading.")
+            Text(L10n.DownloadsUI.pauseResumeHint.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
                 .fixedSize(horizontal: false, vertical: true)
@@ -272,7 +272,7 @@ private struct DownloadRow: View {
                     Text("•")
                     Text(DownloadFormat.speed(job.bytesPerSecond))
                     Text("•")
-                    Text("ETA \(DownloadFormat.eta(job.etaSeconds))")
+                    Text(L10n.DownloadsUI.etaFormat.format(locale: appLocale, DownloadFormat.eta(job.etaSeconds) as NSString))
                     Spacer()
                     actionButtons
                 }
@@ -294,7 +294,7 @@ private struct DownloadRow: View {
                     HStack(spacing: 6) {
                         Image(systemName: "key.horizontal.fill")
                             .foregroundStyle(Theme.Colors.warning)
-                        Text("Gated / private repo. Paste your HuggingFace token to unlock:")
+                        Text(L10n.DownloadsUI.gatedPrompt.render(appLocale))
                             .font(Theme.Typography.caption)
                             .foregroundStyle(Theme.Colors.textMid)
                         Spacer()

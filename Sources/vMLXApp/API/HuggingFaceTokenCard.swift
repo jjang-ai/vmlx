@@ -82,7 +82,7 @@ struct HuggingFaceTokenCard: View {
     }
 
     private var descriptionRow: some View {
-        Text("Required to download gated or private repos. Stored in your macOS Keychain — vMLX never writes it to disk in plaintext.")
+        Text(L10n.HFUI.tokenHelp.render(appLocale))
             .font(Theme.Typography.caption)
             .foregroundStyle(Theme.Colors.textMid)
             .fixedSize(horizontal: false, vertical: true)

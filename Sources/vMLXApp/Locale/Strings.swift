@@ -1191,6 +1191,51 @@ public enum L10n {
         )
     }
 
+    public enum DownloadsUI {
+        public static let imageTabHint = L10nEntry(
+            en: "From the **Image** tab, the model picker has a download button next to each Flux / Z-Image model. Click it and the download appears here automatically.",
+            ja: "**画像** タブでは、モデルピッカーの各 Flux / Z-Image モデルの横にダウンロードボタンがあります。クリックするとダウンロードがここに自動的に表示されます。",
+            ko: "**이미지** 탭에서 모델 피커의 각 Flux / Z-Image 모델 옆에 다운로드 버튼이 있습니다. 클릭하면 여기에 다운로드가 자동으로 표시됩니다.",
+            zh: "在**图像**标签页中，模型选择器的每个 Flux / Z-Image 模型旁都有下载按钮。点击后下载会自动显示在此处。"
+        )
+        public static let fromCLI = L10nEntry(
+            en: "From the CLI:",
+            ja: "CLI から:",
+            ko: "CLI에서:",
+            zh: "从命令行:"
+        )
+        public static let gatedLicenseHint = L10nEntry(
+            en: "Some models require accepting a license on HuggingFace. To download them:",
+            ja: "一部のモデルは HuggingFace でライセンスの承諾が必要です。ダウンロードするには:",
+            ko: "일부 모델은 HuggingFace에서 라이선스 동의가 필요합니다. 다운로드하려면:",
+            zh: "某些模型需要在 HuggingFace 上接受许可证。下载方法:"
+        )
+        public static let cacheHint = L10nEntry(
+            en: "Files are stored in the standard HuggingFace cache. The Server tab's Model Library auto-detects them on the next scan.",
+            ja: "ファイルは標準の HuggingFace キャッシュに保存されます。サーバータブのモデルライブラリは次回スキャン時に自動的に検出します。",
+            ko: "파일은 표준 HuggingFace 캐시에 저장됩니다. 서버 탭의 모델 라이브러리가 다음 스캔 시 자동으로 감지합니다.",
+            zh: "文件存储在标准 HuggingFace 缓存中。服务器选项卡的模型库将在下次扫描时自动检测它们。"
+        )
+        public static let pauseResumeHint = L10nEntry(
+            en: "Pause / cancel / retry are per-row in this window. Resumes use HTTP Range requests so paused downloads pick up from the exact byte they stopped — no re-downloading.",
+            ja: "このウィンドウでは一時停止 / キャンセル / 再試行が行ごとに利用できます。再開には HTTP Range リクエストを使用するため、一時停止したダウンロードは停止したバイトから正確に再開されます — 再ダウンロードは不要です。",
+            ko: "이 창에서 각 행별로 일시 중지 / 취소 / 재시도가 가능합니다. 재개는 HTTP Range 요청을 사용하여 일시 중지된 다운로드를 정확히 중지된 바이트부터 다시 시작합니다 — 재다운로드 없음.",
+            zh: "此窗口中每行都可以暂停 / 取消 / 重试。恢复使用 HTTP Range 请求，暂停的下载从停止的确切字节继续 — 无需重新下载。"
+        )
+        public static let etaFormat = L10nEntry(
+            en: "ETA %@",
+            ja: "残り %@",
+            ko: "예상 %@",
+            zh: "剩余 %@"
+        )
+        public static let gatedPrompt = L10nEntry(
+            en: "Gated / private repo. Paste your HuggingFace token to unlock:",
+            ja: "ゲート付き / プライベートリポジトリ。HuggingFace トークンを貼り付けてロック解除:",
+            ko: "게이트 / 비공개 리포지토리. HuggingFace 토큰을 붙여넣어 잠금 해제:",
+            zh: "受限 / 私有仓库。粘贴您的 HuggingFace 令牌以解锁:"
+        )
+    }
+
     public enum Setup {
         public static let welcome = L10nEntry(
             en: "Welcome to vMLX",
