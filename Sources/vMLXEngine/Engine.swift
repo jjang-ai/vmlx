@@ -1427,6 +1427,35 @@ public actor Engine {
             }
         }
 
+        // §389 — model-family fallback. Some bundles (DSV4-Flash JANG_2L
+        // 2026-04-24 build) ship a minimal jang_config WITHOUT
+        // chat.sampling_defaults AND a HF generation_config with
+        // temperature=1.0/top_p=1.0 — way too random for chat. Apply
+        // documented chat-curated defaults from the jang convert script
+        // (jang-tools/jang_tools/dsv4/convert_dsv4_jangtq.py:280) when
+        // model_type=deepseek_v4 and the per-tier values are still the
+        // permissive HF source defaults. User session/chat overrides
+        // (§378 priority) still win.
+        let mainCfgURL = modelURL.appendingPathComponent("config.json")
+        if let cfgData = try? Data(contentsOf: mainCfgURL),
+           let cfgObj = try? JSONSerialization.jsonObject(with: cfgData)
+                            as? [String: Any],
+           let mt = cfgObj["model_type"] as? String,
+           mt.lowercased() == "deepseek_v4"
+        {
+            // Only nudge values away from the laxer HF defaults when the
+            // bundle didn't override via jang_config above.
+            if out.temperature == nil || out.temperature == 1.0 {
+                out.temperature = 0.6
+            }
+            if out.topP == nil || out.topP == 1.0 {
+                out.topP = 0.95
+            }
+            if out.maxTokens == nil {
+                out.maxTokens = 300
+            }
+        }
+
         return out
     }
 

@@ -577,44 +577,70 @@ public enum CapabilityDetector {
     }
 
     /// Built-in Jinja chat template for DeepSeek V4 Flash / Pro bundles
-    /// that don't ship `tokenizer_config.json::chat_template`. Covers
-    /// the three native modes (chat / thinking+high / thinking+max)
-    /// and drops earlier-turn `<think>…</think>` blocks per
-    /// `jang_config.chat.reasoning.drop_earlier_reasoning=true`.
+    /// that don't ship `tokenizer_config.json::chat_template`. Faithful
+    /// port of `encoding_dsv4.py::encode_messages` semantics:
     ///
-    /// Multi-token role markers use the fullwidth bar U+FF5C literally
-    /// so the upstream tokenizer's `special_tokens_map.json` matches
-    /// without additional escape work on our side.
+    /// - BOS token at conversation start.
+    /// - User → `<｜User｜>{content}` (no eos until next assistant).
+    /// - Assistant prior turns:
+    ///   - In thinking mode AND we have reasoning_content AND (not dropping
+    ///     or this turn is after the last user message) →
+    ///     `<｜Assistant｜><think>{rc}</think>{content}<｜end▁of▁sentence｜>`
+    ///   - Otherwise →
+    ///     `<｜Assistant｜>{content}<｜end▁of▁sentence｜>` (no `<think>`,
+    ///     no `</think>` — encoding_dsv4 NEVER emits these on prior turns
+    ///     in non-thinking mode).
+    /// - Tool result → `<tool_result>{content}</tool_result>` (DSV4 merges
+    ///   tool messages into the user turn; we emit the tag inline).
+    /// - Final prefix (`add_generation_prompt`):
+    ///   - thinking mode → `<｜Assistant｜><think>` (open thinking block)
+    ///   - chat mode → `<｜Assistant｜></think>` (close empty thinking)
+    ///   - Plus `Reasoning Effort: Absolute maximum…` system prefix when
+    ///     `reasoning_effort == 'max'` and thinking is on (only at index 0).
+    /// - `enable_thinking` is our Swift variable mirroring `thinking_mode`:
+    ///     enable_thinking=true  → thinking_mode='thinking'
+    ///     enable_thinking=false → thinking_mode='chat'
+    ///
+    /// Multi-token role markers use the fullwidth bar U+FF5C literally so
+    /// the upstream tokenizer's `special_tokens_map.json` matches without
+    /// additional escape work on our side.
     private static let deepseekV4BuiltinTemplate: String = """
-    {% if bos_token is defined and not bos_token is mapping %}{{ bos_token }}{% else %}<｜begin▁of▁sentence｜>{% endif %}
-    {%- set ns = namespace(has_sys=false) -%}
+    {%- set thinking_on = (enable_thinking is defined and enable_thinking) -%}
+    {%- set effort = (reasoning_effort if reasoning_effort is defined else None) -%}
+    {%- set ns = namespace(last_user_idx=-1) -%}
     {%- for m in messages -%}
-    {%- if m.role == 'system' -%}
-    {{- m.content -}}
-    {%- set ns.has_sys = true -%}
+    {%- if m.role == 'user' or m.role == 'developer' -%}
+    {%- set ns.last_user_idx = loop.index0 -%}
     {%- endif -%}
     {%- endfor -%}
+    <｜begin▁of▁sentence｜>
+    {%- if thinking_on and effort == 'max' -%}
+    Reasoning Effort: Absolute maximum with no shortcuts permitted.
+    You MUST be very thorough in your thinking and comprehensively decompose the problem to resolve the root cause, rigorously stress-testing your logic against all potential paths, edge cases, and adversarial scenarios.
+    Explicitly write out your entire deliberation process, documenting every intermediate step, considered alternative, and rejected hypothesis to ensure absolutely no assumption is left unchecked.
+
+    {% endif -%}
     {%- for m in messages -%}
-    {%- if m.role == 'user' -%}
-    <｜User｜>{{ m.content }}
+    {%- set idx = loop.index0 -%}
+    {%- if m.role == 'system' -%}
+    {{- m.content -}}
+    {%- elif m.role == 'user' or m.role == 'developer' -%}
+    <｜User｜>{{- m.content -}}
     {%- elif m.role == 'assistant' -%}
     <｜Assistant｜>
     {%- set rc = m.reasoning_content if m.reasoning_content is defined else '' -%}
-    {%- if enable_thinking is defined and enable_thinking and rc -%}
-    <think>{{ rc }}</think>
-    {%- else -%}
-    </think>
+    {%- if thinking_on and rc and idx > ns.last_user_idx -%}
+    <think>{{- rc -}}</think>
     {%- endif -%}
-    {{ m.content }}<｜end▁of▁sentence｜>
+    {{- m.content -}}
+    <｜end▁of▁sentence｜>
     {%- elif m.role == 'tool' -%}
-    <tool_result>{{ m.content }}</tool_result>
+    <tool_result>{{- m.content -}}</tool_result>
     {%- endif -%}
     {%- endfor -%}
     {%- if add_generation_prompt -%}
     <｜Assistant｜>
-    {%- if enable_thinking is defined and not enable_thinking -%}
-    </think>
-    {%- endif -%}
+    {%- if thinking_on -%}<think>{%- else -%}</think>{%- endif -%}
     {%- endif -%}
     """
 

@@ -101,8 +101,14 @@ public enum LLMTypeRegistry {
             // and is only consulted when the bundle actually declares
             // `routed_expert_bits` / `mxtq_seed` keys.
             "deepseek_v4": { data in
-                let config = try JSONDecoder.json5().decode(
+                var config = try JSONDecoder.json5().decode(
                     DeepseekV4JANGTQConfiguration.self, from: data)
+                // §389 — fold nested HF `quantization.{bits,group_size}`
+                // into the JANG fields. JANG_2L bundles ship
+                // `quantization: {group_size:32, bits:2}` and would
+                // otherwise inherit the default group_size=64 → garbage
+                // 2-bit decode.
+                config.resolveQuantOverrides()
                 return DeepseekV4JANGTQModel(config)
             },
             "kimi_k25": { data in
