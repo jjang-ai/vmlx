@@ -990,6 +990,93 @@ public enum L10n {
         )
     }
 
+    public enum TrayUI {
+        public static let host = L10nEntry(
+            en: "Host",
+            ja: "ホスト",
+            ko: "호스트",
+            zh: "主机"
+        )
+        public static let port = L10nEntry(
+            en: "Port",
+            ja: "ポート",
+            ko: "포트",
+            zh: "端口"
+        )
+        public static let url = L10nEntry(
+            en: "URL",
+            ja: "URL",
+            ko: "URL",
+            zh: "URL"
+        )
+        public static let copy = L10nEntry(
+            en: "Copy",
+            ja: "コピー",
+            ko: "복사",
+            zh: "复制"
+        )
+        public static let gatewayPort = L10nEntry(
+            en: "Gateway port",
+            ja: "ゲートウェイポート",
+            ko: "게이트웨이 포트",
+            zh: "网关端口"
+        )
+        public static let rateLimit = L10nEntry(
+            en: "Rate limit (req/min/IP)",
+            ja: "レート制限 (req/min/IP)",
+            ko: "속도 제한 (req/min/IP)",
+            zh: "速率限制 (req/min/IP)"
+        )
+        public static let rateLimitHelp = L10nEntry(
+            en: "0 = unlimited. Applies to every new HTTP listener. Active listeners pick up on next (re)start.",
+            ja: "0 = 無制限。新しい HTTP リスナーすべてに適用されます。アクティブなリスナーは次の（再）起動時に反映されます。",
+            ko: "0 = 무제한. 모든 새 HTTP 리스너에 적용됩니다. 활성 리스너는 다음 (재)시작 시 반영됩니다.",
+            zh: "0 = 无限制。适用于每个新的 HTTP 监听器。活动监听器在下次（重新）启动时应用。"
+        )
+        public static let maxTokens = L10nEntry(
+            en: "Max tokens",
+            ja: "最大トークン数",
+            ko: "최대 토큰",
+            zh: "最大令牌数"
+        )
+        public static let topK = L10nEntry(
+            en: "Top-K",
+            ja: "Top-K",
+            ko: "Top-K",
+            zh: "Top-K"
+        )
+        public static let kvCache = L10nEntry(
+            en: "KV cache",
+            ja: "KV キャッシュ",
+            ko: "KV 캐시",
+            zh: "KV 缓存"
+        )
+        public static let tqBits = L10nEntry(
+            en: "TQ bits",
+            ja: "TQ ビット",
+            ko: "TQ 비트",
+            zh: "TQ 位数"
+        )
+        public static let maxCacheBlocks = L10nEntry(
+            en: "Max cache blocks",
+            ja: "最大キャッシュブロック数",
+            ko: "최대 캐시 블록",
+            zh: "最大缓存块数"
+        )
+        public static let prefillStepSize = L10nEntry(
+            en: "Prefill step size",
+            ja: "プレフィルステップサイズ",
+            ko: "프리필 스텝 크기",
+            zh: "预填充步长"
+        )
+        public static let unlimited = L10nEntry(
+            en: "unlimited",
+            ja: "無制限",
+            ko: "무제한",
+            zh: "无限制"
+        )
+    }
+
     public enum Terminal {
         public static let terminal = L10nEntry(
             en: "Terminal",

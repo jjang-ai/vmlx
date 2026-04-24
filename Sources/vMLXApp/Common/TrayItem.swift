@@ -389,7 +389,7 @@ struct TrayItem: View {
 
     private var serverSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            LabeledField("Host") {
+            LabeledField(L10n.TrayUI.host.render(appLocale)) {
                 TextField(
                     "127.0.0.1",
                     text: Binding(
@@ -398,7 +398,7 @@ struct TrayItem: View {
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11))
             }
-            LabeledField("Port") {
+            LabeledField(L10n.TrayUI.port.render(appLocale)) {
                 Stepper(
                     value: Binding(
                         get: { draft.defaultPort },
@@ -416,14 +416,14 @@ struct TrayItem: View {
                 .font(.system(size: 11))
                 .toggleStyle(.switch)
             HStack {
-                Text("URL")
+                Text(L10n.TrayUI.url.render(appLocale))
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
                 Text(serverURL)
                     .font(.system(size: 10, design: .monospaced))
                     .textSelection(.enabled)
                 Spacer()
-                Button("Copy") {
+                Button(L10n.TrayUI.copy.render(appLocale)) {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(serverURL, forType: .string)
                 }
@@ -452,7 +452,7 @@ struct TrayItem: View {
                 .font(.system(size: 11))
                 .toggleStyle(.switch)
             if draft.gatewayEnabled {
-                LabeledField("Gateway port") {
+                LabeledField(L10n.TrayUI.gatewayPort.render(appLocale)) {
                     Stepper(
                         value: Binding(
                             get: { draft.gatewayPort },
@@ -486,17 +486,17 @@ struct TrayItem: View {
             // (per-session servers AND the gateway). Change takes effect
             // at the next listener start.
             Divider().padding(.vertical, 4)
-            LabeledField("Rate limit (req/min/IP)") {
+            LabeledField(L10n.TrayUI.rateLimit.render(appLocale)) {
                 Stepper(
                     value: Binding(
                         get: { draft.rateLimit },
                         set: { draft.rateLimit = max(0, $0); schedulePush() }),
                     in: 0...10000, step: 10) {
-                    Text(draft.rateLimit == 0 ? "unlimited" : "\(draft.rateLimit)")
+                    Text(draft.rateLimit == 0 ? L10n.TrayUI.unlimited.render(appLocale) : "\(draft.rateLimit)")
                         .font(.system(size: 11, design: .monospaced))
                 }
             }
-            Text("0 = unlimited. Applies to every new HTTP listener. Active listeners pick up on next (re)start.")
+            Text(L10n.TrayUI.rateLimitHelp.render(appLocale))
                 .font(.system(size: 9))
                 .foregroundStyle(.secondary)
         }
@@ -539,7 +539,7 @@ struct TrayItem: View {
                     set: { draft.defaultRepetitionPenalty = $0; schedulePush() }),
                 range: 0.5...2.0, step: 0.05,
                 format: "%.2f")
-            LabeledField("Top-K") {
+            LabeledField(L10n.TrayUI.topK.render(appLocale)) {
                 Stepper(
                     value: Binding(
                         get: { draft.defaultTopK },
@@ -549,7 +549,7 @@ struct TrayItem: View {
                         .font(.system(size: 11, design: .monospaced))
                 }
             }
-            LabeledField("Max tokens") {
+            LabeledField(L10n.TrayUI.maxTokens.render(appLocale)) {
                 Stepper(
                     value: Binding(
                         get: { draft.defaultMaxTokens },
@@ -579,7 +579,7 @@ struct TrayItem: View {
             // from the picker anyway). Removed. TurboQuant is the
             // default. Bits stepper renders only when picker selects
             // turboquant.
-            LabeledField("KV cache") {
+            LabeledField(L10n.TrayUI.kvCache.render(appLocale)) {
                 Picker("", selection: Binding(
                     get: { draft.kvCacheQuantization },
                     set: { draft.kvCacheQuantization = $0; schedulePush() })) {
@@ -592,7 +592,7 @@ struct TrayItem: View {
                 .font(.system(size: 11))
             }
             if draft.kvCacheQuantization.lowercased() == "turboquant" {
-                LabeledField("TQ bits") {
+                LabeledField(L10n.TrayUI.tqBits.render(appLocale)) {
                     Stepper(
                         value: Binding(
                             get: { draft.turboQuantBits },
@@ -647,7 +647,7 @@ struct TrayItem: View {
                     set: { draft.memoryCachePercent = $0 / 100; schedulePush() }),
                 range: 5...80, step: 1,
                 format: "%.0f%%")
-            LabeledField("Max cache blocks") {
+            LabeledField(L10n.TrayUI.maxCacheBlocks.render(appLocale)) {
                 Stepper(
                     value: Binding(
                         get: { draft.maxCacheBlocks },
@@ -657,7 +657,7 @@ struct TrayItem: View {
                         .font(.system(size: 11, design: .monospaced))
                 }
             }
-            LabeledField("Prefill step size") {
+            LabeledField(L10n.TrayUI.prefillStepSize.render(appLocale)) {
                 Stepper(
                     value: Binding(
                         get: { draft.prefillStepSize },
