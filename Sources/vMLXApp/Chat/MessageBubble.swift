@@ -144,7 +144,7 @@ struct MessageBubble: View {
             Button(L10n.Common.delete.render(appLocale), role: .destructive) { onDelete() }
             Button(L10n.Common.cancel.render(appLocale), role: .cancel) { }
         } message: {
-            Text("The message will be permanently removed from this chat. This can't be undone.")
+            Text(L10n.ChatUI.deleteMessageConfirm.render(appLocale))
         }
         .overlay {
             // Full-screen zoom overlay for inline images. Shown only while

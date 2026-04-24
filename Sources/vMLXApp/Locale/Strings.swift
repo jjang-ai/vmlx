@@ -670,6 +670,341 @@ public enum L10n {
         )
     }
 
+    // MARK: - §356/§357 deep sweep — chat, sidebar, server panels, image
+
+    public enum ChatUI {
+        public static let newChat = L10nEntry(
+            en: "New chat",
+            ja: "新規チャット",
+            ko: "새 채팅",
+            zh: "新建聊天"
+        )
+        public static let clearAllChats = L10nEntry(
+            en: "Clear all chats",
+            ja: "すべてのチャットを消去",
+            ko: "모든 채팅 지우기",
+            zh: "清除所有聊天"
+        )
+        public static let clearAllChatsConfirm = L10nEntry(
+            en: "All %lld chats and their messages will be permanently removed. This can't be undone.",
+            ja: "%lld 件のすべてのチャットとそのメッセージが完全に削除されます。元に戻せません。",
+            ko: "%lld개의 모든 채팅과 메시지가 영구적으로 제거됩니다. 취소할 수 없습니다.",
+            zh: "所有 %lld 个聊天及其消息将被永久删除。此操作无法撤销。"
+        )
+        public static let deleteMessageConfirm = L10nEntry(
+            en: "The message will be permanently removed from this chat. This can't be undone.",
+            ja: "このチャットからメッセージが完全に削除されます。元に戻せません。",
+            ko: "이 채팅에서 메시지가 영구적으로 제거됩니다. 취소할 수 없습니다.",
+            zh: "消息将从此聊天中永久删除。此操作无法撤销。"
+        )
+        public static let deleteSessionConfirm = L10nEntry(
+            en: "\"%@\" and all its messages will be permanently removed. This can't be undone.",
+            ja: "「%@」とそのすべてのメッセージが完全に削除されます。元に戻せません。",
+            ko: "\"%@\" 및 모든 메시지가 영구적으로 제거됩니다. 취소할 수 없습니다.",
+            zh: "\"%@\" 及其所有消息将被永久删除。此操作无法撤销。"
+        )
+        public static let quickTweaks = L10nEntry(
+            en: "Quick tweaks",
+            ja: "クイック調整",
+            ko: "빠른 조정",
+            zh: "快速调整"
+        )
+        public static let openFullSettings = L10nEntry(
+            en: "Open full settings for more",
+            ja: "詳細設定を開く",
+            ko: "전체 설정 열기",
+            zh: "打开完整设置以查看更多"
+        )
+        public static let shellToolHelp = L10nEntry(
+            en: "Shell maps to BashTool via ChatViewModel → Stream. Enable MCP in the API panel for additional tool providers.",
+            ja: "Shell は ChatViewModel → Stream 経由で BashTool にマップされます。追加のツールプロバイダーには API パネルで MCP を有効化してください。",
+            ko: "Shell은 ChatViewModel → Stream을 통해 BashTool에 매핑됩니다. 추가 도구 제공자는 API 패널에서 MCP를 활성화하십시오.",
+            zh: "Shell 通过 ChatViewModel → Stream 映射到 BashTool。在 API 面板中启用 MCP 以获取其他工具提供者。"
+        )
+        public static let builtinToolsComingSoon = L10nEntry(
+            en: "Coming soon: Web Search, Fetch URL, File Tools, Git, Utility Tools, Brave Search — not yet wired through the stream. Use MCP in the API panel for additional tool providers today.",
+            ja: "近日公開: Web Search、Fetch URL、File Tools、Git、Utility Tools、Brave Search — まだストリーム経由で接続されていません。現時点で追加のツールプロバイダーには API パネルの MCP をご利用ください。",
+            ko: "곧 출시: 웹 검색, URL 가져오기, 파일 도구, Git, 유틸리티 도구, Brave 검색 — 아직 스트림을 통해 연결되지 않았습니다. 현재는 추가 도구 제공자로 API 패널의 MCP를 사용하십시오.",
+            zh: "即将推出：网页搜索、获取 URL、文件工具、Git、实用工具、Brave 搜索 — 尚未通过流连接。目前请使用 API 面板中的 MCP 以获取其他工具提供者。"
+        )
+        public static let noModelsMatch = L10nEntry(
+            en: "No models match `%@`",
+            ja: "「%@」に一致するモデルはありません",
+            ko: "`%@`와 일치하는 모델이 없습니다",
+            zh: "没有匹配 `%@` 的模型"
+        )
+        public static let output = L10nEntry(
+            en: "Output",
+            ja: "出力",
+            ko: "출력",
+            zh: "输出"
+        )
+    }
+
+    public enum ServerUI {
+        public static let performance = L10nEntry(
+            en: "PERFORMANCE",
+            ja: "パフォーマンス",
+            ko: "성능",
+            zh: "性能"
+        )
+        public static let cache = L10nEntry(
+            en: "CACHE",
+            ja: "キャッシュ",
+            ko: "캐시",
+            zh: "缓存"
+        )
+        public static let logs = L10nEntry(
+            en: "LOGS",
+            ja: "ログ",
+            ko: "로그",
+            zh: "日志"
+        )
+        public static let benchmark = L10nEntry(
+            en: "BENCHMARK",
+            ja: "ベンチマーク",
+            ko: "벤치마크",
+            zh: "基准测试"
+        )
+        public static let recentLatency = L10nEntry(
+            en: "Recent request latency (ms)",
+            ja: "最近のリクエストレイテンシ (ms)",
+            ko: "최근 요청 지연 시간 (ms)",
+            zh: "最近请求延迟 (ms)"
+        )
+        public static let engineStoppedNoMetrics = L10nEntry(
+            en: "Engine stopped — no metrics",
+            ja: "エンジン停止中 — メトリクスなし",
+            ko: "엔진 중지됨 — 지표 없음",
+            zh: "引擎已停止 — 无指标"
+        )
+        public static let noCacheActivity = L10nEntry(
+            en: "no cache activity yet",
+            ja: "キャッシュアクティビティなし",
+            ko: "아직 캐시 활동 없음",
+            zh: "暂无缓存活动"
+        )
+        public static let decoded5sAvg = L10nEntry(
+            en: "decoded (5s avg)",
+            ja: "デコード済み (5秒平均)",
+            ko: "디코드됨 (5초 평균)",
+            zh: "已解码（5秒平均）"
+        )
+        public static let noRequestsYet = L10nEntry(
+            en: "No requests yet",
+            ja: "リクエストなし",
+            ko: "아직 요청 없음",
+            zh: "尚无请求"
+        )
+        public static let noModelLoadedSidebar = L10nEntry(
+            en: "No model loaded — load one in the sidebar to see cache stats.",
+            ja: "モデル未ロード — サイドバーでロードするとキャッシュ統計が表示されます。",
+            ko: "로드된 모델 없음 — 사이드바에서 하나를 로드하면 캐시 통계가 표시됩니다.",
+            zh: "未加载模型 — 在侧边栏加载一个以查看缓存统计信息。"
+        )
+        public static let modelArchitecture = L10nEntry(
+            en: "Model architecture",
+            ja: "モデルアーキテクチャ",
+            ko: "모델 아키텍처",
+            zh: "模型架构"
+        )
+        public static let loadModelForCacheBreakdown = L10nEntry(
+            en: "Load a model to see per-layer cache breakdown.",
+            ja: "モデルをロードすると、レイヤーごとのキャッシュ内訳が表示されます。",
+            ko: "모델을 로드하면 레이어별 캐시 분석이 표시됩니다.",
+            zh: "加载模型以查看每层缓存细分。"
+        )
+        public static let hybridInactive = L10nEntry(
+            en: "Hybrid mode inactive — SSM companion not used for this model.",
+            ja: "ハイブリッドモード無効 — このモデルでは SSM コンパニオンは使用されません。",
+            ko: "하이브리드 모드 비활성 — 이 모델에는 SSM 컴패니언이 사용되지 않습니다.",
+            zh: "混合模式未启用 — 此模型未使用 SSM 配套。"
+        )
+        public static let dropCacheHelp = L10nEntry(
+            en: "This drops every prefix / paged / SSM / disk cache entry for the loaded model. The next request will re-prefill from scratch.",
+            ja: "ロード済みモデルのすべてのプレフィックス/ページ型/SSM/ディスクキャッシュエントリを破棄します。次のリクエストは最初から再プレフィルされます。",
+            ko: "로드된 모델의 모든 프리픽스 / 페이지 / SSM / 디스크 캐시 항목을 삭제합니다. 다음 요청은 처음부터 다시 프리필됩니다.",
+            zh: "这将删除已加载模型的每个前缀 / 分页 / SSM / 磁盘缓存条目。下一个请求将从头重新预填充。"
+        )
+        public static let disabled = L10nEntry(
+            en: "Disabled",
+            ja: "無効",
+            ko: "비활성화",
+            zh: "已禁用"
+        )
+        public static let engineError = L10nEntry(
+            en: "Engine error",
+            ja: "エンジンエラー",
+            ko: "엔진 오류",
+            zh: "引擎错误"
+        )
+        public static let remote = L10nEntry(
+            en: "Remote",
+            ja: "リモート",
+            ko: "원격",
+            zh: "远程"
+        )
+        public static let starting = L10nEntry(
+            en: "Starting…",
+            ja: "起動中…",
+            ko: "시작 중…",
+            zh: "启动中…"
+        )
+        public static let lastRunFormat = L10nEntry(
+            en: "Last run — %@",
+            ja: "最終実行 — %@",
+            ko: "마지막 실행 — %@",
+            zh: "上次运行 — %@"
+        )
+        public static let historyLast20 = L10nEntry(
+            en: "HISTORY (last 20)",
+            ja: "履歴 (最新 20 件)",
+            ko: "기록 (최근 20개)",
+            zh: "历史记录（最近 20 次）"
+        )
+        public static let noBenchmarkRuns = L10nEntry(
+            en: "No benchmark runs yet.",
+            ja: "ベンチマーク実行なし。",
+            ko: "아직 벤치마크 실행 없음.",
+            zh: "尚无基准测试运行。"
+        )
+        public static let pidFormat = L10nEntry(
+            en: "PID %lld",
+            ja: "PID %lld",
+            ko: "PID %lld",
+            zh: "PID %lld"
+        )
+    }
+
+    public enum ModelDirs {
+        public static let modelDirectories = L10nEntry(
+            en: "Model directories",
+            ja: "モデルディレクトリ",
+            ko: "모델 디렉토리",
+            zh: "模型目录"
+        )
+        public static let folderScanHelp = L10nEntry(
+            en: "Folders the library scans for downloaded models.",
+            ja: "ダウンロード済みモデルをライブラリがスキャンするフォルダ。",
+            ko: "라이브러리가 다운로드된 모델을 스캔하는 폴더.",
+            zh: "库扫描已下载模型的文件夹。"
+        )
+        public static let rescan = L10nEntry(
+            en: "Rescan",
+            ja: "再スキャン",
+            ko: "다시 스캔",
+            zh: "重新扫描"
+        )
+        public static let customDirectories = L10nEntry(
+            en: "CUSTOM DIRECTORIES",
+            ja: "カスタムディレクトリ",
+            ko: "사용자 지정 디렉토리",
+            zh: "自定义目录"
+        )
+        public static let noCustomDirs = L10nEntry(
+            en: "No custom directories. Add one to scan an external drive or a workspace folder full of safetensors.",
+            ja: "カスタムディレクトリなし。外部ドライブまたは safetensors を含むワークスペースフォルダをスキャンするには追加してください。",
+            ko: "사용자 지정 디렉토리가 없습니다. 외부 드라이브 또는 safetensors가 있는 작업 폴더를 스캔하려면 추가하십시오.",
+            zh: "没有自定义目录。添加一个以扫描外部驱动器或包含 safetensors 的工作区文件夹。"
+        )
+        public static let addDirectory = L10nEntry(
+            en: "Add directory…",
+            ja: "ディレクトリを追加…",
+            ko: "디렉토리 추가…",
+            zh: "添加目录…"
+        )
+        public static let lastScanFormat = L10nEntry(
+            en: "Last scan: %lld models",
+            ja: "最終スキャン: %lld 個のモデル",
+            ko: "마지막 스캔: %lld개 모델",
+            zh: "上次扫描：%lld 个模型"
+        )
+        public static let downloadByHF = L10nEntry(
+            en: "Download by HuggingFace repo",
+            ja: "HuggingFace リポジトリからダウンロード",
+            ko: "HuggingFace 리포지토리로 다운로드",
+            zh: "通过 HuggingFace 仓库下载"
+        )
+        public static let hfFormatHint = L10nEntry(
+            en: "Enter `{org}/{repo}` format. Gated repos require a HuggingFace token in the API tab.",
+            ja: "`{org}/{repo}` 形式で入力してください。ゲート付きリポジトリには API タブで HuggingFace トークンが必要です。",
+            ko: "`{org}/{repo}` 형식으로 입력하십시오. 게이트된 리포지토리는 API 탭에서 HuggingFace 토큰이 필요합니다.",
+            zh: "输入 `{org}/{repo}` 格式。受限仓库需要在 API 选项卡中配置 HuggingFace 令牌。"
+        )
+        public static let hfCacheDefault = L10nEntry(
+            en: "HuggingFace cache (default — cannot be removed)",
+            ja: "HuggingFace キャッシュ (デフォルト — 削除不可)",
+            ko: "HuggingFace 캐시 (기본값 — 제거 불가)",
+            zh: "HuggingFace 缓存（默认 — 无法删除）"
+        )
+        public static let missingOnDisk = L10nEntry(
+            en: "Missing on disk — folder may have been deleted or the drive unmounted",
+            ja: "ディスク上に存在しません — フォルダが削除されたかドライブがマウント解除された可能性があります",
+            ko: "디스크에 없음 — 폴더가 삭제되었거나 드라이브가 마운트 해제되었을 수 있습니다",
+            zh: "磁盘上不存在 — 文件夹可能已被删除或驱动器未挂载"
+        )
+        public static let stopScanningHelp = L10nEntry(
+            en: "vMLX will stop scanning this folder for models. The folder and any files inside it stay on disk untouched.",
+            ja: "vMLX はこのフォルダのモデルスキャンを停止します。フォルダとその中のファイルはディスク上にそのまま残ります。",
+            ko: "vMLX는 이 폴더의 모델 스캔을 중지합니다. 폴더와 내부 파일은 디스크에 그대로 남습니다.",
+            zh: "vMLX 将停止扫描此文件夹中的模型。文件夹及其内部的所有文件保留在磁盘上不变。"
+        )
+    }
+
+    public enum ImageUI {
+        public static let history = L10nEntry(
+            en: "HISTORY",
+            ja: "履歴",
+            ko: "기록",
+            zh: "历史记录"
+        )
+        public static let noHistoryYet = L10nEntry(
+            en: "No history yet",
+            ja: "履歴なし",
+            ko: "아직 기록 없음",
+            zh: "尚无历史记录"
+        )
+        public static let paintMask = L10nEntry(
+            en: "Paint mask",
+            ja: "マスクを描画",
+            ko: "마스크 그리기",
+            zh: "绘制蒙版"
+        )
+        public static let maskLegend = L10nEntry(
+            en: "White = edit, transparent = keep",
+            ja: "白 = 編集、透明 = 保持",
+            ko: "흰색 = 편집, 투명 = 유지",
+            zh: "白色 = 编辑，透明 = 保留"
+        )
+        public static let brushFormat = L10nEntry(
+            en: "Brush %lld",
+            ja: "ブラシ %lld",
+            ko: "브러시 %lld",
+            zh: "画笔 %lld"
+        )
+        public static let opacityFormat = L10nEntry(
+            en: "Opacity %@",
+            ja: "不透明度 %@",
+            ko: "불투명도 %@",
+            zh: "不透明度 %@"
+        )
+    }
+
+    public enum Terminal {
+        public static let terminal = L10nEntry(
+            en: "Terminal",
+            ja: "ターミナル",
+            ko: "터미널",
+            zh: "终端"
+        )
+        public static let terminalModeHelp = L10nEntry(
+            en: "Terminal mode gives the model full shell access",
+            ja: "ターミナルモードはモデルにフルシェルアクセスを許可します",
+            ko: "터미널 모드는 모델에 완전한 셸 액세스를 제공합니다",
+            zh: "终端模式为模型提供完整的 Shell 访问权限"
+        )
+    }
+
     // MARK: - Server / SessionConfigForm (§356 — extend i18n coverage)
 
     public enum SessionConfig {

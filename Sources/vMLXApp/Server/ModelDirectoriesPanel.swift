@@ -17,6 +17,7 @@ import AppKit
 /// without restarting the app.
 struct ModelDirectoriesPanel: View {
     @Environment(AppState.self) private var app
+    @Environment(\.appLocale) private var appLocale: AppLocale
 
     @State private var userDirs: [URL] = []
     @State private var isScanning = false
@@ -59,10 +60,10 @@ struct ModelDirectoriesPanel: View {
     private var header: some View {
         HStack(alignment: .top, spacing: Theme.Spacing.md) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Model directories")
+                Text(L10n.ModelDirs.modelDirectories.render(appLocale))
                     .font(Theme.Typography.title)
                     .foregroundStyle(Theme.Colors.textHigh)
-                Text("Folders the library scans for downloaded models.")
+                Text(L10n.ModelDirs.folderScanHelp.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textMid)
             }
@@ -78,7 +79,7 @@ struct ModelDirectoriesPanel: View {
                     } else {
                         Image(systemName: "arrow.clockwise")
                     }
-                    Text("Rescan")
+                    Text(L10n.ModelDirs.rescan.render(appLocale))
                         .font(Theme.Typography.body)
                 }
                 .foregroundStyle(Theme.Colors.textHigh)
@@ -110,7 +111,7 @@ struct ModelDirectoriesPanel: View {
     private var customDirsList: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             HStack {
-                Text("CUSTOM DIRECTORIES")
+                Text(L10n.ModelDirs.customDirectories.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
                 Spacer()
@@ -119,7 +120,7 @@ struct ModelDirectoriesPanel: View {
                     .foregroundStyle(Theme.Colors.textLow)
             }
             if userDirs.isEmpty {
-                Text("No custom directories. Add one to scan an external drive or a workspace folder full of safetensors.")
+                Text(L10n.ModelDirs.noCustomDirs.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textMid)
                     .padding(.vertical, Theme.Spacing.sm)
@@ -142,7 +143,7 @@ struct ModelDirectoriesPanel: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "plus")
-                    Text("Add directory…")
+                    Text(L10n.ModelDirs.addDirectory.render(appLocale))
                 }
                 .foregroundStyle(.white)
                 .font(Theme.Typography.bodyHi)
@@ -171,7 +172,7 @@ struct ModelDirectoriesPanel: View {
     /// automatically via the default DownloadManager binding.
     private var pullRepoRow: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            Text("Download by HuggingFace repo")
+            Text(L10n.ModelDirs.downloadByHF.render(appLocale))
                 .font(Theme.Typography.bodyHi)
                 .foregroundStyle(Theme.Colors.textHigh)
             HStack(spacing: Theme.Spacing.sm) {
@@ -213,7 +214,7 @@ struct ModelDirectoriesPanel: View {
                           || !pullRepo.contains("/"))
                 .help("Queue a HuggingFace repo download. Progress opens in the Downloads window.")
             }
-            Text("Enter `{org}/{repo}` format. Gated repos require a HuggingFace token in the API tab.")
+            Text(L10n.ModelDirs.hfFormatHint.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
         }

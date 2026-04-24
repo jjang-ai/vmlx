@@ -99,11 +99,13 @@ struct InlineToolCallCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    @Environment(\.appLocale) private var appLocale: AppLocale
+
     @ViewBuilder
     private var expandedBody: some View {
         if let out = toolCall.output, !out.isEmpty {
             Divider().background(Theme.Colors.border)
-            Text("Output")
+            Text(L10n.ChatUI.output.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
             Text(out)

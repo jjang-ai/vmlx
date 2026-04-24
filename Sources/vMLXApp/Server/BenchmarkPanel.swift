@@ -15,6 +15,7 @@ import vMLXTheme
 /// label + final numbers + last-20 history — are live.
 struct BenchmarkPanel: View {
     @Environment(AppState.self) private var app
+    @Environment(\.appLocale) private var appLocale: AppLocale
     let sessionId: UUID
     let modelId: String
 
@@ -28,7 +29,7 @@ struct BenchmarkPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            Text("BENCHMARK")
+            Text(L10n.ServerUI.benchmark.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
 
@@ -114,7 +115,7 @@ struct BenchmarkPanel: View {
     @ViewBuilder
     private func reportBlock(_ r: Engine.BenchReport) -> some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            Text("Last run — \(r.suite.displayName)")
+            Text(L10n.ServerUI.lastRunFormat.format(locale: appLocale, r.suite.displayName as NSString))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
             HStack(spacing: Theme.Spacing.lg) {
@@ -183,11 +184,11 @@ struct BenchmarkPanel: View {
 
     private var historyList: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            Text("HISTORY (last 20)")
+            Text(L10n.ServerUI.historyLast20.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
             if history.isEmpty {
-                Text("No benchmark runs yet.")
+                Text(L10n.ServerUI.noBenchmarkRuns.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
             } else {

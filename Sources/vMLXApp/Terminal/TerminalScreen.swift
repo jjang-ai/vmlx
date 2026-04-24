@@ -11,6 +11,7 @@ import vMLXTheme
 /// First-launch warning is gated on `UserDefaults.terminalWarningAcknowledged`.
 struct TerminalScreen: View {
     @Environment(AppState.self) private var state
+    @Environment(\.appLocale) private var appLocale: AppLocale
     @State private var input: String = ""
     @State private var transcript: [TerminalTurn] = []
     @State private var streaming: Bool = false
@@ -110,7 +111,7 @@ struct TerminalScreen: View {
         HStack(spacing: Theme.Spacing.md) {
             Image(systemName: "terminal")
                 .foregroundStyle(Theme.Colors.textHigh)
-            Text("Terminal")
+            Text(L10n.Terminal.terminal.render(appLocale))
                 .font(Theme.Typography.title)
                 .foregroundStyle(Theme.Colors.textHigh)
             Spacer()
@@ -169,7 +170,7 @@ struct TerminalScreen: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(Theme.Colors.warning)
                     .font(.system(size: 28))
-                Text("Terminal mode gives the model full shell access")
+                Text(L10n.Terminal.terminalModeHelp.render(appLocale))
                     .font(Theme.Typography.title)
                     .foregroundStyle(Theme.Colors.textHigh)
             }

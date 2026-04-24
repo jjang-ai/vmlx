@@ -13,6 +13,7 @@ import vMLXTheme
 /// of flashing zeros.
 struct PerformancePanel: View {
     @Environment(AppState.self) private var app
+    @Environment(\.appLocale) private var appLocale: AppLocale
 
     @State private var snapshot: MetricsCollector.Snapshot?
     @State private var decodeHistory: [Double] = []
@@ -27,7 +28,7 @@ struct PerformancePanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            Text("PERFORMANCE")
+            Text(L10n.ServerUI.performance.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
 
@@ -97,7 +98,7 @@ struct PerformancePanel: View {
                 color: Theme.Colors.accentHi
             )
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                Text("Recent request latency (ms)")
+                Text(L10n.ServerUI.recentLatency.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
                 latencyBars
@@ -131,7 +132,7 @@ struct PerformancePanel: View {
             Image(systemName: "gauge.with.dots.needle.0percent")
                 .font(.system(size: 28, weight: .regular))
                 .foregroundStyle(Theme.Colors.textLow)
-            Text("Engine stopped — no metrics")
+            Text(L10n.ServerUI.engineStoppedNoMetrics.render(appLocale))
                 .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Colors.textLow)
         }
@@ -180,7 +181,7 @@ struct PerformancePanel: View {
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
             } else {
-                Text("no cache activity yet")
+                Text(L10n.ServerUI.noCacheActivity.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
             }
@@ -234,7 +235,7 @@ struct PerformancePanel: View {
             valueFont: Theme.Typography.title,
             numeric: true
         ) {
-            Text("decoded (5s avg)")
+            Text(L10n.ServerUI.decoded5sAvg.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
         }
@@ -267,7 +268,7 @@ struct PerformancePanel: View {
             let barWidth = max(2, (geo.size.width / CGFloat(n)) - 2)
             HStack(alignment: .bottom, spacing: 2) {
                 if latencies.isEmpty {
-                    Text("No requests yet")
+                    Text(L10n.ServerUI.noRequestsYet.render(appLocale))
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.textLow)
                         .frame(maxWidth: .infinity, alignment: .leading)
