@@ -503,36 +503,135 @@ struct Serve: AsyncParsableCommand {
 /// Thin REPL. Reads a line from stdin, streams the response, repeats.
 /// No chat history on disk — just in-memory multi-turn for one session.
 struct Chat: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Interactive chat (REPL)")
+    static let configuration = CommandConfiguration(
+        abstract: "Interactive chat (REPL) with optional agentic shell tools",
+        discussion: """
+        vmlxctl chat loads a model and opens a streaming REPL. By default
+        the model gets unrestricted shell access via the `bash` tool:
+        the model can run commands, read/write files, spawn processes,
+        hit the network, and build multi-step plans the same way Claude
+        Code or Codex do.
+
+        The agentic loop is wired in-process via the engine's
+        ToolDispatcher — when the model emits a tool_call chunk, we
+        execute it, feed stdout/stderr/exitcode back into the
+        conversation as a `tool` message, then re-prompt. Iterates up to
+        --max-tool-calls per user turn.
+
+        --no-tools turns this off and gives you a plain REPL. --reasoning
+        low/medium/high steers the thinking budget. --system sets a
+        persistent instruction.
+        """
+    )
 
     @Option(name: .shortAndLong) var model: String
     @Option(name: .long) var system: String?
+    @Option(name: .long, help: "Disable shell tool (plain chat, no agentic loop)")
+    var noTools: Bool = false
+    @Option(name: .long, help: "Working directory the agent runs bash from")
+    var cwd: String?
+    @Option(name: .long, help: "Reasoning effort: none|low|medium|high")
+    var reasoning: String?
+    @Option(name: .long, help: "Temperature override (default: model's generation_config.json)")
+    var temperature: Double?
+    @Option(name: .long, help: "Max iterations per user turn before giving up (default 16)")
+    var maxToolCalls: Int = 16
 
     func run() async throws {
         let engine = Engine()
-        print("Loading \(model)…")
-        let loadStream = await engine.load(.init(modelPath: URL(fileURLWithPath: model)))
+        let modelURL = URL(fileURLWithPath: model).resolvingSymlinksInPath()
+        FileHandle.standardError.write(Data("Loading \(modelURL.lastPathComponent)…\n".utf8))
+        let loadStream = await engine.load(.init(modelPath: modelURL))
         for try await event in loadStream {
             if case .failed(let reason) = event {
                 FileHandle.standardError.write(Data("[load] failed: \(reason)\n".utf8))
                 throw ExitCode.failure
             }
         }
-        print("Ready. Type a message, or /quit to exit.")
+
+        // §367 — generation_config.json fallback. Qwen/Gemma/Nemotron
+        // each ship different recommended temp/top_p. If the user didn't
+        // pass --temperature explicitly, read the model's own defaults
+        // and surface them to the engine via the ChatRequest field.
+        let (modelTemp, modelTopP, modelTopK) = readGenerationConfig(modelURL)
+        let effectiveTemp = temperature ?? modelTemp
+
+        // Resolve cwd. `--cwd foo/bar` → absolute path starting from
+        // the user's actual pwd, not the engine's. Default is the
+        // current working directory at invocation time.
+        let agentCwd: URL = {
+            if let c = cwd {
+                return URL(fileURLWithPath: c, isDirectory: true,
+                           relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
+            }
+            return URL(fileURLWithPath: FileManager.default.currentDirectoryPath,
+                       isDirectory: true)
+        }()
+
+        let toolsOn = !noTools
+        if toolsOn {
+            FileHandle.standardError.write(Data(
+                "Ready. Shell tool ENABLED — the model can run arbitrary commands in \(agentCwd.path)\n".utf8))
+            FileHandle.standardError.write(Data(
+                "Type a message, /quit to exit. --no-tools to disable.\n".utf8))
+        } else {
+            FileHandle.standardError.write(Data(
+                "Ready. Plain chat (no tools). Type a message, /quit to exit.\n".utf8))
+        }
+        if let t = modelTemp, temperature == nil {
+            var msg = "Defaults from generation_config.json: temp=\(t)"
+            if let p = modelTopP { msg += ", top_p=\(p)" }
+            if let k = modelTopK { msg += ", top_k=\(k)" }
+            msg += "\n"
+            FileHandle.standardError.write(Data(msg.utf8))
+        }
 
         var messages: [ChatRequest.Message] = []
         if let sys = system {
             messages.append(ChatRequest.Message(role: "system", content: .string(sys)))
+        } else if toolsOn {
+            // Default system prompt for the agentic mode. Matches the
+            // tone of the Claude Code / Codex CLI prompts: the model
+            // knows it has shell access and should prefer running
+            // commands over guessing.
+            messages.append(ChatRequest.Message(
+                role: "system",
+                content: .string("""
+                You are a helpful assistant running in a shell-enabled terminal. You have a `bash` tool that runs commands via /bin/zsh -c in the working directory \(agentCwd.path). Prefer running commands to learn about files, systems, and state over guessing. When the user asks for something actionable, do it; don't just describe steps. For long-running tasks, break into small steps, run each, and feed results back. Avoid destructive commands (rm -rf, dd, etc.) unless the user explicitly asks.
+                """)
+            ))
         }
+
+        let tools: [ChatRequest.Tool]? = toolsOn ? [BashTool.openAISchema] : nil
 
         while let line = readLine() {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty { continue }
             if trimmed == "/quit" || trimmed == "/exit" { break }
+            if trimmed == "/reset" {
+                let keepSystem = messages.first?.role == "system" ? [messages.first!] : []
+                messages = keepSystem
+                print("[reset]")
+                continue
+            }
 
             messages.append(ChatRequest.Message(role: "user", content: .string(trimmed)))
-            let req = ChatRequest(model: model, messages: messages, stream: true)
+            let req = ChatRequest(
+                model: model,
+                messages: messages,
+                stream: true,
+                temperature: effectiveTemp,
+                topP: modelTopP,
+                reasoningEffort: reasoning,
+                tools: tools,
+                toolChoice: toolsOn ? .auto : nil
+            )
+            // Stream.swift handles in-process tool dispatch — tool_call
+            // and tool_status chunks come back naturally. We just print
+            // content deltas, echo tool calls to stderr, and collect the
+            // final assistant message.
             var assistant = ""
+            var iterations = 0
             let stream = await engine.stream(request: req)
             do {
                 for try await chunk in stream {
@@ -540,6 +639,26 @@ struct Chat: AsyncParsableCommand {
                         print(delta, terminator: "")
                         fflush(stdout)
                         assistant += delta
+                    }
+                    if let calls = chunk.toolCalls, !calls.isEmpty {
+                        iterations += calls.count
+                        for c in calls {
+                            let name = c.function.name
+                            let args = c.function.arguments
+                            FileHandle.standardError.write(Data(
+                                "\n[tool] \(name) \(args)\n".utf8))
+                        }
+                        if iterations >= maxToolCalls {
+                            FileHandle.standardError.write(Data(
+                                "[tool] max-tool-calls (\(maxToolCalls)) reached — halting agentic loop\n".utf8))
+                            break
+                        }
+                    }
+                    if let status = chunk.toolStatus {
+                        var line = "[tool \(status.phase.rawValue)] \(status.name)"
+                        if let m = status.message { line += ": \(m)" }
+                        line += "\n"
+                        FileHandle.standardError.write(Data(line.utf8))
                     }
                 }
                 print("")
@@ -550,6 +669,24 @@ struct Chat: AsyncParsableCommand {
                 print("\n[error] \(error)")
             }
         }
+    }
+
+    /// §367 — read the model's generation_config.json if present.
+    /// Returns (temperature, top_p, top_k) or nils per field. Swallow
+    /// errors silently — falling back to engine defaults is the right
+    /// thing to do if the file is absent or malformed.
+    private func readGenerationConfig(
+        _ modelURL: URL
+    ) -> (Double?, Double?, Int?) {
+        let cfgURL = modelURL.appendingPathComponent("generation_config.json")
+        guard let data = try? Data(contentsOf: cfgURL),
+              let obj = try? JSONSerialization.jsonObject(with: data)
+                        as? [String: Any]
+        else { return (nil, nil, nil) }
+        let temp = (obj["temperature"] as? NSNumber)?.doubleValue
+        let topP = (obj["top_p"] as? NSNumber)?.doubleValue
+        let topK = (obj["top_k"] as? NSNumber)?.intValue
+        return (temp, topP, topK)
     }
 }
 
