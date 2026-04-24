@@ -119,6 +119,17 @@ what's **in flight**, and what's **deferred** with honest reason.
       "Missing on disk" badge for models that were under the removed
       dir.
 
+## Shipped §363 (architectural deferred list)
+
+- [x] **Gateway image route proxying (A3).** `/v1/images/generations`
+      and `/v1/images/edits (JSON+base64)` now proxy to the defaultEngine
+      on the gateway port instead of returning 404. Image gen is a
+      resident singleton (FluxBackend) on the default Engine so "pinning
+      to default" is actually correct here. Multipart `/v1/images/edits`
+      still requires per-session port — documented in `_gateway/info`.
+      OpenAI SDK clients configured with `base_url = gateway` now Just
+      Work for image generation.
+
 ## Deferred — needs live model + time
 
 - [ ] **Per-model Flux/SDXL `generate()` port.** Flux1 Schnell/Dev,
