@@ -28,8 +28,15 @@ struct ImageModelPicker: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            section(title: "Generate", models: ImageCatalog.generate)
-            section(title: "Edit",     models: ImageCatalog.edit)
+            if !ImageCatalog.generate.isEmpty {
+                section(title: "Generate", models: ImageCatalog.generate)
+            }
+            // §384 — skip the Edit header when no edit models are ported
+            // yet. Stops rendering an empty "EDIT" label with no rows
+            // underneath (leftover placeholder look).
+            if !ImageCatalog.edit.isEmpty {
+                section(title: "Edit", models: ImageCatalog.edit)
+            }
         }
         .padding(Theme.Spacing.md)
         .background(
@@ -209,25 +216,14 @@ struct ImageCatalogModel: Identifiable, Hashable {
 }
 
 enum ImageCatalog {
+    // §384 — catalog only advertises models that actually run end-to-end.
+    // Scaffolded Flux Schnell / Dev / Klein / FIBO and Qwen-Image-Edit
+    // were hidden 2026-04-23 after Eric's "no BS placeholders" call —
+    // they'll land back here when the DiT + dual-encoder forward
+    // passes are ported. Today the only image generator is Z-Image Turbo
+    // (vMLXFluxModels/ZImage, single-encoder single-guidance, verified
+    // end-to-end).
     static let generate: [ImageCatalogModel] = [
-        ImageCatalogModel(
-            id: "flux-schnell",
-            displayName: "Flux Schnell",
-            repo: "black-forest-labs/FLUX.1-schnell",
-            kind: .generate,
-            libraryMatchFragment: "flux.1-schnell",
-            approxSizeBytes: 23_800_000_000,
-            ready: false
-        ),
-        ImageCatalogModel(
-            id: "flux-dev",
-            displayName: "Flux Dev",
-            repo: "black-forest-labs/FLUX.1-dev",
-            kind: .generate,
-            libraryMatchFragment: "flux.1-dev",
-            approxSizeBytes: 23_800_000_000,
-            ready: false
-        ),
         ImageCatalogModel(
             id: "z-image-turbo",
             displayName: "Z-Image Turbo",
@@ -238,16 +234,8 @@ enum ImageCatalog {
             ready: true
         ),
     ]
-    static let edit: [ImageCatalogModel] = [
-        ImageCatalogModel(
-            id: "qwen-image-edit",
-            displayName: "Qwen Image Edit",
-            repo: "mlx-community/Qwen-Image-Edit",
-            kind: .edit,
-            libraryMatchFragment: "qwen-image-edit",
-            approxSizeBytes: 54_000_000_000,
-            ready: false
-        ),
-    ]
+    // No image-edit models ship working yet. Qwen-Image-Edit lands back
+    // here once vMLXFluxModels/QwenImage has a real generate() body.
+    static let edit: [ImageCatalogModel] = []
     static let all: [ImageCatalogModel] = generate + edit
 }

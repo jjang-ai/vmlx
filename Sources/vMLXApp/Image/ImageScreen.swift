@@ -279,19 +279,12 @@ struct ImageScreen: View {
                     // raw stack trace.
                     let text: String
                     if raw.contains("FluxBackend") && raw.contains("not implemented") {
-                        // §358 — honest scaffold status. Previous message
-                        // pointed users at a README that doesn't exist.
-                        // Name the ONE working model and admit the rest
-                        // aren't ported yet.
-                        text = """
-                        Image generation for this model isn't ported yet. \
-                        The only runnable image model on vMLX Swift today \
-                        is Z-Image Turbo — pick it in the Model picker and \
-                        try again. Flux Schnell / Flux Dev / other pipelines \
-                        are scaffolded (scheduler, VAE, DiT, loaders in \
-                        place) but their sampler loops are not wired. \
-                        Track ongoing porting at docs/audit/OPEN-FIX-LIST.md.
-                        """
+                        // §384 — picker now only advertises Z-Image Turbo,
+                        // so this branch only fires when someone hits the
+                        // /v1/images/generations API with a scaffolded
+                        // model name. Short message — no apology, no
+                        // future roadmap, just tell them what works.
+                        text = "Only Z-Image Turbo is available for image generation today. Pick it in the Model picker or set `\"model\": \"z-image-turbo\"` in your API request."
                     } else {
                         text = raw
                     }

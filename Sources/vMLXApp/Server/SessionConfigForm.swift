@@ -687,35 +687,13 @@ struct SessionConfigForm: View {
                            range: 32...4096, step: 32)
         }
 
-        // Distributed — host / port hidden when off. Audit finding #2.
-        // iter-53: distributed is UI-only today. No engine consumer
-        // reads `settings.distributed` — the GlobalSettings field has
-        // a `// doc-only` comment, the resolver threads it through
-        // but nothing else. Flipping the toggle persists to SQLite
-        // and gets dispersed across the tier chain with zero runtime
-        // effect. Rather than ship a dead toggle, show the row with
-        // a "Coming soon" caption so users aren't surprised.
-        toggleRow("Distributed (coming soon)",
-                  boolBinding(\.distributed, default: globalDefaults.distributed))
-        Text(L10n.SessionConfig.distributedHelp.render(appLocale))
-            .font(Theme.Typography.caption)
-            .foregroundStyle(Theme.Colors.textLow)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.leading, 4)
-            .padding(.bottom, 2)
-        if (s.distributed ?? globalDefaults.distributed) {
-            textFieldRow("Distributed host",
-                         placeholder: globalDefaults.distributedHost.isEmpty
-                            ? "e.g. rdma.local (coming soon)"
-                            : globalDefaults.distributedHost,
-                         value: Binding(
-                            get: { s.distributedHost ?? "" },
-                            set: { s.distributedHost = $0.isEmpty ? nil : $0; commit() }
-                         ))
-            ValidatedField(title: "Distributed port",
-                           value: intBinding(\.distributedPort, default: globalDefaults.distributedPort),
-                           range: 1024...65535, step: 1, format: "%.0f")
-        }
+        // §384 — Distributed toggle removed from UI. The engine has no
+        // consumer for it (GlobalSettings.distributed is doc-only; the
+        // resolver threads it through but nothing else reads it). Per
+        // Eric's "no BS placeholders" rule: don't ship a dead toggle.
+        // GlobalSettings.distributed stays in the struct for forward-
+        // compatibility when RDMA/tensor-parallel lands — the UI comes
+        // back then, wired through a real engine consumer.
     }
 
     @ViewBuilder
