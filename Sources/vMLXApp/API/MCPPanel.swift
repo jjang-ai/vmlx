@@ -14,6 +14,7 @@ import vMLXTheme
 /// the next poll surfaces the new state.
 struct MCPPanel: View {
     @Environment(AppState.self) private var app
+    @Environment(\.appLocale) private var appLocale: AppLocale
 
     @State private var servers: [MCPServerStatus] = []
     @State private var tools: [MCPTool] = []
@@ -73,15 +74,15 @@ struct MCPPanel: View {
                 get: { confirmDelete != nil },
                 set: { if !$0 { confirmDelete = nil } })
         ) {
-            Button("Cancel", role: .cancel) { confirmDelete = nil }
-            Button("Remove", role: .destructive) {
+            Button(L10n.Common.cancel.render(appLocale), role: .cancel) { confirmDelete = nil }
+            Button(L10n.MCPUI.remove.render(appLocale), role: .destructive) {
                 if let name = confirmDelete {
                     confirmDelete = nil
                     Task { await remove(name) }
                 }
             }
         } message: {
-            Text("\"\(confirmDelete ?? "")\" will be removed from mcp.json and stopped if running. This action is not undoable from the app.")
+            Text(L10n.MCPUI.removeConfirmFormat.format(locale: appLocale, (confirmDelete ?? "") as NSString))
         }
     }
 
@@ -91,7 +92,7 @@ struct MCPPanel: View {
         HStack {
             Image(systemName: "puzzlepiece.extension")
                 .foregroundStyle(Theme.Colors.accent)
-            Text("MCP servers")
+            Text(L10n.MCPUI.mcpServers.render(appLocale))
                 .font(Theme.Typography.bodyHi)
                 .foregroundStyle(Theme.Colors.textHigh)
             Spacer()
@@ -110,7 +111,7 @@ struct MCPPanel: View {
 
     private var configRow: some View {
         HStack(spacing: Theme.Spacing.sm) {
-            TextField("Path to mcp.json — leave empty to use default",
+            TextField(L10n.MCPUI.mcpPathPlaceholder.render(appLocale),
                       text: $configPath)
                 .textFieldStyle(.plain)
                 .font(Theme.Typography.mono)
@@ -120,7 +121,7 @@ struct MCPPanel: View {
                     RoundedRectangle(cornerRadius: Theme.Radius.sm)
                         .fill(Theme.Colors.surfaceHi)
                 )
-            Button("Browse…") { pickConfigPath() }
+            Button(L10n.MCPUI.browse.render(appLocale)) { pickConfigPath() }
                 .buttonStyle(.borderless)
             // §340 — one-click import from Claude Desktop / Cursor /
             // Windsurf / Zed clipboard format. Reads the current
@@ -128,7 +129,7 @@ struct MCPPanel: View {
             // upserts each entry via the same path as manual add.
             // Much faster than "Browse" when the user already has
             // a working config somewhere.
-            Button("Paste JSON") {
+            Button(L10n.MCPUI.pasteJSON.render(appLocale)) {
                 Task { await pasteJSONImport() }
             }
             .buttonStyle(.borderless)
@@ -139,7 +140,7 @@ struct MCPPanel: View {
                 if reloading {
                     ProgressView().controlSize(.small)
                 } else {
-                    Text("Reload")
+                    Text(L10n.MCPUI.reload.render(appLocale))
                 }
             }
             .buttonStyle(.borderedProminent)
@@ -235,7 +236,7 @@ struct MCPPanel: View {
 
     private var toolList: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("AVAILABLE TOOLS")
+            Text(L10n.MCPUI.availableTools.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
             ForEach(tools, id: \.fullName) { tool in
@@ -259,10 +260,10 @@ struct MCPPanel: View {
             Image(systemName: "puzzlepiece.extension")
                 .font(.system(size: 28))
                 .foregroundStyle(Theme.Colors.textLow)
-            Text("No MCP servers configured")
+            Text(L10n.MCPUI.noMCPConfigured.render(appLocale))
                 .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Colors.textMid)
-            Text("Point at an mcp.json above and hit Reload. See the MCP spec for config format.")
+            Text(L10n.MCPUI.noMCPHint.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
                 .multilineTextAlignment(.center)

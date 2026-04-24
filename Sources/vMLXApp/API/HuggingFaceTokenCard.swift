@@ -11,6 +11,7 @@ import vMLXTheme
 /// for users who don't have a token yet.
 struct HuggingFaceTokenCard: View {
     @ObservedObject var auth = HuggingFaceAuth.shared
+    @Environment(\.appLocale) private var appLocale: AppLocale
 
     @State private var fieldValue: String = ""
     @State private var isRevealed: Bool = false
@@ -64,7 +65,7 @@ struct HuggingFaceTokenCard: View {
             Image(systemName: "key.horizontal.fill")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Theme.Colors.accent)
-            Text("HuggingFace access token")
+            Text(L10n.HFUI.token.render(appLocale))
                 .font(Theme.Typography.bodyHi)
                 .foregroundStyle(Theme.Colors.textHigh)
             Spacer()
