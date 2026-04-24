@@ -560,6 +560,8 @@ let package = Package(
                 "PerfFloorScriptTests.swift",
                 "RegressionConstantsTests.swift",
                 "CapabilityDetectionTests.swift",
+                // §385 — DSML tool-call parser for DSV4 Flash/Pro.
+                "DSMLToolCallParserTests.swift",
                 "ChatRequestValidationTests.swift",
                 "ToolChoiceEnforcementTests.swift",
                 "ToolCallReasoningMatrixTests.swift",
