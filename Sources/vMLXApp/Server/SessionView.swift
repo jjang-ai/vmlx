@@ -11,6 +11,7 @@ import vMLXTheme
 ///   - Auto-opens the Logs tab when the session transitions to `.error`
 struct SessionView: View {
     @Environment(AppState.self) private var app
+    @Environment(\.appLocale) private var appLocale: AppLocale
     let session: Session
 
     @State private var tab: Tab = .logs
@@ -67,7 +68,7 @@ struct SessionView: View {
                 .foregroundStyle(Theme.Colors.danger)
                 .font(.system(size: 14))
             VStack(alignment: .leading, spacing: 2) {
-                Text("Engine error")
+                Text(L10n.ServerUI.engineError.render(appLocale))
                     .font(Theme.Typography.bodyHi)
                     .foregroundStyle(Theme.Colors.danger)
                 Text(message)
@@ -151,7 +152,7 @@ struct SessionView: View {
             // "Remote" label so the spot isn't empty; Chat-send still
             // dispatches through RemoteEngineClient.
             if session.isRemote {
-                Text("Remote")
+                Text(L10n.ServerUI.remote.render(appLocale))
                     .font(Theme.Typography.bodyHi)
                     .foregroundStyle(Theme.Colors.accent)
                     .padding(.horizontal, Theme.Spacing.md)
@@ -165,7 +166,7 @@ struct SessionView: View {
                 case .stopped:
                     buttonTile("Start", color: Theme.Colors.accent) { Task { await startSession() } }
                 case .loading:
-                    Text("Starting…")
+                    Text(L10n.ServerUI.starting.render(appLocale))
                         .font(Theme.Typography.bodyHi)
                         .foregroundStyle(Theme.Colors.textMid)
                     buttonTile("Cancel", color: Theme.Colors.danger) { Task { await app.engine.stop() } }

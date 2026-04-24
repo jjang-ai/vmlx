@@ -18,10 +18,11 @@ struct ImageHistory: View {
     let records: [ImageGenerationRecord]
     let onRecall: (ImageGenerationRecord) -> Void
     let onDelete: (ImageGenerationRecord) -> Void
+    @Environment(\.appLocale) private var appLocale: AppLocale
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            Text("HISTORY")
+            Text(L10n.ImageUI.history.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
                 .padding(.horizontal, Theme.Spacing.md)
@@ -57,7 +58,7 @@ struct ImageHistory: View {
             Image(systemName: "photo.stack")
                 .foregroundStyle(Theme.Colors.textLow)
                 .font(.title2)
-            Text("No history yet")
+            Text(L10n.ImageUI.noHistoryYet.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
         }

@@ -11,6 +11,7 @@ import vMLXTheme
 /// staying strictly on Theme tokens.
 struct LogsPanel: View {
     @Environment(AppState.self) private var app
+    @Environment(\.appLocale) private var appLocale: AppLocale
 
     // Filter state
     @State private var minLevel: LogStore.Level = .info
@@ -77,7 +78,7 @@ struct LogsPanel: View {
 
     private var header: some View {
         HStack {
-            Text("LOGS")
+            Text(L10n.ServerUI.logs.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
             Spacer()

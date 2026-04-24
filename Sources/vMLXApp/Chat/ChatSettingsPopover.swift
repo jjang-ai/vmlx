@@ -162,9 +162,9 @@ struct ChatSettingsPopover: View {
                             writeBack()
                         }
                     )) {
-                        Text("Inherit").tag(0)
-                        Text("On").tag(1)
-                        Text("Off").tag(2)
+                        Text(L10n.Common.inherit.render(appLocale)).tag(0)
+                        Text(L10n.Common.on.render(appLocale)).tag(1)
+                        Text(L10n.Common.off.render(appLocale)).tag(2)
                     }
                     .pickerStyle(.segmented)
                     .frame(width: 180)
@@ -186,11 +186,11 @@ struct ChatSettingsPopover: View {
                             writeBack()
                         }
                     )) {
-                        Text("Inherit").tag("__inherit__")
-                        Text("None").tag("none")
-                        Text("Low").tag("low")
-                        Text("Medium").tag("medium")
-                        Text("High").tag("high")
+                        Text(L10n.Common.inherit.render(appLocale)).tag("__inherit__")
+                        Text(L10n.Common.none.render(appLocale)).tag("none")
+                        Text(L10n.Common.low.render(appLocale)).tag("low")
+                        Text(L10n.Common.medium.render(appLocale)).tag("medium")
+                        Text(L10n.Common.high.render(appLocale)).tag("high")
                     }
                     .pickerStyle(.menu)
                     .frame(width: 180)
@@ -301,10 +301,10 @@ struct ChatSettingsPopover: View {
                             writeBack()
                         }
                     )) {
-                        Text("Inherit").tag("__inherit__")
-                        Text("Auto").tag("auto")
-                        Text("None").tag("none")
-                        Text("Required").tag("required")
+                        Text(L10n.Common.inherit.render(appLocale)).tag("__inherit__")
+                        Text(L10n.Common.auto.render(appLocale)).tag("auto")
+                        Text(L10n.Common.none.render(appLocale)).tag("none")
+                        Text(L10n.Common.required.render(appLocale)).tag("required")
                     }
                     .pickerStyle(.menu)
                     .frame(width: 180)
@@ -350,7 +350,7 @@ struct ChatSettingsPopover: View {
                     get: { draft.shellEnabled },
                     set: { draft.shellEnabled = $0; writeBack() }
                 ), traceKey: "shellEnabled")
-                Text("Shell maps to BashTool via ChatViewModel → Stream. Enable MCP in the API panel for additional tool providers.")
+                Text(L10n.ChatUI.shellToolHelp.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
                     .fixedSize(horizontal: false, vertical: true)
@@ -361,7 +361,7 @@ struct ChatSettingsPopover: View {
                 // mocks but never wired through the stream, so the
                 // toggles were hidden to stop misleading users. Roadmap
                 // pending: drop MCP in the API panel for now.
-                Text("Coming soon: Web Search, Fetch URL, File Tools, Git, Utility Tools, Brave Search — not yet wired through the stream. Use MCP in the API panel for additional tool providers today.")
+                Text(L10n.ChatUI.builtinToolsComingSoon.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
                     .fixedSize(horizontal: false, vertical: true)
@@ -451,7 +451,7 @@ struct ChatSettingsPopover: View {
                             tier: r.resolutionTrace["defaultSystemPrompt"] ?? .global)
                 }
             } else {
-                Text("Loading…").font(Theme.Typography.caption)
+                Text(L10n.Common.loading.render(appLocale)).font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
             }
         }
@@ -541,9 +541,9 @@ struct ChatSettingsPopover: View {
                         value.wrappedValue = (v == 0) ? nil : (v == 1)
                     }
                 )) {
-                    Text("Inherit").tag(0)
-                    Text("On").tag(1)
-                    Text("Off").tag(2)
+                    Text(L10n.Common.inherit.render(appLocale)).tag(0)
+                    Text(L10n.Common.on.render(appLocale)).tag(1)
+                    Text(L10n.Common.off.render(appLocale)).tag(2)
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 180)

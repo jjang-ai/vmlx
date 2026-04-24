@@ -38,6 +38,7 @@ import vMLXTheme
 struct QuickSlidersPopover: View {
     @Environment(AppState.self) private var app
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.appLocale) private var appLocale: AppLocale
     let chatId: UUID
 
     // Live slider state. Loaded from chat-level SessionSettings on
@@ -54,7 +55,7 @@ struct QuickSlidersPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            Text("Quick tweaks")
+            Text(L10n.ChatUI.quickTweaks.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
             slider("Temperature", value: $temperature,
@@ -78,7 +79,7 @@ struct QuickSlidersPopover: View {
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textMid)
                 Spacer()
-                Text("Open full settings for more")
+                Text(L10n.ChatUI.openFullSettings.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
             }

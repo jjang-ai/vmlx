@@ -12,6 +12,7 @@ import vMLXTheme
 /// Footer has a "Clear caches" action that calls `Engine.clearCaches()`.
 struct CachePanel: View {
     @Environment(AppState.self) private var app
+    @Environment(\.appLocale) private var appLocale: AppLocale
     @State private var stats: [String: Any] = [:]
     @State private var loaded: Bool = false
     @State private var pollTask: Task<Void, Never>? = nil
@@ -27,12 +28,12 @@ struct CachePanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            Text("CACHE")
+            Text(L10n.ServerUI.cache.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
 
             if !loaded {
-                Text("No model loaded — load one in the sidebar to see cache stats.")
+                Text(L10n.ServerUI.noModelLoadedSidebar.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
                     .padding(.vertical, Theme.Spacing.sm)
@@ -41,7 +42,7 @@ struct CachePanel: View {
                     architectureSection
                 } label: {
                     HStack(spacing: Theme.Spacing.sm) {
-                        Text("Model architecture")
+                        Text(L10n.ServerUI.modelArchitecture.render(appLocale))
                             .font(Theme.Typography.body)
                             .foregroundStyle(Theme.Colors.textHigh)
                         if archBool("hybridSSMActive") { hybridPill }
@@ -128,7 +129,7 @@ struct CachePanel: View {
         let other = archInt("other")
 
         if total == 0 {
-            Text("Load a model to see per-layer cache breakdown.")
+            Text(L10n.ServerUI.loadModelForCacheBreakdown.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
                 .padding(.top, Theme.Spacing.sm)
@@ -295,7 +296,7 @@ struct CachePanel: View {
             }
             .padding(.top, Theme.Spacing.sm)
         } else {
-            Text("Hybrid mode inactive — SSM companion not used for this model.")
+            Text(L10n.ServerUI.hybridInactive.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
                 .padding(.top, Theme.Spacing.sm)
@@ -381,7 +382,7 @@ struct CachePanel: View {
                 }
                 Button("Cancel", role: .cancel) { }
             } message: {
-                Text("This drops every prefix / paged / SSM / disk cache entry for the loaded model. The next request will re-prefill from scratch.")
+                Text(L10n.ServerUI.dropCacheHelp.render(appLocale))
             }
         }
     }
@@ -432,7 +433,7 @@ struct CachePanel: View {
     @ViewBuilder
     private func disabledHint(_ tier: CacheTier) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("Disabled")
+            Text(L10n.ServerUI.disabled.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
             Text(tier.disabledHelp)

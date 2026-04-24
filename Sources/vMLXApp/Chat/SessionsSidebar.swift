@@ -15,7 +15,7 @@ struct SessionsSidebar: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(Theme.Colors.textLow)
                     .font(.system(size: 11))
-                TextField("Search chats", text: $vm.searchQuery)
+                TextField(L10n.Common.search.render(appLocale), text: $vm.searchQuery)
                     .textFieldStyle(.plain)
                     .font(Theme.Typography.body)
                     .foregroundStyle(Theme.Colors.textHigh)
@@ -38,7 +38,7 @@ struct SessionsSidebar: View {
             } label: {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "plus")
-                    Text("New chat")
+                    Text(L10n.ChatUI.newChat.render(appLocale))
                 }
                 .font(Theme.Typography.bodyHi)
                 .foregroundStyle(Theme.Colors.textHigh)
@@ -194,7 +194,7 @@ private struct SessionRow: View {
             Button(L10n.Common.delete.render(appLocale), role: .destructive) { onDelete() }
             Button(L10n.Common.cancel.render(appLocale), role: .cancel) { }
         } message: {
-            Text("\"\(session.title)\" and all its messages will be permanently removed. This can't be undone.")
+            Text(L10n.ChatUI.deleteSessionConfirm.format(locale: appLocale, session.title as NSString))
         }
     }
 
@@ -228,7 +228,7 @@ private struct ClearAllButton: View {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: "trash.slash")
                     .font(.system(size: 11, weight: .medium))
-                Text("Clear all chats")
+                Text(L10n.ChatUI.clearAllChats.render(appLocale))
                     .font(Theme.Typography.body)
             }
             .foregroundStyle(Theme.Colors.danger)
@@ -250,7 +250,7 @@ private struct ClearAllButton: View {
             Button(L10n.Common.deleteAll.render(appLocale), role: .destructive) { vm.clearAllSessions() }
             Button(L10n.Common.cancel.render(appLocale), role: .cancel) { }
         } message: {
-            Text("All \(vm.sessions.count) chats and their messages will be permanently removed. This can't be undone.")
+            Text(L10n.ChatUI.clearAllChatsConfirm.format(locale: appLocale, Int64(vm.sessions.count)))
         }
     }
 }
