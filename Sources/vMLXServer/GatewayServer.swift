@@ -276,6 +276,54 @@ public struct GatewayServer {
             }
         }
 
+        // §363 — image generation/edit routes forward to defaultEngine.
+        // Image gen is a resident singleton (FluxBackend) held by the
+        // default Engine, so "gateway pins to default engine" is correct
+        // for images — there's literally one backend shared across all
+        // sessions. Previously the gateway returned 404 here and the user
+        // had to figure out which per-session port the image model lived
+        // on. Now OpenAI clients pointed at the gateway work out of the
+        // box.
+        router.post("/v1/images/generations") { req, ctx -> Response in
+            var req = req
+            let body = try await req.collectBody(upTo: 64 * 1024 * 1024)
+            let data = Data(buffer: body)
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return Self.errorJSON(.badRequest, "Invalid JSON")
+            }
+            await defaultEngine.wakeFromStandby()
+            do {
+                let result = try await defaultEngine.generateImage(request: obj)
+                return Self.json(result)
+            } catch let err as EngineError {
+                return OpenAIRoutes.mapEngineError(err)
+            } catch {
+                return Self.errorJSON(.internalServerError, "\(error)")
+            }
+        }
+        router.post("/v1/images/edits") { req, ctx -> Response in
+            var req = req
+            // JSON-with-base64 only on the gateway. The multipart/form-data
+            // variant (OpenAI SDK default) requires file-field parsing that
+            // lives in the per-session Server. Clients hitting the gateway
+            // with multipart should use the per-session port for now, or
+            // switch their SDK to base64 JSON which is the vMLX extension.
+            let body = try await req.collectBody(upTo: 128 * 1024 * 1024)
+            let data = Data(buffer: body)
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return Self.errorJSON(.badRequest, "Gateway /v1/images/edits accepts JSON with base64-encoded image only. Use the per-session port for multipart uploads.")
+            }
+            await defaultEngine.wakeFromStandby()
+            do {
+                let result = try await defaultEngine.editImage(request: obj)
+                return Self.json(result)
+            } catch let err as EngineError {
+                return OpenAIRoutes.mapEngineError(err)
+            } catch {
+                return Self.errorJSON(.internalServerError, "\(error)")
+            }
+        }
+
         // Ollama (`/api/chat`, `/api/generate`) and Anthropic (`/v1/messages`)
         // are NOT exposed on the gateway in v1. Each protocol has a non-
         // trivial encoder (NDJSON for Ollama, anthropic SSE event family
@@ -290,13 +338,15 @@ public struct GatewayServer {
                     "POST /v1/chat/completions",
                     "POST /v1/completions",
                     "POST /v1/embeddings",
+                    "POST /v1/images/generations",
+                    "POST /v1/images/edits (JSON + base64 only)",
                     "GET  /health",
                 ],
                 "unsupported_in_gateway": [
                     "POST /api/chat (Ollama) — use the per-session port",
                     "POST /api/generate (Ollama) — use the per-session port",
                     "POST /v1/messages (Anthropic) — use the per-session port",
-                    "/v1/images/* — use the per-session port",
+                    "POST /v1/images/edits (multipart/form-data) — JSON+base64 works here, multipart requires per-session port",
                     "/v1/audio/* — use the per-session port",
                     "/v1/mcp/* — use the per-session port",
                 ],
