@@ -278,6 +278,7 @@ struct TerminalScreen: View {
             case .user: role = "user"
             case .assistant: role = "assistant"
             case .tool: role = "tool"
+            case .reasoning: continue
             }
             messages.append(ChatRequest.Message(
                 role: role,
@@ -307,6 +308,16 @@ struct TerminalScreen: View {
         var activeAssistantId = UUID()
         transcript.append(TerminalTurn(id: activeAssistantId, role: .assistant, text: ""))
 
+        // §371 — active reasoning turn tracker. Created on first
+        // reasoning chunk of each "block" and auto-collapsed when the
+        // model stops reasoning (first content or tool_call chunk
+        // after a reasoning run). Modern agentic models interleave
+        // thought with tool calls: reason → call bash → read output
+        // → reason again → call bash again → content. Each reasoning
+        // block gets its own collapsible turn so the user can see the
+        // full decision loop without scrollback drowning.
+        var activeReasoningId: UUID? = nil
+
         // Pull the stream from the actor in one `await` first, then
         // iterate locally. `Engine.stream(request:)` is actor-isolated,
         // so it cannot be called directly inside a `for try await in`
@@ -317,8 +328,32 @@ struct TerminalScreen: View {
             for try await chunk in upstream {
                 if Task.isCancelled { break }
 
-                // Append content into the active assistant turn.
+                // §371 — append reasoning deltas into the active
+                // reasoning turn (or start a new one). Interleaved
+                // models can reason mid-tool-loop, so we allow a new
+                // reasoning block after every tool_status.done.
+                if let think = chunk.reasoning, !think.isEmpty {
+                    if let rid = activeReasoningId,
+                       let idx = transcript.firstIndex(where: { $0.id == rid }) {
+                        transcript[idx].text += think
+                    } else {
+                        let rid = UUID()
+                        activeReasoningId = rid
+                        transcript.append(TerminalTurn(
+                            id: rid, role: .reasoning, text: think,
+                            isExpanded: true))
+                    }
+                }
+
+                // Append content into the active assistant turn. Close
+                // any open reasoning block since content = model is done
+                // thinking (for now).
                 if let content = chunk.content, !content.isEmpty {
+                    if let rid = activeReasoningId,
+                       let idx = transcript.firstIndex(where: { $0.id == rid }) {
+                        transcript[idx].isExpanded = false
+                        activeReasoningId = nil
+                    }
                     if let idx = transcript.firstIndex(where: { $0.id == activeAssistantId }) {
                         transcript[idx].text += content
                     }
@@ -327,6 +362,14 @@ struct TerminalScreen: View {
                 // Tool-call lifecycle. `.started` creates a pending tool
                 // turn, `.done` fills in the exit code + output.
                 if let status = chunk.toolStatus {
+                    // §371 — collapse any active reasoning block when
+                    // a tool call fires so the user sees the thought
+                    // block that led up to the call, then the call.
+                    if let rid = activeReasoningId,
+                       let idx = transcript.firstIndex(where: { $0.id == rid }) {
+                        transcript[idx].isExpanded = false
+                        activeReasoningId = nil
+                    }
                     switch status.phase {
                     case .started:
                         transcript.append(TerminalTurn(
@@ -452,17 +495,28 @@ struct TerminalScreen: View {
 // MARK: - Models
 
 struct TerminalTurn: Identifiable {
-    enum Role { case user, assistant, tool }
+    // §371 — added `.reasoning` role so models that emit <think> blocks
+    // or reasoning_content SSE chunks (Qwen3, GLM-5.1, DeepSeek-V3,
+    // MiniMax-M2.7, Nemotron) render their thought stream inline with
+    // the agentic loop instead of going silent while the model reasons
+    // before a tool call. Rendered as a dimmed, collapsible block above
+    // the assistant / tool turns that follow.
+    enum Role { case user, assistant, tool, reasoning }
     let id: UUID
     var role: Role
     var text: String
     var exitCode: Int32? = nil
+    /// §371 — collapse state for `.reasoning` turns. Defaults to
+    /// expanded while streaming, collapses once the next non-reasoning
+    /// chunk arrives so long thought streams don't clutter scrollback.
+    var isExpanded: Bool = true
 
-    init(id: UUID = UUID(), role: Role, text: String, exitCode: Int32? = nil) {
+    init(id: UUID = UUID(), role: Role, text: String, exitCode: Int32? = nil, isExpanded: Bool = true) {
         self.id = id
         self.role = role
         self.text = text
         self.exitCode = exitCode
+        self.isExpanded = isExpanded
     }
 }
 
@@ -478,6 +532,15 @@ private struct TerminalTurnView: View {
     private static let foldTail = 15
 
     @State private var expanded: Bool = false
+    /// §371 — separate expand toggle for `.reasoning` turns. Seeds from
+    /// `turn.isExpanded` (which the stream loop flips to false once the
+    /// next non-reasoning chunk arrives) so long thought streams auto-
+    /// collapse but the user can re-expand them.
+    @State private var reasoningExpanded: Bool? = nil
+
+    private var reasoningIsOpen: Bool {
+        reasoningExpanded ?? turn.isExpanded
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
@@ -493,7 +556,18 @@ private struct TerminalTurnView: View {
                         .foregroundStyle(code == 0 ? Theme.Colors.success : Theme.Colors.danger)
                 }
                 Spacer()
-                if foldedRanges != nil {
+                if turn.role == .reasoning {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            reasoningExpanded = !reasoningIsOpen
+                        }
+                    } label: {
+                        Text(reasoningIsOpen ? "Collapse" : "Show \(lineCount) lines")
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(Theme.Colors.accent)
+                    }
+                    .buttonStyle(.plain)
+                } else if foldedRanges != nil {
                     Button {
                         withAnimation(.easeInOut(duration: 0.15)) {
                             expanded.toggle()
@@ -506,17 +580,20 @@ private struct TerminalTurnView: View {
                     .buttonStyle(.plain)
                 }
             }
-            outputBody
-                .padding(Theme.Spacing.md)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: Theme.Radius.md)
-                        .fill(Theme.Colors.surface)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                                .stroke(Theme.Colors.border, lineWidth: 1)
-                        )
-                )
+            if turn.role != .reasoning || reasoningIsOpen {
+                outputBody
+                    .padding(Theme.Spacing.md)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.md)
+                            .fill(Theme.Colors.surface)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                                    .stroke(Theme.Colors.border, lineWidth: 1)
+                            )
+                    )
+                    .opacity(turn.role == .reasoning ? 0.75 : 1.0)
+            }
         }
     }
 
@@ -574,6 +651,7 @@ private struct TerminalTurnView: View {
         case .user:      return "person.fill"
         case .assistant: return "sparkles"
         case .tool:      return "terminal.fill"
+        case .reasoning: return "brain"
         }
     }
     private var label: String {
@@ -581,6 +659,7 @@ private struct TerminalTurnView: View {
         case .user:      return "You"
         case .assistant: return "Model"
         case .tool:      return "$"
+        case .reasoning: return "thinking"
         }
     }
     private var color: SwiftUI.Color {
@@ -588,6 +667,7 @@ private struct TerminalTurnView: View {
         case .user:      return Theme.Colors.accent
         case .assistant: return Theme.Colors.accentHi
         case .tool:      return Theme.Colors.textMid
+        case .reasoning: return Theme.Colors.textLow
         }
     }
 }
