@@ -53,14 +53,14 @@ actor GatewayActor {
     /// Register an engine under every display name it currently advertises.
     /// Call from `SessionDashboard.startSession` once the engine has loaded
     /// (so its ModelLibrary scan is fresh).
+    ///
+    /// §359 — legacy behavior was "register every model in the library"
+    /// which leaked the full on-disk catalog through `/v1/models` (this
+    /// session didn't load those). Use `registerEngine(_:loadedModel:alias:)`
+    /// instead for new call sites.
     func registerEngine(_ engine: Engine) async {
         let entries = await engine.modelLibrary.entries()
         for entry in entries {
-            // §358 — detect same-name collisions across engines. Previous
-            // behavior was silent last-writer-wins, which meant two sessions
-            // advertising the same display name would route all gateway
-            // traffic to whichever loaded last, with zero UI feedback.
-            // Record the collision for the UI's one-shot warning banner.
             if let existing = registry[entry.displayName]?.engine,
                existing !== engine {
                 duplicateWarnings.append(entry.displayName)
@@ -68,6 +68,37 @@ actor GatewayActor {
             registry[entry.displayName] = WeakEngineBox(engine: engine)
             if !insertionOrder.contains(entry.displayName) {
                 insertionOrder.append(entry.displayName)
+            }
+        }
+    }
+
+    /// §359 — targeted registration: register this engine under ONLY the
+    /// model it loaded + an optional user-supplied alias. Replaces the
+    /// "register everything in the library" path for session startups.
+    ///
+    /// - Parameters:
+    ///   - engine: the Engine actor for the session that just finished loading
+    ///   - canonicalName: the `ModelEntry.displayName` of the loaded model
+    ///   - alias: optional user-supplied nickname (`SessionSettings.modelAlias`).
+    ///     When set, `/v1/chat/completions` requests with `model: "<alias>"`
+    ///     route to this engine, and `/v1/models` advertises both names.
+    func registerEngine(
+        _ engine: Engine,
+        canonicalName: String,
+        alias: String?
+    ) async {
+        // Collision detection against both canonical + alias.
+        var toRegister: [String] = [canonicalName]
+        if let a = alias, !a.isEmpty, a != canonicalName {
+            toRegister.append(a)
+        }
+        for name in toRegister {
+            if let existing = registry[name]?.engine, existing !== engine {
+                duplicateWarnings.append(name)
+            }
+            registry[name] = WeakEngineBox(engine: engine)
+            if !insertionOrder.contains(name) {
+                insertionOrder.append(name)
             }
         }
     }
