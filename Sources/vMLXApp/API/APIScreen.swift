@@ -13,6 +13,7 @@ import vMLXTheme
 ///   * phone-scannable QR code when LAN is enabled
 struct APIScreen: View {
     @Environment(AppState.self) private var app
+    @Environment(\.appLocale) private var appLocale: AppLocale
 
     @State private var keys: [Database.APIKeyRow] = []
     @State private var newKeyLabel: String = ""
@@ -64,7 +65,7 @@ struct APIScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
-                Text("API")
+                Text(L10n.Mode.api.render(appLocale))
                     .font(Theme.Typography.title)
                     .foregroundStyle(Theme.Colors.textHigh)
 
@@ -171,7 +172,7 @@ struct APIScreen: View {
 
     private var endpointCard: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            Text("ENDPOINT")
+            Text(L10n.APIUI.endpoint.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
             HStack {
@@ -180,7 +181,7 @@ struct APIScreen: View {
                     .foregroundStyle(Theme.Colors.textHigh)
                     .textSelection(.enabled)
                 Spacer()
-                Button("Copy") { copyToPasteboard(endpointURL) }
+                Button(L10n.TrayUI.copy.render(appLocale)) { copyToPasteboard(endpointURL) }
                     .buttonStyle(.plain)
                     .font(Theme.Typography.bodyHi)
                     .foregroundStyle(Theme.Colors.accent)
@@ -188,7 +189,7 @@ struct APIScreen: View {
 
             HStack(spacing: Theme.Spacing.md) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Port")
+                    Text(L10n.TrayUI.port.render(appLocale))
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.textLow)
                     HStack(spacing: Theme.Spacing.xs) {
@@ -210,7 +211,7 @@ struct APIScreen: View {
                             .labelsHidden()
                     }
                 }
-                Toggle("LAN (0.0.0.0)", isOn: $lanBinding)
+                Toggle(L10n.APIUI.lanToggle.render(appLocale), isOn: $lanBinding)
                     .toggleStyle(.switch)
                     .tint(Theme.Colors.accent)
                     .font(Theme.Typography.body)
@@ -222,16 +223,16 @@ struct APIScreen: View {
                 Spacer()
             }
             if !portValid {
-                Text("Port must be between 1024 and 65535")
+                Text(L10n.APIUI.portRangeError.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.danger)
             } else if portInUse {
-                Text("Port \(portBinding) is already in use by another session")
+                Text(L10n.APIUI.portInUseFormat.format(locale: appLocale, Int64(portBinding)))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.warning)
             }
 
-            Toggle("Require Bearer auth", isOn: $bearerRequired)
+            Toggle(L10n.APIUI.requireBearer.render(appLocale), isOn: $bearerRequired)
                 .toggleStyle(.switch)
                 .tint(Theme.Colors.accent)
                 .font(Theme.Typography.body)
@@ -241,14 +242,14 @@ struct APIScreen: View {
             if lanBinding, let lan = lanURL {
                 HStack(alignment: .top, spacing: Theme.Spacing.md) {
                     VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                        Text("PHONE / LAN")
+                        Text(L10n.APIUI.phoneLAN.render(appLocale))
                             .font(Theme.Typography.caption)
                             .foregroundStyle(Theme.Colors.textLow)
                         Text(lan)
                             .font(Theme.Typography.mono)
                             .foregroundStyle(Theme.Colors.textMid)
                             .textSelection(.enabled)
-                        Text("Scan from another device on your network")
+                        Text(L10n.APIUI.scanFromDevice.render(appLocale))
                             .font(Theme.Typography.caption)
                             .foregroundStyle(Theme.Colors.textLow)
                     }
@@ -265,11 +266,11 @@ struct APIScreen: View {
 
     private var sessionsCard: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            Text("RUNNING SESSIONS")
+            Text(L10n.APIUI.runningSessions.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
             if app.sessions.isEmpty {
-                Text("No running sessions. Start a model from the Server tab.")
+                Text(L10n.APIUI.noRunningSessions.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
             } else {
@@ -299,7 +300,7 @@ struct APIScreen: View {
 
     private var keysCard: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            Text("API KEYS")
+            Text(L10n.APIUI.apiKeys.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
             keysCardGenerateRow
@@ -325,10 +326,10 @@ struct APIScreen: View {
     private var adminTokenRow: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             HStack(spacing: 6) {
-                Text("ADMIN TOKEN")
+                Text(L10n.APIUI.adminToken.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
-                Text("— gates /admin/* and /v1/cache/*")
+                Text(L10n.APIUI.adminTokenHelp.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
                 Spacer()
@@ -342,7 +343,7 @@ struct APIScreen: View {
             HStack(spacing: Theme.Spacing.sm) {
                 Group {
                     if showAdminToken {
-                        TextField("Leave blank to keep admin routes open",
+                        TextField(L10n.APIUI.adminTokenPlaceholder.render(appLocale),
                                   text: $adminTokenField)
                     } else {
                         SecureField("Leave blank to keep admin routes open",
@@ -362,7 +363,7 @@ struct APIScreen: View {
                         )
                 )
                 .onChange(of: adminTokenField) { _, _ in persistAdminToken() }
-                Button("Randomize") {
+                Button(L10n.APIUI.randomize.render(appLocale)) {
                     adminTokenField = "adm-\(UUID().uuidString.lowercased().prefix(24))"
                     persistAdminToken()
                 }
@@ -375,7 +376,7 @@ struct APIScreen: View {
 
     private var keysCardGenerateRow: some View {
         HStack(spacing: Theme.Spacing.sm) {
-            TextField("Key label", text: $newKeyLabel)
+            TextField(L10n.APIUI.keyLabel.render(appLocale), text: $newKeyLabel)
                 .textFieldStyle(.plain)
                 .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Colors.textHigh)
@@ -388,7 +389,7 @@ struct APIScreen: View {
                                 .stroke(Theme.Colors.border, lineWidth: 1)
                         )
                 )
-            Button("Generate") {
+            Button(L10n.APIUI.generate.render(appLocale)) {
                 _ = APIKeyManager.shared.generate(label: newKeyLabel)
                 newKeyLabel = ""
             }
@@ -452,7 +453,7 @@ struct APIScreen: View {
             }
             .buttonStyle(.plain)
             .help(revealed ? "Hide key" : "Reveal key")
-            Button("Copy") { copyToPasteboard(keyValue) }
+            Button(L10n.TrayUI.copy.render(appLocale)) { copyToPasteboard(keyValue) }
                 .buttonStyle(.plain)
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.accent)
@@ -485,7 +486,7 @@ struct APIScreen: View {
 
     @ViewBuilder
     private var revokeDialogActions: some View {
-        Button("Revoke", role: .destructive) {
+        Button(L10n.APIUI.revoke.render(appLocale), role: .destructive) {
             if let id = pendingRevokeId {
                 // iter-96 §123: capture the value being revoked BEFORE
                 // the delete so we can compare it against the live
@@ -499,7 +500,7 @@ struct APIScreen: View {
             }
             pendingRevokeId = nil
         }
-        Button("Cancel", role: .cancel) { pendingRevokeId = nil }
+        Button(L10n.Common.cancel.render(appLocale), role: .cancel) { pendingRevokeId = nil }
     }
 
     /// iter-96 §123: the dialog promises "any client using this key will
@@ -537,13 +538,13 @@ struct APIScreen: View {
     }
 
     private var revokeDialogMessage: Text {
-        Text("Any client using this key will immediately lose access. This can't be undone — a new key will have a different value.")
+        Text(L10n.APIUI.revokeConfirm.render(appLocale))
     }
 
     private var snippetsCard: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             HStack {
-                Text("CODE SNIPPETS")
+                Text(L10n.APIUI.codeSnippets.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
                 Spacer()

@@ -20,27 +20,28 @@ struct ImageGenStateView: View {
     let elapsedSeconds: Int
     let preview: Data?
     let onStop: () -> Void
+    @Environment(\.appLocale) private var appLocale: AppLocale
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Spacing.md) {
             previewThumb
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                Text("Generating…")
+                Text(L10n.ImageUI.generating.render(appLocale))
                     .font(Theme.Typography.bodyHi)
                     .foregroundStyle(Theme.Colors.textHigh)
                 ProgressView(value: fraction)
                     .tint(Theme.Colors.accent)
                 HStack {
-                    Text("Step \(currentStep) / \(totalSteps)")
+                    Text(L10n.ImageUI.stepFormat.format(locale: appLocale, Int64(currentStep), Int64(totalSteps)))
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.textMid)
                         .monospacedDigit()
                     Spacer()
-                    Text("\(elapsedSeconds)s elapsed · ETA \(etaString)")
+                    Text(L10n.ImageUI.elapsedEtaFormat.format(locale: appLocale, Int64(elapsedSeconds), etaString as NSString))
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.textLow)
                         .monospacedDigit()
-                    Button("Stop", action: onStop)
+                    Button(L10n.Chat.stop.render(appLocale), action: onStop)
                         .buttonStyle(.bordered)
                         .tint(Theme.Colors.danger)
                 }

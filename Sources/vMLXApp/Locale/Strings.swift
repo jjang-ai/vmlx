@@ -952,6 +952,90 @@ public enum L10n {
     }
 
     public enum ImageUI {
+        public static let imageSettings = L10nEntry(
+            en: "Image settings",
+            ja: "画像設定",
+            ko: "이미지 설정",
+            zh: "图像设置"
+        )
+        public static let seed = L10nEntry(
+            en: "Seed",
+            ja: "シード",
+            ko: "시드",
+            zh: "种子"
+        )
+        public static let seedPlaceholder = L10nEntry(
+            en: "-1 for random",
+            ja: "-1 でランダム",
+            ko: "-1은 임의",
+            zh: "-1 为随机"
+        )
+        public static let random = L10nEntry(
+            en: "Random",
+            ja: "ランダム",
+            ko: "임의",
+            zh: "随机"
+        )
+        public static let scheduler = L10nEntry(
+            en: "Scheduler",
+            ja: "スケジューラー",
+            ko: "스케줄러",
+            zh: "调度器"
+        )
+        public static let defaultLabel = L10nEntry(
+            en: "Default",
+            ja: "デフォルト",
+            ko: "기본값",
+            zh: "默认"
+        )
+        public static let strengthHint = L10nEntry(
+            en: "Strength lives on the prompt bar.",
+            ja: "強度はプロンプトバーにあります。",
+            ko: "강도는 프롬프트 바에 있습니다.",
+            zh: "强度位于提示栏。"
+        )
+        public static let saveAsDefault = L10nEntry(
+            en: "Save as default",
+            ja: "デフォルトとして保存",
+            ko: "기본값으로 저장",
+            zh: "另存为默认"
+        )
+        public static let generating = L10nEntry(
+            en: "Generating…",
+            ja: "生成中…",
+            ko: "생성 중…",
+            zh: "生成中…"
+        )
+        public static let stepFormat = L10nEntry(
+            en: "Step %lld / %lld",
+            ja: "ステップ %lld / %lld",
+            ko: "스텝 %lld / %lld",
+            zh: "步骤 %lld / %lld"
+        )
+        public static let elapsedEtaFormat = L10nEntry(
+            en: "%llds elapsed · ETA %@",
+            ja: "%llds 経過 · 残り %@",
+            ko: "%llds 경과 · ETA %@",
+            zh: "已用 %llds · 剩余 %@"
+        )
+        public static let change = L10nEntry(
+            en: "Change",
+            ja: "変更",
+            ko: "변경",
+            zh: "更改"
+        )
+        public static let sourceImage = L10nEntry(
+            en: "Source image",
+            ja: "ソース画像",
+            ko: "원본 이미지",
+            zh: "源图像"
+        )
+        public static let strengthFormat = L10nEntry(
+            en: "Strength %@",
+            ja: "強度 %@",
+            ko: "강도 %@",
+            zh: "强度 %@"
+        )
         public static let history = L10nEntry(
             en: "HISTORY",
             ja: "履歴",
@@ -987,6 +1071,123 @@ public enum L10n {
             ja: "不透明度 %@",
             ko: "불투명도 %@",
             zh: "不透明度 %@"
+        )
+    }
+
+    public enum APIUI {
+        public static let endpoint = L10nEntry(
+            en: "ENDPOINT",
+            ja: "エンドポイント",
+            ko: "엔드포인트",
+            zh: "端点"
+        )
+        public static let runningSessions = L10nEntry(
+            en: "RUNNING SESSIONS",
+            ja: "実行中のセッション",
+            ko: "실행 중인 세션",
+            zh: "运行中的会话"
+        )
+        public static let noRunningSessions = L10nEntry(
+            en: "No running sessions. Start a model from the Server tab.",
+            ja: "実行中のセッションはありません。サーバータブからモデルを起動してください。",
+            ko: "실행 중인 세션이 없습니다. 서버 탭에서 모델을 시작하십시오.",
+            zh: "没有运行中的会话。请从服务器选项卡启动模型。"
+        )
+        public static let apiKeys = L10nEntry(
+            en: "API KEYS",
+            ja: "API キー",
+            ko: "API 키",
+            zh: "API 密钥"
+        )
+        public static let adminToken = L10nEntry(
+            en: "ADMIN TOKEN",
+            ja: "管理者トークン",
+            ko: "관리자 토큰",
+            zh: "管理令牌"
+        )
+        public static let adminTokenHelp = L10nEntry(
+            en: "— gates /admin/* and /v1/cache/*",
+            ja: "— /admin/* と /v1/cache/* を保護",
+            ko: "— /admin/* 및 /v1/cache/* 보호",
+            zh: "— 保护 /admin/* 和 /v1/cache/*"
+        )
+        public static let adminTokenPlaceholder = L10nEntry(
+            en: "Leave blank to keep admin routes open",
+            ja: "空白のままにすると管理ルートが開放されます",
+            ko: "비워 두면 관리자 경로가 열린 상태로 유지됩니다",
+            zh: "留空以保持管理路由开放"
+        )
+        public static let randomize = L10nEntry(
+            en: "Randomize",
+            ja: "ランダム化",
+            ko: "임의 생성",
+            zh: "随机生成"
+        )
+        public static let keyLabel = L10nEntry(
+            en: "Key label",
+            ja: "キーラベル",
+            ko: "키 라벨",
+            zh: "密钥标签"
+        )
+        public static let generate = L10nEntry(
+            en: "Generate",
+            ja: "生成",
+            ko: "생성",
+            zh: "生成"
+        )
+        public static let revoke = L10nEntry(
+            en: "Revoke",
+            ja: "取り消し",
+            ko: "취소",
+            zh: "吊销"
+        )
+        public static let revokeConfirm = L10nEntry(
+            en: "Any client using this key will immediately lose access. This can't be undone — a new key will have a different value.",
+            ja: "このキーを使用しているクライアントは即座にアクセスできなくなります。元に戻せません — 新しいキーは別の値になります。",
+            ko: "이 키를 사용하는 모든 클라이언트는 즉시 액세스 권한을 잃게 됩니다. 취소할 수 없습니다 — 새 키는 다른 값을 가집니다.",
+            zh: "任何使用此密钥的客户端将立即失去访问权限。此操作无法撤销 — 新密钥将具有不同的值。"
+        )
+        public static let requireBearer = L10nEntry(
+            en: "Require Bearer auth",
+            ja: "Bearer 認証を要求",
+            ko: "Bearer 인증 필요",
+            zh: "需要 Bearer 认证"
+        )
+        public static let phoneLAN = L10nEntry(
+            en: "PHONE / LAN",
+            ja: "スマホ / LAN",
+            ko: "전화 / LAN",
+            zh: "手机 / 局域网"
+        )
+        public static let scanFromDevice = L10nEntry(
+            en: "Scan from another device on your network",
+            ja: "ネットワーク上の別のデバイスからスキャン",
+            ko: "네트워크의 다른 장치에서 스캔",
+            zh: "从网络上的另一台设备扫描"
+        )
+        public static let portRangeError = L10nEntry(
+            en: "Port must be between 1024 and 65535",
+            ja: "ポートは 1024 から 65535 の範囲で指定してください",
+            ko: "포트는 1024와 65535 사이여야 합니다",
+            zh: "端口必须在 1024 到 65535 之间"
+        )
+        public static let portInUseFormat = L10nEntry(
+            en: "Port %lld is already in use by another session",
+            ja: "ポート %lld は別のセッションで既に使用されています",
+            ko: "포트 %lld은(는) 이미 다른 세션에서 사용 중입니다",
+            zh: "端口 %lld 已被另一个会话占用"
+        )
+        public static let codeSnippets = L10nEntry(
+            en: "CODE SNIPPETS",
+            ja: "コードスニペット",
+            ko: "코드 스니펫",
+            zh: "代码片段"
+        )
+        public static let lanToggle = L10nEntry(
+            en: "LAN (0.0.0.0)",
+            ja: "LAN (0.0.0.0)",
+            ko: "LAN (0.0.0.0)",
+            zh: "LAN (0.0.0.0)"
         )
     }
 
