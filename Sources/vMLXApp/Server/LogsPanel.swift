@@ -248,7 +248,7 @@ struct LogsPanel: View {
                     }
                     .buttonStyle(.plain)
                     .padding(Theme.Spacing.md)
-                    .help("Scroll to newest log line")
+                    .help(L10n.Tooltip.scrollToNewestLog.render(appLocale))
                 }
             }
         }

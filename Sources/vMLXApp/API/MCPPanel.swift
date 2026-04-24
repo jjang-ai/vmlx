@@ -105,7 +105,7 @@ struct MCPPanel: View {
                 Label("Add server", systemImage: "plus")
             }
             .buttonStyle(.bordered)
-            .help("Add a new MCP server to mcp.json")
+            .help(L10n.Tooltip.mcpAddNew.render(appLocale))
         }
     }
 
@@ -133,7 +133,7 @@ struct MCPPanel: View {
                 Task { await pasteJSONImport() }
             }
             .buttonStyle(.borderless)
-            .help("Paste a Claude-Desktop-style mcp.json block from the clipboard and import every server.")
+            .help(L10n.Tooltip.mcpImportClipboard.render(appLocale))
             Button {
                 Task { await reload() }
             } label: {
@@ -207,7 +207,7 @@ struct MCPPanel: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Edit MCP server \(status.name)")
-                .help("Edit configuration")
+                .help(L10n.Tooltip.mcpEdit.render(appLocale))
                 Button {
                     confirmDelete = status.name
                 } label: {
@@ -216,7 +216,7 @@ struct MCPPanel: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Remove MCP server \(status.name)")
-                .help("Remove from mcp.json")
+                .help(L10n.Tooltip.mcpRemove.render(appLocale))
             }
             // Error row — only shown on `.error` state. Previously the
             // panel only showed the state-pill color-coded red with no
@@ -617,7 +617,7 @@ struct MCPServerEditor: View {
                 if draft.transport == .stdio {
                     Section("stdio") {
                         TextField(L10n.Misc.command.render(appLocale), text: $draft.command)
-                            .help("Absolute path or PATH-resolvable executable")
+                            .help(L10n.Tooltip.mcpCmdPath.render(appLocale))
                         VStack(alignment: .leading, spacing: 2) {
                             Text(L10n.Misc.argsHint.render(appLocale))
                                 .font(Theme.Typography.caption)
@@ -630,7 +630,7 @@ struct MCPServerEditor: View {
                 } else {
                     Section("sse") {
                         TextField(L10n.Misc.urlLabel.render(appLocale), text: $draft.url)
-                            .help("Full https:// URL of the MCP SSE endpoint")
+                            .help(L10n.Tooltip.mcpSseUrl.render(appLocale))
                     }
                 }
                 Section("Environment") {

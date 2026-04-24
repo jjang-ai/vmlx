@@ -618,7 +618,7 @@ private struct ChatModelPicker: View {
                 )
             }
             .menuStyle(.borderlessButton)
-            .help("Pick a model · colored dot = load state. Right side ▶ / ■ toggles the model in/out of RAM without leaving the Chat tab.")
+            .help(L10n.Tooltip.modelPicker.render(appLocale))
 
             // Always-visible Load/Unload button. Previously this was only
             // rendered when `currentEntry()` was non-nil, which meant fresh

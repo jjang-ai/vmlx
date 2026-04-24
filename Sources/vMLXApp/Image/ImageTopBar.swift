@@ -15,6 +15,7 @@ import SwiftUI
 import vMLXTheme
 
 struct ImageTopBar: View {
+    @Environment(\.appLocale) private var appLocale: AppLocale
     let selectedModel: ImageCatalogModel?
     let status: ImageScreen.Status
     let elapsedSeconds: Int
@@ -72,7 +73,7 @@ struct ImageTopBar: View {
                     )
             }
             .buttonStyle(.plain)
-            .help("Image settings")
+            .help(L10n.Tooltip.imageSettings.render(appLocale))
         }
         .padding(Theme.Spacing.lg)
         .background(Theme.Colors.background)

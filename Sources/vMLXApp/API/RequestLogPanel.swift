@@ -206,7 +206,7 @@ struct RequestLogPanel: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Click to inspect this request")
+        .help(L10n.Tooltip.inspectRequest.render(appLocale))
     }
 
     private var footer: some View {

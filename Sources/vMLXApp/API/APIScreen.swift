@@ -464,7 +464,7 @@ struct APIScreen: View {
                     .foregroundStyle(Theme.Colors.textLow)
             }
             .buttonStyle(.plain)
-            .help("Revoke API key")
+            .help(L10n.Tooltip.revokeApiKey.render(appLocale))
         }
         .padding(Theme.Spacing.sm)
         .background(

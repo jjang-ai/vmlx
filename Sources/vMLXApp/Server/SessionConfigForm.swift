@@ -902,7 +902,7 @@ struct SessionConfigForm: View {
                     Image(systemName: "arrow.triangle.2.circlepath")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(Theme.Colors.warning)
-                        .help("Changes to fields under \(title) require a session restart to apply.")
+                        .help(L10n.Tooltip.sectionRestart.render(appLocale))
                 }
             }
         }
