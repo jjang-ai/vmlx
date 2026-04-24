@@ -2270,5 +2270,27 @@ public enum L10n {
             ko: "클릭하여 이 요청 검사",
             zh: "点击检查此请求"
         )
+
+        // Tray gateway port-bump / failure tooltips. These use %@ so the
+        // caller can interpolate port numbers / error messages via
+        // L10nEntry.format(locale:_:).
+        public static let gatewayPortBumped = L10nEntry(
+            en: "Requested port %@ was taken. Bound to %@ instead. Change the port above to reclaim %@ after freeing it.",
+            ja: "要求ポート%@は使用中でした。代わりに%@にバインドしました。%@を解放してから上記で再設定してください。",
+            ko: "요청한 포트 %@은 사용 중입니다. 대신 %@에 바인딩했습니다. %@를 해제한 후 위에서 재지정하세요.",
+            zh: "请求端口 %@ 已被占用,已绑定到 %@。释放后可在上方重新指定 %@。"
+        )
+        public static let gatewayBindFailed = L10nEntry(
+            en: "Gateway failed to bind on port %@. %@",
+            ja: "ゲートウェイはポート%@にバインドできませんでした。%@",
+            ko: "게이트웨이가 포트 %@ 바인딩에 실패했습니다. %@",
+            zh: "网关无法绑定端口 %@。%@"
+        )
+        public static let unreadErrorLogs = L10nEntry(
+            en: "%@ unread error log entries — open Logs to clear",
+            ja: "%@件の未読エラーログ — Logsを開いてクリア",
+            ko: "읽지 않은 오류 로그 %@건 — Logs에서 확인하여 삭제",
+            zh: "%@ 条未读错误日志 — 打开 Logs 清除"
+        )
     }
 }
