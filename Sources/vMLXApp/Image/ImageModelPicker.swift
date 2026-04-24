@@ -84,8 +84,11 @@ struct ImageModelPicker: View {
     }
 
     private func badgesFor(_ m: ImageCatalogModel) -> [String] {
-        guard let e = entryFor(m) else { return [] }
         var out: [String] = []
+        // §381 — lead with runnability so users see it before JANG/quant
+        // metadata. Scaffolded entries get a muted "Not ready" tag.
+        if !m.ready { out.append("Not ready") }
+        guard let e = entryFor(m) else { return out }
         if e.isJANG { out.append("JANG") }
         if e.isMXTQ { out.append("MXTQ") }
         if let b = e.quantBits { out.append("\(b)-bit") }
@@ -195,6 +198,14 @@ struct ImageCatalogModel: Identifiable, Hashable {
     let libraryMatchFragment: String
     /// Fallback size shown when the model hasn't been downloaded yet.
     let approxSizeBytes: Int64
+    /// §381 — `true` when the Swift-side DiT + encoder forward passes
+    /// are actually ported and the model runs end-to-end. `false` for
+    /// scaffolded entries (Flux1 Schnell/Dev, Flux2 Klein, Qwen-Image
+    /// Edit, FIBO) which register into the picker but throw
+    /// FluxError.notImplemented on generate. The picker renders a
+    /// "Not yet runnable" badge + disables selection so users don't
+    /// waste the 24 GB download on a stub.
+    let ready: Bool
 }
 
 enum ImageCatalog {
@@ -205,7 +216,8 @@ enum ImageCatalog {
             repo: "black-forest-labs/FLUX.1-schnell",
             kind: .generate,
             libraryMatchFragment: "flux.1-schnell",
-            approxSizeBytes: 23_800_000_000
+            approxSizeBytes: 23_800_000_000,
+            ready: false
         ),
         ImageCatalogModel(
             id: "flux-dev",
@@ -213,7 +225,8 @@ enum ImageCatalog {
             repo: "black-forest-labs/FLUX.1-dev",
             kind: .generate,
             libraryMatchFragment: "flux.1-dev",
-            approxSizeBytes: 23_800_000_000
+            approxSizeBytes: 23_800_000_000,
+            ready: false
         ),
         ImageCatalogModel(
             id: "z-image-turbo",
@@ -221,7 +234,8 @@ enum ImageCatalog {
             repo: "mlx-community/Z-Image-Turbo-mlx",
             kind: .generate,
             libraryMatchFragment: "z-image-turbo",
-            approxSizeBytes: 6_800_000_000
+            approxSizeBytes: 6_800_000_000,
+            ready: true
         ),
     ]
     static let edit: [ImageCatalogModel] = [
@@ -231,7 +245,8 @@ enum ImageCatalog {
             repo: "mlx-community/Qwen-Image-Edit",
             kind: .edit,
             libraryMatchFragment: "qwen-image-edit",
-            approxSizeBytes: 54_000_000_000
+            approxSizeBytes: 54_000_000_000,
+            ready: false
         ),
     ]
     static let all: [ImageCatalogModel] = generate + edit
