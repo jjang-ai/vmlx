@@ -152,6 +152,21 @@ public actor Engine {
     /// the generic `turboQuantBits` default.
     public private(set) var loadedJangConfig: JangConfig?
 
+    /// §368 — model-supplied sampling defaults from `generation_config.json`.
+    /// Qwen/Gemma/Nemotron each ship different recommended temp/top_p/top_k;
+    /// the UI uses these as the placeholder for inherited values and the
+    /// `/v1/chat/completions` path prefers them when the request + session +
+    /// global chain all resolve to the hardcoded GlobalSettings default.
+    public struct ModelGenerationDefaults: Sendable, Equatable {
+        public var temperature: Double?
+        public var topP: Double?
+        public var topK: Int?
+        public var maxTokens: Int?
+        public var repetitionPenalty: Double?
+        public init() {}
+    }
+    public private(set) var loadedModelDefaults: ModelGenerationDefaults = .init()
+
     /// The `LoadOptions` used for the most recent successful load. Retained
     /// so that `wake()` out of `.standby(.deep)` can replay the load without
     /// requiring the caller to stash and re-supply them. Cleared by
@@ -1340,6 +1355,38 @@ public actor Engine {
 
     private func setLoadedModelPath(_ url: URL?) {
         self.loadedModelPath = url
+        // §368 — refresh model-supplied defaults whenever the loaded
+        // path changes. Unload clears them; a successful load re-reads
+        // generation_config.json for the new model. Silent on failure
+        // since absence of generation_config.json is common.
+        if let url {
+            self.loadedModelDefaults = Self.readGenerationConfig(at: url)
+        } else {
+            self.loadedModelDefaults = .init()
+        }
+    }
+
+    /// §368 — parse generation_config.json into ModelGenerationDefaults.
+    /// Swallows all errors; callers treat nil fields as "not recommended
+    /// by the model, fall through to global default."
+    public nonisolated static func readGenerationConfig(
+        at modelURL: URL
+    ) -> ModelGenerationDefaults {
+        var out = ModelGenerationDefaults()
+        let cfgURL = modelURL.appendingPathComponent("generation_config.json")
+        guard let data = try? Data(contentsOf: cfgURL),
+              let obj = try? JSONSerialization.jsonObject(with: data)
+                        as? [String: Any] else { return out }
+        out.temperature = (obj["temperature"] as? NSNumber)?.doubleValue
+        out.topP = (obj["top_p"] as? NSNumber)?.doubleValue
+        out.topK = (obj["top_k"] as? NSNumber)?.intValue
+        // HuggingFace uses `max_new_tokens` in some configs and
+        // `max_length` in others. Prefer max_new_tokens since it's the
+        // generation-side limit (max_length caps the FULL sequence
+        // including prompt and the user almost never wants that).
+        out.maxTokens = (obj["max_new_tokens"] as? NSNumber)?.intValue
+        out.repetitionPenalty = (obj["repetition_penalty"] as? NSNumber)?.doubleValue
+        return out
     }
 
     private func setLoadedJangConfig(_ cfg: JangConfig?) {

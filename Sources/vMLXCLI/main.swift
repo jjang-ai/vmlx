@@ -537,6 +537,34 @@ struct Chat: AsyncParsableCommand {
     @Option(name: .long, help: "Max iterations per user turn before giving up (default 16)")
     var maxToolCalls: Int = 16
 
+    // §369 — scope flags. These shape the system prompt instead of
+    // injecting new tool schemas because MCP-style tool round-trips
+    // have per-call handshake overhead (schema decode + args validation
+    // + resultencoding + model re-tokenization of the result). Native
+    // bash + a prompt-level boundary is the fast path: one tool schema,
+    // one dispatch, same model state.
+    @Option(name: .long, help: "Read-only mode: model instructed not to modify files or spawn long-running processes")
+    var readOnly: Bool = false
+    @Option(name: .long, help: "No-network mode: model instructed not to make network requests")
+    var noNetwork: Bool = false
+    @Option(name: .long, help: "Forbid destructive commands (rm -rf, dd, mkfs, force-push, etc.)")
+    var noDestructive: Bool = true
+    @Option(name: .long, help: "Constrain the model's working directory to --cwd (no cd out of it)")
+    var sandboxCwd: Bool = false
+
+    // §370 — verbose + reasoning surfaces. Modern agentic models
+    // (Qwen3, GLM-5.1, DeepSeek-V3, MiniMax-M2.7, Nemotron) interleave
+    // thinking with tool calls: reason → call bash → read output →
+    // reason about result → call bash again → finalize. The CLI
+    // should surface all three streams so the user can debug the
+    // agent's decision loop, not just see the final output.
+    @Option(name: .long, help: "Show full bash commands + output before feeding back to the model")
+    var verbose: Bool = false
+    @Option(name: .long, help: "Show model reasoning content (if model emits <think> blocks or reasoning_content SSE chunks)")
+    var showReasoning: Bool = true
+    @Option(name: .long, help: "Reasoning-model thinking budget via enable_thinking kwarg (off for non-reasoning models)")
+    var enableThinking: Bool = true
+
     func run() async throws {
         let engine = Engine()
         let modelURL = URL(fileURLWithPath: model).resolvingSymlinksInPath()
@@ -590,14 +618,36 @@ struct Chat: AsyncParsableCommand {
         if let sys = system {
             messages.append(ChatRequest.Message(role: "system", content: .string(sys)))
         } else if toolsOn {
-            // Default system prompt for the agentic mode. Matches the
-            // tone of the Claude Code / Codex CLI prompts: the model
-            // knows it has shell access and should prefer running
-            // commands over guessing.
+            // §367 + §369 — default agentic system prompt, with scope
+            // adjustments from CLI flags folded in. Matches Claude Code /
+            // Codex tone: the model knows it has shell access and
+            // should prefer running commands over guessing.
+            //
+            // Scope flags are expressed as plain-text boundaries in the
+            // prompt, not as separate tool schemas, to keep the
+            // tool-call hot path cheap. Schema bloat = per-call
+            // overhead = slow agentic loops. Text instructions = zero
+            // extra round-trip cost; the model just honors them.
+            var scope = ""
+            if readOnly {
+                scope += "\n- READ-ONLY MODE: do NOT modify files (no redirects, no edits, no mkdir, no touch). You may read + inspect freely."
+            }
+            if noNetwork {
+                scope += "\n- NO NETWORK: do NOT make HTTP/HTTPS requests. No curl, wget, git push/fetch/clone, brew, npm install, pip install, or similar."
+            }
+            if noDestructive {
+                scope += "\n- NO DESTRUCTIVE COMMANDS: refuse rm -rf, dd if=, mkfs, force-push, sudo, systemctl-stop, kill -9 on system procs, killall, unless the user EXPLICITLY asks with unambiguous wording."
+            }
+            if sandboxCwd {
+                scope += "\n- SANDBOXED WORKDIR: stay inside \(agentCwd.path). Do not `cd` out of it or reference absolute paths outside it."
+            }
+            let scopeBlock = scope.isEmpty
+                ? ""
+                : "\n\nScope rules (enforced by plain-text boundary, not by a sandbox):\(scope)"
             messages.append(ChatRequest.Message(
                 role: "system",
                 content: .string("""
-                You are a helpful assistant running in a shell-enabled terminal. You have a `bash` tool that runs commands via /bin/zsh -c in the working directory \(agentCwd.path). Prefer running commands to learn about files, systems, and state over guessing. When the user asks for something actionable, do it; don't just describe steps. For long-running tasks, break into small steps, run each, and feed results back. Avoid destructive commands (rm -rf, dd, etc.) unless the user explicitly asks.
+                You are a helpful assistant running in a shell-enabled terminal. You have a `bash` tool that runs commands via /bin/zsh -c in the working directory \(agentCwd.path). Prefer running commands to learn about files, systems, and state over guessing. When the user asks for something actionable, do it; don't just describe steps. For long-running tasks, break into small steps, run each, and feed results back.\(scopeBlock)
                 """)
             ))
         }
@@ -622,44 +672,109 @@ struct Chat: AsyncParsableCommand {
                 stream: true,
                 temperature: effectiveTemp,
                 topP: modelTopP,
+                enableThinking: enableThinking ? true : nil,
                 reasoningEffort: reasoning,
                 tools: tools,
-                toolChoice: toolsOn ? .auto : nil
+                toolChoice: toolsOn ? .auto : nil,
+                includeReasoning: showReasoning ? true : nil
             )
             // Stream.swift handles in-process tool dispatch — tool_call
             // and tool_status chunks come back naturally. We just print
             // content deltas, echo tool calls to stderr, and collect the
             // final assistant message.
+            // §370 — stream demultiplexer that handles interleaved thinking.
+            // Modern reasoning models (Qwen3, GLM-5.1, DeepSeek-V3,
+            // MiniMax-M2.7, Nemotron) emit THREE parallel streams:
+            //   • content  → user-visible answer
+            //   • reasoning → <think> blocks or reasoning_content SSE
+            //   • toolCalls + toolStatus → agent actions
+            // The model can switch between all three mid-turn: start
+            // thinking, call bash, read output, go back to thinking,
+            // call bash again, finally emit content. We render each
+            // stream with a distinct prefix/color so the user can see
+            // the full decision loop.
             var assistant = ""
+            var reasoning = ""
             var iterations = 0
+            var lastStream: String = ""   // "content" | "reasoning"
             let stream = await engine.stream(request: req)
             do {
                 for try await chunk in stream {
+                    // Reasoning deltas go to stderr with a color prefix
+                    // so content stays clean on stdout. Grouped so we
+                    // only print the "[thinking]" header once per
+                    // uninterrupted run.
+                    if showReasoning, let think = chunk.reasoning, !think.isEmpty {
+                        if lastStream != "reasoning" {
+                            FileHandle.standardError.write(Data(
+                                "\n\u{001B}[2m[thinking] ".utf8))
+                            lastStream = "reasoning"
+                        }
+                        FileHandle.standardError.write(Data(think.utf8))
+                        reasoning += think
+                    }
                     if let delta = chunk.content {
+                        if lastStream == "reasoning" {
+                            FileHandle.standardError.write(Data(
+                                "\u{001B}[0m\n".utf8))   // end the dim block
+                        }
+                        lastStream = "content"
                         print(delta, terminator: "")
                         fflush(stdout)
                         assistant += delta
                     }
                     if let calls = chunk.toolCalls, !calls.isEmpty {
+                        // Close any open reasoning block before echoing
+                        // the tool call so ANSI doesn't bleed.
+                        if lastStream == "reasoning" {
+                            FileHandle.standardError.write(Data("\u{001B}[0m\n".utf8))
+                            lastStream = ""
+                        }
                         iterations += calls.count
                         for c in calls {
                             let name = c.function.name
                             let args = c.function.arguments
-                            FileHandle.standardError.write(Data(
-                                "\n[tool] \(name) \(args)\n".utf8))
+                            var line = "\n\u{001B}[33m[tool] \(name)"
+                            if verbose {
+                                line += " \(args)"
+                            } else {
+                                // Short form: first 80 chars of the
+                                // command-field specifically (if name
+                                // is "bash"). Keeps terminal clean.
+                                line += " \(args.prefix(80))"
+                                if args.count > 80 { line += "…" }
+                            }
+                            line += "\u{001B}[0m\n"
+                            FileHandle.standardError.write(Data(line.utf8))
                         }
                         if iterations >= maxToolCalls {
                             FileHandle.standardError.write(Data(
-                                "[tool] max-tool-calls (\(maxToolCalls)) reached — halting agentic loop\n".utf8))
+                                "\u{001B}[31m[tool] max-tool-calls (\(maxToolCalls)) reached — halting agentic loop\u{001B}[0m\n".utf8))
                             break
                         }
                     }
                     if let status = chunk.toolStatus {
-                        var line = "[tool \(status.phase.rawValue)] \(status.name)"
-                        if let m = status.message { line += ": \(m)" }
-                        line += "\n"
+                        if lastStream == "reasoning" {
+                            FileHandle.standardError.write(Data("\u{001B}[0m\n".utf8))
+                            lastStream = ""
+                        }
+                        var line = "\u{001B}[2m[tool \(status.phase.rawValue)] \(status.name)"
+                        if let m = status.message {
+                            if verbose {
+                                line += ": \(m)"
+                            } else {
+                                let head = String(m.prefix(120))
+                                line += ": \(head)"
+                                if m.count > 120 { line += "…" }
+                            }
+                        }
+                        line += "\u{001B}[0m\n"
                         FileHandle.standardError.write(Data(line.utf8))
                     }
+                }
+                // Close any dangling reasoning block at end of turn.
+                if lastStream == "reasoning" {
+                    FileHandle.standardError.write(Data("\u{001B}[0m\n".utf8))
                 }
                 print("")
                 messages.append(

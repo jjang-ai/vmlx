@@ -42,16 +42,18 @@ Updated per iteration. Numbered with § tags that match commits.
 | ✓ | §352 /v1/completions legacy logprobs wire fix | ✅ | 389cda7 |
 | ✓ | §354 TurboQuant-as-default cache picker + zombie purge | ✅ | 9c6974b |
 
-### Priority 3.5 — new asks this session (§367+ queue)
+### Priority 3.5 — new asks this session
 
-| # | Issue | Status | Section |
-|---|-------|--------|---------|
-| N1 | **CLI `vmlxctl chat` is plain REPL — no tools, no agentic loop** | 🚧 next | Sources/vMLXCLI/main.swift:505 — needs BashTool.openAISchema injection + tool-call dispatch loop matching ChatViewModel:914 pattern |
-| N2 | **Agentic loop in CLI** — model calls bash, we execute, feed result back, model continues, no max-iter cap | 🚧 next | Stream.swift already handles multi-turn tool dispatch in-process via executeToolCall. CLI just needs to enable it + unbuffered print |
-| N3 | **UI Terminal tab visible confirmation of agentic loop** | 📋 | TerminalScreen.swift — ensure tool-call chunks render + running state reflects agent activity |
-| N4 | **Default chat settings should come from model's generation_config.json** not global hardcoded defaults — Qwen/Gemma/Nemotron each ship different recommended temp/top_p/top_k/repetition_penalty | 📋 | Engine.LoadOptions + JangLoader: read generation_config.json during load, override GlobalSettings.defaultTemperature/topP/topK when `chat_overrides == nil` AND `settings.defaultTemperature == 0.7` (default). Surface in SessionConfigForm as "inherited from model" placeholder |
-| N5 | **Reflect N4 user-side** — placeholder in inference defaults panel: "Temperature: 0.7 (model default)" vs "(global default)" | 📋 | SessionConfigForm inference section + ChatSettings effective values panel |
-| N6 | **Help/info tooltips translated** across settings surfaces — user asked earlier | 📋 partial | Many help strings added; remaining are field-level `.help()` in SessionConfigForm rows |
+| # | Issue | Status | Shipped as |
+|---|-------|--------|------------|
+| N1 | **CLI `vmlxctl chat` plain REPL** → real agentic | ✅ | §367 |
+| N2 | **Agentic loop in CLI** | ✅ | §367 — Stream.swift ToolDispatcher + maxToolCalls cap |
+| N3 | **UI Terminal tab visible tool-call surface** | 📋 queued | The engine already emits tool_call + tool_status chunks; TerminalScreen already renders InlineToolCallCard via applyChunk. Check live-test parity with CLI verbose mode |
+| N4 | **Default chat settings from generation_config.json** | ✅ | §367 CLI + §368 engine API + UI placeholder |
+| N5 | **User-side reflection of N4 in SessionConfigForm** | ✅ | §368 — sparkles-prefixed caption "Model recommends: temp=X, top_p=Y…" above inference fields; reads live from Engine.readGenerationConfig(at:) |
+| N6 | **Help/info tooltips translated** | 🚧 partial | Major help strings done; remaining are `.help()` field tooltips in SessionConfigForm rows |
+| N7 | **Terminal tool scope flags** — read-only / no-network / no-destructive / sandbox-cwd, prompt-level not tool-schema-level | ✅ | §369 |
+| N8 | **Interleaved reasoning display + verbose mode** — stream demuxer for content/reasoning/tool-calls with ANSI color prefixes | ✅ | §370 |
 
 ### Priority 4 — live-test findings (Nemotron session)
 

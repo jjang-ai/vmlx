@@ -47,6 +47,13 @@ struct SessionConfigForm: View {
     // so the user sees what value will be inherited if they leave it empty.
     @State private var globalDefaults: GlobalSettings = GlobalSettings()
 
+    // §368 — model-supplied sampling defaults from generation_config.json,
+    // if any. Populated on load() and after a successful engine load.
+    // Surfaced as an informational caption at the top of Inference
+    // defaults so users see "Qwen recommends temp=0.6, top_p=0.95" vs
+    // "Gemma recommends temp=1.0". Not a binding — read-only hint.
+    @State private var modelDefaults: Engine.ModelGenerationDefaults = .init()
+
     /// True when this session is configured to proxy to a remote HTTP
     /// endpoint. In remote mode, all the local-only settings (Engine,
     /// Cache, Lifecycle, Advanced) are inert — the local MLX loader
@@ -328,6 +335,11 @@ struct SessionConfigForm: View {
 
     @ViewBuilder
     private var inferenceSection: some View {
+        // §368 — surface the model's own sampling recommendations when
+        // generation_config.json exists. Makes Qwen-recommended temp=0.6
+        // vs Gemma-recommended temp=1.0 vs Nemotron default visible in
+        // the UI instead of silently using the global 0.7 default.
+        modelDefaultsCaption
         toggleRow("Enable thinking by default",
                   triStateBinding(\.defaultEnableThinking, default: globalDefaults.defaultEnableThinking ?? false))
 
@@ -726,6 +738,36 @@ struct SessionConfigForm: View {
         .pickerStyle(.segmented)
     }
 
+    /// §368 — compact caption showing model-recommended sampling params.
+    /// Hidden when the model ships no generation_config.json (no fields
+    /// populated). Parts are conditionally joined so users only see what's
+    /// actually recommended. Rendered above inference fields so users
+    /// understand why their values might differ from the global 0.7 default.
+    @ViewBuilder
+    private var modelDefaultsCaption: some View {
+        let parts: [String] = {
+            var p: [String] = []
+            if let t = modelDefaults.temperature { p.append("temp=\(String(format: "%.2f", t))") }
+            if let v = modelDefaults.topP       { p.append("top_p=\(String(format: "%.2f", v))") }
+            if let v = modelDefaults.topK       { p.append("top_k=\(v)") }
+            if let v = modelDefaults.repetitionPenalty { p.append("rep=\(String(format: "%.2f", v))") }
+            if let v = modelDefaults.maxTokens  { p.append("max=\(v)") }
+            return p
+        }()
+        if !parts.isEmpty {
+            HStack(alignment: .top, spacing: 4) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.Colors.accent)
+                Text("Model recommends: " + parts.joined(separator: ", "))
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textMid)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
     // MARK: - Load + commit
 
     private func load() async {
@@ -738,6 +780,15 @@ struct SessionConfigForm: View {
             s = SessionSettings(modelPath: cardModel.modelPath)
             modelPath = cardModel.modelPath
         }
+        // §368 — read generation_config.json for the session's model
+        // path (off the main thread, since it's just a JSON file read).
+        // We can't ask the engine actor for its live `loadedModelDefaults`
+        // because THIS session may not be the one currently loaded in the
+        // actor, but the file read is cheap + authoritative.
+        let path = modelPath
+        modelDefaults = await Task.detached(priority: .utility) {
+            Engine.readGenerationConfig(at: path)
+        }.value
         loaded = true
     }
 
