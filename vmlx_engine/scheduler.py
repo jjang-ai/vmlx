@@ -393,6 +393,12 @@ class Scheduler:
         self._pld_win_zero: int = 0  # rounds where 0 drafts accepted
         self._pld_win_tokens: int = 0  # tokens emitted while PLD active
         self._pld_win_d0_skip: int = 0  # d0 pre-check skips (wasted cycles avoided)
+        # Hysteresis for the zero-attempt auto-disable (vmlx#107): the first
+        # summary window is only 1 token (slow-start), so a brand-new request
+        # is guaranteed to log 0 PLD attempts before its n-gram index warms
+        # up. Require 2 consecutive zero-attempt windows before disabling so
+        # warmup noise doesn't trip the kill switch.
+        self._pld_zero_streak: int = 0
         # Auto-tune: TCP slow-start inspired wall-clock throughput control.
         # Window starts at 10 tokens, doubles each positive window (exponential
         # growth), caps at _pld_summary_interval.  On congestion (PLD hurting),
@@ -3891,17 +3897,39 @@ class Scheduler:
 
         if n == 0:
             if self._pld_auto_enabled:
-                # PLD was enabled but d0 pre-check filtered every cycle —
-                # no opportunities to help. Disable to avoid per-token
-                # overhead from find_draft_tokens + d0 check.
-                self._pld_auto_enabled = False
-                self._pld_at_window = 1
-                self._pld_at_probe_tokens = 0
-                logger.info(
-                    "[PLD:3b1f] auto-tune — disabled (0 rounds in %d tokens, "
-                    "d0 pre-check filtered all)",
-                    self._pld_win_total_tokens,
-                )
+                # Zero attempts this window. Could be real uselessness
+                # (d0 pre-check filtered every cycle) OR a warmup window
+                # where the n-gram index hadn't built up yet. Require two
+                # consecutive zero-attempt windows before disabling so the
+                # 1-token first-window doesn't trip the kill switch
+                # (vmlx#107). Double the window on the first zero so the
+                # second observation has a fair sample.
+                self._pld_zero_streak += 1
+                if self._pld_zero_streak >= 2:
+                    self._pld_auto_enabled = False
+                    self._pld_at_window = 1
+                    self._pld_at_probe_tokens = 0
+                    self._pld_zero_streak = 0
+                    logger.info(
+                        "[PLD:3b1f] auto-tune — disabled (2 consecutive 0-"
+                        "attempt windows, %d tokens total)",
+                        self._pld_win_total_tokens,
+                    )
+                else:
+                    # First zero window — grow summary window (same rule as
+                    # the positive-window path) and wait for one more sample
+                    # before making the kill decision.
+                    old_window = self._pld_at_window
+                    self._pld_at_window = min(
+                        self._pld_at_window * 2, self._pld_summary_interval
+                    )
+                    logger.info(
+                        "[PLD:3b1f] auto-tune — 0 attempts in %d tokens "
+                        "(warmup?), window %d→%d before deciding",
+                        self._pld_win_total_tokens,
+                        old_window,
+                        self._pld_at_window,
+                    )
             else:
                 # Already disabled.  Count toward probe interval.
                 self._pld_at_probe_tokens += self._pld_win_total_tokens
@@ -3909,6 +3937,7 @@ class Scheduler:
                     self._pld_auto_enabled = True
                     self._pld_at_window = 1
                     self._pld_at_probe_tokens = 0
+                    self._pld_zero_streak = 0
                     logger.info(
                         "[PLD:3b1f] auto-tune probe — re-enabling with window=%d",
                         self._pld_at_window,
@@ -3918,6 +3947,10 @@ class Scheduler:
             self._pld_win_cycle_wall_s = 0.0
             self._pld_summary_next = self._pld_at_window
             return
+
+        # Any positive window resets the zero-streak so the hysteresis only
+        # fires on *consecutive* zero windows.
+        self._pld_zero_streak = 0
 
         accepted = self._pld_win_accepted
         full_pct = 100 * self._pld_win_full / n
