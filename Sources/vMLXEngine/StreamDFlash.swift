@@ -89,11 +89,21 @@ extension Engine {
 
         // -- Run cached multi-block speculative decode --
         let requestStart = Date()
-        // §373 — honor model's generation_config.json before falling back
-        // to global default. Same three-tier chain as Stream.swift.
-        let maxNewTokens = max(1, request.maxTokens
-            ?? self.loadedModelDefaults.maxTokens
-            ?? g.defaultMaxTokens)
+        // §373/§378 — sampling priority (highest→lowest):
+        //   1. request.maxTokens (HTTP body)
+        //   2. session/chat override via SettingsStore cascade
+        //   3. loadedModelDefaults.maxTokens (generation_config.json)
+        //   4. compiled-in global default
+        // The trace tells us if tier 2 was populated; if not, swap in
+        // the model recommendation. Mirrors Stream.swift §378 pickInt.
+        let dfTrace = resolved.resolutionTrace["defaultMaxTokens"]
+        let maxFallback: Int
+        if dfTrace == .global, let m = self.loadedModelDefaults.maxTokens {
+            maxFallback = m
+        } else {
+            maxFallback = g.defaultMaxTokens
+        }
+        let maxNewTokens = max(1, request.maxTokens ?? maxFallback)
 
         // Each block outcome yields its accepted tokens as a decoded
         // text chunk. The decoder runs on the engine actor (tokenizer
