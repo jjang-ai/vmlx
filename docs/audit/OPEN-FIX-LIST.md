@@ -19,7 +19,7 @@ Updated per iteration. Numbered with § tags that match commits.
 
 | # | Issue | Status | Section |
 |---|-------|--------|---------|
-| F1 | **Image generation fails** ("Image generation for this model is not yet ported. Swift FluxKit infrastructure (scheduler, VAE, DiT, loaders) is in place but individual model generate() methods are still scaffolded.") | ⏭ | vMLXFluxKit — real scaffolded, not a quick fix |
+| F1 | **Image generation fails** ("Image generation for this model is not yet ported…") — Z-Image Turbo ships real generate(); Flux Schnell/Dev/Klein + Qwen-Image-Edit + FIBO still scaffold | 🔶 picker flags scaffolds | §381 `ImageCatalogModel.ready` + "Not ready" badge at pick time so users see it BEFORE the 24 GB download. Actual Flux ports still deferred (needs Python-reference-matching unit tests). |
 | F2 | **`[Image #N]` placeholder text** leaking into UI instead of real thumbnail | 🚧 | ChatInterface / MessageBubble image rendering |
 | F3 | **Block disk cache** — storage layer + paged-cache integration | 🚧 | §355 storage layer in progress, paged-cache hook follow-on |
 
@@ -41,6 +41,15 @@ Updated per iteration. Numbered with § tags that match commits.
 | ✓ | §350 Jinja inline-if-without-else | ✅ | 7dd86b5 |
 | ✓ | §352 /v1/completions legacy logprobs wire fix | ✅ | 389cda7 |
 | ✓ | §354 TurboQuant-as-default cache picker + zombie purge | ✅ | 9c6974b |
+| ✓ | §371 Terminal interleaved reasoning surface (.reasoning role + collapse) | ✅ | f35be8e |
+| ✓ | §372 Tooltip i18n sweep (26 keys × 4 locales) | ✅ | 27496de |
+| ✓ | §373 + §378 generation_config.json fallback (correct priority) | ✅ | 22b0512 + 19e7a15 + 5793d24 |
+| ✓ | §374 AppIcon compiled into bundle via actool | ✅ | c5ff6f1 (beta.10) |
+| ✓ | §375 + §380 regression guards (9 tests) | ✅ | 976c578 + 0de5a87 |
+| ✓ | §376 TrayItem interpolated tooltips i18n | ✅ | b876832 |
+| ✓ | §377 tray disclosure headers + cache/MoE/logging labels i18n | ✅ | d99401a |
+| ✓ | §381 image picker Not-ready badge | ✅ | 338121f |
+| ✓ | §382 Setup welcome blurb i18n | ✅ | 0420bc9 |
 
 ### Priority 3.5 — new asks this session
 
@@ -51,7 +60,7 @@ Updated per iteration. Numbered with § tags that match commits.
 | N3 | **UI Terminal tab visible tool-call surface + interleaved reasoning** | ✅ | §371 — TerminalTurn.Role += .reasoning with auto-collapse + dim styling; tool-call surface via InlineToolCallCard already in place |
 | N4 | **Default chat settings from generation_config.json** | ✅ | §367 CLI + §368 engine API + UI placeholder |
 | N5 | **User-side reflection of N4 in SessionConfigForm** | ✅ | §368 — sparkles-prefixed caption "Model recommends: temp=X, top_p=Y…" above inference fields; reads live from Engine.readGenerationConfig(at:) |
-| N6 | **Help/info tooltips translated** | 🚧 partial | Major help strings done; remaining are `.help()` field tooltips in SessionConfigForm rows |
+| N6 | **Help/info tooltips translated** | ✅ | §372 + §376 — 29-key L10n.Tooltip (en/ja/ko/zh) covers every `.help(...)` hover across Chat, Server, Image, API. §376 format-aware entries for gateway-port-bump / bind-failed / unread-log-count interpolations. |
 | N7 | **Terminal tool scope flags** — read-only / no-network / no-destructive / sandbox-cwd, prompt-level not tool-schema-level | ✅ | §369 |
 | N8 | **Interleaved reasoning display + verbose mode** — stream demuxer for content/reasoning/tool-calls with ANSI color prefixes | ✅ | §370 |
 
