@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react'
 import { Modal } from '../ui/Modal'
 import { DistributedNodeList } from './DistributedNodeList'
+import { useTranslation } from '../../i18n'
 export interface SessionConfig {
   host: string
   port: number
@@ -173,6 +174,7 @@ interface SessionConfigFormProps {
 }
 
 export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedMaxContext, modelType, imageMode, sessionId }: SessionConfigFormProps) {
+  const { t } = useTranslation()
   const isImage = modelType === 'image'
   const isImageEdit = isImage && (imageMode === 'edit' || config.imageMode === 'edit')
   const [expandedSections, setExpandedSections] = useState({
@@ -206,12 +208,12 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   return (
     <div className="space-y-0">
       {/* Server Settings */}
-      <Section title="Server Settings" expanded={expandedSections.server} onToggle={() => toggleSection('server')}>
-        <Field label="Host" tooltip="The network interface to bind to. Default 127.0.0.1 (localhost only). Change to 0.0.0.0 to allow connections from other machines on your network (LAN access). Use an API key when binding to 0.0.0.0.">
+      <Section title={t('sessions.config.serverSettings')} expanded={expandedSections.server} onToggle={() => toggleSection('server')}>
+        <Field label={t('sessions.config.host')} tooltip="The network interface to bind to. Default 127.0.0.1 (localhost only). Change to 0.0.0.0 to allow connections from other machines on your network (LAN access). Use an API key when binding to 0.0.0.0.">
           <input type="text" value={config.host} onChange={e => onChange('host', e.target.value)} className="cfg-input" />
         </Field>
         <SliderField
-          label="Port"
+          label={t('sessions.config.port')}
           tooltip="The TCP port the server listens on. Each running model instance needs a unique port. Ports are auto-assigned starting from 8000. You can manually set any port between 1024-65535 that isn't already in use."
           value={config.port}
           onChange={v => onChange('port', v)}
@@ -220,14 +222,14 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           step={1}
           defaultValue={DEFAULT_CONFIG.port}
         />
-        <Field label="API Key" tooltip="Optional authentication key for the OpenAI-compatible API. When set, all API requests must include this key in the Authorization header. Leave empty to allow unauthenticated access (fine for local-only servers).">
-          <input type="password" value={config.apiKey} onChange={e => onChange('apiKey', e.target.value)} placeholder="Leave empty for no auth" className="cfg-input" />
+        <Field label={t('sessions.config.apiKey')} tooltip="Optional authentication key for the OpenAI-compatible API. When set, all API requests must include this key in the Authorization header. Leave empty to allow unauthenticated access (fine for local-only servers).">
+          <input type="password" value={config.apiKey} onChange={e => onChange('apiKey', e.target.value)} placeholder={t('sessions.config.apiKeyPlaceholder')} className="cfg-input" />
         </Field>
-        <Field label="Served Model Name" tooltip="Custom name to expose via the /v1/models API and in response objects. When set, API clients can use this name instead of the full model path. Both the custom name and the actual model name are listed in /v1/models. Leave empty to auto-derive from model path (e.g. 'mlx-community/Llama-3.2-3B').">
-          <input type="text" value={config.servedModelName} onChange={e => onChange('servedModelName', e.target.value)} placeholder="Auto (from model path)" className="cfg-input" />
+        <Field label={t('sessions.config.servedModelName')} tooltip="Custom name to expose via the /v1/models API and in response objects. When set, API clients can use this name instead of the full model path. Both the custom name and the actual model name are listed in /v1/models. Leave empty to auto-derive from model path (e.g. 'mlx-community/Llama-3.2-3B').">
+          <input type="text" value={config.servedModelName} onChange={e => onChange('servedModelName', e.target.value)} placeholder={t('sessions.config.servedModelNamePlaceholder')} className="cfg-input" />
         </Field>
         <SliderField
-          label="Rate Limit (req/min)"
+          label={t('sessions.config.rateLimit')}
           tooltip="Maximum number of API requests allowed per minute. Set to 0 to disable rate limiting. Useful when exposing the server to multiple users or external applications to prevent overloading."
           value={config.rateLimit}
           onChange={v => onChange('rateLimit', v)}
@@ -237,10 +239,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           defaultValue={60}
           allowUnlimited
           unlimitedValue={0}
-          unlimitedLabel="Disabled"
+          unlimitedLabel={t('sessions.config.rateLimitDisabled')}
         />
         <SliderField
-          label="Timeout (seconds)"
+          label={t('sessions.config.timeout')}
           tooltip="Maximum time in seconds to wait for a single inference request to complete before timing out. Increase this for very long generations or slow models. Default 300s (5 minutes) should be sufficient for most use cases."
           value={config.timeout}
           onChange={v => onChange('timeout', v)}
@@ -250,18 +252,18 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           defaultValue={DEFAULT_CONFIG.timeout}
           allowUnlimited
           unlimitedValue={0}
-          unlimitedLabel="No limit"
+          unlimitedLabel={t('sessions.config.timeoutNoLimit')}
         />
-        <Field label="Log Level" tooltip="Controls how much detail the server logs. DEBUG shows everything (very verbose). INFO is the default. WARNING and ERROR reduce noise to only important messages.">
+        <Field label={t('sessions.config.logLevel')} tooltip="Controls how much detail the server logs. DEBUG shows everything (very verbose). INFO is the default. WARNING and ERROR reduce noise to only important messages.">
           <select value={config.logLevel || 'INFO'} onChange={e => onChange('logLevel', e.target.value)} className="cfg-input">
-            <option value="DEBUG">DEBUG (verbose)</option>
-            <option value="INFO">INFO (default)</option>
-            <option value="WARNING">WARNING</option>
-            <option value="ERROR">ERROR (minimal)</option>
+            <option value="DEBUG">{t('sessions.config.logLevelDebug')}</option>
+            <option value="INFO">{t('sessions.config.logLevelInfo')}</option>
+            <option value="WARNING">{t('sessions.config.logLevelWarning')}</option>
+            <option value="ERROR">{t('sessions.config.logLevelError')}</option>
           </select>
         </Field>
-        <Field label="CORS Origins" tooltip="Allowed origins for cross-origin API requests (from web browsers). Use * to allow all origins, or a comma-separated list of specific origins (e.g. http://localhost:3000,https://myapp.com). Only matters when external web apps call your API.">
-          <input type="text" value={config.corsOrigins || '*'} onChange={e => onChange('corsOrigins', e.target.value)} placeholder="* (allow all)" className="cfg-input" />
+        <Field label={t('sessions.config.corsOrigins')} tooltip="Allowed origins for cross-origin API requests (from web browsers). Use * to allow all origins, or a comma-separated list of specific origins (e.g. http://localhost:3000,https://myapp.com). Only matters when external web apps call your API.">
+          <input type="text" value={config.corsOrigins || '*'} onChange={e => onChange('corsOrigins', e.target.value)} placeholder={t('sessions.config.corsPlaceholder')} className="cfg-input" />
         </Field>
       </Section>
 
@@ -269,19 +271,19 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       {isImage && (
         <div className="px-4 py-3 text-xs text-muted-foreground border-b border-border">
           {isImageEdit
-            ? <>This is an image editing server. Only server settings (host, port, timeout) apply. Use the Image tab to edit images or call <code className="bg-muted px-1 rounded">/v1/images/edits</code>.</>
-            : <>This is an image generation server. Only server settings (host, port, timeout) apply. Use the Image tab to generate images or call <code className="bg-muted px-1 rounded">/v1/images/generations</code>.</>
+            ? <>{t('sessions.config.imageEditServerNote')}</>
+            : <>{t('sessions.config.imageGenServerNote')}</>
           }
         </div>
       )}
 
-      <Section title="Concurrent Processing" expanded={expandedSections.concurrent} onToggle={() => toggleSection('concurrent')} hidden={isImage}>
+      <Section title={t('sessions.config.concurrentProcessing')} expanded={expandedSections.concurrent} onToggle={() => toggleSection('concurrent')} hidden={isImage}>
         <div className="flex items-center gap-2 mb-2">
           <PerformanceHint text="Controls how many requests your server handles at once. Keep Continuous Batching ON to enable the caching engine." />
           <button
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowCachingHelp(true) }}
             className="w-6 h-6 flex items-center justify-center rounded-full bg-accent/50 text-accent-foreground hover:bg-accent hover:text-white transition-colors text-xs font-bold"
-            title="Caching & Compatibility Reference"
+            title={t('sessions.config.cachingReferenceTitle')}
           >
             ?
           </button>
@@ -411,7 +413,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Prefix Cache */}
-      <Section title="Prefix Cache" expanded={expandedSections.prefixCache} onToggle={() => toggleSection('prefixCache')} hidden={isImage}>
+      <Section title={t('sessions.config.prefixCache')} expanded={expandedSections.prefixCache} onToggle={() => toggleSection('prefixCache')} hidden={isImage}>
         {!effectivelyNoBatching && <PerformanceHint text="Speeds up repeated conversations by remembering previous prompts. Makes follow-up messages much faster (lower time-to-first-token)." />}
         {batchingOff && <IncompatWarning text="Prefix cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable prefix caching." />}
         <CheckField label="Enable Prefix Cache" tooltip="Caches prompt prefixes in memory. If you send the same system prompt or document multiple times, the server reuses the cached internal states instead of recomputing them, drastically reducing Time-To-First-Token (TTFT) and saving GPU compute. Highly recommended for agents and tool calling." checked={config.enablePrefixCache} onChange={v => onChange('enablePrefixCache', v)} />
@@ -546,7 +548,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Paged Cache */}
-      <Section title="Paged KV Cache" expanded={expandedSections.pagedCache} onToggle={() => toggleSection('pagedCache')} hidden={isImage}>
+      <Section title={t('sessions.config.pagedKVCache')} expanded={expandedSections.pagedCache} onToggle={() => toggleSection('pagedCache')} hidden={isImage}>
         {!effectivelyNoBatching && <PerformanceHint text="Reduces memory waste by splitting the KV cache into small blocks instead of one big chunk. Lets the server handle longer conversations without running out of RAM." />}
         {batchingOff && <IncompatWarning text="Paged cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable paged cache." />}
         {config.enableDiskCache && <IncompatWarning text="Paged cache and legacy Disk Cache cannot run simultaneously. Enabling paged cache will auto-disable legacy Disk Cache. For persistent caching with paged cache, use 'Block Disk Cache (L2)' below instead." />}
@@ -602,7 +604,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                     type="text"
                     value={config.blockDiskCacheDir || ''}
                     onChange={e => onChange('blockDiskCacheDir', e.target.value)}
-                    placeholder="~/.cache/vmlx-engine/block-cache"
+                    placeholder={t('sessions.config.blockCachePlaceholder')}
                     className="cfg-input text-xs"
                   />
                 </div>
@@ -613,7 +615,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* KV Cache Quantization */}
-      <Section title="KV Cache Quantization" expanded={expandedSections.kvCacheQuant} onToggle={() => toggleSection('kvCacheQuant')} hidden={isImage}>
+      <Section title={t('sessions.config.kvCacheQuantization')} expanded={expandedSections.kvCacheQuant} onToggle={() => toggleSection('kvCacheQuant')} hidden={isImage}>
         {!effectivelyNoBatching && <PerformanceHint text="TurboQuant (3-bit) is enabled by default — compresses KV cache during generation for ~5x memory savings. You can override with q8/q4 for stored prefix cache compression, or use None for full precision." />}
         {batchingOff && <IncompatWarning text="KV cache quantization requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
         {!batchingOff && prefixOff && <IncompatWarning text="KV cache quantization requires prefix cache. Enable 'Prefix Cache' above to use KV cache quantization." />}
@@ -625,7 +627,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             <Tooltip text="Controls how completed prompt states are stored in the prefix cache. TurboQuant handles live generation cache compression automatically (always active). This setting controls ADDITIONAL compression of stored cache entries: q8 (8-bit, ~2x) or q4 (4-bit, ~4x). Use 'None' if you want stored caches at full precision." />
           </span>
           <select value={config.kvCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching || prefixOff}>
-            <option value="none">None (TurboQuant only)</option>
+            <option value="none">{t('sessions.config.kvQuantNone')}</option>
             <option value="q8">q8 (8-bit, ~2x stored cache savings)</option>
             <option value="q4">q4 (4-bit, ~4x stored cache savings)</option>
           </select>
@@ -645,7 +647,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Disk Cache (L2 Persistent) */}
-      <Section title="Disk Cache (Persistent)" expanded={expandedSections.diskCache} onToggle={() => toggleSection('diskCache')} hidden={isImage}>
+      <Section title={t('sessions.config.diskCachePersistent')} expanded={expandedSections.diskCache} onToggle={() => toggleSection('diskCache')} hidden={isImage}>
         {!effectivelyNoBatching && <PerformanceHint text="Saves cached prompts to your SSD so they survive server restarts. Next time you load the same model, previous conversations warm up instantly." />}
         <InfoNote text="Legacy disk cache works with memory-aware prefix cache. Block disk cache (in the Paged KV Cache section) works with paged cache. Only one can be active at a time." />
         {batchingOff && <IncompatWarning text="Disk cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
@@ -676,7 +678,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                 type="text"
                 value={config.diskCacheDir || ''}
                 onChange={e => onChange('diskCacheDir', e.target.value)}
-                placeholder="~/.cache/vmlx-engine/prompt-cache"
+                placeholder={t('sessions.config.diskCachePathPlaceholder')}
                 className="cfg-input text-xs"
               />
             </div>
@@ -685,7 +687,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Power Management — visible for ALL model types (text + image) */}
-      <Section title="Power Management" expanded={expandedSections.power} onToggle={() => toggleSection('power')}>
+      <Section title={t('sessions.config.powerManagement')} expanded={expandedSections.power} onToggle={() => toggleSection('power')}>
         <PerformanceHint text="Control when idle models automatically sleep to free GPU memory. Sleeping models auto-wake when a new request arrives." />
         <Field label="Auto-Sleep" tooltip="Automatically put the model to sleep after a period of inactivity to free memory. Light sleep clears caches but keeps the model loaded (instant wake). Deep sleep unloads the model entirely (2-15s wake). Models auto-wake when a new request arrives.">
           <label className="flex items-center gap-2 cursor-pointer">
@@ -733,7 +735,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Performance */}
-      <Section title="Performance & Generation" expanded={expandedSections.performance} onToggle={() => toggleSection('performance')} hidden={isImage}>
+      <Section title={t('sessions.config.performanceGeneration')} expanded={expandedSections.performance} onToggle={() => toggleSection('performance')} hidden={isImage}>
         <PerformanceHint text="Controls how tokens stream to you and the max response length. For chat, keep stream interval at 1. Max tokens limits how long a single reply can be." />
         {/* JIT is not available for image models (mflux uses its own GPU pipeline). */}
         <Field label="JIT Compile (mx.compile)" tooltip="Enable Metal kernel fusion via mx.compile on the model forward pass. This optimizes GPU operations for faster inference after a one-time warmup on the first request. May not work with all models — falls back gracefully if compilation fails. Requires restart.">
@@ -815,10 +817,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Tool Integration */}
-      <Section title="Tool Integration (MCP)" expanded={expandedSections.tools} onToggle={() => toggleSection('tools')} hidden={isImage}>
+      <Section title={t('sessions.config.toolIntegrationMCP')} expanded={expandedSections.tools} onToggle={() => toggleSection('tools')} hidden={isImage}>
         <PerformanceHint text="Lets the model call external tools (web search, code execution, etc.) during conversations. Requires a model that supports tool calling." />
         <Field label="MCP Config File" tooltip="Path to a JSON config file defining MCP (Model Context Protocol) tool servers. When configured, the model can call external tools during generation. The config file defines tool server endpoints, authentication, and available capabilities.">
-          <input type="text" value={config.mcpConfig} onChange={e => onChange('mcpConfig', e.target.value)} placeholder="/path/to/mcp-config.json" className="cfg-input" />
+          <input type="text" value={config.mcpConfig} onChange={e => onChange('mcpConfig', e.target.value)} placeholder={t('sessions.config.mcpConfigPlaceholder')} className="cfg-input" />
         </Field>
         <CheckField label="Enable Auto Tool Choice" tooltip="When enabled, the model automatically decides when to call tools based on the conversation context. Requires a model that supports tool calling (Qwen, Llama 3+, Mistral, Gemma 3, Phi-4, Hermes, DeepSeek, GLM, Granite, Kimi, xLAM, Functionary, MiniMax, StepFun). The model will format tool calls according to the selected parser. Leave unchecked for auto-detection (recommended)." checked={config.enableAutoToolChoice ?? false} onChange={v => onChange('enableAutoToolChoice', v || undefined)} />
         {config.enableAutoToolChoice === undefined && (
@@ -842,7 +844,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           <textarea
             value={config.chatTemplate ?? ''}
             onChange={e => onChange('chatTemplate', e.target.value || undefined)}
-            placeholder="Leave empty to use model default"
+            placeholder={t('sessions.config.chatTemplatePlaceholder')}
             rows={3}
             className="cfg-input font-mono text-xs"
             style={{ resize: 'vertical', minHeight: '3rem' }}
@@ -899,12 +901,12 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Speculative Decoding */}
-      <Section title="Speculative Decoding" expanded={expandedSections.specDecode} onToggle={() => toggleSection('specDecode')} hidden={isImage}>
+      <Section title={t('sessions.config.specDecoding')} expanded={expandedSections.specDecode} onToggle={() => toggleSection('specDecode')} hidden={isImage}>
         <PerformanceHint text="Use a small draft model to propose tokens, then verify them in a single target model pass. Can give 20-90% speedup with zero quality loss." />
         {config.continuousBatching && <IncompatWarning text="Speculative decoding is incompatible with continuous batching. The draft model will only be used in SimpleEngine (non-batched) mode. Batched requests will use standard generation." />}
         {config.isMultimodal === true && <IncompatWarning text="Speculative decoding is incompatible with multimodal (VLM) models. The draft model will be ignored for VLM requests." />}
         <Field label="Draft Model" tooltip="Path or HuggingFace name of a small draft model. Must use the same tokenizer as the main model. Example: mlx-community/Llama-3.2-1B-Instruct-4bit for a Llama 3 target model. Leave empty to disable speculative decoding.">
-          <input type="text" value={config.speculativeModel} onChange={e => onChange('speculativeModel', e.target.value)} placeholder="mlx-community/small-draft-model" className="cfg-input" disabled={false} />
+          <input type="text" value={config.speculativeModel} onChange={e => onChange('speculativeModel', e.target.value)} placeholder={t('sessions.config.specModelPlaceholder')} className="cfg-input" disabled={false} />
         </Field>
         {config.speculativeModel && (
           <SliderField
@@ -922,7 +924,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Distributed Compute */}
-      <Section title="Distributed Compute (Pre-Alpha — Localhost Testing Only)" expanded={expandedSections.distributed} onToggle={() => toggleSection('distributed')} hidden={isImage}>
+      <Section title={t('sessions.config.distributed')} expanded={expandedSections.distributed} onToggle={() => toggleSection('distributed')} hidden={isImage}>
         <div className="mx-4 mt-3 mb-2 rounded-md border-2 border-amber-500 bg-amber-500/15 px-3 py-3 text-xs text-amber-800 dark:text-amber-100">
           <div className="font-bold uppercase tracking-wide text-[11px] mb-1.5 text-amber-900 dark:text-amber-50">
             ⚠ Pre-Alpha — localhost loopback only
@@ -982,7 +984,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                 type="password"
                 value={config.distributedSecret || ''}
                 onChange={e => onChange('distributedSecret', e.target.value)}
-                placeholder="Enter cluster secret for worker auth"
+                placeholder={t('sessions.config.clusterSecretPlaceholder')}
                 className="cfg-input"
               />
             </Field>
@@ -1005,16 +1007,16 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       {/* Embedding Model */}
       {!isImage && (
       <div className="mb-2">
-        <Field label="Embedding Model" tooltip="Pre-load a separate embedding model at startup for the /v1/embeddings endpoint. Runs alongside the main chat model. Example: mlx-community/embeddinggemma-300m-6bit. Leave empty to disable embeddings endpoint.">
-          <input type="text" value={config.embeddingModel} onChange={e => onChange('embeddingModel', e.target.value)} placeholder="Optional — mlx-community/embedding-model" className="cfg-input" />
+        <Field label={t('sessions.config.embeddingModel')} tooltip="Pre-load a separate embedding model at startup for the /v1/embeddings endpoint. Runs alongside the main chat model. Example: mlx-community/embeddinggemma-300m-6bit. Leave empty to disable embeddings endpoint.">
+          <input type="text" value={config.embeddingModel} onChange={e => onChange('embeddingModel', e.target.value)} placeholder={t('sessions.config.embeddingPlaceholder')} className="cfg-input" />
         </Field>
       </div>
       )}
 
       {/* Additional */}
       <div className="mb-4">
-        <Field label="Additional Arguments" tooltip="Raw command-line arguments appended to the serve command. Use this for flags not exposed in the UI above. Example: --log-level DEBUG. Arguments are split by whitespace and passed directly to the CLI.">
-          <input type="text" value={config.additionalArgs} onChange={e => onChange('additionalArgs', e.target.value)} placeholder="--custom-flag value" className="cfg-input" />
+        <Field label={t('sessions.config.additionalArgs')} tooltip="Raw command-line arguments appended to the serve command. Use this for flags not exposed in the UI above. Example: --log-level DEBUG. Arguments are split by whitespace and passed directly to the CLI.">
+          <input type="text" value={config.additionalArgs} onChange={e => onChange('additionalArgs', e.target.value)} placeholder={t('sessions.config.additionalArgsPlaceholder')} className="cfg-input" />
         </Field>
       </div>
 
@@ -1259,6 +1261,7 @@ const REASONING_PARSER_OPTIONS: ParserOption[] = [
 function ParserField({ label, tooltip, value, onChange, options }: {
   label: string; tooltip: string; value: string; onChange: (v: string) => void; options: ParserOption[]
 }) {
+  const { t } = useTranslation()
   const [showHelp, setShowHelp] = useState(false)
   const selected = options.find(o => o.value === value)
   // Show help panel when explicitly toggled OR when a non-auto parser is manually selected
@@ -1273,7 +1276,7 @@ function ParserField({ label, tooltip, value, onChange, options }: {
           type="button"
           onClick={() => setShowHelp(!showHelp)}
           className="ml-1 inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-muted text-muted-foreground text-[10px] font-bold cursor-help select-none hover:bg-accent"
-          title="Show model compatibility reference"
+          title={t('sessions.config.modelCompatTitle')}
         >
           ?
         </button>

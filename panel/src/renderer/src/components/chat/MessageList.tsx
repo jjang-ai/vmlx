@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { ArrowDown, MessageCircle } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
+import { useTranslation } from '../../i18n'
 
 interface MessageMetrics {
   tokenCount: number
@@ -37,6 +38,7 @@ interface MessageListProps {
 }
 
 export function MessageList({ messages, streamingMessageId, currentMetrics, reasoningMap, reasoningDoneMap, toolStatusMap, hideToolStatus, sessionId, sessionEndpoint, onRegenerate, onEdit }: MessageListProps) {
+  const { t } = useTranslation()
   const bottomRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const isNearBottomRef = useRef(true)
@@ -96,10 +98,10 @@ export function MessageList({ messages, streamingMessageId, currentMetrics, reas
         <div className="text-center">
           <MessageCircle className="h-8 w-8 text-muted-foreground/30 mx-auto mb-3" />
           <p className="text-sm text-muted-foreground/60">
-            Send a message to start the conversation
+            {t('chat.messages.emptyPrimary')}
           </p>
           <p className="text-xs text-muted-foreground/40 mt-1">
-            Press Enter to send, Shift+Enter for new line
+            {t('chat.messages.emptyHelp')}
           </p>
         </div>
       </div>
@@ -137,7 +139,7 @@ export function MessageList({ messages, streamingMessageId, currentMetrics, reas
         <button
           onClick={scrollToBottom}
           className="absolute bottom-4 left-1/2 -translate-x-1/2 p-2 rounded-full bg-card border border-border shadow-lg hover:bg-accent transition-all text-muted-foreground hover:text-foreground"
-          title="Scroll to bottom"
+          title={t('chat.messages.scrollBottomTitle')}
         >
           <ArrowDown className="h-4 w-4" />
         </button>

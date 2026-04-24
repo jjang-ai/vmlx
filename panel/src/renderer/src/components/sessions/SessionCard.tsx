@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Settings, ScrollText, Moon, Sun } from "lucide-react";
 import { useSessionsContext } from "../../contexts/SessionsContext";
+import { useTranslation } from "../../i18n";
 
 interface Session {
   id: string;
@@ -47,14 +48,6 @@ function formatElapsed(secs: number): string {
   return `${m}m ${s}s`;
 }
 
-const statusLabels: Record<string, string> = {
-  running: "Running",
-  stopped: "Stopped",
-  error: "Error",
-  loading: "Loading...",
-  standby: "Sleeping",
-};
-
 export function SessionCard({
   session,
   onOpen,
@@ -65,6 +58,14 @@ export function SessionCard({
   onSleep,
   onWake,
 }: SessionCardProps) {
+  const { t } = useTranslation();
+  const statusLabels: Record<string, string> = {
+    running: t('status.running'),
+    stopped: t('status.stopped'),
+    error: t('status.error'),
+    loading: t('status.loading'),
+    standby: t('status.sleeping'),
+  };
   const isRemote = session.type === "remote";
   const isImage = (() => {
     try {
@@ -159,11 +160,11 @@ export function SessionCard({
           )}
           <span className="text-xs text-muted-foreground">
             {session.status === "loading"
-              ? `Loading... ${formatElapsed(loadingElapsed)}`
+              ? t('sessions.card.loadingWithElapsed', { elapsed: formatElapsed(loadingElapsed) })
               : session.status === "standby"
                 ? session.standbyDepth === "deep"
-                  ? "Deep Sleep"
-                  : "Light Sleep"
+                  ? t('status.deepSleep')
+                  : t('status.lightSleep')
                 : statusLabels[session.status]}
           </span>
         </div>
@@ -197,7 +198,7 @@ export function SessionCard({
             {session.host}:{session.port}
           </span>
         )}
-        {!isRemote && session.pid && <span>PID {session.pid}</span>}
+        {!isRemote && session.pid && <span>{t('sessions.card.pidLabel', { pid: session.pid })}</span>}
       </div>
 
       {/* Actions */}
@@ -207,7 +208,7 @@ export function SessionCard({
             onClick={() => onOpen(session.id)}
             className="flex-1 px-3 py-1.5 bg-primary text-primary-foreground text-sm rounded hover:bg-primary/90"
           >
-            Open
+            {t('sessions.card.open')}
           </button>
         )}
 
@@ -217,12 +218,12 @@ export function SessionCard({
             className="flex-1 px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 flex items-center justify-center gap-1.5"
             title={
               session.standbyDepth === "deep"
-                ? "Reload model and resume"
-                : "Resume from light sleep"
+                ? t('sessions.card.wakeTitleDeep')
+                : t('sessions.card.wakeTitleLight')
             }
           >
             <Sun className="h-3.5 w-3.5" />
-            Wake
+            {t('sessions.card.wake')}
           </button>
         )}
 
@@ -233,7 +234,7 @@ export function SessionCard({
               className="flex-1 px-3 py-1.5 bg-warning/20 text-warning text-sm rounded hover:bg-warning/30 flex items-center justify-center gap-1.5"
             >
               <ScrollText className="h-3.5 w-3.5" />
-              Logs
+              {t('sessions.card.logs')}
             </button>
           </>
         )}
@@ -243,7 +244,7 @@ export function SessionCard({
             onClick={() => onStart(session.id)}
             className="flex-1 px-3 py-1.5 bg-success text-success-foreground text-sm rounded hover:bg-success/90"
           >
-            {isRemote ? "Connect" : "Start"}
+            {isRemote ? t('sessions.card.connect') : t('sessions.card.start')}
           </button>
         ) : null}
 
@@ -251,7 +252,7 @@ export function SessionCard({
           <button
             onClick={() => onConfigure(session.id)}
             className="px-3 py-1.5 text-sm rounded border border-border text-muted-foreground hover:bg-accent"
-            title="Configure session settings"
+            title={t('sessions.card.configureTitle')}
           >
             <Settings className="h-4 w-4" />
           </button>
@@ -261,7 +262,7 @@ export function SessionCard({
           <button
             onClick={() => onSleep(session.id)}
             className="px-3 py-1.5 text-sm rounded border border-border text-muted-foreground hover:bg-blue-500/10 hover:text-blue-400 hover:border-blue-500/30"
-            title="Put model to sleep (frees memory)"
+            title={t('sessions.card.sleepTitle')}
           >
             <Moon className="h-4 w-4" />
           </button>
@@ -272,7 +273,7 @@ export function SessionCard({
             onClick={() => onStop(session.id)}
             className="px-3 py-1.5 bg-destructive text-destructive-foreground text-sm rounded hover:bg-destructive/90"
           >
-            {isRemote ? "Disconnect" : "Stop"}
+            {isRemote ? t('sessions.card.disconnect') : t('sessions.card.stop')}
           </button>
         )}
 
@@ -280,9 +281,9 @@ export function SessionCard({
           <button
             onClick={() => onStop(session.id)}
             className="px-3 py-1.5 text-sm rounded border border-border text-muted-foreground hover:bg-destructive hover:text-destructive-foreground hover:border-destructive"
-            title="Stop server process completely"
+            title={t('sessions.card.stopStandbyTitle')}
           >
-            Stop
+            {t('sessions.card.stop')}
           </button>
         )}
 
@@ -290,7 +291,7 @@ export function SessionCard({
           <button
             onClick={() => onOpen(session.id)}
             className="px-3 py-1.5 text-sm rounded border border-border text-muted-foreground hover:bg-accent"
-            title="View crash logs"
+            title={t('sessions.card.viewCrashLogsTitle')}
           >
             <ScrollText className="h-4 w-4" />
           </button>
@@ -301,7 +302,7 @@ export function SessionCard({
             onClick={() => onDelete(session.id)}
             className="px-3 py-1.5 text-sm rounded border border-border text-muted-foreground hover:bg-destructive hover:text-destructive-foreground hover:border-destructive"
           >
-            Delete
+            {t('sessions.card.delete')}
           </button>
         )}
       </div>

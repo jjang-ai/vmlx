@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { X, Save, Trash2, Star } from 'lucide-react'
 import { useToast } from '../Toast'
+import { useTranslation } from '../../i18n'
 
 interface ChatProfile {
   id: string
@@ -59,6 +60,7 @@ interface ChatSettingsProps {
 
 export function ChatSettings({ chatId, session, reasoningParser, onClose, onOverridesChanged }: ChatSettingsProps) {
   const { showToast } = useToast()
+  const { t } = useTranslation()
   const [overrides, setOverrides] = useState<ChatOverrides>({})
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -111,7 +113,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
       setDirty(false)
       onOverridesChanged?.()
     } catch (e) {
-      showToast('error', 'Failed to save settings', (e as Error).message)
+      showToast('error', t('chat.settings.saveFailedToast'), (e as Error).message)
     } finally {
       setSaving(false)
     }
@@ -157,7 +159,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   const handleLoadProfile = async (profile: ChatProfile) => {
     setOverrides(profile.overrides)
     setDirty(true)
-    showToast('success', `Loaded "${profile.name}"`)
+    showToast('success', t('chat.settings.loadedToast', { name: profile.name }))
   }
 
   const handleSaveProfile = async () => {
@@ -167,17 +169,17 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
       setProfileName('')
       setShowProfileSave(false)
       loadProfiles()
-      showToast('success', `Saved profile "${profileName.trim()}"`)
+      showToast('success', t('chat.settings.savedProfileToast', { name: profileName.trim() }))
     } catch (e) {
-      showToast('error', 'Failed to save profile', (e as Error).message)
+      showToast('error', t('chat.settings.saveProfileFailedToast'), (e as Error).message)
     }
   }
 
   const handleDeleteProfile = async (id: string, name: string) => {
-    if (!confirm(`Delete profile "${name}"?`)) return
+    if (!confirm(t('chat.settings.deleteProfileConfirm', { name }))) return
     await window.api.chat.deleteProfile(id)
     loadProfiles()
-    showToast('success', `Deleted "${name}"`)
+    showToast('success', t('chat.settings.deletedToast', { name }))
   }
 
   const handleSetDefault = async (profile: ChatProfile) => {
@@ -193,10 +195,10 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
     <div className="w-80 h-full border-l border-border bg-card flex flex-col overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-border flex-shrink-0">
-        <span className="font-medium text-sm">Chat Settings</span>
+        <span className="font-medium text-sm">{t('chat.settings.header')}</span>
         <button
           onClick={() => {
-            if (dirty && !confirm('You have unsaved changes. Discard them?')) return
+            if (dirty && !confirm(t('chat.settings.discardConfirm'))) return
             onClose()
           }}
           className="text-muted-foreground hover:text-foreground text-sm px-1"
@@ -208,7 +210,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
       <div className="flex-1 overflow-auto p-4 space-y-5">
         {/* Server Info */}
         <div>
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Server Info</h3>
+          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{t('chat.settings.serverInfo')}</h3>
           {(() => {
             const isRemote = session.type === 'remote'
             const baseUrl = isRemote && session.remoteUrl
@@ -219,39 +221,39 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
             return (
               <div className="space-y-1.5 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Model</span>
+                  <span className="text-muted-foreground">{t('chat.settings.model')}</span>
                   <span className="text-right truncate ml-2 max-w-[180px]" title={session.modelPath}>{shortModel}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Endpoint</span>
+                  <span className="text-muted-foreground">{t('chat.settings.endpoint')}</span>
                   <span className="font-mono text-xs truncate ml-2 max-w-[180px]" title={baseUrl}>
                     {isRemote ? baseUrl : `http://${session.host}:${session.port}`}
                   </span>
                 </div>
                 {isRemote && (
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Type</span>
-                    <span className="text-xs text-muted-foreground">Remote</span>
+                    <span className="text-muted-foreground">{t('chat.settings.type')}</span>
+                    <span className="text-xs text-muted-foreground">{t('chat.settings.typeRemote')}</span>
                   </div>
                 )}
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Status</span>
+                  <span className="text-muted-foreground">{t('chat.settings.status')}</span>
                   <span className={session.status === 'running' ? 'text-primary' : 'text-destructive'}>
                     {session.status}
                   </span>
                 </div>
                 {session.pid && (
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">PID</span>
+                    <span className="text-muted-foreground">{t('chat.settings.pid')}</span>
                     <span>{session.pid}</span>
                   </div>
                 )}
                 <div className="mt-2">
-                  <span className="text-xs text-muted-foreground">API URL (click to copy)</span>
+                  <span className="text-xs text-muted-foreground">{t('chat.settings.apiUrlHint')}</span>
                   <button
                     onClick={() => navigator.clipboard.writeText(apiUrl)}
                     className="block w-full text-left font-mono text-xs bg-background px-2 py-1.5 rounded border border-border mt-1 hover:bg-accent truncate"
-                    title="Click to copy"
+                    title={t('chat.settings.apiUrlTooltip')}
                   >
                     {apiUrl}
                   </button>
@@ -265,9 +267,9 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
 
         {isImageModel && (
           <div>
-            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Image Server</h3>
+            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">{t('chat.settings.imageServer')}</h3>
             <p className="text-xs text-muted-foreground">
-              This is an image generation server. Use the Image tab to generate images, or send POST requests to the API endpoint above.
+              {t('chat.settings.imageServerNote')}
             </p>
           </div>
         )}
@@ -275,9 +277,9 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
         {!isImageModel && <>
         {/* Profiles */}
         <div>
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Profiles</h3>
+          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">{t('chat.settings.profiles')}</h3>
           <p className="text-[10px] text-muted-foreground/70 mb-2">
-            New chats inherit tool &amp; search settings from your last chat. Star a profile to always apply it instead.
+            {t('chat.settings.profilesInheritHint')}
           </p>
           <div className="space-y-2">
             {profiles.length > 0 && (
@@ -295,14 +297,14 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
                     <button
                       onClick={() => handleSetDefault(p)}
                       className="opacity-0 group-hover:opacity-100 p-1 hover:text-yellow-500"
-                      title={p.isDefault ? 'Remove as default' : 'Set as default for new chats'}
+                      title={p.isDefault ? t('chat.settings.removeDefaultTitle') : t('chat.settings.setDefaultTitle')}
                     >
                       <Star className={`h-3 w-3 ${p.isDefault ? 'fill-yellow-500 text-yellow-500' : ''}`} />
                     </button>
                     <button
                       onClick={() => handleDeleteProfile(p.id, p.name)}
                       className="opacity-0 group-hover:opacity-100 p-1 hover:text-destructive"
-                      title="Delete profile"
+                      title={t('chat.settings.deleteProfileTitle')}
                     >
                       <Trash2 className="h-3 w-3" />
                     </button>
@@ -317,15 +319,15 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
                   value={profileName}
                   onChange={e => setProfileName(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && handleSaveProfile()}
-                  placeholder="Profile name"
+                  placeholder={t('chat.settings.profileNamePlaceholder')}
                   className="flex-1 px-2 py-1 bg-background border border-input rounded text-xs focus:outline-none focus:ring-1 focus:ring-ring"
                   autoFocus
                 />
                 <button onClick={handleSaveProfile} className="px-2 py-1 bg-primary text-primary-foreground rounded text-xs hover:bg-primary/90" disabled={!profileName.trim()}>
-                  Save
+                  {t('chat.settings.save')}
                 </button>
                 <button onClick={() => { setShowProfileSave(false); setProfileName('') }} className="px-2 py-1 text-xs text-muted-foreground hover:text-foreground">
-                  Cancel
+                  {t('chat.settings.cancel')}
                 </button>
               </div>
             ) : (
@@ -333,12 +335,12 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
                 onClick={() => setShowProfileSave(true)}
                 className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
               >
-                <Save className="h-3 w-3" /> Save current settings as profile
+                <Save className="h-3 w-3" /> {t('chat.settings.saveAsProfile')}
               </button>
             )}
           </div>
           <p className="text-xs text-muted-foreground mt-1.5">
-            Save and load named presets. Star a profile to auto-apply on new chats.
+            {t('chat.settings.profilesFooter')}
           </p>
         </div>
 
@@ -346,11 +348,11 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
 
         {/* Inference Settings */}
         <div>
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Inference</h3>
+          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">{t('chat.settings.inference')}</h3>
           <div className="space-y-4">
             <div className="border-b border-border pb-4">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium">Enable Thinking</span>
+                <span className="text-sm font-medium">{t('chat.settings.enableThinking')}</span>
               </div>
               <div className="flex gap-1 bg-background rounded border border-border p-0.5">
                 <button
@@ -361,7 +363,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
                       : 'hover:bg-accent text-muted-foreground'
                   }`}
                 >
-                  Auto
+                  {t('chat.settings.thinkingAuto')}
                 </button>
                 <button
                   onClick={() => update('enableThinking', true)}
@@ -371,7 +373,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
                       : 'hover:bg-accent text-muted-foreground'
                   }`}
                 >
-                  On
+                  {t('chat.settings.thinkingOn')}
                 </button>
                 <button
                   onClick={() => update('enableThinking', false)}
@@ -381,16 +383,16 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
                       : 'hover:bg-accent text-muted-foreground'
                   }`}
                 >
-                  Off
+                  {t('chat.settings.thinkingOff')}
                 </button>
               </div>
               <p className="text-xs text-muted-foreground mt-1.5">
-                Auto: reasoning models think, others don't. On: force thinking. Off: direct responses only.
+                {t('chat.settings.thinkingHelp')}
               </p>
               {overrides.enableThinking !== false && (reasoningParser === 'openai_gptoss' || reasoningParser === 'mistral') && (
                 <div className="mt-3">
                   <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-xs text-muted-foreground">Reasoning Effort</span>
+                    <span className="text-xs text-muted-foreground">{t('chat.settings.reasoningEffort')}</span>
                   </div>
                   <div className="flex gap-1 bg-background rounded border border-border p-0.5">
                     <button
@@ -435,59 +437,59 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
                           : 'hover:bg-accent text-muted-foreground'
                       }`}
                     >
-                      High
+                      {t('chat.settings.effortHigh')}
                     </button>
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
                     {reasoningParser === 'mistral'
-                      ? 'Mistral 4: Auto = fast (no reasoning), High = deep step-by-step reasoning.'
-                      : 'Controls thinking depth for models that support it. Auto lets the model decide.'}
+                      ? t('chat.settings.effortHelpMistral')
+                      : t('chat.settings.effortHelpGeneric')}
                   </p>
                 </div>
               )}
             </div>
             <SliderField
-              label="Temperature"
+              label={t('chat.settings.temperature')}
               value={overrides.temperature ?? 0.7}
               onChange={v => update('temperature', v)}
               min={0} max={2} step={0.05}
-              help="Controls randomness. Lower = more focused, higher = more creative."
+              help={t('chat.settings.temperatureHelp')}
             />
             <SliderField
-              label="Top P"
+              label={t('chat.settings.topP')}
               value={overrides.topP ?? 0.9}
               onChange={v => update('topP', v)}
               min={0} max={1} step={0.05}
-              help="Nucleus sampling. Only tokens with cumulative probability above this threshold."
+              help={t('chat.settings.topPHelp')}
             />
             <NumberField
-              label="Max Tokens"
+              label={t('chat.settings.maxTokens')}
               value={overrides.maxTokens}
               onChange={v => update('maxTokens', v)}
-              placeholder="4096 (default)"
-              help="Maximum tokens to generate per response."
+              placeholder={t('chat.settings.maxTokensPlaceholder')}
+              help={t('chat.settings.maxTokensHelp')}
             />
             <SliderField
-              label="Top K"
+              label={t('chat.settings.topK')}
               value={overrides.topK ?? 0}
               onChange={v => update('topK', v === 0 ? undefined : v)}
               min={0} max={200} step={1}
-              help="Limits tokens to top K candidates. 0 = disabled (uses Top P only)."
+              help={t('chat.settings.topKHelp')}
               format={v => Math.round(v).toString()}
             />
             <SliderField
-              label="Min P"
+              label={t('chat.settings.minP')}
               value={overrides.minP ?? 0}
               onChange={v => update('minP', v === 0 ? undefined : v)}
               min={0} max={1} step={0.01}
-              help="Minimum probability threshold relative to top token. 0 = disabled."
+              help={t('chat.settings.minPHelp')}
             />
             <SliderField
-              label="Repetition Penalty"
+              label={t('chat.settings.repetitionPenalty')}
               value={overrides.repeatPenalty ?? 1.1}
               onChange={v => update('repeatPenalty', v === 1.1 ? undefined : v)}
               min={1.0} max={2.0} step={0.05}
-              help="Penalizes repeated tokens. 1.0 = no penalty, 1.1 = mild (default, prevents dash/word loops on Gemma 4 and 2-bit quants), higher = less repetition at the cost of fluency."
+              help={t('chat.settings.repetitionPenaltyHelp')}
             />
           </div>
         </div>
@@ -496,32 +498,32 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
 
         {/* System Prompt with Templates */}
         <div>
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">System Prompt</h3>
+          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{t('chat.settings.systemPrompt')}</h3>
           <PromptTemplateSelector
             value={overrides.systemPrompt ?? ''}
             onChange={(prompt) => update('systemPrompt', prompt || undefined)}
           />
-          <p className="text-xs text-muted-foreground mt-1">Injected as the first message in each request.</p>
+          <p className="text-xs text-muted-foreground mt-1">{t('chat.settings.systemPromptHelp')}</p>
         </div>
 
         {/* Stop Sequences */}
         <div>
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Stop Sequences</h3>
+          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{t('chat.settings.stopSequences')}</h3>
           <input
             type="text"
             value={overrides.stopSequences ?? ''}
             onChange={e => update('stopSequences', e.target.value || undefined)}
-            placeholder="Comma-separated (uses defaults if empty)"
+            placeholder={t('chat.settings.stopSequencesPlaceholder')}
             className="w-full px-3 py-2 bg-background border border-input rounded text-sm focus:outline-none focus:ring-1 focus:ring-ring"
           />
-          <p className="text-xs text-muted-foreground mt-1">Custom stop tokens override the built-in template tokens.</p>
+          <p className="text-xs text-muted-foreground mt-1">{t('chat.settings.stopSequencesHelp')}</p>
         </div>
 
         <div className="border-t border-border" />
 
         {/* Wire Format */}
         <div>
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">API Wire Format</h3>
+          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{t('chat.settings.wireFormat')}</h3>
           <select
             value={overrides.wireApi ?? 'completions'}
             onChange={e => update('wireApi', e.target.value as 'completions' | 'responses')}
@@ -530,14 +532,14 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
             <option value="completions">Chat Completions (/v1/chat/completions)</option>
             <option value="responses">Responses (/v1/responses)</option>
           </select>
-          <p className="text-xs text-muted-foreground mt-1">Wire format for API requests. Use Responses for OpenAI Responses API compatibility.</p>
+          <p className="text-xs text-muted-foreground mt-1">{t('chat.settings.wireHelp')}</p>
         </div>
 
         <div className="border-t border-border" />
 
         {/* Agentic Settings */}
         <div>
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Agentic</h3>
+          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">{t('chat.settings.agentic')}</h3>
           <div className="space-y-4">
             <NumberField
               label="Max Tool Iterations"
@@ -696,7 +698,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
           disabled={!dirty || saving}
           className="flex-1 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-40"
         >
-          {saving ? 'Saving...' : 'Save'}
+          {saving ? t('chat.settings.saving') : t('chat.settings.save')}
         </button>
         <button
           onClick={handleReset}
@@ -853,6 +855,7 @@ interface PromptTemplate {
 }
 
 function PromptTemplateSelector({ value, onChange }: { value: string; onChange: (prompt: string) => void }) {
+  const { t } = useTranslation()
   const [templates, setTemplates] = useState<PromptTemplate[]>([])
   const [saveName, setSaveName] = useState('')
   const [showSave, setShowSave] = useState(false)
@@ -861,13 +864,13 @@ function PromptTemplateSelector({ value, onChange }: { value: string; onChange: 
     window.api.templates.list().then(setTemplates).catch((err) => console.error('Failed to load templates:', err))
   }, [])
 
-  const builtins = templates.filter(t => t.isBuiltin)
-  const customs = templates.filter(t => !t.isBuiltin)
+  const builtins = templates.filter(tpl => tpl.isBuiltin)
+  const customs = templates.filter(tpl => !tpl.isBuiltin)
 
   const handleSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const id = e.target.value
     if (id === '__none__') { onChange(''); return }
-    const tmpl = templates.find(t => t.id === id)
+    const tmpl = templates.find(tpl => tpl.id === id)
     if (tmpl) onChange(tmpl.content)
   }
 
@@ -886,7 +889,7 @@ function PromptTemplateSelector({ value, onChange }: { value: string; onChange: 
     setTemplates(await window.api.templates.list())
   }
 
-  const currentMatch = templates.find(t => t.content === value)
+  const currentMatch = templates.find(tpl => tpl.content === value)
 
   return (
     <div className="space-y-2">
@@ -896,29 +899,29 @@ function PromptTemplateSelector({ value, onChange }: { value: string; onChange: 
           onChange={handleSelect}
           className="flex-1 text-xs px-2 py-1.5 bg-background border border-input rounded focus:outline-none focus:ring-1 focus:ring-ring"
         >
-          <option value="__none__">(No template)</option>
+          <option value="__none__">{t('chat.settings.templateNone')}</option>
           {builtins.length > 0 && (
-            <optgroup label="Built-in">
-              {builtins.map(t => (
-                <option key={t.id} value={t.id}>{t.name}</option>
+            <optgroup label={t('chat.settings.templateBuiltIn')}>
+              {builtins.map(tpl => (
+                <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
               ))}
             </optgroup>
           )}
           {customs.length > 0 && (
-            <optgroup label="Custom">
-              {customs.map(t => (
-                <option key={t.id} value={t.id}>{t.name}</option>
+            <optgroup label={t('chat.settings.templateCustomGroup')}>
+              {customs.map(tpl => (
+                <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
               ))}
             </optgroup>
           )}
-          {!currentMatch && value && <option value="__custom__">(Custom)</option>}
+          {!currentMatch && value && <option value="__custom__">{t('chat.settings.templateCustomOption')}</option>}
         </select>
         <button
           onClick={() => setShowSave(!showSave)}
           className="text-xs px-2 py-1 border border-border rounded hover:bg-accent"
-          title="Save current prompt as template"
+          title={t('chat.settings.saveTemplateTitle')}
         >
-          Save
+          {t('chat.settings.save')}
         </button>
       </div>
 
@@ -928,12 +931,12 @@ function PromptTemplateSelector({ value, onChange }: { value: string; onChange: 
             type="text"
             value={saveName}
             onChange={e => setSaveName(e.target.value)}
-            placeholder="Template name..."
+            placeholder={t('chat.settings.templateNamePlaceholder')}
             className="flex-1 text-xs px-2 py-1 bg-background border border-input rounded focus:outline-none focus:ring-1 focus:ring-ring"
             onKeyDown={e => e.key === 'Enter' && handleSave()}
           />
           <button onClick={handleSave} className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded hover:bg-primary/90">
-            Save
+            {t('chat.settings.save')}
           </button>
         </div>
       )}
@@ -941,16 +944,16 @@ function PromptTemplateSelector({ value, onChange }: { value: string; onChange: 
       <textarea
         value={value}
         onChange={e => onChange(e.target.value)}
-        placeholder="You are a helpful assistant..."
+        placeholder={t('chat.settings.systemPromptPlaceholder')}
         className="w-full h-24 resize-none px-3 py-2 bg-background border border-input rounded text-sm focus:outline-none focus:ring-1 focus:ring-ring"
       />
 
       {customs.length > 0 && (
         <div className="flex gap-1 flex-wrap">
-          {customs.map(t => (
-            <span key={t.id} className="text-xs bg-muted px-1.5 py-0.5 rounded flex items-center gap-1">
-              {t.name}
-              <button onClick={() => handleDeleteCustom(t.id)} className="text-destructive hover:text-destructive/80">x</button>
+          {customs.map(tpl => (
+            <span key={tpl.id} className="text-xs bg-muted px-1.5 py-0.5 rounded flex items-center gap-1">
+              {tpl.name}
+              <button onClick={() => handleDeleteCustom(tpl.id)} className="text-destructive hover:text-destructive/80">x</button>
             </span>
           ))}
         </div>

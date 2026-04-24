@@ -13,6 +13,8 @@ import { registerEmbeddingHandlers } from './ipc/embeddings'
 import { registerExportHandlers } from './ipc/export'
 import { registerPerformanceHandlers } from './ipc/performance'
 import { registerDeveloperHandlers, killActiveOperation } from './ipc/developer'
+import { loadLocales, setLocale as setMainLocale, getLocale as getMainLocale, t as tMain } from './i18n'
+import { rebuildMenu as rebuildTrayMenu } from './tray'
 import { registerCodingToolHandlers } from './ipc/coding-tools'
 import { registerDistributedHandlers } from './ipc/distributed'
 import { sessionManager } from './sessions'
@@ -40,8 +42,8 @@ process.on('uncaughtException', (error) => {
   try { processManager.killAll().catch(() => { }) } catch (_) { }
   try {
     dialog.showErrorBox(
-      'Unexpected Error',
-      `vMLX encountered an error:\n\n${error.message}\n\nThe app will now exit.`
+      tMain('main.dialog.unexpectedErrorTitle'),
+      tMain('main.dialog.unexpectedErrorBody', { message: error.message })
     )
   } catch (_) { /* dialog may fail if app is in bad state */ }
   // Continuing after uncaught exception risks undefined behavior.
@@ -109,7 +111,7 @@ function createWindow(): void {
       downloadWindow = new BrowserWindow({
         width: 500,
         height: 400,
-        title: 'Downloads',
+        title: tMain('main.window.downloads'),
         parent: mainWindow || undefined,
         minimizable: true,
         maximizable: false,
@@ -134,7 +136,7 @@ function createWindow(): void {
       const result = await dialog.showOpenDialog({
         properties: ['openDirectory', 'createDirectory'],
         securityScopedBookmarks: true,
-        title: 'Select Working Directory'
+        title: tMain('main.dialog.selectWorkingDir')
       })
 
       if (!result.canceled && result.filePaths.length > 0 && result.bookmarks && result.bookmarks.length > 0) {
@@ -148,9 +150,9 @@ function createWindow(): void {
     ipcMain.handle('dialog:pickImages', async () => {
       const result = await dialog.showOpenDialog({
         properties: ['openFile', 'multiSelections'],
-        title: 'Attach Images',
+        title: tMain('main.dialog.attachImagesTitle'),
         filters: [
-          { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'heic', 'heif', 'avif'] }
+          { name: tMain('main.dialog.attachImagesFilterImages'), extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'heic', 'heif', 'avif'] }
         ]
       })
       if (result.canceled || result.filePaths.length === 0) return []
@@ -319,6 +321,27 @@ function createWindow(): void {
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('net.vmlx.app')
 
+  // Main-process i18n: load all 5 locale JSONs. The active locale is
+  // restored from the DB setting on boot (if any) and overridden by the
+  // renderer via IPC as soon as I18nProvider mounts. See src/main/i18n.ts.
+  loadLocales()
+  try {
+    const savedLocale = db.getSetting('locale')
+    if (savedLocale) setMainLocale(savedLocale)
+  } catch {}
+
+  // IPC bridge: renderer mirrors its locale to main so tray/menu/dialogs
+  // stay in sync with the UI picker without a reload.
+  ipcMain.handle('i18n:set-locale', (_, loc: string) => {
+    setMainLocale(loc)
+    try { db.setSetting('locale', loc) } catch {}
+    // Rebuild the tray menu so its labels switch to the new locale in
+    // real time. The renderer has already re-rendered via Context.
+    try { rebuildTrayMenu(processManager, () => mainWindow) } catch {}
+    return { ok: true, locale: getMainLocale() }
+  })
+  ipcMain.handle('i18n:get-locale', () => getMainLocale())
+
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
@@ -381,10 +404,10 @@ app.whenReady().then(async () => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         dialog.showMessageBox(mainWindow, {
           type: 'warning',
-          title: 'Database Recovered',
-          message: 'Your chat database was corrupted and has been recreated.',
-          detail: `Your previous data has been backed up to:\n${db.recoveryBackupPath}`,
-          buttons: ['OK']
+          title: tMain('main.dialog.dbRecoveredTitle'),
+          message: tMain('main.dialog.dbRecoveredMessage'),
+          detail: tMain('main.dialog.dbRecoveredDetail', { path: db.recoveryBackupPath }),
+          buttons: [tMain('main.dialog.ok')]
         }).catch(() => { })
       }
     })

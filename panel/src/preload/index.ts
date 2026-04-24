@@ -419,6 +419,10 @@ const api = {
     removeNode: (nodeId: string, sessionId?: string) =>
       ipcRenderer.invoke('distributed:removeNode', nodeId, sessionId),
   },
+  i18n: {
+    setLocale: (locale: string) => ipcRenderer.invoke('i18n:set-locale', locale),
+    getLocale: () => ipcRenderer.invoke('i18n:get-locale'),
+  },
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to renderer only if context isolation is enabled

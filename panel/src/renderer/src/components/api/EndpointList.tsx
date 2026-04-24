@@ -1,4 +1,63 @@
 import type { ApiFormat } from "./ApiDashboard";
+import { useTranslation } from "../../i18n";
+
+// Maps English category/description strings from the static endpoint data
+// tables above to their i18n key. Falls through to the English value when
+// no key is mapped — safe default that keeps the wire labels accurate even
+// if translations drift.
+const CATEGORY_KEYS: Record<string, string> = {
+  "Chat & Completions": "endpoints.chatCompletions",
+  "Models": "endpoints.models",
+  "Image Generation": "endpoints.imageGeneration",
+  "Embeddings & Reranking": "endpoints.embeddingsReranking",
+  "Audio": "endpoints.audio",
+  "Cache": "endpoints.cache",
+  "MCP Tools": "endpoints.mcpTools",
+  "Cancel": "endpoints.cancelCategory",
+  "Health": "endpoints.health",
+  "Anthropic": "endpoints.anthropic",
+};
+
+const DESCRIPTION_KEYS: Record<string, string> = {
+  "OpenAI-compatible chat and text completion endpoints": "endpoints.chatCompletionsDesc",
+  "Model information and management": "endpoints.modelsDesc",
+  "Text-to-image generation and image editing (requires mflux)": "endpoints.imageGenerationDesc",
+  "Vector embeddings and reranking (requires embedding model)": "endpoints.embeddingsRerankingDesc",
+  "Speech-to-text and text-to-speech (requires mlx-audio)": "endpoints.audioDesc",
+  "KV cache management for prefix caching": "endpoints.cacheDesc",
+  "Model Context Protocol tool integration": "endpoints.mcpToolsDesc",
+  "Cancel in-flight streaming requests": "endpoints.cancelDesc",
+  "Server health and status": "endpoints.healthDesc",
+  "Anthropic Messages API — use with Claude Code, Anthropic SDK, or any Anthropic-compatible client": "endpoints.anthropicDesc",
+};
+
+const ENDPOINT_DESC_KEYS: Record<string, string> = {
+  "Chat completions (OpenAI format)": "endpoints.chatCompletionsEndpoint",
+  "Responses API (OpenAI format)": "endpoints.responsesEndpoint",
+  "Text completions (legacy format)": "endpoints.textCompletionsEndpoint",
+  "Anthropic Messages API": "endpoints.anthropicMessagesEndpoint",
+  "List loaded models": "endpoints.listModelsEndpoint",
+  "Generate images from text prompts": "endpoints.generateImagesEndpoint",
+  "Generate images from text prompts (OpenAI format)": "endpoints.generateImagesEndpoint",
+  "Edit images with text instructions": "endpoints.editImagesEndpoint",
+  "Edit images with text instructions (Qwen-Image-Edit)": "endpoints.editImagesEndpoint",
+  "Generate text embeddings": "endpoints.embeddingsEndpoint",
+  "Rerank documents by relevance": "endpoints.rerankEndpoint",
+  "Transcribe audio (Whisper STT)": "endpoints.transcriptionsEndpoint",
+  "Generate speech (Kokoro TTS)": "endpoints.speechEndpoint",
+  "List available TTS voices": "endpoints.voicesEndpoint",
+  "Cache statistics (hit rate, size)": "endpoints.cacheStatsEndpoint",
+  "List cached prefix entries": "endpoints.cacheEntriesEndpoint",
+  "Pre-warm cache with a prompt": "endpoints.cacheWarmEndpoint",
+  "Clear all cached entries": "endpoints.cacheClearEndpoint",
+  "List available MCP tools": "endpoints.mcpToolsListEndpoint",
+  "MCP server connection status": "endpoints.mcpServersEndpoint",
+  "Execute an MCP tool": "endpoints.mcpExecuteEndpoint",
+  "Cancel a chat completion stream": "endpoints.cancelChatEndpoint",
+  "Cancel a responses stream": "endpoints.cancelResponsesEndpoint",
+  "Cancel a text completion stream": "endpoints.cancelCompletionsEndpoint",
+  "Health check — model status, memory, MCP info": "endpoints.healthEndpoint",
+};
 
 interface Endpoint {
   method: "GET" | "POST" | "DELETE";
@@ -309,30 +368,38 @@ interface EndpointListProps {
 }
 
 export function EndpointList({ format = "openai" }: EndpointListProps) {
+  const { t } = useTranslation();
   const groups = FORMAT_GROUPS[format] || OPENAI_GROUPS;
+  const formatLabel =
+    format === "openai"
+      ? "OpenAI"
+      : format === "anthropic"
+        ? "Anthropic"
+        : "Ollama";
 
   return (
     <div className="space-y-4">
       <h3 className="text-sm font-medium">
-        {format === "openai"
-          ? "OpenAI Endpoints"
-          : format === "anthropic"
-            ? "Anthropic Endpoints"
-            : "Ollama Endpoints"}
+        {formatLabel} {t('endpoints.title')}
       </h3>
-      {groups.map((group) => (
+      {groups.map((group) => {
+        const catKey = CATEGORY_KEYS[group.category];
+        const descKey = DESCRIPTION_KEYS[group.description];
+        return (
         <div
           key={group.category}
           className="border border-border rounded-lg overflow-hidden"
         >
           <div className="px-3 py-2 bg-muted/50 border-b border-border">
-            <h4 className="text-xs font-medium">{group.category}</h4>
+            <h4 className="text-xs font-medium">{catKey ? t(catKey) : group.category}</h4>
             <p className="text-[10px] text-muted-foreground">
-              {group.description}
+              {descKey ? t(descKey) : group.description}
             </p>
           </div>
           <div className="divide-y divide-border">
-            {group.endpoints.map((ep) => (
+            {group.endpoints.map((ep) => {
+              const epKey = ENDPOINT_DESC_KEYS[ep.description];
+              return (
               <div key={ep.path} className="px-3 py-2 flex items-center gap-2">
                 <span
                   className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${METHOD_COLORS[ep.method] || "bg-muted text-foreground"}`}
@@ -344,17 +411,19 @@ export function EndpointList({ format = "openai" }: EndpointListProps) {
                 </code>
                 {ep.stream && (
                   <span className="text-[9px] px-1 py-0.5 rounded bg-violet-500/15 text-violet-400">
-                    stream
+                    {t('common.stream')}
                   </span>
                 )}
                 <span className="text-[10px] text-muted-foreground hidden sm:inline">
-                  {ep.description}
+                  {epKey ? t(epKey) : ep.description}
                 </span>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

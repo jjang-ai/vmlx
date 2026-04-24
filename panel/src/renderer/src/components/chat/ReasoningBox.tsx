@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { ChevronRight, Maximize2, Minimize2 } from 'lucide-react'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import { useTranslation } from '../../i18n'
 
 interface ReasoningBoxProps {
   content: string
@@ -19,6 +20,7 @@ function sanitizeHtml(html: string): string {
 }
 
 export function ReasoningBox({ content, isStreaming, isDone }: ReasoningBoxProps) {
+  const { t } = useTranslation()
   const [isCollapsed, setIsCollapsed] = useState(false)
   const [isMaximized, setIsMaximized] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -80,14 +82,14 @@ export function ReasoningBox({ content, isStreaming, isDone }: ReasoningBoxProps
     const code = btn.closest('pre')?.querySelector('code')
     if (code) {
       navigator.clipboard.writeText(code.textContent || '')
-      btn.textContent = 'Copied!'
-      setTimeout(() => { btn.textContent = 'Copy' }, 1500)
+      btn.textContent = t('chat.reasoning.copied')
+      setTimeout(() => { btn.textContent = t('chat.reasoning.copy') }, 1500)
     }
-  }, [])
+  }, [t])
 
   if (!content) return null
 
-  const label = isStreaming && !isDone ? 'Thinking' : 'Reasoning'
+  const label = isStreaming && !isDone ? t('chat.reasoning.thinking') : t('chat.reasoning.reasoning')
 
   return (
     <div className={`mb-3 rounded border overflow-hidden transition-all duration-200 ${
@@ -112,11 +114,11 @@ export function ReasoningBox({ content, isStreaming, isDone }: ReasoningBoxProps
           </span>
         </button>
         <span className="ml-auto flex items-center gap-2">
-          <span className="text-[10px] opacity-60">{content.length} chars</span>
+          <span className="text-[10px] opacity-60">{t('chat.reasoning.charsSuffix', { n: content.length })}</span>
           <button
             onClick={() => setIsMaximized(!isMaximized)}
             className="text-[10px] opacity-40 hover:opacity-80 transition-opacity"
-            title={isMaximized ? 'Restore size' : 'Maximize'}
+            title={isMaximized ? t('chat.reasoning.restoreTitle') : t('chat.reasoning.maximizeTitle')}
           >
             {isMaximized ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
           </button>

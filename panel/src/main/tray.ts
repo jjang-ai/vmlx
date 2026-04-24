@@ -14,6 +14,7 @@ import { app, Tray, Menu, nativeImage, BrowserWindow, clipboard } from 'electron
 import type { ProcessManager } from './process-manager'
 import { db } from './database'
 import { sessionManager, connectHost } from './sessions'
+import { t } from './i18n'
 
 let tray: Tray | null = null
 let boundProcessManager: ProcessManager | null = null
@@ -107,15 +108,15 @@ function buildMenu(
 
   const items: Electron.MenuItemConstructorOptions[] = [
     {
-      label: `vMLX — ${totalRunning} model${totalRunning !== 1 ? 's' : ''} loaded`,
+      label: t('main.tray.modelsLoaded', { n: totalRunning }),
       enabled: false,
     },
     {
-      label: `API Gateway: localhost:${gwPort}`,
+      label: t('main.tray.apiGateway', { port: gwPort }),
       enabled: false,
     },
     {
-      label: 'Copy API URL',
+      label: t('main.tray.copyApiUrl'),
       click: () => clipboard.writeText(`http://localhost:${gwPort}`),
     },
     { type: 'separator' },
@@ -137,22 +138,28 @@ function buildMenu(
       label: `${statusIcon} ${modelName} (:${proc.port})${memLabel}`,
       submenu: [
         {
-          label: proc.status === 'running' ? '✓ Running' : proc.status,
+          label: proc.status === 'running'
+            ? t('main.tray.statusRunning')
+            : proc.status === 'starting'
+              ? t('main.tray.statusStarting')
+              : proc.status === 'error'
+                ? t('main.tray.statusError')
+                : proc.status,
           enabled: false,
         },
         {
-          label: `Port: ${proc.port}`,
+          label: t('main.tray.port', { port: proc.port }),
           enabled: false,
         },
         { type: 'separator' },
         {
-          label: 'Copy API URL',
+          label: t('main.tray.copyApiUrl'),
           click: () => {
             clipboard.writeText(`http://127.0.0.1:${proc.port}/v1`)
           },
         },
         {
-          label: proc.pinned ? 'Unpin (allow eviction)' : 'Pin (prevent eviction)',
+          label: proc.pinned ? t('main.tray.unpin') : t('main.tray.pin'),
           click: () => {
             processManager.setPinned(proc.id, !proc.pinned)
             rebuildMenu(processManager, getWindow)
@@ -160,7 +167,7 @@ function buildMenu(
         },
         { type: 'separator' },
         {
-          label: 'Stop',
+          label: t('main.tray.stop'),
           click: async () => {
             try {
               await processManager.kill(proc.id)
@@ -194,12 +201,12 @@ function buildMenu(
         label: `${icon} ${modelName} (:${s.port})${sessMemLabel}`,
         submenu: [
           {
-            label: 'Copy API URL',
+            label: t('main.tray.copyApiUrl'),
             click: () => { clipboard.writeText(`http://${connectHost(s.host)}:${s.port}/v1`) },
           },
           { type: 'separator' },
           ...(isSleeping ? [{
-            label: 'Wake',
+            label: t('main.tray.wake'),
             click: async () => {
               try {
                 await sessionManager.wakeSession(s.id)
@@ -209,7 +216,7 @@ function buildMenu(
               }
             },
           }] : [{
-            label: 'Sleep',
+            label: t('main.tray.sleep'),
             click: async () => {
               try {
                 await sessionManager.softSleep(s.id)
@@ -221,7 +228,7 @@ function buildMenu(
           }]),
           { type: 'separator' as const },
           {
-            label: 'Stop',
+            label: t('main.tray.stop'),
             click: async () => {
               try {
                 await sessionManager.stopSession(s.id)
@@ -238,7 +245,7 @@ function buildMenu(
 
   if (totalRunning === 0) {
     items.push({
-      label: 'No models loaded',
+      label: t('main.tray.noModels'),
       enabled: false,
     })
   }
@@ -246,12 +253,12 @@ function buildMenu(
   items.push(
     { type: 'separator' },
     {
-      label: `Memory: ${(totalMemMB / 1024).toFixed(1)} / ${totalGB} GB`,
+      label: t('main.tray.memory', { used: (totalMemMB / 1024).toFixed(1), total: String(totalGB) }),
       enabled: false,
     },
     { type: 'separator' },
     {
-      label: 'Open vMLX Window',
+      label: t('main.tray.openWindow'),
       click: () => {
         const win = getWindow()
         if (win && !win.isDestroyed()) {
@@ -264,7 +271,7 @@ function buildMenu(
       },
     },
     {
-      label: 'Quit vMLX',
+      label: t('main.tray.quit'),
       click: () => {
         app.quit()
       },
@@ -316,8 +323,8 @@ export function rebuildMenu(
   const total = totalRunning + totalStandby
   tray.setToolTip(
     total > 0
-      ? `vMLX — ${totalRunning} running${totalStandby > 0 ? `, ${totalStandby} sleeping` : ''}`
-      : 'vMLX — No models loaded'
+      ? t('main.tray.tooltipRunningSleeping', { running: totalRunning, standby: totalStandby })
+      : t('main.tray.tooltipNoModels')
   )
 }
 
@@ -331,7 +338,7 @@ export function createTray(
   if (tray) return tray
 
   tray = new Tray(createTrayIcon('gray'))
-  tray.setToolTip('vMLX — No models loaded')
+  tray.setToolTip(t('main.tray.tooltipNoModels'))
   tray.setContextMenu(buildMenu(processManager, getWindow))
 
   // macOS: clicking tray icon opens the context menu automatically (setContextMenu).

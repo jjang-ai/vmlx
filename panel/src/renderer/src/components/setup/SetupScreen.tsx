@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useTranslation } from '../../i18n'
 
 interface AvailableInstaller {
   method: 'uv' | 'pip'
@@ -11,6 +12,7 @@ interface SetupScreenProps {
 }
 
 export function SetupScreen({ onReady }: SetupScreenProps) {
+  const { t } = useTranslation()
   const [checking, setChecking] = useState(true)
   const [installers, setInstallers] = useState<AvailableInstaller[]>([])
   const [selectedMethod, setSelectedMethod] = useState<'uv' | 'pip' | null>(null)
@@ -76,11 +78,11 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
       if (!mountedRef.current) return
 
       if (result.success) {
-        setLogs(prev => [...prev, '\nInference engine installed successfully!'])
+        setLogs(prev => [...prev, '\n' + t('setup.installSuccess')])
         // Brief pause so user sees success, then proceed
         setTimeout(() => { if (mountedRef.current) onReady() }, 1000)
       } else {
-        setInstallError(result.error || 'Installation failed')
+        setInstallError(result.error || t('setup.installFailed'))
         setInstalling(false)
       }
     } catch (error) {
@@ -96,13 +98,13 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
   const handleCancel = async () => {
     await window.api.engine.cancelInstall()
     setInstalling(false)
-    setLogs(prev => [...prev, '\nInstallation cancelled.'])
+    setLogs(prev => [...prev, '\n' + t('setup.installCancelled')])
   }
 
   if (checking) {
     return (
       <div className="flex items-center justify-center h-full">
-        <p className="text-muted-foreground">Initializing inference engine...</p>
+        <p className="text-muted-foreground">{t('setup.initializing')}</p>
       </div>
     )
   }
@@ -111,12 +113,9 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
     <div className="flex items-center justify-center h-full p-6">
       <div className="max-w-lg w-full">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold mb-2">Welcome to vMLX</h1>
+          <h1 className="text-3xl font-bold mb-2">{t('setup.welcome')}</h1>
           <p className="text-muted-foreground">
-            First-time setup: vMLX needs to install its inference layer.
-            {installers.length > 0
-              ? ' Click below to install it automatically.'
-              : ' Please install it manually to continue.'}
+            {installers.length > 0 ? t('setup.firstTimeAuto') : t('setup.firstTimeManual')}
           </p>
         </div>
 
@@ -167,7 +166,7 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
                   onClick={handleCancel}
                   className="px-6 py-2.5 text-sm border border-border rounded hover:bg-accent"
                 >
-                  Cancel
+                  {t('setup.cancel')}
                 </button>
               ) : (
                 <>
@@ -176,14 +175,14 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
                     disabled={!selectedMethod}
                     className="px-8 py-2.5 bg-primary text-primary-foreground rounded hover:bg-primary/90 font-medium disabled:opacity-50"
                   >
-                    Install Engine
+                    {t('setup.installEngine')}
                   </button>
                   {installError && (
                     <button
                       onClick={checkAndProceed}
                       className="px-4 py-2.5 text-sm border border-border rounded hover:bg-accent"
                     >
-                      Check Again
+                      {t('setup.checkAgain')}
                     </button>
                   )}
                 </>
@@ -195,17 +194,16 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
           <div className="space-y-4">
             <div className="p-4 bg-card border border-border rounded-lg">
               <p className="text-sm text-muted-foreground mb-3">
-                No compatible package manager found (uv or pip with Python 3.10+).
-                Install manually:
+                {t('setup.noInstallers')}
               </p>
               <div className="space-y-2">
                 <div className="p-2 bg-muted rounded font-mono text-xs">
-                  <span className="text-muted-foreground"># Install uv first (recommended):</span>
+                  <span className="text-muted-foreground">{t('setup.installUvComment')}</span>
                   <br />
                   curl -LsSf https://astral.sh/uv/install.sh | sh
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Then restart vMLX — it will complete setup automatically.
+                  {t('setup.restartHint')}
                 </p>
               </div>
             </div>
@@ -214,7 +212,7 @@ export function SetupScreen({ onReady }: SetupScreenProps) {
                 onClick={checkAndProceed}
                 className="px-6 py-2.5 bg-primary text-primary-foreground rounded hover:bg-primary/90 font-medium"
               >
-                Check Again
+                {t('setup.checkAgain')}
               </button>
             </div>
           </div>

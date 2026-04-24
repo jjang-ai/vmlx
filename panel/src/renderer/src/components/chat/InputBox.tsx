@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect, KeyboardEvent, DragEvent, ClipboardEvent } from 'react'
 import { Paperclip, Send, Square, ImagePlus, X, Film } from 'lucide-react'
 import { VoiceChat } from './VoiceChat'
+import { useTranslation } from '../../i18n'
 
 export type AttachmentKind = 'image' | 'video'
 
@@ -45,6 +46,7 @@ function sizeLimitForKind(kind: AttachmentKind): number {
 }
 
 export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, sessionId }: InputBoxProps) {
+  const { t } = useTranslation()
   const [message, setMessage] = useState('')
   const [attachments, setAttachments] = useState<MediaAttachment[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
@@ -168,7 +170,7 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80 border-2 border-dashed border-primary/40 rounded-lg m-1 pointer-events-none">
           <div className="flex flex-col items-center gap-1 text-primary">
             <ImagePlus className="h-6 w-6" />
-            <span className="text-xs font-medium">Drop image or video to attach</span>
+            <span className="text-xs font-medium">{t('chat.input.dropOverlay')}</span>
           </div>
         </div>
       )}
@@ -224,7 +226,7 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
             onClick={() => fileInputRef.current?.click()}
             disabled={disabled && !loading}
             className="p-2 rounded-lg hover:bg-accent disabled:opacity-40 text-muted-foreground hover:text-foreground transition-colors"
-            title="Attach image or video"
+            title={t('chat.input.attachTitle')}
           >
             <Paperclip className="h-4 w-4" />
           </button>
@@ -241,7 +243,7 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={loading ? "Waiting for response..." : "Message..."}
+          placeholder={loading ? t('chat.input.placeholderWaiting') : t('chat.input.placeholderDefault')}
           disabled={disabled && !loading}
           className="flex-1 resize-none px-4 py-2.5 bg-background border border-input rounded-xl focus:outline-none focus:ring-2 focus:ring-ring/50 min-h-[42px] max-h-[200px] text-sm leading-relaxed"
           rows={1}
@@ -250,7 +252,7 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
           <button
             onClick={onAbort}
             className="p-2.5 bg-destructive text-destructive-foreground rounded-xl hover:bg-destructive/90 transition-colors flex-shrink-0"
-            title="Stop generating (Esc)"
+            title={t('chat.input.stopTitle')}
           >
             <Square className="h-4 w-4" />
           </button>
@@ -259,7 +261,7 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
             onClick={handleSend}
             disabled={disabled || (!message.trim() && attachments.length === 0)}
             className="p-2.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 disabled:opacity-30 transition-colors flex-shrink-0"
-            title="Send message (Enter)"
+            title={t('chat.input.sendTitle')}
           >
             <Send className="h-4 w-4" />
           </button>

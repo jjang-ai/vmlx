@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { ArrowLeft, ChevronRight } from 'lucide-react'
 import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG } from './SessionConfigForm'
+import { useTranslation } from '../../i18n'
 
 interface Session {
   id: string
@@ -156,6 +157,7 @@ function buildCommandPreview(
 }
 
 export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
+  const { t } = useTranslation()
   const [session, setSession] = useState<Session | null>(null)
   const [config, setConfig] = useState<SessionConfig>(DEFAULT_CONFIG)
   const [dirty, setDirty] = useState(false)
@@ -321,7 +323,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
   if (!session) {
     return (
       <div className="flex items-center justify-center h-full">
-        <p className="text-muted-foreground">Loading session...</p>
+        <p className="text-muted-foreground">{t('sessions.settings.loading')}</p>
       </div>
     )
   }
@@ -335,23 +337,23 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         {/* Header */}
         <div className="flex items-center gap-3 mb-6">
           <button onClick={onBack} className="text-muted-foreground hover:text-foreground flex items-center gap-1">
-            <ArrowLeft className="h-3.5 w-3.5" /> Back
+            <ArrowLeft className="h-3.5 w-3.5" /> {t('common.back')}
           </button>
-          <h1 className="text-2xl font-bold">Session Settings</h1>
+          <h1 className="text-2xl font-bold">{t('sessions.settings.title')}</h1>
         </div>
 
         {/* Session Info */}
         <div className="mb-4 p-3 bg-card border border-border rounded">
           <div className="flex items-center justify-between">
             <div>
-              <span className="text-xs text-muted-foreground">Model</span>
+              <span className="text-xs text-muted-foreground">{t('sessions.settings.modelLabel')}</span>
               <p className="font-medium text-sm truncate" title={session.modelPath}>{shortName}</p>
               <p className="text-xs text-muted-foreground truncate">{session.modelPath}</p>
             </div>
             <div className="text-right text-sm">
               <span className={`inline-flex items-center gap-1.5 ${isRunning ? 'text-primary' : 'text-muted-foreground'}`}>
                 <span className={`w-2 h-2 rounded-full ${isRunning ? 'bg-primary' : 'bg-muted-foreground'}`} />
-                {restarting ? 'restarting...' : session.status}
+                {restarting ? t('status.restarting') : session.status}
               </span>
               <p className="text-xs text-muted-foreground">{config.host}:{config.port}</p>
             </div>
@@ -361,7 +363,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         {/* Running warning */}
         {isRunning && !restarting && (
           <div className="mb-4 p-3 bg-warning/10 border border-warning/30 rounded-lg text-sm text-warning">
-            Session is running. Save changes and use "Save & Restart" to apply them.
+            {t('sessions.settings.runningWarning')}
           </div>
         )}
 
@@ -384,7 +386,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
             onClick={() => setShowPreview(!showPreview)}
             className="text-xs text-muted-foreground hover:text-foreground"
           >
-            <ChevronRight className={`h-4 w-4 transition-transform ${showPreview ? 'rotate-90' : ''}`} /> CLI Command Preview
+            <ChevronRight className={`h-4 w-4 transition-transform ${showPreview ? 'rotate-90' : ''}`} /> {t('sessions.settings.cliCommandPreview')}
           </button>
           {showPreview && (
             <pre className="mt-2 p-3 bg-background/80 text-primary text-xs font-mono rounded-lg overflow-x-auto whitespace-pre-wrap">
@@ -396,14 +398,14 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         {/* Actions */}
         <div className="flex flex-wrap gap-3 mt-6 pb-6">
           <button onClick={onBack} className="px-4 py-2 border border-border rounded hover:bg-accent">
-            Back
+            {t('common.back')}
           </button>
           <button
             onClick={handleSave}
             disabled={!dirty || saving || restarting}
             className="px-6 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90 font-medium disabled:opacity-40"
           >
-            {saving && !restarting ? 'Saving...' : 'Save Settings'}
+            {saving && !restarting ? t('common.saving') : t('sessions.settings.saveSettings')}
           </button>
           {isRunning && (
             <button
@@ -411,7 +413,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
               disabled={saving || restarting}
               className="px-6 py-2 bg-success text-success-foreground rounded hover:bg-success/90 font-medium disabled:opacity-40"
             >
-              {restarting ? 'Restarting...' : 'Save & Restart'}
+              {restarting ? t('sessions.settings.restarting') : t('sessions.settings.saveAndRestart')}
             </button>
           )}
         </div>

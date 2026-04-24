@@ -3,6 +3,7 @@ import { FolderOpen, Cpu } from 'lucide-react'
 import { SessionCard } from './SessionCard'
 import { DirectoryManager } from './DirectoryManager'
 import { useToast } from '../Toast'
+import { useTranslation } from '../../i18n'
 
 interface Session {
   id: string
@@ -33,6 +34,7 @@ interface SessionDashboardProps {
 
 export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSession, title, subtitle, filterType }: SessionDashboardProps) {
   const { showToast } = useToast()
+  const { t } = useTranslation()
   const [sessions, setSessions] = useState<Session[]>([])
   const [loading, setLoading] = useState(true)
   const [showDirManager, setShowDirManager] = useState(false)
@@ -102,7 +104,7 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
     setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, status: 'loading' as const } : s))
     const result = await window.api.sessions.start(sessionId)
     if (!result.success) {
-      showToast('error', 'Failed to start session', result.error)
+      showToast('error', t('sessions.dashboard.toast.startFailed'), result.error)
     }
     loadSessions()
   }
@@ -111,16 +113,16 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
     setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, status: 'stopped' as const } : s))
     const result = await window.api.sessions.stop(sessionId)
     if (!result.success) {
-      showToast('error', 'Failed to stop session', result.error)
+      showToast('error', t('sessions.dashboard.toast.stopFailed'), result.error)
     }
     loadSessions()
   }
 
   const handleDelete = async (sessionId: string) => {
-    if (!confirm('Delete this session? Chat history for this model will be preserved.')) return
+    if (!confirm(t('sessions.dashboard.deleteConfirm'))) return
     const result = await window.api.sessions.delete(sessionId)
     if (!result.success) {
-      showToast('error', 'Failed to delete session', result.error)
+      showToast('error', t('sessions.dashboard.toast.deleteFailed'), result.error)
     }
     loadSessions()
   }
@@ -190,7 +192,7 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
   if (loading && sessions.length === 0) {
     return (
       <div className="flex items-center justify-center h-full">
-        <p className="text-muted-foreground">Loading sessions...</p>
+        <p className="text-muted-foreground">{t('sessions.dashboard.loading')}</p>
       </div>
     )
   }
@@ -200,7 +202,7 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold">{title || 'Sessions'}</h1>
+          <h1 className="text-2xl font-bold">{title || t('sessions.dashboard.defaultTitle')}</h1>
           {subtitle && <p className="text-sm text-muted-foreground mt-0.5">{subtitle}</p>}
         </div>
         <div className="flex gap-2">
@@ -209,21 +211,21 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
             className={`px-3 py-1.5 text-sm border rounded ${
               showDirManager ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:bg-accent'
             }`}
-            title="Configure model scan directories"
+            title={t('sessions.dashboard.directoriesTitle')}
           >
-            <FolderOpen className="h-4 w-4" /> Directories
+            <FolderOpen className="h-4 w-4" /> {t('sessions.dashboard.directories')}
           </button>
           <button
             onClick={handleDetect}
             className="px-3 py-1.5 text-sm border border-border rounded hover:bg-accent"
           >
-            Detect Processes
+            {t('sessions.dashboard.detectProcesses')}
           </button>
           <button
             onClick={onCreateSession}
             className="px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90"
           >
-            + New Session
+            {t('sessions.dashboard.newSession')}
           </button>
         </div>
       </div>
@@ -239,7 +241,7 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
             onRemove={handleRemoveDirectory}
             onBrowse={handleBrowseDirectory}
             onClearError={() => setDirError(null)}
-            description="vMLX scans these directories for models when creating a new session."
+            description={t('sessions.dashboard.dirManagerDescription')}
           />
         </div>
       )}
@@ -249,22 +251,22 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
           <div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center mb-4">
             <Cpu className="h-7 w-7 text-primary" />
           </div>
-          <h2 className="text-xl font-semibold mb-2">No sessions yet</h2>
+          <h2 className="text-xl font-semibold mb-2">{t('sessions.dashboard.emptyHeader')}</h2>
           <p className="text-sm text-muted-foreground text-center mb-6 max-w-sm">
-            Create a session to load a model and start chatting, or detect a running server.
+            {t('sessions.dashboard.emptyBody')}
           </p>
           <div className="flex gap-3">
             <button
               onClick={onCreateSession}
               className="px-5 py-2.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 font-medium text-sm transition-colors"
             >
-              Create Session
+              {t('sessions.dashboard.createSession')}
             </button>
             <button
               onClick={handleDetect}
               className="px-5 py-2.5 border border-border rounded-xl hover:bg-accent text-sm transition-colors"
             >
-              Detect Running
+              {t('sessions.dashboard.detectRunning')}
             </button>
           </div>
         </div>
@@ -274,7 +276,7 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
           {runningSessions.length > 0 && (
             <div className="mb-6">
               <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
-                Active ({runningSessions.length})
+                {t('sessions.dashboard.active', { n: runningSessions.length })}
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                 {runningSessions.map(session => (
@@ -298,7 +300,7 @@ export function SessionDashboard({ onOpenSession, onConfigureSession, onCreateSe
           {stoppedSessions.length > 0 && (
             <div>
               <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
-                Inactive ({stoppedSessions.length})
+                {t('sessions.dashboard.inactive', { n: stoppedSessions.length })}
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                 {stoppedSessions.map(session => (

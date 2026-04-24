@@ -378,7 +378,7 @@ function ServerModeContent() {
               className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
             >
               <ArrowLeft className="h-3 w-3" />
-              Back
+              {t('common.back')}
             </button>
             <h2 className="text-2xl font-bold">{t('app.about.title')}</h2>
             <p className="text-sm text-muted-foreground">

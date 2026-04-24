@@ -3,6 +3,7 @@ import { Copy, Check, Wifi, WifiOff } from "lucide-react";
 import { useSessionsContext } from "../../contexts/SessionsContext";
 import { EndpointList } from "./EndpointList";
 import { CodeSnippets } from "./CodeSnippets";
+import { useTranslation } from '../../i18n';
 import { CodingToolIntegration } from "./CodingToolIntegration";
 
 export type ApiFormat = "openai" | "anthropic" | "ollama";
@@ -39,6 +40,7 @@ function getModelType(s: SessionSummary): string {
 }
 
 export function ApiDashboard() {
+  const { t } = useTranslation();
   const { sessions } = useSessionsContext();
   const runningSessions = useMemo(
     () =>
@@ -120,10 +122,9 @@ export function ApiDashboard() {
       <div className="max-w-4xl mx-auto p-6 space-y-6">
         {/* Header */}
         <div>
-          <h1 className="text-2xl font-bold">API Gateway</h1>
+          <h1 className="text-2xl font-bold">{t('api.gatewayTitle')}</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            All models are accessible through a single endpoint. Route by model
-            name in your request.
+            {t('api.gatewayIntro')}
           </p>
           <p className="text-[9px] text-muted-foreground/40 mt-0.5">
             MLX Studio by Jinho Jang &middot; mlx.studio
@@ -139,13 +140,13 @@ export function ApiDashboard() {
               ) : (
                 <WifiOff className="h-4 w-4 text-muted-foreground/50" />
               )}
-              <h3 className="text-sm font-medium">Gateway</h3>
+              <h3 className="text-sm font-medium">{t('api.gateway')}</h3>
               <span
                 className={`text-[10px] px-1.5 py-0.5 rounded ${hasModels ? "bg-green-500/15 text-green-500" : "bg-muted text-muted-foreground"}`}
               >
                 {hasModels
-                  ? `${runningSessions.length} model${runningSessions.length !== 1 ? "s" : ""}`
-                  : "No models"}
+                  ? t('api.runningModelsCount', { n: runningSessions.length })
+                  : t('api.noModels')}
               </span>
             </div>
           </div>
@@ -157,7 +158,7 @@ export function ApiDashboard() {
             {/* Port editor */}
             <div className="flex items-center gap-2 text-xs">
               <span className="text-muted-foreground w-20 flex-shrink-0">
-                Port
+                {t('api.port')}
               </span>
               <input
                 ref={portRef}
@@ -181,7 +182,7 @@ export function ApiDashboard() {
             {/* LAN access toggle */}
             <div className="flex items-center gap-2 text-xs">
               <span className="text-muted-foreground w-20 flex-shrink-0">
-                LAN
+                {t('api.lan')}
               </span>
               <button
                 onClick={handleLanToggle}
@@ -193,8 +194,8 @@ export function ApiDashboard() {
               </button>
               <span className="text-muted-foreground text-[10px]">
                 {lanEnabled
-                  ? "Accessible from network (0.0.0.0)"
-                  : "Localhost only (127.0.0.1)"}
+                  ? t('api.lanEnabled')
+                  : t('api.lanDisabled')}
               </span>
             </div>
 
@@ -212,7 +213,7 @@ export function ApiDashboard() {
         {/* Live model list */}
         {hasModels && (
           <div className="space-y-2">
-            <h3 className="text-sm font-medium">Running Models</h3>
+            <h3 className="text-sm font-medium">{t('api.runningModels')}</h3>
             <div className="border border-border rounded-lg divide-y divide-border overflow-hidden">
               {runningSessions.map((s) => {
                 const name = getModelDisplayName(s);
@@ -232,7 +233,7 @@ export function ApiDashboard() {
                     </span>
                     {isSleeping && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400">
-                        sleeping
+                        {t('api.sleeping')}
                       </span>
                     )}
                     <span className="text-muted-foreground/60 font-mono">
@@ -247,7 +248,7 @@ export function ApiDashboard() {
 
         {/* Format toggle */}
         <div className="flex items-center gap-1">
-          <span className="text-xs text-muted-foreground mr-2">Format:</span>
+          <span className="text-xs text-muted-foreground mr-2">{t('api.format')}</span>
           {(["openai", "anthropic", "ollama"] as ApiFormat[]).map((f) => (
             <button
               key={f}

@@ -3,6 +3,7 @@ import { Sparkles, Loader2 } from 'lucide-react'
 import { MessageList } from './MessageList'
 import { InputBox, MediaAttachment } from './InputBox'
 import { useToast } from '../Toast'
+import { useTranslation } from '../../i18n'
 
 interface MessageMetrics {
   tokenCount: number
@@ -53,6 +54,7 @@ interface ChatInterfaceProps {
 
 export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, sessionStatus, overridesVersion }: ChatInterfaceProps) {
   const { showToast } = useToast()
+  const { t } = useTranslation()
   const [messages, setMessages] = useState<Message[]>([])
   // Track current chatId via ref so async handleSend can detect stale closures
   const chatIdRef = useRef(chatId)
@@ -200,7 +202,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
       // Append truncation warning if server indicated max_tokens was hit
       let finalContent = data.content || ''
       if (data.finishReason === 'length' && finalContent) {
-        finalContent += '\n\n---\n*[Output truncated — max tokens reached. Increase "Default Max Tokens" in session settings or send a follow-up message to continue.]*'
+        finalContent += '\n\n---\n*' + t('chat.interface.truncationNotice') + '*'
       }
       setMessages(prev => prev.map(m =>
         m.id === data.messageId
@@ -309,7 +311,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
 
     // Guard: don't send if model isn't running (prevents fallback to wrong endpoint)
     if (!sessionEndpoint && sessionId) {
-      showToast('error', 'Model not running', 'Start the model before sending a message.')
+      showToast('error', t('chat.interface.toast.modelNotRunningTitle'), t('chat.interface.toast.modelNotRunningBody'))
       return
     }
 
@@ -466,9 +468,9 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
           <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
             <Sparkles className="h-6 w-6 text-primary" />
           </div>
-          <h2 className="text-xl font-semibold mb-2">Start a conversation</h2>
+          <h2 className="text-xl font-semibold mb-2">{t('chat.interface.emptyStateTitle')}</h2>
           <p className="text-sm text-muted-foreground mb-6">
-            Chat with your local model. Load a model first, then start typing.
+            {t('chat.interface.emptyStateBody')}
           </p>
           {onNewChat && (
             <button
@@ -502,7 +504,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
       {askUserQuestion && chatId && (
         <div className="border-t border-border bg-card px-4 py-3">
           <div className="max-w-2xl mx-auto">
-            <div className="text-xs font-medium text-primary mb-1.5">Model is asking:</div>
+            <div className="text-xs font-medium text-primary mb-1.5">{t('chat.interface.askUserLabel')}</div>
             <div className="text-sm mb-2 whitespace-pre-wrap">{askUserQuestion}</div>
             <form onSubmit={e => {
               e.preventDefault()
@@ -524,18 +526,18 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
                 disabled={!askUserInput.trim()}
                 className="px-4 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-40"
               >
-                Reply
+                {t('chat.interface.askUserReply')}
               </button>
               <button
                 type="button"
                 onClick={() => {
-                  window.api.chat.answerUser(chatId, '(User skipped this question)')
+                  window.api.chat.answerUser(chatId, t('chat.interface.askUserSkipResponse'))
                   setAskUserQuestion(null)
                   setAskUserInput('')
                 }}
                 className="px-3 py-1.5 text-sm border border-border rounded hover:bg-accent"
               >
-                Skip
+                {t('chat.interface.askUserSkip')}
               </button>
             </form>
           </div>
@@ -544,14 +546,14 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
       {/* Model sleeping banner */}
       {sessionEndpoint && sessionId && !loading && sessionStatus === 'standby' && (
         <div className="flex items-center justify-center gap-2 px-4 py-2 border-t border-border bg-blue-500/5">
-          <span className="text-xs text-blue-400">Model sleeping — will auto-wake on your next message</span>
+          <span className="text-xs text-blue-400">{t('chat.interface.standbyBanner')}</span>
         </div>
       )}
       {/* Model loading banner */}
       {!sessionEndpoint && sessionId && sessionStatus === 'loading' && (
         <div className="flex items-center justify-center gap-2 px-4 py-2 border-t border-border bg-yellow-500/5">
           <Loader2 className="h-3.5 w-3.5 text-yellow-500 animate-spin" />
-          <span className="text-xs text-muted-foreground">Loading model...</span>
+          <span className="text-xs text-muted-foreground">{t('chat.interface.loadingBanner')}</span>
         </div>
       )}
       {/* TTFT / Waking up banner */}
@@ -559,14 +561,14 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
         <div className="flex items-center justify-center gap-2 px-4 py-2 border-t border-border bg-primary/5">
           <Loader2 className="h-3.5 w-3.5 text-primary animate-spin" />
           <span className="text-xs text-primary/80">
-            {sessionStatus === 'standby' ? 'Waking up model and restoring caches...' : 'Evaluating prompt...'}
+            {sessionStatus === 'standby' ? t('chat.interface.wakingBanner') : t('chat.interface.evaluatingBanner')}
           </span>
         </div>
       )}
       {/* Model not running banner */}
       {!sessionEndpoint && sessionId && !loading && sessionStatus !== 'loading' && (
         <div className="flex items-center justify-center gap-3 px-4 py-2 border-t border-border bg-warning/5">
-          <span className="text-xs text-muted-foreground">Model is not running.</span>
+          <span className="text-xs text-muted-foreground">{t('chat.interface.notRunningBanner')}</span>
           <button
             onClick={async () => {
               try {
@@ -577,7 +579,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
             }}
             className="text-xs px-3 py-1 bg-success text-success-foreground rounded hover:bg-success/90 transition-colors font-medium"
           >
-            Load Model
+            {t('chat.interface.loadModelButton')}
           </button>
         </div>
       )}
