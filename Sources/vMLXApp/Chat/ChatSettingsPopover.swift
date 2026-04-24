@@ -355,17 +355,11 @@ struct ChatSettingsPopover: View {
                     .foregroundStyle(Theme.Colors.textLow)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 2)
-                // §74 / §321: Coming-soon explainer so users don't
-                // wonder where Web Search / Fetch URL / File Tools /
-                // Git / Utility / Brave went. These lived on earlier
-                // mocks but never wired through the stream, so the
-                // toggles were hidden to stop misleading users. Roadmap
-                // pending: drop MCP in the API panel for now.
-                Text(L10n.ChatUI.builtinToolsComingSoon.render(appLocale))
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Colors.textLow)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 2)
+                // §384 — "Coming soon: Web Search, Fetch URL…" blurb
+                // removed per Eric's "no BS placeholders" rule. Users
+                // wanting more tools should use MCP (API panel) which
+                // actually works. If we port those tools natively later,
+                // the UI comes back at that point.
             }
             .padding(.top, Theme.Spacing.xs)
         } label: { sectionLabel(L10n.Chat.sectionBuiltInTools.render(appLocale)) }

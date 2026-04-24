@@ -690,28 +690,11 @@ struct TrayItem: View {
                         set: { draft.flashMoeSlotBank = Int($0); schedulePush() }),
                     range: 16...2048, step: 16,
                     format: "%.0f")
-                // iter-57: Prefetch picker persists to
-                // `flashMoePrefetch` but `applyFlashMoEIfEnabled` never
-                // reads it — FlashMoEExpertLoader is always constructed
-                // with the default (none). "Temporal" is an unrealized
-                // README-only feature. Show the picker but label the
-                // non-default option so users don't wait for a warm-up
-                // that never happens.
-                Picker(
-                    "Prefetch (coming soon)",
-                    selection: Binding(
-                        get: { draft.flashMoePrefetch },
-                        set: { draft.flashMoePrefetch = $0; schedulePush() })
-                ) {
-                    Text("None").tag("none")
-                    Text("Temporal (coming soon)").tag("temporal")
-                }
-                .pickerStyle(.segmented)
-                .font(.system(size: 10))
-                Text("Expert-slot prefetch strategy. Temporal warm-up is planned but not wired today — selecting it persists but the loader loads experts on-demand regardless.")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                // §384 — FlashMoE Prefetch picker removed from UI per
+                // "no BS placeholders" rule. Only "none" was functional;
+                // "temporal" persisted to flashMoePrefetch but
+                // applyFlashMoEIfEnabled never consumed it. Field stays
+                // in GlobalSettings for forward-compat when warm-up lands.
             }
         }
     }
