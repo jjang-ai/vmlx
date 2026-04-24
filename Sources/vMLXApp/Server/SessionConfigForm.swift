@@ -451,6 +451,22 @@ struct SessionConfigForm: View {
                             commit()
                         }
                      ))
+        // §358: CORS is NOT live-swappable — the Hummingbird middleware
+        // captures the allowlist at Server.init() time. API key + admin
+        // token above ARE live (applyAuthCredentials), but CORS requires
+        // a session restart. Previously this lied by omission: no badge,
+        // no caption. Users would edit CORS mid-session and silently
+        // get the old policy until next Stop + Start. Surface it.
+        HStack(alignment: .top, spacing: 4) {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Theme.Colors.warning)
+            Text(L10n.SessionConfig.restartRequired.render(appLocale))
+                .font(Theme.Typography.caption)
+                .foregroundStyle(Theme.Colors.warning)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 4)
     }
 
     /// Remote-endpoint section: turns this session into a thin proxy to

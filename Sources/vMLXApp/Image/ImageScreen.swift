@@ -279,12 +279,18 @@ struct ImageScreen: View {
                     // raw stack trace.
                     let text: String
                     if raw.contains("FluxBackend") && raw.contains("not implemented") {
+                        // §358 — honest scaffold status. Previous message
+                        // pointed users at a README that doesn't exist.
+                        // Name the ONE working model and admit the rest
+                        // aren't ported yet.
                         text = """
-                        Image generation for this model is not yet ported. \
-                        The Swift FluxKit infrastructure (scheduler, VAE, \
-                        DiT, loaders) is in place but individual model \
-                        generate() methods are still scaffolded. Track \
-                        progress at swift/Sources/vMLXFluxKit/README.md.
+                        Image generation for this model isn't ported yet. \
+                        The only runnable image model on vMLX Swift today \
+                        is Z-Image Turbo — pick it in the Model picker and \
+                        try again. Flux Schnell / Flux Dev / other pipelines \
+                        are scaffolded (scheduler, VAE, DiT, loaders in \
+                        place) but their sampler loops are not wired. \
+                        Track ongoing porting at docs/audit/OPEN-FIX-LIST.md.
                         """
                     } else {
                         text = raw

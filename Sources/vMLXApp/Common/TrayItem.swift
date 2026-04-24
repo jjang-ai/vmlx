@@ -472,6 +472,13 @@ struct TrayItem: View {
                 Text("SDK base URL: http://\(draft.gatewayLAN ? "0.0.0.0" : "127.0.0.1"):\(draft.gatewayPort)")
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(.secondary)
+                // §358 — persistent gateway status pill. Replaces the
+                // 3-sec flashBanner-only signal. Green = bound at
+                // configured port. Orange = auto-bumped (port was taken,
+                // we moved to the next free one — requests to the
+                // configured port will miss). Red = failed to bind at
+                // all (check if Ollama/another service holds the port).
+                gatewayStatusPill
             }
 
             // UI-11: Rate limit. 0 = unlimited. When > 0, RateLimitMiddleware
@@ -1052,6 +1059,41 @@ struct TrayItem: View {
             // R2 §303 — plain-English tooltip on hover instead of the
             // bare label. Longpress on trackpad also surfaces this.
             .help(Self.archPillDescription(for: text))
+    }
+
+    /// §358 — Gateway status pill. Shows the ACTUAL bound port (green
+    /// if matches configured, orange if auto-bumped because the
+    /// configured port was taken, red if the bind failed). Replaces
+    /// the 3-second flashBanner-only signal, which vanished too fast
+    /// for the user to read when another app (Ollama on 8080) was
+    /// already holding the port.
+    @ViewBuilder
+    private var gatewayStatusPill: some View {
+        HStack(spacing: 6) {
+            switch app.gatewayStatus {
+            case .disabled:
+                EmptyView()
+            case .running(let bound, let requested):
+                if bound == requested {
+                    Circle().fill(Color.green).frame(width: 6, height: 6)
+                    Text("Gateway on :\(bound)")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Circle().fill(Color.orange).frame(width: 6, height: 6)
+                    Text("Gateway bumped :\(requested)→:\(bound)")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(Color.orange)
+                        .help("Requested port \(requested) was taken. Bound to \(bound) instead. Change the port above to reclaim \(requested) after freeing it.")
+                }
+            case .failed(let port, let msg):
+                Circle().fill(Color.red).frame(width: 6, height: 6)
+                Text("Gateway offline :\(port)")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(Color.red)
+                    .help("Gateway failed to bind on port \(port). \(msg)")
+            }
+        }
     }
 
     /// R2 §303 — plain-English text for tray arch pill tooltip.

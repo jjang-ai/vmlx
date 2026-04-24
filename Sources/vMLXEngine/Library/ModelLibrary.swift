@@ -349,7 +349,16 @@ public actor ModelLibrary {
     ///    dropped into the new dir after the app started wouldn't show
     ///    up in the picker until the user clicked Refresh manually.
     public func addUserDir(_ url: URL) {
-        database.addUserDir(url)
+        // §358 — canonicalize before DB write so "/foo/bar", "/foo/bar/",
+        // and a symlink pointing at /foo/bar can't all land as distinct
+        // rows under the TEXT PRIMARY KEY. resolvingSymlinksInPath +
+        // standardizedFileURL collapse all three representations to one.
+        // Prior behavior: user clicks "Add custom dir" twice on the same
+        // folder (via Finder picker vs Drag-drop) → two rows → library
+        // scans the same tree twice → every model appears duplicated in
+        // the picker.
+        let canonical = url.resolvingSymlinksInPath().standardizedFileURL
+        database.addUserDir(canonical)
         pendingForcedRescan = true
         rebuildWatcher()
     }
