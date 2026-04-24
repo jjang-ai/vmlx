@@ -641,6 +641,9 @@ let package = Package(
                 // §347 lm-eval Phase 1 — tokenizer endpoints (/v1/tokenize,
                 // /v1/detokenize, /v1/tokenizer_info + unprefixed aliases).
                 "TokenizerRoutesRegistrationTests.swift",
+                // §373 — generation_config.json fallback parity for
+                // Qwen/Gemma/Nemotron recommended temp/top_p/top_k.
+                "GenerationConfigDefaultsTests.swift",
                 // Metal-dependent tests excluded — `swift test` can't load
                 // the default.metallib from the SwiftPM bundle path;
                 // JangDFlashDrafter, JangDFlashSpecDec, VisionEmbeddingCache,
