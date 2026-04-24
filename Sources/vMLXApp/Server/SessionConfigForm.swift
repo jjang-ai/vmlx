@@ -172,6 +172,21 @@ struct SessionConfigForm: View {
                             get: { s.modelAlias ?? "" },
                             set: { s.modelAlias = $0.isEmpty ? nil : $0; commit() }
                          ))
+            // §359 — alias is read at session-start time and used to
+            // register the engine in the gateway + stamped into
+            // OpenAI/Anthropic responses. Changing it mid-session
+            // persists but does not re-register; `/v1/chat/completions`
+            // with the new alias will 404 until the session restarts.
+            HStack(alignment: .top, spacing: 4) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.warning)
+                Text(L10n.SessionConfig.restartRequired.render(appLocale))
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 4)
         }
     }
 

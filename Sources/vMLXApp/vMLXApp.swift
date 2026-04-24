@@ -1066,10 +1066,27 @@ final class AppState {
                 sessions[idx2].port = s.port
                 sessions[idx2].pid = Int(ProcessInfo.processInfo.processIdentifier)
             }
-            await gateway.registerEngine(eng)
-            // §358 — surface duplicate display-name registrations. If this
-            // session advertises a model that another session already did,
-            // tell the user once so they can rename via Server → Model alias.
+            // §359 — register ONLY the loaded model (+ optional alias),
+            // not every model in the library. Previously the gateway
+            // leaked the full on-disk catalog through /v1/models and
+            // routed by any match, even to non-loaded models. Resolve
+            // the canonical display name from the library by path so
+            // the gateway registry stays honest.
+            let lib = await eng.modelLibrary
+            let entries = await lib.entries()
+            let canonicalName = entries
+                .first(where: { $0.canonicalPath == s.modelPath })?
+                .displayName
+                ?? s.modelPath.lastPathComponent
+            // modelAlias lives on SessionSettings (not GlobalSettings /
+            // ResolvedSettings), so read it directly from the store.
+            let rawSession = await eng.settings.session(id)
+            let alias = rawSession?.modelAlias
+            await gateway.registerEngine(
+                eng,
+                canonicalName: canonicalName,
+                alias: alias
+            )
             await drainGatewayDuplicateWarnings()
             await ensureGatewayRunning()
         } catch {

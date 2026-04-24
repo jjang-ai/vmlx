@@ -370,7 +370,14 @@ public actor ModelLibrary {
     /// scan, and rebuild the watcher so FSEvents isn't still listening
     /// on the dir we just dropped.
     public func removeUserDir(_ url: URL) {
-        database.removeUserDir(url)
+        // §359 — canonicalize for symmetry with `addUserDir`. Without
+        // this, removing "/foo/bar/" when the DB stored it as
+        // "/foo/bar" (the canonical form addUserDir writes) silently
+        // no-ops: the DELETE statement matches by exact TEXT, and the
+        // trailing slash makes it a different string. The ghost row
+        // then stays in user_dirs forever and keeps scanning the tree.
+        let canonical = url.resolvingSymlinksInPath().standardizedFileURL
+        database.removeUserDir(canonical)
         pendingForcedRescan = true
         rebuildWatcher()
     }
