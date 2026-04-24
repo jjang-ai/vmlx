@@ -562,6 +562,8 @@ let package = Package(
                 "CapabilityDetectionTests.swift",
                 // §385 — DSML tool-call parser for DSV4 Flash/Pro.
                 "DSMLToolCallParserTests.swift",
+                // §385 — DSV4 capability detection (silver + jang stamp).
+                "DeepseekV4CapabilityTests.swift",
                 "ChatRequestValidationTests.swift",
                 "ToolChoiceEnforcementTests.swift",
                 "ToolCallReasoningMatrixTests.swift",
