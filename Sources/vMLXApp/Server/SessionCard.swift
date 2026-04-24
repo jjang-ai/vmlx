@@ -110,6 +110,15 @@ struct SessionCard: View {
                     if session.isMXTQ {
                         Badge(text: "MXTQ", color: Theme.Colors.accentHi)
                     }
+                    // §359 — alias badge so user sees their configured
+                    // nickname is in effect. Shown only while the
+                    // session is actually serving (running or standby)
+                    // since the alias only takes effect at load time.
+                    if let alias = session.aliasSnapshot,
+                       !alias.isEmpty,
+                       alias != session.displayName {
+                        Badge(text: "as: \(alias)", color: Theme.Colors.accent)
+                    }
                 }
                 Text(session.family)
                     .font(Theme.Typography.caption)

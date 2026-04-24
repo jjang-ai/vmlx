@@ -25,6 +25,14 @@ struct Session: Identifiable, Equatable {
     var latencyMs: Double?
     var state: EngineState
     var loadProgress: LoadProgress?
+    /// §359 — snapshot of `SessionSettings.modelAlias` captured at
+    /// session-start time. Displayed as a badge next to the model name
+    /// so the user can confirm their alias is in effect. nil when no
+    /// alias is set (the gateway then registers only the canonical
+    /// display name). Alias is load-time-only — changing it mid-session
+    /// updates SQLite but the Session.aliasSnapshot is refreshed only
+    /// on the next Start/Restart.
+    var aliasSnapshot: String? = nil
     /// iter-128 §154: session is bound to a remote OpenAI/Ollama/Anthropic
     /// endpoint via `SessionSettings.remoteURL` instead of serving a local
     /// model. Local engine stays `.stopped` for these — it's genuinely
