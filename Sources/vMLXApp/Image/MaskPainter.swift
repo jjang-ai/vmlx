@@ -29,6 +29,7 @@ struct MaskPainter: View {
     let sourceImage: Data
     let onSave: (Data) -> Void
     let onCancel: () -> Void
+    @Environment(\.appLocale) private var appLocale: AppLocale
 
     @State private var strokes: [Stroke] = []
     @State private var currentStroke: Stroke? = nil
@@ -55,11 +56,11 @@ struct MaskPainter: View {
 
     private var header: some View {
         HStack {
-            Text("Paint mask")
+            Text(L10n.ImageUI.paintMask.render(appLocale))
                 .font(Theme.Typography.title)
                 .foregroundStyle(Theme.Colors.textHigh)
             Spacer()
-            Text("White = edit, transparent = keep")
+            Text(L10n.ImageUI.maskLegend.render(appLocale))
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
         }
@@ -126,31 +127,31 @@ struct MaskPainter: View {
         VStack(spacing: Theme.Spacing.sm) {
             HStack(spacing: Theme.Spacing.lg) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Brush \(Int(brushSize))")
+                    Text(L10n.ImageUI.brushFormat.format(locale: appLocale, Int64(brushSize)))
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.textLow)
                     Slider(value: $brushSize, in: 2...80)
                         .frame(width: 200)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Opacity \(String(format: "%.2f", opacity))")
+                    Text(L10n.ImageUI.opacityFormat.format(locale: appLocale, String(format: "%.2f", opacity) as NSString))
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.textLow)
                     Slider(value: $opacity, in: 0.2...1.0)
                         .frame(width: 200)
                 }
                 Spacer()
-                Button("Undo") {
+                Button(L10n.Misc.undo.render(appLocale)) {
                     if !strokes.isEmpty { strokes.removeLast() }
                 }
                 .disabled(strokes.isEmpty)
-                Button("Clear") { strokes.removeAll() }
+                Button(L10n.Misc.clear.render(appLocale)) { strokes.removeAll() }
                     .disabled(strokes.isEmpty)
             }
             HStack {
                 Spacer()
-                Button("Cancel", action: onCancel)
-                Button("Save") { onSave(rasterize()) }
+                Button(L10n.Common.cancel.render(appLocale), action: onCancel)
+                Button(L10n.Misc.save.render(appLocale)) { onSave(rasterize()) }
                     .keyboardShortcut(.return, modifiers: .command)
                     .disabled(strokes.isEmpty)
             }

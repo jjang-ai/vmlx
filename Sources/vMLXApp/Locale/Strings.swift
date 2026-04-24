@@ -1074,6 +1074,468 @@ public enum L10n {
         )
     }
 
+    public enum Advanced {
+        public static let header = L10nEntry(
+            en: "ADVANCED — CORS, RATE LIMIT, TLS",
+            ja: "詳細設定 — CORS、レート制限、TLS",
+            ko: "고급 — CORS, 속도 제한, TLS",
+            zh: "高级 — CORS、速率限制、TLS"
+        )
+        public static let restartRequired = L10nEntry(
+            en: "Restart required to apply",
+            ja: "適用するには再起動が必要",
+            ko: "적용하려면 재시작 필요",
+            zh: "需要重启以应用"
+        )
+        public static let corsOrigins = L10nEntry(
+            en: "CORS allowed origins",
+            ja: "CORS 許可されたオリジン",
+            ko: "CORS 허용 오리진",
+            zh: "CORS 允许的来源"
+        )
+        public static let corsHint = L10nEntry(
+            en: "Comma-separated. * means all. Single exact origin maps to Access-Control-Allow-Origin: <origin>. Multiple non-wildcard entries enable origin-echo mode.",
+            ja: "カンマ区切り。* はすべて。単一の完全なオリジンは Access-Control-Allow-Origin: <origin> にマップされます。複数のワイルドカードなしのエントリはオリジンエコーモードを有効にします。",
+            ko: "쉼표로 구분. *는 모두를 의미. 단일 정확한 오리진은 Access-Control-Allow-Origin: <origin>에 매핑됩니다. 여러 와일드카드가 아닌 항목은 오리진 에코 모드를 활성화합니다.",
+            zh: "以逗号分隔。* 表示全部。单个精确来源映射到 Access-Control-Allow-Origin: <origin>。多个非通配符条目启用来源回显模式。"
+        )
+        public static let rateLimit = L10nEntry(
+            en: "Rate limit (requests / minute / IP)",
+            ja: "レート制限 (リクエスト/分/IP)",
+            ko: "속도 제한 (요청/분/IP)",
+            zh: "速率限制 (请求/分钟/IP)"
+        )
+        public static let tlsHeader = L10nEntry(
+            en: "TLS (HTTPS) — set BOTH to enable, leave blank for HTTP",
+            ja: "TLS (HTTPS) — 両方設定で有効化、空欄で HTTP",
+            ko: "TLS (HTTPS) — 둘 다 설정하여 활성화, HTTP는 비워 두기",
+            zh: "TLS (HTTPS) — 全部设置以启用，留空使用 HTTP"
+        )
+        public static let tlsBothRequired = L10nEntry(
+            en: "Both key and cert must be set to enable TLS",
+            ja: "TLS を有効にするには鍵と証明書の両方が必要です",
+            ko: "TLS를 활성화하려면 키와 인증서 모두 설정해야 합니다",
+            zh: "启用 TLS 需要同时设置密钥和证书"
+        )
+        public static let tlsFileMissing = L10nEntry(
+            en: "One of the TLS files is missing or unreadable",
+            ja: "TLS ファイルのいずれかが見つからないか読み取れません",
+            ko: "TLS 파일 중 하나가 누락되었거나 읽을 수 없습니다",
+            zh: "其中一个 TLS 文件缺失或无法读取"
+        )
+        public static let tlsWillUse = L10nEntry(
+            en: "TLS will use https:// on next restart",
+            ja: "TLS は次回再起動時に https:// を使用します",
+            ko: "TLS는 다음 재시작 시 https://를 사용합니다",
+            zh: "TLS 将在下次重启时使用 https://"
+        )
+    }
+
+    public enum RequestLog {
+        public static let liveHeader = L10nEntry(
+            en: "Live request log",
+            ja: "ライブリクエストログ",
+            ko: "실시간 요청 로그",
+            zh: "实时请求日志"
+        )
+        public static let inspector = L10nEntry(
+            en: "Request inspector",
+            ja: "リクエストインスペクター",
+            ko: "요청 검사기",
+            zh: "请求检查器"
+        )
+        public static let rawLine = L10nEntry(
+            en: "Raw log line",
+            ja: "生のログ行",
+            ko: "원시 로그 행",
+            zh: "原始日志行"
+        )
+        public static let hintFormat = L10nEntry(
+            en: "Shows the last %lld server-category log lines. Server tab's LogsPanel has full filters.",
+            ja: "最新の %lld 件のサーバーカテゴリログ行を表示します。サーバータブの LogsPanel にはすべてのフィルターがあります。",
+            ko: "최근 %lld개의 서버 카테고리 로그 행을 표시합니다. 서버 탭의 LogsPanel에 전체 필터가 있습니다.",
+            zh: "显示最近 %lld 条服务器类别日志行。服务器选项卡的 LogsPanel 具有完整过滤器。"
+        )
+    }
+
+    public enum Downloads2 {
+        public static let findModels = L10nEntry(
+            en: "Find MLX-compatible models",
+            ja: "MLX 互換モデルを検索",
+            ko: "MLX 호환 모델 찾기",
+            zh: "查找 MLX 兼容模型"
+        )
+        public static let findModelsHint = L10nEntry(
+            en: "Search the HuggingFace Hub. Popular filters: MLX, VLM, image-gen.",
+            ja: "HuggingFace Hub を検索します。人気のフィルター: MLX、VLM、image-gen。",
+            ko: "HuggingFace Hub를 검색합니다. 인기 필터: MLX, VLM, image-gen.",
+            zh: "搜索 HuggingFace Hub。热门过滤器：MLX、VLM、image-gen。"
+        )
+        public static let searchPlaceholder = L10nEntry(
+            en: "Search HuggingFace models — e.g. qwen, gemma, flux",
+            ja: "HuggingFace モデルを検索 — 例: qwen、gemma、flux",
+            ko: "HuggingFace 모델 검색 — 예: qwen, gemma, flux",
+            zh: "搜索 HuggingFace 模型 — 例如 qwen、gemma、flux"
+        )
+        public static let gated = L10nEntry(
+            en: "Gated",
+            ja: "ゲート付き",
+            ko: "게이트",
+            zh: "受限"
+        )
+        public static let dismiss = L10nEntry(
+            en: "Dismiss",
+            ja: "閉じる",
+            ko: "닫기",
+            zh: "忽略"
+        )
+    }
+
+    public enum Setup {
+        public static let welcome = L10nEntry(
+            en: "Welcome to vMLX",
+            ja: "vMLX へようこそ",
+            ko: "vMLX에 오신 것을 환영합니다",
+            zh: "欢迎使用 vMLX"
+        )
+        public static let stepOfFormat = L10nEntry(
+            en: "Step %lld of 3",
+            ja: "ステップ %lld / 3",
+            ko: "3단계 중 %lld단계",
+            zh: "步骤 %lld / 3"
+        )
+        public static let runSOTA = L10nEntry(
+            en: "Run state-of-the-art LLMs on Apple Silicon",
+            ja: "Apple Silicon で最先端の LLM を実行",
+            ko: "Apple Silicon에서 최첨단 LLM 실행",
+            zh: "在 Apple Silicon 上运行最先进的 LLM"
+        )
+        public static let scanningCache = L10nEntry(
+            en: "Scanning Hugging Face cache…",
+            ja: "Hugging Face キャッシュをスキャン中…",
+            ko: "Hugging Face 캐시 스캔 중…",
+            zh: "正在扫描 Hugging Face 缓存…"
+        )
+        public static let pickModel = L10nEntry(
+            en: "Pick a model to use for chat",
+            ja: "チャットに使用するモデルを選択",
+            ko: "채팅에 사용할 모델 선택",
+            zh: "选择用于聊天的模型"
+        )
+        public static let allSet = L10nEntry(
+            en: "You're all set",
+            ja: "準備完了",
+            ko: "모든 준비가 완료되었습니다",
+            zh: "一切就绪"
+        )
+        public static let allSetBody = L10nEntry(
+            en: "Open the Server tab to start the engine, then head to Chat. Keys for remote clients live under the API tab.",
+            ja: "サーバータブを開いてエンジンを起動し、チャットに進んでください。リモートクライアント用のキーは API タブにあります。",
+            ko: "서버 탭을 열어 엔진을 시작한 다음 채팅으로 이동하십시오. 원격 클라이언트용 키는 API 탭에 있습니다.",
+            zh: "打开服务器选项卡启动引擎，然后转到聊天。远程客户端的密钥在 API 选项卡下。"
+        )
+        public static let tokenSaved = L10nEntry(
+            en: "Hugging Face token stored — gated repos (Llama, Gemma, Mistral) are accessible.",
+            ja: "Hugging Face トークンが保存されました — ゲート付きリポジトリ (Llama、Gemma、Mistral) にアクセスできます。",
+            ko: "Hugging Face 토큰이 저장되었습니다 — 게이트된 리포지토리 (Llama, Gemma, Mistral)에 액세스할 수 있습니다.",
+            zh: "Hugging Face 令牌已存储 — 可以访问受限仓库（Llama、Gemma、Mistral）。"
+        )
+        public static let tokenMissing = L10nEntry(
+            en: "No Hugging Face token yet — the starter model above is public, but gated repos (Llama, Gemma, Mistral) need one.",
+            ja: "まだ Hugging Face トークンがありません — 上記のスターターモデルは公開されていますが、ゲート付きリポジトリ (Llama、Gemma、Mistral) にはトークンが必要です。",
+            ko: "아직 Hugging Face 토큰이 없습니다 — 위의 스타터 모델은 공개되지만 게이트된 리포지토리 (Llama, Gemma, Mistral)에는 토큰이 필요합니다.",
+            zh: "还没有 Hugging Face 令牌 — 上面的入门模型是公开的，但受限仓库（Llama、Gemma、Mistral）需要令牌。"
+        )
+        public static let addTokenCTA = L10nEntry(
+            en: "Add a token →",
+            ja: "トークンを追加 →",
+            ko: "토큰 추가 →",
+            zh: "添加令牌 →"
+        )
+        public static let back = L10nEntry(
+            en: "Back",
+            ja: "戻る",
+            ko: "뒤로",
+            zh: "返回"
+        )
+        public static let next = L10nEntry(
+            en: "Next",
+            ja: "次へ",
+            ko: "다음",
+            zh: "下一步"
+        )
+        public static let finish = L10nEntry(
+            en: "Finish",
+            ja: "完了",
+            ko: "완료",
+            zh: "完成"
+        )
+    }
+
+    public enum TerminalUI {
+        public static let understandEnable = L10nEntry(
+            en: "I understand — enable Terminal mode",
+            ja: "理解しました — ターミナルモードを有効化",
+            ko: "이해했습니다 — 터미널 모드 활성화",
+            zh: "我明白了 — 启用终端模式"
+        )
+    }
+
+    public enum Misc {
+        public static let reset = L10nEntry(
+            en: "Reset",
+            ja: "リセット",
+            ko: "재설정",
+            zh: "重置"
+        )
+        public static let resetToDefaults = L10nEntry(
+            en: "Reset to defaults",
+            ja: "デフォルトにリセット",
+            ko: "기본값으로 재설정",
+            zh: "重置为默认"
+        )
+        public static let create = L10nEntry(
+            en: "Create",
+            ja: "作成",
+            ko: "생성",
+            zh: "创建"
+        )
+        public static let wake = L10nEntry(
+            en: "Wake",
+            ja: "ウェイク",
+            ko: "깨우기",
+            zh: "唤醒"
+        )
+        public static let reconnect = L10nEntry(
+            en: "Reconnect",
+            ja: "再接続",
+            ko: "재연결",
+            zh: "重新连接"
+        )
+        public static let openLogs = L10nEntry(
+            en: "Open logs",
+            ja: "ログを開く",
+            ko: "로그 열기",
+            zh: "打开日志"
+        )
+        public static let start = L10nEntry(
+            en: "Start",
+            ja: "開始",
+            ko: "시작",
+            zh: "启动"
+        )
+        public static let stopBtn = L10nEntry(
+            en: "Stop",
+            ja: "停止",
+            ko: "중지",
+            zh: "停止"
+        )
+        public static let clearCaches = L10nEntry(
+            en: "Clear caches",
+            ja: "キャッシュをクリア",
+            ko: "캐시 지우기",
+            zh: "清除缓存"
+        )
+        public static let searchBtn = L10nEntry(
+            en: "Search",
+            ja: "検索",
+            ko: "검색",
+            zh: "搜索"
+        )
+        public static let download = L10nEntry(
+            en: "Download",
+            ja: "ダウンロード",
+            ko: "다운로드",
+            zh: "下载"
+        )
+        public static let save = L10nEntry(
+            en: "Save",
+            ja: "保存",
+            ko: "저장",
+            zh: "保存"
+        )
+        public static let undo = L10nEntry(
+            en: "Undo",
+            ja: "元に戻す",
+            ko: "실행 취소",
+            zh: "撤销"
+        )
+        public static let clear = L10nEntry(
+            en: "Clear",
+            ja: "クリア",
+            ko: "지우기",
+            zh: "清除"
+        )
+        public static let recallPrompt = L10nEntry(
+            en: "Recall prompt",
+            ja: "プロンプトを呼び出し",
+            ko: "프롬프트 불러오기",
+            zh: "调用提示"
+        )
+        public static let copied = L10nEntry(
+            en: "Copied!",
+            ja: "コピーしました！",
+            ko: "복사됨!",
+            zh: "已复制！"
+        )
+        public static let noMatches = L10nEntry(
+            en: "No matches",
+            ja: "一致なし",
+            ko: "일치하지 않음",
+            zh: "无匹配项"
+        )
+        public static let typeCommand = L10nEntry(
+            en: "Type a command…",
+            ja: "コマンドを入力…",
+            ko: "명령 입력…",
+            zh: "输入命令…"
+        )
+        public static let chatName = L10nEntry(
+            en: "Chat name",
+            ja: "チャット名",
+            ko: "채팅 이름",
+            zh: "聊天名称"
+        )
+        public static let filterModels = L10nEntry(
+            en: "Filter models…",
+            ja: "モデルをフィルター…",
+            ko: "모델 필터링…",
+            zh: "过滤模型…"
+        )
+        public static let selectForChat = L10nEntry(
+            en: "Select for this chat",
+            ja: "このチャットに選択",
+            ko: "이 채팅에 선택",
+            zh: "为此聊天选择"
+        )
+        public static let stopUnload = L10nEntry(
+            en: "Stop / unload from RAM",
+            ja: "停止 / RAM からアンロード",
+            ko: "중지 / RAM에서 언로드",
+            zh: "停止 / 从 RAM 卸载"
+        )
+        public static let startLoad = L10nEntry(
+            en: "Start / load into RAM",
+            ja: "開始 / RAM にロード",
+            ko: "시작 / RAM에 로드",
+            zh: "启动 / 加载到 RAM"
+        )
+        public static let showInServer = L10nEntry(
+            en: "Show in Server tab",
+            ja: "サーバータブに表示",
+            ko: "서버 탭에 표시",
+            zh: "在服务器选项卡中显示"
+        )
+        public static let manageInServer = L10nEntry(
+            en: "Manage in Server tab",
+            ja: "サーバータブで管理",
+            ko: "서버 탭에서 관리",
+            zh: "在服务器选项卡中管理"
+        )
+        public static let noImagesYet = L10nEntry(
+            en: "No images yet",
+            ja: "画像がまだありません",
+            ko: "아직 이미지가 없습니다",
+            zh: "尚无图像"
+        )
+        public static let noImagesHint = L10nEntry(
+            en: "Pick a model, type a prompt, and hit Generate.",
+            ja: "モデルを選択し、プロンプトを入力して生成を押してください。",
+            ko: "모델을 선택하고 프롬프트를 입력한 다음 생성을 누르십시오.",
+            zh: "选择模型，输入提示，然后点击生成。"
+        )
+        public static let removeFromScanList = L10nEntry(
+            en: "Remove from scan list",
+            ja: "スキャンリストから削除",
+            ko: "스캔 목록에서 제거",
+            zh: "从扫描列表中移除"
+        )
+        public static let name = L10nEntry(
+            en: "Name",
+            ja: "名前",
+            ko: "이름",
+            zh: "名称"
+        )
+        public static let command = L10nEntry(
+            en: "Command",
+            ja: "コマンド",
+            ko: "명령",
+            zh: "命令"
+        )
+        public static let argsHint = L10nEntry(
+            en: "Args (one per line)",
+            ja: "引数 (1 行につき 1 つ)",
+            ko: "인수 (한 줄에 하나)",
+            zh: "参数（每行一个）"
+        )
+        public static let urlLabel = L10nEntry(
+            en: "URL",
+            ja: "URL",
+            ko: "URL",
+            zh: "URL"
+        )
+        public static let envKV = L10nEntry(
+            en: "KEY=VALUE per line",
+            ja: "KEY=VALUE を 1 行につき",
+            ko: "KEY=VALUE 줄당",
+            zh: "每行 KEY=VALUE"
+        )
+        public static let enabledToggle = L10nEntry(
+            en: "Enabled",
+            ja: "有効",
+            ko: "활성화",
+            zh: "已启用"
+        )
+        public static let timeout = L10nEntry(
+            en: "Timeout",
+            ja: "タイムアウト",
+            ko: "타임아웃",
+            zh: "超时"
+        )
+        public static let skipSecurity = L10nEntry(
+            en: "Skip security validation (dev only)",
+            ja: "セキュリティ検証をスキップ (開発専用)",
+            ko: "보안 검증 건너뛰기 (개발 전용)",
+            zh: "跳过安全验证（仅开发）"
+        )
+        public static let pidFormat2 = L10nEntry(
+            en: "PID %lld",
+            ja: "PID %lld",
+            ko: "PID %lld",
+            zh: "PID %lld"
+        )
+        public static let apiRoutes = L10nEntry(
+            en: "API ROUTES",
+            ja: "API ルート",
+            ko: "API 경로",
+            zh: "API 路由"
+        )
+        public static let noRoutesMatch = L10nEntry(
+            en: "No routes match your filter.",
+            ja: "フィルターに一致するルートはありません。",
+            ko: "필터와 일치하는 경로가 없습니다.",
+            zh: "没有匹配您过滤器的路由。"
+        )
+        public static let sampleBody = L10nEntry(
+            en: "Sample body",
+            ja: "サンプルボディ",
+            ko: "샘플 본문",
+            zh: "示例主体"
+        )
+        public static let fullCurl = L10nEntry(
+            en: "Full curl",
+            ja: "完全な curl",
+            ko: "전체 curl",
+            zh: "完整 curl"
+        )
+        public static let routeFilterPlaceholder = L10nEntry(
+            en: "Filter by path, family, or brief...",
+            ja: "パス、ファミリー、または概要でフィルター...",
+            ko: "경로, 패밀리 또는 간략 설명으로 필터...",
+            zh: "按路径、系列或简介过滤..."
+        )
+    }
+
     public enum MCPUI {
         public static let mcpServers = L10nEntry(
             en: "MCP servers",

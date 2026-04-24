@@ -135,7 +135,7 @@ private struct SessionRow: View {
         Button(action: { if !isRenaming { onSelect() } }) {
             HStack(spacing: Theme.Spacing.sm) {
                 if isRenaming {
-                    TextField("Chat name", text: $renameDraft)
+                    TextField(L10n.Misc.chatName.render(appLocale), text: $renameDraft)
                         .textFieldStyle(.plain)
                         .font(Theme.Typography.body)
                         .foregroundStyle(Theme.Colors.textHigh)

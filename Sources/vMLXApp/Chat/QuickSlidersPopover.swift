@@ -72,7 +72,7 @@ struct QuickSlidersPopover: View {
                    format: "%.2f")
             Divider().overlay(Theme.Colors.border)
             HStack {
-                Button("Reset to defaults") {
+                Button(L10n.Misc.resetToDefaults.render(appLocale)) {
                     Task { await resetToGlobal() }
                 }
                 .buttonStyle(.plain)

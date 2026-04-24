@@ -131,9 +131,9 @@ struct ImageHistory: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button("Recall prompt") { onRecall(r) }
+            Button(L10n.Misc.recallPrompt.render(appLocale)) { onRecall(r) }
             Divider()
-            Button("Delete", role: .destructive) { onDelete(r) }
+            Button(L10n.Common.delete.render(appLocale), role: .destructive) { onDelete(r) }
         }
     }
 

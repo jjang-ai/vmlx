@@ -574,7 +574,7 @@ struct ChatSettingsPopover: View {
                 .foregroundStyle(Theme.Colors.textLow)
             Spacer()
             if isChatSet {
-                Button("Reset") { reset(); writeBack() }
+                Button(L10n.Misc.reset.render(appLocale)) { reset(); writeBack() }
                     .buttonStyle(.borderless)
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textMid)

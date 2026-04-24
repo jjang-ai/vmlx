@@ -19,6 +19,7 @@ import vMLXTheme
 import vMLXEngine
 
 struct ImagePromptBar: View {
+    @Environment(\.appLocale) private var appLocale: AppLocale
     @Binding var prompt: String
     @Binding var sourceImage: Data?
     @Binding var maskImage: Data?
@@ -145,12 +146,12 @@ struct ImagePromptBar: View {
                                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
                         }
                         #endif
-                        Text("Change").font(Theme.Typography.caption)
+                        Text(L10n.ImageUI.change.render(appLocale)).font(Theme.Typography.caption)
                             .foregroundStyle(Theme.Colors.textMid)
                     } else {
                         Image(systemName: "photo.badge.plus")
                             .foregroundStyle(Theme.Colors.textMid)
-                        Text("Source image").font(Theme.Typography.caption)
+                        Text(L10n.ImageUI.sourceImage.render(appLocale)).font(Theme.Typography.caption)
                             .foregroundStyle(Theme.Colors.textMid)
                     }
                 }
@@ -183,7 +184,7 @@ struct ImagePromptBar: View {
             .disabled(sourceImage == nil)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Strength \(String(format: "%.2f", strength))")
+                Text(L10n.ImageUI.strengthFormat.format(locale: appLocale, String(format: "%.2f", strength) as NSString))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
                 Slider(value: $strength, in: 0...1)

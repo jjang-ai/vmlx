@@ -32,6 +32,7 @@ struct ReasoningBox: View {
     /// VoiceOver users or anyone with vestibular sensitivity shouldn't
     /// see a looping animation when the OS preference is off.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appLocale) private var appLocale: AppLocale
     /// Brief "Copied!" acknowledgment shown for 1.2s after the copy
     /// button fires so the user gets a visible confirmation. Replaces
     /// the char-count label during the acknowledgment window.
@@ -109,7 +110,7 @@ struct ReasoningBox: View {
                     .foregroundStyle(isActive ? Theme.Colors.textHigh : Theme.Colors.textMid)
                 Spacer()
                 if copiedFlash {
-                    Text("Copied!")
+                    Text(L10n.Misc.copied.render(appLocale))
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.success)
                         .transition(.opacity)
