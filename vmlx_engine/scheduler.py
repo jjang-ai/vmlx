@@ -4594,17 +4594,20 @@ class Scheduler:
         # ── Deferred SSM re-derive (idle-time processing) ──
         # For thinking models (gen_prompt_len > 0), the SSM companion store
         # queues a re-derive task instead of skipping entirely. We run the
-        # re-derive here ONLY when the scheduler is idle (no running
-        # requests) — the forward pass uses the Metal GPU so it can't
-        # overlap with active generation. The re-derive runs a separate
-        # prefill pass on just the prompt tokens (no thinking/output
-        # contamination) and stores the clean SSM state for future prefix
-        # cache hits. This means the CURRENT conversation pays full
-        # re-prefill on each turn, but the NEXT conversation with the
+        # re-derive here ONLY when the scheduler is fully idle (no running
+        # AND no queued-waiting requests) — the forward pass uses the Metal
+        # GPU so it can't overlap with active generation, and `self.waiting`
+        # must also be empty so we don't steal TTFT from interactive requests
+        # that just landed on the admission queue (vmlx#103). The re-derive
+        # runs a separate prefill pass on just the prompt tokens (no
+        # thinking/output contamination) and stores the clean SSM state for
+        # future prefix cache hits. This means the CURRENT conversation pays
+        # full re-prefill on each turn, but the NEXT conversation with the
         # same prompt prefix gets an instant KV+SSM cache hit.
         if (
             self._is_hybrid
             and not self.running
+            and not self.waiting
             and hasattr(self, "_ssm_rederive_queue")
             and self._ssm_rederive_queue
             and self._ssm_state_cache is not None
