@@ -126,7 +126,8 @@ struct TrayItem: View {
                         .frame(width: 8, height: 8)
                         .overlay(Circle().stroke(Color.white, lineWidth: 1))
                         .offset(x: 4, y: -4)
-                        .help("\(app.errorLogCount) unread error log entr\(app.errorLogCount == 1 ? "y" : "ies") — open Logs to clear")
+                        .help(L10n.Tooltip.unreadErrorLogs.format(
+                            locale: appLocale, "\(app.errorLogCount)" as NSString))
                 }
             }
             VStack(alignment: .leading, spacing: 2) {
@@ -1084,14 +1085,21 @@ struct TrayItem: View {
                     Text("Gateway bumped :\(requested)→:\(bound)")
                         .font(.system(size: 9, design: .monospaced))
                         .foregroundStyle(Color.orange)
-                        .help("Requested port \(requested) was taken. Bound to \(bound) instead. Change the port above to reclaim \(requested) after freeing it.")
+                        .help(L10n.Tooltip.gatewayPortBumped.format(
+                            locale: appLocale,
+                            "\(requested)" as NSString,
+                            "\(bound)" as NSString,
+                            "\(requested)" as NSString))
                 }
             case .failed(let port, let msg):
                 Circle().fill(Color.red).frame(width: 6, height: 6)
                 Text("Gateway offline :\(port)")
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(Color.red)
-                    .help("Gateway failed to bind on port \(port). \(msg)")
+                    .help(L10n.Tooltip.gatewayBindFailed.format(
+                        locale: appLocale,
+                        "\(port)" as NSString,
+                        msg as NSString))
             }
         }
     }
