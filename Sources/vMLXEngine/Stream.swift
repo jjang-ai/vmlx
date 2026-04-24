@@ -1120,6 +1120,15 @@ extension Engine {
                     let stubContents: Set<String> = [
                         "<think>\n</think>\n\n",  // Qwen3.5 family
                         "<think></think>",        // Nemotron-H / Cascade
+                        // §388 — DSV4 Flash/Pro chat mode closes the
+                        // empty reasoning with a bare `</think>`
+                        // (the open `<think>` is already consumed as
+                        // part of the `<｜Assistant｜></think>` prompt
+                        // tail per the built-in template). Without
+                        // this entry, chat-mode DSV4 multi-turn would
+                        // skip the gen_prompt_len strip → prefix
+                        // cache miss every turn.
+                        "</think>",
                     ]
                     var rawMsgsClosed = rawMsgsFull
                     if let last = rawMsgsClosed.last,

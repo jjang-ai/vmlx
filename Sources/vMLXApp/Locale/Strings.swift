@@ -468,6 +468,15 @@ public enum L10n {
             ko: "높음",
             zh: "高"
         )
+        /// §388 — DSV4 Flash/Pro adds a fourth effort level above `high`.
+        /// Labeled literally as "Max" across locales to match the
+        /// jang_config.chat.reasoning.reasoning_effort_levels value.
+        public static let maxEffort = L10nEntry(
+            en: "Max",
+            ja: "最大",
+            ko: "최대",
+            zh: "最大"
+        )
         public static let required = L10nEntry(
             en: "Required",
             ja: "必須",

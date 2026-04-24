@@ -978,6 +978,13 @@ public enum OllamaRoutes {
             return (false, "none")
         case "low", "medium", "high":
             return (true, lower)
+        // §388 — DSV4 Flash/Pro adds a `max` level paired with `high`
+        // via jang_config.chat.reasoning.reasoning_effort_levels.
+        // Ollama clients passing `think: "max"` should route to
+        // thinking-on + max effort, not silently drop to server
+        // default.
+        case "max":
+            return (true, "max")
         default:
             return (nil, nil)
         }
