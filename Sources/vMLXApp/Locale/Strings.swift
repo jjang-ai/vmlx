@@ -1074,6 +1074,108 @@ public enum L10n {
         )
     }
 
+    public enum MCPUI {
+        public static let mcpServers = L10nEntry(
+            en: "MCP servers",
+            ja: "MCP サーバー",
+            ko: "MCP 서버",
+            zh: "MCP 服务器"
+        )
+        public static let availableTools = L10nEntry(
+            en: "AVAILABLE TOOLS",
+            ja: "利用可能なツール",
+            ko: "사용 가능한 도구",
+            zh: "可用工具"
+        )
+        public static let noMCPConfigured = L10nEntry(
+            en: "No MCP servers configured",
+            ja: "MCP サーバーが設定されていません",
+            ko: "구성된 MCP 서버가 없습니다",
+            zh: "未配置 MCP 服务器"
+        )
+        public static let noMCPHint = L10nEntry(
+            en: "Point at an mcp.json above and hit Reload. See the MCP spec for config format.",
+            ja: "上記で mcp.json を指定して [再読み込み] を押してください。設定形式は MCP 仕様を参照してください。",
+            ko: "위에서 mcp.json을 지정하고 다시 로드를 누르십시오. 구성 형식은 MCP 사양을 참조하십시오.",
+            zh: "在上面指定 mcp.json 并点击重新加载。配置格式请参阅 MCP 规范。"
+        )
+        public static let reload = L10nEntry(
+            en: "Reload",
+            ja: "再読み込み",
+            ko: "다시 로드",
+            zh: "重新加载"
+        )
+        public static let browse = L10nEntry(
+            en: "Browse…",
+            ja: "参照…",
+            ko: "찾아보기…",
+            zh: "浏览…"
+        )
+        public static let pasteJSON = L10nEntry(
+            en: "Paste JSON",
+            ja: "JSON を貼り付け",
+            ko: "JSON 붙여넣기",
+            zh: "粘贴 JSON"
+        )
+        public static let mcpPathPlaceholder = L10nEntry(
+            en: "Path to mcp.json — leave empty to use default",
+            ja: "mcp.json のパス — デフォルトを使用するには空のままにしてください",
+            ko: "mcp.json 경로 — 기본값을 사용하려면 비워 두십시오",
+            zh: "mcp.json 的路径 — 留空以使用默认值"
+        )
+        public static let remove = L10nEntry(
+            en: "Remove",
+            ja: "削除",
+            ko: "제거",
+            zh: "移除"
+        )
+        public static let removeConfirmFormat = L10nEntry(
+            en: "\"%@\" will be removed from mcp.json and stopped if running. This action is not undoable from the app.",
+            ja: "「%@」は mcp.json から削除され、実行中の場合は停止されます。この操作はアプリから元に戻せません。",
+            ko: "\"%@\"는 mcp.json에서 제거되며 실행 중인 경우 중지됩니다. 이 작업은 앱에서 취소할 수 없습니다.",
+            zh: "\"%@\" 将从 mcp.json 中移除，如果正在运行将被停止。此操作无法从应用撤销。"
+        )
+    }
+
+    public enum HFUI {
+        public static let token = L10nEntry(
+            en: "HuggingFace token",
+            ja: "HuggingFace トークン",
+            ko: "HuggingFace 토큰",
+            zh: "HuggingFace 令牌"
+        )
+        public static let tokenHelp = L10nEntry(
+            en: "Stored in Keychain. Used to download gated models (Gemma, Llama, etc.).",
+            ja: "キーチェーンに保存されます。ゲート付きモデル (Gemma、Llama など) のダウンロードに使用されます。",
+            ko: "키체인에 저장됩니다. 게이트된 모델 (Gemma, Llama 등) 다운로드에 사용됩니다.",
+            zh: "存储在钥匙串中。用于下载受限模型（Gemma、Llama 等）。"
+        )
+        public static let saveToken = L10nEntry(
+            en: "Save",
+            ja: "保存",
+            ko: "저장",
+            zh: "保存"
+        )
+        public static let clearToken = L10nEntry(
+            en: "Clear",
+            ja: "クリア",
+            ko: "지우기",
+            zh: "清除"
+        )
+        public static let tokenPlaceholder = L10nEntry(
+            en: "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            ja: "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            ko: "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            zh: "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        )
+        public static let tokenSaved = L10nEntry(
+            en: "Token saved to Keychain",
+            ja: "トークンがキーチェーンに保存されました",
+            ko: "토큰이 키체인에 저장되었습니다",
+            zh: "令牌已保存到钥匙串"
+        )
+    }
+
     public enum APIUI {
         public static let endpoint = L10nEntry(
             en: "ENDPOINT",
