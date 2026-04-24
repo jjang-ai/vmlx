@@ -92,6 +92,19 @@ public enum LLMTypeRegistry {
             "deepseek_v32": { data in
                 try Self.makeDeepseekV3OrJANGTQ(family: "deepseek_v32", data: data)
             },
+            // DeepSeek V4 (Flash 284B / Pro 1.6T). §385 registration.
+            // Single model class handles both JANG (affine everywhere) and
+            // JANGTQ (mxtq routed + 8-bit non-routed) bundles — the loader
+            // auto-detects quant bits per module via `_fix_quantized_bits`.
+            // Config decoder accepts both variants because
+            // DeepseekV4JANGTQConfiguration.jangtqRoutedBits defaults to 2
+            // and is only consulted when the bundle actually declares
+            // `routed_expert_bits` / `mxtq_seed` keys.
+            "deepseek_v4": { data in
+                let config = try JSONDecoder.json5().decode(
+                    DeepseekV4JANGTQConfiguration.self, from: data)
+                return DeepseekV4JANGTQModel(config)
+            },
             "kimi_k25": { data in
                 try Self.makeDeepseekV3OrJANGTQ(family: "kimi_k25", data: data)
             },

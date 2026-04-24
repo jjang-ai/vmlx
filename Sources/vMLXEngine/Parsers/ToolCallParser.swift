@@ -806,6 +806,103 @@ public final class MiniMaxToolCallParser: ToolCallParser {
 
 // MARK: - Gemma 4 (<|tool_call>{json}<|/tool_call> and hermes fallback)
 
+// MARK: - DeepSeek DSML (V4 Flash / Pro)
+
+/// DSML = "DeepSeek Markup Language". V4's tool-call envelope, distinct from
+/// V3's `<｜tool▁calls▁begin｜>...JSON...` format.
+///
+/// Format (｜ is fullwidth U+FF5C):
+/// ```
+/// <｜DSML｜invoke name="search">
+///   <｜DSML｜parameter name="query" string="true">weather</｜DSML｜parameter>
+///   <｜DSML｜parameter name="count" string="false">5</｜DSML｜parameter>
+/// </｜DSML｜invoke>
+/// ```
+///
+/// `string="true"` → keep the value as a plain string.
+/// `string="false"` → parse value as JSON (int, number, bool, array, object).
+///
+/// Multiple `<｜DSML｜invoke>` blocks can appear back-to-back. A top-level
+/// `<｜DSML｜tool_calls>...</｜DSML｜tool_calls>` wrapper may or may not be
+/// present — we parse invokes directly either way.
+///
+/// Ported from `jang-tools/jang_tools/dsv4/test_chat.py::parse_dsml_tool_calls`
+/// (2026-04-24 reference, bit-compatible with DeepSeek V4 `encoding_dsv4`).
+public final class DSMLToolCallParser: ToolCallParser {
+    /// Fullwidth vertical bar token character.
+    public static let dsmlChar = "｜"
+    public static let dsmlPrefix = "\(dsmlChar)DSML\(dsmlChar)"
+
+    public init() {}
+
+    public func extractToolCalls(_ modelOutput: String, request: ChatRequest?) -> ExtractedToolCallInformation {
+        // Strip <think>...</think> first so tool-call text inside the
+        // reasoning block never false-matches.
+        let source = ParserUtils.stripThinkTags(modelOutput)
+        let prefix = Self.dsmlPrefix  // "｜DSML｜"
+        // Cheap substring gate before regex.
+        guard source.contains("\(prefix)invoke") else {
+            return ExtractedToolCallInformation(
+                toolsCalled: false, toolCalls: [], content: modelOutput)
+        }
+
+        // Invoke regex: <｜DSML｜invoke name="...">BODY</｜DSML｜invoke>
+        // NSRegularExpression needs the fullwidth char escaped as-is.
+        let escapedPrefix = NSRegularExpression.escapedPattern(for: prefix)
+        let invokePattern = #"(?s)<\#(escapedPrefix)invoke name=\"([^\"]+)\">(.*?)</\#(escapedPrefix)invoke>"#
+        let paramPattern = #"(?s)<\#(escapedPrefix)parameter name=\"([^\"]+)\" string=\"(true|false)\">(.*?)</\#(escapedPrefix)parameter>"#
+
+        // Cleaned content = text before the first invoke marker (if any).
+        let cleanedContent: String = {
+            guard let start = source.range(of: "<\(prefix)invoke") else { return "" }
+            return String(source[..<start.lowerBound])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }()
+
+        var calls: [ParsedToolCall] = []
+        for invokeMatch in ParserUtils.regexMatches(source, pattern: invokePattern) where invokeMatch.count >= 3 {
+            let name = invokeMatch[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            let body = invokeMatch[2]
+            var params: [String: Any] = [:]
+            for p in ParserUtils.regexMatches(body, pattern: paramPattern) where p.count >= 4 {
+                let pname = p[1]
+                let isString = p[2] == "true"
+                let value = p[3]
+                if isString {
+                    params[pname] = value
+                } else {
+                    // Parse as JSON so "5" → 5, "true" → true, "[1,2]" → [1,2]
+                    if let data = value.data(using: .utf8),
+                       let parsed = try? JSONSerialization.jsonObject(
+                           with: data, options: [.fragmentsAllowed, .allowFragments])
+                    {
+                        params[pname] = parsed
+                    } else {
+                        params[pname] = value
+                    }
+                }
+            }
+            let argsJSON: String = {
+                if let data = try? JSONSerialization.data(withJSONObject: params),
+                   let s = String(data: data, encoding: .utf8) { return s }
+                return "{}"
+            }()
+            calls.append(ParsedToolCall(
+                id: generateToolId(), name: name, arguments: argsJSON))
+        }
+
+        if calls.isEmpty {
+            return ExtractedToolCallInformation(
+                toolsCalled: false, toolCalls: [], content: modelOutput)
+        }
+        return ExtractedToolCallInformation(
+            toolsCalled: true,
+            toolCalls: calls,
+            content: cleanedContent.isEmpty ? nil : cleanedContent
+        )
+    }
+}
+
 public final class Gemma4ToolCallParser: ToolCallParser {
     public init() {}
 

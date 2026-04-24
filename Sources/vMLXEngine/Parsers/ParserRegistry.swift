@@ -53,6 +53,12 @@ public enum ToolCallParserRegistry {
             return MistralToolCallParser()
         case "deepseek", "deepseek_v3", "deepseek_r1", "deepseek_v32":
             return DeepSeekToolCallParser()
+        // DeepSeek V4 (Flash / Pro) — DSML envelope with ｜DSML｜-framed
+        // invoke/parameter blocks. The `deepseek_v4` model_type alias
+        // routes here via the silver table; clients may also stamp
+        // `tool_parser: "dsml"` directly in jang_config.
+        case "dsml", "deepseek_v4":
+            return DSMLToolCallParser()
         case "kimi", "kimi_k2", "moonshot":
             return KimiToolCallParser()
         case "granite", "granite3", "granitemoehybrid":
@@ -93,10 +99,10 @@ public enum ToolCallParserRegistry {
     public static var registered: [String] {
         [
             "hermes", "qwen", "llama", "mistral", "mistral4", "deepseek",
-            "kimi", "granite", "nemotron", "nemotron_h", "step3p5",
-            "xlam", "functionary", "glm47", "glm4", "glm4_moe", "glm5",
-            "minimax", "minimax_m2", "minimax_m2_5", "gemma", "gemma4",
-            "native",
+            "dsml", "deepseek_v4", "kimi", "granite", "nemotron",
+            "nemotron_h", "step3p5", "xlam", "functionary", "glm47",
+            "glm4", "glm4_moe", "glm5", "minimax", "minimax_m2",
+            "minimax_m2_5", "gemma", "gemma4", "native",
         ]
     }
 }
