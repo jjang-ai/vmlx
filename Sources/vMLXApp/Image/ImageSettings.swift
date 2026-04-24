@@ -18,6 +18,7 @@ struct ImageSettingsDrawer: View {
     let mode: ImageScreen.Tab
     let onClose: () -> Void
     let onPersist: (ImageGenSettings) -> Void  // pushed to SettingsStore
+    @Environment(\.appLocale) private var appLocale: AppLocale
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
@@ -39,24 +40,24 @@ struct ImageSettingsDrawer: View {
             }
 
             HStack {
-                Text("Seed")
+                Text(L10n.ImageUI.seed.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textMid)
                     .frame(width: 90, alignment: .leading)
-                TextField("-1 for random", value: $settings.seed, format: .number)
+                TextField(L10n.ImageUI.seedPlaceholder.render(appLocale), value: $settings.seed, format: .number)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 140)
-                Button("Random") { settings.seed = -1 }
+                Button(L10n.ImageUI.random.render(appLocale)) { settings.seed = -1 }
                     .buttonStyle(.link)
             }
 
             HStack {
-                Text("Scheduler")
+                Text(L10n.ImageUI.scheduler.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textMid)
                     .frame(width: 90, alignment: .leading)
                 Picker("", selection: $settings.scheduler) {
-                    Text("Default").tag("default")
+                    Text(L10n.ImageUI.defaultLabel.render(appLocale)).tag("default")
                     Text("DDIM").tag("ddim")
                     Text("Euler").tag("euler")
                     Text("DPM++").tag("dpmpp")
@@ -66,15 +67,15 @@ struct ImageSettingsDrawer: View {
             }
 
             if mode == .edit {
-                Text("Strength lives on the prompt bar.")
+                Text(L10n.ImageUI.strengthHint.render(appLocale))
                     .font(Theme.Typography.caption)
                     .foregroundStyle(Theme.Colors.textLow)
             }
 
             HStack {
                 Spacer()
-                Button("Close") { onClose() }
-                Button("Save as default") {
+                Button(L10n.Common.close.render(appLocale)) { onClose() }
+                Button(L10n.ImageUI.saveAsDefault.render(appLocale)) {
                     onPersist(settings)
                     onClose()
                 }
@@ -95,7 +96,7 @@ struct ImageSettingsDrawer: View {
 
     private var header: some View {
         HStack {
-            Text("Image settings")
+            Text(L10n.ImageUI.imageSettings.render(appLocale))
                 .font(Theme.Typography.title)
                 .foregroundStyle(Theme.Colors.textHigh)
             Spacer()
