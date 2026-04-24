@@ -2308,7 +2308,7 @@ class MLLMBatchGenerator:
                                     cloned = deepcopy(c)
                                     # Ensure MLX arrays are fully materialized copies
                                     cloned.cache = [
-                                        mx.contiguous(mx.array(a)) if a is not None else None
+                                        mx.contiguous(a) if a is not None else None
                                         for a in c.cache
                                     ]
                                     ssm_layers.append(cloned)
@@ -2935,7 +2935,7 @@ class MLLMBatchGenerator:
                     from copy import deepcopy
                     cloned = deepcopy(c)
                     cloned.cache = [
-                        mx.contiguous(mx.array(a)) if a is not None else None
+                        mx.contiguous(a) if a is not None else None
                         for a in c.cache
                     ]
                     ssm_layers.append(cloned)

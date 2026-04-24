@@ -4630,9 +4630,7 @@ class Scheduler:
 
                                 cloned = deepcopy(c)
                                 cloned.cache = [
-                                    mx.contiguous(mx.array(a))
-                                    if a is not None
-                                    else None
+                                    mx.contiguous(a) if a is not None else None
                                     for a in c.cache
                                 ]
                                 ssm_layers.append(cloned)
