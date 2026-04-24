@@ -16,6 +16,45 @@ import MLX
 import MLXNN
 import vMLXLMCommon
 
+// MARK: - Compiled router fast path (Phase S1 speedup, 2026-04-24)
+//
+// Fuses sigmoid-route → bias-bias → topk → renorm into one MLX graph,
+// gated by `HardwareInfo.isCompiledDecodeSupported`. Mirrors the Python
+// `_get_compiled_router_sigmoid` helper in jang_tools.load_jangtq.
+
+private struct MiniMaxJANGTQRouterKey: Hashable {
+    let numExperts: Int; let k: Int
+}
+nonisolated(unsafe) private var _miniMaxJANGTQRouterCache:
+    [MiniMaxJANGTQRouterKey: ([MLXArray]) -> [MLXArray]] = [:]
+private let _miniMaxJANGTQRouterLock = NSLock()
+
+private func miniMaxJANGTQCompiledRouter(numExperts: Int, k: Int)
+    -> ([MLXArray]) -> [MLXArray]
+{
+    let key = MiniMaxJANGTQRouterKey(numExperts: numExperts, k: k)
+    _miniMaxJANGTQRouterLock.lock(); defer { _miniMaxJANGTQRouterLock.unlock() }
+    if let cached = _miniMaxJANGTQRouterCache[key] { return cached }
+    let kth = k - 1
+    let body: @Sendable ([MLXArray]) -> [MLXArray] = { args in
+        let gates = args[0]; let bias = args[1]
+        let scoresOrig = sigmoid(gates)
+        let biased = scoresOrig + bias
+        let inds = argPartition(-biased, kth: kth, axis: -1)[.ellipsis, ..<k]
+        var sel = takeAlong(scoresOrig, inds, axis: -1)
+        sel = sel / (sel.sum(axis: -1, keepDims: true) + MLXArray(Float(1e-20), dtype: sel.dtype))
+        return [inds, sel]
+    }
+    let compiled: ([MLXArray]) -> [MLXArray]
+    if HardwareInfo.isCompiledDecodeSupported {
+        compiled = compile(shapeless: true, body)
+    } else {
+        compiled = body
+    }
+    _miniMaxJANGTQRouterCache[key] = compiled
+    return compiled
+}
+
 // MARK: - Attention (identical to MiniMax.swift)
 
 private class MiniMaxJANGTQAttention: Module {
@@ -118,18 +157,13 @@ private class MiniMaxJANGTQSparseMoeBlock: Module {
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
         let gates = gate(x)
-
-        var scores = sigmoid(gates)
-        let originalScores = scores
-        scores = scores + eScoreCorrectionBias
-
-        let k = numExpertsPerTok
-        let inds = argPartition(-scores, kth: k - 1, axis: -1)[.ellipsis, ..<k]
-        scores = takeAlong(originalScores, inds, axis: -1)
-
-        scores = scores
-            / (scores.sum(axis: -1, keepDims: true) + MLXArray(1e-20, dtype: scores.dtype))
-        scores = scores.asType(x.dtype)
+        // Compiled router: fuses sigmoid + bias + topk + renorm into one graph.
+        let router = miniMaxJANGTQCompiledRouter(
+            numExperts: gates.dim(-1), k: numExpertsPerTok
+        )
+        let routed = router([gates, eScoreCorrectionBias])
+        let inds = routed[0]
+        let scores = routed[1].asType(x.dtype)
 
         let y = switchMLP(x, inds)
         return (y * scores[.ellipsis, .newAxis]).sum(axis: -2)
