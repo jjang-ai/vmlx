@@ -994,7 +994,15 @@ class MLLMBatchGenerator:
         # Companion SSM state cache for hybrid models (MambaCache + KVCache).
         # Stores SSM layer states at prompt boundary so hybrid cache HITs can
         # skip the full prefix instead of wasting the KV cache hit.
-        self._ssm_state_cache = HybridSSMStateCache(max_entries=ssm_state_cache_size)
+        # vmlx#110: optional L2 disk store so the companion survives process
+        # restart. Off unless VMLX_SSM_COMPANION_DISK_DIR is set; safe no-op.
+        from .utils.ssm_companion_disk_store import (
+            build_from_env as _build_ssm_disk_store,
+        )
+        self._ssm_state_cache = HybridSSMStateCache(
+            max_entries=ssm_state_cache_size,
+            disk_store=_build_ssm_disk_store(),
+        )
 
         # Async rederive queue for MLLM thinking models. When we capture SSM
         # state post-full-prefill (is_complete=False, gpl-contaminated), we

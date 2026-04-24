@@ -356,7 +356,16 @@ class Scheduler:
                 # MLLM scheduler honoured `MLLMSchedulerConfig.ssm_state_cache_size`
                 # but the LLM scheduler hardcoded 50, ignoring user config.
                 _ssm_cache_size = getattr(self.config, "ssm_state_cache_size", 50) or 50
-                self._ssm_state_cache = HybridSSMStateCache(max_entries=_ssm_cache_size)
+                # vmlx#110: optional L2 disk store so the SSM companion
+                # survives process restart. Off unless
+                # VMLX_SSM_COMPANION_DISK_DIR is set; safe no-op otherwise.
+                from .utils.ssm_companion_disk_store import (
+                    build_from_env as _build_ssm_disk_store,
+                )
+                self._ssm_state_cache = HybridSSMStateCache(
+                    max_entries=_ssm_cache_size,
+                    disk_store=_build_ssm_disk_store(),
+                )
                 logger.info(
                     f"Hybrid SSM cache: {len(self._hybrid_kv_positions)}/"
                     f"{self._hybrid_num_layers} KV layers, "

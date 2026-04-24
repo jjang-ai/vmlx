@@ -134,7 +134,12 @@ class SSMCompanionCache:
     LRU eviction keeps it bounded.
     """
 
-    def __init__(self, max_entries: int = 20, model_key: str = ""):
+    def __init__(
+        self,
+        max_entries: int = 20,
+        model_key: str = "",
+        disk_store: Optional[Any] = None,
+    ):
         if max_entries < 1:
             raise ValueError("max_entries must be >= 1")
         # Internal storage: key -> (states, is_complete) tuple.
@@ -151,6 +156,12 @@ class SSMCompanionCache:
         # shared prefix family; different families with the same length
         # live under different prefix_hashes.  vmlx#91.
         self._length_index: Dict[int, Dict[str, str]] = {}
+
+        # Optional L2 disk store (vmlx#110). When set, ``store()`` write-
+        # throughs and ``fetch()`` falls back on L1 miss so SSM companions
+        # survive process restarts. ``None`` keeps legacy memory-only
+        # behaviour — zero overhead on the hot path.
+        self._disk_store = disk_store
 
     @property
     def size(self) -> int:
@@ -224,6 +235,15 @@ class SSMCompanionCache:
         while len(self._store) > self._max_entries:
             evict_key, _ = self._store.popitem(last=False)
             self._index_remove(evict_key)
+        # L2 write-through (vmlx#110). Disk write is queued on a background
+        # thread by the disk store; main-thread cost is the mx.eval + dict
+        # flatten performed there, not here. Failures are logged at DEBUG
+        # and never impact the L1 path.
+        if self._disk_store is not None:
+            try:
+                self._disk_store.store(key, ssm_states, is_complete, num_tokens)
+            except Exception as _e:
+                logger.debug("SSM disk persist failed: %s", _e)
 
     def _prefix_hash(self, token_ids: List[int], num_tokens: int) -> str:
         """Stable family identifier: same sha256 for any (longer) token list
@@ -269,6 +289,27 @@ class SSMCompanionCache:
             return None
         key = self._key(token_ids, num_tokens)
         entry = self._store.get(key)
+        # L2 read-through (vmlx#110). On L1 miss, try disk; on hit promote
+        # into the L1 LRU and register in the length index so this query
+        # and any subsequent ``fetch_longest_prefix`` calls hit the fast
+        # path. Deep-copy discipline below is uniform whether the entry
+        # came from L1 or was just promoted from L2.
+        if entry is None and self._disk_store is not None:
+            try:
+                disk_entry = self._disk_store.fetch(key)
+            except Exception as _e:
+                logger.debug("SSM disk fetch failed: %s", _e)
+                disk_entry = None
+            if disk_entry is not None:
+                d_states, d_complete = disk_entry
+                self._store[key] = (d_states, d_complete)
+                self._length_index.setdefault(num_tokens, {})[
+                    self._prefix_hash(token_ids, num_tokens)
+                ] = key
+                while len(self._store) > self._max_entries:
+                    evict_key, _ = self._store.popitem(last=False)
+                    self._index_remove(evict_key)
+                entry = self._store.get(key)
         if entry is None:
             return None
         states, is_complete = entry
@@ -415,6 +456,15 @@ def is_hybrid_ssm_model(model_or_config) -> bool:
     if isinstance(model_or_config, dict):
         return is_hybrid_ssm_config(model_or_config)
     return False
+
+
+# Re-export the optional L2 disk store so callers importing from this module
+# (the stable path) can reach both classes without a second import line.
+# Guarded in case the disk-store module is ever stripped from a minimal build.
+try:
+    from .ssm_companion_disk_store import SSMCompanionDiskStore  # noqa: F401
+except ImportError:  # pragma: no cover — disk store optional
+    SSMCompanionDiskStore = None  # type: ignore[assignment]
 
 
 HybridSSMStateCache = SSMCompanionCache
