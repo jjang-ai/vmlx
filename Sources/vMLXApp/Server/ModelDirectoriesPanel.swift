@@ -92,7 +92,7 @@ struct ModelDirectoriesPanel: View {
             }
             .buttonStyle(.plain)
             .disabled(isScanning)
-            .help("Force a fresh disk walk of every model directory")
+            .help(L10n.Tooltip.rescanDirs.render(appLocale))
         }
     }
 
@@ -155,7 +155,7 @@ struct ModelDirectoriesPanel: View {
                 )
             }
             .buttonStyle(.plain)
-            .help("Pick a folder containing model directories to scan")
+            .help(L10n.Tooltip.pickFolder.render(appLocale))
             Spacer()
             if let count = lastScanResultCount {
                 Text(L10n.ModelDirs.lastScanFormat.format(locale: appLocale, Int64(count)))
@@ -212,7 +212,7 @@ struct ModelDirectoriesPanel: View {
                 .disabled(isEnqueuing
                           || pullRepo.trimmingCharacters(in: .whitespaces).isEmpty
                           || !pullRepo.contains("/"))
-                .help("Queue a HuggingFace repo download. Progress opens in the Downloads window.")
+                .help(L10n.Tooltip.hfDownload.render(appLocale))
             }
             Text(L10n.ModelDirs.hfFormatHint.render(appLocale))
                 .font(Theme.Typography.caption)
@@ -283,7 +283,7 @@ struct ModelDirectoriesPanel: View {
                     .foregroundStyle(Theme.Colors.textMid)
             }
             .buttonStyle(.plain)
-            .help("Reveal in Finder")
+            .help(L10n.Tooltip.revealInFinder.render(appLocale))
 
             if !isDefault {
                 Button {
@@ -293,7 +293,7 @@ struct ModelDirectoriesPanel: View {
                         .foregroundStyle(Theme.Colors.danger.opacity(0.85))
                 }
                 .buttonStyle(.plain)
-                .help("Remove this directory from the scan list (does not delete files)")
+                .help(L10n.Tooltip.removeDir.render(appLocale))
             }
         }
         .padding(.horizontal, Theme.Spacing.md)

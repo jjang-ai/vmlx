@@ -102,7 +102,7 @@ struct MessageBubble: View {
                                         .cornerRadius(Theme.Radius.md)
                                 }
                                 .buttonStyle(.plain)
-                                .help("Click to zoom")
+                                .help(L10n.Tooltip.clickToZoom.render(appLocale))
                             }
                             #endif
                         }
@@ -276,7 +276,7 @@ struct MessageBubble: View {
                     .foregroundStyle(Theme.Colors.textLow)
             }
             .buttonStyle(.plain)
-            .help("Delete message")
+            .help(L10n.Tooltip.deleteMessage.render(appLocale))
         }
     }
 

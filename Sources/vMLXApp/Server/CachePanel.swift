@@ -345,7 +345,7 @@ struct CachePanel: View {
             }
             .buttonStyle(.plain)
             .disabled(warmInFlight || clearInFlight)
-            .help("Prefills the prefix cache with your 5 most recent user prompts so the next send has a warm cache hit.")
+            .help(L10n.Tooltip.cacheWarm5.render(appLocale))
 
             Button {
                 showClearConfirm = true

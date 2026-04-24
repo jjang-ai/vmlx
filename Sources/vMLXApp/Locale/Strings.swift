@@ -2091,4 +2091,184 @@ public enum L10n {
             zh: "自动"
         )
     }
+
+    /// §372 — Cursor-hover tooltips (SwiftUI `.help("…")`) across every
+    /// surface of the app. Each entry is a short noun/verb phrase so
+    /// translators have enough context to keep labels natural in
+    /// non-English locales. Added for N6 (Help/info tooltips translated).
+    public enum Tooltip {
+        // Chat surface
+        public static let attachImages = L10nEntry(
+            en: "Attach images (drag, paste, or pick from disk)",
+            ja: "画像を添付(ドラッグ、貼り付け、またはディスクから選択)",
+            ko: "이미지 첨부(드래그, 붙여넣기 또는 디스크에서 선택)",
+            zh: "附加图像(拖放、粘贴或从磁盘选取)"
+        )
+        public static let clickToZoom = L10nEntry(
+            en: "Click to zoom",
+            ja: "クリックで拡大",
+            ko: "클릭하여 확대",
+            zh: "点击缩放"
+        )
+        public static let deleteMessage = L10nEntry(
+            en: "Delete message",
+            ja: "メッセージを削除",
+            ko: "메시지 삭제",
+            zh: "删除消息"
+        )
+        public static let scrollToBottom = L10nEntry(
+            en: "Scroll to bottom",
+            ja: "一番下までスクロール",
+            ko: "맨 아래로 스크롤",
+            zh: "滚动到底部"
+        )
+        public static let scrollToNewestLog = L10nEntry(
+            en: "Scroll to newest log line",
+            ja: "最新のログ行へスクロール",
+            ko: "최신 로그로 스크롤",
+            zh: "滚动到最新日志"
+        )
+        public static let renameChat = L10nEntry(
+            en: "Rename chat",
+            ja: "チャット名を変更",
+            ko: "채팅 이름 변경",
+            zh: "重命名对话"
+        )
+        public static let deleteChat = L10nEntry(
+            en: "Delete chat",
+            ja: "チャットを削除",
+            ko: "채팅 삭제",
+            zh: "删除对话"
+        )
+        public static let copyReasoningOnly = L10nEntry(
+            en: "Copy reasoning only",
+            ja: "推論のみコピー",
+            ko: "추론만 복사",
+            zh: "仅复制推理内容"
+        )
+        public static let modelPicker = L10nEntry(
+            en: "Pick a model · colored dot = load state. Right side ▶ / ■ toggles the model in/out of RAM without leaving the Chat tab.",
+            ja: "モデルを選択 · 色付きドットは読み込み状態。右側の ▶ / ■ でチャットタブを離れずにモデルをRAMに出し入れできます。",
+            ko: "모델 선택 · 색 점은 로드 상태. 오른쪽 ▶ / ■ 로 채팅 탭을 떠나지 않고 모델을 RAM에 로드/언로드합니다.",
+            zh: "选择模型 · 彩色圆点表示加载状态。右侧 ▶ / ■ 可在不离开聊天标签的情况下加载/卸载模型。"
+        )
+
+        // Server surface
+        public static let sessionDashboardLoad = L10nEntry(
+            en: "Pick a model from disk and load it into a new server session",
+            ja: "ディスクからモデルを選択し、新しいサーバーセッションに読み込みます",
+            ko: "디스크에서 모델을 선택하여 새 서버 세션에 로드",
+            zh: "从磁盘选取模型并加载到新的服务器会话中"
+        )
+        public static let resetPeakToCurrent = L10nEntry(
+            en: "Reset peak to current",
+            ja: "ピークを現在値にリセット",
+            ko: "현재 값으로 피크 재설정",
+            zh: "将峰值重置为当前值"
+        )
+        public static let rescanDirs = L10nEntry(
+            en: "Force a fresh disk walk of every model directory",
+            ja: "すべてのモデルディレクトリを強制的に再スキャン",
+            ko: "모든 모델 디렉토리를 새로 디스크 스캔",
+            zh: "强制重新扫描所有模型目录"
+        )
+        public static let pickFolder = L10nEntry(
+            en: "Pick a folder containing model directories to scan",
+            ja: "スキャンするモデルディレクトリを含むフォルダを選択",
+            ko: "스캔할 모델 디렉토리가 포함된 폴더 선택",
+            zh: "选取包含模型目录的文件夹进行扫描"
+        )
+        public static let hfDownload = L10nEntry(
+            en: "Queue a HuggingFace repo download. Progress opens in the Downloads window.",
+            ja: "HuggingFaceリポジトリのダウンロードをキューに追加。進捗はダウンロードウィンドウに表示されます。",
+            ko: "HuggingFace 저장소 다운로드를 큐에 추가. 진행 상황은 다운로드 창에 표시됩니다.",
+            zh: "将 HuggingFace 仓库加入下载队列,进度在下载窗口中显示。"
+        )
+        public static let revealInFinder = L10nEntry(
+            en: "Reveal in Finder",
+            ja: "Finderで表示",
+            ko: "Finder에서 보기",
+            zh: "在 Finder 中显示"
+        )
+        public static let removeDir = L10nEntry(
+            en: "Remove this directory from the scan list (does not delete files)",
+            ja: "このディレクトリをスキャン一覧から削除(ファイルは削除されません)",
+            ko: "스캔 목록에서 이 디렉토리 제거(파일은 삭제되지 않음)",
+            zh: "从扫描列表中移除此目录(不会删除文件)"
+        )
+        public static let cacheWarm5 = L10nEntry(
+            en: "Prefills the prefix cache with your 5 most recent user prompts so the next send has a warm cache hit.",
+            ja: "最近のユーザープロンプト5件でプレフィックスキャッシュを事前に満たし、次の送信でウォームヒットさせます。",
+            ko: "최근 사용자 프롬프트 5건으로 접두 캐시를 미리 채워 다음 전송 시 웜 히트를 얻습니다.",
+            zh: "用最近 5 条用户提示词预热前缀缓存,让下一次发送命中热缓存。"
+        )
+        public static let sectionRestart = L10nEntry(
+            en: "Changes to fields under this section require a session restart to apply.",
+            ja: "このセクション内のフィールドを変更するには、セッションの再起動が必要です。",
+            ko: "이 섹션의 필드 변경은 세션 재시작이 필요합니다.",
+            zh: "此部分下字段的更改需要重启会话才能生效。"
+        )
+
+        // Image / API / MCP / Tray
+        public static let imageSettings = L10nEntry(
+            en: "Image settings",
+            ja: "画像設定",
+            ko: "이미지 설정",
+            zh: "图像设置"
+        )
+        public static let removeStoredToken = L10nEntry(
+            en: "Remove stored token",
+            ja: "保存されたトークンを削除",
+            ko: "저장된 토큰 제거",
+            zh: "移除已存储的令牌"
+        )
+        public static let mcpAddNew = L10nEntry(
+            en: "Add a new MCP server to mcp.json",
+            ja: "新しいMCPサーバーをmcp.jsonに追加",
+            ko: "mcp.json에 새 MCP 서버 추가",
+            zh: "向 mcp.json 添加新的 MCP 服务器"
+        )
+        public static let mcpImportClipboard = L10nEntry(
+            en: "Paste a Claude-Desktop-style mcp.json block from the clipboard and import every server.",
+            ja: "クリップボードからClaude Desktop形式のmcp.jsonブロックを貼り付け、全サーバーをインポート。",
+            ko: "클립보드에서 Claude Desktop 형식 mcp.json 블록을 붙여넣어 모든 서버를 가져옵니다.",
+            zh: "从剪贴板粘贴 Claude Desktop 格式的 mcp.json 块,导入全部服务器。"
+        )
+        public static let mcpEdit = L10nEntry(
+            en: "Edit configuration",
+            ja: "設定を編集",
+            ko: "설정 편집",
+            zh: "编辑配置"
+        )
+        public static let mcpRemove = L10nEntry(
+            en: "Remove from mcp.json",
+            ja: "mcp.jsonから削除",
+            ko: "mcp.json에서 제거",
+            zh: "从 mcp.json 中移除"
+        )
+        public static let mcpCmdPath = L10nEntry(
+            en: "Absolute path or PATH-resolvable executable",
+            ja: "絶対パスまたはPATHで解決可能な実行ファイル",
+            ko: "절대 경로 또는 PATH로 해석 가능한 실행 파일",
+            zh: "绝对路径或可通过 PATH 解析的可执行文件"
+        )
+        public static let mcpSseUrl = L10nEntry(
+            en: "Full https:// URL of the MCP SSE endpoint",
+            ja: "MCP SSEエンドポイントの完全な https:// URL",
+            ko: "MCP SSE 엔드포인트의 완전한 https:// URL",
+            zh: "MCP SSE 端点的完整 https:// URL"
+        )
+        public static let revokeApiKey = L10nEntry(
+            en: "Revoke API key",
+            ja: "APIキーを取り消す",
+            ko: "API 키 해지",
+            zh: "吊销 API 密钥"
+        )
+        public static let inspectRequest = L10nEntry(
+            en: "Click to inspect this request",
+            ja: "クリックでこのリクエストを検査",
+            ko: "클릭하여 이 요청 검사",
+            zh: "点击检查此请求"
+        )
+    }
 }

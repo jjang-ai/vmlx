@@ -8,6 +8,7 @@ import vMLXTheme
 ///   * Track unread tail messages while frozen; show a snap-to-bottom pill.
 ///   * Tapping the pill (or sending a new prompt) re-engages auto-follow.
 struct MessageList: View {
+    @Environment(\.appLocale) private var appLocale: AppLocale
     @Bindable var vm: ChatViewModel
     @State private var userScrolledUp = false
     @State private var unreadCount = 0
@@ -144,7 +145,7 @@ struct MessageList: View {
             )
         }
         .buttonStyle(.plain)
-        .help("Scroll to bottom")
+        .help(L10n.Tooltip.scrollToBottom.render(appLocale))
     }
 }
 

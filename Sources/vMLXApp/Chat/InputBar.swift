@@ -10,6 +10,7 @@ import AppKit
 
 struct InputBar: View {
     @Environment(AppState.self) private var app
+    @Environment(\.appLocale) private var appLocale: AppLocale
     @Bindable var vm: ChatViewModel
     @State private var showImporter = false
 
@@ -356,7 +357,7 @@ struct InputBar: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Attach images")
         .accessibilityHint("Opens a file picker to attach images to the next message")
-        .help("Attach images (drag, paste, or pick from disk)")
+        .help(L10n.Tooltip.attachImages.render(appLocale))
     }
 
     private var sendButton: some View {

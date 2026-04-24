@@ -206,7 +206,7 @@ struct PerformancePanel: View {
                             .foregroundStyle(Theme.Colors.textLow)
                     }
                     .buttonStyle(.plain)
-                    .help("Reset peak to current")
+                    .help(L10n.Tooltip.resetPeakToCurrent.render(appLocale))
                 )
             }
         ) {

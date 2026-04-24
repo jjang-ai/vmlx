@@ -128,7 +128,7 @@ struct SessionDashboard: View {
                 )
             }
             .buttonStyle(.plain)
-            .help("Pick a model from disk and load it into a new server session")
+            .help(L10n.Tooltip.sessionDashboardLoad.render(appLocale))
             .popover(isPresented: $showCreatePopover, arrowEdge: .top) {
                 CreateSessionPopover(isPresented: $showCreatePopover) { url in
                     Task { await createSession(for: url) }

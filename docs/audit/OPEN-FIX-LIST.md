@@ -48,7 +48,7 @@ Updated per iteration. Numbered with § tags that match commits.
 |---|-------|--------|------------|
 | N1 | **CLI `vmlxctl chat` plain REPL** → real agentic | ✅ | §367 |
 | N2 | **Agentic loop in CLI** | ✅ | §367 — Stream.swift ToolDispatcher + maxToolCalls cap |
-| N3 | **UI Terminal tab visible tool-call surface** | 📋 queued | The engine already emits tool_call + tool_status chunks; TerminalScreen already renders InlineToolCallCard via applyChunk. Check live-test parity with CLI verbose mode |
+| N3 | **UI Terminal tab visible tool-call surface + interleaved reasoning** | ✅ | §371 — TerminalTurn.Role += .reasoning with auto-collapse + dim styling; tool-call surface via InlineToolCallCard already in place |
 | N4 | **Default chat settings from generation_config.json** | ✅ | §367 CLI + §368 engine API + UI placeholder |
 | N5 | **User-side reflection of N4 in SessionConfigForm** | ✅ | §368 — sparkles-prefixed caption "Model recommends: temp=X, top_p=Y…" above inference fields; reads live from Engine.readGenerationConfig(at:) |
 | N6 | **Help/info tooltips translated** | 🚧 partial | Major help strings done; remaining are `.help()` field tooltips in SessionConfigForm rows |

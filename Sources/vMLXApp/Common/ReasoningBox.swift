@@ -143,7 +143,7 @@ struct ReasoningBox: View {
                         .padding(.vertical, Theme.Spacing.sm)
                 }
                 .buttonStyle(.plain)
-                .help("Copy reasoning only")
+                .help(L10n.Tooltip.copyReasoningOnly.render(appLocale))
             }
         }
     }

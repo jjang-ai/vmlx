@@ -136,7 +136,7 @@ struct HuggingFaceTokenCard: View {
                     Image(systemName: "trash")
                 }
                 .buttonStyle(.plain)
-                .help("Remove stored token")
+                .help(L10n.Tooltip.removeStoredToken.render(appLocale))
             }
         }
     }

@@ -157,7 +157,7 @@ private struct SessionRow: View {
                             .foregroundStyle(Theme.Colors.textLow)
                     }
                     .buttonStyle(.plain)
-                    .help("Rename chat")
+                    .help(L10n.Tooltip.renameChat.render(appLocale))
                     Button {
                         showDeleteConfirm = true
                     } label: {
@@ -166,7 +166,7 @@ private struct SessionRow: View {
                             .foregroundStyle(Theme.Colors.textLow)
                     }
                     .buttonStyle(.plain)
-                    .help("Delete chat")
+                    .help(L10n.Tooltip.deleteChat.render(appLocale))
                 }
             }
             .padding(.horizontal, Theme.Spacing.md)
