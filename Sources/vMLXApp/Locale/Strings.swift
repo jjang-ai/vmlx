@@ -2293,4 +2293,127 @@ public enum L10n {
             zh: "%@ 条未读错误日志 — 打开 Logs 清除"
         )
     }
+
+    /// §377 — tray disclosure group headers + cache/MoE/logging toggle
+    /// labels. TrayUI already holds the picker / lifecycle labels; this
+    /// extends coverage so every user-visible string in TrayItem uses
+    /// L10n.
+    public enum TrayPanel {
+        public static let serverBinding = L10nEntry(
+            en: "Server binding",
+            ja: "サーバーバインド",
+            ko: "서버 바인딩",
+            zh: "服务器绑定"
+        )
+        public static let samplingGlobals = L10nEntry(
+            en: "Sampling (global defaults)",
+            ja: "サンプリング(グローバル既定)",
+            ko: "샘플링(전역 기본값)",
+            zh: "采样(全局默认)"
+        )
+        public static let cache = L10nEntry(
+            en: "Cache",
+            ja: "キャッシュ",
+            ko: "캐시",
+            zh: "缓存"
+        )
+        public static let flashMoE = L10nEntry(
+            en: "Flash MoE",
+            ja: "Flash MoE",
+            ko: "Flash MoE",
+            zh: "Flash MoE"
+        )
+        public static let adapter = L10nEntry(
+            en: "Adapter",
+            ja: "アダプター",
+            ko: "어댑터",
+            zh: "适配器"
+        )
+        public static let logging = L10nEntry(
+            en: "Logging",
+            ja: "ログ",
+            ko: "로깅",
+            zh: "日志"
+        )
+        public static let recentLogs = L10nEntry(
+            en: "Recent logs",
+            ja: "最近のログ",
+            ko: "최근 로그",
+            zh: "最近日志"
+        )
+
+        // Cache section labels
+        public static let l2DiskCache = L10nEntry(
+            en: "L2 disk cache",
+            ja: "L2ディスクキャッシュ",
+            ko: "L2 디스크 캐시",
+            zh: "L2 磁盘缓存"
+        )
+        public static let diskBudgetGB = L10nEntry(
+            en: "Disk budget (GB)",
+            ja: "ディスク上限 (GB)",
+            ko: "디스크 한도 (GB)",
+            zh: "磁盘预算 (GB)"
+        )
+        public static let prefixCache = L10nEntry(
+            en: "Prefix cache",
+            ja: "プレフィックスキャッシュ",
+            ko: "접두 캐시",
+            zh: "前缀缓存"
+        )
+        public static let memoryAwarePrefixCache = L10nEntry(
+            en: "Memory-aware prefix cache",
+            ja: "メモリ対応プレフィックスキャッシュ",
+            ko: "메모리 인식 접두 캐시",
+            zh: "内存感知前缀缓存"
+        )
+        public static let ssmReDerive = L10nEntry(
+            en: "SSM re-derive (hybrid+thinking)",
+            ja: "SSM再導出(ハイブリッド+思考)",
+            ko: "SSM 재유도(하이브리드+사고)",
+            zh: "SSM 重新推导(混合+思考)"
+        )
+        public static let cacheMemoryPercent = L10nEntry(
+            en: "Cache memory %",
+            ja: "キャッシュメモリ %",
+            ko: "캐시 메모리 %",
+            zh: "缓存内存 %"
+        )
+
+        // Flash MoE section
+        public static let enableFlashMoE = L10nEntry(
+            en: "Enable Flash MoE (stream experts from SSD)",
+            ja: "Flash MoEを有効化 (SSDから専門家をストリーム)",
+            ko: "Flash MoE 활성화 (SSD에서 전문가 스트리밍)",
+            zh: "启用 Flash MoE(从 SSD 流式加载专家)"
+        )
+        public static let slotBankSize = L10nEntry(
+            en: "Slot bank size",
+            ja: "スロットバンクサイズ",
+            ko: "슬롯 뱅크 크기",
+            zh: "槽位组大小"
+        )
+
+        // Adapter section
+        public static let adapterBlurb = L10nEntry(
+            en: "Active LoRA adapter is managed via Server → Adapter panel.",
+            ja: "アクティブなLoRAアダプターは Server → Adapter パネルで管理します。",
+            ko: "활성 LoRA 어댑터는 Server → Adapter 패널에서 관리합니다.",
+            zh: "活动 LoRA 适配器通过 Server → Adapter 面板管理。"
+        )
+        public static let openAdapterPanel = L10nEntry(
+            en: "Open Adapter panel",
+            ja: "Adapter パネルを開く",
+            ko: "Adapter 패널 열기",
+            zh: "打开 Adapter 面板"
+        )
+
+        // Logging section
+        public static let defaultLevel = L10nEntry(
+            en: "Default level",
+            ja: "既定レベル",
+            ko: "기본 수준",
+            zh: "默认级别"
+        )
+    }
 }
