@@ -372,7 +372,7 @@ let package = Package(
 
         .target(
             name: "vMLXLMCommon",
-            dependencies: ["MLX", "MLXNN", "MLXOptimizers", "MLXRandom"],
+            dependencies: ["MLX", "MLXNN", "MLXOptimizers", "MLXRandom", "MLXFast"],
             path: "Sources/vMLXLMCommon",
             exclude: [
                 "README.md",
@@ -564,6 +564,10 @@ let package = Package(
                 "DSMLToolCallParserTests.swift",
                 // §385 — DSV4 capability detection (silver + jang stamp).
                 "DeepseekV4CapabilityTests.swift",
+                // §391 — DSV4 multi-turn matrix: reasoning leak, DSML
+                // tool-call ordering, effort transitions, family
+                // sampling defaults, parser registry routing.
+                "DeepseekV4MultiTurnTests.swift",
                 "ChatRequestValidationTests.swift",
                 "ToolChoiceEnforcementTests.swift",
                 "ToolCallReasoningMatrixTests.swift",
