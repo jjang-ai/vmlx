@@ -604,6 +604,35 @@ struct TrayItem: View {
                     }
                 }
             }
+            // §403 — sliding-window override picker. Auto = honor model
+            // config; Long = force full-context (escape hatch for
+            // thinking models that drift past their trained window);
+            // Bounded = hard cap of `slidingWindowSize` for memory.
+            LabeledField("Sliding window") {
+                Picker("", selection: Binding(
+                    get: { draft.slidingWindowMode },
+                    set: { draft.slidingWindowMode = $0; schedulePush() })) {
+                    Text("Auto").tag("auto")
+                    Text("Long").tag("long")
+                    Text("Bounded").tag("bounded")
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .font(.system(size: 11))
+            }
+            if draft.slidingWindowMode.lowercased() == "bounded" {
+                LabeledField("SW size") {
+                    Stepper(
+                        value: Binding(
+                            get: { draft.slidingWindowSize },
+                            set: { draft.slidingWindowSize = $0; schedulePush() }),
+                        in: 256...262144, step: 1024
+                    ) {
+                        Text("\(draft.slidingWindowSize)")
+                            .font(.system(size: 11, design: .monospaced))
+                    }
+                }
+            }
             Toggle(
                 L10n.TrayPanel.l2DiskCache.render(appLocale),
                 isOn: Binding(

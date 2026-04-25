@@ -670,6 +670,12 @@ public enum CapabilityDetector {
     /// `vmlx_engine/utils/model_inspector.py::is_mla_model` — looks for
     /// `kv_lora_rank > 0` in the top-level config OR inside text_config
     /// (VLM wrapper). Returns false when the field is absent or zero.
+    ///
+    /// §392 — DSV4 Flash bundles ship `head_dim=512` + `q_lora_rank>0` +
+    /// `num_key_value_heads=1` as the MLA shape signature WITHOUT a
+    /// top-level `kv_lora_rank` field. Recognize that triad as MLA so
+    /// the silver "mla" cache type isn't demoted to "kv" for the very
+    /// model_type the silver row was authored for.
     private static func isMLAConfig(_ config: [String: Any]) -> Bool {
         if let rank = config["kv_lora_rank"] as? Int, rank > 0 { return true }
         if let textCfg = config["text_config"] as? [String: Any],
@@ -677,7 +683,23 @@ public enum CapabilityDetector {
         {
             return true
         }
+        if isDSV4MLAShape(config) { return true }
+        if let textCfg = config["text_config"] as? [String: Any],
+           isDSV4MLAShape(textCfg)
+        {
+            return true
+        }
         return false
+    }
+
+    private static func isDSV4MLAShape(_ cfg: [String: Any]) -> Bool {
+        guard let mt = (cfg["model_type"] as? String)?.lowercased(),
+              mt == "deepseek_v4"
+        else { return false }
+        let headDim = cfg["head_dim"] as? Int ?? 0
+        let qLora = cfg["q_lora_rank"] as? Int ?? 0
+        let nkv = cfg["num_key_value_heads"] as? Int ?? 0
+        return headDim >= 256 && qLora > 0 && nkv >= 1
     }
 
     private static func bronzeHeuristic(modelType: String) -> Bronze {

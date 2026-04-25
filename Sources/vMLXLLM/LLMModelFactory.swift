@@ -816,12 +816,22 @@ public final class LLMModelFactory: ModelFactory {
         async let tokenizerTask = tokenizerLoader.load(
             from: configuration.tokenizerDirectory)
 
-        // When JANG, skip config.json's perLayerQuantization — JANG infers correct
-        // per-layer bits from tensor shapes. This avoids creating QuantizedLinear at
-        // the wrong bit width (which can't be re-quantized later).
+        // §400 — when both jangConfig AND config.json's perLayerQuantization
+        // are present, forward BOTH. Load.swift now merges them: config.json
+        // entries (which are explicit and unambiguous) win on the layers they
+        // cover, JANG inference fills the rest. The previous behavior (drop
+        // perLayerQuantization when jangConfig was present) silently routed
+        // bundles whose `jang_config.json` lacks an explicit `quantization`
+        // block (e.g. DSV4 Flash JANGTQ ships only `{"weight_format":"bf16"}`)
+        // through default-disambiguation in `inferBitWidthAndGroupSize`,
+        // picking the wrong (bits, group_size) pair when multiple satisfy the
+        // packed-shape equation. Concrete failure: embed=[V,1024]/scales=[V,128]
+        // → JANG defaults pick (bits=4, gs=64) → output dim 8192 instead of
+        // the bundle's actual (bits=8, gs=32) → 4096. Doubled hidden state
+        // collapses fn matmul to a 0-d scalar → mHC sinkhorn crashes.
         try loadWeights(
             modelDirectory: modelDirectory, model: model,
-            perLayerQuantization: jangConfig != nil ? nil : baseConfig.perLayerQuantization,
+            perLayerQuantization: baseConfig.perLayerQuantization,
             jangConfig: jangConfig)
 
         let tokenizer = try await tokenizerTask

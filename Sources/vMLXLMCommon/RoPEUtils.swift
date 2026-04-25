@@ -94,6 +94,13 @@ public class YarnRoPE: Module, OffsetLayer, ArrayOffsetLayer {
     private let _mscale: Float
     private let _freqs: MLXArray
 
+    /// Public accessor for the wavelength tensor (post-YaRN correction).
+    /// Used by DSV4 attention to compute INVERSE rope by passing -freqs to
+    /// MLXFast.RoPE. Without inverse rope, DSV4 output is gibberish (verified
+    /// in jang-tools Python tests 2026-04-24, see research/DSV4-RUNTIME-ARCHITECTURE.md §29).
+    public var freqs: MLXArray { _freqs }
+    public var mscale: Float { _mscale }
+
     public init(
         dimensions: Int,
         traditional: Bool = false,

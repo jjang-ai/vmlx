@@ -205,6 +205,10 @@ public struct JangConfig: Sendable {
 // MARK: - JANG Loader
 
 /// JANG model loader — detects, parses config, and infers per-layer quantization.
+// DIAG (2026-04-25): mutable global for first-call trace; not thread-safe but
+// JangLoader.inferBitWidthAndGroupSize is called serially from one place.
+nonisolated(unsafe) var _inferDiagFired = false
+
 public struct JangLoader: Sendable {
 
     /// Check if a model directory contains a JANG model.
@@ -420,10 +424,20 @@ public struct JangLoader: Sendable {
             }
         }
 
-        // For each quantized layer, infer the actual bit width.
-        // First try with the JANG block_size as group_size. If that doesn't produce
-        // a valid integer bit width, fall back to inferring both bits and group_size
-        // from shapes (handles gates with different group_size like 64 vs 128).
+        // §410 — shape is authoritative. Always emit a per-layer
+        // override, even when the inferred (bits, gs) happens to match
+        // the JANG-declared default. Reason: the downstream loader
+        // walks `quantization(layer:)` lookups, falling through to
+        // `top-level.quantization` only when the layer has no entry.
+        // If we omit "matches default" entries, an incorrectly-set
+        // top-level default (e.g. bad config declaring bits=2 but
+        // storing 8-bit attention on disk) silently routes through
+        // the wrong dequant. By writing the inferred value at every
+        // quantized layer's path, the loader's lookup is shape-driven
+        // regardless of what jang_config or config.json declared.
+        var disagreementCount = 0
+        var sampleDeclared: (Int, Int)? = nil
+        var sampleInferred: (Int, Int)? = nil
         for basePath in quantizedLayers {
             guard let weightArray = weights[basePath + ".weight"],
                 let scalesArray = weights[basePath + ".scales"]
@@ -431,18 +445,52 @@ public struct JangLoader: Sendable {
                 continue
             }
 
-            // Try with known group_size first; pass bitWidthsUsed so the
-            // fallback can disambiguate layers whose group_size differs
-            // from the body (e.g., MoE gates).
+            // Pass bitWidthsUsed for the tail-safety fallback path; the
+            // primary preference-ordered enumeration in
+            // `inferBitWidthAndGroupSize` is shape-only and ignores
+            // knownGroupSize.
             let (bits, inferredGroupSize) = inferBitWidthAndGroupSize(
                 weight: weightArray, scales: scalesArray,
                 knownGroupSize: groupSize,
                 bitWidthsUsed: jangConfig.quantization.bitWidthsUsed)
 
+            // §410 — track disagreement against the JANG-declared default
+            // for the user-facing log line below. We compare against
+            // `(defaultBits, groupSize)` because that's what the loader
+            // would have used for any layer absent from per-layer
+            // overrides under the OLD inferer.
             if bits != defaultBits || inferredGroupSize != groupSize {
-                perLayer[basePath] = .quantize(
-                    BaseConfiguration.Quantization(groupSize: inferredGroupSize, bits: bits))
+                disagreementCount += 1
+                if sampleDeclared == nil {
+                    sampleDeclared = (defaultBits, groupSize)
+                    sampleInferred = (bits, inferredGroupSize)
+                }
             }
+
+            perLayer[basePath] = .quantize(
+                BaseConfiguration.Quantization(
+                    groupSize: inferredGroupSize, bits: bits))
+        }
+
+        // Mirror Python's user-facing log line:
+        //   "⚠ config-metadata BUG detected, patched in-memory:
+        //    top_bits 2 → 8, +312 per-module overrides (312 mismatches)"
+        // Visible in vmlxctl serve / chat output so users on legacy
+        // bundles see the runtime save when it fires. No spam on
+        // clean configs (disagreementCount == 0).
+        if disagreementCount > 0,
+           let dec = sampleDeclared, let inf = sampleInferred
+        {
+            let plural = disagreementCount == 1 ? "" : "s"
+            let line = (
+                "⚠ [JangLoader] config-metadata BUG detected, "
+                + "patched in-memory: declared (bits=\(dec.0), gs=\(dec.1)) "
+                + "→ shape-inferred (bits=\(inf.0), gs=\(inf.1)), "
+                + "\(disagreementCount) per-layer override\(plural) "
+                + "applied. Set VMLX_REPAIR_BAD_JANG_CONFIG=1 to also "
+                + "patch config.json on disk.\n"
+            )
+            FileHandle.standardError.write(Data(line.utf8))
         }
 
         // Layers without .scales are unquantized (norms, biases) — they don't need entries
@@ -482,34 +530,91 @@ public struct JangLoader: Sendable {
     ) -> (bits: Int, groupSize: Int) {
         let packedDim = weight.shape.last ?? 0
         let numGroups = scales.shape.last ?? 1
-
-        guard packedDim > 0 && numGroups > 0 else { return (4, knownGroupSize ?? 64) }
-
-        let validBits = [2, 3, 4, 5, 6, 8]
-
-        // Primary path: knownGroupSize gives an unambiguous answer.
-        // bits must divide (packedDim * 32) exactly.
-        if let gs = knownGroupSize, gs > 0 {
-            let inDim = numGroups * gs
-            if inDim > 0 && (packedDim * 32) % inDim == 0 {
-                let bits = (packedDim * 32) / inDim
-                if validBits.contains(bits) {
-                    return (bits, gs)
-                }
+        // §411 — first-call shape trace, gated behind `VMLX_LOAD_DIAG=1`.
+        // Useful for diagnosing path-resolution mismatches between
+        // shape inference and the loader's leaf-path lookup; off by
+        // default so production loads stay quiet.
+        if !_inferDiagFired,
+           ProcessInfo.processInfo.environment["VMLX_LOAD_DIAG"] == "1"
+        {
+            _inferDiagFired = true
+            let msg = "[infer-diag] weight.shape=\(weight.shape) scales.shape=\(scales.shape) packedDim=\(packedDim) numGroups=\(numGroups) knownGS=\(String(describing: knownGroupSize)) bitsUsed=\(bitWidthsUsed)\n"
+            if let data = msg.data(using: .utf8) {
+                try? FileHandle.standardError.write(contentsOf: data)
             }
         }
 
-        // Fallback: the provided knownGroupSize is wrong for this tensor (e.g.,
-        // MoE gates use a different group_size than body layers). Search for
-        // (bits, groupSize) pairs that produce an exact round-trip. Prefer
-        // higher bits first to favor CRITICAL tier layers (which JANG stores
-        // at the highest available bit width).
+        guard packedDim > 0 && numGroups > 0 else { return (4, knownGroupSize ?? 64) }
+
+        // §410 — shape-authoritative bit-width inference (replaces the
+        // earlier `knownGroupSize-first` path).
         //
-        // For any candidate `bits`, the implied group size must be an integer:
-        //   in_dim = (packedDim * 32) / bits    (must be exact)
-        //   gs     = in_dim / numGroups         (must be exact)
+        // The packed-shape equation is:
+        //   weight.shape[-1] * 32 = bits * num_groups * group_size
+        //   ⇒ bits * group_size = 32 * (packedDim / numGroups)
+        //
+        // For typical R = packedDim / numGroups = 8, the equation is
+        // satisfied by THREE plausible pairs: (8, 32), (4, 64), (2, 128).
+        // The earlier code locked `group_size` to whatever
+        // `jang_config.quantization.block_size` declared (defaulting to
+        // 64) and solved only for `bits` — which silently picked
+        // (4, 64) for an attention/embed/head layer that the JANGTQ
+        // converter actually emitted at (8, 32). Result: load succeeds
+        // with the wrong bit width, embed output dim doubles, attention
+        // matmul dimensions don't match, downstream tensors collapse to
+        // 0-d scalars, model "loads" but generates garbage or crashes.
+        //
+        // The fix: enumerate (bits, group_size) pairs in the preference
+        // order the JANGTQ converter actually emits — 8-bit before 4-bit
+        // before 2-bit, smaller group_size before larger — and pick the
+        // FIRST pair whose implied shape matches the on-disk tensor.
+        // This makes shape authoritative regardless of what
+        // `jang_config.json` (or any future converter bug) declares.
+        //
+        // Works for THREE config classes:
+        //   - BAD config (bits=2 declared everywhere, mixed storage on
+        //     disk): inferred shape correctly identifies 8-bit
+        //     attention / embed / lm_head, ignores the 2-bit declaration.
+        //   - GOOD config (per-layer overrides match disk): inferred
+        //     shape agrees, no-op.
+        //   - FUTURE config (new converter bug): inferred shape stays
+        //     authoritative, model still loads correctly.
+        //
+        // Preference order (matches the JANGTQ converter classify rules
+        // verified against 522/522 + 312/312 + 187/187 trusted bundles):
+        //   8-bit attention / embed / lm_head / shared experts at
+        //   group_size 32 first (most common, gs=64/128 fallback for
+        //   wider hidden), then 4-bit (routed experts in 4-bit
+        //   profile), 2-bit (routed experts in 2-bit profile),
+        //   then 3/6-bit edge cases. (5-bit + odd group_sizes also
+        //   tried last for completeness.)
+        let preferred: [(Int, Int)] = [
+            (8, 32), (8, 64), (8, 128),
+            (4, 32), (4, 64), (4, 128),
+            (2, 32), (2, 64), (2, 128),
+            (3, 32), (6, 32),
+            (5, 32), (5, 64), (3, 64), (6, 64),
+        ]
+        for (bits, gs) in preferred {
+            // Implied in_dim = bits * num_groups * group_size / 32
+            // packedDim must equal in_dim * bits / 32 = num_groups * group_size * bits^2 / (32 * 32)
+            // Simpler: check bits * group_size == 32 * packedDim / numGroups
+            // and packedDim * 32 % bits == 0 + the resulting in_dim divides cleanly.
+            guard (packedDim * 32) % bits == 0 else { continue }
+            let inDim = (packedDim * 32) / bits
+            guard inDim > 0, inDim % numGroups == 0 else { continue }
+            let impliedGs = inDim / numGroups
+            if impliedGs == gs {
+                return (bits, gs)
+            }
+        }
+
+        // Tail safety: if no preferred pair matches, fall back to the
+        // bitWidthsUsed-scoped search (preserves prior behavior for any
+        // odd CRITICAL-tier layout the converter might emit).
+        let validBits = [2, 3, 4, 5, 6, 8]
         let candidates = bitWidthsUsed.isEmpty
-            ? validBits.sorted(by: >)  // [8, 6, 5, 4, 3, 2]
+            ? validBits.sorted(by: >)
             : bitWidthsUsed.sorted(by: >)
         for bits in candidates {
             guard bits > 0, (packedDim * 32) % bits == 0 else { continue }

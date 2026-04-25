@@ -568,6 +568,27 @@ let package = Package(
                 // tool-call ordering, effort transitions, family
                 // sampling defaults, parser registry routing.
                 "DeepseekV4MultiTurnTests.swift",
+                // §397 — SSM parity map (vmlx GH #103/#105/#107/#109/#110)
+                // pinned across hybrid families.
+                "SSMParityMapTests.swift",
+                // §397 — DSV4 looping-output regression guards (4
+                // candidates from the 2026-04-24 diagnostic note:
+                // chat template, EOS, sampling defaults, tq_bits strip).
+                "DeepseekV4LoopingGuardTests.swift",
+                // §405 — FIM completion truncator (decode-loop tail
+                // strip for code completions on /v1/completions when
+                // `truncate_fim: true`).
+                "FIMTruncatorTests.swift",
+                // §407 — DSV4 Compressor + Indexer mask helpers ported
+                // from mlx-lm PR #1195. Pure-tensor helpers tested
+                // standalone before the attention forward integration.
+                "DeepseekV4MaskHelpersTests.swift",
+                // §410 — shape-authoritative bit-width inference. Pins
+                // the preference order ((8,32) > (8,64) > … > (2,128))
+                // and guards against the prior `knownGroupSize`-first
+                // bug that picked (4,64) for ambiguous shapes — the
+                // root cause of the DSV4 embed/wq_b miscloads.
+                "JangShapeAuthoritativeTests.swift",
                 "ChatRequestValidationTests.swift",
                 "ToolChoiceEnforcementTests.swift",
                 "ToolCallReasoningMatrixTests.swift",
