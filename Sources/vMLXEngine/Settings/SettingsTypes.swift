@@ -284,6 +284,33 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     public var enableTurboQuant: Bool = true
     public var turboQuantBits: Int = 4
 
+    // §403 — sliding-window mode override.
+    //
+    // Per-model `config.json::sliding_window` declares the trained
+    // attention window (e.g. DSV4 Flash = 128 with Compressor pool,
+    // Gemma 4 = 4096 alternating). For some workflows we want to
+    // override:
+    //   • `auto`   — honor the model's config exactly (default).
+    //                Best fidelity to training distribution.
+    //   • `long`   — force full-context attention even when config
+    //                declares a window. Escape hatch for DSV4 when
+    //                the Compressor pool path is degraded — output
+    //                `> sliding_window` tokens lose visibility of
+    //                the original prompt under SW=128 + degraded
+    //                Compressor.
+    //   • `bounded`— force a hard sliding window of `slidingWindowSize`
+    //                regardless of model config. Memory-frugal mode
+    //                for old hardware. Default size 16384 covers
+    //                reasoning-trace + prompt + answer comfortably
+    //                (8192 truncates Think-Max chains).
+    //
+    // Resolved at session start in `Engine.makeCache` and consumed
+    // by SW-bearing models (DSV4, Gemma 4) when constructing per-layer
+    // KV caches. Models without SW in their config ignore the setting
+    // (no `RotatingKVCache` to swap).
+    public var slidingWindowMode: String = "auto"   // auto | long | bounded
+    public var slidingWindowSize: Int = 16384       // used when mode=bounded
+
     // Hybrid-SSM companion cache re-derive. When a thinking-template
     // turn finishes on a hybrid model, the post-generation SSM state
     // is contaminated (see `Cache/SSMReDerive.swift` for the long
@@ -515,6 +542,11 @@ public struct SessionSettings: Codable, Sendable, Equatable {
     public var memoryCachePercent: Double? = nil
     public var memoryCacheTTLMinutes: Double? = nil
     public var kvCacheQuantization: String? = nil
+
+    // §403 — sliding-window override per session. See GlobalSettings
+    // for the policy. Nil falls back to the global setting.
+    public var slidingWindowMode: String? = nil
+    public var slidingWindowSize: Int? = nil
 
     public var flashMoe: Bool? = nil
     public var flashMoeSlotBank: Int? = nil

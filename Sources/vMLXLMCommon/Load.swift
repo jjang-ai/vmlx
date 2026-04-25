@@ -13,6 +13,11 @@ import MLXNN
 ///
 /// When a JANG model is detected (via `jangConfig`), per-layer bit widths are
 /// inferred from tensor shapes automatically. Standard MLX models are unaffected.
+// DIAG (2026-04-25): mutable wrapper for diag counter, since loadWeights is
+// a free function. Remove after path resolution diagnosis.
+fileprivate final class _MutInt { var value: Int = 0 }
+fileprivate let _loadDiagCounter = _MutInt()
+
 public func loadWeights(
     modelDirectory: URL, model: LanguageModel,
     quantization: BaseConfiguration.Quantization? = nil,
@@ -220,8 +225,171 @@ public func loadWeights(
         // Safe for JANGTQ-native: infer only walks `.scales` keys, so it picks
         // up the affine 8-bit attention / embed / lm_head and ignores the
         // tq_packed expert projections.
-        effectivePerLayerQuantization = JangLoader.inferPerLayerQuantization(
+        let inferred = JangLoader.inferPerLayerQuantization(
             weights: weights, jangConfig: jangConfig)
+        // §411 — opt-in on-disk bundle repair. No-op unless
+        // `VMLX_REPAIR_BAD_JANG_CONFIG=1` is set. The runtime path-
+        // variant fix below makes the loader correct WITHOUT modifying
+        // the bundle; the on-disk repair is just for users who want
+        // their config.json to also reflect the truth (helps third-
+        // party tooling that reads the metadata).
+        JangConfigRepair.repairIfBad(
+            at: modelDirectory,
+            inferredPerLayer: inferred.perLayerQuantization
+        )
+        // §400 — bundle disambiguation. JANG `inferBitWidthAndGroupSize` is
+        // mathematically ambiguous when (bits, group_size) pairs both satisfy
+        // the packed-shape equation. For example:
+        //   weight=[V, 1024], scales=[V, 128] satisfies BOTH
+        //     (bits=4, gs=64): inDim=8192
+        //     (bits=8, gs=32): inDim=4096
+        // When `jang_config.json` lacks an explicit quantization block (the
+        // DSV4 Flash JANGTQ bundle ships `{"weight_format":"bf16"}` with no
+        // bit-widths) the JANG path falls back to defaults `[2,4,6]` and
+        // picks bits=4 — silently doubling the embed/head/attention output
+        // dim. The bundle's authoritative answer lives in
+        // `config.json::quantization` (top-level + per-layer overrides like
+        // `"embed": {bits:8, group_size:32}`). When that block is present,
+        // overlay it onto JANG inference: per-layer entries from config.json
+        // win, JANG fills the gaps.
+        if let perLayerQuantization {
+            // §410 — shape-inferred entries are authoritative. The JANG
+            // inferer (`inferPerLayerQuantization`) emits a per-layer
+            // override at EVERY quantized leaf (no "matches default"
+            // gate, per §410 in JangLoader.swift), so `inferred` already
+            // contains the correct (bits, gs) for every layer that has
+            // .scales on disk. config.json's per-layer block is treated
+            // as a *backstop* — only used when the shape inferer didn't
+            // emit an entry (purely unquantized layers, layers loaded
+            // from a sidecar etc.) and broadcast across path variants
+            // ("attn" ↔ "self_attn", `model.` prefix, language_model
+            // strip) so leaf-path lookup resolves on either naming
+            // convention.
+            //
+            // History: before §410 the merge ran the other direction —
+            // config.json overrode shape inference. That worked when
+            // config.json was correct but BROKE for bundles where
+            // `jang_config.json` declared a uniform bits=2/gs=64 default
+            // and the actual safetensors stored 8-bit/gs=32 attention
+            // (the "BAD config" class). The shape-authoritative
+            // direction works for both BAD and GOOD configs and stays
+            // robust against future converter bugs.
+            var merged = inferred.perLayerQuantization
+            func variants(_ k: String) -> [String] {
+                var out = [k]
+                if k.contains(".attn.") || k.hasSuffix(".attn") {
+                    out.append(k.replacingOccurrences(of: ".attn.", with: ".self_attn."))
+                    if k.hasSuffix(".attn") {
+                        out.append(String(k.dropLast(".attn".count)) + ".self_attn")
+                    }
+                }
+                return out
+            }
+            // ── §411 fix (2026-04-25): also expand `model.X` prefix variants
+            // for SHAPE-INFERRED entries. The earlier §410 code only added
+            // `model.X` variants for config.json-declared overrides, leaving
+            // shape-inferred keys without the prefix. Symptom: leaf module
+            // path is `model.embed` (after Swift sanitize prefixes with
+            // `model.`), but inferred dict has just `embed`. Loader looks up
+            // `model.embed`, gets nil, falls back to top-level → wrong bits
+            // (e.g. picks 4-bit instead of 8-bit) → embed output dim doubles
+            // → hcCollapse matmul crash with shape (B, L, 32768) × (16384, 24).
+            // Diagnosed via stderr trace showing h.shape=[1, 5, 4, 8192] when
+            // expected [1, 5, 4, 4096]. Fix: clone every shape-inferred entry
+            // under `model.<key>` too.
+            for (key, value) in inferred.perLayerQuantization {
+                let modelPrefixed = "model.\(key)"
+                if merged[modelPrefixed] == nil { merged[modelPrefixed] = value }
+                // Also expand attn.→self_attn. variants for the model-prefixed form
+                for v in variants(modelPrefixed) {
+                    if merged[v] == nil { merged[v] = value }
+                }
+            }
+            for (key, value) in perLayerQuantization.perLayerQuantization {
+                for v in variants(key) {
+                    // Backstop only — don't overwrite shape-inferred entries.
+                    if merged[v] == nil { merged[v] = value }
+                    let modelPrefixed = "model.\(v)"
+                    if merged[modelPrefixed] == nil { merged[modelPrefixed] = value }
+                }
+                if key.hasPrefix("language_model.model.") {
+                    let stripped = String(key.dropFirst("language_model.".count))
+                    for v in variants(stripped) {
+                        if merged[v] == nil { merged[v] = value }
+                    }
+                } else if key.hasPrefix("language_model.") {
+                    let stripped = String(key.dropFirst("language_model.".count))
+                    for v in variants(stripped) {
+                        if merged[v] == nil { merged[v] = value }
+                    }
+                }
+            }
+            // Top-level (default) quantization: still prefer config.json's
+            // explicit declaration over JANG's heuristic when present —
+            // the top-level acts only as the fallback for paths absent
+            // from per-layer; per-layer entries always win.
+            effectivePerLayerQuantization = BaseConfiguration.PerLayerQuantization(
+                quantization: perLayerQuantization.quantization ?? inferred.quantization,
+                perLayerQuantization: merged
+            )
+            // §411 — diag dump gated behind `VMLX_LOAD_DIAG=1`. Off by
+            // default so production loads stay quiet; flip on to debug
+            // path-resolution mismatches between shape-inferred entries
+            // and the loader's leaf-path lookup keys.
+            if ProcessInfo.processInfo.environment["VMLX_LOAD_DIAG"] == "1" {
+                let probeKeys = ["embed", "model.embed", "lm_head", "model.lm_head",
+                                 "layers.0.attn.wq_a", "layers.0.self_attn.wq_a",
+                                 "model.layers.0.attn.wq_a", "model.layers.0.self_attn.wq_a"]
+                for k in probeKeys {
+                    let v = merged[k]
+                    let s = "[merge-diag] merged[\(k)] = \(v.map { "\($0)" } ?? "NIL")\n"
+                    if let data = s.data(using: .utf8) {
+                        try? FileHandle.standardError.write(contentsOf: data)
+                    }
+                }
+                let topQ = perLayerQuantization.quantization ?? inferred.quantization
+                let s = "[merge-diag] top-level quantization = \(topQ.map { "(b=\($0.bits), gs=\($0.groupSize))" } ?? "NIL"); merged_count=\(merged.count); inferred_count=\(inferred.perLayerQuantization.count); explicit_count=\(perLayerQuantization.perLayerQuantization.count)\n"
+                if let data = s.data(using: .utf8) {
+                    try? FileHandle.standardError.write(contentsOf: data)
+                }
+            }
+        } else {
+            // §411 fix (2026-04-25): when config.json has no perLayerQuantization
+            // block, the inferred dict alone is used — but its keys don't have
+            // the `model.` prefix that the leafModule path lookup uses. Add
+            // `model.X` variants so the lookup hits.
+            var merged = inferred.perLayerQuantization
+            func variants(_ k: String) -> [String] {
+                var out = [k]
+                if k.contains(".attn.") || k.hasSuffix(".attn") {
+                    out.append(k.replacingOccurrences(of: ".attn.", with: ".self_attn."))
+                    if k.hasSuffix(".attn") {
+                        out.append(String(k.dropLast(".attn".count)) + ".self_attn")
+                    }
+                }
+                return out
+            }
+            for (key, value) in inferred.perLayerQuantization {
+                for v in variants(key) {
+                    if merged[v] == nil { merged[v] = value }
+                }
+                let modelPrefixed = "model.\(key)"
+                if merged[modelPrefixed] == nil { merged[modelPrefixed] = value }
+                for v in variants(modelPrefixed) {
+                    if merged[v] == nil { merged[v] = value }
+                }
+            }
+            effectivePerLayerQuantization = BaseConfiguration.PerLayerQuantization(
+                quantization: inferred.quantization,
+                perLayerQuantization: merged
+            )
+            if ProcessInfo.processInfo.environment["VMLX_LOAD_DIAG"] == "1" {
+                let dbg = "[merge-diag-else] inferred_count=\(inferred.perLayerQuantization.count) merged_count=\(merged.count) sample_keys=\(Array(merged.keys).prefix(5))\n"
+                if let data = dbg.data(using: .utf8) {
+                    try? FileHandle.standardError.write(contentsOf: data)
+                }
+            }
+        }
     } else if let perLayerQuantization {
         // Remap perLayerQuantization keys to match sanitized weight paths.
         // Config.json uses VLM-prefixed keys like "language_model.model.layers.0..."
@@ -245,9 +413,22 @@ public func loadWeights(
         effectivePerLayerQuantization = nil
     }
 
+    // §411 — diag entry summary, gated. Off by default.
+    if ProcessInfo.processInfo.environment["VMLX_LOAD_DIAG"] == "1" {
+        let leafCount = model.leafModules().flattened().count
+        let quantHas = quantization != nil
+        let effHas = effectivePerLayerQuantization != nil
+        let scalesCount = weights.keys.filter { $0.hasSuffix(".scales") }.count
+        let msg = "[load-diag entry] quantization=\(quantHas) effPerLayer=\(effHas) leafModules=\(leafCount) weight_scales_keys=\(scalesCount) isJANGTQNative=\(isJANGTQNative)\n"
+        if let data = msg.data(using: .utf8) {
+            try? FileHandle.standardError.write(contentsOf: data)
+        }
+    }
+
     // quantize if needed
     if quantization != nil || effectivePerLayerQuantization != nil {
         // Inline quantize with error logging instead of try! crash
+        let loadDiag = ProcessInfo.processInfo.environment["VMLX_LOAD_DIAG"] == "1"
         let updates = model.leafModules().flattened().compactMap { (path, m) -> (String, Module)? in
             guard weights["\(path).scales"] != nil else { return nil }
             let tup: (groupSize: Int, bits: Int, mode: QuantizationMode)?
@@ -255,6 +436,25 @@ public func loadWeights(
                 tup = effectivePerLayerQuantization.quantization(layer: path)?.asTuple
             } else {
                 tup = quantization?.asTuple
+            }
+            // §411 — per-leaf trace, gated. Limited to 12 entries on
+            // embed/lm_head/early-layer paths so the trace is useful
+            // without flooding stderr on big models.
+            if loadDiag, _loadDiagCounter.value < 12 && (path.contains("embed") || path.contains("lm_head") || path.contains("layers.0") || path.contains("layers.1.")) {
+                _loadDiagCounter.value += 1
+                let direct = effectivePerLayerQuantization?.perLayerQuantization[path]
+                let directDesc: String
+                switch direct {
+                case .none: directDesc = "MISS"
+                case .some(.skip): directDesc = "SKIP"
+                case .some(.quantize(let q)): directDesc = "(b=\(q.bits), gs=\(q.groupSize))"
+                }
+                let topQ = effectivePerLayerQuantization?.quantization
+                let topDesc = topQ.map { "(b=\($0.bits), gs=\($0.groupSize))" } ?? "NIL"
+                let msg = "[load-diag #\(_loadDiagCounter.value)] path=\(path) direct_lookup=\(directDesc) top=\(topDesc) tup=\(tup.map { "(b=\($0.bits), gs=\($0.groupSize), m=\($0.mode))" } ?? "NIL") module=\(type(of: m))\n"
+                if let data = msg.data(using: .utf8) {
+                    try? FileHandle.standardError.write(contentsOf: data)
+                }
             }
             guard let (gs, b, mode) = tup else { return nil }
 

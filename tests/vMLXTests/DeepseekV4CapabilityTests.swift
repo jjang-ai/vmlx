@@ -50,6 +50,53 @@ final class DeepseekV4CapabilityTests: XCTestCase {
         XCTAssertTrue(caps.supportsThinking)
     }
 
+    /// §392 — actual DSV4 Flash bundle ships NO `kv_lora_rank` in
+    /// config.json. MLA shape is signaled by head_dim=512 + q_lora_rank>0
+    /// + num_key_value_heads=1. Without §392, silver row's "mla" cache
+    /// type gets demoted to "kv", which would then disable the MLA ⊥
+    /// TurboQuant guard, push wrong cache class through the scheduler,
+    /// and break the L2 disk path that depends on single-kv-head
+    /// head_dim=512 layout. Verify the shape-based MLA detection wins.
+    func testSilverRowForDSV4WithoutKVLoraRank() throws {
+        let d = tempDir(name: "silver-shape")
+        defer { try? FileManager.default.removeItem(at: d) }
+        try write([
+            "model_type": "deepseek_v4",
+            // NO kv_lora_rank — matches actual JANGTQ bundle shape.
+            "head_dim": 512,
+            "q_lora_rank": 1024,
+            "num_key_value_heads": 1,
+            "num_hidden_layers": 43,
+            "hidden_size": 4096,
+        ], to: d.appendingPathComponent("config.json"))
+
+        let caps = CapabilityDetector.detect(at: d)
+        XCTAssertEqual(caps.family, "deepseek_v4")
+        XCTAssertEqual(caps.modelType, "deepseek_v4")
+        XCTAssertEqual(caps.cacheType, "mla",
+            "DSV4 shape (head_dim=512+q_lora_rank>0+nkv=1) MUST keep silver MLA cache type")
+        XCTAssertEqual(caps.toolParser, "dsml")
+        XCTAssertEqual(caps.reasoningParser, "deepseek_r1")
+    }
+
+    /// Negative: model_type=deepseek_v4 but normal attention shape
+    /// (head_dim=128, no q_lora_rank) must demote to "kv".
+    func testSilverRowForDSV4PlainAttentionDemotes() throws {
+        let d = tempDir(name: "silver-plain")
+        defer { try? FileManager.default.removeItem(at: d) }
+        try write([
+            "model_type": "deepseek_v4",
+            "head_dim": 128,
+            "num_key_value_heads": 8,
+            "num_hidden_layers": 43,
+            "hidden_size": 4096,
+        ], to: d.appendingPathComponent("config.json"))
+
+        let caps = CapabilityDetector.detect(at: d)
+        XCTAssertEqual(caps.cacheType, "kv",
+            "Non-MLA DSV4 fine-tune must demote to kv cache, not silver MLA")
+    }
+
     /// §389 — bundle that ships NO `tokenizer_config.json::chat_template`
     /// (DSV4 uses Python encoding/encoding_dsv4.py which Swift can't
     /// exec) must still get a usable Jinja template via the built-in

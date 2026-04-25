@@ -489,6 +489,17 @@ public enum OpenAIRoutes {
                 return Self.errorJSON(.internalServerError, "\(error)")
             }
 
+            // §405 — FIM completion truncation guard. When the request
+            // sets `truncate_fim: true`, run the assembled completion
+            // through FIMTruncator to strip decode-loop tail, EOS-as-text
+            // markers, and `# Example` / `# Test` next-section delimiters
+            // before returning. Mirrors Python `truncate_fim` in
+            // `jang-tools/jang_tools/dsv4/bench_humaneval.py`. Off by
+            // default — bench harnesses + code-completion clients opt in.
+            if let fimFlag = obj["truncate_fim"] as? Bool, fimFlag {
+                content = FIMTruncator.truncate(content)
+            }
+
             // §163.B5: legacy `/v1/completions` uses a DIFFERENT logprobs
             // shape than chat completions. It's the flat-array form
             // `{tokens, token_logprobs, top_logprobs, text_offset}`

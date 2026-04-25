@@ -74,6 +74,13 @@ public actor Engine {
         public var kvCacheQuantization: String = "none"
         public var kvCacheGroupSize: Int = 64
         public var turboQuantBits: Int = 4
+        // §403 — sliding-window mode, propagated from settings via
+        // ResolvedSettings into LoadOptions so SW-aware models (DSV4,
+        // Gemma 4) can branch in their per-layer cache construction.
+        // `auto` honors model config exactly; `long` forces full-context;
+        // `bounded` forces a hard window of `slidingWindowSize`.
+        public var slidingWindowMode: String = "auto"
+        public var slidingWindowSize: Int = 16384
         public var enableSSMReDerive: Bool = true
         // Smelt + Flash MoE
         public var smelt: Bool = false

@@ -48,6 +48,71 @@
 // loop, no sampling). On a 2K prompt at ~1000 prefill tok/s that's
 // ~2 seconds. On long contexts it dominates so the watcher MUST be
 // skippable via `GlobalSettings.enableSSMReDerive`.
+//
+// PARITY MAP — vmlx (Python) GH issues #103/#105/#107/#109/#110
+// =============================================================
+// Tracking equivalent treatment for hybrid SSM models on the Swift
+// side. Pinned 2026-04-24 against vmlx 1.3.86 / `fa1fdb8`.
+//
+// • #103 deferred re-derive starves queued requests
+//   Python: scheduler runs re-derive when `running.empty` but ignores
+//   `waiting`, so a freshly arrived request eats N × re-derive TTFT.
+//   Swift parity: `Stream.swift:~2037` fires the re-derive on
+//   `Task.detached(priority: .utility)` AFTER the user's stream
+//   completes. The detached task acquires `container.perform`, which
+//   is sequential — a follow-up request would block on it. Mitigation
+//   is the cancel-Task guard already in place + the .utility priority
+//   so the system scheduler de-prioritizes it under load. There is no
+//   `waiting` queue concept in Swift's single-stream design, so the
+//   exact #103 bug doesn't reproduce; the analogous "interactive
+//   responsiveness" concern is bounded to one re-derive per turn.
+//
+// • #105 `mx.contiguous(mx.array(a))` redundant wrap
+//   Python: three sites in scheduler/mllm_batch_generator clone SSM
+//   layers with a redundant `mx.array` wrap.
+//   Swift parity: N/A. `SSMStateCache.store` clones via `arr * 1`
+//   (line ~127) which is idiomatic Swift for forcing materialization;
+//   no equivalent double-wrap exists.
+//
+// • #107 PLD auto-tune kill-switch first-window false positive
+//   Python: scheduler disables PLD on the first 1-token summary window
+//   because n-gram indices haven't been built yet.
+//   Swift parity: PLD is settings-only in Swift (see
+//   `SettingsTypes.swift:332-333`). The scheduler-side PLD logic is
+//   not yet ported, so the kill-switch hysteresis bug doesn't apply
+//   here. When PLD lands, mirror the streak-based fix: only disable
+//   after 2 consecutive zero-attempt windows.
+//
+// • #109 capture-during-prefill (clean SSM state at prompt boundary)
+//   Python: proposes capturing SSM state at the prefill→decode
+//   transition (when `num_computed_tokens == prompt_len - gen_prompt_len`)
+//   so the next turn doesn't have to re-derive at all.
+//   Swift parity: NOT IMPLEMENTED. Today the deferred re-derive in
+//   `maybeReDeriveSSMState` runs a full fresh prefill pass, costing
+//   O(prompt_len) compute per thinking turn. A capture-during-prefill
+//   hook would zero this cost for the common case (single-chunk
+//   prefill, no chunked / image / resumed prefill). Integration
+//   point: in `Evaluate.swift::TokenIterator.prepare(input:windowSize:)`
+//   add an optional `cachePromptOnlyBoundary: Int?` callback that
+//   fires after the last prompt-only token forward pass — extract
+//   SSM layer state from the live cache and store via
+//   `coordinator.ssmStateCache.store(..., isComplete: true)`. Then
+//   `maybeReDeriveSSMState` becomes a fallback for chunked prefill
+//   only. See vmlx GH #109 for the full mechanics.
+//
+// • #110 SSM companion disk persistence (L2 write-through)
+//   Python: proposes safetensors + JSON sidecar disk store for
+//   SSMCompanionCache so a stable-system-prompt workload doesn't pay
+//   full prefill on every cold start.
+//   Swift parity: NOT IMPLEMENTED. `SSMStateCache` is in-memory only.
+//   Paged KV blocks already disk-persist via `BlockDiskStore`, but
+//   SSM companion shares no key/shape with that store. Future work:
+//   add `SSMCompanionDiskStore` keyed on the same SHA-256 hash the
+//   in-memory cache uses, with `is_complete` in the sidecar JSON.
+//   Wire `SSMStateCache` to write-through on `store()` and
+//   read-through fallback on `fetch()`. Gate behind a setting
+//   (`enableSSMCompanionDiskCache`) defaulting OFF, parallel to the
+//   `enableBlockDiskStore` toggle pattern.
 
 import Foundation
 import MLX

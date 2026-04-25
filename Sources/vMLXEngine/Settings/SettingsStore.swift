@@ -341,6 +341,9 @@ public actor SettingsStore {
         if let v = s?.diskCacheDir { out.diskCacheDir = v; trace["diskCacheDir"] = .session } else { trace["diskCacheDir"] = .global }
         if let v = s?.diskCacheMaxGB { out.diskCacheMaxGB = v; trace["diskCacheMaxGB"] = .session } else { trace["diskCacheMaxGB"] = .global }
         if let v = s?.kvCacheQuantization { out.kvCacheQuantization = v; trace["kvCacheQuantization"] = .session } else { trace["kvCacheQuantization"] = .global }
+        // §403 — sliding-window resolution.
+        if let v = s?.slidingWindowMode { out.slidingWindowMode = v; trace["slidingWindowMode"] = .session } else { trace["slidingWindowMode"] = .global }
+        if let v = s?.slidingWindowSize { out.slidingWindowSize = v; trace["slidingWindowSize"] = .session } else { trace["slidingWindowSize"] = .global }
         if let v = s?.flashMoe { out.flashMoe = v; trace["flashMoe"] = .session } else { trace["flashMoe"] = .global }
         if let v = s?.flashMoeSlotBank { out.flashMoeSlotBank = v; trace["flashMoeSlotBank"] = .session } else { trace["flashMoeSlotBank"] = .global }
         if let v = s?.flashMoePrefetch { out.flashMoePrefetch = v; trace["flashMoePrefetch"] = .session } else { trace["flashMoePrefetch"] = .global }
@@ -457,6 +460,10 @@ extension Engine.LoadOptions {
         self.kvCacheQuantization = r.kvCacheQuantization
         self.kvCacheGroupSize = r.kvCacheGroupSize
         self.turboQuantBits = r.turboQuantBits
+        // §403 — sliding-window mode forwarded so models that consult
+        // it during cache construction (DSV4, Gemma 4) can branch.
+        self.slidingWindowMode = r.slidingWindowMode
+        self.slidingWindowSize = r.slidingWindowSize
         self.enableSSMReDerive = r.enableSSMReDerive
         // Smelt + Flash MoE
         self.smelt = r.smelt

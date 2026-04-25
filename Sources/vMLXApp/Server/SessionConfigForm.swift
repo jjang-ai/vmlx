@@ -331,6 +331,39 @@ struct SessionConfigForm: View {
         Text(L10n.SessionConfig.cacheKindHelp.render(appLocale))
             .font(.caption)
             .foregroundStyle(.secondary)
+
+        // §403 — sliding-window override.
+        //
+        // `auto` honors the model's `config.json::sliding_window` exactly
+        // (DSV4 Flash = 128 + Compressor pool, Gemma 4 = 4096 alternating
+        // hybrid). `long` forces full-context attention even when the
+        // config declares a window — escape hatch for thinking-model
+        // workflows where the trace exceeds the trained window and
+        // prompt visibility scrolls out. `bounded` forces a hard cap of
+        // `slidingWindowSize` on every layer regardless of model config
+        // — memory-frugal mode for long-running summarization on small
+        // RAM. Models without sliding_window in their config ignore
+        // this setting (no RotatingKVCache to swap).
+        Picker("Sliding window", selection: Binding(
+            get: { s.slidingWindowMode ?? globalDefaults.slidingWindowMode },
+            set: { s.slidingWindowMode = $0; commit() }
+        )) {
+            Text("Auto").tag("auto")
+            Text("Long").tag("long")
+            Text("Bounded").tag("bounded")
+        }
+        .pickerStyle(.segmented)
+        if (s.slidingWindowMode ?? globalDefaults.slidingWindowMode) == "bounded" {
+            ValidatedField(title: "Window size",
+                           value: intBinding(\.slidingWindowSize,
+                                             default: globalDefaults.slidingWindowSize),
+                           range: 256...262144, step: 256)
+        }
+        Text("Auto: trust the model's training distribution. " +
+             "Long: ignore the model's window (helps thinking models " +
+             "drifting past 128 tokens). Bounded: hard cap memory.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 
     @ViewBuilder

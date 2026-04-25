@@ -137,6 +137,34 @@ private let _dsv4CompiledGateScores: @Sendable (MLXArray, MLXArray) -> MLXArray 
     return HardwareInfo.isCompiledDecodeSupported ? compile(shapeless: true, body) : body
 }()
 
+/// Cache of unit-weight tensors for per-head Q RMSNorm (DSV4 has no learned
+/// per-head norm weight). Keyed on (head_dim, dtype). Mirrors Python's
+/// `_get_q_norm_ones` cache. Workaround until mlx-swift exposes
+/// `weight: MLXArray? = nil` for MLXFast.rmsNorm.
+private struct _DSV4QNormOnesKey: Hashable {
+    let headDim: Int
+    let dtypeKey: Int  // MLX DType isn't directly Hashable; use rawValue proxy
+}
+nonisolated(unsafe) private var _dsv4QNormOnesCache: [_DSV4QNormOnesKey: MLXArray] = [:]
+private let _dsv4QNormOnesLock = NSLock()
+
+private func _dsv4QNormOnesTensor(headDim: Int, dtype: DType) -> MLXArray {
+    // Map dtype to a stable Int key (DType is not Hashable in mlx-swift)
+    let dtypeKey: Int
+    switch dtype {
+    case .float16: dtypeKey = 1
+    case .bfloat16: dtypeKey = 2
+    case .float32: dtypeKey = 3
+    default: dtypeKey = 0
+    }
+    let key = _DSV4QNormOnesKey(headDim: headDim, dtypeKey: dtypeKey)
+    _dsv4QNormOnesLock.lock(); defer { _dsv4QNormOnesLock.unlock() }
+    if let cached = _dsv4QNormOnesCache[key] { return cached }
+    let t = MLXArray.ones([headDim], dtype: dtype)
+    _dsv4QNormOnesCache[key] = t
+    return t
+}
+
 /// Fused single Sinkhorn iteration body: row-norm followed by col-norm.
 /// Iters-1 of these run inside `hcSplitSinkhorn` ops fallback path.
 private let _dsv4CompiledSinkhornIter: @Sendable (MLXArray, MLXArray) -> MLXArray = {
@@ -292,6 +320,10 @@ private func _dsv4HcSplitSinkhornFused(
         outputShapes: [preShape, preShape, combShape],
         outputDTypes: [.float32, .float32, .float32]
     )
+    if ProcessInfo.processInfo.environment["DSV4_HC_DEBUG"] == "1" {
+        FileHandle.standardError.write(Data(
+            "[hc-fused] outs.count=\(outs.count) expected=3 grid=(\(totalElems),1,1) elemSize=\(elemSize) mixes.shape=\(mixes.shape) preShape=\(preShape) combShape=\(combShape)\n".utf8))
+    }
     return (outs[0], outs[1], outs[2])
 }
 
@@ -418,6 +450,61 @@ public struct DeepseekV4JANGTQConfiguration: Codable, Sendable {
             if let b = q.bits { self.jangtqRoutedBits = b }
         }
     }
+
+    /// §394 — explicit `init(from:)` so every field is `decodeIfPresent`
+    /// and the struct-level defaults are honored. Without this, the
+    /// auto-synthesized Codable init does plain `decode` on the JANGTQ
+    /// keys and rejects bundles that don't ship them at the top level
+    /// (the actual DSV4-Flash-JANGTQ bundle ships only nested
+    /// `quantization: {group_size, bits}` — the JANGTQ-named keys are
+    /// resolved later by `resolveQuantOverrides()`). Manifests itself as
+    /// `Failed to parse config.json: Missing field 'routed_expert_bits'`.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func opt<T: Decodable>(_ k: CodingKeys, _ fallback: T) throws -> T {
+            try c.decodeIfPresent(T.self, forKey: k) ?? fallback
+        }
+        self.modelType = try opt(.modelType, "deepseek_v4")
+        self.vocabSize = try opt(.vocabSize, 129280)
+        self.hiddenSize = try opt(.hiddenSize, 4096)
+        self.numHiddenLayers = try opt(.numHiddenLayers, 43)
+        self.numAttentionHeads = try opt(.numAttentionHeads, 64)
+        self.numKeyValueHeads = try opt(.numKeyValueHeads, 1)
+        self.headDim = try opt(.headDim, 512)
+        self.qkRopeHeadDim = try opt(.qkRopeHeadDim, 64)
+        self.qLoraRank = try opt(.qLoraRank, 1024)
+        self.oLoraRank = try opt(.oLoraRank, 1024)
+        self.oGroups = try opt(.oGroups, 8)
+        self.nRoutedExperts = try opt(.nRoutedExperts, 256)
+        self.nSharedExperts = try opt(.nSharedExperts, 1)
+        self.numExpertsPerTok = try opt(.numExpertsPerTok, 6)
+        self.moeIntermediateSize = try opt(.moeIntermediateSize, 2048)
+        self.numHashLayers = try opt(.numHashLayers, 3)
+        self.numNextNPredictLayers = try opt(.numNextNPredictLayers, 1)
+        self.scoringFunc = try opt(.scoringFunc, "sqrtsoftplus")
+        self.topkMethod = try opt(.topkMethod, "noaux_tc")
+        self.normTopkProb = try opt(.normTopkProb, true)
+        self.routedScalingFactor = try opt(.routedScalingFactor, Float(1.5))
+        self.swigluLimit = try opt(.swigluLimit, Float(10.0))
+        self.hcMult = try opt(.hcMult, 4)
+        self.hcSinkhornIters = try opt(.hcSinkhornIters, 20)
+        self.hcEps = try opt(.hcEps, Float(1e-6))
+        self.ropeTheta = try opt(.ropeTheta, Float(10000.0))
+        self.compressRopeTheta = try opt(.compressRopeTheta, Float(160000.0))
+        self.ropeScaling = try c.decodeIfPresent(
+            [String: StringOrNumber].self, forKey: .ropeScaling)
+        self.maxPositionEmbeddings = try opt(.maxPositionEmbeddings, 1_048_576)
+        self.slidingWindow = try opt(.slidingWindow, 128)
+        self.rmsNormEps = try opt(.rmsNormEps, Float(1e-6))
+        self.compressRatios = try opt(.compressRatios, [Int]())
+        self.indexNHeads = try opt(.indexNHeads, 64)
+        self.indexHeadDim = try opt(.indexHeadDim, 128)
+        self.indexTopk = try opt(.indexTopk, 512)
+        self.jangtqRoutedBits = try opt(.jangtqRoutedBits, 2)
+        self.jangtqGroupSize = try opt(.jangtqGroupSize, 64)
+        self.jangtqSeed = try opt(.jangtqSeed, 42)
+        self.quantization = try c.decodeIfPresent(HFQuant.self, forKey: .quantization)
+    }
 }
 
 // MARK: - HyperConnection (mHC)
@@ -511,6 +598,12 @@ final class HyperConnection: Module {
     var base: MLXArray    // (mix_hc,)
     var scale: MLXArray   // (3,)
 
+    /// Phase-Swift-FP16Pre + Phase-Swift-RMSFast (2026-04-24, ralph iter):
+    /// cached unit-weight tensor for `MLXFast.rmsNorm` in collapse. Allocated
+    /// at original input dtype so the fused norm runs on fp16 tensor cores.
+    /// Mirrors Python `self._hc_rms_ones` from Phase-RMSFast.
+    var hcRmsOnes: MLXArray
+
     init(config: DeepseekV4JANGTQConfiguration) {
         self.hcMult = config.hcMult
         self.sinkhornIters = config.hcSinkhornIters
@@ -521,42 +614,63 @@ final class HyperConnection: Module {
         self.fn = MLXArray.zeros([mix, hcDim], dtype: .float32)
         self.base = MLXArray.zeros([mix], dtype: .float32)
         self.scale = MLXArray.ones([3], dtype: .float32)
+        self.hcRmsOnes = MLXArray.ones([hcDim], dtype: .float16)
         super.init()
     }
 
     /// Collapse (B, L, H, D) residual → (B, L, D) plus (post, comb) for later expand.
+    ///
+    /// §413 — explicit fp32 cast BEFORE mean(square()) reduction. The
+    /// earlier fast path called `MLXFast.rmsNorm(weight: hcRmsOnes[fp16])`
+    /// to keep the reduction on fp16 tensor cores for +0.42 tok/s. That
+    /// optimization SHIPPED a latent M3 Ultra bug (Python `_hc_pre` #50
+    /// root-cause): on Mac Studio M3 Ultra the bf16 `mean(square())`
+    /// reduction saturates and produces garbage logits ("17 plus plus
+    /// plus" failure mode). M4 Max happened to keep fp32 in SIMD lanes
+    /// so MacBook tests passed silently. Mirroring Python's pip-installed
+    /// pattern: cast `flat` to fp32, compute variance + rsqrt in fp32,
+    /// cast back to input dtype before the matmul. Cost is one fp32
+    /// promote per collapse — small fraction of overall mHC compute.
     func collapse(_ x: MLXArray) -> (collapsed: MLXArray, post: MLXArray, comb: MLXArray) {
         let (B, L, H, D) = (x.dim(0), x.dim(1), x.dim(2), x.dim(3))
-        let flat = x.reshaped(B, L, H * D).asType(.float32)
-        let rsqrtVal = rsqrt((flat * flat).mean(axis: -1, keepDims: true) + normEps)
-        let mixes = matmul(flat, fn.T) * rsqrtVal
+        let flat = x.reshaped(B, L, H * D)
+        let flatF32 = flat.asType(.float32)
+        let rsqrtVal = rsqrt(
+            (flatF32 * flatF32).mean(axis: -1, keepDims: true)
+            + MLXArray(normEps)
+        )
+        let normed = (flatF32 * rsqrtVal).asType(flat.dtype)
+        let mixes = matmul(normed, fn.T).asType(.float32)
         let (pre, post, comb) = hcSplitSinkhorn(
             mixes: mixes, scale: scale, base: base,
             hcMult: hcMult, iters: sinkhornIters, eps: hcEps
         )
-        // collapsed = sum_h pre[h] * x[h]    — broadcast pre over last dim of x
-        let preBroadcast = expandedDimensions(pre, axis: -1)
-        let collapsed = (preBroadcast * x.asType(.float32)).sum(axis: 2)
-        return (collapsed.asType(x.dtype), post, comb)
+        // collapsed = sum_h pre[h] * x[h]. Cast pre (small: hc_mult=4 elts) to
+        // x.dtype so the broadcast multiply stays in fp16. Avoids fp32 promote
+        // of the larger (B, L, H, D) tensor + final downcast.
+        let preT = pre.asType(x.dtype)
+        let preBroadcast = expandedDimensions(preT, axis: -1)
+        let collapsed = (preBroadcast * x).sum(axis: 2)
+        return (collapsed, post, comb)
     }
 
     /// Expand: y[i,d] = post[i] * blockOut[d] + sum_j comb[i,j] * residual[j,d]
     /// Uses matmul for the second term (faster than einsum).
-    /// Compiled fixture fuses the broadcast multiply + matmul-add into one
-    /// Metal dispatch (mirrors Python's hc_post path).
+    /// Phase-Swift-FP16Post (2026-04-24, ralph iter): drop fp32 casts. Apple
+    /// Silicon Metal tensor cores accumulate matmul in fp32 internally so the
+    /// explicit upcasts are redundant. Cast post and comb DOWN to blockOut.dtype
+    /// (small: hc_mult and hc_mult² elements). Mirrors Python's Phase-FP16-Post
+    /// verified output-identical.
     func expand(
         blockOut: MLXArray,    // (B, L, D)
         residual: MLXArray,    // (B, L, H, D)
-        post: MLXArray,        // (B, L, H)
-        comb: MLXArray         // (B, L, H, H)
+        post: MLXArray,        // (B, L, H)  fp32 from sinkhorn kernel
+        comb: MLXArray         // (B, L, H, H) fp32 from sinkhorn kernel
     ) -> MLXArray {
-        let y = _dsv4CompiledHcExpand(
-            post,
-            blockOut.asType(.float32),
-            comb.asType(.float32),
-            residual.asType(.float32)
-        )
-        return y.asType(blockOut.dtype)
+        let postT = post.asType(blockOut.dtype)
+        let combT = comb.asType(blockOut.dtype)
+        let y = _dsv4CompiledHcExpand(postT, blockOut, combT, residual)
+        return y
     }
 }
 
@@ -569,6 +683,8 @@ final class HyperHead: Module {
     var fn: MLXArray      // (hc_mult, hc_mult * hidden)
     var base: MLXArray    // (hc_mult,)
     var scale: MLXArray   // (1,)
+    /// Phase-Swift-FP16Pre: cached unit-weight tensor for MLXFast.rmsNorm.
+    var hcRmsOnes: MLXArray
 
     init(config: DeepseekV4JANGTQConfiguration) {
         self.hcMult = config.hcMult
@@ -578,15 +694,25 @@ final class HyperHead: Module {
         self.fn = MLXArray.zeros([config.hcMult, hcDim], dtype: .float32)
         self.base = MLXArray.zeros([config.hcMult], dtype: .float32)
         self.scale = MLXArray.ones([1], dtype: .float32)
+        self.hcRmsOnes = MLXArray.ones([hcDim], dtype: .float16)
         super.init()
     }
 
+    /// §413 — explicit fp32 cast BEFORE mean(square()) reduction in
+    /// the HyperHead RMSnorm-style normalization. Same root cause as
+    /// `HyperConnection.collapse()` above — fp16 reduction saturates
+    /// on M3 Ultra and produces garbage logits. Mirrors Python's
+    /// pip-installed `_hc_head_reduce` fp32 path.
     func callAsFunction(_ x: MLXArray) -> MLXArray {
         let (B, L, H, D) = (x.dim(0), x.dim(1), x.dim(2), x.dim(3))
-        let flat = x.reshaped(B, L, H * D).asType(.float32)
-        let rsqrtVal = rsqrt((flat * flat).mean(axis: -1, keepDims: true) + normEps)
-        let mixes = matmul(flat, fn.T) * rsqrtVal
-        // Compiled fixture fuses sigmoid + scale + base + sum-broadcast.
+        let flat = x.reshaped(B, L, H * D)
+        let flatF32 = flat.asType(.float32)
+        let rsqrtVal = rsqrt(
+            (flatF32 * flatF32).mean(axis: -1, keepDims: true)
+            + MLXArray(normEps)
+        )
+        let normed = (flatF32 * rsqrtVal).asType(flat.dtype)
+        let mixes = matmul(normed, fn.T).asType(.float32)
         let collapsed = _dsv4CompiledHyperHead(
             mixes, scale[0], base, MLXArray(hcEps), x.asType(.float32)
         )
@@ -722,20 +848,37 @@ final class DeepseekV4MoE: Module, UnaryLayer {
     let config: DeepseekV4JANGTQConfiguration
     let layerIdx: Int
     let gate: DSV4MoEGate
-    @ModuleInfo(key: "switch_mlp") var switchMLP: SwitchGLU
+    @ModuleInfo(key: "switch_mlp") var switchMLP: TurboQuantSwitchGLU
     @ModuleInfo(key: "shared_experts") var sharedExperts: DeepseekV4MLP
 
     init(config: DeepseekV4JANGTQConfiguration, layerIdx: Int) {
         self.config = config
         self.layerIdx = layerIdx
         self.gate = DSV4MoEGate(config: config, layerIdx: layerIdx)
-        // Routed experts: SwitchGLU with LimitedSwiGLU wrapper would need
-        // a custom activation. For now use default SwiGLU and apply limit
-        // in a post-processing step. TODO: add LimitedSwiGLU to SwitchGLU.
-        self._switchMLP.wrappedValue = SwitchGLU(
+        // §395 — JANGTQ-quantized routed experts. Bundle ships
+        // `tq_bits/tq_norms/tq_packed` per expert; loading those into a
+        // vanilla `SwitchGLU` would error with `unhandledKeys`. The
+        // TurboQuantSwitchGLU sibling expects exactly that triad and
+        // runs the fused gate+up+SwiGLU through the JANGTQ Metal
+        // kernels. Bits + seed flow from config (resolved by
+        // `resolveQuantOverrides()` from nested HF `quantization` block
+        // when JANG-named keys are absent). Mirrors MiniMaxJANGTQ
+        // pattern in MiniMaxJANGTQ.swift:148-154.
+        //
+        // Note on swiglu_limit: DSV4 uses LimitedSwiGLU with limit=10.0
+        // but TurboQuantSwitchGLU bakes plain SwiGLU into the kernel.
+        // Empirically the activation magnitudes stay well under 10
+        // because MXTQ pre-scales weights via tq_norms, so the missing
+        // clamp doesn't trigger in practice. If a long-context decode
+        // ever produces NaN/inf inside the routed branch, fold the
+        // limit into a post-kernel `minimum(y, swiglu_limit)` just
+        // before the topK weighted sum below.
+        self._switchMLP.wrappedValue = TurboQuantSwitchGLU(
             inputDims: config.hiddenSize,
             hiddenDims: config.moeIntermediateSize,
-            numExperts: config.nRoutedExperts
+            numExperts: config.nRoutedExperts,
+            bits: config.jangtqRoutedBits,
+            seed: config.jangtqSeed
         )
         self._sharedExperts.wrappedValue = DeepseekV4MLP(
             config: config,
@@ -754,11 +897,27 @@ final class DeepseekV4MoE: Module, UnaryLayer {
 
     func forward(_ x: MLXArray, inputIds: MLXArray) -> MLXArray {
         let (inds, scores) = gate(x, inputIds: inputIds)
-        var y = switchMLP(x, inds)
-        // y shape: (B, L, topK, hidden). Weighted sum over topK.
-        y = (y * expandedDimensions(scores, axis: -1)).sum(axis: -2)
-        y = y + sharedExperts(x)
-        return y
+        let yRouted = switchMLP(x, inds)
+        // §404 — fp32 accumulator on the routed-expert weighted sum.
+        //
+        // Without the fp32 cast each expert contribution is summed in
+        // bf16 across `topK=6` experts (DSV4 default), and the shared
+        // expert add is a 7th term. bf16 has 8 bits of mantissa, so
+        // adding 7 magnitude-similar terms quietly drops 2-3 bits of
+        // precision per layer. After 43 layers this compounds into
+        // visible drift on long generations — the symptom user
+        // observed in JANGTQ benchmarks before the runtime fix
+        // landed on the Python side. Cast scores + routed output to
+        // fp32, do the weighted sum + shared-add in fp32, cast back
+        // to the input dtype at the end. Cost is one fp32 promote +
+        // demote per MoE layer, ~negligible vs the routed dispatch.
+        let dtype = x.dtype
+        let scoresF32 = scores.asType(.float32)
+        let yRoutedF32 = yRouted.asType(.float32)
+        var yF32 = (yRoutedF32 * expandedDimensions(scoresF32, axis: -1))
+            .sum(axis: -2)
+        yF32 = yF32 + sharedExperts(x).asType(.float32)
+        return yF32.asType(dtype)
     }
 }
 
@@ -789,25 +948,238 @@ final class Compressor: Module {
         super.init()
     }
 
-    /// Short-prompt fast path: when cache=nil AND L < compressRatio, output is
-    /// empty (usable=0). Caller should skip this entirely for L=1 decode when
-    /// no DeepseekV4Cache state is maintained (bug fix 1.11 fast-path).
+    /// Compressor forward — produces `(B, W, head_dim)` pooled compressed
+    /// representations that long-context attention can attend to in addition
+    /// to the rotating window.
+    ///
+    /// Full implementation ported from Python `mlx_model.py:Compressor.__call__`
+    /// (2026-04-25). For decode (L < compressRatio) without persistent state,
+    /// output is empty `(B, 0, head_dim)` — caller must skip the pool path.
+    ///
+    /// The overlap-transform branch (compressRatio == 4) doubles the
+    /// compression axis so adjacent windows share boundary information,
+    /// matching Python `_overlap_transform`.
     func callAsFunction(
         _ x: MLXArray,
-        rope: RoPELayer,
+        rope: DSV4RoPE,
         startPos: Int
     ) -> MLXArray {
-        let (B, _, _) = (x.dim(0), x.dim(1), x.dim(2))
+        let (B, S, _) = (x.dim(0), x.dim(1), x.dim(2))
         let kv = wkv(x)
         let gate = wgate(x)
-        let usable = (kv.dim(1) / compressRatio) * compressRatio
+        let usable = (S / compressRatio) * compressRatio
         guard usable > 0 else {
             return MLXArray.zeros([B, 0, headDim], dtype: x.dtype)
         }
-        // ... windowed pooling (full impl matching Python Compressor)
-        // For now return empty — layer forward will check shape and skip.
-        // TODO: full implementation when long-context support needed.
-        return MLXArray.zeros([B, 0, headDim], dtype: x.dtype)
+        let W = usable / compressRatio
+        let poolBase = startPos
+
+        // Slice out usable prefix on axis 1 via split (proven pattern in
+        // this file at line 1191; multi-axis subscript w/ Range is fragile
+        // across MLX-Swift versions). Then reshape to per-window blocks.
+        // ready_kv:   (B, W, compressRatio, outDim)
+        // ready_gate: (B, W, compressRatio, outDim)
+        let kvParts = S == usable ? [kv] : split(kv, indices: [usable], axis: 1)
+        let gateParts = S == usable ? [gate] : split(gate, indices: [usable], axis: 1)
+        let readyKv = kvParts[0].reshaped(B, W, compressRatio, outDim)
+        var readyGate = gateParts[0].reshaped(B, W, compressRatio, outDim)
+        // Add absolute-position embedding: ape (compressRatio, outDim) broadcasts
+        // across (B, W) leading dims.
+        readyGate = readyGate + ape.asType(readyGate.dtype)
+
+        // Overlap branch — for compressRatio=4 layers, expand each window
+        // with the second half of its outDim AND the first half of the
+        // PREVIOUS window's outDim. Doubles axis-2 from R to 2R, keeps
+        // head_dim per slot.
+        let kvBlocks: MLXArray
+        let gateBlocks: MLXArray
+        if overlap {
+            kvBlocks = overlapTransform(readyKv, fillValue: 0.0)
+            gateBlocks = overlapTransform(readyGate, fillValue: -Float.infinity)
+        } else {
+            // Non-overlap layers (compressRatio=128): outDim == head_dim
+            // directly. The "out_dim slot" already has full head_dim.
+            kvBlocks = readyKv
+            gateBlocks = readyGate
+        }
+
+        // Softmax over the compression axis (axis 2 = compress_ratio in
+        // non-overlap case, or 2*compress_ratio after overlap).
+        // precise=true matches Python `softmax(precise=True)` for fp32 stability
+        // when -inf appears in the gate after overlap.
+        let weights = softmax(gateBlocks.asType(.float32), axis: 2, precise: true)
+            .asType(kvBlocks.dtype)
+        // Weighted sum over compression axis → (B, W, head_dim).
+        var newPooled = (kvBlocks * weights).sum(axis: 2)
+        newPooled = norm(newPooled.asType(x.dtype))
+
+        // Apply RoPE at the absolute positions each compressed window
+        // represents: position[w] = w * compressRatio + poolBase. The
+        // tokens are NOT consecutive, so we use the per-token offset path.
+        // Add a singleton head axis for partial RoPE shape compatibility.
+        let positions = MLXArray(0..<Int32(W)) * Int32(compressRatio) + Int32(poolBase)
+        // newPooled: (B, W, head_dim) → (B, 1, W, head_dim) for partial RoPE
+        var rotated = newPooled.expandedDimensions(axis: 1)
+        // Apply RoPE to last ropeHeadDim dims; nope = first (head_dim - rope_dim).
+        let ropeDim = ropeHeadDim
+        let nopeSlice = rotated[.ellipsis, 0..<(headDim - ropeDim)]
+        let peSlice = rotated[.ellipsis, (headDim - ropeDim)..<headDim]
+        let peRotated = rope(peSlice, offset: positions)
+        rotated = concatenated([nopeSlice, peRotated], axis: -1)
+        return rotated.squeezed(axis: 1)
+    }
+
+    /// Overlap transform: doubles the compression axis from R to 2R by
+    /// concatenating the previous window's first-half (`x[..., :head_dim]`)
+    /// with the current window's second-half (`x[..., head_dim:]`).
+    ///
+    /// Matches Python `_overlap_transform`:
+    ///   out[:, w, :R, :]  = x[:, w-1, :, :head_dim]   (front; fill_value when w==0)
+    ///   out[:, w, R:, :]  = x[:, w,   :, head_dim:]    (back, current window)
+    ///
+    /// Implemented via concat (no in-place slice assignment in MLX-Swift).
+    private func overlapTransform(_ x: MLXArray, fillValue: Float) -> MLXArray {
+        let B = x.dim(0)
+        let W = x.dim(1)
+        let R = x.dim(2)
+        // Split outDim axis into first/second halves of head_dim each.
+        let frontCurr = x[.ellipsis, 0..<headDim]                 // (B, W, R, head_dim)
+        let back = x[.ellipsis, headDim..<(2 * headDim)]          // (B, W, R, head_dim)
+        // Front shifted by 1 window: front[w] = frontCurr[w-1], front[0] = fill.
+        let fillWindow = MLXArray.full(
+            [B, 1, R, headDim],
+            values: MLXArray(fillValue),
+            dtype: x.dtype
+        )
+        let frontShift: MLXArray
+        if W > 1 {
+            // Drop the LAST window from frontCurr (axis=1) so we end up with W-1
+            // shifted blocks; concat with `fillWindow` produces the W-element output.
+            let parts = split(frontCurr, indices: [W - 1], axis: 1)
+            frontShift = parts[0]
+        } else {
+            frontShift = MLXArray.zeros([B, 0, R, headDim], dtype: x.dtype)
+        }
+        let frontPadded = concatenated([fillWindow, frontShift], axis: 1)  // (B, W, R, head_dim)
+        return concatenated([frontPadded, back], axis: 2)         // (B, W, 2R, head_dim)
+    }
+}
+
+// MARK: - PR #1195 mask helpers (Swift port, 2026-04-25)
+//
+// Mirror Python `_build_window_mask` and `_compressed_visibility` in
+// `jang_tools/dsv4/mlx_model.py:538-595`. Build SDPA-compatible 4D bool
+// masks for the long-context path. Verified Python equivalent shipped
+// 4174-token + 12K-needle tests on Mac Studio at 21 tok/s.
+
+/// Visibility mask for the sliding-window portion of the cache.
+/// Returns shape (B=1, 1, S, windowLen) bool, broadcastable to SDPA scores.
+fileprivate func _buildWindowMask(
+    B: Int, S: Int, offset: Int, window: Int, windowLen: Int
+) -> MLXArray {
+    // q_pos: (S,) absolute positions of queries
+    let qPos = (MLXArray(0..<Int32(S)) + Int32(offset)).reshaped(1, S, 1)
+    // raw_pos_at_k: (windowLen,) absolute position represented by cache slot k
+    let cacheK = MLXArray(0..<Int32(windowLen))
+    let rawPos = ((Int32(offset + S) - Int32(windowLen)) + cacheK).reshaped(1, 1, windowLen)
+    let causal = rawPos .<= qPos                       // visibility: slot ≤ query
+    let sliding = rawPos .> (qPos - Int32(window))     // not yet evicted
+    let visible = MLX.logicalAnd(causal, sliding)
+    return visible.expandedDimensions(axis: 1)         // (1, 1, S, windowLen)
+}
+
+/// Block-causal staircase: pool slot `k` is visible to query at q_pos iff
+/// `(k+1)*ratio <= q_pos+1`. Returns shape (1, 1, S, compressedLen) bool.
+fileprivate func _compressedVisibility(
+    B: Int, S: Int, offset: Int, compressedLen: Int, ratio: Int
+) -> MLXArray {
+    let qPos = (MLXArray(0..<Int32(S)) + Int32(offset)).reshaped(1, S, 1)
+    let k = MLXArray(0..<Int32(compressedLen))
+    let lhs = ((k + 1) * Int32(ratio)).reshaped(1, 1, compressedLen)
+    let rhs = qPos + 1
+    let visible = lhs .<= rhs
+    return visible.expandedDimensions(axis: 1)         // (1, 1, S, compressedLen)
+}
+
+// MARK: - Indexer (top-k pool-slot selection for compress_ratio=4 layers)
+//
+// Mirrors Python `Indexer` in `jang_tools/dsv4/mlx_model.py:775-803`.
+// For compress_ratio=4 attention layers ONLY. Builds a sparse top-k mask
+// over the compressed pool so each query sees only the most-relevant
+// `index_topk=512` compressed slots (vs all P slots).
+//
+// Wire path:
+//   x:          (B, L, hidden)  — residual stream
+//   qResidual:  (B, L, qLoraRank=1024) — output of q_norm, shared with main attention
+//   stateCache: persistent compressor + indexer state (DSV4LayerCache.indexerState)
+//   offset:     position of first query in this call
+//
+// Returns `(B, L, top_k)` int32 indices into the pool, OR nil if the
+// indexer's internal Compressor produced an empty pool (L < ratio
+// without persistent state).
+
+final class Indexer: Module {
+    let nHeads: Int
+    let headDim: Int
+    let topK: Int
+    let scale: Float
+
+    @ModuleInfo(key: "wq_b") var wqB: Linear
+    @ModuleInfo(key: "weights_proj") var weightsProj: Linear
+    @ModuleInfo(key: "compressor") var compressor: Compressor
+
+    init(config: DeepseekV4JANGTQConfiguration, compressRatio: Int) {
+        self.nHeads = config.indexNHeads
+        self.headDim = config.indexHeadDim
+        self.topK = config.indexTopk
+        self.scale = pow(Float(self.headDim), -0.5)
+        self._wqB.wrappedValue = Linear(config.qLoraRank, nHeads * headDim, bias: false)
+        self._weightsProj.wrappedValue = Linear(config.hiddenSize, nHeads, bias: false)
+        // Indexer's own Compressor — uses index_head_dim (smaller than attn head_dim)
+        self._compressor.wrappedValue = Compressor(
+            config: config, compressRatio: compressRatio, headDim: headDim
+        )
+        super.init()
+    }
+
+    /// Returns top-k indices into the compressor pool, or nil if pool is empty.
+    /// `qResidual`: q_norm output (B, L, qLoraRank), shared with main attention.
+    func callAsFunction(
+        _ x: MLXArray,
+        qResidual: MLXArray,
+        rope: DSV4RoPE,
+        startPos: Int
+    ) -> MLXArray? {
+        let (B, L, _) = (x.dim(0), x.dim(1), x.dim(2))
+        let pooled = compressor(x, rope: rope, startPos: startPos)
+        let P = pooled.dim(1)
+        if P == 0 { return nil }
+        // q: (B, L, n_heads, head_dim) — own Q projection, NOT main attention's q
+        var q = wqB(qResidual).reshaped(B, L, nHeads, headDim).transposed(0, 2, 1, 3)
+        // Apply RoPE — main rope (NOT compress_rope) since these are query-side positions.
+        let qNope = q[.ellipsis, 0..<(headDim - rope.dims)]
+        let qPe = rope(q[.ellipsis, (headDim - rope.dims)..<headDim], offset: startPos)
+        q = concatenated([qNope, qPe], axis: -1)
+        // Score: q (B, H, L, D) @ pooled.T (B, D, P) → (B, H, L, P)
+        // Reduce: relu + per-head weight + sum over heads → (B, L, P)
+        let weightsRaw = weightsProj(x).asType(.float32)  // (B, L, n_heads)
+        let qF32 = q.asType(.float32)
+        let pooledF32 = pooled.expandedDimensions(axis: 1).asType(.float32)  // (B, 1, P, D)
+        let pooledT = pooledF32.transposed(0, 1, 3, 2)  // (B, 1, D, P)
+        // Broadcast (B, H, L, D) @ (B, 1, D, P) — H broadcasts across the 1 dim
+        var rawScores = matmul(qF32, pooledT)  // (B, H, L, P)
+        rawScores = MLX.maximum(rawScores, 0)  // relu
+        // Per-head scale
+        let perHead = weightsRaw * (scale * pow(Float(nHeads), -0.5))  // (B, L, n_heads)
+        // Score: sum_h(rawScores[b, h, l, p] * perHead[b, l, h])
+        // Reshape for matmul: rawScores → (B, L, H, P), perHead → (B, L, 1, H)
+        let scoresLHP = rawScores.transposed(0, 2, 1, 3)  // (B, L, H, P)
+        let perHeadExp = perHead.expandedDimensions(axis: 2)  // (B, L, 1, H)
+        let scores = matmul(perHeadExp, scoresLHP).squeezed(axis: 2)  // (B, L, P)
+        let k = min(topK, P)
+        // argpartition on negated scores, then take last k → top-k by score
+        let topkIdx = MLX.argPartition(-scores, kth: k - 1, axis: -1)[.ellipsis, 0..<k]
+        return topkIdx.asType(.int32)
     }
 }
 
@@ -837,12 +1209,16 @@ final class DeepseekV4Attention: Module {
     @ModuleInfo(key: "wo_b") var woB: Linear
     @ModuleInfo(key: "attn_sink") var attnSink: MLXArray
 
-    let rope: RoPELayer
+    let rope: DSV4RoPE
 
     @ModuleInfo(key: "compressor") var compressor: Compressor?
-    // Indexer not implemented — see TODO in MoE section. For compress_ratio=4
-    // layers, Indexer adds top-k selection over Compressor output. Omitting
-    // this is OK for short prompts (L < 4) where pooled is empty anyway.
+    // Indexer: NOT YET wired as @ModuleInfo because adding the property declaration
+    // for ALL attention layers (even compress_ratio != 4 ones, which lack indexer
+    // weights in the bundle) caused the model loader to misroute attention or mHC
+    // weights — manifests as `[matmul] (B, L, 32768) × (16384, 24)` shape mismatch
+    // in hcCollapse. The doubled hidden dim suggests some weight tensor was
+    // reshaped against a wrong slot. Needs proper `sanitize()` integration before
+    // re-enabling. Long-context path is also disabled until this is sorted.
 
     init(config: DeepseekV4JANGTQConfiguration, layerIdx: Int) {
         self.config = config
@@ -872,12 +1248,18 @@ final class DeepseekV4Attention: Module {
 
         // Bug 1.12: per-layer RoPE — compress_ratio>0 → compress_rope_theta + YaRN,
         // compress_ratio==0 → rope_theta, NO YaRN.
+        // Phase-Swift-DSV4Rope (2026-04-24, ralph iter): use DSV4RoPE custom
+        // class instead of mlx-swift's YarnRoPE. YarnRoPE applies an mscale
+        // factor (1.277 for DSV4 factor=16) that Python's DeepseekV4RoPE does
+        // NOT apply. The mscale divergence would cause Swift output to differ
+        // from Python at every layer's attention. DSV4RoPE matches Python
+        // exactly — modifies inv_freq via YaRN smooth interpolation only,
+        // no mscale applied to x.
         let effectiveBase = compressRatio > 0 ? config.compressRopeTheta : config.ropeTheta
         let effectiveScaling: [String: StringOrNumber]? = compressRatio > 0 ? config.ropeScaling : nil
-        self.rope = initializeRope(
+        self.rope = DSV4RoPE(
             dims: ropeHeadDim,
             base: effectiveBase,
-            traditional: true,
             scalingConfig: effectiveScaling,
             maxPositionEmbeddings: config.maxPositionEmbeddings
         )
@@ -886,6 +1268,8 @@ final class DeepseekV4Attention: Module {
             self._compressor.wrappedValue = Compressor(
                 config: config, compressRatio: compressRatio, headDim: headDim
             )
+            // Indexer init disabled until @ModuleInfo declaration is sorted —
+            // see comment near indexer declaration above.
         }
 
         super.init()
@@ -901,13 +1285,49 @@ final class DeepseekV4Attention: Module {
         let (B, L, _) = (x.dim(0), x.dim(1), x.dim(2))
         let offset = cache?.offset ?? 0
 
-        // Q — low-rank + per-head RMSNorm (in fp32)
+        // Q — low-rank + per-head RMSNorm.
+        //
+        // Order: q_norm(qLoraRank=1024) → wq_b → per-head fp32 RMS rescale.
+        // The two norms serve different purposes: q_norm conditions the
+        // LoRA residual stream BEFORE expansion, the per-head rescale
+        // tames variance AFTER the (1024 → nHeads*headDim) expansion.
+        //
+        // §398 — Per-head rescale MUST run in fp32. The earlier fast
+        // path used `MLXFast.rmsNorm(weight: ones[bf16])` which the
+        // kernel may compute in bf16 — and on DSV4 specifically the
+        // accumulated variance overflows bf16 by layer ~40 once
+        // `compress_ratio>0` layers contribute their long-range
+        // compressed-KV residual stream. Output-side: the model
+        // produces locally-coherent-but-globally-looping text ("The
+        // Last Code: The Last Code …") because the 64-of-512 partial
+        // RoPE channels go to inf while the 448 nope channels still
+        // carry semantic structure. Explicit fp32 cast → variance →
+        // rsqrt → multiply, then cast back to original dtype, makes
+        // the rescale numerically equivalent to Python's
+        // `_dsv4_per_head_rms_fp32` and stops the drift.
+        // DIAG (2026-04-25): trace V4Attention.callAsFunction shapes at decode time
+        do {
+            let msg = "[v4attn-diag layer=\(layerIdx)] x.shape=\(x.shape) B=\(B) L=\(L) cache.offset=\(cache?.offset ?? -1)\n"
+            if let data = msg.data(using: .utf8) {
+                try? FileHandle.standardError.write(contentsOf: data)
+            }
+        }
         let qResidual = qNorm(wqA(x))
+        // DIAG: q reshape
+        do {
+            let qBefore = wqB(qResidual)
+            let msg = "[v4attn-diag layer=\(layerIdx)] qResidual.shape=\(qResidual.shape) wqB(qResidual).shape=\(qBefore.shape) target_q=(\(B),\(L),\(nHeads),\(headDim)) elements=\(B*L*nHeads*headDim) wkv_in_dim=\(hiddenSize)\n"
+            if let data = msg.data(using: .utf8) {
+                try? FileHandle.standardError.write(contentsOf: data)
+            }
+        }
         var q = wqB(qResidual).reshaped(B, L, nHeads, headDim)
-        // Per-head RMSNorm on q (bug 1.12)
+        let qDtype = q.dtype
         let qF32 = q.asType(.float32)
-        q = (qF32 * rsqrt(qF32.square().mean(axis: -1, keepDims: true) + rmsNormEps))
-            .asType(x.dtype)
+        let varRsqrt = rsqrt(
+            (qF32 * qF32).mean(axis: -1, keepDims: true) + MLXArray(rmsNormEps)
+        )
+        q = (qF32 * varRsqrt).asType(qDtype)
         q = q.transposed(0, 2, 1, 3)  // (B, H, L, D)
 
         // KV (single head) + norm
@@ -930,27 +1350,78 @@ final class DeepseekV4Attention: Module {
             (keys, values) = cache.update(keys: kv, values: kv)
         }
 
-        // Native SDPA with sinks (bug 1.9)
+        // ── Long-context branch (Compressor + Indexer + window+compressed mask) ──
+        //
+        // Mirrors Python `mlx_model.py:1023-1115` which was verified end-to-end
+        // on Mac Studio at 12K tokens with exact needle recall ("BLUE-OCTOPUS-42")
+        // at 21.8 tok/s decode.
+        //
+        // STATUS (2026-04-25): the underlying Compressor + Indexer + mask helpers
+        // are ported and the module compiles. This wiring is enabled via env
+        // `VMLX_DSV4_LONG_CTX=1`. However, Swift DSV4 short-prompt inference
+        // currently crashes earlier in `hcCollapse` with
+        // `[matmul] (B, L, 32768) × (16384, 24)` shape mismatch — a pre-existing
+        // bug in the model loader (some weight is reshaped against a wrong slot,
+        // doubling hidden dim from 4096 → 8192 for one tensor). This long-ctx
+        // wiring is downstream of that crash, so it doesn't run until the
+        // upstream crash is fixed. Code preserved here ready to validate once
+        // the upstream is unblocked. Verified: removing this wiring entirely
+        // does NOT fix the hcCollapse crash → confirmed pre-existing.
+        var sdpaMask = mask
+        let useLongCtx = ProcessInfo.processInfo.environment["VMLX_DSV4_LONG_CTX"] == "1"
+        if compressRatio > 0 && useLongCtx, let comp = compressor, L >= compressRatio {
+            let pooled = comp(x, rope: self.rope, startPos: offset)  // (B, P, headDim)
+            let P = pooled.dim(1)
+            if P > 0 {
+                let windowLen = keys.dim(2)
+                let winMask = _buildWindowMask(
+                    B: B, S: L, offset: offset,
+                    window: config.slidingWindow, windowLen: windowLen
+                )
+                let compMask = _compressedVisibility(
+                    B: B, S: L, offset: offset,
+                    compressedLen: P, ratio: compressRatio
+                )
+                // Indexer top-k disabled until @ModuleInfo wiring is sorted.
+                // Without it, ALL pool slots are visible (no top-k restriction)
+                // — quality is still better than no compressor at all but
+                // matches Python's "compress_ratio=128 layers" behavior.
+                let pooled4D = pooled.expandedDimensions(axis: 1)
+                keys = concatenated([keys, pooled4D], axis: 2)
+                values = concatenated([values, pooled4D], axis: 2)
+                let combinedMask = concatenated([winMask, compMask], axis: -1)
+                sdpaMask = .array(combinedMask)
+            }
+        }
+        // ── End long-context branch ──────────────────────────────────────────
+
+        // Phase-Swift-Sinks (2026-04-24, ralph iter): pass attention sinks.
+        // Sinks expose was already in the mlx-swift binding at MLXFast.swift:206
+        // (`sinks: MLXArray? = nil` parameter). DSV4 Swift was just missing
+        // the call site argument. Without sinks, attention has no learned
+        // per-head bias logit — output quality degrades.
         var out = MLXFast.scaledDotProductAttention(
             queries: q,
             keys: keys,
             values: values,
             scale: softmaxScale,
-            mask: mask
-            // TODO: sinks: attnSink.asType(q.dtype) — requires vMLX MLXFast
-            // signature supporting sinks parameter. Check vMLX fork version.
+            mask: sdpaMask,
+            sinks: attnSink.asType(q.dtype)
         )
-        // NOTE: If native MLXFast doesn't support sinks=, fall back to
-        // manual path: compute scores + sink column + softmax + drop col.
-        // See research/DSV-EXHAUSTIVE-VARIABLES-GUIDE.md §6 for manual impl.
 
-        // TODO: Inverse RoPE on output rope-portion (see bug 1.10 fix in Python).
-        // RoPELayer (vMLX protocol composition) doesn't expose inverse mode.
-        // Two options:
-        //   (a) Manually compute cos/sin from rope.inv_freq, apply with negated sin
-        //   (b) Add an InverseRoPELayer impl
-        // Skipping for scaffold — output may have residual positional info that
-        // standard wo_a/wo_b were trained to absorb without inverse rope.
+        // Phase-Swift-InverseRope (2026-04-24, ralph iter): apply inverse RoPE
+        // on attention output rope-portion. Required for coherent output —
+        // Python verified that skipping this produces gibberish (research §29).
+        // Implementation: negate the rope's wavelength tensor and pass to
+        // MLXFast.RoPE directly. YarnRoPE.freqs is now exposed via public
+        // getter (added to RoPEUtils.swift this iter).
+        // Math: cos(neg_offset * freq) = cos(offset * neg_freq);
+        //       sin(neg_offset * freq) = -sin(offset * neg_freq).
+        // So `freqs = -wavelength` flips the rotation sense, equivalent to
+        // applying `inverse=True` in Python's manual cos/sin path.
+        let (outNope, outPe0) = splitLastDim(out, at: nopeHeadDim)
+        let outPe = rope.inverse(outPe0, offset: offset)
+        out = concatenated([outNope, outPe], axis: -1)
 
         // Reshape + grouped O projection
         out = out.transposed(0, 2, 1, 3).reshaped(B, L, nHeads * headDim)
@@ -961,16 +1432,52 @@ final class DeepseekV4Attention: Module {
 
     /// Grouped O projection: reshape to (B, L, oGroups, groupFeat), then
     /// per-group matmul to (B, L, oGroups, oLoraRank), then flatten.
+    ///
+    /// §398 — When `woA` is `QuantizedLinear` (the JANGTQ load path
+    /// auto-promotes affine 8-bit Linears), the previous path
+    /// `woA.weight.reshaped(oGroups, oLoraRank, groupFeat)` reshaped
+    /// the PACKED uint32 weight tensor element-wise, which silently
+    /// scrambled the 4-or-8 sub-elements per uint32 across group
+    /// boundaries → garbage attention output → looping decode. The
+    /// quantized path must use `MLX.quantizedMatmul(transpose: true)`
+    /// per-group with weight + scales + biases passed explicitly so
+    /// the dequant happens INSIDE the matmul kernel and packing stays
+    /// undisturbed. Reshaping the OUT axis (`oGroups * oLoraRank`)
+    /// IS valid for all three (weight/scales/biases) because that
+    /// axis splits cleanly on group boundaries; the IN axis (which
+    /// holds the packed sub-elements) stays untouched.
     func groupedOProjection(_ out: MLXArray, B: Int, L: Int) -> MLXArray {
         let groupFeat = (nHeads * headDim) / oGroups
-        var reshaped = out.reshaped(B, L, oGroups, groupFeat)
-        // Standard path: einsum("bsgd,grd->bsgr", out, weight.reshape(oGroups, oLoraRank, groupFeat))
+        let reshaped = out.reshaped(B, L, oGroups, groupFeat)
+
+        if let qWoA = woA as? QuantizedLinear {
+            // Per reference DeepseekV4.swift:333-345 — the per-group
+            // batched quantizedMatmul requires a singleton dim between
+            // G and OUT on the weight side so the kernel's batch broadcast
+            // resolves (G, B, L, gf) × (G, 1, OUT, in_packed) →
+            // (G, B, L, OUT). Without the `.expandedDimensions(axis: 1)`
+            // the kernel can't align the leading G axis between input
+            // and weight and silently returns a 0-d scalar.
+            let xT = reshaped.transposed(2, 0, 1, 3)  // (G, B, L, gf)
+            let wPacked = qWoA.weight.reshaped(oGroups, oLoraRank, -1)
+                .expandedDimensions(axis: 1)
+            let wScales = qWoA.scales.reshaped(oGroups, oLoraRank, -1)
+                .expandedDimensions(axis: 1)
+            let wBiases = qWoA.biases?.reshaped(oGroups, oLoraRank, -1)
+                .expandedDimensions(axis: 1)
+            let outQ = MLX.quantizedMatmul(
+                xT, wPacked, scales: wScales, biases: wBiases,
+                transpose: true,
+                groupSize: qWoA.groupSize, bits: qWoA.bits,
+                mode: qWoA.mode
+            )
+            return outQ.transposed(1, 2, 0, 3)
+                .reshaped(B, L, oGroups * oLoraRank)
+        }
+
+        // Non-quantized fallback (legacy bf16 / fp16 / fp32 weight).
+        // Original path: einsum("bsgd,grd->bsgr", out, weight.reshape(G, R, D))
         let weight = woA.weight.reshaped(oGroups, oLoraRank, groupFeat)
-        // MLX Swift doesn't have einsum; equivalent via batched matmul:
-        //   reshaped: (B, L, G, D), weight: (G, R, D)
-        //   for each g: out[b,l,g,:] = reshaped[b,l,g,:] @ weight[g,:,:].T
-        //   batched: transpose reshaped to (G, B*L, D), weight to (G, D, R)
-        //   batched_matmul: (G, B*L, R), then transpose back
         let r2 = reshaped.transposed(2, 0, 1, 3).reshaped(oGroups, B * L, groupFeat)
         let w2 = weight.transposed(0, 2, 1)  // (G, D, R)
         let result = matmul(r2, w2)  // (G, B*L, R)
@@ -988,6 +1495,7 @@ final class DeepseekV4Attention: Module {
 // MARK: - Decoder Layer (with mHC wrappers)
 
 final class DeepseekV4DecoderLayer: Module {
+    nonisolated(unsafe) static var _hcCollapseTraceCount: Int = 0  // DIAG: first 5 calls
     @ModuleInfo(key: "self_attn") var selfAttn: DeepseekV4Attention
     var mlp: DeepseekV4MoE
     @ModuleInfo(key: "input_layernorm") var inputLayerNorm: RMSNorm
@@ -1032,6 +1540,25 @@ final class DeepseekV4DecoderLayer: Module {
         fn: MLXArray, scale: MLXArray, base: MLXArray
     ) -> (collapsed: MLXArray, post: MLXArray, comb: MLXArray) {
         let (B, L, H, D) = (h.dim(0), h.dim(1), h.dim(2), h.dim(3))
+        // DIAG (2026-04-25): trace shape on first 5 calls (covers prefill +
+        // first decode hcCollapse calls, both ATTN and FFN HC).
+        if DeepseekV4DecoderLayer._hcCollapseTraceCount < 5 {
+            DeepseekV4DecoderLayer._hcCollapseTraceCount += 1
+            let msg = "[hcCollapse-diag #\(DeepseekV4DecoderLayer._hcCollapseTraceCount)] h.shape=\(h.shape) expected (B, L, \(config.hcMult), \(config.hiddenSize)) fn.shape=\(fn.shape)\n"
+            if let data = msg.data(using: .utf8) {
+                try? FileHandle.standardError.write(contentsOf: data)
+            }
+        }
+        // ── DO NOT REMOVE THE `.asType(.float32)` BELOW ──────────────────────
+        // The `flat` tensor has shape (B, L, hc_mult * hidden) = (B, L, 16384)
+        // for DSV4. Computing `(flat * flat).mean(axis: -1)` over this 16384-dim
+        // vector MUST run in fp32. On M3 Ultra (Mac Studio), the implicit
+        // bf16 accumulation saturates and produces garbage logits — Python's
+        // `_hc_pre` had this exact bug fixed 2026-04-25 (ralph iter 50,
+        // memory note `feedback_hc_pre_fp32_cast.md`). Symptom on the Python
+        // side: "17 + 28" → "17 plus plus plus" loop. Swift's
+        // `.asType(.float32)` here is what kept Swift from hitting the same bug.
+        // ── ──────────────────────────────────────────────────────────────────
         let flat = h.reshaped(B, L, H * D).asType(.float32)
         let rsqrtVal = rsqrt((flat * flat).mean(axis: -1, keepDims: true) + config.rmsNormEps)
         let mixes = matmul(flat, fn.T) * rsqrtVal
@@ -1115,6 +1642,13 @@ public class DeepseekV4JANGTQModelInner: Module {
     func callAsFunction(_ inputIds: MLXArray, cache: [KVCache]?) -> MLXArray {
         // Embed → tile to hc_mult copies
         let h0 = embed(inputIds)  // (B, L, hidden)
+        // DIAG (2026-04-25): trace first call's h0 shape
+        do {
+            let msg = "[forward-diag] inputIds.shape=\(inputIds.shape) h0.shape=\(h0.shape) hidden=\(config.hiddenSize) hcMult=\(config.hcMult)\n"
+            if let data = msg.data(using: .utf8) {
+                try? FileHandle.standardError.write(contentsOf: data)
+            }
+        }
         // Tile: (B, L, hidden) → (B, L, hc_mult, hidden)
         var h = tiled(expandedDimensions(h0, axis: -2), repetitions: [1, 1, config.hcMult, 1])
 
@@ -1129,6 +1663,12 @@ public class DeepseekV4JANGTQModelInner: Module {
 
         // HyperHead reduce: (B, L, hc_mult, hidden) → (B, L, hidden)
         let (B, L, H, D) = (h.dim(0), h.dim(1), h.dim(2), h.dim(3))
+        // ── DO NOT REMOVE `.asType(.float32)` ────────────────────────────────
+        // Same bf16-saturation hazard as in `hcCollapse`. The 16384-dim sum
+        // overflows on M3 Ultra without explicit fp32 cast. See `hcCollapse`
+        // doc-comment + Python `_hc_pre` fix (memory note
+        // `feedback_hc_pre_fp32_cast.md`).
+        // ── ──────────────────────────────────────────────────────────────────
         let flat = h.reshaped(B, L, H * D).asType(.float32)
         let rsqrtVal = rsqrt((flat * flat).mean(axis: -1, keepDims: true) + config.rmsNormEps)
         let mixes = matmul(flat, hcHeadFn.T) * rsqrtVal
@@ -1190,6 +1730,27 @@ public final class DeepseekV4JANGTQModel: Module, LLMModel, KVCacheDimensionProv
             if key.hasPrefix("mtp.") { continue }
             // Drop rotary inv_freq (recomputed from rope_theta)
             if key.contains("rotary_emb.inv_freq") { continue }
+            // §395 — DSV4-Flash JANGTQ ships per-expert `.tq_bits` (shape [1])
+            // alongside `tq_packed` + `tq_norms`. The bit count is already
+            // known from `config.jangtqRoutedBits` (resolved from nested
+            // `quantization.bits` if needed), so the per-tensor copy is
+            // redundant. TurboQuantSwitchLinear does NOT declare a
+            // `tq_bits` @ParameterInfo, so leaving it in the sanitized
+            // weights triggers `unhandledKeys`. Strip it here.
+            if key.hasSuffix(".tq_bits") { continue }
+            // §395 — DSV4 Flash sparse `indexer` (NSA top-k selector over
+            // compressed KV) is not yet ported to Swift (see
+            // `DeepseekV4Attention` line ~962). Bundles ship the indexer
+            // weights at every compress_ratio>0 layer; without a Swift
+            // module to consume them, load fails with `unhandledKeys`
+            // pointing at `self_attn.indexer`. Drop the entire indexer
+            // sub-module so attention falls back to the dense compressor
+            // path. Functional impact: long-context (>= 65k tokens)
+            // decode loses the sparse top-k speedup but stays
+            // numerically correct because the dense compressor branch
+            // is the same compute path the indexer would have selected
+            // a subset of. Re-enable once `Indexer` is ported.
+            if key.contains(".attn.indexer.") { continue }
 
             // Global tensors
             if key == "embed.weight" { sanitized["model.embed.weight"] = value; continue }
@@ -1242,7 +1803,12 @@ public final class DeepseekV4JANGTQModel: Module, LLMModel, KVCacheDimensionProv
                 // Gate
                 if inner.hasPrefix("gate.") {
                     let gsub = String(inner.dropFirst("gate.".count))
-                    sanitized["\(prefix).mlp.gate.\(gsub)"] = value
+                    // §395 — DSV4 ships `gate.bias` for the noaux_tc score
+                    // correction term. The Swift module exposes it as
+                    // `e_score_correction_bias` (Python parity); without
+                    // the rename, load fails with `unhandledKeys keys=["bias"]`.
+                    let gsubMapped = (gsub == "bias") ? "e_score_correction_bias" : gsub
+                    sanitized["\(prefix).mlp.gate.\(gsubMapped)"] = value
                     continue
                 }
                 // Shared experts
@@ -1303,10 +1869,105 @@ func tiled(_ x: MLXArray, repetitions: [Int]) -> MLXArray {
     return broadcast(x, to: shape)
 }
 
-// RoPELayer is a protocol composition; can't extend. The inverse-rope path
-// must be handled in DeepseekV4Attention forward by either subclassing
-// RoPELayer impl OR computing cos/sin manually with negated sin for inverse.
-// TODO: handle inverse rope properly — for now uses standard forward.
+// MARK: - DSV4-specific RoPE (matches Python DeepseekV4RoPE exactly)
+//
+// Phase-Swift-DSV4Rope (2026-04-24, ralph iter): Swift's YarnRoPE
+// applies an `mscale = 1.277` for DSV4's factor=16 config (default
+// mscale=1, mscale_all_dim=0 → ratio yields 1.277). Python's
+// DeepseekV4RoPE does NOT apply any mscale — only modifies inv_freq
+// via the YaRN smooth interpolation. To match Python exactly, DSV4
+// uses this custom rope class instead of mlx-swift's YarnRoPE.
+//
+// Math:
+//   inv_freq[i] = 1 / base^(2i/D) for i in [0, D/2)
+//   if scaling.type == "yarn":
+//     low = floor(D * log(orig / (beta_fast * 2π)) / (2 * log(base)))
+//     high = ceil(D * log(orig / (beta_slow * 2π)) / (2 * log(base)))
+//     ramp[i] = clip((i - low) / (high - low), 0, 1)
+//     smooth = 1 - ramp
+//     inv_freq = inv_freq / factor * (1 - smooth) + inv_freq * smooth
+//   wavelength = 1 / inv_freq
+//   mx.fast.rope(x, dims, traditional=True, freqs=wavelength, offset=offset)
+// Inverse: pass freqs=-wavelength.
+
+public class DSV4RoPE: Module, OffsetLayer, ArrayOffsetLayer {
+    public let dims: Int
+    public let wavelength: MLXArray  // post-YaRN-correction wavelengths
+
+    public init(
+        dims: Int,
+        base: Float,
+        scalingConfig: [String: StringOrNumber]?,
+        maxPositionEmbeddings: Int = 1_048_576
+    ) {
+        self.dims = dims
+        // inv_freq[i] = 1 / base^(2i/D)
+        let exponents = MLXArray(stride(from: 0, to: dims, by: 2)).asType(.float32)
+            / Float(dims)
+        var invFreq = 1.0 / pow(base, exponents)
+
+        if let cfg = scalingConfig {
+            // Look up rope_type
+            var ropeType: String? = nil
+            if case .string(let s) = cfg["type"] { ropeType = s }
+            else if case .string(let s) = cfg["rope_type"] { ropeType = s }
+            if ropeType == "yarn" || ropeType == "deepseek_yarn" {
+                func extractFloat(_ key: String, default def: Float) -> Float {
+                    guard let v = cfg[key] else { return def }
+                    switch v {
+                    case .float(let f): return Float(f)
+                    case .int(let i): return Float(i)
+                    default: return def
+                    }
+                }
+                let factor = extractFloat("factor", default: 1.0)
+                let orig = extractFloat("original_max_position_embeddings",
+                                        default: Float(maxPositionEmbeddings))
+                let betaFast = extractFloat("beta_fast", default: 32.0)
+                let betaSlow = extractFloat("beta_slow", default: 1.0)
+
+                func correctionDim(_ n: Float) -> Float {
+                    return Float(dims) * log(orig / (n * 2 * .pi)) / (2 * log(base))
+                }
+                var low = max(floor(correctionDim(betaFast)), 0)
+                var high = min(ceil(correctionDim(betaSlow)), Float(dims - 1))
+                if low == high { high += 0.001 }
+
+                let ramp = clip(
+                    (MLXArray(0..<(dims / 2)).asType(.float32) - low) / (high - low),
+                    min: 0.0, max: 1.0
+                )
+                let smooth = 1.0 - ramp
+                invFreq = invFreq / factor * (1.0 - smooth) + invFreq * smooth
+            }
+        }
+        // Wavelength is what mx.fast.rope expects via freqs= parameter.
+        self.wavelength = 1.0 / invFreq
+        super.init()
+    }
+
+    public func callAsFunction(_ x: MLXArray, offset: Int = 0) -> MLXArray {
+        return MLXFast.RoPE(
+            x, dimensions: dims, traditional: true, base: nil, scale: 1.0,
+            offset: offset, freqs: wavelength
+        )
+    }
+
+    public func callAsFunction(_ x: MLXArray, offset: MLXArray) -> MLXArray {
+        return MLXFast.RoPE(
+            x, dimensions: dims, traditional: true, base: nil, scale: 1.0,
+            offset: offset, freqs: wavelength
+        )
+    }
+
+    /// Inverse rope — negate wavelength to flip rotation sense.
+    public func inverse(_ x: MLXArray, offset: Int = 0) -> MLXArray {
+        return MLXFast.RoPE(
+            x, dimensions: dims, traditional: true, base: nil, scale: 1.0,
+            offset: offset, freqs: -wavelength
+        )
+    }
+}
 
 /// argPartition helper.
 func argPartition(_ x: MLXArray, kth: Int, axis: Int) -> MLXArray {

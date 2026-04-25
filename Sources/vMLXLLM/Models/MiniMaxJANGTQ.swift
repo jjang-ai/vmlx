@@ -45,12 +45,23 @@ private func miniMaxJANGTQCompiledRouter(numExperts: Int, k: Int)
         sel = sel / (sel.sum(axis: -1, keepDims: true) + MLXArray(Float(1e-20), dtype: sel.dtype))
         return [inds, sel]
     }
-    let compiled: ([MLXArray]) -> [MLXArray]
-    if HardwareInfo.isCompiledDecodeSupported {
-        compiled = compile(shapeless: true, body)
-    } else {
-        compiled = body
-    }
+    // §394 — site-specific opt-out from `compile(shapeless:true)`. The
+    // class-level escape hatch in `HardwareInfo` claims the whole-model
+    // compile path was the culprit and that small router-style fusions
+    // are safe, but live MiniMax-M2.7-Small JANGTQ on M4 Max + macOS Tahoe
+    // crashes inside this exact router with the documented MLX#3329
+    // empty-call signature: `Compiled::eval_gpu` returns `[]`, the Swift
+    // wrapper does `routed[0]` and traps "Index out of range". Repro is
+    // 100% on the warmup forward pass at `MiniMaxJANGTQSparseMoeBlock+812`.
+    //
+    // Force the body path here (no compile()) regardless of the global
+    // gate. Cost: per-token, this body has 4 small ops (sigmoid, +,
+    // argPartition, takeAlong, /) — same handful of Metal dispatches
+    // either way, so the loss vs. the compiled trace is < 0.1 tok/s on
+    // a model where each MoE layer dominates anyway. Correctness > the
+    // micro-fusion. Re-enable once MLX#3329 is fixed for this router
+    // shape.
+    let compiled: ([MLXArray]) -> [MLXArray] = body
     _miniMaxJANGTQRouterCache[key] = compiled
     return compiled
 }
