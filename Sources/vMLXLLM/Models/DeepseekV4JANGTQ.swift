@@ -1000,6 +1000,173 @@ final class DeepseekV4MoE: Module, UnaryLayer {
     }
 }
 
+// MARK: - DSV4 Layer Cache (long-context)
+//
+// §417 (2026-04-25) — Port of Python `DeepseekV4Cache` (mlx_model.py:617-718).
+// Wraps a `RotatingKVCache` (windowed KV) and carries two pool-state
+// branches (`compressorState`, `indexerState`), each holding `bufferKv`,
+// `bufferGate`, and `pooled` tensors. Decode-time long-context correctness
+// requires this state to accumulate across calls.
+
+public struct DSV4PoolState {
+    public var bufferKv: MLXArray?
+    public var bufferGate: MLXArray?
+    public var pooled: MLXArray?
+}
+
+public enum DSV4PoolBranch {
+    case compressor
+    case indexer
+}
+
+public final class DSV4LayerCache: KVCache, CustomDebugStringConvertible {
+    public let local: RotatingKVCache
+    public var compressorState = DSV4PoolState()
+    public var indexerState = DSV4PoolState()
+
+    public init(slidingWindow: Int, keep: Int = 0, step: Int = 256) {
+        self.local = RotatingKVCache(maxSize: slidingWindow, keep: keep, step: step)
+    }
+
+    // KVCache protocol — delegate to wrapped RotatingKVCache.
+    public var offset: Int { local.offset }
+    public var maxSize: Int? { local.maxSize }
+    public var state: [MLXArray] {
+        get { local.state }
+        set { local.state = newValue }
+    }
+    public var metaState: [String] {
+        get { local.metaState }
+        set { local.metaState = newValue }
+    }
+    public var isTrimmable: Bool { local.isTrimmable }
+
+    public func update(keys: MLXArray, values: MLXArray) -> (MLXArray, MLXArray) {
+        return local.update(keys: keys, values: values)
+    }
+    public func innerState() -> [MLXArray] { local.innerState() }
+    @discardableResult
+    public func trim(_ n: Int) -> Int { local.trim(n) }
+    public func makeMask(
+        n: Int, windowSize: Int?, returnArray: Bool
+    ) -> MLXFast.ScaledDotProductAttentionMaskMode {
+        return local.makeMask(n: n, windowSize: windowSize, returnArray: returnArray)
+    }
+    public func copy() -> any KVCache {
+        // Pool state not deep-copied — DSV4 long-context decode does not
+        // currently exercise prompt-cache reuse; if it ever does, port
+        // Python's DeepseekV4Cache.copy().
+        let c = DSV4LayerCache(
+            slidingWindow: local.maxSize ?? 128,
+            keep: 0, step: 256
+        )
+        c.state = self.state
+        c.metaState = self.metaState
+        c.compressorState = self.compressorState
+        c.indexerState = self.indexerState
+        return c
+    }
+
+    public var debugDescription: String {
+        "DSV4LayerCache(window=\(local.maxSize ?? -1), offset=\(offset), "
+            + "comp.pooled=\(compressorState.pooled?.dim(1) ?? 0), "
+            + "idx.pooled=\(indexerState.pooled?.dim(1) ?? 0))"
+    }
+
+    private func readState(_ branch: DSV4PoolBranch) -> DSV4PoolState {
+        switch branch {
+        case .compressor: return compressorState
+        case .indexer:    return indexerState
+        }
+    }
+
+    private func writeState(_ branch: DSV4PoolBranch, _ s: DSV4PoolState) {
+        switch branch {
+        case .compressor: compressorState = s
+        case .indexer:    indexerState = s
+        }
+    }
+
+    /// `accumulate_windows` from Python (`mlx_model.py:651-689`). Splits the
+    /// incoming `kv`/`gate` tensors into a "ready" prefix (multiple of
+    /// `compress_ratio`) plus a buffered tail. Tail is stashed for next
+    /// call; prefix is concatenated with prior buffered tail. Returns
+    /// `(readyKv, readyGate, poolBase)` where `poolBase` is the absolute
+    /// position of the FIRST token in `readyKv`.
+    public func accumulateWindows(
+        kv: MLXArray, gate: MLXArray,
+        ratio: Int, startPos: Int,
+        branch: DSV4PoolBranch
+    ) -> (MLXArray, MLXArray, Int) {
+        var s = readState(branch)
+        let prevKv = s.bufferKv
+        let prevGate = s.bufferGate
+
+        let combinedKv: MLXArray
+        let combinedGate: MLXArray
+        if let p = prevKv, let pg = prevGate, p.dim(1) > 0 {
+            combinedKv = concatenated([p, kv], axis: 1)
+            combinedGate = concatenated([pg, gate], axis: 1)
+        } else {
+            combinedKv = kv
+            combinedGate = gate
+        }
+
+        let total = combinedKv.dim(1)
+        let usable = (total / ratio) * ratio
+        let tailLen = total - usable
+
+        let readyKv: MLXArray
+        let readyGate: MLXArray
+        if tailLen == 0 {
+            readyKv = combinedKv
+            readyGate = combinedGate
+            s.bufferKv = nil
+            s.bufferGate = nil
+        } else if usable == 0 {
+            // Entire combined tensor buffered for next call.
+            var emptyKvShape = combinedKv.shape; emptyKvShape[1] = 0
+            var emptyGateShape = combinedGate.shape; emptyGateShape[1] = 0
+            readyKv = MLXArray.zeros(emptyKvShape, dtype: combinedKv.dtype)
+            readyGate = MLXArray.zeros(emptyGateShape, dtype: combinedGate.dtype)
+            s.bufferKv = combinedKv
+            s.bufferGate = combinedGate
+        } else {
+            let kvParts = split(combinedKv, indices: [usable], axis: 1)
+            let gateParts = split(combinedGate, indices: [usable], axis: 1)
+            readyKv = kvParts[0]
+            readyGate = gateParts[0]
+            s.bufferKv = kvParts[1]
+            s.bufferGate = gateParts[1]
+        }
+
+        let prevBufferLen = prevKv?.dim(1) ?? 0
+        let poolBase = Swift.max(0, startPos) - prevBufferLen
+
+        writeState(branch, s)
+        return (readyKv, readyGate, poolBase)
+    }
+
+    /// `update_pool` from Python (`mlx_model.py:691-704`). Concatenates the
+    /// freshly produced pool chunk onto persistent `pooled` and returns the
+    /// cumulative pool.
+    public func updatePool(
+        _ newPooled: MLXArray,
+        branch: DSV4PoolBranch
+    ) -> MLXArray {
+        var s = readState(branch)
+        let merged: MLXArray
+        if let p = s.pooled, p.dim(1) > 0 {
+            merged = concatenated([p, newPooled], axis: 1)
+        } else {
+            merged = newPooled
+        }
+        s.pooled = merged
+        writeState(branch, s)
+        return merged
+    }
+}
+
 // MARK: - Compressor (KV pooling for long-context compression)
 
 final class Compressor: Module {
@@ -1041,27 +1208,56 @@ final class Compressor: Module {
     func callAsFunction(
         _ x: MLXArray,
         rope: DSV4RoPE,
-        startPos: Int
+        startPos: Int,
+        cache: DSV4LayerCache? = nil,
+        branch: DSV4PoolBranch = .compressor
     ) -> MLXArray {
-        let (B, S, _) = (x.dim(0), x.dim(1), x.dim(2))
-        let kv = wkv(x)
-        let gate = wgate(x)
-        let usable = (S / compressRatio) * compressRatio
-        guard usable > 0 else {
+        let (B, _, _) = (x.dim(0), x.dim(1), x.dim(2))
+        let kvRaw = wkv(x)
+        let gateRaw = wgate(x)
+
+        // §417 — accumulate windows across calls when cache is provided.
+        // Without cache, fall back to stateless slicing (only emit pool
+        // when L >= compressRatio in this single call).
+        let readyKvFlat: MLXArray
+        let readyGateFlat: MLXArray
+        let poolBase: Int
+        if let c = cache {
+            (readyKvFlat, readyGateFlat, poolBase) = c.accumulateWindows(
+                kv: kvRaw, gate: gateRaw,
+                ratio: compressRatio, startPos: startPos,
+                branch: branch
+            )
+        } else {
+            let S = kvRaw.dim(1)
+            let usable = (S / compressRatio) * compressRatio
+            if usable == 0 {
+                return MLXArray.zeros([B, 0, headDim], dtype: x.dtype)
+            }
+            let kvParts = S == usable ? [kvRaw] : split(kvRaw, indices: [usable], axis: 1)
+            let gateParts = S == usable ? [gateRaw] : split(gateRaw, indices: [usable], axis: 1)
+            readyKvFlat = kvParts[0]
+            readyGateFlat = gateParts[0]
+            poolBase = startPos
+        }
+
+        let usable = readyKvFlat.dim(1)
+        if usable == 0 {
+            // Cache-aware decode where L < compressRatio: this call emits
+            // no new compressed tokens. Return prior pool from cache so
+            // attention can still attend to history.
+            if let c = cache {
+                let prev = (branch == .compressor)
+                    ? c.compressorState.pooled
+                    : c.indexerState.pooled
+                if let p = prev, p.dim(1) > 0 { return p }
+            }
             return MLXArray.zeros([B, 0, headDim], dtype: x.dtype)
         }
         let W = usable / compressRatio
-        let poolBase = startPos
 
-        // Slice out usable prefix on axis 1 via split (proven pattern in
-        // this file at line 1191; multi-axis subscript w/ Range is fragile
-        // across MLX-Swift versions). Then reshape to per-window blocks.
-        // ready_kv:   (B, W, compressRatio, outDim)
-        // ready_gate: (B, W, compressRatio, outDim)
-        let kvParts = S == usable ? [kv] : split(kv, indices: [usable], axis: 1)
-        let gateParts = S == usable ? [gate] : split(gate, indices: [usable], axis: 1)
-        let readyKv = kvParts[0].reshaped(B, W, compressRatio, outDim)
-        var readyGate = gateParts[0].reshaped(B, W, compressRatio, outDim)
+        let readyKv = readyKvFlat.reshaped(B, W, compressRatio, outDim)
+        var readyGate = readyGateFlat.reshaped(B, W, compressRatio, outDim)
         // Add absolute-position embedding: ape (compressRatio, outDim) broadcasts
         // across (B, W) leading dims.
         readyGate = readyGate + ape.asType(readyGate.dtype)
@@ -1094,18 +1290,28 @@ final class Compressor: Module {
 
         // Apply RoPE at the absolute positions each compressed window
         // represents: position[w] = w * compressRatio + poolBase. The
-        // tokens are NOT consecutive, so we use the per-token offset path.
-        // Add a singleton head axis for partial RoPE shape compatibility.
+        // tokens are NOT consecutive, so we MUST use the manual per-token
+        // cos/sin path — `MLXFast.RoPE(_:offset: MLXArray)` interprets the
+        // offset array as a per-batch scalar (per the docstring at
+        // `MLXFast.swift:53`) which would collapse all pool slots to the
+        // same phase. §416 added `DSV4RoPE.manual(_:positions:)` mirroring
+        // Python `_call_manual` for exactly this case.
         let positions = MLXArray(0..<Int32(W)) * Int32(compressRatio) + Int32(poolBase)
         // newPooled: (B, W, head_dim) → (B, 1, W, head_dim) for partial RoPE
-        var rotated = newPooled.expandedDimensions(axis: 1)
+        let pooled4D = newPooled.expandedDimensions(axis: 1)
         // Apply RoPE to last ropeHeadDim dims; nope = first (head_dim - rope_dim).
         let ropeDim = ropeHeadDim
-        let nopeSlice = rotated[.ellipsis, 0..<(headDim - ropeDim)]
-        let peSlice = rotated[.ellipsis, (headDim - ropeDim)..<headDim]
-        let peRotated = rope(peSlice, offset: positions)
-        rotated = concatenated([nopeSlice, peRotated], axis: -1)
-        return rotated.squeezed(axis: 1)
+        let nopeSlice = pooled4D[.ellipsis, 0..<(headDim - ropeDim)]
+        let peSlice = pooled4D[.ellipsis, (headDim - ropeDim)..<headDim]
+        let peRotated = rope.manual(peSlice, positions: positions)
+        let rotated = concatenated([nopeSlice, peRotated], axis: -1)
+        let chunk = rotated.squeezed(axis: 1)
+
+        // §417 — persist into the cache so subsequent decode steps see history.
+        if let c = cache {
+            return c.updatePool(chunk, branch: branch)
+        }
+        return chunk
     }
 
     /// Overlap transform: doubles the compression axis from R to 2R by
@@ -1180,6 +1386,22 @@ fileprivate func _compressedVisibility(
     return visible.expandedDimensions(axis: 1)         // (1, 1, S, compressedLen)
 }
 
+/// §417 — Build a (B, 1, L, P) bool mask where slot `p` is True iff `p`
+/// appears in the indexer's top-K selection for that query. Mirrors
+/// Python `selected = (topk[..., None] == k_idx[None,None,None,:]).any(axis=-2)`
+/// at `mlx_model.py:1088-1093`.
+///
+/// `topk` shape: (B, L, K) int32. `P` is the pool size.
+fileprivate func _indexerSelected(topk: MLXArray, P: Int) -> MLXArray {
+    let B = topk.dim(0)
+    let L = topk.dim(1)
+    let K = topk.dim(2)
+    let topkI = topk.asType(.int32).reshaped(B, 1, L, K, 1)
+    let kRange = MLXArray(0..<Int32(P)).reshaped(1, 1, 1, 1, P)
+    let eq = topkI .== kRange                        // (B, 1, L, K, P) bool
+    return eq.any(axis: -2)                          // (B, 1, L, P) bool
+}
+
 // MARK: - Indexer (top-k pool-slot selection for compress_ratio=4 layers)
 //
 // Mirrors Python `Indexer` in `jang_tools/dsv4/mlx_model.py:775-803`.
@@ -1223,14 +1445,19 @@ final class Indexer: Module {
 
     /// Returns top-k indices into the compressor pool, or nil if pool is empty.
     /// `qResidual`: q_norm output (B, L, qLoraRank), shared with main attention.
+    /// §417 — accepts the layer cache so the indexer's internal Compressor
+    /// uses the SECOND state branch (`indexerState`), separate from the
+    /// main Compressor's branch.
     func callAsFunction(
         _ x: MLXArray,
         qResidual: MLXArray,
         rope: DSV4RoPE,
-        startPos: Int
+        startPos: Int,
+        cache: DSV4LayerCache? = nil
     ) -> MLXArray? {
         let (B, L, _) = (x.dim(0), x.dim(1), x.dim(2))
-        let pooled = compressor(x, rope: rope, startPos: startPos)
+        let pooled = compressor(x, rope: rope, startPos: startPos,
+                                cache: cache, branch: .indexer)
         let P = pooled.dim(1)
         if P == 0 { return nil }
         // q: (B, L, n_heads, head_dim) — own Q projection, NOT main attention's q
@@ -1291,13 +1518,14 @@ final class DeepseekV4Attention: Module {
     let rope: DSV4RoPE
 
     @ModuleInfo(key: "compressor") var compressor: Compressor?
-    // Indexer: NOT YET wired as @ModuleInfo because adding the property declaration
-    // for ALL attention layers (even compress_ratio != 4 ones, which lack indexer
-    // weights in the bundle) caused the model loader to misroute attention or mHC
-    // weights — manifests as `[matmul] (B, L, 32768) × (16384, 24)` shape mismatch
-    // in hcCollapse. The doubled hidden dim suggests some weight tensor was
-    // reshaped against a wrong slot. Needs proper `sanitize()` integration before
-    // re-enabling. Long-context path is also disabled until this is sorted.
+    /// §415 (2026-04-25) — Indexer wired as `@ModuleInfo` after the §410
+    /// shape-authoritative loader landed. Earlier hcCollapse `(B,L,32768) ×
+    /// (16384,24)` mismatch was a stale build cache, not the indexer
+    /// declaration; resolved via §410 + §414. Indexer is `Optional<Module>`,
+    /// instantiated only for `compressRatio == 4` layers (per Python
+    /// reference `mlx_model.py:951-952`); other layers leave it nil so the
+    /// loader has no `self_attn.indexer.*` keys to consume there.
+    @ModuleInfo(key: "indexer") var indexer: Indexer?
 
     init(config: DeepseekV4JANGTQConfiguration, layerIdx: Int) {
         self.config = config
@@ -1347,8 +1575,13 @@ final class DeepseekV4Attention: Module {
             self._compressor.wrappedValue = Compressor(
                 config: config, compressRatio: compressRatio, headDim: headDim
             )
-            // Indexer init disabled until @ModuleInfo declaration is sorted —
-            // see comment near indexer declaration above.
+            // §415 — Indexer only on compress_ratio==4 fast-cadence layers.
+            // Mirrors Python `if compress_ratio == 4: self.indexer = Indexer(...)`.
+            if compressRatio == 4 {
+                self._indexer.wrappedValue = Indexer(
+                    config: config, compressRatio: compressRatio
+                )
+            }
         }
 
         super.init()
@@ -1431,45 +1664,70 @@ final class DeepseekV4Attention: Module {
 
         // ── Long-context branch (Compressor + Indexer + window+compressed mask) ──
         //
-        // Mirrors Python `mlx_model.py:1023-1115` which was verified end-to-end
-        // on Mac Studio at 12K tokens with exact needle recall ("BLUE-OCTOPUS-42")
-        // at 21.8 tok/s decode.
-        //
-        // STATUS (2026-04-25): the underlying Compressor + Indexer + mask helpers
-        // are ported and the module compiles. This wiring is enabled via env
-        // `VMLX_DSV4_LONG_CTX=1`. However, Swift DSV4 short-prompt inference
-        // currently crashes earlier in `hcCollapse` with
-        // `[matmul] (B, L, 32768) × (16384, 24)` shape mismatch — a pre-existing
-        // bug in the model loader (some weight is reshaped against a wrong slot,
-        // doubling hidden dim from 4096 → 8192 for one tensor). This long-ctx
-        // wiring is downstream of that crash, so it doesn't run until the
-        // upstream crash is fixed. Code preserved here ready to validate once
-        // the upstream is unblocked. Verified: removing this wiring entirely
-        // does NOT fix the hcCollapse crash → confirmed pre-existing.
+        // §417 (2026-04-25) — full long-context wiring:
+        //   • Cache cast to `DSV4LayerCache` so pool state accumulates across
+        //     decode calls (was: pool history dropped every step).
+        //   • Compressor receives cache so `accumulateWindows` + `updatePool`
+        //     persist `bufferKv`/`bufferGate`/`pooled`.
+        //   • For `compressRatio == 4` layers, Indexer runs and produces top-k
+        //     pool indices. Two SDPA paths:
+        //       - L==1 decode + Indexer present → take_along_axis gather of
+        //         top-k pool rows; mask=causal (sdpaMask kept as default).
+        //       - else (prefill or non-indexer layer) → bool visibility mask
+        //         AND'd with indexer-selected (when present) and concatenated
+        //         to the window mask before SDPA.
+        // Engaged when `VMLX_DSV4_LONG_CTX=1`.
+        let v4Cache = cache as? DSV4LayerCache
         var sdpaMask = mask
         let useLongCtx = ProcessInfo.processInfo.environment["VMLX_DSV4_LONG_CTX"] == "1"
-        if compressRatio > 0 && useLongCtx, let comp = compressor, L >= compressRatio {
-            let pooled = comp(x, rope: self.rope, startPos: offset)  // (B, P, headDim)
+        if compressRatio > 0 && useLongCtx, let comp = compressor {
+            let pooled = comp(x, rope: self.rope, startPos: offset,
+                              cache: v4Cache, branch: .compressor)
             let P = pooled.dim(1)
             if P > 0 {
-                let windowLen = keys.dim(2)
-                let winMask = _buildWindowMask(
-                    B: B, S: L, offset: offset,
-                    window: config.slidingWindow, windowLen: windowLen
-                )
-                let compMask = _compressedVisibility(
-                    B: B, S: L, offset: offset,
-                    compressedLen: P, ratio: compressRatio
-                )
-                // Indexer top-k disabled until @ModuleInfo wiring is sorted.
-                // Without it, ALL pool slots are visible (no top-k restriction)
-                // — quality is still better than no compressor at all but
-                // matches Python's "compress_ratio=128 layers" behavior.
-                let pooled4D = pooled.expandedDimensions(axis: 1)
-                keys = concatenated([keys, pooled4D], axis: 2)
-                values = concatenated([values, pooled4D], axis: 2)
-                let combinedMask = concatenated([winMask, compMask], axis: -1)
-                sdpaMask = .array(combinedMask)
+                // Run Indexer for compress_ratio==4 layers; nil otherwise.
+                var topkIdx: MLXArray? = nil
+                if let idx = self.indexer {
+                    topkIdx = idx(x, qResidual: qResidual,
+                                  rope: self.rope, startPos: offset,
+                                  cache: v4Cache)
+                }
+
+                if L == 1, let topk = topkIdx {
+                    // S=1 decode fast path: gather top-k rows directly.
+                    let K = topk.dim(-1)
+                    let pooledExp = pooled.expandedDimensions(axis: 1)         // (B, 1, P, D)
+                    let topkExp = topk.expandedDimensions(axis: -1)            // (B, 1, K, 1)
+                    let topkBcast = MLX.broadcast(
+                        topkExp, to: [pooled.dim(0), 1, K, pooled.dim(2)])     // (B, 1, K, D)
+                    let gathered = MLX.takeAlong(
+                        pooledExp, topkBcast.asType(.int32), axis: 2
+                    )
+                    keys = concatenated([keys, gathered], axis: 2)
+                    values = concatenated([values, gathered], axis: 2)
+                    // Default causal mask works: top-k slots are already
+                    // both window-visible AND query-causal by construction.
+                } else {
+                    let windowLen = keys.dim(2)
+                    let winMask = _buildWindowMask(
+                        B: B, S: L, offset: offset,
+                        window: config.slidingWindow, windowLen: windowLen
+                    )
+                    var compMask = _compressedVisibility(
+                        B: B, S: L, offset: offset,
+                        compressedLen: P, ratio: compressRatio
+                    )
+                    // AND with indexer top-k selection when available.
+                    if let topk = topkIdx {
+                        let sel = _indexerSelected(topk: topk, P: P)  // (B, 1, L, P) bool
+                        compMask = MLX.logicalAnd(compMask, sel)
+                    }
+                    let pooled4D = pooled.expandedDimensions(axis: 1)
+                    keys = concatenated([keys, pooled4D], axis: 2)
+                    values = concatenated([values, pooled4D], axis: 2)
+                    let combinedMask = concatenated([winMask, compMask], axis: -1)
+                    sdpaMask = .array(combinedMask)
+                }
             }
         }
         // ── End long-context branch ──────────────────────────────────────────
@@ -1920,6 +2178,39 @@ public final class DeepseekV4JANGTQModel: Module, LLMModel, KVCacheDimensionProv
         model.layers
     }
 
+    /// §417 (2026-04-25) — Long-context cache override.
+    ///
+    /// When `VMLX_DSV4_LONG_CTX=1`, return per-layer caches sized to
+    /// match each layer's `compressRatio`:
+    ///   • `compressRatio == 0` → plain `RotatingKVCache(slidingWindow)`.
+    ///     The layer never engages the long-context branch.
+    ///   • `compressRatio > 0`  → `DSV4LayerCache(slidingWindow)` carrying
+    ///     `compressorState` + `indexerState` pool buffers across decode
+    ///     calls, mirroring Python `Model.make_cache` at
+    ///     `mlx_model.py:1542-1569`.
+    ///
+    /// When the env-flag is unset, fall back to plain RotatingKVCache for
+    /// every layer so short-prompt decode is unchanged.
+    public func newCache(parameters: GenerateParameters?) -> [KVCache] {
+        let useLongCtx = ProcessInfo.processInfo.environment["VMLX_DSV4_LONG_CTX"] == "1"
+        let window = config.slidingWindow
+        guard useLongCtx else {
+            return (0..<config.numHiddenLayers).map { _ in
+                RotatingKVCache(maxSize: window, keep: 0)
+            }
+        }
+        // §417 — Long-context: per-layer caches sized to compressRatio.
+        //   • compressRatio == 0 → plain RotatingKVCache (window only)
+        //   • compressRatio > 0  → DSV4LayerCache (carries pool buffers)
+        return (0..<config.numHiddenLayers).map { i in
+            let r = config.effectiveCompressRatio(forLayer: i)
+            if r > 0 {
+                return DSV4LayerCache(slidingWindow: window)
+            }
+            return RotatingKVCache(maxSize: window, keep: 0)
+        }
+    }
+
     public func callAsFunction(
         _ inputs: MLXArray,
         cache: [KVCache]?
@@ -1979,19 +2270,14 @@ public final class DeepseekV4JANGTQModel: Module, LLMModel, KVCacheDimensionProv
             // `tq_bits` @ParameterInfo, so leaving it in the sanitized
             // weights triggers `unhandledKeys`. Strip it here.
             if key.hasSuffix(".tq_bits") { continue }
-            // §395 — DSV4 Flash sparse `indexer` (NSA top-k selector over
-            // compressed KV) is not yet ported to Swift (see
-            // `DeepseekV4Attention` line ~962). Bundles ship the indexer
-            // weights at every compress_ratio>0 layer; without a Swift
-            // module to consume them, load fails with `unhandledKeys`
-            // pointing at `self_attn.indexer`. Drop the entire indexer
-            // sub-module so attention falls back to the dense compressor
-            // path. Functional impact: long-context (>= 65k tokens)
-            // decode loses the sparse top-k speedup but stays
-            // numerically correct because the dense compressor branch
-            // is the same compute path the indexer would have selected
-            // a subset of. Re-enable once `Indexer` is ported.
-            if key.contains(".attn.indexer.") { continue }
+            // §415 (2026-04-25) — Indexer is now wired via @ModuleInfo on
+            // `DeepseekV4Attention` (`compressRatio == 4` layers only).
+            // The pass-through `attn.<rest>` path below routes
+            // `layers.N.attn.indexer.*` → `model.layers.N.self_attn.indexer.*`
+            // matching the new property registration. Bundle only ships
+            // indexer weights at `compressRatio == 4` layers (verified
+            // 2026-04-25), and only those layers init an Indexer module,
+            // so layered registration matches and load succeeds.
 
             // Global tensors
             if key == "embed.weight" { sanitized["model.embed.weight"] = value; continue }
@@ -2137,6 +2423,7 @@ func tiled(_ x: MLXArray, repetitions: [Int]) -> MLXArray {
 public class DSV4RoPE: Module, OffsetLayer, ArrayOffsetLayer {
     public let dims: Int
     public let wavelength: MLXArray  // post-YaRN-correction wavelengths
+    public let invFreq: MLXArray     // 1.0 / wavelength — for manual per-token path
 
     public init(
         dims: Int,
@@ -2187,6 +2474,7 @@ public class DSV4RoPE: Module, OffsetLayer, ArrayOffsetLayer {
         }
         // Wavelength is what mx.fast.rope expects via freqs= parameter.
         self.wavelength = 1.0 / invFreq
+        self.invFreq = invFreq
         super.init()
     }
 
@@ -2210,6 +2498,43 @@ public class DSV4RoPE: Module, OffsetLayer, ArrayOffsetLayer {
             x, dimensions: dims, traditional: true, base: nil, scale: 1.0,
             offset: offset, freqs: -wavelength
         )
+    }
+
+    /// §416 (2026-04-25) — Manual cos/sin RoPE path with per-TOKEN positions.
+    ///
+    /// `MLXFast.RoPE(_:offset: MLXArray)` interprets the offset array as a
+    /// per-BATCH scalar (per docstring at MLXFast.swift:53), so it cannot
+    /// handle non-consecutive per-token positions like the
+    /// `(window * ratio + pool_base)` layout produced by `Compressor`.
+    /// Mirrors Python `_call_manual` in `mlx_model.py:494-516`.
+    ///
+    /// `x` shape: `(..., L, dims)` (last axis must equal `self.dims`; caller
+    ///   is responsible for splitting nope vs pe before calling this).
+    /// `positions` shape: `(L,)` int or fp32 — absolute position per token.
+    /// `inverse`: when true, flip the sin sign (equivalent to `scale=-1`).
+    public func manual(_ x: MLXArray, positions: MLXArray, inverse: Bool = false) -> MLXArray {
+        let dtype = x.dtype
+        let pos = positions.asType(.float32)
+        // freqs[l, d/2] = pos[l] * inv_freq[d/2]
+        let freqs = pos.expandedDimensions(axis: -1) * invFreq.expandedDimensions(axis: 0)
+        var cosT = cos(freqs)
+        var sinT = sin(freqs)
+        if inverse { sinT = -sinT }
+        // Broadcast cos/sin across batch + head dims of x. x is (..., L, dims).
+        // After reshape x → (..., L, dims/2, 2), cos/sin should broadcast over
+        // every leading axis. Build a shape that prepends 1's for those axes.
+        let leading = Array(repeating: 1, count: x.ndim - 2)
+        let bc = leading + cosT.shape
+        cosT = cosT.reshaped(bc).asType(dtype)
+        sinT = sinT.reshaped(bc).asType(dtype)
+        // Traditional layout: x[..., 2k, 2k+1] are interleaved pairs.
+        var xPaired = x.reshaped(Array(x.shape.dropLast()) + [dims / 2, 2])
+        let x0 = xPaired[.ellipsis, 0]
+        let x1 = xPaired[.ellipsis, 1]
+        let r0 = x0 * cosT - x1 * sinT
+        let r1 = x0 * sinT + x1 * cosT
+        xPaired = stacked([r0, r1], axis: -1)
+        return xPaired.reshaped(x.shape)
     }
 }
 
