@@ -738,6 +738,72 @@ public final class LLMModelFactory: ModelFactory {
             }
         }
 
+        // §421 — SHAPE-AUTHORITATIVE routed-expert bits override.
+        //
+        // After the jang_config.json merge above, configData has the
+        // best metadata-derived `mxtq_bits` we can produce from the
+        // BUNDLE'S DECLARED FIELDS. But some bundles ship neither
+        // `mxtq_bits` nor `routed_expert_bits` in either config.json
+        // OR jang_config.json — Qwen3.6-A3B-JANGTQ4 (pre-2026-04-25
+        // HF patch), Kimi-K2.6-Small-JANGTQ, MiniMax-M2.7-JANGTQ. For
+        // those, the §418 fallback chain inside Qwen35JANGTQ /
+        // MiniMaxJANGTQ / DeepseekV4JANGTQ lands on top-level
+        // `quantization.bits` — which is the AFFINE non-routed bits,
+        // NOT the routed-expert bits. When those differ (8-bit affine
+        // attention with 4-bit routed experts), TurboQuantSwitchLinear
+        // is constructed at the wrong bits → wrong _packed shape →
+        // load failure or silent garbage.
+        //
+        // The on-disk packing IS the ground truth. Read safetensors
+        // headers (cheap — JSON metadata only, no tensor data), find
+        // any `*.tq_packed` tensor, and solve `packed_cols = ceil(
+        // in_features * bits / 32)` for bits using config-declared
+        // candidates (hidden_size, moe_intermediate_size, etc.). When
+        // a unique answer exists AND it differs from what configData
+        // currently has, OVERWRITE `mxtq_bits` so the model is built
+        // at the right bits from the start.
+        //
+        // This runs unconditionally for every model type. Safe for
+        // non-JANGTQ bundles: no `tq_packed` tensors → returns nil →
+        // configData unchanged.
+        if let inferredBits = JangLoader.peekRoutedBitsFromSafetensors(
+            modelDirectory: modelDirectory,
+            configData: configData
+        ) {
+            // Check whether configData ALREADY agrees. If it does we
+            // don't need to overwrite (avoids serialization round-trip
+            // for the common well-formed-bundle case).
+            let currentBits: Int?
+            if let dict = (try? JSONSerialization.jsonObject(with: configData)) as? [String: Any] {
+                if let i = dict["mxtq_bits"] as? Int {
+                    currentBits = i
+                } else if let m = dict["mxtq_bits"] as? [String: Any],
+                          let r = (m["routed_expert"] ?? m["shared_expert"]) as? Int {
+                    currentBits = r
+                } else {
+                    currentBits = nil
+                }
+            } else {
+                currentBits = nil
+            }
+            if currentBits != inferredBits {
+                let line: String
+                if let c = currentBits {
+                    line = "[§421] mxtq_bits override: declared \(c) → "
+                        + "shape-authoritative \(inferredBits) "
+                        + "(packing on disk wins)\n"
+                } else {
+                    line = "[§421] mxtq_bits inferred from safetensors "
+                        + "shape: \(inferredBits) (config field absent)\n"
+                }
+                if let data = line.data(using: .utf8) {
+                    try? FileHandle.standardError.write(contentsOf: data)
+                }
+                configData = JangLoader.injectRoutedBits(
+                    into: configData, bits: inferredBits)
+            }
+        }
+
         let baseConfig: BaseConfiguration
         do {
             baseConfig = try JSONDecoder.json5().decode(BaseConfiguration.self, from: configData)
