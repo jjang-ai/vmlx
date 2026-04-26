@@ -3202,6 +3202,27 @@ async def create_anthropic_message(
 
     messages_dump = [m.model_dump(exclude_none=True) for m in chat_req.messages]
 
+    # DSV4 default-system-prompt injection (2026-04-26): per upstream
+    # ml-explore/mlx-lm PR #1195 testing instructions, DSV4-Flash REQUIRES a
+    # system prompt to anchor its conversational behavior. Without one, the
+    # model goes into reasoning-runaway on multi-turn chat (model never
+    # emits `</think>`, runs to max_tokens of stream-of-consciousness, then
+    # if interrupted leaves bad cache state that destabilizes the next turn).
+    # Symptom: `whats 10x10` → "First Statement (A): If I am a crocod then
+    # I am green... SHIT! 1000000000000000 let's go. NO YES LOL ?????Bel"
+    # Reference: research/DSV4-CHAT-TEMPLATE-INVESTIGATION-2026-04-25.md and
+    # the upstream PR's exact recommended prompt format.
+    if _is_dsv4 and messages_dump:
+        if not any(m.get("role") == "system" for m in messages_dump):
+            messages_dump.insert(0, {
+                "role": "system",
+                "content": "You are a helpful AI assistant. Respond directly and concisely.",
+            })
+            logger.info(
+                "DSV4: injected default system prompt (model requires anchor "
+                "to avoid reasoning-runaway on multi-turn chat)"
+            )
+
     # Strip <think> blocks from prior assistant messages when thinking is disabled.
     # Same logic as the OpenAI path — prevents model from mimicking prior reasoning.
     _explicit_thinking_off = chat_req.enable_thinking is False or (
@@ -3858,6 +3879,17 @@ async def ollama_chat(fastapi_request: Request):
         from .api.utils import extract_multimodal_content
 
         messages, _, _ = extract_multimodal_content(chat_req.messages)
+
+    # DSV4 default-system-prompt injection (Ollama path). See
+    # /v1/chat/completions block for full rationale. DSV4 needs anchoring
+    # to avoid reasoning-runaway on multi-turn chat.
+    if _is_dsv4_o and messages:
+        if not any((m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) == "system" for m in messages):
+            messages.insert(0, {
+                "role": "system",
+                "content": "You are a helpful AI assistant. Respond directly and concisely.",
+            })
+            logger.info("DSV4 (Ollama): injected default system prompt")
 
     # mlxstudio#72: stateful Ollama NDJSON translation. vMLX's
     # stream_chat_completion emits tool calls across two SSE chunks:
@@ -5195,6 +5227,31 @@ async def create_chat_completion(
 
     has_media = bool(images or videos)
 
+    # DSV4 default-system-prompt injection (chat-completions main path).
+    # See research/DSV4-CHAT-TEMPLATE-INVESTIGATION-2026-04-25.md and upstream
+    # ml-explore/mlx-lm PR #1195 testing instructions. DSV4-Flash JANGTQ
+    # requires a system prompt to anchor multi-turn chat behavior; without
+    # one the model goes into reasoning-runaway (529+ token reasoning blocks
+    # never closed with </think>) and on interruption leaves bad cache state
+    # that destabilizes subsequent turns. We re-detect family_name here
+    # because the canonical _is_dsv4 variable is set later in this function.
+    try:
+        from .model_config_registry import get_model_config_registry
+        _mc_for_dsv4_msgs = get_model_config_registry().lookup(getattr(request, "model", "") or "")
+        _is_dsv4_msgs = getattr(_mc_for_dsv4_msgs, "family_name", "") == "deepseek_v4"
+    except Exception:
+        _is_dsv4_msgs = False
+    if _is_dsv4_msgs and messages:
+        if not any((m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) == "system" for m in messages):
+            messages.insert(0, {
+                "role": "system",
+                "content": "You are a helpful AI assistant. Respond directly and concisely.",
+            })
+            logger.info(
+                "DSV4: injected default system prompt (model requires anchor "
+                "to avoid reasoning-runaway on multi-turn chat)"
+            )
+
     # Handle response_format - inject system prompt if needed
     response_format = request.response_format
     if response_format:
@@ -5936,6 +5993,16 @@ async def create_response(
         request.instructions,
         preserve_multimodal=engine.is_mllm,
     )
+
+    # DSV4 default-system-prompt injection (Responses path). See
+    # /v1/chat/completions block for full rationale.
+    if _is_dsv4 and messages:
+        if not any((m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) == "system" for m in messages):
+            messages.insert(0, {
+                "role": "system",
+                "content": "You are a helpful AI assistant. Respond directly and concisely.",
+            })
+            logger.info("DSV4 (Responses): injected default system prompt")
 
     # Handle text format (json_object / json_schema) — translate to response_format
     if (
