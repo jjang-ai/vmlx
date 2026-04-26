@@ -589,6 +589,12 @@ let package = Package(
                 // bug that picked (4,64) for ambiguous shapes — the
                 // root cause of the DSV4 embed/wq_b miscloads.
                 "JangShapeAuthoritativeTests.swift",
+                // §421 — shape-authoritative routed-bits override
+                // (peekRoutedBitsFromSafetensors + injectRoutedBits).
+                // Synthetic safetensors files exercise the pre-decode
+                // path that overrides mxtq_bits when bundle metadata
+                // is missing or wrong. Pure file IO + JSON, no MLX dep.
+                "JangtqRoutedBitsOverrideTests.swift",
                 "ChatRequestValidationTests.swift",
                 "ToolChoiceEnforcementTests.swift",
                 "ToolCallReasoningMatrixTests.swift",

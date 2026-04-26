@@ -775,7 +775,207 @@ public struct JangLoader: Sendable {
         return nil
     }
 
-    // MARK: - §421 JANGTQ shape-authoritative validator
+    // MARK: - §421 JANGTQ shape-authoritative routed-bits resolution
+
+    /// §421 — Read safetensors HEADERS (not tensor data) in
+    /// `modelDirectory`, find any tensor whose key path contains
+    /// `tq_packed`, and return the routed-expert bit width implied by
+    /// that tensor's last-dim packing.
+    ///
+    /// The shape relationship is exact:
+    ///     packed_cols == ceil(in_features * bits / 32)
+    /// where `in_features` is one of the dimensions declared by
+    /// config.json (`hidden_size`, `moe_intermediate_size`,
+    /// `intermediate_size`, optionally nested under `text_config`).
+    /// We try every candidate `in_features` against the legal set
+    /// {2, 3, 4, 6, 8} and accept the unique pairing that satisfies
+    /// the equation.
+    ///
+    /// **Why this exists.** Some JANGTQ bundles (Qwen3.6-A3B-JANGTQ4
+    /// pre-2026-04-25-patch, Kimi-K2.6-Small-JANGTQ, MiniMax-M2.7-JANGTQ)
+    /// ship config.json with neither `mxtq_bits` nor
+    /// `routed_expert_bits`. The downstream config-decode chain falls
+    /// back to top-level `quantization.bits` — but that field describes
+    /// AFFINE non-routed bits, NOT routed-expert bits. When those two
+    /// differ (e.g. 8-bit affine attention with 4-bit routed experts),
+    /// constructing `TurboQuantSwitchLinear` with the wrong bits value
+    /// allocates the wrong `_packed` shape — load either fails with
+    /// a generic shape-mismatch error or, if shapes happen to align,
+    /// silently produces garbage at inference because the kernel reads
+    /// the wrong codebook + bit-shifts off the wrong stride.
+    ///
+    /// This function returns the SHAPE-AUTHORITATIVE answer from on-disk
+    /// data. Callers in `LLMModelFactory` use it to OVERRIDE the
+    /// `mxtq_bits` field in `configData` before the model is constructed,
+    /// so `TurboQuantSwitchLinear` is built at the right bits from the
+    /// start. Returns nil when:
+    ///   • The bundle has no `tq_packed` tensors (not a JANGTQ bundle)
+    ///   • Multiple `tq_packed` tensors disagree on bits (bundle is
+    ///     internally inconsistent — let the explicit shape-mismatch at
+    ///     load time surface it)
+    ///   • No (in_features, bits) pairing matches (config dimensions are
+    ///     missing or the bundle uses non-standard packing)
+    public static func peekRoutedBitsFromSafetensors(
+        modelDirectory: URL,
+        configData: Data
+    ) -> Int? {
+        let candidateInFeatures = collectInFeaturesCandidates(from: configData)
+        guard !candidateInFeatures.isEmpty else { return nil }
+
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(
+            at: modelDirectory,
+            includingPropertiesForKeys: nil
+        ) else { return nil }
+
+        // Filter to *.safetensors files. Sort for deterministic scan
+        // order so the "first match wins" tiebreak is stable.
+        let safetensors = files
+            .filter { $0.pathExtension == "safetensors"
+                    && !$0.lastPathComponent.hasPrefix("jangtq_runtime") }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        guard !safetensors.isEmpty else { return nil }
+
+        var votes: [Int: Int] = [:]
+        for url in safetensors {
+            // Read header: 8-byte little-endian uint64 = JSON length, then
+            // that many UTF-8 bytes of JSON metadata. We never read the
+            // tensor payload — header-only is O(filename count), not
+            // O(parameter count).
+            guard let headerJSON = try? readSafetensorsHeader(at: url) else { continue }
+            for (key, entry) in headerJSON {
+                guard key.contains("tq_packed"),
+                      let dict = entry as? [String: Any],
+                      let shape = dict["shape"] as? [Int],
+                      let packedCols = shape.last,
+                      packedCols > 0
+                else { continue }
+                if let bits = solveBitsForPackedCols(packedCols, candidates: candidateInFeatures) {
+                    votes[bits, default: 0] += 1
+                }
+            }
+        }
+
+        guard votes.count == 1, let bits = votes.keys.first else {
+            return nil   // no match OR disagreement — caller falls
+                         // through to existing config-driven resolution
+        }
+        return bits
+    }
+
+    /// §421 — Inject `mxtq_bits` into a config.json byte buffer at the
+    /// top level. Used by JANGTQ factory closures to apply the
+    /// shape-authoritative override before `JSONDecoder.decode(...)`
+    /// runs. Preserves all other fields exactly. Returns the original
+    /// `configData` unchanged if the JSON cannot be parsed (callers
+    /// will surface that downstream).
+    ///
+    /// Behavior choices:
+    ///   • Top-level field, not nested under `text_config`. The
+    ///     Qwen35JANGTQTextConfiguration / DeepseekV4JANGTQConfiguration
+    ///     decoders BOTH accept `mxtq_bits` at either level (top-level
+    ///     wins via the §346 dict/Int dual-form parser).
+    ///   • Always overwrites — if the bundle declared a wrong value,
+    ///     shape-authoritative wins. The on-disk packing is ground
+    ///     truth; the metadata field is convention.
+    public static func injectRoutedBits(
+        into configData: Data,
+        bits: Int
+    ) -> Data {
+        guard var dict = (try? JSONSerialization.jsonObject(with: configData))
+            as? [String: Any]
+        else { return configData }
+        dict["mxtq_bits"] = bits
+        guard let mutated = try? JSONSerialization.data(withJSONObject: dict)
+        else { return configData }
+        return mutated
+    }
+
+    /// Read a single safetensors file's JSON header. Public for
+    /// regression tests; loaders should call peekRoutedBitsFromSafetensors
+    /// instead.
+    public static func readSafetensorsHeader(at url: URL) throws -> [String: Any] {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let lenBytes = handle.readData(ofLength: 8)
+        guard lenBytes.count == 8 else {
+            throw JangLoaderError.loadFailed(
+                "safetensors header truncated: \(url.lastPathComponent)")
+        }
+        // Little-endian uint64. Header lengths are always < 2^32 in
+        // practice; cast guard prevents overflow on 32-bit platforms.
+        var n: UInt64 = 0
+        for i in 0..<8 {
+            n |= UInt64(lenBytes[i]) << (8 * i)
+        }
+        guard n > 0, n < 64 * 1024 * 1024 else {
+            throw JangLoaderError.loadFailed(
+                "safetensors header length suspicious (\(n)): "
+              + url.lastPathComponent)
+        }
+        let json = handle.readData(ofLength: Int(n))
+        guard json.count == Int(n) else {
+            throw JangLoaderError.loadFailed(
+                "safetensors header read short: \(url.lastPathComponent)")
+        }
+        guard let parsed = try JSONSerialization.jsonObject(with: json)
+            as? [String: Any]
+        else {
+            throw JangLoaderError.loadFailed(
+                "safetensors header is not a JSON object: "
+              + url.lastPathComponent)
+        }
+        return parsed
+    }
+
+    /// Extract candidate `in_features` values from a config.json byte
+    /// buffer. Reads `hidden_size`, `intermediate_size`,
+    /// `moe_intermediate_size`, `shared_expert_intermediate_size`, and
+    /// the same fields nested under `text_config`. Filters to >0.
+    private static func collectInFeaturesCandidates(from configData: Data) -> [Int] {
+        guard let dict = (try? JSONSerialization.jsonObject(with: configData))
+            as? [String: Any]
+        else { return [] }
+        var values = Set<Int>()
+        let keys = [
+            "hidden_size", "intermediate_size", "moe_intermediate_size",
+            "shared_expert_intermediate_size", "head_dim",
+        ]
+        for source in [dict, (dict["text_config"] as? [String: Any]) ?? [:]] {
+            for k in keys {
+                if let v = source[k] as? Int, v > 0 {
+                    values.insert(v)
+                }
+            }
+        }
+        return Array(values).sorted()
+    }
+
+    /// Given `packed_cols` from a tq_packed tensor's last dim, return
+    /// the unique `bits` value (in {2,3,4,6,8}) for which there exists
+    /// a candidate `in_features` such that
+    ///     packed_cols == ceil(in_features * bits / 32) == (in + 32/bits - 1) / (32/bits)
+    /// Returns nil if no pairing matches OR multiple match (ambiguous).
+    private static func solveBitsForPackedCols(
+        _ packedCols: Int,
+        candidates: [Int]
+    ) -> Int? {
+        var matched: Set<Int> = []
+        for inFeatures in candidates where inFeatures > 0 {
+            for bits in [2, 3, 4, 6, 8] {
+                let valsPerU32 = 32 / bits
+                let expected = (inFeatures + valsPerU32 - 1) / valsPerU32
+                if expected == packedCols {
+                    matched.insert(bits)
+                    break  // first bits hit per inFeatures wins
+                }
+            }
+        }
+        return matched.count == 1 ? matched.first : nil
+    }
+
+    // MARK: - §421b JANGTQ shape-authoritative validator (post-load)
+
 
     /// §421 — Inspect post-sanitize weight tensors for a JANGTQ bundle and
     /// verify every `tq_packed` shape is internally consistent with a single
