@@ -236,6 +236,11 @@ public struct Qwen35JANGTQTextConfiguration: Codable, Sendable {
         } else {
             self.mxtqBits = 2
         }
+        // §421 DIAG (2026-04-25): print resolved mxtqBits to confirm
+        // config patches reach the runtime. Always-on; cheap (one print
+        // per model load).
+        FileHandle.standardError.write(Data(
+            "[Qwen35JANGTQ] mxtqBits resolved to \(self.mxtqBits)\n".utf8))
         self.mxtqSeed = try container.decodeIfPresent(Int.self, forKey: .mxtqSeed) ?? 42
 
         let defaultRopeParameters: [String: StringOrNumber] = [
