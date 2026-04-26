@@ -387,6 +387,47 @@ public final class VLMModelFactory: ModelFactory {
                 "[jang-merge VLM] skipped — no jang_config.json or JSON parse failed\n".utf8))
         }
 
+        // §424 (2026-04-25) — VLM-side shape-authoritative routed-bits override.
+        // Mirrors the §421 chain in `LLMModelFactory._load`. Qwen3.6 / Holo3
+        // bundles have `model_type: qwen3_5_moe` with a `vision_config`, so
+        // they route through the VLM factory instead of the LLM factory.
+        // Without this block, broken bundles (no `mxtq_bits`,
+        // `routed_expert_bits` absent at every layer) silently picked the
+        // wrong codebook → "2+2 2+2" loop. JangLoader.peekRoutedBitsFromSafetensors
+        // reads the `tq_packed` tensor headers and infers bits from
+        // packed_cols + candidate in_features. injectRoutedBits propagates
+        // the resolved value into top-level mxtq_bits + routed_expert_bits +
+        // text_config.mxtq_bits so any downstream decoder finds it.
+        if let inferredBits = JangLoader.peekRoutedBitsFromSafetensors(
+            modelDirectory: modelDirectory, configData: configData
+        ) {
+            let currentBits: Int? = {
+                guard let dict = (try? JSONSerialization.jsonObject(with: configData))
+                        as? [String: Any]
+                else { return nil }
+                if let i = dict["mxtq_bits"] as? Int { return i }
+                if let m = dict["mxtq_bits"] as? [String: Any],
+                   let r = (m["routed_expert"] ?? m["shared_expert"]) as? Int { return r }
+                if let tc = dict["text_config"] as? [String: Any],
+                   let i = tc["mxtq_bits"] as? Int { return i }
+                return nil
+            }()
+            // §425 — always inject (idempotent). injectRoutedBits skips
+            // top-level fields that are already correct, but propagates
+            // into text_config.mxtq_bits + routed_expert_bits which may
+            // still be nil even when top-level matches.
+            let line: String
+            if let c = currentBits, c == inferredBits {
+                line = "[§424] mxtq_bits already correct at top (=\(c)); ensuring text_config + routed_expert_bits also set\n"
+            } else if let c = currentBits {
+                line = "[§424] mxtq_bits override: declared \(c) → shape-authoritative \(inferredBits)\n"
+            } else {
+                line = "[§424] mxtq_bits inferred from safetensors shape: \(inferredBits) (config field absent)\n"
+            }
+            FileHandle.standardError.write(Data(line.utf8))
+            configData = JangLoader.injectRoutedBits(into: configData, bits: inferredBits)
+        }
+
         let baseConfig: BaseConfiguration
         do {
             baseConfig = try JSONDecoder.json5().decode(BaseConfiguration.self, from: configData)

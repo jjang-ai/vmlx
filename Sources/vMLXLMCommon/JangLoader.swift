@@ -885,7 +885,35 @@ public struct JangLoader: Sendable {
         guard var dict = (try? JSONSerialization.jsonObject(with: configData))
             as? [String: Any]
         else { return configData }
-        dict["mxtq_bits"] = bits
+        // §425 — make all writes idempotent (only fill when missing OR
+        // when the existing value is a dict, which means the merge step
+        // hasn't yet flattened the per-role dict to the routed-expert Int).
+        let topMxtqExisting = dict["mxtq_bits"]
+        let needsTopMxtq = (topMxtqExisting == nil) || (topMxtqExisting is [String: Any]) ||
+            ((topMxtqExisting as? Int) != nil && (topMxtqExisting as? Int) != bits)
+        if needsTopMxtq {
+            dict["mxtq_bits"] = bits
+        }
+        // §423 (2026-04-25) — also mirror into BOTH `routed_expert_bits`
+        // (DSV4 convention) AND nested `text_config.mxtq_bits`
+        // (Qwen3.6/Holo3 convention). The nested-config gotcha bit on
+        // Qwen3.6-A3B-JANGTQ4: outer config had `mxtq_bits` but
+        // `Qwen35JANGTQTextConfiguration.init` reads ONLY from
+        // `text_config` when present, so top-level injection was
+        // invisible. Setting all three locations is idempotent (we
+        // never overwrite a bundle-declared value other than the
+        // top-level, which we already overwrote above) and eliminates
+        // the nested-config trap for any future model class that
+        // delegates to a `text_config` decoder.
+        if dict["routed_expert_bits"] == nil {
+            dict["routed_expert_bits"] = bits
+        }
+        if var textConfig = dict["text_config"] as? [String: Any] {
+            if textConfig["mxtq_bits"] == nil {
+                textConfig["mxtq_bits"] = bits
+            }
+            dict["text_config"] = textConfig
+        }
         guard let mutated = try? JSONSerialization.data(withJSONObject: dict)
         else { return configData }
         return mutated
