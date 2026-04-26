@@ -186,6 +186,33 @@ def serve_command(args):
                     logger.warning(f"Failed to auto-configure reasoning parser '{_mc.reasoning_parser}': {e}")
             if getattr(_mc, "think_in_template", False):
                 _registry_thinking_model = True
+
+            # DSV4-Flash / DSV4-Pro: BatchGenerator's continuous-batching path
+            # is INCOMPATIBLE with DSV4's custom 4D mHC layout (input is tiled
+            # to (B, T, hc_mult, hidden) inside Model.__call__, but BatchGenerator
+            # assumes plain (B, T, hidden) for cache + sampling). The result is
+            # numerically corrupt logits and gibberish output, even though the
+            # same model produces coherent text via mlx_lm.generate / SimpleEngine.
+            #
+            # Verified 2026-04-26 against DeepSeekV4-Flash-JANGTQ:
+            #   - mlx_lm.generate (direct):                            coherent
+            #   - SimpleEngine /v1/chat/completions @ temp=1.0:        coherent
+            #   - BatchedEngine /v1/chat/completions @ temp=1.0:       gibberish
+            #   - BatchedEngine /v1/completions raw prompt:            gibberish
+            #
+            # Until the BatchGenerator interaction is properly fixed (would
+            # require either making DSV4's Model.__call__ accept the (B, T, H)
+            # interface BatchGenerator expects, or teaching BatchGenerator to
+            # respect the model's tile-to-4D pattern), force-disable continuous
+            # batching for DSV4 so all paths route through SimpleEngine.
+            if _mc.family_name == "deepseek_v4" and getattr(args, "continuous_batching", False):
+                logger.warning(
+                    "DSV4 detected — disabling --continuous-batching to avoid "
+                    "BatchGenerator/4D-mHC incompatibility (produces gibberish output). "
+                    "All DSV4 requests route through SimpleEngine. Verified 2026-04-26 "
+                    "across /v1/chat/completions, /v1/responses, /api/chat, /v1/messages."
+                )
+                args.continuous_batching = False
     except Exception as e:
         logger.debug(f"Registry auto-apply skipped: {e}")
 
