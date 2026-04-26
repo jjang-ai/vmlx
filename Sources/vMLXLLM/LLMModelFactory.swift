@@ -767,8 +767,7 @@ public final class LLMModelFactory: ModelFactory {
         // non-JANGTQ bundles: no `tq_packed` tensors → returns nil →
         // configData unchanged.
         if let inferredBits = JangLoader.peekRoutedBitsFromSafetensors(
-            modelDirectory: modelDirectory,
-            configData: configData
+            modelDirectory: modelDirectory, configData: configData
         ) {
             // Check whether configData ALREADY agrees. If it does we
             // don't need to overwrite (avoids serialization round-trip
@@ -786,22 +785,34 @@ public final class LLMModelFactory: ModelFactory {
             } else {
                 currentBits = nil
             }
-            if currentBits != inferredBits {
-                let line: String
-                if let c = currentBits {
-                    line = "[§421] mxtq_bits override: declared \(c) → "
-                        + "shape-authoritative \(inferredBits) "
-                        + "(packing on disk wins)\n"
-                } else {
-                    line = "[§421] mxtq_bits inferred from safetensors "
-                        + "shape: \(inferredBits) (config field absent)\n"
-                }
-                if let data = line.data(using: .utf8) {
-                    try? FileHandle.standardError.write(contentsOf: data)
-                }
-                configData = JangLoader.injectRoutedBits(
-                    into: configData, bits: inferredBits)
+            // §425 (2026-04-25) — Always inject when inferredBits is
+            // known, even when currentBits matches at TOP level.
+            // Reason: the §423-extended `injectRoutedBits` propagates
+            // into BOTH `text_config.mxtq_bits` AND
+            // `routed_expert_bits`, but those nested fields can still
+            // be nil even when top-level is set (e.g. Qwen3.6 bundles
+            // where the LLM-factory pre-merge step already wrote
+            // top-level mxtq_bits but didn't touch text_config).
+            // The inject is idempotent — skips fields that are already
+            // present, only fills nil. So always running it is safe
+            // and ensures every known sink for the value has it.
+            let line: String
+            if let c = currentBits, c == inferredBits {
+                line = "[§421] mxtq_bits already correct at top (=\(c)); "
+                    + "ensuring text_config + routed_expert_bits also set\n"
+            } else if let c = currentBits {
+                line = "[§421] mxtq_bits override: declared \(c) → "
+                    + "shape-authoritative \(inferredBits) "
+                    + "(packing on disk wins)\n"
+            } else {
+                line = "[§421] mxtq_bits inferred from safetensors "
+                    + "shape: \(inferredBits) (config field absent)\n"
             }
+            if let data = line.data(using: .utf8) {
+                try? FileHandle.standardError.write(contentsOf: data)
+            }
+            configData = JangLoader.injectRoutedBits(
+                into: configData, bits: inferredBits)
         }
 
         let baseConfig: BaseConfiguration
