@@ -167,6 +167,27 @@ public class TurboQuantSwitchGLU: Module {
         let K = indices.dim(-1)
         let idxFlat = indices.reshaped([-1]).asType(.uint32)
 
+        // BUG3 DIAG: dump xRot for layer 0 first call
+        if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" {
+            nonisolated(unsafe) struct _GTQ { static var fired = false }
+            if !_GTQ.fired {
+                _GTQ.fired = true
+                let xRot0 = JANGTQKernels.hadamardRotate(xFlat, signs: signsIn, dim: inputDims)
+                // Token 8 (last) of input
+                let tok = batchTokens - 1  // last token
+                let xPre8 = xFlat[tok..<(tok+1), 0..<8].asType(.float32).flattened().asArray(Float.self)
+                let xRot8 = xRot0[tok..<(tok+1), 0..<8].asType(.float32).flattened().asArray(Float.self)
+                let xRotN = sqrt((xRot0 * xRot0).sum()).item(Float.self)
+                let signsV = signsIn[0..<8].asType(.float32).flattened().asArray(Float.self)
+                // packed[107, 0..<4] (expert 107, first row, first 4 packed cols)
+                let pck107 = gateProj.packed[107..<108, 0..<1, 0..<4].asType(.uint32).flattened().asArray(UInt32.self)
+                let nrm107 = gateProj.norms[107..<108, 0..<8].asType(.float32).flattened().asArray(Float.self)
+                let cb = cbGate.asType(.float32).flattened().asArray(Float.self)
+                let msg = "[BUG3-TQ] xFlat[\(tok),:8]=\(xPre8)\n[BUG3-TQ] signs[:8]=\(signsV)\n[BUG3-TQ] xRot[\(tok),:8]=\(xRot8) full_norm=\(xRotN)\n[BUG3-TQ] gateProj.packed[107,0,:4]=\(pck107)\n[BUG3-TQ] gateProj.norms[107,:8]=\(nrm107)\n[BUG3-TQ] codebook=\(cb)\n"
+                if let d = msg.data(using: .utf8) { try? FileHandle.standardError.write(contentsOf: d) }
+            }
+        }
+
         let cacheKey = "bt\(batchTokens).K\(K).b\(bits)"
         if compiledCache[cacheKey] == nil {
             // Capture dimensions in the closure; signs/codebooks come
@@ -202,6 +223,11 @@ public class TurboQuantSwitchGLU: Module {
             }
             // shapeless: true so the same compiled graph handles different
             // tokens-per-call without recompiling, mirroring Python.
+            // BUG3 (2026-04-25): the compile path was earlier suspected as
+            // the source of routed-expert divergence. Verified clean —
+            // actual root cause was `resolveQuantOverrides` corrupting
+            // `jangtqRoutedBits` from `quantization.bits=8`. Compile path
+            // is fine, restore.
             compiledCache[cacheKey] = compile(shapeless: true, body)
         }
         let compiled = compiledCache[cacheKey]!

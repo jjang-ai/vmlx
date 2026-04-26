@@ -78,7 +78,8 @@ private let _dsv4CompiledLimitedSwiGLU: @Sendable (MLXArray, MLXArray, MLXArray)
         let upClamped = clip(upOut, min: -limit, max: limit)
         return silu(gateClamped) * upClamped
     }
-    return HardwareInfo.isCompiledDecodeSupported ? compile(shapeless: true, body) : body
+    // TEMP DISABLE COMPILE 2026-04-25: shape-cache bug bleeding prefill L into decode
+    return body
 }()
 
 /// Fused HyperConnection.expand body: post * blockOut + matmul(comb, residual).
@@ -93,9 +94,7 @@ nonisolated(unsafe) private let _dsv4CompiledHcExpandArr: ([MLXArray]) -> [MLXAr
         let blockB = expandedDimensions(blockOut, axis: -2)
         return [postB * blockB + matmul(comb, residual)]
     }
-    if HardwareInfo.isCompiledDecodeSupported {
-        return compile(shapeless: true, body)
-    }
+    // TEMP DISABLE COMPILE 2026-04-25: shape-cache bug
     return body
 }()
 private func _dsv4CompiledHcExpand(
@@ -114,6 +113,8 @@ nonisolated(unsafe) private let _dsv4CompiledHyperHeadArr: ([MLXArray]) -> [MLXA
         let pre = sigmoid(mixes * scale + base) + eps
         return [(expandedDimensions(pre, axis: -1) * xF32).sum(axis: 2)]
     }
+    // TEMP DISABLE COMPILE 2026-04-25: shape-cache bug
+    return body
     if HardwareInfo.isCompiledDecodeSupported {
         return compile(shapeless: true, body)
     }
@@ -129,12 +130,18 @@ private func _dsv4CompiledHyperHead(
 /// Fused gate math: fp32 matmul + sqrtsoftplus. Bug 1.8 demands the
 /// matmul be in fp32; this fixture preserves the cast and fuses the
 /// downstream `sqrt(log1p(exp(g)))` into one graph.
+///
+/// TEMP DISABLED COMPILE (2026-04-25): suspected of caching prefill L
+/// shape across decode calls — caused MoE forward to return (1, 5, 4096)
+/// for decode input (1, 1, 4096). Bypass compile to verify, restore
+/// after fix.
 private let _dsv4CompiledGateScores: @Sendable (MLXArray, MLXArray) -> MLXArray = {
     let body: @Sendable (MLXArray, MLXArray) -> MLXArray = { xF32, wF32 in
         let gates = matmul(xF32, wF32.T)
         return sqrt(log(1.0 + exp(gates)))
     }
-    return HardwareInfo.isCompiledDecodeSupported ? compile(shapeless: true, body) : body
+    // return HardwareInfo.isCompiledDecodeSupported ? compile(shapeless: true, body) : body
+    return body
 }()
 
 /// Cache of unit-weight tensors for per-head Q RMSNorm (DSV4 has no learned
@@ -172,7 +179,8 @@ private let _dsv4CompiledSinkhornIter: @Sendable (MLXArray, MLXArray) -> MLXArra
         let rowNormed = comb / (comb.sum(axis: -1, keepDims: true) + eps)
         return rowNormed / (rowNormed.sum(axis: -2, keepDims: true) + eps)
     }
-    return HardwareInfo.isCompiledDecodeSupported ? compile(shapeless: true, body) : body
+    // TEMP DISABLE COMPILE 2026-04-25: shape-cache bug bleeding prefill L into decode
+    return body
 }()
 
 // MARK: - Fused mHC split-Sinkhorn Metal kernel (Phase S3, 2026-04-24)
@@ -444,10 +452,41 @@ public struct DeepseekV4JANGTQConfiguration: Codable, Sendable {
     /// `.group_size` (HF convention) into the JANG-named fields so the
     /// model loader sees one source of truth. Top-level `group_size`
     /// (JANGTQ convention) still wins when present.
+    ///
+    /// §414 (BUG 3 ROOT CAUSE, 2026-04-25): the previous version overwrote
+    /// `jangtqRoutedBits` from `quantization.bits` unconditionally. After
+    /// the §410 config-metadata bug fix, bundles ship `quantization.bits=8`
+    /// (the AFFINE setting for embed/lm_head/attention/shared experts) at
+    /// the top level. That value is NOT the JANGTQ routed-expert bits —
+    /// the bundle ships `routed_expert_bits=2` separately. Overwriting
+    /// `jangtqRoutedBits=8` made TurboQuantSwitchLinear allocate packed
+    /// arrays sized for 8-bit codes (4 codes per uint32) and lookup an
+    /// 8-bit (256-entry) Lloyd-Max codebook instead of the 2-bit (4-entry)
+    /// codebook that matches the on-disk packed weights → routed-expert
+    /// outputs were 4× wrong magnitude AND sign-flipped → garbage logits
+    /// → multilingual gibberish output even though attention/HC/embedding
+    /// were all bit-exact to Python.
+    ///
+    /// Fix: only override `jangtqRoutedBits` when `quantization.mode == "tq"`.
+    /// For affine-mode top-level quantization, leave the JANG-named field
+    /// alone — it has its own decoded value from `routed_expert_bits`.
     public mutating func resolveQuantOverrides() {
         if let q = quantization {
             if let g = q.groupSize { self.jangtqGroupSize = g }
-            if let b = q.bits { self.jangtqRoutedBits = b }
+            // §414 — DO NOT fold q.bits into jangtqRoutedBits anymore.
+            // After the config-metadata bug fix (§410), bundles ship
+            // `quantization.bits=8` for AFFINE attention/embed/lm_head,
+            // while routed-expert TQ bits live in the separate top-level
+            // `routed_expert_bits` field (decoded directly into
+            // `jangtqRoutedBits`). Folding 8 here corrupts the TurboQuant
+            // codebook size (256 entries vs the correct 4) and the
+            // packed-weight stride → 4× wrong-magnitude routed expert
+            // output → garbage logits. (Bug 3 root cause.)
+            //
+            // If a future bundle uses TQ for the top-level (mode='tq')
+            // and ships its bits there, we'd need a more nuanced
+            // detection — until then, treat top-level quantization as
+            // affine and trust the JANG-named field.
         }
     }
 
@@ -897,7 +936,33 @@ final class DeepseekV4MoE: Module, UnaryLayer {
 
     func forward(_ x: MLXArray, inputIds: MLXArray) -> MLXArray {
         let (inds, scores) = gate(x, inputIds: inputIds)
-        let yRouted = switchMLP(x, inds)
+        var yRouted = switchMLP(x, inds)
+        // BUG3 DIAG: trace MoE internals
+        if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" && layerIdx == 0 {
+            nonisolated(unsafe) struct _GM { static var fired = false }
+            if !_GM.fired {
+                _GM.fired = true
+                let lastIdx = x.dim(1) - 1
+                let xV = x[0..<1, lastIdx..<(lastIdx+1), 0..<8].asType(.float32).flattened().asArray(Float.self)
+                let indsV = inds[0..<1, lastIdx..<(lastIdx+1), 0..<inds.dim(2)].asType(.int32).flattened().asArray(Int32.self)
+                let scoresV = scores[0..<1, lastIdx..<(lastIdx+1), 0..<scores.dim(2)].asType(.float32).flattened().asArray(Float.self)
+                let yRV = yRouted[0..<1, lastIdx..<(lastIdx+1), 0..<yRouted.dim(2), 0..<8].asType(.float32).flattened().asArray(Float.self)
+                let yRn = sqrt((yRouted.asType(.float32) * yRouted.asType(.float32)).sum()).item(Float.self)
+                var msg = "[BUG3-MOE] x[0,L-1,:8]=\(xV)\n[BUG3-MOE] inds=\(indsV) scores=\(scoresV)\n[BUG3-MOE] yRouted shape=\(yRouted.shape) full_norm=\(yRn) per-K[:8]=\(yRV)\n"
+                if let d = msg.data(using: .utf8) { try? FileHandle.standardError.write(contentsOf: d) }
+            }
+        }
+        // ── Bug 3 fix attempt (2026-04-25): Python `_DSV4SwiGLU` clamps
+        // gate to [-∞, swiglu_limit] and up to [-swiglu_limit, swiglu_limit]
+        // BEFORE silu*up. Swift's TurboQuantSwitchGLU bakes plain SwiGLU
+        // without clamps. We can't easily inject the clamp inside the
+        // fused Metal kernel, so post-apply a symmetric clamp on the
+        // fused output. Not bit-exact to Python but bounds extreme
+        // values that could produce wrong-sign logits over 43 layers.
+        if config.swigluLimit > 0 {
+            let lim = MLXArray(config.swigluLimit * config.swigluLimit)
+            yRouted = MLX.clip(yRouted, min: -lim, max: lim)
+        }
         // §404 — fp32 accumulator on the routed-expert weighted sum.
         //
         // Without the fp32 cast each expert contribution is summed in
@@ -916,7 +981,21 @@ final class DeepseekV4MoE: Module, UnaryLayer {
         let yRoutedF32 = yRouted.asType(.float32)
         var yF32 = (yRoutedF32 * expandedDimensions(scoresF32, axis: -1))
             .sum(axis: -2)
-        yF32 = yF32 + sharedExperts(x).asType(.float32)
+        let sharedOut = sharedExperts(x).asType(.float32)
+        if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" && layerIdx == 0 {
+            nonisolated(unsafe) struct _GM2 { static var fired = false }
+            if !_GM2.fired {
+                _GM2.fired = true
+                let lastIdx = yF32.dim(1) - 1
+                let routedSum = yF32[0..<1, lastIdx..<(lastIdx+1), 0..<8].asType(.float32).flattened().asArray(Float.self)
+                let routedNorm = sqrt((yF32 * yF32).sum()).item(Float.self)
+                let sharedV = sharedOut[0..<1, lastIdx..<(lastIdx+1), 0..<8].asType(.float32).flattened().asArray(Float.self)
+                let sharedNorm = sqrt((sharedOut * sharedOut).sum()).item(Float.self)
+                let msg = "[BUG3-MOE] routedSum[0,L-1,:8]=\(routedSum) full_norm=\(routedNorm)\n[BUG3-MOE] shared[0,L-1,:8]=\(sharedV) shared_norm=\(sharedNorm)\n"
+                if let d = msg.data(using: .utf8) { try? FileHandle.standardError.write(contentsOf: d) }
+            }
+        }
+        yF32 = yF32 + sharedOut
         return yF32.asType(dtype)
     }
 }
@@ -1395,18 +1474,22 @@ final class DeepseekV4Attention: Module {
         }
         // ── End long-context branch ──────────────────────────────────────────
 
-        // Phase-Swift-Sinks (2026-04-24, ralph iter): pass attention sinks.
-        // Sinks expose was already in the mlx-swift binding at MLXFast.swift:206
-        // (`sinks: MLXArray? = nil` parameter). DSV4 Swift was just missing
-        // the call site argument. Without sinks, attention has no learned
-        // per-head bias logit — output quality degrades.
+        // ── Bug 3 fix (2026-04-25): match Python `sinks=None` ────────────────
+        // Earlier `Phase-Swift-Sinks` note thought we needed to PASS sinks,
+        // but Python reference at mlx_model.py:1125 explicitly passes
+        // `sinks=None`. Python `attn_sink` parameter has shape
+        // (n_kv_heads=1, 1, head_dim=512) and is initialized to zeros but
+        // NEVER passed to SDPA — it stays as a model-level parameter that
+        // gets loaded but doesn't affect attention math. Swift was passing
+        // `attnSink: (n_heads=64,)` which (a) has the wrong shape and
+        // (b) injects spurious per-head bias into SDPA logits → garbage
+        // tokens. Removing sinks restores parity with Python.
         var out = MLXFast.scaledDotProductAttention(
             queries: q,
             keys: keys,
             values: values,
             scale: softmaxScale,
-            mask: sdpaMask,
-            sinks: attnSink.asType(q.dtype)
+            mask: sdpaMask
         )
 
         // Phase-Swift-InverseRope (2026-04-24, ralph iter): apply inverse RoPE
@@ -1496,6 +1579,7 @@ final class DeepseekV4Attention: Module {
 
 final class DeepseekV4DecoderLayer: Module {
     nonisolated(unsafe) static var _hcCollapseTraceCount: Int = 0  // DIAG: first 5 calls
+    nonisolated(unsafe) static var _layerCallCount: Int = 0  // DIAG: layer entry
     @ModuleInfo(key: "self_attn") var selfAttn: DeepseekV4Attention
     var mlp: DeepseekV4MoE
     @ModuleInfo(key: "input_layernorm") var inputLayerNorm: RMSNorm
@@ -1566,6 +1650,27 @@ final class DeepseekV4DecoderLayer: Module {
             mixes: mixes, scale: scale, base: base,
             hcMult: config.hcMult, iters: config.hcSinkhornIters, eps: config.hcEps
         )
+        // BUG3 DIAG: dump first call's pre/post/comb at last position
+        if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" {
+            nonisolated(unsafe) struct _G4 { static var fired = false }
+            if !_G4.fired {
+                _G4.fired = true
+                let lastIdx = L - 1
+                let preV = pre[0..<1, lastIdx..<(lastIdx+1), .ellipsis].asType(.float32).flattened().asArray(Float.self)
+                let postV = post[0..<1, lastIdx..<(lastIdx+1), .ellipsis].asType(.float32).flattened().asArray(Float.self)
+                let combV = comb[0..<1, lastIdx..<(lastIdx+1), .ellipsis].asType(.float32).flattened().asArray(Float.self)
+                let mixV = mixes[0..<1, lastIdx..<(lastIdx+1), .ellipsis].asType(.float32).flattened().asArray(Float.self)
+                let scaleV = scale.asType(.float32).flattened().asArray(Float.self)
+                let baseV = base.asType(.float32).flattened().asArray(Float.self)
+                let fnFirstRow = fn[0..<1, 0..<8].asType(.float32).flattened().asArray(Float.self)
+                let fnLastRow = fn[23..<24, 0..<8].asType(.float32).flattened().asArray(Float.self)
+                let flatLast8 = flat[0..<1, lastIdx..<(lastIdx+1), 0..<8].asType(.float32).flattened().asArray(Float.self)
+                let msg = "[BUG3-MIX] scale=\(scaleV) base=\(baseV)\n[BUG3-MIX] fn[0,:8]=\(fnFirstRow) fn[23,:8]=\(fnLastRow)\n[BUG3-MIX] flat[0,L-1,:8]=\(flatLast8)\n[BUG3-MIX] mixes=\(mixV)\n[BUG3-MIX] pre=\(preV)\n[BUG3-MIX] post=\(postV)\n[BUG3-MIX] comb=\(combV)\n"
+                if let d = msg.data(using: .utf8) {
+                    try? FileHandle.standardError.write(contentsOf: d)
+                }
+            }
+        }
         let preB = expandedDimensions(pre, axis: -1)
         let collapsed = (preB * h.asType(.float32)).sum(axis: 2)
         return (collapsed.asType(h.dtype), post, comb)
@@ -1589,23 +1694,94 @@ final class DeepseekV4DecoderLayer: Module {
         cache: KVCache?,
         inputIds: MLXArray
     ) -> MLXArray {
+        // DIAG (2026-04-25): trace decoder layer entry, especially during decode
+        if DeepseekV4DecoderLayer._layerCallCount < 50 || DeepseekV4DecoderLayer._layerCallCount % 43 == 0 {
+            DeepseekV4DecoderLayer._layerCallCount += 1
+            let msg = "[layer-call #\(DeepseekV4DecoderLayer._layerCallCount)] h.shape=\(h.shape) inputIds.shape=\(inputIds.shape) cache.offset=\(cache?.offset ?? -1)\n"
+            if let data = msg.data(using: .utf8) {
+                try? FileHandle.standardError.write(contentsOf: data)
+            }
+        } else {
+            DeepseekV4DecoderLayer._layerCallCount += 1
+        }
         // ATTN HC
         var residual = h
         var (x, post, comb) = hcCollapse(
             h, fn: hcAttnFn, scale: hcAttnScale, base: hcAttnBase
         )
         x = inputLayerNorm(x)
+        // BUG3 DIAG: dump pre-attn collapsed input
+        let layerIdxLocal = DeepseekV4DecoderLayer._layerCallCount  // approximate
+        if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" && layerIdxLocal <= 1 {
+            let lastIdx = x.dim(1) - 1
+            let v = x[0..<1, lastIdx..<(lastIdx+1), 0..<8].asType(.float32).flattened().asArray(Float.self)
+            let msg = "[BUG3-LAYER0] post-inputLN x[0,L-1,:8]=\(v) shape=\(x.shape)\n"
+            if let d = msg.data(using: .utf8) { try? FileHandle.standardError.write(contentsOf: d) }
+        }
         x = selfAttn(x, mask: mask, cache: cache)
+        if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" && layerIdxLocal <= 1 {
+            let lastIdx = x.dim(1) - 1
+            let v = x[0..<1, lastIdx..<(lastIdx+1), 0..<8].asType(.float32).flattened().asArray(Float.self)
+            let xn = sqrt((x.asType(.float32) * x.asType(.float32)).sum()).item(Float.self)
+            let msg = "[BUG3-LAYER0] post-attn x[0,L-1,:8]=\(v) shape=\(x.shape) full_norm=\(xn)\n"
+            if let d = msg.data(using: .utf8) { try? FileHandle.standardError.write(contentsOf: d) }
+        }
         var hNew = hcExpand(blockOut: x, residual: residual, post: post, comb: comb)
+        if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" && layerIdxLocal <= 1 {
+            let lastIdx = hNew.dim(1) - 1
+            for slot in 0..<4 {
+                let v = hNew[0..<1, lastIdx..<(lastIdx+1), slot..<(slot+1), 0..<8].asType(.float32).flattened().asArray(Float.self)
+                let s = hNew[0..<1, lastIdx..<(lastIdx+1), slot..<(slot+1), .ellipsis].asType(.float32)
+                let n = sqrt((s*s).sum()).item(Float.self)
+                let msg = "[BUG3-LAYER0] post-attn-HC slot=\(slot) :8=\(v) norm=\(n)\n"
+                if let d = msg.data(using: .utf8) { try? FileHandle.standardError.write(contentsOf: d) }
+            }
+        }
 
         // FFN HC
         residual = hNew
         (x, post, comb) = hcCollapse(
             hNew, fn: hcFfnFn, scale: hcFfnScale, base: hcFfnBase
         )
+        // DIAG: shape after FFN hcCollapse
+        if DeepseekV4DecoderLayer._layerCallCount <= 50 {
+            let s = "[layer-flow #\(DeepseekV4DecoderLayer._layerCallCount)] post-FFN-hcCollapse x.shape=\(x.shape) residual.shape=\(residual.shape)\n"
+            if let d = s.data(using: .utf8) { try? FileHandle.standardError.write(contentsOf: d) }
+        }
+        if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" && layerIdxLocal <= 1 {
+            let lastIdx = x.dim(1) - 1
+            let v = x[0..<1, lastIdx..<(lastIdx+1), 0..<8].asType(.float32).flattened().asArray(Float.self)
+            let postV = post[0..<1, lastIdx..<(lastIdx+1), .ellipsis].asType(.float32).flattened().asArray(Float.self)
+            let combV = comb[0..<1, lastIdx..<(lastIdx+1), .ellipsis].asType(.float32).flattened().asArray(Float.self)
+            let msg = "[BUG3-FFN] post-FFN-collapsed x[0,L-1,:8]=\(v) shape=\(x.shape)\n[BUG3-FFN] FFN-post=\(postV)\n[BUG3-FFN] FFN-comb=\(combV)\n"
+            if let d = msg.data(using: .utf8) { try? FileHandle.standardError.write(contentsOf: d) }
+        }
         x = postAttentionLayerNorm(x)
+        if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" && layerIdxLocal <= 1 {
+            let lastIdx = x.dim(1) - 1
+            let v = x[0..<1, lastIdx..<(lastIdx+1), 0..<8].asType(.float32).flattened().asArray(Float.self)
+            let msg = "[BUG3-FFN] post-postAttnLN x[0,L-1,:8]=\(v)\n"
+            if let d = msg.data(using: .utf8) { try? FileHandle.standardError.write(contentsOf: d) }
+        }
         x = mlp.forward(x, inputIds: inputIds)
+        if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" && layerIdxLocal <= 1 {
+            let lastIdx = x.dim(1) - 1
+            let v = x[0..<1, lastIdx..<(lastIdx+1), 0..<8].asType(.float32).flattened().asArray(Float.self)
+            let xn = sqrt((x.asType(.float32) * x.asType(.float32)).sum()).item(Float.self)
+            let msg = "[BUG3-FFN] post-mlp x[0,L-1,:8]=\(v) shape=\(x.shape) full_norm=\(xn)\n"
+            if let d = msg.data(using: .utf8) { try? FileHandle.standardError.write(contentsOf: d) }
+        }
+        // DIAG: mlp output shape
+        if DeepseekV4DecoderLayer._layerCallCount <= 50 {
+            let s = "[layer-flow #\(DeepseekV4DecoderLayer._layerCallCount)] post-mlp x.shape=\(x.shape)\n"
+            if let d = s.data(using: .utf8) { try? FileHandle.standardError.write(contentsOf: d) }
+        }
         hNew = hcExpand(blockOut: x, residual: residual, post: post, comb: comb)
+        // DIAG: final return shape
+        if DeepseekV4DecoderLayer._layerCallCount <= 50 {
+            let s = "[layer-flow #\(DeepseekV4DecoderLayer._layerCallCount)] return hNew.shape=\(hNew.shape)\n"
+            if let d = s.data(using: .utf8) { try? FileHandle.standardError.write(contentsOf: d) }
+        }
 
         return hNew
     }
@@ -1649,6 +1825,18 @@ public class DeepseekV4JANGTQModelInner: Module {
                 try? FileHandle.standardError.write(contentsOf: data)
             }
         }
+        // BUG3 DIAG: post-embed first-token first-8-elements
+        if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" {
+            nonisolated(unsafe) struct _G2 { static var fired = false }
+            if !_G2.fired {
+                _G2.fired = true
+                let v = h0[0..<1, 0..<1, 0..<8].asType(.float32).flattened().asArray(Float.self)
+                let msg = "[BUG3-DIAG] post-embed h0[0,0,:8]=\(v) dtype=\(h0.dtype)\n"
+                if let d = msg.data(using: .utf8) {
+                    try? FileHandle.standardError.write(contentsOf: d)
+                }
+            }
+        }
         // Tile: (B, L, hidden) → (B, L, hc_mult, hidden)
         var h = tiled(expandedDimensions(h0, axis: -2), repetitions: [1, 1, config.hcMult, 1])
 
@@ -1659,6 +1847,30 @@ public class DeepseekV4JANGTQModelInner: Module {
 
         for (i, layer) in layers.enumerated() {
             h = layer(h, mask: mask, cache: cache?[i], inputIds: inputIds)
+            // BUG3 DIAG: dump first layer's output (h is (B, L, hcMult, hidden))
+            if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" && i < 2 {
+                nonisolated(unsafe) struct _G3 { static var fired: [Int: Bool] = [:] }
+                if _G3.fired[i] == nil {
+                    _G3.fired[i] = true
+                    let lastIdx = h.dim(1) - 1
+                    // Norm of full residual at last position
+                    let lastFlat = h[0..<1, lastIdx..<(lastIdx+1), .ellipsis].asType(.float32)
+                    let normVal = sqrt((lastFlat * lastFlat).sum()).item(Float.self)
+                    var msg = "[BUG3-DIAG] post-layer\(i) full_norm=\(normVal)\n"
+                    // Per-slot first-8
+                    for slot in 0..<4 {
+                        let v = h[0..<1, lastIdx..<(lastIdx+1), slot..<(slot+1), 0..<8]
+                            .asType(.float32).flattened().asArray(Float.self)
+                        let slotFull = h[0..<1, lastIdx..<(lastIdx+1), slot..<(slot+1), .ellipsis]
+                            .asType(.float32)
+                        let slotNorm = sqrt((slotFull * slotFull).sum()).item(Float.self)
+                        msg += "[BUG3-DIAG] post-layer\(i) slot=\(slot) :8=\(v) norm=\(slotNorm)\n"
+                    }
+                    if let d = msg.data(using: .utf8) {
+                        try? FileHandle.standardError.write(contentsOf: d)
+                    }
+                }
+            }
         }
 
         // HyperHead reduce: (B, L, hc_mult, hidden) → (B, L, hidden)
@@ -1713,7 +1925,36 @@ public final class DeepseekV4JANGTQModel: Module, LLMModel, KVCacheDimensionProv
         cache: [KVCache]?
     ) -> MLXArray {
         let h = model(inputs, cache: cache)
-        return lmHead(h)
+        let logits = lmHead(h)
+        // BUG3 DIAG: dump first call's exit logits + hidden state for cross-runtime compare
+        if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" {
+            nonisolated(unsafe) struct _G { static var fired = false }
+            if !_G.fired {
+                _G.fired = true
+                // Hidden state: last position
+                let lastIdx = h.dim(1) - 1
+                let lastH = h[0..<1, lastIdx..<(lastIdx+1), 0..<8].asType(.float32)
+                let lastL = logits[0..<1, lastIdx..<(lastIdx+1), 0..<logits.dim(2)].asType(.float32)
+                let stats = "min=\(lastL.min().item(Float.self)) max=\(lastL.max().item(Float.self)) mean=\(lastL.mean().item(Float.self))"
+                let h8 = lastH.flattened().asArray(Float.self)
+                // Top-5 logits
+                let lastFlat = lastL.flattened()
+                let sortedIdx = argSort(-lastFlat, axis: 0)[0..<5]
+                let top5Idx = sortedIdx.asArray(Int32.self)
+                let top5Vals = takeAlong(lastFlat, sortedIdx, axis: 0).asArray(Float.self)
+                var msg = "[BUG3-DIAG] inputs.shape=\(inputs.shape) inputs[0]=\(inputs[0].asArray(Int32.self))\n"
+                msg += "[BUG3-DIAG] last hidden h[0,L-1,:8]=\(h8)\n"
+                msg += "[BUG3-DIAG] logits stats: \(stats)\n"
+                msg += "[BUG3-DIAG] top-5 logits:\n"
+                for (i, v) in zip(top5Idx, top5Vals) {
+                    msg += "[BUG3-DIAG]   tok=\(i) logit=\(v)\n"
+                }
+                if let d = msg.data(using: .utf8) {
+                    try? FileHandle.standardError.write(contentsOf: d)
+                }
+            }
+        }
+        return logits
     }
 
     /// Map DSV4 bundle tensor names → my Swift module structure.
@@ -1858,15 +2099,18 @@ public final class DeepseekV4JANGTQModel: Module, LLMModel, KVCacheDimensionProv
 
 // MARK: - Helpers
 
-/// Tile x along given axes.
+/// Tile x along given axes — MATERIALIZED, not a broadcast view.
+///
+/// Bug 3 root cause (2026-04-25): the previous `broadcast` implementation
+/// returned a strided view sharing memory across all hc_mult slots. Python
+/// reference at `mlx_model.py:1490` explicitly comments:
+///   "Must be materialized (not a broadcast view) — matches torch reference
+///    `h.unsqueeze(2).repeat(1, 1, hc_mult, 1)`. Subsequent
+///    `flatten(start_axis=2)` inside `_hc_pre` would see wrong strided data
+///    from a broadcast view."
+/// MLX-swift provides `MLX.tiled(...)` which performs the materializing copy.
 func tiled(_ x: MLXArray, repetitions: [Int]) -> MLXArray {
-    // MLX Swift may have `mx.tile` or `mx.repeat`; using MLXArray.repeated as fallback.
-    // Since tiled(expand, [1,1,hc,1]) == broadcasted, use broadcast_to for efficiency.
-    var shape = x.shape
-    for (i, r) in repetitions.enumerated() {
-        shape[i] *= r
-    }
-    return broadcast(x, to: shape)
+    return MLX.tiled(x, repetitions: repetitions)
 }
 
 // MARK: - DSV4-specific RoPE (matches Python DeepseekV4RoPE exactly)
