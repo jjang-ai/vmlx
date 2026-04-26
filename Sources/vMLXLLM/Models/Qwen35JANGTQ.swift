@@ -213,6 +213,16 @@ public struct Qwen35JANGTQTextConfiguration: Codable, Sendable {
         // §346 T6 — accept `mxtq_bits` as flat Int OR per-role dict.
         // See Qwen35MoEJANGTQ for the rationale; same bundles may be
         // loaded through either the LLM-text or VLM factory path.
+        //
+        // §418 (2026-04-25) — fallback to top-level `quantization.bits`
+        // when `mxtq_bits` is absent. Qwen3.6-35B-A3B-JANGTQ4 ships
+        // `quantization.bits=4` only (no `mxtq_bits`, no
+        // `routed_expert_bits`). With the previous `else 2` fallback,
+        // the TurboQuant routed experts loaded with a 2-bit codebook
+        // (4 entries) instead of 4-bit (16 entries), producing empty
+        // output. Bundle naming convention "JANGTQ4" guarantees routed
+        // bits == top-level affine bits when no dedicated routed-bits
+        // field is present.
         if let flat = try? container.decodeIfPresent(Int.self, forKey: .mxtqBits) {
             self.mxtqBits = flat
         } else if let dict = try? container.decodeIfPresent(
@@ -221,6 +231,8 @@ public struct Qwen35JANGTQTextConfiguration: Codable, Sendable {
                 ?? dict.values.first
         {
             self.mxtqBits = routed
+        } else if let qBits = Qwen35JANGTQTextConfiguration._peekQuantizationBits(decoder) {
+            self.mxtqBits = qBits
         } else {
             self.mxtqBits = 2
         }
@@ -257,6 +269,28 @@ public struct Qwen35JANGTQTextConfiguration: Codable, Sendable {
         if self.headDim == nil {
             self.headDim = self.hiddenSize / self.attentionHeads
         }
+    }
+
+    /// §418 (2026-04-25) — peek at top-level `quantization.bits` for the
+    /// `mxtq_bits` fallback. Some bundles (e.g. Qwen3.6-A3B-JANGTQ4)
+    /// ship `quantization.bits=4` only, omitting the dedicated
+    /// `mxtq_bits` field. Without this fallback the routed-expert
+    /// TurboQuant kernel loaded with the default 2-bit codebook,
+    /// producing empty output.
+    private enum QuantPeekKey: String, CodingKey { case quantization }
+    private struct QuantPeek: Decodable {
+        let bits: Int?
+        let groupSize: Int?
+        enum CodingKeys: String, CodingKey {
+            case bits, groupSize = "group_size"
+        }
+    }
+    fileprivate static func _peekQuantizationBits(_ decoder: Decoder) -> Int? {
+        guard let outer = try? decoder.container(keyedBy: QuantPeekKey.self),
+              let q = try? outer.decodeIfPresent(QuantPeek.self, forKey: .quantization),
+              let b = q.bits
+        else { return nil }
+        return b
     }
 
     /// Project this JANGTQ config into the affine-side representation
