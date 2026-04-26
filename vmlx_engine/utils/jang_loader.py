@@ -2183,6 +2183,12 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
     try:
         if tmp_dir is not None:
             logger.info(f"  Loading {len(result)} repacked shards via mmap")
+            # vmlx#114: cross-shard pre-fix over the repacked shard set so any
+            # module whose .weight + .scales straddle a boundary still gets
+            # bits/group_size resolved before load.
+            _shape_map_xshard = _collect_shard_shape_map(result)
+            _pre_fix_bits_from_metadata(model, _shape_map_xshard, block_size)
+            del _shape_map_xshard
             for sf in result:
                 shard_weights = mx.load(sf)
                 if hasattr(model, "sanitize"):
@@ -2310,6 +2316,14 @@ def _load_jang_v1_vlm(
         )
 
         from mlx_vlm.utils import sanitize_weights
+
+        # vmlx#114: cross-shard pre-fix for the VLM sanitize_weights second-pass.
+        # Same rationale as the LLM v2 + VLM JANG sites — modules whose .weight
+        # and .scales straddle a shard boundary need bits/group_size resolved
+        # before the per-shard load loop.
+        _shape_map_xshard = _collect_shard_shape_map(shard_files)
+        _pre_fix_bits_from_metadata(model, _shape_map_xshard, block_size)
+        del _shape_map_xshard
 
         for sf in shard_files:
             shard_weights = mx.load(sf)
