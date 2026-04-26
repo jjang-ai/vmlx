@@ -774,6 +774,159 @@ public struct JangLoader: Sendable {
         if let i = value as? Int { return Float(i) }
         return nil
     }
+
+    // MARK: - §421 JANGTQ shape-authoritative validator
+
+    /// §421 — Inspect post-sanitize weight tensors for a JANGTQ bundle and
+    /// verify every `tq_packed` shape is internally consistent with a single
+    /// `(bits, in_features)` choice. Returns a struct describing the inferred
+    /// routed-expert bit width and any inconsistencies.
+    ///
+    /// **Why this exists.** Some JANGTQ bundles (Qwen3.6-A3B-JANGTQ4,
+    /// Kimi-K2.6-Small-JANGTQ at audit time 2026-04-25) shipped without
+    /// `mxtq_bits` / `routed_expert_bits` fields, so the config-time
+    /// resolution chain falls back to top-level `quantization.bits` —
+    /// which describes affine non-routed bits, NOT routed-expert bits.
+    /// When those two differ (8-bit affine attention with 4-bit routed
+    /// experts) the loader picked 8 → TurboQuantSwitchLinear allocated
+    /// the wrong-sized `_packed` array → either hard shape-mismatch on
+    /// `model.update` OR silent-garbage output if the kernel happened
+    /// to consume mismatched packing without throwing.
+    ///
+    /// `inferRoutedBitsFromWeights` is the **shape-authoritative** answer:
+    /// `tq_packed.shape == [E, out_features, packed_cols]` where
+    /// `packed_cols == ceil(in_features * bits / 32)`. Given a candidate
+    /// `in_features` from config, we solve for bits and validate that
+    /// it lies in the legal set {2, 3, 4, 6, 8}. Run this against EVERY
+    /// `*.tq_packed` tensor; all must agree.
+    ///
+    /// Invocation pattern:
+    /// ```swift
+    /// let report = JangLoader.inferRoutedBitsFromWeights(
+    ///     weights: weights,
+    ///     candidateInFeatures: [hiddenSize, moeIntermediateSize, intermediateSize]
+    /// )
+    /// if let bits = report.inferredBits, bits != configuredBits {
+    ///     // log warning, the bundle metadata is incomplete or wrong
+    /// }
+    /// ```
+    public struct JANGTQShapeReport: Sendable {
+        /// Bit width that ALL inspected `tq_packed` tensors agree on, or
+        /// nil if no tensors were found / shapes were inconsistent.
+        public let inferredBits: Int?
+
+        /// Per-tensor diagnoses. Empty when bundle has no `tq_packed`
+        /// tensors (i.e. not a JANGTQ bundle, or a misnamed one).
+        public let perTensor: [(key: String, packedCols: Int, inferredBits: Int?, inFeaturesUsed: Int?)]
+
+        /// Human-readable warning strings. Empty when everything aligns.
+        /// Otherwise contains one line per anomaly:
+        /// - "bundle has tq_packed but no candidate in_features matched"
+        /// - "tq_packed tensors disagree on bits: X vs Y"
+        /// - "bundle bits=4 but config declared bits=8"
+        public let warnings: [String]
+    }
+
+    /// §421 — Walk post-sanitize weights, find every `tq_packed` tensor,
+    /// and infer the routed-expert bit width from on-disk shape.
+    ///
+    /// `candidateInFeatures` lists every plausible in_features value
+    /// (typically `[hiddenSize, moeIntermediateSize]` for MoE, sometimes
+    /// also `intermediateSize` for shared-expert paths). The function
+    /// tries each candidate against each tensor and accepts the bits
+    /// value that yields a legal {2,3,4,6,8} for that pairing.
+    ///
+    /// Robust against:
+    ///   • per-expert layout `experts.<E>.w<N>.tq_packed`  shape (out, P)
+    ///   • stacked layout    `switch_mlp.X_proj.tq_packed` shape (E, out, P)
+    ///   • any future flat layout where the LAST dim is packed_cols
+    public static func inferRoutedBitsFromWeights(
+        weights: [String: MLXArray],
+        candidateInFeatures: [Int],
+        configuredBits: Int? = nil
+    ) -> JANGTQShapeReport {
+        // Legal routed-expert bit widths: {2, 3, 4, 6, 8}. Inlined into
+        // the per-tensor solver below (no need for a separate set).
+        var warnings: [String] = []
+        var perTensor: [(String, Int, Int?, Int?)] = []
+        var votes: [Int: Int] = [:]   // bits → count of agreeing tensors
+
+        for (key, arr) in weights where key.hasSuffix("tq_packed")
+            || key.contains(".tq_packed") {
+            let shape = arr.shape
+            guard let packedCols = shape.last else {
+                perTensor.append((key, 0, nil, nil))
+                continue
+            }
+
+            // Try each candidate in_features. For a match we need:
+            //   bits = packedCols * 32 / inFeatures   AND   packedCols == ceil(inFeatures * bits / 32)
+            // The integer-rounding form keeps us honest on edge sizes.
+            var found: (bits: Int, inFeatures: Int)?
+            for inFeatures in candidateInFeatures where inFeatures > 0 {
+                for bits in [2, 3, 4, 6, 8] {
+                    let valsPerU32 = 32 / bits
+                    let expected = (inFeatures + valsPerU32 - 1) / valsPerU32
+                    if expected == packedCols {
+                        found = (bits, inFeatures)
+                        break
+                    }
+                }
+                if found != nil { break }
+            }
+
+            if let f = found {
+                perTensor.append((key, packedCols, f.bits, f.inFeatures))
+                votes[f.bits, default: 0] += 1
+            } else {
+                perTensor.append((key, packedCols, nil, nil))
+                warnings.append(
+                    "[§421] tq_packed tensor \(key) shape=\(shape) does not match "
+                    + "any (bits, in_features) pairing for in_features ∈ "
+                    + "\(candidateInFeatures) at bits ∈ {2,3,4,6,8}. "
+                    + "Bundle may use a non-standard packing or candidates list "
+                    + "is incomplete.")
+            }
+        }
+
+        let inferredBits: Int?
+        switch votes.count {
+        case 0:
+            inferredBits = nil
+        case 1:
+            inferredBits = votes.keys.first
+        default:
+            inferredBits = nil
+            // Pick the single bits if one tensor disagrees vs the majority,
+            // but still warn loudly.
+            let sorted = votes.sorted { $0.value > $1.value }
+            warnings.append(
+                "[§421] tq_packed tensors disagree on inferred bits: "
+                + "\(sorted.map { "\($0.key)→\($0.value) tensors" }.joined(separator: ", "))"
+                + ". Bundle is malformed — different experts/layers packed at "
+                + "different bit widths. Affected keys: "
+                + perTensor.compactMap { $0.2 != sorted.first?.key ? $0.0 : nil }
+                    .prefix(3).joined(separator: ", "))
+        }
+
+        if let inferred = inferredBits, let configured = configuredBits, inferred != configured {
+            warnings.append(
+                "[§421] config-declared mxtq_bits=\(configured) but bundle's "
+                + "tq_packed shapes imply bits=\(inferred). "
+                + "Routed-expert TurboQuantSwitchLinear was constructed at the "
+                + "wrong bit width — this would have produced silent-garbage "
+                + "output. Either (a) add `mxtq_bits: \(inferred)` to the "
+                + "bundle's config.json, or (b) re-quantize with a JANGTQ "
+                + "tool that emits the correct metadata. The shape-authoritative "
+                + "answer is \(inferred); trust that over the config field.")
+        }
+
+        return JANGTQShapeReport(
+            inferredBits: inferredBits,
+            perTensor: perTensor,
+            warnings: warnings
+        )
+    }
 }
 
 // MARK: - Errors

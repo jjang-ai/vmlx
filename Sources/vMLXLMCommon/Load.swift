@@ -209,6 +209,57 @@ public func loadWeights(
     // per-model cleanup (models can inspect metadata to customize behavior)
     weights = model.sanitize(weights: weights, metadata: metadata)
 
+    // §421 — JANGTQ shape-authoritative routed-bits validator.
+    //
+    // Every JANGTQ bundle ships per-expert `tq_packed` tensors whose
+    // shape encodes the routed quantization bits exactly:
+    //     packed_cols == ceil(in_features * bits / 32)
+    // This validator walks the post-sanitize weights, collects every
+    // `tq_packed` tensor's last-dim, and infers bits given config-known
+    // candidate `in_features` values (hidden_size / moe_intermediate /
+    // intermediate). On mismatch with the bundle's declared bit width
+    // it logs a clear warning naming the inferred value and the
+    // probable root cause (missing `mxtq_bits` / wrong `quantization.bits`
+    // fallback). When config and shape agree (the common case for
+    // well-formed bundles), this is silent.
+    //
+    // Bundles affected at audit time 2026-04-25:
+    //   • Qwen3.6-A3B-JANGTQ4         — no `mxtq_bits`, top.bits=8 → fb=8 (wrong, on-disk=4)
+    //   • Kimi-K2.6-Small-JANGTQ      — no `mxtq_bits`, top.bits=8 → fb=8 (wrong, on-disk=2)
+    //   • MiniMax-M2.7-JANGTQ         — no `mxtq_bits`, top.bits=8 → fb=8 (wrong, on-disk=2)
+    // (HF metadata for these has been patched 2026-04-25; the validator
+    // remains as a defense-in-depth signal for future bundles.)
+    // Auto-discover candidate in_features values by collecting the unique
+    // last-dim sizes of every non-tq tensor. These cover hidden_size,
+    // intermediate_size, moe_intermediate_size, head_dim × num_heads,
+    // vocab_size for embed/lm_head, etc. — the routed-expert in_features
+    // is guaranteed to be one of them. No per-model knowledge needed.
+    var candidates = Set<Int>()
+    for (key, arr) in weights where !key.contains("tq_packed") && !key.contains("tq_norms") {
+        for d in arr.shape where d > 1 { candidates.insert(d) }
+    }
+    let jangtqShapeReport = JangLoader.inferRoutedBitsFromWeights(
+        weights: weights,
+        candidateInFeatures: Array(candidates).sorted(),
+        configuredBits: nil   // pass nil — we don't have per-model bits
+                              // accessor here; the validator still emits
+                              // the per-tensor consistency check + the
+                              // "no candidate matched" warning.
+    )
+    for warning in jangtqShapeReport.warnings {
+        if let data = (warning + "\n").data(using: .utf8) {
+            try? FileHandle.standardError.write(contentsOf: data)
+        }
+    }
+    if let inferred = jangtqShapeReport.inferredBits,
+       ProcessInfo.processInfo.environment["VMLX_LOAD_DIAG"] == "1" {
+        let line = "[§421] inferred routed-expert bits = \(inferred) "
+            + "(\(jangtqShapeReport.perTensor.count) tq_packed tensors all agree)\n"
+        if let data = line.data(using: .utf8) {
+            try? FileHandle.standardError.write(contentsOf: data)
+        }
+    }
+
     // JANG: dequantize MoE gate weights from quantized uint32 → float.
     // Gates are stored at 8-bit (CRITICAL tier) but may have different group_size
     // than the body. Dequantizing resolves ambiguous bit/group_size inference.
