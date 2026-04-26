@@ -110,7 +110,7 @@ check "image response carries placeholder_output warning" \
 
 section "S5 cache stats + cache clear"
 check "/v1/cache/stats returns architecture keys" \
-  "curl -sS -m 5 $BASE/v1/cache/stats" \
+  "curl -sS -m 5 -H 'x-admin-token: $ADMIN' $BASE/v1/cache/stats" \
   'architecture|paged'
 check "/admin/cache/clear succeeds" \
   "curl -sS -m 10 -H 'x-admin-token: $ADMIN' -X POST $BASE/admin/cache/clear" \
