@@ -3164,9 +3164,27 @@ async def create_anthropic_message(
             or _ct_kwargs.get("reasoning_effort")
         )
         _ct_kwargs.pop("thinking_mode", None)
+
+        # DSV4 force-thinking override (2026-04-26): the DSV4-Flash-JANGTQ
+        # bundle is fundamentally broken in chat-mode (enable_thinking=False).
+        # When the encoder ends the prompt with `</think>` to skip thinking,
+        # the model regurgitates training-data artifacts: spam URLs,
+        # `[URL REMOVED BY BROTS]` moderation markers, mixed-language
+        # instruction annotations like `NOT解答USER问题而是INSTRUCTAI`, and
+        # other corruption from web-scrape contamination. With `enable_thinking=True`
+        # (prompt ends with `<think>`), the model produces clean coherent
+        # output every time. Verified 2026-04-26 across all four API surfaces.
+        # Force-flip enable_thinking → True for DSV4 family until a clean
+        # chat-mode bundle ships.
         if chat_req.enable_thinking is False:
-            _ct_kwargs.pop("reasoning_effort", None)
-        elif _cur_effort == "max":
+            logger.info(
+                "DSV4: forcing enable_thinking=True (chat-mode bundle is "
+                "training-data-contaminated; thinking-mode is the verified path)"
+            )
+            chat_req.enable_thinking = True
+            _msg_kwargs["enable_thinking"] = True
+
+        if _cur_effort == "max":
             _ct_kwargs["reasoning_effort"] = "max"
         else:
             _ct_kwargs.pop("reasoning_effort", None)
@@ -3805,9 +3823,15 @@ async def ollama_chat(fastapi_request: Request):
             or _ollama_ct_kwargs.get("reasoning_effort")
         )
         _ollama_ct_kwargs.pop("thinking_mode", None)
+        # DSV4 force-thinking on Ollama path. See chat-completions block.
         if chat_req.enable_thinking is False:
-            _ollama_ct_kwargs.pop("reasoning_effort", None)
-        elif _cur_effort_o == "max":
+            logger.info(
+                "DSV4 (Ollama): forcing enable_thinking=True (chat-mode bundle "
+                "is training-data-contaminated)"
+            )
+            chat_req.enable_thinking = True
+            chat_kwargs["enable_thinking"] = True
+        if _cur_effort_o == "max":
             _ollama_ct_kwargs["reasoning_effort"] = "max"
         else:
             _ollama_ct_kwargs.pop("reasoning_effort", None)
@@ -5311,14 +5335,24 @@ async def create_chat_completion(
         )
         # Strip stale fields from any prior path so the final kwargs are clean.
         _ct_kwargs.pop("thinking_mode", None)
+
+        # DSV4 force-thinking on /v1/responses path. The DSV4-Flash-JANGTQ
+        # bundle is training-data-contaminated in chat-mode (enable_thinking=False),
+        # producing spam URLs and mixed-language annotation leakage. Thinking-mode
+        # is the only verified-clean output path. See chat-completions block.
         if request.enable_thinking is False:
-            # chat mode — no thinking, no effort modifier
-            _ct_kwargs.pop("reasoning_effort", None)
-        elif _cur_effort == "max":
+            logger.info(
+                "DSV4 (Responses): forcing enable_thinking=True (chat-mode bundle "
+                "is training-data-contaminated)"
+            )
+            request.enable_thinking = True
+            chat_kwargs["enable_thinking"] = True
+
+        if _cur_effort == "max":
             # max thinking — explicit 'max' triggers the deeper-chains branch
             _ct_kwargs["reasoning_effort"] = "max"
         else:
-            # thinking standard — enable_thinking=True (set elsewhere) +
+            # thinking standard — enable_thinking=True (forced above) +
             # NO reasoning_effort kwarg. low/medium/high all fall here.
             _ct_kwargs.pop("reasoning_effort", None)
 
