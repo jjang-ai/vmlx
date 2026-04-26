@@ -144,44 +144,94 @@ open class BaseThinkingReasoningParser: ReasoningParser {
         return ReasoningDelta(content: delta)
     }
 
+    /// §420 — strip stray `<think>` / `</think>` markers from a
+    /// delta that's known to be in a single mode. Interleaved-
+    /// thinking models occasionally emit duplicate or unmatched
+    /// markers as artifacts (verified 2026-04-25 on MiniMax-Small
+    /// JANGTQ in osaurus chat: model emitted `</think>` THREE times
+    /// across one assistant turn — first legitimately closed
+    /// reasoning, second + third were strays that leaked verbatim
+    /// into the user-visible content stream).
+    ///
+    /// Mirrors `vmlx-swift-lm` c98ae5c stray-tag policy. Family-
+    /// gated: only `BaseThinkingReasoningParser` subclasses (Qwen3,
+    /// DeepSeek-R1, Mistral, MiniMax/GLM/Nemotron/Kimi via Qwen3
+    /// alias) opt in. `Gemma4ReasoningParser` (channel format) is
+    /// a separate class and keeps stray-tag passthrough by design.
+    private func stripStrayMarkers(_ s: String) -> String {
+        if s.isEmpty { return s }
+        var out = s
+        if out.contains(endToken) {
+            out = out.replacingOccurrences(of: endToken, with: "")
+        }
+        if out.contains(startToken) {
+            out = out.replacingOccurrences(of: startToken, with: "")
+        }
+        return out
+    }
+
     private func handleExplicitThink(delta: String, startInPrev: Bool, endInPrev: Bool, endInDelta: Bool) -> ReasoningDelta? {
         let startInDelta = delta.contains(startToken)
 
         if startInPrev {
+            // §420 — order matters: if `endInPrev`, we're ALREADY in
+            // content mode. Any `</think>` in this delta is a stray, NOT
+            // a boundary. Strip it and emit the whole delta as content.
+            // If we don't check endInPrev first, the split-delta path
+            // below would mis-treat a stray as a boundary and route the
+            // pre-stray segment to reasoning.
+            if endInPrev {
+                let stripped = stripStrayMarkers(delta)
+                return stripped.isEmpty ? nil : ReasoningDelta(content: stripped)
+            }
             if endInDelta, let endRange = delta.range(of: endToken) {
-                let r = String(delta[..<endRange.lowerBound])
-                let c = String(delta[endRange.upperBound...])
+                // Genuine boundary — first time we see </think>. The
+                // pre-end segment is the tail of reasoning; the post-end
+                // segment begins content. Strip stray duplicates from
+                // either half.
+                let r = stripStrayMarkers(String(delta[..<endRange.lowerBound]))
+                let c = stripStrayMarkers(String(delta[endRange.upperBound...]))
                 return ReasoningDelta(reasoning: r.isEmpty ? nil : r, content: c.isEmpty ? nil : c)
-            } else if endInPrev {
-                return ReasoningDelta(content: delta)
             } else {
-                return ReasoningDelta(reasoning: delta)
+                // §420 — still in reasoning. Strip stray `<think>`
+                // (model emitted a duplicate open marker).
+                let stripped = stripStrayMarkers(delta)
+                return stripped.isEmpty ? nil : ReasoningDelta(reasoning: stripped)
             }
         }
 
         if startInDelta, let startRange = delta.range(of: startToken) {
             if endInDelta, let endRange = delta.range(of: endToken), endRange.lowerBound >= startRange.upperBound {
-                let r = String(delta[startRange.upperBound..<endRange.lowerBound])
-                let c = String(delta[endRange.upperBound...])
+                let r = stripStrayMarkers(String(delta[startRange.upperBound..<endRange.lowerBound]))
+                let c = stripStrayMarkers(String(delta[endRange.upperBound...]))
                 return ReasoningDelta(reasoning: r.isEmpty ? nil : r, content: c.isEmpty ? nil : c)
             } else {
-                let r = String(delta[startRange.upperBound...])
+                let r = stripStrayMarkers(String(delta[startRange.upperBound...]))
                 return ReasoningDelta(reasoning: r.isEmpty ? nil : r)
             }
         }
 
-        return ReasoningDelta(content: delta)
+        // No tags involved — pure content mode. Still strip stray
+        // markers in case the delta contains an isolated `</think>`
+        // emitted by the model after content already started.
+        let stripped = stripStrayMarkers(delta)
+        return stripped.isEmpty ? nil : ReasoningDelta(content: stripped)
     }
 
     private func handleImplicitThink(delta: String, endInPrev: Bool, endInDelta: Bool) -> ReasoningDelta? {
         if endInDelta, let endRange = delta.range(of: endToken) {
-            let r = String(delta[..<endRange.lowerBound])
-            let c = String(delta[endRange.upperBound...])
+            let r = stripStrayMarkers(String(delta[..<endRange.lowerBound]))
+            let c = stripStrayMarkers(String(delta[endRange.upperBound...]))
             return ReasoningDelta(reasoning: r.isEmpty ? nil : r, content: c.isEmpty ? nil : c)
         } else if endInPrev {
-            return ReasoningDelta(content: delta)
+            // §420 — past close, in content. Strip stray markers.
+            let stripped = stripStrayMarkers(delta)
+            return stripped.isEmpty ? nil : ReasoningDelta(content: stripped)
         } else {
-            return ReasoningDelta(reasoning: delta)
+            // §420 — still implicit reasoning. Strip stray `<think>`
+            // markers (model emitted a duplicate open).
+            let stripped = stripStrayMarkers(delta)
+            return stripped.isEmpty ? nil : ReasoningDelta(reasoning: stripped)
         }
     }
 }
