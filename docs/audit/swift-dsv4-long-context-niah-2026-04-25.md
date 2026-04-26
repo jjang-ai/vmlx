@@ -112,11 +112,14 @@ auto-wrap; only manual prompt construction needs to handle this.
 - **Multi-turn long context**: the test was a single-turn 12K NIAH.
   Multi-turn chat with growing context is the next interesting
   regression point (cache invalidation + tool-call interleaving).
-- **M4 Max**: this run was on Mac Studio M3 Ultra. M4 Max has shown
-  divergent short-prompt output in earlier testing (`session 18:50`)
-  — likely an unrelated path issue under investigation, but the
-  long-context Compressor/Indexer kernels themselves are
-  hardware-agnostic.
+- **M4 Max**: confirmed working via `bench-direct` path on M4 Max
+  this session (post-NIAH). DSV4-Flash JANGTQ +
+  `VMLX_DSV4_LONG_CTX=1` → `"The capital of France is Paris."`
+  at 14.97 tok/s decode. Earlier apparent "regression" via
+  `vmlxctl chat` was a test-methodology artifact — `chat` and
+  `bench-direct` exercise different prompt-construction paths;
+  `bench-direct` is the path the parallel team validated against.
+  §415-§417 is hardware-agnostic on M3 Ultra + M4 Max.
 
 ## Status of §415-§417
 
