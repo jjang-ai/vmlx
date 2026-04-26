@@ -837,6 +837,13 @@ def _load_jang_v2(
         if _is_mxtq:
             logger.info("  MXTQ/JANGTQ format detected — will dequant tq_packed weights to fp16")
 
+    # vmlx#114: cross-shard pre-fix for mixed-precision JANG (LLM v2 path).
+    # Same rationale as the VLM site below: a module's .weight and .scales can
+    # straddle a shard boundary, and per-shard pre-fix would silently skip it.
+    _shape_map_xshard = _collect_shard_shape_map(weight_files)
+    _pre_fix_bits_from_metadata(model, _shape_map_xshard, block_size)
+    del _shape_map_xshard
+
     for sf in weight_files:
         weights = mx.load(str(sf))
 
@@ -1459,6 +1466,14 @@ def _load_jang_v2_vlm(
         "model_type", config.get("model_type", "")
     )
     _vlm_needs_gemma4_switch_remap = _vlm_text_mt in ("gemma4", "gemma4_text")
+
+    # vmlx#114: cross-shard pre-fix for mixed-precision JANG VLMs. Read all shard
+    # headers (no data load) into a combined shape map so a module whose .weight
+    # and .scales straddle a shard boundary still gets its bits pre-fixed before
+    # load_weights. The per-shard call inside the loop below stays as a safety net.
+    _shape_map_xshard = _collect_shard_shape_map(weight_files)
+    _pre_fix_bits_from_metadata(model, _shape_map_xshard, block_size)
+    del _shape_map_xshard
 
     for sf in weight_files:
         shard_weights = mx.load(str(sf))
@@ -3048,6 +3063,115 @@ def _pre_fix_bits_from_shard(model, shard_weights, block_size):
     if fixed_count > 0:
         logger.info(
             f"  Pre-fixed {fixed_count} module(s) with mixed-precision bit widths"
+        )
+
+
+def _collect_shard_shape_map(weight_files):
+    """Read every shard's safetensors HEADER (no data load) into a combined
+    {weight_key: shape_tuple} map. Used by `_pre_fix_bits_from_metadata` to
+    handle modules whose .weight and .scales straddle a shard boundary
+    (jjang-ai/vmlx#114).
+
+    Returns {} on any error — caller falls through to per-shard pre-fix.
+    """
+    shape_map = {}
+    try:
+        from safetensors import safe_open
+    except Exception as e:
+        logger.debug(f"  Cross-shard pre-fix: safetensors unavailable ({e})")
+        return shape_map
+
+    for sf_path in weight_files:
+        try:
+            with safe_open(str(sf_path), framework="numpy") as sf:
+                for k in sf.keys():
+                    try:
+                        shape_map[k] = tuple(sf.get_slice(k).get_shape())
+                    except Exception:
+                        continue
+        except Exception as e:
+            logger.debug(f"  Cross-shard pre-fix: failed to open {sf_path} ({e})")
+            continue
+    return shape_map
+
+
+def _pre_fix_bits_from_metadata(model, shape_map, block_size):
+    """Cross-shard variant of `_pre_fix_bits_from_shard` (jjang-ai/vmlx#114).
+
+    Operates on a {weight_key: shape_tuple} map collected across ALL shards
+    (see `_collect_shard_shape_map`), so a module whose .weight and .scales
+    live in different shards still gets its `bits` and `group_size` pre-fixed
+    before `model.load_weights`. The per-shard pre-fix that follows stays as
+    a no-op safety net.
+
+    Pure metadata — no tensor loads, no GPU ops. Mirrors `_pre_fix_bits_from_shard`'s
+    bit-width and group-size derivation logic.
+    """
+    if not shape_map:
+        return
+
+    modules_by_path = {}
+    for mod_path, mod in model.named_modules():
+        if hasattr(mod, "bits") and hasattr(mod, "group_size"):
+            modules_by_path[mod_path] = mod
+
+    if not modules_by_path:
+        return
+
+    fixed_count = 0
+    for k, w_shape in shape_map.items():
+        try:
+            if not k.endswith(".weight"):
+                continue
+            s_key = k[:-7] + ".scales"
+            s_shape = shape_map.get(s_key)
+            if s_shape is None:
+                continue
+
+            mod_path = k[:-7]
+            module = modules_by_path.get(mod_path)
+            if module is None:
+                continue
+
+            w_cols = w_shape[-1] if len(w_shape) >= 1 else 0
+            s_cols = s_shape[-1] if len(s_shape) >= 1 else 0
+            if s_cols <= 0 or w_cols <= 0:
+                continue
+
+            gs_candidates = [block_size]
+            if hasattr(module, "group_size") and module.group_size not in gs_candidates:
+                gs_candidates.append(module.group_size)
+            for gs in (64, 128):
+                if gs not in gs_candidates:
+                    gs_candidates.append(gs)
+
+            for try_bs in gs_candidates:
+                in_dim = s_cols * try_bs
+                if in_dim <= 0 or (w_cols * 32) % in_dim != 0:
+                    continue
+                actual_bits = (w_cols * 32) // in_dim
+                if actual_bits not in (2, 3, 4, 5, 6, 8):
+                    continue
+                changed = False
+                if actual_bits != module.bits:
+                    module.bits = actual_bits
+                    changed = True
+                if try_bs != module.group_size:
+                    module.group_size = try_bs
+                    changed = True
+                if changed:
+                    fixed_count += 1
+                    logger.debug(
+                        f"  Pre-fix bits (cross-shard): {mod_path} → {actual_bits}-bit gs={try_bs}"
+                    )
+                break
+        except Exception as e:
+            logger.debug(f"  Pre-fix bits (cross-shard): skipped {k}: {e}")
+
+    if fixed_count > 0:
+        logger.info(
+            f"  Pre-fixed {fixed_count} module(s) cross-shard "
+            f"(jjang-ai/vmlx#114 — would have been silently skipped per-shard)"
         )
 
 
