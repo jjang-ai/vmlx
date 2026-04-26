@@ -149,7 +149,32 @@ class ModelConfigRegistry:
                 return None
             caps = jcfg.get("capabilities")
             if not isinstance(caps, dict):
-                return None
+                # Fallback: some bundles (notably DSV4-Flash) use the
+                # `chat` schema from research/DSV4-RUNTIME-ARCHITECTURE.md §4
+                # instead of a top-level `capabilities` block. Synthesize a
+                # caps-shaped dict from the chat block so the rest of the
+                # stamp pipeline works generically:
+                #
+                #   jang_config.chat.reasoning.parser       → reasoning_parser
+                #   jang_config.chat.tool_calling.parser    → tool_parser
+                #   jang_config.chat.reasoning.supported    → think_in_template
+                #   jang_config.chat.reasoning.modes        → (informational)
+                #   jang_config.model_family                → family
+                chat_cfg = jcfg.get("chat")
+                if isinstance(chat_cfg, dict):
+                    _chat_r = chat_cfg.get("reasoning") or {}
+                    _chat_t = chat_cfg.get("tool_calling") or {}
+                    caps = {
+                        "family": jcfg.get("model_family") or "",
+                        "reasoning_parser": _chat_r.get("parser") if isinstance(_chat_r, dict) else None,
+                        "tool_parser": _chat_t.get("parser") if isinstance(_chat_t, dict) else None,
+                        "think_in_template": bool(
+                            isinstance(_chat_r, dict) and _chat_r.get("supported", False)
+                        ),
+                        "cache_type": jcfg.get("cache_type", "kv"),
+                    }
+                else:
+                    return None
             family = caps.get("family") or ""
             if not family:
                 return None

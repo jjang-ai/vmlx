@@ -1,0 +1,130 @@
+# vMLX Default Configuration
+# All values configurable - see docs for full list of options
+
+# Memory configuration - all limits configurable, no hardcoded values
+memory:
+  # Total memory budget for inference (fraction of available RAM)
+  total_budget_percent: 0.85  # 85% of RAM max
+
+  # KV Cache settings
+  kv_cache:
+    quantization: "turboquant"  # "none", "q4", "q8", "turboquant"
+    memory_limit_mb: null        # null = auto (use remaining budget)
+    turboquant:
+      default_key_bits: 3
+      default_value_bits: 3
+      critical_key_bits: 4
+      critical_value_bits: 4
+      critical_layers: [0, 1, 2, -3, -2, -1]  # First 3 and last 3 layers
+      sink_tokens: 4                               # First N tokens at full precision
+      seed: 42
+
+  # Codebook weight cache (LRU with disk spillover)
+  codebook_cache:
+    enabled: true
+    memory_limit_mb: null              # null = unlimited (LRU to disk)
+    disk_cache_dir: "~/.cache/vmlx-engine/codebook-cache"
+    disk_max_gb: 1000                 # 1TB disk budget
+    eviction_batch_size: 4             # Evict 4 layers at a time
+
+  # Prefix cache (token trie)
+  prefix_cache:
+    enabled: true
+    memory_limit_mb: null              # null = unlimited
+    max_entries: 10000
+
+  # Paged KV cache (experimental)
+  paged_cache:
+    enabled: false
+    block_size: 64                     # Tokens per block
+    max_blocks: 10000
+    memory_limit_mb: null
+
+  # Disk cache (L2 persistence)
+  disk_cache:
+    enabled: true
+    cache_dir: null                    # null = auto (~/.cache/vmlx-engine/prompt-cache)
+    max_gb: 100
+    memory_limit_mb: null
+
+# Codebook VQ settings
+codebook:
+  enabled: "auto"                      # "auto", "true", "false"
+  loading: "lazy"                     # "lazy", "eager", "hybrid"
+  hybrid_eager_layers: [15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]  # Safety-critical
+  per_layer_settings: {}              # Override per layer: "layer_idx.tensor_type": {n_codes, group_size}
+  kernel: "metal"                     # "metal", "mlx"
+  kernel_config:
+    threads_per_threadgroup: 256
+    max_batch_size: 32
+  cache:
+    enabled: true
+    memory_limit_mb: null              # null = unlimited (LRU to disk)
+    disk_cache_dir: "~/.cache/vmlx-engine/codebook-cache"
+    disk_max_gb: 1000
+    eviction_batch_size: 4
+
+# TurboQuant KV cache settings (alternative config location)
+turboquant:
+  default_key_bits: 3
+  default_value_bits: 3
+  critical_key_bits: 4
+  critical_value_bits: 4
+  critical_layers: [0, 1, 2, -3, -2, -1]
+  sink_tokens: 4
+  seed: 42
+
+# Hybrid architecture (SSM + attention)
+hybrid:
+  ssm_recompute: "full"              # "full" = recompute from scratch on miss
+  checkpoint_interval_tokens: 512     # For checkpoint mode
+  detection: "auto"                  # "auto" or path to layer_types.json
+  cache_types: {}                    # Override per layer: "layer_idx": "turboquant"|"arrays"|"none"
+
+# Inference settings
+inference:
+  max_concurrent_requests: 256
+  prefill_batch_size: 8
+  completion_batch_size: 32
+  max_tokens_per_step: 8192
+  max_tokens: 4096
+  stop_tokens: []                    # Override EOS tokens
+  sampling:
+    temperature: 0.7
+    top_p: 0.9
+    top_k: 0
+    min_p: 0.0
+    repetition_penalty: 1.0
+
+# Kernel settings
+kernel:
+  use_metal: true
+  num_threads: null                  # null = auto-detect
+  compute_precision: "float16"       # "float16", "bfloat16", "float32"
+  kv_compute_precision: "float16"     # For dequantized attention
+
+# Debug/logging settings
+debug:
+  log_cache_hits: false
+  log_cache_misses: false
+  log_memory_usage: false
+  profile_kernel_times: false
+  stats_interval_seconds: 60
+
+# Per-model overrides (can also be in separate files: ~/.config/vmlx/models/{model_name}.yaml)
+per_model: {}
+
+# Example per-model override (put in ~/.config/vmlx/models/Qwen3.5-35B-A3B-CODEBOOK-TEST.yaml):
+# codebook:
+#   enabled: true
+#   loading: lazy
+#   memory_limit_mb: 65536  # 64GB for this model
+#
+# hybrid:
+#   ssm_recompute: full
+#   cache_types:
+#     # Auto-detect layer types
+#
+# turboquant:
+#   default_key_bits: 3
+#   critical_layers: [0, 1, 2, 3, 4, -1]  # More critical layers

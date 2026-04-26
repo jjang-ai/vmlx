@@ -47,6 +47,7 @@ from .abstract_tool_parser import (
 # Import parsers to register them
 from .auto_tool_parser import AutoToolParser
 from .deepseek_tool_parser import DeepSeekToolParser
+from .dsml_tool_parser import DSMLToolParser  # DeepSeek V4 DSML format
 from .functionary_tool_parser import FunctionaryToolParser
 from .granite_tool_parser import GraniteToolParser
 from .hermes_tool_parser import HermesToolParser

@@ -237,6 +237,15 @@ class MLLMSchedulerConfig:
     # Maximum images per request (guard against Metal OOM from excessive images)
     max_images_per_request: int = 20
 
+    # Optional pre-built single-worker executor for model ops. When the
+    # caller (BatchedEngine._start_mllm) loads the model on a dedicated
+    # executor, it should pass that same executor here so step()/prefill
+    # share one thread with the load. See MLLMScheduler.__init__ for the
+    # JANGTQ Metal kernel stream-isolation rationale. None -> scheduler
+    # creates its own (load runs on a different thread, JANGTQ-VL
+    # bundles will hit the stream issue).
+    step_executor: Any = None
+
 
 @dataclass
 class MLLMRequest:
@@ -375,6 +384,31 @@ class MLLMScheduler:
         self._queue_lock = threading.RLock()
         # Separate lock for batch generator next()/remove() to prevent abort race
         self._batch_lock = threading.RLock()
+
+        # Dedicated single-worker executor for ALL model-touching code
+        # (prefill, decode, cache extract). MLX streams are thread-local —
+        # asyncio.to_thread dispatches to a multi-worker pool where each
+        # call may land on a different thread (asyncio_0, asyncio_1, ...),
+        # so Stream(gpu, 1) created during model load on MainThread becomes
+        # invisible. Pinning every step() to the same worker thread (and
+        # loading the model on that worker) keeps the stream registry
+        # consistent and lets JANGTQ Metal kernels resolve their dispatch
+        # streams cleanly.
+        #
+        # The caller (BatchedEngine._start_mllm) may pass a pre-built
+        # executor that ALSO ran the model load — using that same executor
+        # here ensures load + every subsequent step() share one worker
+        # thread. If no executor is provided, a fresh single-worker pool
+        # is created (load then runs on a different thread, and JANGTQ-VL
+        # bundles will hit the stream issue — pre-existing behavior).
+        from concurrent.futures import ThreadPoolExecutor
+        _provided = config.step_executor if config is not None else None
+        if _provided is not None:
+            self._step_executor = _provided
+        else:
+            self._step_executor = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="mllm-worker"
+            )
 
         # Get model config
         self.model_config = getattr(model, "config", None)
@@ -2330,9 +2364,14 @@ class MLLMScheduler:
         while self._running:
             try:
                 if self.has_requests():
-                    # Run step in thread to avoid blocking the event loop
-                    # (batch_generator.next() does heavy MLX computation)
-                    step_output = await asyncio.to_thread(self.step)
+                    # Run step on the dedicated single-worker executor
+                    # to keep all MLX ops on the SAME thread as model load.
+                    # See `_step_executor` field comment for the JANGTQ
+                    # Metal kernel stream-isolation rationale.
+                    loop = asyncio.get_running_loop()
+                    step_output = await loop.run_in_executor(
+                        self._step_executor, self.step
+                    )
                     # Dispatch outputs on the event loop (asyncio.Queue is not thread-safe)
                     self._dispatch_outputs(step_output)
                 else:

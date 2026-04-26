@@ -399,6 +399,49 @@ def register_all(registry=None):
         )
     )
 
+    # DeepSeek V4-Flash (deepseek_v4) — 284B total / ~13B active, MLA with
+    # head_dim=512, 256 routed experts top-6 + 1 shared, sqrtsoftplus routing
+    # with hash layers for first 3 blocks, mHC (Manifold Hyper-Connections)
+    # hc_mult=4, attention sink per head, inverse RoPE on output, swiglu_limit=10,
+    # 1M context via YaRN factor=16 from 65k, sliding window 128, compressor+
+    # indexer for compressed global context. Runtime lives in
+    # jang_tools.dsv4.mlx_model (~1128 LOC) and is registered into mlx_lm
+    # via jang_tools.dsv4.mlx_register at load time. Not VLM.
+    #
+    # Three reasoning modes per research/DSV4-RUNTIME-ARCHITECTURE.md §4:
+    #   - chat          (instruct, thinking suppressed via trailing </think>)
+    #   - thinking      (reasoning_effort=high)
+    #   - thinking max  (reasoning_effort=max, extra system hint)
+    # Multi-turn: jang_config.chat.reasoning.drop_earlier_reasoning=true →
+    # strip prior <think>...</think> blocks from history when building next
+    # prompt. Our deepseek_r1 reasoning parser handles the <think> tags;
+    # think_in_template=True so the empty-tag suppression trick works.
+    #
+    # Tool calls use DSML format: <｜DSML｜invoke name="fn">...<｜DSML｜parameter
+    # name="p" string="true">val</｜DSML｜parameter></｜DSML｜invoke>.
+    # Parser name "dsml" registered in tool_parsers (see DSV4 test_chat.py).
+    #
+    # Cache type "kv" at engine boundary. Internally DSV4 uses a custom
+    # DeepseekV4Cache wrapping a RotatingKVCache(max_size=sliding_window=128,
+    # keep=0) for local attention + compressor/indexer state buffers for
+    # cross-window pooling. Loader constructs it via make_cache(); engine
+    # just drives update_and_fetch like standard KV.
+    #
+    # Bundle formats (per §5 cheat sheet): JANG_2L (107 GB), JANGTQ2 (74 GB
+    # recommended prod default), JANGTQ4 (173 GB highest fidelity), JANG4
+    # (173 GB uniform 4-bit). Do NOT use JANGTQ4-HP (mxfp4+bf16 unstable).
+    _register(
+        ModelConfig(
+            family_name="deepseek_v4",
+            model_types=["deepseek_v4"],
+            cache_type="kv",
+            tool_parser="dsml",
+            reasoning_parser="deepseek_r1",
+            think_in_template=True,
+            priority=20,
+        )
+    )
+
     # ── GLM family (CRITICAL: different reasoning parsers per variant) ──
 
     # GPT-OSS: Harmony <|channel|> protocol reasoning

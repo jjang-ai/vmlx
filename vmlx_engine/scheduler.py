@@ -453,15 +453,39 @@ class Scheduler:
                 _is_mla = True
             elif _model_args and getattr(_model_args, "model_type", "") == "mistral4":
                 _is_mla = True
+            # DeepSeek V4-Flash / V4-Pro: MLA with head_dim=512 (single latent
+            # KV head, broadcast to all 64 q heads). Stored KV is already a
+            # compressed latent — quantizing again destroys decode quality
+            # and doesn't save much (1 KV head × head_dim=512). Force-off
+            # same as DeepSeek V3 / Mistral 4.
+            elif _model_args and getattr(_model_args, "model_type", "") == "deepseek_v4":
+                _is_mla = True
         except Exception:
             pass
-        if self.config.kv_cache_quantization != "none" and _is_mla:
+        # User opt-in override for the MLA auto-disable. DSV4 / DeepSeek V3 /
+        # Mistral 4 stash compressed latents in KV — quantizing them again
+        # is double-lossy and harms quality. We force-off by default. But
+        # for long-context decode where users care about RAM more than
+        # marginal quality loss (e.g. "DSV4 with 128k context, accept some
+        # drift to fit on 128GB"), expose `VMLX_ALLOW_MLA_KV_QUANT=1` so the
+        # user can opt into TurboQuant KV-quant on MLA at their own risk.
+        _allow_mla_kvq = os.environ.get(
+            "VMLX_ALLOW_MLA_KV_QUANT"
+        ) in ("1", "true", "True", "yes", "on")
+        if self.config.kv_cache_quantization != "none" and _is_mla and not _allow_mla_kvq:
             logger.info(
                 f"MLA model detected (kv_lora_rank > 0) — disabling KV cache quantization "
                 f"(was: {self.config.kv_cache_quantization}). MLA stores compressed latents "
-                f"that should not be further quantized."
+                f"that should not be further quantized. Set VMLX_ALLOW_MLA_KV_QUANT=1 to "
+                f"override if you accept the quality risk."
             )
             self.config.kv_cache_quantization = "none"
+        elif self.config.kv_cache_quantization != "none" and _is_mla and _allow_mla_kvq:
+            logger.warning(
+                f"MLA model + KV cache quantization='{self.config.kv_cache_quantization}' "
+                f"requested via VMLX_ALLOW_MLA_KV_QUANT=1 — running double-lossy KV quant "
+                f"on compressed latents. Expect some output drift; turn off if quality matters."
+            )
         if self.config.kv_cache_quantization != "none":
             if self.config.enable_prefix_cache:
                 bits = 4 if self.config.kv_cache_quantization == "q4" else 8
@@ -703,11 +727,15 @@ class Scheduler:
             }
             if cache_types and cache_types == kv_types:
                 return False
-            # Any non-KV cache type (MambaCache, ArraysCache, etc.) needs paged cache.
-            # Discard CacheList — it's a wrapper (used by MoE models) that contains
-            # KVCache layers, not a hybrid SSM cache type.
+            # DeepSeek V4 `DeepseekV4Cache` wraps a RotatingKVCache internally
+            # and exposes the standard KV surface (update_and_fetch / make_mask
+            # / offset). The compressor + indexer state buffers it carries are
+            # cumulative-but-recomputable (unlike true SSM state) — treat as
+            # plain KV so the paged / memory-aware / disk L2 cache paths work
+            # identically to DeepSeek V3.
             non_kv = cache_types - kv_types
             non_kv.discard("CacheList")
+            non_kv.discard("DeepseekV4Cache")
             return bool(non_kv)
         except Exception as e:
             logger.warning(f"make_cache() failed during hybrid detection: {e}")
@@ -4591,20 +4619,25 @@ class Scheduler:
             except Exception:
                 pass
 
-        # ── Deferred SSM re-derive (idle-time processing) ──
+        # ── Deferred SSM re-derive (idle-time processing) ── vmlx#103
         # For thinking models (gen_prompt_len > 0), the SSM companion store
         # queues a re-derive task instead of skipping entirely. We run the
-        # re-derive here ONLY when the scheduler is idle (no running
-        # requests) — the forward pass uses the Metal GPU so it can't
-        # overlap with active generation. The re-derive runs a separate
-        # prefill pass on just the prompt tokens (no thinking/output
-        # contamination) and stores the clean SSM state for future prefix
-        # cache hits. This means the CURRENT conversation pays full
-        # re-prefill on each turn, but the NEXT conversation with the
-        # same prompt prefix gets an instant KV+SSM cache hit.
+        # re-derive here ONLY when the scheduler is fully idle — no running
+        # requests, no waiting requests, and no unprocessed-prefill
+        # requests. The forward pass uses the Metal GPU so it can't overlap
+        # with active or queued work; without these guards the re-derive
+        # could starve queued requests by holding the GPU for a full second
+        # prefill while they wait for their first token (vmlx#103).
+        # The re-derive runs a separate prefill pass on just the prompt
+        # tokens (no thinking/output contamination) and stores the clean
+        # SSM state for future prefix cache hits.
+        _has_unprocessed = bool(getattr(self, "unprocessed_requests", []))
+        _has_waiting = bool(getattr(self, "waiting", []))
         if (
             self._is_hybrid
             and not self.running
+            and not _has_waiting
+            and not _has_unprocessed
             and hasattr(self, "_ssm_rederive_queue")
             and self._ssm_rederive_queue
             and self._ssm_state_cache is not None

@@ -1432,6 +1432,9 @@ Examples:
             "functionary",
             "glm47",
             "step3p5",
+            # DeepSeek V4 DSML format (<｜DSML｜invoke name="…">)
+            "dsml",
+            "deepseek_v4",
             # Aliases (map to same parsers)
             "generic",
             "qwen3",

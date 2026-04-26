@@ -352,6 +352,15 @@ def _compute_bypass_prefix_cache(request_obj) -> bool:
     no cache stores for this request. The salt itself is not stored; if
     users want namespaced caches within a run, they should call
     DELETE /v1/cache between runs instead.
+
+    Environment-level bypass: when ``DSV4_LONG_CTX=1`` is set, the DSV4
+    runtime uses ``DeepseekV4Cache`` which carries compressor/indexer
+    state buffers that cannot be reconstructed from cached KV tokens
+    alone. Our prefix cache stores KV arrays only, so a cache hit in
+    that mode would resume with stale (all-zero) compressor state →
+    drift. Force-bypass prefix cache whenever DSV4_LONG_CTX is on.
+    Research ref: DSV4-RUNTIME-ARCHITECTURE.md §17, DSV-EXHAUSTIVE-
+    VARIABLES-GUIDE.md §12.
     """
     if request_obj is None:
         return False
@@ -359,6 +368,8 @@ def _compute_bypass_prefix_cache(request_obj) -> bool:
         return True
     salt = getattr(request_obj, "cache_salt", None)
     if isinstance(salt, str) and salt:
+        return True
+    if os.environ.get("DSV4_LONG_CTX") in ("1", "true", "True", "yes", "on"):
         return True
     return False
 
@@ -594,9 +605,12 @@ def _template_completes_thinking(tokenizer, model_name: str) -> bool:
 _enable_auto_tool_choice: bool = False
 _tool_call_parser: str | None = None  # Parser name: auto, mistral, qwen, llama, hermes
 
-# reasoning_effort → token budget mapping (mirrors OpenAI o-series behavior)
-_EFFORT_THINKING_BUDGET = {"low": 1024, "medium": 8192, "high": 32768}
-_EFFORT_MAX_TOKENS = {"low": 4096, "medium": 16384, "high": 32768}
+# reasoning_effort → token budget mapping (mirrors OpenAI o-series behavior).
+# DSV4-Flash adds a "max" effort tier beyond OpenAI's low/medium/high
+# (research/DSV4-RUNTIME-ARCHITECTURE.md §4) — allow extended budgets so
+# the token ceiling doesn't truncate deep reasoning chains mid-thought.
+_EFFORT_THINKING_BUDGET = {"low": 1024, "medium": 8192, "high": 32768, "max": 131072}
+_EFFORT_MAX_TOKENS = {"low": 4096, "medium": 16384, "high": 32768, "max": 131072}
 
 
 @asynccontextmanager
@@ -1987,6 +2001,14 @@ def load_model(
     except Exception:
         pass
 
+    # Drain any async dispatch queues left behind by the loader.
+    try:
+        import mlx.core as _mx
+        _mx.synchronize()
+    except Exception:
+        pass
+
+
     # Log system memory after model load
     try:
         import psutil
@@ -3126,6 +3148,29 @@ async def create_anthropic_message(
         elif chat_req.enable_thinking is False and "reasoning_effort" not in _ct_kwargs:
             _ct_kwargs["reasoning_effort"] = "none"
 
+    # DeepSeek V4 three-mode encoder (mirror OpenAI chat-completions path).
+    # See research/DSV4-RUNTIME-ARCHITECTURE.md §4 + dsv4_chat_encoder.py.
+    try:
+        from .model_config_registry import get_model_config_registry
+        _mc_for_dsv4 = get_model_config_registry().lookup(getattr(chat_req, "model", "") or "")
+        _is_dsv4 = getattr(_mc_for_dsv4, "family_name", "") == "deepseek_v4"
+    except Exception:
+        _is_dsv4 = False
+    if _is_dsv4:
+        # See create_chat_completion `_is_dsv4` block for full rationale.
+        # The DSV4 Jinja template only branches on `reasoning_effort=='max'`.
+        _cur_effort = (
+            getattr(chat_req, "reasoning_effort", None)
+            or _ct_kwargs.get("reasoning_effort")
+        )
+        _ct_kwargs.pop("thinking_mode", None)
+        if chat_req.enable_thinking is False:
+            _ct_kwargs.pop("reasoning_effort", None)
+        elif _cur_effort == "max":
+            _ct_kwargs["reasoning_effort"] = "max"
+        else:
+            _ct_kwargs.pop("reasoning_effort", None)
+
     # Pass tools to engine so batched.py knows not to inject <think></think>
     if chat_req.tools:
         from .api.tool_calling import convert_tools_for_template
@@ -3735,6 +3780,41 @@ async def ollama_chat(fastapi_request: Request):
     )
     if _et is not None:
         chat_kwargs["enable_thinking"] = _et
+
+    # DSV4 three-mode mapping mirrored onto the Ollama adapter path so
+    # clients that speak the Ollama wire format land on the right
+    # thinking_mode/reasoning_effort pair for DSV4 bundles too.
+    try:
+        from .model_config_registry import get_model_config_registry
+        _mc_for_dsv4_o = get_model_config_registry().lookup(
+            _model_path or _model_name or chat_req.model
+        )
+        _is_dsv4_o = getattr(_mc_for_dsv4_o, "family_name", "") == "deepseek_v4"
+    except Exception:
+        _is_dsv4_o = False
+    if _is_dsv4_o:
+        # See `_is_dsv4` block in create_chat_completion for the full
+        # rationale. The DSV4 Jinja template only branches on
+        # `reasoning_effort == 'max'` — every other value (including
+        # 'high') falls through to the standard-thinking branch. So:
+        #   chat              → enable_thinking=False, no reasoning_effort
+        #   thinking standard → enable_thinking=True,  no reasoning_effort
+        #   thinking max      → enable_thinking=True,  reasoning_effort='max'
+        _cur_effort_o = (
+            getattr(chat_req, "reasoning_effort", None)
+            or _ollama_ct_kwargs.get("reasoning_effort")
+        )
+        _ollama_ct_kwargs.pop("thinking_mode", None)
+        if chat_req.enable_thinking is False:
+            _ollama_ct_kwargs.pop("reasoning_effort", None)
+        elif _cur_effort_o == "max":
+            _ollama_ct_kwargs["reasoning_effort"] = "max"
+        else:
+            _ollama_ct_kwargs.pop("reasoning_effort", None)
+        # Forward the resolved chat_template_kwargs so DSV4 encoder sees them.
+        _extra_o = {k: v for k, v in _ollama_ct_kwargs.items() if k != "enable_thinking"}
+        if _extra_o:
+            chat_kwargs["chat_template_kwargs"] = _extra_o
 
     # Pass tools to engine so batched.py knows not to inject <think></think>
     # when tool calling is active (model needs to think to decide on tools)
@@ -5193,6 +5273,54 @@ async def create_chat_completion(
         elif request.enable_thinking is False and "reasoning_effort" not in _ct_kwargs:
             _ct_kwargs["reasoning_effort"] = "none"
 
+    # DeepSeek V4 three-mode encoder: thinking_mode=chat|thinking + optional
+    # reasoning_effort=high|max. Auto-map enable_thinking toggle to the right
+    # pair so the UI's simple on/off switch lands on the correct prompt
+    # suffix (</think> for chat mode, no suffix for thinking, extra system
+    # hint for max). See research/DSV4-RUNTIME-ARCHITECTURE.md §4 and
+    # vmlx_engine/loaders/dsv4_chat_encoder.py::_resolve_mode_and_effort.
+    try:
+        from .model_config_registry import get_model_config_registry
+        _model_family_key = getattr(request, "model", "") or ""
+        _mc_for_dsv4 = get_model_config_registry().lookup(_model_family_key)
+        _is_dsv4 = getattr(_mc_for_dsv4, "family_name", "") == "deepseek_v4"
+    except Exception:
+        _is_dsv4 = False
+    if _is_dsv4:
+        # The DSV4 Jinja template (baked into tokenizer_config.json) accepts
+        # exactly two kwargs:
+        #     enable_thinking: bool
+        #     reasoning_effort: 'max' or None
+        # The template branches ONLY on `reasoning_effort == 'max'`. Any
+        # other string value (including 'high', 'medium', 'low') silently
+        # falls through to the default branch — i.e. behaves identical to
+        # `reasoning_effort=None`. So:
+        #
+        #   chat mode             → enable_thinking=False, reasoning_effort=None
+        #   thinking (standard)   → enable_thinking=True,  reasoning_effort=None
+        #   thinking (max)        → enable_thinking=True,  reasoning_effort='max'
+        #
+        # Setting `thinking_mode` here is a no-op for the template (it's only
+        # used by the legacy `dsv4_chat_encoder.py` Python adapter, not the
+        # Jinja template applied via tokenizer.apply_chat_template). We keep
+        # it off the kwargs to avoid Jinja "undefined kwarg" warnings on
+        # strict templates.
+        _cur_effort = (
+            request.reasoning_effort
+            or _ct_kwargs.get("reasoning_effort")
+        )
+        # Strip stale fields from any prior path so the final kwargs are clean.
+        _ct_kwargs.pop("thinking_mode", None)
+        if request.enable_thinking is False:
+            # chat mode — no thinking, no effort modifier
+            _ct_kwargs.pop("reasoning_effort", None)
+        elif _cur_effort == "max":
+            # max thinking — explicit 'max' triggers the deeper-chains branch
+            _ct_kwargs["reasoning_effort"] = "max"
+        else:
+            # thinking standard — enable_thinking=True (set elsewhere) +
+            # NO reasoning_effort kwarg. low/medium/high all fall here.
+            _ct_kwargs.pop("reasoning_effort", None)
 
     # Forward extra chat_template_kwargs to engine (exclude enable_thinking, already handled)
     if _ct_kwargs:

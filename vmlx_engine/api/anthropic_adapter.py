@@ -193,11 +193,19 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
         if thinking.get("type") == "enabled":
             enable_thinking = True
             _thinking_source_seen = True
-            # Forward budget_tokens as thinking_budget for Qwen3 models
+            # Forward budget_tokens as thinking_budget for Qwen3 models.
+            # For DSV4 (research/DSV4-RUNTIME-ARCHITECTURE.md §4): a large
+            # budget_tokens threshold selects "max" mode over plain thinking
+            # (DSV4 uses a discrete "max" tier rather than a token budget).
+            # Threshold ≥ 32768 matches our _EFFORT_THINKING_BUDGET["high"]
+            # ceiling so clients that explicitly request >32k chains land
+            # on the deeper reasoning path.
             if thinking.get("budget_tokens"):
                 if chat_template_kwargs is None:
                     chat_template_kwargs = {}
                 chat_template_kwargs["thinking_budget"] = thinking["budget_tokens"]
+                if thinking["budget_tokens"] >= 32768:
+                    chat_template_kwargs.setdefault("reasoning_effort", "max")
         elif thinking.get("type") == "disabled":
             enable_thinking = False
             _thinking_source_seen = True
@@ -230,6 +238,13 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
         tool_choice=tool_choice,
         enable_thinking=enable_thinking,
         chat_template_kwargs=chat_template_kwargs,
+        # Forward reasoning_effort if the ct_kwargs carry it (DSV4 "max"
+        # gets set via thinking.budget_tokens≥32768 above). Keeps the
+        # Anthropic → OpenAI conversion honest with the shared OpenAI-path
+        # auto-mapping block at server.py:5186 / :3122.
+        reasoning_effort=(chat_template_kwargs or {}).get("reasoning_effort")
+        if chat_template_kwargs
+        else None,
     )
 
 

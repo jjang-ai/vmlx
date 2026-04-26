@@ -111,6 +111,56 @@ from .vision_embedding_cache import VisionEmbeddingCache
 
 logger = logging.getLogger(__name__)
 
+
+# Dedicated GPU stream for prefill + sample + materialize, matching the
+# pattern used by mlx_lm.generate_step, mlx_vlm.generate.generate_step,
+# and the reference jang_tools generate_vl helper.
+#
+# WHY: native TurboQuant Metal kernels (P3/P15/P17/P18 in jang_tools)
+# dispatch async work onto an internal stream. Subsequent ops (the
+# materialize routine, async_eval, sampled.item()) running on the
+# scheduler thread without a stream context raise:
+#   RuntimeError: There is no Stream(gpu, 1) in current thread.
+# Pinning all prefill+sample+materialize work to a single dedicated
+# stream means every op shares the same Stream handle, eliminating the
+# cross-thread/cross-stream resolution failure.
+#
+# Lazy-created on first use so the device handle binds at runtime.
+_GENERATION_STREAM: Optional[Any] = None
+
+
+def _gen_stream() -> Any:
+    """Lazily create the dedicated GPU stream for prefill/decode work."""
+    global _GENERATION_STREAM
+    if _GENERATION_STREAM is None:
+        try:
+            _GENERATION_STREAM = mx.new_stream(mx.default_device())
+        except Exception:
+            try:
+                _GENERATION_STREAM = mx.default_stream(mx.default_device())
+            except Exception:
+                _GENERATION_STREAM = None
+    return _GENERATION_STREAM
+
+
+class _MaybeStream:
+    """Context manager that wraps mx.stream(stream) only if stream exists."""
+    __slots__ = ("_cm",)
+
+    def __init__(self):
+        s = _gen_stream()
+        self._cm = mx.stream(s) if s is not None else None
+
+    def __enter__(self):
+        if self._cm is not None:
+            self._cm.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        if self._cm is not None:
+            return self._cm.__exit__(*exc)
+        return False
+
 # TurboQuantKVCache class name for isinstance-free detection.
 # TQ is a drop-in replacement for KVCache (positional, sliceable, has .state/.keys/.values)
 # but does NOT inherit from KVCache. This constant enables KV-like detection without
@@ -1466,6 +1516,125 @@ class MLLMBatchGenerator:
             f"({processing_time:.2f}s)"
         )
 
+    def _maybe_capture_clean_ssm_boundary(
+        self,
+        request: "MLLMBatchRequest",
+        cache: List[Any],
+        all_tokens: List[int],
+        boundary_len: int,
+    ) -> bool:
+        """vmlx#109 capture-during-prefill.
+
+        Snapshot SSM layer state from a hybrid model's live ``cache`` at
+        ``boundary_len`` tokens — i.e. BEFORE the gen-prompt suffix has
+        been processed. The snapshot is stashed onto ``request`` so the
+        post-prefill capture site stores it with ``is_complete=True``
+        instead of queueing the slow deferred re-derive. Returns True on
+        successful capture.
+
+        Pre-conditions: hybrid model, gpl > 0, text-only request, valid
+        ``boundary_len`` strictly less than the full input length. Image
+        requests are skipped because the vision encoder needs the full
+        sequence in one shot — splitting the prefill would corrupt
+        vision token positions.
+        """
+        if not (self._is_hybrid and self._ssm_state_cache is not None):
+            return False
+        if not self._hybrid_kv_positions:
+            return False
+        if boundary_len <= 0 or boundary_len >= len(all_tokens):
+            return False
+        if not cache:
+            return False
+        # Idempotent: if a prior call already stashed SSM for this request
+        # at the same boundary, do not overwrite. The caller's split-prefill
+        # path should only fire once per request, but defending here keeps
+        # us safe under future retry / re-entry refactors.
+        prior_b = getattr(request, "_inline_ssm_boundary", 0) or 0
+        prior_layers = getattr(request, "_inline_ssm_layers", None)
+        if prior_layers and prior_b == boundary_len:
+            return True
+        try:
+            # NOTE: do NOT call mx.eval() on cache.state arrays here.
+            # Reading `.state` on BatchKVCache wrappers can create cross-
+            # stream references that confuse the surrounding scheduler's
+            # thread/stream context (RuntimeError: There is no Stream(gpu, 1)
+            # in current thread). The deepcopy + mx.contiguous() loop below
+            # materializes the SSM-only layers we actually need; the KV
+            # layers are skipped via `_hybrid_kv_positions` anyway.
+            kv_set = set(self._hybrid_kv_positions or [])
+            ssm_layers: List[Any] = []
+            for layer_idx, c in enumerate(cache):
+                if layer_idx in kv_set:
+                    continue
+                if hasattr(c, "cache") and isinstance(c.cache, list):
+                    from copy import deepcopy
+
+                    cloned = deepcopy(c)
+                    cloned.cache = [
+                        mx.contiguous(a) if a is not None else None
+                        for a in c.cache
+                    ]
+                    ssm_layers.append(cloned)
+                else:
+                    ssm_layers.append(c)
+            if not ssm_layers:
+                return False
+            request._inline_ssm_layers = ssm_layers  # type: ignore[attr-defined]
+            request._inline_ssm_boundary = int(boundary_len)  # type: ignore[attr-defined]
+            request._inline_ssm_tokens = list(all_tokens[:boundary_len])  # type: ignore[attr-defined]
+            logger.info(
+                "vmlx#109: captured clean SSM at prefill boundary for %s "
+                "(%d layers, key=%d tokens, is_complete=True — no re-derive needed)",
+                getattr(request, "request_id", "?"),
+                len(ssm_layers),
+                boundary_len,
+            )
+            return True
+        except Exception as e:
+            logger.debug(
+                "vmlx#109 inline SSM capture failed for %s: %s",
+                getattr(request, "request_id", "?"), e,
+            )
+            return False
+
+    def _clean_ssm_boundary_for(
+        self, request: "MLLMBatchRequest", seq_len: int, has_images: bool
+    ) -> int:
+        """Compute the boundary token index for vmlx#109 capture-during-prefill.
+
+        Returns 0 when no inline capture should be attempted (non-hybrid
+        model, gpl=0, image request, boundary out of range, or env-disabled).
+        Otherwise returns the token count to process before snapshotting
+        SSM state. The boundary excludes the gen-prompt suffix so the
+        captured state matches the cache key produced by the post-prefill
+        store path (which strips ``gen_prompt_len`` from the key).
+
+        Killswitch: ``VMLX_DISABLE_SSM_INLINE_CAPTURE=1`` forces boundary=0
+        so the legacy deferred re-derive path runs. Useful when the inline
+        path interacts badly with a model's forward stream layout (e.g.
+        async_eval + multi-phase lm() calls leaving Stream(gpu, 1) refs
+        the surrounding scheduler can't resolve).
+        """
+        if has_images or not self._is_hybrid:
+            return 0
+        if os.environ.get("VMLX_DISABLE_SSM_INLINE_CAPTURE") in (
+            "1", "true", "True", "yes", "on"
+        ):
+            return 0
+        gpl = int(getattr(request, "_gen_prompt_len", 0) or 0)
+        if gpl <= 0:
+            return 0
+        # Boundary aligns with the post-prefill store key:
+        #     key = all_tokens[:N-1] (post-prefill store uses N-1)
+        # but the store also strips gpl from that key, leaving:
+        #     stored_key = all_tokens[:N-1-gpl]
+        # Capture state at exactly N-1-gpl tokens to match.
+        boundary = seq_len - 1 - gpl
+        if boundary <= 0:
+            return 0
+        return boundary
+
     def _run_vision_encoding(self, request: MLLMBatchRequest, cache: Optional[List[Any]] = None) -> mx.array:
         """
         Run the initial VLM forward pass to encode vision and get first logits.
@@ -1483,6 +1652,13 @@ class MLLMBatchGenerator:
         Returns:
             Logits from the forward pass
         """
+        # Pin all forward + materialize work to the dedicated generation
+        # stream — see module-level `_gen_stream()` docstring for the
+        # JANGTQ Metal kernel + scheduler thread stream-isolation rationale.
+        with _MaybeStream():
+            return self._run_vision_encoding_inner(request, cache)
+
+    def _run_vision_encoding_inner(self, request: "MLLMBatchRequest", cache: Optional[List[Any]] = None) -> "mx.array":
         kwargs = dict(request.extra_kwargs)
         # Only pass pixel_values when non-None. Smelt-loaded models use a
         # text-only wrapper whose __call__ does NOT accept pixel_values at
@@ -1591,8 +1767,31 @@ class MLLMBatchGenerator:
             lm = self.language_model
             if lm is not None and cache is not None:
                 if seq_len <= self.prefill_step_size * 2:
-                    # Short text: single-shot through language_model
-                    output = lm(input_ids, cache=cache)
+                    # Short text: single-shot through language_model.
+                    # vmlx#109: for hybrid+thinking models we split the
+                    # prefill at the gen-prompt boundary so we can capture
+                    # SSM state without contamination. Phase A processes
+                    # tokens[:boundary] and snapshots SSM. Phase B processes
+                    # the gen-prompt suffix; the final lm() call (now on the
+                    # remaining tail through last token) returns logits.
+                    boundary = self._clean_ssm_boundary_for(
+                        request, seq_len, has_images
+                    )
+                    if boundary > 0:
+                        lm(input_ids[:, :boundary], cache=cache)
+                        # Use pre-materialized Python list to avoid an
+                        # mx.array → list eval cycle that can pin the
+                        # current op group to a non-default stream.
+                        all_tokens = (
+                            getattr(request, "_original_token_ids", None)
+                            or input_ids[0].tolist()
+                        )
+                        self._maybe_capture_clean_ssm_boundary(
+                            request, cache, all_tokens, boundary
+                        )
+                        output = lm(input_ids[:, boundary:], cache=cache)
+                    else:
+                        output = lm(input_ids, cache=cache)
                     request.vision_encoded = True
                     if hasattr(output, "logits"):
                         return output.logits
@@ -1609,8 +1808,22 @@ class MLLMBatchGenerator:
             if lm is not None and cache is not None:
                 processed = 0
                 chunk_num = 0
+                # vmlx#109: clean boundary for inline SSM capture. Land
+                # one chunk on this boundary exactly (shrinking the chunk
+                # if needed), snapshot SSM, then continue chunked prefill
+                # of the gen-prompt suffix.
+                ssm_boundary = self._clean_ssm_boundary_for(
+                    request, seq_len, has_images
+                )
+                ssm_captured = False
                 while processed < seq_len - 1:  # -1: keep last token for final logits
                     chunk_size = min(self.prefill_step_size, seq_len - 1 - processed)
+                    if (
+                        ssm_boundary > 0
+                        and not ssm_captured
+                        and processed < ssm_boundary <= processed + chunk_size
+                    ):
+                        chunk_size = ssm_boundary - processed
                     chunk = input_ids[:, processed:processed + chunk_size]
                     try:
                         lm(chunk, cache=cache)
@@ -1634,9 +1847,27 @@ class MLLMBatchGenerator:
                             f"[cache: {', '.join(_cache_diag)}]"
                         )
                         raise
-                    mx.eval([c.state for c in cache if hasattr(c, 'state')])
+                    try:
+                        mx.eval([c.state for c in cache if hasattr(c, 'state')])
+                    except RuntimeError as _eval_err:
+                        if "Stream" in str(_eval_err):
+                            mx.synchronize()
+                        else:
+                            raise
                     processed += chunk_size
                     chunk_num += 1
+                    if (
+                        ssm_boundary > 0
+                        and not ssm_captured
+                        and processed == ssm_boundary
+                    ):
+                        all_tokens = (
+                            getattr(request, "_original_token_ids", None)
+                            or input_ids[0].tolist()
+                        )
+                        ssm_captured = self._maybe_capture_clean_ssm_boundary(
+                            request, cache, all_tokens, ssm_boundary
+                        )
                     mx.clear_cache()
 
                 # Final chunk: get logits from last token
@@ -1660,7 +1891,25 @@ class MLLMBatchGenerator:
                 lm_kwargs = {}
                 if cache is not None:
                     lm_kwargs["cache"] = cache
-                output = lm(input_ids, **lm_kwargs)
+                # vmlx#109: split prefill at clean boundary for hybrid
+                # thinking models so SSM state is captured before the
+                # gen-prompt suffix taints it.
+                boundary = (
+                    self._clean_ssm_boundary_for(request, seq_len, has_images)
+                    if cache is not None else 0
+                )
+                if boundary > 0:
+                    lm(input_ids[:, :boundary], **lm_kwargs)
+                    all_tokens = (
+                        getattr(request, "_original_token_ids", None)
+                        or input_ids[0].tolist()
+                    )
+                    self._maybe_capture_clean_ssm_boundary(
+                        request, cache, all_tokens, boundary
+                    )
+                    output = lm(input_ids[:, boundary:], **lm_kwargs)
+                else:
+                    output = lm(input_ids, **lm_kwargs)
                 request.vision_encoded = True
                 if hasattr(output, "logits"):
                     return output.logits
@@ -2228,6 +2477,15 @@ class MLLMBatchGenerator:
                         req.prompt_cache = None
                         req.input_ids = mx.array([req._original_token_ids])
                         req.attention_mask = None
+                        # vmlx#109 hardening: drop stale inline SSM stash
+                        # captured against the aborted prefill — see
+                        # broadcast-retry path below for full rationale.
+                        if hasattr(req, "_inline_ssm_layers"):
+                            req._inline_ssm_layers = None
+                        if hasattr(req, "_inline_ssm_tokens"):
+                            req._inline_ssm_tokens = None
+                        if hasattr(req, "_inline_ssm_boundary"):
+                            req._inline_ssm_boundary = 0
                         try:
                             if hasattr(self.language_model, 'make_cache'):
                                 req_cache = self.language_model.make_cache()
@@ -2253,34 +2511,45 @@ class MLLMBatchGenerator:
                 req.image_grid_thw = None
                 req.extra_kwargs = {}
 
-                last_logits = logits[:, -1, :]
-                mx.eval(last_logits)  # materialize before freeing logits buffer
-                del logits
-                mx.clear_cache()
-                logprobs = last_logits - mx.logsumexp(
-                    last_logits, axis=-1, keepdims=True
-                )
-                req_sampler = self._make_request_sampler(req)
-                sampled = req_sampler(logprobs)
+                # All post-prefill materialization (logits eval, sampler,
+                # cache state submission, .item()) MUST run inside the
+                # dedicated generation stream context. JANGTQ Metal kernels
+                # in jang_tools (P3/P15/P17/P18) dispatch async work onto
+                # an internal stream — running these ops outside the stream
+                # context raises:
+                #   RuntimeError: There is no Stream(gpu, 1) in current thread.
+                # Wrapping in `_MaybeStream()` makes every op share the
+                # same Stream handle so cross-thread resolution works.
+                with _MaybeStream():
+                    last_logits = logits[:, -1, :]
+                    mx.eval(last_logits)
+                    del logits
+                    mx.clear_cache()
+                    logprobs = last_logits - mx.logsumexp(
+                        last_logits, axis=-1, keepdims=True
+                    )
+                    req_sampler = self._make_request_sampler(req)
+                    sampled = req_sampler(logprobs)
 
-                # Async submit cache states to GPU for CPU/GPU overlap
-                try:
-                    cache_states = []
-                    for c in req_cache:
-                        if hasattr(c, 'state'):
-                            st = c.state
-                            if isinstance(st, (list, tuple)):
-                                cache_states.extend(x for x in st if x is not None)
-                            elif st is not None:
-                                cache_states.append(st)
-                        elif hasattr(c, 'cache'):
-                            cache_states.extend(x for x in c.cache if x is not None)
-                    mx.async_eval(sampled, logprobs, *cache_states)
-                except Exception as e:
-                    logger.warning(f"Cache state submission error (non-fatal): {e}")
-                    mx.async_eval(sampled, logprobs)
+                    # Async submit cache states to GPU for CPU/GPU overlap
+                    try:
+                        cache_states = []
+                        for c in req_cache:
+                            if hasattr(c, 'state'):
+                                st = c.state
+                                if isinstance(st, (list, tuple)):
+                                    cache_states.extend(x for x in st if x is not None)
+                                elif st is not None:
+                                    cache_states.append(st)
+                            elif hasattr(c, 'cache'):
+                                cache_states.extend(x for x in c.cache if x is not None)
+                        mx.async_eval(sampled, logprobs, *cache_states)
+                    except Exception as e:
+                        logger.warning(f"Cache state submission error (non-fatal): {e}")
+                        mx.async_eval(sampled, logprobs)
 
-                first_tokens.append(sampled.item())
+                    _sampled_value = sampled.item()
+                first_tokens.append(_sampled_value)
                 all_logprobs.append(logprobs.squeeze(0))
                 succeeded_requests.append(req)
 
@@ -2298,6 +2567,40 @@ class MLLMBatchGenerator:
                     _tp = getattr(req, '_original_token_ids', None) or input_ids_list[i]
                     if _img_id is not None and _img_id in _tp:
                         continue
+                    # vmlx#109: if capture-during-prefill already snapshotted
+                    # a clean SSM state at the gpl boundary, store it now
+                    # with is_complete=True and skip the deferred re-derive
+                    # path entirely. The post-prefill cache is post-gpl and
+                    # would otherwise either be wrong (gpl>0) or queue a
+                    # second prefill pass.
+                    _inline_layers = getattr(req, "_inline_ssm_layers", None)
+                    _inline_boundary = getattr(req, "_inline_ssm_boundary", 0)
+                    _inline_tokens = getattr(req, "_inline_ssm_tokens", None)
+                    if _inline_layers and _inline_boundary > 0 and _inline_tokens:
+                        try:
+                            self._ssm_state_cache.store(
+                                _inline_tokens,
+                                _inline_boundary,
+                                _inline_layers,
+                                is_complete=True,
+                            )
+                            logger.info(
+                                "vmlx#109: stored inline-captured SSM for %s "
+                                "(%d layers, %d-token key, no re-derive)",
+                                req.request_id,
+                                len(_inline_layers),
+                                _inline_boundary,
+                            )
+                        except Exception as e:
+                            logger.debug(
+                                "vmlx#109 inline store failed for %s: %s",
+                                req.request_id, e,
+                            )
+                        # Drop refs so per-request memory isn't held longer
+                        # than necessary.
+                        req._inline_ssm_layers = None
+                        req._inline_ssm_tokens = None
+                        continue
                     try:
                         kv_set = set(self._hybrid_kv_positions)
                         ssm_layers = []
@@ -2308,7 +2611,7 @@ class MLLMBatchGenerator:
                                     cloned = deepcopy(c)
                                     # Ensure MLX arrays are fully materialized copies
                                     cloned.cache = [
-                                        mx.contiguous(mx.array(a)) if a is not None else None
+                                        mx.contiguous(a) if a is not None else None
                                         for a in c.cache
                                     ]
                                     ssm_layers.append(cloned)
@@ -2402,6 +2705,16 @@ class MLLMBatchGenerator:
                     req.attention_mask = None
                     req.image_grid_thw = None
                     req.extra_kwargs = {}
+                    # vmlx#109 hardening: any inline SSM stash captured
+                    # against the now-aborted prefill is stale — drop it
+                    # so the retry path captures fresh state instead of
+                    # storing layers that reference a discarded cache.
+                    if hasattr(req, "_inline_ssm_layers"):
+                        req._inline_ssm_layers = None
+                    if hasattr(req, "_inline_ssm_tokens"):
+                        req._inline_ssm_tokens = None
+                    if hasattr(req, "_inline_ssm_boundary"):
+                        req._inline_ssm_boundary = 0
                     # Flush stale GPU state before retry
                     mx.clear_cache()
                     try:
@@ -2412,15 +2725,17 @@ class MLLMBatchGenerator:
                             req_cache = [KVCache() for _ in self.language_model.layers]
                         logits = self._run_vision_encoding(req, cache=req_cache)
                         per_request_caches.append(req_cache)
-                        last_logits = logits[:, -1, :]
-                        mx.eval(last_logits)  # materialize before freeing logits buffer
-                        del logits
-                        mx.clear_cache()
-                        logprobs = last_logits - mx.logsumexp(last_logits, axis=-1, keepdims=True)
-                        req_sampler = self._make_request_sampler(req)
-                        sampled = req_sampler(logprobs)
-                        mx.async_eval(sampled, logprobs)
-                        first_tokens.append(sampled.item())
+                        with _MaybeStream():
+                            last_logits = logits[:, -1, :]
+                            mx.eval(last_logits)
+                            del logits
+                            mx.clear_cache()
+                            logprobs = last_logits - mx.logsumexp(last_logits, axis=-1, keepdims=True)
+                            req_sampler = self._make_request_sampler(req)
+                            sampled = req_sampler(logprobs)
+                            mx.async_eval(sampled, logprobs)
+                            _sampled_value = sampled.item()
+                        first_tokens.append(_sampled_value)
                         all_logprobs.append(logprobs.squeeze(0))
                         succeeded_requests.append(req)
                         continue  # Successfully retried
@@ -2456,15 +2771,17 @@ class MLLMBatchGenerator:
                                     req_cache = [KVCache() for _ in self.language_model.layers]
                                 logits = self._run_vision_encoding(req, cache=req_cache)
                                 per_request_caches.append(req_cache)
-                                last_logits = logits[:, -1, :]
-                                mx.eval(last_logits)  # materialize before freeing logits buffer
-                                del logits
-                                mx.clear_cache()
-                                logprobs = last_logits - mx.logsumexp(last_logits, axis=-1, keepdims=True)
-                                req_sampler = self._make_request_sampler(req)
-                                sampled = req_sampler(logprobs)
-                                mx.async_eval(sampled, logprobs)
-                                first_tokens.append(sampled.item())
+                                with _MaybeStream():
+                                    last_logits = logits[:, -1, :]
+                                    mx.eval(last_logits)
+                                    del logits
+                                    mx.clear_cache()
+                                    logprobs = last_logits - mx.logsumexp(last_logits, axis=-1, keepdims=True)
+                                    req_sampler = self._make_request_sampler(req)
+                                    sampled = req_sampler(logprobs)
+                                    mx.async_eval(sampled, logprobs)
+                                    _sampled_value = sampled.item()
+                                first_tokens.append(_sampled_value)
                                 all_logprobs.append(logprobs.squeeze(0))
                                 succeeded_requests.append(req)
                                 continue
@@ -2900,7 +3217,13 @@ class MLLMBatchGenerator:
                         if hasattr(arr, "shape"):
                             materialize.append(arr)
             if materialize:
-                mx.eval(materialize)
+                try:
+                    mx.eval(materialize)
+                except RuntimeError as _eval_err:
+                    if "Stream" in str(_eval_err):
+                        mx.synchronize()
+                    else:
+                        raise
             return fresh_cache
         except Exception as ex:
             logger.warning(f"MLLM clean SSM prefill failed (non-fatal): {ex}")
@@ -2935,7 +3258,7 @@ class MLLMBatchGenerator:
                     from copy import deepcopy
                     cloned = deepcopy(c)
                     cloned.cache = [
-                        mx.contiguous(mx.array(a)) if a is not None else None
+                        mx.contiguous(a) if a is not None else None
                         for a in c.cache
                     ]
                     ssm_layers.append(cloned)

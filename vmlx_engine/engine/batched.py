@@ -12,6 +12,7 @@ For MLLM models, this engine supports a hybrid approach:
 This is necessary because BatchGenerator only supports token IDs, not pixel_values.
 """
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from typing import Any
@@ -154,12 +155,25 @@ class BatchedEngine(BaseEngine):
         from ..mllm_scheduler import MLLMScheduler, MLLMSchedulerConfig
         from ..models.mllm import MLXMultimodalLM
 
-        # Load the MLLM model
+        # Load the MLLM model on the SAME thread that will later run
+        # step()/prefill — see `MLLMScheduler._step_executor` for the
+        # JANGTQ Metal kernel stream-isolation rationale. Without this,
+        # Stream(gpu, 1) created during load on MainThread is invisible
+        # to the worker thread that runs prefill, and JANGTQ-VL bundles
+        # crash with "RuntimeError: There is no Stream(gpu, 1) in current
+        # thread."  We instantiate a temporary scheduler-aligned executor
+        # here, load the model on it, then hand the same executor to the
+        # scheduler below so step() runs on the exact same worker.
+        from concurrent.futures import ThreadPoolExecutor
+        loader_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="mllm-worker"
+        )
         self._mllm_instance = MLXMultimodalLM(
             self._model_name,
             trust_remote_code=self._trust_remote_code,
         )
-        self._mllm_instance.load()
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(loader_executor, self._mllm_instance.load)
 
         self._model = self._mllm_instance.model
         self._processor = self._mllm_instance.processor
@@ -209,6 +223,10 @@ class BatchedEngine(BaseEngine):
             model_path=getattr(self._scheduler_config, "model_path", None) or self._model_name,
             # Hybrid SSM state cache size
             ssm_state_cache_size=getattr(self._scheduler_config, "ssm_state_cache_size", 50),
+            # Hand the loader executor to the scheduler so step() runs on
+            # the same worker thread as the load (JANGTQ Metal kernel
+            # stream-isolation fix).
+            step_executor=loader_executor,
         )
 
         # Create and start MLLM scheduler

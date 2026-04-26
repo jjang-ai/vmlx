@@ -79,6 +79,36 @@ def _chunked_eval_params(model, chunk_size: int = 200):
         mx.eval(*[v for _, v in _flat[_i : _i + chunk_size]])
 
 
+def _safe_source_model_name(jang_cfg: dict) -> str:
+    """Extract a printable source-model identifier from `jang_config.json`.
+
+    Handles all known shapes the field has taken across JANG versions:
+
+      * older bundles  → ``{"source_model": {"name": "...", "path": "..."}}``
+      * DSV4 bundles    → ``{"source_model": "/Users/example/sources/DeepSeek-V4-Flash"}``
+                          (plain string path)
+      * missing / null  → "unknown"
+
+    Returns a string suitable for log messages — never raises.
+
+    Without this helper, every ``(jang_cfg.get("source_model") or {}).get(...)``
+    call site crashes when DSV4 (and any future bundle that simplifies the
+    field to a bare string) is loaded — the error surfaces as
+    ``AttributeError: 'str' object has no attribute 'get'`` deep inside the
+    server lifespan, which presents to the user as "Launch Failed" with no
+    actionable hint.
+    """
+    sm = jang_cfg.get("source_model")
+    if isinstance(sm, dict):
+        return sm.get("name") or sm.get("path") or "unknown"
+    if isinstance(sm, str) and sm:
+        # Treat as path — show the basename so the log line stays readable
+        # ("DeepSeek-V4-Flash" vs "/Users/example/sources/DeepSeek-V4-Flash").
+        from os.path import basename
+        return basename(sm.rstrip("/")) or sm
+    return "unknown"
+
+
 def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
     """Patch model.make_cache() to return TurboQuantKVCache for JANG models with TQ enabled.
 
@@ -367,7 +397,7 @@ def _load_codebook_vq_model(
     _chunked_eval_params(model)
 
     elapsed = time.perf_counter() - start
-    source_model = jang_cfg.get("source_model", {}).get("name", "unknown")
+    source_model = _safe_source_model_name(jang_cfg)
     logger.info(f"  Codebook VQ model loaded in {elapsed:.1f}s: {source_model}")
 
     return model, tokenizer
@@ -445,6 +475,21 @@ def _load_jang_v2(
     start = time.perf_counter()
     config = load_config(path)
 
+    # Runtime quantization-shape repair (vmlx#config-repair): some older
+    # JANG/JANGTQ converter revisions wrote the wrong per-module
+    # bits/group_size into config.json["quantization"]. The actual
+    # safetensors weights are correct — only the config metadata is wrong.
+    # Loading with the wrong (bits, gsz) makes mx.dequantize unpack the
+    # weight bytes with the wrong stride → degenerate output. We scan the
+    # bundle's safetensors here, infer the real (bits, gsz) per quantized
+    # Linear from shape ratios, and patch the in-memory config when it
+    # disagrees. Idempotent on already-good bundles.
+    try:
+        from .quant_shape_inference import infer_quant_overrides_for_bundle
+        config = infer_quant_overrides_for_bundle(path, config)
+    except Exception as _qsi_err:
+        logger.debug(f"quant_shape_inference: skipped ({_qsi_err})")
+
     # Mistral-Small-4-119B mismatch: HF config.json has top model_type="mistral3"
     # (the VLM wrapper class) but text_config.model_type="mistral4" (the inner
     # MLA language model). When loaded as text-only via mlx_lm, the top-level
@@ -480,12 +525,12 @@ def _load_jang_v2(
     # Always read block_size from jang_config (needed by _pre_fix_bits_from_shard
     # and other per-shard fixups). config.json's quantization.group_size may differ
     # from the JANG config's block_size for older models.
-    block_size = jang_cfg.get("quantization", {}).get("block_size", 64)
+    block_size = (jang_cfg.get("quantization") or {}).get("block_size", 64)
 
     # config.json already has quantization key (written by v2 converter)
     # but ensure it exists for older v2 models
     if "quantization" not in config:
-        bit_widths = jang_cfg.get("quantization", {}).get("bit_widths_used", [4])
+        bit_widths = (jang_cfg.get("quantization") or {}).get("bit_widths_used", [4])
         config["quantization"] = {"group_size": block_size, "bits": min(bit_widths)}
 
     # MXTQ / JANGTQ fast path ─────────────────────────────────────────────
@@ -507,6 +552,28 @@ def _load_jang_v2(
             _is_mxtq_v2 = False
 
     if _is_mxtq_v2:
+        # DeepSeek V4 (model_type="deepseek_v4") — register our MLX model
+        # class into mlx_lm.models BEFORE the JANGTQ loader's _load_skeleton
+        # call tries to resolve it. jang_tools.dsv4.mlx_register injects
+        # jang_tools.dsv4.mlx_model as mlx_lm.models.deepseek_v4 at import
+        # time, so `from jang_tools.dsv4 import mlx_register` is the only
+        # prerequisite. See research/DSV4-RUNTIME-ARCHITECTURE.md §3.
+        if config.get("model_type") == "deepseek_v4":
+            try:
+                from jang_tools.dsv4 import mlx_register  # noqa: F401
+                logger.info(
+                    "DeepSeek V4 detected — registered jang_tools.dsv4.mlx_model "
+                    "as mlx_lm.models.deepseek_v4 (MLA head_dim=512, mHC hc_mult=4, "
+                    "256 routed experts top-6, sqrtsoftplus + hash layers, "
+                    "sliding_window=128 RotatingKVCache)"
+                )
+            except ImportError as _ds4_ie:
+                logger.warning(
+                    "DeepSeek V4 requires jang_tools.dsv4.mlx_register but "
+                    "import failed (%s) — bundle may fail to load. Ensure "
+                    "jang_tools ≥ the release shipping the dsv4/ submodule.",
+                    _ds4_ie,
+                )
         # Step 1: try to import the fast-path entry point. Only an ImportError
         # here justifies falling back to the dequant path (jang_tools missing).
         try:
@@ -562,8 +629,8 @@ def _load_jang_v2(
                 logger.debug(traceback.format_exc())
 
             elapsed = time.perf_counter() - start
-            actual_bits = jang_cfg.get("quantization", {}).get("actual_bits", 0)
-            source_model = jang_cfg.get("source_model", {}).get("name", "unknown")
+            actual_bits = (jang_cfg.get("quantization") or {}).get("actual_bits", 0)
+            source_model = _safe_source_model_name(jang_cfg)
             logger.info(
                 f"JANGTQ v2 loaded in {elapsed:.1f}s: {source_model} "
                 f"({actual_bits:.1f}-bit avg, native TQ, no dequant)"
@@ -583,6 +650,27 @@ def _load_jang_v2(
         register_gemma4_native()
     except Exception as _g4_e:
         logger.debug(f"gemma4 native register skipped: {_g4_e}")
+
+    # DeepSeek V4 (model_type="deepseek_v4") — register our MLX model
+    # class BEFORE _load_model_skeleton tries to resolve it. Same thing
+    # we do on the JANGTQ fast path at line 509, but also required for
+    # bundles that lack `.tq_packed` keys (e.g. DeepSeek-V4-Flash-JANG_2L,
+    # which is 2-bit affine everywhere and routes through the dequant-
+    # and-repack path below). Idempotent — safe to import twice.
+    if config.get("model_type") == "deepseek_v4":
+        try:
+            from jang_tools.dsv4 import mlx_register  # noqa: F401
+            logger.info(
+                "DeepSeek V4 detected (non-TQ path) — registered "
+                "jang_tools.dsv4.mlx_model as mlx_lm.models.deepseek_v4"
+            )
+        except ImportError as _ds4_ie:
+            logger.warning(
+                "DeepSeek V4 requires jang_tools.dsv4 but import failed (%s) — "
+                "the dequant load below will fail to resolve the model class. "
+                "Ensure jang_tools ≥2.5.3 with the dsv4/ submodule.",
+                _ds4_ie,
+            )
 
     # Nemotron-H LatentMoE patch: must run BEFORE _load_model_skeleton creates
     # NemotronHBlock instances. For models with moe_latent_size set (e.g.,
@@ -620,7 +708,7 @@ def _load_jang_v2(
     if (
         _is_mistral4_promoted := (
             getattr(_load_model_skeleton, "__name__", "") == "load_model"
-            and (jang_cfg.get("architecture", {}).get("attention", "") == "mla"
+            and ((jang_cfg.get("architecture") or {}).get("attention", "") == "mla"
                  or "mistral4" in str(config.get("model_type", "")))
         )
     ):
@@ -729,7 +817,17 @@ def _load_jang_v2(
     # MXTQ detection: check first shard for tq_packed keys
     _is_mxtq = False
     _mxtq_seed = jang_cfg.get("mxtq_seed", 42)
-    _mxtq_bits_map = jang_cfg.get("mxtq_bits", {})
+    # Accept both dict form ({"routed_expert": 4, "shared_expert": 8, ...}) and scalar
+    # form (mxtq_bits=4) for HF configs that omit per-module overrides. Scalar maps to
+    # routed_expert only — matches Swift JangLoader.swift:367 (`["routed_expert": bits]`).
+    # When a bundle needs distinct shared_expert bits, the dict form is required.
+    _mxtq_bits_raw = jang_cfg.get("mxtq_bits", {})
+    if isinstance(_mxtq_bits_raw, int):
+        _mxtq_bits_map = {"routed_expert": _mxtq_bits_raw}
+    elif isinstance(_mxtq_bits_raw, dict):
+        _mxtq_bits_map = _mxtq_bits_raw
+    else:
+        _mxtq_bits_map = {}
     if weight_files:
         try:
             _first_keys = list(mx.load(str(weight_files[0])).keys())
@@ -1042,7 +1140,7 @@ def _load_jang_v2(
     # whose weight is uint32 to its Quantized variant in place. Safe no-op
     # for models that nn.quantize already converted.
     _q_cfg = config.get("quantization", {}) if isinstance(config, dict) else {}
-    _q_bits = _q_cfg.get("bits", min(jang_cfg.get("quantization", {}).get("bit_widths_used", [4])))
+    _q_bits = _q_cfg.get("bits", min((jang_cfg.get("quantization") or {}).get("bit_widths_used", [4])))
     _q_gs = _q_cfg.get("group_size", block_size)
     _upg = _upgrade_modules_with_uint32_weights(model, _q_bits, _q_gs)
     if _upg > 0:
@@ -1086,8 +1184,8 @@ def _load_jang_v2(
 
     elapsed = time.perf_counter() - start
 
-    actual_bits = jang_cfg.get("quantization", {}).get("actual_bits", 0)
-    source_model = jang_cfg.get("source_model", {}).get("name", "unknown")
+    actual_bits = (jang_cfg.get("quantization") or {}).get("actual_bits", 0)
+    source_model = _safe_source_model_name(jang_cfg)
     logger.info(
         f"JANG v2 loaded in {elapsed:.1f}s: {source_model} ({actual_bits:.1f}-bit avg)"
     )
@@ -1115,8 +1213,8 @@ def _load_jang_v2_vlm(
 
     start = time.perf_counter()
 
-    block_size = jang_cfg.get("quantization", {}).get("block_size", 64)
-    bit_widths = jang_cfg.get("quantization", {}).get("bit_widths_used", [4])
+    block_size = (jang_cfg.get("quantization") or {}).get("block_size", 64)
+    bit_widths = (jang_cfg.get("quantization") or {}).get("bit_widths_used", [4])
     default_bits = min(bit_widths)
 
     # Nemotron-H LatentMoE patch — see _load_jang_v2 for rationale. Must run
@@ -1130,6 +1228,14 @@ def _load_jang_v2_vlm(
         logger.debug(f"LatentMoE patch skipped: {_lmoe_e}")
 
     config = vlm_load_config(path)
+
+    # Runtime quantization-shape repair (vmlx#config-repair). See
+    # `_load_jang_v2` for the full rationale.
+    try:
+        from .quant_shape_inference import infer_quant_overrides_for_bundle
+        config = infer_quant_overrides_for_bundle(path, config)
+    except Exception as _qsi_err:
+        logger.debug(f"quant_shape_inference (VLM): skipped ({_qsi_err})")
 
     # Mistral 4 VLM fallback: the outer config has model_type=mistral3 (the VLM
     # wrapper class name in HuggingFace) but text_config.model_type=mistral4
@@ -1230,7 +1336,14 @@ def _load_jang_v2_vlm(
     # JANGTQ_2L / Qwen3.5-VL-*-JANGTQ* path).
     _vlm_is_mxtq = any(k.endswith(".tq_packed") for k in all_weight_keys)
     _vlm_mxtq_seed = jang_cfg.get("mxtq_seed", 42)
-    _vlm_mxtq_bits_map = jang_cfg.get("mxtq_bits", {})
+    # Accept scalar mxtq_bits=N (routed-expert only) alongside dict form. See line ~820.
+    _vlm_mxtq_bits_raw = jang_cfg.get("mxtq_bits", {})
+    if isinstance(_vlm_mxtq_bits_raw, int):
+        _vlm_mxtq_bits_map = {"routed_expert": _vlm_mxtq_bits_raw}
+    elif isinstance(_vlm_mxtq_bits_raw, dict):
+        _vlm_mxtq_bits_map = _vlm_mxtq_bits_raw
+    else:
+        _vlm_mxtq_bits_map = {}
     if _vlm_is_mxtq:
         # JANGTQ VLM fast path via jang_tools.load_jangtq_vlm — mirrors the
         # text-side fast path at line ~509. Uses the same P3/P15/P17/P18
@@ -1271,7 +1384,7 @@ def _load_jang_v2_vlm(
         except Exception as _pe:
             logger.warning(f"  TurboQuant make_cache patch skipped: {_pe}")
         elapsed = time.perf_counter() - start
-        actual_bits = jang_cfg.get("quantization", {}).get("actual_bits", 0)
+        actual_bits = (jang_cfg.get("quantization") or {}).get("actual_bits", 0)
         logger.info(
             f"JANGTQ VLM loaded in {elapsed:.1f}s (fast path) — "
             f"{actual_bits:.1f}-bit avg" if actual_bits else
@@ -2009,10 +2122,10 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
 
     start = time.perf_counter()
 
-    block_size = jang_cfg.get("quantization", {}).get("block_size", 64)
-    target_bits = jang_cfg.get("quantization", {}).get("target_bits", 4)
-    actual_bits = jang_cfg.get("quantization", {}).get("actual_bits", target_bits)
-    source_model = jang_cfg.get("source_model", {}).get("name", "unknown")
+    block_size = (jang_cfg.get("quantization") or {}).get("block_size", 64)
+    target_bits = (jang_cfg.get("quantization") or {}).get("target_bits", 4)
+    actual_bits = (jang_cfg.get("quantization") or {}).get("actual_bits", target_bits)
+    source_model = _safe_source_model_name(jang_cfg)
 
     logger.info(
         f"Loading JANG v1 model: {source_model} "
@@ -2020,11 +2133,23 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
     )
 
     config = load_config(path)
-    bit_widths = jang_cfg.get("quantization", {}).get("bit_widths_used", [2, 4, 6, 8])
+    bit_widths = (jang_cfg.get("quantization") or {}).get("bit_widths_used", [2, 4, 6, 8])
     default_bits = min(bit_widths)
     config.pop("quantization", None)
     config.pop("quantization_config", None)
     config["quantization"] = {"group_size": block_size, "bits": default_bits}
+
+    # Runtime quantization-shape repair (vmlx#config-repair). The legacy
+    # JANG v1 path constructs a uniform-bits config above from
+    # `bit_widths_used`, but mixed-precision bundles still need per-module
+    # overrides for modules that aren't `default_bits`. The patcher scans
+    # safetensors shapes and adds the correct overrides. See
+    # `_load_jang_v2` for the full rationale.
+    try:
+        from .quant_shape_inference import infer_quant_overrides_for_bundle
+        config = infer_quant_overrides_for_bundle(path, config)
+    except Exception as _qsi_err:
+        logger.debug(f"quant_shape_inference (legacy v1): skipped ({_qsi_err})")
 
     # Nemotron-H LatentMoE patch — see _load_jang_v2 for rationale.
     try:
@@ -2120,14 +2245,20 @@ def _load_jang_v1_vlm(
 
     start = time.perf_counter()
 
-    block_size = jang_cfg.get("quantization", {}).get("block_size", 64)
-    bit_widths = jang_cfg.get("quantization", {}).get("bit_widths_used", [2, 4, 6, 8])
+    block_size = (jang_cfg.get("quantization") or {}).get("block_size", 64)
+    bit_widths = (jang_cfg.get("quantization") or {}).get("bit_widths_used", [2, 4, 6, 8])
     default_bits = min(bit_widths)
-    source_model = jang_cfg.get("source_model", {}).get("name", "unknown")
+    source_model = _safe_source_model_name(jang_cfg)
 
     logger.info(f"Loading JANG v1 VLM: {source_model}")
 
     config = vlm_load_config(path)
+    # Runtime quantization-shape repair (vmlx#config-repair).
+    try:
+        from .quant_shape_inference import infer_quant_overrides_for_bundle
+        config = infer_quant_overrides_for_bundle(path, config)
+    except Exception as _qsi_err:
+        logger.debug(f"quant_shape_inference (v1 VLM): skipped ({_qsi_err})")
     model_class, _ = get_model_and_args(config=config)
 
     config.setdefault("text_config", {})

@@ -146,6 +146,16 @@ def is_mla_model(config: Any) -> bool:
                 return True
         except (TypeError, ValueError):
             continue
+        # DeepSeek V4-Flash / V4-Pro don't set kv_lora_rank but they ARE MLA:
+        # single latent KV head (num_key_value_heads=1, head_dim=512) with
+        # q_lora_rank+o_lora_rank projections. Runtime lives in
+        # jang_tools.dsv4.mlx_model.DeepseekV4Attention and uses its own
+        # DeepseekV4Cache (RotatingKVCache sliding_window=128 + compressor/
+        # indexer state). TurboQuant flat 3-bit cache is incompatible, so
+        # the same MLA-gate that skips V3 must also skip V4. See
+        # research/DSV4-RUNTIME-ARCHITECTURE.md §3 and §7.1.
+        if sub.get("model_type") == "deepseek_v4":
+            return True
         # Gemma4 shared KV: layers share a single KV cache via num_kv_shared_layers.
         # This is a form of latent compression — TQ's flat cache breaks the shared
         # structure (make_cache returns a partial list, shared layers index into it).

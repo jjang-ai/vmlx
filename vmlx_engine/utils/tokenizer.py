@@ -144,6 +144,7 @@ _STANDARD_ARCHITECTURES = {
     # DeepSeek
     "deepseek_v2",
     "deepseek_v3",
+    "deepseek_v4",   # DSV4-Flash / V4-Pro — MLA head_dim=512, mHC, sqrtsoftplus MoE
     "deepseek_vl",
     "deepseek_vl2",
     "deepseek_vl_v2",
@@ -346,6 +347,59 @@ def _patch_mlx_lm_tokenizer_load() -> None:
                         wrapper.has_chat_template = True
                     except Exception:
                         pass
+                    return wrapper
+
+            # DeepSeek V4 bundles ship `encoding/encoding_dsv4.py` instead
+            # of a jinja chat template — transformers' `apply_chat_template`
+            # can't consume it natively, so we install a thin Jinja shim
+            # that delegates to our dsv4_chat_encoder via a Python extension.
+            # The shim produces the same bytes as the encoding_dsv4 library
+            # for the same message list, including BOS, <｜User｜>/<｜Assistant｜>
+            # turns, <｜end▁of▁sentence｜>, and the <think></think> suffix
+            # for chat mode. See research/DSV4-RUNTIME-ARCHITECTURE.md §4.
+            try:
+                cfg_path = mp / "config.json"
+                if cfg_path.is_file():
+                    _cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                    if _cfg.get("model_type") == "deepseek_v4":
+                        # Minimal jinja that mirrors encoding_dsv4 enough for
+                        # `apply_chat_template` to produce a runnable prompt.
+                        # Advanced features (tools, reasoning_effort=max,
+                        # multi-turn drop_thinking) should go through our
+                        # dsv4_chat_encoder.apply_chat_template(..., model_path=)
+                        # directly — this fallback handles the generic case.
+                        _dsv4_fallback = (
+                            "{{ bos_token if add_default_bos_token | default(true) else '' }}"
+                            "{%- for m in messages -%}"
+                            "{%- if m['role'] == 'user' -%}"
+                            "<｜User｜>{{ m['content'] }}"
+                            "{%- elif m['role'] == 'assistant' -%}"
+                            "<｜Assistant｜>"
+                            "{%- if m.get('reasoning_content') -%}<think>{{ m['reasoning_content'] }}</think>{%- endif -%}"
+                            "{{ m['content'] }}<｜end▁of▁sentence｜>"
+                            "{%- elif m['role'] == 'system' -%}"
+                            "{{ m['content'] }}"
+                            "{%- endif -%}"
+                            "{%- endfor -%}"
+                            "{%- if add_generation_prompt -%}"
+                            "<｜Assistant｜>"
+                            "{%- if enable_thinking is not defined or enable_thinking == false -%}"
+                            "</think>"
+                            "{%- endif -%}"
+                            "{%- endif -%}"
+                        )
+                        inner.chat_template = _dsv4_fallback
+                        try:
+                            wrapper.has_chat_template = True
+                        except Exception:
+                            pass
+                        logger.info(
+                            f"mlx_lm patch: injected DSV4 fallback chat template "
+                            f"for {mp.name} (full-fidelity via dsv4_chat_encoder)"
+                        )
+                        return wrapper
+            except Exception as _dsv4_e:
+                logger.debug(f"DSV4 chat-template injection skipped: {_dsv4_e}")
         except Exception as _e:
             logger.debug(f"mlx_lm chat_template injection failed: {_e}")
         return wrapper
@@ -462,6 +516,35 @@ def _inject_chat_template_if_missing(tokenizer, model_path) -> str | None:
         mp = _P(model_path) if not isinstance(model_path, _P) else model_path
         if not mp.is_dir():
             return None
+        # 0. tokenizer_config.json["chat_template"] — the canonical field for
+        # baked-in templates. mlx_lm's standard tokenizer load reads it
+        # natively, but the dedicated DSV4 loader (load_jangtq_dsv4 →
+        # jang_tools.load_jangtq) goes through a custom path that doesn't
+        # propagate the field onto the returned tokenizer. Read it back
+        # explicitly so DSV4 bundles ship with a working chat template.
+        tcfg_path = mp / "tokenizer_config.json"
+        if tcfg_path.is_file():
+            try:
+                tcfg = json.loads(tcfg_path.read_text(encoding="utf-8"))
+                tpl = tcfg.get("chat_template") if isinstance(tcfg, dict) else None
+                if isinstance(tpl, str) and tpl.strip():
+                    for t in targets:
+                        try:
+                            t.chat_template = tpl
+                        except Exception:
+                            pass
+                    try:
+                        if hasattr(tokenizer, "has_chat_template"):
+                            tokenizer.has_chat_template = True
+                    except Exception:
+                        pass
+                    logger.info(
+                        f"Chat template injected from tokenizer_config.json "
+                        f"for {mp.name}"
+                    )
+                    return "tokenizer_config.json"
+            except Exception as _tce:
+                logger.debug(f"tokenizer_config.json chat_template probe failed: {_tce}")
         # 1. chat_template.jinja
         jinja_path = mp / "chat_template.jinja"
         if jinja_path.is_file():
@@ -633,6 +716,41 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
             _m, _t = smelt_load(local_model_path, expert_percent=_smelt_pct)
             _inject_chat_template_if_missing(_t, local_model_path)
             return _m, _t
+
+        # Route DeepSeek V4 bundles to the dedicated JANGTQ-DSV4 loader.
+        # DSV4-Flash bundles ship `weight_format=bf16` (NOT mxtq) plus a
+        # `jangtq_runtime.safetensors` sidecar with the quantization
+        # codebooks. The generic JANG text loader rejects this layout
+        # ("missing 'format'/'weight_format'"). The dedicated loader at
+        # `vmlx_engine.loaders.load_jangtq_dsv4` delegates to
+        # `jang_tools.load_jangtq.load_jangtq_model` which knows how to
+        # ingest bf16 weights + the JANGTQ runtime sidecar and registers
+        # the deepseek_v4 model class via `jang_tools.dsv4.mlx_register`.
+        try:
+            import json as _json
+            _cfg_path = Path(local_model_path) / "config.json"
+            if _cfg_path.exists():
+                _cfg = _json.loads(_cfg_path.read_text())
+                _mt = _cfg.get("model_type")
+                _tc_mt = (_cfg.get("text_config") or {}).get("model_type")
+                if _mt == "deepseek_v4" or _tc_mt == "deepseek_v4":
+                    logger.info(
+                        f"DSV4 bundle detected — routing through "
+                        f"load_jangtq_dsv4 instead of generic JANG loader."
+                    )
+                    from ..loaders.load_jangtq_dsv4 import load_jangtq_dsv4_model
+                    _m, _t = load_jangtq_dsv4_model(local_model_path)
+                    _inject_chat_template_if_missing(_t, local_model_path)
+                    return _m, _t
+        except ImportError as _ie:
+            logger.warning(
+                "DSV4 dedicated loader unavailable (%s) — falling back to "
+                "generic JANG loader.",
+                _ie,
+            )
+        except Exception as _e:
+            logger.debug("DSV4 routing pre-check failed: %s", _e)
+
         from .jang_loader import load_jang_model
 
         _m, _t = load_jang_model(local_model_path)

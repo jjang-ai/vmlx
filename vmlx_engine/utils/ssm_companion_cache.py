@@ -143,6 +143,14 @@ class SSMCompanionCache:
         # Model identity prefix mixed into every key. Empty string is the
         # legacy "single-model" behavior — safe default.
         self._model_key = str(model_key or "")
+        # Optional L2 disk store (vmlx#110). Off-by-default; resolves to
+        # None unless VMLX_ENABLE_SSM_DISK_CACHE=1 is set in env.
+        try:
+            from .ssm_companion_disk_store import get_disk_store
+
+            self._disk = get_disk_store()
+        except Exception:
+            self._disk = None
 
         # Auxiliary index: maps checkpoint length -> (key, prefix_hash)
         # so fetch_longest_prefix can find the best resume point for
@@ -224,6 +232,15 @@ class SSMCompanionCache:
         while len(self._store) > self._max_entries:
             evict_key, _ = self._store.popitem(last=False)
             self._index_remove(evict_key)
+        # vmlx#110 — write-through to L2 disk store. Failures are silent
+        # (L1 still has the data; disk is best-effort warm-start cache).
+        if self._disk is not None:
+            try:
+                self._disk.store(
+                    key, ssm_states, is_complete, token_ids, num_tokens
+                )
+            except Exception as e:
+                logger.debug("SSM disk write-through failed: %s", e)
 
     def _prefix_hash(self, token_ids: List[int], num_tokens: int) -> str:
         """Stable family identifier: same sha256 for any (longer) token list
@@ -270,6 +287,48 @@ class SSMCompanionCache:
         key = self._key(token_ids, num_tokens)
         entry = self._store.get(key)
         if entry is None:
+            # vmlx#110 — L1 miss, try L2 disk store.
+            if self._disk is not None:
+                try:
+                    disk_entry = self._disk.fetch(key)
+                except Exception as e:
+                    logger.debug("SSM disk fetch failed: %s", e)
+                    disk_entry = None
+                if disk_entry is None:
+                    return None
+                disk_states, disk_complete = disk_entry
+                # Backfill L1 so subsequent hits skip disk altogether.
+                self._store[key] = (disk_states, disk_complete)
+                prefix_hash = self._prefix_hash(token_ids, num_tokens)
+                self._length_index.setdefault(num_tokens, {})[prefix_hash] = key
+                while len(self._store) > self._max_entries:
+                    evict_key, _ = self._store.popitem(last=False)
+                    self._index_remove(evict_key)
+                # Disk fetch already performed deepcopy + materialize; we
+                # can return its result directly. Mirror the L1 contract by
+                # producing fresh deep copies for the caller.
+                fresh: List[Any] = []
+                for s in disk_states:
+                    try:
+                        c = deepcopy(s)
+                        if hasattr(c, "cache") and isinstance(c.cache, list):
+                            c.cache = [
+                                (mx.array(a) * 1 if a is not None else None)
+                                for a in c.cache
+                            ]
+                            mat = [x for x in c.cache if x is not None]
+                            if mat:
+                                _mx_materialize(*mat)
+                        if getattr(c, "lengths", None) is not None:
+                            try:
+                                c.lengths = mx.array(c.lengths) * 1
+                                _mx_materialize(c.lengths)
+                            except Exception:
+                                pass
+                        fresh.append(c)
+                    except Exception:
+                        return None
+                return (fresh, disk_complete)
             return None
         states, is_complete = entry
         # Move to end (most recently used)
