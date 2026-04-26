@@ -241,8 +241,18 @@ class ModelConfigRegistry:
             if model_name in self._match_cache:
                 return self._match_cache[model_name]
 
+            # vmlx#115: HF repo IDs (e.g. "Org/Model") arrive here unresolved on the
+            # first lookup before the engine downloads/snapshots them. Map to the
+            # local snapshot path so jang_config.json + config.json file probes can
+            # actually find the files. Local paths fall through unchanged.
+            try:
+                from .api.utils import resolve_to_local_path
+                resolved_path = resolve_to_local_path(model_name)
+            except Exception:
+                resolved_path = model_name
+
             # Tier 1 — JANG-stamped capabilities (authoritative, never second-guess)
-            _stamped = self._try_jang_stamp(model_name)
+            _stamped = self._try_jang_stamp(resolved_path)
             if _stamped is not None:
                 logger.info(
                     f"Model config: detection_source=jang_stamped family={_stamped.family_name} "
@@ -260,7 +270,7 @@ class ModelConfigRegistry:
                     from mlx_lm.utils import load_config as _load_config_fn
                     load_config = _load_config_fn
                 from pathlib import Path
-                model_config = load_config(Path(model_name))
+                model_config = load_config(Path(resolved_path))
                 model_type = model_config.get("model_type", "").lower()
             except Exception as e:
                 logger.warning(f"Could not load config.json for {model_name} to check model_type: {e}")
@@ -272,7 +282,7 @@ class ModelConfigRegistry:
                 try:
                     from pathlib import Path
                     import json
-                    cfg_path = Path(model_name) / "config.json"
+                    cfg_path = Path(resolved_path) / "config.json"
                     if cfg_path.exists():
                         raw = json.loads(cfg_path.read_text())
                         text_model_type = raw.get("text_config", {}).get("model_type", "").lower()

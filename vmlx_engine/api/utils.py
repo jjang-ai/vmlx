@@ -112,8 +112,11 @@ def resolve_to_local_path(model_name: str) -> str:
 
     Returns the original ``model_name`` unchanged if it already points to an
     existing directory.  For HuggingFace repo IDs (e.g.
-    ``"JANGQ-AI/Qwen3.5-122B-A10B-JANG_3L"``), scans the local HF cache and
-    returns the snapshot path of the most recently modified revision.
+    ``"JANGQ-AI/Qwen3.5-122B-A10B-JANG_3L"``), scans:
+
+    1. ``~/.mlxstudio/models/<repo_id>/`` — vMLX desktop app's model cache
+    2. HuggingFace cache snapshots (most recent revision with a config.json)
+
     Returns ``model_name`` as-is if resolution fails (callers will fall
     through gracefully).
 
@@ -125,7 +128,16 @@ def resolve_to_local_path(model_name: str) -> str:
     if Path(model_name).is_dir():
         return model_name
 
-    # Try HuggingFace cache (no network, no download)
+    # vMLX app cache: ~/.mlxstudio/models/<org>/<name>/
+    # (The desktop app downloads here, separate from HF cache.)
+    try:
+        mlxstudio_path = Path.home() / ".mlxstudio" / "models" / model_name
+        if mlxstudio_path.is_dir() and (mlxstudio_path / "config.json").is_file():
+            return str(mlxstudio_path)
+    except Exception:
+        pass
+
+    # HuggingFace cache (no network, no download)
     try:
         from huggingface_hub import scan_cache_dir
 
