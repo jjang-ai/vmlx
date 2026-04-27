@@ -231,6 +231,29 @@ public actor Engine {
         terminalCwd = url
     }
 
+    // §429 — VL screenshot rendezvous. ToolDispatcher's screenshot
+    // handler stamps the saved PNG path here when the model invokes
+    // the `screenshot` tool. TerminalScreen.runViaEngine reads
+    // `pendingScreenshots()` after engine.stream() returns and
+    // attaches each captured PNG as an `image_url` content part on
+    // the next user message so the VL model SEES the pixels on its
+    // next forward pass.
+    //
+    // Stored as a queue (not a single slot) because the model can
+    // call screenshot multiple times in one agentic-loop run — e.g.
+    // capture before clicking, then capture after, then describe
+    // both. Drained by `consumeLatestScreenshots()` which the
+    // Terminal calls after each stream completes.
+    private var pendingScreenshotPaths: [URL] = []
+    public func recordScreenshot(path: URL) {
+        pendingScreenshotPaths.append(path)
+    }
+    public func consumeLatestScreenshots() -> [URL] {
+        let paths = pendingScreenshotPaths
+        pendingScreenshotPaths.removeAll()
+        return paths
+    }
+
     /// 4-tier settings store (global → session → chat → request). Backed by
     /// its own SQLite file at `~/Library/Application Support/vMLX/settings.sqlite3`.
     /// HTTP routes should call `settings.resolved(sessionId:chatId:request:)`

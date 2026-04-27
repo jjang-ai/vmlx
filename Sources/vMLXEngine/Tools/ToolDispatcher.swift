@@ -53,6 +53,14 @@ extension Engine {
             return await executeBashTool(call, cwd: effectiveCwd, timeoutSeconds: timeoutSeconds)
         }
 
+        // §429 — VL screenshot tool. Captures the screen to a temp PNG
+        // and returns the path. Terminal then auto-attaches the PNG
+        // as an `image_url` content part on the next user message so
+        // the VL model actually SEES the pixels.
+        if name == "screenshot" {
+            return await executeScreenshotTool(call)
+        }
+
         // MCP namespaced names are `server__tool`. Route through the
         // MCPServerManager which starts the server lazily on first use.
         if name.contains("__") {
@@ -116,6 +124,61 @@ extension Engine {
                 isError: true
             )
         }
+    }
+
+    /// §429 — Run the `screenshot` tool. Captures the screen via
+    /// /usr/sbin/screencapture, persists the path on the engine actor
+    /// so the Terminal UI can pick it up after the agentic loop ends
+    /// and attach the image to the next user turn for VL inference.
+    private func executeScreenshotTool(
+        _ call: ChatRequest.ToolCall
+    ) async -> ToolDispatchResult {
+        let argsData = call.function.arguments.data(using: .utf8) ?? Data()
+        let argsJson = (try? JSONSerialization.jsonObject(with: argsData)) as? [String: Any] ?? [:]
+
+        var inv = ScreenshotTool.Invocation()
+        if let region = argsJson["region"] as? [Any] {
+            let ints = region.compactMap { ($0 as? Int) ?? Int($0 as? Double ?? .nan) }
+            if ints.count == 4 { inv.region = ints }
+        }
+        if let d = argsJson["delay"] as? Double { inv.delaySeconds = d }
+        if let d = argsJson["delay"] as? Int { inv.delaySeconds = Double(d) }
+        if let t = argsJson["target"] as? String { inv.target = t }
+
+        let tool = ScreenshotTool()
+        let result = await tool.run(inv)
+
+        // Persist the path on the engine actor so the chat session
+        // (typically TerminalScreen.runViaEngine) can pick it up after
+        // the engine.stream() agentic loop concludes and attach the
+        // PNG as an image_url part on the next user message.
+        if result.error == nil {
+            await self.recordScreenshot(path: result.path)
+        }
+
+        // Format result as JSON. The model sees this as the tool
+        // message body — keep it concise.
+        var dict: [String: Any] = [
+            "saved": result.error == nil,
+            "path": result.path.path,
+            "bytes": result.savedBytes,
+        ]
+        if let w = result.widthHint { dict["width"] = w }
+        if let h = result.heightHint { dict["height"] = h }
+        if let err = result.error {
+            dict["error"] = err
+        } else {
+            dict["note"] = "PNG saved. The image will be attached to your next input so you can SEE it. Don't try to call screenshot again unless the user requests a new capture."
+        }
+        let body = (try? JSONSerialization.data(withJSONObject: dict))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+
+        return ToolDispatchResult(
+            toolCallId: call.id,
+            name: "screenshot",
+            content: body,
+            isError: result.error != nil
+        )
     }
 
     /// Run the `bash` tool. Parses the `command` field out of the JSON
