@@ -177,7 +177,7 @@ const openCode: ToolConfig = {
     const cfg = safeReadJSON(join(homedir(), '.config', 'opencode', 'opencode.json'))
     if (!cfg?.provider) return []
     return Object.entries(cfg.provider)
-      .filter(([_, v]: any) => v?.[MLXSTUDIO_TAG])
+      .filter(([_, v]: any) => v?.[MLXSTUDIO_TAG] || (v as any)?.options?.[MLXSTUDIO_TAG])
       .map(([k, v]: any) => ({ label: k, baseUrl: (v as any)?.options?.baseURL || '' }))
   },
   addEntry: (baseUrl, modelName) => {
@@ -188,7 +188,10 @@ const openCode: ToolConfig = {
     cfg.provider[key] = {
       npm: '@ai-sdk/openai-compatible',
       name: `MLX Studio (${modelName})`,
-      options: { baseURL: `${baseUrl}/v1` },
+      options: {
+        baseURL: `${baseUrl}/v1`,
+        [MLXSTUDIO_TAG]: true,
+      },
       models: {
         [modelName]: {
           name: modelName,
@@ -196,7 +199,6 @@ const openCode: ToolConfig = {
           modalities: { input: ['text'], output: ['text'] },
         },
       },
-      [MLXSTUDIO_TAG]: true,
     }
     safeWriteJSON(path, cfg)
   },
