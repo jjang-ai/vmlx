@@ -116,7 +116,14 @@ struct SessionConfigForm: View {
             .foregroundStyle(Theme.Colors.textHigh)
             .padding(.bottom, Theme.Spacing.lg)
         }
-        .frame(maxHeight: 520)
+        // §425 — was `maxHeight: 520` (hard cap). The cap clipped
+        // controls below the fold on stock 1280×800 windows where the
+        // Server tab needs ~700px to show all sections. Switching to
+        // `minHeight: 520` keeps the form ≥520 (so it never collapses
+        // smaller than the original design) but lets it grow vertically
+        // with the window so users on tall displays see all controls
+        // without scrolling.
+        .frame(minHeight: 520)
         .task { await load() }
         // LAN-bind confirmation dialog. Exposing the HTTP listener to
         // `0.0.0.0` surfaces the engine to every device on the same

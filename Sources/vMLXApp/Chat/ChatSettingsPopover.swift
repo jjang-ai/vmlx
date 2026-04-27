@@ -76,7 +76,12 @@ struct ChatSettingsPopover: View {
             Divider().background(Theme.Colors.border)
             effectiveValuesFooter
         }
-        .frame(width: 480, height: 640)
+        // §425 — was fixed `width: 480, height: 640` which clipped the
+        // popover on small windows + wasted space on large ones. Switch
+        // to range constraints so the popover scales reasonably with
+        // window/display size.
+        .frame(minWidth: 420, idealWidth: 500, maxWidth: 600,
+               minHeight: 480, idealHeight: 640)
         .background(Theme.Colors.background)
         .task(id: chatId) { await load() }
     }

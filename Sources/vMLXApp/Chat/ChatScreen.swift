@@ -600,25 +600,57 @@ private struct ChatModelPicker: View {
                 }
             } label: {
                 HStack(spacing: 4) {
-                    Circle()
-                        .fill(stateColor(currentEntryState()))
-                        .frame(width: 8, height: 8)
-                    Text(currentAlias.isEmpty ? "Select model" : currentAlias)
+                    // §425 — when no model is picked, hide the state dot
+                    // (it's confusing to show a grey dot for "absent")
+                    // and show a folder/picker icon instead so the user
+                    // sees this is a chooser.
+                    if currentAlias.isEmpty {
+                        Image(systemName: "rectangle.and.text.magnifyingglass")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.Colors.accent)
+                    } else {
+                        Circle()
+                            .fill(stateColor(currentEntryState()))
+                            .frame(width: 8, height: 8)
+                    }
+                    Text(currentAlias.isEmpty ? "Select model →" : currentAlias)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .frame(maxWidth: 180, alignment: .leading)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9))
+                        .foregroundStyle(Theme.Colors.textLow)
                 }
-                .foregroundStyle(Theme.Colors.textMid)
+                // §425 — when no model is picked, render in accent color
+                // + bold caption so the picker feels like a primary call-
+                // to-action rather than an inert label. Once a model is
+                // selected the standard textMid/caption styling kicks in.
+                .foregroundStyle(currentAlias.isEmpty ? Theme.Colors.accent : Theme.Colors.textMid)
                 .font(Theme.Typography.caption)
+                .fontWeight(currentAlias.isEmpty ? .semibold : .regular)
                 .padding(.horizontal, Theme.Spacing.sm)
                 .padding(.vertical, 4)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
-                        .fill(Theme.Colors.surface)
+                        .fill(currentAlias.isEmpty
+                              ? Theme.Colors.accent.opacity(0.10)
+                              : Theme.Colors.surface)
+                )
+                .overlay(
+                    // Dashed accent stroke when empty, signalling
+                    // "click here to pick" instead of a flat surface.
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(
+                            currentAlias.isEmpty
+                                ? Theme.Colors.accent.opacity(0.6)
+                                : Color.clear,
+                            style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
                 )
             }
             .menuStyle(.borderlessButton)
-            .help(L10n.Tooltip.modelPicker.render(appLocale))
+            .help(currentAlias.isEmpty
+                  ? "Pick a model — then click Load to start the engine."
+                  : L10n.Tooltip.modelPicker.render(appLocale))
 
             // Always-visible Load/Unload button. Previously this was only
             // rendered when `currentEntry()` was non-nil, which meant fresh
