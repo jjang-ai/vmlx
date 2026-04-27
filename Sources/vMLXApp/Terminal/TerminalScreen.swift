@@ -808,18 +808,27 @@ struct TerminalScreen: View {
         }
     }
 
-    /// §427 — Reasoning-effort levels supported by the loaded model.
-    /// Pulled from family + jang_config. Values match what the chat
-    /// templates accept; passing an unsupported level falls through to
-    /// "high" or gets dropped depending on parser. Per memory:
-    ///   - mistral4 — only ["none", "high"]
-    ///   - deepseek_v4 — full ["none","low","medium","high","max"]
-    ///   - qwen3_5 / qwen3_5_moe / nemotron / glm_moe / minimax —
-    ///     ["none","low","medium","high"] (no max tier)
-    ///   - gemma4 — ["none","low","medium","high"] (channel format)
-    ///   - gpt_oss — ["none","low","medium","high"] (harmony channels)
-    /// Models that don't support thinking return [] → reasoning picker
-    /// hides entirely.
+    /// §427b — Reasoning-effort levels supported by the loaded model.
+    /// What the model's chat template actually CONSUMES, not what
+    /// generic OpenAI clients can send.
+    ///
+    /// Most families implement reasoning as a BINARY switch via
+    /// `enable_thinking: bool` in the chat template — Qwen3, Gemma4,
+    /// Nemotron, MiniMax, GLM-MoE all read just `enable_thinking`
+    /// and ignore graded `reasoning_effort` strings. Showing
+    /// low/medium/high for these is misleading — those values don't
+    /// change the prompt at all.
+    ///
+    /// Only three families actually consume graded levels:
+    ///   - mistral4: template branches on `reasoning_effort=='high'`
+    ///     vs everything else → ["none", "high"]
+    ///   - deepseek_v4: template branches on `none/low/medium/high/max`
+    ///     with a special max-tier system prefix → 5-tier
+    ///   - gpt_oss (Harmony): channel header carries
+    ///     `<|channel|>analysis effort=...` with minimal/low/medium/high
+    ///
+    /// Everyone else → binary [off, on] surfaced as [none, thinking].
+    /// Models that don't support thinking return [] → picker hides.
     private var availableReasoningLevels: [String] {
         guard let caps = loadedCaps, caps.supportsThinking else { return [] }
         switch caps.family {
@@ -827,20 +836,40 @@ struct TerminalScreen: View {
             return ["none", "high"]
         case "deepseek_v4":
             return ["none", "low", "medium", "high", "max"]
+        case "gpt_oss", "gpt_oss_v2":
+            return ["minimal", "low", "medium", "high"]
         default:
-            return ["none", "low", "medium", "high"]
+            // Binary family: enable_thinking on/off. Show as
+            // [none, thinking] so the persisted value reads the same
+            // ("none" everywhere = thinking off).
+            return ["none", "thinking"]
         }
     }
 
     /// Display label for a reasoning level + family-specific hint.
+    /// Hints reflect what the level actually does on the active
+    /// family — e.g. "Low" on DSV4 vs "Low" on GPT-OSS are different.
     private func reasoningLevelLabel(_ level: String) -> String {
+        let family = loadedCaps?.family ?? ""
         switch level {
-        case "none":   return "None — chat mode (no thinking)"
-        case "low":    return "Low"
-        case "medium": return "Medium"
-        case "high":   return "High"
-        case "max":    return "Max — DSV4 absolute-maximum prefix"
-        default:       return level
+        case "none":
+            return "None — chat mode (no thinking)"
+        case "thinking":
+            return "Thinking — `<think>` blocks enabled"
+        case "minimal":
+            return "Minimal — Harmony minimal effort"
+        case "low":
+            return family == "deepseek_v4" ? "Low" : "Low — Harmony low effort"
+        case "medium":
+            return family == "deepseek_v4" ? "Medium" : "Medium — Harmony medium effort"
+        case "high":
+            return family == "mistral4"
+                ? "High — Mistral 4 thinking on"
+                : (family == "deepseek_v4" ? "High" : "High — Harmony high effort")
+        case "max":
+            return "Max — DSV4 absolute-maximum prefix"
+        default:
+            return level
         }
     }
 
@@ -867,22 +896,46 @@ struct TerminalScreen: View {
     private func buildSystemPrompt() -> String {
         var lines: [String] = [
             """
-            You are an expert terminal assistant with access to a `bash` tool that runs shell commands on the user's Mac.
+            You are an autonomous terminal agent on the user's Mac. You have ONE tool: `bash`. Your job is to USE the tool, not describe it.
 
             Current working directory: \(cwd.path).
 
-            HOW TO USE THE BASH TOOL:
-            1. When the user asks for a task, call the `bash` tool with the appropriate command.
-            2. After EVERY tool call, inspect the result. The result has `stdout`, `stderr`, and `exit_code` fields.
-            3. If `exit_code != 0` OR `stderr` indicates a problem, DO NOT GIVE UP. Reason about why it failed (missing dependency? wrong path? typo? permissions?) and try a corrected command. Up to \(maxToolIterations) attempts per turn.
-            4. Common recovery patterns:
-               • Command not found → use `which` / `command -v` to find it, or install via brew
-               • Permission denied → check file ownership with `ls -la`; do not run `sudo` without asking
-               • No such file → `ls` the parent directory to see what's actually there
-               • Multiple command alternatives → try the next one
-            5. Once the task is verified complete, give a CONCISE one-paragraph summary. Do not dump full command output unless the user asked for it.
+            ╔══════════════════════════════════════════════════════════╗
+            ║  CRITICAL RULES — VIOLATING THESE BREAKS THE INTERFACE   ║
+            ╠══════════════════════════════════════════════════════════╣
+            ║                                                          ║
+            ║  1. NEVER write ```bash code blocks in your reply text. ║
+            ║     The user CANNOT execute markdown code. Markdown      ║
+            ║     means you've failed to use the tool.                 ║
+            ║                                                          ║
+            ║  2. EVERY shell command MUST go through the `bash` tool ║
+            ║     call mechanism — NOT prose, NOT markdown.            ║
+            ║                                                          ║
+            ║  3. NEVER say "Let me check…" or "I'll run…" without    ║
+            ║     ALSO emitting the tool call in the same response.   ║
+            ║     Talking about what you would do = task failed.      ║
+            ║                                                          ║
+            ║  4. When in doubt: call the tool. Empty output is fine. ║
+            ║     Wrong-command output is fine. The tool is cheap.    ║
+            ║                                                          ║
+            ╚══════════════════════════════════════════════════════════╝
 
-            Think before each tool call. Use reasoning to plan, then call the tool. After seeing the result, reason again before the next call.
+            AGENTIC LOOP:
+            • User asks a task → call `bash` with the best first command
+            • Read the tool result: stdout, stderr, exit_code
+            • exit_code != 0 → reason about WHY, call `bash` again with a fix
+              (up to \(maxToolIterations) attempts per user turn)
+            • Common recovery patterns:
+              - Command not found → `which X` / `command -v X` / install via brew
+              - Permission denied → `ls -la` to inspect ownership
+              - No such file → `ls` the parent directory
+              - Wrong syntax → check `man X` or try alternatives
+            • Task verified complete → write a concise one-paragraph summary
+
+            REASONING:
+            Use reasoning blocks (`<think>...</think>`) to plan BEFORE each tool call. After seeing the result, reason again before the next call. Interleaved reasoning + tool calls is expected and encouraged. Do NOT put commands inside reasoning — reasoning is for thought only.
+
+            DO NOT FORGET RULE #1. NO MARKDOWN CODE BLOCKS. CALL THE TOOL.
             """,
         ]
         if readOnly {
@@ -980,11 +1033,23 @@ struct TerminalScreen: View {
 
         // §424 — wire the toolbar settings into the request. Reasoning
         // effort flows through `reasoning_effort` chat-template kwarg
-        // (Stream.swift:792 picks it up). "none" → enable_thinking=false
-        // (chat mode). max_tool_iterations bumps the agentic-loop
-        // ceiling per the ChatRequest field.
-        let effort: String? = (reasoningEffort == "none") ? nil : reasoningEffort
+        // (Stream.swift:792 picks it up). max_tool_iterations bumps
+        // the agentic-loop ceiling per the ChatRequest field.
+        //
+        // §427b — reasoningEffort=="thinking" is the binary-family
+        // sentinel. Don't pass it as a graded `reasoning_effort` kwarg
+        // (no template recognizes "thinking" as a value); just flip
+        // enable_thinking=true and leave effort nil. Same for "none":
+        // enable_thinking=false, effort nil. Graded values pass
+        // through unchanged.
         let enableThinking: Bool = (reasoningEffort != "none")
+        let effort: String?
+        switch reasoningEffort {
+        case "none", "thinking":
+            effort = nil   // binary families — only enable_thinking matters
+        default:
+            effort = reasoningEffort   // graded families (deepseek_v4 / gpt_oss / mistral4)
+        }
         var request = ChatRequest(
             model: state.selectedModelPath?.lastPathComponent ?? "default",
             messages: messages,
