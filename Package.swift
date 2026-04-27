@@ -709,6 +709,7 @@ let package = Package(
             ],
             sources: [
                 "Track1SmokeTests.swift",
+                "Track1SmokeTests+ZImageReal.swift",
             ]
         ),
         // MARK: - Track-2 image-edit smoke tests
@@ -727,6 +728,7 @@ let package = Package(
             path: "Tests/vMLXFluxTests",
             exclude: [
                 "Track1SmokeTests.swift",
+                "Track1SmokeTests+ZImageReal.swift",
                 "Track3SmokeTests.swift",
             ],
             sources: [
@@ -748,6 +750,7 @@ let package = Package(
             path: "Tests/vMLXFluxTests",
             exclude: [
                 "Track1SmokeTests.swift",
+                "Track1SmokeTests+ZImageReal.swift",
                 "Track2SmokeTests.swift",
             ],
             sources: [
