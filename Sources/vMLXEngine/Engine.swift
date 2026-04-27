@@ -254,6 +254,21 @@ public actor Engine {
         return paths
     }
 
+    /// §431 — Persistent headless browser instance for VL agents. One
+    /// per engine — cookies / DOM / history live across tool calls so
+    /// the model can drive a real session: navigate → see → click →
+    /// see results. Lazily created on first use; lives until the
+    /// engine is dropped or `unload` is called.
+    #if canImport(WebKit) && canImport(AppKit)
+    private var _browserTool: BrowserTool?
+    public func browserToolInstance() async -> BrowserTool {
+        if let t = _browserTool { return t }
+        let fresh = await MainActor.run { BrowserTool() }
+        _browserTool = fresh
+        return fresh
+    }
+    #endif
+
     /// 4-tier settings store (global → session → chat → request). Backed by
     /// its own SQLite file at `~/Library/Application Support/vMLX/settings.sqlite3`.
     /// HTTP routes should call `settings.resolved(sessionId:chatId:request:)`

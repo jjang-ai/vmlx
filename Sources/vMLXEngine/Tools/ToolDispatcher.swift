@@ -61,6 +61,15 @@ extension Engine {
             return await executeScreenshotTool(call)
         }
 
+        // §431 — Headless WKWebView browser tool for VL agents. Same
+        // rendezvous as `screenshot` (drains via consumeLatestScreenshots
+        // after the agentic loop). The model gets a stateful browser
+        // it can drive iteratively — open, click, type, scroll —
+        // and SEES the page after every action.
+        if name == "browser" {
+            return await executeBrowserTool(call)
+        }
+
         // MCP namespaced names are `server__tool`. Route through the
         // MCPServerManager which starts the server lazily on first use.
         if name.contains("__") {
@@ -124,6 +133,73 @@ extension Engine {
                 isError: true
             )
         }
+    }
+
+    /// §431 — Run the `browser` tool. Drives a persistent headless
+    /// WKWebView the VL model can interact with. After every action
+    /// the post-action snapshot is staged on the engine via
+    /// `recordScreenshot(path:)` so the Terminal auto-continue path
+    /// attaches it to the model's next user message.
+    private func executeBrowserTool(
+        _ call: ChatRequest.ToolCall
+    ) async -> ToolDispatchResult {
+        #if canImport(WebKit) && canImport(AppKit)
+        let argsData = call.function.arguments.data(using: .utf8) ?? Data()
+        let argsJson = (try? JSONSerialization.jsonObject(with: argsData)) as? [String: Any] ?? [:]
+
+        let action = (argsJson["action"] as? String) ?? "screenshot"
+        var inv = BrowserTool.Invocation(action: action)
+        if let s = argsJson["url"] as? String { inv.url = s }
+        if let s = argsJson["selector"] as? String { inv.selector = s }
+        if let s = argsJson["text"] as? String { inv.text = s }
+        if let s = argsJson["script"] as? String { inv.script = s }
+        if let n = argsJson["x"] as? Double { inv.x = n }
+        if let n = argsJson["x"] as? Int { inv.x = Double(n) }
+        if let n = argsJson["y"] as? Double { inv.y = n }
+        if let n = argsJson["y"] as? Int { inv.y = Double(n) }
+        if let n = argsJson["delta_y"] as? Double { inv.deltaY = n }
+        if let n = argsJson["delta_y"] as? Int { inv.deltaY = Double(n) }
+        if let b = argsJson["visible"] as? Bool { inv.visible = b }
+        if let n = argsJson["width"] as? Int { inv.width = n }
+        if let n = argsJson["height"] as? Int { inv.height = n }
+
+        let tool = await self.browserToolInstance()
+        let result = await tool.run(inv)
+
+        if let path = result.screenshotPath {
+            await self.recordScreenshot(path: path)
+        }
+
+        var dict: [String: Any] = [
+            "action": action,
+            "ok": result.error == nil,
+        ]
+        if let u = result.pageURL { dict["page_url"] = u }
+        if let t = result.pageTitle { dict["page_title"] = t }
+        if let p = result.screenshotPath {
+            dict["screenshot_path"] = p.path
+            if let w = result.widthHint { dict["width"] = w }
+            if let h = result.heightHint { dict["height"] = h }
+            dict["note"] = "PNG attached to your next input — describe what you see and decide the next action."
+        }
+        if let r = result.evalResult { dict["eval_result"] = r }
+        if let err = result.error { dict["error"] = err }
+
+        let body = (try? JSONSerialization.data(withJSONObject: dict))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+
+        return ToolDispatchResult(
+            toolCallId: call.id,
+            name: "browser",
+            content: body,
+            isError: result.error != nil
+        )
+        #else
+        return ToolDispatchResult(
+            toolCallId: call.id, name: "browser",
+            content: "{\"error\":\"browser tool requires macOS WebKit/AppKit\"}",
+            isError: true)
+        #endif
     }
 
     /// §429 — Run the `screenshot` tool. Captures the screen via
