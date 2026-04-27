@@ -689,6 +689,71 @@ let package = Package(
                 // CacheCoordinatorRotatingGuard, CacheBlock stay Xcode-only.
             ]
         ),
+        // MARK: - Track-1 image-gen smoke tests
+        // Cover FLUX.1 Schnell/Dev, FLUX.2 Klein, Qwen-Image, Z-Image,
+        // FIBO, Bria. Each variant SKIPS when `VMLX_SWIFT_TEST_WEIGHTS`
+        // env var is unset (CI without weights stays green). With
+        // weights present: load → generate → assert RMS variance >
+        // threshold (proves non-noise) and write a scratch PNG.
+        .testTarget(
+            name: "vMLXFluxTrack1Tests",
+            dependencies: [
+                "vMLXFluxKit",
+                "vMLXFluxModels",
+                "MLX",
+            ],
+            path: "Tests/vMLXFluxTests",
+            exclude: [
+                "Track2SmokeTests.swift",
+                "Track3SmokeTests.swift",
+            ],
+            sources: [
+                "Track1SmokeTests.swift",
+            ]
+        ),
+        // MARK: - Track-2 image-edit smoke tests
+        // Pure-MLX unit tests on EditOps + skip-on-missing-env weights
+        // smoke tests for FLUX.1 Kontext, FLUX.1 Fill, Qwen-Image-Edit.
+        // Set VMLX_SWIFT_TEST_WEIGHTS + VMLX_SWIFT_TEST_FIXTURES to run
+        // the full end-to-end smoke; otherwise the weights-dependent
+        // tests skip cleanly.
+        .testTarget(
+            name: "vMLXFluxTrack2Tests",
+            dependencies: [
+                "vMLXFluxKit",
+                "vMLXFluxModels",
+                "MLX",
+            ],
+            path: "Tests/vMLXFluxTests",
+            exclude: [
+                "Track1SmokeTests.swift",
+                "Track3SmokeTests.swift",
+            ],
+            sources: [
+                "Track2SmokeTests.swift",
+            ]
+        ),
+        // Track 3 — Wan video smoke. Same skip-when-no-weights pattern as
+        // Track 2: each variant test reads `VMLX_SWIFT_TEST_WEIGHTS` and
+        // skips if unset. With weights present: generate a 16-frame MP4
+        // at 320×576, assert valid container + per-channel pixel range +
+        // consecutive-frame correlation > 0.5.
+        .testTarget(
+            name: "vMLXFluxTrack3Tests",
+            dependencies: [
+                "vMLXFluxKit",
+                "vMLXFluxVideo",
+                "MLX",
+            ],
+            path: "Tests/vMLXFluxTests",
+            exclude: [
+                "Track1SmokeTests.swift",
+                "Track2SmokeTests.swift",
+            ],
+            sources: [
+                "Track3SmokeTests.swift",
+            ]
+        ),
     ],
     cxxLanguageStandard: .gnucxx20
 )

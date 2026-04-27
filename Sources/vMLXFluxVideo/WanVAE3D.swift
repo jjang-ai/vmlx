@@ -28,10 +28,32 @@ import vMLXFluxKit
 // convolutions slot in when mlx-swift exposes Conv3d (currently 2D only).
 
 // MARK: - CausalConv3d shim
+//
+// TEMPORAL-COHERENCE GAP — READ BEFORE TOUCHING THIS FILE.
+//
+// MLX-Swift 0.31 does NOT yet expose a 3D convolution primitive (only
+// Conv1d and Conv2d). The Wan reference implementation uses real Conv3d
+// with causal padding along the temporal axis. Until the upstream MLX-
+// Swift adds Conv3d, we run a frame-wise 2D conv: each video frame is
+// convolved independently in (H, W) and the temporal kernel is dropped.
+//
+// Concretely: the stored weight has shape (out, in, kT, kH, kW) but we
+// only use the kT=1 mid-slice. This means:
+//   • Every Wan VAE registry entry SHIPS WITH `isPlaceholder: true`.
+//   • Per-frame structure is correct but inter-frame coherence is lost
+//     (smoke threshold `consecutive-frame correlation > 0.5` will FAIL
+//     until real Conv3d lands).
+//   • Replace `CausalConv3d.callAsFunction` with a real `Conv3d` call once
+//     the MLX-Swift primitive exists; the surrounding scaffold (residual
+//     blocks, upsample, group norm) is shape-compatible already.
+//
+// Weight layout for the future replacement: official Wan checkpoint stores
+// `{conv.weight, conv.bias}` where weight is (out, in, kT, kH, kW). The
+// frame-wise shim collapses to (out, in, kH, kW) by indexing `weight[:,:,kT//2]`.
 
 /// Stand-in for a causal 3D convolution. Currently implemented as a
-/// frame-wise 2D conv followed by a 1D temporal mix. When mlx-swift
-/// ships `Conv3d` we replace this with a single real call.
+/// frame-wise 2D conv. When mlx-swift ships `Conv3d` we replace this
+/// with a single real call.
 ///
 /// Weight layout follows the Wan official checkpoint: `{conv.weight,
 /// conv.bias}` where weight shape is (out, in, kT, kH, kW). For now we

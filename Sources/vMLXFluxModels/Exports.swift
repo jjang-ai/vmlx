@@ -19,8 +19,20 @@ public enum vMLXFluxModels {
         _ = Flux2KleinEdit._register
         _ = ZImage._register
         _ = QwenImage._register
-        _ = QwenImageEdit._register
+        // QwenImageEdit is owned by Track 2; registered below via
+        // `QwenImageEditEditor`. The legacy `QwenImageEdit` class was
+        // removed from `QwenImage.swift` by Track 1 since Track 1's
+        // ownership is gen-only.
         _ = FIBO._register
+        _ = Bria._register
         _ = SeedVR2._register
+        // Track 2 edit ports — register LAST so they win the registry
+        // last-write semantics over the temporary stubs in Flux1.swift /
+        // QwenImage.swift. Once Track 1 removes those stubs, the V2
+        // suffix on these classes can be dropped and the originals
+        // restored to canonical names.
+        _ = Flux1KontextEditor._register
+        _ = Flux1FillEditor._register
+        _ = QwenImageEditEditor._register
     }
 }
