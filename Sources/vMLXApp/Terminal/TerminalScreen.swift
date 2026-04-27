@@ -905,17 +905,33 @@ struct TerminalScreen: View {
         if isVL {
             modalityNote = """
 
-                ✓ VISION-MODEL NOTE: You have TWO tools — `bash` AND `screenshot`. The `screenshot` tool captures the screen and the resulting PNG is attached to your NEXT input as a real image you can SEE.
-                  • Use `screenshot` when the task involves understanding what's currently on screen
-                  • Use `bash` for everything else (run commands, open apps/URLs, read files)
-                  • Pair them for visual verification — e.g. `bash` to `open https://example.com`, then `screenshot` to read the rendered page
-                  • Other useful shell commands for screen / web tasks:
-                     - Open a URL:         `open https://example.com`
-                     - Drive Safari:       `osascript -e 'tell application "Safari" to ...'`
-                     - HTTP request:       `curl -sL https://example.com`
-                     - Read clipboard:     `pbpaste`
-                     - Read a file:        `cat path/to/file`
-                Do NOT click in the browser via JavaScript injection — there's no `click_at` tool in Terminal mode. For interactive web tasks, fall back to `osascript` or tell the user the limitation.
+                ✓ VISION-MODEL TOOLBELT: You have THREE tools — `bash`, `screenshot`, AND `browser`. Every screenshot/browser action returns a PNG that is attached to your NEXT input as a real image you can SEE.
+
+                  ► `browser` — Headless web browser (preferred for web tasks)
+                     The `browser` tool is a stateful, hidden Chromium-class browser that lives across calls. Cookies and DOM persist. ALWAYS use `browser` for web tasks instead of `bash`+`open` — `open` just spawns the user's Safari and returns; you cannot click, type, or see the result.
+                     Actions:
+                       - {"action":"open", "url":"https://..."}     → loads URL, returns screenshot
+                       - {"action":"click", "selector":"button.go"} → CSS-selector click (preferred)
+                       - {"action":"click", "x":640, "y":420}        → click at viewport pixel (fallback when no selector)
+                       - {"action":"type", "selector":"input#q", "text":"hello"}
+                       - {"action":"scroll", "delta_y":600}          → scroll down 600px
+                       - {"action":"eval", "script":"document.title"} → JS eval, returns text
+                       - {"action":"screenshot"}                     → re-snap without action
+                       - {"action":"back" / "forward" / "reload" / "close"}
+
+                  ► `screenshot` — Capture the user's actual desktop screen (NOT the browser).
+                     Use for OS-level UI tasks: reading what's open in their app, debugging visible state, etc.
+
+                  ► `bash` — Shell access for files, processes, system queries, installs.
+                     Useful adjuncts: `pbpaste` (read clipboard), `osascript` (drive native macOS apps), `curl -sL` (raw HTTP without rendering).
+
+                Browser-task playbook:
+                  1. {"action":"open", "url":"…"}              → see landing page
+                  2. analyze the screenshot → identify next interaction
+                  3. {"action":"click"…} or {"action":"type"…} → see result
+                  4. repeat 2-3 until task done
+
+                NEVER substitute `bash open URL` for `browser open URL` — `open` is fire-and-forget; `browser` keeps a session you can drive.
 
                 """
         } else {
@@ -1057,12 +1073,19 @@ struct TerminalScreen: View {
         // stranded. wakeFromStandby is a no-op when .running.
         await engine.wakeFromStandby()
 
-        // §429 — Tool list. Bash always; screenshot only when a
-        // vision-capable model is loaded so non-VL models don't see
-        // a tool they couldn't actually use the result of.
+        // §429/§431 — Tool list. Bash always. VL models additionally
+        // get `screenshot` (capture the user's actual screen) and
+        // `browser` (drive a headless WKWebView for autonomous web
+        // tasks — open / click / type / scroll, with each action
+        // returning a fresh PNG the model SEES on the next turn).
+        // Non-VL models don't see screenshot/browser since they
+        // couldn't act on the resulting image.
         var tools: [ChatRequest.Tool] = [BashTool.openAISchema]
         if loadedCaps?.modality == .vision {
             tools.append(ScreenshotTool.openAISchema)
+            #if canImport(WebKit) && canImport(AppKit)
+            tools.append(BrowserTool.openAISchema)
+            #endif
         }
 
         // §424 — wire the toolbar settings into the request. Reasoning
