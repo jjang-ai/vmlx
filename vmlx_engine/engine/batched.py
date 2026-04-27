@@ -60,7 +60,17 @@ class MLLMModelWrapper:
         if self._inject_pixel_values and "pixel_values" not in kwargs:
             kwargs["pixel_values"] = None
 
-        output = self._model(*args, **kwargs)
+        try:
+            output = self._model(*args, **kwargs)
+        except TypeError as e:
+            if "pixel_values" in str(e) and self._inject_pixel_values:
+                # Model doesn't accept pixel_values (e.g., text-only Gemma 4
+                # with model_type="gemma4") — disable injection permanently.
+                self._inject_pixel_values = False
+                kwargs.pop("pixel_values", None)
+                output = self._model(*args, **kwargs)
+            else:
+                raise
         # If output has logits attribute, return just the logits
         if hasattr(output, "logits"):
             return output.logits
