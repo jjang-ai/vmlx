@@ -75,7 +75,7 @@ struct TerminalScreen: View {
                     } else {
                         LazyVStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                             ForEach(transcript) { turn in
-                                TerminalTurnView(turn: turn)
+                                TerminalTurnView(turn: turn, verbose: verbose)
                                     .id(turn.id)
                             }
                         }
@@ -184,10 +184,22 @@ struct TerminalScreen: View {
         }
     }
 
-    /// Currently-active model display name, or nil when nothing is
-    /// loaded. Tries `selectedModelPath` first (the user's last pick),
-    /// falling back to the running session's model path.
-    private var activeModelName: String? {
+    /// Currently-active model display name. Two distinct things:
+    ///   - `selectedModelName`: the user's pick from the picker (may be
+    ///      .stopped, .loading, .running, or absent)
+    ///   - `runningModelName`: the model that's actually live — only
+    ///      non-nil when engine is `.running` so callers can switch on
+    ///      "is the agentic loop available right now"
+    /// The empty-state copy + chip suggestions key off `runningModelName`
+    /// so the user never sees "Agentic Terminal" + chips while the
+    /// engine is .stopped/.loading and Send would actually fall back to
+    /// raw shell.
+    private var selectedModelName: String? {
+        state.selectedModelPath?.lastPathComponent
+    }
+
+    private var runningModelName: String? {
+        guard case .running = state.engineState else { return nil }
         if let p = state.selectedModelPath { return p.lastPathComponent }
         if let s = state.sessions.first(where: {
             if case .running = $0.state { return true }; return false
@@ -241,27 +253,54 @@ struct TerminalScreen: View {
                 .help("Change working directory")
             }
 
-            // ─── Row 2: reasoning + verbose + settings + logs ───────
+            // ─── Row 2: reasoning + verbose + action buttons ────────
+            // §425b — switched from segmented Picker (320 px fixed
+            // width, overflows at <850 px window widths) to a
+            // dropdown Menu so the row gracefully handles narrow
+            // windows. Verbose toggle + action buttons keep their
+            // compact footprint; Spacer() between the two clusters
+            // pushes the action group to the right edge.
             HStack(spacing: Theme.Spacing.md) {
-                // Reasoning effort picker — none/low/medium/high/max.
+                // Reasoning effort dropdown — none/low/medium/high/max.
                 // none = enable_thinking=false (chat mode); anything
                 // else maps to enable_thinking=true plus the effort
                 // string passed as `reasoning_effort` chat-template
                 // kwarg. DSV4 has a special "max" tier that injects an
                 // "Absolute maximum effort" system prefix.
-                Picker("Reasoning", selection: $reasoningEffort) {
-                    Text("none").tag("none")
-                    Text("low").tag("low")
-                    Text("medium").tag("medium")
-                    Text("high").tag("high")
-                    Text("max").tag("max")
+                Menu {
+                    Picker("Reasoning effort", selection: $reasoningEffort) {
+                        Text("None — chat mode (no thinking)").tag("none")
+                        Text("Low").tag("low")
+                        Text("Medium").tag("medium")
+                        Text("High").tag("high")
+                        Text("Max — DSV4 absolute-maximum prefix").tag("max")
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "brain")
+                            .font(.system(size: 11))
+                        Text("Reasoning: \(reasoningEffort)")
+                            .font(Theme.Typography.caption)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9))
+                    }
+                    .foregroundStyle(Theme.Colors.textMid)
+                    .padding(.horizontal, Theme.Spacing.sm)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Theme.Colors.surfaceHi)
+                    )
                 }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 320)
+                .menuStyle(.borderlessButton)
+                .fixedSize()
                 .help("Reasoning effort. \"none\" disables thinking; \"max\" tells DSV4-class models to spend maximum tokens on reasoning.")
 
                 // Verbose toggle — show full bash commands + output in
-                // the transcript when ON.
+                // the transcript when ON. §425b — wired to
+                // TerminalTurnView so the foldThreshold is bypassed
+                // when ON (vs. the prior commit where this toggle
+                // was a dead control).
                 Toggle(isOn: $verbose) {
                     Text("Verbose")
                         .font(Theme.Typography.caption)
@@ -269,16 +308,15 @@ struct TerminalScreen: View {
                 }
                 .toggleStyle(.switch)
                 .tint(Theme.Colors.accent)
-                .help("Show full bash commands + stdout/stderr in the transcript")
+                .fixedSize()
+                .help("Show full bash commands + stdout/stderr in the transcript (no auto-fold for long outputs)")
 
                 Spacer()
 
                 // Settings gear — opens TerminalSettingsSheet with
                 // safety toggles, max iterations, system prompt
                 // override.
-                Button {
-                    showSettings = true
-                } label: {
+                Button { showSettings = true } label: {
                     Image(systemName: "slider.horizontal.3")
                         .foregroundStyle(Theme.Colors.textMid)
                 }
@@ -288,9 +326,7 @@ struct TerminalScreen: View {
                 // Logs button — opens LogsPanel in a sheet so the user
                 // can tail engine + model + tool events without
                 // jumping to the Server tab.
-                Button {
-                    showLogs = true
-                } label: {
+                Button { showLogs = true } label: {
                     Image(systemName: "doc.text.below.ecg")
                         .foregroundStyle(Theme.Colors.textMid)
                 }
@@ -300,11 +336,9 @@ struct TerminalScreen: View {
                 // Clear-transcript button — drops the conversation
                 // history but keeps command history + cwd. Use when
                 // switching topic to avoid context bloat.
-                Button {
-                    transcript.removeAll()
-                } label: {
+                Button { transcript.removeAll() } label: {
                     Image(systemName: "eraser")
-                        .foregroundStyle(Theme.Colors.textMid)
+                        .foregroundStyle(transcript.isEmpty ? Theme.Colors.textLow : Theme.Colors.textMid)
                 }
                 .buttonStyle(.borderless)
                 .help("Clear transcript (keeps command history)")
@@ -560,12 +594,12 @@ struct TerminalScreen: View {
                     .font(.system(size: 32))
                     .foregroundStyle(Theme.Colors.accent)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(activeModelName != nil
+                    Text(runningModelName != nil
                          ? "Agentic Terminal"
                          : "Raw Shell Mode")
                         .font(Theme.Typography.title)
                         .foregroundStyle(Theme.Colors.textHigh)
-                    Text(activeModelName != nil
+                    Text(runningModelName != nil
                          ? "Ask the model to run shell commands. It uses the `bash` tool to execute, reads the output, and decides what to do next."
                          : "No model loaded — input is dispatched directly to /bin/bash. Load a model from the Server tab to enable the agentic loop.")
                         .font(Theme.Typography.body)
@@ -574,7 +608,7 @@ struct TerminalScreen: View {
                 }
             }
 
-            if activeModelName != nil {
+            if runningModelName != nil {
                 // Quick-action chips — sample prompts to get the user
                 // started. Each fills the input; the user reviews and
                 // clicks Send.
@@ -1089,6 +1123,11 @@ struct TerminalTurn: Identifiable {
 
 private struct TerminalTurnView: View {
     let turn: TerminalTurn
+    /// §425b — when verbose=true, skip the long-output fold logic so
+    /// tool stdout/stderr renders in full (matches `vmlxctl chat
+    /// --verbose`). When verbose=false (default), the fold kicks in
+    /// at 80 lines so long outputs don't drown the scrollback.
+    var verbose: Bool = false
 
     /// Long-output collapse threshold (UI-6). Tool / model outputs over
     /// this many lines render with a fold: first FOLD_HEAD lines, an
@@ -1172,6 +1211,10 @@ private struct TerminalTurnView: View {
     /// `nil` means render the full text. User-input turns are never folded
     /// (they're typed by hand and short by definition).
     private var foldedRanges: (head: String, hidden: Int, tail: String)? {
+        // §425b — verbose mode: never fold. Render full output even
+        // when it's hundreds of lines long. The user opted in by
+        // enabling Verbose in the toolbar, so respect it.
+        if verbose { return nil }
         guard turn.role != .user else { return nil }
         let lines = turn.text.components(separatedBy: "\n")
         guard lines.count > Self.foldThreshold else { return nil }
