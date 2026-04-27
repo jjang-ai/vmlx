@@ -1,6 +1,50 @@
 import Foundation
 @preconcurrency import MLX
+import MLXNN
 import vMLXFluxKit
+
+// MARK: - DiT weight loader helper
+//
+// Filter the merged checkpoint to keys that belong to the DiT
+// transformer (anything not under `text_encoder`, `text_encoder_2`,
+// `tokenizer`, or `vae`), run the BFL → Swift remap, and push into
+// the module via `Module.update(parameters:verify:)`.
+//
+// `verify: []` deliberately tolerates extra checkpoint keys — most
+// FLUX.1 snapshots ship with auxiliary tensors (rope freqs, scheduler
+// metadata) that aren't actual DiT parameters. Missing keys do still
+// surface in our diagnostics dict so the caller can log them.
+
+/// Apply remapped DiT weights to a `FluxDiTModel`. Returns missing /
+/// extra key counts for diagnostics. Throws on update failure.
+@discardableResult
+internal func applyFluxDiTWeights(
+    _ weights: [String: MLXArray],
+    to dit: FluxDiTModel
+) throws -> (missing: [String], extra: [String]) {
+    // Transformer-only filter: drop keys that obviously belong to other
+    // submodules (text encoders + VAE).
+    let dropPrefixes = [
+        "text_encoder.", "text_encoder_2.",
+        "vae.", "decoder.", "encoder.",
+        "tokenizer.", "tokenizer_2.",
+        "scheduler.",
+    ]
+    let ditOnly = weights.filter { (k, _) in
+        for p in dropPrefixes where k.hasPrefix(p) { return false }
+        return true
+    }
+
+    let remapped = Flux1WeightRemap.remap(ditOnly)
+
+    // Build the model's parameter-key set so we can diff for diagnostics.
+    let modelParamKeys = Set(dit.parameters().flattened().map { $0.0 })
+    let diff = Flux1WeightRemap.diff(remapped: remapped, modelKeys: modelParamKeys)
+
+    let params = ModuleParameters.unflattened(remapped)
+    try dit.update(parameters: params, verify: [])
+    return diff
+}
 
 // MARK: - Flux1 (Schnell + Dev)
 //
@@ -51,6 +95,10 @@ public final class Flux1Schnell: ImageGenerator, @unchecked Sendable {
     public let vae: VAEDecoder
     public let t5: T5XXLEncoder
     public let clip: CLIPLEncoder
+    /// Missing / extra DiT parameter keys observed when applying the
+    /// checkpoint. Empty `missing` is the goal; populated values mean
+    /// the remap or the checkpoint format diverged from BFL upstream.
+    public let weightLoadDiagnostics: (missing: [String], extra: [String])
 
     public init(modelPath: URL, quantize: Int?) throws {
         self.modelPath = modelPath
@@ -66,6 +114,13 @@ public final class Flux1Schnell: ImageGenerator, @unchecked Sendable {
         // 10240 ffn) and CLIP-L (12 blocks, 768 hidden, 12 heads).
         self.t5 = T5XXLEncoder(maxSeqLen: 256)
         self.clip = CLIPLEncoder()
+        // Apply DiT weights from the merged checkpoint via the BFL →
+        // Swift remap. Other components (T5 / CLIP / VAE) keep their
+        // own weight-load passes; this wires only the transformer.
+        self.weightLoadDiagnostics = try applyFluxDiTWeights(
+            self.loadedWeights.weights,
+            to: self.transformer
+        )
     }
 
     public func generate(_ request: ImageGenRequest) -> AsyncThrowingStream<ImageGenEvent, Error> {
@@ -206,6 +261,8 @@ public final class Flux1Dev: ImageGenerator, @unchecked Sendable {
     public let vae: VAEDecoder
     public let t5: T5XXLEncoder
     public let clip: CLIPLEncoder
+    /// See `Flux1Schnell.weightLoadDiagnostics`.
+    public let weightLoadDiagnostics: (missing: [String], extra: [String])
 
     public init(modelPath: URL, quantize: Int?) throws {
         self.modelPath = modelPath
@@ -219,6 +276,10 @@ public final class Flux1Dev: ImageGenerator, @unchecked Sendable {
         self.vae = VAEDecoder()
         self.t5 = T5XXLEncoder(maxSeqLen: 512)
         self.clip = CLIPLEncoder()
+        self.weightLoadDiagnostics = try applyFluxDiTWeights(
+            self.loadedWeights.weights,
+            to: self.transformer
+        )
     }
 
     public func generate(_ request: ImageGenRequest) -> AsyncThrowingStream<ImageGenEvent, Error> {
