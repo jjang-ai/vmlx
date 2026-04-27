@@ -63,6 +63,13 @@ struct TerminalScreen: View {
     /// we kick a Task on appear and store the snapshot in @State.
     @State private var modelEntries: [ModelLibrary.ModelEntry] = []
 
+    /// §427 — capabilities of the currently-loaded model, fetched
+    /// from `engine.currentCapabilities()`. Drives the reasoning-effort
+    /// picker (visible only when supportsThinking) AND the settings
+    /// sheet's "detected parsers" line. Refreshes on engine state
+    /// change so it tracks load/unload events.
+    @State private var loadedCaps: ModelCapabilities? = nil
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -101,12 +108,22 @@ struct TerminalScreen: View {
         }
         .task {
             await refreshModelEntries()
+            await refreshLoadedCaps()
         }
         .onChange(of: state.sessions.count) { _, _ in
             // A session was added/removed — refresh state-tagged entries
             // so the picker reflects load/unload events triggered from
             // the Server tab too.
-            Task { await refreshModelEntries() }
+            Task {
+                await refreshModelEntries()
+                await refreshLoadedCaps()
+            }
+        }
+        .onChange(of: state.engineState) { _, _ in
+            // §427 — when engine transitions stopped→running or vice
+            // versa, re-fetch capabilities so the reasoning picker
+            // hides/shows + level options refresh per the loaded model.
+            Task { await refreshLoadedCaps() }
         }
         // Up/Down arrow command history recall in the terminal input.
         // Matches the existing chat-input recall in ChatScreen so muscle
@@ -261,40 +278,43 @@ struct TerminalScreen: View {
             // compact footprint; Spacer() between the two clusters
             // pushes the action group to the right edge.
             HStack(spacing: Theme.Spacing.md) {
-                // Reasoning effort dropdown — none/low/medium/high/max.
-                // none = enable_thinking=false (chat mode); anything
-                // else maps to enable_thinking=true plus the effort
-                // string passed as `reasoning_effort` chat-template
-                // kwarg. DSV4 has a special "max" tier that injects an
-                // "Absolute maximum effort" system prefix.
-                Menu {
-                    Picker("Reasoning effort", selection: $reasoningEffort) {
-                        Text("None — chat mode (no thinking)").tag("none")
-                        Text("Low").tag("low")
-                        Text("Medium").tag("medium")
-                        Text("High").tag("high")
-                        Text("Max — DSV4 absolute-maximum prefix").tag("max")
+                // §427 — Reasoning effort dropdown driven by the loaded
+                // model's capabilities. The level set varies per family:
+                // mistral4 = ["none","high"]; deepseek_v4 = full 5-tier
+                // including "max"; everyone else = 4-tier (no max).
+                // Models that don't support thinking at all (modality
+                // .image, .embedding, or supportsThinking=false) hide
+                // the picker entirely so we don't lie to the user about
+                // toggles that have no effect.
+                let levels = availableReasoningLevels
+                if !levels.isEmpty {
+                    Menu {
+                        Picker("Reasoning effort", selection: $reasoningEffort) {
+                            ForEach(levels, id: \.self) { lvl in
+                                Text(reasoningLevelLabel(lvl)).tag(lvl)
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "brain")
+                                .font(.system(size: 11))
+                            Text("Reasoning: \(reasoningEffort)")
+                                .font(Theme.Typography.caption)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 9))
+                        }
+                        .foregroundStyle(Theme.Colors.textMid)
+                        .padding(.horizontal, Theme.Spacing.sm)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Theme.Colors.surfaceHi)
+                        )
                     }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "brain")
-                            .font(.system(size: 11))
-                        Text("Reasoning: \(reasoningEffort)")
-                            .font(Theme.Typography.caption)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 9))
-                    }
-                    .foregroundStyle(Theme.Colors.textMid)
-                    .padding(.horizontal, Theme.Spacing.sm)
-                    .padding(.vertical, 4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Theme.Colors.surfaceHi)
-                    )
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Reasoning effort options come from the loaded model's family. \"none\" disables thinking entirely.")
                 }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .help("Reasoning effort. \"none\" disables thinking; \"max\" tells DSV4-class models to spend maximum tokens on reasoning.")
 
                 // Verbose toggle — show full bash commands + output in
                 // the transcript when ON. §425b — wired to
@@ -777,15 +797,92 @@ struct TerminalScreen: View {
         await MainActor.run { modelEntries = snapshot }
     }
 
+    /// §427 — Refresh `loadedCaps` from the engine. nil unless the
+    /// engine reached `.running` AND the loader populated capabilities
+    /// (jang_config-stamped > silver-table > template-sniff > fallback).
+    private func refreshLoadedCaps() async {
+        let caps = await state.engine.currentCapabilities()
+        await MainActor.run {
+            loadedCaps = caps
+            clampReasoningEffortToModel()
+        }
+    }
+
+    /// §427 — Reasoning-effort levels supported by the loaded model.
+    /// Pulled from family + jang_config. Values match what the chat
+    /// templates accept; passing an unsupported level falls through to
+    /// "high" or gets dropped depending on parser. Per memory:
+    ///   - mistral4 — only ["none", "high"]
+    ///   - deepseek_v4 — full ["none","low","medium","high","max"]
+    ///   - qwen3_5 / qwen3_5_moe / nemotron / glm_moe / minimax —
+    ///     ["none","low","medium","high"] (no max tier)
+    ///   - gemma4 — ["none","low","medium","high"] (channel format)
+    ///   - gpt_oss — ["none","low","medium","high"] (harmony channels)
+    /// Models that don't support thinking return [] → reasoning picker
+    /// hides entirely.
+    private var availableReasoningLevels: [String] {
+        guard let caps = loadedCaps, caps.supportsThinking else { return [] }
+        switch caps.family {
+        case "mistral4":
+            return ["none", "high"]
+        case "deepseek_v4":
+            return ["none", "low", "medium", "high", "max"]
+        default:
+            return ["none", "low", "medium", "high"]
+        }
+    }
+
+    /// Display label for a reasoning level + family-specific hint.
+    private func reasoningLevelLabel(_ level: String) -> String {
+        switch level {
+        case "none":   return "None — chat mode (no thinking)"
+        case "low":    return "Low"
+        case "medium": return "Medium"
+        case "high":   return "High"
+        case "max":    return "Max — DSV4 absolute-maximum prefix"
+        default:       return level
+        }
+    }
+
+    /// §427 — clamp the persisted `reasoningEffort` to what the loaded
+    /// model supports. Called after `loadedCaps` refreshes so a user
+    /// who had effort=max persisted from a prior DSV4 session doesn't
+    /// silently get an invalid level passed to the next model's chat
+    /// template. Falls back to the highest supported level.
+    private func clampReasoningEffortToModel() {
+        let levels = availableReasoningLevels
+        guard !levels.isEmpty else { return }
+        if !levels.contains(reasoningEffort) {
+            reasoningEffort = levels.last ?? "none"
+        }
+    }
+
     /// Build the system prompt — default terminal-assistant message plus
     /// any safety constraint text plus the user's optional override.
+    /// §428 — explicit retry-on-failure instructions. Models were
+    /// giving up after a single failed `bash` call; the new prompt
+    /// tells them to inspect stderr/exit_code, plan a correction in
+    /// reasoning, and retry. Interleaved reasoning between attempts
+    /// is encouraged.
     private func buildSystemPrompt() -> String {
         var lines: [String] = [
             """
-            You are an expert terminal assistant with access to a `bash` tool that runs shell commands on the user's Mac. \
-            Current working directory: \(cwd.path). \
-            When the user asks for a task, call the `bash` tool with the appropriate command. \
-            Return concise explanations.
+            You are an expert terminal assistant with access to a `bash` tool that runs shell commands on the user's Mac.
+
+            Current working directory: \(cwd.path).
+
+            HOW TO USE THE BASH TOOL:
+            1. When the user asks for a task, call the `bash` tool with the appropriate command.
+            2. After EVERY tool call, inspect the result. The result has `stdout`, `stderr`, and `exit_code` fields.
+            3. If `exit_code != 0` OR `stderr` indicates a problem, DO NOT GIVE UP. Reason about why it failed (missing dependency? wrong path? typo? permissions?) and try a corrected command. Up to \(maxToolIterations) attempts per turn.
+            4. Common recovery patterns:
+               • Command not found → use `which` / `command -v` to find it, or install via brew
+               • Permission denied → check file ownership with `ls -la`; do not run `sudo` without asking
+               • No such file → `ls` the parent directory to see what's actually there
+               • Multiple command alternatives → try the next one
+            5. Once the task is verified complete, give a CONCISE one-paragraph summary. Do not dump full command output unless the user asked for it.
+
+            Think before each tool call. Use reasoning to plan, then call the tool. After seeing the result, reason again before the next call.
             """,
         ]
         if readOnly {
@@ -982,6 +1079,15 @@ struct TerminalScreen: View {
                         // Replace the last `.tool` turn with the real
                         // result. The engine already packed stdout/stderr/
                         // exit_code into status.message as JSON.
+                        // §428 — when exit_code != 0, prefix the visible
+                        // turn with a clear failure marker so the user
+                        // (and the model on its next reasoning pass)
+                        // knows this attempt failed and another should
+                        // follow. The engine ALREADY feeds the tool
+                        // result back to the model as a tool message;
+                        // this is purely a UI-side affordance so the
+                        // failure → retry pattern is visible in
+                        // scrollback.
                         if let idx = transcript.lastIndex(where: { $0.role == .tool && $0.exitCode == nil }) {
                             let (text, code) = decodeBashResult(status.message)
                             transcript[idx].text = text
@@ -1025,9 +1131,33 @@ struct TerminalScreen: View {
                 transcript.removeLast()
             }
         } catch {
+            // §428 — engine error mid-stream. Drop the empty assistant
+            // turn (so the failure isn't followed by a blank bubble),
+            // then surface a clear `.tool` turn explaining what
+            // happened. Common shapes:
+            //   • CancellationError — user hit Stop, no need to
+            //     yelp (suppress)
+            //   • EngineError.invalidRequest — model rejected the
+            //     prompt (e.g. too-long)
+            //   • Other — usually MLX or scheduler hiccup; suggest
+            //     reload via the Server tab
+            //
+            // Note: an MLX Metal command-buffer abort (SIGABRT from
+            // `MTLReportFailure`) is NOT catchable as a Swift error —
+            // it bypasses Swift's try/catch and tears the process
+            // down. Real defense would be running the model in a
+            // subprocess. The diagnostic on next launch is the
+            // crash log; we can't catch it here.
+            if let idx = transcript.lastIndex(where: { $0.role == .assistant && $0.text.isEmpty }) {
+                transcript.remove(at: idx)
+            }
+            if error is CancellationError {
+                // User hit Stop — silent stop is fine, don't lecture.
+                return
+            }
             transcript.append(TerminalTurn(
                 role: .tool,
-                text: "engine error: \(error)",
+                text: "Engine error: \(error)\n\nIf this keeps happening: open Server tab → Stop → Load again to refresh the model. Long agentic loops on smaller models can cause Metal OOM.",
                 exitCode: -1
             ))
         }
