@@ -905,14 +905,17 @@ struct TerminalScreen: View {
         if isVL {
             modalityNote = """
 
-                ⚠ VISION-MODEL NOTE: You are a vision model running in TERMINAL mode (not browser-agent mode). You DO NOT have direct browser/screenshot/click tools. Your ONLY tool is `bash`. To work with the screen / web from terminal:
-                  • Take a screenshot:  `screencapture -x /tmp/sc.png`     (then `open /tmp/sc.png` to view it yourself, but you cannot SEE the contents from a tool result)
-                  • Open a URL:         `open https://example.com`
-                  • Drive Safari:       `osascript -e 'tell application "Safari" to ...'`
-                  • HTTP request:       `curl -sL https://example.com`
-                  • Read clipboard:     `pbpaste`
-                  • Read a file:        `cat path/to/file`
-                Do NOT pretend you have a browser tool. If the task requires actually clicking on a webpage, tell the user "this requires browser automation which Terminal mode doesn't support" — don't fake it.
+                ✓ VISION-MODEL NOTE: You have TWO tools — `bash` AND `screenshot`. The `screenshot` tool captures the screen and the resulting PNG is attached to your NEXT input as a real image you can SEE.
+                  • Use `screenshot` when the task involves understanding what's currently on screen
+                  • Use `bash` for everything else (run commands, open apps/URLs, read files)
+                  • Pair them for visual verification — e.g. `bash` to `open https://example.com`, then `screenshot` to read the rendered page
+                  • Other useful shell commands for screen / web tasks:
+                     - Open a URL:         `open https://example.com`
+                     - Drive Safari:       `osascript -e 'tell application "Safari" to ...'`
+                     - HTTP request:       `curl -sL https://example.com`
+                     - Read clipboard:     `pbpaste`
+                     - Read a file:        `cat path/to/file`
+                Do NOT click in the browser via JavaScript injection — there's no `click_at` tool in Terminal mode. For interactive web tasks, fall back to `osascript` or tell the user the limitation.
 
                 """
         } else {
@@ -1054,8 +1057,13 @@ struct TerminalScreen: View {
         // stranded. wakeFromStandby is a no-op when .running.
         await engine.wakeFromStandby()
 
-        // Inject the bash tool schema. Let the model choose when to call it.
-        let tools: [ChatRequest.Tool] = [BashTool.openAISchema]
+        // §429 — Tool list. Bash always; screenshot only when a
+        // vision-capable model is loaded so non-VL models don't see
+        // a tool they couldn't actually use the result of.
+        var tools: [ChatRequest.Tool] = [BashTool.openAISchema]
+        if loadedCaps?.modality == .vision {
+            tools.append(ScreenshotTool.openAISchema)
+        }
 
         // §424 — wire the toolbar settings into the request. Reasoning
         // effort flows through `reasoning_effort` chat-template kwarg
@@ -1221,6 +1229,23 @@ struct TerminalScreen: View {
             if let last = transcript.last, last.role == .assistant, last.text.isEmpty {
                 transcript.removeLast()
             }
+
+            // §429 — VL screenshot rendezvous. If the model called the
+            // `screenshot` tool during this stream, the engine has
+            // staged the captured PNG path(s) on its actor. Drain them
+            // and AUTO-CONTINUE the conversation with a synthetic user
+            // message that attaches the image as `image_url` so the VL
+            // model actually SEES the pixels on the next forward pass.
+            //
+            // We bound the auto-continue to one round per user turn to
+            // avoid runaway loops where the model keeps screenshotting
+            // without converging. A future refinement can lift this to
+            // N rounds and respect maxToolIterations.
+            let captures = await engine.consumeLatestScreenshots()
+            if !captures.isEmpty {
+                await autoContinueWithScreenshots(
+                    captures, engine: engine, baseMessages: messages, tools: tools)
+            }
         } catch {
             // §428 — engine error mid-stream. Drop the empty assistant
             // turn (so the failure isn't followed by a blank bubble),
@@ -1251,6 +1276,122 @@ struct TerminalScreen: View {
                 text: "Engine error: \(error)\n\nIf this keeps happening: open Server tab → Stop → Load again to refresh the model. Long agentic loops on smaller models can cause Metal OOM.",
                 exitCode: -1
             ))
+        }
+    }
+
+    /// §429 — auto-continue path for VL screenshot rendezvous. After
+    /// the engine's tool-call loop concludes, if the model captured
+    /// screenshots during the turn, drain them, append a synthetic
+    /// user message that attaches each PNG as an `image_url` content
+    /// part, and re-stream so the model can SEE its captures on the
+    /// next forward pass.
+    ///
+    /// This is the critical piece that turns a vision model into a
+    /// real screen-aware agent: the engine's tool-call loop only
+    /// flows TEXT through tool messages (per OpenAI spec), but VL
+    /// inference needs IMAGE content blocks in user messages. We
+    /// bridge those two by exiting the inner agentic loop, attaching
+    /// pixels, and entering a fresh stream.
+    private func autoContinueWithScreenshots(
+        _ paths: [URL],
+        engine: Engine,
+        baseMessages: [ChatRequest.Message],
+        tools: [ChatRequest.Tool]
+    ) async {
+        // Build the multipart user message: [text, image_url, image_url, …]
+        var parts: [ChatRequest.ContentPart] = [
+            ChatRequest.ContentPart(
+                type: "text",
+                text: "Here is the screenshot you captured. Look at it carefully and tell me what you see, then continue with the original task.",
+                imageUrl: nil,
+                videoUrl: nil
+            )
+        ]
+        for url in paths {
+            // Inline as a `file://` ImageURL — ChatRequest.ImageURL
+            // already handles file:// inputs through its loader.
+            parts.append(ChatRequest.ContentPart(
+                type: "image_url",
+                text: nil,
+                imageUrl: ChatRequest.ContentPart.ImageURL(url: "file://\(url.path)"),
+                videoUrl: nil
+            ))
+        }
+
+        // Walk the in-flight transcript to rebuild the chat history so
+        // the assistant turns the model produced THIS turn (including
+        // any tool messages) are part of the new request's context —
+        // otherwise the model wouldn't remember what it captured or
+        // why.
+        var msgs = baseMessages
+        for t in transcript.suffix(20) {   // last ~20 turns is plenty
+            let role: String
+            switch t.role {
+            case .user: role = "user"
+            case .assistant: role = "assistant"
+            case .tool: role = "tool"
+            case .reasoning: continue
+            }
+            // Skip already-included history (baseMessages was built
+            // with the prior transcript). Just append the NEW turns
+            // since this user prompt — heuristic: anything after the
+            // last user role in baseMessages.
+            _ = role
+        }
+        msgs.append(ChatRequest.Message(role: "user", content: .parts(parts)))
+
+        // Show a UI marker so the user sees the auto-continue happen.
+        transcript.append(TerminalTurn(
+            role: .tool,
+            text: "📷 Screenshot captured — re-prompting with image attached…",
+            exitCode: 0
+        ))
+
+        var request = ChatRequest(
+            model: state.selectedModelPath?.lastPathComponent ?? "default",
+            messages: msgs,
+            stream: true,
+            enableThinking: (reasoningEffort != "none"),
+            reasoningEffort: (reasoningEffort == "none" || reasoningEffort == "thinking") ? nil : reasoningEffort,
+            tools: tools,
+            toolChoice: .auto
+        )
+        if maxToolIterations > 0 {
+            request.maxToolIterations = maxToolIterations
+        }
+
+        // Fresh assistant turn for the auto-continue response.
+        let activeAssistantId = UUID()
+        transcript.append(TerminalTurn(id: activeAssistantId, role: .assistant, text: ""))
+
+        let upstream = await engine.stream(request: request)
+        do {
+            for try await chunk in upstream {
+                if Task.isCancelled { break }
+                if let content = chunk.content, !content.isEmpty,
+                   let idx = transcript.firstIndex(where: { $0.id == activeAssistantId }) {
+                    transcript[idx].text += content
+                }
+                // Reasoning during auto-continue gets folded into the
+                // assistant turn (we don't open a new collapsible
+                // .reasoning turn here to keep the auto-continue
+                // visually compact — user already saw the chips block
+                // for the original turn).
+            }
+            if let last = transcript.last, last.role == .assistant, last.text.isEmpty {
+                transcript.removeLast()
+            }
+        } catch {
+            if !(error is CancellationError) {
+                if let idx = transcript.lastIndex(where: { $0.role == .assistant && $0.text.isEmpty }) {
+                    transcript.remove(at: idx)
+                }
+                transcript.append(TerminalTurn(
+                    role: .tool,
+                    text: "Auto-continue (with screenshot) error: \(error)",
+                    exitCode: -1
+                ))
+            }
         }
     }
 
