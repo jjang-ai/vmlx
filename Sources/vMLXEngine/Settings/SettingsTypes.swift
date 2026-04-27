@@ -132,9 +132,13 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     // orphan fields in Swift (set but never read), so they're intentionally
     // absent. Use `maxNumSeqs` for request concurrency and `prefillStepSize`
     // for per-step prompt chunking.
-    // Mac override: 1024 prefill step keeps first-token latency low on
-    // long prompts where 2048 would stall the first render tick.
-    public var prefillStepSize: Int = 1024         // cli.py default=2048 (server), 1024 (vMLX Mac)
+    // 2026-04-26: bumped to 2048 to match Python server default + reduce
+    // per-step overhead on long prompts. Prior 1024 was a Mac-laptop-only
+    // override aimed at first-token latency on small prompts; the 2048
+    // step keeps prefill throughput flat for the common 1K-16K prompt
+    // range without hurting TTFT on small prompts (the warmup amortizes
+    // before the first decode).
+    public var prefillStepSize: Int = 2048         // cli.py default=2048 (server)
     /// §332 ORPHAN — Python-parity field, no Swift wiring. Real
     /// batching/scheduling happens inside the scheduler's
     /// GenerationLock + fair queue; there's no user-visible
@@ -237,7 +241,13 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     // the memory pressure monitor drops entries before vmsignal fires,
     // so there is no OOM risk on constrained-RAM hardware.
     public var enableMemoryCache: Bool = true
-    public var memoryCachePercent: Double = 0.30
+    // 2026-04-26: lowered to 20% from 30%. The combined L1 paged + L1.5
+    // memory + L2 disk stack means most multi-turn KV reuse comes from
+    // either the in-flight paged blocks or the disk-backfill path; the
+    // L1.5 byte-budget mostly absorbs short-window churn. 20% leaves
+    // more wired-memory headroom for the model itself on smaller Macs
+    // (16-32 GB) without hurting hit rate on the active session.
+    public var memoryCachePercent: Double = 0.20
     public var memoryCacheTTLMinutes: Double = 0
 
     // TurboQuant KV-cache compression. **Default on for every model
