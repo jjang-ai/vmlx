@@ -29,6 +29,40 @@ struct TerminalScreen: View {
     /// Input text before recall started, so Down at the end restores it.
     @State private var preRecallInput: String = ""
 
+    // §424 — Terminal toolbar state. Settings/logs sheets, plus the
+    // per-session knobs that flow into the agentic loop.
+    @State private var showSettings: Bool = false
+    @State private var showLogs: Bool = false
+    /// Reasoning effort sent as `reasoning_effort` chat-template kwarg.
+    /// "none" maps to enable_thinking=false; everything else implies
+    /// thinking on. Persisted in UserDefaults so the choice survives
+    /// across app restarts.
+    @AppStorage("terminal.reasoningEffort") private var reasoningEffort: String = "medium"
+    /// Verbose surface — when ON, the bash tool's full command + stdout/
+    /// stderr is rendered in the transcript (vs. a one-liner summary).
+    /// Mirrors `vmlxctl chat --verbose`.
+    @AppStorage("terminal.verbose") private var verbose: Bool = true
+    /// Safety toggles — passed into the system prompt so the model knows
+    /// the constraints. Defaults match `vmlxctl chat` defaults: no-
+    /// destructive ON, the others OFF.
+    @AppStorage("terminal.readOnly") private var readOnly: Bool = false
+    @AppStorage("terminal.noNetwork") private var noNetwork: Bool = false
+    @AppStorage("terminal.noDestructive") private var noDestructive: Bool = true
+    @AppStorage("terminal.sandboxCwd") private var sandboxCwd: Bool = false
+    /// Max tool-call iterations per user turn. Bumps the agentic loop
+    /// ceiling for long multi-step tasks. Mirrors `vmlxctl chat
+    /// --max-tool-calls`.
+    @AppStorage("terminal.maxToolIterations") private var maxToolIterations: Int = 16
+    /// Optional system-prompt override appended to the default. Empty
+    /// string disables.
+    @AppStorage("terminal.systemPromptOverride") private var systemPromptOverride: String = ""
+
+    /// Locally-cached ModelLibrary entries — loaded on appear and
+    /// refreshed when the user opens the picker. The library is an
+    /// actor so we can't read it inline from a SwiftUI body; instead
+    /// we kick a Task on appear and store the snapshot in @State.
+    @State private var modelEntries: [ModelLibrary.ModelEntry] = []
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -59,6 +93,21 @@ struct TerminalScreen: View {
         }
         .background(Theme.Colors.background)
         .sheet(isPresented: $showFirstRunWarning) { firstRunWarning }
+        .sheet(isPresented: $showSettings) {
+            terminalSettingsSheet
+        }
+        .sheet(isPresented: $showLogs) {
+            terminalLogsSheet
+        }
+        .task {
+            await refreshModelEntries()
+        }
+        .onChange(of: state.sessions.count) { _, _ in
+            // A session was added/removed — refresh state-tagged entries
+            // so the picker reflects load/unload events triggered from
+            // the Server tab too.
+            Task { await refreshModelEntries() }
+        }
         // Up/Down arrow command history recall in the terminal input.
         // Matches the existing chat-input recall in ChatScreen so muscle
         // memory carries over. Only fires when the input is empty or the
@@ -147,67 +196,352 @@ struct TerminalScreen: View {
     }
 
     private var header: some View {
-        HStack(spacing: Theme.Spacing.md) {
-            Image(systemName: "terminal")
-                .foregroundStyle(Theme.Colors.textHigh)
-            Text(L10n.Terminal.terminal.render(appLocale))
-                .font(Theme.Typography.title)
-                .foregroundStyle(Theme.Colors.textHigh)
+        VStack(spacing: 0) {
+            // ─── Row 1: title + model picker + load/stop + cwd ──────
+            HStack(spacing: Theme.Spacing.md) {
+                Image(systemName: "terminal")
+                    .foregroundStyle(Theme.Colors.textHigh)
+                Text(L10n.Terminal.terminal.render(appLocale))
+                    .font(Theme.Typography.title)
+                    .foregroundStyle(Theme.Colors.textHigh)
 
-            // Engine state pill — dot + label + active model name. Tap
-            // jumps to the Server tab for full session control. When no
-            // model is loaded, the pill reads "raw shell" so the user
-            // understands why the agent isn't responding to natural
-            // language.
-            Button {
-                state.mode = .server
-            } label: {
-                HStack(spacing: Theme.Spacing.xs) {
-                    Circle()
-                        .fill(engineStateColor)
-                        .frame(width: 8, height: 8)
-                    Text(activeModelName ?? "raw shell")
-                        .font(Theme.Typography.bodyHi)
-                        .foregroundStyle(Theme.Colors.textHigh)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    if activeModelName != nil {
-                        Text("· \(engineStateLabel)")
-                            .font(Theme.Typography.body)
+                // Model picker — Menu listing every entry in the
+                // ModelLibrary. Each row shows a state dot + label +
+                // running/loading/standby/stopped tag. Picking a row
+                // sets selectedModelPath; the Load/Stop button below
+                // calls app.startSession / app.stopSession.
+                modelPickerMenu
+
+                // Load/Stop button — toggle for the currently-selected
+                // model. Disabled when no model is selected.
+                loadStopButton
+
+                Spacer()
+
+                // CWD pill — click to pick a new directory.
+                Button { pickCwd() } label: {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        Image(systemName: "folder")
+                            .foregroundStyle(Theme.Colors.textMid)
+                        Text(cwd.path)
+                            .font(Theme.Typography.mono)
                             .foregroundStyle(Theme.Colors.textLow)
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                            .frame(maxWidth: 280, alignment: .trailing)
                     }
+                    .padding(.horizontal, Theme.Spacing.md)
+                    .padding(.vertical, Theme.Spacing.xs)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.md)
+                            .fill(Theme.Colors.surfaceHi)
+                    )
                 }
-                .padding(.horizontal, Theme.Spacing.md)
-                .padding(.vertical, Theme.Spacing.xs)
-                .background(
-                    RoundedRectangle(cornerRadius: Theme.Radius.md)
-                        .fill(Theme.Colors.surfaceHi)
-                )
+                .buttonStyle(.plain)
+                .help("Change working directory")
             }
-            .buttonStyle(.plain)
-            .help("Open Server tab to load / switch / stop models")
 
-            Spacer()
+            // ─── Row 2: reasoning + verbose + settings + logs ───────
+            HStack(spacing: Theme.Spacing.md) {
+                // Reasoning effort picker — none/low/medium/high/max.
+                // none = enable_thinking=false (chat mode); anything
+                // else maps to enable_thinking=true plus the effort
+                // string passed as `reasoning_effort` chat-template
+                // kwarg. DSV4 has a special "max" tier that injects an
+                // "Absolute maximum effort" system prefix.
+                Picker("Reasoning", selection: $reasoningEffort) {
+                    Text("none").tag("none")
+                    Text("low").tag("low")
+                    Text("medium").tag("medium")
+                    Text("high").tag("high")
+                    Text("max").tag("max")
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 320)
+                .help("Reasoning effort. \"none\" disables thinking; \"max\" tells DSV4-class models to spend maximum tokens on reasoning.")
 
-            // CWD path (right side). Trailing folder icon opens an
-            // NSOpenPanel to pick a different working directory.
-            Text(cwd.path)
-                .font(Theme.Typography.mono)
-                .foregroundStyle(Theme.Colors.textLow)
-                .lineLimit(1)
-                .truncationMode(.head)
-            Button {
-                pickCwd()
-            } label: {
-                Image(systemName: "folder")
-                    .foregroundStyle(Theme.Colors.textMid)
+                // Verbose toggle — show full bash commands + output in
+                // the transcript when ON.
+                Toggle(isOn: $verbose) {
+                    Text("Verbose")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.textMid)
+                }
+                .toggleStyle(.switch)
+                .tint(Theme.Colors.accent)
+                .help("Show full bash commands + stdout/stderr in the transcript")
+
+                Spacer()
+
+                // Settings gear — opens TerminalSettingsSheet with
+                // safety toggles, max iterations, system prompt
+                // override.
+                Button {
+                    showSettings = true
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .foregroundStyle(Theme.Colors.textMid)
+                }
+                .buttonStyle(.borderless)
+                .help("Terminal settings: safety toggles, max iterations, system prompt")
+
+                // Logs button — opens LogsPanel in a sheet so the user
+                // can tail engine + model + tool events without
+                // jumping to the Server tab.
+                Button {
+                    showLogs = true
+                } label: {
+                    Image(systemName: "doc.text.below.ecg")
+                        .foregroundStyle(Theme.Colors.textMid)
+                }
+                .buttonStyle(.borderless)
+                .help("Live engine logs")
+
+                // Clear-transcript button — drops the conversation
+                // history but keeps command history + cwd. Use when
+                // switching topic to avoid context bloat.
+                Button {
+                    transcript.removeAll()
+                } label: {
+                    Image(systemName: "eraser")
+                        .foregroundStyle(Theme.Colors.textMid)
+                }
+                .buttonStyle(.borderless)
+                .help("Clear transcript (keeps command history)")
+                .disabled(transcript.isEmpty)
             }
-            .buttonStyle(.plain)
-            .help("Change working directory")
+            .padding(.top, Theme.Spacing.sm)
         }
         .padding(.horizontal, Theme.Spacing.lg)
         .padding(.vertical, Theme.Spacing.md)
         .background(Theme.Colors.surface)
+    }
+
+    // MARK: - Model picker
+
+    /// Lookup-state for a library entry — same five states the
+    /// ChatModelPicker exposes so the visual is consistent.
+    private enum ModelLoadState { case running, loading, standby, stopped, absent }
+
+    private func modelLoadState(for entry: ModelLibrary.ModelEntry) -> ModelLoadState {
+        let canonical = entry.canonicalPath.standardizedFileURL.resolvingSymlinksInPath()
+        guard let session = state.sessions.first(where: {
+            $0.modelPath.standardizedFileURL.resolvingSymlinksInPath() == canonical
+        }) else { return .absent }
+        switch session.state {
+        case .running: return .running
+        case .loading: return .loading
+        case .standby: return .standby
+        case .stopped, .error: return .stopped
+        }
+    }
+
+    private func modelStateColor(_ s: ModelLoadState) -> Color {
+        switch s {
+        case .running: return .green
+        case .loading: return .yellow
+        case .standby: return .orange
+        case .stopped, .absent: return Theme.Colors.textLow
+        }
+    }
+
+    private var currentEntry: ModelLibrary.ModelEntry? {
+        guard let path = state.selectedModelPath else { return nil }
+        let canonical = path.standardizedFileURL.resolvingSymlinksInPath()
+        return modelEntries.first {
+            $0.canonicalPath.standardizedFileURL.resolvingSymlinksInPath() == canonical
+        }
+    }
+
+    private var modelPickerMenu: some View {
+        Menu {
+            if modelEntries.isEmpty {
+                Text("No models found — add a directory in Server tab")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textLow)
+            } else {
+                ForEach(modelEntries) { e in
+                    Button {
+                        state.selectedModelPath = e.canonicalPath
+                    } label: {
+                        HStack(spacing: Theme.Spacing.sm) {
+                            Circle()
+                                .fill(modelStateColor(modelLoadState(for: e)))
+                                .frame(width: 8, height: 8)
+                            Text(e.displayName)
+                            Spacer()
+                            if e.canonicalPath == state.selectedModelPath {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+                Divider()
+                Button("Manage in Server tab…") { state.mode = .server }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(currentEntry.map { modelStateColor(modelLoadState(for: $0)) } ?? Theme.Colors.textLow)
+                    .frame(width: 8, height: 8)
+                Text(currentEntry?.displayName ?? "Select model")
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 220, alignment: .leading)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10))
+            }
+            .foregroundStyle(Theme.Colors.textMid)
+            .font(Theme.Typography.bodyHi)
+            .padding(.horizontal, Theme.Spacing.md)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                    .fill(Theme.Colors.surfaceHi)
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .help("Pick a model — green = running, yellow = loading, gray = stopped")
+    }
+
+    private var loadStopButton: some View {
+        let s = currentEntry.map { modelLoadState(for: $0) } ?? .absent
+        return Button {
+            guard let entry = currentEntry else { return }
+            Task {
+                let canonical = entry.canonicalPath.standardizedFileURL.resolvingSymlinksInPath()
+                let existing = state.sessions.first(where: {
+                    $0.modelPath.standardizedFileURL.resolvingSymlinksInPath() == canonical
+                })
+                switch s {
+                case .running, .loading, .standby:
+                    if let sid = existing?.id { await state.stopSession(sid) }
+                case .stopped, .absent:
+                    let sid: UUID
+                    if let existing { sid = existing.id }
+                    else { sid = await state.createSession(forModel: entry.canonicalPath) }
+                    await state.startSession(sid)
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                switch s {
+                case .running, .loading, .standby:
+                    Image(systemName: "stop.circle")
+                    Text("Stop")
+                case .stopped, .absent:
+                    Image(systemName: "play.circle")
+                    Text("Load")
+                }
+            }
+            .font(Theme.Typography.caption)
+            .foregroundStyle(currentEntry == nil ? Theme.Colors.textLow : Theme.Colors.accent)
+            .padding(.horizontal, Theme.Spacing.md)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                    .fill(Theme.Colors.surfaceHi)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(currentEntry == nil)
+        .help(currentEntry == nil ? "Pick a model first" : "Toggle model load/unload")
+    }
+
+    // MARK: - Settings sheet
+
+    private var terminalSettingsSheet: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+            HStack {
+                Text("Terminal Settings")
+                    .font(Theme.Typography.title)
+                    .foregroundStyle(Theme.Colors.textHigh)
+                Spacer()
+                Button("Done") { showSettings = false }
+                    .keyboardShortcut(.defaultAction)
+            }
+
+            Divider().background(Theme.Colors.border)
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                Text("Safety constraints")
+                    .font(Theme.Typography.bodyHi)
+                    .foregroundStyle(Theme.Colors.textMid)
+
+                Toggle("Read-only — model instructed not to modify files",
+                       isOn: $readOnly)
+                Toggle("No network — model instructed not to make HTTP/git fetch requests",
+                       isOn: $noNetwork)
+                Toggle("Block destructive commands (rm -rf, dd, mkfs, force-push, etc.)",
+                       isOn: $noDestructive)
+                Toggle("Sandbox cwd — forbid `cd` outside the working directory",
+                       isOn: $sandboxCwd)
+            }
+
+            Divider().background(Theme.Colors.border)
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                Text("Max tool iterations: \(maxToolIterations)")
+                    .font(Theme.Typography.bodyHi)
+                    .foregroundStyle(Theme.Colors.textMid)
+                Slider(
+                    value: Binding(
+                        get: { Double(maxToolIterations) },
+                        set: { maxToolIterations = Int($0) }
+                    ),
+                    in: 1...64, step: 1
+                )
+                Text("How many tool calls the model can chain before giving up. 16 fits most multi-step tasks; bump higher for long scripted runs.")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textLow)
+            }
+
+            Divider().background(Theme.Colors.border)
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                Text("System prompt override (optional)")
+                    .font(Theme.Typography.bodyHi)
+                    .foregroundStyle(Theme.Colors.textMid)
+                TextEditor(text: $systemPromptOverride)
+                    .font(Theme.Typography.mono)
+                    .frame(minHeight: 80)
+                    .scrollContentBackground(.hidden)
+                    .background(Theme.Colors.surfaceHi)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.md)
+                            .stroke(Theme.Colors.border, lineWidth: 1)
+                    )
+                Text("Replaces the default terminal-assistant system prompt. Leave blank to use the default.")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textLow)
+            }
+        }
+        .padding(Theme.Spacing.xxl)
+        .frame(width: 540)
+        .background(Theme.Colors.surface)
+    }
+
+    // MARK: - Logs sheet
+
+    /// Embeds LogsPanel in a sheet. The user can dismiss with Done or
+    /// the macOS standard close button.
+    private var terminalLogsSheet: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Engine Logs")
+                    .font(Theme.Typography.title)
+                    .foregroundStyle(Theme.Colors.textHigh)
+                Spacer()
+                Button("Done") { showLogs = false }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(Theme.Spacing.lg)
+            Divider().background(Theme.Colors.border)
+            LogsPanel()
+                .frame(minWidth: 720, minHeight: 480)
+        }
+        .frame(width: 880, height: 600)
+        .background(Theme.Colors.background)
     }
 
     // MARK: empty state
@@ -400,6 +734,45 @@ struct TerminalScreen: View {
         }
     }
 
+    /// Refresh the cached `modelEntries` snapshot. Called on appear and
+    /// whenever the global session list changes so the picker reflects
+    /// load/unload events from the Server tab.
+    private func refreshModelEntries() async {
+        let lib = await state.engine.modelLibrary
+        let snapshot = await lib.entries()
+        await MainActor.run { modelEntries = snapshot }
+    }
+
+    /// Build the system prompt — default terminal-assistant message plus
+    /// any safety constraint text plus the user's optional override.
+    private func buildSystemPrompt() -> String {
+        var lines: [String] = [
+            """
+            You are an expert terminal assistant with access to a `bash` tool that runs shell commands on the user's Mac. \
+            Current working directory: \(cwd.path). \
+            When the user asks for a task, call the `bash` tool with the appropriate command. \
+            Return concise explanations.
+            """,
+        ]
+        if readOnly {
+            lines.append("READ-ONLY MODE: do not modify, create, or delete files. Do not start long-running processes. Read-only commands only.")
+        }
+        if noNetwork {
+            lines.append("NO-NETWORK MODE: do not run commands that make network requests (curl, wget, git fetch/push/pull, npm install, pip install, etc.).")
+        }
+        if noDestructive {
+            lines.append("NO-DESTRUCTIVE: never run `rm -rf`, `dd`, `mkfs`, `git push --force`, `git reset --hard`, or any command that destroys data without explicit user confirmation.")
+        }
+        if sandboxCwd {
+            lines.append("SANDBOX-CWD: do not `cd` outside \(cwd.path). All commands must operate inside this directory.")
+        }
+        let trimmed = systemPromptOverride.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            lines.append("Additional user instructions: \(trimmed)")
+        }
+        return lines.joined(separator: "\n\n")
+    }
+
     private func send() {
         // Stop button: cancel in-flight generation.
         if streaming {
@@ -445,18 +818,11 @@ struct TerminalScreen: View {
 
         // Build the conversation history from the transcript. Every
         // previous user/assistant/tool turn goes in so the model has
-        // context for multi-turn shell sessions.
+        // context for multi-turn shell sessions. System prompt is
+        // assembled by `buildSystemPrompt()` so user safety toggles +
+        // optional override apply.
         var messages: [ChatRequest.Message] = [
-            ChatRequest.Message(
-                role: "system",
-                content: .string("""
-                    You are an expert terminal assistant with access to a \
-                    `bash` tool that runs shell commands on the user's Mac. \
-                    Current working directory: \(cwd.path). \
-                    When the user asks for a task, call the `bash` tool with the \
-                    appropriate command. Return concise explanations.
-                    """)
-            )
+            ChatRequest.Message(role: "system", content: .string(buildSystemPrompt()))
         ]
         for t in transcript {
             let role: String
@@ -481,13 +847,28 @@ struct TerminalScreen: View {
         // Inject the bash tool schema. Let the model choose when to call it.
         let tools: [ChatRequest.Tool] = [BashTool.openAISchema]
 
-        let request = ChatRequest(
+        // §424 — wire the toolbar settings into the request. Reasoning
+        // effort flows through `reasoning_effort` chat-template kwarg
+        // (Stream.swift:792 picks it up). "none" → enable_thinking=false
+        // (chat mode). max_tool_iterations bumps the agentic-loop
+        // ceiling per the ChatRequest field.
+        let effort: String? = (reasoningEffort == "none") ? nil : reasoningEffort
+        let enableThinking: Bool = (reasoningEffort != "none")
+        var request = ChatRequest(
             model: state.selectedModelPath?.lastPathComponent ?? "default",
             messages: messages,
             stream: true,
+            enableThinking: enableThinking,
+            reasoningEffort: effort,
             tools: tools,
             toolChoice: .auto
         )
+        // maxToolIterations is set as a settable property after init
+        // (matches the ChatViewModel pattern at ChatViewModel.swift:1015 —
+        // the public init predates the field).
+        if maxToolIterations > 0 {
+            request.maxToolIterations = maxToolIterations
+        }
 
         // Track the current assistant turn so we can append streaming
         // content in place. We create a new turn per final pass.
