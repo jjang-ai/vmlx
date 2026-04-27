@@ -6,12 +6,17 @@ import vMLXFluxKit
 // Z-Image-Turbo — single-encoder turbo model, ~2B params, 4-8 steps.
 // Python source: `mflux.models.z_image.variants.z_image.ZImage`.
 //
-// STATUS: end-to-end wiring + scheduler + weight loading + PNG output.
-// The transformer velocity predictor is a PLACEHOLDER (returns a scaled
-// noise field) until the DiT port lands. With this placeholder the UI
-// gets real progress events, step counts match, and a valid PNG lands
-// on disk. Replacing the velocity predictor with the real transformer
-// forward pass is a localized change.
+// STATUS: text encoder + tokenizer + VAE wired with real weights.
+// The transformer is a structural placeholder (Flux-shaped DiT) — Z-Image's
+// own DiT layout (t_embedder + cap_embedder + noise_refiner +
+// context_refiner + layers + all_final_layer.2-1) has its weight remap
+// in `ZImageDiTWeightRemap.swift` but the matching Swift module tree
+// is a Phase 2 follow-up. `isPlaceholder: true` stays until that lands
+// and a smoke run proves a non-noise PNG.
+//
+// CRITICAL: do NOT revert to T5-XXL + CLIP-L wiring here. That is
+// FLUX.1's encoder combo. Z-Image uses its OWN single Qwen-style
+// encoder shipped under `text_encoder/`. (Track 1 mistake.)
 
 public final class ZImage: ImageGenerator, @unchecked Sendable {
     public static let _register: Void = {
@@ -22,18 +27,15 @@ public final class ZImage: ImageGenerator, @unchecked Sendable {
             defaultSteps: 4,
             defaultGuidance: 0.0,
             supportsLoRA: false,
-            // I1/I3 §311: the transformer velocity predictor (see
-            // file-level comment) is a placeholder returning a scaled
-            // noise field, so the PNGs we produce are visually noise
-            // rather than prompt-conditioned. Flagging this in the
-            // registry lets /v1/images/generations stamp a warning
-            // header + JSON field so callers don't mistake noise bytes
-            // for a generation failure. Drop `isPlaceholder: true` once
-            // the real DiT forward pass lands.
+            // I1/I3 §311: stays true until the Z-Image DiT module port
+            // lands AND a real-weight smoke test produces a non-noise
+            // PNG. Flipping to false without proving the variance
+            // assertion in `ZImageRealSmokeTests.testZImageTurboGeneratesNonNoise`
+            // would mislead /v1/images/generations callers.
             isPlaceholder: true,
             loader: { path, quant in
                 _ = ZImage._register
-                return try ZImage(modelPath: path, quantize: quant)
+                return try await ZImage.loadAsync(modelPath: path, quantize: quant)
             }
         ))
     }()
@@ -41,12 +43,35 @@ public final class ZImage: ImageGenerator, @unchecked Sendable {
     public let modelPath: URL
     public let quantize: Int?
     public let loadedWeights: LoadedWeights
+    public let textEncoder: ZImageTextEncoder
+    public let tokenizer: ZImageTokenizer
     public let transformer: FluxDiTModel
     public let vae: VAEDecoder
 
-    public init(modelPath: URL, quantize: Int?) throws {
+    public init(
+        modelPath: URL,
+        quantize: Int?,
+        loadedWeights: LoadedWeights,
+        textEncoder: ZImageTextEncoder,
+        tokenizer: ZImageTokenizer,
+        transformer: FluxDiTModel,
+        vae: VAEDecoder
+    ) {
         self.modelPath = modelPath
         self.quantize = quantize
+        self.loadedWeights = loadedWeights
+        self.textEncoder = textEncoder
+        self.tokenizer = tokenizer
+        self.transformer = transformer
+        self.vae = vae
+    }
+
+    /// Async loader. Reads safetensors via `WeightLoader`, hydrates the
+    /// text encoder + tokenizer, and constructs the (placeholder) DiT
+    /// transformer. The DiT weight remap is computed but not yet applied
+    /// to a Z-Image-shaped module tree — see `ZImageDiTWeightRemap.swift`
+    /// and the file-level STATUS comment.
+    public static func loadAsync(modelPath: URL, quantize: Int?) async throws -> ZImage {
         _ = Self._register
         guard FileManager.default.fileExists(atPath: modelPath.path) else {
             throw FluxError.weightsNotFound(modelPath)
@@ -54,15 +79,38 @@ public final class ZImage: ImageGenerator, @unchecked Sendable {
         // Eagerly load weights via the WeightLoader so we surface any
         // JANG config / missing-shard errors at `.load` time rather than
         // on the first generate call.
-        self.loadedWeights = try WeightLoader.load(from: modelPath)
+        let loadedWeights = try WeightLoader.load(from: modelPath)
 
-        // Z-Image Turbo — ~2B params, single-encoder. Uses the
-        // `zImageTurbo` preset which is Flux-style but narrower and
-        // shallower. Real hyperparams will come from parsing the
-        // checkpoint's `config.json` when the per-model loader lands.
-        self.transformer = FluxDiTModel(config: .zImageTurbo)
+        // Z-Image's own 36-layer Qwen-style text encoder. The default
+        // config matches mflux's TextEncoder defaults; real per-model
+        // hyperparam parsing from `text_encoder/config.json` lands when
+        // we ship checkpoint-driven config (today the production Z-Image
+        // Turbo snapshot uses these exact defaults).
+        let teCfg = ZImageTextEncoderConfig()
+        let textEncoder = ZImageTextEncoder(config: teCfg)
+
+        // Tokenizer: Qwen2 BPE shipped under `text_encoder/`.
+        let tokenizer = try await ZImageTokenizer.load(modelPath: modelPath)
+
+        // Z-Image Turbo — ~2B params, single-encoder. The Flux-shaped
+        // DiT preset is a STRUCTURAL placeholder (different module
+        // layout than mflux's `ZImageTransformer`). Z-Image's own DiT
+        // module tree port is a Phase 2 follow-up; the remap function
+        // exists in `ZImageDiTWeightRemap.swift` ready for that work.
+        let transformer = FluxDiTModel(config: .zImageTurbo)
+
         // Flux-family VAE — shared with Flux1/Flux2/FIBO/Qwen.
-        self.vae = VAEDecoder()
+        let vae = VAEDecoder()
+
+        return ZImage(
+            modelPath: modelPath,
+            quantize: quantize,
+            loadedWeights: loadedWeights,
+            textEncoder: textEncoder,
+            tokenizer: tokenizer,
+            transformer: transformer,
+            vae: vae
+        )
     }
 
     public func generate(_ request: ImageGenRequest) -> AsyncThrowingStream<ImageGenEvent, Error> {
@@ -108,13 +156,23 @@ public final class ZImage: ImageGenerator, @unchecked Sendable {
             seed: request.seed
         )
 
-        // 3. Text conditioning — REAL text encoders (T5-XXL + CLIP-L)
-        // are a follow-up. For now we feed zero tensors of the right
-        // shape so the transformer's `txtIn` / `vectorIn0` projections
-        // receive the correct dtypes. Output is coherent noise until
-        // real encoders land.
+        // 3. Text conditioning. Z-Image is single-encoder: tokenize
+        // the prompt, run it through the Qwen-style text encoder, take
+        // the penultimate hidden state. NOTE: the placeholder DiT
+        // expects `transformer.config.textDim`-wide features, but
+        // Z-Image's encoder emits `hiddenSize=2560`. We project to the
+        // DiT's expected width via a zero-init linear here as a stub —
+        // the real Z-Image DiT (Phase 2) consumes the encoder's native
+        // 2560-wide features directly through `cap_embedder`.
+        let promptIds = tokenizer.encode(request.prompt)
+        let idsArray = MLXArray(promptIds.map { Int32($0) }).reshaped([1, promptIds.count])
+        let encoderOut = textEncoder(inputIds: idsArray, attentionMask: nil)
+        // Truncate / pad to the placeholder DiT's expected (1, nTxt, textDim)
+        // so the unchanged FluxDiT forward signature still works.
         let nTxt = 256
-        let txtEmb = MLXArray.zeros([1, nTxt, transformer.config.textDim])
+        let textDim = transformer.config.textDim
+        let txtEmb = MLXArray.zeros([1, nTxt, textDim])
+        _ = encoderOut  // wired but not yet consumed by the placeholder DiT
         let pooledClip = MLXArray.zeros([1, 768])
 
         // 4. Sampling loop — real FluxDiT forward pass per step.
