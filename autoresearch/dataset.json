@@ -1,0 +1,82 @@
+[
+  {
+    "inputs": {"question": "What is 25 * 37?"},
+    "outputs": {"answer": "925", "expected_tool_use": true}
+  },
+  {
+    "inputs": {"question": "What is the capital of France?"},
+    "outputs": {"answer": "Paris", "expected_tool_use": false}
+  },
+  {
+    "inputs": {"question": "Convert 100 km to miles"},
+    "outputs": {"answer": "62.14", "expected_tool_use": true}
+  },
+  {
+    "inputs": {"question": "What is 15^2?"},
+    "outputs": {"answer": "225", "expected_tool_use": true}
+  },
+  {
+    "inputs": {"question": "What is the square root of 144?"},
+    "outputs": {"answer": "12", "expected_tool_use": true}
+  },
+  {
+    "inputs": {"question": "Convert 32 Fahrenheit to Celsius"},
+    "outputs": {"answer": "0", "expected_tool_use": true}
+  },
+  {
+    "inputs": {"question": "What is 100 + 200?"},
+    "outputs": {"answer": "300", "expected_tool_use": true}
+  },
+  {
+    "inputs": {"question": "Who wrote Romeo and Juliet?"},
+    "outputs": {"answer": "Shakespeare", "expected_tool_use": false}
+  },
+  {
+    "inputs": {"question": "Convert 5 kg to pounds"},
+    "outputs": {"answer": "11.02", "expected_tool_use": true}
+  },
+  {
+    "inputs": {"question": "What is log10(1000)?"},
+    "outputs": {"answer": "3", "expected_tool_use": true}
+  },
+  {
+    "inputs": {"question": "Convert 273.15 Kelvin to Celsius"},
+    "outputs": {"answer": "0", "expected_tool_use": true}
+  },
+  {
+    "inputs": {"question": "What is the largest planet in our solar system?"},
+    "outputs": {"answer": "Jupiter", "expected_tool_use": false}
+  },
+  {
+    "inputs": {"question": "What is sin(30 degrees) in radians?"},
+    "outputs": {"answer": "0.5", "expected_tool_use": true}
+  },
+  {
+    "inputs": {"question": "What is 2^10?"},
+    "outputs": {"answer": "1024", "expected_tool_use": true}
+  },
+  {
+    "inputs": {"question": "What is the speed of light?"},
+    "outputs": {"answer": "299792458", "expected_tool_use": false}
+  },
+  {
+    "inputs": {"question": "Convert 1 mile to meters"},
+    "outputs": {"answer": "1609.34", "expected_tool_use": true}
+  },
+  {
+    "inputs": {"question": "What is 17 * 18?"},
+    "outputs": {"answer": "306", "expected_tool_use": true}
+  },
+  {
+    "inputs": {"question": "What is the value of pi?"},
+    "outputs": {"answer": "3.14", "expected_tool_use": true}
+  },
+  {
+    "inputs": {"question": "Convert 20 feet to meters"},
+    "outputs": {"answer": "6.10", "expected_tool_use": true}
+  },
+  {
+    "inputs": {"question": "What is the formula for the area of a circle?"},
+    "outputs": {"answer": "pi r squared", "expected_tool_use": false}
+  }
+]

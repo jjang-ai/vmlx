@@ -11,8 +11,8 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
-from ..api.tool_calling import convert_tools_for_template
-from ..api.utils import clean_output_text, is_mllm_model
+from .api.tool_calling import convert_tools_for_template
+from .api.utils import clean_output_text, is_mllm_model
 from .base import BaseEngine, GenerationOutput
 
 logger = logging.getLogger(__name__)
