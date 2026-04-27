@@ -219,20 +219,28 @@ open class BaseThinkingReasoningParser: ReasoningParser {
     }
 
     private func handleImplicitThink(delta: String, endInPrev: Bool, endInDelta: Bool) -> ReasoningDelta? {
+        // §420 — order matters here too (matches handleExplicitThink
+        // fix). If we're already past the close from a prior chunk,
+        // ANY `</think>` in this delta is a stray, NOT a boundary.
+        // Without this `endInPrev` check first, the split-delta path
+        // below would mis-treat a duplicate `</think>` as a fresh
+        // boundary and route the pre-stray segment to reasoning when
+        // it should all be content.
+        if endInPrev {
+            let stripped = stripStrayMarkers(delta)
+            return stripped.isEmpty ? nil : ReasoningDelta(content: stripped)
+        }
         if endInDelta, let endRange = delta.range(of: endToken) {
+            // Genuine first close: pre-end is reasoning tail, post-end
+            // begins content. Strip stray duplicates from either half.
             let r = stripStrayMarkers(String(delta[..<endRange.lowerBound]))
             let c = stripStrayMarkers(String(delta[endRange.upperBound...]))
             return ReasoningDelta(reasoning: r.isEmpty ? nil : r, content: c.isEmpty ? nil : c)
-        } else if endInPrev {
-            // §420 — past close, in content. Strip stray markers.
-            let stripped = stripStrayMarkers(delta)
-            return stripped.isEmpty ? nil : ReasoningDelta(content: stripped)
-        } else {
-            // §420 — still implicit reasoning. Strip stray `<think>`
-            // markers (model emitted a duplicate open).
-            let stripped = stripStrayMarkers(delta)
-            return stripped.isEmpty ? nil : ReasoningDelta(reasoning: stripped)
         }
+        // Still implicit reasoning. Strip stray `<think>` markers
+        // (model emitted a duplicate open).
+        let stripped = stripStrayMarkers(delta)
+        return stripped.isEmpty ? nil : ReasoningDelta(reasoning: stripped)
     }
 }
 
