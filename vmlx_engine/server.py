@@ -5996,7 +5996,15 @@ async def create_response(
 
     # DSV4 default-system-prompt injection (Responses path). See
     # /v1/chat/completions block for full rationale.
-    if _is_dsv4 and messages:
+    # _is_dsv4 is defined later in this function (line ~5367) so we
+    # re-detect locally here. This is cheap (cached registry lookup).
+    try:
+        from .model_config_registry import get_model_config_registry
+        _mc_dsv4_resp_msgs = get_model_config_registry().lookup(getattr(request, "model", "") or "")
+        _is_dsv4_resp_msgs = getattr(_mc_dsv4_resp_msgs, "family_name", "") == "deepseek_v4"
+    except Exception:
+        _is_dsv4_resp_msgs = False
+    if _is_dsv4_resp_msgs and messages:
         if not any((m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) == "system" for m in messages):
             messages.insert(0, {
                 "role": "system",
