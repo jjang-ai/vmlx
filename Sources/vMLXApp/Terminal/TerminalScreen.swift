@@ -894,11 +894,37 @@ struct TerminalScreen: View {
     /// reasoning, and retry. Interleaved reasoning between attempts
     /// is encouraged.
     private func buildSystemPrompt() -> String {
+        // §428c — modality-aware preamble. Vision/web-agent models
+        // (Holo3, Qwen3.5-VL, Gemma4-VL) were trained on browser
+        // automation + screenshot reasoning and tend to hallucinate
+        // Selenium / Playwright / browser tools that don't exist in
+        // Terminal mode. Tell them up-front: in this mode you have
+        // BASH ONLY, here's how to do screen / browser tasks via shell.
+        let isVL = (loadedCaps?.modality == .vision)
+        let modalityNote: String
+        if isVL {
+            modalityNote = """
+
+                ⚠ VISION-MODEL NOTE: You are a vision model running in TERMINAL mode (not browser-agent mode). You DO NOT have direct browser/screenshot/click tools. Your ONLY tool is `bash`. To work with the screen / web from terminal:
+                  • Take a screenshot:  `screencapture -x /tmp/sc.png`     (then `open /tmp/sc.png` to view it yourself, but you cannot SEE the contents from a tool result)
+                  • Open a URL:         `open https://example.com`
+                  • Drive Safari:       `osascript -e 'tell application "Safari" to ...'`
+                  • HTTP request:       `curl -sL https://example.com`
+                  • Read clipboard:     `pbpaste`
+                  • Read a file:        `cat path/to/file`
+                Do NOT pretend you have a browser tool. If the task requires actually clicking on a webpage, tell the user "this requires browser automation which Terminal mode doesn't support" — don't fake it.
+
+                """
+        } else {
+            modalityNote = ""
+        }
+
         var lines: [String] = [
             """
             You are an autonomous terminal agent on the user's Mac. You have ONE tool: `bash`. Your job is to USE the tool, not describe it.
 
             Current working directory: \(cwd.path).
+            \(modalityNote)
 
             ╔══════════════════════════════════════════════════════════╗
             ║  CRITICAL RULES — VIOLATING THESE BREAKS THE INTERFACE   ║
