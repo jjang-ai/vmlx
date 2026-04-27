@@ -110,16 +110,25 @@ public class TurboQuantSwitchGLU: Module {
     public let numExperts: Int
     public let bits: Int
     public let mxtqSeed: Int
+    /// §426 — DSV4 limited-SwiGLU clamp value (0 = ordinary SwiGLU).
+    /// DSV4 trains with `silu(min(gate, 10)) * clip(up, ±10)`; passing
+    /// 10 here forwards into the fused gate+up Metal kernel via
+    /// `meta[5]` so the routed-expert path matches DSV4's training
+    /// math. Other JANGTQ models (Qwen35-MoE, MiniMax, Holo3, GLM4-MoE)
+    /// leave this 0 and get byte-identical kernel output.
+    public let swigluLimit: Int
 
     public init(
         inputDims: Int, hiddenDims: Int, numExperts: Int,
-        bits: Int = 2, seed: Int = 42
+        bits: Int = 2, seed: Int = 42,
+        swigluLimit: Int = 0
     ) {
         self.inputDims = inputDims
         self.hiddenDims = hiddenDims
         self.numExperts = numExperts
         self.bits = bits
         self.mxtqSeed = seed
+        self.swigluLimit = swigluLimit
         self._gateProj.wrappedValue = TurboQuantSwitchLinear(
             inFeatures: inputDims, outFeatures: hiddenDims,
             numExperts: numExperts, bits: bits, seed: seed
@@ -198,6 +207,11 @@ public class TurboQuantSwitchGLU: Module {
             let bitsLocal = self.bits
             let bt = batchTokens
             let kLocal = K
+            // §426 — capture swiglu_limit for the compiled body. DSV4
+            // sets this to 10 to engage the kernel's limited-SwiGLU
+            // branch; everyone else passes 0 → kernel skips clamp +
+            // emits byte-identical output to the pre-§426 path.
+            let swigluLimitLocal = self.swigluLimit
             let body: ([MLXArray]) -> [MLXArray] = { args in
                 // args: [xFlat, packedGate, normsGate, packedUp, normsUp,
                 //        packedDown, normsDown, signsIn, signsDn,
@@ -209,7 +223,8 @@ public class TurboQuantSwitchGLU: Module {
                     packedUp: args[3], normsUp: args[4],
                     codebook: args[9], rhsIndices: args[11],
                     batchTokens: bt, K: kLocal,
-                    inFeatures: inDim, outFeatures: outDim, bits: bitsLocal
+                    inFeatures: inDim, outFeatures: outDim, bits: bitsLocal,
+                    swigluLimit: swigluLimitLocal
                 )
                 let xActR = JANGTQKernels.hadamardRotate(xAct_, signs: args[8], dim: outDim)
                 let yLocal = JANGTQKernels.gatherTQ(

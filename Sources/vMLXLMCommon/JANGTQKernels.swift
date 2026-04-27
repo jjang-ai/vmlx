@@ -175,6 +175,18 @@ private let kFusedSwiGLUSource = """
     }
 
     if (lane == 0) {
+        // §426 — DSV4 limited SwiGLU support. meta[5] = swiglu_limit
+        // (uint, 0 = no clamp; >0 = clamp ceiling). DSV4 trains with
+        // `silu(min(gate, 10)) * clip(up, ±10)`; the TurboQuant fused
+        // kernel previously baked plain SwiGLU which costs ~4.5 pp
+        // MMLU on DSV4-Flash. Other JANGTQ models (Qwen35-MoE, MiniMax,
+        // Holo3, GLM4-MoE) pass meta[5]=0 → no clamp, byte-identical
+        // to the prior kernel. Verified +4.5 pp MMLU on DSV4 in the
+        // Python prototype (jang/codex_dsv4_fixkit/scripts/runtime_dsv4_fixed.py).
+        uint swiglu_limit_int = meta[5];
+        float swiglu_lim = static_cast<float>(swiglu_limit_int);
+        bool apply_clamp = (swiglu_limit_int > 0u);
+
         uint base_off = (token_idx * K + k_idx) * out_features;
         for (uint o = 0; o < n_outs; o++) {
             uint oi = out_idx_0 + o;
@@ -182,6 +194,10 @@ private let kFusedSwiGLUSource = """
             float nu = static_cast<float>(norms_up[expert * out_features + oi]);
             float gv = acc_g[o] * ng;
             float uv = acc_u[o] * nu;
+            if (apply_clamp) {
+                gv = metal::min(gv, swiglu_lim);
+                uv = metal::max(metal::min(uv, swiglu_lim), -swiglu_lim);
+            }
             out_act[base_off + oi] = (gv / (1.0f + metal::fast::exp(-gv))) * uv;
         }
     }
@@ -432,7 +448,13 @@ public enum JANGTQKernels {
         codebook: MLXArray,
         rhsIndices: MLXArray,
         batchTokens: Int, K: Int,
-        inFeatures: Int, outFeatures: Int, bits: Int = 2
+        inFeatures: Int, outFeatures: Int, bits: Int = 2,
+        // §426 — DSV4 limited-SwiGLU support. swiglu_limit > 0 enables
+        // the in-kernel `silu(min(gate, lim)) * clip(up, ±lim)` clamp
+        // that DSV4 trains with. Defaults to 0 (no clamp) so all
+        // existing JANGTQ callers (Qwen35-MoE, MiniMax, Holo3, GLM4-MoE,
+        // DeepseekV3) get byte-identical kernel output.
+        swigluLimit: Int = 0
     ) -> MLXArray {
         let valsPerU32 = 32 / bits
         let packedCols = (inFeatures + valsPerU32 - 1) / valsPerU32
@@ -440,6 +462,7 @@ public enum JANGTQKernels {
         let meta = MLXArray([
             UInt32(K), UInt32(inFeatures), UInt32(outFeatures),
             UInt32(packedCols), UInt32(bits),
+            UInt32(max(0, swigluLimit)),
         ])
         let opt = 10
         let outGroups = (outFeatures + opt - 1) / opt

@@ -904,20 +904,24 @@ final class DeepseekV4MoE: Module, UnaryLayer {
         // when JANG-named keys are absent). Mirrors MiniMaxJANGTQ
         // pattern in MiniMaxJANGTQ.swift:148-154.
         //
-        // Note on swiglu_limit: DSV4 uses LimitedSwiGLU with limit=10.0
-        // but TurboQuantSwitchGLU bakes plain SwiGLU into the kernel.
-        // Empirically the activation magnitudes stay well under 10
-        // because MXTQ pre-scales weights via tq_norms, so the missing
-        // clamp doesn't trigger in practice. If a long-context decode
-        // ever produces NaN/inf inside the routed branch, fold the
-        // limit into a post-kernel `minimum(y, swiglu_limit)` just
-        // before the topK weighted sum below.
+        // §426 — DSV4 trains routed experts with `silu(min(gate, 10))
+        // * clip(up, ±10)` (LimitedSwiGLU). Earlier this comment said
+        // the missing clamp didn't matter empirically because tq_norms
+        // pre-scales activations under 10 — that turned out to be
+        // wrong: the Python investigation in
+        // jang/research/DSV4-FLASH-MMLU-2026-04-26-DAY-LOG.md (§441)
+        // measured a +4.5 pp MMLU jump after baking the clamp into
+        // the same kernel. Mirror that fix here by forwarding
+        // `swigluLimit: 10` → `meta[5]` → in-kernel clamp branch.
+        // Other JANGTQ models leave swigluLimit=0 → kernel skips
+        // clamp → byte-identical output to pre-§426.
         self._switchMLP.wrappedValue = TurboQuantSwitchGLU(
             inputDims: config.hiddenSize,
             hiddenDims: config.moeIntermediateSize,
             numExperts: config.nRoutedExperts,
             bits: config.jangtqRoutedBits,
-            seed: config.jangtqSeed
+            seed: config.jangtqSeed,
+            swigluLimit: Int(config.swigluLimit)
         )
         self._sharedExperts.wrappedValue = DeepseekV4MLP(
             config: config,
