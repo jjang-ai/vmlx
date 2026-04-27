@@ -3,9 +3,7 @@
 // §407 — DSV4 Compressor + Indexer mask helpers (PR #1195 port).
 //
 // Reference: ml-explore/mlx-lm PR #1195 head 905df9c2,
-// `mlx_lm/models/deepseek_v4.py` lines 823-869, 1095-1108. Local
-// mirror of the Python source: `/tmp/pr1195_dsv4.py`. Spec doc at
-// `/Users/eric/jang/research/JANGTQ-COMPRESSOR-INDEXER-PROPER-FIX-2026-04-25.md`.
+// `mlx_lm/models/deepseek_v4.py` lines 823-869, 1095-1108.
 //
 // Why this lives in its own file:
 //

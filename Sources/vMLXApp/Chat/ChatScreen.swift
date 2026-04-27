@@ -85,6 +85,28 @@ struct ChatScreen: View {
             // Publish the vm to AppState so global Cmd-N / Cmd-Shift-T /
             // Cmd-K shortcuts and the command bar can drive it.
             app.chatViewModelRef = vm
+            // §430 — if user loaded a model on another tab (Terminal,
+            // Server) and is just NOW landing on Chat, the global state
+            // observer may still be bound to a stale session. Adopt
+            // any running session so the banner doesn't lie about
+            // "Load Model" while the engine is already serving.
+            if let runningSid = app.sessions.first(where: {
+                if case .running = $0.state { return true }
+                if case .loading = $0.state { return true }
+                return false
+            })?.id, app.selectedServerSessionId != runningSid {
+                if app.selectedServerSessionId == nil
+                    || !(app.sessions.first(where: { $0.id == app.selectedServerSessionId })
+                        .map {
+                            if case .running = $0.state { return true }
+                            if case .loading = $0.state { return true }
+                            return false
+                        } ?? false)
+                {
+                    app.selectedServerSessionId = runningSid
+                    app.rebindEngineObserver()
+                }
+            }
         }
         .onDisappear {
             if app.chatViewModelRef === vm { app.chatViewModelRef = nil }
@@ -868,22 +890,37 @@ private func loadChatModelInline(app: AppState, vm: ChatViewModel) async {
     } else {
         sid = await app.createSession(forModel: entry.canonicalPath)
     }
-    // Fast-path: if the engine is ALREADY in standby (idle-fired or
-    // manually slept), calling `wakeFromStandby` is much cheaper than
-    // `startSession` — no re-registration with the gateway, no HTTP
-    // listener respin, and for soft-standby no weight reload. The
-    // banner's "Wake now" CTA routes through this inline helper, so
-    // picking the cheap path matters for perceived responsiveness.
-    // Fall back to full startSession for `.stopped` / `.error` / fresh
-    // sessions, which need the end-to-end init.
+    // §430 — When the user lands on Chat from another tab (e.g. just
+    // loaded a model from Terminal mode), the engine for `sid` may
+    // already be `.running` or mid-`.loading`. In that case the chat
+    // banner has stale `app.engineState` (the global observer is
+    // still bound to whatever session was selected when Chat first
+    // mounted, or to `defaultEngine` if none was). The OLD code fell
+    // through to `app.startSession(sid)` which calls `engine.load()`
+    // a second time on a model that's already in memory — Metal can
+    // crash on the redundant weight reload, and at minimum the user
+    // sees a confusing second loading bar. Fix: rebind the observer
+    // FIRST so the banner reflects reality, then only do the
+    // expensive load when the engine genuinely needs starting.
+    //
+    // Fast-path order:
+    //   .running / .loading → just rebind the observer + return
+    //   .standby           → wakeFromStandby (cheap)
+    //   .stopped / .error  → full startSession (loads weights + HTTP)
     let eng = app.engine(for: sid)
-    if case .standby = eng.state {
+    let engState = eng.state
+    switch engState {
+    case .running, .loading:
+        // Engine is already serving this session — just point the
+        // global state at it so the banner flips to the truth.
+        app.selectedServerSessionId = sid
+        app.selectedModelPath = entry.canonicalPath
+        app.rebindEngineObserver()
+    case .standby:
         await eng.wakeFromStandby()
-        // `rebindEngineObserver` so the global state tracker picks up
-        // the transition immediately (normally startSession does this).
         app.selectedServerSessionId = sid
         app.rebindEngineObserver()
-    } else {
+    case .stopped, .error:
         await app.startSession(sid)
     }
 }
