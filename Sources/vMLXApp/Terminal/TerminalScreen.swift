@@ -35,13 +35,18 @@ struct TerminalScreen: View {
             Divider().background(Theme.Colors.border)
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-                        ForEach(transcript) { turn in
-                            TerminalTurnView(turn: turn)
-                                .id(turn.id)
+                    if transcript.isEmpty {
+                        emptyState
+                            .padding(Theme.Spacing.xxl)
+                    } else {
+                        LazyVStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                            ForEach(transcript) { turn in
+                                TerminalTurnView(turn: turn)
+                                    .id(turn.id)
+                            }
                         }
+                        .padding(Theme.Spacing.lg)
                     }
-                    .padding(Theme.Spacing.lg)
                 }
                 .onChange(of: transcript.count) { _, _ in
                     if let last = transcript.last {
@@ -107,6 +112,40 @@ struct TerminalScreen: View {
 
     // MARK: header
 
+    /// Engine state → colored dot for the header indicator. Mirrors the
+    /// EngineStatusFooter color scheme so the user sees the same signal
+    /// in both surfaces.
+    private var engineStateColor: Color {
+        switch state.engineState {
+        case .running: return .green
+        case .loading: return .yellow
+        case .standby: return .orange
+        case .stopped: return Theme.Colors.textLow
+        case .error:   return .red
+        }
+    }
+
+    private var engineStateLabel: String {
+        switch state.engineState {
+        case .running: return "running"
+        case .loading: return "loading"
+        case .standby(let kind): return kind == .deep ? "deep sleep" : "light sleep"
+        case .stopped: return "stopped"
+        case .error:   return "error"
+        }
+    }
+
+    /// Currently-active model display name, or nil when nothing is
+    /// loaded. Tries `selectedModelPath` first (the user's last pick),
+    /// falling back to the running session's model path.
+    private var activeModelName: String? {
+        if let p = state.selectedModelPath { return p.lastPathComponent }
+        if let s = state.sessions.first(where: {
+            if case .running = $0.state { return true }; return false
+        }) { return s.modelPath.lastPathComponent }
+        return nil
+    }
+
     private var header: some View {
         HStack(spacing: Theme.Spacing.md) {
             Image(systemName: "terminal")
@@ -114,7 +153,44 @@ struct TerminalScreen: View {
             Text(L10n.Terminal.terminal.render(appLocale))
                 .font(Theme.Typography.title)
                 .foregroundStyle(Theme.Colors.textHigh)
+
+            // Engine state pill — dot + label + active model name. Tap
+            // jumps to the Server tab for full session control. When no
+            // model is loaded, the pill reads "raw shell" so the user
+            // understands why the agent isn't responding to natural
+            // language.
+            Button {
+                state.mode = .server
+            } label: {
+                HStack(spacing: Theme.Spacing.xs) {
+                    Circle()
+                        .fill(engineStateColor)
+                        .frame(width: 8, height: 8)
+                    Text(activeModelName ?? "raw shell")
+                        .font(Theme.Typography.bodyHi)
+                        .foregroundStyle(Theme.Colors.textHigh)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if activeModelName != nil {
+                        Text("· \(engineStateLabel)")
+                            .font(Theme.Typography.body)
+                            .foregroundStyle(Theme.Colors.textLow)
+                    }
+                }
+                .padding(.horizontal, Theme.Spacing.md)
+                .padding(.vertical, Theme.Spacing.xs)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.md)
+                        .fill(Theme.Colors.surfaceHi)
+                )
+            }
+            .buttonStyle(.plain)
+            .help("Open Server tab to load / switch / stop models")
+
             Spacer()
+
+            // CWD path (right side). Trailing folder icon opens an
+            // NSOpenPanel to pick a different working directory.
             Text(cwd.path)
                 .font(Theme.Typography.mono)
                 .foregroundStyle(Theme.Colors.textLow)
@@ -127,10 +203,120 @@ struct TerminalScreen: View {
                     .foregroundStyle(Theme.Colors.textMid)
             }
             .buttonStyle(.plain)
+            .help("Change working directory")
         }
         .padding(.horizontal, Theme.Spacing.lg)
         .padding(.vertical, Theme.Spacing.md)
         .background(Theme.Colors.surface)
+    }
+
+    // MARK: empty state
+
+    /// Shown when the transcript is empty. Two layouts:
+    ///   • Model loaded → welcome + 4 quick-action chips that each
+    ///     pre-fill the input with a sample prompt (model can call
+    ///     bash via the agentic loop). User clicks Send to dispatch.
+    ///   • No model loaded → fallback hint explaining raw-shell mode +
+    ///     button that jumps to the Server tab so the user can pick a
+    ///     model.
+    private var emptyState: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+            HStack(spacing: Theme.Spacing.md) {
+                Image(systemName: "terminal.fill")
+                    .font(.system(size: 32))
+                    .foregroundStyle(Theme.Colors.accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(activeModelName != nil
+                         ? "Agentic Terminal"
+                         : "Raw Shell Mode")
+                        .font(Theme.Typography.title)
+                        .foregroundStyle(Theme.Colors.textHigh)
+                    Text(activeModelName != nil
+                         ? "Ask the model to run shell commands. It uses the `bash` tool to execute, reads the output, and decides what to do next."
+                         : "No model loaded — input is dispatched directly to /bin/bash. Load a model from the Server tab to enable the agentic loop.")
+                        .font(Theme.Typography.body)
+                        .foregroundStyle(Theme.Colors.textMid)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            if activeModelName != nil {
+                // Quick-action chips — sample prompts to get the user
+                // started. Each fills the input; the user reviews and
+                // clicks Send.
+                Text("Try one of these:")
+                    .font(Theme.Typography.bodyHi)
+                    .foregroundStyle(Theme.Colors.textMid)
+                    .padding(.top, Theme.Spacing.md)
+                let suggestions: [(String, String)] = [
+                    ("doc.text.magnifyingglass", "Summarize the README in this directory"),
+                    ("chevron.left.forwardslash.chevron.right", "Show me the git log for the last week"),
+                    ("ladybug", "Find any TODOs or FIXMEs in the source tree"),
+                    ("hammer", "Run the tests and tell me what failed"),
+                ]
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: Theme.Spacing.md)],
+                          spacing: Theme.Spacing.md) {
+                    ForEach(suggestions, id: \.1) { (icon, text) in
+                        Button {
+                            input = text
+                        } label: {
+                            HStack(spacing: Theme.Spacing.sm) {
+                                Image(systemName: icon)
+                                    .frame(width: 18)
+                                    .foregroundStyle(Theme.Colors.accent)
+                                Text(text)
+                                    .font(Theme.Typography.body)
+                                    .foregroundStyle(Theme.Colors.textHigh)
+                                    .multilineTextAlignment(.leading)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(Theme.Spacing.md)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                                    .fill(Theme.Colors.surfaceHi)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                                    .stroke(Theme.Colors.border, lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            } else {
+                Button {
+                    state.mode = .server
+                } label: {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        Image(systemName: "server.rack")
+                        Text("Go to Server tab")
+                    }
+                    .font(Theme.Typography.bodyHi)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, Theme.Spacing.lg)
+                    .padding(.vertical, Theme.Spacing.md)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.md)
+                            .fill(Theme.Colors.accent)
+                    )
+                }
+                .buttonStyle(.plain)
+                .padding(.top, Theme.Spacing.md)
+            }
+
+            // Footer hint — reasoning surface + history recall keys so
+            // users discover the affordances without trial-and-error.
+            HStack(spacing: Theme.Spacing.lg) {
+                Label("↑/↓ recalls history", systemImage: "arrow.up.arrow.down")
+                Label("⌘4 jumps here", systemImage: "command")
+                Label("Working dir: \(cwd.lastPathComponent)", systemImage: "folder")
+            }
+            .font(Theme.Typography.caption)
+            .foregroundStyle(Theme.Colors.textLow)
+            .padding(.top, Theme.Spacing.lg)
+        }
+        .frame(maxWidth: 720, alignment: .leading)
     }
 
     // MARK: input bar
