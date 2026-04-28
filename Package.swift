@@ -552,6 +552,7 @@ let package = Package(
             sources: [
                 "ParserTests.swift",
                 "AhoCorasickTests.swift",
+                "BrowserToolSmokeTests.swift",
                 "NumPyPCG64Tests.swift",
                 "CacheCoordinatorGenPromptLenTests.swift",
                 "SettingsStoreClampTests.swift",
