@@ -501,6 +501,54 @@ private class NemotronHSwitchMLP: Module {
     }
 }
 
+// MARK: - §437 JANGTQ SwitchMLP for NemotronH (TurboQuant codec on routed experts)
+
+/// Drop-in replacement for `NemotronHSwitchMLP` that uses TurboQuant
+/// per-expert weights. Mirrors the affine path semantically:
+///   y = fc2( relu²( fc1(x, idx) ), idx )
+///
+/// The TQ codec encodes each expert's weight matrix as a Hadamard-rotated
+/// codebook lookup. `TurboQuantSwitchLinear` handles the per-expert
+/// matmul + Hadamard rotate + codebook lookup in one Metal dispatch.
+/// Activation stays as `relu²` between the two TQ matmuls — no fused
+/// ReLU² kernel exists yet, but the split path is correct and runs on
+/// the same gather_tq Metal kernel as MiniMax / DSV4 JANGTQ.
+private class NemotronHJANGTQSwitchMLP: Module {
+    @ModuleInfo(key: "fc1") var fc1: TurboQuantSwitchLinear
+    @ModuleInfo(key: "fc2") var fc2: TurboQuantSwitchLinear
+
+    let inputDims: Int
+    let hiddenDims: Int
+    let numExperts: Int
+
+    init(inputDims: Int, hiddenDims: Int, numExperts: Int, bits: Int, seed: Int) {
+        self.inputDims = inputDims
+        self.hiddenDims = hiddenDims
+        self.numExperts = numExperts
+
+        self._fc1.wrappedValue = TurboQuantSwitchLinear(
+            inFeatures: inputDims, outFeatures: hiddenDims,
+            numExperts: numExperts, bits: bits, seed: seed)
+        self._fc2.wrappedValue = TurboQuantSwitchLinear(
+            inFeatures: hiddenDims, outFeatures: inputDims,
+            numExperts: numExperts, bits: bits, seed: seed)
+
+        super.init()
+    }
+
+    /// Same shape contract as `NemotronHSwitchMLP.callAsFunction` —
+    /// callers (NemotronHMoE / NemotronHJANGTQMoE) can't tell the
+    /// difference. `expandedDimensions(_:axes:[-2,-3])` matches what
+    /// TurboQuantSwitchLinear expects for the gather kernel input.
+    func callAsFunction(_ x: MLXArray, _ indices: MLXArray) -> MLXArray {
+        let xExp = MLX.expandedDimensions(x, axes: [-2, -3])
+        var y = fc1(xExp, indices)
+        y = relu2(y)
+        y = fc2(y, indices)
+        return MLX.squeezed(y, axis: -2)
+    }
+}
+
 // MARK: - MoE
 
 private class NemotronHMoE: Module, UnaryLayer, NemotronHMixer {
