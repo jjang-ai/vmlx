@@ -179,6 +179,76 @@ public func maybeReDeriveSSMState(
     }
 }
 
+/// §440 — capture-during-prefill (Python #109 native port). When the
+/// caller is already running prefill on the FULL prompt (including any
+/// generation-prompt suffix tokens), we can capture the clean SSM
+/// state at the prompt-only boundary BY POSITION instead of running a
+/// second fresh prefill at turn-end (`reDeriveSSMStates` above). This
+/// path zeroes the re-derive cost for thinking-template multi-turn
+/// chat — the user's prompt forward pass is the only forward pass.
+///
+/// Contract:
+///   • Caller has just finished prefilling `boundaryTokens` worth of
+///     tokens through the live `[KVCache]`. The cache layers already
+///     contain the SSM state at the boundary because Mamba caches are
+///     state-replacing (O(1) per token), not appending — the live
+///     cache IS the snapshot.
+///   • We deep-copy via `extractSSMStates(from:)` (which calls
+///     `state.value.copy()` per CacheHelpers.swift) so subsequent
+///     mutation by generation-prompt tokens doesn't alias.
+///   • Storage matches `maybeReDeriveSSMState`: keyed on the stripped
+///     prefix hash + modelKey so multi-turn fetch hits exactly.
+///
+/// Why this is correct vs. `reDeriveSSMStates`:
+///   • Both produce SSM state for the SAME `boundaryTokens` (i.e. the
+///     prompt minus the generation suffix).
+///   • `reDeriveSSMStates` runs a second forward pass; this skips the
+///     pass entirely and reads the live cache.
+///   • Determinism: both must produce bit-identical state because
+///     they're driving the same model with the same input through the
+///     same kernels. The §439 fp32 cast in `computeDt` is what
+///     guarantees the bit-identity — without it, the prefill chunked
+///     SSD path and the decode L=1 path can diverge by exp(precision
+///     loss). With §439 in place, capture-during-prefill = re-derive
+///     in the limit.
+///
+/// Used by Evaluate.swift's prefill loop: when `genPromptLen > 0` AND
+/// the model is hybrid AND the feature flag is on, the loop calls this
+/// at the `prompt.count - genPromptLen` boundary inline.
+public func captureCleanSSMStateInline(
+    coordinator: CacheCoordinator,
+    liveCache: [KVCache],
+    promptTokenIds: [Int],
+    genPromptLen: Int,
+    enableSSMReDerive: Bool
+) {
+    func log(_ status: String) {
+        let line = "[vmlx][cache/ssm-rederive] inline-capture/\(status) hybrid=\(coordinator.isHybrid) genGP=\(genPromptLen) promptLen=\(promptTokenIds.count) enabled=\(enableSSMReDerive)\n"
+        FileHandle.standardError.write(Data(line.utf8))
+    }
+
+    guard enableSSMReDerive else { log("skip/disabled"); return }
+    guard coordinator.isHybrid else { log("skip/not-hybrid"); return }
+    guard genPromptLen > 0 else { log("skip/no-gen-prompt"); return }
+    guard promptTokenIds.count > genPromptLen else {
+        log("skip/prompt-shorter-than-gp"); return
+    }
+
+    let stripped = Array(promptTokenIds.prefix(promptTokenIds.count - genPromptLen))
+    guard !stripped.isEmpty else { log("skip/empty-stripped"); return }
+
+    let states = extractSSMStates(from: liveCache)
+    guard !states.isEmpty else { log("skip/no-ssm-states"); return }
+
+    coordinator.ssmStateCache.store(
+        ssmStates: states,
+        tokens: stripped,
+        boundary: stripped.count
+    )
+    coordinator.ssmStateCache.markReDeriveFired()
+    log("ok/captured stateCount=\(states.count)")
+}
+
 public func reDeriveSSMStates(
     model: any LanguageModel,
     tokens: [Int],
