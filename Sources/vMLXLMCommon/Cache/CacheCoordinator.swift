@@ -131,6 +131,22 @@ public final class CacheCoordinator: @unchecked Sendable {
         self.ssmStateCache = SSMStateCache(
             maxEntries: config.ssmMaxEntries,
             modelKey: config.modelKey)
+
+        // §441c — wire SSMCompanionDiskStore as a write-through tier
+        // when the L2 disk cache is enabled AND the coordinator owns
+        // a stable cache directory. Reuses the same `diskCacheDir` so
+        // SSM companion state lives next to KV blocks and gets purged
+        // together on `clear()`. Failures are silent — disk-tier
+        // unavailability degrades gracefully to in-memory only.
+        if config.enableDiskCache {
+            let baseDir = config.diskCacheDir
+                ?? FileManager.default.temporaryDirectory
+                    .appendingPathComponent("vmlx_disk_cache")
+            let ssmDir = baseDir.appendingPathComponent("ssm_companion")
+            self.ssmStateCache.diskStore = try? SSMCompanionDiskStore(
+                cacheDir: ssmDir,
+                modelKey: config.modelKey)
+        }
     }
 
     // MARK: - Hybrid Flag

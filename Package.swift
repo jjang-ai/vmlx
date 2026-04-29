@@ -553,6 +553,7 @@ let package = Package(
                 "ParserTests.swift",
                 "AhoCorasickTests.swift",
                 "BrowserToolSmokeTests.swift",
+                "SSMCompanionDiskStoreTests.swift",
                 "NumPyPCG64Tests.swift",
                 "CacheCoordinatorGenPromptLenTests.swift",
                 "SettingsStoreClampTests.swift",
