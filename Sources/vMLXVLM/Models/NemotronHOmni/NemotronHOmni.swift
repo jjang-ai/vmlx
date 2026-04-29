@@ -9,22 +9,11 @@
 //
 // Mirrors jang_tools/nemotron_omni/model.py NemotronHOmni.
 //
-// §435 — ported from `vmlx-swift-lm` 2026-04-29. The multimodal forward
-// path (`callAsFunction(input:cache:)` and `extractImageEmbeds`) is
-// gated behind `NEMOTRON_OMNI_MULTIMODAL_READY` because it depends on
-// two NemotronHModel additions that aren't on this branch yet:
-//
-//   1. public `embedTokens(_:)` accessor for the LM token embedding
-//   2. public `callAsFunction(inputsEmbeds:cache:)` overload that
-//      bypasses the embed lookup and accepts pre-computed embeddings
-//
-// Both exist in vmlx-swift-lm but require a focused diff against this
-// repo's NemotronH.swift (1251 LOC). Subsystem ports — RADIO vision
-// tower, Parakeet audio encoder, projectors, preprocessors — compile
-// cleanly and are usable as standalone primitives until the LM
-// surgery lands.
+// §435 — ported from `vmlx-swift-lm` 2026-04-29.
+// §436 — multimodal forward path UNGATED 2026-04-29 after adding
+// `embedTokens(_:)` and `callAsFunction(inputsEmbeds:cache:)` to
+// NemotronHModel + `forwardFromEmbeddings(_:cache:)` to the backbone.
 
-#if NEMOTRON_OMNI_MULTIMODAL_READY
 import Foundation
 import MLX
 import vMLXLLM
@@ -452,4 +441,3 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
     }
 }
 
-#endif
