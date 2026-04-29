@@ -809,7 +809,19 @@ private class NemotronHBackbone: Module {
     }
 
     func callAsFunction(_ inputs: MLXArray, cache: [KVCache]? = nil) -> MLXArray {
-        var hidden = embeddings(inputs)
+        let hidden = embeddings(inputs)
+        return forwardFromEmbeddings(hidden, cache: cache)
+    }
+
+    /// §436 — multimodal entry point. Skips the token embedding lookup
+    /// and accepts pre-computed embeddings (text + spliced
+    /// vision/video/audio). Mirrors `NemotronHOmni.prepare()` flow:
+    /// the omni wrapper builds embeds for text, runs RADIO on image
+    /// pixels, runs Parakeet on audio mel-spec, splices each at the
+    /// matching context-token positions, then hands the merged tensor
+    /// here.
+    func forwardFromEmbeddings(_ inputsEmbeds: MLXArray, cache: [KVCache]? = nil) -> MLXArray {
+        var hidden = inputsEmbeds
 
         // Create attention mask using the first attention layer's cache
         let attentionMask: MLXFast.ScaledDotProductAttentionMaskMode = {
@@ -887,6 +899,29 @@ public class NemotronHModel: Module, LLMModel, KVCacheDimensionProvider, LoRAMod
 
     public func callAsFunction(_ inputs: MLXArray, cache: [KVCache]?) -> MLXArray {
         var out = backbone(inputs, cache: cache)
+        if let lmHead {
+            out = lmHead(out)
+        } else {
+            out = backbone.embeddings.asLinear(out)
+        }
+        return out
+    }
+
+    /// §436 — Public token-embedding accessor. Used by `NemotronHOmni`
+    /// to build a starter embedding tensor that the multimodal wrapper
+    /// then splices vision / audio embeddings into at placeholder
+    /// token positions before handing back to
+    /// `callAsFunction(inputsEmbeds:cache:)`.
+    public func embedTokens(_ tokens: MLXArray) -> MLXArray {
+        backbone.embeddings(tokens)
+    }
+
+    /// §436 — Multimodal forward. Bypasses the token-embedding lookup
+    /// and accepts pre-computed embeddings (text + RADIO vision +
+    /// Parakeet audio merged via `spliceAtToken`). Same lm_head /
+    /// tied-embedding logic as `callAsFunction(_:cache:)`.
+    public func callAsFunction(inputsEmbeds: MLXArray, cache: [KVCache]?) -> MLXArray {
+        var out = backbone.forwardFromEmbeddings(inputsEmbeds, cache: cache)
         if let lmHead {
             out = lmHead(out)
         } else {
