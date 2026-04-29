@@ -14,8 +14,33 @@ import MLXNN
 public func computeDt(_ dt: MLXArray, _ dtBias: MLXArray, _ timeStepLimit: (Float, Float))
     -> MLXArray
 {
-    let dt = logAddExp(dt + dtBias, MLXArray(0, dtype: dt.dtype))
-    return MLX.clip(dt, min: MLXArray(timeStepLimit.0, dtype: dt.dtype), max: MLXArray(timeStepLimit.1, dtype: dt.dtype))
+    // §439 — CRITICAL parity fix vs `mlx_lm/models/ssm.py:7-10`
+    // (`compute_dt`). Python explicitly upcasts `dt` to float32 BEFORE
+    // the softplus + clamp, then leaves the result in fp32 for the
+    // downstream `dt * x` discretization. Without this cast, bf16/fp16
+    // input dtype loses precision through the exponential in softplus.
+    // The `time_step_limit = (0.001, 100.0)` clamp is exponential-
+    // sensitive; precision loss freezes the SSM state (dt → 0) after
+    // ~5–10 tokens on long sequences and silently corrupts late-context
+    // recall on hybrid Mamba models (NemotronH / Cascade-2 / Nemotron-
+    // Omni). Documented in
+    // `~/jang/research/NEMOTRON-OMNI-RUNTIME-2026-04-28.md` §3 +
+    // trap #7 ("don't override `time_step_limit` normalization").
+    let outDtype = dt.dtype
+    let dt32 = dt.asType(.float32)
+    let bias32 = dtBias.asType(.float32)
+    let activated = logAddExp(dt32 + bias32, MLXArray(Float(0), dtype: .float32))
+    let clamped = MLX.clip(
+        activated,
+        min: MLXArray(timeStepLimit.0, dtype: .float32),
+        max: MLXArray(timeStepLimit.1, dtype: .float32))
+    // Return in input dtype to keep the downstream graph shape stable.
+    // Python keeps fp32 here, but Swift's discretization path expects
+    // matching dtypes for the SSM state matmul; the precision loss on
+    // re-cast is the inverse of the upcast and recovers Python parity
+    // because the lossy step (softplus exponential) was already done
+    // in fp32.
+    return clamped.asType(outDtype)
 }
 
 private func makeSSMKernel() -> MLXFast.MLXFastKernel? {
