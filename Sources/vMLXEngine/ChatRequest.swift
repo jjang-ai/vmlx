@@ -566,6 +566,20 @@ public struct ChatRequest: Codable, Sendable {
             throw ChatRequestValidationError(
                 field: "max_tokens", reason: "must be > 0, got \(mt)")
         }
+        // §438 — F5 from API audit. Reject pathologically large
+        // max_tokens at request boundary instead of letting it
+        // through to forward() where it would either OOM the KV
+        // cache (paged or hybrid) or silently truncate. Cap at
+        // 1M tokens — above any real model's context window today.
+        // Per-model context-window enforcement requires the loaded
+        // model's `maxPositionEmbeddings` and lives in Stream.swift,
+        // but a conservative absolute upper bound here catches
+        // misconfigured clients before they hit the loader.
+        if let mt = maxTokens, mt > 1_000_000 {
+            throw ChatRequestValidationError(
+                field: "max_tokens",
+                reason: "exceeds absolute upper bound 1_000_000, got \(mt)")
+        }
         if let s = stop, s.count > 16 {
             throw ChatRequestValidationError(
                 field: "stop",
