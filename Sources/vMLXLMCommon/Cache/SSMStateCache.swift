@@ -87,6 +87,14 @@ public final class SSMStateCache: @unchecked Sendable {
     /// `CacheCoordinator` based on `CacheCoordinatorConfig.modelKey`.
     private let modelKey: String?
 
+    /// §441 — Optional disk tier for cold-start cache survival. When
+    /// non-nil, `store()` write-throughs to disk and `fetchEntry()`
+    /// falls through on memory miss + reloads into the LRU slot.
+    /// Wired by `CacheCoordinator` when
+    /// `enableSSMCompanionDiskCache` setting is on. Default nil =
+    /// in-memory only (pre-§441 behavior).
+    public var diskStore: SSMCompanionDiskStore? = nil
+
     // MARK: - Public API
 
     /// Store SSM layer states for a given token prefix.
@@ -137,6 +145,20 @@ public final class SSMStateCache: @unchecked Sendable {
         if entries.count > maxEntries {
             entries.removeFirst()
         }
+
+        // §441 — write-through to disk tier if configured. Done outside
+        // the in-memory critical path's hot section by capturing the
+        // values we need first; the disk write itself takes the
+        // SSMCompanionDiskStore's own lock. Failures are swallowed so a
+        // disk-full / permission error never breaks generation — the
+        // in-memory entry above is still authoritative.
+        if let disk = diskStore {
+            try? disk.store(
+                ssmStates: copies,
+                tokens: tokens,
+                boundary: boundary,
+                isComplete: isComplete)
+        }
     }
 
     /// Fetch cached SSM states for a given token prefix.
@@ -171,6 +193,29 @@ public final class SSMStateCache: @unchecked Sendable {
 
         guard let index = entries.firstIndex(where: { $0.key == key }) else {
             misses += 1
+            // §441 — fall through to disk tier on memory miss. Reload
+            // into the LRU slot so subsequent fetches in this session
+            // hit memory. Disk fetch returns deep-copied arrays from
+            // safetensors deserialize, so they're already detached
+            // from any lazy graph.
+            if let disk = diskStore,
+               let result = disk.fetch(tokens: tokens, boundary: boundary)
+            {
+                // Hydrate into LRU. Subtract the miss we just bumped
+                // because the disk lookup found it — this is a hit
+                // from the user's perspective, just one tier deeper.
+                misses -= 1
+                hits += 1
+                entries.append((
+                    key: key,
+                    states: result.states,
+                    isComplete: result.isComplete))
+                if entries.count > maxEntries { entries.removeFirst() }
+                // Return another deep copy so the caller can mutate
+                // freely — same contract as the in-memory hit path.
+                let safeCopies = result.states.map { $0 * 1 }
+                return FetchResult(states: safeCopies, isComplete: result.isComplete)
+            }
             return nil
         }
 
