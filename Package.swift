@@ -554,6 +554,7 @@ let package = Package(
                 "AhoCorasickTests.swift",
                 "BrowserToolSmokeTests.swift",
                 "SSMCompanionDiskStoreTests.swift",
+                "FamilySamplingDefaultsTests.swift",
                 "NumPyPCG64Tests.swift",
                 "CacheCoordinatorGenPromptLenTests.swift",
                 "SettingsStoreClampTests.swift",
