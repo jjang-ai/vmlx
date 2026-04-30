@@ -395,7 +395,7 @@ let package = Package(
         .target(
             name: "vMLXVLM",
             dependencies: [
-                "vMLXLMCommon", "MLX", "MLXNN", "MLXOptimizers",
+                "vMLXLMCommon", "vMLXLLM", "MLX", "MLXNN", "MLXOptimizers",
             ],
             path: "Sources/vMLXVLM",
             exclude: [
@@ -541,6 +541,7 @@ let package = Package(
                 "vMLXEngine",
                 "vMLXLMCommon",
                 "vMLXServer",
+                "vMLXVLM",
             ],
             path: "Tests/vMLXTests",
             // Curated minimal set that compiles clean against framework

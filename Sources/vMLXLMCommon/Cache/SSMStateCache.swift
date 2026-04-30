@@ -267,39 +267,52 @@ public final class SSMStateCache: @unchecked Sendable {
         tokens: [Int], boundary: Int, mediaSalt: String? = nil,
         modelKey: String? = nil
     ) -> String {
+        // P0-2 (2026-04-30): Converged hash formula. Previously this hashed
+        // raw Int bytes via `UnsafeRawBufferPointer(prefix)` which differed
+        // from `SSMCompanionDiskStore.keyFor` (raw bytes too, but with `:`
+        // separator) AND from Python's
+        //   `model_key + "\x00" + json.dumps(tokens[:N], separators=(",",":"))`
+        // (audit doc AUDIT-SSM-WARMPASS-PARITY.md §1).
+        // Result: L1 vs L2 mismatch → disk backfill never lands in L1.
+        // Python ↔ Swift mismatch → no future cross-process sharing.
+        // The new shared formula:
+        //   SHA-256( modelKey-blob || mediaSalt-blob || "|tokens:" || json.dumps([…]) )
+        // matches Python byte-for-byte once modelKey and mediaSalt are blank
+        // (the "|tokens:" tag + JSON-string-of-list is identical to Python
+        // when the auxiliary salts are empty).
         let prefix = Array(tokens.prefix(boundary))
         var hasher = SHA256()
 
         // Mix modelKey FIRST so hot-swapping models in-process can't
-        // collide on the same prompt prefix. Mirrors the salt added to
-        // `DiskCache.hashTokens` and `CacheBlock.computeBlockHash`.
-        // Without this, switching from model A → model B on the same
-        // prompt prefix would HIT model A's stored SSM state and produce
-        // corrupted decode. Audit finding 2026-04-15 (cache audit #3).
+        // collide. Mirrors `DiskCache.hashTokens` / `CacheBlock.computeBlockHash`.
         if let mk = modelKey, !mk.isEmpty {
             hasher.update(data: Data("|model:".utf8))
             hasher.update(data: Data(mk.utf8))
         }
-
-        // Audit F-G1 (P0): mix mediaSalt BEFORE tokens so VLM multi-turn
-        // requests with different images but the same text prefix produce
-        // different keys. The paged L1 and disk L2 tiers already do this
-        // via `CacheBlock.computeBlockHash` and `DiskCache.hashTokens` —
-        // the SSM companion tier was the only cache that hashed tokens
-        // alone, so it would HIT on image-B requests with stored
-        // image-A state and silently corrupt generation. Empty salt is
-        // the text-only path and hashes the same as pre-fix entries.
+        // VLM mediaSalt — also unconditionally mixed so L2 disk store agrees.
         if let salt = mediaSalt, !salt.isEmpty {
             hasher.update(data: Data("|media:".utf8))
             hasher.update(data: Data(salt.utf8))
         }
-
-        prefix.withUnsafeBufferPointer { buffer in
-            let rawBuffer = UnsafeRawBufferPointer(buffer)
-            hasher.update(bufferPointer: rawBuffer)
-        }
+        // Tokens encoded as JSON array string with no whitespace,
+        // matching Python `json.dumps([…], separators=(",",":"))` byte-for-byte.
+        hasher.update(data: Data("|tokens:".utf8))
+        hasher.update(data: Self.jsonEncodeIntList(prefix))
 
         let digest = hasher.finalize()
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Encode an Int array as `[a,b,c]` UTF-8 bytes — byte-identical to
+    /// Python `json.dumps(list, separators=(",",":"))` for any list of
+    /// non-negative integers (token IDs).
+    static func jsonEncodeIntList(_ ints: [Int]) -> Data {
+        var s = "["
+        for (i, x) in ints.enumerated() {
+            if i > 0 { s.append(",") }
+            s.append(String(x))
+        }
+        s.append("]")
+        return Data(s.utf8)
     }
 }

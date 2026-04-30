@@ -1003,8 +1003,21 @@ public class NemotronHModel: Module, LLMModel, KVCacheDimensionProvider, LoRAMod
         // flash-moe cross-contaminate MTP weights into routed experts.
         // Mirrors Python `utils/jang_loader.py` _load_jang_v2 MTP filter
         // (`not k.endswith(".importance") and "mtp." not in k`).
+        //
+        // Also drop NemotronH-Omni multimodal heads (vision_model, mlp1,
+        // sound_encoder, sound_projection). The text-only LLM model does not
+        // own these — they live in the Omni wrapper. Without this filter,
+        // loading an Omni bundle (MXFP4/JANGTQ) into NemotronHModel fails
+        // with `unhandledKeys`. Mirrors the Python `mlx_lm/models/nemotron_h.py`
+        // sanitize patch noted in research/NEMOTRON-OMNI-FINAL-2026-04-28.md.
         let filteredWeights = weights.filter { key, _ in
-            !key.hasSuffix(".importance") && !key.contains("mtp.")
+            if key.hasSuffix(".importance") { return false }
+            if key.contains("mtp.") { return false }
+            if key.hasPrefix("vision_model.") { return false }
+            if key.hasPrefix("mlp1.") { return false }
+            if key.hasPrefix("sound_encoder.") { return false }
+            if key.hasPrefix("sound_projection.") { return false }
+            return true
         }
 
         for (key, value) in filteredWeights {

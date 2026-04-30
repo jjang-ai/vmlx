@@ -56,10 +56,25 @@ public enum CapabilityDetector {
 
         // Resolve the HF model_type up front (text_config wins for VLM
         // wrappers, matching ModelDetector tier 1).
-        let (rawModelType, modalityFromConfig) = resolveModelType(
+        var (rawModelType, modalityFromConfig) = resolveModelType(
             config: config,
             jang: jangJSON
         )
+
+        // NemotronH-Omni promotion: bundles ship `config.json` with
+        // `model_type=nemotron_h` (the LLM type) plus a sibling
+        // `config_omni.json` carrying the multimodal wrapper metadata
+        // (img_context_token_id, sound_context_token_id, etc.). Promote
+        // the modelType so the VLMModelFactory routes to NemotronHOmni
+        // and the silver row (cacheType=hybrid, isMLLM=true) takes effect.
+        // Mirrors Python `vmlx_engine.omni_multimodal.is_omni_multimodal_bundle`.
+        if rawModelType == "nemotron_h" {
+            let omniURL = directory.appendingPathComponent("config_omni.json")
+            if FileManager.default.fileExists(atPath: omniURL.path) {
+                rawModelType = "nemotron_h_omni"
+                modalityFromConfig = .vision
+            }
+        }
 
         let modality = refineModality(
             base: modalityFromConfig,
@@ -876,7 +891,7 @@ public enum CapabilityDetector {
     /// `Engine.setupCacheCoordinator` calls `coordinator.setHybrid(true)` so
     /// the SSMStateCache companion path activates.
     private static let hybridModelTypes: Set<String> = [
-        "nemotron_h", "qwen3_next", "jamba",
+        "nemotron_h", "nemotron_h_omni", "qwen3_next", "jamba",
         "falcon_h1", "granite_moe_hybrid",
         "lfm2", "lfm2_moe", "mimo_v2_flash", "baichuan_m1",
     ]

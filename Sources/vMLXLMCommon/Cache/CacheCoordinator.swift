@@ -528,8 +528,17 @@ public final class CacheCoordinator: @unchecked Sendable {
             // media prefix. Store and fetch must agree on the boundary
             // key, so `isMLLM=true` callers (ChunkedPrefillVLM path)
             // subtract one token here and in `fetch()`.
-            let base = min(storeTotal, blockLayerData.count * blockSize)
-            let boundary = isMLLM ? max(0, base - 1) : base
+            //
+            // P0-3 (2026-04-30): Boundary fix. Previously this used
+            //   min(storeTotal, blockLayerData.count * blockSize)
+            // which floor-aligned to the paged-block boundary (64).
+            // `maybeReDeriveSSMState` and `captureCleanSSMStateInline`
+            // store at the EXACT `storeTotal` though — meaning the
+            // post-gen sync store and the re-derived store landed at
+            // different keys. Random prompt sizes hit ~1.6% (1/64)
+            // boundary alignment with the floor. Use exact storeTotal
+            // so all three store paths converge on the same key.
+            let boundary = isMLLM ? max(0, storeTotal - 1) : storeTotal
             ssmStateCache.store(
                 ssmStates: effective,
                 tokens: storeTokens,
