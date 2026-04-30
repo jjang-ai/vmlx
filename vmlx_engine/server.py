@@ -2227,6 +2227,68 @@ async def health():
     if _max_prompt_tokens > 0:
         result["max_prompt_tokens"] = _max_prompt_tokens
 
+    # Nemotron-3-Nano-Omni multimodal: surface bundle status + active backend.
+    # Lets the UI show "Vision/Audio: Native MLX (fast)" vs "PyTorch bridge".
+    try:
+        from .omni_multimodal import is_omni_multimodal_bundle, OmniMultimodalDispatcher
+        _omni_path = _model_path or _model_name
+        if _omni_path and is_omni_multimodal_bundle(_omni_path):
+            result["omni_multimodal"] = {
+                "bundle_compatible": True,
+                "backend": OmniMultimodalDispatcher._pick_backend(),
+                "modalities": ["text", "image", "audio", "video"],
+            }
+    except Exception:
+        pass
+
+    # TurboQuant KV cache status — works for SimpleEngine AND BatchedEngine,
+    # for plain MLX, JANG, JANGTQ, and MLLM/VLM models.
+    # Detection: walk into the engine and find an object whose .make_cache is
+    # one of the TQ patcher names. Patch sites:
+    #   - LLM:  _engine._model.model.make_cache  (tokenizer._apply_turboquant_to_model)
+    #   - MLLM: _engine._model.model.language_model.make_cache  (models/mllm.py)
+    #   - JANG/JANGTQ: same shape, patched by jang_loader._patch_turboquant_make_cache
+    #   - BatchedEngine: model is reachable via _engine.model
+    if _engine is not None:
+        _tq_active = False
+
+        def _check_make_cache(obj):
+            mc = getattr(obj, "make_cache", None)
+            return mc is not None and getattr(mc, "__name__", "") in (
+                "_tq_make_cache",
+                "_turboquant_make_cache",
+            )
+
+        # Walk the candidate chain and probe each level + .language_model
+        _seen = set()
+        _stack = []
+        for _attr in ("_model", "model"):
+            _v = getattr(_engine, _attr, None)
+            if _v is not None:
+                _stack.append(_v)
+        while _stack:
+            _v = _stack.pop()
+            if id(_v) in _seen:
+                continue
+            _seen.add(id(_v))
+            if _check_make_cache(_v):
+                _tq_active = True
+                break
+            for _next_attr in ("model", "language_model"):
+                _nxt = getattr(_v, _next_attr, None)
+                if _nxt is not None and id(_nxt) not in _seen:
+                    _stack.append(_nxt)
+
+        if _tq_active:
+            result["turboquant_kv_cache"] = {
+                "enabled": True,
+                "default_bits": 3,
+                "critical_bits": 4,
+                "critical_layers": "first 3 + last 3",
+            }
+        else:
+            result["turboquant_kv_cache"] = {"enabled": False}
+
     return result
 
 
@@ -2541,6 +2603,20 @@ async def cache_stats():
                 "bits": scheduler._kv_cache_bits,
                 "group_size": scheduler._kv_cache_group_size,
             }
+
+        # TurboQuant KV cache status (separate path from generic kv_cache_quantization).
+        # _tq_active is True when the model's make_cache returns TurboQuantKVCache.
+        # Applies to JANG/JANGTQ via jang_loader._patch_turboquant_make_cache, AND
+        # to plain MLX models via tokenizer._apply_turboquant_to_model.
+        if getattr(scheduler, "_tq_active", False):
+            result["turboquant_kv_cache"] = {
+                "enabled": True,
+                "default_bits": 3,
+                "critical_bits": 4,
+                "critical_layers": "first 3 + last 3",
+            }
+        else:
+            result["turboquant_kv_cache"] = {"enabled": False}
 
     # Disk cache (L2) stats — prompt-level
     if scheduler and getattr(scheduler, "disk_cache", None) is not None:
@@ -4075,13 +4151,84 @@ async def ollama_pull():
 
 
 @app.post("/api/delete", dependencies=[Depends(verify_api_key)])
-async def ollama_delete():
-    return {"status": "success"}
+async def ollama_delete(request: Request):
+    """vmlx#57 — actually remove the model directory.
+
+    Ollama-compatible body: `{"name": "<model>"}` or `{"model": "<path>"}`.
+    Resolves to a local path via the same logic the loader uses, then walks
+    upward to confirm we're inside the configured model_directories before
+    deleting. Refuses any path outside those roots.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    target = body.get("name") or body.get("model") or ""
+    if not target:
+        raise HTTPException(status_code=400, detail="Provide 'name' or 'model' in body")
+
+    from pathlib import Path
+    import shutil
+    from .api.utils import resolve_to_local_path
+
+    local = resolve_to_local_path(target)
+    p = Path(local).resolve()
+
+    # Enforce the path is inside one of the configured model directories.
+    allowed_roots: list[Path] = []
+    md = getattr(_app_state, "model_directories", None) if "_app_state" in dir() else None
+    if md is None:
+        # Fallbacks: HF cache + ~/.mlxstudio
+        allowed_roots.append(Path.home() / ".cache" / "huggingface" / "hub")
+        allowed_roots.append(Path.home() / ".mlxstudio")
+    else:
+        allowed_roots = [Path(d).resolve() for d in (md or [])]
+
+    inside = any(str(p).startswith(str(root.resolve()) + "/") for root in allowed_roots)
+    if not inside:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Refusing to delete path outside allowed model directories: {p}",
+        )
+    if not p.exists():
+        return {"status": "success", "deleted": str(p), "note": "already absent"}
+    try:
+        if p.is_dir():
+            shutil.rmtree(p)
+        else:
+            p.unlink()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Delete failed: {e}")
+    return {"status": "success", "deleted": str(p)}
 
 
 @app.post("/api/copy", dependencies=[Depends(verify_api_key)])
 async def ollama_copy():
     return {"status": "success"}
+
+
+@app.post("/v1/images/cancel", dependencies=[Depends(verify_api_key)])
+async def image_generation_cancel():
+    """Cancel the in-flight or next image generation request.
+
+    Cooperative — interrupts the engine at the next boundary it owns
+    (between images in a batch, or before the next generate() call).
+    The currently-running denoise step inside mflux still completes;
+    this prevents subsequent steps and aborts the request flow.
+
+    Tracks vmlx#100 / mlxstudio#100. Without this, cancelled jobs in
+    the panel kept running and could OOM the machine.
+
+    Returns 200 with `cancelled: true` even if no job is active —
+    setting the flag is idempotent and harmless on idle.
+    """
+    global _image_gen
+    if _image_gen is not None:
+        try:
+            _image_gen.cancel()
+        except Exception:
+            pass
+    return {"cancelled": True}
 
 
 @app.post("/api/create", dependencies=[Depends(verify_api_key)])
@@ -4131,6 +4278,26 @@ async def create_image(request: Request):
         body = await request.json()
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid request body: {e}")
+
+    # vmlx#100 / mlxstudio#100 — disconnect watchdog. If the client closes
+    # the HTTP connection (panel "Stop" button, browser reload, network
+    # cut), cancel the in-flight generation cooperatively. Mflux's denoise
+    # step is uncancellable mid-step, so this aborts at the next boundary
+    # we own (between images in a batch, or before the next generate()).
+    async def _watch_disconnect():
+        try:
+            while True:
+                await asyncio.sleep(0.5)
+                if await request.is_disconnected():
+                    if _image_gen is not None:
+                        try:
+                            _image_gen.cancel()
+                        except Exception:
+                            pass
+                    return
+        except asyncio.CancelledError:
+            return
+    _disconnect_watch = asyncio.create_task(_watch_disconnect())
 
     prompt = body.get("prompt", "")
     model = body.get("model", "schnell")
@@ -4242,7 +4409,16 @@ async def create_image(request: Request):
             try:
                 if _image_gen.is_loaded:
                     _image_gen.unload()
-                _image_gen.load(model, quantize=quantize, model_path=model_path)
+                # mlxstudio#98: frontend doesn't send model_path on /v1/images/generations,
+                # so fall back to the global _model_path set by `serve`. /v1/images/edits
+                # already does this — keep both paths symmetric so standby-wake reloads
+                # don't fail with "No local model files found".
+                _image_gen.load(
+                    model,
+                    quantize=quantize,
+                    model_path=model_path or _model_path,
+                    mflux_class=getattr(_image_gen, "_mflux_class", None),
+                )
             except Exception as e:
                 raise HTTPException(
                     status_code=500, detail=f"Failed to load image model '{model}': {e}"
@@ -5108,6 +5284,38 @@ async def create_chat_completion(
             )
     # Normalize response model field to the resolved name
     request.model = resolved_name
+
+    # Nemotron-3-Nano-Omni multimodal dispatch (Stage-1 PyTorch+MLX bridge).
+    # If the loaded bundle is a nemotron_h Omni bundle (has config_omni.json
+    # + vision_model.* weights) AND the request includes any image/audio/
+    # video content parts, route through `OmniMultimodalDispatcher` which
+    # wraps `jang_tools.nemotron_omni_session.OmniSession`. Text-only
+    # requests fall through to the standard chat path (already verified
+    # working at full LLM speed). See research/NEMOTRON-OMNI-MULTIMODAL-2026-04-28.md.
+    try:
+        from .omni_multimodal import (
+            is_omni_multimodal_bundle,
+            request_has_multimodal,
+            dispatch_omni_chat_completion,
+        )
+
+        _omni_path = _model_path or _model_name
+        if (
+            _omni_path
+            and is_omni_multimodal_bundle(_omni_path)
+            and request_has_multimodal(
+                [m.model_dump(exclude_none=True) if hasattr(m, "model_dump") else m
+                 for m in (request.messages or [])]
+            )
+        ):
+            return await dispatch_omni_chat_completion(request, _omni_path)
+    except HTTPException:
+        raise
+    except Exception as _omni_route_err:  # pragma: no cover
+        logger.warning(
+            "Omni multimodal dispatch failed (%s); falling back to standard path",
+            _omni_route_err,
+        )
 
     # Reject empty prompts with a clear 400 instead of letting mlx-vlm
     # crash inside stream_generate with ValueError:

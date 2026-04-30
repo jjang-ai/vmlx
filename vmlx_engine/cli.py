@@ -186,33 +186,6 @@ def serve_command(args):
                     logger.warning(f"Failed to auto-configure reasoning parser '{_mc.reasoning_parser}': {e}")
             if getattr(_mc, "think_in_template", False):
                 _registry_thinking_model = True
-
-            # DSV4-Flash / DSV4-Pro: BatchGenerator's continuous-batching path
-            # is INCOMPATIBLE with DSV4's custom 4D mHC layout (input is tiled
-            # to (B, T, hc_mult, hidden) inside Model.__call__, but BatchGenerator
-            # assumes plain (B, T, hidden) for cache + sampling). The result is
-            # numerically corrupt logits and gibberish output, even though the
-            # same model produces coherent text via mlx_lm.generate / SimpleEngine.
-            #
-            # Verified 2026-04-26 against DeepSeekV4-Flash-JANGTQ:
-            #   - mlx_lm.generate (direct):                            coherent
-            #   - SimpleEngine /v1/chat/completions @ temp=1.0:        coherent
-            #   - BatchedEngine /v1/chat/completions @ temp=1.0:       gibberish
-            #   - BatchedEngine /v1/completions raw prompt:            gibberish
-            #
-            # Until the BatchGenerator interaction is properly fixed (would
-            # require either making DSV4's Model.__call__ accept the (B, T, H)
-            # interface BatchGenerator expects, or teaching BatchGenerator to
-            # respect the model's tile-to-4D pattern), force-disable continuous
-            # batching for DSV4 so all paths route through SimpleEngine.
-            if _mc.family_name == "deepseek_v4" and getattr(args, "continuous_batching", False):
-                logger.warning(
-                    "DSV4 detected — disabling --continuous-batching to avoid "
-                    "BatchGenerator/4D-mHC incompatibility (produces gibberish output). "
-                    "All DSV4 requests route through SimpleEngine. Verified 2026-04-26 "
-                    "across /v1/chat/completions, /v1/responses, /api/chat, /v1/messages."
-                )
-                args.continuous_batching = False
     except Exception as e:
         logger.debug(f"Registry auto-apply skipped: {e}")
 
@@ -1054,7 +1027,85 @@ def bench_detok_command(args):
             print(f"    Batch: {repr(batch_result[:100])}...")
 
 
+def _check_macos_compat():
+    """mlxstudio#90 — bundled MLX is compiled with `minos 26.0`. macOS < 26
+    crashes on import with a cryptic
+        Symbol not found: __ZNSt13exception_ptr31__from_native_exception_pointerEPv
+    libc++ symbol that landed in macOS 14.5+. Surface a clear actionable
+    error before the import.
+    """
+    import platform, sys
+    if sys.platform != "darwin":
+        return
+    try:
+        ver = tuple(int(x) for x in platform.mac_ver()[0].split(".")[:2])
+    except Exception:
+        return
+    if ver < (14, 5):
+        sys.stderr.write(
+            f"vmlx requires macOS >= 14.5 (you are on {platform.mac_ver()[0]}).\n"
+            "The bundled MLX runtime depends on libc++ symbols added in "
+            "macOS 14.5; older systems will hit:\n"
+            "  Symbol not found: __ZNSt13exception_ptr31__from_native_"
+            "exception_pointerEPv\n"
+            "Upgrade to macOS 14.5+ (Sonoma) or 15.x (Sequoia) and retry.\n"
+        )
+        sys.exit(2)
+
+
+def _check_no_duplicate_mlx():
+    """vmlx#120 / mlxstudio#101 — `nanobind error: refusing to add duplicate
+    key "cpu" to enumeration "mlx.core.DeviceType"` happens when the MLX C
+    extension is loaded twice in one process. Most common cause: two distinct
+    `mlx` packages on sys.path (e.g. bundled python + a stale user-site
+    install). The Electron panel sets PYTHONNOUSERSITE=1 and `-s`, but if
+    the user pip-installed `mlx` into the bundled python directly OR has
+    a non-standard PYTHONPATH, both copies show up. Detect and abort with
+    a clear message.
+    """
+    import importlib.util, sys
+    try:
+        # Look for ALL mlx packages on the path. Spec.submodule_search_locations
+        # gives every directory contributing to the namespace.
+        spec = importlib.util.find_spec("mlx")
+        if spec is None:
+            return
+        locations = list(spec.submodule_search_locations or [])
+        # Also walk sys.path for shadowed copies.
+        seen = []
+        for p in sys.path:
+            try:
+                cand = __import__("os").path.join(p, "mlx")
+                if __import__("os").path.isdir(cand) and cand not in locations:
+                    locations.append(cand)
+                    seen.append(cand)
+            except Exception:
+                pass
+        if len(set(locations)) > 1:
+            sys.stderr.write(
+                "vmlx detected MULTIPLE `mlx` package locations on sys.path. "
+                "Loading two MLX C extensions in one process triggers:\n"
+                "  Critical nanobind error: refusing to add duplicate key \"cpu\" "
+                "to enumeration \"mlx.core.DeviceType\"\n"
+                "Locations found:\n"
+            )
+            for p in set(locations):
+                sys.stderr.write(f"  - {p}\n")
+            sys.stderr.write(
+                "\nFix:\n"
+                "  1. Uninstall any extra mlx wheels: `pip uninstall mlx mlx-lm`\n"
+                "  2. Use only the bundled python (vmlx-engine spawns with -s + "
+                "PYTHONNOUSERSITE=1)\n"
+                "  3. Unset PYTHONPATH if it's pointing into a second site-packages\n"
+            )
+            sys.exit(2)
+    except Exception:
+        pass
+
+
 def main():
+    _check_macos_compat()
+    _check_no_duplicate_mlx()
     parser = argparse.ArgumentParser(
         description="vmlx-engine: Apple Silicon MLX backend for vLLM",
         formatter_class=argparse.RawDescriptionHelpFormatter,

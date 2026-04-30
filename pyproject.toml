@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vmlx"
-version = "1.3.99"
+version = "1.4.1"
 description = "Local AI inference for Apple Silicon — Text, Image, Video & Audio generation on Mac"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -62,6 +62,13 @@ ui = [
     "gradio>=4.0.0",
     "pytz>=2024.1",
 ]
+# JANG / MXTQ / TurboQuant runtime support — needed for any *.JANGTQ*, *.MXTQ*,
+# DSV4-Flash, MiniMax-M2.7-JANG_*, NemotronH-Omni-* bundle. Without this extra,
+# vmlx will warn `MXTQ dequant failed (missing jang_tools)` and the bundle
+# will produce garbage tokens. Tracks mlxstudio#95.
+mxtq = [
+    "jang-tools>=2.5.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
@@ -97,9 +104,13 @@ audio = [
     "unidic-lite>=1.0.0",    # Japanese dictionary for fugashi
     "jieba>=0.42.0",         # Chinese word segmentation
 ]
-# JANG conversion (inference loader is built-in, only conversion needs this)
+# JANG / MXTQ runtime + conversion. `jang-tools` provides both the
+# runtime dequant codec and the conversion CLI; covers DSV4-Flash,
+# MiniMax-M2.7-JANG_*, NemotronH-Omni-*, MXTQ shards, and any other
+# JANG-stamped bundle. Mirrors `mxtq` extra above (intentionally same
+# pin) so `pip install vmlx[jang]` is a friendly alias.
 jang = [
-    "jang>=1.0.0; python_version >= '3.11'",
+    "jang-tools>=2.5.0",
 ]
 # Image generation dependencies (Flux, Z-Image-Turbo via mflux)
 image = [
@@ -125,8 +136,11 @@ vmlx-engine-bench = "vmlx_engine.benchmark:main"
 vmlx-worker = "vmlx_engine.distributed.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["engine"]
 include = ["vmlx_engine*"]
+
+[tool.setuptools.package-dir]
+"" = "engine"
 
 [tool.poetry]
 package-mode = false

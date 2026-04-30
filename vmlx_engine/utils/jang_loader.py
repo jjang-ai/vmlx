@@ -249,8 +249,32 @@ def _resolve_local_path(model_path: str | Path) -> Path:
 
 
 def is_jang_model(model_path: str | Path) -> bool:
-    """Check if a directory contains a JANG model."""
-    return _find_config_path(_resolve_local_path(model_path)) is not None
+    """Check if a directory contains a JANG model that needs JANG-codec loading.
+
+    Returns False for capability-only stamps (e.g. Nemotron-3-Nano-Omni-MXFP4
+    ships jang_config.json with weight_format='mlx' just to carry the
+    capabilities block — its weights load via stock mlx_lm.load(), not the
+    JANG codec). Returns True only for bundles that actually use JANG/JANGTQ
+    storage formats (jang, jjqf, mxq, mxtq).
+    """
+    cfg_path = _find_config_path(_resolve_local_path(model_path))
+    if cfg_path is None:
+        return False
+    try:
+        cfg = json.loads(cfg_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        # Malformed jang_config — fall back to "yes JANG" so the existing
+        # error-path raises a clear loader error rather than silently
+        # dropping into stock mlx_lm.
+        return True
+    fmt = cfg.get("format")
+    weight_format = cfg.get("weight_format")
+    # Recognized JANG-codec formats. Anything else (notably 'mlx') is a
+    # capability-only stamp on a stock MLX bundle.
+    JANG_CODEC_FORMATS = {"jang", "jjqf", "mxq", "mxtq"}
+    if fmt in JANG_CODEC_FORMATS or weight_format in JANG_CODEC_FORMATS:
+        return True
+    return False
 
 
 def _is_v2_model(model_path: Path) -> bool:
@@ -808,6 +832,51 @@ def _load_jang_v2(
         and not hasattr(model, "language_model")
     )
 
+    # GENERALIZED LM-STRIP (vmlx Qwen3.6-27B JANG_4M-CRACK regression,
+    # 2026-04-30):
+    # ANY VL-wrapped JANG bundle whose `runtime.format = "mlx-native
+    # (post-sanitize)"` (sanitized_for mlx_vlm) ships weights with the
+    # `language_model.*` prefix. When such a bundle is loaded text-only
+    # (the LLM scheduler path, `is_mllm=False`), mlx_lm instantiates the
+    # INNER text model (e.g. qwen3_5_text, gemma4_text, qwen3_5_moe_text)
+    # which has NO `language_model` attribute. Result:
+    #   • `_needs_vlm_key_remap` is False (no .language_model attr)
+    #   • `_needs_mistral4_lm_strip` was False (model_type != "mistral4")
+    # so all `language_model.*.scales/biases/weight` keys silently drop
+    # (strict=False) and the model runs on Xavier init → garbage tokens
+    # like "endc7arS-tSample_" that hit a stray EOS at ~10 tokens.
+    #
+    # Fix: route through the same prefix-strip path Mistral 4 uses when
+    # the bundle's safetensors index actually contains `language_model.*`
+    # keys AND the instantiated model lacks `language_model`. The keys
+    # are stripped to `model.*` / `lm_head.*` so they bind to the inner
+    # text model. Audit-2026-04-07 §6.3 hardening already counts source
+    # vs dst to refuse silent loss.
+    if not _needs_mistral4_lm_strip and not _needs_vlm_key_remap:
+        try:
+            from safetensors import safe_open
+            _has_lm_prefix_keys = False
+            for _wf in _get_v2_weight_files(path)[:1]:  # one shard is enough
+                with safe_open(str(_wf), framework="numpy") as _sf:
+                    for _k in _sf.keys():
+                        if _k.startswith("language_model."):
+                            _has_lm_prefix_keys = True
+                            break
+                if _has_lm_prefix_keys:
+                    break
+            if _has_lm_prefix_keys and not hasattr(model, "language_model"):
+                logger.info(
+                    "  Generalized LM-strip: bundle has `language_model.*` "
+                    "keys but instantiated model class has no .language_model "
+                    "attr — stripping prefix so weights bind to the inner "
+                    "text model (mirrors Mistral 4 path; covers Qwen3.5/3.6 "
+                    "VL JANG bundles loaded text-only). model_type=%s",
+                    _model_type,
+                )
+                _needs_mistral4_lm_strip = True  # reuse the existing strip path
+        except Exception as _ls_err:
+            logger.debug(f"  Generalized LM-strip pre-scan skipped: {_ls_err}")
+
     # Gemma 4: JANG stores expert keys as switch_mlp.{gate,up,down}_proj but
     # mlx-lm gemma4/gemma4_text model uses experts.switch_glu.{gate,up,down}_proj.
     # Without this remap, expert weights are silently dropped (strict=False)
@@ -915,7 +984,15 @@ def _load_jang_v2(
                     if _tq_count > 0:
                         logger.info(f"  Dequanted+requanted {_tq_count} MXTQ tensors in shard {sf.name}")
                 except ImportError as ie:
-                    logger.warning(f"  MXTQ dequant failed (missing jang_tools): {ie}")
+                    # mlxstudio#95: actionable error so users can self-resolve.
+                    logger.error(
+                        "  MXTQ shard %s requires jang_tools to dequantize. "
+                        "Install it with:  pip install jang-tools "
+                        "(or `pip install -U vmlx[mxtq]` if vmlx defines that "
+                        "extra). The bundle WILL load incorrectly without it. "
+                        "Original error: %s",
+                        sf.name, ie,
+                    )
                 except Exception as e:
                     logger.warning(f"  MXTQ dequant failed: {e}")
 

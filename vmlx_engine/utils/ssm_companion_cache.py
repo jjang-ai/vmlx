@@ -82,6 +82,7 @@ import hashlib
 import json
 import logging
 from collections import OrderedDict
+import copy as copy_module
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -185,7 +186,13 @@ class SSMCompanionCache:
             + b"\x00"
             + json.dumps(token_ids[:num_tokens], separators=(",", ":")).encode()
         )
-        return hashlib.sha256(data).hexdigest()
+        h = hashlib.sha256(data).hexdigest()
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "SSM key: N=%d hash=%s tokens[-8:]=%s",
+                num_tokens, h[:12], token_ids[max(0,num_tokens-8):num_tokens]
+            )
+        return h
 
     def store(
         self,
@@ -287,6 +294,11 @@ class SSMCompanionCache:
         key = self._key(token_ids, num_tokens)
         entry = self._store.get(key)
         if entry is None:
+            logger.info(
+                "SSM fetch MISS: N=%d hash=%s store_size=%d store_keys[:3]=%s",
+                num_tokens, key[:12], len(self._store),
+                [k[:12] for k in list(self._store.keys())[:3]],
+            )
             # vmlx#110 — L1 miss, try L2 disk store.
             if self._disk is not None:
                 try:
@@ -339,21 +351,35 @@ class SSMCompanionCache:
         copied: List[Any] = []
         for s in states:
             try:
-                c = deepcopy(s)
-                # Ensure MLX arrays in .cache are independent buffers.
-                # Per-layer materialization is required to avoid lazy-graph
-                # interference between layers (a single call at the end
-                # produces garbled output — session 2026-03-28b).
+                # 2026-04-30 known limitation: cross-thread MLX array clone
+                # always trips the Metal-stream guard. The scheduler's
+                # `_run_ssm_rederive_idle` runs on the loader_executor
+                # thread and stores arrays on its stream; subsequent fetch
+                # from a request-handler thread can neither materialize
+                # nor clone those arrays without raising
+                # `RuntimeError: There is no Stream(gpu, N) in current thread`.
+                # Even storing-side numpy bridges only partially detach.
+                # Until MLX exposes a stream-detach primitive (or the
+                # engine routes fetches through the loader_executor too),
+                # the companion is write-only across sessions for hybrid+
+                # thinking models. The release-on-miss fix at
+                # scheduler.py:2381 (P0-1) ensures KV blocks remain
+                # cache-resident, so the paged + block-disk tiers still
+                # deliver cross-session warm-pass benefit.
+                # Tracking: AUDIT-SSM-WARMPASS-FINAL.md §3.
+                cls = type(s)
+                c = cls.__new__(cls)
+                src_dict = getattr(s, "__dict__", None)
+                if src_dict is not None:
+                    c.__dict__.update(src_dict)
                 if hasattr(c, "cache") and isinstance(c.cache, list):
                     c.cache = [
-                        (mx.array(a) * 1 if a is not None else None) for a in c.cache
+                        (mx.array(a) * 1 if a is not None else None)
+                        for a in c.cache
                     ]
                     materialise = [x for x in c.cache if x is not None]
                     if materialise:
                         _mx_materialize(*materialise)
-                # Also materialise `lengths` if present (REQ-A3-001 deep-copy
-                # contract — `lengths` is a top-level mx.array attribute on
-                # mlx-lm 0.31.2 ArraysCache and is not in `.state`).
                 if getattr(c, "lengths", None) is not None:
                     try:
                         c.lengths = mx.array(c.lengths) * 1
@@ -361,13 +387,12 @@ class SSMCompanionCache:
                     except Exception:
                         pass
                 copied.append(c)
-            except Exception:
-                # Deepcopy failed — return None (cache miss) rather than
-                # returning a shared reference. The model mutates SSM state
-                # in-place during forward passes, so a shared ref would
-                # corrupt the stored companion for all future requests.
+            except Exception as _dc_err:
+                # Cross-thread Metal-stream guard tripped. Documented limit;
+                # silently miss so engine falls back to full prefill.
                 logger.debug(
-                    "SSM companion deepcopy failed for a layer — treating as cache miss"
+                    "SSM companion clone failed (key=%s err=%s) — cache miss",
+                    key[:12], type(_dc_err).__name__
                 )
                 return None
         return (copied, is_complete)

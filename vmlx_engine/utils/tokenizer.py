@@ -673,6 +673,28 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
     except Exception as _e:  # pragma: no cover
         logger.debug(f"register_gemma4_native skipped: {_e}")
 
+    # Register DeepSeek V4 model class globally (fixes mlxstudio#119:
+    # "Model type deepseek_v4 not supported"). The DSV4 model class lives
+    # in jang_tools.dsv4.mlx_register and was previously only registered
+    # inside the MXTQ branch of jang_loader. Non-MXTQ DSV4 bundles
+    # (e.g. plain dequant 2-bit, or any "DeepSeek-V4-Flash-*-DQ" pack)
+    # therefore failed at mlx_lm.load with ValueError. Idempotent —
+    # re-registration is a no-op once mlx_lm.models.deepseek_v4 exists.
+    try:
+        from jang_tools.dsv4 import mlx_register as _dsv4_reg  # noqa: F401
+        logger.debug(
+            "DeepSeek V4 (deepseek_v4) registered with mlx_lm.models — "
+            "any DSV4 bundle (MXTQ, JANGTQ, plain dequant, BF16) can load"
+        )
+    except ImportError:
+        # jang_tools.dsv4 not available in this env — DSV4 bundles will fail
+        # with the same ValueError as before. Surface a clearer warning when
+        # we actually see a DSV4 bundle so users know what to install.
+        logger.debug(
+            "jang_tools.dsv4 not installed — DSV4 bundles will need "
+            "`pip install jang-tools` (or jang_tools >= 2.5.x with dsv4 submodule)"
+        )
+
     tokenizer_config = tokenizer_config or {}
     # Q1 (audit-2026-04-07): trust_remote_code=True silences the noisy HF
     # warning on load for models with custom tokenizer_config classes
@@ -812,8 +834,26 @@ def _load_with_tokenizer_fallback(model_name: str, lazy: bool = False):
 
     ensure_latent_moe_support(str(model_path))
 
+    # Nemotron-3-Nano-Omni MXFP4 bundles ship with multimodal weights
+    # (vision_model.*, sound_encoder.*, mlp1.*, sound_projection.*) that
+    # the text-only mlx_lm NemotronH class doesn't have. mlx_lm.load_model
+    # defaults to strict=True → "Received N parameters not in model".
+    # Drop strict for nemotron_h so the LLM submodel loads cleanly. Per
+    # research/NEMOTRON-OMNI-RUNTIME-2026-04-28.md §10 (multimodal keys
+    # were supposed to be dropped at convert-time but the MXFP4 converter
+    # left them in place).
+    _load_strict = True
+    try:
+        cfg_path = Path(model_path) / "config.json"
+        if cfg_path.is_file():
+            _cfg = json.loads(cfg_path.read_text())
+            if _cfg.get("model_type") == "nemotron_h":
+                _load_strict = False
+    except Exception:
+        pass
+
     # Load model
-    model, _ = load_model(model_path, lazy=lazy)
+    model, _ = load_model(model_path, lazy=lazy, strict=_load_strict)
 
     # Try to load tokenizer from tokenizer.json directly
     tokenizer_json = model_path / "tokenizer.json"

@@ -12,7 +12,7 @@ These models define the request and response schemas for:
 import time
 import uuid
 
-from pydantic import BaseModel, Field, computed_field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 # =============================================================================
 # Content Types (for multimodal messages)
@@ -44,18 +44,25 @@ class ContentPart(BaseModel):
 
     Supports:
     - text: Plain text content
-    - image_url: Image from URL or base64
-    - video: Video from local path
-    - video_url: Video from URL or base64
+    - image_url / image: Image from URL or base64
+    - video / video_url: Video from local path or URL/base64
     - audio_url: Audio from URL or base64
+    - input_audio / audio: Audio dict {data: <base64>, format: "wav"|"mp3"|...}
+      — the OpenAI audio chat schema used by Nemotron-3-Nano-Omni.
     """
+    # Allow extra fields so future content-part types pass through to the
+    # downstream dispatcher without Pydantic stripping them.
+    model_config = {"extra": "allow"}
 
-    type: str  # "text", "image_url", "video", "video_url", "audio_url"
+    type: str  # "text", "image_url", "image", "video", "video_url", "audio_url", "input_audio", "audio"
     text: str | None = None
     image_url: ImageUrl | dict | str | None = None
+    image: dict | None = None
     video: str | None = None
     video_url: VideoUrl | dict | str | None = None
     audio_url: AudioUrl | dict | str | None = None
+    input_audio: dict | None = None
+    audio: dict | None = None
 
 
 # =============================================================================
@@ -209,6 +216,28 @@ class ChatCompletionRequest(BaseModel):
     # within the run; pass a new salt on every turn for strict isolation.
     cache_salt: str | None = None
     skip_prefix_cache: bool | None = None
+    # mlxstudio#100 — Continue (VS Code) and other Anthropic-style clients
+    # send the reasoning toggle as a nested object: `reasoning: {"effort": "..."}`.
+    # Accept that shape too and normalize into `reasoning_effort` via a
+    # model_validator below.
+    reasoning: dict | None = None
+
+    @model_validator(mode="after")
+    def _normalize_reasoning_alias(self):
+        # If caller sent `reasoning: {"effort": "..."}` and didn't set
+        # `reasoning_effort`, lift the effort up so downstream code (which
+        # reads request.reasoning_effort) sees it. Also accept Anthropic-
+        # style `reasoning: {"type": "enabled", "budget_tokens": N}` —
+        # treat any non-None reasoning object as enable_thinking=True
+        # when no explicit reasoning_effort is provided.
+        if self.reasoning is not None and self.reasoning_effort is None:
+            eff = self.reasoning.get("effort")
+            if isinstance(eff, str) and eff:
+                self.reasoning_effort = eff
+            elif self.enable_thinking is None:
+                # No effort but reasoning object present → opt-in to thinking
+                self.enable_thinking = True
+        return self
 
     @field_validator("temperature")
     @classmethod

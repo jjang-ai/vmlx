@@ -1830,6 +1830,27 @@ class BlockAwarePrefixCache:
             self.paged_cache.delete_block_table(request_id)
             logger.debug(f"Released cache for {request_id}")
 
+    def detach_request(self, request_id: str) -> None:
+        """Drop the per-request block_table entry WITHOUT freeing blocks.
+
+        Used by the SSM-companion-miss fast path: the request will do a
+        full prefill and the in-memory block_table is no longer useful for
+        it, but the underlying KV blocks must stay cache-resident so that
+        future cross-session requests with the same prompt prefix can hit
+        them. Mirrors PagedCacheManager.detach_request semantics.
+
+        Without this, scheduler.py:2381 was calling release_cache which
+        free_block()s every block — turning the SSM-companion miss into
+        a cache poisoning event that defeats cross-session reuse.
+        """
+        entry = self._request_tables.pop(request_id, None)
+        if entry:
+            for _d in self._entries_by_type.values():
+                if request_id in _d:
+                    del _d[request_id]
+            self.paged_cache.detach_request(request_id)
+            logger.debug(f"Detached request {request_id} (blocks kept cached)")
+
     def trim_block_table(
         self, request_id: str, target_tokens: int
     ) -> Optional["BlockTable"]:

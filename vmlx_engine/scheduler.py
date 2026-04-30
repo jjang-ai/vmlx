@@ -208,6 +208,18 @@ class SchedulerConfig:
     # ignoring this entirely.
     ssm_state_cache_size: int = 50
 
+    # Dedicated single-worker ThreadPoolExecutor that loaded the model and
+    # must run every step()/BatchGenerator call. MLX streams are
+    # thread-local — if step() runs on a different thread than load, JANGTQ
+    # Metal kernels fail with `RuntimeError: There is no Stream(gpu, N) in
+    # current thread`. The MLLM scheduler has had this since 2026-04-25
+    # (mlxstudio JANGTQ-VL thread fix); the LLM path was missing it,
+    # causing uvicorn workers to crash on every JANGTQ chat request.
+    # `BatchedEngine._start_llm` now constructs a `llm-worker` executor,
+    # loads on it, then forwards it here so `EngineCore._engine_loop`
+    # dispatches `scheduler.step()` to the same worker thread.
+    step_executor: Any = None
+
 
 @dataclass
 class SchedulerOutput:
@@ -2266,6 +2278,17 @@ class Scheduler:
                                 # trie consumes it directly via PrefixCacheManager.
                                 _ssm_tokens = list(request.prompt_token_ids)
                                 _fetch_num = block_table.num_tokens
+                                # P0-1 diagnostic: log every fetch attempt with
+                                # tokens-tail so we can correlate hash+key with
+                                # store events.
+                                logger.info(
+                                    "SSM companion attempt fetch: req=%s "
+                                    "fetch_num=%d cache_size=%d tokens_tail=%s",
+                                    request.request_id,
+                                    _fetch_num,
+                                    len(self._ssm_state_cache._store) if self._ssm_state_cache is not None else -1,
+                                    _ssm_tokens[max(0, _fetch_num-8):_fetch_num] if _fetch_num > 0 else [],
+                                )
                                 _entry = (
                                     self._ssm_state_cache.fetch(
                                         _ssm_tokens,
@@ -2357,16 +2380,25 @@ class Scheduler:
                                                 )
 
                                 if not ssm_states:
-                                    # No SSM companion (None or empty) — release KV blocks, full prefill
+                                    # No SSM companion (None or empty) — fall back to full
+                                    # prefill for THIS request. Keep KV blocks cache-resident
+                                    # so cross-session reuse stays possible. Previously this
+                                    # called release_cache → delete_block_table → free_block,
+                                    # which poisoned the cache: every SSM miss recycled the
+                                    # KV blocks, and the next session found neither KV nor SSM.
+                                    # Empirical Pass 1/Pass 2 wallclock noise (-2%) confirmed
+                                    # the warm-pass was effectively write-only across sessions.
+                                    # Use detach_request to drop only the per-request refs.
                                     logger.info(
                                         f"Request {request.request_id}: "
                                         f"hybrid paged MISS — "
                                         f"{block_table.num_tokens} KV tokens cached "
-                                        f"but no SSM companion, full prefill"
+                                        f"but no SSM companion, full prefill "
+                                        f"(blocks kept cached for future sessions)"
                                     )
                                     reconstructed = None
                                     request.remaining_tokens = request.prompt_token_ids
-                                    self.block_aware_cache.release_cache(
+                                    self.block_aware_cache.detach_request(
                                         request.request_id
                                     )
                                 else:
@@ -4652,7 +4684,7 @@ class Scheduler:
                 )
                 clean_cache = self._prefill_for_prompt_only_cache(tokens)
                 if clean_cache is not None:
-                    # Extract SSM layers from the clean cache
+                    # Extract SSM layers from the clean cache.
                     kv_set = set(self._hybrid_kv_positions or [])
                     ssm_layers = []
                     for layer_idx, c in enumerate(clean_cache):

@@ -17,6 +17,7 @@ Usage:
     image = engine.generate("Golden cat", image_path="/tmp/cat.png", image_strength=0.7)
 """
 
+import asyncio
 import base64
 import io
 import logging
@@ -336,6 +337,35 @@ class ImageGenEngine:
         self._mflux_class: str | None = None
         self._quantize: int | None = None
         self._loaded = False
+        # vmlx#100 / mlxstudio#100 — cooperative cancellation. mflux's
+        # `generate_image` is synchronous and not preemptible from outside,
+        # so this flag is checked at every coarse boundary that we own:
+        # before each generate() call, between img-batch frames, and (when
+        # mflux exposes a step callback in a future release) per denoise
+        # step. Calling `cancel()` aborts the NEXT cooperative checkpoint
+        # rather than mid-step. Reset on every successful return so a fresh
+        # generate() doesn't inherit a stale cancel.
+        import threading
+        self._cancel_flag = threading.Event()
+
+    def cancel(self) -> None:
+        """Request cancellation of the current/next generation.
+
+        Cooperative — interrupts at the next checkpoint we own. The
+        currently-running denoise step (inside mflux) still runs to
+        completion. Subsequent calls to generate()/edit() return early
+        with a CancelledError until cancel state is cleared by a fresh
+        successful return or `clear_cancel()`.
+        """
+        self._cancel_flag.set()
+
+    def clear_cancel(self) -> None:
+        """Reset the cancel flag (idempotent)."""
+        self._cancel_flag.clear()
+
+    @property
+    def is_cancelling(self) -> bool:
+        return self._cancel_flag.is_set()
 
     @property
     def is_loaded(self) -> bool:
@@ -550,6 +580,15 @@ class ImageGenEngine:
         """
         if not self.is_loaded:
             raise RuntimeError("No image model loaded. Call load() first.")
+
+        # vmlx#100 / mlxstudio#100 — honor cancellation requested while a
+        # prior call was running (or before this call started). Mflux is
+        # uncancellable mid-step, so this is the entry-point checkpoint.
+        if self._cancel_flag.is_set():
+            self._cancel_flag.clear()
+            raise asyncio.CancelledError(
+                "image generation cancelled before start (cancel() was called)"
+            )
 
         if steps is None:
             steps = DEFAULT_STEPS.get(self._model_name, 20)
