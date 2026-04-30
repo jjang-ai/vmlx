@@ -598,6 +598,20 @@ private struct ChatModelPicker: View {
                                     }
                                     app.mode = .server
                                 }
+                                // vmlx#57 — delete model files from disk.
+                                // Disabled while the model is loaded so we
+                                // don't yank weights mid-stream. Calls
+                                // ModelLibrary.deleteEntry which refuses
+                                // any path outside the configured roots
+                                // and any entry whose refcount > 0.
+                                let _ls = loadState(for: e)
+                                if _ls == .stopped || _ls == .absent {
+                                    Button(role: .destructive) {
+                                        Task { await deleteEntry(e) }
+                                    } label: {
+                                        Text("Delete model files…")
+                                    }
+                                }
                             } label: {
                                 HStack(spacing: Theme.Spacing.sm) {
                                     Circle()
@@ -828,6 +842,32 @@ private struct ChatModelPicker: View {
     private func stopModel(for entry: ModelLibrary.ModelEntry) async {
         guard let sid = app.sessionId(forModelPath: entry.canonicalPath) else { return }
         await app.stopSession(sid)
+    }
+
+    /// vmlx#57 — delete model weights from disk.
+    /// Calls `ModelLibrary.deleteEntry(byId:)` which:
+    ///   • refuses if the path isn't under a known model root,
+    ///   • refuses if refcount > 0 (the model is currently loaded),
+    ///   • removes the directory atomically and rescans.
+    /// On success we refresh the picker. On failure we surface the
+    /// error in the banner so the user knows why nothing happened.
+    private func deleteEntry(_ entry: ModelLibrary.ModelEntry) async {
+        do {
+            let ok = try await app.engine.modelLibrary.deleteEntry(byId: entry.id)
+            if ok {
+                await refreshEntries()
+            }
+        } catch {
+            // ModelLibrary surfaces a localized error; we just rethrow into
+            // a banner-style log. AppState may have its own banner pipeline.
+            await MainActor.run {
+                app.banner = "Delete failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func refreshEntries() async {
+        entries = await app.engine.modelLibrary.entries()
     }
 }
 

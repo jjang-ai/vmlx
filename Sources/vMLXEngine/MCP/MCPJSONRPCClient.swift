@@ -10,8 +10,10 @@
 //  - response correlation via a per-ID continuation map
 //  - graceful shutdown on process exit
 //
+// Now handled (mlxstudio#31):
+//  - SSE transport (HTTP+SSE legacy MCP servers like Docker Toolkit / JetBrains)
+//
 // Not yet handled (deferred to a later session):
-//  - SSE transport (reads events from an HTTP stream)
 //  - bidirectional requests (server → client `sampling/createMessage`)
 //  - notifications (one-way messages from server)
 //
@@ -45,6 +47,19 @@ public actor MCPStdioClient {
     /// Buffered stdout bytes waiting for a newline.
     private var readBuffer = Data()
 
+    // SSE transport state (mlxstudio#31). Active when server.transport == .sse.
+    private var sseStreamTask: Task<Void, Never>?
+    /// URL the server announces via the `endpoint` SSE event for client→
+    /// server JSON-RPC POSTs. Falls back to the configured SSE URL if no
+    /// endpoint event is observed (some servers accept POSTs to the same URL).
+    private var sseSendURL: URL?
+    /// One-shot continuation that resumes once the server announces its
+    /// messages endpoint (or the stream EOF/errors). `start()` waits on this
+    /// so callers don't issue requests before the channel is ready.
+    private var sseEndpointReady: CheckedContinuation<Void, Error>?
+    /// Buffered SSE event lines until the blank-line terminator.
+    private var sseEventBuffer: [String] = []
+
     // MARK: - Protocol state
 
     private var nextId: Int = 1
@@ -64,10 +79,16 @@ public actor MCPStdioClient {
 
     /// Start the subprocess and begin reading stdout. Must be called
     /// before `initialize()`. Throws if the process can't launch.
-    public func start() throws {
-        guard server.transport == .stdio else {
-            throw MCPError.transportNotSupported(server.transport)
+    public func start() async throws {
+        switch server.transport {
+        case .stdio:
+            try startStdio()
+        case .sse:
+            try await startSSE()
         }
+    }
+
+    private func startStdio() throws {
         guard let command = server.command else {
             throw MCPError.configInvalid(reason: "stdio server has no command")
         }
@@ -83,6 +104,136 @@ public actor MCPStdioClient {
             proc.arguments = [command] + (server.args ?? [])
         }
         try launchAndStoreStreams(proc)
+    }
+
+    /// HTTP + SSE transport (mlxstudio#31). Implements the legacy MCP
+    /// "HTTP+SSE" channel:
+    ///   • GET <url>      — server-sent event stream of JSON-RPC frames.
+    ///                      First event with `event: endpoint` carries the
+    ///                      messages POST URL (with session id).
+    ///   • POST <messages-url> — client→server JSON-RPC requests.
+    ///
+    /// We start the SSE stream task immediately, then wait up to
+    /// `server.timeout` seconds for the `endpoint` event before declaring
+    /// readiness. Servers that don't announce a separate POST URL keep
+    /// using the original SSE URL — many simple bridges (Docker MCP
+    /// Toolkit, single-endpoint servers) work this way.
+    private func startSSE() async throws {
+        guard let urlString = server.url, let url = URL(string: urlString) else {
+            throw MCPError.configInvalid(reason: "sse server has no url")
+        }
+        sseSendURL = url  // default; overridden by `endpoint` event if present
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        req.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        if let overrides = server.env {
+            for (k, v) in overrides where k.lowercased().hasPrefix("authorization") || k.hasPrefix("X-") || k.hasPrefix("x-") {
+                req.setValue(v, forHTTPHeaderField: k)
+            }
+        }
+        req.timeoutInterval = max(60, server.timeout)
+
+        // Use bytes(for:) to get an AsyncBytes stream + line decoder.
+        let (bytes, response) = try await URLSession.shared.bytes(for: req)
+        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            throw MCPError.processFailure(
+                reason: "\(server.name) SSE GET \(url) returned HTTP \(http.statusCode)"
+            )
+        }
+
+        sseStreamTask = Task { [weak self] in
+            do {
+                for try await line in bytes.lines {
+                    if Task.isCancelled { break }
+                    await self?.handleSSELine(line)
+                }
+            } catch {
+                // Stream errored — clean up.
+            }
+            await self?.handleEOF()
+        }
+
+        // Wait for either the endpoint event or a short grace timeout.
+        // Servers that don't announce an endpoint can be used immediately
+        // (sseSendURL stays = url). Use a 2s grace, not the full server
+        // timeout, since most servers announce within milliseconds.
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            sseEndpointReady = cont
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                await self?.fireEndpointReady()
+            }
+        }
+    }
+
+    private func fireEndpointReady() {
+        if let cont = sseEndpointReady {
+            sseEndpointReady = nil
+            cont.resume()
+        }
+    }
+
+    /// Parse one SSE protocol line. Buffers `event:`, `data:`, `id:` lines
+    /// until a blank line, then dispatches the assembled event.
+    private func handleSSELine(_ line: String) {
+        if line.isEmpty {
+            // End of an event — assemble and dispatch.
+            var eventName = "message"
+            var dataParts: [String] = []
+            for raw in sseEventBuffer {
+                if raw.hasPrefix("event:") {
+                    eventName = String(raw.dropFirst("event:".count))
+                        .trimmingCharacters(in: .whitespaces)
+                } else if raw.hasPrefix("data:") {
+                    var d = String(raw.dropFirst("data:".count))
+                    if d.hasPrefix(" ") { d.removeFirst() }
+                    dataParts.append(d)
+                }
+                // `id:` and `retry:` lines are ignored — JSON-RPC doesn't need them.
+            }
+            sseEventBuffer.removeAll(keepingCapacity: true)
+            let payload = dataParts.joined(separator: "\n")
+            switch eventName {
+            case "endpoint":
+                // Server announces the messages POST URL. Some servers send
+                // an absolute URL; others a path relative to the SSE URL.
+                if let resolved = resolveEndpoint(payload) {
+                    sseSendURL = resolved
+                }
+                fireEndpointReady()
+            case "message", "":
+                // JSON-RPC payload — feed into the same dispatch the stdio
+                // path uses. `appendAndDispatch` parses line-delimited JSON,
+                // so terminate with `\n` to match.
+                if let data = (payload + "\n").data(using: .utf8) {
+                    appendAndDispatch(chunk: data)
+                }
+            case "ping":
+                // Keepalive — ignore.
+                break
+            default:
+                // Unknown event type — log via standard error path; treat
+                // as message so we don't drop legitimate JSON-RPC.
+                if let data = (payload + "\n").data(using: .utf8) {
+                    appendAndDispatch(chunk: data)
+                }
+            }
+            return
+        }
+        sseEventBuffer.append(line)
+    }
+
+    private func resolveEndpoint(_ raw: String) -> URL? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let abs = URL(string: trimmed), abs.scheme != nil { return abs }
+        // Relative — resolve against original SSE URL.
+        if let base = server.url, let baseURL = URL(string: base) {
+            return URL(string: trimmed, relativeTo: baseURL)?.absoluteURL
+        }
+        return nil
     }
 
     /// Configure pipes, run the subprocess, and start the read loop.
@@ -164,6 +315,16 @@ public actor MCPStdioClient {
         stdinPipe = nil
         stdoutPipe = nil
 
+        // Cancel SSE stream task + clean up endpoint-readiness latch.
+        sseStreamTask?.cancel()
+        sseStreamTask = nil
+        sseSendURL = nil
+        sseEventBuffer.removeAll()
+        if let cont = sseEndpointReady {
+            sseEndpointReady = nil
+            cont.resume(throwing: MCPError.processFailure(reason: "client stopped"))
+        }
+
         // Fail anything still waiting.
         for (_, cont) in pending {
             cont.resume(throwing: MCPError.processFailure(reason: "client stopped"))
@@ -193,7 +354,7 @@ public actor MCPStdioClient {
         }
         // Send the `initialized` notification so the server knows the
         // handshake is complete.
-        try sendNotification(method: "notifications/initialized", params: nil)
+        try await sendNotification(method: "notifications/initialized", params: nil)
     }
 
     // MARK: - Tool operations
@@ -269,7 +430,7 @@ public actor MCPStdioClient {
         }
 
         let line = try makeLine(message)
-        try write(line)
+        try await write(line)
 
         // Install a continuation and wait.
         return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[String: Any], Error>) in
@@ -290,24 +451,69 @@ public actor MCPStdioClient {
     }
 
     /// One-way notification — no response expected, so no continuation.
-    private func sendNotification(method: String, params: [String: Any]?) throws {
+    private func sendNotification(method: String, params: [String: Any]?) async throws {
         var message: [String: Any] = [
             "jsonrpc": "2.0",
             "method": method,
         ]
         if let params = params { message["params"] = params }
         let line = try makeLine(message)
-        try write(line)
+        try await write(line)
     }
 
-    private func write(_ line: String) throws {
-        guard let stdin = stdinPipe else {
-            throw MCPError.processFailure(reason: "stdin pipe is nil")
+    private func write(_ line: String) async throws {
+        switch server.transport {
+        case .stdio:
+            guard let stdin = stdinPipe else {
+                throw MCPError.processFailure(reason: "stdin pipe is nil")
+            }
+            guard let data = line.data(using: .utf8) else {
+                throw MCPError.protocolError(reason: "message not UTF-8 encodable")
+            }
+            try stdin.fileHandleForWriting.write(contentsOf: data)
+        case .sse:
+            guard let postURL = sseSendURL else {
+                throw MCPError.processFailure(
+                    reason: "SSE send URL not yet known (waiting for `endpoint` event)"
+                )
+            }
+            // SSE servers expect a single JSON object per POST, no newline.
+            let body = line.hasSuffix("\n") ? String(line.dropLast()) : line
+            guard let data = body.data(using: .utf8) else {
+                throw MCPError.protocolError(reason: "message not UTF-8 encodable")
+            }
+            var req = URLRequest(url: postURL)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
+            req.httpBody = data
+            req.timeoutInterval = max(30, server.timeout)
+            if let overrides = server.env {
+                for (k, v) in overrides where k.lowercased().hasPrefix("authorization") || k.hasPrefix("X-") || k.hasPrefix("x-") {
+                    req.setValue(v, forHTTPHeaderField: k)
+                }
+            }
+            let (respData, response) = try await URLSession.shared.data(for: req)
+            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                throw MCPError.processFailure(
+                    reason: "SSE POST returned HTTP \(http.statusCode): \(String(data: respData, encoding: .utf8) ?? "")"
+                )
+            }
+            // Some "Streamable HTTP" servers return the JSON-RPC reply
+            // inline in the POST response (Content-Type application/json),
+            // others reply only via the SSE stream. Feed the inline body
+            // through appendAndDispatch when present so both shapes work.
+            if !respData.isEmpty,
+               let http = response as? HTTPURLResponse,
+               (http.value(forHTTPHeaderField: "Content-Type") ?? "").contains("application/json")
+            {
+                var bytes = respData
+                if bytes.last != 0x0a {
+                    bytes.append(0x0a)  // ensure newline-terminated for line decoder
+                }
+                appendAndDispatch(chunk: bytes)
+            }
         }
-        guard let data = line.data(using: .utf8) else {
-            throw MCPError.protocolError(reason: "message not UTF-8 encodable")
-        }
-        try stdin.fileHandleForWriting.write(contentsOf: data)
     }
 
     private func makeLine(_ message: [String: Any]) throws -> String {

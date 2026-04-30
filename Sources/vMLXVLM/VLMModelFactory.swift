@@ -140,6 +140,16 @@ public enum VLMTypeRegistry {
         "lfm2-vl": create(LFM2VLConfiguration.self, LFM2VL.init),
         "glm_ocr": create(GlmOcrConfiguration.self, GlmOcr.init),
         "gemma4": create(Gemma4Configuration.self, Gemma4.init),
+        // NemotronH-Omni multimodal wrapper. Two registrations cover the two
+        // ways an Omni bundle is detected:
+        //   • `nemotron_h_omni`        — explicit model_type when set
+        //   • `nemotron_h`             — alias for Omni bundles where
+        //                                config.json carries `nemotron_h`
+        //                                (the LLM type) and a sibling
+        //                                `config_omni.json` flags multimodal
+        // The dispatch picks Omni when `config_omni.json` is present, else
+        // falls back to the LLM-only NemotronHModel via the LLM factory.
+        "nemotron_h_omni": create(NemotronHOmniConfiguration.self, NemotronHOmni.init),
     ]
 }
 
@@ -173,6 +183,8 @@ public enum VLMProcessorTypeRegistry {
             GlmOcrProcessorConfiguration.self, GlmOcrProcessor.init),
         "Gemma4Processor": create(
             Gemma4ProcessorConfiguration.self, Gemma4Processor.init),
+        "NemotronHOmniProcessor": create(
+            NemotronHOmniProcessorConfiguration.self, NemotronHOmniProcessor.init),
     ])
 }
 

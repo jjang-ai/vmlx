@@ -310,6 +310,15 @@ public enum ModelTypeTable {
               cacheType: "hybrid",
               toolParser: "nemotron", reasoningParser: "deepseek_r1",
               thinkInTemplate: true, priority: 10),
+        // NemotronH-Omni multimodal (vision + audio + video). Inherits the
+        // nemotron_h hybrid cache + reasoning/tool parsers. `isMLLM: true`
+        // routes the engine through the VLM dispatch path so image/audio
+        // inputs reach the NemotronHOmniProcessor instead of being dropped
+        // by the text-only LLM path.
+        .init(family: "nemotron_h_omni", modelTypes: ["nemotron_h_omni"],
+              cacheType: "hybrid",
+              toolParser: "nemotron", reasoningParser: "deepseek_r1",
+              thinkInTemplate: true, isMLLM: true, priority: 10),
 
         // ── Cohere ──
         .init(family: "cohere", modelTypes: ["cohere", "cohere2"],

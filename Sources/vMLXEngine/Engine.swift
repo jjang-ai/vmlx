@@ -1185,7 +1185,20 @@ public actor Engine {
                     // running a 256 GB machine short.
                     let a3Budget = Engine.memoryBudgetBytes()
                     let a3PeakNeeded = Int64(Double(estimatedBytes) * 1.3) + Int64(2_000_000_000)
-                    if estimatedBytes > 0 && a3PeakNeeded > a3Budget {
+                    // vmlx#125 — Flash MoE streams experts from disk; only
+                    // a slot-bank's worth of expert weights is resident
+                    // simultaneously (default 64 experts × per-expert size).
+                    // Pre-load gate must NOT reject MoE bundles that exceed
+                    // RAM in raw size when the user has enabled Flash MoE,
+                    // because that's the entire point of the feature.
+                    // Python `apply_flash_moe` runs the patch FIRST and the
+                    // gate sees the slot-bank-scaled footprint; Swift's
+                    // gate runs before `applyFlashMoEIfEnabled` could shrink
+                    // the in-memory state, so we skip the gate here when
+                    // the flash-moe setting is on. Slot-bank OOM is caught
+                    // later by the Metal allocator with a clearer message.
+                    let _flashMoEOn = await self.settings.global().flashMoe
+                    if !_flashMoEOn && estimatedBytes > 0 && a3PeakNeeded > a3Budget {
                         throw EngineError.insufficientMemory(
                             needed: a3PeakNeeded, available: a3Budget)
                     }

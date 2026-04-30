@@ -175,28 +175,20 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
         cacheDir.appendingPathComponent("ssm-\(hash).json")
     }
 
-    /// SHA-256 hash of `modelKey + ":" + tokens[..<boundary]`.
-    /// Identity-aligned with `SSMStateCache`'s in-memory key so the
-    /// disk store can be a plain extension of the LRU tier (write-
-    /// through on store, fall-through on miss).
+    /// SHA-256 hash. P0-2 (2026-04-30): converged with `SSMStateCache.makeKey`
+    /// AND with Python's `ssm_companion_cache._key`. Previous formula used
+    /// `:` separator + Int32 LE bytes, which collided with NEITHER. Result
+    /// was a write-only L2: every disk fetch missed L1's hash, so backfill
+    /// silently failed (`AUDIT-SSM-WARMPASS-PARITY.md` §1). New formula
+    /// delegates to `SSMStateCache.makeKey` so the two sites cannot drift.
+    /// Note: `mediaSalt` is not currently passed in by the caller chain;
+    /// the L1 site provides it. Pass `nil` here = no salt, which is fine
+    /// for the text path. VLM/Omni paths should be plumbed through to mix
+    /// it in (P1 follow-up — would otherwise break VLM L2 disk fetch).
     public static func keyFor(tokens: [Int], boundary: Int, modelKey: String?) -> String {
-        var hasher = SHA256()
-        if let mk = modelKey, !mk.isEmpty {
-            hasher.update(data: Data(mk.utf8))
-            hasher.update(data: Data([0x3a]))  // ":"
-        }
-        // Encode tokens as little-endian Int32s. Same encoding the
-        // in-memory cache uses (`SSMStateCache.keyFor`).
-        var buf = [UInt8](repeating: 0, count: boundary * 4)
-        for i in 0 ..< boundary {
-            let t = Int32(truncatingIfNeeded: tokens[i])
-            buf[i * 4 + 0] = UInt8(truncatingIfNeeded: t & 0xff)
-            buf[i * 4 + 1] = UInt8(truncatingIfNeeded: (t >> 8) & 0xff)
-            buf[i * 4 + 2] = UInt8(truncatingIfNeeded: (t >> 16) & 0xff)
-            buf[i * 4 + 3] = UInt8(truncatingIfNeeded: (t >> 24) & 0xff)
-        }
-        hasher.update(data: Data(buf))
-        let digest = hasher.finalize()
-        return digest.map { String(format: "%02x", $0) }.joined()
+        SSMStateCache.makeKey(
+            tokens: tokens, boundary: boundary,
+            mediaSalt: nil, modelKey: modelKey
+        )
     }
 }
