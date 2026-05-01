@@ -143,10 +143,11 @@ vMLX runs any MLX model. Point it at a HuggingFace repo or local path and go.
 
 | Type | Models |
 |------|--------|
-| **Text LLMs** | Qwen 2/2.5/3/3.5, Llama 3/3.1/3.2/3.3/4, Mistral/Mixtral, Gemma 3, Phi-4, DeepSeek, GLM-4, MiniMax, Nemotron, StepFun, and any mlx-lm model |
-| **Vision LLMs** | Qwen-VL, Qwen3.5-VL, Pixtral, InternVL, LLaVA, Gemma 3n |
-| **MoE Models** | Qwen 3.5 MoE (A3B/A10B), Mixtral, DeepSeek V2/V3, MiniMax M2.5, Llama 4 |
-| **Hybrid SSM** | Nemotron-H, Jamba, GatedDeltaNet (Mamba + Attention) |
+| **Text LLMs** | Qwen 2/2.5/3/3.5/3.6, Llama 3/3.1/3.2/3.3/4, Mistral/Mixtral, **Mistral-Medium-3.5** (ministral3), Mistral-Small-4, Gemma 3/4, Phi-4, DeepSeek V2/V3/V4, GLM-4/5, MiniMax M2.5/M2.7, Nemotron, **Laguna** (poolside), Kimi K2.5/K2.6, StepFun, and any mlx-lm model |
+| **Vision LLMs** | Qwen-VL, Qwen3.5-VL / Qwen3.6-VL, Pixtral, InternVL, LLaVA, Gemma 3n / 4-VL, Mistral-Medium-3.5 (PIXTRAL) |
+| **Multimodal Omni** | **Nemotron-3-Nano-Omni** (text + image + audio + video) — Parakeet audio encoder + RADIO ViT vision tower; routed via OmniMultimodalDispatcher across `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, `/api/chat` |
+| **MoE Models** | Qwen 3.5/3.6 MoE (A3B/A10B), Mixtral, DeepSeek V2/V3/V4, MiniMax M2.5/M2.7, Llama 4, Laguna (256 routed experts top-8) |
+| **Hybrid SSM** | Nemotron-H, Jamba, GatedDeltaNet (Mamba + Attention), Qwen3.5-A3B hybrid, Granite MoE Hybrid, LFM2 |
 | **Image Gen** | Flux Schnell/Dev, Z-Image Turbo (via mflux) |
 | **Image Edit** | Qwen Image Edit (via mflux) |
 | **Embeddings** | Any mlx-lm compatible embedding model |
