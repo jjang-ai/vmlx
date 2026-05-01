@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vmlx"
-version = "1.4.2"
+version = "1.4.3"
 description = "Local AI inference for Apple Silicon — Text, Image, Video & Audio generation on Mac"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -55,6 +55,16 @@ dependencies = [
     "jsonschema>=4.0.0",
     # Note: mlx-audio moved to optional [audio] deps due to mlx-lm version conflict
     "mlx-embeddings>=0.0.5",
+    # JANG / MXTQ / JANGTQ runtime — REQUIRED, not optional. Every modern JANG
+    # bundle (MiniMax-M2.7-JANGTQ-CRACK, Kimi K2.6, DSV4-Flash, Nemotron-Omni,
+    # Mistral-Medium-3.5-JANGTQ, Laguna-XS.2-JANGTQ, etc.) needs jang_tools at
+    # load time to dequant tq_packed weights. Without it the engine prints
+    # 60+ ERROR lines per shard and the bundle loads with garbage weights.
+    # User report 2026-04-30 with MiniMax-M2.7-JANGTQ-CRACK forced the
+    # promotion from optional [mxtq] to a hard dependency. The PyPI package
+    # is named `jang` (not `jang-tools` — that's the local repo dir name);
+    # `import jang_tools` works because that's the package import name.
+    "jang>=2.5.9",
 ]
 
 [project.optional-dependencies]
@@ -62,12 +72,11 @@ ui = [
     "gradio>=4.0.0",
     "pytz>=2024.1",
 ]
-# JANG / MXTQ / TurboQuant runtime support — needed for any *.JANGTQ*, *.MXTQ*,
-# DSV4-Flash, MiniMax-M2.7-JANG_*, NemotronH-Omni-* bundle. Without this extra,
-# vmlx will warn `MXTQ dequant failed (missing jang_tools)` and the bundle
-# will produce garbage tokens. Tracks mlxstudio#95.
+# mxtq extra retained as a no-op alias for backward compat with anyone
+# pinning `vmlx[mxtq]` in their requirements; the real install is now a
+# hard dependency above so plain `pip install vmlx` works for all bundles.
 mxtq = [
-    "jang-tools>=2.5.0",
+    "jang>=2.5.9",
 ]
 dev = [
     "pytest>=7.0.0",
