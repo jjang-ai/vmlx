@@ -256,6 +256,30 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     except Exception:
         pass
 
+    # Mistral-Medium-3.5: outer mistral3 wrapper has vision_config but the
+    # current `jang_tools.mistral3.Mistral3ForConditionalGeneration` keeps
+    # vision_tower / multi_modal_projector as None stubs (text-only). The
+    # MLLM path routes to mlx_vlm which expects a fully-fleshed VLM and
+    # raises "Received 438 parameters not in model" on the vision keys.
+    # Force LLM path so jang_tools.mistral3.runtime.load handles the
+    # vision-strip + text decode. When the vision tower port lands, drop
+    # this branch.
+    try:
+        import json as _json_m3
+        from pathlib import Path as _Path_m3
+        cfg_path_m3 = _Path_m3(local_path) / "config.json"
+        if cfg_path_m3.exists():
+            cfg_m3 = _json_m3.loads(cfg_path_m3.read_text())
+            if (cfg_m3.get("text_config") or {}).get("model_type") == "ministral3" \
+               or cfg_m3.get("model_type") == "ministral3":
+                _logger.info(
+                    "is_mllm_model(%s): tier=ministral3_routes_via_jang_tools result=False",
+                    model_name,
+                )
+                return False
+    except Exception:
+        pass
+
     if force_mllm:
         # Not cached — force_mllm is cheap + callers may toggle at runtime.
         _logger.info("is_mllm_model(%s): tier=force_mllm result=True", model_name)
