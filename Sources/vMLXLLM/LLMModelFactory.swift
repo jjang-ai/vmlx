@@ -38,7 +38,20 @@ public enum LLMTypeRegistry {
             "qwen3": create(Qwen3Configuration.self, Qwen3Model.init),
             "qwen3_moe": create(Qwen3MoEConfiguration.self, Qwen3MoEModel.init),
             "qwen3_next": create(Qwen3NextConfiguration.self, Qwen3NextModel.init),
-            "qwen3_5": create(Qwen35Configuration.self, Qwen35Model.init),
+            "qwen3_5": { data in
+                if FormatSniff.hasVisionConfig(from: data) {
+                    if FormatSniff.isMXTQ(from: data) {
+                        let config = try JSONDecoder.json5().decode(
+                            Qwen35JANGTQConfiguration.self, from: data)
+                        return Qwen35JANGTQModel(config)
+                    }
+                    let config = try JSONDecoder.json5().decode(Qwen35Configuration.self, from: data)
+                    return Qwen35Model(config)
+                } else {
+                    let config = try JSONDecoder.json5().decode(Qwen35TextConfiguration.self, from: data)
+                    return Qwen35TextModel(config)
+                }
+            },
             "qwen3_5_moe": { data in
                 // Sniff weight_format at the top level OR nested under
                 // text_config. JANGTQ-quantized checkpoints declare
@@ -58,34 +71,6 @@ public enum LLMTypeRegistry {
                 return Qwen35MoEModel(config)
             },
             "qwen3_5_text": create(Qwen35TextConfiguration.self, Qwen35TextModel.init),
-            // Laguna (poolside) + ministral3 (Mistral-Medium-3.5 inner text):
-            // No native Swift port yet — these architectures are still
-            // Python-only. Register the entries here so the user gets a
-            // CLEAN actionable error instead of the cryptic
-            // "Unsupported model type: laguna" / a VLM-shape crash on
-            // mistral3 source bundles. Tracking: vmlx_swift_v2_known_issues.md
-            // [BLOCKER for laguna users] / [BLOCKER for ministral3 users].
-            "laguna": { _ in
-                throw NSError(
-                    domain: "vMLXLLM", code: 4001,
-                    userInfo: [NSLocalizedDescriptionKey:
-                        "Laguna (poolside) doesn't have a native Swift port yet. " +
-                        "Use the legacy Python panel (/Applications/vMLX.app) to " +
-                        "load Laguna bundles for now — it routes through " +
-                        "jang_tools.laguna which decodes correctly. Track " +
-                        "Swift port progress in vmlx_swift_v2_known_issues.md."])
-            },
-            "ministral3": { _ in
-                throw NSError(
-                    domain: "vMLXLLM", code: 4001,
-                    userInfo: [NSLocalizedDescriptionKey:
-                        "Mistral-Medium-3.5 (ministral3 inner text type) doesn't " +
-                        "have a native Swift text decoder yet. Use the legacy " +
-                        "Python panel (/Applications/vMLX.app) to load these " +
-                        "bundles — it routes through jang_tools.mistral3 with " +
-                        "the proper vision-tower strip + language_model→model " +
-                        "prefix remap. Track in vmlx_swift_v2_known_issues.md."])
-            },
         ]
     }
 
@@ -238,49 +223,7 @@ public enum LLMTypeRegistry {
             "bailing_moe": create(BailingMoeConfiguration.self, BailingMoeModel.init),
             "lfm2_moe": create(LFM2MoEConfiguration.self, LFM2MoEModel.init),
             "nanochat": create(NanoChatConfiguration.self, NanoChatModel.init),
-            "nemotron_h": { data in
-                // §438 — JANGTQ detection. Nemotron-H bundles ship in
-                // three flavors per ~/jang/research/NEMOTRON-OMNI-RUNTIME-2026-04-28.md:
-                //   • MXFP4   — stock 4-bit affine, loads via the standard
-                //     NemotronHModel below
-                //   • JANGTQ4 — TurboQuant 4-bit codec on routed experts
-                //   • JANGTQ2 — TurboQuant 2-bit codec on routed experts
-                //
-                // The JANGTQ flavors carry `weight_format=="mxtq"` at the
-                // top of jang_config.json AND per-expert `tq_packed`
-                // tensors at `backbone.layers.N.mixer.experts.E.{up,down}_proj`.
-                // The TurboQuantSwitchLinear-backed Model wrapper that
-                // consumes those tensors lands in a follow-up iter; the
-                // load-bearing primitive (NemotronHJANGTQSwitchMLP) was
-                // shipped in §437 but the Model+sanitize wrapper isn't
-                // wired yet. Detect the JANGTQ flavor at config-load
-                // time and emit a clear error so users see the gap
-                // instead of a silent garbage forward pass.
-                struct JANGTQProbe: Codable {
-                    let weightFormat: String?
-                    enum CodingKeys: String, CodingKey {
-                        case weightFormat = "weight_format"
-                    }
-                }
-                if let probe = try? JSONDecoder.json5().decode(JANGTQProbe.self, from: data),
-                   probe.weightFormat == "mxtq"
-                {
-                    throw NSError(
-                        domain: "vMLXLLM.LLMModelFactory",
-                        code: 438,
-                        userInfo: [
-                            NSLocalizedDescriptionKey: """
-                            Nemotron-H JANGTQ bundle detected (weight_format=mxtq) but \
-                            the NemotronHJANGTQModel wrapper isn't wired yet. \
-                            Components are in place (§437 NemotronHJANGTQSwitchMLP); \
-                            the Model+sanitize wrapper lands in a follow-up iter. \
-                            For now, use the MXFP4 bundle of the same model to load.
-                            """
-                        ])
-                }
-                let config = try JSONDecoder.json5().decode(NemotronHConfiguration.self, from: data)
-                return NemotronHModel(config)
-            },
+            "nemotron_h": create(NemotronHConfiguration.self, NemotronHModel.init),
             "afmoe": create(AfMoEConfiguration.self, AfMoEModel.init),
             "jamba": create(JambaConfiguration.self, JambaModel.init),
             "mistral3": { data in
@@ -806,83 +749,6 @@ public final class LLMModelFactory: ModelFactory {
             if let merged = try? JSONSerialization.data(withJSONObject: configDict) {
                 configData = merged
             }
-        }
-
-        // §421 — SHAPE-AUTHORITATIVE routed-expert bits override.
-        //
-        // After the jang_config.json merge above, configData has the
-        // best metadata-derived `mxtq_bits` we can produce from the
-        // BUNDLE'S DECLARED FIELDS. But some bundles ship neither
-        // `mxtq_bits` nor `routed_expert_bits` in either config.json
-        // OR jang_config.json — Qwen3.6-A3B-JANGTQ4 (pre-2026-04-25
-        // HF patch), Kimi-K2.6-Small-JANGTQ, MiniMax-M2.7-JANGTQ. For
-        // those, the §418 fallback chain inside Qwen35JANGTQ /
-        // MiniMaxJANGTQ / DeepseekV4JANGTQ lands on top-level
-        // `quantization.bits` — which is the AFFINE non-routed bits,
-        // NOT the routed-expert bits. When those differ (8-bit affine
-        // attention with 4-bit routed experts), TurboQuantSwitchLinear
-        // is constructed at the wrong bits → wrong _packed shape →
-        // load failure or silent garbage.
-        //
-        // The on-disk packing IS the ground truth. Read safetensors
-        // headers (cheap — JSON metadata only, no tensor data), find
-        // any `*.tq_packed` tensor, and solve `packed_cols = ceil(
-        // in_features * bits / 32)` for bits using config-declared
-        // candidates (hidden_size, moe_intermediate_size, etc.). When
-        // a unique answer exists AND it differs from what configData
-        // currently has, OVERWRITE `mxtq_bits` so the model is built
-        // at the right bits from the start.
-        //
-        // This runs unconditionally for every model type. Safe for
-        // non-JANGTQ bundles: no `tq_packed` tensors → returns nil →
-        // configData unchanged.
-        if let inferredBits = JangLoader.peekRoutedBitsFromSafetensors(
-            modelDirectory: modelDirectory, configData: configData
-        ) {
-            // Check whether configData ALREADY agrees. If it does we
-            // don't need to overwrite (avoids serialization round-trip
-            // for the common well-formed-bundle case).
-            let currentBits: Int?
-            if let dict = (try? JSONSerialization.jsonObject(with: configData)) as? [String: Any] {
-                if let i = dict["mxtq_bits"] as? Int {
-                    currentBits = i
-                } else if let m = dict["mxtq_bits"] as? [String: Any],
-                          let r = (m["routed_expert"] ?? m["shared_expert"]) as? Int {
-                    currentBits = r
-                } else {
-                    currentBits = nil
-                }
-            } else {
-                currentBits = nil
-            }
-            // §425 (2026-04-25) — Always inject when inferredBits is
-            // known, even when currentBits matches at TOP level.
-            // Reason: the §423-extended `injectRoutedBits` propagates
-            // into BOTH `text_config.mxtq_bits` AND
-            // `routed_expert_bits`, but those nested fields can still
-            // be nil even when top-level is set (e.g. Qwen3.6 bundles
-            // where the LLM-factory pre-merge step already wrote
-            // top-level mxtq_bits but didn't touch text_config).
-            // The inject is idempotent — skips fields that are already
-            // present, only fills nil. So always running it is safe
-            // and ensures every known sink for the value has it.
-            let line: String
-            if let c = currentBits, c == inferredBits {
-                line = "[§421] mxtq_bits already correct at top (=\(c)); "
-                    + "ensuring text_config + routed_expert_bits also set\n"
-            } else if let c = currentBits {
-                line = "[§421] mxtq_bits override: declared \(c) → "
-                    + "shape-authoritative \(inferredBits) "
-                    + "(packing on disk wins)\n"
-            } else {
-                line = "[§421] mxtq_bits inferred from safetensors "
-                    + "shape: \(inferredBits) (config field absent)\n"
-            }
-            if let data = line.data(using: .utf8) {
-                try? FileHandle.standardError.write(contentsOf: data)
-            }
-            configData = JangLoader.injectRoutedBits(
-                into: configData, bits: inferredBits)
         }
 
         let baseConfig: BaseConfiguration
