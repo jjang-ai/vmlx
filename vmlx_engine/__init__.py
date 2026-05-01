@@ -12,7 +12,7 @@ Features:
 - Support for LLM and multimodal models
 """
 
-__version__ = "1.4.4"
+__version__ = "1.4.5"
 
 # mlx_lm 0.31.x changed create_attention_mask() to require return_array and
 # window_size positional args.  mlx_vlm's qwen3_5/language.py calls

@@ -363,11 +363,15 @@ class Scheduler:
                         "TurboQuantKVCache",
                     )
                 ]
-                # Honour SchedulerConfig.ssm_state_cache_size when set; default 50
-                # mirrors the prior hardcoded value. Fixes A3→A2-002 (config drift):
-                # MLLM scheduler honoured `MLLMSchedulerConfig.ssm_state_cache_size`
-                # but the LLM scheduler hardcoded 50, ignoring user config.
-                _ssm_cache_size = getattr(self.config, "ssm_state_cache_size", 50) or 50
+                # Honour SchedulerConfig.ssm_state_cache_size when set; default 16
+                # for hybrid models — was 50 pre-2026-04-30 but the release-gate
+                # audit on Nemotron-Omni caught the cap holding ~9–10 MB per
+                # entry × 50 = ~500 MB resident RAM even when most entries
+                # were never re-fetched. 16 still gives multi-conversation
+                # coherence (typical user has 1–4 active chats) at 1/3 the
+                # footprint. User can override via `--ssm-state-cache-size`
+                # for long-running multi-tenant deployments.
+                _ssm_cache_size = getattr(self.config, "ssm_state_cache_size", 16) or 16
                 self._ssm_state_cache = HybridSSMStateCache(max_entries=_ssm_cache_size)
                 logger.info(
                     f"Hybrid SSM cache: {len(self._hybrid_kv_positions)}/"
@@ -3476,21 +3480,63 @@ class Scheduler:
                         # doesn't help the CURRENT conversation but ensures
                         # the NEXT request with the same prompt prefix gets
                         # a full KV+SSM cache hit instead of re-prefilling.
-                        if not hasattr(self, "_ssm_rederive_queue"):
-                            self._ssm_rederive_queue = []
-                        # Cap queue at 20 entries to prevent unbounded growth
-                        # under sustained load. Oldest entries are the least
-                        # useful (newer prompts more likely to be re-requested).
-                        if len(self._ssm_rederive_queue) >= 20:
-                            self._ssm_rederive_queue.pop(0)
-                        self._ssm_rederive_queue.append(
-                            (list(all_tokens), prompt_len, request_id)
-                        )
-                        logger.info(
-                            f"SSM companion: queued deferred re-derive for "
-                            f"{request_id} (gpl={_gpl}, {prompt_len} prompt "
-                            f"tokens, will run during next idle period)"
-                        )
+                        #
+                        # 2026-04-30 release-gate audit caught a real RAM
+                        # leak via this path: 30 short unique prompts in
+                        # burst grew Nemotron-Omni hybrid RSS by +2964 MB
+                        # because each enqueue triggered a re-derive that
+                        # stored a fresh ~10 MB SSM companion entry in
+                        # `_ssm_state_cache` (LRU cap 50 → ~500 MB worst
+                        # case) PLUS held onto the original token list +
+                        # request_id in the queue PLUS the in-flight
+                        # `clean_cache` from `_prefill_for_prompt_only_cache`
+                        # whose Metal buffers don't always release in time.
+                        # Three guards added below close most of the gap:
+                        #   1. Skip enqueue for short prompts (< 64 tokens):
+                        #      they're unlikely to ever be re-requested with
+                        #      the exact same prefix, so storing them is pure
+                        #      memory waste.
+                        #   2. Skip enqueue if we've stored ≥ max_entries
+                        #      worth of companions already — the LRU is
+                        #      already saturated, the next eviction would
+                        #      drop a useful entry to store one we're
+                        #      probably going to evict before it's read.
+                        #   3. Drop the queue cap from 20 to 8 so the
+                        #      worst-case footprint shrinks 60%.
+                        SSM_REDERIVE_MIN_TOKENS = 64
+                        SSM_REDERIVE_QUEUE_CAP = 8
+                        if prompt_len < SSM_REDERIVE_MIN_TOKENS:
+                            logger.debug(
+                                "SSM companion: skipping re-derive for "
+                                f"{request_id} (prompt_len={prompt_len} < "
+                                f"{SSM_REDERIVE_MIN_TOKENS} — prefix unlikely to be reused)"
+                            )
+                        elif (
+                            self._ssm_state_cache is not None
+                            and len(getattr(self._ssm_state_cache, "_store", {}))
+                                >= self._ssm_state_cache.max_entries
+                        ):
+                            logger.debug(
+                                "SSM companion: skipping re-derive for "
+                                f"{request_id} (companion cache saturated, "
+                                f"{self._ssm_state_cache.max_entries} entries)"
+                            )
+                        else:
+                            if not hasattr(self, "_ssm_rederive_queue"):
+                                self._ssm_rederive_queue = []
+                            # Cap queue at SSM_REDERIVE_QUEUE_CAP. Oldest
+                            # entries are the least useful (newer prompts
+                            # are more likely to be re-requested). Was 20.
+                            if len(self._ssm_rederive_queue) >= SSM_REDERIVE_QUEUE_CAP:
+                                self._ssm_rederive_queue.pop(0)
+                            self._ssm_rederive_queue.append(
+                                (list(all_tokens), prompt_len, request_id)
+                            )
+                            logger.info(
+                                f"SSM companion: queued deferred re-derive for "
+                                f"{request_id} (gpl={_gpl}, {prompt_len} prompt "
+                                f"tokens, will run during next idle period)"
+                            )
                     elif prompt_len > 0:
                         _ssm_key_tokens = all_tokens
                         _ssm_key_len = prompt_len
