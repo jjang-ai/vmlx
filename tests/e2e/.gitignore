@@ -1,0 +1,5 @@
+reports/*.png
+reports/*.log
+reports/*.json
+reports/*.txt
+results/*.txt
