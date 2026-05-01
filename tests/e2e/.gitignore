@@ -1,3 +1,7 @@
+# Build / runtime artefacts — never commit
+swift-axdriver/.build/
+panel-driver/node_modules/
+panel-driver/package-lock.json
 reports/*.png
 reports/*.log
 reports/*.json
