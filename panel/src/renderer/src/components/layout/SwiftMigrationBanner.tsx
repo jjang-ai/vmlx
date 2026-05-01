@@ -84,9 +84,8 @@ export function SwiftMigrationBanner() {
         <div className="flex items-center gap-3 min-w-0">
           <span className="text-base shrink-0">⚡</span>
           <span className="truncate">
-            <strong className="font-semibold">vMLX is moving to Swift.</strong>{' '}
-            The Swift v2 engine is significantly faster (50–95 t/s on M-series vs 11–60 t/s on this Python build).
-            Download and switch over to keep getting performance + new features.
+            <strong className="font-semibold">vMLX v2 (Swift) is now the main app.</strong>{' '}
+            Native Swift + Metal, 50–95 t/s on M-series (vs 11–60 t/s on this Python build), zero PyTorch in the hot path. This Python panel stays around for legacy support.
           </span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -94,7 +93,7 @@ export function SwiftMigrationBanner() {
             onClick={onOpen}
             className="px-3 py-1 rounded-md bg-white/20 hover:bg-white/30 transition-colors font-medium"
           >
-            Download Swift v2
+            Get vMLX v2 (Swift)
           </button>
           <button
             onClick={() => setDismissed(true)}
