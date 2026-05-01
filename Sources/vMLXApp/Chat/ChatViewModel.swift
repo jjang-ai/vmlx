@@ -111,6 +111,15 @@ final class ChatViewModel {
     var topUndoLabel: String? { undoStack.last?.label }
 
     private weak var app: AppState?
+
+    /// Test-friendly accessor used by `MicRecorderButton` (and any other
+    /// auxiliary chat view that needs the gateway port without holding a
+    /// reference to `AppState`). Returns nil if the parent app has been
+    /// torn down.
+    func gatewayGlobalSettings() async -> GlobalSettings? {
+        guard let app else { return nil }
+        return await app.engine.settings.global()
+    }
     private var streamTask: Task<Void, Never>? = nil
 
     /// Optional server-session id — when set, `send()` targets the engine

@@ -360,6 +360,19 @@ struct InputBar: View {
         .help(L10n.Tooltip.attachImages.render(appLocale))
     }
 
+    /// Microphone button — records via AVAudioRecorder, posts the resulting
+    /// audio file to the in-process /v1/audio/transcriptions endpoint, and
+    /// appends the transcribed text to the composer textfield.
+    ///
+    /// Closes the parity gap surfaced by docs/AUDIT-MULTIMODAL-UI.md (P0):
+    /// the Electron panel had this for months via VoiceChat.tsx; the Swift
+    /// app had `EngineTranscribe.swift` running on the server side but no
+    /// client UI was wired to it. Without this, a user on the Swift app
+    /// has no way to dictate into chat.
+    private var micButton: some View {
+        MicRecorderButton(vm: vm, appLocale: appLocale)
+    }
+
     private var sendButton: some View {
         Button {
             if vm.isGenerating { vm.stop() } else { vm.send() }
@@ -422,6 +435,7 @@ struct InputBar: View {
     private var inputRow: some View {
         HStack(alignment: .bottom, spacing: Theme.Spacing.sm) {
             attachButton
+            micButton
             textField
             sendButton
         }
