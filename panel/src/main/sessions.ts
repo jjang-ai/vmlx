@@ -635,6 +635,12 @@ export class SessionManager extends EventEmitter {
         ...spawnEnv,
         PYTHONNOUSERSITE: '1',  // Extra safety: disable user site-packages
         PYTHONPATH: undefined,  // Clear any inherited PYTHONPATH
+        // vmlx#102/#116: brew-installed mlx/mlx-c can collide with bundled mlx
+        // via DYLD_*. Clearing those forces the bundled libmlx to be the only
+        // one loaded — fixes "duplicate key 'cpu' to enumeration mlx.core.DeviceType".
+        DYLD_LIBRARY_PATH: undefined,
+        DYLD_FALLBACK_LIBRARY_PATH: undefined,
+        DYLD_INSERT_LIBRARIES: undefined,
       }
       const fullCmd = `${engineResult.pythonPath} -s -m vmlx_engine.cli ${args.join(' ')}`
       this.pushLog(sessionId, `$ ${fullCmd}`)
@@ -1990,6 +1996,14 @@ export class SessionManager extends EventEmitter {
 
     // JIT compilation
     if (config.enableJit) args.push('--enable-jit')
+
+    // Nemotron-Omni multimodal backend selector. Default stage1 (correct).
+    // stage2 = native MLX RADIO + Parakeet, ~15-21x faster encoders + 82
+    // tok/s decode on M4 Max — the JANGQ-AI banner numbers. User flips
+    // this from the panel's "Omni Backend" select in the Server tab.
+    if ((config as any).omniBackend && (config as any).omniBackend !== 'stage1') {
+      args.push('--omni-backend', (config as any).omniBackend)
+    }
 
     // Logging
     if (config.logLevel && config.logLevel !== 'INFO') {

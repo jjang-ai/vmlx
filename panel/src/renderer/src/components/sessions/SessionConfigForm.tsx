@@ -25,6 +25,11 @@ export interface SessionConfig {
   maxCacheBlocks: number
   kvCacheQuantization: string
   kvCacheGroupSize: number
+  // Nemotron-Omni multimodal backend. 'stage1' = bit-exact PyTorch+MPS
+  // bridge (default, slower). 'stage2' = native MLX RADIO + Parakeet,
+  // ~15–21× faster encoders + ~82 tok/s decode (the JANGQ-AI banner
+  // numbers). Default-off pending Wave-4 quality validation.
+  omniBackend: 'stage1' | 'stage2'
   enableDiskCache: boolean
   diskCacheMaxGb: number
   diskCacheDir: string
@@ -100,6 +105,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   maxCacheBlocks: 1000,
   kvCacheQuantization: 'none',
   kvCacheGroupSize: 64,
+  omniBackend: 'stage1',
   enableDiskCache: true,
   diskCacheMaxGb: 10,
   diskCacheDir: '',

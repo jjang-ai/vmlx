@@ -37,6 +37,16 @@ def serve_command(args):
     # If it's "none" or omitted, tool calling is disabled.
 
     server._api_key = args.api_key or os.environ.get("VLLM_API_KEY")
+
+    # Plumb --omni-backend → VMLX_OMNI_BACKEND so OmniMultimodalDispatcher
+    # picks the right path on first request. Explicit CLI arg wins over
+    # whatever was in the environment so the panel/UI can override.
+    if getattr(args, "omni_backend", None):
+        os.environ["VMLX_OMNI_BACKEND"] = args.omni_backend
+        logger.info(
+            "Nemotron-Omni backend pinned to %s via --omni-backend",
+            args.omni_backend,
+        )
     if args.timeout <= 0:
         print(f"Error: --timeout must be positive, got {args.timeout}")
         sys.exit(1)
@@ -1557,6 +1567,28 @@ Examples:
         help="Force the model to load as a multimodal (vision) model even if auto-detection "
              "doesn't recognize it. Use this for VLM models that aren't in the built-in registry. "
              "Auto-detection checks config.json for 'vision_config'.",
+    )
+    # Nemotron-3-Nano-Omni multimodal backend selector. Exposes the
+    # VMLX_OMNI_BACKEND env var as a first-class CLI flag so the panel +
+    # Swift settings UI can flip between the bit-exact Stage-1 PyTorch
+    # bridge (default, correct) and the ~15–21× faster Stage-2 native
+    # MLX path (RADIO bilinear pos_embed + Parakeet Conformer in MLX,
+    # zero PyTorch in the hot path). User reported the JANGQ-AI banner
+    # speed claims (1.4 s image / 2.1 s 20-s audio / 3.6 s 8-frame
+    # video / 82 tok/s decode) — those are Stage-2 numbers; Stage-1 is
+    # 15-21× slower on encoders. Default stays Stage-1 until Wave-4
+    # rel-pos parity validation completes; users can opt in here.
+    serve_parser.add_argument(
+        "--omni-backend",
+        type=str,
+        default=None,
+        choices=["stage1", "stage2", "pytorch", "mlx"],
+        help="Nemotron-Omni multimodal backend. 'stage1'/'pytorch' = bit-exact "
+             "PyTorch+MPS encoder bridge (default, slower). 'stage2'/'mlx' = "
+             "native MLX RADIO + Parakeet (~15-21x faster encoders, ~82 tok/s "
+             "decode on M4 Max — the JANGQ-AI banner numbers). Stage-2 "
+             "default-off pending Wave-4 quality validation; opt in for "
+             "benchmarking. Equivalent to setting VMLX_OMNI_BACKEND env var.",
     )
     # Embedding model option
     serve_parser.add_argument(
