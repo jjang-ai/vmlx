@@ -40,16 +40,25 @@ public enum ToolCallParserRegistry {
             return HermesToolCallParser()
         // Qwen family aliases covering JANG capability-stamp + vLLM
         // ecosystem names + Qwen 3.6 short/long forms (2026-04-16
-        // parser alias audit).
+        // parser alias audit). `laguna` ships poolside's 33B/3B
+        // agentic-coding MoE which uses Qwen2-flavored tokenizer +
+        // qwen-style tool format — its silver-tier registry row
+        // declares toolParser: "qwen", so route the literal "laguna"
+        // family name here too. (User audit 2026-05-01: missing this
+        // alias caused tool_call leak into delta.content.)
         case "qwen", "qwen3", "qwen3_5", "qwen35", "qwen3_6", "qwen36",
-             "qwen3_coder", "qwen3_5_moe", "qwen3_5_text", "qwen3_5_moe_text":
+             "qwen3_coder", "qwen3_5_moe", "qwen3_5_text", "qwen3_5_moe_text",
+             "laguna":
             return QwenToolCallParser()
         case "llama", "llama3", "llama4":
             return LlamaToolCallParser()
         // Mistral family — include `mistral4` variant (JANG stamp uses
         // it for MLA-backed Mistral 4). Before this, Mistral 4 stamped
-        // models silently lost tool parsing.
-        case "mistral", "mistral3", "mistral4":
+        // models silently lost tool parsing. `ministral3` covers the
+        // Mistral-Medium-3.5 inner text model_type — silver registry
+        // registers it as a separate family but it uses the same
+        // mistral [TOOL_CALLS] / native tool format.
+        case "mistral", "mistral3", "mistral4", "ministral3":
             return MistralToolCallParser()
         case "deepseek", "deepseek_v3", "deepseek_r1", "deepseek_v32":
             return DeepSeekToolCallParser()
