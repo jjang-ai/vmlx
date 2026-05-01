@@ -31,6 +31,8 @@ struct ModelDirectoriesPanel: View {
     @State private var pullRepo: String = ""
     @State private var isEnqueuing: Bool = false
 
+    @State private var isShowingFolderPicker = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
             header
@@ -52,6 +54,20 @@ struct ModelDirectoriesPanel: View {
                         .stroke(Theme.Colors.border, lineWidth: 1)
                 )
         )
+        .fileImporter(
+            isPresented: $isShowingFolderPicker,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    Task { await addDir(url) }
+                }
+            case .failure(let error):
+                bannerMessage = "Failed to pick directory: \(error.localizedDescription)"
+            }
+        }
         .task { await refreshDirs() }
     }
 
@@ -139,7 +155,7 @@ struct ModelDirectoriesPanel: View {
     private var footer: some View {
         HStack {
             Button {
-                pickAndAddDir()
+                isShowingFolderPicker = true
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "plus")
@@ -337,21 +353,6 @@ struct ModelDirectoriesPanel: View {
                 bannerMessage = nil
             }
         }
-    }
-
-    private func pickAndAddDir() {
-        #if canImport(AppKit)
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.title = "Pick a model directory"
-        panel.prompt = "Add directory"
-        panel.message = "Choose a folder vMLX should scan for model directories. Each immediate subfolder is treated as one model."
-        if panel.runModal() == .OK, let url = panel.url {
-            Task { await addDir(url) }
-        }
-        #endif
     }
 
     private func addDir(_ url: URL) async {
