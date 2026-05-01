@@ -1,4 +1,4 @@
-import { exec as execCallback, spawn, execSync, execFileSync, ChildProcess } from 'child_process'
+import { exec as execCallback, spawn, execFileSync, ChildProcess } from 'child_process'
 import { promisify } from 'util'
 import { createHash } from 'crypto'
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'fs'
