@@ -58,6 +58,34 @@ public enum LLMTypeRegistry {
                 return Qwen35MoEModel(config)
             },
             "qwen3_5_text": create(Qwen35TextConfiguration.self, Qwen35TextModel.init),
+            // Laguna (poolside) + ministral3 (Mistral-Medium-3.5 inner text):
+            // No native Swift port yet — these architectures are still
+            // Python-only. Register the entries here so the user gets a
+            // CLEAN actionable error instead of the cryptic
+            // "Unsupported model type: laguna" / a VLM-shape crash on
+            // mistral3 source bundles. Tracking: vmlx_swift_v2_known_issues.md
+            // [BLOCKER for laguna users] / [BLOCKER for ministral3 users].
+            "laguna": { _ in
+                throw NSError(
+                    domain: "vMLXLLM", code: 4001,
+                    userInfo: [NSLocalizedDescriptionKey:
+                        "Laguna (poolside) doesn't have a native Swift port yet. " +
+                        "Use the legacy Python panel (/Applications/vMLX.app) to " +
+                        "load Laguna bundles for now — it routes through " +
+                        "jang_tools.laguna which decodes correctly. Track " +
+                        "Swift port progress in vmlx_swift_v2_known_issues.md."])
+            },
+            "ministral3": { _ in
+                throw NSError(
+                    domain: "vMLXLLM", code: 4001,
+                    userInfo: [NSLocalizedDescriptionKey:
+                        "Mistral-Medium-3.5 (ministral3 inner text type) doesn't " +
+                        "have a native Swift text decoder yet. Use the legacy " +
+                        "Python panel (/Applications/vMLX.app) to load these " +
+                        "bundles — it routes through jang_tools.mistral3 with " +
+                        "the proper vision-tower strip + language_model→model " +
+                        "prefix remap. Track in vmlx_swift_v2_known_issues.md."])
+            },
         ]
     }
 
