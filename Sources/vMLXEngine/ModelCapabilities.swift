@@ -146,6 +146,17 @@ public enum ModelTypeTable {
         .init(family: "qwen3_5_moe", modelTypes: ["qwen3_5_moe", "qwen3_5_moe_text"],
               toolParser: "qwen", reasoningParser: "qwen3",
               thinkInTemplate: true, priority: 4),
+        // Laguna (poolside) — 33B/3B agentic-coding MoE. 40 hybrid SWA+full
+        // layers with per-layer head count, 256 routed experts top-8 + 1
+        // shared, dual RoPE (full=YaRN / SWA=default). Text-only. Qwen2-
+        // flavored tokenizer (vocab 100352, eos `<|im_end|>`), so the
+        // qwen tool parser + qwen3 reasoning parser are the right fallback.
+        // The actual loader lives in jang_tools.laguna.runtime — we
+        // currently route the load through the Python loader; the Swift
+        // factory entry below is for capability + cache-type detection.
+        .init(family: "laguna", modelTypes: ["laguna"],
+              toolParser: "qwen", reasoningParser: "qwen3",
+              thinkInTemplate: true, priority: 10),
         // `qwen3_5_moe_text` is the inner `text_config.model_type` name
         // Qwen 3.6 VLM wrappers use. `resolveModelType` prefers
         // text_config over top-level, so without this alias a Qwen 3.6
@@ -202,6 +213,14 @@ public enum ModelTypeTable {
         .init(family: "mistral3", modelTypes: ["mistral3"],
               toolParser: "mistral", thinkInTemplate: false,
               isMLLM: true, priority: 10),
+        // Mistral-Medium-3.5-128B — outer wrapper is `mistral3` (registered
+        // above with PIXTRAL vision); inner text decoder type is
+        // `ministral3` (dense GQA 96/8 with 88 layers, hidden 12288, 256K
+        // YaRN). Distinct from legacy mistral / mistral4. Loaded via
+        // `load_mistral3` Python loader; Swift port pending.
+        .init(family: "mistral3", modelTypes: ["ministral3"],
+              toolParser: "mistral", thinkInTemplate: false,
+              priority: 10),
 
         // ── DeepSeek ──
         .init(family: "deepseek_vl",
