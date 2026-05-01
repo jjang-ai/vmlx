@@ -63,6 +63,30 @@ def load_mistral3_model(model_path: str | Path) -> Tuple[Any, Any]:
     path = Path(model_path)
     logger.info("Loading Mistral-Medium-3.5 bundle: %s", path.name)
 
+    # JANGTQ on Mistral 3.5 is NOT yet wired end-to-end. Same shape
+    # as the laguna gap: `jang_tools.mistral3.weight_loader.load_weights`
+    # with fmt='jangtq' returns raw `.tq_packed/.tq_norms/.tq_bits` keys
+    # without the matching TurboQuantLinear module replacement, and
+    # `jang_tools.load_jangtq` doesn't dispatch on ministral3. The
+    # `nn.quantize` call in `jang_tools.mistral3.runtime` then matches
+    # nothing (looks for `.scales` keys) and `model.update()` silently
+    # fails to bind the tq_packed weights. Refuse with a clean error
+    # until the Mistral3 TurboQuantLinear shim ships in jang-tools >= 2.6.
+    # bf16 / JANG-affine / MXFP4 / fp8 paths are unaffected.
+    try:
+        cfg_check = json.loads((path / "config.json").read_text())
+        if cfg_check.get("weight_format") == "mxtq" or "mxtq_bits" in cfg_check:
+            raise NotImplementedError(
+                "Mistral-Medium-3.5 JANGTQ (weight_format=mxtq) is not yet "
+                "wired in jang_tools. The ministral3 model.py uses bare "
+                "nn.Linear; .tq_packed weights would not feed quantized "
+                "matmul. Use the bf16 / JANG-affine / MXFP4 / fp8 variant "
+                "of this bundle, or wait for jang-tools >= 2.6 which adds "
+                "the ministral3 TurboQuantLinear shim. Path: " + str(path)
+            )
+    except (OSError, json.JSONDecodeError):
+        pass
+
     model, cfg, fmt = _m3_load(str(path))
     logger.info(
         "Mistral-Medium-3.5 loaded: format=%s, text-layers=%d, "

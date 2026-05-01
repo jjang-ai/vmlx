@@ -68,6 +68,31 @@ def load_laguna_model(model_path: str | Path) -> Tuple[Any, Any]:
     path = Path(model_path)
     logger.info("Loading Laguna bundle: %s", path.name)
 
+    # JANGTQ on Laguna is NOT yet wired end-to-end — `jang_tools.laguna`
+    # ships a stub `weight_loader_bf16.load_jangtq` that returns the raw
+    # `.tq_packed/.tq_norms/.tq_bits` tensors without the matching
+    # TurboQuantLinear module replacement. The canonical hydration logic
+    # in `jang_tools.load_jangtq` only dispatches on minimax_m2 /
+    # qwen3_5_moe / qwen3_next; laguna is not in the table. Loading a
+    # `weight_format=mxtq` Laguna bundle via the current runtime would
+    # either silently produce garbage tokens (nn.Linear absorbs .tq_packed
+    # keys via strict=False) or crash on `.scales` lookup. Refuse with a
+    # clean error pointing at the bf16 / MXFP4 alternative. bf16 / JANG-
+    # affine / MXFP4 paths are unaffected and continue to work.
+    try:
+        cfg_check = json.loads((path / "config.json").read_text())
+        if cfg_check.get("weight_format") == "mxtq" or "mxtq_bits" in cfg_check:
+            raise NotImplementedError(
+                "Laguna JANGTQ (weight_format=mxtq) is not yet wired in "
+                "jang_tools. TurboQuantLinear shims for the Laguna model.py "
+                "haven't landed, so .tq_packed weights would not feed "
+                "quantized matmul. Use the bf16 / JANG-affine / MXFP4 "
+                "variant of this bundle, or wait for jang-tools >= 2.6 "
+                "which adds the laguna shim. Path: " + str(path)
+            )
+    except (OSError, json.JSONDecodeError):
+        pass
+
     model, cfg, fmt = _laguna_load(str(path))
     logger.info(
         "Laguna loaded: format=%s, layers=%d, experts=%d, "
