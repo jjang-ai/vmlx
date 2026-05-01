@@ -25,15 +25,23 @@ export interface AvailableInstaller {
 }
 
 // Common installation paths — uv first (recommended), then pip/brew/conda
-const SEARCH_PATHS = [
-  join(homedir(), '.local', 'bin', 'vmlx-engine'),     // uv tool / pip --user
-  '/opt/homebrew/bin/vmlx-engine',                      // Homebrew (Apple Silicon)
-  '/usr/local/bin/vmlx-engine',                         // Homebrew (Intel)
-  '/usr/bin/vmlx-engine',                               // System pip
-  join(homedir(), 'miniforge3', 'bin', 'vmlx-engine'), // Miniforge
-  join(homedir(), 'anaconda3', 'bin', 'vmlx-engine'),  // Anaconda
-  join(homedir(), 'miniconda3', 'bin', 'vmlx-engine')  // Miniconda
+// vmlx ships THREE entry-point names — vmlx, vmlx-serve, vmlx-engine — all
+// pointing at the same cli:main. Pre-2026-04-30 detection only looked for
+// `vmlx-engine` and falsely reported "engine not installed" for users who
+// installed via `uv tool install vmlx` (which on some uv versions only
+// drops `vmlx` into ~/.local/bin) or who use `vmlx serve …` interactively.
+const ENTRY_POINT_NAMES = ['vmlx-engine', 'vmlx-serve', 'vmlx']
+const SEARCH_DIRS = [
+  join(homedir(), '.local', 'bin'),                    // uv tool / pip --user / pipx
+  '/opt/homebrew/bin',                                  // Homebrew (Apple Silicon)
+  '/usr/local/bin',                                     // Homebrew (Intel)
+  '/usr/bin',                                           // System pip
+  join(homedir(), 'miniforge3', 'bin'),                 // Miniforge
+  join(homedir(), 'anaconda3', 'bin'),                  // Anaconda
+  join(homedir(), 'miniconda3', 'bin'),                 // Miniconda
+  join(homedir(), '.pyenv', 'shims'),                   // pyenv shims
 ]
+const SEARCH_PATHS = SEARCH_DIRS.flatMap(d => ENTRY_POINT_NAMES.map(n => join(d, n)))
 
 /**
  * Get the path to bundled Python interpreter (standalone distribution).
@@ -133,7 +141,55 @@ export async function checkEngineInstallation(): Promise<EngineInstallation> {
     }
   }
 
-  // 2. Check PATH
+  // 2. Check PATH — try every entry-point name against both the inherited
+  // process PATH and the user's bash login-shell PATH (which knows about
+  // ~/.local/bin / Homebrew / pyenv from .zshrc / .bashrc; Electron's
+  // LaunchServices PATH does not).
+  const { execFile: execFileWhich2 } = await import('child_process')
+  const { promisify: promisifyWhich2 } = await import('util')
+  const execFileWhichAsync2 = promisifyWhich2(execFileWhich2)
+  for (const name of ENTRY_POINT_NAMES) {
+    try {
+      const result = await execFileWhichAsync2('which', [name])
+      const path = result.stdout.trim()
+      if (path && existsSync(path)) {
+        console.log(`[Engine Manager] Found in PATH: ${path}`)
+        const version = await getVersionFromBinary(path)
+        const method = detectInstallMethod(path)
+        return { installed: true, path, version, method }
+      }
+    } catch (_) { /* not in inherited PATH; try login shell */ }
+
+    try {
+      const result = await execFileWhichAsync2('bash', ['-lc', `which ${name}`])
+      const path = result.stdout.trim()
+      if (path && existsSync(path)) {
+        console.log(`[Engine Manager] Found in login-shell PATH: ${path}`)
+        const version = await getVersionFromBinary(path)
+        const method = detectInstallMethod(path)
+        return { installed: true, path, version, method }
+      }
+    } catch (_) { /* truly not found by name */ }
+  }
+
+  // 2b. Last resort: try importing vmlx_engine via any python on PATH.
+  // Catches conda/pyenv installs that put the Python module on disk but
+  // didn't drop a console-script shim where we expect it.
+  for (const py of ['/opt/homebrew/bin/python3', '/usr/local/bin/python3', '/usr/bin/python3', 'python3']) {
+    try {
+      const ver = execFileSync(py, ['-c', 'import vmlx_engine; print(vmlx_engine.__version__)'], {
+        encoding: 'utf-8', timeout: 5000,
+      }).trim()
+      if (/^\d+\.\d+\.\d+/.test(ver)) {
+        console.log(`[Engine Manager] Found via python import (${py}): vmlx_engine ${ver}`)
+        return { installed: true, path: py, version: ver, method: 'pip' }
+      }
+    } catch (_) { /* keep trying */ }
+  }
+
+  // (legacy) Original `which vmlx-engine` fallback — the loop above already
+  // covers vmlx-engine, but keeping the explicit fallback prevents a hostile
+  // refactor from accidentally regressing detection.
   try {
     const result = await exec('which vmlx-engine')
     const path = result.stdout.trim()
