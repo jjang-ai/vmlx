@@ -52,4 +52,9 @@ public enum FormatSniff {
         let nested = check.textConfig?.weightFormat?.lowercased()
         return top == "mxtq" || nested == "mxtq"
     }
+
+    public static func hasVisionConfig(from data: Data) -> Bool {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        return json["vision_config"] != nil
+    }
 }
