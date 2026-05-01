@@ -764,6 +764,43 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
                     _m, _t = load_jangtq_dsv4_model(local_model_path)
                     _inject_chat_template_if_missing(_t, local_model_path)
                     return _m, _t
+
+                # Laguna (poolside): 33B/3B agentic-coding MoE,
+                # model_type=laguna. mlx_lm has no native laguna class so
+                # the generic loader can't resolve it. Route through
+                # `jang_tools.laguna.runtime.load` which auto-detects
+                # bf16 / JANG affine / JANGTQ / MXFP4 layouts and returns
+                # the LagunaForCausalLM instance with weights bound.
+                if _mt == "laguna" or _tc_mt == "laguna":
+                    logger.info(
+                        "Laguna bundle detected — routing through "
+                        "load_laguna instead of generic JANG/mlx_lm loader."
+                    )
+                    from ..loaders.load_laguna import load_laguna_model
+                    _m, _t = load_laguna_model(local_model_path)
+                    _inject_chat_template_if_missing(_t, local_model_path)
+                    return _m, _t
+
+                # Mistral-Medium-3.5-128B: model_type=mistral3 outer
+                # wrapper + text_config.model_type=ministral3 inner.
+                # The inner `ministral3` is a NEW dense GQA arch (96/8
+                # heads, 128 head_dim, 88 layers, hidden 12288, 256K
+                # YaRN ctx) that mlx_lm has no class for, so the generic
+                # loader misroutes it to legacy `mistral` and produces
+                # garbage. Route to jang_tools.mistral3.runtime.load.
+                #
+                # Distinguish from LEGACY mistral3 (Mistral-Small-3.1
+                # 24B VLM with `text_config.model_type=mistral` or
+                # `mistral4`): only ministral3 inner type triggers this.
+                if _tc_mt == "ministral3" or _mt == "ministral3":
+                    logger.info(
+                        "Mistral-Medium-3.5 bundle detected (ministral3 "
+                        "inner) — routing through load_mistral3."
+                    )
+                    from ..loaders.load_mistral3 import load_mistral3_model
+                    _m, _t = load_mistral3_model(local_model_path)
+                    _inject_chat_template_if_missing(_t, local_model_path)
+                    return _m, _t
         except ImportError as _ie:
             logger.warning(
                 "DSV4 dedicated loader unavailable (%s) — falling back to "

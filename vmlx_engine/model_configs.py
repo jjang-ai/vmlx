@@ -122,6 +122,54 @@ def register_all(registry=None):
         )
     )
 
+    # Laguna (poolside) — 33B/3B agentic-coding MoE.
+    #
+    # Architecture (per `~/jang/jang-tools/jang_tools/laguna/README.md`):
+    # 40 layers, hybrid SLIDING-WINDOW + full attention with PER-LAYER head
+    # count (48 full / 64 SWA, sliding_window=512), dual RoPE (full uses
+    # YaRN, SWA uses default), 256 routed experts top-8 + 1 shared,
+    # sigmoid routing with per-head gating (`g_proj`), q_norm/k_norm in
+    # attention, dense layer 0 + sparse layers 1..39. Text-only — no
+    # vision / audio / video.
+    #
+    # cache_type="kv" (HONEST STATE): Laguna interleaves SWA and full-
+    # attention layers per `config.json["layer_types"]`. The vmlx hybrid
+    # scheduler is designed for SSM+attention hybrids (Nemotron-H,
+    # Qwen3.5-A3B, Jamba etc. — non-KV layers carry cumulative SSM state),
+    # NOT for SWA+full hybrids where every layer IS a KV variant. The
+    # right Laguna integration would either:
+    #   (a) extend `_hybrid_kv_positions` detection to recognize layer-
+    #       types with mixed RotatingKVCache + KVCache, or
+    #   (b) keep this row as cache_type="kv" and rely on each layer's
+    #       per-layer cache class assignment via `model.make_cache()`.
+    # `LagunaForCausalLM` from jang-tools currently exposes NEITHER a
+    # vmlx-compatible `make_cache()` NOR the standard
+    # `__call__(input_ids, mask=None, cache=None) -> logits` shape — its
+    # forward returns `(logits, new_caches)` and uses tuple-of-tuples
+    # internally (standalone inference design). vmlx engine integration
+    # therefore needs a thin adapter that wraps LagunaForCausalLM with
+    # the mlx_lm.Model contract; until that adapter lands the engine
+    # path will fail at the scheduler's first cache-allocation call.
+    # `vmlx_engine/loaders/load_laguna.py` returns the LagunaForCausalLM
+    # instance correctly; running it through the OpenAI-compat server
+    # path is what's not yet wired. Tracking gap.
+    #
+    # Tokenizer: Qwen2-flavored (vocab 100352, eos `<|im_end|>`). No
+    # custom parser; qwen tool + qwen3 reasoning are the right fallback.
+    _register(
+        ModelConfig(
+            family_name="laguna",
+            model_types=["laguna"],
+            cache_type="kv",
+            eos_tokens=["<|im_end|>", "<|endoftext|>"],
+            tool_parser="qwen",
+            reasoning_parser="qwen3",
+            think_in_template=True,
+            is_mllm=False,
+            priority=10,
+        )
+    )
+
     _register(
         ModelConfig(
             family_name="qwen3",
@@ -322,6 +370,39 @@ def register_all(registry=None):
             is_mllm=True,
             tool_parser="mistral",
             reasoning_parser=None,  # Only mistral4 has reasoning; detected via text_config
+            think_in_template=False,
+            supports_native_tools=True,
+            preserve_native_tool_format=True,
+            priority=10,
+        )
+    )
+
+    # ministral3 — Mistral-Medium-3.5-128B's inner text decoder type.
+    # Outer wrapper is `mistral3` (registered above) with PIXTRAL vision;
+    # inner text decoder is `ministral3` (dense GQA 96/8, head_dim 128,
+    # 88 layers, hidden 12288, 256K YaRN — NOT mistral4 MLA, NOT legacy
+    # mistral). When loaded text-only the registry needs this inner
+    # type registered so reasoning + tool detection pick the right
+    # parsers (mistral_v3-flavored chat template, no reasoning by
+    # default — the model itself doesn't ship a thinking block).
+    #
+    # `family_name="ministral3"` (NOT "mistral3"): the registry routes
+    # by family_name when model_type appears at the TOP LEVEL of
+    # config.json. We've seen Mistral-Medium-3.5 bundles ship
+    # `model_type=mistral3` outer + `text_config.model_type=ministral3`
+    # inner (the canonical layout) AND occasionally bundles where the
+    # outer model_type is `ministral3` directly (text-only-extracted
+    # builds, custom finetunes, future renames). Without the
+    # `ministral3` family_name registration the latter shape resolves
+    # to family=unknown → no tool/reasoning parser → silent garbage.
+    _register(
+        ModelConfig(
+            family_name="ministral3",
+            model_types=["ministral3"],
+            cache_type="kv",
+            is_mllm=False,  # text-only inner
+            tool_parser="mistral",
+            reasoning_parser=None,
             think_in_template=False,
             supports_native_tools=True,
             preserve_native_tool_format=True,

@@ -3177,6 +3177,60 @@ async def create_anthropic_message(
     resolved_name = _resolve_model_name()
     chat_req.model = resolved_name
 
+    # Nemotron-Omni multimodal dispatch (Anthropic /v1/messages parity
+    # with /v1/chat/completions; live test 2026-04-30 surfaced that
+    # image content blocks were converted to image_url correctly by the
+    # adapter at api/anthropic_adapter.py:338-354 but the converted
+    # request never reached `dispatch_omni_chat_completion` because the
+    # /v1/messages handler skipped that hook. Result: model received
+    # text-only context and emitted a generic color list instead of
+    # actually seeing the image. Mirrors the dispatch in
+    # `create_chat_completion` at server.py:5295-5311.
+    try:
+        from .omni_multimodal import (
+            is_omni_multimodal_bundle,
+            request_has_multimodal,
+            dispatch_omni_chat_completion,
+        )
+        _omni_path = _model_path or _model_name
+        if (
+            _omni_path
+            and is_omni_multimodal_bundle(_omni_path)
+            and request_has_multimodal(
+                [m.model_dump(exclude_none=True) if hasattr(m, "model_dump") else m
+                 for m in (chat_req.messages or [])]
+            )
+        ):
+            # Reuse the same dispatcher; its output is OpenAI chat-completion
+            # shape, which the Anthropic adapter's `to_anthropic_response`
+            # path can then re-wrap into Anthropic's content_block format.
+            from .api.anthropic_adapter import to_anthropic_response
+            cc = await dispatch_omni_chat_completion(chat_req, _omni_path)
+            # `dispatch_omni_chat_completion` returns either a JSONResponse
+            # (non-streaming) or a StreamingResponse. Anthropic streaming
+            # has its own SSE shape — for now we only re-wrap the non-
+            # streaming path. Streaming Anthropic + Omni would need a
+            # `from_chat_completion_chunks` chunk-by-chunk adapter; that's
+            # a separate follow-up.
+            from starlette.responses import JSONResponse as _JR
+            if isinstance(cc, _JR):
+                cc_dict = json.loads(cc.body.decode("utf-8")) if cc.body else {}
+                return _JR(
+                    content=to_anthropic_response(cc_dict, resolved_name)
+                )
+            # Streaming path: pass through unchanged. Caller may see OpenAI
+            # SSE chunks instead of Anthropic content_block events; doc this
+            # gap and prefer non-streaming for image+audio-bearing requests.
+            return cc
+    except HTTPException:
+        raise
+    except Exception as _omni_route_err:  # pragma: no cover
+        logger.warning(
+            "Omni multimodal dispatch failed in /v1/messages (%s); "
+            "falling back to standard path",
+            _omni_route_err,
+        )
+
     engine = get_engine()
 
     # Build generation kwargs from the converted chat request (shared by streaming + non-streaming)
@@ -5995,13 +6049,61 @@ def _responses_input_to_messages(
                     clean_parts.append({k: v for k, v in p.items() if v is not None})
                 else:
                     clean_parts.append(p)
+            # OpenAI Responses API uses `input_image` / `input_video` /
+            # `input_audio` as the canonical content-part types (with
+            # `image_url` / `audio` etc. as sub-fields), distinct from
+            # the chat-completions API's `image_url` / `video_url` types.
+            # Both shapes must be detected as media-bearing AND normalized
+            # so downstream multimodal extraction (`extract_media_from_messages`,
+            # OmniMultimodalDispatcher) sees a uniform shape.
+            # Live test 2026-04-30 with /v1/responses + input_image → empty
+            # response (model never saw the image) was traced to this gap.
+            _MEDIA_TYPES = {
+                "image_url", "image", "video_url", "video", "input_audio",
+                "input_image", "input_video",
+            }
             has_media = any(
-                isinstance(p, dict)
-                and p.get("type") in ("image_url", "image", "video_url", "video")
+                isinstance(p, dict) and p.get("type") in _MEDIA_TYPES
                 for p in clean_parts
             )
             if has_media:
-                return clean_parts
+                # Normalize Responses-API shapes → chat-completions shapes
+                # so downstream code paths (which expect image_url +
+                # video_url + input_audio) get a consistent envelope.
+                normalized = []
+                for p in clean_parts:
+                    if not isinstance(p, dict):
+                        normalized.append(p); continue
+                    t = p.get("type")
+                    if t == "input_image":
+                        # `input_image: {image_url: "data:image/...;base64,..."}`
+                        # OR `input_image: {file_id: "..."}` (not supported,
+                        # left as-is for clear downstream error).
+                        url = p.get("image_url")
+                        if isinstance(url, dict):
+                            url = url.get("url")
+                        if url:
+                            normalized.append({"type": "image_url",
+                                               "image_url": {"url": url}})
+                        else:
+                            normalized.append(p)
+                    elif t == "input_video":
+                        url = p.get("video_url") or p.get("file_id")
+                        if isinstance(url, dict):
+                            url = url.get("url")
+                        if url:
+                            normalized.append({"type": "video_url",
+                                               "video_url": {"url": url}})
+                        else:
+                            normalized.append(p)
+                    elif t == "input_text":
+                        # OpenAI Responses uses input_text; chat completions
+                        # uses just `text`. Re-tag for consistency.
+                        normalized.append({"type": "text",
+                                           "text": p.get("text", "")})
+                    else:
+                        normalized.append(p)
+                return normalized
         return _extract_text_from_content(raw_content)
 
     messages = []
@@ -6195,11 +6297,24 @@ async def create_response(
 
     # Convert Responses API input to chat messages
     # For MLLM models, preserve content arrays with image/video parts — MLLM engines
-    # extract images from message content internally (same as Chat Completions path)
+    # extract images from message content internally (same as Chat Completions path).
+    # Nemotron-Omni is loaded as an LLM (engine.is_mllm=False) but the omni dispatcher
+    # picks up multimodal content at request time — so we must preserve the array
+    # for omni bundles too, otherwise input_image gets collapsed to text and the
+    # encoder never sees the image.
+    _preserve_mm = bool(engine.is_mllm)
+    if not _preserve_mm:
+        try:
+            from .omni_multimodal import is_omni_multimodal_bundle
+            _omni_path_resp = _model_path or _model_name
+            if _omni_path_resp and is_omni_multimodal_bundle(_omni_path_resp):
+                _preserve_mm = True
+        except Exception:
+            pass
     messages = _responses_input_to_messages(
         request.input,
         request.instructions,
-        preserve_multimodal=engine.is_mllm,
+        preserve_multimodal=_preserve_mm,
     )
 
     # DSV4 default-system-prompt injection (Responses path). See
@@ -6450,6 +6565,72 @@ async def create_response(
         if "<|im_end|>" not in _stop:
             _stop = list(_stop) + ["<|im_end|>"]
             chat_kwargs["stop"] = _stop
+
+    # Nemotron-Omni multimodal dispatch (Responses API parity with
+    # /v1/chat/completions + /v1/messages). Without this hook, input_image /
+    # input_video / input_audio reach the engine but engine.chat() is the
+    # text-only path — image+audio encoders never run. Live test 2026-04-30
+    # T6 surfaced this gap: T6 returned "Could you clarify what you'd like a
+    # brief description of?" because the model never saw the image. Mirrors
+    # /v1/messages dispatch at server.py:3189-3224.
+    try:
+        from .omni_multimodal import (
+            is_omni_multimodal_bundle as _is_omni_resp,
+            request_has_multimodal as _has_mm_resp,
+            dispatch_omni_chat_completion as _omni_dispatch_resp,
+        )
+        _omni_path_dispatch = _model_path or _model_name
+        if (
+            _omni_path_dispatch
+            and _is_omni_resp(_omni_path_dispatch)
+            and _has_mm_resp(messages)
+            and not request.stream
+        ):
+            from .api.models import ChatCompletionRequest as _CCR
+            from starlette.responses import JSONResponse as _JR2
+            _cc_req = _CCR(
+                model=resolved_name,
+                messages=messages,  # already preserved-multimodal above
+                temperature=request.temperature,
+                top_p=request.top_p,
+                max_tokens=request.max_output_tokens,
+                stream=False,
+                reasoning_effort=request.reasoning_effort,
+            )
+            cc = await _omni_dispatch_resp(_cc_req, _omni_path_dispatch)
+            if isinstance(cc, _JR2):
+                cc_dict = json.loads(cc.body.decode("utf-8")) if cc.body else {}
+                _msg = (cc_dict.get("choices") or [{}])[0].get("message") or {}
+                _txt = _msg.get("content") or ""
+                _u = cc_dict.get("usage") or {}
+                _resp_payload = {
+                    "id": cc_dict.get("id", "resp_omni"),
+                    "object": "response",
+                    "created_at": cc_dict.get("created", int(time.time())),
+                    "model": resolved_name,
+                    "status": "completed",
+                    "output": [{
+                        "type": "message",
+                        "id": "msg_omni",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": _txt}],
+                    }],
+                    "usage": {
+                        "input_tokens": _u.get("prompt_tokens", 0),
+                        "output_tokens": _u.get("completion_tokens", 0),
+                        "total_tokens": _u.get("total_tokens", 0),
+                    },
+                }
+                return _JR2(content=_resp_payload)
+            return cc
+    except HTTPException:
+        raise
+    except Exception as _omni_resp_err:  # pragma: no cover
+        logger.warning(
+            "Omni dispatch failed in /v1/responses (%s); "
+            "falling back to text-only LLM path.",
+            _omni_resp_err,
+        )
 
     if request.stream:
         return StreamingResponse(

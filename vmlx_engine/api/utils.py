@@ -235,14 +235,31 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
         # so force_mllm will be False in the common path.
         pass
 
+    # Resolve HF repo IDs (e.g. "Org/Model") to local cache path so that
+    # file-based checks (jang_config.json, config.json) actually find the files.
+    local_path = resolve_to_local_path(model_name)
+
+    # Nemotron-3-Nano-Omni: bundle has vision_config (would route through MLLM
+    # path → mlx_vlm.get_model_and_args → ValueError "nemotron_h not supported"),
+    # but the omni dispatcher loads its own encoders + LM at request time. The
+    # standard engine load only needs the text-only LLM path (mlx_lm has
+    # nemotron_h). Force LLM path; omni multimodal is handled in server.py's
+    # /v1/chat/completions, /v1/messages, /v1/responses dispatch hooks.
+    try:
+        from ..omni_multimodal import is_omni_multimodal_bundle
+        if is_omni_multimodal_bundle(local_path):
+            _logger.info(
+                "is_mllm_model(%s): tier=omni_bundle_routes_via_dispatcher result=False",
+                model_name,
+            )
+            return False
+    except Exception:
+        pass
+
     if force_mllm:
         # Not cached — force_mllm is cheap + callers may toggle at runtime.
         _logger.info("is_mllm_model(%s): tier=force_mllm result=True", model_name)
         return True
-
-    # Resolve HF repo IDs (e.g. "Org/Model") to local cache path so that
-    # file-based checks (jang_config.json, config.json) actually find the files.
-    local_path = resolve_to_local_path(model_name)
 
     # Q2 result cache check — return without re-logging if we've already
     # resolved this (model_name, local_path, config_mtime, jang_mtime).

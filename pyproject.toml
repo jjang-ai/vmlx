@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vmlx"
-version = "1.4.1"
+version = "1.4.2"
 description = "Local AI inference for Apple Silicon — Text, Image, Video & Audio generation on Mac"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -136,11 +136,8 @@ vmlx-engine-bench = "vmlx_engine.benchmark:main"
 vmlx-worker = "vmlx_engine.distributed.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["engine"]
+where = ["."]
 include = ["vmlx_engine*"]
-
-[tool.setuptools.package-dir]
-"" = "engine"
 
 [tool.poetry]
 package-mode = false
