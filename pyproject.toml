@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vmlx"
-version = "1.4.3"
+version = "1.4.4"
 description = "Local AI inference for Apple Silicon — Text, Image, Video & Audio generation on Mac"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -65,6 +65,16 @@ dependencies = [
     # is named `jang` (not `jang-tools` — that's the local repo dir name);
     # `import jang_tools` works because that's the package import name.
     "jang>=2.5.9",
+    # PyTorch — REQUIRED for Nemotron-3-Nano-Omni multimodal dispatch.
+    # `jang_tools.nemotron_omni_chat._import_torch()` lazy-imports torch on
+    # the FIRST image / audio / video request to an Omni bundle; without
+    # it the request 500s with `ModuleNotFoundError: No module named
+    # 'torch'` and the user gets a generic Internal Server Error. Live
+    # audit 2026-04-30 (release-audit.py E1) caught this regression vs
+    # 1.4.3. Wheel install grows ~700 MB but it's the only way to keep
+    # the Omni multimodal path working out of the box.
+    "torch>=2.3.0",
+    "torchvision>=0.18.0",
 ]
 
 [project.optional-dependencies]
