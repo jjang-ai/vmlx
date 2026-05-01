@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vmlx"
-version = "1.4.8"
+version = "1.4.9"
 description = "Local AI inference for Apple Silicon — Text, Image, Video & Audio generation on Mac"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -75,6 +75,16 @@ dependencies = [
     # the Omni multimodal path working out of the box.
     "torch>=2.3.0",
     "torchvision>=0.18.0",
+    # soundfile — REQUIRED for Stage-2 native MLX Omni audio. Audio
+    # ingestion in `jang_tools.nemotron_omni.model._load_audio` lazy-
+    # imports it on the first audio request; without it Stage-2 audio
+    # 500s with `ModuleNotFoundError: 'soundfile'`. Live audit
+    # 2026-04-30 with --omni-backend stage2 reproduced the gap. Stage-1
+    # uses torchaudio so isn't affected, but every user who flips to
+    # Stage-2 hits it. Promote to hard dep so the JANGQ-AI banner
+    # speed claims (84 tok/s decode, 15-21x faster encoders) are
+    # reachable on a plain `pip install vmlx`. ~3 MB via cffi.
+    "soundfile>=0.12.0",
 ]
 
 [project.optional-dependencies]
