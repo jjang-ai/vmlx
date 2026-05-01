@@ -1,0 +1,13 @@
+{
+  "": {
+    "dependencies": "/Users/eric/vmlx/swift/Tests/e2e/swift-axdriver/.build/arm64-apple-macosx/release/vmlx_axdriver.build/vmlx_axdriver.d",
+    "object": "/Users/eric/vmlx/swift/Tests/e2e/swift-axdriver/.build/arm64-apple-macosx/release/vmlx_axdriver.build/vmlx_axdriver.o",
+    "swift-dependencies": "/Users/eric/vmlx/swift/Tests/e2e/swift-axdriver/.build/arm64-apple-macosx/release/vmlx_axdriver.build/primary.swiftdeps"
+  },
+  "/Users/eric/vmlx/swift/Tests/e2e/swift-axdriver/Sources/main.swift": {
+    "object": "/Users/eric/vmlx/swift/Tests/e2e/swift-axdriver/.build/arm64-apple-macosx/release/vmlx_axdriver.build/main.swift.o",
+    "swiftmodule": "/Users/eric/vmlx/swift/Tests/e2e/swift-axdriver/.build/arm64-apple-macosx/release/vmlx_axdriver.build/main~partial.swiftmodule",
+    "swift-dependencies": "/Users/eric/vmlx/swift/Tests/e2e/swift-axdriver/.build/arm64-apple-macosx/release/vmlx_axdriver.build/main.swiftdeps",
+    "diagnostics": "/Users/eric/vmlx/swift/Tests/e2e/swift-axdriver/.build/arm64-apple-macosx/release/vmlx_axdriver.build/main.dia"
+  }
+}

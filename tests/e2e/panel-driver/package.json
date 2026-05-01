@@ -1,0 +1,13 @@
+{
+  "name": "vmlx-panel-driver",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Private Playwright-Electron E2E driver for the vMLX panel app.",
+  "type": "module",
+  "scripts": {
+    "drive": "node drive.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.55.0"
+  }
+}
