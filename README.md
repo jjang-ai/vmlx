@@ -14,6 +14,17 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/jjang-ai/vmlx/releases?q=tag%3Av2&expanded=true">
+    <img src="https://img.shields.io/badge/%E2%AC%87%EF%B8%8F_Get_vMLX_v2_(Swift)-Recommended-orange?style=for-the-badge&logo=swift&logoColor=white" alt="Get vMLX v2 Swift" height="36">
+  </a>
+</p>
+
+<p align="center">
+  <b>vMLX v2 (Swift) is the recommended desktop app.</b> Native Swift + Metal, 50–95 t/s on M-series. Pure SwiftUI, zero PyTorch in the hot path.<br>
+  This Python repo (<code>main</code> branch) keeps shipping for users who run the engine standalone via <code>pip install vmlx</code> or who want the legacy Electron panel.
+</p>
+
+<p align="center">
   <a href="https://pypi.org/project/vmlx/"><img src="https://img.shields.io/pypi/v/vmlx?color=%234B8BBE&label=PyPI&logo=python&logoColor=white" alt="PyPI" /></a>
   <a href="https://github.com/jjang-ai/vmlx/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-green?logo=apache" alt="License" /></a>
   <a href="https://github.com/jjang-ai/vmlx"><img src="https://img.shields.io/github/stars/jjang-ai/vmlx?style=social" alt="Stars" /></a>
