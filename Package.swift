@@ -286,15 +286,17 @@ let package = Package(
         // CLI argument parsing.
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.4.0"),
         // Tokenizer + HuggingFace hub loader.
-        .package(url: "https://github.com/huggingface/swift-transformers", from: "0.1.21"),
-        // Jinja template engine — pulled in transitively by swift-transformers
-        // for chat-template rendering. Declared explicitly here so the vMLX
-        // test target can import it directly for chat-template repro tests.
-        // vMLX §225 (2026-04-21): vendored at Vendor/Jinja so we can ship
-        // the negative-step `slice()` Python-semantics fix without a
-        // manual fork round-trip. Upstream reference:
-        // https://github.com/johnmai-dev/Jinja @ 1.3.0. Patch details in
-        // Vendor/Jinja/Sources/Utilities.swift.
+        // vMLX 2026-04-30: vendored at Vendor/SwiftTransformers (pinned at
+        // huggingface/swift-transformers @ f000aa7aec0e ≈ 0.1.21) so chat-
+        // template + tokenizer behavior changes land directly here without
+        // a remote fetch. Patches: see Vendor/SwiftTransformers/Sources/.
+        .package(path: "Vendor/SwiftTransformers"),
+        // Jinja template engine — used both by SwiftTransformers (chat
+        // templates) and by vMLX engine code directly. Vendored at
+        // Vendor/Jinja from johnmai-dev/Jinja @ 1.3.0. The vendored
+        // SwiftTransformers manifest depends on `path: ../Jinja` so we
+        // run a single Jinja implementation across the whole tree.
+        // Patch details in Vendor/Jinja/Sources/Utilities.swift.
         .package(path: "Vendor/Jinja"),
     ],
     targets: [
@@ -420,7 +422,7 @@ let package = Package(
             name: "vMLXWhisper",
             dependencies: [
                 "MLX", "MLXNN", "MLXFast",
-                .product(name: "Transformers", package: "swift-transformers"),
+                .product(name: "Transformers", package: "SwiftTransformers"),
             ],
             path: "Sources/vMLXWhisper"
         ),
@@ -441,7 +443,7 @@ let package = Package(
             name: "vMLXFluxKit",
             dependencies: [
                 "MLX", "MLXNN", "MLXRandom", "vMLXLMCommon",
-                .product(name: "Transformers", package: "swift-transformers"),
+                .product(name: "Transformers", package: "SwiftTransformers"),
             ],
             path: "Sources/vMLXFluxKit"
         ),
@@ -481,7 +483,7 @@ let package = Package(
                 "vMLXFlux",
                 "vMLXFluxKit",
                 "vMLXTTS",
-                .product(name: "Transformers", package: "swift-transformers"),
+                .product(name: "Transformers", package: "SwiftTransformers"),
             ],
             path: "Sources/vMLXEngine"
         ),
