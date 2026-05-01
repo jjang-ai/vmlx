@@ -255,6 +255,12 @@ struct MessageBubble: View {
                 .disabled(isGenerating)
                 .help(isGenerating ? "Stop generating to regenerate" : "Regenerate response")
             }
+            // TTS playback — parity with panel TTSPlayer in MessageBubble.tsx.
+            // Renders only on assistant messages; tap streams audio bytes
+            // from /v1/audio/speech (Kokoro) into AVAudioPlayer.
+            if message.role == .assistant && !message.content.isEmpty {
+                TTSPlaybackButton(text: message.content, isGenerating: isGenerating)
+            }
             if let onBranch {
                 Button(action: onBranch) {
                     Image(systemName: "arrow.triangle.branch")
