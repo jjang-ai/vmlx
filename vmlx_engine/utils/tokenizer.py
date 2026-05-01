@@ -725,6 +725,47 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
     if local_model_path != model_name:
         logger.info(f"Resolved HF model to: {local_model_path}")
 
+    # ── Architecture-specific routing BEFORE the JANG gate ──
+    #
+    # `is_jang_model()` only fires for bundles whose `jang_config.weight_format`
+    # is in {jang, jjqf, mxq, mxtq} — i.e. JANG-codec bundles. Bundles that
+    # ship `weight_format=mxfp4` (or `bf16`) fall through to the stock
+    # `mlx_lm.load()` path. That works fine for architectures mlx_lm
+    # natively supports (qwen, llama, mistral, …) but FAILS for ones it
+    # doesn't (Laguna, ministral3) → `ValueError: Model type laguna not
+    # supported`. Live audit 2026-04-30 caught this exact crash on
+    # Laguna-XS.2-mxfp4. Route by model_type FIRST so MXFP4/bf16 builds
+    # of these architectures land in the right loader.
+    try:
+        import json as _json_arch
+        _cfg_path_arch = Path(local_model_path) / "config.json"
+        if _cfg_path_arch.exists():
+            _cfg_arch = _json_arch.loads(_cfg_path_arch.read_text())
+            _mt_arch = _cfg_arch.get("model_type")
+            _tc_mt_arch = (_cfg_arch.get("text_config") or {}).get("model_type")
+            if _mt_arch == "laguna" or _tc_mt_arch == "laguna":
+                logger.info(
+                    "Laguna bundle detected (early route) — load_laguna_model"
+                )
+                from ..loaders.load_laguna import load_laguna_model
+                _m, _t = load_laguna_model(local_model_path)
+                _inject_chat_template_if_missing(_t, local_model_path)
+                return _m, _t
+            if _tc_mt_arch == "ministral3" or _mt_arch == "ministral3":
+                logger.info(
+                    "Mistral-Medium-3.5 bundle detected (early route) — load_mistral3_model"
+                )
+                from ..loaders.load_mistral3 import load_mistral3_model
+                _m, _t = load_mistral3_model(local_model_path)
+                _inject_chat_template_if_missing(_t, local_model_path)
+                return _m, _t
+    except (OSError, _json_arch.JSONDecodeError):
+        pass
+    except ImportError:
+        # Loader missing — let the existing JANG / mlx_lm path raise so
+        # the user sees the actionable error from there.
+        pass
+
     # JANG format MUST be checked FIRST — JANG models use their own loader that
     # repacks weights into QuantizedLinear and handles tokenizer internally.
     # Checking tokenizer fallback first would bypass the JANG loader for Nemotron-H.
