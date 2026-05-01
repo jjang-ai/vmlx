@@ -118,7 +118,15 @@ public enum VLMTypeRegistry {
         "llava_qwen2": create(FastVLMConfiguration.self, FastVLM.init),
         "pixtral": create(PixtralConfiguration.self, PixtralVLM.init),
         "mistral3": { data in
-            // Mistral3 VLM may wrap Mistral4 text decoder — check text_config.model_type
+            // Mistral3 VLM dispatches three ways:
+            //   1. text_config.model_type == "mistral4" → MLA Mistral 4 VLM
+            //   2. text_config.model_type == "ministral3" → Mistral-Medium-3.5
+            //      (NEW: 88-layer dense GQA + 256K YaRN). NO native Swift
+            //      port for ministral3 yet, so fall through to a clean
+            //      "use legacy panel" error rather than letting the bundle
+            //      crash on shape mismatches when its weights bind against
+            //      the Mistral3VLM (Mistral-Small-3.1 24B) skeleton.
+            //   3. else (legacy Mistral-Small-3.1 24B) → Mistral3VLM
             struct TextCheck: Codable {
                 let textConfig: TextType?
                 struct TextType: Codable {
@@ -127,11 +135,21 @@ public enum VLMTypeRegistry {
                 }
                 enum CodingKeys: String, CodingKey { case textConfig = "text_config" }
             }
-            if let check = try? JSONDecoder.json5().decode(TextCheck.self, from: data),
-                check.textConfig?.modelType == "mistral4"
-            {
+            let check = try? JSONDecoder.json5().decode(TextCheck.self, from: data)
+            if check?.textConfig?.modelType == "mistral4" {
                 let config = try JSONDecoder.json5().decode(Mistral4VLMConfiguration.self, from: data)
                 return Mistral4VLM(config)
+            }
+            if check?.textConfig?.modelType == "ministral3" {
+                throw NSError(
+                    domain: "vMLXVLM", code: 4001,
+                    userInfo: [NSLocalizedDescriptionKey:
+                        "Mistral-Medium-3.5 (mistral3 wrapper + ministral3 inner) " +
+                        "doesn't have a native Swift VLM port yet. Use the legacy " +
+                        "Python panel (/Applications/vMLX.app) — it routes through " +
+                        "jang_tools.mistral3 with vision-tower strip + " +
+                        "language_model→model prefix remap. Track in " +
+                        "vmlx_swift_v2_known_issues.md."])
             }
             let config = try JSONDecoder.json5().decode(Mistral3VLMConfiguration.self, from: data)
             return Mistral3VLM(config)
