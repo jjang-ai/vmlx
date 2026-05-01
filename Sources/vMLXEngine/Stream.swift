@@ -1601,9 +1601,41 @@ extension Engine {
                     let emitLen = max(0, targetCap - emittedContentBytes)
                     if emitLen > 0 {
                         let allUtf8 = Array(combined.utf8)
-                        let slice = allUtf8[emittedContentBytes..<(emittedContentBytes + emitLen)]
-                        emittableContent = String(decoding: slice, as: UTF8.self)
-                        emittedContentBytes += emitLen
+                        let rawSlice = allUtf8[emittedContentBytes..<(emittedContentBytes + emitLen)]
+
+                        // UTF-8 Boundary Fix: If the slice ends in the middle of a multi-byte
+                        // character, hold back the partial bytes.
+                        var validatedLen = emitLen
+                        var i = emittedContentBytes + emitLen - 1
+                        while i >= emittedContentBytes && i >= (emittedContentBytes + emitLen - 4) {
+                            let byte = allUtf8[i]
+                            if (byte & 0x80) == 0 { // 1-byte ASCII, valid boundary
+                                break
+                            }
+                            if (byte & 0xC0) == 0xC0 { // Start of multi-byte sequence
+                                let sequenceLen: Int
+                                if (byte & 0xF8) == 0xF0 { sequenceLen = 4 }
+                                else if (byte & 0xF0) == 0xE0 { sequenceLen = 3 }
+                                else if (byte & 0xC0) == 0xC0 { sequenceLen = 2 }
+                                else { sequenceLen = 1 }
+
+                                let bytesAvailable = (emittedContentBytes + emitLen) - i
+                                if bytesAvailable < sequenceLen {
+                                    // Truncate this partial sequence
+                                    validatedLen -= bytesAvailable
+                                }
+                                break
+                            }
+                            i -= 1
+                        }
+
+                        if validatedLen > 0 {
+                            let slice = allUtf8[emittedContentBytes..<(emittedContentBytes + validatedLen)]
+                            emittableContent = String(decoding: slice, as: UTF8.self)
+                            emittedContentBytes += validatedLen
+                        } else {
+                            emittableContent = ""
+                        }
                     } else {
                         emittableContent = ""
                     }

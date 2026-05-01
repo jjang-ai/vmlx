@@ -95,13 +95,14 @@ public struct NaiveStreamingDetokenizer: StreamingDetokenizer {
 
     public mutating func next() -> String? {
         let newSegment = tokenizer.decode(tokenIds: segmentTokens)
-        let new = newSegment.suffix(newSegment.count - segment.count)
 
         // if the new segment ends with REPLACEMENT CHARACTER this means
         // that the token didn't produce a complete unicode character
-        if new.last == "\u{fffd}" {
+        if newSegment.last == "\u{fffd}" {
             return nil
         }
+
+        let new = newSegment.suffix(newSegment.count - segment.count)
 
         if new.hasSuffix("\n") {
             startNewSegment()
