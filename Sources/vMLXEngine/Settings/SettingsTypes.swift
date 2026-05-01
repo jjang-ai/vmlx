@@ -370,6 +370,15 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     public var clusterSecret: String = ""         // cli.py --cluster-secret
     public var workerNodes: String = ""           // cli.py --worker-nodes
 
+    // Nemotron-3-Nano-Omni multimodal backend selector (parity with
+    // Python panel + cli.py --omni-backend). "stage1" = bit-exact
+    // PyTorch+MPS bridge (default, correct). "stage2" = native MLX
+    // RADIO + Parakeet, ~15-21x faster encoders + 82 tok/s decode on
+    // M4 Max — the JANGQ-AI banner numbers. Default-off pending
+    // Wave-4 quality validation; users can flip from the Server
+    // settings UI for benchmarking.
+    public var omniBackend: String = "stage1"     // cli.py --omni-backend: stage1|stage2
+
     // Speculative / PLD
     public var enableJit: Bool = false            // cli.py --enable-jit
     public var speculativeModel: String = ""      // cli.py --speculative-model
