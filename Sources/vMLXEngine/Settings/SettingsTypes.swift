@@ -198,7 +198,15 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     // settings, and JANG models with a calibrated `turboquant` block in
     // `jang_config.json` still auto-activate TQ via the
     // `loadedJangConfig?.turboquant` path in `Stream.buildGenerateParameters`.
-    public var kvCacheQuantization: String = "none"  // cli.py --kv-cache-quantization: none|q4|q8|turboquant
+    // Default-on TurboQuant KV cache (user directive 2026-04-30): the
+    // Server / Chat / Session settings UI surfaces should never present
+    // "None" as the default since that means raw fp16 KV cache and is a
+    // memory regression vs TurboQuant. The segmented picker in
+    // SessionConfigForm only exposes turboquant/q8/q4 (none was removed
+    // in iter-67); aligning the backing default here so a freshly-
+    // created session lands on TurboQuant without the picker silently
+    // mapping "none" → "q8".
+    public var kvCacheQuantization: String = "turboquant"  // cli.py --kv-cache-quantization: q4|q8|turboquant
     public var kvCacheGroupSize: Int = 64            // cli.py --kv-cache-group-size
 
     // Disk caches.
