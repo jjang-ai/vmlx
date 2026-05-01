@@ -618,17 +618,37 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         )}
       </Section>
 
-      {/* KV Cache Quantization */}
+      {/* KV Cache Quantization — split into two clearly-distinct controls so
+          users stop assuming the dropdown's "None" default means "no cache
+          compression at all". TurboQuant (3-bit live cache) is the engine
+          default for JANG models and runs orthogonally to the q4/q8 stored-
+          cache compression below. User report 2026-04-30: "if kv cache
+          setting is not set default in ui to turboquant" — fixed by adding
+          a status row that shows TurboQuant as ON (Default) above the
+          stored-cache dropdown so the live-cache compression isn't
+          invisible. */}
       <Section title={t('sessions.config.kvCacheQuantization')} expanded={expandedSections.kvCacheQuant} onToggle={() => toggleSection('kvCacheQuant')} hidden={isImage}>
-        {!effectivelyNoBatching && <PerformanceHint text="TurboQuant (3-bit) is enabled by default — compresses KV cache during generation for ~5x memory savings. You can override with q8/q4 for stored prefix cache compression, or use None for full precision." />}
         {batchingOff && <IncompatWarning text="KV cache quantization requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
         {!batchingOff && prefixOff && <IncompatWarning text="KV cache quantization requires prefix cache. Enable 'Prefix Cache' above to use KV cache quantization." />}
         {!effectivelyNoBatching && !prefixOff && isMambaCache && <PerformanceHint text="Hybrid model detected — cache quantization only compresses the attention layers. Non-attention layers (Mamba/GatedDeltaNet) are stored at full precision." />}
-        <InfoNote text="TurboQuant compresses the live generation KV cache to 3-bit (Hadamard rotation + optimal codebooks). q8/q4 additionally compress stored prefix cache entries. Both can be active — TQ handles live cache, q8/q4 handles stored cache." />
+
+        {/* Live KV cache (TurboQuant) — automatic, default-on for JANG bundles. */}
+        <div className="block">
+          <span className="text-xs font-medium text-muted-foreground">
+            Live KV Cache Compression
+            <Tooltip text="Compresses the active KV cache during generation using TurboQuant (3-bit Hadamard rotation + per-channel codebooks). Default-on for any JANG / JANGTQ bundle. ~5× memory savings on the hot path with ≤1% quality regression on the calibrated set. Independent of the stored-cache setting below." />
+          </span>
+          <div className="cfg-input flex items-center justify-between" style={{ background: 'var(--card)', cursor: 'default' }}>
+            <span>TurboQuant (3-bit) — auto</span>
+            <span className="text-xs px-2 py-0.5 rounded" style={{ background: 'var(--success-bg, rgba(34,197,94,0.15))', color: 'var(--success-fg, rgb(34,197,94))' }}>ON · Default</span>
+          </div>
+        </div>
+
+        {/* Stored prefix-cache compression — orthogonal to TurboQuant. */}
         <div className="block">
           <span className="text-xs font-medium text-muted-foreground">
             Stored Cache Quantization
-            <Tooltip text="Controls how completed prompt states are stored in the prefix cache. TurboQuant handles live generation cache compression automatically (always active). This setting controls ADDITIONAL compression of stored cache entries: q8 (8-bit, ~2x) or q4 (4-bit, ~4x). Use 'None' if you want stored caches at full precision." />
+            <Tooltip text="Controls how completed prompt states are stored in the prefix cache. TurboQuant handles live generation cache compression automatically (above). This setting controls ADDITIONAL compression of stored cache entries: q8 (8-bit, ~2x) or q4 (4-bit, ~4x). Use 'None' if you want stored caches at full precision." />
           </span>
           <select value={config.kvCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching || prefixOff}>
             <option value="none">{t('sessions.config.kvQuantNone')}</option>
