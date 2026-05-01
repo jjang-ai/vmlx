@@ -108,6 +108,18 @@ public actor Engine {
         public init(modelPath: URL) { self.modelPath = modelPath }
     }
 
+    /// Minimal config.json sniff used by Engine.load to pre-fail bundles
+    /// whose architecture has no Swift port. Reads only the top-level
+    /// `model_type` and `text_config.model_type` keys; ignores the rest.
+    private struct TextConfigSniff: Codable {
+        let textConfig: Inner?
+        struct Inner: Codable {
+            let modelType: String?
+            enum CodingKeys: String, CodingKey { case modelType = "model_type" }
+        }
+        enum CodingKeys: String, CodingKey { case textConfig = "text_config" }
+    }
+
     public private(set) var loaded: vMLXLMCommon.ModelContainer?
     // `nonisolated(unsafe)` lets `subscribeState`'s AsyncStream closure
     // capture `state` synchronously without tripping strict concurrency.
@@ -1243,6 +1255,38 @@ public actor Engine {
                         progressClock.cancel()
                         throw EngineError.notImplemented(
                             "\(config.modelType) is recognized as a VL model but has no Swift implementation yet. Use the Electron vMLX.app or a different model family (Qwen2/2.5/3-VL, Gemma 3/4 VLM, PaliGemma, Idefics3, SmolVLM, Pixtral are supported).")
+                    }
+                    // 2026-05-01 (user audit): pre-fail Laguna + ministral3
+                    // BEFORE touching mlx-swift's loader. The factory closures
+                    // I added throw NSError, but mlx-swift's `_load` path
+                    // calls the closure synchronously and the throw races
+                    // with progress-clock + Metal init → app crashes
+                    // instead of cleanly transitioning to .error(msg).
+                    // Match the unsupportedVLMs pattern: explicit guard
+                    // that throws BEFORE loadContainer, so Engine.load's
+                    // `fail(msg)` is the only error path and the user sees
+                    // a banner instead of a hard crash.
+                    let unsupportedSwiftFamilies: Set<String> = [
+                        "laguna", "ministral3",
+                    ]
+                    let textConfigType = (try? JSONDecoder.json5().decode(
+                        TextConfigSniff.self, from: try Data(contentsOf:
+                            opts.modelPath.appendingPathComponent("config.json")))
+                        )?.textConfig?.modelType
+                    let modelTypeLowered = config.modelType.lowercased()
+                    let textTypeLowered = textConfigType?.lowercased()
+                    if unsupportedSwiftFamilies.contains(modelTypeLowered)
+                       || (textTypeLowered.map { unsupportedSwiftFamilies.contains($0) } ?? false)
+                    {
+                        progressClock.cancel()
+                        let surfaceType = textTypeLowered ?? modelTypeLowered
+                        throw EngineError.notImplemented(
+                            "\(surfaceType) doesn't have a native Swift port yet. " +
+                            "Use the legacy Python panel (/Applications/vMLX.app) — " +
+                            "it routes through jang_tools.\(surfaceType).runtime which " +
+                            "decodes correctly. Track Swift port progress in " +
+                            "vmlx_swift_v2_known_issues.md."
+                        )
                     }
                     let container: vMLXLMCommon.ModelContainer
                     do {
