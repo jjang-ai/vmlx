@@ -165,17 +165,24 @@ class Gemma4ReasoningParser(ReasoningParser):
             self._saw_eoc = True
             self._in_thought = False
 
-        # If we haven't seen any thought channel markers and have accumulated
-        # enough text, treat as pure content (thinking OFF)
+        # If we haven't seen any thought channel markers, decide whether the
+        # accumulated text could still be a channel-marker prefix. If not,
+        # emit as content immediately. This avoids dropping short responses
+        # that finish before the legacy 18-char threshold (e.g. "BRAVO" =
+        # 5 chars on /v1/messages with Anthropic-spec enable_thinking=False).
         if not self._saw_thought:
-            # Buffer a few chars to detect potential incoming <|channel>
-            # The marker "<|channel>thought\n" is 18 chars
-            if len(current_text) < 18:
-                # Could be start of marker — hold
+            # The two channel-prefix candidates are "<|channel>thought\n"
+            # (18 chars) and degraded "thought\n" (8 chars). If accumulated
+            # text is NOT a prefix of either, this is plain content — flush.
+            stripped = current_text.lstrip()
+            could_be_channel = (
+                _SOC.startswith(stripped) or stripped.startswith(_SOC)
+                or (_THOUGHT + "\n").startswith(stripped) or stripped.startswith(_THOUGHT)
+            )
+            if could_be_channel:
+                # Hold until we resolve which side of the marker we're on
                 return None
-            # Not a thought channel — emit as content.
-            # On the first emit (crossing the 18-char threshold), flush
-            # ALL accumulated text so the buffered prefix isn't lost.
+            # Not a thought channel — emit ALL accumulated text as content.
             content_so_far = current_text.replace(_EOT, "").strip()
             if content_so_far and len(content_so_far) > self._emitted_content:
                 new = content_so_far[self._emitted_content:]
