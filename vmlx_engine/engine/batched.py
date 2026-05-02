@@ -281,6 +281,29 @@ class BatchedEngine(BaseEngine):
         _skip_tq = _kvq in ("q4", "q8", "none")
 
         def _load():
+            # Pre-warm MLX internal streams on this worker thread BEFORE
+            # the model load. MLX C++ kernels lazily allocate internal
+            # streams (Stream(gpu, 1), Stream(gpu, 2), ...) when they
+            # first run a kernel; those streams get bound to the calling
+            # thread. Without this pre-warm, the first internal stream
+            # is allocated on whichever thread runs the first kernel —
+            # sometimes MainThread before the worker even starts — and
+            # subsequent kernel invocations from the worker fail with
+            # `RuntimeError: There is no Stream(gpu, N) in current thread.`
+            # on DSV4-Flash + JANGTQ bundles. Forcing a no-op kernel and
+            # synchronize here binds those internal streams to the worker.
+            try:
+                import mlx.core as _mx_pre
+                _a = _mx_pre.zeros((2, 2))
+                _b = _mx_pre.matmul(_a, _a)
+                # mx.synchronize() forces all pending ops to finish,
+                # which materialises any lazily-allocated internal
+                # streams on the calling thread. Avoids using mx.eval
+                # so we don't perturb the active stream context.
+                if hasattr(_mx_pre, "synchronize"):
+                    _mx_pre.synchronize()
+            except Exception:
+                pass
             return load_model_with_fallback(
                 self._model_name,
                 tokenizer_config=tokenizer_config,
