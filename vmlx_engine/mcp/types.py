@@ -13,6 +13,7 @@ class MCPTransport(str, Enum):
 
     STDIO = "stdio"
     SSE = "sse"
+    HTTP = "http"  # Streamable HTTP (modern remote MCP servers like Exa)
 
 
 class MCPServerState(str, Enum):
@@ -36,8 +37,11 @@ class MCPServerConfig:
     args: Optional[List[str]] = None
     env: Optional[Dict[str, str]] = None
 
-    # For SSE transport
+    # For SSE / HTTP transport
     url: Optional[str] = None
+    # HTTP headers for remote transports (auth tokens, API keys for Exa,
+    # GitHub remote MCP, etc.). Ignored for stdio.
+    headers: Optional[Dict[str, str]] = None
 
     # Common options
     enabled: bool = True
@@ -56,10 +60,10 @@ class MCPServerConfig:
                 raise ValueError(
                     f"MCP server '{self.name}': stdio transport requires 'command'"
                 )
-        elif self.transport == MCPTransport.SSE:
+        elif self.transport in (MCPTransport.SSE, MCPTransport.HTTP):
             if not self.url:
                 raise ValueError(
-                    f"MCP server '{self.name}': sse transport requires 'url'"
+                    f"MCP server '{self.name}': {self.transport.value} transport requires 'url'"
                 )
 
         # Security validation

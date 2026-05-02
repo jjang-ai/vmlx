@@ -276,6 +276,44 @@ _distributed_coordinator = None  # Coordinator instance when distributed is acti
 
 _FALLBACK_TEMPERATURE = 0.7
 _FALLBACK_TOP_P = 0.9
+
+# Family-aware fallback overrides — applied when no request-level value AND
+# no --default-* CLI flag was supplied. Lets us bias defaults away from
+# pathological greedy-mode behaviour on families known to loop or contaminate
+# (e.g. DSV4-Flash 8-bit + 4-bit emit `<｜begin▁of▁sentence｜>` infinitely
+# under greedy decoding — see mlxstudio#99 + DSV-FAMILY-RUNTIME-GUIDE.md).
+# Per-family entries are (temperature, top_p, repetition_penalty); None
+# fields fall through to the generic _FALLBACK_*.
+_FAMILY_FALLBACK_DEFAULTS: dict[str, tuple[float | None, float | None, float | None]] = {
+    "deepseek_v4": (0.6, 0.95, 1.05),
+}
+
+
+def _family_fallback_for(model_name: str = "") -> tuple[float | None, float | None, float | None]:
+    """Look up family-specific fallback (temp, top_p, rep_pen). All-None tuple
+    when the family has no override. Resolves via model_config_registry — uses
+    `_model_path` (the actual loaded model directory, set at server startup)
+    for the registry lookup since `model_name` from chat requests is typically
+    a short alias that fails registry's config.json probe."""
+    candidates: list[str] = []
+    if model_name:
+        candidates.append(model_name)
+    if _model_path:
+        candidates.append(_model_path)
+    if not candidates:
+        return (None, None, None)
+    try:
+        from .model_config_registry import get_model_config_registry
+        registry = get_model_config_registry()
+        family = ""
+        for cand in candidates:
+            cfg = registry.lookup(cand)
+            family = getattr(cfg, "family_name", "") or ""
+            if family and family != "unknown":
+                break
+    except Exception:
+        return (None, None, None)
+    return _FAMILY_FALLBACK_DEFAULTS.get(family, (None, None, None))
 _THINK_STRIP_RE = re.compile(
     r"(?:<think>.*?</think>|\[THINK\].*?\[/THINK\])\s*", re.DOTALL
 )
@@ -302,39 +340,49 @@ def _strip_think_for_tool_parse(text: str) -> str:
     return stripped.strip()
 
 
-def _resolve_temperature(request_value: float | None) -> float:
-    """Resolve temperature: request > CLI default > fallback."""
+def _resolve_temperature(request_value: float | None, model_name: str = "") -> float:
+    """Resolve temperature: request > CLI default > family fallback > generic fallback."""
     if request_value is not None:
         return request_value
     if _default_temperature is not None:
         return _default_temperature
+    fam_temp, _, _ = _family_fallback_for(model_name)
+    if fam_temp is not None:
+        return fam_temp
     return _FALLBACK_TEMPERATURE
 
 
-def _resolve_top_p(request_value: float | None) -> float:
-    """Resolve top_p: request > CLI default > fallback."""
+def _resolve_top_p(request_value: float | None, model_name: str = "") -> float:
+    """Resolve top_p: request > CLI default > family fallback > generic fallback."""
     if request_value is not None:
         return request_value
     if _default_top_p is not None:
         return _default_top_p
+    _, fam_top_p, _ = _family_fallback_for(model_name)
+    if fam_top_p is not None:
+        return fam_top_p
     return _FALLBACK_TOP_P
 
 
-def _resolve_repetition_penalty(request_value: float | None) -> float | None:
-    """Resolve repetition penalty: request > CLI default > None (mlx-lm default = 1.0).
+def _resolve_repetition_penalty(request_value: float | None, model_name: str = "") -> float | None:
+    """Resolve repetition penalty: request > CLI default > family fallback > None.
 
-    Returns None when neither the request nor CLI specified a value, which
-    means "don't pass repetition_penalty at all to the engine" — mlx-lm then
-    applies its implicit 1.0 (no penalty). When a value is returned, the
-    caller should include it in chat_kwargs so the engine applies it.
+    Returns None when neither the request, CLI, nor family override specified
+    a value, which means "don't pass repetition_penalty at all to the engine"
+    — mlx-lm then applies its implicit 1.0 (no penalty). When a value is
+    returned, the caller should include it in chat_kwargs.
 
-    Mirrors the structure of _resolve_temperature / _resolve_top_p but returns
-    Optional[float] so callers can distinguish "not set" from "set to 1.0".
+    The family fallback is the sole reason this can return non-None without
+    user/CLI intervention — currently used for DSV4-Flash to break the
+    `<｜begin▁of▁sentence｜>` greedy-decode loop (mlxstudio#99).
     """
     if request_value is not None:
         return request_value
     if _default_repetition_penalty is not None:
         return _default_repetition_penalty
+    _, _, fam_rep = _family_fallback_for(model_name)
+    if fam_rep is not None:
+        return fam_rep
     return None
 
 
@@ -6440,6 +6488,22 @@ async def create_response(
         elif _resp_thinking is False and "reasoning_effort" not in _ct_kwargs:
             _ct_kwargs["reasoning_effort"] = "none"
 
+
+    # DSV4 reasoning_effort filter — the Jinja template only branches on
+    # `reasoning_effort=='max'`. Any other value (`high`, `medium`, ...) is
+    # a silent no-op that confuses downstream parsing. Mirror the v1.3.93
+    # fix already in chat_completion / ollama / msgs paths so the Responses
+    # API behaves identically.
+    if _is_dsv4_resp_msgs:
+        _cur_resp_effort = (
+            getattr(request, "reasoning_effort", None)
+            or _ct_kwargs.get("reasoning_effort")
+        )
+        _ct_kwargs.pop("thinking_mode", None)
+        if _cur_resp_effort == "max":
+            _ct_kwargs["reasoning_effort"] = "max"
+        else:
+            _ct_kwargs.pop("reasoning_effort", None)
 
     # Forward extra chat_template_kwargs to engine (exclude enable_thinking, already handled)
     if _ct_kwargs:

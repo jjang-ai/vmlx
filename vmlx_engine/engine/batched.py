@@ -257,9 +257,38 @@ class BatchedEngine(BaseEngine):
         if model_config.eos_tokens:
             tokenizer_config["eos_token"] = model_config.eos_tokens[0]
 
-        self._model, self._tokenizer = load_model_with_fallback(
-            self._model_name,
-            tokenizer_config=tokenizer_config,
+        # JANGTQ Metal stream isolation (mlxstudio#96/#97 root cause,
+        # 2026-04-28). MLX streams are thread-local; load + every
+        # subsequent forward must run on the same thread or JANGTQ
+        # kernels crash with `Stream(gpu, N) in current thread`. The
+        # MLLM path has had this since 2026-04-25; this wires the
+        # equivalent dedicated executor for the LLM path so JANGTQ
+        # text bundles (Qwen3.6-A3B JANGTQ4, MiniMax-M2.7 JANGTQ,
+        # Kimi K2.6 JANGTQ, etc.) work via /v1/chat/completions.
+        from concurrent.futures import ThreadPoolExecutor
+        loader_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="llm-worker"
+        )
+        loop = asyncio.get_running_loop()
+
+        # GH#138: when the user explicitly sets `--kv-cache-quantization
+        # {q4,q8,none}`, skip TurboQuant patching so their choice actually
+        # applies. Default behavior (no flag) keeps TurboQuant auto-on for
+        # JANG-stamped bundles. q8 KV pairs cleanly with 8-bit attention
+        # weights on bundles like Qwen3.6-27B-CRACK; TurboQuant 3-bit is
+        # a different tradeoff users should opt into explicitly.
+        _kvq = getattr(self._scheduler_config, "kv_cache_quantization", None)
+        _skip_tq = _kvq in ("q4", "q8", "none")
+
+        def _load():
+            return load_model_with_fallback(
+                self._model_name,
+                tokenizer_config=tokenizer_config,
+                skip_turboquant=_skip_tq,
+            )
+
+        self._model, self._tokenizer = await loop.run_in_executor(
+            loader_executor, _load
         )
 
         # Wrap model so BatchGenerator gets raw logits tensors.
@@ -268,8 +297,10 @@ class BatchedEngine(BaseEngine):
         # present and is a no-op passthrough for models returning tensors.
         self._model = MLLMModelWrapper(self._model, model_name=self._model_name)
 
-        # Create engine config
+        # Create engine config — forward the loader executor so EngineCore
+        # dispatches every scheduler.step() to the same worker thread.
         scheduler_config = self._scheduler_config or SchedulerConfig()
+        scheduler_config.step_executor = loader_executor
         engine_config = EngineConfig(
             model_name=self._model_name,
             scheduler_config=scheduler_config,
