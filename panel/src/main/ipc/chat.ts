@@ -1895,17 +1895,35 @@ export function registerChatHandlers(
                         ? (firstTokenTime - fetchStartTime) / 1000
                         : 0,
                     );
+                    // 2026-05-02: derive tps from server's usage instead of
+                    // hard-coded "0.0". Suppressed-reasoning heartbeats fire
+                    // throughout the internal thinking phase on models like
+                    // MiniMax M2.5; "0.0 t/s" was misleading users to think
+                    // generation had stalled. server's usage.completion_tokens
+                    // increments correctly per the SSE stream — use that.
+                    const _hbToks =
+                      parsed.usage.completion_tokens ||
+                      parsed.usage.output_tokens ||
+                      0;
+                    const _hbElapsed =
+                      firstTokenTime !== null
+                        ? (now - firstTokenTime) / 1000
+                        : 0;
+                    const _hbTps =
+                      _hbElapsed > 0.1 && _hbToks > 0
+                        ? (_hbToks / _hbElapsed).toFixed(1)
+                        : "0.0";
                     win.webContents.send("chat:stream", {
                       chatId,
                       messageId: assistantMessage.id,
                       fullContent: "",
                       isReasoning: false,
                       metrics: {
-                        tokenCount: tokenCount,
+                        tokenCount: _hbToks || tokenCount,
                         promptTokens,
                         cachedTokens,
                         cacheDetail,
-                        tokensPerSecond: "0.0",
+                        tokensPerSecond: _hbTps,
                         ttft: ttft.toFixed(2),
                         elapsed: ((now - fetchStartTime) / 1000).toFixed(1),
                       },

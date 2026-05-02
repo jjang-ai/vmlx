@@ -100,6 +100,8 @@ class MCPClient:
                         await self._connect_stdio()
                     elif self.config.transport == MCPTransport.SSE:
                         await self._connect_sse()
+                    elif self.config.transport == MCPTransport.HTTP:
+                        await self._connect_http()
                     else:
                         raise ValueError(f"Unknown transport: {self.config.transport}")
 
@@ -187,11 +189,48 @@ class MCPClient:
                 "MCP SDK required for MCP support. Install with: pip install mcp"
             )
 
-        # Create SSE client context
-        self._sse_client = sse_client(self.config.url)
+        # Forward auth headers (e.g., Bearer tokens for Exa / GitHub remote MCP).
+        # mcp SDK's sse_client accepts a `headers` kwarg in 1.x.
+        _kwargs: Dict[str, Any] = {}
+        if self.config.headers:
+            _kwargs["headers"] = dict(self.config.headers)
+        self._sse_client = sse_client(self.config.url, **_kwargs)
         self._read, self._write = await self._sse_client.__aenter__()
 
         # Create session — clean up SSE client if this fails
+        try:
+            self._session = ClientSession(self._read, self._write)
+            await self._session.__aenter__()
+        except Exception:
+            await self._sse_client.__aexit__(None, None, None)
+            self._sse_client = None
+            self._read = None
+            self._write = None
+            raise
+
+    async def _connect_http(self):
+        """Connect via Streamable HTTP transport (modern remote MCP servers)."""
+        try:
+            from mcp import ClientSession
+            from mcp.client.streamable_http import streamablehttp_client
+        except ImportError:
+            raise ImportError(
+                "MCP SDK with streamable_http support required. "
+                "Upgrade with: pip install -U mcp"
+            )
+
+        _kwargs: Dict[str, Any] = {}
+        if self.config.headers:
+            _kwargs["headers"] = dict(self.config.headers)
+        self._sse_client = streamablehttp_client(self.config.url, **_kwargs)
+        # streamablehttp_client returns (read, write, get_session_id) — we
+        # only consume the read/write pair; session-id callback is optional.
+        _ctx_result = await self._sse_client.__aenter__()
+        if isinstance(_ctx_result, tuple) and len(_ctx_result) >= 2:
+            self._read, self._write = _ctx_result[0], _ctx_result[1]
+        else:
+            self._read, self._write = _ctx_result
+
         try:
             self._session = ClientSession(self._read, self._write)
             await self._session.__aenter__()

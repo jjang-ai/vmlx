@@ -37,16 +37,6 @@ def serve_command(args):
     # If it's "none" or omitted, tool calling is disabled.
 
     server._api_key = args.api_key or os.environ.get("VLLM_API_KEY")
-
-    # Plumb --omni-backend → VMLX_OMNI_BACKEND so OmniMultimodalDispatcher
-    # picks the right path on first request. Explicit CLI arg wins over
-    # whatever was in the environment so the panel/UI can override.
-    if getattr(args, "omni_backend", None):
-        os.environ["VMLX_OMNI_BACKEND"] = args.omni_backend
-        logger.info(
-            "Nemotron-Omni backend pinned to %s via --omni-backend",
-            args.omni_backend,
-        )
     if args.timeout <= 0:
         print(f"Error: --timeout must be positive, got {args.timeout}")
         sys.exit(1)
@@ -1071,44 +1061,84 @@ def _check_no_duplicate_mlx():
     install). The Electron panel sets PYTHONNOUSERSITE=1 and `-s`, but if
     the user pip-installed `mlx` into the bundled python directly OR has
     a non-standard PYTHONPATH, both copies show up. Detect and abort with
-    a clear message.
+    a message that names the EXTRA (non-bundled) location to remove —
+    earlier message naively told users to pip-uninstall, which removed the
+    BUNDLED mlx_lm and broke startup with `ModuleNotFoundError: mlx_lm.generate`.
     """
-    import importlib.util, sys
+    import importlib.util
+    import os
+    import sys
     try:
-        # Look for ALL mlx packages on the path. Spec.submodule_search_locations
-        # gives every directory contributing to the namespace.
         spec = importlib.util.find_spec("mlx")
         if spec is None:
             return
         locations = list(spec.submodule_search_locations or [])
-        # Also walk sys.path for shadowed copies.
-        seen = []
         for p in sys.path:
             try:
-                cand = __import__("os").path.join(p, "mlx")
-                if __import__("os").path.isdir(cand) and cand not in locations:
+                cand = os.path.join(p, "mlx")
+                if os.path.isdir(cand) and cand not in locations:
                     locations.append(cand)
-                    seen.append(cand)
             except Exception:
                 pass
-        if len(set(locations)) > 1:
+        unique = list(dict.fromkeys(locations))
+        if len(unique) <= 1:
+            return
+
+        # Identify the bundled location (directly under sys.prefix). The
+        # `extras` set is everything else — those are what the user should
+        # remove. Never tell the user to touch the bundled site-packages;
+        # uninstalling from there breaks vmlx itself.
+        bundled_prefix = os.path.realpath(sys.prefix)
+        bundled = []
+        extras = []
+        for loc in unique:
+            try:
+                real = os.path.realpath(loc)
+            except Exception:
+                real = loc
+            if real.startswith(bundled_prefix):
+                bundled.append(loc)
+            else:
+                extras.append(loc)
+
+        sys.stderr.write(
+            "vmlx detected MULTIPLE `mlx` package locations on sys.path. "
+            "Loading two MLX C extensions in one process triggers:\n"
+            "  Critical nanobind error: refusing to add duplicate key \"cpu\" "
+            "to enumeration \"mlx.core.DeviceType\"\n"
+            "\nLocations found:\n"
+        )
+        for p in unique:
+            tag = "  (bundled — DO NOT TOUCH)" if p in bundled else "  (extra — REMOVE THIS)"
+            sys.stderr.write(f"  - {p}{tag}\n")
+
+        if extras:
             sys.stderr.write(
-                "vmlx detected MULTIPLE `mlx` package locations on sys.path. "
-                "Loading two MLX C extensions in one process triggers:\n"
-                "  Critical nanobind error: refusing to add duplicate key \"cpu\" "
-                "to enumeration \"mlx.core.DeviceType\"\n"
-                "Locations found:\n"
+                "\nFix — remove the extra (non-bundled) mlx only:\n"
             )
-            for p in set(locations):
-                sys.stderr.write(f"  - {p}\n")
+            for p in extras:
+                # Best guess for what site-packages this lives in: the parent
+                # of `<sp>/mlx` is `<sp>`. We hint at the python that owns it.
+                sp = os.path.dirname(os.path.realpath(p))
+                sys.stderr.write(f"  rm -rf {p!r}  # from {sp}\n")
             sys.stderr.write(
-                "\nFix:\n"
-                "  1. Uninstall any extra mlx wheels: `pip uninstall mlx mlx-lm`\n"
-                "  2. Use only the bundled python (vmlx-engine spawns with -s + "
-                "PYTHONNOUSERSITE=1)\n"
-                "  3. Unset PYTHONPATH if it's pointing into a second site-packages\n"
+                "\nDO NOT run `pip uninstall mlx mlx-lm` against the bundled "
+                "python — that removes the bundled mlx_lm and produces a "
+                "ModuleNotFoundError: mlx_lm.generate at the next startup.\n"
+                "If `pip uninstall` was already run against the bundled python, "
+                "reinstall vmlx from the DMG to restore the bundled wheels.\n"
+                "\nAlso unset `PYTHONPATH` if it's pointing into a second "
+                "site-packages.\n"
             )
-            sys.exit(2)
+        else:
+            # Two bundled-prefix locations is suspicious (corrupt install).
+            sys.stderr.write(
+                "\nBoth locations are under the bundled python prefix — this "
+                "indicates a corrupt install. Reinstall vmlx from the DMG.\n"
+            )
+        sys.exit(2)
+    except SystemExit:
+        raise
     except Exception:
         pass
 
@@ -1567,28 +1597,6 @@ Examples:
         help="Force the model to load as a multimodal (vision) model even if auto-detection "
              "doesn't recognize it. Use this for VLM models that aren't in the built-in registry. "
              "Auto-detection checks config.json for 'vision_config'.",
-    )
-    # Nemotron-3-Nano-Omni multimodal backend selector. Exposes the
-    # VMLX_OMNI_BACKEND env var as a first-class CLI flag so the panel +
-    # Swift settings UI can flip between the bit-exact Stage-1 PyTorch
-    # bridge (default, correct) and the ~15–21× faster Stage-2 native
-    # MLX path (RADIO bilinear pos_embed + Parakeet Conformer in MLX,
-    # zero PyTorch in the hot path). User reported the JANGQ-AI banner
-    # speed claims (1.4 s image / 2.1 s 20-s audio / 3.6 s 8-frame
-    # video / 82 tok/s decode) — those are Stage-2 numbers; Stage-1 is
-    # 15-21× slower on encoders. Default stays Stage-1 until Wave-4
-    # rel-pos parity validation completes; users can opt in here.
-    serve_parser.add_argument(
-        "--omni-backend",
-        type=str,
-        default=None,
-        choices=["stage1", "stage2", "pytorch", "mlx"],
-        help="Nemotron-Omni multimodal backend. 'stage1'/'pytorch' = bit-exact "
-             "PyTorch+MPS encoder bridge (default, slower). 'stage2'/'mlx' = "
-             "native MLX RADIO + Parakeet (~15-21x faster encoders, ~82 tok/s "
-             "decode on M4 Max — the JANGQ-AI banner numbers). Stage-2 "
-             "default-off pending Wave-4 quality validation; opt in for "
-             "benchmarking. Equivalent to setting VMLX_OMNI_BACKEND env var.",
     )
     # Embedding model option
     serve_parser.add_argument(

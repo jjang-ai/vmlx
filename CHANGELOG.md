@@ -2,6 +2,35 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.5.1] - 2026-05-02
+
+### Fixed
+- **dense JANG bundles incoherent output (Qwen3.6-27B-JANG_4M-CRACK, Gemma-4-26B-A4B-it-JANG_4M-CRACK)** — `vmlx_engine/utils/jang_loader.py`:
+  - Qwen3.5 / Qwen3.6 hybrid-SSM VL bundles routed through `mlx_vlm.models.qwen3_5` produced garbage tokens because `Qwen3_5GatedDeltaNet.__call__` is missing `cache.advance(S)` and uses a different conv-state slicing path than `mlx_lm`'s working version. The bug spans multiple mlx_vlm classes (decoder layer, text model, attention) — full upstream port deferred. Workaround: detect hybrid-SSM Qwen3.5/3.6-VL bundles and fall back to the text-only `mlx_lm.models.qwen3_5` path which decodes coherently. Override via `VMLX_FORCE_VLM_LOADER=1`. Trade-off: image input is unavailable on these specific bundles via the fallback; text chat (the user-reported bug) works.
+  - Removed TurboQuant auto-enable for unstamped JANG bundles. JANG bundles that were calibrated for TQ continue to auto-activate via `jang_config.json::turboquant`; everything else now ships TQ off by default. Mirrors the Swift v2 fix that delivered 25× speedup on Nemotron Cascade.
+  - Per-module `mxtq_bits` overrides now thread through `class_predicate` correctly so mixed-precision JANG bundles (Qwen3-MoE, Kimi K2.6, MiniMax) don't silently default shared-expert layers to 3-bit.
+- **mlxstudio#138 — `--kv-cache-quantization` ignored by BatchedEngine** (`vmlx_engine/engine/batched.py`):
+  - When the user explicitly passed `--kv-cache-quantization q4|q8|none`, the loader still applied TurboQuant if `jang_config.turboquant` was present. Now the explicit flag wins: `skip_turboquant=True` is forwarded to `load_model_with_fallback` whenever a non-TQ KV mode is requested.
+- **panel tok/s counter wrong while reasoning is on** (`panel/src/main/ipc/chat.ts`):
+  - Heartbeat events used a hardcoded `"0.0"` for tokens-per-second whenever the model was emitting reasoning content (no visible tokens yet). The status bar showed `0.0 t/s` for the entire thinking span. Heartbeat now derives `tps` from the SSE `usage` block (`completion_tokens || output_tokens`) divided by elapsed wall time, so reasoning-token throughput shows correctly.
+- **mlxstudio#95 — `pip install vmlx` missing JANG runtime** (`pyproject.toml`):
+  - `jang>=2.5.9`, `torch`, `torchvision`, `soundfile` promoted from `[mxtq]` extra to hard dependencies. Plain `pip install vmlx` now Just Works on every JANG / JANGTQ / Nemotron-Omni bundle without a second install step.
+- **mlxstudio#100 — reasoning request not honored** (`vmlx_engine/api/models.py`):
+  - `reasoning_effort` / `thinking` / `enable_thinking` aliases now normalize to a single canonical field on the request model, so OpenAI-shape, Anthropic-shape, and Ollama-shape requests all reach the chat template with the right kwargs.
+- **mlxstudio#119 — DeepSeek-V4-Flash-2bit-DQ not supported**:
+  - Added DSV4 family routing + tri-mode default (HSA / CSA / SWA combo, no `DSV4_LONG_CTX=0` legacy short-context fork). DSV4 Flash 8-bit / 2-bit / 2-bit-DQ all decode coherently end-to-end.
+- **mlxstudio#99 — DSV4-Flash-8bit infinite `<begin_of_sentence>` loop** (`vmlx_engine/server.py`):
+  - Added `_FAMILY_FALLBACK_DEFAULTS` for DSV4 (temperature 0.6, top_p 0.95, repetition_penalty 1.05) and routed all four endpoints (`chat/completions`, `completions`, `responses`, Ollama bridge) through `_family_fallback_for(_model_path)` so DSV4 picks up sane defaults when the client doesn't pass them.
+- **mlxstudio#131 — `MCPServerConfig` rejects `headers` field** (`vmlx_engine/mcp/types.py`, `client.py`):
+  - Added `MCPTransport.HTTP` enum value, `headers: Optional[Dict[str, str]]` field, and `_connect_http()` using `streamablehttp_client`. JetBrains IDE MCP servers and any HTTP-transport MCP that needs auth headers (Bearer token, custom API key) now work.
+- **mlxstudio#132 — Gemma 4 MoE AWQ `AttributeError` on inner-model resolution** (`jang-tools` upstream, vendored fix):
+  - `_resolve_inner_model()` now handles all three module-tree conventions: LLaMA-nested (`.model.model`), Gemma-top-level (`.model`), and VLM (`.language_model`). Stops the AWQ converter from crashing on Gemma 4 MoE where the inner LM is at the top level instead of nested.
+- **Nemotron 3 Nano Omni** — `model_config_registry.py` now treats `mod == "omni"` as multimodal so the Omni audio + image pipeline receives the right runtime path.
+- **MLLM text-only path defensive reset** (`vmlx_engine/mllm_batch_generator.py`):
+  - `_position_ids` and `_rope_deltas` now reset between text-only LM dispatches to avoid stale state when an MLLM session switches mid-flight from image → text.
+- **bundled-mlx duplicate diagnostic** (`vmlx_engine/cli.py`):
+  - `_check_no_duplicate_mlx` now prints a clear "DO NOT TOUCH bundled" message when a user-installed mlx in `~/.local/lib` shadows the bundled copy. Stops the silent hang on cold first-launch.
+
 ## [1.3.83] - 2026-04-23
 
 ### Fixed

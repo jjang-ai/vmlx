@@ -1888,6 +1888,18 @@ class MLLMBatchGenerator:
         if not has_images:
             lm = self.language_model
             if lm is not None and lm is not self.model:
+                # Qwen3.5/3.6-VL hybrid (and similar mRoPE VL models) cache
+                # `_position_ids` / `_rope_deltas` on the language_model across
+                # calls. The VL wrapper's get_input_embeddings() text-only path
+                # explicitly resets these (qwen3_5.py:36-38) before delegating;
+                # bypassing the wrapper inherits stale state. Reset to match.
+                # NOTE: this fix alone does NOT resolve the
+                # Qwen3.6-27B-JANG_4M-CRACK garbage-output bug — preserved as
+                # a defensive correctness measure mirroring wrapper semantics.
+                if hasattr(lm, "_position_ids"):
+                    lm._position_ids = None
+                if hasattr(lm, "_rope_deltas"):
+                    lm._rope_deltas = None
                 lm_kwargs = {}
                 if cache is not None:
                     lm_kwargs["cache"] = cache

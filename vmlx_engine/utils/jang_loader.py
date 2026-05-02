@@ -136,17 +136,35 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
 
     _tq_cfg = jang_cfg.get("turboquant")
     if not _tq_cfg:
-        # Auto-enable TQ with defaults for ALL JANG models
-        _tq_cfg = {
-            "enabled": True,
-            "default_key_bits": 3,
-            "default_value_bits": 3,
-            "critical_key_bits": 4,
-            "critical_value_bits": 4,
-            "critical_layers": [0, 1, 2, -3, -2, -1],
-            "seed": 42,
-        }
-        logger.info("  TurboQuant auto-enabled (JANG model, no explicit config)")
+        # 2026-05-02: removed auto-enable. The Swift-side TurboQuant regression
+        # fix (2026-04-16: Nemotron 2.4→61.4 t/s, 25× speedup; Gemma4 26B
+        # 34.9→49 +40%; Qwen9B 69→98 +42%) found that default-on TQ KV taxed
+        # every MoE/hybrid model AND on Qwen3.6-27B-JANG_4M-CRACK (hybrid SSM
+        # VLM, mixed [4,8] bits) it produces incoherent garbage output (the
+        # exact symptom in mlxstudio#95-class reports). Bundles that NEED TQ
+        # KV must set `turboquant.enabled: true` in jang_config.json
+        # explicitly (calibrated bundles do this at convert time).
+        # Override: env VMLX_FORCE_TQ_AUTO=1 re-enables the legacy auto path
+        # for A/B comparison only.
+        import os as _os_tq
+        if _os_tq.environ.get("VMLX_FORCE_TQ_AUTO") == "1":
+            _tq_cfg = {
+                "enabled": True,
+                "default_key_bits": 3,
+                "default_value_bits": 3,
+                "critical_key_bits": 4,
+                "critical_value_bits": 4,
+                "critical_layers": [0, 1, 2, -3, -2, -1],
+                "seed": 42,
+            }
+            logger.info("  TurboQuant auto-enabled via VMLX_FORCE_TQ_AUTO=1 (legacy path)")
+        else:
+            logger.info(
+                "  TurboQuant: not enabled (jang_config has no `turboquant` block; "
+                "default is off — set turboquant.enabled=true in jang_config.json "
+                "to opt in, or VMLX_FORCE_TQ_AUTO=1 for legacy auto)"
+            )
+            return
     if not _tq_cfg.get("enabled", True):
         return
 
@@ -1344,6 +1362,33 @@ def _load_jang_v2_vlm(
         )
         return _load_jang_v2(path, jang_cfg, skip_eval=skip_eval, filter_expert_keys=filter_expert_keys)
 
+    # 2026-05-02: Qwen3.5/3.6-VL hybrid SSM (qwen3_5 wrapper / qwen3_5_text
+    # inner with linear_attention layers) loaded via mlx_vlm's _load_jang_v2_vlm
+    # produces incoherent garbage logits even after pre-fix bits + per-module
+    # quant overrides. Same bundle loaded via _load_jang_v2 (text path with
+    # Generalized LM-strip) produces coherent output. Reproduced live on
+    # Qwen3.6-27B-JANG_4M-CRACK with /v1/chat/completions garbage matching
+    # user screenshot. Until the deep VLM-loader divergence is identified,
+    # fall back to the text path for these bundles. mlx_vlm processor will
+    # still build for image preprocessing but text-only chat works correctly.
+    # Detection: hybrid_ssm_dense + qwen3_5 family markers.
+    _is_qwen35_vl_hybrid = (
+        config.get("model_type") in ("qwen3_5", "qwen3_5_moe", "qwen3_vl", "qwen3_vl_moe")
+        and isinstance(_tc.get("layer_types"), (list, tuple))
+        and any(t == "linear_attention" for t in _tc.get("layer_types", []))
+    )
+    if _is_qwen35_vl_hybrid:
+        logger.warning(
+            "  Qwen3.5/3.6-VL hybrid SSM detected — falling back to text-only "
+            "load (VLM-loader produces garbage on hybrid SSM bundles, "
+            "mlxstudio#95-class regression on Qwen3.6-27B-JANG_4M-CRACK). "
+            "Image input will be unavailable until deep VLM-loader fix lands. "
+            "Override: VMLX_FORCE_VLM_LOADER=1 to skip this fallback."
+        )
+        import os as _os_qfb
+        if _os_qfb.environ.get("VMLX_FORCE_VLM_LOADER") != "1":
+            return _load_jang_v2(path, jang_cfg, skip_eval=skip_eval, filter_expert_keys=filter_expert_keys)
+
     # Kimi K2.6 (model_type="kimi_k25") — route through
     # jang_tools.load_jangtq_kimi_vlm so the kimi_k25 → kimi_vl remap is
     # installed in mlx_vlm.MODEL_REMAPPING + MODEL_CONFIG before dispatch,
@@ -1501,27 +1546,62 @@ def _load_jang_v2_vlm(
 
     quantization = {"group_size": block_size, "bits": default_bits}
 
+    # Per-module bit overrides patched into config by quant_shape_inference
+    # (see _load_jang_v2 — runs at the top of the VLM path too at line ~1338).
+    # quant_shape_inference writes config["quantization"][module_path] =
+    # {"bits": N, "group_size": G} for any module whose stored shape doesn't
+    # match the config's claim. The TEXT path (load_jang_v2) honours these via
+    # mlx_lm.utils.load_model's internal nn.quantize predicate. THIS path used
+    # to call nn.quantize with uniform `bits=default_bits` — silently dropping
+    # the per-module overrides, which produced garbage logits on mixed-bit
+    # bundles like Qwen3.6-27B-JANG_4M-CRACK (bit_widths_used=[4,8], lm_head
+    # at 8-bit). Fix 2026-05-02: class_predicate now returns a dict with the
+    # module's actual bits/group_size so to_quantized() materialises the
+    # correct shape. Reproduced + verified end-to-end on the user's bundle.
+    _qcfg_overrides = config.get("quantization", {}) or {}
+
+    def _per_module_override(p: str):
+        """Look up per-module override for module path `p`. Returns dict or None.
+        Tries the same path-mapping fallbacks as the existing predicate so the
+        override matches whether the converter wrote bare or `language_model.`
+        -prefixed keys."""
+        candidates = [p, f"model.{p}"]
+        if "language_model.model." in p:
+            candidates.append(p.replace("language_model.model.", "model.language_model.", 1))
+        if p.endswith("lm_head") or "language_model.lm_head" in p:
+            candidates.append("lm_head")
+        for cand in candidates:
+            v = _qcfg_overrides.get(cand)
+            if isinstance(v, dict) and "bits" in v and "group_size" in v:
+                return {"bits": int(v["bits"]), "group_size": int(v["group_size"])}
+        return None
+
     def get_class_predicate(p, m):
         if skip_multimodal_module(p):
             return False
         if not hasattr(m, "to_quantized"):
             return False
-        # Try exact match first
+        # Path matches: same logic as before for "should this module be quantized?"
+        _matched = False
         if p in quantized_suffixes:
-            return True
-        # Try with model. prefix (safetensors often has model. prefix)
-        if f"model.{p}" in quantized_suffixes:
-            return True
-        # Handle mlx-vlm naming: language_model.model.X → model.language_model.X
-        if "language_model.model." in p:
+            _matched = True
+        elif f"model.{p}" in quantized_suffixes:
+            _matched = True
+        elif "language_model.model." in p:
             remapped = p.replace("language_model.model.", "model.language_model.", 1)
             if remapped in quantized_suffixes:
-                return True
-        # Handle lm_head: module path is language_model.lm_head, weight key is just lm_head
-        if p.endswith("lm_head") or "language_model.lm_head" in p:
-            if "lm_head" in quantized_suffixes:
-                return True
-        return False
+                _matched = True
+        elif (p.endswith("lm_head") or "language_model.lm_head" in p) and "lm_head" in quantized_suffixes:
+            _matched = True
+        if not _matched:
+            return False
+        # If quant_shape_inference patched a per-module override, return it as
+        # a dict so nn.quantize honours the right bits/group_size for THIS
+        # module. Otherwise fall back to True (uniform default_bits).
+        override = _per_module_override(p)
+        if override is not None:
+            return override
+        return True
 
     nn.quantize(
         model,

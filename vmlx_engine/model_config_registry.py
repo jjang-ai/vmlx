@@ -214,7 +214,12 @@ class ModelConfigRegistry:
                 updates["think_in_template"] = tin
             if ct:
                 updates["cache_type"] = ct
-            if mod == "vision":
+            if mod == "vision" or mod == "omni":
+                # `omni` covers Nemotron-Omni (text+image+audio+video) — the
+                # dispatch logic at request time decides between text-only LLM
+                # path and the OmniMultimodalDispatcher based on what's
+                # actually in the messages, but is_mllm=True ensures MLLM
+                # tooling (image-extraction, etc.) is available on the model.
                 updates["is_mllm"] = True
             elif mod == "text":
                 updates["is_mllm"] = False
