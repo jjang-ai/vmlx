@@ -2,6 +2,14 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.5.4] - 2026-05-02
+
+### Fixed
+- **`/api/show` returned all-empty metadata** (`vmlx_engine/server.py`):
+  - `details.family`, `details.parameter_size`, `details.quantization_level`, and `template` were hardcoded empty strings, making vMLX look like a stripped-down or broken Ollama backend in Open WebUI / Continue / Copilot pickers. Now reads `config.json` (model_type → family) + `jang_config.json` (quantization.actual_bits + profile → quantization_level e.g. `Q4_K_JANG_4M`; source_model.parameters → parameter_size) + `chat_template.jinja` (→ template) at request time. Falls back to the empty stub on any read failure so the endpoint never 500s.
+- **`/api/show` reported `vision` capability when image input was unavailable** (`vmlx_engine/server.py` + `vmlx_engine/utils/jang_loader.py`):
+  - Qwen3.5/3.6-VL hybrid-SSM bundles fall back to text-only via the v1.5.1 fix because mlx_vlm's `Qwen3_5GatedDeltaNet` is broken. The engine's `is_mllm` flag stayed True (correct, for batching/scheduler routing) so `/api/show` continued to advertise `vision` — clients gating on capabilities (Copilot, Continue) would offer image upload that silently does nothing. Loader now sets a module-level `_LAST_LOAD_VLM_FALLBACK` marker that `/api/show` consults; vision dropped from capabilities when fallback fired.
+
 ## [1.5.3] - 2026-05-02
 
 ### Fixed

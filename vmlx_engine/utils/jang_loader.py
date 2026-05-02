@@ -1387,6 +1387,11 @@ def _load_jang_v2_vlm(
         )
         import os as _os_qfb
         if _os_qfb.environ.get("VMLX_FORCE_VLM_LOADER") != "1":
+            # Module-level fallback marker so /api/show + UI capability lists
+            # can drop `vision` — claiming vision when image input is
+            # unavailable would mislead clients (Copilot, Continue, etc.)
+            # gating their model picker on the capabilities list.
+            globals()["_LAST_LOAD_VLM_FALLBACK"] = True
             return _load_jang_v2(path, jang_cfg, skip_eval=skip_eval, filter_expert_keys=filter_expert_keys)
 
     # Kimi K2.6 (model_type="kimi_k25") — route through

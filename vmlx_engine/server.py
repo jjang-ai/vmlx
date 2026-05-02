@@ -3883,37 +3883,93 @@ async def ollama_show(fastapi_request: Request):
     Ollama spec v0.20.x adds a ``capabilities`` list that GitHub Copilot
     gates on to decide whether to surface a model (mlxstudio#72 follow-up).
     Without it, Copilot drops all vMLX models from its picker.
+
+    Populates `details` and `model_info` from the loaded bundle's
+    `config.json` + `jang_config.json` so Ollama clients (Open WebUI,
+    Continue, Copilot) can render quant level, parameter count, and
+    family. The previous all-empty-stub response made vMLX look like a
+    stripped-down or broken Ollama backend in those UIs.
     """
     name = _resolve_model_name()
     capabilities = ["completion"]
-    # Tool calling — assume present unless parser explicitly disabled
     _tp = globals().get("_tool_parser")
-    if _tp is not None and getattr(_tp, "__name__", "") != "None":
-        capabilities.append("tools")
-    else:
-        capabilities.append("tools")  # permissive default — most models support tools
-    # Vision — on when engine is MLLM mode
+    capabilities.append("tools")  # permissive default — most models support tools
+
+    # Vision — on when engine is MLLM mode AND the loader didn't fall
+    # back to text-only (e.g. Qwen3.5/3.6-VL hybrid SSM bundles route
+    # through the text path because the mlx_vlm Qwen3_5GatedDeltaNet is
+    # broken; image input is unavailable in that mode).
     try:
         _eng = globals().get("_engine")
         if _eng is not None and getattr(_eng, "is_mllm", False):
-            capabilities.append("vision")
+            _vision_disabled = False
+            try:
+                from .utils import jang_loader as _jl
+                _vision_disabled = bool(getattr(_jl, "_LAST_LOAD_VLM_FALLBACK", False))
+            except Exception:
+                pass
+            if not _vision_disabled:
+                capabilities.append("vision")
     except Exception:
         pass
-    # Thinking — on when a reasoning parser is configured
     if globals().get("_reasoning_parser") is not None:
         capabilities.append("thinking")
     capabilities.append("insert")
+
+    # Build details + model_info from bundle metadata. Falls back to the
+    # all-empty stub on any read failure so we never 500 the endpoint.
+    family = "mlx"
+    families = ["mlx"]
+    parameter_size = ""
+    quantization_level = ""
+    template_text = ""
+    try:
+        from pathlib import Path
+        _path = Path(_model_path) if _model_path else None
+        if _path is not None and _path.is_dir():
+            _cfg_p = _path / "config.json"
+            if _cfg_p.exists():
+                try:
+                    _cfg = json.loads(_cfg_p.read_text())
+                    _mt = _cfg.get("model_type") or (_cfg.get("text_config") or {}).get("model_type")
+                    if _mt:
+                        family = str(_mt)
+                        families = [family]
+                except Exception:
+                    pass
+            _jang_p = _path / "jang_config.json"
+            if _jang_p.exists():
+                try:
+                    _jc = json.loads(_jang_p.read_text())
+                    _q = _jc.get("quantization") or {}
+                    _src = _jc.get("source_model") or {}
+                    _bits = _q.get("actual_bits") or _q.get("target_bits")
+                    if _bits is not None:
+                        quantization_level = f"Q{int(round(float(_bits)))}_K_{_q.get('profile') or 'JANG'}"
+                    if _src.get("parameters"):
+                        parameter_size = str(_src["parameters"])
+                except Exception:
+                    pass
+            _tpl_p = _path / "chat_template.jinja"
+            if _tpl_p.exists():
+                try:
+                    template_text = _tpl_p.read_text()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     return {
         "modelfile": "",
         "parameters": "",
-        "template": "",
+        "template": template_text,
         "details": {
             "parent_model": "",
             "format": "mlx",
-            "family": "mlx",
-            "families": ["mlx"],
-            "parameter_size": "",
-            "quantization_level": "",
+            "family": family,
+            "families": families,
+            "parameter_size": parameter_size,
+            "quantization_level": quantization_level,
         },
         "model_info": {"name": name},
         "capabilities": capabilities,
