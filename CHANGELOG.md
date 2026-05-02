@@ -2,6 +2,29 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.5.5] - 2026-05-02
+
+### Fixed
+- **DSV4-Flash + JANGTQ inference end-to-end working via `/v1/chat/completions` and all 5 wire formats**.
+  Root cause: `mlx_lm.generate.BatchGenerator`'s prefill / decode loop calls `mx.async_eval` / `mx.eval` on cache state and intermediate tensors that carry MLX-internal stream IDs from cross-thread kernel scheduling. The llm-worker step-executor's default stream is `Stream(Device(gpu, 0), 1)` while MainThread sees `Stream(0)` — when the worker materialises tensors that any C++ kernel tagged with a stream ID neither thread owns directly, MLX raises `RuntimeError: There is no Stream(gpu, N) in current thread.` Live-traced through 24 mitigation iterations: pinning streams, `mx.synchronize()` patches, CPU-stream round-trips, batch-API stubs, internal-stream pre-warm — none survived because MLX C++ allocates streams independently of Python.
+  Structural fix shipped:
+  - **New `vmlx_engine/utils/dsv4_batch_generator.py`** — DSV4-native batch generator (~250 lines) that mirrors `jang_tools.dsv4.runtime.generate`'s prefill + decode + sample + EOS loop while exposing the `BatchGenerator` API (`insert` / `next` / `next_generated` / `remove` / `extract_cache`). Bypasses `mlx_lm.BatchGenerator` entirely so the cross-thread stream traversal never happens. Single-batch only (`max_num_seqs=1`); multi-batch surfaces a clear `NotImplementedError` pointing the user at the right CLI flag.
+  - **Auto-evict finished requests** — generator drops finished requests on next `insert()` so the scheduler can queue the next prompt; without this the engine stuck in a retry loop after the first request finished.
+  - **Chunked prefill + warmup** — DSV4 first forward triggers Metal kernel JIT for every routed-expert / hash-router shape combo; one-shot prefill of even a 20-token prompt blew through the Metal command-buffer watchdog (~10s). Generator now warms up MLX kernels with a 1-token forward on first call, then chunks user prefill in `prefill_step_size`-token blocks with `mx.synchronize()` between chunks.
+  - **`vmlx_engine/utils/mamba_cache.py`** also patches `PromptProcessingBatch.prompt` and `GenerationBatch._step` to use `mx.synchronize()` instead of cross-thread cache.state eval, plus adds `filter`/`extract`/`prepare`/`finalize` stubs to `PoolQuantizedV4Cache` and `DeepseekV4Cache` (single-batch passthrough, multi-batch raises clear error). These are belt-and-suspenders — even if the DSV4 detection misses, mlx_lm.BatchGenerator now drains via active-stream synchronize instead of stream-graph traversal.
+  - **`vmlx_engine/scheduler.py::_create_batch_generator`** detects DSV4 family by sniffing `type(model).__module__` / `__name__` and returns `DSV4BatchGenerator` instead of `BatchGenerator` when `dsv4` / `deepseek_v4` is in the path.
+  Live-verified on `DeepSeek-V4-Flash-JANGTQ2` (74 GB on disk, 38 GB resident): "What is the capital of France?" → coherent reasoning text, "What is 2+2?" → `'4'`, "What is my name?" (multi-turn) → `'Your name is Eric.'`, 16.3 tok/s decode. **11/14 probe-matrix PASS** across `/v1/chat/completions`, `/v1/completions`, `/v1/responses`, `/api/chat` (Ollama), `/v1/messages` (Anthropic), SSE streaming + reasoning_content delta, sleep/wake roundtrip, family default temps. The 3 fails are DSV4 reasoning-template refinements (reasoning_effort=high MMLU-style chain, tool-call invocation, chat_template_kwargs.enable_thinking=true) — not stream/threading; deferred to next iteration.
+- **MLX vlm-import side-effect on uvicorn MainThread** — `vmlx_engine/__init__.py` previously imported `mlx_vlm.prompt_utils` at module-load time (gemma4 + kimi_k25 registry patches). That transitively pulls in `mlx_vlm.generate`, which executes `mx.new_stream(...)` at import — binding the stream to MainThread. Moved into `_install_mlx_vlm_registry_patches()` called from `MLXMultimodalLM.load()` so the import (and any module-level stream creation) lands on the loader-executor worker thread.
+
+### Verified non-regressions
+- `Qwen3.6-27B-JANG_4M-CRACK` — `'PONG'` ✓ (unchanged)
+- `Gemma-4-26B-A4B-it-JANG_4M-CRACK` — short-response streaming intact (1.5.2 fix preserved)
+- `Qwen3.6-35B-A3B-JANGTQ4` — JANGTQ MoE 14/14 PASS preserved
+
+### Known issues
+- DSV4 reasoning-effort=high / tools / explicit enable_thinking=true return empty content because the reasoning parser's `<think>...</think>` split path needs DSV4-specific wiring. Deferred — DSV4 chat-mode (the user-reported headline) works coherently end-to-end at 16.3 tok/s.
+- DSV4 still requires `--max-num-seqs 1` because compressor + indexer pool state can't be sliced per-request without a full re-prefill.
+
 ## [1.5.4] - 2026-05-02
 
 ### Fixed

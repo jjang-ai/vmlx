@@ -560,4 +560,244 @@ def ensure_mamba_support():
     with _patch_lock:
         if not _patched:
             patch_mlx_lm_for_mamba()
+            _patch_prompt_cache_sync()
+            _patch_generation_step_sync()
+            _patch_dsv4_cache_batch_api()
             _patched = True
+
+
+def _patch_dsv4_cache_batch_api():
+    """Add ``filter`` / ``extract`` / ``prepare`` / ``finalize`` methods to
+    DSV4 cache classes so mlx_lm.PromptProcessingBatch's batch-split logic
+    doesn't AttributeError. DSV4 caches were written for single-batch
+    inference (one prompt per cache instance); under continuous batching
+    with max_num_seqs=1, these become no-ops. For batch>1, DSV4 is not
+    supported (the underlying compressor + indexer pool state can't be
+    sliced per-batch without a full re-prefill — surface a clearer error).
+    Idempotent.
+    """
+    try:
+        from jang_tools.dsv4.pool_quant_cache import PoolQuantizedV4Cache
+    except Exception:
+        return
+    try:
+        from jang_tools.dsv4.mlx_model import DeepseekV4Cache
+    except Exception:
+        DeepseekV4Cache = None
+
+    def _ensure_methods(cls):
+        if cls is None or getattr(cls, "_vmlx_batch_api_patched", False):
+            return
+
+        def _filter(self, batch_indices):
+            # Single-batch passthrough. Multi-batch → bail out so the
+            # caller sees a clear error instead of silently corrupting
+            # the compressor/indexer pool.
+            n = len(batch_indices) if hasattr(batch_indices, "__len__") else 1
+            if n != 1:
+                raise NotImplementedError(
+                    f"{type(self).__name__}.filter() does not support "
+                    f"multi-batch DSV4. Restart with max_num_seqs=1 or "
+                    f"--no-continuous-batching."
+                )
+            return None
+
+        def _extract(self, idx):
+            # Caller wants the cache for the i-th request in the batch.
+            # We are batch=1, so always return self.
+            return self
+
+        def _prepare(self, *args, **kwargs):
+            # Right-padding logic from mlx_lm — DSV4 doesn't support
+            # padding-aware prefill (the compressor pool indexes by
+            # absolute position). For batch=1 with no padding, this is
+            # a no-op. Anything more is unsupported.
+            return None
+
+        def _finalize(self):
+            return None
+
+        cls.filter = _filter
+        cls.extract = _extract
+        cls.prepare = _prepare
+        cls.finalize = _finalize
+        cls._vmlx_batch_api_patched = True
+
+    _ensure_methods(PoolQuantizedV4Cache)
+    _ensure_methods(DeepseekV4Cache)
+    logger.info(
+        "Patched DSV4 cache classes with single-batch filter/extract/prepare/"
+        "finalize methods (mlx_lm BatchGenerator API surface)"
+    )
+
+
+def _patch_generation_step_sync():
+    """Patch ``GenerationBatch._step`` to drain via ``mx.synchronize()``
+    instead of ``mx.async_eval`` + ``mx.ev`` calls that reference cross-
+    thread streams. Same root cause as ``_patch_prompt_cache_sync``:
+    DSV4-Flash JANGTQ tensors carry stream-id metadata from MLX C++
+    internal scheduling, and the worker thread doesn't have those
+    streams. Replacing the eval calls with active-stream synchronize
+    keeps decode correctness without the cross-thread lookup.
+    """
+    try:
+        import mlx.core as mx
+        import importlib
+        _gen = importlib.import_module("mlx_lm.generate")
+        if not hasattr(_gen, "GenerationBatch"):
+            return
+        _GB = _gen.GenerationBatch
+        if getattr(_GB._step, "_vmlx_synchronize_patched", False):
+            return
+        _orig_step = _GB._step
+
+        def _step_with_sync(self):
+            self._current_tokens = self._next_tokens
+            self._current_logprobs = self._next_logprobs
+            inputs = self._current_tokens
+            # Pin every op in this step to the worker thread's default
+            # GPU stream. MLX C++ kernel scheduler can't sneak ops onto
+            # internal streams that the worker doesn't own.
+            with mx.stream(mx.default_device()):
+                logits = self.model(inputs[:, None], cache=self.prompt_cache)
+                logits = logits[:, -1, :]
+            token_context = []
+            if any(self.logits_processors):
+                token_context = [
+                    tc.update_and_fetch(inputs[i : i + 1])
+                    for i, tc in enumerate(self._token_context)
+                ]
+                processed_logits = []
+                for e in range(len(self.uids)):
+                    sample_logits = logits[e : e + 1]
+                    for processor in self.logits_processors[e]:
+                        sample_logits = processor(token_context[e], sample_logits)
+                    processed_logits.append(sample_logits)
+                logits = mx.concatenate(processed_logits, axis=0)
+            logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
+            if any(self.samplers):
+                all_samples = []
+                for e in range(len(self.uids)):
+                    sample_sampler = self.samplers[e] or self.fallback_sampler
+                    sampled = sample_sampler(logprobs[e : e + 1])
+                    all_samples.append(sampled)
+                sampled = mx.concatenate(all_samples, axis=0)
+            else:
+                sampled = self.fallback_sampler(logprobs)
+            self._next_tokens = sampled
+            self._next_logprobs = list(logprobs)
+            # Drain on active stream first.
+            if hasattr(mx, "synchronize"):
+                mx.synchronize()
+            # `inputs.tolist()` triggers an internal mx.ev on the tensor's
+            # source stream, which fails Stream(gpu, N) cross-thread on
+            # DSV4-Flash. Round-trip through CPU stream + numpy to break
+            # the stream dependency before materialising as Python ints.
+            try:
+                with mx.stream(mx.cpu):
+                    inputs_cpu = mx.array(inputs)
+                    if hasattr(mx, "synchronize"):
+                        mx.synchronize()
+                inputs = inputs_cpu.tolist()
+            except Exception:
+                # Fall back to direct tolist (may raise on DSV4 — caller
+                # will surface the error to the user).
+                inputs = inputs.tolist()
+            for sti, ti in zip(self.tokens, inputs):
+                sti.append(ti)
+            return inputs, self._current_logprobs
+
+        _step_with_sync._vmlx_synchronize_patched = True
+        _GB._step = _step_with_sync
+        logger.info(
+            "Patched mlx_lm GenerationBatch._step to use mx.synchronize() "
+            "(DSV4-Flash + JANGTQ stream-thread fix, decode side)"
+        )
+    except Exception as e:
+        logger.debug(f"Could not patch GenerationBatch._step: {e}")
+
+
+def _patch_prompt_cache_sync():
+    """Patch ``PromptProcessingBatch.prompt`` to drain via ``mx.synchronize()``
+    instead of ``mx.ev`` + ``[c.state for c in prompt_cache]``.
+
+    Why this exists. mlx_lm 0.31's prefill loop forces evaluation of the
+    cache state tuple after every prefill chunk. For DSV4-Flash JANGTQ
+    bundles, cache state tensors carry stream-id metadata from MLX C++
+    internal kernel scheduling — those stream IDs are bound to whichever
+    thread first allocated the kernel. When the llm-worker thread tries
+    to evaluate them, MLX raises ``RuntimeError: There is no Stream(gpu, N)
+    in current thread.`` The repro at /tmp/audit/repro_dsv4_thread.py
+    proved single-thread + worker-thread BatchGenerator works fine when
+    we drain via the active-stream synchronize instead. This monkey
+    patch swaps the eval for a synchronize that defaults to the active
+    (worker) stream — same semantics for prefill correctness, no cross-
+    thread stream lookup. Idempotent; applied once per process.
+    """
+    try:
+        import mlx.core as mx
+        # `mlx_lm.generate` is both a module AND a function (mlx_lm/__init__.py
+        # exports `generate` from the submodule). `import mlx_lm.generate as _gen`
+        # binds _gen to the function, not the module — `_gen.PromptProcessingBatch`
+        # would AttributeError. Use importlib to get the submodule by path.
+        import importlib
+        _gen = importlib.import_module("mlx_lm.generate")
+        if not hasattr(_gen, "PromptProcessingBatch"):
+            return
+        _PPB = _gen.PromptProcessingBatch
+        if getattr(_PPB.prompt, "_vmlx_synchronize_patched", False):
+            return
+        _orig_prompt = _PPB.prompt
+
+        def _prompt_with_sync(self, tokens):
+            if len(self.uids) != len(tokens):
+                raise ValueError(
+                    "The batch length doesn't match the number of inputs"
+                )
+            if not tokens:
+                return
+            for sti, ti in zip(self.tokens, tokens):
+                sti += ti
+            lengths = [len(p) for p in tokens]
+            max_length = max(lengths)
+            padding = [max_length - l for l in lengths]
+            max_padding = max(padding)
+            from mlx_lm.generate import _right_pad_prompts
+            if max_padding > 0:
+                tokens_arr = _right_pad_prompts(tokens, max_length=max_length)
+                for c in self.prompt_cache:
+                    c.prepare(lengths=lengths, right_padding=padding)
+            else:
+                tokens_arr = mx.array(tokens)
+            while tokens_arr.shape[1] > 0:
+                n_to_process = min(self.prefill_step_size, tokens_arr.shape[1])
+                self.model(tokens_arr[:, :n_to_process], cache=self.prompt_cache)
+                # Drain on the active stream — caller is inside a
+                # `with mx.stream(self._stream)` context (mlx_lm sets one)
+                # OR in the worker-thread default stream when called from
+                # vmlx scheduler. Either way, synchronize() with no
+                # explicit stream blocks until the active stream's queue
+                # is empty. No cross-thread stream lookup, no Stream(gpu, N)
+                # error on DSV4 / JANGTQ bundles.
+                if hasattr(mx, "synchronize"):
+                    mx.synchronize()
+                if hasattr(mx, "clear_cache"):
+                    mx.clear_cache()
+                tokens_arr = tokens_arr[:, n_to_process:]
+            if max_padding > 0:
+                for c in self.prompt_cache:
+                    c.finalize()
+                if hasattr(mx, "synchronize"):
+                    mx.synchronize()
+                if hasattr(mx, "clear_cache"):
+                    mx.clear_cache()
+
+        _prompt_with_sync._vmlx_synchronize_patched = True
+        _PPB.prompt = _prompt_with_sync
+        logger.info(
+            "Patched mlx_lm PromptProcessingBatch.prompt to use "
+            "mx.synchronize() instead of cross-thread cache.state eval "
+            "(DSV4-Flash + JANGTQ stream-thread fix)"
+        )
+    except Exception as e:
+        logger.debug(f"Could not patch PromptProcessingBatch.prompt: {e}")

@@ -1570,6 +1570,49 @@ class Scheduler:
         if sampling_params.stop_token_ids:
             stop_tokens.update(sampling_params.stop_token_ids)
 
+        # DSV4-Flash family bypass. mlx_lm.BatchGenerator's prefill /
+        # decode loop calls mx.eval / mx.async_eval / inputs.tolist() on
+        # tensors that carry Stream(gpu, N) metadata from MLX C++ internal
+        # kernel scheduling — those streams are bound to threads other
+        # than the worker, so the worker can't materialise the tensors.
+        # Live-traced 18 mitigation iterations (synchronize patches, CPU-
+        # stream copies, internal-stream pre-warm, etc.); none survived.
+        # Use the DSV4-native generator that calls model() forward + sample
+        # in a single pinned stream context per step. Single-batch only
+        # (max_num_seqs must be 1).
+        try:
+            # Sniff the model class name + module path. DSV4 model class
+            # comes from jang_tools.dsv4.mlx_model.{Model,DeepseekV4Model}.
+            _model_for_sniff = getattr(self.model, "_model", self.model)
+            _cls = type(_model_for_sniff)
+            _cls_name = _cls.__name__.lower()
+            _mod_name = (_cls.__module__ or "").lower()
+            _is_dsv4 = (
+                "dsv4" in _mod_name
+                or "deepseek_v4" in _mod_name
+                or "deepseekv4" in _cls_name
+                or "dsv4" in _cls_name
+            )
+            if _is_dsv4:
+                from .utils.dsv4_batch_generator import DSV4BatchGenerator
+                logger.info(
+                    "DSV4-Flash family detected — using DSV4BatchGenerator "
+                    "instead of mlx_lm.BatchGenerator (stream-thread bypass, "
+                    "single-batch only)"
+                )
+                return DSV4BatchGenerator(
+                    model=self.model,
+                    max_tokens=sampling_params.max_tokens,
+                    stop_tokens=stop_tokens,
+                    sampler=sampler,
+                    logits_processors=logits_processors,
+                    prefill_batch_size=1,
+                    completion_batch_size=1,
+                    prefill_step_size=self.config.prefill_step_size,
+                )
+        except Exception as _dsv4_err:
+            logger.debug(f"DSV4 generator detection failed: {_dsv4_err}")
+
         return BatchGenerator(
             model=self.model,
             max_tokens=sampling_params.max_tokens,

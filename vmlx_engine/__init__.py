@@ -12,7 +12,7 @@ Features:
 - Support for LLM and multimodal models
 """
 
-__version__ = "1.5.0"
+__version__ = "1.5.4"
 
 # mlx_lm 0.31.x changed create_attention_mask() to require return_array and
 # window_size positional args.  mlx_vlm's qwen3_5/language.py calls
@@ -62,46 +62,46 @@ try:
 except Exception:
     pass
 
-# mlx_vlm's MessageFormatter does not yet have a gemma4 entry in MODEL_CONFIG
-# (mlx-vlm 0.3.x ships gemma3/gemma3n but not gemma4). Without this patch,
-# `mlx_vlm.prompt_utils.apply_chat_template()` raises
-# `ValueError: Unsupported model: gemma4` for any Gemma 4 VLM (including
-# Gemma 4 JANG), and the BatchedEngine silently falls back to the text-only
-# tokenizer path — which drops image content parts entirely, so the model
-# receives the prompt WITHOUT any image placeholder tokens and answers as
-# if no image were provided (see GitHub issue reported 2026-04-09).
-#
-# Fix: register `gemma4` (and the `gemma4_text` sub-type for safety) under
-# `LIST_WITH_IMAGE_TYPE`, which builds the same
-# `[{type: 'image'}, {type: 'text', text: ...}]` content list the Gemma 4
-# Jinja chat template already knows how to render into `<|image|>` tokens.
-try:
-    from mlx_vlm.prompt_utils import MODEL_CONFIG as _VLM_MODEL_CONFIG, MessageFormat as _VLMMF
-
-    _VLM_MODEL_CONFIG.setdefault("gemma4", _VLMMF.LIST_WITH_IMAGE_TYPE)
-    _VLM_MODEL_CONFIG.setdefault("gemma4_text", _VLMMF.LIST_WITH_IMAGE_TYPE)
-except Exception:
-    pass
-
-# Kimi K2.6 (`kimi_k25` model_type) reuses the `kimi_vl` module in mlx_vlm
-# for vision + multi-modal projector. Install the remap at import time
-# (setdefault = idempotent) so apply_chat_template + get_model_and_args
-# route kimi_k25 through kimi_vl without needing jang_tools to be
-# imported first. See research/KIMI-K2.6-VMLX-INTEGRATION.md §1.
-try:
-    from mlx_vlm import utils as _mlx_vlm_utils
-    _mapping = getattr(_mlx_vlm_utils, "MODEL_REMAPPING", None)
-    if _mapping is not None:
-        _mapping.setdefault("kimi_k25", "kimi_vl")
-except Exception:
-    pass
-
-try:
-    from mlx_vlm.prompt_utils import MODEL_CONFIG as _KV_MODEL_CONFIG
-    if "kimi_k25" not in _KV_MODEL_CONFIG and "kimi_vl" in _KV_MODEL_CONFIG:
-        _KV_MODEL_CONFIG["kimi_k25"] = _KV_MODEL_CONFIG["kimi_vl"]
-except Exception:
-    pass
+# mlx_vlm registry patches (gemma4 + kimi_k25) — DEFERRED to first VLM
+# load instead of import time. Importing `mlx_vlm.prompt_utils` /
+# `mlx_vlm.utils` transitively pulls in `mlx_vlm.generate` which has
+# a module-level `mx.new_stream(mx.default_device())`. That stream is
+# then bound to the importing thread (uvicorn MainThread) and becomes
+# inaccessible to the `llm-worker` thread that scheduler.step()
+# eventually runs on — DSV4-Flash + JANGTQ bundles crash with
+# `RuntimeError: There is no Stream(gpu, N) in current thread.` mid-
+# prefill (mlxstudio#119 follow-up, 2026-05-02). Calling
+# `_install_mlx_vlm_registry_patches()` from the loader executor right
+# before the first VLM load keeps the patches idempotent + ensures
+# any thread-bound MLX stream is created on the load thread.
+def _install_mlx_vlm_registry_patches() -> None:
+    """Install gemma4 / kimi_k25 entries in mlx_vlm's MODEL_CONFIG /
+    MODEL_REMAPPING. Idempotent. Safe to call from any thread; should
+    be called from the same thread that will later run the VLM load
+    so any module-level `mx.new_stream(...)` ends up bound to that
+    thread."""
+    try:
+        from mlx_vlm.prompt_utils import (
+            MODEL_CONFIG as _VLM_MODEL_CONFIG,
+            MessageFormat as _VLMMF,
+        )
+        _VLM_MODEL_CONFIG.setdefault("gemma4", _VLMMF.LIST_WITH_IMAGE_TYPE)
+        _VLM_MODEL_CONFIG.setdefault("gemma4_text", _VLMMF.LIST_WITH_IMAGE_TYPE)
+    except Exception:
+        pass
+    try:
+        from mlx_vlm import utils as _mlx_vlm_utils
+        _mapping = getattr(_mlx_vlm_utils, "MODEL_REMAPPING", None)
+        if _mapping is not None:
+            _mapping.setdefault("kimi_k25", "kimi_vl")
+    except Exception:
+        pass
+    try:
+        from mlx_vlm.prompt_utils import MODEL_CONFIG as _KV_MODEL_CONFIG
+        if "kimi_k25" not in _KV_MODEL_CONFIG and "kimi_vl" in _KV_MODEL_CONFIG:
+            _KV_MODEL_CONFIG["kimi_k25"] = _KV_MODEL_CONFIG["kimi_vl"]
+    except Exception:
+        pass
 
 # All imports are lazy to allow usage on non-Apple Silicon platforms
 # (e.g., CI running on Linux) where mlx_lm is not available.

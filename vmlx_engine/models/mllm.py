@@ -729,6 +729,18 @@ class MLXMultimodalLM:
         from ..api.utils import resolve_to_local_path
         resolved_name = resolve_to_local_path(self.model_name)
 
+        # Install mlx_vlm registry patches (gemma4 + kimi_k25) on THIS thread
+        # so any module-level `mx.new_stream(...)` in mlx_vlm.generate ends
+        # up bound to the loader-executor worker rather than uvicorn
+        # MainThread. Otherwise scheduler.step() crashes mid-prefill with
+        # `RuntimeError: There is no Stream(gpu, N) in current thread.`
+        # (mlxstudio#119 follow-up, 2026-05-02).
+        try:
+            from .. import _install_mlx_vlm_registry_patches
+            _install_mlx_vlm_registry_patches()
+        except Exception:
+            pass
+
         # Apply mlx_vlm runtime compat patches (Qwen3-VL grid_thw coercion, #69).
         try:
             from ..utils.mlx_vlm_compat import apply as _apply_mlx_vlm_compat
