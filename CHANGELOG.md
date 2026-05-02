@@ -2,6 +2,26 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.5.3] - 2026-05-02
+
+### Fixed
+- **DSV4-Flash bundles fail to load with `ModuleNotFoundError: jang_tools.dsv4.pool_quant_cache`** — `panel/scripts/bundle-python.sh`:
+  - The PyPI `jang` wheel (2.5.9) lagged the local development of `jang_tools.dsv4` modules. `pool_quant_cache.py`, `fused_pool_attn.py`, `fused_pool_attn_kernel.py`, and `build_role_codebooks.py` landed in jang 2.5.10/2.5.11 but were not on PyPI when the v1.5.2 DMG was built. The moment any DSV4-Flash bundle was loaded, the JANGTQ runtime imported `pool_quant_cache` and the request died inside `scheduler.step()`, returning empty content (`{prompt_tokens: 0, completion_tokens: 0}`) without surfacing the error to the client.
+  - `bundle-python.sh` now installs `jang_tools` from the local `~/jang/jang-tools` source path when present, with a PyPI fallback (`jang>=2.5.11`) for CI builds. Every future DMG will ship whatever DSV4 runtime the engine actually needs without waiting for a separate PyPI publish.
+- **DSV4 `make_cache()` `NameError: name 'long_ctx' is not defined`** — vendored `jang_tools/dsv4/mlx_model.py` fix synced into bundled-python:
+  - The 2026-05-01 "tri-mode always active" cleanup left the `long_ctx` variable referenced inside `make_cache()` but the parameter was removed from the signature, so the function raised on first call. The scheduler caught it as a hybrid-detection warning and silently fell back to a plain KV path that doesn't match DSV4's compressor/indexer architecture.
+  - Replaced `if long_ctx and layer.self_attn.compress_ratio:` with `if layer.self_attn.compress_ratio:` (matches the docstring; tri-mode is unconditional).
+- **DSV4 `PoolQuantizedV4Cache` rejected by mamba_cache merge whitelist** — `vmlx_engine/utils/mamba_cache.py`:
+  - `_patched_merge_caches` enumerated KVCache, RotatingKVCache, MambaCache, ArraysCache, CacheList — but raised `ValueError("does not yet support batching with history")` for DSV4's `DeepseekV4Cache` and `PoolQuantizedV4Cache`. With continuous batching enabled, the very first request crashed the engine loop and aborted itself.
+  - Added DSV4 cache passthrough for `len(caches)==1` (single-batch is a no-op merge); multi-batch raises a clearer error pointing the user at `--continuous-batching` off / `max_num_seqs=1`.
+
+### Audit (continued from 1.5.2)
+- 4th bundle: `DeepSeek-V4-Flash-JANGTQ2`. The 3 fixes above unblock load + non-batched inference; a deeper Metal stream-thread bug (`There is no Stream(gpu, 3) in current thread.`) still kills the first inference because DSV4's compressor / indexer / pool-quant tensors were created on multiple worker threads. Same class as the MLLM `/admin/deep-sleep` bug. Tracked separately.
+
+### Known issues (carry-over)
+- DSV4-Flash inference fails with `Stream(gpu, 3)` on the first request when the engine spans multiple worker threads. Fix path: dedicated single-worker executor for DSV4 (mirrors the 1.3.93 JANGTQ-VL `mllm-worker_0` fix).
+- `/admin/deep-sleep` on hybrid-SSM MLLM bundles fails with `Stream(gpu, 4)` — same class. Soft-sleep + wake roundtrip works.
+
 ## [1.5.2] - 2026-05-02
 
 ### Fixed

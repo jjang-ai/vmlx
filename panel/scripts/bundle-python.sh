@@ -45,7 +45,10 @@ echo "==> Installing dependencies..."
   "fastapi>=0.100.0" "uvicorn>=0.23.0" \
   "mcp>=1.0.0" "jsonschema>=4.0.0" \
   "psutil>=5.9.0" "tqdm>=4.66.0" "pyyaml>=6.0" \
-  "requests>=2.28.0" "tabulate>=0.9.0" "mlx-embeddings>=0.0.5"
+  "requests>=2.28.0" "tabulate>=0.9.0" "mlx-embeddings>=0.0.5" \
+  "tiktoken>=0.7.0" \
+  "soundfile>=0.12" \
+  "timm>=1.0.20"  # Kimi K2.6 tokenizer + Nemotron-Omni audio (soundfile) + Omni RADIO ViT (timm)
 
 # Install mlx-audio for STT/TTS (--no-deps: it pins exact mlx-lm/transformers versions
 # that conflict with ours — we already have all the real deps above)
@@ -55,128 +58,35 @@ echo "==> Installing mlx-audio (STT/TTS)..."
 "$PYTHON" -m pip install \
   librosa sounddevice miniaudio pyloudnorm numba
 
-# Install jang-tools from local source. Kimi K2.6 integration
-# (research/KIMI-K2.6-VMLX-INTEGRATION.md §1) depends on:
-#   jang_tools.load_jangtq, load_jangtq_vlm, load_jangtq_kimi_vlm,
-#   jang_tools.kimi_prune.generate_vl, jang_tools.turboquant.*.
-# Path is fixed-per-dev-machine; override via JANG_TOOLS_DIR env var.
-JANG_TOOLS_DIR="${JANG_TOOLS_DIR:-$HOME/jang/jang-tools}"
-if [ -d "$JANG_TOOLS_DIR" ]; then
-  echo "==> Installing jang-tools from $JANG_TOOLS_DIR..."
-  "$PYTHON" -m pip install --no-deps "$JANG_TOOLS_DIR"
+# Install vmlx-engine from PyPI (the local repo's pyproject.toml has a
+# `setuptools.package-dir = engine` declaration that breaks `pip install
+# .` here because the panel dir lives at panel/, not engine/. PyPI 1.4.3
+# is a clean wheel with the same source so this is equivalent.)
+#
+# jang_tools — install from LOCAL source path, not PyPI. The published
+# `jang` wheel lags the local development of jang_tools.dsv4 modules
+# (pool_quant_cache.py, fused_pool_attn.py, fused_pool_attn_kernel.py,
+# build_role_codebooks.py landed in jang 2.5.10 but only jang 2.5.9 was
+# on PyPI as of v1.5.2 build, causing
+# `ModuleNotFoundError: No module named 'jang_tools.dsv4.pool_quant_cache'`
+# the moment a DSV4-Flash bundle was loaded). Pinning to local source
+# ensures every DMG ships with whatever DSV4 runtime the engine actually
+# needs. Falls back to PyPI if the local path doesn't exist (CI builds).
+echo "==> Installing vmlx-engine + jang_tools (local source)..."
+"$PYTHON" -m pip install --no-deps "vmlx==1.4.3"
+JANG_LOCAL="$HOME/jang/jang-tools"
+if [ -f "$JANG_LOCAL/pyproject.toml" ]; then
+  echo "    using local jang-tools at $JANG_LOCAL"
+  "$PYTHON" -m pip install --no-deps "$JANG_LOCAL"
 else
-  echo "==> WARNING: jang-tools source not found at $JANG_TOOLS_DIR"
-  echo "    Kimi K2.6 + JANGTQ bundles will not load in this build."
+  echo "    local jang-tools missing, falling back to PyPI"
+  "$PYTHON" -m pip install --no-deps "jang>=2.5.11"
 fi
-
-# Install our customized vmlx-engine from source (--no-deps since all deps already installed)
-echo "==> Installing vmlx-engine from source..."
-"$PYTHON" -m pip install --no-deps "$REPO_DIR"
 
 # Verify it works
 echo "==> Verifying installation..."
 "$PYTHON" -c "import vmlx_engine; print(f'vmlx_engine {vmlx_engine.__version__} imported OK')"
 "$PYTHON" -m vmlx_engine.cli --help > /dev/null 2>&1 && echo "CLI OK"
-
-# mlxstudio#88 build-time patch: Gemma 4 VLM `pixel_values` list coercion.
-# Upstream mlx_vlm.models.gemma4.vision.VisionModel.__call__ only accepts
-# lists whose elements are already mx.array. When mlx_vlm's processor
-# pipeline hands us a list mixing mx.array + np.ndarray (common on
-# multi-image prompts since MLX 0.31's strict type checking), the first
-# mx.concatenate call throws:
-#   TypeError: concatenate(): incompatible function arguments
-# Fix: per-item coerce to mx.array before concat. Idempotent via marker.
-echo "==> Applying mlxstudio#88 Gemma 4 vision concat coercion..."
-"$PYTHON" <<'PYPATCH'
-from pathlib import Path
-from importlib.util import find_spec
-spec = find_spec("mlx_vlm.models.gemma4.vision")
-if spec is None or spec.origin is None:
-    raise SystemExit("mlx_vlm.models.gemma4.vision not importable after bundle install")
-target = Path(spec.origin)
-src = target.read_text()
-if "mlxstudio#88" in src:
-    print(f"  patch already present in {target}")
-    raise SystemExit(0)
-ORIG = """    def __call__(self, pixel_values: mx.array) -> mx.array:
-        if isinstance(pixel_values, list):
-            pixel_values = mx.concatenate(pixel_values, axis=0)"""
-NEW = """    def __call__(self, pixel_values: mx.array) -> mx.array:
-        if isinstance(pixel_values, list):
-            # mlxstudio#88 (2026-04-23): upstream mx.concatenate rejects
-            # non-mx.array items since MLX 0.31+. Gemma 4's processor path
-            # can hand us a list mixing mx.array + np.ndarray (one entry per
-            # image tile on multi-image prompts), so coerce per-item before
-            # concat. A plain mx.array(v) on an already-mx.array is a no-op
-            # but we guard to avoid the unnecessary copy.
-            pixel_values = mx.concatenate(
-                [v if isinstance(v, mx.array) else mx.array(v) for v in pixel_values],
-                axis=0,
-            )"""
-if ORIG not in src:
-    raise SystemExit(f"upstream mlx_vlm.models.gemma4.vision shape changed; review patch block at {target}")
-target.write_text(src.replace(ORIG, NEW))
-print(f"  patched {target}")
-PYPATCH
-
-# Kimi K2.6 build-time patch: fp32 MLA L==1 SDPA fix on bundled mlx_lm.
-# Without this, Kimi decoding at bf16 drifts and produces repetition loops
-# after ~14 tokens. Doc: research/KIMI-K2.6-VMLX-INTEGRATION.md §1.2.
-# Idempotent — checks for the "JANG fast fix" marker before editing.
-echo "==> Applying Kimi K2.6 MLA fp32-SDPA patch to bundled mlx_lm..."
-"$PYTHON" <<'PYPATCH'
-from pathlib import Path
-from importlib.util import find_spec
-
-spec = find_spec("mlx_lm.models.deepseek_v3")
-if spec is None or spec.origin is None:
-    raise SystemExit("mlx_lm.models.deepseek_v3 not importable after bundle install")
-target = Path(spec.origin)
-src = target.read_text()
-if "JANG fast fix" in src and "q_sdpa" in src:
-    print(f"  patch already present in {target}")
-    raise SystemExit(0)
-
-ORIG = """        if L == 1:
-            q_nope = self.embed_q(q_nope)
-            k = v = kv_latent
-        else:
-            k = self.embed_q(kv_latent, transpose=False)
-            v = self.unembed_out(kv_latent)
-
-        output = scaled_dot_product_attention(
-            q_nope, k, v, cache=cache, scale=self.scale, mask=pe_scores
-        )
-        if L == 1:
-            output = self.unembed_out(output)"""
-
-NEW = """        if L == 1:
-            q_nope = self.embed_q(q_nope)
-            k = v = kv_latent
-            # JANG fast fix (2026-04-22): MLA absorb path at bf16 drifts ~7.0
-            # in logit magnitude per token vs prefill; cast just the SDPA
-            # inputs to float32 so attention accumulates in higher precision.
-            q_sdpa = q_nope.astype(mx.float32)
-            k_sdpa = k.astype(mx.float32)
-            v_sdpa = v.astype(mx.float32)
-            mask_sdpa = pe_scores.astype(mx.float32)
-        else:
-            k = self.embed_q(kv_latent, transpose=False)
-            v = self.unembed_out(kv_latent)
-            q_sdpa, k_sdpa, v_sdpa, mask_sdpa = q_nope, k, v, pe_scores
-
-        output = scaled_dot_product_attention(
-            q_sdpa, k_sdpa, v_sdpa, cache=cache, scale=self.scale, mask=mask_sdpa
-        )
-        if L == 1:
-            output = output.astype(kv_latent.dtype)
-            output = self.unembed_out(output)"""
-
-if ORIG not in src:
-    raise SystemExit(f"upstream mlx_lm.models.deepseek_v3 shape changed; review patch block at {target}")
-target.write_text(src.replace(ORIG, NEW))
-print(f"  patched {target}")
-PYPATCH
 
 # Clean up to reduce size
 echo "==> Cleaning up..."
@@ -207,12 +117,11 @@ find "$SITE" -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
 rm -rf "$SITE/torch" "$SITE/torch-"*.dist-info 2>/dev/null || true
 rm -rf "$SITE/torchvision" "$SITE/torchvision-"*.dist-info 2>/dev/null || true
 rm -rf "$SITE/torchgen" "$SITE/torchgen-"*.dist-info 2>/dev/null || true
-# soundfile: requires libsndfile.dylib which isn't bundled. Removing the package
-# makes transformers.is_soundfile_available() return False and skip audio imports.
-# mlx_vlm/utils.py is also patched to lazy-import soundfile for defense-in-depth.
-rm -f "$SITE/soundfile.py" 2>/dev/null || true
-rm -rf "$SITE/soundfile-"*.dist-info 2>/dev/null || true
-rm -rf "$SITE/_soundfile"* 2>/dev/null || true
+# soundfile: KEEP. Required for Nemotron-3-Nano-Omni audio path
+# (jang_tools.nemotron_omni_chat → ParakeetEncoder mel features).
+# Modern pip install ships libsndfile_arm64.dylib alongside _soundfile_data,
+# so the older "missing libsndfile.dylib" runtime crash no longer applies.
+# Verified working at bundle time: see verify-bundled-python.sh soundfile gate.
 rm -rf "$SITE/setuptools" 2>/dev/null || true          # build tool, not needed at runtime (~4.2 MB)
 rm -rf "$SITE/setuptools"*.dist-info 2>/dev/null || true
 

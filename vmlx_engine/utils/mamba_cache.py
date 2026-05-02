@@ -517,6 +517,24 @@ def patch_mlx_lm_for_mamba():
                     )[0]
                     merged_subs.append(sub_merged)
                 cache = CacheList(*merged_subs)
+            elif type(layer_cache).__name__ in (
+                "DeepseekV4Cache", "PoolQuantizedV4Cache"
+            ):
+                # DSV4 caches own compressor + indexer state buffers that
+                # cannot be reconstructed from per-batch slices. For single
+                # batch (len(caches)==1) the merge is a no-op — pass through.
+                # Multi-batch DSV4 isn't supported yet (the cache class
+                # itself raises on batched history); we surface a clearer
+                # error if anyone tries.
+                if len(caches) == 1:
+                    cache = layer_cache
+                else:
+                    raise ValueError(
+                        f"DSV4 cache type {type(layer_cache).__name__} cannot "
+                        "merge across multiple batches. Restart the engine "
+                        "without --continuous-batching, or send requests "
+                        "serially (max_num_seqs=1)."
+                    )
             else:
                 raise ValueError(
                     f"{type(layer_cache)} does not yet support batching with history"
