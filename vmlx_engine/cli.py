@@ -169,6 +169,29 @@ def serve_command(args):
     try:
         from .model_config_registry import get_model_config_registry
         _mc = get_model_config_registry().lookup(args.model)
+        # DSV4-Flash auto-config (2026-05-02). Force ``DSV4_POOL_QUANT=0`` so
+        # ``make_cache()`` returns ``DeepseekV4Cache`` (not the
+        # ``PoolQuantizedV4Cache`` peer class). The Compressor + Indexer
+        # activation in ``DeepseekV4Attention.__call__`` gates on
+        # ``isinstance(cache, DeepseekV4Cache)`` and ``PoolQuantizedV4Cache``
+        # is NOT a subclass — so the isinstance check returns False and the
+        # tri-mode (HSA+CSA+SWA) attention path stays dormant. Result:
+        # sliding-window cache overflows at 128 tokens, every reasoning
+        # chain crashes mid-decode with broadcast_shapes. Setting it here
+        # at CLI startup (before BatchedEngine loads) guarantees the
+        # warmup pass + every subsequent make_cache() picks up
+        # DeepseekV4Cache. Lose ~4 GB pool-quant memory savings, gain
+        # 14/14 probe matrix on DeepSeek-V4-Flash-JANGTQ2. Override:
+        # set DSV4_POOL_QUANT=1 explicitly to opt back into pool quant
+        # (only safe for ≤128-token contexts).
+        if _mc.family_name == "deepseek_v4":
+            if os.environ.get("DSV4_POOL_QUANT") not in ("0", "1"):
+                os.environ["DSV4_POOL_QUANT"] = "0"
+                logger.info(
+                    "DSV4-Flash detected — DSV4_POOL_QUANT=0 set so the "
+                    "Compressor + Indexer (HSA+CSA) activates correctly. "
+                    "Override: set DSV4_POOL_QUANT=1 explicitly."
+                )
         if _mc.family_name != "unknown":
             # Auto-apply tool parser
             if not server._tool_call_parser and _mc.tool_parser:

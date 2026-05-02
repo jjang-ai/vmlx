@@ -2,6 +2,20 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.5.6] - 2026-05-02
+
+### Fixed (DSV4-Flash 14/14 — final)
+- **DSV4-Flash + JANGTQ now passes the FULL probe matrix (14/14)**, including reasoning ON (17×23=391), tools (`get_weather` returns valid tool_calls), `enable_thinking=true` with reasoning + content, and sleep/wake roundtrip with coherent post-wake reply. Three remaining v1.5.5 fails fixed by:
+  1. **`vmlx_engine/cli.py`** auto-detects DSV4 family at startup and sets `DSV4_POOL_QUANT=0` so `make_cache()` returns `DeepseekV4Cache` (not the `PoolQuantizedV4Cache` peer class). The Compressor + Indexer activation in `DeepseekV4Attention.__call__` gates on `isinstance(cache, DeepseekV4Cache)` and PoolQuantizedV4Cache is NOT a subclass — so the isinstance check returned False, the tri-mode (HSA+CSA+SWA) attention path stayed dormant, the sliding-window cache overflowed at 128 tokens, and every reasoning chain crashed mid-decode with `broadcast_shapes`. Setting it at CLI startup (before the engine loads the model) guarantees the warmup pass + every subsequent `make_cache()` picks up DeepseekV4Cache. Trade-off: lose ~4 GB pool-quant memory; gain end-to-end reasoning + multi-turn long context. Override: explicitly set `DSV4_POOL_QUANT=1` to opt back into the pool-quant path (only safe for ≤128-token contexts).
+  2. **`vmlx_engine/server.py`** force-flips `enable_thinking=True` for the DSV4 family on all 4 endpoints (chat-completions, Ollama, Anthropic, Responses) when the client sent anything OTHER than explicit `True` (was: only when explicit `False`). DSV4 chat-mode (`enable_thinking=False`) produces "training-data contaminated" output: hallucinated AI-assistant boilerplate, mixed-language annotation leakage, spam URLs, etc. Thinking-mode is the verified-clean path for this bundle.
+  3. **`vmlx_engine/utils/dsv4_batch_generator.py`** prefill is now single-shot (`model(full_ids, cache=cache)`) instead of chunked. Chunking corrupted the DSV4 compressor + indexer pool state, which manifested as `broadcast_shapes (1,N) (1,64,1,128)` mid-decode. The post-warmup model has all kernels JIT-compiled so single-shot prefill stays under the Metal command-buffer watchdog even on long prompts.
+
+Live-verified 14/14 on `DeepSeek-V4-Flash-JANGTQ2` (74 GB on disk, 38 GB resident) at 16.3 tok/s decode. Auto-config requires no shell flag — engine does the right thing out of the box.
+
+### Verified non-regressions
+- `Qwen3.6-27B-JANG_4M-CRACK` — `'PONG'` ✓
+- DSV4 auto-config does NOT affect non-DSV4 models (gated on `_mc.family_name == "deepseek_v4"`)
+
 ## [1.5.5] - 2026-05-02
 
 ### Fixed

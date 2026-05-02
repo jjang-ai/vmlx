@@ -3354,7 +3354,7 @@ async def create_anthropic_message(
         # output every time. Verified 2026-04-26 across all four API surfaces.
         # Force-flip enable_thinking → True for DSV4 family until a clean
         # chat-mode bundle ships.
-        if chat_req.enable_thinking is False:
+        if chat_req.enable_thinking is not True:
             logger.info(
                 "DSV4: forcing enable_thinking=True (chat-mode bundle is "
                 "training-data-contaminated; thinking-mode is the verified path)"
@@ -4079,7 +4079,7 @@ async def ollama_chat(fastapi_request: Request):
         )
         _ollama_ct_kwargs.pop("thinking_mode", None)
         # DSV4 force-thinking on Ollama path. See chat-completions block.
-        if chat_req.enable_thinking is False:
+        if chat_req.enable_thinking is not True:
             logger.info(
                 "DSV4 (Ollama): forcing enable_thinking=True (chat-mode bundle "
                 "is training-data-contaminated)"
@@ -5763,7 +5763,7 @@ async def create_chat_completion(
         # bundle is training-data-contaminated in chat-mode (enable_thinking=False),
         # producing spam URLs and mixed-language annotation leakage. Thinking-mode
         # is the only verified-clean output path. See chat-completions block.
-        if request.enable_thinking is False:
+        if request.enable_thinking is not True:
             logger.info(
                 "DSV4 (Responses): forcing enable_thinking=True (chat-mode bundle "
                 "is training-data-contaminated)"

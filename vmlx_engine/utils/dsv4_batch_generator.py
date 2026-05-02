@@ -227,16 +227,6 @@ class DSV4BatchGenerator:
         prompt_resps: List[_Response] = []
         gen_resps: List[_Response] = []
 
-        import threading as _th
-        _tname = _th.current_thread().name
-        try:
-            _curr_stream = mx.default_stream(self._device)
-        except Exception:
-            _curr_stream = "?"
-        logger.info(
-            f"DSV4Gen.next() thread={_tname} default_stream={_curr_stream} "
-            f"requests={len(self._requests)}"
-        )
         # On first call, warm up MLX kernels so the user's prefill
         # doesn't have to JIT-compile every routed-expert / hash-router
         # combo in one shot. We call model() with the smallest possible
@@ -259,27 +249,22 @@ class DSV4BatchGenerator:
         for r in list(self._requests):
             with mx.stream(self._device):
                 if r.cache is None:
-                    # Prefill — chunk in `prefill_step_size` blocks. DSV4's
-                    # first forward triggers Metal kernel JIT compilation
-                    # for every routed-expert / hash-router shape combo;
-                    # one-shot prefill of even a 20-token prompt can
-                    # exceed the Metal command-buffer watchdog (~10s) on
-                    # cold cache. Synchronize between chunks so each
-                    # command buffer stays under the limit.
+                    # Prefill — single-shot via `model(full_ids, cache=cache)`.
+                    # The canonical jang_tools.dsv4.runtime.generate runs
+                    # prefill in one call; chunking the prefill broke the
+                    # DSV4 compressor + indexer pool state (broadcast_shapes
+                    # mismatch on subsequent decode). The post-warmup model
+                    # has all kernels JIT-compiled, so even a long prompt
+                    # completes within the Metal command-buffer watchdog.
                     r.cache = self._make_new_cache()
                     if not r.prompt_tokens:
                         r.finish_reason = "stop"
                         r.prompt_processed = True
                         continue
                     full_ids = mx.array(r.prompt_tokens, dtype=mx.int32)[None, :]
-                    chunk = max(1, int(self.prefill_step_size))
-                    n = full_ids.shape[1]
-                    logits = None
-                    for start in range(0, n, chunk):
-                        slc = full_ids[:, start : start + chunk]
-                        logits = self.model(slc, cache=r.cache)
-                        if hasattr(mx, "synchronize"):
-                            mx.synchronize()
+                    logits = self.model(full_ids, cache=r.cache)
+                    if hasattr(mx, "synchronize"):
+                        mx.synchronize()
                     # Sample first token from last logit position
                     last_logits = logits[:, -1, :]
                     sampled, logprobs = self._sample(
