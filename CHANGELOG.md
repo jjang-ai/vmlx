@@ -2,6 +2,20 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.5.2] - 2026-05-02
+
+### Fixed
+- **Gemma 4 streaming drops short responses (any reply < 18 chars)** — `vmlx_engine/reasoning/gemma4_parser.py`:
+  - `Gemma4ReasoningParser.extract_reasoning_streaming` was buffering output until `len(current_text) >= 18` to detect a possible incoming `<|channel>thought\n` marker. Responses shorter than 18 chars (e.g. `BRAVO`, `OK`, `42`, single-token tool args) finished generating before reaching the threshold, so the buffered prefix was never flushed → stream emitted `role:assistant` opener and the final usage chunk only, with zero `content` deltas. Affected `/v1/chat/completions stream=true`, `/v1/messages` (Anthropic non-streaming internally streams), and any client that drives Gemma 4 via SSE.
+  - Replaced static-threshold buffer with a prefix-could-be-channel-marker check: hold only while the accumulated text remains a viable prefix of `<|channel>` or `thought\n`; flush as content the moment the first character disqualifies the marker (e.g. starts with `B` for "BRAVO").
+  - Live-verified on `Gemma-4-26B-A4B-it-JANG_4M-CRACK`: streaming "BRAVO" now emits `BRA` + `VO` deltas; Anthropic returns `text="BRAVO"`; full audit matrix went from 10/14 → 12/14 PASS on this bundle.
+
+### Audit
+- Cross-cutting wire-format matrix run on 3 dense/MoE/hybrid bundles (Qwen3.6-27B-JANG_4M, Gemma-4-26B-A4B-it-JANG_4M, Qwen3.6-35B-A3B-JANGTQ4): 13/14, 12/14, 14/14 PASS respectively. Verified across `/v1/chat/completions`, `/v1/completions`, `/v1/responses`, `/api/chat` (Ollama), `/v1/messages` (Anthropic) — reasoning on/off, tools, multi-turn cache, family fallback temps, async re-derive, sleep/wake. Single shared `_resolve_enable_thinking()` resolver across 6 sites; Anthropic adapter has its own 3-source thinking precedence (per spec, default OFF).
+
+### Known issues (carry-over, not fixed in 1.5.2)
+- `/admin/deep-sleep` on hybrid-SSM MLLM bundles fails with `There is no Stream(gpu, 4) in current thread.` — Metal stream is owned by the dedicated `mllm-worker_0` executor (1.3.93 thread fix) but FastAPI calls `_engine.stop()` from the event-loop thread which can't access stream 4. `/admin/wake` returns `already_active` because the failed deep-sleep never cleared `_standby_state`. Soft-sleep + wake cycle works.
+
 ## [1.5.1] - 2026-05-02
 
 ### Fixed
