@@ -99,6 +99,137 @@ class MLXLanguageModel:
                 tokenizer_config=tokenizer_config,
             )
 
+            # ─────────────────────────────────────────────────────────────
+            # UNIVERSAL multi-eos stop set installation
+            # ─────────────────────────────────────────────────────────────
+            # Common bug class observed across laguna, dsv4, qwen3.6,
+            # nemotron-h, kimi, minimax, mistral3, gemma4: bundles ship
+            # `generation_config.json::eos_token_id` as a LIST (e.g.
+            # `[2, 24]`, `[1, 128803]`, `[248046, 248044]`), but
+            # `mlx_lm.generate.stream_generate` re-wraps the tokenizer
+            # with `TokenizerWrapper(tok)` — no `eos_token_ids` arg —
+            # falling back to the singleton `{tokenizer.eos_token_id}`.
+            # The model emits a token from the list that ISN'T the
+            # singleton primary, the engine doesn't recognise it as a
+            # stop, and decoding rolls past the natural turn boundary.
+            # User symptoms range from emitting `</assistant>` literal
+            # text (laguna) to looping in `<think>` mode (qwen3.6
+            # hybrid SSM, dsv4 reasoning) to fake user turns.
+            #
+            # The PRE-WRAP pattern below collects all stop ids from:
+            #   1. `generation_config.json::eos_token_id` (authoritative —
+            #      bundle's own declared stop list)
+            #   2. `model_config.eos_tokens` from the registry (engine
+            #      overrides, e.g. dsv4's `<｜User｜>` defensive stop)
+            #   3. `tokenizer.eos_token_id` (the existing primary)
+            # …then wraps with `TokenizerWrapper(tok, eos_token_ids=...)`.
+            # mlx_lm's `isinstance(tokenizer, TokenizerWrapper)` check
+            # in `stream_generate` short-circuits the re-wrap, so our
+            # full id list survives.
+            try:
+                from mlx_lm.tokenizer_utils import TokenizerWrapper
+                resolved: list[int] = []
+
+                # Source 1: tokenizer's own primary eos
+                primary = getattr(self.tokenizer, "eos_token_id", None)
+                if isinstance(primary, int):
+                    resolved.append(primary)
+
+                # Source 2: bundle's generation_config.json eos_token_id
+                # (list or int). This is the most authoritative — it's
+                # what HF / vLLM / llama.cpp use as the model's declared
+                # stop set.
+                try:
+                    from pathlib import Path as _Path
+                    import json as _json
+                    _gen_cfg_path = _Path(self.model_name) / "generation_config.json"
+                    if _gen_cfg_path.is_file():
+                        _gen_cfg = _json.loads(_gen_cfg_path.read_text())
+                        _gen_eos = _gen_cfg.get("eos_token_id")
+                        if isinstance(_gen_eos, list):
+                            for t in _gen_eos:
+                                if isinstance(t, int) and t not in resolved:
+                                    resolved.append(t)
+                        elif isinstance(_gen_eos, int):
+                            if _gen_eos not in resolved:
+                                resolved.append(_gen_eos)
+                except Exception:
+                    pass  # missing / unreadable generation_config — skip
+
+                # Source 3: registry-level eos_tokens (engine overrides
+                # like dsv4's `<｜User｜>` defensive stop). Resolve each
+                # string against the tokenizer's vocab.
+                unresolved: list[str] = []
+                if model_config.eos_tokens:
+                    for tok_str in model_config.eos_tokens:
+                        try:
+                            tid = int(tok_str)
+                        except ValueError:
+                            tid = self.tokenizer.convert_tokens_to_ids(tok_str) \
+                                if hasattr(self.tokenizer, "convert_tokens_to_ids") \
+                                else None
+                        if tid is None or tid < 0:
+                            unresolved.append(tok_str)
+                            continue
+                        # `convert_tokens_to_ids` returns `unk_token_id`
+                        # for strings not in vocab; treat that as
+                        # unresolved unless the user really IS asking for
+                        # the unk token.
+                        unk_id = getattr(self.tokenizer, "unk_token_id", None)
+                        if (
+                            unk_id is not None and tid == unk_id
+                            and tok_str != getattr(self.tokenizer, "unk_token", "")
+                        ):
+                            unresolved.append(tok_str)
+                            continue
+                        if tid not in resolved:
+                            resolved.append(tid)
+
+                # Only wrap when there's > 1 stop id — singleton equals
+                # the default, no need to interfere.
+                if len(resolved) > 1:
+                    if isinstance(self.tokenizer, TokenizerWrapper):
+                        # Already wrapped (Laguna early route or some
+                        # custom path). Add any missing ids directly to
+                        # the wrapper's stop set via add_eos_token.
+                        for tid in resolved:
+                            try:
+                                # add_eos_token accepts int or string; pass
+                                # int directly to avoid round-tripping
+                                # through vocab.
+                                self.tokenizer.add_eos_token(tid)
+                            except Exception:
+                                pass
+                        # Telemetry: inspect the post-add set
+                        existing = getattr(self.tokenizer, "_eos_token_ids", None)
+                        logger.info(
+                            f"{model_config.family_name}: TokenizerWrapper "
+                            f"existing wrapper extended; eos_token_ids={existing}"
+                        )
+                    else:
+                        # Raw HF tokenizer — pre-wrap with full id list
+                        # so it survives mlx_lm's re-wrap.
+                        self.tokenizer = TokenizerWrapper(
+                            self.tokenizer, eos_token_ids=resolved,
+                        )
+                        logger.info(
+                            f"{model_config.family_name}: tokenizer "
+                            f"pre-wrapped with eos_token_ids={resolved}"
+                        )
+
+                if unresolved:
+                    logger.warning(
+                        f"{model_config.family_name}: unresolved eos "
+                        f"strings {unresolved} (not in vocab as single "
+                        f"tokens) — fix the registry entry or bundle "
+                        f"tokenizer_config special_tokens"
+                    )
+            except Exception as _wrap_err:
+                logger.warning(
+                    f"{model_config.family_name}: universal multi-eos "
+                    f"install failed: {_wrap_err}"
+                )
+
             self._loaded = True
             logger.info(f"Model loaded successfully: {self.model_name}")
 

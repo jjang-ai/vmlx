@@ -154,14 +154,29 @@ def register_all(registry=None):
     # instance correctly; running it through the OpenAI-compat server
     # path is what's not yet wired. Tracking gap.
     #
-    # Tokenizer: Qwen2-flavored (vocab 100352, eos `<|im_end|>`). No
-    # custom parser; qwen tool + qwen3 reasoning are the right fallback.
+    # Tokenizer: poolside-flavored (vocab 100352). DESPITE the README
+    # claim that Laguna ships "Qwen2-flavored" tokens, the bundle's
+    # `generation_config.json` lists `eos_token_id: [2, 24]` —
+    # token 2 = `〈|EOS|〉` (the special end marker), token 24 =
+    # `</assistant>` (the chat-template assistant turn close, see the
+    # tail of `chat_template.jinja`). Setting `eos_token` to
+    # `<|im_end|>` (Qwen convention) silently fails because that
+    # string isn't in Laguna's vocab — the tokenizer keeps the bundle
+    # default but the engine's decode-loop stop list ends up empty,
+    # and the model loops past the natural turn boundary emitting
+    # literal `</assistant>\n</assistant>\n...` then hallucinating
+    # follow-up turns. Use the strings that ARE in the vocab.
+    #
+    # Reasoning parser: Laguna's chat template gates `<think>` blocks
+    # behind `enable_thinking=true` (default false). The qwen3 parser
+    # extracts `<think>...</think>` if present and otherwise routes
+    # all output to `content`, so leaving it auto-applied is safe.
     _register(
         ModelConfig(
             family_name="laguna",
             model_types=["laguna"],
             cache_type="kv",
-            eos_tokens=["<|im_end|>", "<|endoftext|>"],
+            eos_tokens=["</assistant>", "〈|EOS|〉"],
             tool_parser="qwen",
             reasoning_parser="qwen3",
             think_in_template=True,
@@ -511,11 +526,23 @@ def register_all(registry=None):
     # Bundle formats (per §5 cheat sheet): JANG_2L (107 GB), JANGTQ2 (74 GB
     # recommended prod default), JANGTQ4 (173 GB highest fidelity), JANG4
     # (173 GB uniform 4-bit). Do NOT use JANGTQ4-HP (mxfp4+bf16 unstable).
+    # eos_tokens contains BOTH the special EOS and the user-turn marker.
+    # `generation_config.json` ships only `eos_token_id: 1` (the
+    # `<｜end▁of▁sentence｜>` token). DeepSeek-R1-style reasoning models
+    # also need `<｜User｜>` (id 128803) in the stop set as a defense
+    # against the model hallucinating a new user turn — without it the
+    # decoder happily keeps generating past the natural assistant
+    # boundary, looping in `<think>` mode and never emitting `</think>`.
+    # `eos_tokens[0]` is consumed by the tokenizer-config override at
+    # `models/llm.py`; everything beyond [0] gets registered via
+    # `tokenizer.add_eos_token()` after the wrapper loads (see
+    # `models/llm.py` post-load hook).
     _register(
         ModelConfig(
             family_name="deepseek_v4",
             model_types=["deepseek_v4"],
             cache_type="kv",
+            eos_tokens=["<｜end▁of▁sentence｜>", "<｜User｜>"],
             tool_parser="dsml",
             reasoning_parser="deepseek_r1",
             think_in_template=True,

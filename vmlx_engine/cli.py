@@ -31,14 +31,50 @@ def serve_command(args):
 
     logger = logging.getLogger(__name__)
 
+    # mlxstudio#138: --kv-cache-quantization explicit-pass detection.
+    # default=None lets us tell "user didn't pass it" from "user said none".
+    # When explicit, set VMLX_DISABLE_TQ_KV so the JANG loader doesn't
+    # silently shadow the user's choice with calibrated TurboQuant KV.
+    _kv_quant_explicit = args.kv_cache_quantization is not None
+    if not _kv_quant_explicit:
+        args.kv_cache_quantization = "none"
+    elif _kv_quant_explicit:
+        os.environ["VMLX_DISABLE_TQ_KV"] = "1"
+        logger.info(
+            f"--kv-cache-quantization={args.kv_cache_quantization} explicit; "
+            f"VMLX_DISABLE_TQ_KV=1 set so JANG-calibrated TurboQuant KV is "
+            f"skipped at load time. Omit the flag (or set VMLX_FORCE_TQ_AUTO=1) "
+            f"to keep the bundle's calibrated TQ."
+        )
+
     # Unified server configuration — explicit args ONLY
     # If the user passes --tool-call-parser qwen, we use qwen.
     # If it's "auto", we auto-detect via model_config_registry.
     # If it's "none" or omitted, tool calling is disabled.
 
+    # Port validation — run BEFORE any registry / model auto-config so
+    # bad ports surface as the visible failure reason. mlxstudio session
+    # manager bug-class: typing fast in the panel's port field can
+    # produce an out-of-range value (e.g. 80014 instead of 8014). Until
+    # 2.5.13 this validation lived ~450 lines later, so a bad port
+    # printed dozens of INFO logs first ("Auto-configured tool parser
+    # from registry: nemotron", "Auto-configured reasoning parser ...",
+    # security summary, etc.) and the panel — which captures the
+    # logging-stream tail to attach to "Process exited before becoming
+    # ready" — saw a benign INFO line as the apparent culprit. Both
+    # checks now use logger.error so the panel's tail capture surfaces
+    # the actual reason.
+    if args.port < 1 or args.port > 65535:
+        logger.error(
+            f"--port must be between 1 and 65535, got {args.port}. "
+            f"TCP ports are 16-bit; values above 65535 are invalid. "
+            f"Did you mean {args.port % 65536}?"
+        )
+        sys.exit(1)
+
     server._api_key = args.api_key or os.environ.get("VLLM_API_KEY")
     if args.timeout <= 0:
-        print(f"Error: --timeout must be positive, got {args.timeout}")
+        logger.error(f"--timeout must be positive, got {args.timeout}")
         sys.exit(1)
     server._default_timeout = args.timeout
     if args.rate_limit > 0:
@@ -643,10 +679,13 @@ def serve_command(args):
     # Configure JIT compilation
     server._enable_jit = getattr(args, 'enable_jit', False)
 
-    # Validate port range BEFORE loading model (loading can take 30s+)
-    if args.port < 0 or args.port > 65535:
-        print(f"Error: --port must be between 0 and 65535, got {args.port}")
-        sys.exit(1)
+    # Port validation now happens at the top of `serve_command` so a
+    # bad port short-circuits BEFORE any model / registry / parser
+    # logging. This kept producing user reports of "Process exited
+    # before becoming ready: INFO:__main__:Auto-configured tool parser
+    # from registry: nemotron" because the panel captured the trailing
+    # INFO log line, not the late `print()` error. Validation is
+    # idempotent — the second check is a defensive nop.
 
     if _is_image:
         # Image model path — load via mflux, serve /v1/images/generations only
@@ -769,6 +808,14 @@ def bench_command(args):
     from .engine_core import AsyncEngineCore, EngineConfig
     from .request import SamplingParams
     from .scheduler import SchedulerConfig
+
+    # mlxstudio#138: mirror serve_command's explicit-pass detection so bench
+    # also disables JANG-calibrated TurboQuant when the user passes
+    # --kv-cache-quantization explicitly.
+    if args.kv_cache_quantization is None:
+        args.kv_cache_quantization = "none"
+    else:
+        os.environ["VMLX_DISABLE_TQ_KV"] = "1"
 
     # Smelt mode: set server globals
     if getattr(args, 'smelt', False):
@@ -1359,16 +1406,25 @@ Examples:
              "(default: 1000, i.e. 64,000 tokens with default block size)",
     )
     # KV cache quantization
+    # mlxstudio#138: default=None lets us distinguish "user didn't pass it"
+    # (None) from "user explicitly chose none" ("none"). When explicit, we
+    # also set VMLX_DISABLE_TQ_KV so the JANG loader's TurboQuant patch
+    # respects the user's intent — without this the bundle's calibrated TQ
+    # silently shadows the requested q4/q8 because BatchGenerator goes
+    # through the patched model.make_cache().
     serve_parser.add_argument(
         "--kv-cache-quantization",
         type=str,
-        default="none",
+        default=None,
         choices=["none", "q4", "q8"],
         help="Compress stored KV cache to reduce unified memory usage by 2-4x. "
              "q8 = 8-bit (minimal quality loss, ~2x savings). "
              "q4 = 4-bit (slight quality loss, ~4x savings). "
              "Cache is stored compressed but decompressed for generation (no inference slowdown). "
-             "Requires --continuous-batching. (default: none)",
+             "Requires --continuous-batching. Passing this flag explicitly disables "
+             "JANG-calibrated TurboQuant KV (jang_config.turboquant.enabled) so your "
+             "choice is honored — set VMLX_FORCE_TQ_AUTO=1 or omit this flag to keep "
+             "the bundle's calibrated TQ. (default: none)",
     )
     serve_parser.add_argument(
         "--kv-cache-group-size",
@@ -1832,13 +1888,14 @@ Examples:
         default=1000,
         help="Maximum number of cache blocks (default: 1000)",
     )
-    # KV cache quantization
+    # KV cache quantization (mlxstudio#138: see serve_parser block for rationale)
     bench_parser.add_argument(
         "--kv-cache-quantization",
         type=str,
-        default="none",
+        default=None,
         choices=["none", "q4", "q8"],
-        help="Quantize KV cache to reduce GPU memory (~2-4x). q8=8-bit, q4=4-bit (default: none)",
+        help="Quantize KV cache to reduce GPU memory (~2-4x). q8=8-bit, q4=4-bit. "
+             "Passing this flag explicitly disables JANG-calibrated TurboQuant KV. (default: none)",
     )
     bench_parser.add_argument(
         "--kv-cache-group-size",

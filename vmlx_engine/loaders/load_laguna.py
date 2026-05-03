@@ -68,28 +68,26 @@ def load_laguna_model(model_path: str | Path) -> Tuple[Any, Any]:
     path = Path(model_path)
     logger.info("Loading Laguna bundle: %s", path.name)
 
-    # JANGTQ on Laguna is NOT yet wired end-to-end — `jang_tools.laguna`
-    # ships a stub `weight_loader_bf16.load_jangtq` that returns the raw
-    # `.tq_packed/.tq_norms/.tq_bits` tensors without the matching
-    # TurboQuantLinear module replacement. The canonical hydration logic
-    # in `jang_tools.load_jangtq` only dispatches on minimax_m2 /
-    # qwen3_5_moe / qwen3_next; laguna is not in the table. Loading a
-    # `weight_format=mxtq` Laguna bundle via the current runtime would
-    # either silently produce garbage tokens (nn.Linear absorbs .tq_packed
-    # keys via strict=False) or crash on `.scales` lookup. Refuse with a
-    # clean error pointing at the bf16 / MXFP4 alternative. bf16 / JANG-
-    # affine / MXFP4 paths are unaffected and continue to work.
+    # 2026-05-02 follow-up: Laguna JANGTQ now wired through
+    # `jang_tools.jangrt.jangtq_hydrate.hydrate_jangtq` (jang-tools 2.5.12+).
+    # The downstream `_laguna_load` swaps `.tq_packed`-bearing modules to
+    # TurboQuant{Linear,SwitchLinear} before `model.update`. Older jang-tools
+    # without the helper raises `ImportError` → caught here as a clean
+    # NotImplementedError pointing the user at the alternative bundles.
     try:
         cfg_check = json.loads((path / "config.json").read_text())
         if cfg_check.get("weight_format") == "mxtq" or "mxtq_bits" in cfg_check:
-            raise NotImplementedError(
-                "Laguna JANGTQ (weight_format=mxtq) is not yet wired in "
-                "jang_tools. TurboQuantLinear shims for the Laguna model.py "
-                "haven't landed, so .tq_packed weights would not feed "
-                "quantized matmul. Use the bf16 / JANG-affine / MXFP4 "
-                "variant of this bundle, or wait for jang-tools >= 2.6 "
-                "which adds the laguna shim. Path: " + str(path)
-            )
+            try:
+                # Surface a clear error if the helper isn't installed.
+                from jang_tools.jangrt.jangtq_hydrate import hydrate_jangtq  # noqa: F401
+            except ImportError as _ie:
+                raise NotImplementedError(
+                    "Laguna JANGTQ (weight_format=mxtq) needs jang-tools "
+                    f">= 2.5.12 (jangrt.jangtq_hydrate is missing: {_ie}). "
+                    "Either upgrade jang-tools, or use the bf16 / "
+                    "JANG-affine / MXFP4 variant of this bundle. "
+                    "Path: " + str(path)
+                ) from _ie
     except (OSError, json.JSONDecodeError):
         pass
 
@@ -114,13 +112,54 @@ def load_laguna_model(model_path: str | Path) -> Tuple[Any, Any]:
         logger.debug("Laguna model.config attach failed: %s", _cfg_err)
         model.config = {"model_type": "laguna"}
 
-    # Tokenizer: standard HF route. Laguna ships a Qwen2-flavored
-    # tokenizer.json + tokenizer_config.json + chat_template.jinja so no
-    # custom encoder is needed (unlike DSV4 which has its own
-    # `dsv4_chat_encoder.py`).
+    # Tokenizer: poolside-flavored. Laguna ships
+    # tokenizer.json + tokenizer_config.json + chat_template.jinja with
+    # `eos_token = '〈|EOS|〉'` (token id 2) — but the chat-template
+    # closes assistant turns with `</assistant>\n` (token id 24, NOT a
+    # special token but a single vocab entry). `generation_config.json`
+    # encodes this correctly as `eos_token_id: [2, 24]`. Stock HF
+    # `AutoTokenizer.from_pretrained` only picks up `eos_token_id` from
+    # tokenizer_config, so the loaded tokenizer has
+    # `eos_token_ids == 2` and `mlx_lm.stream_generate` stops only on
+    # 2. The model was trained to emit 24 at the natural turn boundary,
+    # so without 24 in the stop set, it emits `</assistant>\n`,
+    # continues past it, and starts hallucinating a new assistant turn
+    # (the symptom users see as "looping"). Read the full eos id list
+    # from generation_config.json and attach it to the tokenizer so
+    # mlx_lm honors both.
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(
         str(path), trust_remote_code=True
     )
+    # mlx_lm.generate.stream_generate wraps the tokenizer with
+    # `TokenizerWrapper(tokenizer)` — no `eos_token_ids` arg passed —
+    # which falls back to `{tokenizer.eos_token_id}` (singleton). For
+    # Laguna that's `{2}` (`〈|EOS|〉`) only, missing token 24
+    # (`</assistant>`) which is the chat-template's natural assistant
+    # turn close. The model is trained to emit token 24 at the end of
+    # an answer; without it in the stop set the engine continues past
+    # the boundary, emitting `</assistant>\n</assistant>\n...` and
+    # hallucinating new turns (the user-visible "looping" symptom).
+    # Pre-wrap with the full eos id list from generation_config.json
+    # so `isinstance(tokenizer, TokenizerWrapper)` short-circuits the
+    # re-wrap and our explicit eos_token_ids list survives.
+    try:
+        gen_cfg_path = path / "generation_config.json"
+        eos_ids: list[int] = []
+        if gen_cfg_path.is_file():
+            gen_cfg = json.loads(gen_cfg_path.read_text())
+            raw = gen_cfg.get("eos_token_id")
+            if isinstance(raw, list):
+                eos_ids = list(dict.fromkeys(int(t) for t in raw))
+            elif isinstance(raw, int):
+                eos_ids = [int(raw)]
+        if eos_ids:
+            from mlx_lm.tokenizer_utils import TokenizerWrapper
+            tokenizer = TokenizerWrapper(tokenizer, eos_token_ids=eos_ids)
+            logger.info(
+                "Laguna tokenizer pre-wrapped with eos_token_ids=%s", eos_ids,
+            )
+    except Exception as _eos_err:
+        logger.warning("Laguna eos_token_ids attach failed: %s", _eos_err)
 
     return model, tokenizer
