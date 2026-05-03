@@ -133,13 +133,18 @@ audio = [
     "unidic-lite>=1.0.0",    # Japanese dictionary for fugashi
     "jieba>=0.42.0",         # Chinese word segmentation
 ]
-# JANG / MXTQ runtime + conversion. `jang-tools` provides both the
-# runtime dequant codec and the conversion CLI; covers DSV4-Flash,
-# MiniMax-M2.7-JANG_*, NemotronH-Omni-*, MXTQ shards, and any other
-# JANG-stamped bundle. Mirrors `mxtq` extra above (intentionally same
-# pin) so `pip install vmlx[jang]` is a friendly alias.
+# JANG / MXTQ runtime + conversion. The PyPI distribution name is
+# `jang` (NOT `jang-tools` — that name doesn't exist on PyPI; the
+# import name is `jang_tools` only because the wheel ships its
+# package directory as `jang_tools/`). Provides both the runtime
+# dequant codec and the conversion CLI; covers DSV4-Flash,
+# MiniMax-M2.7-JANG_*, NemotronH-Omni-*, Laguna-XS.2-JANGTQ,
+# Mistral-Medium-3.5-JANGTQ, Qwen 3.5/3.6-JANGTQ, MXTQ shards, and
+# any other JANG-stamped bundle. Mirrors `mxtq` extra above
+# (intentionally same pin) so `pip install vmlx[jang]` is a
+# friendly alias. Pin tracks the hard dep above — bump in lockstep.
 jang = [
-    "jang-tools>=2.5.0",
+    "jang>=2.5.13",
 ]
 # Image generation dependencies (Flux, Z-Image-Turbo via mflux)
 image = [
