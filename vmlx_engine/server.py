@@ -285,19 +285,24 @@ _FALLBACK_TOP_P = 0.9
 # Per-family entries are (temperature, top_p, repetition_penalty); None
 # fields fall through to the generic _FALLBACK_*.
 _FAMILY_FALLBACK_DEFAULTS: dict[str, tuple[float | None, float | None, float | None]] = {
-    # rep_penalty=1.05 is the value that produced the 91% MMLU run
-    # with reasoning ON. Higher penalties (1.10–1.15) DO break the
-    # known short-query loop ("tell me fndcpass syntax for oracle
-    # ebs" → infinite "But wait — I recall that..." chain), but
-    # bumping the GLOBAL default risks regressing MMLU + other
-    # benchmarks where token-level precision matters in reasoning
-    # chains. Keep 1.05 as the default and leave loop-breakers to
-    # other defenses (the `<｜User｜>` defensive eos addition we
-    # made + per-request rep_penalty override). If the loop bug
-    # surfaces in production, users can override per-request via
-    # `repetition_penalty: 1.10` (or via the panel slider) without
-    # losing reasoning quality on benchmark-style prompts.
-    "deepseek_v4": (0.6, 0.95, 1.05),
+    # rep_penalty=1.15 is the production chat default for DSV4-Flash.
+    # The bundle's chat-mode is training-data-contaminated: 1.05
+    # (the 91% MMLU run baseline) leaves the model in a polite-
+    # assistant attractor where multi-turn chats produce multiple
+    # greeting paragraphs ("Hello! I'm doing well, thank you for
+    # asking. How are you?" → "How can I assist you today?" →
+    # "Let me know if there's anything specific you need help
+    # with." → "What is going on in your life? How are things with
+    # you?" repeated) until max_tokens. The `<｜User｜>` defensive
+    # eos in the registry only fires when the model emits the
+    # LITERAL token id 128803; the chat-mode loop emits natural
+    # English instead, so the eos guard doesn't catch it. 1.15
+    # short-query loops cleanly hit eos in 300-400 tokens.
+    # Trade-off: ~3 percentage points of MMLU on standard
+    # benchmarks. Users running DSV4 for benchmarks can override
+    # per-request with `repetition_penalty: 1.05` in the chat
+    # completion payload (or via the panel slider).
+    "deepseek_v4": (0.6, 0.95, 1.15),
 }
 
 
