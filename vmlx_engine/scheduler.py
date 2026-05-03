@@ -3597,100 +3597,61 @@ class Scheduler:
                                 f"tokens, will run during next idle period)"
                             )
                     elif prompt_len > 0:
-                        _ssm_key_tokens = all_tokens
-                        _ssm_key_len = prompt_len
-
-                        # ── Extract SSM layers from generated cache ──
-                        ssm_layers = []
-                        if (
-                            hasattr(request, "_extracted_cache")
-                            and request._extracted_cache
+                        # gpl=0 (non-thinking) hybrid SSM path. Mirror the
+                        # gpl>0 defer-only pattern above — DO NOT extract
+                        # post-output SSM layers from `_extracted_cache`
+                        # and DO NOT do an immediate `is_complete=False`
+                        # store.
+                        #
+                        # Earlier fix attempted to mark contaminated state
+                        # as `is_complete=False` so the rejection check
+                        # would force re-prefill until async re-derive
+                        # replaced it. That path was correct for
+                        # correctness but caused a Metal-buffer RAM leak
+                        # on Nemotron-Omni JANGTQ2: each request stored
+                        # ~10 MB of `MambaCache.from_state(...)` arrays
+                        # backing post-output Metal command buffers AND
+                        # queued an async re-derive. The contaminated
+                        # entries piled up in `_ssm_state_cache._store`
+                        # (LRU cap holds them past the rejection check)
+                        # while the async re-derive ALSO populated entries
+                        # — doubling resident SSM state per request.
+                        #
+                        # Fetch path with NO companion entry already
+                        # falls back to full prefill (line 2364:
+                        # `if _entry is None: ssm_states = None`), so
+                        # the immediate-store-with-rejection-flag was
+                        # functionally redundant: the next turn re-prefills
+                        # either way. Drop the immediate store; just queue
+                        # the async re-derive (clean-boundary capture
+                        # writes `is_complete=True` directly).
+                        if prompt_len < SSM_REDERIVE_MIN_TOKENS:
+                            logger.debug(
+                                "SSM companion (gpl=0): skipping re-derive "
+                                f"for {request_id} (prompt_len={prompt_len} "
+                                f"< {SSM_REDERIVE_MIN_TOKENS})"
+                            )
+                        elif (
+                            self._ssm_state_cache is not None
+                            and len(getattr(self._ssm_state_cache, "_store", {}))
+                                >= self._ssm_state_cache.max_entries
                         ):
-                            _KV_NAMES = {
-                                "KVCache",
-                                "QuantizedKVCache",
-                                "RotatingKVCache",
-                                "CacheList",
-                                "TurboQuantKVCache",
-                            }
-                            _ssm_candidates = 0
-                            for layer_sd in request._extracted_cache:
-                                if not isinstance(layer_sd, dict):
-                                    continue
-                                cls = layer_sd.get("class_name", "")
-                                if cls in _KV_NAMES:
-                                    continue
-                                _ssm_candidates += 1
-                                state = layer_sd.get("state")
-                                meta = layer_sd.get("meta_state")
-                                if state is not None:
-                                    try:
-                                        import mlx_lm.models.cache as _cm
-
-                                        cc = getattr(_cm, cls, None)
-                                        if cc and hasattr(cc, "from_state"):
-                                            ssm_layers.append(
-                                                cc.from_state(state, meta)
-                                            )
-                                        else:
-                                            logger.debug(
-                                                f"SSM layer {cls}: no "
-                                                f"from_state in mlx_lm"
-                                            )
-                                    except Exception as _se:
-                                        logger.debug(f"SSM {cls} restore: {_se}")
-                            if _ssm_candidates > 0 and not ssm_layers:
-                                logger.warning(
-                                    f"SSM companion: {_ssm_candidates} "
-                                    f"candidate layers but 0 restored "
-                                    f"for {request_id}"
-                                )
-                        if ssm_layers:
-                            # CRITICAL: post-output extraction means
-                            # the SSM state captured here is at position
-                            # `prompt_len + output_len`, NOT at
-                            # `prompt_len`. KV layers were truncated to
-                            # `prompt_len-1` by
-                            # `_truncate_cache_to_prompt_length`, but
-                            # SSM layers (MambaCache / ArraysCache) are
-                            # cumulative and pass through that truncation
-                            # unchanged. Storing this misaligned SSM
-                            # state under a `_ssm_key_len = prompt_len`
-                            # key marked complete causes next-turn
-                            # multi-turn requests to fetch garbage
-                            # state, producing incoherent output (the
-                            # Qwen 3.5/3.6 + Nemotron-H multi-turn API
-                            # incoherence reports). Mark `is_complete=False`
-                            # so the rejection check at
-                            # `scheduler.py:2367-2378` and
-                            # `mllm_batch_generator.py:_validate_ssm_companion`
-                            # treats this as "do not use until async
-                            # re-derive replaces it with a clean
-                            # state captured at prompt_len boundary".
-                            # The deferred re-derive path (gpl > 0
-                            # branch above) and the inline
-                            # `vmlx#109 capture-during-prefill` path
-                            # both produce `is_complete=True` entries
-                            # via clean-boundary captures.
-                            self._ssm_state_cache.store(
-                                _ssm_key_tokens, _ssm_key_len, ssm_layers,
-                                is_complete=False,
+                            logger.debug(
+                                "SSM companion (gpl=0): skipping re-derive "
+                                f"for {request_id} (companion cache saturated)"
                             )
-                            logger.info(
-                                f"Stored SSM companion (post-output, "
-                                f"is_complete=False — deferred to async "
-                                f"re-derive) for {request_id}: "
-                                f"{len(ssm_layers)} layers, "
-                                f"{_ssm_key_len}-tok key"
-                            )
-                            # Queue async re-derive so next turn gets
-                            # clean prompt-boundary state.
+                        else:
                             if not hasattr(self, "_ssm_rederive_queue"):
                                 self._ssm_rederive_queue = []
                             if len(self._ssm_rederive_queue) >= SSM_REDERIVE_QUEUE_CAP:
                                 self._ssm_rederive_queue.pop(0)
                             self._ssm_rederive_queue.append(
-                                (list(_ssm_key_tokens), _ssm_key_len, request_id)
+                                (list(all_tokens), prompt_len, request_id)
+                            )
+                            logger.info(
+                                f"SSM companion (gpl=0): queued deferred "
+                                f"re-derive for {request_id} ({prompt_len} "
+                                f"prompt tokens, runs on next idle tick)"
                             )
                 except Exception as _ssm_e:
                     logger.warning(
