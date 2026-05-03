@@ -309,6 +309,22 @@ class Scheduler:
             model.make_cache, "__name__", ""
         ) in ("_tq_make_cache", "_turboquant_make_cache")
 
+        # mlxstudio#138: surface the precedence when both knobs are set.
+        # Without VMLX_DISABLE_TQ_KV, the loader's TQ patch wins because
+        # BatchGenerator runs `model.make_cache()` and gets TurboQuantKVCache;
+        # the scheduler's q4/q8 wrap below still installs but only patches
+        # `QuantizedKVCache.size()` upstream — it never wraps a TQ cache.
+        # Make the precedence visible so the user knows their flag is
+        # being shadowed and how to opt out.
+        if self._tq_active and self.config.kv_cache_quantization != "none":
+            logger.warning(
+                f"--kv-cache-quantization='{self.config.kv_cache_quantization}' "
+                f"requested but jang_config.turboquant.enabled=true is in effect "
+                f"(TurboQuantKVCache patched make_cache). The bundle's calibrated "
+                f"TQ takes precedence; your flag will not change KV bit-width. "
+                f"Set VMLX_DISABLE_TQ_KV=1 to skip TQ and let q4/q8 take effect."
+            )
+
         # Mixed-attention models (Gemma 4 = sliding + full) currently drift
         # under the prefix-cache reconstruct path and produce word loops on
         # the 3rd multi-turn request. Transparently bypass the prefix cache
@@ -3630,13 +3646,51 @@ class Scheduler:
                                     f"for {request_id}"
                                 )
                         if ssm_layers:
+                            # CRITICAL: post-output extraction means
+                            # the SSM state captured here is at position
+                            # `prompt_len + output_len`, NOT at
+                            # `prompt_len`. KV layers were truncated to
+                            # `prompt_len-1` by
+                            # `_truncate_cache_to_prompt_length`, but
+                            # SSM layers (MambaCache / ArraysCache) are
+                            # cumulative and pass through that truncation
+                            # unchanged. Storing this misaligned SSM
+                            # state under a `_ssm_key_len = prompt_len`
+                            # key marked complete causes next-turn
+                            # multi-turn requests to fetch garbage
+                            # state, producing incoherent output (the
+                            # Qwen 3.5/3.6 + Nemotron-H multi-turn API
+                            # incoherence reports). Mark `is_complete=False`
+                            # so the rejection check at
+                            # `scheduler.py:2367-2378` and
+                            # `mllm_batch_generator.py:_validate_ssm_companion`
+                            # treats this as "do not use until async
+                            # re-derive replaces it with a clean
+                            # state captured at prompt_len boundary".
+                            # The deferred re-derive path (gpl > 0
+                            # branch above) and the inline
+                            # `vmlx#109 capture-during-prefill` path
+                            # both produce `is_complete=True` entries
+                            # via clean-boundary captures.
                             self._ssm_state_cache.store(
-                                _ssm_key_tokens, _ssm_key_len, ssm_layers
+                                _ssm_key_tokens, _ssm_key_len, ssm_layers,
+                                is_complete=False,
                             )
                             logger.info(
-                                f"Stored SSM companion for "
-                                f"{request_id}: {len(ssm_layers)} "
-                                f"layers, {_ssm_key_len}-tok key"
+                                f"Stored SSM companion (post-output, "
+                                f"is_complete=False — deferred to async "
+                                f"re-derive) for {request_id}: "
+                                f"{len(ssm_layers)} layers, "
+                                f"{_ssm_key_len}-tok key"
+                            )
+                            # Queue async re-derive so next turn gets
+                            # clean prompt-boundary state.
+                            if not hasattr(self, "_ssm_rederive_queue"):
+                                self._ssm_rederive_queue = []
+                            if len(self._ssm_rederive_queue) >= SSM_REDERIVE_QUEUE_CAP:
+                                self._ssm_rederive_queue.pop(0)
+                            self._ssm_rederive_queue.append(
+                                (list(_ssm_key_tokens), _ssm_key_len, request_id)
                             )
                 except Exception as _ssm_e:
                     logger.warning(

@@ -285,6 +285,18 @@ _FALLBACK_TOP_P = 0.9
 # Per-family entries are (temperature, top_p, repetition_penalty); None
 # fields fall through to the generic _FALLBACK_*.
 _FAMILY_FALLBACK_DEFAULTS: dict[str, tuple[float | None, float | None, float | None]] = {
+    # rep_penalty=1.05 is the value that produced the 91% MMLU run
+    # with reasoning ON. Higher penalties (1.10–1.15) DO break the
+    # known short-query loop ("tell me fndcpass syntax for oracle
+    # ebs" → infinite "But wait — I recall that..." chain), but
+    # bumping the GLOBAL default risks regressing MMLU + other
+    # benchmarks where token-level precision matters in reasoning
+    # chains. Keep 1.05 as the default and leave loop-breakers to
+    # other defenses (the `<｜User｜>` defensive eos addition we
+    # made + per-request rep_penalty override). If the loop bug
+    # surfaces in production, users can override per-request via
+    # `repetition_penalty: 1.10` (or via the panel slider) without
+    # losing reasoning quality on benchmark-style prompts.
     "deepseek_v4": (0.6, 0.95, 1.05),
 }
 
@@ -401,14 +413,17 @@ def _compute_bypass_prefix_cache(request_obj) -> bool:
     users want namespaced caches within a run, they should call
     DELETE /v1/cache between runs instead.
 
-    Environment-level bypass: when ``DSV4_LONG_CTX=1`` is set, the DSV4
-    runtime uses ``DeepseekV4Cache`` which carries compressor/indexer
-    state buffers that cannot be reconstructed from cached KV tokens
-    alone. Our prefix cache stores KV arrays only, so a cache hit in
-    that mode would resume with stale (all-zero) compressor state →
-    drift. Force-bypass prefix cache whenever DSV4_LONG_CTX is on.
-    Research ref: DSV4-RUNTIME-ARCHITECTURE.md §17, DSV-EXHAUSTIVE-
-    VARIABLES-GUIDE.md §12.
+    DSV4 family bypass: tri-mode (HSA+CSA+SWA) is the default and only
+    path since 2026-05-01 (jang_tools.dsv4.mlx_model removed the
+    DSV4_LONG_CTX=0 SWA-only fallback). DSV4 always uses
+    ``DeepseekV4Cache`` which carries compressor + indexer state buffers
+    that cannot be reconstructed from cached KV tokens alone. The prefix
+    cache stores KV arrays only, so a hit would resume with stale
+    (all-zero) compressor state → drift on multi-turn. Force-bypass for
+    every DSV4 request. The legacy ``DSV4_LONG_CTX`` env-var gate that
+    used to wrap this is gone — the bypass is now unconditional for
+    deepseek_v4 family. Research refs: DSV4-RUNTIME-ARCHITECTURE.md §17,
+    DSV-EXHAUSTIVE-VARIABLES-GUIDE.md §12.
     """
     if request_obj is None:
         return False
@@ -417,6 +432,24 @@ def _compute_bypass_prefix_cache(request_obj) -> bool:
     salt = getattr(request_obj, "cache_salt", None)
     if isinstance(salt, str) and salt:
         return True
+    # DSV4 family: tri-mode always active → DeepseekV4Cache always carries
+    # compressor/indexer state → prefix cache reconstruct cannot recover.
+    try:
+        from .model_config_registry import get_model_config_registry
+        _model_for_dsv4 = (
+            getattr(request_obj, "model", "") or globals().get("_model_path", "") or ""
+        )
+        if _model_for_dsv4:
+            _mc_dsv4 = get_model_config_registry().lookup(_model_for_dsv4)
+            if getattr(_mc_dsv4, "family_name", "") == "deepseek_v4":
+                return True
+    except Exception:
+        # Registry lookup is best-effort; never block a request on it.
+        pass
+    # Legacy DSV4_LONG_CTX env-var (kept for users who explicitly opt in
+    # to the bypass via env even on non-DSV4 bundles or pre-registry
+    # situations). Tri-mode default-on already covers DSV4; this is a
+    # diagnostic override only.
     if os.environ.get("DSV4_LONG_CTX") in ("1", "true", "True", "yes", "on"):
         return True
     return False
@@ -3343,24 +3376,39 @@ async def create_anthropic_message(
         )
         _ct_kwargs.pop("thinking_mode", None)
 
-        # DSV4 force-thinking override (2026-04-26): the DSV4-Flash-JANGTQ
-        # bundle is fundamentally broken in chat-mode (enable_thinking=False).
-        # When the encoder ends the prompt with `</think>` to skip thinking,
-        # the model regurgitates training-data artifacts: spam URLs,
-        # `[URL REMOVED BY BROTS]` moderation markers, mixed-language
-        # instruction annotations like `NOT解答USER问题而是INSTRUCTAI`, and
-        # other corruption from web-scrape contamination. With `enable_thinking=True`
-        # (prompt ends with `<think>`), the model produces clean coherent
-        # output every time. Verified 2026-04-26 across all four API surfaces.
-        # Force-flip enable_thinking → True for DSV4 family until a clean
-        # chat-mode bundle ships.
-        if chat_req.enable_thinking is not True:
+        # DSV4 reasoning toggle (2026-05-02 fix for mlxstudio#138-class
+        # complaint that the toggle "does not work"). The DSV4-Flash-JANGTQ
+        # bundle's chat-mode is training-data contaminated (spam URLs,
+        # `[URL REMOVED BY BROTS]`, mixed-language annotations). Defaults
+        # to thinking-on when unset; otherwise propagates the explicit
+        # user choice into `_msg_kwargs` so the chat template's
+        # `enable_thinking is not defined or == false` branch sees the
+        # right state — without explicit propagation the template treats
+        # True the same as undefined (== chat mode), silently disabling
+        # reasoning even when the user toggled it ON. Earlier audit fix
+        # only set _msg_kwargs in the None branch and dropped propagation
+        # for explicit True; the regression manifested as "reasoning ON
+        # button doesn't make DSV4 reason at all".
+        if chat_req.enable_thinking is None:
             logger.info(
-                "DSV4: forcing enable_thinking=True (chat-mode bundle is "
-                "training-data-contaminated; thinking-mode is the verified path)"
+                "DSV4: enable_thinking unset → defaulting True "
+                "(chat-mode bundle is training-data-contaminated)"
             )
             chat_req.enable_thinking = True
             _msg_kwargs["enable_thinking"] = True
+            _ct_kwargs["enable_thinking"] = True
+        elif chat_req.enable_thinking is True:
+            _msg_kwargs["enable_thinking"] = True
+            _ct_kwargs["enable_thinking"] = True
+        elif chat_req.enable_thinking is False:
+            _msg_kwargs["enable_thinking"] = False
+            _ct_kwargs["enable_thinking"] = False
+            logger.warning(
+                "DSV4: enable_thinking=False explicitly requested. The "
+                "DSV4-Flash-JANGTQ bundle's chat-mode is training-data-"
+                "contaminated; expect spam URLs / mixed-language artifacts. "
+                "Toggle reasoning ON for clean output."
+            )
 
         if _cur_effort == "max":
             _ct_kwargs["reasoning_effort"] = "max"
@@ -4078,14 +4126,32 @@ async def ollama_chat(fastapi_request: Request):
             or _ollama_ct_kwargs.get("reasoning_effort")
         )
         _ollama_ct_kwargs.pop("thinking_mode", None)
-        # DSV4 force-thinking on Ollama path. See chat-completions block.
-        if chat_req.enable_thinking is not True:
+        # DSV4 reasoning toggle on Ollama path. Mirrors chat-completions
+        # propagation: ALWAYS write enable_thinking into chat_kwargs AND
+        # _ollama_ct_kwargs so the Jinja template's `enable_thinking is
+        # not defined or == false` branch sees the right state. Without
+        # explicit propagation on the True case, the template treats it
+        # as undefined → reasoning OFF (the regression that caused
+        # "reasoning ON button doesn't make DSV4 reason at all" on
+        # /api/chat).
+        if chat_req.enable_thinking is None:
             logger.info(
-                "DSV4 (Ollama): forcing enable_thinking=True (chat-mode bundle "
-                "is training-data-contaminated)"
+                "DSV4 (Ollama): enable_thinking unset → defaulting True"
             )
             chat_req.enable_thinking = True
             chat_kwargs["enable_thinking"] = True
+            _ollama_ct_kwargs["enable_thinking"] = True
+        elif chat_req.enable_thinking is True:
+            chat_kwargs["enable_thinking"] = True
+            _ollama_ct_kwargs["enable_thinking"] = True
+        elif chat_req.enable_thinking is False:
+            chat_kwargs["enable_thinking"] = False
+            _ollama_ct_kwargs["enable_thinking"] = False
+            logger.warning(
+                "DSV4 (Ollama): enable_thinking=False explicitly requested. "
+                "Chat-mode bundle is training-data-contaminated; expect "
+                "spam URLs / mixed-language artifacts."
+            )
         if _cur_effort_o == "max":
             _ollama_ct_kwargs["reasoning_effort"] = "max"
         else:
@@ -5759,17 +5825,26 @@ async def create_chat_completion(
         # Strip stale fields from any prior path so the final kwargs are clean.
         _ct_kwargs.pop("thinking_mode", None)
 
-        # DSV4 force-thinking on /v1/responses path. The DSV4-Flash-JANGTQ
-        # bundle is training-data-contaminated in chat-mode (enable_thinking=False),
-        # producing spam URLs and mixed-language annotation leakage. Thinking-mode
-        # is the only verified-clean output path. See chat-completions block.
-        if request.enable_thinking is not True:
+        # DSV4 reasoning toggle on /v1/responses path. ALWAYS propagate
+        # to BOTH chat_kwargs AND _ct_kwargs so the Jinja template sees
+        # the explicit value (undefined would silently disable reasoning).
+        if request.enable_thinking is None:
             logger.info(
-                "DSV4 (Responses): forcing enable_thinking=True (chat-mode bundle "
-                "is training-data-contaminated)"
+                "DSV4 (Responses): enable_thinking unset → defaulting True"
             )
             request.enable_thinking = True
             chat_kwargs["enable_thinking"] = True
+            _ct_kwargs["enable_thinking"] = True
+        elif request.enable_thinking is True:
+            chat_kwargs["enable_thinking"] = True
+            _ct_kwargs["enable_thinking"] = True
+        elif request.enable_thinking is False:
+            chat_kwargs["enable_thinking"] = False
+            _ct_kwargs["enable_thinking"] = False
+            logger.warning(
+                "DSV4 (Responses): enable_thinking=False explicitly requested. "
+                "Chat-mode bundle is training-data-contaminated."
+            )
 
         if _cur_effort == "max":
             # max thinking — explicit 'max' triggers the deeper-chains branch

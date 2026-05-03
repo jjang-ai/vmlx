@@ -63,27 +63,23 @@ def load_mistral3_model(model_path: str | Path) -> Tuple[Any, Any]:
     path = Path(model_path)
     logger.info("Loading Mistral-Medium-3.5 bundle: %s", path.name)
 
-    # JANGTQ on Mistral 3.5 is NOT yet wired end-to-end. Same shape
-    # as the laguna gap: `jang_tools.mistral3.weight_loader.load_weights`
-    # with fmt='jangtq' returns raw `.tq_packed/.tq_norms/.tq_bits` keys
-    # without the matching TurboQuantLinear module replacement, and
-    # `jang_tools.load_jangtq` doesn't dispatch on ministral3. The
-    # `nn.quantize` call in `jang_tools.mistral3.runtime` then matches
-    # nothing (looks for `.scales` keys) and `model.update()` silently
-    # fails to bind the tq_packed weights. Refuse with a clean error
-    # until the Mistral3 TurboQuantLinear shim ships in jang-tools >= 2.6.
-    # bf16 / JANG-affine / MXFP4 / fp8 paths are unaffected.
+    # 2026-05-02 follow-up: Mistral-Medium-3.5 JANGTQ now wired through
+    # `jang_tools.jangrt.jangtq_hydrate` (jang-tools 2.5.12+). Older
+    # jang-tools without the helper surfaces here as a clean
+    # NotImplementedError pointing the user at the alternative bundles.
     try:
         cfg_check = json.loads((path / "config.json").read_text())
         if cfg_check.get("weight_format") == "mxtq" or "mxtq_bits" in cfg_check:
-            raise NotImplementedError(
-                "Mistral-Medium-3.5 JANGTQ (weight_format=mxtq) is not yet "
-                "wired in jang_tools. The ministral3 model.py uses bare "
-                "nn.Linear; .tq_packed weights would not feed quantized "
-                "matmul. Use the bf16 / JANG-affine / MXFP4 / fp8 variant "
-                "of this bundle, or wait for jang-tools >= 2.6 which adds "
-                "the ministral3 TurboQuantLinear shim. Path: " + str(path)
-            )
+            try:
+                from jang_tools.jangrt.jangtq_hydrate import hydrate_jangtq  # noqa: F401
+            except ImportError as _ie:
+                raise NotImplementedError(
+                    "Mistral-Medium-3.5 JANGTQ (weight_format=mxtq) needs "
+                    f"jang-tools >= 2.5.12 (jangrt.jangtq_hydrate is "
+                    f"missing: {_ie}). Upgrade jang-tools or use the "
+                    "bf16 / JANG-affine / MXFP4 / fp8 variant. "
+                    "Path: " + str(path)
+                ) from _ie
     except (OSError, json.JSONDecodeError):
         pass
 
