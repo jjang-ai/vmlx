@@ -202,32 +202,43 @@ def serve_command(args):
     # flags were not explicitly set.  This lets known models "just work" for
     # direct CLI users who don't pass --tool-call-parser / --reasoning-parser.
     _registry_thinking_model = False
+    _is_dsv4_model = False
     try:
         from .model_config_registry import get_model_config_registry
         _mc = get_model_config_registry().lookup(args.model)
-        # DSV4-Flash auto-config (2026-05-02). Force ``DSV4_POOL_QUANT=0`` so
-        # ``make_cache()`` returns ``DeepseekV4Cache`` (not the
-        # ``PoolQuantizedV4Cache`` peer class). The Compressor + Indexer
-        # activation in ``DeepseekV4Attention.__call__`` gates on
-        # ``isinstance(cache, DeepseekV4Cache)`` and ``PoolQuantizedV4Cache``
-        # is NOT a subclass — so the isinstance check returns False and the
-        # tri-mode (HSA+CSA+SWA) attention path stays dormant. Result:
-        # sliding-window cache overflows at 128 tokens, every reasoning
-        # chain crashes mid-decode with broadcast_shapes. Setting it here
-        # at CLI startup (before BatchedEngine loads) guarantees the
-        # warmup pass + every subsequent make_cache() picks up
-        # DeepseekV4Cache. Lose ~4 GB pool-quant memory savings, gain
-        # 14/14 probe matrix on DeepSeek-V4-Flash-JANGTQ2. Override:
-        # set DSV4_POOL_QUANT=1 explicitly to opt back into pool quant
-        # (only safe for ≤128-token contexts).
+        # DSV4-Flash auto-config. DSV4_LONG_CTX=1 is the only supported
+        # runtime mode (tri-mode SWA+CSA/HSA). The upstream JANG prefill
+        # shape bug is patched in-process by load_jangtq_dsv4. POOL_QUANT
+        # stays off because PoolQuantizedV4Cache is not a subclass of
+        # DeepseekV4Cache in DeepseekV4Attention's isinstance gates.
         if _mc.family_name == "deepseek_v4":
-            if os.environ.get("DSV4_POOL_QUANT") not in ("0", "1"):
-                os.environ["DSV4_POOL_QUANT"] = "0"
+            _is_dsv4_model = True
+            os.environ["DSV4_LONG_CTX"] = "1"
+            os.environ["DSV4_POOL_QUANT"] = "0"
+            # DSV4-aware paged prefix cache + block-disk L2 are dormant on
+            # mixed KVCache/DeepseekV4Cache layer state (verified
+            # 2026-05-04: paged_hits=0 on identical 1029-token prompt
+            # repeats). Until the schema reconciles the two cache types,
+            # force off for DSV4 — model output is correct without them,
+            # users who need long-prefix cache can re-enable per-request.
+            if getattr(args, "use_paged_cache", False):
                 logger.info(
-                    "DSV4-Flash detected — DSV4_POOL_QUANT=0 set so the "
-                    "Compressor + Indexer (HSA+CSA) activates correctly. "
-                    "Override: set DSV4_POOL_QUANT=1 explicitly."
+                    "DSV4-Flash detected — disabling --use-paged-cache "
+                    "(DSV4-aware paged schema is currently a no-op on "
+                    "mixed KVCache/DeepseekV4Cache layers)."
                 )
+                args.use_paged_cache = False
+            if getattr(args, "enable_block_disk_cache", False):
+                logger.info(
+                    "DSV4-Flash detected — disabling --enable-block-disk-cache "
+                    "(depends on paged cache for DSV4)."
+                )
+                args.enable_block_disk_cache = False
+            logger.info(
+                "DSV4-Flash detected — DSV4_LONG_CTX=1 (tri-mode SWA+CSA/HSA), "
+                "DSV4_POOL_QUANT=0. Upstream prefill shape bug patched in-process "
+                "by load_jangtq_dsv4."
+            )
         if _mc.family_name != "unknown":
             # Auto-apply tool parser
             if not server._tool_call_parser and _mc.tool_parser:
@@ -550,6 +561,20 @@ def serve_command(args):
             print("  scaffolding only — no forward pass is wired. Phase 2 work item.")
             print("  Use --distributed-mode pipeline for now (this IS the default).")
             sys.exit(1)
+
+    if _is_dsv4_model and getattr(args, 'continuous_batching', False):
+        # DSV4BatchGenerator is a custom single-batch path because each request
+        # owns a heterogeneous SWA + CSA/HSA cache object. Letting panel/default
+        # sessions start with max_num_seqs > 1 works until a second request is
+        # admitted, then fails mid-session. Clamp at CLI entry so direct CLI and
+        # panel launches share the same production-safe behavior.
+        if getattr(args, 'max_num_seqs', 1) != 1:
+            logger.warning(
+                "DSV4-Flash detected — overriding --max-num-seqs %s to 1 "
+                "because DSV4BatchGenerator is single-batch only.",
+                args.max_num_seqs,
+            )
+            args.max_num_seqs = 1
 
     # Build scheduler config for batched mode
     scheduler_config = None

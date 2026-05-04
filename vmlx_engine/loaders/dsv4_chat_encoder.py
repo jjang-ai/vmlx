@@ -40,23 +40,22 @@ layer on top as JANG-stamp capabilities.
 Tool calls are DSML format (``vmlx_engine/tool_parsers/dsml_tool_parser.py``
 — parser key "dsml"). ``jang_config.chat.tool_calling.parser`` = "dsml".
 
-Long-context mode (``DSV4_LONG_CTX=1`` environment variable, default off):
+Long-context mode (``DSV4_LONG_CTX``):
 
-  * Default (safe) path: ``Model.make_cache()`` returns plain KVCache for
-    every layer. Compressor runs stateless during prefill via the fast-path
-    (``if self.compress_ratio and L >= self.compress_ratio``). Decode
-    (L=1) falls back to local sliding-window attention.
-    → Prefix cache / paged / memory-aware / disk L2 all work exactly like
-      DeepSeek V3. Multi-turn cache hits truncate + restore KV cleanly.
-
-  * Opt-in (``DSV4_LONG_CTX=1``): ``DeepseekV4Cache`` persists compressor
-    + indexer state across prefill + decode for compress_ratio>0 layers.
-    → Prefix cache is force-bypassed (``_compute_bypass_prefix_cache``
-      returns True) because compressor state can't be reconstructed from
-      cached KV tokens alone. TurboQuant cache still bypassed via MLA
-      detection. Disk L2 and memory-aware cache likewise skip stores.
-    → Currently has known correctness issues on short prompts — opt-in
-      only, reserved for the narrow >1000-token use case.
+  * Default ``0`` (matches upstream JANG safe default) — ``Model.make_cache()``
+    returns plain ``KVCache`` for every layer. Prompts up to
+    sliding_window=128 behave identically to the pre-make_cache path; longer
+    prompts fall back to local-only sliding-window attention (still coherent
+    per ``mlx_model.py:1314``, but loses pooled-global benefit).
+  * Opt-in ``1`` — ``Model.make_cache()`` returns ``DeepseekV4Cache`` on
+    ``compress_ratio>0`` layers (CSA/HSA + SWA composite). Paged prefix cache
+    uses a dedicated ``deepseek_v4`` block record with ``deepseek_v4_v6``
+    metadata; v4/v5/v6 keys DSV4 prompt cache blocks at N-1 tokens so the
+    last prompt token is re-fed on prefix hits. **Currently has a known
+    upstream JANG prefill shape bug for prompts >sliding_window — opt in
+    only after JANG ships the fix.**
+  * ``cache_salt`` / ``skip_prefix_cache`` still bypass all cache layers for
+    benchmarks, but DSV4 is no longer force-bypassed by family.
 
 Research refs: DSV4-RUNTIME-ARCHITECTURE.md §17,
 DSV-EXHAUSTIVE-VARIABLES-GUIDE.md §12.
@@ -65,6 +64,7 @@ DSV-EXHAUSTIVE-VARIABLES-GUIDE.md §12.
 from __future__ import annotations
 
 import importlib.util
+import copy
 import json
 import logging
 import os
@@ -225,6 +225,24 @@ def apply_chat_template(
         or the vmlx generation loop.
     """
     thinking_mode, effort = _resolve_mode_and_effort(enable_thinking, reasoning_effort)
+    messages = copy.deepcopy(messages)
+
+    # DSV4's bundled encoder predates the strict-template normalization used
+    # by the Responses adapter. It expects OpenAI tool-call
+    # `function.arguments` to be a JSON string and calls json.loads() itself;
+    # if we pass a dict it wraps the whole dict under a single DSML
+    # `arguments` parameter. That makes tool-history continuation and DSML
+    # exemplars materially wrong for DSV4 while the same dict form is correct
+    # for Qwen/Mistral/Llama templates. Normalize only in this adapter.
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        for tc in msg.get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function")
+            if isinstance(fn, dict) and isinstance(fn.get("arguments"), dict):
+                fn["arguments"] = json.dumps(fn["arguments"], ensure_ascii=False)
 
     # If the caller passed a `tools` list without a system message carrying
     # it, inject onto the first message. DSV4 encoder conventions require
