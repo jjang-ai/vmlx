@@ -70,12 +70,21 @@ class DSMLToolParser(ToolParser):
         rf'<{re.escape(DSML_PREFIX)}invoke\s+name="([^"]+)"\s*>(.*?)</{re.escape(DSML_PREFIX)}invoke>',
         re.DOTALL,
     )
+    _PARTIAL_INVOKE_RE = re.compile(
+        rf'<{re.escape(DSML_PREFIX)}invoke\s+name="([^"]+)"\s*>(.*)',
+        re.DOTALL,
+    )
 
     # Param regex: <｜DSML｜parameter name="…" string="true|false">value</｜DSML｜parameter>
     _PARAM_RE = re.compile(
         rf'<{re.escape(DSML_PREFIX)}parameter\s+name="([^"]+)"\s+string="(true|false)"\s*>(.*?)</{re.escape(DSML_PREFIX)}parameter>',
         re.DOTALL,
     )
+    _MALFORMED_NAME_RE = re.compile(
+        rf'<{re.escape(DSML_PREFIX)}(?:tool_call_type|tool_call|tool_calls)[^>]*?(?:type|name)="([^"]+)"',
+        re.DOTALL,
+    )
+    _ATTR_RE = re.compile(r'"attributes"\s*:\s*"([^"}\n]*)', re.DOTALL)
 
     def _has_dsml(self, text: str) -> bool:
         return self.INVOKE_OPEN_PREFIX in text
@@ -97,11 +106,143 @@ class DSMLToolParser(ToolParser):
                     out[name] = raw
         return out
 
+    def _tool_schemas(self, request: Any | None) -> dict[str, dict[str, Any]]:
+        """Return available tool schemas keyed by function name.
+
+        Parser repair must be schema-gated. DSV4 JANGTQ can emit malformed
+        DSML-ish text under tool pressure; we only turn that into a structured
+        call when the emitted name is one of the request's available tools.
+        """
+        tools = []
+        if isinstance(request, dict):
+            tools = request.get("tools") or []
+        elif request is not None:
+            tools = getattr(request, "tools", []) or []
+        out: dict[str, dict[str, Any]] = {}
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            fn = tool.get("function") if isinstance(tool.get("function"), dict) else tool
+            name = fn.get("name") if isinstance(fn, dict) else None
+            if isinstance(name, str) and name:
+                out[name] = fn
+        return out
+
+    def _repair_malformed_dsml(
+        self, text: str, request: Any | None
+    ) -> list[dict[str, Any]]:
+        """Best-effort repair for old DSV4 JANGTQ malformed DSML.
+
+        Canonical DSML is still required for normal parsing. This fallback
+        handles the observed older-bundle shape:
+
+            <｜DSML｜tool_call_type type="list_directory"... "attributes":"." ...>
+
+        It is intentionally conservative: the function name must exist in the
+        request tool schema, and arguments are only inferred for declared
+        parameters. If there is one required parameter and the malformed block
+        exposes a single attributes value, that value is assigned to it.
+        """
+        if DSML_PREFIX not in text:
+            return []
+        schemas = self._tool_schemas(request)
+        if not schemas:
+            return []
+
+        calls: list[dict[str, Any]] = []
+        for m in self._MALFORMED_NAME_RE.finditer(text):
+            name = m.group(1)
+            schema = schemas.get(name)
+            if not schema:
+                continue
+            params_schema = schema.get("parameters") or {}
+            props = (
+                params_schema.get("properties") or {}
+                if isinstance(params_schema, dict)
+                else {}
+            )
+            required = (
+                params_schema.get("required") or []
+                if isinstance(params_schema, dict)
+                else []
+            )
+            args: dict[str, Any] = {}
+            for p_name in props:
+                # Common malformed forms: path=".", "path": ".", path:. 
+                pat = re.compile(
+                    rf'(?:{re.escape(p_name)}\s*=\s*"([^"]*)"|"{re.escape(p_name)}"\s*:\s*"([^"]*)")'
+                )
+                pm = pat.search(text)
+                if pm:
+                    args[p_name] = next(g for g in pm.groups() if g is not None)
+            attr = self._ATTR_RE.search(text)
+            if attr and len(required) == 1 and required[0] not in args:
+                args[required[0]] = attr.group(1)
+            if not args and len(props) == 1:
+                # Last-resort single-parameter inference from an explicit dot.
+                only = next(iter(props))
+                if '"."' in text or ">.<" in text or " . " in text:
+                    args[only] = "."
+            if args or not required:
+                calls.append(
+                    self._make_tool_call(
+                        name=name,
+                        arguments=json.dumps(args, ensure_ascii=False),
+                        id_=generate_tool_id(),
+                    )
+                )
+        return calls
+
+    def _repair_partial_invoke(
+        self, text: str, request: Any | None
+    ) -> list[dict[str, Any]]:
+        """Repair a canonical DSML invoke whose closing tag was truncated.
+
+        DSV4 JANGTQ2 sometimes emits a perfectly valid opening invoke and
+        complete parameter tags, then stops after the first characters of the
+        closing tag, e.g. ``</``. Treat that as a tool call only when:
+
+        - the tool name exists in the request schema; and
+        - at least all required parameters were parsed from complete parameter
+          tags.
+
+        This keeps the non-streaming parser from showing raw DSML text while
+        avoiding arbitrary conversion of incomplete markup into tool calls.
+        """
+        if DSML_PREFIX not in text or self.INVOKE_CLOSE in text:
+            return []
+        schemas = self._tool_schemas(request)
+        if not schemas:
+            return []
+        m = self._PARTIAL_INVOKE_RE.search(text)
+        if not m:
+            return []
+        name = m.group(1)
+        schema = schemas.get(name)
+        if not schema:
+            return []
+        args = self._parse_params(m.group(2))
+        params_schema = schema.get("parameters") or {}
+        required = (
+            params_schema.get("required") or []
+            if isinstance(params_schema, dict)
+            else []
+        )
+        if any(p not in args for p in required):
+            return []
+        return [
+            self._make_tool_call(
+                name=name,
+                arguments=json.dumps(args, ensure_ascii=False),
+                id_=generate_tool_id(),
+            )
+        ]
+
     def extract_tool_calls(
         self, model_output: str, request: Any | None = None
     ) -> ExtractedToolCallInformation:
         """Non-streaming path — parse entire completion and return tool calls + residue."""
-        if not self._has_dsml(model_output):
+        if DSML_PREFIX not in model_output:
             return ExtractedToolCallInformation(
                 tools_called=False, tool_calls=[], content=model_output
             )
@@ -119,10 +260,20 @@ class DSMLToolParser(ToolParser):
                 )
             )
 
+        if not tool_calls:
+            tool_calls = self._repair_partial_invoke(model_output, request)
+
+        if not tool_calls:
+            tool_calls = self._repair_malformed_dsml(model_output, request)
+
         # Residue content = everything OUTSIDE the invoke blocks. Strip the
         # matched spans and collapse surrounding whitespace so the chat UI
         # doesn't show a blank paragraph where the tool call used to be.
         residue = self._INVOKE_RE.sub("", model_output).strip()
+        if tool_calls and residue == model_output.strip():
+            # Repaired malformed DSML: hide the malformed raw marker from the
+            # client once we successfully emitted a structured tool call.
+            residue = ""
 
         return ExtractedToolCallInformation(
             tools_called=len(tool_calls) > 0,
@@ -188,16 +339,11 @@ class DSMLToolParser(ToolParser):
     # override; leaving thin bodies so tests can import + exercise the regex.
 
     def _make_tool_call(self, *, name: str, arguments: str, id_: str):
-        # Use parent class helper if available; fall back to a plain dict
-        # that the streaming/assembly code can serialise.
-        try:
-            return super()._make_tool_call(name=name, arguments=arguments, id_=id_)
-        except Exception:
-            return {
-                "id": id_,
-                "type": "function",
-                "function": {"name": name, "arguments": arguments},
-            }
+        # Non-streaming parser contract in this codebase is the flat shape
+        # used by qwen/mistral/nemotron parsers. `server._parse_tool_calls_*`
+        # wraps this into Chat/Responses API objects. Returning OpenAI-shaped
+        # dicts here trips KeyError('name') and falls back to raw DSML text.
+        return {"id": id_, "name": name, "arguments": arguments}
 
     def _make_stream_tool_call_delta(
         self, *, index: int, name: str, arguments: str, id_: str

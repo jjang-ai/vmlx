@@ -818,11 +818,37 @@ class MLXMultimodalLM:
             self._loaded = True
             logger.info(f"MLLM loaded successfully: {self.model_name}")
 
-        except ImportError:
+        except ImportError as e:
+            # 2026-05-03: surface the ACTUAL missing module instead of
+            # always blaming mlx-vlm. Common upstream causes:
+            #   - torch / torchvision missing → Qwen3VLVideoProcessor and
+            #     similar transformers VLM processors hard-require them.
+            #     Earlier vMLX builds stripped torch from bundled-python
+            #     (see panel/scripts/bundle-python.sh:128) — that strip was
+            #     reversed 2026-05-03 because every VL bundle hits this.
+            #   - mlx_vlm itself absent → bare wheel issue.
+            #   - One of mlx_vlm's submodules (e.g. video_processor backend)
+            #     transitively imports a missing dep.
+            # Pre-fix we always re-raised "mlx-vlm is required" which hid
+            # the real cause. Pass the original exception through.
+            _msg = str(e).lower()
+            if ("torch" in _msg and ("vision" in _msg or "audio" in _msg)) or "torchvision" in _msg:
+                raise ImportError(
+                    f"VLM bundle requires torch+torchvision in vMLX bundled-python. "
+                    f"Install: <bundled-python>/bin/pip install torch torchvision. "
+                    f"Original error: {e}"
+                ) from e
+            if "mlx_vlm" in _msg or "mlx-vlm" in _msg:
+                raise ImportError(
+                    f"mlx-vlm is required for multimodal inference. "
+                    f"Install with: pip install mlx-vlm. "
+                    f"Original error: {e}"
+                ) from e
+            # Unknown ImportError: re-raise WITH original cause attached so
+            # the traceback shows the real failure, not a generic message.
             raise ImportError(
-                "mlx-vlm is required for multimodal inference. "
-                "Install with: pip install mlx-vlm"
-            )
+                f"VLM model load failed with ImportError (cause not auto-detected): {e}"
+            ) from e
         except Exception as e:
             logger.error(f"Failed to load MLLM: {e}")
             raise
@@ -968,7 +994,7 @@ class MLXMultimodalLM:
                     if isinstance(item, dict):
                         item_type = item.get("type", "")
 
-                        if item_type == "text":
+                        if item_type in ("text", "input_text"):
                             msg_text += item.get("text", "")
 
                         elif item_type == "image_url":
@@ -976,6 +1002,14 @@ class MLXMultimodalLM:
                             if isinstance(img_url, str):
                                 all_image_urls.append(img_url)
                             else:
+                                all_image_urls.append(img_url.get("url", ""))
+                            msg_image_count += 1
+
+                        elif item_type == "input_image":
+                            img_url = item.get("image_url", item.get("url", ""))
+                            if isinstance(img_url, str):
+                                all_image_urls.append(img_url)
+                            elif isinstance(img_url, dict):
                                 all_image_urls.append(img_url.get("url", ""))
                             msg_image_count += 1
 
@@ -990,6 +1024,13 @@ class MLXMultimodalLM:
 
                         elif item_type == "video_url":
                             vid_url = item.get("video_url", {})
+                            if isinstance(vid_url, str):
+                                videos.append(vid_url)
+                            else:
+                                videos.append(vid_url.get("url", ""))
+
+                        elif item_type == "input_video":
+                            vid_url = item.get("video_url", item.get("url", item.get("file_id", "")))
                             if isinstance(vid_url, str):
                                 videos.append(vid_url)
                             else:

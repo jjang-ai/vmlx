@@ -537,12 +537,23 @@ def register_all(registry=None):
     # `models/llm.py`; everything beyond [0] gets registered via
     # `tokenizer.add_eos_token()` after the wrapper loads (see
     # `models/llm.py` post-load hook).
+    # 2026-05-03 panel repro: DSV4 in chat-mode/thinking-mode would
+    # generate a clean response, then continue past the natural turn
+    # boundary by emitting a literal `<｜Assistant｜>` token (id 128804)
+    # to fake a brand-new assistant turn (panel rendered the special
+    # token as "🤖" then kept streaming the model's "🤖 My name is...
+    # I am DeepAI..." hallucination loop). The eos_token_id and
+    # `<｜User｜>` (128803) defenses didn't trigger because the model
+    # chose `<｜Assistant｜>` (128804) instead. Add it as a third stop
+    # so a stray Assistant marker terminates generation immediately.
+    # The model should never emit this token mid-response — it only
+    # ever appears in prompt-side turn boundaries.
     _register(
         ModelConfig(
             family_name="deepseek_v4",
             model_types=["deepseek_v4"],
             cache_type="kv",
-            eos_tokens=["<｜end▁of▁sentence｜>", "<｜User｜>"],
+            eos_tokens=["<｜end▁of▁sentence｜>", "<｜User｜>", "<｜Assistant｜>"],
             tool_parser="dsml",
             reasoning_parser="deepseek_r1",
             think_in_template=True,

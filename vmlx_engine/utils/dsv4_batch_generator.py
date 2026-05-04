@@ -25,6 +25,7 @@ Constraints:
 """
 from __future__ import annotations
 import logging
+import os
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Sequence, Tuple
@@ -44,6 +45,7 @@ DSV4_EOS_ID = 1
 class _Request:
     uid: int
     prompt_tokens: List[int]
+    context_tokens: List[int]
     cache: Optional[List[Any]]
     out_tokens: List[int] = field(default_factory=list)
     max_tokens: int = 1024
@@ -115,7 +117,21 @@ class DSV4BatchGenerator:
                 else:
                     # Multi-token stop sequence — store as tuple
                     self.stop_tokens.add(tuple(seq))
-        self.prefill_step_size = prefill_step_size
+        logger.info(
+            f"DSV4Gen: stop_tokens at construction = {sorted(self.stop_tokens)} "
+            f"(DSV4_EOS_ID={DSV4_EOS_ID} always-checked separately)"
+        )
+        # DSV4 CSA layers can otherwise materialize large LxP attention
+        # worksets during prefill. Use a conservative chunk by default and
+        # flush MLX's transient cache after each chunk; callers may override
+        # after validation via DSV4_PREFILL_STEP_SIZE.
+        try:
+            _dsv4_step = int(os.environ.get("DSV4_PREFILL_STEP_SIZE", "512"))
+        except (TypeError, ValueError):
+            _dsv4_step = 512
+        if _dsv4_step <= 0:
+            _dsv4_step = prefill_step_size
+        self.prefill_step_size = max(1, min(prefill_step_size, _dsv4_step))
         self.prefill_batch_size = 1  # always 1 for DSV4
         self.completion_batch_size = 1
         self.max_kv_size = max_kv_size
@@ -148,6 +164,35 @@ class DSV4BatchGenerator:
         sampled = sample_fn(logprobs)
         return sampled, logprobs
 
+    def _prefill_last_logits(self, token_ids: List[int], cache: List[Any]):
+        """Chunked DSV4 prefill returning logits for the last prompt token.
+
+        The earlier custom generator used one-shot prefill because an old
+        DSV4 cache bug made chunking suspicious. Current DeepseekV4Cache
+        accumulates compressor/indexer pool state correctly across calls.
+        Chunking is required in production: single-shot 6K+ prompts can
+        allocate enormous CSA worksets before MLX has a chance to drain
+        transients. This mirrors mlx-lm's prefill contract: process chunks
+        against the same cache, materialize the final-token logits for each
+        chunk, then clear transient MLX buffers before the next chunk.
+        """
+        if not token_ids:
+            return None
+        all_ids = mx.array(token_ids, dtype=mx.int32)[None, :]
+        last_logits = None
+        total = len(token_ids)
+        step = max(1, self.prefill_step_size)
+        for off in range(0, total, step):
+            chunk = all_ids[:, off:min(off + step, total)]
+            logits = self.model(chunk, cache=cache)
+            last_logits = logits[:, -1, :]
+            mx.eval(last_logits)
+            if hasattr(mx, "synchronize"):
+                mx.synchronize()
+            if hasattr(mx, "clear_cache"):
+                mx.clear_cache()
+        return last_logits
+
     # ---------- BatchGenerator API ----------
     def insert(
         self,
@@ -171,6 +216,7 @@ class DSV4BatchGenerator:
         uids = []
         max_tokens = max_tokens or [self.max_tokens] * len(prompts)
         caches = caches or [None] * len(prompts)
+        all_tokens = all_tokens or prompts
         samplers = samplers or [None] * len(prompts)
         logits_processors = logits_processors or [None] * len(prompts)
         state_machines = state_machines or [None] * len(prompts)
@@ -178,6 +224,7 @@ class DSV4BatchGenerator:
             req = _Request(
                 uid=self._uid_count,
                 prompt_tokens=list(p),
+                context_tokens=list(all_tokens[i] or p),
                 cache=caches[i],
                 max_tokens=max_tokens[i],
                 sampler=samplers[i],
@@ -196,6 +243,18 @@ class DSV4BatchGenerator:
         # Flatten by concatenation — DSV4 doesn't use multi-segment prefill.
         flat = [sum(seg, []) for seg in segments]
         return self.insert(flat, *args, **kwargs)
+
+    @staticmethod
+    def _processor_context(req: _Request) -> List[int]:
+        """Full token history for logits processors.
+
+        mlx-lm's repetition penalty is applied over the generated context, not
+        just a small recent window. DSV4 is especially sensitive here: limiting
+        the processor context to the last 32 output tokens allowed long-form
+        chat to re-enter earlier sentence/paragraph loops once the repeated
+        phrase fell outside that window.
+        """
+        return list(req.context_tokens) + list(req.out_tokens)
 
     def remove(self, uids, return_prompt_caches: bool = False):
         out = {}
@@ -249,27 +308,19 @@ class DSV4BatchGenerator:
         for r in list(self._requests):
             with mx.stream(self._device):
                 if r.cache is None:
-                    # Prefill — single-shot via `model(full_ids, cache=cache)`.
-                    # The canonical jang_tools.dsv4.runtime.generate runs
-                    # prefill in one call; chunking the prefill broke the
-                    # DSV4 compressor + indexer pool state (broadcast_shapes
-                    # mismatch on subsequent decode). The post-warmup model
-                    # has all kernels JIT-compiled, so even a long prompt
-                    # completes within the Metal command-buffer watchdog.
+                    # Prefill — chunked through one DeepseekV4Cache instance.
+                    # This preserves SWA+CSA/HSA state while bounding transient
+                    # MLX allocations for long prompts.
                     r.cache = self._make_new_cache()
                     if not r.prompt_tokens:
                         r.finish_reason = "stop"
                         r.prompt_processed = True
                         continue
-                    full_ids = mx.array(r.prompt_tokens, dtype=mx.int32)[None, :]
-                    logits = self.model(full_ids, cache=r.cache)
-                    if hasattr(mx, "synchronize"):
-                        mx.synchronize()
                     # Sample first token from last logit position
-                    last_logits = logits[:, -1, :]
+                    last_logits = self._prefill_last_logits(r.prompt_tokens, r.cache)
                     sampled, logprobs = self._sample(
                         last_logits, r.sampler, r.logits_processors,
-                        r.prompt_tokens[-32:],
+                        self._processor_context(r),
                     )
                     if hasattr(mx, "synchronize"):
                         mx.synchronize()
@@ -284,6 +335,39 @@ class DSV4BatchGenerator:
                     prompt_resps.append(_Response(
                         uid=r.uid, token=tok_id, logprobs=logprobs,
                         finish_reason=r.finish_reason,
+                        prompt_cache=r.cache,
+                    ))
+                elif not r.prompt_processed:
+                    # Prefix-cache hit path. The scheduler passes the cached
+                    # prompt cache plus the remaining prompt tail to process
+                    # (for exact hits this is the final prompt token). DSV4's
+                    # custom generator cannot jump straight into decode with
+                    # an empty out_tokens list; it must first run that prompt
+                    # tail through the restored cache and sample the first
+                    # generated token from the resulting logits. This mirrors
+                    # mlx_lm BatchGenerator's cached-prefix kickoff behavior.
+                    if not r.prompt_tokens:
+                        r.finish_reason = "stop"
+                        r.prompt_processed = True
+                        continue
+                    last_logits = self._prefill_last_logits(r.prompt_tokens, r.cache)
+                    sampled, logprobs = self._sample(
+                        last_logits, r.sampler, r.logits_processors,
+                        self._processor_context(r),
+                    )
+                    if hasattr(mx, "synchronize"):
+                        mx.synchronize()
+                    tok_id = int(sampled.tolist()[0]) if hasattr(sampled, "tolist") else int(sampled.item())
+                    r.out_tokens.append(tok_id)
+                    r.prompt_processed = True
+                    if tok_id == DSV4_EOS_ID or tok_id in self.stop_tokens:
+                        r.finish_reason = "stop"
+                    elif len(r.out_tokens) >= r.max_tokens:
+                        r.finish_reason = "length"
+                    prompt_resps.append(_Response(
+                        uid=r.uid, token=tok_id, logprobs=logprobs,
+                        finish_reason=r.finish_reason,
+                        prompt_cache=r.cache,
                     ))
                 else:
                     # Decode
@@ -299,7 +383,7 @@ class DSV4BatchGenerator:
                     last_logits = logits[:, -1, :]
                     sampled, logprobs = self._sample(
                         last_logits, r.sampler, r.logits_processors,
-                        r.out_tokens[-32:],
+                        self._processor_context(r),
                     )
                     if hasattr(mx, "synchronize"):
                         mx.synchronize()
@@ -312,6 +396,7 @@ class DSV4BatchGenerator:
                     gen_resps.append(_Response(
                         uid=r.uid, token=tok_id, logprobs=logprobs,
                         finish_reason=r.finish_reason,
+                        prompt_cache=r.cache,
                     ))
 
         return prompt_resps, gen_resps

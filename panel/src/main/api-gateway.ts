@@ -31,6 +31,7 @@ interface ResolvedSession {
   status: string;
   modelName: string;
   modelPath: string;
+  config?: string;
   servedModelName?: string;
   embeddingModel?: string;
 }
@@ -198,6 +199,16 @@ export class ApiGateway extends EventEmitter {
       }
     }
     if (!modelName) {
+      const capMatch = url.match(/^\/v1\/models\/(.+)\/capabilities(?:\?|$)/);
+      if (capMatch?.[1]) {
+        try {
+          modelName = decodeURIComponent(capMatch[1]);
+        } catch (_) {
+          modelName = capMatch[1];
+        }
+      }
+    }
+    if (!modelName) {
       // Support ?model=X query parameter for GET/DELETE endpoints (cache, MCP, audio voices)
       const qIdx = url.indexOf("?");
       if (qIdx >= 0) {
@@ -318,6 +329,7 @@ export class ApiGateway extends EventEmitter {
         status: s.status,
         modelName: s.modelName || s.modelPath.split("/").pop() || "",
         modelPath: s.modelPath,
+        config: s.config,
         servedModelName: config.servedModelName || undefined,
         embeddingModel: config.embeddingModel || undefined,
       };

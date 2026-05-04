@@ -151,11 +151,27 @@ class EngineCore:
         _ORPHAN_TIMEOUT_S = 30.0  # abort after 30s with no consumer
         _ghost_check_counter = 0
 
+        # JANGTQ Metal streams are thread-local: step() must run on the
+        # SAME thread that loaded the model. BatchedEngine plumbs a
+        # single-worker `llm-worker` ThreadPoolExecutor through
+        # SchedulerConfig.step_executor → Scheduler._step_executor.
+        # When present, dispatch step() onto it (mirrors the MLLM
+        # scheduler's _process_loop pattern, mllm_scheduler.py:2371-2374).
+        # Without this, DSV4-Flash + every JANGTQ LLM bundle crashes with
+        # `RuntimeError: There is no Stream(gpu, N) in current thread.`
+        _step_executor = getattr(self.scheduler, "_step_executor", None)
+        _async_loop = asyncio.get_running_loop() if _step_executor is not None else None
+
         while self._running:
             try:
                 if self.scheduler.has_requests():
                     # Run one generation step
-                    output = self.scheduler.step()
+                    if _step_executor is not None:
+                        output = await _async_loop.run_in_executor(
+                            _step_executor, self.scheduler.step
+                        )
+                    else:
+                        output = self.scheduler.step()
                     self._steps_executed += 1
 
                     # Periodic ghost request detection: find requests in
@@ -375,8 +391,14 @@ class EngineCore:
         )
         self._finished_events[request_id] = asyncio.Event()
 
-        # Add to scheduler
-        self.scheduler.add_request(request)
+        # Add to scheduler. If validation rejects the request (for example,
+        # DSV4 long-prefill guard), clean up the collector/event state we just
+        # created so a rejected request cannot leave ghost bookkeeping behind.
+        try:
+            self.scheduler.add_request(request)
+        except Exception:
+            self._cleanup_request(request_id)
+            raise
 
         return request_id
 
@@ -575,10 +597,17 @@ class EngineCore:
             self.scheduler.add_request(request)
             request_ids.append(request_id)
 
-        # Process until all done - direct scheduler access, no async overhead
+        # Process until all done - direct scheduler access, no async overhead.
+        # Same thread-pinning rationale as `_engine_loop`: when an
+        # `_step_executor` is present we route step() through it so
+        # JANGTQ Metal kernels stay on the loader thread.
+        _step_executor = getattr(self.scheduler, "_step_executor", None)
         results: Dict[str, RequestOutput] = {}
         while self.scheduler.has_requests():
-            output = self.scheduler.step()
+            if _step_executor is not None:
+                output = _step_executor.submit(self.scheduler.step).result()
+            else:
+                output = self.scheduler.step()
             for req_output in output.outputs:
                 if req_output.finished:
                     results[req_output.request_id] = req_output

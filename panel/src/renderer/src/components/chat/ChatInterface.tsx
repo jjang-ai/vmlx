@@ -368,7 +368,15 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
           const hydrated = hydrateMessages(freshMessages)
           return hydrated.map(m => {
             if (m.id === streamedAssistant.id) {
-              return { ...streamedAssistant, tokens: m.tokens, metrics: m.metrics || streamedAssistant.metrics, metricsJson: m.metricsJson, toolCallsJson: m.toolCallsJson, reasoningContent: m.reasoningContent }
+              return {
+                ...streamedAssistant,
+                content: m.content ?? streamedAssistant.content,
+                tokens: m.tokens,
+                metrics: m.metrics || streamedAssistant.metrics,
+                metricsJson: m.metricsJson,
+                toolCallsJson: m.toolCallsJson,
+                reasoningContent: m.reasoningContent
+              }
             }
             return m
           })

@@ -34,6 +34,14 @@ from .paged_cache import BlockTable, PagedCacheManager
 
 logger = logging.getLogger(__name__)
 
+# Bump this when the token->cache-state contract changes for paged prefix
+# caches or their block-level L2 disk namespace. 2026-05-03 changed paged
+# stores to index truncated N-1 prompt cache state under N-1 prompt-token
+# keys so the last prompt token is always re-fed on cache hit. Older block
+# disk entries were indexed under full-N keys and can replay unrelated text
+# after restart, so every family must use a fresh namespace, not just DSV4.
+PAGED_CACHE_SCHEMA_VERSION = "paged_n1_keys_v2"
+
 
 def compute_model_cache_key(
     model: Any,
@@ -104,11 +112,30 @@ def compute_model_cache_key(
             pass
 
     # 3. Loader fingerprint — A4 Concern #1
+    parts.append(f"paged_cache_schema={PAGED_CACHE_SCHEMA_VERSION}")
     parts.append(f"smelt={1 if smelt_enabled else 0}")
     if smelt_enabled and smelt_pct is not None:
         parts.append(f"smelt_pct={float(smelt_pct):.4f}")
     parts.append(f"tq={1 if tq_enabled else 0}")
     parts.append(f"kvq={int(kv_quant_bits or 0)}")
+
+    # DSV4 cache correctness depends on runtime cache shape. Keep these in
+    # the model key so L1/L2 prefix cache entries never cross between SWA-only
+    # and tri-mode SWA+CSA/HSA, or between different DSV4 composite-cache
+    # schema versions.
+    if any(p == "model_type=deepseek_v4" for p in parts):
+        parts.append(f"dsv4_long_ctx={os.environ.get('DSV4_LONG_CTX', '0')}")
+        parts.append(f"dsv4_pool_quant={os.environ.get('DSV4_POOL_QUANT', '')}")
+        # v5: DSV4 runtime uses PR #1195 flat-pool CSA/HSA masks plus
+        # chunked prefill. Bump the schema so old blocks captured by the
+        # pre-v5 L*topk expansion path can never replay into the fixed
+        # runtime.
+        #
+        # v4: paged/block L2 stores DSV4 cache data under N-1 prompt-token
+        # keys so the last prompt token is always re-fed on prefix hits. This
+        # intentionally invalidates older v2 disk blocks that were keyed by
+        # the full prompt despite holding truncated cache state.
+        parts.append("dsv4_cache_schema=deepseek_v4_v6")
 
     if not parts:
         # Defensive: fall back to identity
@@ -642,6 +669,57 @@ class PrefixCacheManager:
 
 
 
+def _is_dsv4_cache_class(class_name: str) -> bool:
+    return "DeepseekV4Cache" in (class_name or "")
+
+
+def _cache_data_has_dsv4(cache_data) -> bool:
+    """Return True when extracted cache states include DSV4 composite layers."""
+    try:
+        for layer_state in cache_data or []:
+            if not isinstance(layer_state, dict):
+                continue
+            if _is_dsv4_cache_class(layer_state.get("class_name", "")):
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _to_numpy_tree(obj):
+    """Convert nested MLX-array state to numpy, preserving tuple/list shape."""
+    import numpy as np
+
+    if obj is None:
+        return None
+    if hasattr(obj, "__array__"):
+        return np.array(obj)
+    if isinstance(obj, tuple):
+        return tuple(_to_numpy_tree(x) for x in obj)
+    if isinstance(obj, list):
+        return [_to_numpy_tree(x) for x in obj]
+    return obj
+
+
+def _dsv4_cache_meta(layer_state: Dict[str, Any]) -> Dict[str, Any]:
+    meta: Dict[str, Any] = {}
+    cr = layer_state.get("compress_ratio")
+    sw = layer_state.get("sliding_window")
+    if cr is not None:
+        try:
+            meta["compress_ratio"] = int(cr)
+        except Exception:
+            meta["compress_ratio"] = cr
+    if sw is not None:
+        try:
+            meta["sliding_window"] = int(sw)
+        except Exception:
+            meta["sliding_window"] = sw
+    if "pool_quant" in layer_state:
+        meta["pool_quant"] = layer_state.get("pool_quant")
+    return meta
+
+
 def _numpy_block_slice(
     cache_data, np_sources, start_idx, end_idx, is_last_block,
 ):
@@ -664,6 +742,24 @@ def _numpy_block_slice(
         if "state" not in layer_state:
             continue
         cls = layer_state.get("class_name", "")
+
+        if _is_dsv4_cache_class(cls):
+            state = layer_state.get("state")
+            if is_last_block and state is not None:
+                block_slices.append((
+                    "deepseek_v4",
+                    _to_numpy_tree(state),
+                    layer_state.get("meta_state", ""),
+                    cls,
+                    _dsv4_cache_meta(layer_state),
+                ))
+            else:
+                block_slices.append((
+                    "deepseek_v4_pending",
+                    cls,
+                    _dsv4_cache_meta(layer_state),
+                ))
+            continue
 
         # CacheList (MoE): not yet supported in numpy path
         if cls == "CacheList":
@@ -737,7 +833,9 @@ def _block_needs_cumulative_update(cache_data) -> bool:
         tag = entry[0]
         if tag == "skip":
             has_skip = True
-        elif tag == "cumulative":
+        elif tag == "deepseek_v4_pending":
+            has_skip = True
+        elif tag in ("cumulative", "deepseek_v4"):
             has_cumulative = True
         elif tag == "cache_list" and len(entry) > 1:
             # Recurse into CacheList sub-slices for MoE hybrid models
@@ -745,7 +843,9 @@ def _block_needs_cumulative_update(cache_data) -> bool:
                 if isinstance(sub, (tuple, list)) and len(sub) > 0:
                     if sub[0] == "skip":
                         has_skip = True
-                    elif sub[0] == "cumulative":
+                    elif sub[0] == "deepseek_v4_pending":
+                        has_skip = True
+                    elif sub[0] in ("cumulative", "deepseek_v4"):
                         has_cumulative = True
     return has_skip and not has_cumulative
 
@@ -1015,36 +1115,99 @@ class BlockAwarePrefixCache:
         if not tokens:
             return None, tokens
 
-        # Try to find shared prefix blocks
-        shared_block_ids, remaining = self.paged_cache.find_shared_prefix(tokens)
+        # Primary path: chain-hash lookup. This includes the parent block hash
+        # and therefore the full prefix context. Do not use the legacy
+        # find_shared_prefix() block-content hash here: it keys only on the
+        # current block's token bytes and can replay a repeated 64-token chunk
+        # under the wrong history/position, corrupting decoded text.
+        cached_blocks, num_cached = self.paged_cache.get_computed_blocks(tokens)
+        # MLLM/DSV4 paths store blocks with N-1 tokens (truncated for re-feed).
+        # Always try the N-1 key as well, not only on total miss. After process
+        # restart the in-memory partial-size index is empty, so the full-N lookup
+        # can restore the full 64-token blocks but miss the terminal partial
+        # block (e.g. full prompt remaining=41 while stored N-1 terminal=40).
+        # For DSV4 that terminal partial carries the only deepseek_v4 composite
+        # CSA/HSA state; accepting the shorter hit yields "2 layers, expected
+        # 43" or a forced full prefill. Prefer whichever lookup restores more
+        # cached tokens, and release request refs from the loser.
+        if len(tokens) > 1:
+            alt_blocks, alt_num_cached = self.paged_cache.get_computed_blocks(tokens[:-1])
+            if alt_num_cached > num_cached:
+                if cached_blocks:
+                    try:
+                        self.paged_cache.release_request_refs(
+                            BlockTable(
+                                request_id=request_id,
+                                block_ids=[b.block_id for b in cached_blocks],
+                                num_tokens=num_cached,
+                            )
+                        )
+                    except Exception:
+                        pass
+                cached_blocks, num_cached = alt_blocks, alt_num_cached
+            elif alt_blocks:
+                try:
+                    self.paged_cache.release_request_refs(
+                        BlockTable(
+                            request_id=request_id,
+                            block_ids=[b.block_id for b in alt_blocks],
+                            num_tokens=alt_num_cached,
+                        )
+                    )
+                except Exception:
+                    pass
+        if cached_blocks:
+            if self._dsv4_l2_chain_missing_terminal_state(cached_blocks):
+                _reject_table = BlockTable(
+                    request_id=request_id,
+                    block_ids=[cb.block_id for cb in cached_blocks],
+                    num_tokens=sum(getattr(cb, "token_count", 0) for cb in cached_blocks),
+                )
+                self.paged_cache.release_request_refs(_reject_table)
+                logger.warning(
+                    "Ignoring DSV4 paged prefix hit for %s: restored blocks "
+                    "contain DeepseekV4Cache pending markers but no terminal "
+                    "deepseek_v4 composite state. A non-terminal DSV4 block "
+                    "only carries SWA/local fragments; CSA/HSA pool state "
+                    "lives in the terminal block, so using this prefix would "
+                    "reconstruct an incomplete cache.",
+                    request_id,
+                )
+                self._misses += 1
+                return None, tokens
 
-        if shared_block_ids:
-            # Create block table for this request with shared blocks
             block_table = self.paged_cache.create_block_table(request_id)
+            for cb in cached_blocks:
+                block_table.block_ids.append(cb.block_id)
+                block_table.num_tokens += cb.token_count
 
-            for block_id in shared_block_ids:
-                # Increment ref count for sharing
-                self.paged_cache.increment_ref(block_id)
-                block = self.paged_cache.allocated_blocks.get(block_id)
-                if block:
-                    block_table.block_ids.append(block_id)
-                    block_table.num_tokens += block.token_count
-
-            num_prefix_tokens = len(tokens) - len(remaining)
+            remaining = tokens[block_table.num_tokens:]
             self._hits += 1
-            self._tokens_saved += num_prefix_tokens
-
-            logger.debug(
-                f"Cache hit for {request_id}: "
-                f"{len(shared_block_ids)} blocks, {num_prefix_tokens} tokens"
+            self._tokens_saved += block_table.num_tokens
+            logger.info(
+                f"Paged cache hit for {request_id}: "
+                f"{len(cached_blocks)} blocks, {block_table.num_tokens} tokens"
             )
-
             return block_table, remaining
 
         # Try prefix index for longer matches
         best_match = self._find_best_prefix_match(tokens)
         if best_match:
             matched_tokens, matched_block_ids = best_match
+            matched_blocks = [
+                self.paged_cache.allocated_blocks.get(block_id)
+                for block_id in matched_block_ids
+            ]
+            matched_blocks = [b for b in matched_blocks if b is not None]
+            if self._dsv4_l2_chain_missing_terminal_state(matched_blocks):
+                logger.warning(
+                    "Ignoring DSV4 prefix-index hit for %s: matched blocks "
+                    "contain DeepseekV4Cache pending markers but no terminal "
+                    "deepseek_v4 composite state.",
+                    request_id,
+                )
+                self._misses += 1
+                return None, tokens
 
             # Fork the matched blocks
             block_table = self.paged_cache.create_block_table(request_id)
@@ -1066,44 +1229,35 @@ class BlockAwarePrefixCache:
 
             return block_table, remaining
 
-        # Fallback: chain-hash lookup with L2 disk check.
-        # find_shared_prefix uses legacy content hashes (in-memory only).
-        # get_computed_blocks uses chain hashes and checks disk on L1 miss.
-        # After server restart, L1 is empty but disk blocks persist.
-        if self.paged_cache._disk_store is not None:
-            cached_blocks, num_cached = self.paged_cache.get_computed_blocks(tokens)
-            # MLLM path stores blocks with N-1 tokens (truncated for re-feed).
-            # If full token list misses, try N-1 to match what was stored.
-            if not cached_blocks and len(tokens) > 1:
-                cached_blocks, num_cached = self.paged_cache.get_computed_blocks(tokens[:-1])
-            if cached_blocks:
-                block_table = self.paged_cache.create_block_table(request_id)
-                for cb in cached_blocks:
-                    with self.paged_cache._lock:
-                        cb.ref_count += 1
-                    block_table.block_ids.append(cb.block_id)
-                    block_table.num_tokens += cb.token_count
-                    # Re-register in legacy hash_to_block for future in-memory hits
-                    if cb.token_count == self.block_size:
-                        chunk = tokens[block_table.num_tokens - cb.token_count:block_table.num_tokens]
-                    else:
-                        chunk = tokens[block_table.num_tokens - cb.token_count:block_table.num_tokens]
-                    self.paged_cache.register_block_hash(cb, chunk)
-
-                remaining = tokens[block_table.num_tokens:]
-                self._hits += 1
-                self._tokens_saved += block_table.num_tokens
-                logger.info(
-                    f"Disk L2 hit for {request_id}: "
-                    f"{len(cached_blocks)} blocks, {block_table.num_tokens} tokens "
-                    f"restored from SSD"
-                )
-                return block_table, remaining
-
         # No cache hit
         self._misses += 1
         logger.debug(f"Cache miss for {request_id}")
         return None, tokens
+
+    @staticmethod
+    def _dsv4_l2_chain_missing_terminal_state(cached_blocks: List[Any]) -> bool:
+        """True when an L2 hit restored only non-terminal DSV4 blocks.
+
+        DSV4 block L2 intentionally writes cheap ``deepseek_v4_pending``
+        markers for non-terminal blocks and stores the full SWA+CSA/HSA
+        composite state only on the terminal block. A chain hit that stops
+        before that terminal block is not a usable prefix cache: rebuilding it
+        yields a few SWA layers and misses every DeepseekV4Cache layer.
+        Treat it as a miss so the scheduler does a full prefill instead of
+        running with incomplete compressor/indexer pool state.
+        """
+        saw_pending = False
+        saw_terminal = False
+        for block in cached_blocks or []:
+            for entry in getattr(block, "cache_data", None) or []:
+                if not isinstance(entry, (tuple, list)) or not entry:
+                    continue
+                tag = entry[0]
+                if tag == "deepseek_v4_pending":
+                    saw_pending = True
+                elif tag == "deepseek_v4":
+                    saw_terminal = True
+        return saw_pending and not saw_terminal
 
     def store_cache(
         self,
@@ -1143,6 +1297,7 @@ class BlockAwarePrefixCache:
             and isinstance(cache_data[0], dict)
             and "state" in cache_data[0]
         )
+        has_dsv4_cache_data = _cache_data_has_dsv4(cache_data) if is_tensor_data else False
 
         # Get or create block table
         block_table = self.paged_cache.get_block_table(request_id)
@@ -1173,10 +1328,23 @@ class BlockAwarePrefixCache:
                 parent_hash = _compute_chain_hash(parent_hash, tokens[eb_start:eb_end])
 
         disk_store = self.paged_cache._disk_store  # May be None
+        # Frugal mode: when block disk store is on, disk is authoritative for
+        # block KV data. The in-RAM `block.cache_data` MLX copy is then a
+        # ~26 GB duplicate (sized like the live KV cache) that
+        # `_promote_from_disk` re-creates lazily on L1 miss anyway. Skip the
+        # in-RAM mirror to keep total cache footprint at ~1× live-KV instead
+        # of ~3× during _store. Default ON whenever disk store is present;
+        # users can re-enable RAM-only via `VMLX_PAGED_FRUGAL=0`.
+        import os as _os
+        _frugal_env = _os.environ.get("VMLX_PAGED_FRUGAL", "").strip()
+        if _frugal_env == "":
+            _paged_frugal = disk_store is not None  # auto: on when disk has it
+        else:
+            _paged_frugal = _frugal_env not in ("0", "false", "False", "no")
         logger.info(
             f"Block disk write-through: disk_store={'present' if disk_store else 'None'}, "
             f"is_tensor_data={is_tensor_data}, new_tokens={len(new_tokens)}, "
-            f"num_new_blocks={num_new_blocks}"
+            f"num_new_blocks={num_new_blocks}, frugal={_paged_frugal}"
         )
 
         # Pre-convert source KV arrays to numpy for safe slicing.
@@ -1335,8 +1503,16 @@ class BlockAwarePrefixCache:
                     # Without this, hybrid SSM models get "Reconstructed 10
                     # layers but expected 40" because cumulative entries are
                     # never stored.
-                    if is_last and is_tensor_data and _block_needs_cumulative_update(
-                        existing_block.cache_data
+                    if (
+                        is_last
+                        and is_tensor_data
+                        and (
+                            _block_needs_cumulative_update(existing_block.cache_data)
+                            or (
+                                has_dsv4_cache_data
+                                and existing_block.cache_data is None
+                            )
+                        )
                     ):
                         pass  # Fall through to new block allocation
                     else:
@@ -1358,34 +1534,46 @@ class BlockAwarePrefixCache:
                 continue
 
             # Also check legacy hash for blocks stored before chain hashing.
-            # find_cached_block already holds _lock internally, but we need to
-            # do the ref bump under the same lock to avoid the same race.
-            with self.paged_cache._lock:
-                hash_value = self.paged_cache.compute_block_hash(block_tokens)
-                existing_block = None
-                if hash_value in self.paged_cache.hash_to_block:
-                    bid = self.paged_cache.hash_to_block[hash_value]
-                    if bid in self.paged_cache.allocated_blocks:
-                        existing_block = self.paged_cache.allocated_blocks[bid]
-                        # Same cumulative state check as chain hash path:
-                        # skip reuse if last block needs cumulative SSM state
-                        if is_last and is_tensor_data and _block_needs_cumulative_update(
-                            existing_block.cache_data
-                        ):
-                            existing_block = None  # Fall through to allocation
-                        else:
-                            existing_block.ref_count += 1
-                            existing_block.touch()
-                            if existing_block.ref_count == 2:
-                                self.paged_cache.stats.shared_blocks += 1
-                            self.paged_cache.stats.cache_hits += 1
-                            # Set chain hash on the existing block if it doesn't have one
-                            if existing_block.block_hash is None:
-                                existing_block.block_hash = block_chain_hash
-                                self.paged_cache.cached_block_hash_to_block.insert(
-                                    block_chain_hash, existing_block
-                                )
-                if existing_block is None:
+            #
+            # DSV4 must NEVER use this content-only fallback. Repeated 64-token
+            # chunks have identical text but different hidden state because
+            # DeepseekV4Cache carries CSA/HSA pool state keyed by the full
+            # prefix. Reusing a legacy-content block from an earlier position
+            # prevents the terminal ``deepseek_v4`` composite block from being
+            # written and later reconstructs only the SWA layers. Chain hashes
+            # above already cover the safe exact-prefix case.
+            existing_block = None
+            if not has_dsv4_cache_data:
+                # find_cached_block already holds _lock internally, but we need
+                # to do the ref bump under the same lock to avoid the same race.
+                with self.paged_cache._lock:
+                    hash_value = self.paged_cache.compute_block_hash(block_tokens)
+                    if hash_value in self.paged_cache.hash_to_block:
+                        bid = self.paged_cache.hash_to_block[hash_value]
+                        if bid in self.paged_cache.allocated_blocks:
+                            existing_block = self.paged_cache.allocated_blocks[bid]
+                            # Same cumulative state check as chain hash path:
+                            # skip reuse if last block needs cumulative SSM state
+                            if is_last and is_tensor_data and _block_needs_cumulative_update(
+                                existing_block.cache_data
+                            ):
+                                existing_block = None  # Fall through to allocation
+                            else:
+                                existing_block.ref_count += 1
+                                existing_block.touch()
+                                if existing_block.ref_count == 2:
+                                    self.paged_cache.stats.shared_blocks += 1
+                                self.paged_cache.stats.cache_hits += 1
+                                # Set chain hash on the existing block if it doesn't have one
+                                if existing_block.block_hash is None:
+                                    existing_block.block_hash = block_chain_hash
+                                    self.paged_cache.cached_block_hash_to_block.insert(
+                                        block_chain_hash, existing_block
+                                    )
+                    if existing_block is None:
+                        self.paged_cache.stats.cache_misses += 1
+            else:
+                with self.paged_cache._lock:
                     self.paged_cache.stats.cache_misses += 1
             if existing_block:
                 block_table.block_ids.append(existing_block.block_id)
@@ -1431,17 +1619,29 @@ class BlockAwarePrefixCache:
                     np_sources=np_sources if np_sources else None,
                 )
                 if block_kv_data:
-                    block.cache_data = block_kv_data
-                    logger.debug(
-                        f"Stored tensor slice for block {block.block_id}: "
-                        f"tokens [{global_start}:{global_end}], {len(block_kv_data)} layers"
-                        f"{' (includes cumulative states)' if is_last else ''}"
-                    )
+                    if _paged_frugal:
+                        # Disk has it — skip the in-RAM duplicate. L1 lookup
+                        # will fall through to L2 disk + _promote_from_disk
+                        # which lazily re-creates cache_data on hit.
+                        # Keep token_count/block_hash set above so disk
+                        # promotion can verify the block.
+                        logger.debug(
+                            f"Frugal: skipped in-RAM mirror for block "
+                            f"{block.block_id} (tokens [{global_start}:{global_end}], "
+                            f"disk-only)"
+                        )
+                    else:
+                        block.cache_data = block_kv_data
+                        logger.debug(
+                            f"Stored tensor slice for block {block.block_id}: "
+                            f"tokens [{global_start}:{global_end}], {len(block_kv_data)} layers"
+                            f"{' (includes cumulative states)' if is_last else ''}"
+                        )
 
                     # Defer disk write using numpy slices (no MLX ops)
-                    if disk_store is not None and np_sources:
+                    if disk_store is not None:
                         np_block = _numpy_block_slice(
-                            cache_data, np_sources,
+                            cache_data, np_sources or {},
                             local_start, local_end, is_last,
                         )
                         if np_block:
@@ -1460,11 +1660,6 @@ class BlockAwarePrefixCache:
                                 f"for block {block.block_id} "
                                 f"(local [{local_start}:{local_end}], is_last={is_last})"
                             )
-                    elif disk_store is not None and not np_sources:
-                        logger.warning(
-                            f"Block disk: np_sources empty for block {block.block_id}, "
-                            f"cannot write to disk"
-                        )
 
             # Register in hash caches under lock (both chain hash and legacy)
             with self.paged_cache._lock:
@@ -1474,6 +1669,22 @@ class BlockAwarePrefixCache:
             self.paged_cache.register_block_hash(block, block_tokens)
 
             parent_hash = block_chain_hash
+
+        # Free the full-cache numpy mirror immediately. np_sources duplicates
+        # the entire live KV cache (~26 GB on a MiniMax-M2 17K-prefill: 62
+        # layers × 48 heads × 64 head_dim × 17000 tokens × 2 bytes × 2 (k+v))
+        # and was previously held until function exit. The block-extraction
+        # loop above is finished, so dropping this here cuts peak resident
+        # RAM during _store by exactly the live-KV size. Pending disk writes
+        # below already have their own per-block numpy slices captured.
+        if np_sources:
+            np_sources.clear()
+        np_sources = None
+        try:
+            import gc as _gc
+            _gc.collect()
+        except Exception:
+            pass
 
         # Write deferred disk blocks (all numpy — no MLX/Metal ops).
         if pending_disk_writes and disk_store is not None:
@@ -1616,6 +1827,25 @@ class BlockAwarePrefixCache:
                 continue
 
             class_name = layer_state.get("class_name", "")
+
+            if _is_dsv4_cache_class(class_name):
+                state = layer_state["state"]
+                if is_last_block and state is not None:
+                    meta = layer_state.get("meta_state", "")
+                    block_slices.append((
+                        "deepseek_v4",
+                        state,
+                        meta,
+                        class_name,
+                        _dsv4_cache_meta(layer_state),
+                    ))
+                else:
+                    block_slices.append((
+                        "deepseek_v4_pending",
+                        class_name,
+                        _dsv4_cache_meta(layer_state),
+                    ))
+                continue
 
             # CacheList (MoE models): extract slices from each sub-cache
             if class_name == "CacheList" and "sub_caches" in layer_state:
@@ -2009,8 +2239,30 @@ class BlockAwarePrefixCache:
                     return None
 
                 if block.cache_data is None:
-                    logger.debug(f"Block {block_id} has no tensor data stored")
-                    return None
+                    # Frugal mode (or post-eviction): in-RAM mirror skipped,
+                    # but the block was written to L2 disk during _store. Pull
+                    # it back lazily so the in-session reconstruct path still
+                    # succeeds. Without this, every prefix-cache hit on a
+                    # frugal-stored prompt would silently fall through to a
+                    # full prefill, defeating the cache.
+                    _disk = getattr(self.paged_cache, "_disk_store", None)
+                    if _disk is not None and block.block_hash is not None:
+                        try:
+                            _disk_data = _disk.read_block(block.block_hash)
+                        except Exception as _re:
+                            logger.warning(
+                                f"Block {block_id} disk read failed: {_re}"
+                            )
+                            _disk_data = None
+                        if _disk_data is not None:
+                            block.cache_data = _disk_data
+                            logger.debug(
+                                f"Block {block_id} rehydrated from L2 disk "
+                                f"(hash={block.block_hash.hex()[:12] if hasattr(block.block_hash, 'hex') else block.block_hash})"
+                            )
+                    if block.cache_data is None:
+                        logger.debug(f"Block {block_id} has no tensor data stored")
+                        return None
 
                 all_block_data.append(block.cache_data)
 
@@ -2056,6 +2308,7 @@ class BlockAwarePrefixCache:
                 # Check the type tag from _extract_block_tensor_slice
                 # Collect entries by type, find best cumulative entry
                 best_cumulative = None
+                best_dsv4 = None
                 kv_slices_keys = []
                 kv_slices_values = []
                 rotating_kv_slices_keys = []
@@ -2086,6 +2339,10 @@ class BlockAwarePrefixCache:
                             rotating_params = (entry[3], entry[4] if len(entry) > 4 else 0)
                     elif tag == "cumulative":
                         best_cumulative = entry  # Last cumulative entry wins
+                    elif tag == "deepseek_v4":
+                        best_dsv4 = entry  # Last DSV4 composite state wins
+                    elif tag == "deepseek_v4_pending":
+                        pass
                     elif tag == "cache_list":
                         cache_list_entries.append(entry[1])  # list of sub-slices
                     # "skip" entries are ignored
@@ -2230,6 +2487,37 @@ class BlockAwarePrefixCache:
                     reconstructed_caches.append(cache)
                     reconstructed_indices.add(layer_idx)
                     kv_count += 1
+
+                elif best_dsv4 is not None:
+                    _, state, meta, class_name, cache_meta = best_dsv4
+                    try:
+                        from jang_tools.dsv4.mlx_model import DeepseekV4Cache
+
+                        if not isinstance(cache_meta, dict):
+                            cache_meta = {}
+                        sliding_window = int(cache_meta.get("sliding_window") or 128)
+                        compress_ratio = cache_meta.get("compress_ratio")
+                        if compress_ratio is not None:
+                            compress_ratio = int(compress_ratio)
+                        cache = DeepseekV4Cache(
+                            sliding_window=sliding_window,
+                            compress_ratio=compress_ratio,
+                        )
+                        cache.state = state
+                        try:
+                            cache.meta_state = meta
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        logger.warning(
+                            f"Cannot reconstruct layer {layer_idx} "
+                            f"({class_name}) as DeepseekV4Cache: {e}"
+                        )
+                        return None
+
+                    reconstructed_caches.append(cache)
+                    reconstructed_indices.add(layer_idx)
+                    cumulative_count += 1
 
                 elif best_cumulative is not None:
                     # Cumulative cache (MambaCache/ArraysCache): restore full state

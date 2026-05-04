@@ -2,7 +2,7 @@ import { spawn, ChildProcess, execSync, execFileSync } from 'child_process'
 import { lookup } from 'dns'
 import { powerSaveBlocker } from 'electron'
 import { EventEmitter } from 'events'
-import { existsSync, readdirSync, statSync } from 'fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
 import { createServer } from 'net'
 import { homedir, totalmem, freemem } from 'os'
 import { join, basename } from 'path'
@@ -33,6 +33,89 @@ interface ManagedProcess {
 /** Normalize model paths for consistent matching: resolve and strip trailing slashes */
 function normalizePath(p: string): string {
   return p.replace(/\/+$/, '')
+}
+
+interface BundleStartupDefaults {
+  defaultTemperature?: number
+  defaultTopP?: number
+  defaultRepetitionPenalty?: number
+  maxTokens?: number
+  source?: 'generation_config' | 'jang_config'
+}
+
+function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
+  if (!modelPath) return {}
+  const out: BundleStartupDefaults = {}
+  try {
+    const gen = JSON.parse(readFileSync(join(modelPath, 'generation_config.json'), 'utf8'))
+    if (typeof gen.temperature === 'number') out.defaultTemperature = Math.round(gen.temperature * 100)
+    if (typeof gen.top_p === 'number') out.defaultTopP = Math.round(gen.top_p * 100)
+    if (typeof gen.repetition_penalty === 'number') out.defaultRepetitionPenalty = Math.round(gen.repetition_penalty * 100)
+    if (typeof gen.max_new_tokens === 'number' && gen.max_new_tokens > 0) out.maxTokens = Math.round(gen.max_new_tokens)
+    if (Object.keys(out).length > 0) out.source = 'generation_config'
+  } catch { /* generation_config.json is optional */ }
+
+  try {
+    const jang = JSON.parse(readFileSync(join(modelPath, 'jang_config.json'), 'utf8'))
+    const sampling = jang?.chat?.sampling_defaults
+    if (sampling && typeof sampling === 'object') {
+      if (typeof sampling.temperature === 'number') out.defaultTemperature = Math.round(sampling.temperature * 100)
+      if (typeof sampling.top_p === 'number') out.defaultTopP = Math.round(sampling.top_p * 100)
+      // Pick mode-specific repetition penalty based on the bundle's
+      // default reasoning mode. Bundles split _thinking vs _chat because
+      // the right value differs (DSV4: 1.0 thinking to keep </think>
+      // closure, 1.05 chat to break degeneration loops). Falls back to
+      // the unified scalar if either side is missing.
+      const defaultMode = jang?.chat?.reasoning?.default_mode
+      const repThinking = typeof sampling.repetition_penalty_thinking === 'number'
+        ? sampling.repetition_penalty_thinking : undefined
+      const repChat = typeof sampling.repetition_penalty_chat === 'number'
+        ? sampling.repetition_penalty_chat : undefined
+      const repScalar = typeof sampling.repetition_penalty === 'number'
+        ? sampling.repetition_penalty : undefined
+      const rep = defaultMode === 'thinking'
+        ? (repThinking ?? repChat ?? repScalar)
+        : (repChat ?? repThinking ?? repScalar)
+      if (typeof rep === 'number') out.defaultRepetitionPenalty = Math.round(rep * 100)
+      if (typeof sampling.max_new_tokens === 'number' && sampling.max_new_tokens > 0) out.maxTokens = Math.round(sampling.max_new_tokens)
+      out.source = 'jang_config'
+    }
+  } catch { /* jang_config.json is optional */ }
+
+  return out
+}
+
+function applyBundleStartupDefaults(config: Partial<ServerConfig>, modelPath?: string): void {
+  const defs = readBundleStartupDefaults(modelPath)
+  if (!defs.source) return
+
+  // Treat the built-in generic slider values as "unset" for model-specific
+  // startup. This lets DSV4/Nemotron/etc. launch with bundle-calibrated CLI
+  // defaults while preserving explicit non-generic user edits.
+  if (
+    defs.defaultTemperature != null &&
+    (config.defaultTemperature == null || config.defaultTemperature === 70)
+  ) {
+    config.defaultTemperature = defs.defaultTemperature
+  }
+  if (
+    defs.defaultTopP != null &&
+    (config.defaultTopP == null || config.defaultTopP === 95)
+  ) {
+    config.defaultTopP = defs.defaultTopP
+  }
+  if (
+    defs.defaultRepetitionPenalty != null &&
+    ((config as any).defaultRepetitionPenalty == null || (config as any).defaultRepetitionPenalty === 110)
+  ) {
+    ;(config as any).defaultRepetitionPenalty = defs.defaultRepetitionPenalty
+  }
+  if (
+    defs.maxTokens != null &&
+    (config.maxTokens == null || config.maxTokens === 32768)
+  ) {
+    config.maxTokens = defs.maxTokens
+  }
 }
 
 /** Resolve bind address to connectable address (0.0.0.0 → 127.0.0.1) */
@@ -361,6 +444,7 @@ export class SessionManager extends EventEmitter {
   private async _createSessionInner(modelPath: string, config: Partial<ServerConfig>): Promise<Session> {
     // Normalize path to prevent trailing-slash mismatches
     modelPath = normalizePath(modelPath)
+    applyBundleStartupDefaults(config, modelPath)
 
     // Check if session already exists for this model path
     const existing = db.getSessionByModelPath(modelPath)
@@ -371,6 +455,7 @@ export class SessionManager extends EventEmitter {
       const host = (config.host as string) || existing.host
       const port = (config.port as number) || existing.port
       const merged = { ...existingConfig, ...config, modelPath, host, port }
+      applyBundleStartupDefaults(merged, modelPath)
       db.updateSession(existing.id, {
         config: JSON.stringify(merged),
         host,
@@ -481,6 +566,7 @@ export class SessionManager extends EventEmitter {
     config.modelPath = session.modelPath
     config.host = session.host
     config.port = session.port
+    applyBundleStartupDefaults(config, config.modelPath)
 
     // Apply model_settings.reasoning_mode as server-level default for external API clients
     const modelSettings = db.getModelSettings(session.modelPath)
@@ -1745,11 +1831,20 @@ export class SessionManager extends EventEmitter {
 
     // === Text model flags below ===
 
+    // Auto-detect tool/reasoning/cache behavior from config.json. This must
+    // happen before concurrency flags because DSV4's custom generator is
+    // single-batch even though the generic session profile defaults to 5.
+    const detected = detectModelConfigFromDir(config.modelPath)
+
     // Concurrent processing
     // When value is 0 ("No limit" in UI), omit the flag so backend uses its default.
     // When value > 0, pass it explicitly to override the backend default.
-    if (config.maxNumSeqs && config.maxNumSeqs > 0) {
-      args.push('--max-num-seqs', config.maxNumSeqs.toString())
+    const effectiveMaxNumSeqs = detected.family === 'deepseek-v4' ? 1 : config.maxNumSeqs
+    if (detected.family === 'deepseek-v4' && config.maxNumSeqs && config.maxNumSeqs !== 1) {
+      console.log(`[SESSION] DSV4-Flash detected: overriding maxNumSeqs ${config.maxNumSeqs} -> 1 (DSV4BatchGenerator is single-batch only)`)
+    }
+    if (effectiveMaxNumSeqs && effectiveMaxNumSeqs > 0) {
+      args.push('--max-num-seqs', effectiveMaxNumSeqs.toString())
     }
     if (config.prefillBatchSize && config.prefillBatchSize > 0) {
       args.push('--prefill-batch-size', config.prefillBatchSize.toString())
@@ -1760,10 +1855,6 @@ export class SessionManager extends EventEmitter {
     if (config.completionBatchSize && config.completionBatchSize > 0) {
       args.push('--completion-batch-size', config.completionBatchSize.toString())
     }
-
-    // Auto-detect tool/reasoning parser from model's config.json model_type field.
-    // No name-based regex detection — config.json is authoritative.
-    const detected = detectModelConfigFromDir(config.modelPath)
 
     // VLM detection: tri-state — undefined=auto, true=force on, false=force off.
     // Only respect explicit user choice (true/false); undefined defers to auto-detect.

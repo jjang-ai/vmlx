@@ -49,8 +49,14 @@ def _set_wired_limit_for_model(weight_files):
     """
     try:
         total_bytes = sum(sf.stat().st_size for sf in weight_files)
-        # 8 GB headroom for activations, KV cache, scheduler overhead
-        target = total_bytes + 8 * 1024 * 1024 * 1024
+        # Headroom = max(16 GB, 30% of model size). The previous 8 GB
+        # was tight on big MoE bundles (MiniMax 38 GB JANGTQ2, etc.):
+        # routed-expert dequant + KV cache + Metal scratch could spike
+        # past 8 GB on first inference and the kernel SIGKILLed the
+        # process. 30%-of-model is plenty for dense models too and stays
+        # under max_recommended_working_set on M-series with ≥96 GB.
+        headroom = max(16 * 1024 * 1024 * 1024, int(total_bytes * 0.30))
+        target = total_bytes + headroom
         # Cap at OS max working set (sysctl iogpu.wired_limit_mb)
         try:
             max_ws = mx.metal.device_info().get("max_recommended_working_set_size")

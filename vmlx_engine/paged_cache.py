@@ -779,6 +779,17 @@ class PagedCacheManager:
                 return False
 
             block = self.allocated_blocks[block_id]
+            if block.ref_count == 0 and not block.is_null:
+                # Cached-but-free block: revive it for this request and remove
+                # it from the free LRU queue so it cannot be reallocated while
+                # a block table is actively using it.
+                if block.prev_free_block is not None or block.next_free_block is not None:
+                    try:
+                        self.free_block_queue.remove(block)
+                        self.stats.free_blocks = max(0, self.stats.free_blocks - 1)
+                        self.stats.allocated_blocks += 1
+                    except RuntimeError:
+                        pass
             block.ref_count += 1
             block.touch()
 
@@ -906,7 +917,10 @@ class PagedCacheManager:
             with self._lock:
                 cached_block = self.cached_block_hash_to_block.get_block(block_hash)
                 if cached_block is not None:
-                    cached_block.touch()  # Update LRU position
+                    # Hold a request reference for the block returned to the
+                    # caller. This also revives cached-but-free blocks from the
+                    # free LRU queue before they can be reallocated.
+                    self.touch([cached_block])
 
             if cached_block is None and self._disk_store is not None:
                 # L1 miss — check L2 disk cache (outside lock to avoid blocking)
@@ -922,6 +936,8 @@ class PagedCacheManager:
                             if promoted is not None:
                                 cached_block = promoted
                                 self.stats.disk_hits += 1
+                        else:
+                            self.touch([cached_block])
 
             if cached_block is None:
                 with self._lock:
@@ -938,33 +954,54 @@ class PagedCacheManager:
 
         # Also check partial (trailing) block after all full blocks matched.
         # Without this, short prompts (< block_size) never get disk hits.
+        #
+        # Important: partial-prefix matching must still use the parent chain
+        # hash. The legacy hash_to_block map keys only on the block's token
+        # content; that is unsafe for real KV state because a repeated block of
+        # text has different hidden/KV values under a different preceding
+        # context. Try the exact remaining length first, then known in-memory
+        # partial sizes from largest to smallest so a request can reuse a
+        # previously stored terminal partial block when extending that prompt.
         remaining_tokens = token_ids[num_cached_tokens:]
         if remaining_tokens and len(remaining_tokens) < self.block_size:
-            block_hash = compute_block_hash(parent_hash, remaining_tokens)
+            partial_sizes: List[int] = [len(remaining_tokens)]
+            for size in sorted(self._partial_block_sizes, reverse=True):
+                if 0 < size <= len(remaining_tokens) and size not in partial_sizes:
+                    partial_sizes.append(size)
 
-            with self._lock:
-                cached_block = self.cached_block_hash_to_block.get_block(block_hash)
-                if cached_block is not None:
-                    cached_block.touch()
+            for size in partial_sizes:
+                block_tokens = remaining_tokens[:size]
+                block_hash = compute_block_hash(parent_hash, block_tokens)
 
-            if cached_block is None and self._disk_store is not None:
-                disk_data = self._disk_store.read_block(block_hash)
-                if disk_data is not None:
-                    with self._lock:
-                        cached_block = self.cached_block_hash_to_block.get_block(block_hash)
-                        if cached_block is None:
-                            promoted = self._promote_from_disk(
-                                block_hash, disk_data, len(remaining_tokens)
-                            )
-                            if promoted is not None:
-                                cached_block = promoted
-                                self.stats.disk_hits += 1
-
-            if cached_block is not None:
-                cached_blocks.append(cached_block)
-                num_cached_tokens += cached_block.token_count
                 with self._lock:
-                    self.stats.cache_hits += 1
+                    cached_block = self.cached_block_hash_to_block.get_block(block_hash)
+                    if cached_block is not None:
+                        # Hold a request reference for the block returned to the
+                        # caller. This also revives cached-but-free blocks from the
+                        # free LRU queue before they can be reallocated.
+                        self.touch([cached_block])
+
+                if cached_block is None and self._disk_store is not None:
+                    disk_data = self._disk_store.read_block(block_hash)
+                    if disk_data is not None:
+                        with self._lock:
+                            cached_block = self.cached_block_hash_to_block.get_block(block_hash)
+                            if cached_block is None:
+                                promoted = self._promote_from_disk(
+                                    block_hash, disk_data, size
+                                )
+                                if promoted is not None:
+                                    cached_block = promoted
+                                    self.stats.disk_hits += 1
+                            else:
+                                self.touch([cached_block])
+
+                if cached_block is not None:
+                    cached_blocks.append(cached_block)
+                    num_cached_tokens += cached_block.token_count
+                    with self._lock:
+                        self.stats.cache_hits += 1
+                    break
 
         return cached_blocks, num_cached_tokens
 

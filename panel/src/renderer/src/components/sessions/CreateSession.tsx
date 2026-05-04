@@ -49,6 +49,28 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
   const [remoteOrganization, setRemoteOrganization] = useState('')
   const [remoteConnecting, setRemoteConnecting] = useState(false)
 
+  const applyModelDefaults = async (modelPath: string) => {
+    const detected = await window.api.models.detectConfig(modelPath) as any
+    const gen = await window.api.models.getGenerationDefaults(modelPath).catch(() => null) as any
+    setConfig(prev => {
+      const next: SessionConfig = {
+        ...prev,
+        enableAutoToolChoice: detected?.enableAutoToolChoice,
+        toolCallParser: 'auto',
+        reasoningParser: 'auto',
+        usePagedCache: detected?.usePagedCache,
+      }
+      if (gen?.temperature != null) next.defaultTemperature = Math.round(gen.temperature * 100)
+      if (gen?.topP != null) next.defaultTopP = Math.round(gen.topP * 100)
+      if (gen?.repeatPenalty != null) next.defaultRepetitionPenalty = Math.round(gen.repeatPenalty * 100)
+      if (gen?.maxNewTokens != null) next.maxTokens = gen.maxNewTokens
+      return next
+    })
+    if (detected?.cacheType) setDetectedCacheType(detected.cacheType)
+    else setDetectedCacheType('kv')
+    if (detected?.maxContextLength) setDetectedMaxContext(detected.maxContextLength)
+  }
+
   // Auto-detect image model type on mount when initialModelPath is provided
   useEffect(() => {
     if (initialModelPath && !filterTypeProp) {
@@ -112,18 +134,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
     if (!initialModelPath) return
     const detect = async () => {
       try {
-        const detected = await window.api.models.detectConfig(initialModelPath) as any
-        if (detected && detected.family !== 'unknown') {
-          setConfig(prev => ({
-            ...prev,
-            enableAutoToolChoice: detected.enableAutoToolChoice,
-            toolCallParser: 'auto',
-            reasoningParser: 'auto',
-            usePagedCache: detected.usePagedCache,
-          }))
-          setDetectedCacheType(detected.cacheType || 'kv')
-          if (detected.maxContextLength) setDetectedMaxContext(detected.maxContextLength)
-        }
+        await applyModelDefaults(initialModelPath)
       } catch (_) { }
     }
     detect()
@@ -138,11 +149,16 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
     // Re-run model detection to get proper defaults for this model
     if (selectedModel) {
       try {
-        const detected = await window.api.models.detectConfig(selectedModel)
+        const detected = await window.api.models.detectConfig(selectedModel) as any
+        const gen = await window.api.models.getGenerationDefaults(selectedModel).catch(() => null) as any
         if (detected && detected.family !== 'unknown') {
           base.enableAutoToolChoice = detected.enableAutoToolChoice
           base.usePagedCache = detected.usePagedCache
         }
+        if (gen?.temperature != null) base.defaultTemperature = Math.round(gen.temperature * 100)
+        if (gen?.topP != null) base.defaultTopP = Math.round(gen.topP * 100)
+        if (gen?.repeatPenalty != null) base.defaultRepetitionPenalty = Math.round(gen.repeatPenalty * 100)
+        if (gen?.maxNewTokens != null) base.maxTokens = gen.maxNewTokens
       } catch (_) { }
     }
     setConfig(base)
@@ -498,10 +514,25 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
                           if (existing?.config) {
                             try {
                               const stored = JSON.parse(existing.config)
-                              // Migrate old default: enableAutoToolChoice: false was the broken default
-                              // that blocked auto-detection. Convert to undefined (auto-detect).
-                              if (stored.enableAutoToolChoice === false) delete stored.enableAutoToolChoice
-                              setConfig(prev => ({ ...prev, ...stored, port: prev.port }))
+	                              // Migrate old default: enableAutoToolChoice: false was the broken default
+	                              // that blocked auto-detection. Convert to undefined (auto-detect).
+	                              if (stored.enableAutoToolChoice === false) delete stored.enableAutoToolChoice
+                              try {
+                                const gen = await window.api.models.getGenerationDefaults(model.path) as any
+                                if (gen?.temperature != null && (stored.defaultTemperature == null || stored.defaultTemperature === 70)) {
+                                  stored.defaultTemperature = Math.round(gen.temperature * 100)
+                                }
+                                if (gen?.topP != null && (stored.defaultTopP == null || stored.defaultTopP === 95)) {
+                                  stored.defaultTopP = Math.round(gen.topP * 100)
+                                }
+                                if (gen?.repeatPenalty != null && (stored.defaultRepetitionPenalty == null || stored.defaultRepetitionPenalty === 110)) {
+                                  stored.defaultRepetitionPenalty = Math.round(gen.repeatPenalty * 100)
+                                }
+                                if (gen?.maxNewTokens != null && (stored.maxTokens == null || stored.maxTokens === 32768)) {
+                                  stored.maxTokens = gen.maxNewTokens
+                                }
+                              } catch (_) { }
+	                              setConfig(prev => ({ ...prev, ...stored, port: prev.port }))
                               // Still detect cache type for UI gating (Mamba vs KV, VLM)
                               try {
                                 const det = await window.api.models.detectConfig(model.path) as any
@@ -519,23 +550,12 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
                             } catch (_) { }
                           }
                         } catch (_) { }
-                        // Fallback: auto-detect model config for fresh sessions
-                        try {
-                          const detected = await window.api.models.detectConfig(model.path) as any
-                          if (detected && detected.family !== 'unknown') {
-                            setConfig(prev => ({
-                              ...prev,
-                              enableAutoToolChoice: detected.enableAutoToolChoice,
-                              toolCallParser: 'auto',
-                              reasoningParser: 'auto',
-                              usePagedCache: detected.usePagedCache,
-                            }))
-                            setDetectedCacheType(detected.cacheType || 'kv')
-                            if (detected.maxContextLength) setDetectedMaxContext(detected.maxContextLength)
-                          }
-                        } catch (_) {
-                          // Auto-detect failed — user can configure manually
-                        }
+	                        // Fallback: auto-detect model config for fresh sessions
+	                        try {
+	                          await applyModelDefaults(model.path)
+	                        } catch (_) {
+	                          // Auto-detect failed — user can configure manually
+	                        }
                         // Auto-detect image model
                         try {
                           const types = await window.api.models.detectTypes([model.path])

@@ -445,17 +445,17 @@ export function registerChatHandlers(
           // confuses new users. Models that explicitly set reasoning_mode
           // in their model settings will override this.
           let enableThinking: boolean = false;
-          if (modelSettings.reasoning_mode === "always") enableThinking = true;
+          if (modelSettings.reasoning_mode === "on") enableThinking = true;
 
           // Sensible defaults: many models ship with temperature=1.0 in
           // generation_config.json which is too creative for most users and
-          // causes looping on low-bit JANG quants. Cap temperature at 0.7
-          // and always set a mild repetition penalty (1.1) to prevent
-          // token-level repetition loops. Users can still override in
-          // Chat Settings — these are just the starting values.
+          // causes looping on low-bit JANG quants. Keep that cap for raw
+          // generation_config defaults, but trust jang_config.chat sampling
+          // defaults because those are bundle/runtime calibrated (DSV4 uses
+          // this to declare 0.6/0.95/1.15).
           let temp =
             modelSettings.temperature ?? genDefaults.temperature ?? 0.7;
-          if (temp > 0.7) temp = 0.7; // cap overly creative defaults
+          if (genDefaults.source !== "jang_config" && temp > 0.7) temp = 0.7;
           db.setChatOverrides({
             chatId: chat.id,
             temperature: temp,
@@ -464,7 +464,7 @@ export function registerChatHandlers(
             minP: genDefaults.minP,
             repeatPenalty:
               genDefaults.repeatPenalty ?? 1.1, // mild anti-loop default
-            maxTokens: modelSettings.max_tokens,
+            maxTokens: modelSettings.max_tokens ?? genDefaults.maxNewTokens,
             enableThinking: enableThinking,
           });
           console.log(
@@ -1001,6 +1001,14 @@ export function registerChatHandlers(
       // No default system prompt injected — let the model's native template handle defaults.
       // Injecting "You are a helpful assistant." reinforces safety behavior in abliterated/CRACK models.
 
+      // Determine wire format before rebuilding history because persisted
+      // tool-call context must be reconstructed differently for Responses
+      // (`function_call` / `function_call_output` items) versus Chat
+      // Completions (`assistant.tool_calls` / `role:"tool"` messages).
+      const wireApi =
+        overrides?.wireApi || (isRemote ? "completions" : "responses");
+      const useResponsesApi = wireApi === "responses";
+
       // Add conversation messages (skip any existing system messages to avoid duplicates)
       // Messages with JSON content arrays (multimodal) are parsed back to content parts for the API
       for (const m of messages) {
@@ -1026,7 +1034,17 @@ export function registerChatHandlers(
               "",
             );
           }
-          if (!msgContent.trim()) continue; // Skip entirely empty aborted messages
+          // 2026-05-03: keep empty-content assistant turns when they
+          // carry tool_calls. An assistant turn that ONLY emits tool
+          // calls has no visible content — but the chat template still
+          // needs the message in history with `tool_calls` set so the
+          // model sees prior calls + their results. Skipping it
+          // collapsed the conversation into "user → user" gibberish
+          // on continuation.
+          const _hasOaiToolCalls =
+            typeof (m as any).toolCallsOaiJson === "string" &&
+            (m as any).toolCallsOaiJson.length > 0;
+          if (!msgContent.trim() && !_hasOaiToolCalls) continue; // Skip entirely empty aborted messages
         }
         // Detect JSON content arrays (multimodal messages with images)
         if (
@@ -1053,7 +1071,110 @@ export function registerChatHandlers(
             /* not JSON, use as plain string */
           }
         }
-        requestMessages.push({ role: m.role, content: msgContent });
+        // 2026-05-03: rebuild tool-call context from DB so chat-template
+        // re-render preserves the tool-call format anchor on continuation.
+        // We store the tool-call request and tool outputs on the visible
+        // assistant row, then expand them into wire-native history here.
+        const reqMsg: any = { role: m.role, content: msgContent };
+        if (m.role === "assistant") {
+          const oai = (m as any).toolCallsOaiJson;
+          if (typeof oai === "string" && oai.length > 0) {
+            try {
+              const tcs = JSON.parse(oai);
+              if (Array.isArray(tcs) && tcs.length > 0) {
+                // Validate shape: must have `function.name` + `function.arguments`.
+                const valid = tcs.filter(
+                  (tc: any) =>
+                    tc &&
+                    tc.id &&
+                    tc.function &&
+                    typeof tc.function.name === "string" &&
+                    typeof tc.function.arguments === "string",
+                );
+                if (valid.length > 0) {
+                  let toolResults: Array<{
+                    tool_call_id: string;
+                    content: string;
+                  }> = [];
+                  const resultsJson = (m as any).toolResultsOaiJson;
+                  if (typeof resultsJson === "string" && resultsJson.length > 0) {
+                    try {
+                      const parsedResults = JSON.parse(resultsJson);
+                      if (Array.isArray(parsedResults)) {
+                        toolResults = parsedResults
+                          .filter(
+                            (r: any) =>
+                              r &&
+                              typeof r.tool_call_id === "string" &&
+                              typeof r.content === "string",
+                          )
+                          .map((r: any) => ({
+                            tool_call_id: r.tool_call_id,
+                            content: r.content,
+                          }));
+                      }
+                    } catch {
+                      /* malformed tool results — replay tool_calls only */
+                    }
+                  }
+
+                  if (useResponsesApi) {
+                    for (const tc of valid) {
+                      requestMessages.push({
+                        type: "function_call",
+                        call_id: tc.id,
+                        name: tc.function.name,
+                        arguments: tc.function.arguments,
+                      });
+                    }
+                    for (const tr of toolResults) {
+                      requestMessages.push({
+                        type: "function_call_output",
+                        call_id: tr.tool_call_id,
+                        output: tr.content,
+                      });
+                    }
+                    if (
+                      typeof msgContent === "string" &&
+                      msgContent.trim().length > 0
+                    ) {
+                      requestMessages.push({
+                        type: "output_text",
+                        text: msgContent,
+                      });
+                    }
+                  } else {
+                    requestMessages.push({
+                      role: "assistant",
+                      content: null,
+                      tool_calls: valid,
+                    });
+                    for (const tr of toolResults) {
+                      requestMessages.push({
+                        role: "tool",
+                        tool_call_id: tr.tool_call_id,
+                        content: tr.content,
+                      });
+                    }
+                    if (
+                      typeof msgContent === "string" &&
+                      msgContent.trim().length > 0
+                    ) {
+                      requestMessages.push({
+                        role: "assistant",
+                        content: msgContent,
+                      });
+                    }
+                  }
+                  continue;
+                }
+              }
+            } catch {
+              /* malformed JSON — drop, fall through to content-only message */
+            }
+          }
+        }
+        requestMessages.push(reqMsg);
       }
 
       // Fix role alternation: merge consecutive same-role messages to prevent
@@ -1166,11 +1287,6 @@ export function registerChatHandlers(
       };
 
       try {
-        // Determine wire format: 'responses' (default for local) or 'completions'
-        const wireApi =
-          overrides?.wireApi || (isRemote ? "completions" : "responses");
-        const useResponsesApi = wireApi === "responses";
-
         // Call API (local vMLX Engine or remote OpenAI-compatible endpoint)
         const apiUrl = useResponsesApi
           ? `${baseUrl}/v1/responses`
@@ -1269,6 +1385,12 @@ export function registerChatHandlers(
               };
             if (overrides?.reasoningEffort)
               obj.reasoning_effort = overrides.reasoningEffort;
+            if (!isRemote) {
+              if (obj.enable_thinking === false) obj.thinking_mode = "instruct";
+              else if (obj.enable_thinking === true && obj.reasoning_effort === "max")
+                obj.thinking_mode = "max";
+              else if (obj.enable_thinking === true) obj.thinking_mode = "reasoning";
+            }
             // VLM video sampling — forward to engine only when session
             // config has non-default values. Remote OpenAI-compatible
             // providers don't support these fields, so skip there.
@@ -1339,6 +1461,12 @@ export function registerChatHandlers(
               };
             if (overrides?.reasoningEffort && !isStrictApi)
               obj.reasoning_effort = overrides.reasoningEffort;
+            if (!isRemote) {
+              if (obj.enable_thinking === false) obj.thinking_mode = "instruct";
+              else if (obj.enable_thinking === true && obj.reasoning_effort === "max")
+                obj.thinking_mode = "max";
+              else if (obj.enable_thinking === true) obj.thinking_mode = "reasoning";
+            }
             // VLM video sampling — local engine only (strict 3rd-party APIs
             // reject unknown fields, remote OpenAI-compat doesn't support it).
             if (!isRemote && sessionVideoFps !== undefined)
@@ -1400,6 +1528,7 @@ export function registerChatHandlers(
         reasoningContent = "";
         isReasoning = false;
         let currentEventType = ""; // Track SSE event type for Responses API
+        const seenResponsesApiEvents = new Set<string>();
 
         // Track whether server sends real token counts (via usage in each SSE chunk)
         let serverSendsUsage = false;
@@ -1657,6 +1786,15 @@ export function registerChatHandlers(
 
           try {
             const parsed = JSON.parse(data);
+
+            if (useResponsesApi && currentEventType) {
+              const seq = parsed.sequence_number;
+              if (typeof seq === "number") {
+                const key = `${currentEventType}:${seq}`;
+                if (seenResponsesApiEvents.has(key)) return;
+                seenResponsesApiEvents.add(key);
+              }
+            }
 
             if (useResponsesApi) {
               // ── Responses API SSE parsing ──
@@ -2099,6 +2237,7 @@ export function registerChatHandlers(
         const sendFollowUp = async (): Promise<boolean> => {
           // Reset SSE parser state from previous stream
           currentEventType = "";
+          seenResponsesApiEvents.clear();
           // Reset fetchStartTime so TTFT for follow-up is measured correctly
           fetchStartTime = Date.now();
           firstTokenTime = null;
@@ -2722,6 +2861,110 @@ export function registerChatHandlers(
         }
         if (reasoningContent) {
           assistantMessage.reasoningContent = reasoningContent;
+        }
+
+        // 2026-05-03: persist model-visible tool context separately from
+        // the UI-display tool_calls_json. Without this, history replay drops
+        // tool_calls and the model's chat template can't render `<tool_call>`
+        // XML on continuation — Qwen3 was observed to improvise
+        // `{"tool_name": ..., "arguments": ...}` JSON after an interrupted
+        // tool round.
+        //
+        // Keep the data on the visible assistant row as JSON context, not as
+        // hidden role="tool" DB rows. Older SQLite schemas CHECK message.role
+        // to system/user/assistant, and renderer message lists would display
+        // hidden tool rows. Request reconstruction expands this JSON back into
+        // Responses or Chat-Completions-native history.
+        try {
+          const harvestedCalls: Array<{
+            id: string;
+            type: "function";
+            function: { name: string; arguments: string };
+          }> = [];
+          const harvestedResults: Array<{
+            tool_call_id: string;
+            content: string;
+          }> = [];
+          for (const m of requestMessages) {
+            if (
+              m &&
+              m.role === "assistant" &&
+              Array.isArray(m.tool_calls) && m.tool_calls.length > 0
+            ) {
+              for (const tc of m.tool_calls) {
+                if (
+                  tc &&
+                  tc.id &&
+                  tc.function &&
+                  typeof tc.function.name === "string"
+                ) {
+                  harvestedCalls.push({
+                    id: tc.id,
+                    type: "function",
+                    function: {
+                      name: tc.function.name,
+                      arguments:
+                        typeof tc.function.arguments === "string"
+                          ? tc.function.arguments
+                          : JSON.stringify(tc.function.arguments ?? {}),
+                    },
+                  });
+                }
+              }
+            } else if (
+              m &&
+              m.type === "function_call" &&
+              typeof m.call_id === "string"
+            ) {
+              harvestedCalls.push({
+                id: m.call_id,
+                type: "function",
+                function: {
+                  name: typeof m.name === "string" ? m.name : "",
+                  arguments:
+                    typeof m.arguments === "string"
+                      ? m.arguments
+                      : JSON.stringify(m.arguments ?? {}),
+                },
+              });
+            } else if (
+              m &&
+              m.role === "tool" &&
+              typeof m.tool_call_id === "string"
+            ) {
+              harvestedResults.push({
+                tool_call_id: m.tool_call_id,
+                content:
+                  typeof m.content === "string"
+                    ? m.content
+                    : JSON.stringify(m.content),
+              });
+            } else if (
+              m &&
+              m.type === "function_call_output" &&
+              typeof m.call_id === "string"
+            ) {
+              harvestedResults.push({
+                tool_call_id: m.call_id,
+                content:
+                  typeof m.output === "string"
+                    ? m.output
+                    : JSON.stringify(m.output),
+              });
+            }
+          }
+          if (harvestedCalls.length > 0) {
+            assistantMessage.toolCallsOaiJson = JSON.stringify(
+              harvestedCalls,
+            );
+          }
+          if (harvestedResults.length > 0) {
+            assistantMessage.toolResultsOaiJson = JSON.stringify(
+              harvestedResults,
+            );
+          }
+        } catch (_persistErr) {
+          /* Non-fatal: persistence is best-effort; UI still works without it. */
         }
         db.addMessage(assistantMessage);
 

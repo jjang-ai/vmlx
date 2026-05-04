@@ -105,6 +105,7 @@ registerFamily('mixtral', { cacheType: 'kv', toolParser: 'mistral', enableAutoTo
 registerFamily('mistral', { cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, description: 'Mistral', priority: 20 })
 
 // DeepSeek
+registerFamily('deepseek-v4', { cacheType: 'kv', toolParser: 'dsml', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, description: 'DeepSeek V4 Flash', priority: 4 })
 registerFamily('deepseek-vl', { cacheType: 'kv', toolParser: 'deepseek', isMultimodal: true, description: 'DeepSeek-VL vision-language', priority: 5 })
 registerFamily('deepseek-r1', { cacheType: 'kv', toolParser: 'deepseek', reasoningParser: 'deepseek_r1', description: 'DeepSeek R1', priority: 5 })
 registerFamily('deepseek-v3', { cacheType: 'kv', toolParser: 'deepseek', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, description: 'DeepSeek V3', priority: 5 })
@@ -240,6 +241,7 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'devstral': 'devstral',
   'codestral_mamba': 'mamba',
   // ── DeepSeek family ──
+  'deepseek_v4': 'deepseek-v4',
   'deepseek_v3': 'deepseek-v3',
   'deepseek_v2': 'deepseek-v2',
   'deepseek_vl': 'deepseek-vl',

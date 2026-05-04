@@ -123,6 +123,13 @@ class SchedulingPolicy(Enum):
     PRIORITY = "priority"  # Priority-based
 
 
+# Skip queueing an SSM re-derive when the prompt is shorter than this —
+# the prefix is unlikely to be re-requested verbatim and the entry would
+# just churn the LRU. Cap on outstanding deferred re-derives (memory).
+SSM_REDERIVE_MIN_TOKENS = 64
+SSM_REDERIVE_QUEUE_CAP = 8
+
+
 @dataclass
 class SchedulerConfig:
     """Configuration for the scheduler."""
@@ -3605,17 +3612,15 @@ class Scheduler:
 
             request = self.running.get(request_id)
 
-            # PHASE 2 OPTIMIZATION: Skip cache storage for short-output requests.
-            # For benchmark workloads (MMLU: 14k requests, 1-token answers), cache
-            # extraction + truncation + storage dominates per-request overhead.
-            # Single-turn requests with very short outputs will never benefit from
-            # prefix cache reuse, so skip entirely.
+            # Cacheability is decided by the prompt prefix, not by output
+            # length. Short-output requests still benefit from caching their
+            # prompt KV for the next turn that shares the same prefix —
+            # multi-turn chat with brief replies is the canonical case.
+            # Benchmarks that legitimately want no-store set
+            # ``_bypass_prefix_cache`` explicitly via cache_salt /
+            # skip_prefix_cache below.
             _output_len = getattr(request, "num_output_tokens", 0) if request else 0
-            _skip_cache_store = (
-                _output_len > 0
-                and _output_len <= 3
-                and not getattr(request, "_has_history", False)
-            )
+            _skip_cache_store = False
             # Hard cache bypass from the API request (cache_salt / skip_prefix_cache).
             # This overrides all heuristics — the benchmark client asked for
             # guaranteed fresh execution, so nothing gets stored either.
@@ -3732,8 +3737,6 @@ class Scheduler:
                         #      probably going to evict before it's read.
                         #   3. Drop the queue cap from 20 to 8 so the
                         #      worst-case footprint shrinks 60%.
-                        SSM_REDERIVE_MIN_TOKENS = 64
-                        SSM_REDERIVE_QUEUE_CAP = 8
                         if prompt_len < SSM_REDERIVE_MIN_TOKENS:
                             logger.debug(
                                 "SSM companion: skipping re-derive for "

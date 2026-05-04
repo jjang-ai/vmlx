@@ -26,6 +26,11 @@ Supported cache_data tuple types (from prefix_cache.py):
 - ("quantized_kv", keys_tuple, values_tuple, meta) — QuantizedKVCache
 - ("rotating_kv", keys_slice, values_slice, max_size, keep) — RotatingKVCache
 - ("cumulative", state_list, meta, class_name) — MambaCache/ArraysCache
+- ("deepseek_v4", state_tree, meta, class_name, cache_meta) — DSV4
+  composite cache (SWA local + CSA/HSA compressor/indexer pools)
+- ("deepseek_v4_pending", class_name, cache_meta) — non-terminal DSV4
+  marker so paged/L2 chain hashes remain materialized without duplicating
+  full CSA/HSA pool state in every block
 - ("skip",) — placeholder for cumulative layers in non-last blocks
 """
 
@@ -49,6 +54,71 @@ try:
     HAS_MLX = True
 except ImportError:
     HAS_MLX = False
+
+
+def _json_safe(obj: Any) -> Any:
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, tuple):
+        return [_json_safe(x) for x in obj]
+    if isinstance(obj, list):
+        return [_json_safe(x) for x in obj]
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    return str(obj)
+
+
+def _pack_tree(obj: Any, tensors: Dict[str, Any], prefix: str, counter: List[int]) -> Dict[str, Any]:
+    """Flatten a nested cache-state tree into safetensors + JSON metadata."""
+    if obj is None:
+        return {"kind": "none"}
+    if hasattr(obj, "shape"):
+        key = f"{prefix}_{counter[0]}"
+        counter[0] += 1
+        tensors[key] = obj
+        return {
+            "kind": "tensor",
+            "key": key,
+            "orig_dtype": str(getattr(obj, "dtype", "")),
+        }
+    if isinstance(obj, tuple):
+        return {
+            "kind": "tuple",
+            "items": [_pack_tree(x, tensors, prefix, counter) for x in obj],
+        }
+    if isinstance(obj, list):
+        return {
+            "kind": "list",
+            "items": [_pack_tree(x, tensors, prefix, counter) for x in obj],
+        }
+    return {"kind": "literal", "value": _json_safe(obj)}
+
+
+def _unpack_tree(node: Any, data: Dict[str, Any]) -> Any:
+    if not isinstance(node, dict):
+        return None
+    kind = node.get("kind")
+    if kind == "none":
+        return None
+    if kind == "literal":
+        return node.get("value")
+    if kind == "tensor":
+        arr = data.get(node.get("key", ""))
+        if arr is not None and HAS_MLX:
+            orig_dt = node.get("orig_dtype")
+            if orig_dt and orig_dt != str(getattr(arr, "dtype", "")):
+                target = getattr(mx, orig_dt.replace("mlx.core.", ""), None)
+                if target is not None:
+                    try:
+                        arr = arr.astype(target)
+                    except Exception:
+                        pass
+        return arr
+    if kind == "tuple":
+        return tuple(_unpack_tree(x, data) for x in node.get("items", []))
+    if kind == "list":
+        return [_unpack_tree(x, data) for x in node.get("items", [])]
+    return None
 
 
 
@@ -639,6 +709,7 @@ def _serialize_block(
       layer_{i}_keys_data, _scales, _zeros       — quantized kv
       layer_{i}_max_size, layer_{i}_keep          — rotating kv params
       layer_{i}_cumulative_{j}                    — cumulative state arrays
+      layer_{i}_dsv4_state_{j}                    — DSV4 nested state arrays
 
     Returns:
         (tensor_dict, dtype_string, num_layers_with_data)
@@ -723,6 +794,30 @@ def _serialize_block(
                     if hasattr(arr, "shape"):
                         tensors[f"layer_{i}_cumulative_{j}"] = arr
             meta[str(i)] = {"class_name": class_name, "meta": layer_meta}
+
+        elif tag == "deepseek_v4":
+            _, state_tree, layer_meta, class_name, cache_meta = layer_data
+            counter = [0]
+            tree_meta = _pack_tree(
+                state_tree,
+                tensors,
+                f"layer_{i}_dsv4_state",
+                counter,
+            )
+            meta[str(i)] = {
+                "class_name": class_name,
+                "meta": _json_safe(layer_meta),
+                "cache_meta": _json_safe(cache_meta),
+                "state_tree": tree_meta,
+            }
+
+        elif tag == "deepseek_v4_pending":
+            _, class_name, cache_meta = layer_data
+            tensors[f"layer_{i}_dsv4_pending"] = mx.array([1], dtype=mx.int32)
+            meta[str(i)] = {
+                "class_name": class_name,
+                "cache_meta": _json_safe(cache_meta),
+            }
 
     # Determine dominant dtype for the DB index (informational only)
     type_set = set(meta["__layer_types__"].values())
@@ -906,6 +1001,30 @@ def _deserialize_block(
                 cache_data.append(("cumulative", state_arrays, layer_meta_val, class_name))
             else:
                 cache_data.append(("skip",))
+        elif layer_type == "deepseek_v4":
+            layer_meta_dict = meta.get(str(i), {})
+            class_name = layer_meta_dict.get("class_name", "DeepseekV4Cache")
+            layer_meta_val = layer_meta_dict.get("meta", "")
+            cache_meta = layer_meta_dict.get("cache_meta", {})
+            state_tree = layer_meta_dict.get("state_tree")
+            state = _unpack_tree(state_tree, data)
+            if state is not None:
+                cache_data.append((
+                    "deepseek_v4",
+                    state,
+                    layer_meta_val,
+                    class_name,
+                    cache_meta,
+                ))
+            else:
+                cache_data.append(("skip",))
+        elif layer_type == "deepseek_v4_pending":
+            layer_meta_dict = meta.get(str(i), {})
+            cache_data.append((
+                "deepseek_v4_pending",
+                layer_meta_dict.get("class_name", "DeepseekV4Cache"),
+                layer_meta_dict.get("cache_meta", {}),
+            ))
         else:
             cache_data.append(("skip",))
 
@@ -917,6 +1036,8 @@ def _infer_layer_type(data: Dict[str, Any], layer_idx: int, fallback_dtype: str)
     prefix = f"layer_{layer_idx}_"
     has_keys_data = f"{prefix}keys_data" in data
     has_cumulative = f"{prefix}cumulative_0" in data
+    has_dsv4 = f"{prefix}dsv4_state_0" in data
+    has_dsv4_pending = f"{prefix}dsv4_pending" in data
     has_max_size = f"{prefix}max_size" in data
     has_keys = f"{prefix}keys" in data
     has_sub = f"{prefix}sub_0_keys" in data or f"{prefix}sub_0_cumulative_0" in data
@@ -927,6 +1048,10 @@ def _infer_layer_type(data: Dict[str, Any], layer_idx: int, fallback_dtype: str)
         return "quantized_kv"
     if has_cumulative:
         return "cumulative"
+    if has_dsv4:
+        return "deepseek_v4"
+    if has_dsv4_pending:
+        return "deepseek_v4_pending"
     if has_max_size and has_keys:
         return "rotating_kv"
     if has_keys:

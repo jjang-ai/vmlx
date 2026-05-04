@@ -617,6 +617,30 @@ class TestBlockAwarePrefixCache:
         # Should hit the prefix
         assert remaining == [999, 1000]
 
+    def test_block_aware_fetch_ignores_context_free_legacy_block_hash(self):
+        """Repeated block bytes under a different parent are not a prefix hit.
+
+        The legacy PagedCacheManager.find_shared_prefix path keys a block only
+        by the current chunk's token content. Real KV state depends on the
+        previous context too, so BlockAwarePrefixCache must use the chain hash
+        path instead.
+        """
+        from vmlx_engine.paged_cache import PagedCacheManager
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+        paged_manager = PagedCacheManager(block_size=4, max_blocks=100)
+        cache = BlockAwarePrefixCache(model=None, paged_cache_manager=paged_manager)
+
+        # Second block is [9, 9, 9, 9], but it was computed after [1,2,3,4].
+        cache.store_cache("req-1", [1, 2, 3, 4, 9, 9, 9, 9], ["data"])
+
+        # A new prompt starting with [9,9,9,9] must miss; otherwise it would
+        # restore hidden/KV state produced under the wrong parent context.
+        block_table, remaining = cache.fetch_cache("req-2", [9, 9, 9, 9, 7])
+
+        assert block_table is None
+        assert remaining == [9, 9, 9, 9, 7]
+
     def test_release_cache(self):
         """Test releasing cache."""
         from vmlx_engine.paged_cache import PagedCacheManager

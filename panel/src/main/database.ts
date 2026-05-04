@@ -66,7 +66,22 @@ export interface Message {
   timestamp: number;
   tokens?: number;
   metricsJson?: string; // JSON-serialized MessageMetrics
-  toolCallsJson?: string; // JSON-serialized tool call statuses for inline display
+  toolCallsJson?: string; // UI-display tool-status array (collectedToolStatuses)
+  // OpenAI-format tool_calls for replay through chat templates:
+  // `[{id, type:"function", function:{name, arguments}}, ...]`. Distinct
+  // from `toolCallsJson` (UI-only). Set on assistant messages whose turn
+  // emitted tool calls; consumed by request reconstruction so the chat
+  // template renders proper `<tool_call>` XML on the next turn.
+  toolCallsOaiJson?: string;
+  // For role="tool" messages: which assistant tool_call this is
+  // responding to (matches one of the ids in the prior assistant
+  // message's `tool_calls`).
+  toolCallId?: string;
+  // OpenAI/Responses-format tool results paired with toolCallsOaiJson:
+  // `[{tool_call_id, content}, ...]`. Kept on the visible assistant row
+  // so the DB schema does not need hidden role="tool" rows that would show
+  // up in the renderer and violate older SQLite CHECK constraints.
+  toolResultsOaiJson?: string;
   reasoningContent?: string; // Reasoning/thinking content (from <think> tags or similar)
 }
 
@@ -137,7 +152,7 @@ export interface ChatOverrides {
   builtinToolsEnabled?: boolean;
   workingDirectory?: string;
   enableThinking?: boolean; // tri-state: undefined=Auto, true=On, false=Off
-  reasoningEffort?: string; // 'low' | 'medium' | 'high' | undefined=Auto
+  reasoningEffort?: string; // 'low' | 'medium' | 'high' | 'max' | undefined=Auto
   hideToolStatus?: boolean;
   webSearchEnabled?: boolean;
   braveSearchEnabled?: boolean;
@@ -340,6 +355,25 @@ class DatabaseManager {
       }
       if (!msgColumns.find((c) => c.name === "reasoning_content")) {
         this.db.exec("ALTER TABLE messages ADD COLUMN reasoning_content TEXT");
+      }
+      // 2026-05-03: persist OpenAI-format tool_calls + tool_call_id
+      // separately from the UI-display tool-status array. Existing
+      // tool_calls_json stores collectedToolStatuses (UI-only). Chat
+      // templates need OpenAI shape [{id, type, function:{name, arguments}}]
+      // on history replay; without it, model loses tool-call format
+      // anchor on continuation and improvises a different format.
+      if (!msgColumns.find((c) => c.name === "tool_calls_oai_json")) {
+        this.db.exec(
+          "ALTER TABLE messages ADD COLUMN tool_calls_oai_json TEXT",
+        );
+      }
+      if (!msgColumns.find((c) => c.name === "tool_call_id")) {
+        this.db.exec("ALTER TABLE messages ADD COLUMN tool_call_id TEXT");
+      }
+      if (!msgColumns.find((c) => c.name === "tool_results_oai_json")) {
+        this.db.exec(
+          "ALTER TABLE messages ADD COLUMN tool_results_oai_json TEXT",
+        );
       }
 
       // Safe migration: add new chat_overrides columns if missing
@@ -1012,8 +1046,12 @@ class DatabaseManager {
     this.ensureOpen();
     const insertAndUpdate = this.db.transaction(() => {
       const stmt = this.db.prepare(`
-        INSERT OR REPLACE INTO messages (id, chat_id, role, content, timestamp, tokens, metrics_json, tool_calls_json, reasoning_content)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO messages (
+          id, chat_id, role, content, timestamp, tokens,
+          metrics_json, tool_calls_json, reasoning_content,
+          tool_calls_oai_json, tool_call_id, tool_results_oai_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       stmt.run(
         message.id,
@@ -1025,6 +1063,9 @@ class DatabaseManager {
         message.metricsJson,
         message.toolCallsJson,
         message.reasoningContent,
+        message.toolCallsOaiJson,
+        message.toolCallId,
+        message.toolResultsOaiJson,
       );
 
       // Update chat's updatedAt atomically with the message insert
@@ -1073,6 +1114,9 @@ class DatabaseManager {
       metricsJson: row.metrics_json,
       toolCallsJson: row.tool_calls_json,
       reasoningContent: row.reasoning_content,
+      toolCallsOaiJson: row.tool_calls_oai_json,
+      toolCallId: row.tool_call_id,
+      toolResultsOaiJson: row.tool_results_oai_json,
     }));
   }
 

@@ -19,6 +19,23 @@ if [ ! -x "$PY" ]; then
   exit 1
 fi
 
+# Hard guard against the 1.5.9→1.5.12 ship-stale-engine class of bug:
+# if package.json bumps but bundle-python.sh wasn't re-run, the bundled
+# vmlx_engine still reports the old version. Refuse to package the .app
+# in that case so no DMG ever ships an installer/runtime version mismatch.
+PKG_VERSION="$(node -p "require('$PANEL/package.json').version")"
+BUNDLED_VERSION="$(PYTHONNOUSERSITE=1 PYTHONPATH= "$PY" -s -c 'import vmlx_engine; print(vmlx_engine.__version__)' 2>/dev/null || echo "MISSING")"
+if [ "$PKG_VERSION" != "$BUNDLED_VERSION" ]; then
+  echo "❌ RELEASE BLOCKED — bundled-python vmlx_engine version drift"
+  echo "   package.json version : $PKG_VERSION"
+  echo "   bundled-python ships : $BUNDLED_VERSION"
+  echo
+  echo "   Re-run ./scripts/bundle-python.sh so the bundled site-packages"
+  echo "   match the version users will see in the .app's Info.plist."
+  exit 1
+fi
+echo "  ok   bundled vmlx_engine version matches package.json ($PKG_VERSION)"
+
 # Isolated imports — no user site, no PYTHONPATH leakage (same env as the
 # running engine). -s suppresses user site-packages the way sessions.ts does.
 PYTHONNOUSERSITE=1 PYTHONPATH= "$PY" -s - <<'PYEOF'

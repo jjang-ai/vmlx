@@ -193,6 +193,11 @@ class ChatCompletionRequest(BaseModel):
     enable_thinking: bool | None = None
     # Reasoning effort level for models that support it (e.g., GPT-OSS: low/medium/high)
     reasoning_effort: str | None = None
+    # Canonical vMLX shorthand for discrete UI/API modes:
+    # instruct/chat/off -> enable_thinking=False
+    # reasoning/thinking/on -> enable_thinking=True, reasoning_effort=medium when absent
+    # max/max_thinking -> enable_thinking=True, reasoning_effort=max when absent
+    thinking_mode: str | None = None
     # Extra kwargs passed directly to tokenizer.apply_chat_template()
     # Standard vLLM convention: {"enable_thinking": true/false, ...}
     # enable_thinking here is used as fallback when top-level enable_thinking is None
@@ -237,6 +242,27 @@ class ChatCompletionRequest(BaseModel):
             elif self.enable_thinking is None:
                 # No effort but reasoning object present → opt-in to thinking
                 self.enable_thinking = True
+        if self.thinking_mode is not None:
+            mode = self.thinking_mode.strip().lower().replace("-", "_").replace(" ", "_")
+            if mode in ("instruct", "instruction", "chat", "off", "none", "false"):
+                if self.enable_thinking is None:
+                    self.enable_thinking = False
+                if self.reasoning_effort is None:
+                    self.reasoning_effort = None
+            elif mode in ("reasoning", "thinking", "think", "on", "true", "medium"):
+                if self.enable_thinking is None:
+                    self.enable_thinking = True
+                if self.reasoning_effort is None:
+                    self.reasoning_effort = "medium"
+            elif mode in ("max", "max_thinking", "maximum", "high"):
+                if self.enable_thinking is None:
+                    self.enable_thinking = True
+                if self.reasoning_effort is None:
+                    self.reasoning_effort = "max"
+            else:
+                raise ValueError(
+                    "thinking_mode must be one of: instruct, reasoning, max"
+                )
         return self
 
     @field_validator("temperature")
@@ -686,6 +712,8 @@ class ResponsesRequest(BaseModel):
     enable_thinking: bool | None = None
     # Reasoning effort level for models that support it (e.g., GPT-OSS: low/medium/high)
     reasoning_effort: str | None = None
+    thinking_mode: str | None = None
+    reasoning: dict | None = None
     # Extra kwargs passed directly to tokenizer.apply_chat_template()
     chat_template_kwargs: dict | None = None
     # Request timeout in seconds (None = use server default)
@@ -693,6 +721,37 @@ class ResponsesRequest(BaseModel):
     # Video processing controls (MLLM models)
     video_fps: float | None = None
     video_max_frames: int | None = None
+
+    @model_validator(mode="after")
+    def _normalize_reasoning_alias(self):
+        if self.reasoning is not None and self.reasoning_effort is None:
+            eff = self.reasoning.get("effort")
+            if isinstance(eff, str) and eff:
+                self.reasoning_effort = eff
+            elif self.enable_thinking is None:
+                self.enable_thinking = True
+        if self.thinking_mode is not None:
+            mode = self.thinking_mode.strip().lower().replace("-", "_").replace(" ", "_")
+            if mode in ("instruct", "instruction", "chat", "off", "none", "false"):
+                if self.enable_thinking is None:
+                    self.enable_thinking = False
+                if self.reasoning_effort is None:
+                    self.reasoning_effort = None
+            elif mode in ("reasoning", "thinking", "think", "on", "true", "medium"):
+                if self.enable_thinking is None:
+                    self.enable_thinking = True
+                if self.reasoning_effort is None:
+                    self.reasoning_effort = "medium"
+            elif mode in ("max", "max_thinking", "maximum", "high"):
+                if self.enable_thinking is None:
+                    self.enable_thinking = True
+                if self.reasoning_effort is None:
+                    self.reasoning_effort = "max"
+            else:
+                raise ValueError(
+                    "thinking_mode must be one of: instruct, reasoning, max"
+                )
+        return self
 
     @field_validator("temperature")
     @classmethod

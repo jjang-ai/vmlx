@@ -1112,9 +1112,7 @@ class TestGitHubIssueGuards:
         """vmlx#87: ValueError on per_layer_model_projection for Gemma 3n/4
         no-PLE variant. Fixed in v1.3.60 by dropping the projection keys when
         the module is absent."""
-        src = Path(
-            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/utils/jang_loader.py"
-        ).read_text()
+        src = Path("vmlx_engine/utils/jang_loader.py").read_text()
         assert "per_layer_model_projection" in src, (
             "Gemma 3n PLE handling must be present (vmlx#87)"
         )
@@ -5710,9 +5708,7 @@ class TestMistral4VlmTextFallback:
         """Defense in depth: even if is_mllm is forced True via --is-mllm,
         _load_jang_v2_vlm must detect mistral3+mistral4 and delegate to
         the text-only loader."""
-        src = Path(
-            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/utils/jang_loader.py"
-        ).read_text()
+        src = Path("vmlx_engine/utils/jang_loader.py").read_text()
         # In the VLM loader, check for the fallback block
         vlm_idx = src.find("def _load_jang_v2_vlm")
         assert vlm_idx > 0
@@ -5729,9 +5725,7 @@ class TestMistral4VlmTextFallback:
     def test_non_mistral4_vlm_still_loads_via_vlm_path(self):
         """Regression guard — Qwen VL, Gemma 4 VL etc. must NOT be
         rerouted to the text-only path."""
-        src = Path(
-            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/utils/jang_loader.py"
-        ).read_text()
+        src = Path("vmlx_engine/utils/jang_loader.py").read_text()
         vlm_idx = src.find("def _load_jang_v2_vlm")
         next_fn = src.find("\ndef _", vlm_idx + 10)
         vlm_body = src[vlm_idx:next_fn if next_fn > 0 else len(src)]
