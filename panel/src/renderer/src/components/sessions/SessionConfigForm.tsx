@@ -1000,7 +1000,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               label="Parallelism Mode"
               tooltip="Pipeline: split layers across nodes (simple, works with any network). Tensor: split weights within layers (requires high bandwidth, 10GbE+ recommended)."
               value={config.distributedMode || 'pipeline'}
-              onChange={v => onChange('distributedMode', v)}
+              onChange={v => onChange('distributedMode', v as 'pipeline' | 'tensor')}
               options={[
                 { value: 'pipeline', label: 'Pipeline Parallelism (split layers)' },
                 { value: 'tensor', label: 'Tensor Parallelism (split weights) — coming soon' },

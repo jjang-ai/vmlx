@@ -22,6 +22,8 @@ tests immediately.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from vmlx_engine.api.models import ChatCompletionRequest, CompletionRequest
@@ -129,6 +131,16 @@ class TestComputeBypassFlag:
         class R:
             cache_salt = None
             skip_prefix_cache = False
+
+        assert _compute_bypass_prefix_cache(R()) is False
+
+    def test_dsv4_model_does_not_implicitly_bypass(self):
+        from vmlx_engine.server import _compute_bypass_prefix_cache
+
+        class R:
+            model = "/Volumes/EricsLLMDrive/jangq-ai/DeepSeek-V4-Flash-JANGTQ2"
+            cache_salt = None
+            skip_prefix_cache = None
 
         assert _compute_bypass_prefix_cache(R()) is False
 
@@ -350,6 +362,165 @@ class TestServerForwarding:
             f"Need at least 2 gen_kwargs assignments (completions non-stream "
             f"+ streaming) — found {gen_kwargs_assigns}"
         )
+
+    def test_responses_output_text_survives_tool_history_conversion(self):
+        """Panel follow-ups use Responses items to preserve tool history.
+
+        A previous regression dropped `output_text` items in
+        _responses_input_to_messages, so after a tool round the next prompt
+        lost the assistant's final text and models tried to restart tool use
+        in the wrong format.
+        """
+        from vmlx_engine.server import _responses_input_to_messages
+
+        messages = _responses_input_to_messages(
+            [
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "list_directory",
+                    "arguments": json.dumps({"path": "."}),
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "README.md",
+                },
+                {"type": "output_text", "text": "The directory contains README.md."},
+                {"type": "message", "role": "user", "content": "continue"},
+            ],
+            instructions="system",
+        )
+
+        assert messages[0] == {"role": "system", "content": "system"}
+        assert messages[1]["role"] == "user"
+        assert "tool-call history" in messages[1]["content"]
+        assert messages[2]["role"] == "assistant"
+        assert messages[2]["tool_calls"][0]["id"] == "call_1"
+        assert messages[3] == {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": "README.md",
+        }
+        assert messages[4] == {
+            "role": "assistant",
+            "content": "The directory contains README.md.",
+        }
+
+    def test_tool_parser_is_disabled_when_request_has_no_tools(self):
+        """CLI auto parser flags must not create tool calls by themselves.
+
+        A Responses follow-up can include prior function_call/function_call_output
+        items as history, then ask for plain text with no tools in the current
+        request. If the server still runs the Qwen/Mistral/etc. parser solely
+        because it was launched with --tool-call-parser auto, normal text can be
+        returned as a function_call-only response with no visible output_text.
+        """
+        from vmlx_engine import server
+
+        assert (
+            server._suppress_tool_parsing_when_no_tools(
+                [], "auto", "Responses API"
+            )
+            is True
+        )
+        assert (
+            server._suppress_tool_parsing_when_no_tools(
+                [], None, "Chat Completions"
+            )
+            is True
+        )
+        assert (
+            server._suppress_tool_parsing_when_no_tools(
+                [{"type": "function"}], "auto", "Responses API"
+            )
+            is False
+        )
+
+        with pytest.raises(Exception) as exc:
+            server._suppress_tool_parsing_when_no_tools(
+                [], "required", "Responses API"
+            )
+        assert getattr(exc.value, "status_code", None) == 400
+
+    def test_streaming_tool_detection_requires_request_tools(self):
+        """Streaming paths should not buffer tool-call markers unless tools
+        were actually passed into the request/template."""
+        src = self._read_server()
+        assert "_stream_tools_available = bool(kwargs.get(\"tools\")) or _request_has_tools" in src
+        assert "tool_call_active = _stream_tools_available and not _suppress_tools" in src
+        assert "(_enable_auto_tool_choice or _tool_call_parser is not None or _request_has_tools" not in src
+
+    def test_dsv4_bundle_repetition_penalty_overrides_generic_cli_default(self, tmp_path, monkeypatch):
+        """DSV4 bundles carry calibrated sampling defaults.
+
+        The panel can still launch with generic --default-repetition-penalty
+        1.10. For DSV4 only, the bundle's 1.15 thinking penalty must win or
+        the model can fall into duplicate/paraphrase reasoning loops.
+        """
+        from vmlx_engine import server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps({"model_type": "deepseek_v4"}), encoding="utf-8"
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "chat": {
+                        "sampling_defaults": {
+                            "repetition_penalty_thinking": 1.15,
+                            "repetition_penalty_chat": 1.05,
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_default_repetition_penalty", 1.10)
+        server._jang_sampling_defaults_cache.clear()
+
+        assert server._resolve_repetition_penalty(None, str(tmp_path)) == 1.15
+
+    def test_dsv4_paged_block_disk_cache_is_not_force_disabled(self):
+        """DSV4 paged cache must use the dedicated composite-state path.
+
+        Regression guard for the old emergency workaround that force-disabled
+        paged cache + block disk L2. Production should keep those layers on
+        and serialize DeepseekV4Cache as a first-class block type.
+        """
+        with open("vmlx_engine/scheduler.py") as f:
+            sched = f.read()
+        with open("vmlx_engine/prefix_cache.py") as f:
+            prefix = f.read()
+        with open("vmlx_engine/block_disk_store.py") as f:
+            disk = f.read()
+        assert "force-disabling paged cache" not in sched
+        assert '"deepseek_v4"' in prefix
+        assert '"deepseek_v4"' in disk
+        assert "dsv4_cache_schema=deepseek_v4_v6" in sched
+
+    def test_paged_l2_schema_invalidates_old_block_namespaces_for_all_families(self):
+        """Global paged-cache contract changes must move every family to a
+        fresh L2 namespace, not only DSV4.
+
+        The N-1 cache-key fix changed how block disk entries are keyed. If a
+        non-DSV4 family (Laguna/Qwen/Gemma/etc.) reuses the old block-cache
+        directory, first request after restart can restore stale blocks and
+        emit unrelated text before the prompt suffix is processed.
+        """
+        with open("vmlx_engine/prefix_cache.py") as f:
+            prefix = f.read()
+        with open("vmlx_engine/scheduler.py") as f:
+            sched = f.read()
+        with open("vmlx_engine/mllm_scheduler.py") as f:
+            mllm = f.read()
+
+        assert "PAGED_CACHE_SCHEMA_VERSION" in prefix
+        assert "paged_cache_schema={PAGED_CACHE_SCHEMA_VERSION}" in sched
+        assert "paged_cache_schema={PAGED_CACHE_SCHEMA_VERSION}" in mllm
+        assert "prefix_cache_schema={PAGED_CACHE_SCHEMA_VERSION}" in sched
+        assert "prefix_cache_schema={PAGED_CACHE_SCHEMA_VERSION}" in mllm
 
 
 # ---------------------------------------------------------------------------

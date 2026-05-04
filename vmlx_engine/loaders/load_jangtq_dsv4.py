@@ -317,14 +317,189 @@ def _try_fast_load_dsv4(model, model_path, mxtq_seed) -> bool:
         _set_attr(model, new_base, new_module)
         n_replaced += 1
 
+    # CRITICAL: replicate the post-stack work that the original streaming
+    # hydrate does after replacing modules. Without these, embed_tokens /
+    # lm_head / attention quantized layers retain bit-widths from the
+    # generic model init (top-level `quantization.bits`), which mismatches
+    # the actual on-disk packed shape and triggers `[dequantize] Shape of
+    # scales and biases does not match` on the very first inference call.
+    #
+    # Mirror jang_tools.load_jangtq._hydrate_dsv4_jangtq_streaming lines
+    # 275-276 (and the MLA bit fix used for absorbed projections in
+    # _hydrate_jangtq_model lines 829-867 — DSV4 uses MLA via
+    # DeepseekV4Attention's compress/indexer paths).
+    try:
+        from jang_tools.loader import _fix_quantized_bits
+        _fix_quantized_bits(model, {})
+    except Exception as e:
+        _log.warning(
+            "DSV4 fast-load: _fix_quantized_bits failed (%s); inference may "
+            "hit dequantize shape mismatch. Falling back to streaming hydrate.",
+            e,
+        )
+        return False
+
+    # CRITICAL: install the DSV4-fused SwitchGLU routed-expert decode path.
+    # Streaming hydrate runs this AFTER stacking; without it, decode falls
+    # back to stock SwitchGLU (no Hadamard rotation, no fused gate+up
+    # SwiGLU, no compiled per-shape kernel) and DSV4 throughput drops
+    # ~25% (live-observed: 25 → 18 t/s on JANGTQ, JANGTQ_K).
+    try:
+        import mlx.core as mx
+        from jang_tools.turboquant.tq_kernel import TurboQuantSwitchLinear
+        from mlx_lm.models.switch_layers import SwitchGLU, _gather_sort, _scatter_unsort
+        from jang_tools.turboquant.fused_gate_up_kernel import (
+            fused_gate_up_swiglu_matmul,
+            make_fused_gate_up_swiglu_decode,
+        )
+        from jang_tools.turboquant.gather_tq_kernel import make_gather_tq_decode_per_row
+        from jang_tools.turboquant.hadamard_kernel import hadamard_rotate_metal
+
+        _orig_switchglu_call = SwitchGLU.__call__
+        _decode_compiled: dict = {}
+
+        def _get_compiled_decode(in_f, out_f, bits, k, swiglu_limit=0.0):
+            limit_milli = int(round(float(swiglu_limit or 0.0) * 1000.0))
+            cache_key = (in_f, out_f, bits, k, limit_milli)
+            if cache_key in _decode_compiled:
+                return _decode_compiled[cache_key]
+            fused_gu = make_fused_gate_up_swiglu_decode(
+                in_f, out_f, bits, k, swiglu_limit=swiglu_limit
+            )
+            gather_dn = make_gather_tq_decode_per_row(out_f, in_f, bits, k)
+
+            def _mlp(x_flat, pg, ng, pu, nu, pd, nd, cb_gate, cb_down, signs_in, signs_dn, idx_flat):
+                x_rot = hadamard_rotate_metal(x_flat, signs_in)
+                x_act = fused_gu(x_rot, pg, ng, pu, nu, cb_gate, idx_flat)
+                x_act_rot = hadamard_rotate_metal(x_act, signs_dn)
+                return gather_dn(x_act_rot, pd, nd, cb_down, idx_flat)
+
+            _decode_compiled[cache_key] = mx.compile(_mlp)
+            return _decode_compiled[cache_key]
+
+        def _dsv4_fused_switchglu_call(self, x, indices):
+            gp = self.gate_proj
+            up = self.up_proj
+            dp = self.down_proj
+            if not isinstance(gp, TurboQuantSwitchLinear) or not isinstance(up, TurboQuantSwitchLinear):
+                return _orig_switchglu_call(self, x, indices)
+            activation = getattr(self, "activation", None)
+            swiglu_limit = getattr(activation, "swiglu_limit", 0.0) or 0.0
+            x_sq = x
+            while x_sq.ndim > 2 and x_sq.shape[-2] == 1:
+                x_sq = x_sq.squeeze(-2)
+            x_flat = x_sq.reshape(-1, gp.in_features)
+            batch = x_flat.shape[0]
+            k = indices.shape[-1] if indices.ndim > 0 else 1
+            can_fast = batch == 1 and k > 0 and indices.ndim >= 1 and indices.size < 64
+            if can_fast and not getattr(self, "training", False):
+                idx_flat = indices.reshape(-1).astype(mx.uint32)
+                compiled_mlp = _get_compiled_decode(
+                    gp.in_features, gp.out_features, gp.bits, k, swiglu_limit
+                )
+                y = compiled_mlp(
+                    x_flat.astype(mx.float32),
+                    gp.packed, gp.norms, up.packed, up.norms,
+                    dp.packed, dp.norms,
+                    gp.codebook, dp.codebook,
+                    gp.signs, dp.signs, idx_flat,
+                )
+                out = y.reshape(*indices.shape[:-1], k, 1, gp.in_features)
+                if out.dtype != x.dtype:
+                    out = out.astype(x.dtype)
+                return out.squeeze(-2)
+
+            x_exp = mx.expand_dims(x, (-2, -3))
+            do_sort = indices.size >= 64
+            idx = indices
+            inv_order = None
+            if do_sort:
+                x_exp, idx, inv_order = _gather_sort(x_exp, indices)
+            if getattr(self, "training", False):
+                idx = mx.stop_gradient(idx)
+            x_act = fused_gate_up_swiglu_matmul(
+                x_exp,
+                gp.packed, gp.norms,
+                up.packed, up.norms,
+                gp.codebook, gp.signs,
+                idx,
+                bits=gp.bits,
+                swiglu_limit=swiglu_limit,
+            )
+            x_out = self.down_proj(x_act, idx, sorted_indices=do_sort)
+            if do_sort:
+                x_out = _scatter_unsort(x_out, inv_order, indices.shape)
+            return x_out.squeeze(-2)
+
+        SwitchGLU.__call__ = _dsv4_fused_switchglu_call
+        n_patched = sum(
+            1 for _, m in model.named_modules()
+            if isinstance(m, SwitchGLU)
+            and isinstance(getattr(m, "gate_proj", None), TurboQuantSwitchLinear)
+            and isinstance(getattr(m, "up_proj", None), TurboQuantSwitchLinear)
+        )
+        _log.info(
+            "DSV4 fast-load: SwitchGLU fused gate+up patch applied (%d TQ instances)",
+            n_patched,
+        )
+        print(
+            f"  DSV4 fast-load: SwitchGLU fused gate+up patch applied ({n_patched} TQ instances)",
+            flush=True,
+        )
+    except Exception as e:
+        _log.warning(
+            "DSV4 fast-load: SwitchGLU fusion patch skipped (%s); decode will "
+            "use stock SwitchGLU and run ~25%% slower than streaming hydrate path.",
+            e,
+        )
+        return False
+
+    # MLA QuantizedMultiLinear bit fix (mlx_lm.models.mla absorbed
+    # projections embed_q/unembed_out — not handled by _fix_quantized_bits).
+    try:
+        from mlx_lm.models.mla import QuantizedMultiLinear  # type: ignore
+
+        def _infer_mla_bits(scales_shape, weight_shape):
+            if not scales_shape or not weight_shape:
+                return None
+            try:
+                cols = int(weight_shape[-1])
+                scols = int(scales_shape[-1])
+            except Exception:
+                return None
+            if scols == 0:
+                return None
+            ratio = cols // scols if cols >= scols else 0
+            return {1: 8, 2: 4, 4: 2}.get(ratio)
+
+        _mla_fixed = 0
+        for _name, mod in model.named_modules():
+            if not isinstance(mod, QuantizedMultiLinear):
+                continue
+            scales = getattr(mod, "scales", None)
+            weight = getattr(mod, "weight", None)
+            if scales is None or weight is None:
+                continue
+            inferred = _infer_mla_bits(scales.shape, weight.shape)
+            if inferred is not None and getattr(mod, "bits", None) != inferred:
+                mod.bits = inferred
+                _mla_fixed += 1
+        if _mla_fixed:
+            _log.info(
+                "DSV4 fast-load: MLA QuantizedMultiLinear bits fixed: %d modules",
+                _mla_fixed,
+            )
+    except Exception as e:
+        _log.debug("DSV4 fast-load: MLA bit-fix step skipped (%s)", e)
+
     _log.info(
         "DSV4 fast-load: hydrated %d routed TQ modules from sidecar %s "
-        "(skipped 129-group streaming stack).",
+        "(skipped 129-group streaming stack, _fix_quantized_bits applied).",
         n_replaced, sidecar,
     )
     print(
         f"  DSV4 fast-load: hydrated {n_replaced} routed TQ modules from "
-        f"pre-stacked sidecar (no per-expert restacking)",
+        f"pre-stacked sidecar (no per-expert restacking, bits fixed)",
         flush=True,
     )
     return True

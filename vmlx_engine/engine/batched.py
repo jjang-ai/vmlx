@@ -314,6 +314,130 @@ class BatchedEngine(BaseEngine):
             loader_executor, _load
         )
 
+        # ─────────────────────────────────────────────────────────────────
+        # UNIVERSAL multi-eos stop set installation (port of the hook in
+        # `vmlx_engine/models/llm.py:102-217`). Without this here, every
+        # batched-mode load (panel default + `--continuous-batching`)
+        # ships only a singleton EOS even when the bundle/registry declares
+        # a multi-stop list. Symptom on DSV4-Flash: model emits
+        # `<｜end▁of▁sentence｜>` (id 1) → singleton stop hits → fine, but
+        # also rolls into `<｜User｜>` (id 128803) on multi-turn chat
+        # because the registry's defensive stop never made it into the
+        # tokenizer wrapper. mlx_lm's `stream_generate` re-wraps with
+        # `TokenizerWrapper(tok)` (no eos_token_ids) → singleton fallback
+        # → control-character output past natural turn boundary on
+        # /v1/chat/completions. The pre-wrap with full id list survives
+        # `isinstance(tokenizer, TokenizerWrapper)` short-circuit in
+        # mlx_lm so the list isn't collapsed.
+        try:
+            from mlx_lm.tokenizer_utils import TokenizerWrapper as _TW
+            logger.info(
+                f"BatchedEngine multi-eos hook: family={model_config.family_name}, "
+                f"registry eos_tokens={model_config.eos_tokens}, "
+                f"tokenizer_class={type(self._tokenizer).__name__}, "
+                f"primary={getattr(self._tokenizer, 'eos_token_id', None)}"
+            )
+            resolved: list[int] = []
+            primary = getattr(self._tokenizer, "eos_token_id", None)
+            if isinstance(primary, int):
+                resolved.append(primary)
+            try:
+                from pathlib import Path as _Path
+                import json as _json
+                _gen_cfg_path = _Path(self._model_name) / "generation_config.json"
+                if _gen_cfg_path.is_file():
+                    _gen_eos = _json.loads(_gen_cfg_path.read_text()).get("eos_token_id")
+                    if isinstance(_gen_eos, list):
+                        for t in _gen_eos:
+                            if isinstance(t, int) and t not in resolved:
+                                resolved.append(t)
+                    elif isinstance(_gen_eos, int) and _gen_eos not in resolved:
+                        resolved.append(_gen_eos)
+            except Exception:
+                pass
+            if model_config.eos_tokens:
+                inner = getattr(self._tokenizer, "_tokenizer", self._tokenizer)
+                _unk = getattr(inner, "unk_token_id", None)
+                _unk_str = getattr(inner, "unk_token", "")
+                # Fallback: load the rust `tokenizers.Tokenizer` directly from
+                # `tokenizer.json` for special-token → id resolution. The
+                # transformers `TokenizersBackend` wrapping that ships with
+                # newer transformers does not always expose
+                # `convert_tokens_to_ids` for special tokens that aren't in
+                # `added_tokens_decoder` of `tokenizer_config.json` (e.g.
+                # DSV4's `<｜User｜>` is in `tokenizer.json::added_tokens`
+                # but absent from `tokenizer_config.json::added_tokens_decoder`,
+                # so the transformers wrapper returns the unk id instead of
+                # the real id 128803). The rust tokenizer always knows.
+                _rust_tok = None
+                try:
+                    from tokenizers import Tokenizer as _RustTok
+                    from pathlib import Path as _Path2
+                    _tj = _Path2(self._model_name) / "tokenizer.json"
+                    if _tj.is_file():
+                        _rust_tok = _RustTok.from_file(str(_tj))
+                except Exception:
+                    _rust_tok = None
+                for tok_str in model_config.eos_tokens:
+                    try:
+                        tid = int(tok_str)
+                    except (TypeError, ValueError):
+                        tid = (
+                            inner.convert_tokens_to_ids(tok_str)
+                            if hasattr(inner, "convert_tokens_to_ids")
+                            else None
+                        )
+                    # If the transformers wrapper says unk, double-check via
+                    # rust tokenizer. This rescues special tokens that the
+                    # transformers backend doesn't expose by name.
+                    if (
+                        _rust_tok is not None
+                        and (
+                            tid is None
+                            or tid < 0
+                            or (_unk is not None and tid == _unk
+                                and tok_str != _unk_str)
+                        )
+                    ):
+                        try:
+                            _rust_tid = _rust_tok.token_to_id(tok_str)
+                            if isinstance(_rust_tid, int) and _rust_tid >= 0:
+                                tid = _rust_tid
+                        except Exception:
+                            pass
+                    if tid is None or tid < 0:
+                        continue
+                    if (
+                        _unk is not None and tid == _unk
+                        and tok_str != _unk_str
+                    ):
+                        continue
+                    if tid not in resolved:
+                        resolved.append(tid)
+            if len(resolved) > 1:
+                if isinstance(self._tokenizer, _TW):
+                    for tid in resolved:
+                        try:
+                            self._tokenizer.add_eos_token(tid)
+                        except Exception:
+                            pass
+                    logger.info(
+                        f"{model_config.family_name}: BatchedEngine extended "
+                        f"existing TokenizerWrapper; "
+                        f"eos_token_ids={getattr(self._tokenizer, '_eos_token_ids', None)}"
+                    )
+                else:
+                    self._tokenizer = _TW(self._tokenizer, eos_token_ids=resolved)
+                    logger.info(
+                        f"{model_config.family_name}: BatchedEngine pre-wrapped "
+                        f"with eos_token_ids={resolved}"
+                    )
+        except Exception as _eos_err:
+            logger.warning(
+                f"BatchedEngine multi-eos hook failed for "
+                f"{model_config.family_name}: {_eos_err}"
+            )
+
         # Wrap model so BatchGenerator gets raw logits tensors.
         # Some models (nemotron_h, etc.) return LanguageModelOutput objects
         # instead of plain tensors. MLLMModelWrapper extracts .logits when
@@ -586,6 +710,20 @@ class BatchedEngine(BaseEngine):
     ) -> str:
         """Apply chat template to messages."""
         tokenizer = self.tokenizer
+
+        # Normalize native tool-history turns before any template renderer sees
+        # them. OpenAI permits assistant tool-call turns with content=null, but
+        # strict HF templates (Mistral 4/Pixtral-style) often accept the
+        # tool_calls and then still call `|length` on `content`. Empty string is
+        # semantically equivalent for a tool-call-only assistant turn and keeps
+        # those templates from failing with len(None).
+        for msg in messages:
+            if (
+                msg.get("role") == "assistant"
+                and msg.get("tool_calls")
+                and msg.get("content") is None
+            ):
+                msg["content"] = ""
 
         # Count non-system messages to detect multi-turn conversations
         non_system_msgs = sum(1 for m in messages if m.get("role") != "system")

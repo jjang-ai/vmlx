@@ -533,6 +533,104 @@ class TestResponsesInputConversion:
         assert any(m["role"] == "assistant" for m in messages)
         assert any(m["role"] == "tool" for m in messages)
 
+    def test_function_call_assistant_has_template_safe_empty_content(self):
+        """Responses function_call history must render on strict templates.
+
+        Mistral 4/Pixtral-style templates allow assistant turns that only carry
+        tool_calls, but later evaluate `message['content'] | length`. OpenAI
+        `content: null` therefore crashes with len(None). The internal chat
+        history should keep the tool_calls and use content="".
+        """
+        from vmlx_engine.server import _responses_input_to_messages
+
+        messages = _responses_input_to_messages([
+            {
+                "type": "function_call",
+                "name": "list_directory",
+                "call_id": "call_audit",
+                "arguments": '{"path": "."}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_audit",
+                "output": "README.md",
+            },
+        ])
+
+        assistant = next(m for m in messages if m["role"] == "assistant")
+        assert assistant["content"] == ""
+        assert assistant["tool_calls"][0]["id"] == "call_audit"
+
+    def test_leading_function_call_history_gets_user_anchor(self):
+        """Function-call history without the original user turn still needs
+        valid chat alternation for native templates such as DSV4 DSML."""
+        from vmlx_engine.server import _responses_input_to_messages
+
+        messages = _responses_input_to_messages([
+            {
+                "type": "function_call",
+                "name": "list_directory",
+                "call_id": "call_audit",
+                "arguments": '{"path": "."}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_audit",
+                "output": "README.md",
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": "Name one listed file.",
+            },
+        ])
+
+        assert messages[0]["role"] == "user"
+        assert "tool-call history" in messages[0]["content"]
+        assert messages[1]["role"] == "assistant"
+        assert messages[1]["tool_calls"][0]["id"] == "call_audit"
+        assert messages[2]["role"] == "tool"
+        assert messages[3]["role"] == "user"
+
+    def test_historical_tool_schema_can_be_rebuilt_from_function_call(self):
+        from vmlx_engine.server import (
+            _responses_input_to_messages,
+            _synthesize_tools_from_message_tool_calls,
+        )
+
+        messages = _responses_input_to_messages([
+            {
+                "type": "function_call",
+                "name": "list_directory",
+                "call_id": "call_audit",
+                "arguments": '{"path": "."}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_audit",
+                "output": "README.md",
+            },
+        ])
+
+        tools = _synthesize_tools_from_message_tool_calls(messages)
+
+        assert tools == [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_directory",
+                    "description": (
+                        "Previously available tool from conversation history."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            }
+        ]
+
     def test_multimodal_preserved_for_mllm(self):
         from vmlx_engine.server import _responses_input_to_messages
 
@@ -564,6 +662,326 @@ class TestResponsesInputConversion:
         messages = _responses_input_to_messages(input_data, preserve_multimodal=False)
         # For LLM, content should be extracted to text only
         assert isinstance(messages[0]["content"], str)
+
+
+class TestFallbackToolPromptFormat:
+    def test_dsv4_fallback_injects_dsml_not_generic_xml(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            last_kwargs = None
+
+            def apply_chat_template(self, messages, **kwargs):
+                self.last_kwargs = kwargs
+                return "\n".join(m.get("content", "") for m in messages)
+
+        prompt = "<｜begin▁of▁sentence｜><｜User｜>use tool<｜Assistant｜>"
+        messages = [{"role": "user", "content": "use list_directory"}]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_directory",
+                    "description": "List files",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            prompt,
+            messages,
+            tools,
+            FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True},
+        )
+
+        assert "<｜DSML｜invoke" in rendered
+        assert "<tool_call>" not in rendered
+        assert "list_directory" in rendered
+
+    def test_dsv4_fallback_injects_dsml_even_when_tool_name_present(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            def __init__(self):
+                self.last_kwargs = None
+
+            def apply_chat_template(self, messages, **kwargs):
+                self.last_kwargs = kwargs
+                return "\n".join(m.get("content", "") for m in messages)
+
+        prompt = (
+            "<｜begin▁of▁sentence｜><｜User｜>use tool<｜Assistant｜>\n"
+            "Tool: list_directory\nparameters: path\n"
+            '<｜DSML｜invoke name="$TOOL_NAME">'
+        )
+        messages = [{"role": "user", "content": "use list_directory"}]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_directory",
+                    "description": "List files",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            }
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            prompt,
+            messages,
+            tools,
+            FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True},
+        )
+
+        assert "<｜DSML｜invoke" in rendered
+        assert 'name="list_directory"' in rendered
+        assert 'parameter name="path"' in rendered
+        assert "<tool_call>" not in rendered
+
+    def test_qwen_fallback_injects_concrete_native_tool_example(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            last_kwargs = None
+
+            def apply_chat_template(self, messages, **kwargs):
+                self.last_kwargs = kwargs
+                return "\n".join(m.get("content", "") for m in messages)
+
+        prompt = (
+            "<|im_start|>system\n# Tools\n<tools>\n"
+            '{"type":"function","function":{"name":"list_directory"}}\n'
+            "</tools>\n"
+            "<tool_call>\n"
+            "<function=example_function_name>\n"
+            "<parameter=example_parameter_1>\nvalue_1\n</parameter>\n"
+            "</function>\n</tool_call>\n"
+            "<|im_end|>\n<|im_start|>user\nUse list_directory<|im_end|>\n"
+            "<|im_start|>assistant\n"
+        )
+        messages = [{"role": "user", "content": "Use list_directory for path '.'"}]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_directory",
+                    "description": "List files",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            }
+        ]
+
+        tokenizer = FakeTokenizer()
+        rendered = check_and_inject_fallback_tools(
+            prompt,
+            messages,
+            tools,
+            tokenizer,
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+        )
+
+        assert "<function=list_directory>" in rendered
+        assert "<parameter=path>" in rendered
+        assert "fake directory listing" in rendered
+        assert "tools" not in tokenizer.last_kwargs
+
+    def test_dsml_parser_repairs_schema_gated_malformed_old_dsv4_tool_call(self):
+        from vmlx_engine.tool_parsers.dsml_tool_parser import DSMLToolParser
+
+        text = (
+            '<｜DSML｜tool_call_type type="list_directory","" '
+            '"attributes":".} 100%}\n\n```json\n<｜DSML｜tool_name type="false"}'
+        )
+        req = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "list_directory",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        result = DSMLToolParser(None).extract_tool_calls(text, request=req)
+
+        assert result.tools_called
+        assert result.tool_calls[0]["name"] == "list_directory"
+        assert '"path": "."' in result.tool_calls[0]["arguments"]
+        assert result.content is None
+
+    def test_dsml_parser_repairs_partial_canonical_invoke(self):
+        from vmlx_engine.tool_parsers.dsml_tool_parser import DSMLToolParser
+
+        text = (
+            '<｜DSML｜invoke name="list_directory">\n'
+            '  <｜DSML｜parameter name="path" string="true">.</｜DSML｜parameter>\n'
+            "</"
+        )
+        req = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "list_directory",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        result = DSMLToolParser(None).extract_tool_calls(text, request=req)
+
+        assert result.tools_called
+        assert result.tool_calls[0]["name"] == "list_directory"
+        assert '"path": "."' in result.tool_calls[0]["arguments"]
+        assert result.content is None
+
+    def test_generic_parser_handles_laguna_arg_key_value_tool_call(self):
+        from vmlx_engine.api.tool_calling import parse_tool_calls
+
+        text = (
+            "<tool_call>list_directory\n"
+            "<arg_key>path</arg_key>\n"
+            "<arg_value>.</arg_value>\n"
+            "</tool_call>"
+        )
+
+        cleaned, calls = parse_tool_calls(text)
+
+        assert cleaned == ""
+        assert calls
+        assert calls[0].function.name == "list_directory"
+        assert '"path": "."' in calls[0].function.arguments
+
+    def test_generic_parser_handles_dsv4_use_json_tool_call(self):
+        """Live DSV4 JANGTQ2 can emit a compact <use_tool JSON> call.
+
+        The server filters parsed calls to request.tools, so the generic parser
+        can safely recognize this syntax without turning arbitrary prose into a
+        callable function.
+        """
+        from vmlx_engine.api.tool_calling import parse_tool_calls
+
+        text = '<use_list_directory\n\n{\n  "path": "."  \n}'
+
+        cleaned, calls = parse_tool_calls(text)
+
+        assert cleaned == ""
+        assert calls
+        assert calls[0].function.name == "list_directory"
+        assert '"path": "."' in calls[0].function.arguments
+
+    def test_server_tool_parser_filters_unavailable_tool_names(self, monkeypatch):
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ResponsesRequest
+
+        monkeypatch.setattr(server, "_tool_call_parser", None)
+        req = ResponsesRequest(
+            model="m",
+            input="x",
+            tools=[
+                {
+                    "type": "function",
+                    "name": "list_directory",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                    },
+                }
+            ],
+        )
+
+        cleaned, calls = server._parse_tool_calls_with_parser(
+            '<tool_call>{"name":"README.md","arguments":{}}</tool_call>',
+            req,
+        )
+
+        assert calls is None
+        assert "README.md" in cleaned
+
+    def test_server_repairs_schema_gated_tool_instruction_echo(self, monkeypatch):
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ResponsesRequest
+
+        monkeypatch.setattr(server, "_tool_call_parser", None)
+        req = ResponsesRequest(
+            model="m",
+            input="x",
+            tools=[
+                {
+                    "type": "function",
+                    "name": "list_directory",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                }
+            ],
+        )
+
+        cleaned, calls = server._parse_tool_calls_with_parser(
+            "<Use the list_directory tool for path '.' and do not answer in prose.",
+            req,
+        )
+
+        assert cleaned == ""
+        assert calls
+        assert calls[0].function.name == "list_directory"
+        assert '"path": "."' in calls[0].function.arguments
+
+    def test_dsv4_encoder_keeps_function_arguments_as_dsml_params(self):
+        from vmlx_engine.loaders.dsv4_chat_encoder import apply_chat_template
+
+        prompt = apply_chat_template(
+            [
+                {"role": "system", "content": "Use tools."},
+                {"role": "user", "content": "List."},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_audit",
+                            "type": "function",
+                            "function": {
+                                "name": "list_directory",
+                                "arguments": {"path": "."},
+                            },
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_audit", "content": "README.md"},
+                {"role": "user", "content": "What file appeared?"},
+            ],
+            enable_thinking=False,
+            model_path="/Volumes/EricsLLMDrive/jangq-ai/DeepSeek-V4-Flash-JANGTQ",
+        )
+
+        assert 'parameter name="path"' in prompt
+        assert 'parameter name="arguments"' not in prompt
+        assert "<tool_result>README.md</tool_result>" in prompt
 
 
 # ─── ToolDefinition Validation ───────────────────────────────────────────────

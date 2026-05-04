@@ -406,7 +406,7 @@ app.whenReady().then(async () => {
           type: 'warning',
           title: tMain('main.dialog.dbRecoveredTitle'),
           message: tMain('main.dialog.dbRecoveredMessage'),
-          detail: tMain('main.dialog.dbRecoveredDetail', { path: db.recoveryBackupPath }),
+          detail: tMain('main.dialog.dbRecoveredDetail', { path: db.recoveryBackupPath || '' }),
           buttons: [tMain('main.dialog.ok')]
         }).catch(() => { })
       }

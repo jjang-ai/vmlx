@@ -256,24 +256,30 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     except Exception:
         pass
 
-    # Mistral-Medium-3.5: outer mistral3 wrapper has vision_config but the
-    # current `jang_tools.mistral3.Mistral3ForConditionalGeneration` keeps
-    # vision_tower / multi_modal_projector as None stubs (text-only). The
-    # MLLM path routes to mlx_vlm which expects a fully-fleshed VLM and
-    # raises "Received 438 parameters not in model" on the vision keys.
-    # Force LLM path so jang_tools.mistral3.runtime.load handles the
-    # vision-strip + text decode. When the vision tower port lands, drop
-    # this branch.
+    # Mistral wrapper exceptions:
+    # - Mistral-Medium-3.5: outer mistral3 wrapper + inner ministral3 has
+    #   Pixtral metadata, but jang_tools.mistral3.runtime currently strips
+    #   vision_tower / multi_modal_projector and runs text-only.
+    # - Mistral 4: outer mistral3 wrapper + inner mistral4 has no supported
+    #   mlx_vlm VLM class; the JANG loader promotes to the text-only inner
+    #   mistral4 runtime. Routing either shape through MLLM silently loads
+    #   the wrong class or drops weights.
+    # Force LLM path for both until their vision fold-in is implemented.
     try:
         import json as _json_m3
         from pathlib import Path as _Path_m3
         cfg_path_m3 = _Path_m3(local_path) / "config.json"
         if cfg_path_m3.exists():
             cfg_m3 = _json_m3.loads(cfg_path_m3.read_text())
-            if (cfg_m3.get("text_config") or {}).get("model_type") == "ministral3" \
-               or cfg_m3.get("model_type") == "ministral3":
+            top_mt = cfg_m3.get("model_type")
+            text_mt = (cfg_m3.get("text_config") or {}).get("model_type")
+            if (
+                text_mt == "ministral3"
+                or top_mt == "ministral3"
+                or (top_mt == "mistral3" and text_mt == "mistral4")
+            ):
                 _logger.info(
-                    "is_mllm_model(%s): tier=ministral3_routes_via_jang_tools result=False",
+                    "is_mllm_model(%s): tier=mistral_wrapper_text_runtime result=False",
                     model_name,
                 )
                 return False
@@ -494,6 +500,22 @@ def extract_multimodal_content(
         else:
             tool_calls = getattr(msg, "tool_calls", None)
 
+        # Some strict templates (notably Mistral Medium 3.5 / Pixtral-style)
+        # reject assistant turns whose content is empty and which carry no
+        # tool_calls. Such turns can appear after aborted generations, failed
+        # retries, or UI persistence of a placeholder assistant row. They carry
+        # no semantic history, and keeping them can crash prompt rendering.
+        # Preserve tool-call-only assistant turns: those are valid OpenAI
+        # history anchors and are required for tool-result continuation.
+        if role == "assistant" and not tool_calls:
+            empty_content = (
+                content is None
+                or content == ""
+                or (isinstance(content, list) and len(content) == 0)
+            )
+            if empty_content:
+                continue
+
         if role == "assistant" and tool_calls:
             if preserve_native_format:
                 # Preserve native tool_calls format
@@ -553,17 +575,25 @@ def extract_multimodal_content(
             for item in content:
                 # Handle both Pydantic models and dicts
                 if hasattr(item, "model_dump"):
-                    item = item.model_dump()
+                    item = item.model_dump(exclude_none=True)
                 elif hasattr(item, "dict"):
                     item = item.dict()
+                    item = {k: v for k, v in item.items() if v is not None}
 
                 item_type = item.get("type", "")
 
-                if item_type == "text":
+                if item_type in ("text", "input_text"):
                     text_parts.append(item.get("text", ""))
 
                 elif item_type == "image_url":
                     img_url = item.get("image_url", {})
+                    if isinstance(img_url, str):
+                        images.append(img_url)
+                    elif isinstance(img_url, dict):
+                        images.append(img_url.get("url", ""))
+
+                elif item_type == "input_image":
+                    img_url = item.get("image_url", item.get("url", ""))
                     if isinstance(img_url, str):
                         images.append(img_url)
                     elif isinstance(img_url, dict):
@@ -577,6 +607,13 @@ def extract_multimodal_content(
 
                 elif item_type == "video_url":
                     vid_url = item.get("video_url", {})
+                    if isinstance(vid_url, str):
+                        videos.append(vid_url)
+                    elif isinstance(vid_url, dict):
+                        videos.append(vid_url.get("url", ""))
+
+                elif item_type == "input_video":
+                    vid_url = item.get("video_url", item.get("url", item.get("file_id", "")))
                     if isinstance(vid_url, str):
                         videos.append(vid_url)
                     elif isinstance(vid_url, dict):

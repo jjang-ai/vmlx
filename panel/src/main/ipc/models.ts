@@ -54,28 +54,61 @@ export interface GenerationDefaults {
   topK?: number;
   minP?: number;
   repeatPenalty?: number;
+  maxNewTokens?: number;
+  source?: "jang_config" | "generation_config";
 }
 
-/** Read generation_config.json from a model directory and extract sampling defaults */
+/** Read bundle sampling defaults, preferring JANG chat metadata over generation_config. */
 export async function readGenerationDefaults(
   modelPath: string,
 ): Promise<GenerationDefaults | null> {
   try {
-    const configPath = join(modelPath, "generation_config.json");
-    const raw = await readFile(configPath, "utf-8");
-    const config = JSON.parse(raw);
     const defaults: GenerationDefaults = {};
 
-    if (typeof config.temperature === "number")
-      defaults.temperature = config.temperature;
-    if (typeof config.top_p === "number") defaults.topP = config.top_p;
-    if (typeof config.top_k === "number") defaults.topK = config.top_k;
-    if (typeof config.min_p === "number") defaults.minP = config.min_p;
-    if (typeof config.repetition_penalty === "number")
-      defaults.repeatPenalty = config.repetition_penalty;
+    const configPath = join(modelPath, "generation_config.json");
+    try {
+      const raw = await readFile(configPath, "utf-8");
+      const config = JSON.parse(raw);
+
+      if (typeof config.temperature === "number")
+        defaults.temperature = config.temperature;
+      if (typeof config.top_p === "number") defaults.topP = config.top_p;
+      if (typeof config.top_k === "number") defaults.topK = config.top_k;
+      if (typeof config.min_p === "number") defaults.minP = config.min_p;
+      if (typeof config.repetition_penalty === "number")
+        defaults.repeatPenalty = config.repetition_penalty;
+      if (typeof config.max_new_tokens === "number")
+        defaults.maxNewTokens = config.max_new_tokens;
+      if (Object.keys(defaults).length > 0) defaults.source = "generation_config";
+    } catch {
+      // generation_config.json is optional; JANG metadata below may still exist.
+    }
+
+    try {
+      const raw = await readFile(join(modelPath, "jang_config.json"), "utf-8");
+      const jang = JSON.parse(raw);
+      const sampling = jang?.chat?.sampling_defaults;
+      if (sampling && typeof sampling === "object") {
+        if (typeof sampling.temperature === "number")
+          defaults.temperature = sampling.temperature;
+        if (typeof sampling.top_p === "number") defaults.topP = sampling.top_p;
+        if (typeof sampling.repetition_penalty_thinking === "number")
+          defaults.repeatPenalty = sampling.repetition_penalty_thinking;
+        else if (typeof sampling.repetition_penalty_chat === "number")
+          defaults.repeatPenalty = sampling.repetition_penalty_chat;
+        else if (typeof sampling.repetition_penalty === "number")
+          defaults.repeatPenalty = sampling.repetition_penalty;
+        if (typeof sampling.max_new_tokens === "number")
+          defaults.maxNewTokens = sampling.max_new_tokens;
+        defaults.source = "jang_config";
+      }
+    } catch {
+      // jang_config.json is optional for non-JANG bundles.
+    }
 
     // Only return if at least one param was found
-    if (Object.keys(defaults).length === 0) return null;
+    if (Object.keys(defaults).filter((k) => k !== "source").length === 0)
+      return null;
     return defaults;
   } catch {
     return null;

@@ -25,7 +25,7 @@ interface ChatOverrides {
   builtinToolsEnabled?: boolean
   workingDirectory?: string
   enableThinking?: boolean
-  reasoningEffort?: 'low' | 'medium' | 'high'
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'max'
   hideToolStatus?: boolean
   webSearchEnabled?: boolean
   braveSearchEnabled?: boolean
@@ -67,6 +67,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   const [profiles, setProfiles] = useState<ChatProfile[]>([])
   const [profileName, setProfileName] = useState('')
   const [showProfileSave, setShowProfileSave] = useState(false)
+  const [detectedFamily, setDetectedFamily] = useState<string | undefined>(undefined)
 
   const loadProfiles = useCallback(() => {
     window.api.chat.getProfiles().then((p: ChatProfile[]) => setProfiles(p))
@@ -90,8 +91,15 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
             if (gen.topK != null) modelDefaults.topK = gen.topK
             if (gen.minP != null) modelDefaults.minP = gen.minP
             if (gen.repeatPenalty != null) modelDefaults.repeatPenalty = gen.repeatPenalty
+            if (gen.maxNewTokens != null) modelDefaults.maxTokens = gen.maxNewTokens
           }
         } catch (_) {/* no generation_config.json — fall back to hardcoded placeholders */}
+        try {
+          const detected = await window.api.models.detectConfig(session.modelPath)
+          setDetectedFamily(detected?.family)
+        } catch (_) {
+          setDetectedFamily(undefined)
+        }
       }
       // Saved overrides win over model defaults for any field the user has explicitly set.
       const merged: ChatOverrides = { ...modelDefaults, ...(saved || {}) }
@@ -103,6 +111,24 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
 
   const update = <K extends keyof ChatOverrides>(key: K, value: ChatOverrides[K]) => {
     setOverrides(prev => ({ ...prev, [key]: value }))
+    setDirty(true)
+  }
+
+  const updateThinkingMode = (
+    enableThinking: boolean,
+    reasoningEffort?: ChatOverrides['reasoningEffort']
+  ) => {
+    setOverrides(prev => {
+      const next: ChatOverrides = { ...prev, enableThinking, reasoningEffort }
+      if (detectedFamily === 'deepseek-v4' && enableThinking) {
+        // DSV4's own jang_config declares 4096 as the chat/thinking budget.
+        // Older chats can carry stale 300/900/1024 caps; those strand output
+        // inside <think> and make Reasoning/Max look broken even when the
+        // encoder/runtime is correct.
+        next.maxTokens = Math.max(prev.maxTokens ?? 0, 4096)
+      }
+      return next
+    })
     setDirty(true)
   }
 
@@ -148,6 +174,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
         if (gen.topK != null) defaults.topK = gen.topK
         if (gen.minP != null) defaults.minP = gen.minP
         if (gen.repeatPenalty != null) defaults.repeatPenalty = gen.repeatPenalty
+        if (gen.maxNewTokens != null) defaults.maxTokens = gen.maxNewTokens
       }
     } catch (_) {}
     await window.api.chat.setOverrides(chatId, defaults)
@@ -354,42 +381,77 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm font-medium">{t('chat.settings.enableThinking')}</span>
               </div>
-              <div className="flex gap-1 bg-background rounded border border-border p-0.5">
-                <button
-                  onClick={() => update('enableThinking', undefined)}
-                  className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
-                    overrides.enableThinking == null
-                      ? 'bg-primary text-primary-foreground'
-                      : 'hover:bg-accent text-muted-foreground'
-                  }`}
-                >
-                  {t('chat.settings.thinkingAuto')}
-                </button>
-                <button
-                  onClick={() => update('enableThinking', true)}
-                  className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
-                    overrides.enableThinking === true
-                      ? 'bg-primary text-primary-foreground'
-                      : 'hover:bg-accent text-muted-foreground'
-                  }`}
-                >
-                  {t('chat.settings.thinkingOn')}
-                </button>
-                <button
-                  onClick={() => update('enableThinking', false)}
-                  className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
-                    overrides.enableThinking === false
-                      ? 'bg-primary text-primary-foreground'
-                      : 'hover:bg-accent text-muted-foreground'
-                  }`}
-                >
-                  {t('chat.settings.thinkingOff')}
-                </button>
-              </div>
+              {detectedFamily === 'deepseek-v4' ? (
+                <div className="flex gap-1 bg-background rounded border border-border p-0.5">
+                  <button
+                    onClick={() => updateThinkingMode(false, undefined)}
+                    className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
+                      overrides.enableThinking === false
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-accent text-muted-foreground'
+                    }`}
+                  >
+                    Instruct
+                  </button>
+                  <button
+                    onClick={() => updateThinkingMode(true, undefined)}
+                    className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
+                      overrides.enableThinking === true && overrides.reasoningEffort !== 'max'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-accent text-muted-foreground'
+                    }`}
+                  >
+                    Reasoning
+                  </button>
+                  <button
+                    onClick={() => updateThinkingMode(true, 'max')}
+                    className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
+                      overrides.enableThinking === true && overrides.reasoningEffort === 'max'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-accent text-muted-foreground'
+                    }`}
+                  >
+                    Max
+                  </button>
+                </div>
+              ) : (
+                <div className="flex gap-1 bg-background rounded border border-border p-0.5">
+                  <button
+                    onClick={() => update('enableThinking', undefined)}
+                    className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
+                      overrides.enableThinking == null
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-accent text-muted-foreground'
+                    }`}
+                  >
+                    {t('chat.settings.thinkingAuto')}
+                  </button>
+                  <button
+                    onClick={() => update('enableThinking', true)}
+                    className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
+                      overrides.enableThinking === true
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-accent text-muted-foreground'
+                    }`}
+                  >
+                    {t('chat.settings.thinkingOn')}
+                  </button>
+                  <button
+                    onClick={() => update('enableThinking', false)}
+                    className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
+                      overrides.enableThinking === false
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-accent text-muted-foreground'
+                    }`}
+                  >
+                    {t('chat.settings.thinkingOff')}
+                  </button>
+                </div>
+              )}
               <p className="text-xs text-muted-foreground mt-1.5">
                 {t('chat.settings.thinkingHelp')}
               </p>
-              {overrides.enableThinking !== false && (reasoningParser === 'openai_gptoss' || reasoningParser === 'mistral') && (
+              {detectedFamily !== 'deepseek-v4' && overrides.enableThinking !== false && (reasoningParser === 'openai_gptoss' || reasoningParser === 'mistral') && (
                 <div className="mt-3">
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-xs text-muted-foreground">{t('chat.settings.reasoningEffort')}</span>

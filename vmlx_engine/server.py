@@ -285,24 +285,19 @@ _FALLBACK_TOP_P = 0.9
 # Per-family entries are (temperature, top_p, repetition_penalty); None
 # fields fall through to the generic _FALLBACK_*.
 _FAMILY_FALLBACK_DEFAULTS: dict[str, tuple[float | None, float | None, float | None]] = {
-    # rep_penalty=1.15 is the production chat default for DSV4-Flash.
-    # The bundle's chat-mode is training-data-contaminated: 1.05
-    # (the 91% MMLU run baseline) leaves the model in a polite-
-    # assistant attractor where multi-turn chats produce multiple
-    # greeting paragraphs ("Hello! I'm doing well, thank you for
-    # asking. How are you?" → "How can I assist you today?" →
-    # "Let me know if there's anything specific you need help
-    # with." → "What is going on in your life? How are things with
-    # you?" repeated) until max_tokens. The `<｜User｜>` defensive
-    # eos in the registry only fires when the model emits the
-    # LITERAL token id 128803; the chat-mode loop emits natural
-    # English instead, so the eos guard doesn't catch it. 1.15
-    # short-query loops cleanly hit eos in 300-400 tokens.
-    # Trade-off: ~3 percentage points of MMLU on standard
-    # benchmarks. Users running DSV4 for benchmarks can override
-    # per-request with `repetition_penalty: 1.05` in the chat
-    # completion payload (or via the panel slider).
-    "deepseek_v4": (0.6, 0.95, 1.15),
+    # Empty by design. Earlier work added rep_penalty bandaids here
+    # (1.05 / 1.15 for "deepseek_v4") that were masking a real cache
+    # contamination bug — `DeepseekV4Cache` carries cumulative
+    # `compressor_state` + `indexer_state` pool buffers that survive
+    # `_truncate_cache_to_prompt_length` because line 768 explicitly
+    # discarded `DeepseekV4Cache` from the non-KV (cumulative-state)
+    # set. The pool buffers accumulated output-side artifacts across
+    # multi-turn → polite-assistant attractor loops in chat. Bench
+    # (SimpleEngine) was clean because it doesn't reuse caches.
+    # That root-cause is now fixed at scheduler.py:768. With the
+    # cumulative-state path correctly active for DSV4, the same
+    # rep_penalty that produced 91% MMLU (request default) works in
+    # chat too. Family-specific bandaids removed.
 }
 
 
@@ -357,12 +352,203 @@ def _strip_think_for_tool_parse(text: str) -> str:
     return stripped.strip()
 
 
+_jang_sampling_defaults_cache: dict[str, dict] = {}
+_generation_defaults_cache: dict[str, dict] = {}
+
+
+def _nearly_equal(a: float, b: float, eps: float = 1e-6) -> bool:
+    return abs(float(a) - float(b)) <= eps
+
+
+def _is_stale_dsv4_ui_default(key: str, value: float | None) -> bool:
+    """Was this explicit request value likely injected by an old UI default?
+
+    Existing DSV4 chats in the user's DB can carry generic or prior-bundle
+    defaults (temperature=0.7, top_p=1.0, repeat_penalty=1.05/1.10/1.15) as
+    explicit request fields. If honored literally, they bypass DSV4's neutral
+    repetition setting and cause thinking-mode failures where the model never
+    closes ``</think>``. Treat only those known defaults as stale; other
+    explicit user values still win.
+    """
+    if value is None:
+        return False
+    if key == "temperature":
+        return _nearly_equal(value, 0.7) or _nearly_equal(value, 1.0)
+    if key == "top_p":
+        return _nearly_equal(value, 0.9) or _nearly_equal(value, 1.0)
+    if key == "repetition_penalty":
+        return (
+            _nearly_equal(value, 1.0)
+            or _nearly_equal(value, 1.05)
+            or _nearly_equal(value, 1.1)
+            or _nearly_equal(value, 1.15)
+        )
+    return False
+
+
+def _jang_chat_sampling_default(model_name: str, key: str) -> float | None:
+    """Read a numeric default from the loaded bundle's
+    ``jang_config.json::chat.sampling_defaults.<key>``. Cached per-path.
+
+    The JANG runtime stamp carries per-bundle chat defaults. Reading these
+    server-side means panels / CLI users do not need to know per-family
+    sampling values; the bundle declares them.
+
+    Returns None when the bundle has no jang_config or the key is absent.
+    """
+    if not model_name:
+        return None
+    cache = _jang_sampling_defaults_cache
+    if model_name not in cache:
+        try:
+            from pathlib import Path as _P
+            import json as _json
+            _p = _P(model_name) / "jang_config.json"
+            if _p.is_file():
+                _doc = _json.loads(_p.read_text())
+                _chat = _doc.get("chat") or {}
+                _sd = _chat.get("sampling_defaults") or {}
+                cache[model_name] = _sd if isinstance(_sd, dict) else {}
+            else:
+                cache[model_name] = {}
+        except Exception:
+            cache[model_name] = {}
+    val = cache[model_name].get(key)
+    if isinstance(val, (int, float)):
+        return float(val)
+    return None
+
+
+def _generation_config_default(model_name: str, key: str) -> float | None:
+    """Read a numeric generation default from ``generation_config.json``."""
+    if not model_name:
+        return None
+    cache = _generation_defaults_cache
+    if model_name not in cache:
+        try:
+            from pathlib import Path as _P
+            import json as _json
+            _p = _P(model_name) / "generation_config.json"
+            if _p.is_file():
+                _doc = _json.loads(_p.read_text())
+                cache[model_name] = _doc if isinstance(_doc, dict) else {}
+            else:
+                cache[model_name] = {}
+        except Exception:
+            cache[model_name] = {}
+    val = cache[model_name].get(key)
+    if isinstance(val, (int, float)):
+        return float(val)
+    return None
+
+
+def _jang_chat_default_mode(bundle_path: str) -> str | None:
+    """Return ``jang_config.chat.reasoning.default_mode`` or None."""
+    try:
+        from pathlib import Path as _P
+        _p = _P(bundle_path) / "jang_config.json"
+        if not _p.exists():
+            return None
+        import json as _json
+        d = _json.loads(_p.read_text())
+        m = d.get("chat", {}).get("reasoning", {}).get("default_mode")
+        return m if isinstance(m, str) else None
+    except Exception:
+        return None
+
+
+def _bundle_repetition_penalty_keys(bundle_path: str) -> tuple[str, ...]:
+    """Mode-aware lookup order for `_bundle_sampling_default`.
+
+    Bundles split `repetition_penalty_thinking` vs `_chat` because the
+    right value differs by reasoning mode (DSV4: 1.0 thinking to keep
+    `</think>` closure, 1.05 chat to break degeneration loops). Pick the
+    one matching the bundle's stamped default mode.
+    """
+    mode = _jang_chat_default_mode(bundle_path)
+    if mode == "thinking":
+        return (
+            "repetition_penalty_thinking",
+            "repetition_penalty_chat",
+            "repetition_penalty",
+        )
+    return (
+        "repetition_penalty_chat",
+        "repetition_penalty_thinking",
+        "repetition_penalty",
+    )
+
+
+def _bundle_sampling_default(model_name: str, key: str) -> float | None:
+    """Bundle-declared sampling default, preferring JANG chat metadata.
+
+    ``jang_config.chat.sampling_defaults`` is intentionally higher priority
+    than ``generation_config.json`` because it is the JANG runtime stamp for
+    chat behavior. DSV4, for example, ships generation_config temperature/top_p
+    as 1.0/1.0 but declares the audited chat defaults as 0.6/0.95 in
+    jang_config.
+    """
+    bundle_path = _model_path or model_name
+    if not bundle_path:
+        return None
+    v = _jang_chat_sampling_default(bundle_path, key)
+    if v is not None:
+        return v
+    gen_key = {
+        "top_p": "top_p",
+        "temperature": "temperature",
+        "repetition_penalty": "repetition_penalty",
+        "max_new_tokens": "max_new_tokens",
+    }.get(key, key)
+    return _generation_config_default(bundle_path, gen_key)
+
+
+def _model_family_for_defaults(model_name: str = "") -> str:
+    bundle_path = _model_path or model_name
+    try:
+        from .model_config_registry import get_model_config_registry
+        _cfg = get_model_config_registry().lookup(bundle_path) if bundle_path else None
+        return getattr(_cfg, "family_name", "") if _cfg is not None else ""
+    except Exception:
+        return ""
+
+
+def _bundle_overrides_generic_cli_defaults(model_name: str = "") -> bool:
+    """Whether bundle chat defaults should beat generic CLI defaults.
+
+    The panel historically passes generic server defaults on every launch
+    (temperature=0.70, rep_penalty=1.10). DSV4 has audited per-bundle chat
+    defaults in ``jang_config`` and those generic values are known-bad for
+    reasoning mode. Per-request values still win; this only protects server
+    defaults for API/UI launches that did not explicitly set request sampling.
+    """
+    return _model_family_for_defaults(model_name) == "deepseek_v4"
+
+
 def _resolve_temperature(request_value: float | None, model_name: str = "") -> float:
-    """Resolve temperature: request > CLI default > family fallback > generic fallback."""
+    """Resolve temperature.
+
+    Order: request > DSV4 bundle chat default > CLI default > bundle default >
+    family fallback > generic fallback.
+    """
     if request_value is not None:
+        if (
+            _bundle_overrides_generic_cli_defaults(model_name)
+            and _is_stale_dsv4_ui_default("temperature", request_value)
+        ):
+            v = _bundle_sampling_default(model_name, "temperature")
+            if v is not None:
+                return v
         return request_value
+    if _bundle_overrides_generic_cli_defaults(model_name):
+        v = _bundle_sampling_default(model_name, "temperature")
+        if v is not None:
+            return v
     if _default_temperature is not None:
         return _default_temperature
+    v = _bundle_sampling_default(model_name, "temperature")
+    if v is not None:
+        return v
     fam_temp, _, _ = _family_fallback_for(model_name)
     if fam_temp is not None:
         return fam_temp
@@ -370,33 +556,85 @@ def _resolve_temperature(request_value: float | None, model_name: str = "") -> f
 
 
 def _resolve_top_p(request_value: float | None, model_name: str = "") -> float:
-    """Resolve top_p: request > CLI default > family fallback > generic fallback."""
+    """Resolve top_p.
+
+    Order mirrors temperature: request > DSV4 bundle chat default > CLI default
+    > bundle default > family fallback > generic fallback.
+    """
     if request_value is not None:
+        if (
+            _bundle_overrides_generic_cli_defaults(model_name)
+            and _is_stale_dsv4_ui_default("top_p", request_value)
+        ):
+            v = _bundle_sampling_default(model_name, "top_p")
+            if v is not None:
+                return v
         return request_value
+    if _bundle_overrides_generic_cli_defaults(model_name):
+        v = _bundle_sampling_default(model_name, "top_p")
+        if v is not None:
+            return v
     if _default_top_p is not None:
         return _default_top_p
+    v = _bundle_sampling_default(model_name, "top_p")
+    if v is not None:
+        return v
     _, fam_top_p, _ = _family_fallback_for(model_name)
     if fam_top_p is not None:
         return fam_top_p
     return _FALLBACK_TOP_P
 
 
-def _resolve_repetition_penalty(request_value: float | None, model_name: str = "") -> float | None:
-    """Resolve repetition penalty: request > CLI default > family fallback > None.
-
-    Returns None when neither the request, CLI, nor family override specified
-    a value, which means "don't pass repetition_penalty at all to the engine"
-    — mlx-lm then applies its implicit 1.0 (no penalty). When a value is
-    returned, the caller should include it in chat_kwargs.
-
-    The family fallback is the sole reason this can return non-None without
-    user/CLI intervention — currently used for DSV4-Flash to break the
-    `<｜begin▁of▁sentence｜>` greedy-decode loop (mlxstudio#99).
-    """
+def _resolve_max_tokens(request_value: int | None, model_name: str = "") -> int:
+    """Resolve max output tokens from request, DSV4 bundle, then CLI default."""
     if request_value is not None:
         return request_value
+    if _bundle_overrides_generic_cli_defaults(model_name):
+        v = _bundle_sampling_default(model_name, "max_new_tokens")
+        if v is not None and v > 0:
+            return int(v)
+    return _default_max_tokens
+
+
+def _resolve_repetition_penalty(request_value: float | None, model_name: str = "") -> float | None:
+    """Resolve repetition penalty: request > [DSV4 bundle override] >
+    CLI default > jang_config bundle default > family fallback > None.
+
+    Returns None when nothing matches, which means "don't pass
+    repetition_penalty at all to the engine" — mlx-lm then applies its
+    implicit 1.0 (no penalty). When a value is returned, the caller should
+    include it in chat_kwargs.
+
+    Special-case for DeepSeek V4 family: the current standalone JANG
+    reference path is coherent with neutral/no repetition penalty, while
+    forced 1.05/1.10/1.15 defaults make vMLX chat and thinking mode drift
+    or fail to close ``</think>``. Therefore DSV4 bundle defaults win over
+    generic CLI/UI defaults, and current bundles declare 1.0. Per-request
+    non-default values still override everything.
+    """
+    if request_value is not None:
+        if (
+            _bundle_overrides_generic_cli_defaults(model_name)
+            and _is_stale_dsv4_ui_default("repetition_penalty", request_value)
+        ):
+            for _key in _bundle_repetition_penalty_keys(model_name):
+                _v = _bundle_sampling_default(model_name, _key)
+                if _v is not None:
+                    return _v
+        return request_value
+    # DSV4-only: bundle calibrated value wins over CLI default.
+    _bundle_path = _model_path or model_name
+    if _bundle_overrides_generic_cli_defaults(model_name):
+        for _key in _bundle_repetition_penalty_keys(_bundle_path):
+            _v = _bundle_sampling_default(_bundle_path, _key)
+            if _v is not None:
+                return _v
     if _default_repetition_penalty is not None:
         return _default_repetition_penalty
+    for _key in _bundle_repetition_penalty_keys(_bundle_path):
+        _v = _bundle_sampling_default(_bundle_path, _key)
+        if _v is not None:
+            return _v
     _, _, fam_rep = _family_fallback_for(model_name)
     if fam_rep is not None:
         return fam_rep
@@ -418,17 +656,10 @@ def _compute_bypass_prefix_cache(request_obj) -> bool:
     users want namespaced caches within a run, they should call
     DELETE /v1/cache between runs instead.
 
-    DSV4 family bypass: tri-mode (HSA+CSA+SWA) is the default and only
-    path since 2026-05-01 (jang_tools.dsv4.mlx_model removed the
-    DSV4_LONG_CTX=0 SWA-only fallback). DSV4 always uses
-    ``DeepseekV4Cache`` which carries compressor + indexer state buffers
-    that cannot be reconstructed from cached KV tokens alone. The prefix
-    cache stores KV arrays only, so a hit would resume with stale
-    (all-zero) compressor state → drift on multi-turn. Force-bypass for
-    every DSV4 request. The legacy ``DSV4_LONG_CTX`` env-var gate that
-    used to wrap this is gone — the bypass is now unconditional for
-    deepseek_v4 family. Research refs: DSV4-RUNTIME-ARCHITECTURE.md §17,
-    DSV-EXHAUSTIVE-VARIABLES-GUIDE.md §12.
+    DSV4 note: DSV4 is not bypassed here. Its paged cache path stores a
+    dedicated ``deepseek_v4`` composite block record (local SWA plus CSA/HSA
+    compressor/indexer pool state) and block disk L2 round-trips that nested
+    state. Only explicit request fields bypass it.
     """
     if request_obj is None:
         return False
@@ -437,27 +668,95 @@ def _compute_bypass_prefix_cache(request_obj) -> bool:
     salt = getattr(request_obj, "cache_salt", None)
     if isinstance(salt, str) and salt:
         return True
-    # DSV4 family: tri-mode always active → DeepseekV4Cache always carries
-    # compressor/indexer state → prefix cache reconstruct cannot recover.
-    try:
-        from .model_config_registry import get_model_config_registry
-        _model_for_dsv4 = (
-            getattr(request_obj, "model", "") or globals().get("_model_path", "") or ""
-        )
-        if _model_for_dsv4:
-            _mc_dsv4 = get_model_config_registry().lookup(_model_for_dsv4)
-            if getattr(_mc_dsv4, "family_name", "") == "deepseek_v4":
-                return True
-    except Exception:
-        # Registry lookup is best-effort; never block a request on it.
-        pass
-    # Legacy DSV4_LONG_CTX env-var (kept for users who explicitly opt in
-    # to the bypass via env even on non-DSV4 bundles or pre-registry
-    # situations). Tri-mode default-on already covers DSV4; this is a
-    # diagnostic override only.
-    if os.environ.get("DSV4_LONG_CTX") in ("1", "true", "True", "yes", "on"):
-        return True
     return False
+
+
+_MULTIMODAL_CONTENT_TYPES = {
+    "image_url",
+    "image",
+    "input_image",
+    "video_url",
+    "video",
+    "input_video",
+    "input_audio",
+    "audio",
+}
+
+
+def _content_has_multimodal(content) -> bool:
+    if isinstance(content, list):
+        for part in content:
+            if hasattr(part, "model_dump"):
+                part = part.model_dump(exclude_none=True)
+            elif hasattr(part, "dict"):
+                part = {k: v for k, v in part.dict().items() if v is not None}
+            if isinstance(part, dict) and part.get("type") in _MULTIMODAL_CONTENT_TYPES:
+                return True
+    return False
+
+
+def _messages_have_multimodal(messages) -> bool:
+    for msg in messages or []:
+        if hasattr(msg, "model_dump"):
+            msg = msg.model_dump(exclude_none=True)
+        elif hasattr(msg, "dict"):
+            msg = {k: v for k, v in msg.dict().items() if v is not None}
+        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+        if _content_has_multimodal(content):
+            return True
+    return False
+
+
+def _responses_input_has_multimodal(input_data) -> bool:
+    if isinstance(input_data, str):
+        return False
+    for item in input_data or []:
+        if hasattr(item, "model_dump"):
+            item = item.model_dump(exclude_none=True)
+        elif hasattr(item, "dict"):
+            item = {k: v for k, v in item.dict().items() if v is not None}
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") in _MULTIMODAL_CONTENT_TYPES:
+            return True
+        if _content_has_multimodal(item.get("content")):
+            return True
+    return False
+
+
+def _loaded_omni_modalities() -> list[str] | None:
+    try:
+        from .omni_multimodal import is_omni_multimodal_bundle
+        _omni_path = _model_path or _model_name
+        if _omni_path and is_omni_multimodal_bundle(_omni_path):
+            return ["text", "vision", "audio", "video"]
+    except Exception:
+        pass
+    return None
+
+
+def _reject_unsupported_multimodal(endpoint: str) -> None:
+    modalities = _loaded_omni_modalities()
+    if modalities is not None:
+        # Omni requests should have been routed through OmniMultimodalDispatcher
+        # before the text path. If dispatch failed, do not silently drop media.
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"{endpoint} received multimodal input for an Omni bundle, but "
+                "the Omni multimodal dispatcher did not complete. The request "
+                "was rejected to avoid silently ignoring image/audio/video data."
+            ),
+        )
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"{endpoint} received image/video/audio content, but the loaded "
+            "runtime is text-only. Start a VLM/Omni session that reports "
+            "vision/audio/video in /v1/models/{id}/capabilities, or send a "
+            "text-only request. This guard prevents silent media drop."
+        ),
+    )
 
 
 def _resolve_enable_thinking(
@@ -566,6 +865,7 @@ _TOOL_CALL_MARKERS = [
     "<|tool_call_begin|>",
     "<\uff5ctool\u2581calls\u2581begin\uff5c>",  # DeepSeek Unicode variant (U+FF5C, U+2581)
     "<\uff5ctool\u2581call\u2581begin\uff5c>",  # DeepSeek singular begin (GLM-5.1 emits this)
+    "<｜DSML｜invoke",  # DSV4 native tool-call format
     "<|python_tag|>",  # Llama 3.1+ code interpreter / tool call
     "```tool_code",  # Gemma 3 / 3n function-call code block (Google docs format)
 ]
@@ -1212,6 +1512,31 @@ async def check_memory_pressure(request: Request):
     if mem.percent < threshold_pct:
         return
 
+    # Before rejecting, purge MLX's reusable graph/allocation cache once and
+    # re-check. Large DSV4/MLA models can retain tens of GB in MLX's cache
+    # after a completed request while the actual model working set is fine.
+    # Prefix/L2 cache clearing is handled separately; this only releases
+    # purgeable MLX allocator cache so we don't turn recoverable pressure into
+    # a sticky 503 state.
+    try:
+        import gc as _gc
+        import mlx.core as _mx
+
+        _gc.collect()
+        if hasattr(_mx, "clear_cache"):
+            _mx.clear_cache()
+        elif hasattr(_mx, "clear_memory_cache"):
+            _mx.clear_memory_cache()
+        mem = psutil.virtual_memory()
+        if mem.percent < threshold_pct:
+            logger.info(
+                "Memory pressure guard: purged MLX cache and continued "
+                f"({mem.percent:.1f}% used, threshold {threshold_pct:.1f}%)."
+            )
+            return
+    except Exception:
+        pass
+
     # Log pressure rejections, but at most once per 5 s so we don't spam
     # the log under sustained overload.
     global _last_pressure_log
@@ -1363,6 +1688,126 @@ def _parse_tool_calls_with_parser(
     Returns:
         Tuple of (cleaned_text, tool_calls)
     """
+    def _allowed_tool_names() -> set[str]:
+        if not request or not getattr(request, "tools", None):
+            return set()
+        names: set[str] = set()
+        try:
+            for tool in convert_tools_for_template(request.tools) or []:
+                fn = tool.get("function") if isinstance(tool, dict) else None
+                name = fn.get("name") if isinstance(fn, dict) else None
+                if isinstance(name, str) and name:
+                    names.add(name)
+        except Exception:
+            pass
+        return names
+
+    def _filter_to_request_tools(tool_calls: list | None) -> list | None:
+        if not tool_calls:
+            return tool_calls
+        allowed = _allowed_tool_names()
+        if not allowed:
+            return tool_calls
+        filtered = []
+        for tc in tool_calls:
+            try:
+                name = tc.function.name
+            except Exception:
+                fn = tc.get("function") if isinstance(tc, dict) else None
+                name = fn.get("name") if isinstance(fn, dict) else tc.get("name") if isinstance(tc, dict) else None
+            if name in allowed:
+                filtered.append(tc)
+            else:
+                logger.warning(
+                    "Dropping parsed tool call for unavailable tool %r; "
+                    "available tools=%s",
+                    name,
+                    sorted(allowed),
+                )
+        return filtered or None
+
+    def _repair_instruction_echo_tool_call(text: str) -> tuple[str, list | None]:
+        """Repair model output that echoes an explicit tool-use instruction.
+
+        Live DSV4 JANGTQ2 can answer an auto-tool request with:
+
+            <Use the list_directory tool for path '.' and do not answer in prose.
+
+        That is not canonical DSML, but it is not normal prose either: it names
+        a request-available tool and carries a schema-visible argument. Keep the
+        repair schema-gated so arbitrary text cannot become a function call.
+        """
+        allowed = _allowed_tool_names()
+        if not allowed:
+            return text, None
+        stripped = text.strip()
+        m = re.match(
+            r"^<\s*use\s+the\s+([A-Za-z_][\w.-]*)\s+tool\b",
+            stripped,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not m:
+            return text, None
+        name = m.group(1)
+        if name not in allowed:
+            return text, None
+
+        schema = None
+        try:
+            for tool in convert_tools_for_template(getattr(request, "tools", None)) or []:
+                fn = tool.get("function") if isinstance(tool, dict) else None
+                if isinstance(fn, dict) and fn.get("name") == name:
+                    schema = fn
+                    break
+        except Exception:
+            schema = None
+        params_schema = schema.get("parameters", {}) if isinstance(schema, dict) else {}
+        props = (
+            params_schema.get("properties", {})
+            if isinstance(params_schema, dict)
+            else {}
+        )
+        required = (
+            params_schema.get("required", [])
+            if isinstance(params_schema, dict)
+            else []
+        )
+
+        args: dict[str, str] = {}
+        for p_name in props:
+            pat = re.compile(
+                rf"\b{re.escape(p_name)}\b\s*(?:=|:|to|is)?\s*['\"]([^'\"]+)['\"]",
+                flags=re.IGNORECASE,
+            )
+            pm = pat.search(stripped)
+            if pm:
+                args[p_name] = pm.group(1)
+        if not args and len(props) == 1 and ("'.'" in stripped or '"."' in stripped):
+            args[next(iter(props))] = "."
+        if any(p not in args for p in required):
+            return text, None
+
+        return "", [
+            ToolCall(
+                id=f"call_{uuid.uuid4().hex[:8]}",
+                type="function",
+                function=FunctionCall(
+                    name=name,
+                    arguments=json.dumps(args, ensure_ascii=False),
+                ),
+            )
+        ]
+
+    def _generic_parse_filtered(text: str) -> tuple[str, list | None]:
+        cleaned, calls = parse_tool_calls(text)
+        calls = _filter_to_request_tools(calls)
+        if calls:
+            return cleaned, calls
+        repaired_cleaned, repaired_calls = _repair_instruction_echo_tool_call(text)
+        if repaired_calls:
+            return repaired_cleaned, repaired_calls
+        return text, None
+
     # Determine which parser to use.
     # If --enable-auto-tool-choice was set, use the configured parser.
     # Otherwise, if the request has tools, auto-detect from model config
@@ -1382,7 +1827,7 @@ def _parse_tool_calls_with_parser(
             pass
 
     if not active_parser:
-        return parse_tool_calls(output_text)
+        return _generic_parse_filtered(output_text)
 
     # Create a fresh parser instance per call for thread-safety.
     # Non-streaming requests can be concurrent — sharing a global instance
@@ -1416,14 +1861,49 @@ def _parse_tool_calls_with_parser(
                 )
                 for tc in result.tool_calls
             ]
-            return result.content or "", tool_calls
+            filtered_tool_calls = _filter_to_request_tools(tool_calls)
+            if filtered_tool_calls:
+                return result.content or "", filtered_tool_calls
+            # Parser consumed only unavailable tool names. Treat as plain text
+            # so clients do not receive hallucinated function calls like
+            # README.md()/src()/tests() when the request only exposed
+            # list_directory().
+            return output_text, None
         else:
             # Specific parser found nothing — try generic parser as fallback
             # (handles Nemotron, Llama, raw JSON, etc.)
-            return parse_tool_calls(output_text)
+            return _generic_parse_filtered(output_text)
     except Exception as e:
         logger.warning(f"Tool parser error: {e}")
-        return parse_tool_calls(output_text)
+        return _generic_parse_filtered(output_text)
+
+
+def _suppress_tool_parsing_when_no_tools(
+    all_tools: list,
+    tool_choice,
+    endpoint: str,
+) -> bool:
+    """Return True when tool-call parsing should be disabled for a request.
+
+    Starting the server with ``--tool-call-parser auto`` or
+    ``--enable-auto-tool-choice`` only selects a parser; it must not make a
+    model invent API tool calls when the current request did not provide any
+    tools (or MCP did not contribute any). Several reasoning models mention
+    tool-call syntax in normal text after a tool-history continuation; parsing
+    that text without an actual tool schema can turn a valid answer into a
+    function_call-only response with no visible content.
+    """
+    if all_tools:
+        return False
+    if tool_choice == "required" or isinstance(tool_choice, dict):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{endpoint}: tool_choice requires at least one available tool "
+                "(request tools or MCP tools)."
+            ),
+        )
+    return True
 
 
 def _detect_native_tool_support() -> bool:
@@ -2957,6 +3437,19 @@ async def clear_cache(cache_type: str = Query("all", alias="type")):
                 if disk_store is not None:
                     disk_store.clear()
                     cleared.append("block_disk_store")
+            try:
+                import gc as _gc
+                import mlx.core as _mx
+
+                _gc.collect()
+                if hasattr(_mx, "clear_cache"):
+                    _mx.clear_cache()
+                    cleared.append("mlx_cache")
+                elif hasattr(_mx, "clear_memory_cache"):
+                    _mx.clear_memory_cache()
+                    cleared.append("mlx_memory_cache")
+            except Exception:
+                pass
 
     # Clear multimodal caches
     if cache_type in ("multimodal", "all"):
@@ -3200,6 +3693,123 @@ async def list_models() -> ModelsResponse:
     return ModelsResponse(data=models)
 
 
+@app.get("/v1/models/{model_id:path}/capabilities", dependencies=[Depends(verify_api_key)])
+async def model_capabilities(model_id: str) -> dict:
+    """Return vMLX runtime capabilities for the loaded model.
+
+    This is intentionally separate from Ollama's flat `capabilities` list:
+    the panel needs structured mode data so it can show Instruct / Reasoning /
+    Max Thinking only when the loaded family actually supports those modes.
+    """
+    model_key = _model_path or _model_name or model_id
+    try:
+        from .model_config_registry import get_model_config_registry
+        cfg = get_model_config_registry().lookup(model_key)
+    except Exception:
+        cfg = None
+
+    family = getattr(cfg, "family_name", "unknown") if cfg is not None else "unknown"
+    reasoning_parser = getattr(cfg, "reasoning_parser", None) if cfg is not None else None
+    tool_parser = getattr(cfg, "tool_parser", None) if cfg is not None else None
+    think_in_template = bool(getattr(cfg, "think_in_template", False)) if cfg is not None else False
+    registry_is_mllm = bool(getattr(cfg, "is_mllm", False)) if cfg is not None else False
+    engine_is_mllm = (
+        bool(getattr(_engine, "is_mllm", False))
+        if _engine is not None
+        else registry_is_mllm
+    )
+    omni_modalities = _loaded_omni_modalities()
+    if omni_modalities is not None:
+        modalities = omni_modalities
+    elif engine_is_mllm:
+        modalities = ["text", "vision", "video"]
+    else:
+        modalities = ["text"]
+    supports_thinking = bool(reasoning_parser or think_in_template)
+
+    if family == "deepseek_v4":
+        # DSV4 standard chat + thinking are supported. The standalone JANG
+        # reference runtime still degenerates on reasoning_effort="max" for
+        # this bundle, so do not advertise Max as a stable UI mode.
+        supported_modes = ["instruct", "reasoning"]
+        reasoning_efforts = []
+    elif supports_thinking:
+        supported_modes = ["instruct", "reasoning"]
+        if reasoning_parser in ("openai_gptoss", "mistral"):
+            reasoning_efforts = ["low", "medium", "high"]
+        else:
+            reasoning_efforts = []
+    else:
+        supported_modes = ["instruct"]
+        reasoning_efforts = []
+
+    bundle_path = _model_path or model_key
+    sampling_defaults = {
+        key: _bundle_sampling_default(bundle_path, key)
+        for key in (
+            "temperature",
+            "top_p",
+            "max_new_tokens",
+            "repetition_penalty",
+            "repetition_penalty_chat",
+            "repetition_penalty_thinking",
+        )
+    }
+    sampling_defaults = {k: v for k, v in sampling_defaults.items() if v is not None}
+
+    scheduler = _get_scheduler()
+    scheduler_config = getattr(scheduler, "config", None)
+    block_aware_cache = getattr(scheduler, "block_aware_cache", None)
+    paged_cache_manager = getattr(scheduler, "paged_cache_manager", None)
+    memory_aware_cache = getattr(scheduler, "memory_aware_cache", None)
+    trie_prefix_cache = getattr(scheduler, "prefix_cache", None)
+    if block_aware_cache is not None:
+        cache_type = "paged"
+    elif memory_aware_cache is not None:
+        cache_type = "memory_aware"
+    elif trie_prefix_cache is not None:
+        cache_type = "trie"
+    else:
+        cache_type = "disabled"
+    prefix_cache_enabled = bool(
+        getattr(scheduler_config, "enable_prefix_cache", False)
+        or block_aware_cache is not None
+        or memory_aware_cache is not None
+        or trie_prefix_cache is not None
+    )
+    paged_cache_enabled = bool(block_aware_cache is not None and paged_cache_manager is not None)
+    block_disk_store = getattr(paged_cache_manager, "_disk_store", None)
+    dsv4_composite_state = bool(
+        family == "deepseek_v4"
+        and paged_cache_enabled
+        and getattr(scheduler, "_uses_dsv4_cache", False)
+    )
+
+    return {
+        "id": model_id,
+        "loaded_model": _resolve_model_name(),
+        "model_path": _model_path,
+        "family": family,
+        "supports_tools": bool(tool_parser),
+        "tool_parser": tool_parser,
+        "supports_thinking": supports_thinking,
+        "reasoning_parser": reasoning_parser,
+        "think_in_template": think_in_template,
+        "supported_modes": supported_modes,
+        "experimental_modes": ["max"] if family == "deepseek_v4" else [],
+        "reasoning_efforts": reasoning_efforts,
+        "modalities": modalities,
+        "cache": {
+            "prefix": prefix_cache_enabled,
+            "type": cache_type,
+            "paged": paged_cache_enabled,
+            "block_disk_l2": block_disk_store is not None,
+            "dsv4_composite_state": dsv4_composite_state,
+        },
+        "sampling_defaults": sampling_defaults,
+    }
+
+
 # =============================================================================
 # Anthropic Messages API
 # =============================================================================
@@ -3323,7 +3933,7 @@ async def create_anthropic_message(
     _msg_kwargs: dict = {
         "temperature": _resolve_temperature(chat_req.temperature),
         "top_p": _resolve_top_p(chat_req.top_p),
-        "max_tokens": chat_req.max_tokens or _default_max_tokens,
+        "max_tokens": _resolve_max_tokens(chat_req.max_tokens, chat_req.model),
     }
     if chat_req.top_k is not None:
         _msg_kwargs["top_k"] = chat_req.top_k
@@ -3368,7 +3978,9 @@ async def create_anthropic_message(
     # See research/DSV4-RUNTIME-ARCHITECTURE.md §4 + dsv4_chat_encoder.py.
     try:
         from .model_config_registry import get_model_config_registry
-        _mc_for_dsv4 = get_model_config_registry().lookup(getattr(chat_req, "model", "") or "")
+        _mc_for_dsv4 = get_model_config_registry().lookup(
+            _model_path or _model_name or getattr(chat_req, "model", "") or ""
+        )
         _is_dsv4 = getattr(_mc_for_dsv4, "family_name", "") == "deepseek_v4"
     except Exception:
         _is_dsv4 = False
@@ -3381,40 +3993,24 @@ async def create_anthropic_message(
         )
         _ct_kwargs.pop("thinking_mode", None)
 
-        # DSV4 reasoning toggle (2026-05-02 fix for mlxstudio#138-class
-        # complaint that the toggle "does not work"). The DSV4-Flash-JANGTQ
-        # bundle's chat-mode is training-data contaminated (spam URLs,
-        # `[URL REMOVED BY BROTS]`, mixed-language annotations). Defaults
-        # to thinking-on when unset; otherwise propagates the explicit
-        # user choice into `_msg_kwargs` so the chat template's
-        # `enable_thinking is not defined or == false` branch sees the
-        # right state — without explicit propagation the template treats
-        # True the same as undefined (== chat mode), silently disabling
-        # reasoning even when the user toggled it ON. Earlier audit fix
-        # only set _msg_kwargs in the None branch and dropped propagation
-        # for explicit True; the regression manifested as "reasoning ON
-        # button doesn't make DSV4 reason at all".
-        if chat_req.enable_thinking is None:
-            logger.info(
-                "DSV4: enable_thinking unset → defaulting True "
-                "(chat-mode bundle is training-data-contaminated)"
-            )
-            chat_req.enable_thinking = True
-            _msg_kwargs["enable_thinking"] = True
-            _ct_kwargs["enable_thinking"] = True
-        elif chat_req.enable_thinking is True:
+        # DSV4 reasoning toggle propagation. The chat-loop bug that
+        # earlier work attributed to "chat-mode contamination" is
+        # actually `DeepseekV4Cache` pool-buffer contamination across
+        # multi-turn (scheduler.py:768 root-cause fix removes the
+        # `non_kv.discard("DeepseekV4Cache")` exception that was
+        # routing DSV4 around the cumulative-state path). With that
+        # fix, the toggle works without forcing True. Honor the
+        # explicit user choice and propagate to BOTH _msg_kwargs and
+        # _ct_kwargs so the Jinja template's
+        # `enable_thinking is not defined or == false` branch sees
+        # the right state.
+        if chat_req.enable_thinking is True:
             _msg_kwargs["enable_thinking"] = True
             _ct_kwargs["enable_thinking"] = True
         elif chat_req.enable_thinking is False:
             _msg_kwargs["enable_thinking"] = False
             _ct_kwargs["enable_thinking"] = False
-            logger.warning(
-                "DSV4: enable_thinking=False explicitly requested. The "
-                "DSV4-Flash-JANGTQ bundle's chat-mode is training-data-"
-                "contaminated; expect spam URLs / mixed-language artifacts. "
-                "Toggle reasoning ON for clean output."
-            )
-
+        # Auto / None → fall through to engine-side defaults
         if _cur_effort == "max":
             _ct_kwargs["reasoning_effort"] = "max"
         else:
@@ -4075,9 +4671,7 @@ async def ollama_chat(fastapi_request: Request):
 
     engine = get_engine()
     chat_kwargs = {
-        "max_tokens": chat_req.max_tokens
-        if chat_req.max_tokens is not None
-        else _default_max_tokens,
+        "max_tokens": _resolve_max_tokens(chat_req.max_tokens, chat_req.model),
         "temperature": _resolve_temperature(chat_req.temperature),
         "top_p": _resolve_top_p(chat_req.top_p),
     }
@@ -4131,32 +4725,16 @@ async def ollama_chat(fastapi_request: Request):
             or _ollama_ct_kwargs.get("reasoning_effort")
         )
         _ollama_ct_kwargs.pop("thinking_mode", None)
-        # DSV4 reasoning toggle on Ollama path. Mirrors chat-completions
-        # propagation: ALWAYS write enable_thinking into chat_kwargs AND
-        # _ollama_ct_kwargs so the Jinja template's `enable_thinking is
-        # not defined or == false` branch sees the right state. Without
-        # explicit propagation on the True case, the template treats it
-        # as undefined → reasoning OFF (the regression that caused
-        # "reasoning ON button doesn't make DSV4 reason at all" on
-        # /api/chat).
-        if chat_req.enable_thinking is None:
-            logger.info(
-                "DSV4 (Ollama): enable_thinking unset → defaulting True"
-            )
-            chat_req.enable_thinking = True
-            chat_kwargs["enable_thinking"] = True
-            _ollama_ct_kwargs["enable_thinking"] = True
-        elif chat_req.enable_thinking is True:
+        # DSV4 reasoning toggle on Ollama path. Honor user choice;
+        # cache contamination root-cause is fixed at scheduler.py:768
+        # (`non_kv.discard("DeepseekV4Cache")` removed) so the toggle
+        # no longer needs to force True as a workaround.
+        if chat_req.enable_thinking is True:
             chat_kwargs["enable_thinking"] = True
             _ollama_ct_kwargs["enable_thinking"] = True
         elif chat_req.enable_thinking is False:
             chat_kwargs["enable_thinking"] = False
             _ollama_ct_kwargs["enable_thinking"] = False
-            logger.warning(
-                "DSV4 (Ollama): enable_thinking=False explicitly requested. "
-                "Chat-mode bundle is training-data-contaminated; expect "
-                "spam URLs / mixed-language artifacts."
-            )
         if _cur_effort_o == "max":
             _ollama_ct_kwargs["reasoning_effort"] = "max"
         else:
@@ -5374,9 +5952,7 @@ async def create_completion(request: CompletionRequest):
         try:
             gen_kwargs = {
                 "prompt": prompt,
-                "max_tokens": request.max_tokens
-                if request.max_tokens is not None
-                else _default_max_tokens,
+                "max_tokens": _resolve_max_tokens(request.max_tokens, getattr(request, "model", "")),
                 "temperature": _resolve_temperature(request.temperature),
                 "top_p": _resolve_top_p(request.top_p),
                 "stop": request.stop,
@@ -5663,6 +6239,8 @@ async def create_chat_completion(
         )
 
     has_media = bool(images or videos)
+    if has_media and not engine.is_mllm:
+        _reject_unsupported_multimodal("/v1/chat/completions")
 
     # DSV4 default-system-prompt injection (chat-completions main path).
     # See research/DSV4-CHAT-TEMPLATE-INVESTIGATION-2026-04-25.md and upstream
@@ -5674,7 +6252,9 @@ async def create_chat_completion(
     # because the canonical _is_dsv4 variable is set later in this function.
     try:
         from .model_config_registry import get_model_config_registry
-        _mc_for_dsv4_msgs = get_model_config_registry().lookup(getattr(request, "model", "") or "")
+        _mc_for_dsv4_msgs = get_model_config_registry().lookup(
+            _model_path or _model_name or getattr(request, "model", "") or ""
+        )
         _is_dsv4_msgs = getattr(_mc_for_dsv4_msgs, "family_name", "") == "deepseek_v4"
     except Exception:
         _is_dsv4_msgs = False
@@ -5726,9 +6306,7 @@ async def create_chat_completion(
 
     # Prepare kwargs
     chat_kwargs = {
-        "max_tokens": request.max_tokens
-        if request.max_tokens is not None
-        else _default_max_tokens,
+        "max_tokens": _resolve_max_tokens(request.max_tokens, request.model),
         "temperature": _resolve_temperature(request.temperature),
         "top_p": _resolve_top_p(request.top_p),
     }
@@ -5799,7 +6377,7 @@ async def create_chat_completion(
     # vmlx_engine/loaders/dsv4_chat_encoder.py::_resolve_mode_and_effort.
     try:
         from .model_config_registry import get_model_config_registry
-        _model_family_key = getattr(request, "model", "") or ""
+        _model_family_key = _model_path or _model_name or getattr(request, "model", "") or ""
         _mc_for_dsv4 = get_model_config_registry().lookup(_model_family_key)
         _is_dsv4 = getattr(_mc_for_dsv4, "family_name", "") == "deepseek_v4"
     except Exception:
@@ -5830,33 +6408,18 @@ async def create_chat_completion(
         # Strip stale fields from any prior path so the final kwargs are clean.
         _ct_kwargs.pop("thinking_mode", None)
 
-        # DSV4 reasoning toggle on /v1/responses path. ALWAYS propagate
-        # to BOTH chat_kwargs AND _ct_kwargs so the Jinja template sees
-        # the explicit value (undefined would silently disable reasoning).
-        if request.enable_thinking is None:
-            logger.info(
-                "DSV4 (Responses): enable_thinking unset → defaulting True"
-            )
-            request.enable_thinking = True
-            chat_kwargs["enable_thinking"] = True
-            _ct_kwargs["enable_thinking"] = True
-        elif request.enable_thinking is True:
+        # DSV4 reasoning toggle on /v1/responses path. Honor user
+        # choice; root-cause cache contamination fixed at
+        # scheduler.py:768.
+        if request.enable_thinking is True:
             chat_kwargs["enable_thinking"] = True
             _ct_kwargs["enable_thinking"] = True
         elif request.enable_thinking is False:
             chat_kwargs["enable_thinking"] = False
             _ct_kwargs["enable_thinking"] = False
-            logger.warning(
-                "DSV4 (Responses): enable_thinking=False explicitly requested. "
-                "Chat-mode bundle is training-data-contaminated."
-            )
-
         if _cur_effort == "max":
-            # max thinking — explicit 'max' triggers the deeper-chains branch
             _ct_kwargs["reasoning_effort"] = "max"
         else:
-            # thinking standard — enable_thinking=True (forced above) +
-            # NO reasoning_effort kwarg. low/medium/high all fall here.
             _ct_kwargs.pop("reasoning_effort", None)
 
     # Forward extra chat_template_kwargs to engine (exclude enable_thinking, already handled)
@@ -5930,6 +6493,11 @@ async def create_chat_completion(
                 all_tools.extend(request.tools)
             logger.debug(f"Added {len(all_tools)} tools (tool_choice={_tool_choice})")
 
+    if not _suppress_tools:
+        _suppress_tools = _suppress_tool_parsing_when_no_tools(
+            all_tools, _tool_choice, "Chat Completions"
+        )
+
     # Pass merged tools to engine (normalize all to template format)
     if all_tools:
         chat_kwargs["tools"] = convert_tools_for_template(all_tools)
@@ -5999,6 +6567,9 @@ async def create_chat_completion(
         raise HTTPException(
             status_code=504, detail=f"Request timed out after {timeout:.1f} seconds"
         )
+    except ValueError as e:
+        logger.warning(f"Chat completion rejected: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Chat completion failed: {e}", exc_info=True)
         raise HTTPException(
@@ -6322,6 +6893,8 @@ def _responses_input_to_messages(
                         if isinstance(item.tool_calls, list)
                         else [item.tool_calls]
                     )
+                    if msg.get("content") is None:
+                        msg["content"] = ""
                 if hasattr(item, "tool_call_id") and item.tool_call_id:
                     msg["tool_call_id"] = item.tool_call_id
                 messages.append(msg)
@@ -6345,7 +6918,12 @@ def _responses_input_to_messages(
             messages.append(
                 {
                     "role": "assistant",
-                    "content": None,
+                    # Tool-call-only assistant turns are valid Responses/OpenAI
+                    # history anchors. Use an empty string instead of None:
+                    # strict templates such as Mistral 4 accept the tool_calls
+                    # but later evaluate `message['content'] | length`, which
+                    # crashes on None.
+                    "content": "",
                     "tool_calls": [
                         {
                             "id": call_id,
@@ -6371,6 +6949,17 @@ def _responses_input_to_messages(
             )
             continue
 
+        # output_text is how the panel preserves assistant text between
+        # Responses API follow-up calls (including tool auto-continue). Treat
+        # it as an assistant message when converting back to Chat Completions
+        # history; skipping it makes continuation forget the model's previous
+        # answer/context after a tool round.
+        if item_type == "output_text":
+            text = item.get("text", "")
+            if text:
+                messages.append({"role": "assistant", "content": text})
+            continue
+
         # message type with content parts
         if item_type == "message":
             role = _normalize_role(item.get("role", "user"))
@@ -6390,10 +6979,13 @@ def _responses_input_to_messages(
                 )
             # Preserve assistant messages with tool_calls (Chat Completions format)
             elif role == "assistant" and "tool_calls" in item:
+                _assistant_content = item.get("content")
+                if _assistant_content is None:
+                    _assistant_content = ""
                 messages.append(
                     {
                         "role": "assistant",
-                        "content": item.get("content"),
+                        "content": _assistant_content,
                         "tool_calls": item["tool_calls"],
                     }
                 )
@@ -6402,7 +6994,101 @@ def _responses_input_to_messages(
                 messages.append({"role": role, "content": content})
         # Skip unknown item types (e.g. reasoning, web_search_call, etc.)
 
+    # Responses clients may send a previous response as function_call /
+    # function_call_output items without also replaying the original user
+    # prompt that caused the call. Native chat templates still need a valid
+    # user→assistant ordering anchor before assistant tool_calls. DSV4 is
+    # especially sensitive here: a leading assistant DSML block after system
+    # prompt can produce only "<think></think>" on continuation. Insert a
+    # neutral user anchor before a leading assistant tool-call turn; models
+    # still see the actual tool result and the real follow-up user message.
+    first_non_system = next(
+        (
+            idx
+            for idx, msg in enumerate(messages)
+            if msg.get("role") not in ("system", "developer")
+        ),
+        None,
+    )
+    if first_non_system is not None:
+        first_msg = messages[first_non_system]
+        if first_msg.get("role") == "assistant" and first_msg.get("tool_calls"):
+            messages.insert(
+                first_non_system,
+                {
+                    "role": "user",
+                    "content": "Previous assistant tool-call history follows.",
+                },
+            )
+
     return messages
+
+
+def _synthesize_tools_from_message_tool_calls(messages: list[dict]) -> list[dict]:
+    """Build minimal tool schemas from assistant tool-call history.
+
+    Responses follow-up requests can replay prior ``function_call`` and
+    ``function_call_output`` items without including the original ``tools``
+    array. Some native templates (notably DSV4 DSML) need tool definitions on
+    the system prompt to render tool-call conversations correctly, even when
+    the current request is not allowed to call tools. Infer a conservative
+    schema from historical arguments so the prompt has the missing context.
+    """
+    by_name: dict[str, dict] = {}
+    for msg in messages or []:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        for tc in msg.get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+            name = fn.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            args = fn.get("arguments") or {}
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except Exception:
+                    args = {}
+            props = {}
+            required = []
+            if isinstance(args, dict):
+                for key, value in args.items():
+                    if not isinstance(key, str) or not key:
+                        continue
+                    if isinstance(value, bool):
+                        typ = "boolean"
+                    elif isinstance(value, int):
+                        typ = "integer"
+                    elif isinstance(value, float):
+                        typ = "number"
+                    elif isinstance(value, list):
+                        typ = "array"
+                    elif isinstance(value, dict):
+                        typ = "object"
+                    else:
+                        typ = "string"
+                    props[key] = {"type": typ}
+                    required.append(key)
+            by_name.setdefault(
+                name,
+                {
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": (
+                            "Previously available tool from conversation history."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": props,
+                            "required": required,
+                        },
+                    },
+                },
+            )
+    return list(by_name.values())
 
 
 @app.post(
@@ -6478,6 +7164,13 @@ async def create_response(
         )
 
     engine = get_engine()
+    _responses_has_media = _responses_input_has_multimodal(request.input)
+    if (
+        _responses_has_media
+        and not engine.is_mllm
+        and _loaded_omni_modalities() is None
+    ):
+        _reject_unsupported_multimodal("/v1/responses")
 
     # Convert Responses API input to chat messages
     # For MLLM models, preserve content arrays with image/video parts — MLLM engines
@@ -6507,7 +7200,9 @@ async def create_response(
     # re-detect locally here. This is cheap (cached registry lookup).
     try:
         from .model_config_registry import get_model_config_registry
-        _mc_dsv4_resp_msgs = get_model_config_registry().lookup(getattr(request, "model", "") or "")
+        _mc_dsv4_resp_msgs = get_model_config_registry().lookup(
+            _model_path or _model_name or getattr(request, "model", "") or ""
+        )
         _is_dsv4_resp_msgs = getattr(_mc_dsv4_resp_msgs, "family_name", "") == "deepseek_v4"
     except Exception:
         _is_dsv4_resp_msgs = False
@@ -6564,9 +7259,7 @@ async def create_response(
 
     # Build kwargs
     chat_kwargs = {
-        "max_tokens": request.max_output_tokens
-        if request.max_output_tokens is not None
-        else _default_max_tokens,
+        "max_tokens": _resolve_max_tokens(request.max_output_tokens, request.model),
         "temperature": _resolve_temperature(request.temperature),
         "top_p": _resolve_top_p(request.top_p),
     }
@@ -6734,9 +7427,25 @@ async def create_response(
                     )
             logger.debug(f"Added {len(all_tools)} tools (tool_choice={_tool_choice})")
 
+    if not _suppress_tools:
+        _suppress_tools = _suppress_tool_parsing_when_no_tools(
+            all_tools, _tool_choice, "Responses API"
+        )
+
     # Pass merged tools to engine
     if all_tools:
         chat_kwargs["tools"] = convert_tools_for_template(all_tools)
+    elif _is_dsv4_resp_msgs and any(
+        isinstance(m, dict) and m.get("role") == "tool" for m in messages
+    ):
+        historical_tools = _synthesize_tools_from_message_tool_calls(messages)
+        if historical_tools:
+            chat_kwargs["tools"] = historical_tools
+            logger.info(
+                "DSV4 (Responses): synthesized %d historical tool schema(s) "
+                "for tool-result continuation prompt context",
+                len(historical_tools),
+            )
 
     # Inject Harmony analysis prefix for GPT-OSS models (same as Chat Completions path)
     if isinstance(_reasoning_parser, GptOssReasoningParser):
@@ -7018,7 +7727,7 @@ async def create_response(
     final_text = (
         clean_output_text(cleaned_text)
         if cleaned_text
-        else ("" if tool_calls else (output.text or ""))
+        else ("" if tool_calls else (clean_output_text(content_for_parsing) if content_for_parsing else ""))
     )
     if final_text:
         output_items.append(
@@ -7113,9 +7822,7 @@ async def stream_completions_multi(
         try:
             gen_kwargs: dict = {
                 "prompt": prompt,
-                "max_tokens": request.max_tokens
-                if request.max_tokens is not None
-                else _default_max_tokens,
+                "max_tokens": _resolve_max_tokens(request.max_tokens, getattr(request, "model", "")),
                 "temperature": _resolve_temperature(request.temperature),
                 "top_p": _resolve_top_p(request.top_p),
                 "stop": request.stop,
@@ -7380,9 +8087,8 @@ async def stream_chat_completion(
     # Auto-enable tool call detection when client sends tools in request (#46),
     # even if server wasn't started with --enable-auto-tool-choice
     _request_has_tools = bool(getattr(request, "tools", None))
-    tool_call_active = (
-        _enable_auto_tool_choice or _tool_call_parser is not None or _request_has_tools
-    ) and not _suppress_tools
+    _stream_tools_available = bool(kwargs.get("tools")) or _request_has_tools
+    tool_call_active = _stream_tools_available and not _suppress_tools
 
     # Track token counts for usage reporting
     prompt_tokens = 0
@@ -8141,9 +8847,8 @@ async def stream_responses_api(
 
     _suppress_tools = getattr(request, "tool_choice", None) == "none"
     _request_has_tools = bool(getattr(request, "tools", None))
-    tool_call_active = (
-        _enable_auto_tool_choice or _tool_call_parser is not None or _request_has_tools
-    ) and not _suppress_tools
+    _stream_tools_available = bool(kwargs.get("tools")) or _request_has_tools
+    tool_call_active = _stream_tools_available and not _suppress_tools
     tool_call_buffering = False
 
     full_text = ""

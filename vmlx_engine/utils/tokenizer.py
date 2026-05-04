@@ -362,12 +362,43 @@ def _patch_mlx_lm_tokenizer_load() -> None:
                 if cfg_path.is_file():
                     _cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
                     if _cfg.get("model_type") == "deepseek_v4":
-                        # Minimal jinja that mirrors encoding_dsv4 enough for
-                        # `apply_chat_template` to produce a runnable prompt.
-                        # Advanced features (tools, reasoning_effort=max,
-                        # multi-turn drop_thinking) should go through our
-                        # dsv4_chat_encoder.apply_chat_template(..., model_path=)
-                        # directly — this fallback handles the generic case.
+                        # 2026-05-03 audit: only inject the fallback when the
+                        # bundle did NOT ship its own chat_template inside
+                        # tokenizer_config.json. Newer DSV4-Flash bundles
+                        # (JANGTQ2 / JANGTQ4 ≥ 2026-04-28) ship a complete
+                        # Jinja chat_template via `tokenizer_config.json::
+                        # chat_template` that handles `<｜begin▁of▁sentence｜>`,
+                        # `<｜User｜>`/`<｜Assistant｜>` turns, the
+                        # `enable_thinking` branch (`<think>` prefix when on,
+                        # `</think>` close when off), and historical assistant
+                        # turns with `reasoning_content`. Overriding it with
+                        # our minimal fallback caused multi-turn thinking-mode
+                        # incoherence: the fallback's `<｜Assistant｜>` prefix
+                        # has NEITHER `<think>` open NOR `</think>` close
+                        # when `enable_thinking=true`, so the model's
+                        # generation didn't start inside `<think>` and
+                        # produced unbounded reasoning prose without the
+                        # `</think>` boundary the parser needed. Honor the
+                        # bundle's template if present.
+                        _existing_tpl = getattr(inner, "chat_template", None)
+                        if isinstance(_existing_tpl, str) and _existing_tpl.strip():
+                            try:
+                                wrapper.has_chat_template = True
+                            except Exception:
+                                pass
+                            logger.info(
+                                f"mlx_lm patch: DSV4 bundle ships its own "
+                                f"chat_template for {mp.name} ({len(_existing_tpl)} chars) — "
+                                f"keeping bundle template; fallback NOT installed."
+                            )
+                            return wrapper
+
+                        # Bundle has no template (legacy / pre-2026-04-28 layout).
+                        # Use the encoding_adapter-derived fallback as a last
+                        # resort. NOTE: this fallback does NOT branch correctly
+                        # on `enable_thinking=true` (no `<think>` open), so
+                        # callers that need full fidelity should route through
+                        # `dsv4_chat_encoder.apply_chat_template(...)` directly.
                         _dsv4_fallback = (
                             "{{ bos_token if add_default_bos_token | default(true) else '' }}"
                             "{%- for m in messages -%}"
@@ -383,7 +414,9 @@ def _patch_mlx_lm_tokenizer_load() -> None:
                             "{%- endfor -%}"
                             "{%- if add_generation_prompt -%}"
                             "<｜Assistant｜>"
-                            "{%- if enable_thinking is not defined or enable_thinking == false -%}"
+                            "{%- if enable_thinking is defined and enable_thinking -%}"
+                            "<think>"
+                            "{%- else -%}"
                             "</think>"
                             "{%- endif -%}"
                             "{%- endif -%}"
@@ -395,7 +428,7 @@ def _patch_mlx_lm_tokenizer_load() -> None:
                             pass
                         logger.info(
                             f"mlx_lm patch: injected DSV4 fallback chat template "
-                            f"for {mp.name} (full-fidelity via dsv4_chat_encoder)"
+                            f"for {mp.name} (bundle had no embedded template)"
                         )
                         return wrapper
             except Exception as _dsv4_e:
@@ -789,6 +822,7 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
         # `jang_tools.load_jangtq.load_jangtq_model` which knows how to
         # ingest bf16 weights + the JANGTQ runtime sidecar and registers
         # the deepseek_v4 model class via `jang_tools.dsv4.mlx_register`.
+        _is_dsv4_bundle = False
         try:
             import json as _json
             _cfg_path = Path(local_model_path) / "config.json"
@@ -797,12 +831,16 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
                 _mt = _cfg.get("model_type")
                 _tc_mt = (_cfg.get("text_config") or {}).get("model_type")
                 if _mt == "deepseek_v4" or _tc_mt == "deepseek_v4":
+                    _is_dsv4_bundle = True
                     logger.info(
                         f"DSV4 bundle detected — routing through "
                         f"load_jangtq_dsv4 instead of generic JANG loader."
                     )
                     from ..loaders.load_jangtq_dsv4 import load_jangtq_dsv4_model
-                    _m, _t = load_jangtq_dsv4_model(local_model_path)
+                    _m, _t = load_jangtq_dsv4_model(
+                        local_model_path,
+                        skip_params_eval=True,
+                    )
                     _inject_chat_template_if_missing(_t, local_model_path)
                     return _m, _t
 
@@ -843,12 +881,23 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
                     _inject_chat_template_if_missing(_t, local_model_path)
                     return _m, _t
         except ImportError as _ie:
+            if _is_dsv4_bundle:
+                raise RuntimeError(
+                    "DSV4 dedicated loader is unavailable; refusing generic "
+                    "JANG fallback because it can load all shards eagerly and "
+                    "SIGKILL the process. Rebuild vMLX with current jang_tools."
+                ) from _ie
             logger.warning(
                 "DSV4 dedicated loader unavailable (%s) — falling back to "
                 "generic JANG loader.",
                 _ie,
             )
         except Exception as _e:
+            if _is_dsv4_bundle:
+                raise RuntimeError(
+                    "DSV4 dedicated loader failed; refusing generic JANG "
+                    f"fallback for {local_model_path}: {_e}"
+                ) from _e
             logger.debug("DSV4 routing pre-check failed: %s", _e)
 
         from .jang_loader import load_jang_model

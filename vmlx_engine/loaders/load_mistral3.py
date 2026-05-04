@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Tuple
 
@@ -63,13 +64,48 @@ def load_mistral3_model(model_path: str | Path) -> Tuple[Any, Any]:
     path = Path(model_path)
     logger.info("Loading Mistral-Medium-3.5 bundle: %s", path.name)
 
-    # 2026-05-02 follow-up: Mistral-Medium-3.5 JANGTQ now wired through
+    # 2026-05-03 production guard: the 2-bit dense JANGTQ build of
+    # Mistral-Medium-3.5 is structurally loadable, but it is not a
+    # production-coherent runtime today. Unlike MoE JANGTQ models
+    # (Qwen3.6 / MiniMax / Nemotron / Laguna), Mistral 3.5 applies
+    # dense codebook linears across 88 x 12288-hidden layers. The current
+    # decode-oriented TurboQuantLinear path stalls on full prefill and
+    # the 2-bit text output degenerates even in the Swift reference audit.
+    # Keep this fail-fast so the app does not present the bad bundle as a
+    # usable chat model. Set VMLX_ALLOW_UNSTABLE_MISTRAL35_JANGTQ=1 only
+    # for kernel/debug probes.
+    #
+    # 2026-05-02 follow-up: Mistral-Medium-3.5 JANGTQ is wired through
     # `jang_tools.jangrt.jangtq_hydrate` (jang-tools 2.5.12+). Older
-    # jang-tools without the helper surfaces here as a clean
+    # jang-tools without the helper still surfaces as a clean
     # NotImplementedError pointing the user at the alternative bundles.
     try:
         cfg_check = json.loads((path / "config.json").read_text())
         if cfg_check.get("weight_format") == "mxtq" or "mxtq_bits" in cfg_check:
+            bits_cfg = cfg_check.get("mxtq_bits")
+            text_bits = (
+                bits_cfg.get("text_decoder")
+                if isinstance(bits_cfg, dict)
+                else bits_cfg
+            )
+            text_model_type = (cfg_check.get("text_config") or {}).get("model_type")
+            if (
+                text_model_type == "ministral3"
+                and isinstance(text_bits, int)
+                and text_bits <= 2
+                and os.environ.get("VMLX_ALLOW_UNSTABLE_MISTRAL35_JANGTQ") != "1"
+            ):
+                raise NotImplementedError(
+                    "Mistral-Medium-3.5 JANGTQ2 is not a supported production "
+                    "runtime in vMLX. The bundle loads structurally but the "
+                    "2-bit dense TurboQuant text decoder stalls on full prefill "
+                    "and produces degenerate text. Use the validated MXFP4 "
+                    "bundle instead: "
+                    "/Volumes/EricsLLMDrive/jangq-ai/OsaurusAI/"
+                    "Mistral-Medium-3.5-128B-mxfp4. To debug the unstable "
+                    "JANGTQ path anyway, set "
+                    "VMLX_ALLOW_UNSTABLE_MISTRAL35_JANGTQ=1."
+                )
             try:
                 from jang_tools.jangrt.jangtq_hydrate import hydrate_jangtq  # noqa: F401
             except ImportError as _ie:

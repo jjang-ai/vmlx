@@ -73,14 +73,25 @@ echo "==> Installing mlx-audio (STT/TTS)..."
 # ensures every DMG ships with whatever DSV4 runtime the engine actually
 # needs. Falls back to PyPI if the local path doesn't exist (CI builds).
 echo "==> Installing vmlx-engine + jang_tools (local source)..."
-"$PYTHON" -m pip install --no-deps "vmlx==1.4.3"
+# Install vmlx-engine from local source so the bundle ships current fixes,
+# not the lagging PyPI release. Falls back to PyPI if the local path is
+# absent (CI builds). 2026-05-03: previous pin to PyPI vmlx==1.4.3
+# silently overwrote shipped F1-F13 fixes on every rebuild.
+VMLX_LOCAL="$(cd "$(dirname "$0")/../.." && pwd)"
+if [ -f "$VMLX_LOCAL/pyproject.toml" ] && [ -d "$VMLX_LOCAL/vmlx_engine" ]; then
+  echo "    using local vmlx at $VMLX_LOCAL"
+  "$PYTHON" -m pip install --no-deps "$VMLX_LOCAL"
+else
+  echo "    local vmlx missing, falling back to PyPI"
+  "$PYTHON" -m pip install --no-deps "vmlx>=1.5.9"
+fi
 JANG_LOCAL="$HOME/jang/jang-tools"
 if [ -f "$JANG_LOCAL/pyproject.toml" ]; then
   echo "    using local jang-tools at $JANG_LOCAL"
   "$PYTHON" -m pip install --no-deps "$JANG_LOCAL"
 else
   echo "    local jang-tools missing, falling back to PyPI"
-  "$PYTHON" -m pip install --no-deps "jang>=2.5.11"
+  "$PYTHON" -m pip install --no-deps "jang>=2.5.15"
 fi
 
 # Verify it works
@@ -111,12 +122,21 @@ find "$SITE" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
 find "$SITE" -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
 
 # Packages not needed at runtime (transitive deps / dev-only tools)
-# torch/torchvision: vmlx-engine uses MLX, not PyTorch. torch's bundled copy is
-# broken (missing torchgen) and causes ModuleNotFoundError on startup.
-# transformers gracefully degrades without torch via is_torch_available().
-rm -rf "$SITE/torch" "$SITE/torch-"*.dist-info 2>/dev/null || true
-rm -rf "$SITE/torchvision" "$SITE/torchvision-"*.dist-info 2>/dev/null || true
-rm -rf "$SITE/torchgen" "$SITE/torchgen-"*.dist-info 2>/dev/null || true
+# torch/torchvision/torchgen: KEEP (2026-05-03 reversal of earlier strip).
+# Earlier comment claimed "vmlx-engine uses MLX, not PyTorch" — true for the
+# core LLM path, but VL bundles tell another story:
+#   - Nemotron-Omni Stage-1 (default) bridges PT encoders to MLX LLM via
+#     `jang_tools.nemotron_omni_chat.OmniChat` which calls
+#     `AutoModel.from_pretrained(..., torch_dtype=bfloat16)`.
+#   - Qwen3-VL / Qwen3.5-VL: transformers loads `Qwen3VLVideoProcessor`
+#     eagerly via `AutoProcessor.from_pretrained`; that class hard-requires
+#     torch+torchvision and raises a confusing `ImportError` upstream
+#     that gets re-wrapped as "mlx-vlm is required" in mllm.py.
+#   - mlx_vlm itself imports torch helpers in some processor paths.
+# Stripping torch broke every VL bundle the moment a video processor or
+# PT encoder loaded. Keep them. Cost: ~700 MB extra bundle weight.
+# pyproject.toml already declares them as hard deps (`torch>=2.3.0`,
+# `torchvision>=0.18.0`) — pip install -e . pulls them in cleanly.
 # soundfile: KEEP. Required for Nemotron-3-Nano-Omni audio path
 # (jang_tools.nemotron_omni_chat → ParakeetEncoder mel features).
 # Modern pip install ships libsndfile_arm64.dylib alongside _soundfile_data,
@@ -219,7 +239,67 @@ try:
         print('  Already patched or structure changed: qwen3_5/language.py')
 except FileNotFoundError:
     print('  Skipped: qwen3_5/language.py not found (model not in this mlx-vlm version)')
+	"
+	
+# --- Patch: mlx_vlm/models/gemma4/vision.py (Gemma 4 multi-image input) ---
+# mlxstudio#88: some Gemma 4 processors return `pixel_values` as a Python
+# list containing numpy arrays. mlx.concatenate requires mx.array inputs.
+echo "  Patching mlx_vlm/models/gemma4/vision.py (pixel_values list coercion)..."
+"$PYTHON" -c "
+path = '$SITE/mlx_vlm/models/gemma4/vision.py'
+try:
+    with open(path, 'r') as f:
+        content = f.read()
+    old = '''    def __call__(self, pixel_values: mx.array) -> mx.array:
+        if isinstance(pixel_values, list):
+            pixel_values = mx.concatenate(pixel_values, axis=0)
+
+        B, C, H, W = pixel_values.shape'''
+    new = '''    def __call__(self, pixel_values: mx.array) -> mx.array:
+        if isinstance(pixel_values, list):
+            # mlxstudio#88: multi-image processors can hand us a Python list
+            # containing numpy arrays instead of MLX arrays. Upstream
+            # mx.concatenate only accepts mx.array inputs, so coerce each
+            # element before concatenating.
+            pixel_values = [
+                v if isinstance(v, mx.array) else mx.array(v)
+                for v in pixel_values
+            ]
+            pixel_values = mx.concatenate(pixel_values, axis=0)
+        elif not isinstance(pixel_values, mx.array):
+            pixel_values = mx.array(pixel_values)
+
+        B, C, H, W = pixel_values.shape'''
+    if old in content:
+        content = content.replace(old, new)
+        with open(path, 'w') as f:
+            f.write(content)
+        print('  Patched: gemma4 vision pixel_values list coercion')
+    elif 'mlxstudio#88' in content and 'isinstance(v, mx.array)' in content:
+        print('  Already patched: gemma4 vision pixel_values list coercion')
+    else:
+        print('  WARNING: gemma4 vision patch target not found')
+except FileNotFoundError:
+    print('  Skipped: gemma4 vision.py not found')
 "
+
+# --- Patch: mlx_lm/models/deepseek_v3.py (Kimi K2.6 fp32 MLA decode) ---
+# Kimi K2.6 inherits the DeepSeek V3 MLA path. The bundled mlx-lm source
+# must contain the JANG fp32 L==1 SDPA fix at build time; relying on the
+# runtime installer is intentionally refused for signed vMLX bundles.
+echo "  Patching mlx_lm/models/deepseek_v3.py (Kimi K2.6 fp32 MLA decode)..."
+KIMI_PATCH_SRC="$HOME/jang/research/deepseek_v3_patched.py"
+KIMI_PATCH_DST="$SITE/mlx_lm/models/deepseek_v3.py"
+if [ -f "$KIMI_PATCH_SRC" ] && [ -f "$KIMI_PATCH_DST" ]; then
+  cp "$KIMI_PATCH_SRC" "$KIMI_PATCH_DST"
+  mkdir -p "$BUNDLE_DIR/python/lib/python3.12/research"
+  cp "$KIMI_PATCH_SRC" "$BUNDLE_DIR/python/lib/python3.12/research/deepseek_v3_patched.py"
+  echo "  Patched: deepseek_v3.py Kimi K2.6 fp32 MLA decode"
+elif [ -f "$KIMI_PATCH_DST" ] && grep -q "JANG fast fix" "$KIMI_PATCH_DST"; then
+  echo "  Already patched: deepseek_v3.py Kimi K2.6 fp32 MLA decode"
+else
+  echo "  WARNING: Kimi K2.6 deepseek_v3 patch source or target missing"
+fi
 
 # --- Patch: mlx_lm/models/ssm.py (Mamba/Nemotron-H hybrid state space model) ---
 # Fix 1: mx.clip(dt, ...) upper-clips dt values, corrupting Mamba state transitions.

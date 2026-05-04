@@ -480,9 +480,14 @@ class MLLMScheduler:
                     cache_dir = self.config.block_disk_cache_dir
                     if cache_dir is None and self.config.model_path:
                         import hashlib
-                        # Include quant config in hash to prevent cross-config cache poisoning
+                        # Include quant config and paged-cache schema in hash
+                        # to prevent cross-config / stale L2 cache poisoning.
                         quant_tag = self.config.kv_cache_quantization or "none"
-                        block_scope_key = f"{self.config.model_path}:quant={quant_tag}"
+                        from .prefix_cache import PAGED_CACHE_SCHEMA_VERSION
+                        block_scope_key = (
+                            f"{self.config.model_path}:quant={quant_tag}"
+                            f":paged_cache_schema={PAGED_CACHE_SCHEMA_VERSION}"
+                        )
                         model_hash = hashlib.sha256(
                             block_scope_key.encode()
                         ).hexdigest()[:12]
@@ -584,7 +589,11 @@ class MLLMScheduler:
                         n_layers = getattr(_cfg, 'num_hidden_layers', 0)
                         if n_layers:
                             break
-                scope_key = f"{self.config.model_path}:quant={quant_tag}:layers={n_layers}"
+                from .prefix_cache import PAGED_CACHE_SCHEMA_VERSION
+                scope_key = (
+                    f"{self.config.model_path}:quant={quant_tag}:layers={n_layers}"
+                    f":prefix_cache_schema={PAGED_CACHE_SCHEMA_VERSION}"
+                )
                 model_hash = hashlib.sha256(
                     scope_key.encode()
                 ).hexdigest()[:12]
