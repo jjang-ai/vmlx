@@ -31,7 +31,11 @@ from .block_disk_store import BlockDiskStore
 from .disk_cache import DiskCacheManager
 from .memory_cache import MemoryAwarePrefixCache, MemoryCacheConfig
 from .paged_cache import PagedCacheManager
-from .prefix_cache import BlockAwarePrefixCache, PrefixCacheManager
+from .prefix_cache import (
+    BlockAwarePrefixCache,
+    PAGED_CACHE_SCHEMA_VERSION,
+    PrefixCacheManager,
+)
 from .prompt_lookup import NgramIndex, find_draft_tokens, pld_stats
 from .request import Request, RequestOutput, RequestStatus, SamplingParams
 from .mllm_batch_generator import HybridSSMStateCache, _fix_hybrid_cache
@@ -273,6 +277,17 @@ class Scheduler:
         self.tokenizer = tokenizer
         self.config = config or SchedulerConfig()
 
+        # Loader thread executor — every step()/BatchGenerator call must
+        # run on the SAME thread that loaded the model, because MLX Metal
+        # streams are thread-local. JANGTQ DSV4-Flash (and other JANGTQ
+        # bundles) allocate kernels on the loader thread; running step()
+        # on the asyncio event-loop thread crashes with
+        # `RuntimeError: There is no Stream(gpu, N) in current thread.`
+        # MLLMScheduler has had this since 2026-04-25 (see _step_executor
+        # there). Engine_core._engine_loop reads this attribute and, when
+        # present, dispatches scheduler.step() through it.
+        self._step_executor = self.config.step_executor
+
         # Detect if tokenizer is a processor (MLLM) and get the actual tokenizer
         self._actual_tokenizer = self._get_actual_tokenizer(tokenizer)
 
@@ -303,8 +318,10 @@ class Scheduler:
         self._ewma_ttft: float = 0.0
         self._ttft_alpha: float = 0.1
 
-        # Track if model uses mixed cache types (KVCache + MambaCache)
+        # Track if model uses mixed cache types. DSV4's DeepseekV4Cache is a
+        # first-class composite attention cache, not an SSM companion cache.
         self._is_hybrid = self._is_hybrid_model(model)
+        self._uses_dsv4_cache = self._model_uses_dsv4_cache(model)
         self._tq_active = getattr(model, "make_cache", None) and getattr(
             model.make_cache, "__name__", ""
         ) in ("_tq_make_cache", "_turboquant_make_cache")
@@ -362,7 +379,7 @@ class Scheduler:
         self._hybrid_kv_positions: Optional[List[int]] = None
         self._hybrid_num_layers: Optional[int] = None
         self._ssm_state_cache: Optional[HybridSSMStateCache] = None
-        if self._is_hybrid and hasattr(model, "make_cache"):
+        if self._is_hybrid and not self._uses_dsv4_cache and hasattr(model, "make_cache"):
             try:
                 from mlx_lm.models.cache import KVCache as _KVC
 
@@ -532,6 +549,14 @@ class Scheduler:
                     "but prefix cache is disabled — quantization has no effect without prefix cache"
                 )
 
+        if self._uses_dsv4_cache and self.config.use_paged_cache:
+            logger.info(
+                "DSV4 DeepseekV4Cache-aware paged prefix cache enabled — "
+                "terminal blocks store full SWA+CSA/HSA composite state and "
+                "block disk L2 uses deepseek_v4_v6 nested-state serialization "
+                "with N-1 prompt-token keys."
+            )
+
         if self.config.enable_prefix_cache:
             logger.info(
                 "Prefix cache requires continuous batching — enabled automatically"
@@ -544,10 +569,22 @@ class Scheduler:
                     if cache_dir is None and self.config.model_path:
                         import hashlib
 
-                        # Include quant config in hash to prevent cross-config cache poisoning
-                        # (same fix as prompt disk cache — C3)
+                        # Include quant + runtime cache shape in hash to prevent
+                        # cross-config cache poisoning (same fix as prompt disk
+                        # cache — C3, extended for DSV4 tri-mode cache schema).
                         quant_tag = self.config.kv_cache_quantization or "none"
-                        block_scope_key = f"{self.config.model_path}:quant={quant_tag}"
+                        dsv4_scope = ""
+                        if self._uses_dsv4_cache:
+                            dsv4_scope = (
+                                f":dsv4_long_ctx={os.environ.get('DSV4_LONG_CTX', '0')}"
+                                f":dsv4_pool_quant={os.environ.get('DSV4_POOL_QUANT', '')}"
+                                ":dsv4_cache_schema=deepseek_v4_v6"
+                            )
+                        block_scope_key = (
+                            f"{self.config.model_path}:quant={quant_tag}"
+                            f":paged_cache_schema={PAGED_CACHE_SCHEMA_VERSION}"
+                            f"{dsv4_scope}"
+                        )
                         model_hash = hashlib.sha256(
                             block_scope_key.encode()
                         ).hexdigest()[:12]
@@ -672,6 +709,7 @@ class Scheduler:
                             break
                 scope_key = (
                     f"{self.config.model_path}:quant={quant_tag}:layers={n_layers}"
+                    f":prefix_cache_schema={PAGED_CACHE_SCHEMA_VERSION}"
                 )
                 model_hash = hashlib.sha256(scope_key.encode()).hexdigest()[:12]
                 model_slug = os.path.basename(self.config.model_path.rstrip("/"))
@@ -735,6 +773,19 @@ class Scheduler:
         return False
 
     @staticmethod
+    def _model_uses_dsv4_cache(model: Any) -> bool:
+        """Return True when model.make_cache() contains DeepseekV4Cache."""
+        if not hasattr(model, "make_cache"):
+            return False
+        try:
+            return any(
+                "DeepseekV4Cache" in type(c).__name__
+                for c in (model.make_cache() or [])
+            )
+        except Exception:
+            return False
+
+    @staticmethod
     def _is_hybrid_model(model: Any) -> bool:
         """Check if model uses non-standard cache types requiring paged cache.
 
@@ -759,15 +810,32 @@ class Scheduler:
             }
             if cache_types and cache_types == kv_types:
                 return False
-            # DeepSeek V4 `DeepseekV4Cache` wraps a RotatingKVCache internally
-            # and exposes the standard KV surface (update_and_fetch / make_mask
-            # / offset). The compressor + indexer state buffers it carries are
-            # cumulative-but-recomputable (unlike true SSM state) — treat as
-            # plain KV so the paged / memory-aware / disk L2 cache paths work
-            # identically to DeepSeek V3.
+            # `DeepseekV4Cache` is NOT pure KV. It wraps a RotatingKVCache as
+            # `self.local` AND carries `compressor_state` + `indexer_state` pool
+            # buffers (HSA + CSA pool accumulators) that are cumulative across
+            # the entire prefill window. `_truncate_cache_to_prompt_length`
+            # only calls `.trim(n)` on the inner local KV — the pool buffers
+            # pass through unchanged, accumulating output-side artifacts on
+            # multi-turn → polite-assistant attractor leaks across turns →
+            # chat-loop bug observed on /v1/chat/completions.
+            #
+            # Bench harness (SimpleEngine) doesn't reuse caches across requests,
+            # so MMLU is clean at the same rep_penalty. Chat path
+            # (BatchedEngine + scheduler + paged cache reuse) hits the
+            # contamination on every multi-turn.
+            #
+            # The previous `non_kv.discard("DeepseekV4Cache")` line treated
+            # DSV4 as plain KV, which routed it to the memory-aware cache
+            # truncation path that doesn't know about pool buffers. Removing
+            # the discard lets DSV4 fall through to the hybrid cumulative-
+            # state path, where the `is_complete=False` + async re-derive
+            # flow (scheduler.py:3675 onward) handles cumulative state by
+            # rejecting post-output snapshots and forcing a clean prompt-
+            # boundary re-prefill on next-turn fetch. Same shape as the
+            # qwen3_5/qwen3_5_moe (GatedDeltaNet) and nemotron_h (Mamba2)
+            # fix.
             non_kv = cache_types - kv_types
             non_kv.discard("CacheList")
-            non_kv.discard("DeepseekV4Cache")
             return bool(non_kv)
         except Exception as e:
             logger.warning(f"make_cache() failed during hybrid detection: {e}")
@@ -1577,8 +1645,10 @@ class Scheduler:
         ):
             from mlx_lm.sample_utils import make_logits_processors
 
+            _rep_context_size = 512 if self._uses_dsv4_cache else 20
             logits_processors = make_logits_processors(
                 repetition_penalty=sampling_params.repetition_penalty,
+                repetition_context_size=_rep_context_size,
             )
 
         stop_tokens = self._get_stop_tokens()
@@ -1873,6 +1943,34 @@ class Scheduler:
             if isinstance(layer_cache, dict):
                 truncated.append(layer_cache)
                 continue
+            cls_name = type(layer_cache).__name__
+            if "DeepseekV4Cache" in cls_name:
+                try:
+                    from jang_tools.dsv4.mlx_model import DeepseekV4Cache
+
+                    local = getattr(layer_cache, "local", None)
+                    sliding_window = int(getattr(local, "max_size", 128) or 128)
+                    compress_ratio = getattr(layer_cache, "compress_ratio", None)
+                    new_cache = DeepseekV4Cache(
+                        sliding_window=sliding_window,
+                        compress_ratio=compress_ratio,
+                    )
+                    new_cache.state = layer_cache.state
+                    try:
+                        new_cache.meta_state = layer_cache.meta_state
+                    except Exception:
+                        pass
+                    current_len = int(getattr(layer_cache, "offset", 0) or 0)
+                    to_trim = max(0, current_len - target_len)
+                    if to_trim:
+                        new_cache.trim(to_trim)
+                    truncated.append(new_cache)
+                    continue
+                except Exception as e:
+                    logger.debug(
+                        f"DeepseekV4Cache prompt truncation failed: {e}"
+                    )
+                    return None
             if hasattr(layer_cache, "keys") and layer_cache.keys is not None:
                 # Positional cache: truncate to target length
                 try:
@@ -1911,7 +2009,6 @@ class Scheduler:
                         # Standard KVCache / RotatingKVCache: keys/values are tensors
                         from mlx_lm.models.cache import KVCache
 
-                        cls_name = type(layer_cache).__name__
                         if "Rotating" in cls_name:
                             try:
                                 from mlx_lm.models.cache import RotatingKVCache
@@ -2184,13 +2281,25 @@ class Scheduler:
                         meta = (meta[0] if meta else "0", str(g), str(b))
 
                     class_counts[cls_name] = class_counts.get(cls_name, 0) + 1
-                    extracted.append(
-                        {
-                            "state": state,
-                            "meta_state": meta,
-                            "class_name": cls_name,
-                        }
-                    )
+                    entry = {
+                        "state": state,
+                        "meta_state": meta,
+                        "class_name": cls_name,
+                    }
+                    if "DeepseekV4Cache" in cls_name:
+                        entry["compress_ratio"] = getattr(
+                            layer_cache, "compress_ratio", None
+                        )
+                        try:
+                            entry["sliding_window"] = getattr(
+                                getattr(layer_cache, "local", None),
+                                "max_size",
+                                None,
+                            )
+                        except Exception:
+                            entry["sliding_window"] = None
+                        entry["pool_quant"] = False
+                    extracted.append(entry)
                 else:
                     logger.debug(
                         f"Layer {i} ({type(layer_cache).__name__}) lacks state/meta_state"
@@ -2273,6 +2382,22 @@ class Scheduler:
                 "Cannot schedule a request with no input tokens."
             )
 
+        if self._uses_dsv4_cache:
+            try:
+                _dsv4_max_prefill = int(os.environ.get("DSV4_MAX_PREFILL_TOKENS", "32768"))
+            except (TypeError, ValueError):
+                _dsv4_max_prefill = 32768
+            if _dsv4_max_prefill > 0 and len(request.prompt_token_ids) > _dsv4_max_prefill:
+                raise ValueError(
+                    "DeepSeek V4 Flash JANGTQ long-prefill guard: prompt has "
+                    f"{len(request.prompt_token_ids)} tokens, max safe prefill is "
+                    f"{_dsv4_max_prefill}. The Python DSV4 path uses chunked "
+                    "prefill for SWA+CSA/HSA cache state, but very large prompts "
+                    "still scale with accumulated compressor/indexer pool work. "
+                    "Set DSV4_MAX_PREFILL_TOKENS=0 to disable this production "
+                    "guard after validating the workload on this machine."
+                )
+
         # Per-request cache bypass (from cache_salt / skip_prefix_cache on the
         # API request). When set, skip EVERY prefix cache lookup below AND
         # ensure no store happens at the end. This is the hard guarantee that
@@ -2324,7 +2449,7 @@ class Scheduler:
                     else:
                         # Hybrid SSM models: combine reconstructed KV blocks
                         # with SSM companion state for a full cache hit.
-                        if self._is_hybrid:
+                        if self._is_hybrid and not self._uses_dsv4_cache:
                             try:
                                 # Fetch SSM companion state.
                                 # MUST use block_table.num_tokens (the KV block
@@ -2524,7 +2649,11 @@ class Scheduler:
                             request.shared_prefix_blocks = len(block_table.block_ids)
                             request.remaining_tokens = remaining
                             if not getattr(request, "_cache_detail", ""):
-                                request._cache_detail = "paged"
+                                request._cache_detail = (
+                                    "paged+dsv4"
+                                    if self._uses_dsv4_cache
+                                    else "paged"
+                                )
                             logger.info(
                                 f"Request {request.request_id}: paged cache hit, "
                                 f"{request.cached_tokens} tokens in "
@@ -2997,10 +3126,22 @@ class Scheduler:
             # completely, put the request back in the waiting queue.
             try:
                 try:
+                    insert_kwargs = {}
+                    if (
+                        self.batch_generator.__class__.__name__
+                        == "DSV4BatchGenerator"
+                    ):
+                        # DSV4's custom generator applies repetition penalty
+                        # itself during its pinned-stream decode loop. Pass the
+                        # full original prompt so prefix-cache hit paths and
+                        # normal prefill paths use the same logits-processor
+                        # context instead of only the re-fed tail token.
+                        insert_kwargs["all_tokens"] = [request.prompt_token_ids]
                     uids = self.batch_generator.insert(
                         [tokens_to_process],
                         max_tokens=[request.sampling_params.max_tokens],
                         caches=[cache_to_use] if cache_to_use else None,
+                        **insert_kwargs,
                     )
                 except Exception as e:
                     # Cache-related insertion failure - retry without cache
@@ -3014,10 +3155,17 @@ class Scheduler:
                         request.cached_tokens = 0
                         request.remaining_tokens = request.prompt_token_ids
                         tokens_to_process = request.prompt_token_ids
+                        insert_kwargs = {}
+                        if (
+                            self.batch_generator.__class__.__name__
+                            == "DSV4BatchGenerator"
+                        ):
+                            insert_kwargs["all_tokens"] = [request.prompt_token_ids]
                         uids = self.batch_generator.insert(
                             [tokens_to_process],
                             max_tokens=[request.sampling_params.max_tokens],
                             caches=None,
+                            **insert_kwargs,
                         )
                     else:
                         raise
@@ -3473,10 +3621,31 @@ class Scheduler:
             # guaranteed fresh execution, so nothing gets stored either.
             if request is not None and getattr(request, "_bypass_prefix_cache", False):
                 _skip_cache_store = True
+            if (
+                request is not None
+                and self._uses_dsv4_cache
+                and request.status == RequestStatus.FINISHED_LENGTH_CAPPED
+            ):
+                # DSV4 DeepseekV4Cache includes CSA/HSA pool state in addition
+                # to local SWA KV. After a length-capped decode, the live cache
+                # has advanced through generated tokens. Trimming positional KV
+                # back to the prompt boundary is not enough to prove the
+                # compressor/indexer pool state is also at the prompt boundary,
+                # and live exact-repeat tests showed those stores can produce
+                # immediate stop on cache hit. Do not let capped generations
+                # donate prefix blocks; clean stop requests still store normally.
+                _skip_cache_store = True
+            # No DSV4-specific short-prompt skip. Other families store paged
+            # cache at any prompt length and rely on the standard LRU
+            # eviction (max_blocks budget) to bound memory. The earlier
+            # 512-token threshold was based on a gigabyte/entry estimate
+            # that turned out to be wrong — DSV4 composite state per
+            # prompt is tens of MB, not GB, with the v6 nested-state
+            # schema. Treat DSV4 like every other model.
             if _skip_cache_store and request is not None:
                 logger.debug(
                     f"Skipping cache store for {request_id}: "
-                    f"short output ({_output_len} tokens), likely single-turn"
+                    f"output_len={_output_len}, status={request.status.name}"
                 )
                 if hasattr(request, "_extracted_cache"):
                     request._extracted_cache = None
@@ -3507,6 +3676,7 @@ class Scheduler:
             # Future fix: async re-derive or capture-during-prefill.
             if (
                 self._is_hybrid
+                and not self._uses_dsv4_cache
                 and self._ssm_state_cache is not None
                 and request is not None
                 and request.prompt_token_ids
@@ -3707,6 +3877,45 @@ class Scheduler:
                                             break
                                         state = sd.get("state")
                                         cls_name = sd.get("class_name", "")
+                                        if "DeepseekV4Cache" in cls_name and state is not None:
+                                            try:
+                                                from jang_tools.dsv4.mlx_model import (
+                                                    DeepseekV4Cache,
+                                                )
+
+                                                cache = DeepseekV4Cache(
+                                                    sliding_window=int(
+                                                        sd.get("sliding_window")
+                                                        or 128
+                                                    ),
+                                                    compress_ratio=sd.get(
+                                                        "compress_ratio"
+                                                    ),
+                                                )
+                                                cache.state = state
+                                                try:
+                                                    cache.meta_state = sd.get(
+                                                        "meta_state", ()
+                                                    )
+                                                except Exception:
+                                                    pass
+                                                current_len = int(
+                                                    getattr(cache, "offset", 0) or 0
+                                                )
+                                                to_trim = max(0, current_len - target)
+                                                if to_trim:
+                                                    cache.trim(to_trim)
+                                                truncated_dicts.append(
+                                                    {
+                                                        **sd,
+                                                        "state": cache.state,
+                                                        "meta_state": cache.meta_state,
+                                                    }
+                                                )
+                                                continue
+                                            except Exception:
+                                                trunc_ok = False
+                                                break
                                         if (
                                             state is None
                                             or cls_name == "CacheList"
@@ -3789,17 +3998,35 @@ class Scheduler:
                                         truncated_dicts.append(sd)
                                     if trunc_ok and truncated_dicts:
                                         cache_data = truncated_dicts
+                            # Paged prefix cache entries must be keyed by the
+                            # same token count represented by cache_data:
+                            # prompt_len - 1. The generator re-feeds the last
+                            # prompt token on hit to obtain first-token logits.
+                            #
+                            # Previously this path stored a truncated N-1
+                            # cache under a full-N token hash. Exact hits then
+                            # reported zero remaining tokens; DSV4BatchGenerator
+                            # correctly refused to decode without a kickoff
+                            # token and returned an empty/stop response. This
+                            # is especially visible with block disk L2 because
+                            # full-key stale blocks survive process restarts.
+                            store_tokens = (
+                                prompt_tokens[:-1]
+                                if len(prompt_tokens) > 1
+                                else prompt_tokens
+                            )
                             self.block_aware_cache.store_cache(
                                 request_id,
-                                prompt_tokens,
+                                store_tokens,
                                 cache_data,
                                 cache_type=self._pick_cache_type_for_request(request),
                             )
                             logger.info(
                                 f"Stored paged cache for request {request_id} "
-                                f"({len(prompt_tokens)} prompt tokens, "
+                                f"({len(store_tokens)} cache-key tokens from "
+                                f"{len(prompt_tokens)} prompt tokens, "
                                 f"{len(request._extracted_cache)} layers, "
-                                f"cache truncated to {len(prompt_tokens) - 1} tokens)"
+                                f"cache truncated to {max(len(prompt_tokens) - 1, 0)} tokens)"
                             )
                         except Exception as e:
                             logger.warning(
