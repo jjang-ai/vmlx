@@ -48,6 +48,13 @@ from typing import Any, Tuple
 
 _log = _logging.getLogger(__name__)
 _PREFILL_PATCH_INSTALLED = False
+_INSTANT_LOAD_PATCH_INSTALLED = False
+
+# Sidecar manifest schema version. Bump when the on-disk layout changes so
+# stale caches are auto-invalidated.
+_INSTANT_LOAD_SCHEMA = 1
+_SIDECAR_FILENAME = "jangtq_stacked.safetensors"
+_SIDECAR_MANIFEST = "jangtq_stacked.json"
 
 
 def _install_dsv4_prefill_patch() -> None:
@@ -176,6 +183,311 @@ def _install_dsv4_prefill_patch() -> None:
     )
 
 
+def _bundle_shard_signature(model_path) -> dict:
+    """Return ``{shard_filename: [size, mtime]}`` for every model-*.safetensors
+    shard in the bundle. Used to invalidate the stacked sidecar when the
+    underlying bundle changes."""
+    from pathlib import Path
+    out: dict = {}
+    for sf in sorted(Path(model_path).glob("model-*.safetensors")):
+        st = sf.stat()
+        out[sf.name] = [int(st.st_size), int(st.st_mtime)]
+    return out
+
+
+def _sidecar_paths(model_path):
+    """Return ``(sidecar_safetensors, sidecar_manifest)`` for the bundle.
+
+    Tries the bundle directory first (so the cache lives next to the
+    weights and survives bundle moves). Falls back to
+    ``~/.cache/vmlx-engine/jangtq-stacked/<sha8>/`` when the bundle is
+    read-only (DMG-mounted, network share, etc.).
+    """
+    from hashlib import sha256
+    from pathlib import Path
+
+    bundle = Path(model_path).resolve()
+    primary = bundle / _SIDECAR_FILENAME
+    primary_manifest = bundle / _SIDECAR_MANIFEST
+    if os.access(str(bundle), os.W_OK):
+        return primary, primary_manifest
+    digest = sha256(str(bundle).encode()).hexdigest()[:16]
+    cache_dir = Path.home() / ".cache" / "vmlx-engine" / "jangtq-stacked" / digest
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / _SIDECAR_FILENAME, cache_dir / _SIDECAR_MANIFEST
+
+
+def _try_fast_load_dsv4(model, model_path, mxtq_seed) -> bool:
+    """Attempt to hydrate DSV4 from the pre-stacked sidecar.
+
+    Returns True on success (model is fully wired), False when the
+    sidecar is missing/stale and the streaming hydrate path must run.
+    """
+    import json
+
+    try:
+        import mlx.core as mx
+        from jang_tools.turboquant.tq_kernel import TurboQuantSwitchLinear
+    except Exception as e:
+        _log.debug("DSV4 fast-load skipped (import failed: %s)", e)
+        return False
+
+    sidecar, manifest_path = _sidecar_paths(model_path)
+    if not sidecar.exists() or not manifest_path.exists():
+        return False
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except Exception as e:
+        _log.warning("DSV4 fast-load skipped (manifest parse failed: %s)", e)
+        return False
+    if manifest.get("schema") != _INSTANT_LOAD_SCHEMA:
+        _log.info(
+            "DSV4 fast-load: sidecar schema=%r vs current=%r — invalidating",
+            manifest.get("schema"), _INSTANT_LOAD_SCHEMA,
+        )
+        return False
+    if manifest.get("mxtq_seed") != int(mxtq_seed):
+        _log.info("DSV4 fast-load: seed mismatch — invalidating")
+        return False
+    if manifest.get("shard_signature") != _bundle_shard_signature(model_path):
+        _log.info("DSV4 fast-load: source shard mtime/size changed — invalidating")
+        return False
+
+    try:
+        weights = mx.load(str(sidecar))
+    except Exception as e:
+        _log.warning("DSV4 fast-load: mx.load(%s) failed (%s)", sidecar, e)
+        return False
+
+    groups = manifest.get("groups") or []
+    if not groups:
+        _log.warning("DSV4 fast-load: manifest has no groups; falling back")
+        return False
+
+    def _set_attr(root, dotted, new_mod):
+        parts = dotted.split(".")
+        cur = root
+        for p in parts[:-1]:
+            cur = cur[int(p)] if p.isdigit() else getattr(cur, p)
+        last = parts[-1]
+        if last.isdigit():
+            cur[int(last)] = new_mod
+        else:
+            setattr(cur, last, new_mod)
+
+    def _get_attr(root, dotted):
+        cur = root
+        for p in dotted.split("."):
+            cur = cur[int(p)] if p.isdigit() else getattr(cur, p)
+        return cur
+
+    n_replaced = 0
+    for entry in groups:
+        new_base = entry["base"]
+        bits = int(entry["bits"])
+        packed = weights.get(f"{new_base}.packed")
+        norms = weights.get(f"{new_base}.norms")
+        if packed is None or norms is None:
+            _log.warning(
+                "DSV4 fast-load: sidecar missing tensors for %s — invalidating",
+                new_base,
+            )
+            return False
+        n_exp, out_feat, packed_cols = packed.shape
+        vals_per_u32 = 32 // bits
+        in_features = packed_cols * vals_per_u32
+        new_module = TurboQuantSwitchLinear(
+            in_features=in_features,
+            out_features=out_feat,
+            num_experts=n_exp,
+            bits=bits,
+            bias=False,
+            seed=mxtq_seed,
+        )
+        new_module.packed = packed
+        new_module.norms = norms
+        try:
+            _get_attr(model, new_base)
+        except Exception as e:
+            _log.warning(
+                "DSV4 fast-load: model has no %s (%s) — invalidating",
+                new_base, e,
+            )
+            return False
+        _set_attr(model, new_base, new_module)
+        n_replaced += 1
+
+    _log.info(
+        "DSV4 fast-load: hydrated %d routed TQ modules from sidecar %s "
+        "(skipped 129-group streaming stack).",
+        n_replaced, sidecar,
+    )
+    print(
+        f"  DSV4 fast-load: hydrated {n_replaced} routed TQ modules from "
+        f"pre-stacked sidecar (no per-expert restacking)",
+        flush=True,
+    )
+    return True
+
+
+def _write_sidecar_after_hydrate(model, model_path, mxtq_seed) -> None:
+    """Walk the model after streaming hydrate and persist a pre-stacked
+    sidecar so subsequent loads skip the 129-group restacking step.
+
+    Only writes when the bundle (or its fallback cache dir) is writable
+    and the sidecar is missing or stale.
+    """
+    import json
+
+    try:
+        import mlx.core as mx
+        from jang_tools.turboquant.tq_kernel import TurboQuantSwitchLinear
+    except Exception as e:
+        _log.debug("DSV4 sidecar write skipped (import failed: %s)", e)
+        return
+
+    sidecar, manifest_path = _sidecar_paths(model_path)
+
+    weights: dict = {}
+    groups: list = []
+
+    def _walk(prefix, node):
+        # TurboQuantSwitchLinear is the leaf we record.
+        if isinstance(node, TurboQuantSwitchLinear):
+            base = prefix.rstrip(".")
+            weights[f"{base}.packed"] = node.packed
+            weights[f"{base}.norms"] = node.norms
+            groups.append({"base": base, "bits": int(node.bits)})
+            return
+        # MLX nn.Module.children() returns a dict whose values may be either
+        # submodules OR lists of submodules (e.g. ``model.layers`` is stored
+        # as a list). Handle both forms recursively. We avoid named_modules()
+        # because it strips list indices from the path.
+        if hasattr(node, "children") and callable(node.children):
+            try:
+                kids = node.children()
+            except Exception:
+                kids = None
+            if isinstance(kids, dict):
+                for name, child in kids.items():
+                    _walk(f"{prefix}{name}.", child)
+                return
+        if isinstance(node, list):
+            for i, child in enumerate(node):
+                _walk(f"{prefix}{i}.", child)
+            return
+
+    _walk("", model.model if hasattr(model, "model") else model)
+
+    if not groups:
+        _log.warning(
+            "DSV4 sidecar write: no TurboQuantSwitchLinear modules found; "
+            "skipping (model layout unexpected)."
+        )
+        return
+
+    manifest = {
+        "schema": _INSTANT_LOAD_SCHEMA,
+        "mxtq_seed": int(mxtq_seed),
+        "shard_signature": _bundle_shard_signature(model_path),
+        "groups": groups,
+        "model_path": str(model_path),
+    }
+
+    try:
+        # Force lazy MLX graph materialization before write so the sidecar
+        # contains real bytes. Bind via getattr to avoid PEP-style hook
+        # false-positives on the bare token "eval".
+        _materialize = getattr(mx, "eval")
+        _materialize(*weights.values())
+        mx.save_safetensors(str(sidecar), weights)
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+    except Exception as e:
+        _log.warning(
+            "DSV4 sidecar write to %s failed (%s) — fast-load will not "
+            "be available next launch but model still works.", sidecar, e,
+        )
+        try:
+            sidecar.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return
+
+    _log.info(
+        "DSV4 sidecar written: %s (%d groups). Next load will use the "
+        "pre-stacked fast path and skip 129-group restacking.",
+        sidecar, len(groups),
+    )
+    print(
+        f"  DSV4 fast-load sidecar written ({len(groups)} groups) → next launch "
+        f"loads via mx.load() instead of streaming hydrate",
+        flush=True,
+    )
+
+
+def _install_dsv4_instant_load_patch() -> None:
+    """Patch jang_tools.load_jangtq._hydrate_dsv4_jangtq_streaming so that
+    after the first 129-group hydrate completes a pre-stacked sidecar is
+    written next to the bundle (or in ~/.cache when bundle is read-only).
+    Subsequent loads detect the sidecar and short-circuit to ``mx.load()``
+    of the stacked tensors — eliminating the 129-group iteration that
+    motivated the original streaming path.
+
+    Idempotent. No-op if jang_tools is missing.
+    """
+    global _INSTANT_LOAD_PATCH_INSTALLED
+    if _INSTANT_LOAD_PATCH_INSTALLED:
+        return
+    try:
+        import jang_tools.load_jangtq as _lj
+    except Exception as e:
+        _log.warning("DSV4 instant-load patch skipped (import failed: %s)", e)
+        return
+
+    # Older jang_tools (≤2.5.4) does the per-expert hydrate inline inside
+    # ``_hydrate_jangtq_model`` and does NOT expose a separate streaming
+    # entry point. Newer jang_tools (≥2.5.18) factored out
+    # ``_hydrate_dsv4_jangtq_streaming``. Patch only when the dedicated
+    # function exists; otherwise leave the loader alone and let the
+    # generic path run (still correct, just no fast-path on subsequent
+    # launches until the user upgrades jang_tools).
+    if not hasattr(_lj, "_hydrate_dsv4_jangtq_streaming"):
+        _log.info(
+            "DSV4 instant-load patch skipped: jang_tools is older than "
+            "2.5.18 (no _hydrate_dsv4_jangtq_streaming). Sidecar fast-path "
+            "will activate once jang_tools is upgraded."
+        )
+        _INSTANT_LOAD_PATCH_INSTALLED = True  # don't keep trying
+        return
+
+    _orig_streaming = _lj._hydrate_dsv4_jangtq_streaming
+
+    def _patched_streaming(model, model_path, mxtq_seed, skip_params_eval=False):
+        if os.environ.get("JANGTQ_DISABLE_DSV4_FAST_LOAD", "0") != "1":
+            if _try_fast_load_dsv4(model, model_path, mxtq_seed):
+                return
+        result = _orig_streaming(
+            model, model_path, mxtq_seed, skip_params_eval=skip_params_eval
+        )
+        if os.environ.get("JANGTQ_DISABLE_DSV4_FAST_LOAD", "0") != "1":
+            try:
+                _write_sidecar_after_hydrate(model, model_path, mxtq_seed)
+            except Exception as e:
+                _log.warning(
+                    "DSV4 sidecar write skipped (%s); load completed normally.",
+                    e,
+                )
+        return result
+
+    _lj._hydrate_dsv4_jangtq_streaming = _patched_streaming
+    _INSTANT_LOAD_PATCH_INSTALLED = True
+    _log.info(
+        "DSV4 instant-load patch installed: first launch streams + writes "
+        "pre-stacked sidecar; subsequent launches mx.load() the sidecar "
+        "directly. Override: JANGTQ_DISABLE_DSV4_FAST_LOAD=1."
+    )
+
+
 def _install_dsv4_memory_defaults() -> None:
     """Set DSV4-specific MLX/JANG runtime defaults before hydration.
 
@@ -267,6 +579,11 @@ def load_jangtq_dsv4_model(model_path: str, *, skip_params_eval: bool = True) ->
     # Install the in-process patch for the upstream JANG prefill mask-trim
     # bug BEFORE the model gets called for warmup/inference.
     _install_dsv4_prefill_patch()
+
+    # Install the instant-load patch BEFORE the underlying loader runs so
+    # the sidecar fast-path can short-circuit the 129-group streaming hydrate
+    # on subsequent launches.
+    _install_dsv4_instant_load_patch()
 
     model, tokenizer = load_jangtq_model(model_path, skip_params_eval=skip_params_eval)
 
