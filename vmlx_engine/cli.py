@@ -215,25 +215,13 @@ def serve_command(args):
             _is_dsv4_model = True
             os.environ["DSV4_LONG_CTX"] = "1"
             os.environ["DSV4_POOL_QUANT"] = "0"
-            # DSV4-aware paged prefix cache + block-disk L2 are dormant on
-            # mixed KVCache/DeepseekV4Cache layer state (verified
-            # 2026-05-04: paged_hits=0 on identical 1029-token prompt
-            # repeats). Until the schema reconciles the two cache types,
-            # force off for DSV4 — model output is correct without them,
-            # users who need long-prefix cache can re-enable per-request.
-            if getattr(args, "use_paged_cache", False):
-                logger.info(
-                    "DSV4-Flash detected — disabling --use-paged-cache "
-                    "(DSV4-aware paged schema is currently a no-op on "
-                    "mixed KVCache/DeepseekV4Cache layers)."
-                )
-                args.use_paged_cache = False
-            if getattr(args, "enable_block_disk_cache", False):
-                logger.info(
-                    "DSV4-Flash detected — disabling --enable-block-disk-cache "
-                    "(depends on paged cache for DSV4)."
-                )
-                args.enable_block_disk_cache = False
+            # Paged + block-disk L2 are honored as the user requests them.
+            # The DSV4-aware paged schema (scheduler.py: deepseek_v4_v6
+            # nested-state serialization) handles the mixed KVCache /
+            # DeepseekV4Cache layer layout via the prefill mask-trim patch
+            # installed by load_jangtq_dsv4. Short prompts (<512 tokens)
+            # still skip store via scheduler.py:3643 because each composite
+            # block carries gigabytes of HSA/CSA pool state.
             logger.info(
                 "DSV4-Flash detected — DSV4_LONG_CTX=1 (tri-mode SWA+CSA/HSA), "
                 "DSV4_POOL_QUANT=0. Upstream prefill shape bug patched in-process "
