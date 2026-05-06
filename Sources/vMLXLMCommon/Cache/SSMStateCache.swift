@@ -248,6 +248,19 @@ public final class SSMStateCache: @unchecked Sendable {
         return FetchResult(states: copies, isComplete: entry.isComplete)
     }
 
+    /// Check whether an in-memory companion snapshot exists without
+    /// incrementing hit/miss counters or deep-copying state arrays.
+    public func contains(
+        tokens: [Int], boundary: Int, mediaSalt: String? = nil
+    ) -> Bool {
+        let key = Self.makeKey(tokens: tokens, boundary: boundary, mediaSalt: mediaSalt, modelKey: modelKey)
+
+        lock.lock()
+        defer { lock.unlock() }
+
+        return entries.contains { $0.key == key && !$0.states.isEmpty }
+    }
+
     /// Remove all entries and reset hit/miss/re-derive statistics.
     public func clear() {
         lock.lock()

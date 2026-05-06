@@ -2421,48 +2421,80 @@ extension Engine {
            capturedGenPromptLen > 0,
            resolved.settings.enableSSMReDerive
         {
-            let syncReDeriveForced =
-                ProcessInfo.processInfo.environment["VMLX_DISABLE_SSM_RE_DERIVE_ASYNC"] == "1"
-            if syncReDeriveForced {
-                await container.perform { (ctx: ModelContext) in
-                    maybeReDeriveSSMState(
-                        coordinator: coord,
-                        model: ctx.model,
-                        promptTokenIds: capturedPromptIds,
-                        genPromptLen: capturedGenPromptLen,
-                        enableSSMReDerive: true)
+            let strippedPromptIds: [Int]
+            var cleanStateReady = false
+            if capturedPromptIds.count > capturedGenPromptLen {
+                strippedPromptIds = Array(
+                    capturedPromptIds.prefix(capturedPromptIds.count - capturedGenPromptLen))
+                cleanStateReady =
+                    coord.ssmStateCache.contains(
+                        tokens: strippedPromptIds,
+                        boundary: strippedPromptIds.count)
+                if cleanStateReady,
+                   coord.blockDiskCache != nil,
+                   coord.pagedCache != nil
+                {
+                    let blockSize = coord.config.pagedBlockSize
+                    if blockSize > 0 {
+                        let blockBoundary = (strippedPromptIds.count / blockSize) * blockSize
+                        if blockBoundary > 0, blockBoundary < strippedPromptIds.count {
+                            cleanStateReady = coord.ssmStateCache.contains(
+                                tokens: strippedPromptIds,
+                                boundary: blockBoundary)
+                        }
+                    }
                 }
             } else {
-                // Capture inputs into a Sendable closure and fire-and-forget.
-                // Task is detached so the Engine actor doesn't wait on it.
-                let captureCoord = coord
-                let captureIds = capturedPromptIds
-                let captureGP = capturedGenPromptLen
-                let captureContainer = container
-                // Iter 144 — capture the JangPress controller and rebind
-                // the TaskLocal inside the detached re-derive. Without
-                // this, `Task.detached` does not inherit the parent
-                // Task's TaskLocal values, so any
-                // `JangPressRouteTelemetry.recordTopK` issued from the
-                // re-derive's forward pass sees `controller = nil` and
-                // is silently dropped — undercounting expert activations
-                // on hybrid+thinking models.
-                let captureEmber = self.emberController
-                Task.detached(priority: .utility) {
-                    // Late-cancel guard — if the parent Task was cancelled
-                    // between spawn and our first resume point, bail before
-                    // touching MLX arrays whose Metal resources may be
-                    // mid-teardown.
-                    if Task.isCancelled { return }
-                    await JangPressRouteTelemetry.$controller.withValue(captureEmber) {
-                        await captureContainer.perform { (ctx: ModelContext) in
-                            if Task.isCancelled { return }
-                            maybeReDeriveSSMState(
-                                coordinator: captureCoord,
-                                model: ctx.model,
-                                promptTokenIds: captureIds,
-                                genPromptLen: captureGP,
-                                enableSSMReDerive: true)
+                strippedPromptIds = []
+            }
+
+            if cleanStateReady {
+                let line = "[vmlx][cache/ssm-rederive] skip/clean-state-ready hybrid=true genGP=\(capturedGenPromptLen) promptLen=\(capturedPromptIds.count) enabled=true\n"
+                FileHandle.standardError.write(Data(line.utf8))
+            } else {
+                let syncReDeriveForced =
+                    ProcessInfo.processInfo.environment["VMLX_DISABLE_SSM_RE_DERIVE_ASYNC"] == "1"
+                if syncReDeriveForced {
+                    await container.perform { (ctx: ModelContext) in
+                        maybeReDeriveSSMState(
+                            coordinator: coord,
+                            model: ctx.model,
+                            promptTokenIds: capturedPromptIds,
+                            genPromptLen: capturedGenPromptLen,
+                            enableSSMReDerive: true)
+                    }
+                } else {
+                    // Capture inputs into a Sendable closure and fire-and-forget.
+                    // Task is detached so the Engine actor doesn't wait on it.
+                    let captureCoord = coord
+                    let captureIds = capturedPromptIds
+                    let captureGP = capturedGenPromptLen
+                    let captureContainer = container
+                    // Iter 144 — capture the JangPress controller and rebind
+                    // the TaskLocal inside the detached re-derive. Without
+                    // this, `Task.detached` does not inherit the parent
+                    // Task's TaskLocal values, so any
+                    // `JangPressRouteTelemetry.recordTopK` issued from the
+                    // re-derive's forward pass sees `controller = nil` and
+                    // is silently dropped — undercounting expert activations
+                    // on hybrid+thinking models.
+                    let captureEmber = self.emberController
+                    Task.detached(priority: .utility) {
+                        // Late-cancel guard — if the parent Task was cancelled
+                        // between spawn and our first resume point, bail before
+                        // touching MLX arrays whose Metal resources may be
+                        // mid-teardown.
+                        if Task.isCancelled { return }
+                        await JangPressRouteTelemetry.$controller.withValue(captureEmber) {
+                            await captureContainer.perform { (ctx: ModelContext) in
+                                if Task.isCancelled { return }
+                                maybeReDeriveSSMState(
+                                    coordinator: captureCoord,
+                                    model: ctx.model,
+                                    promptTokenIds: captureIds,
+                                    genPromptLen: captureGP,
+                                    enableSSMReDerive: true)
+                            }
                         }
                     }
                 }

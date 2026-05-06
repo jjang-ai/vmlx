@@ -209,7 +209,7 @@ Audio targets (added 2026-04-14):
 git clone -b dev https://github.com/jjang-ai/vmlx.git
 cd vmlx
 
-# CLI — SwiftPM produces .build/<target-triple>/<cfg>/vmlxctl
+# CLI / SwiftPM dev build — produces .build/<target-triple>/<cfg>/vmlxctl
 swift build -c release
 # CRITICAL: colocate the Metal kernel library so binaries can load
 # models. Without this every load fails with "Failed to load the
@@ -225,20 +225,28 @@ open vMLX.xcodeproj
 # in project.yml if you want to distribute the .app.
 
 # Use the CLI
-.build/release/vmlx serve --model /path/to/model
-.build/release/vmlx chat  --model /path/to/model
-.build/release/vmlx pull  mlx-community/Qwen3-32B-4bit
-.build/release/vmlx list
+.build/release/vmlxctl serve --model /path/to/model
+.build/release/vmlxctl chat  --model /path/to/model
+.build/release/vmlxctl pull  mlx-community/Qwen3-32B-4bit
+.build/release/vmlxctl list
 
 # Build the SwiftUI app via XcodeGen + sign + notarize + DMG
 ./scripts/build-release.sh
+
+# If you want to launch the SwiftPM-built debug app directly instead,
+# build and stage the matching debug metallib first:
+swift build -c debug --product vMLX
+./scripts/stage-metallib.sh debug
+open .build/arm64-apple-macosx/debug/vMLX
 ```
 
 **Binaries after build:**
 
 ```
-.build/arm64-apple-macosx/debug/vMLX       # SwiftUI app
-.build/arm64-apple-macosx/debug/vmlxctl    # CLI
+.build/arm64-apple-macosx/release/vMLX       # SwiftUI app, after release build
+.build/arm64-apple-macosx/release/vmlxctl    # CLI, after release build
+.build/arm64-apple-macosx/debug/vMLX         # SwiftUI app, after debug build
+.build/arm64-apple-macosx/debug/vmlxctl      # CLI, after debug build
 ```
 
 ---
