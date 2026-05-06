@@ -454,6 +454,39 @@ def infer_quant_overrides_for_bundle(
     new_qcfg = new_cfg.setdefault("quantization", {})
     for mod, (bits, gsz) in patched.items():
         new_qcfg[mod] = {"bits": bits, "group_size": gsz}
+        # CRACK-bundle key-prefix normalization (Gemma-4-31B-JANG_4M-CRACK
+        # discussion #25, 2026-05-04): some VLM CRACK bundles wrote
+        # per-module overrides under HF naming `model.language_model.X`,
+        # but mlx_lm's class_predicate matches MLX module paths after
+        # `sanitize()` which strips `model.` (`language_model.model.X`
+        # path on the live module tree). When the override is keyed
+        # under HF naming, mlx_lm's predicate looks up the MLX path,
+        # finds nothing, and falls back to the global default — which
+        # was usually 8-bit even when the layer is 4-bit. The result
+        # is shape mismatch on load (8192,672) vs (8192,1344). Patch
+        # by writing the override under BOTH HF and MLX paths so
+        # whichever the predicate looks up wins.
+        #
+        # MLX path conventions for VLM wrappers (gemma3n/gemma4/qwen3.5_vl/
+        # nemotron_omni): top-level wrapper places the language model at
+        # `language_model` (not `model.language_model`). Inside the
+        # language_model, the inner stack is at `.model.layers.X` (NOT
+        # `.layers.X`). So the rewrite is:
+        #   model.language_model.X → language_model.model.X (when
+        #     X != model.layers... — only the leading `model.` is
+        #     stripped; the inner `language_model.model` path stays).
+        # Conservative: only write the alternate key if the rewrite
+        # produces a NEW name (i.e. the source had `model.` prefix).
+        if mod.startswith("model."):
+            alt = mod[len("model."):]
+            if alt and alt not in new_qcfg:
+                new_qcfg[alt] = {"bits": bits, "group_size": gsz}
+        elif mod.startswith("language_model.") or mod.startswith("vision_tower."):
+            # The reverse rewrite: bundle had MLX naming, also write HF
+            # naming so older mlx_lm pre-sanitize lookups still find it.
+            alt = "model." + mod
+            if alt not in new_qcfg:
+                new_qcfg[alt] = {"bits": bits, "group_size": gsz}
 
     logger.warning(
         "quant_shape_inference: patched %d module(s) in %s — config "

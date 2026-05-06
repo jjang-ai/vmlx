@@ -40,7 +40,15 @@ logger = logging.getLogger(__name__)
 # keys so the last prompt token is always re-fed on cache hit. Older block
 # disk entries were indexed under full-N keys and can replay unrelated text
 # after restart, so every family must use a fresh namespace, not just DSV4.
-PAGED_CACHE_SCHEMA_VERSION = "paged_n1_keys_v2"
+# 2026-05-05 v3 bump: scheduler.py:1964 DSV4 SWA+CSA+HSA truncation guard
+# now refuses to store post-generation DeepseekV4Cache when current_len >
+# target_len. Old block-disk entries (v2) were stored without the guard
+# and contain post-generation rotated/cumulative state that decodes
+# garbage on hit. This bump invalidates ALL families' L2 disk caches,
+# forcing a clean rebuild on next run. DSV4 specifically also gets a new
+# v7 schema tag below to invalidate v6 entries that were stored before
+# the guard landed.
+PAGED_CACHE_SCHEMA_VERSION = "paged_n1_keys_v3"
 
 
 def compute_model_cache_key(
@@ -135,7 +143,7 @@ def compute_model_cache_key(
         # keys so the last prompt token is always re-fed on prefix hits. This
         # intentionally invalidates older v2 disk blocks that were keyed by
         # the full prompt despite holding truncated cache state.
-        parts.append("dsv4_cache_schema=deepseek_v4_v6")
+        parts.append("dsv4_cache_schema=deepseek_v4_v7")
 
     if not parts:
         # Defensive: fall back to identity
@@ -1111,6 +1119,10 @@ class BlockAwarePrefixCache:
             Tuple of (block_table, remaining_tokens)
             - block_table: BlockTable if prefix found, None otherwise
             - remaining_tokens: Tokens that need processing
+
+        Ref ownership:
+            get_computed_blocks() increments request refs through touch();
+            fallback prefix-index matches call increment_ref explicitly.
         """
         if not tokens:
             return None, tokens
@@ -1176,6 +1188,9 @@ class BlockAwarePrefixCache:
                 self._misses += 1
                 return None, tokens
 
+            # get_computed_blocks() holds request refs for each returned
+            # block via touch(); the prefix-index path below uses
+            # increment_ref directly because it starts from block IDs.
             block_table = self.paged_cache.create_block_table(request_id)
             for cb in cached_blocks:
                 block_table.block_ids.append(cb.block_id)

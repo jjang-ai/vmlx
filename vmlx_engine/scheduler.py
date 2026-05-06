@@ -386,7 +386,12 @@ class Scheduler:
         self._hybrid_kv_positions: Optional[List[int]] = None
         self._hybrid_num_layers: Optional[int] = None
         self._ssm_state_cache: Optional[HybridSSMStateCache] = None
-        if self._is_hybrid and not self._uses_dsv4_cache and hasattr(model, "make_cache"):
+        if (
+            self._is_hybrid
+            and not self._uses_dsv4_cache
+            and self.config.enable_prefix_cache
+            and hasattr(model, "make_cache")
+        ):
             try:
                 from mlx_lm.models.cache import KVCache as _KVC
 
@@ -420,6 +425,11 @@ class Scheduler:
                 )
             except Exception as _e:
                 logger.warning(f"Failed to init hybrid SSM cache layout: {_e}")
+        elif self._is_hybrid and not self._uses_dsv4_cache:
+            logger.info(
+                "Hybrid SSM cache detected but prefix cache is disabled; "
+                "SSM companion lookup/store/re-derive is disabled for this run"
+            )
 
         # Prompt lookup decoding — measurement state (Phase 1)
         # Maps request_id -> (draft_tokens, expected_start_output_idx, hit_count)
@@ -528,7 +538,22 @@ class Scheduler:
         _allow_mla_kvq = os.environ.get(
             "VMLX_ALLOW_MLA_KV_QUANT"
         ) in ("1", "true", "True", "yes", "on")
-        if self.config.kv_cache_quantization != "none" and _is_mla and not _allow_mla_kvq:
+        # DSV4 partial-MLA path (2026-05-05): for DeepseekV4Cache models
+        # we now have a composite-aware quantizer at
+        # `_quantize_cache_for_storage` that quantizes ONLY the SWA local
+        # KV component (plain RotatingKVCache) and leaves compressor/
+        # indexer pool buffers (already-compressed latents) native. This
+        # matches every-other-model behavior at the API surface — KV
+        # cache quantization is the default — while preserving MLA's
+        # compressed-latent invariant. Treat DSV4 as quantizable by
+        # default, not auto-disabled.
+        _is_dsv4_composite = self._uses_dsv4_cache
+        if (
+            self.config.kv_cache_quantization != "none"
+            and _is_mla
+            and not _is_dsv4_composite
+            and not _allow_mla_kvq
+        ):
             logger.info(
                 f"MLA model detected (kv_lora_rank > 0) — disabling KV cache quantization "
                 f"(was: {self.config.kv_cache_quantization}). MLA stores compressed latents "
@@ -536,11 +561,27 @@ class Scheduler:
                 f"override if you accept the quality risk."
             )
             self.config.kv_cache_quantization = "none"
-        elif self.config.kv_cache_quantization != "none" and _is_mla and _allow_mla_kvq:
+        elif (
+            self.config.kv_cache_quantization != "none"
+            and _is_mla
+            and not _is_dsv4_composite
+            and _allow_mla_kvq
+        ):
             logger.warning(
                 f"MLA model + KV cache quantization='{self.config.kv_cache_quantization}' "
                 f"requested via VMLX_ALLOW_MLA_KV_QUANT=1 — running double-lossy KV quant "
                 f"on compressed latents. Expect some output drift; turn off if quality matters."
+            )
+        elif (
+            self.config.kv_cache_quantization != "none"
+            and _is_dsv4_composite
+        ):
+            logger.info(
+                f"DSV4 partial-MLA KV cache quantization enabled "
+                f"({self.config.kv_cache_quantization}). SWA local KV "
+                f"quantizes; compressor/indexer pool buffers stay native "
+                f"(double-quantize-safe). Override with "
+                f"VMLX_ALLOW_MLA_KV_QUANT=0 to fully disable."
             )
         if self.config.kv_cache_quantization != "none":
             if self.config.enable_prefix_cache:
@@ -560,7 +601,7 @@ class Scheduler:
             logger.info(
                 "DSV4 DeepseekV4Cache-aware paged prefix cache enabled — "
                 "terminal blocks store full SWA+CSA/HSA composite state and "
-                "block disk L2 uses deepseek_v4_v6 nested-state serialization "
+                "block disk L2 uses deepseek_v4_v7 nested-state serialization "
                 "with N-1 prompt-token keys."
             )
 
@@ -582,10 +623,22 @@ class Scheduler:
                         quant_tag = self.config.kv_cache_quantization or "none"
                         dsv4_scope = ""
                         if self._uses_dsv4_cache:
+                            # Include the unsafe-override env in the scope so
+                            # safe/default runs can NEVER share namespace with
+                            # `VMLX_DSV4_TRUST_TRIMMED_CACHE=1` debug runs that
+                            # store post-generation contaminated state.
+                            _unsafe_trim = (
+                                "1"
+                                if os.environ.get(
+                                    "VMLX_DSV4_TRUST_TRIMMED_CACHE", "0"
+                                ).lower() in ("1", "true", "yes")
+                                else "0"
+                            )
                             dsv4_scope = (
                                 f":dsv4_long_ctx={os.environ.get('DSV4_LONG_CTX', '0')}"
                                 f":dsv4_pool_quant={os.environ.get('DSV4_POOL_QUANT', '')}"
-                                ":dsv4_cache_schema=deepseek_v4_v6"
+                                f":dsv4_unsafe_trim={_unsafe_trim}"
+                                ":dsv4_cache_schema=deepseek_v4_v7"
                             )
                         block_scope_key = (
                             f"{self.config.model_path}:quant={quant_tag}"
@@ -1129,6 +1182,51 @@ class Scheduler:
                         f"KV cache quantization failed for layer {i} "
                         f"(keys shape={layer_cache.keys.shape}): {e}. "
                         f"Storing unquantized."
+                    )
+                    result.append(layer_cache)
+            elif "DeepseekV4Cache" in type(layer_cache).__name__:
+                # DSV4 partial-MLA quantization (2026-05-05).
+                #
+                # DeepseekV4Cache is a composite: SWA local KV (plain
+                # RotatingKVCache) + CSA compressor pool + HSA indexer
+                # pool. The compressor/indexer pools are ALREADY
+                # compressed latents (kv_lora projection outputs); double-
+                # quantizing them is lossy + wrong dimensionality. The
+                # local SWA KV is a plain RotatingKVCache that DOES
+                # benefit from KV q4/q8 just like every other model.
+                #
+                # Quantize ONLY the SWA local KV; leave compressor and
+                # indexer state native. Mirrors the pattern other models
+                # use, while respecting MLA's compressed-latent
+                # invariant.
+                try:
+                    local = getattr(layer_cache, "local", None)
+                    if local is not None and getattr(local, "keys", None) is not None:
+                        qkv_local = QuantizedKVCache(group_size=group_size, bits=bits)
+                        qkv_local.keys = tuple(
+                            mx.quantize(local.keys, group_size=group_size, bits=bits)
+                        )
+                        qkv_local.values = tuple(
+                            mx.quantize(local.values, group_size=group_size, bits=bits)
+                        )
+                        qkv_local.offset = getattr(local, "offset", 0)
+                        # Replace the local sub-cache in-place so the
+                        # composite stores quantized SWA + native pool.
+                        # The DeepseekV4Cache class wraps `self.local` so
+                        # downstream serializers see (q_kv, comp, idx).
+                        try:
+                            layer_cache.local = qkv_local  # type: ignore[attr-defined]
+                            quantized_count += 1
+                        except Exception:
+                            # If `.local` is read-only on this DSV4Cache
+                            # build, fall through and store unquantized
+                            # (correctness > memory savings).
+                            pass
+                    result.append(layer_cache)
+                except Exception as e:
+                    logger.warning(
+                        f"DSV4 partial-MLA KV quantization failed for "
+                        f"layer {i}: {e}. Storing unquantized."
                     )
                     result.append(layer_cache)
             else:
@@ -1958,6 +2056,76 @@ class Scheduler:
                     local = getattr(layer_cache, "local", None)
                     sliding_window = int(getattr(local, "max_size", 128) or 128)
                     compress_ratio = getattr(layer_cache, "compress_ratio", None)
+                    current_len = int(getattr(layer_cache, "offset", 0) or 0)
+                    to_trim = max(0, current_len - target_len)
+
+                    # SAFETY: DeepseekV4Cache is a composite of THREE
+                    # attention components (SWA + CSA + HSA), each with
+                    # its own rewind constraint. Trimming a post-
+                    # generation live cache back to the prompt boundary
+                    # is unsafe in all three:
+                    #
+                    # (1) SWA local — RotatingKVCache as `self.local`.
+                    #     Cannot be rewound after the circular buffer
+                    #     wraps (offset > max_size). _idx goes negative
+                    #     and replay applies output-side tokens at wrong
+                    #     positions → looping decode (verified live
+                    #     2026-05-05 with prompt 29 + output 600,
+                    #     sliding_window=128 → offset=629, idx=-501).
+                    #     Same constraint as plain RotatingKVCache at
+                    #     scheduler.py:72 (`_rebuild_meta_state_after_
+                    #     truncation` returns None when wrapped). The
+                    #     DSV4 branch was bypassing that check.
+                    #
+                    # (2) CSA compressor pool — cumulative buffer of
+                    #     `pooled` rows summarizing every `compress_ratio`
+                    #     raw positions. After generation, pool contains
+                    #     prompt-side AND output-side rows interleaved
+                    #     by the compressor's chunk boundaries.
+                    #     `trim(n)` drops `max(1, n // ratio)` trailing
+                    #     rows (jang_tools dsv4/mlx_model.py:527) but
+                    #     the boundary often does NOT align with the
+                    #     prompt/output split. Even an aligned trim
+                    #     leaves the kept rows whose `key/value` were
+                    #     computed from a window that may have included
+                    #     output tokens — semantically wrong.
+                    #
+                    # (3) HSA indexer pool — same cumulative behavior
+                    #     and same trim approximation as CSA. Wrong
+                    #     indexer state mis-routes attention sparsely
+                    #     across output rather than prompt.
+                    #
+                    # The clean fix is to capture a prompt-boundary
+                    # snapshot BEFORE decode starts (or async re-derive
+                    # after the request completes). Until that path
+                    # exists, refuse ALL post-generation DSV4 cache
+                    # stores. Caller falls through to full prefill on
+                    # next turn, which is correct.
+                    #
+                    # Override: VMLX_DSV4_TRUST_TRIMMED_CACHE=1 to keep
+                    # the (broken) v1.5.13 store-always behavior for
+                    # benchmarking. NOT recommended for production.
+                    _trust_trim = os.environ.get(
+                        "VMLX_DSV4_TRUST_TRIMMED_CACHE", "0"
+                    ) in ("1", "true", "yes")
+                    if to_trim > 0 and not _trust_trim:
+                        logger.info(
+                            f"DSV4 prompt cache store SKIPPED: "
+                            f"current_len={current_len}, "
+                            f"target_len={target_len}, "
+                            f"to_trim={to_trim} tokens. "
+                            f"DeepseekV4Cache (SWA+CSA+HSA composite) "
+                            f"cannot be safely rewound from post-"
+                            f"generation state — SWA RotatingKVCache "
+                            f"wraps at offset>{sliding_window} and "
+                            f"CSA/HSA pool buffers are cumulative "
+                            f"across the entire window. Returning None "
+                            f"forces clean full prefill on next turn. "
+                            f"Override: VMLX_DSV4_TRUST_TRIMMED_CACHE=1 "
+                            f"(NOT recommended)."
+                        )
+                        return None
+
                     new_cache = DeepseekV4Cache(
                         sliding_window=sliding_window,
                         compress_ratio=compress_ratio,
@@ -1967,8 +2135,6 @@ class Scheduler:
                         new_cache.meta_state = layer_cache.meta_state
                     except Exception:
                         pass
-                    current_len = int(getattr(layer_cache, "offset", 0) or 0)
-                    to_trim = max(0, current_len - target_len)
                     if to_trim:
                         new_cache.trim(to_trim)
                     truncated.append(new_cache)
@@ -3458,6 +3624,20 @@ class Scheduler:
                 # Extract cache for future reuse
                 if hasattr(response, "prompt_cache"):
                     try:
+                        # CLEAN PROMPT-BOUNDARY SNAPSHOT (DSV4 fast path).
+                        #
+                        # DSV4BatchGenerator captures a deep-copy of the
+                        # cache state IMMEDIATELY after prefill — before
+                        # decode mutates the live cache. That snapshot is
+                        # the *correct* prompt-boundary state for prefix
+                        # cache + L2 disk store, free of SWA wrap and
+                        # CSA/HSA pool drift. When present, prefer it
+                        # over the live `prompt_cache` and skip the
+                        # truncation guard entirely.
+                        snapshot_cache = getattr(
+                            response, "prompt_cache_snapshot", None
+                        )
+
                         # prompt_cache may be callable or direct attribute
                         if callable(response.prompt_cache):
                             raw_cache = response.prompt_cache()
@@ -3477,16 +3657,30 @@ class Scheduler:
                                 ):
                                     pass  # Already cached, nothing to do
                                 else:
-                                    # Paged cache: truncate to N-1 tokens so the
-                                    # last prompt token can be re-fed on cache hit.
-                                    # Without this, the last token's KV would be
-                                    # duplicated with wrong positional encoding.
                                     prompt_len = len(request.prompt_token_ids)
-                                    cache_for_extract = (
-                                        self._truncate_cache_to_prompt_length(
-                                            raw_cache, prompt_len
+                                    if snapshot_cache is not None:
+                                        # Snapshot was captured at the
+                                        # prompt boundary — use it
+                                        # DIRECTLY. No truncation, no
+                                        # rewind, no guard.
+                                        logger.info(
+                                            f"DSV4 prefix cache store using "
+                                            f"clean prompt-boundary snapshot "
+                                            f"({len(snapshot_cache)} layers, "
+                                            f"prompt_len={prompt_len}). No "
+                                            f"truncation needed."
                                         )
-                                    )
+                                        cache_for_extract = snapshot_cache
+                                    else:
+                                        # Paged cache: truncate to N-1 tokens so the
+                                        # last prompt token can be re-fed on cache hit.
+                                        # Without this, the last token's KV would be
+                                        # duplicated with wrong positional encoding.
+                                        cache_for_extract = (
+                                            self._truncate_cache_to_prompt_length(
+                                                raw_cache, prompt_len
+                                            )
+                                        )
 
                                     if cache_for_extract is not None:
                                         # TQ re-wrap: BatchKVCache.extract() always
@@ -3682,6 +3876,7 @@ class Scheduler:
             if (
                 self._is_hybrid
                 and not self._uses_dsv4_cache
+                and self.config.enable_prefix_cache
                 and self._ssm_state_cache is not None
                 and request is not None
                 and request.prompt_token_ids
@@ -3906,6 +4101,33 @@ class Scheduler:
                                                     getattr(cache, "offset", 0) or 0
                                                 )
                                                 to_trim = max(0, current_len - target)
+                                                # SAFETY: gen_prompt_len stripping
+                                                # also calls cache.trim() on a
+                                                # reconstructed DeepseekV4Cache. The
+                                                # same SWA RotatingKVCache wrap
+                                                # constraint applies here: if the
+                                                # original prefill exceeded
+                                                # sliding_window, the SWA buffer has
+                                                # wrapped and cannot be safely
+                                                # rewound. Refuse the trim and skip
+                                                # this cache (caller falls through
+                                                # to fresh prefill on next-turn).
+                                                # Symmetric with Fix 1 guard.
+                                                local = getattr(cache, "local", None)
+                                                _swa = int(
+                                                    getattr(local, "max_size", 128) or 128
+                                                )
+                                                if to_trim > 0 and current_len > _swa:
+                                                    logger.info(
+                                                        f"DSV4 gen_prompt_len strip "
+                                                        f"skipped: current_len="
+                                                        f"{current_len}, target="
+                                                        f"{target}, sliding_window="
+                                                        f"{_swa} → SWA wrapped, "
+                                                        f"trim unsafe."
+                                                    )
+                                                    trunc_ok = False
+                                                    break
                                                 if to_trim:
                                                     cache.trim(to_trim)
                                                 truncated_dicts.append(
@@ -5001,6 +5223,7 @@ class Scheduler:
         _has_waiting = bool(getattr(self, "waiting", []))
         if (
             self._is_hybrid
+            and self.config.enable_prefix_cache
             and not self.running
             and not _has_waiting
             and not _has_unprocessed

@@ -249,12 +249,20 @@ class ChatCompletionRequest(BaseModel):
                     self.enable_thinking = False
                 if self.reasoning_effort is None:
                     self.reasoning_effort = None
-            elif mode in ("reasoning", "thinking", "think", "on", "true", "medium"):
+            elif mode in ("reasoning", "thinking", "think", "on", "true", "medium", "high"):
+                # NOTE 2026-05-05: "high" was previously aliased to "max"
+                # which silently routed users into the experimental/
+                # unstable max-thinking path on DSV4 (verified to produce
+                # "Plan and Plan and Plan ... ( ( ( (" attractor on
+                # long-form prompts). "high" now maps to "medium" effort
+                # which is the verified-stable thinking path. Users who
+                # really want max must pass `reasoning_effort=max`
+                # explicitly.
                 if self.enable_thinking is None:
                     self.enable_thinking = True
                 if self.reasoning_effort is None:
                     self.reasoning_effort = "medium"
-            elif mode in ("max", "max_thinking", "maximum", "high"):
+            elif mode in ("max", "max_thinking", "maximum"):
                 if self.enable_thinking is None:
                     self.enable_thinking = True
                 if self.reasoning_effort is None:
@@ -721,6 +729,14 @@ class ResponsesRequest(BaseModel):
     # Video processing controls (MLLM models)
     video_fps: float | None = None
     video_max_frames: int | None = None
+    # Cache bypass — parity with ChatCompletionRequest.cache_salt /
+    # skip_prefix_cache. Without these fields, `model_config={"extra":
+    # "ignore"}` silently drops them, and Responses-API clients (Claude
+    # Code, OpenAI SDK) cannot bypass cache for testing or for
+    # explicitly requested fresh state. Wired through to the same
+    # `_compute_bypass_prefix_cache` plumbing as Chat/Completions.
+    cache_salt: str | None = None
+    skip_prefix_cache: bool | None = None
 
     @model_validator(mode="after")
     def _normalize_reasoning_alias(self):
@@ -737,12 +753,20 @@ class ResponsesRequest(BaseModel):
                     self.enable_thinking = False
                 if self.reasoning_effort is None:
                     self.reasoning_effort = None
-            elif mode in ("reasoning", "thinking", "think", "on", "true", "medium"):
+            elif mode in ("reasoning", "thinking", "think", "on", "true", "medium", "high"):
+                # NOTE 2026-05-05: "high" was previously aliased to "max"
+                # which silently routed users into the experimental/
+                # unstable max-thinking path on DSV4 (verified to produce
+                # "Plan and Plan and Plan ... ( ( ( (" attractor on
+                # long-form prompts). "high" now maps to "medium" effort
+                # which is the verified-stable thinking path. Users who
+                # really want max must pass `reasoning_effort=max`
+                # explicitly.
                 if self.enable_thinking is None:
                     self.enable_thinking = True
                 if self.reasoning_effort is None:
                     self.reasoning_effort = "medium"
-            elif mode in ("max", "max_thinking", "maximum", "high"):
+            elif mode in ("max", "max_thinking", "maximum"):
                 if self.enable_thinking is None:
                     self.enable_thinking = True
                 if self.reasoning_effort is None:

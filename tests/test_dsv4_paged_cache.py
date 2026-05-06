@@ -231,3 +231,102 @@ def test_dsv4_fetch_prefers_n_minus_one_terminal_partial_after_restart():
     assert rebuilt is not None
     assert len(rebuilt) == 1
     assert isinstance(rebuilt[0], DeepseekV4Cache)
+
+
+# ============================================================================
+# DSV4 SWA+CSA+HSA cache truncation guard (scheduler.py:1964) regression tests
+# ============================================================================
+
+def _bootstrap_dsv4_cache_offset(c, offset_value):
+    """DeepseekV4Cache.offset is a @property delegating to self.local.offset.
+    The property may be settable; if not, we set the underlying RotatingKVCache."""
+    try:
+        c.local.offset = offset_value
+    except Exception:
+        pass
+    return c
+
+
+def test_dsv4_truncation_refuses_post_generation_cache():
+    """Pin the SWA+CSA+HSA truncation guard.
+
+    `_truncate_cache_to_prompt_length` MUST return None for DSV4 when the
+    live cache has advanced past the prompt boundary (current_len >
+    target_len). Storing the trimmed state would corrupt next-turn decode
+    because:
+      - SWA RotatingKVCache cannot be rewound after wrap (offset > max_size)
+      - CSA pool buffers are cumulative across the entire window
+      - HSA indexer pool is cumulative; trim drops trailing rows but
+        boundary may not align with prompt/output split
+
+    Regression target: scheduler.py:1964 DSV4 branch must `return None` when
+    to_trim > 0 unless `VMLX_DSV4_TRUST_TRIMMED_CACHE=1`.
+    """
+    import os
+    from unittest.mock import MagicMock
+    from vmlx_engine.scheduler import Scheduler
+
+    # Ensure the unsafe override is OFF for this test
+    prev = os.environ.pop("VMLX_DSV4_TRUST_TRIMMED_CACHE", None)
+    try:
+        c = _make_dsv4_state_cache()
+        # Simulate post-generation: local SWA has wrapped (offset=600 > 128).
+        # `local.offset` is read by the guard.
+        # _make_dsv4_state_cache builds with sliding_window=128.
+        # We need the live cache to claim it has advanced past prompt.
+        # Mock its `offset` attribute directly.
+        c.local.offset = 600  # post-generation, wrapped
+        # `layer_cache.offset` is read for current_len.
+        # DeepseekV4Cache.offset returns local.offset by convention.
+        target_len = 28  # prompt-only target
+        # _truncate_cache_to_prompt_length is @staticmethod — call directly.
+        result = Scheduler._truncate_cache_to_prompt_length([c], target_len)
+        assert result is None, (
+            "DSV4 truncation guard MUST return None when to_trim>0; "
+            "guard at scheduler.py:1964 is regressed."
+        )
+    finally:
+        if prev is not None:
+            os.environ["VMLX_DSV4_TRUST_TRIMMED_CACHE"] = prev
+
+
+def test_dsv4_truncation_allows_zero_trim_clean_state():
+    """Pin: the guard does NOT block clean-boundary stores.
+
+    When target_len == current_len (no trim needed), the cache is at the
+    prompt boundary (no decode happened yet, or caller captured a clean
+    snapshot). Guard should return a valid truncated list.
+    """
+    from vmlx_engine.scheduler import Scheduler
+
+    c = _make_dsv4_state_cache()
+    # Simulate fresh-prefilled cache (no decode yet): offset == target.
+    c.local.offset = 28  # at prompt boundary, no wrap
+    # _truncate_cache_to_prompt_length is @staticmethod — call directly.
+    result = Scheduler._truncate_cache_to_prompt_length([c], 28)
+    # to_trim == 0 → guard does not fire, returns the rebuilt cache list
+    assert result is not None
+    assert len(result) == 1
+
+
+def test_dsv4_unsafe_override_in_cache_scope_key():
+    """Pin: when VMLX_DSV4_TRUST_TRIMMED_CACHE is set, the dsv4 cache scope
+    key includes that env so debug runs don't share namespace with safe runs.
+
+    Regression target: scheduler.py:~595 dsv4_scope must include
+    `dsv4_unsafe_trim={0,1}` so block-disk caches written under `=1` cannot
+    be replayed when the override is later disabled.
+    """
+    # We assert the source contains the scope key contribution, not that the
+    # full block_scope_key is computed (that requires a full Scheduler
+    # instance with live model state).
+    import inspect
+    from vmlx_engine import scheduler
+
+    src = inspect.getsource(scheduler)
+    assert "dsv4_unsafe_trim" in src, (
+        "scheduler.py block_scope_key MUST include dsv4_unsafe_trim={0,1} "
+        "so VMLX_DSV4_TRUST_TRIMMED_CACHE=1 debug runs don't share L2 disk "
+        "namespace with default safe runs."
+    )
+    assert "VMLX_DSV4_TRUST_TRIMMED_CACHE" in src
