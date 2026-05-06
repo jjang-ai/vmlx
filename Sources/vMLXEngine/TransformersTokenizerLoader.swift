@@ -38,6 +38,8 @@ public struct TransformersTokenizerLoader: vMLXLMCommon.TokenizerLoader {
             Self.shouldForceBailingTemplateFallback(in: directory)
         let forceNemotronTemplateFallback =
             Self.shouldForceNemotronTemplateFallback(in: directory)
+        let forceGemma4TemplateFallback =
+            Self.shouldForceGemma4TemplateFallback(in: directory)
         let mistralDefaultSystemMessage =
             Self.loadMistralDefaultSystemMessage(in: directory)
         do {
@@ -48,6 +50,7 @@ public struct TransformersTokenizerLoader: vMLXLMCommon.TokenizerLoader {
                 forceMistralTemplateFallback: forceMistralTemplateFallback,
                 forceBailingTemplateFallback: forceBailingTemplateFallback,
                 forceNemotronTemplateFallback: forceNemotronTemplateFallback,
+                forceGemma4TemplateFallback: forceGemma4TemplateFallback,
                 mistralDefaultSystemMessage: mistralDefaultSystemMessage)
         } catch Tokenizers.TokenizerError.unsupportedTokenizer(let name) {
             // swift-transformers allowlists a fixed set of tokenizer classes
@@ -88,6 +91,7 @@ public struct TransformersTokenizerLoader: vMLXLMCommon.TokenizerLoader {
                 forceMistralTemplateFallback: forceMistralTemplateFallback,
                 forceBailingTemplateFallback: forceBailingTemplateFallback,
                 forceNemotronTemplateFallback: forceNemotronTemplateFallback,
+                forceGemma4TemplateFallback: forceGemma4TemplateFallback,
                 mistralDefaultSystemMessage: mistralDefaultSystemMessage)
         }
     }
@@ -212,6 +216,33 @@ public struct TransformersTokenizerLoader: vMLXLMCommon.TokenizerLoader {
                 atPath: directory.appendingPathComponent("config_omni.json").path)
     }
 
+    /// Gemma4 sidecar templates are parse-heavy and, when thinking is off,
+    /// prefill an empty harmony thought channel:
+    ///
+    ///   <|channel>thought
+    ///   <channel|>
+    ///
+    /// The reference Swift runtime uses a minimal Gemma4 turn renderer for
+    /// production chat and leaves generation at the open model turn. The
+    /// full sidecar path made the 26B-A4B JANG_4M bundle generate malformed
+    /// role/control text in live probes despite valid cache hits.
+    static func shouldForceGemma4TemplateFallback(in directory: URL) -> Bool {
+        let env = ProcessInfo.processInfo.environment
+        if env["VMLX_DISABLE_GEMMA4_TEMPLATE_FALLBACK"] == "1"
+            || env["VMLINUX_DISABLE_GEMMA4_TEMPLATE_FALLBACK"] == "1" {
+            return false
+        }
+        guard
+            let cfgData = try? Data(contentsOf:
+                directory.appendingPathComponent("config.json")),
+            let cfg = try? JSONSerialization.jsonObject(with: cfgData) as? [String: Any]
+        else { return false }
+        let modelType = ((cfg["model_type"] as? String) ?? "").lowercased()
+        let textModelType = (((cfg["text_config"] as? [String: Any])?["model_type"] as? String)
+            ?? "").lowercased()
+        return modelType.hasPrefix("gemma4") || textModelType.hasPrefix("gemma4")
+    }
+
     static func loadMistralDefaultSystemMessage(in directory: URL) -> String? {
         guard shouldForceMistralTemplateFallback(in: directory) else { return nil }
         let url = directory.appendingPathComponent("SYSTEM_PROMPT.txt")
@@ -306,6 +337,7 @@ struct TransformersTokenizerBridge: vMLXLMCommon.Tokenizer, @unchecked Sendable 
     private let forceMistralTemplateFallback: Bool
     private let forceBailingTemplateFallback: Bool
     private let forceNemotronTemplateFallback: Bool
+    private let forceGemma4TemplateFallback: Bool
     private let mistralDefaultSystemMessage: String?
 
     init(
@@ -314,6 +346,7 @@ struct TransformersTokenizerBridge: vMLXLMCommon.Tokenizer, @unchecked Sendable 
         forceMistralTemplateFallback: Bool = false,
         forceBailingTemplateFallback: Bool = false,
         forceNemotronTemplateFallback: Bool = false,
+        forceGemma4TemplateFallback: Bool = false,
         mistralDefaultSystemMessage: String? = nil
     ) {
         self.upstream = upstream
@@ -321,6 +354,7 @@ struct TransformersTokenizerBridge: vMLXLMCommon.Tokenizer, @unchecked Sendable 
         self.forceMistralTemplateFallback = forceMistralTemplateFallback
         self.forceBailingTemplateFallback = forceBailingTemplateFallback
         self.forceNemotronTemplateFallback = forceNemotronTemplateFallback
+        self.forceGemma4TemplateFallback = forceGemma4TemplateFallback
         self.mistralDefaultSystemMessage = mistralDefaultSystemMessage
     }
 
@@ -458,6 +492,20 @@ struct TransformersTokenizerBridge: vMLXLMCommon.Tokenizer, @unchecked Sendable 
                 let preview = rendered.prefix(2000)
                 FileHandle.standardError.write(Data(
                     "[template-trace] nemotron native fallback enable_thinking=\(enableThinking) reasoning_budget=\(reasoningBudget.map(String.init) ?? "nil") add_generation_prompt=\(addGen)\n\(preview)\n[template-trace] end nemotron prompt\n".utf8))
+            }
+            return upstream.encode(text: rendered, addSpecialTokens: false)
+        }
+        if overrideTemplate == nil && forceGemma4TemplateFallback {
+            let rendered = ChatTemplateFallback.renderGemma4(
+                messages: messages,
+                addGenerationPrompt: addGen,
+                bosToken: upstream.bosToken,
+                tools: tools,
+                enableThinking: enableThinking)
+            if ProcessInfo.processInfo.environment["VMLX_TEMPLATE_TRACE"] == "1" {
+                let preview = rendered.prefix(2000)
+                FileHandle.standardError.write(Data(
+                    "[template-trace] gemma4 native fallback enable_thinking=\(enableThinking) add_generation_prompt=\(addGen)\n\(preview)\n[template-trace] end gemma4 prompt\n".utf8))
             }
             return upstream.encode(text: rendered, addSpecialTokens: false)
         }
@@ -644,6 +692,7 @@ enum ChatTemplateFallback {
                 messages: messages,
                 addGenerationPrompt: addGenerationPrompt,
                 bosToken: bosToken,
+                tools: tools,
                 enableThinking: enableThinking)
         }
         if tokenExists("<start_of_turn>") && tokenExists("<end_of_turn>") {
@@ -1279,6 +1328,7 @@ enum ChatTemplateFallback {
         messages: [[String: any Sendable]],
         addGenerationPrompt: Bool,
         bosToken: String?,
+        tools: [[String: any Sendable]]? = nil,
         enableThinking: Bool = false
     ) -> String {
         var out = ""
@@ -1299,20 +1349,37 @@ enum ChatTemplateFallback {
         if enableThinking {
             pendingSystem = pendingSystem.isEmpty ? "<|think|>" : "<|think|>\n\(pendingSystem)"
         }
-        if !pendingSystem.isEmpty {
-            out += "<|turn>system\n\(pendingSystem)<turn|>\n"
+        let hasTools = !(tools?.isEmpty ?? true)
+        if !pendingSystem.isEmpty || hasTools {
+            out += "<|turn>system\n"
+            if !pendingSystem.isEmpty {
+                out += pendingSystem
+            }
+            if let tools, !tools.isEmpty {
+                for tool in tools {
+                    out += renderGemma4ToolDeclaration(tool)
+                }
+            }
+            out += "<turn|>\n"
         }
         for message in body {
             let rawRole = (message["role"] as? String) ?? "user"
+            if rawRole == "tool" {
+                out += renderGemma4ToolResponse(message)
+                continue
+            }
             let role = rawRole == "assistant" ? "model" : "user"
             let content = stringifyContent(message["content"])
-            out += "<|turn>\(role)\n\(content)<turn|>\n"
+            out += "<|turn>\(role)\n\(content)"
+            if let toolCalls = message["tool_calls"] as? [[String: any Sendable]] {
+                for call in toolCalls {
+                    out += renderGemma4ToolCall(call)
+                }
+            }
+            out += "<turn|>\n"
         }
         if addGenerationPrompt {
             out += "<|turn>model\n"
-            if !enableThinking {
-                out += "<|channel>thought\n<channel|>"
-            }
         }
         return out
     }
@@ -1421,6 +1488,73 @@ enum ChatTemplateFallback {
             return json
         }
         return "{}"
+    }
+
+    private static func gemma4Quoted(_ value: String) -> String {
+        "<|\"|>\(value)<|\"|>"
+    }
+
+    private static func renderGemma4ToolDeclaration(_ tool: [String: any Sendable]) -> String {
+        let fn = tool["function"] as? [String: any Sendable]
+        let name = (fn?["name"] as? String) ?? (tool["name"] as? String) ?? ""
+        let description = (fn?["description"] as? String)
+            ?? (tool["description"] as? String)
+            ?? ""
+        var out = "<|tool>declaration:\(name)"
+        if !description.isEmpty {
+            out += "{description:\(gemma4Quoted(description))}"
+        }
+        out += "<tool|>"
+        return out
+    }
+
+    private static func renderGemma4Argument(_ value: Any) -> String {
+        if let s = value as? String { return gemma4Quoted(s) }
+        if let b = value as? Bool { return b ? "true" : "false" }
+        if let n = value as? NSNumber { return n.stringValue }
+        if let d = value as? [String: Any] {
+            let body = d.keys.sorted().map { key in
+                "\(key):\(renderGemma4Argument(d[key] as Any))"
+            }.joined(separator: ",")
+            return "{\(body)}"
+        }
+        if let a = value as? [Any] {
+            return "[" + a.map { renderGemma4Argument($0) }.joined(separator: ",") + "]"
+        }
+        return "\(value)"
+    }
+
+    private static func renderGemma4ToolArguments(_ raw: Any) -> String {
+        if let s = raw as? String {
+            return s.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let d = raw as? [String: Any] {
+            return d.keys.sorted().map { key in
+                "\(key):\(renderGemma4Argument(d[key] as Any))"
+            }.joined(separator: ",")
+        }
+        if let d = raw as? [String: any Sendable] {
+            return d.keys.sorted().map { key in
+                "\(key):\(renderGemma4Argument(d[key] as Any))"
+            }.joined(separator: ",")
+        }
+        return ""
+    }
+
+    private static func renderGemma4ToolCall(_ call: [String: any Sendable]) -> String {
+        let fn = call["function"] as? [String: any Sendable]
+        let name = (fn?["name"] as? String)
+            ?? (call["name"] as? String)
+            ?? ""
+        let arguments = renderGemma4ToolArguments(
+            fn?["arguments"] ?? call["arguments"] ?? [String: Any]())
+        return "<|tool_call>call:\(name){\(arguments)}<tool_call|>"
+    }
+
+    private static func renderGemma4ToolResponse(_ message: [String: any Sendable]) -> String {
+        let name = (message["name"] as? String) ?? "unknown"
+        let content = stringifyContent(message["content"])
+        return "<|tool_response>response:\(name){\(content)}<tool_response|>\n"
     }
 
     private static func renderBailingToolCall(_ call: [String: any Sendable]) -> String {

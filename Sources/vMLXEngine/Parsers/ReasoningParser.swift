@@ -336,6 +336,8 @@ public final class Gemma4ReasoningParser: ReasoningParser {
     private static let thoughtStartAlt = "<|channel|>thought"
     private static let degradedThoughtStart = "thought\n"
     private static let degradedThoughtStartAlt = "|thought\n"
+    private static let degradedThoughtBare = "thought"
+    private static let degradedThoughtBareAlt = "|thought"
     private static let xmlThoughtStart = "<thought>"
     private static let xmlThoughtEnd = "</thought>"
 
@@ -659,6 +661,10 @@ public final class Gemma4ReasoningParser: ReasoningParser {
         if out.hasPrefix(Self.degradedThoughtStart) {
             out.removeFirst(Self.degradedThoughtStart.count)
         }
+        if let range = Self.degradedThoughtStartRange(in: out),
+           range.lowerBound == out.startIndex {
+            out.removeSubrange(range)
+        }
         return out
     }
 
@@ -709,7 +715,26 @@ public final class Gemma4ReasoningParser: ReasoningParser {
         if rest.hasPrefix(degradedThoughtStartAlt) {
             return first..<text.index(first, offsetBy: degradedThoughtStartAlt.count)
         }
+        if hasBareDegradedThoughtPrefix(rest, marker: degradedThoughtBare) {
+            return first..<text.index(first, offsetBy: degradedThoughtBare.count)
+        }
+        if hasBareDegradedThoughtPrefix(rest, marker: degradedThoughtBareAlt) {
+            return first..<text.index(first, offsetBy: degradedThoughtBareAlt.count)
+        }
         return nil
+    }
+
+    private static func hasBareDegradedThoughtPrefix(
+        _ rest: Substring,
+        marker: String
+    ) -> Bool {
+        guard rest.hasPrefix(marker) else { return false }
+        let after = rest.dropFirst(marker.count)
+        guard let next = after.unicodeScalars.first else { return true }
+        // The tokenizer can drop the special channel delimiters and newline,
+        // leaving `thoughtThe answer...`. Do not strip ordinary words like
+        // `thoughtful`, where the next scalar is lowercase.
+        return !CharacterSet.lowercaseLetters.contains(next)
     }
 }
 

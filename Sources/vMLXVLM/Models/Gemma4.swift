@@ -115,11 +115,7 @@ public struct Gemma4VisionConfig: Codable, Sendable {
         numKeyValueHeads = try c.decodeIfPresent(Int.self, forKey: .numKeyValueHeads) ?? 12
         headDim = try c.decodeIfPresent(Int.self, forKey: .headDim) ?? 64
         rmsNormEps = try c.decodeIfPresent(Float.self, forKey: .rmsNormEps) ?? 1e-6
-        // Audit 2026-04-16 VL pipeline: default 14 matches every shipping
-        // Gemma 4 checkpoint (e2b/e4b/26b all ship `patch_size: 14`).
-        // Previous default 16 silently produced wrong patch counts when
-        // preprocessor_config.json was absent → maskedScatter fatalError.
-        patchSize = try c.decodeIfPresent(Int.self, forKey: .patchSize) ?? 14
+        patchSize = try c.decodeIfPresent(Int.self, forKey: .patchSize) ?? 16
         positionEmbeddingSize = try c.decodeIfPresent(Int.self, forKey: .positionEmbeddingSize) ?? 10240
         defaultOutputLength = try c.decodeIfPresent(Int.self, forKey: .defaultOutputLength) ?? 280
         poolingKernelSize = try c.decodeIfPresent(Int.self, forKey: .poolingKernelSize) ?? 3
@@ -255,15 +251,42 @@ private func rotateHalf(_ x: MLXArray) -> MLXArray {
     return concatenated([-x[.ellipsis, half...], x[.ellipsis, ..<half]], axis: -1)
 }
 
+private let gemma4VisionDebugEnabled: Bool = {
+    let env = ProcessInfo.processInfo.environment
+    return env["VMLX_GEMMA4_VISION_DEBUG"] == "1"
+        || env["VMLINUX_GEMMA4_VISION_DEBUG"] == "1"
+}()
+
+private func gemma4RawGeluApproximate(_ x: MLXArray) -> MLXArray {
+    0.5 * x * (1 + tanh(sqrt(2 / Float.pi) * (x + 0.044715 * x * x * x)))
+}
+
 private func applyMultidimensionalRope(_ inputs: MLXArray, positions: MLXArray, base: Float) -> MLXArray {
+    if gemma4VisionDebugEnabled {
+        FileHandle.standardError.write(Data(
+            "[Gemma4Vision] rope inputs.shape=\(inputs.shape) positions.shape=\(positions.shape) inputs.ndim=\(inputs.ndim) positions.ndim=\(positions.ndim)\n".utf8))
+    }
+    guard inputs.ndim > 0, positions.ndim > 0 else {
+        return inputs
+    }
     let headDim = inputs.dim(-1)
     let ndim = positions.dim(-1)
+    guard headDim > 0, ndim > 0 else {
+        return inputs
+    }
     let chPerDim = 2 * (headDim / (2 * ndim))
+    guard chPerDim > 0 else {
+        return inputs
+    }
     let halfPerDim = chPerDim / 2
 
     var parts: [MLXArray] = []
+    let rotaryDim = min(headDim, chPerDim * ndim)
     for d in 0 ..< ndim {
-        let xPart = inputs[.ellipsis, (d * chPerDim) ..< ((d + 1) * chPerDim)]
+        let start = d * chPerDim
+        let end = min((d + 1) * chPerDim, rotaryDim)
+        guard start < end else { break }
+        let xPart = inputs[.ellipsis, start ..< end]
         let freqExp = (2.0 / Float(chPerDim)) * MLXArray(0 ..< halfPerDim).asType(.float32)
         let timescale = pow(base, freqExp)
         let sinInp = positions[.ellipsis, d ..< (d + 1)].asType(.float32) / timescale
@@ -274,6 +297,9 @@ private func applyMultidimensionalRope(_ inputs: MLXArray, positions: MLXArray, 
         cosD = expandedDimensions(cosD, axis: 2)
         sinD = expandedDimensions(sinD, axis: 2)
         parts.append(xPart * cosD + rotateHalf(xPart) * sinD)
+    }
+    if rotaryDim < headDim {
+        parts.append(inputs[.ellipsis, rotaryDim ..< headDim])
     }
     return concatenated(parts, axis: -1)
 }
@@ -312,10 +338,18 @@ private class VisionAttn: Module {
 
     func callAsFunction(_ x: MLXArray, positions: MLXArray, mask: MLXArray?) -> MLXArray {
         let (B, L) = (x.dim(0), x.dim(1))
+        if gemma4VisionDebugEnabled {
+            FileHandle.standardError.write(Data(
+                "[Gemma4Vision] attn input.shape=\(x.shape) positions.shape=\(positions.shape) B=\(B) L=\(L) heads=\(numHeads) kvHeads=\(numKVHeads) headDim=\(headDim)\n".utf8))
+        }
         var q = qProj(x).reshaped(B, L, numHeads, headDim)
         var k = kProj(x).reshaped(B, L, numKVHeads, headDim)
         var v = vProj(x).reshaped(B, L, numKVHeads, headDim)
         q = qNorm(q); k = kNorm(k); v = visionRmsNormNoScale(v)
+        if gemma4VisionDebugEnabled {
+            FileHandle.standardError.write(Data(
+                "[Gemma4Vision] attn q.shape=\(q.shape) k.shape=\(k.shape) v.shape=\(v.shape)\n".utf8))
+        }
         q = applyMultidimensionalRope(q, positions: positions, base: ropeBase)
         k = applyMultidimensionalRope(k, positions: positions, base: ropeBase)
         q = q.transposed(0, 2, 1, 3); k = k.transposed(0, 2, 1, 3); v = v.transposed(0, 2, 1, 3)
@@ -349,7 +383,12 @@ private class VisionMLP: Module {
         _downProj.wrappedValue = Linear(cfg.intermediateSize, cfg.hiddenSize, bias: false)
         super.init()
     }
-    func callAsFunction(_ x: MLXArray) -> MLXArray { downProj(safeGeluApproximate(gateProj(x)) * upProj(x)) }
+    func callAsFunction(_ x: MLXArray) -> MLXArray {
+        // Vision prefill runs inside a larger generation graph. Avoid the
+        // compiled single-array GELU wrapper here; on this path it can return
+        // an empty result vector and trap in compile(...)[0].
+        downProj(gemma4RawGeluApproximate(gateProj(x)) * upProj(x))
+    }
 }
 
 private class VisionBlock: Module {
@@ -394,8 +433,18 @@ private class VisionPatchEmbedder: Module {
     func callAsFunction(pixels: MLXArray, patchPos: MLXArray, padPos: MLXArray) -> MLXArray {
         let (B, C, H, W) = (pixels.dim(0), pixels.dim(1), pixels.dim(2), pixels.dim(3))
         let p = patchSize
-        let patches = pixels.reshaped(B, C, H / p, p, W / p, p)
-            .transposed(0, 2, 4, 3, 5, 1).reshaped(B, (H / p) * (W / p), C * p * p)
+        let usableH = (H / p) * p
+        let usableW = (W / p) * p
+        if gemma4VisionDebugEnabled {
+            FileHandle.standardError.write(Data(
+                "[Gemma4Vision] patch pixels.shape=\(pixels.shape) patchPos.shape=\(patchPos.shape) padPos.shape=\(padPos.shape) weight.shape=\(inputProj.weight.shape) B=\(B) C=\(C) H=\(H) W=\(W) usableH=\(usableH) usableW=\(usableW) patch=\(patchSize)\n".utf8))
+        }
+        precondition(usableH > 0 && usableW > 0, "Gemma4 image is smaller than one vision patch")
+        let patchPixels = (usableH == H && usableW == W)
+            ? pixels
+            : pixels[0..., 0..., ..<usableH, ..<usableW]
+        let patches = patchPixels.reshaped(B, C, usableH / p, p, usableW / p, p)
+            .transposed(0, 2, 4, 3, 5, 1).reshaped(B, (usableH / p) * (usableW / p), C * p * p)
         let normalized = 2 * (patches - 0.5)
         let embedded = inputProj(normalized.asType(inputProj.weight.dtype))
 
@@ -403,6 +452,10 @@ private class VisionPatchEmbedder: Module {
             .transposed(0, 2, 1, 3).asType(posTable.dtype)
         var posEmb = matmul(oh, posTable).sum(axis: 1)
         posEmb = MLX.where(expandedDimensions(padPos, axis: -1), MLXArray(Float(0), dtype: posEmb.dtype), posEmb)
+        if gemma4VisionDebugEnabled {
+            FileHandle.standardError.write(Data(
+                "[Gemma4Vision] patch patches.shape=\(patches.shape) embedded.shape=\(embedded.shape) posEmb.shape=\(posEmb.shape)\n".utf8))
+        }
         return embedded + posEmb
     }
 }
@@ -483,6 +536,11 @@ private class VisionTower: Module {
 
         var emb = patchEmb(pixels: pixels, patchPos: patchPos[0..., ..<nReal], padPos: padPos[0..., ..<nReal])
         if nPad > 0 { emb = concatenated([emb, MLXArray.zeros([B, nPad, cfg.hiddenSize]).asType(emb.dtype)], axis: 1) }
+        MLX.eval(emb)
+        if gemma4VisionDebugEnabled {
+            FileHandle.standardError.write(Data(
+                "[Gemma4Vision] tower emb.shape.afterEval=\(emb.shape) nReal=\(nReal) nPad=\(nPad) maxPatches=\(maxPatches)\n".utf8))
+        }
 
         let valid = logicalNot(padPos).asType(.float32)
         var mask = expandedDimensions(valid, axis: 1) * expandedDimensions(valid, axis: 2)
@@ -1007,14 +1065,23 @@ public struct Gemma4ProcessorConfiguration: Codable, Sendable {
         case audioSeqLength = "audio_seq_length"
     }
 
+    enum NestedKeys: String, CodingKey {
+        case imageProcessor = "image_processor"
+    }
+
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        let n = try? decoder.container(keyedBy: NestedKeys.self)
+        let image = try? n?.nestedContainer(keyedBy: CodingKeys.self, forKey: .imageProcessor)
         processorClass = try c.decodeIfPresent(String.self, forKey: .processorClass) ?? "Gemma4Processor"
-        // Audit 2026-04-16: match vision config default (14).
-        patchSize = try c.decodeIfPresent(Int.self, forKey: .patchSize) ?? 14
-        maxSoftTokens = try c.decodeIfPresent(Int.self, forKey: .maxSoftTokens) ?? 280
-        poolingKernelSize = try c.decodeIfPresent(Int.self, forKey: .poolingKernelSize) ?? 3
-        imageSeqLength = try c.decodeIfPresent(Int.self, forKey: .imageSeqLength) ?? 280
+        let nestedPatchSize = try image?.decodeIfPresent(Int.self, forKey: .patchSize)
+        let nestedMaxSoftTokens = try image?.decodeIfPresent(Int.self, forKey: .maxSoftTokens)
+        let nestedPoolingKernelSize = try image?.decodeIfPresent(Int.self, forKey: .poolingKernelSize)
+        let nestedImageSeqLength = try image?.decodeIfPresent(Int.self, forKey: .imageSeqLength)
+        patchSize = try c.decodeIfPresent(Int.self, forKey: .patchSize) ?? nestedPatchSize ?? 16
+        maxSoftTokens = try c.decodeIfPresent(Int.self, forKey: .maxSoftTokens) ?? nestedMaxSoftTokens ?? 280
+        poolingKernelSize = try c.decodeIfPresent(Int.self, forKey: .poolingKernelSize) ?? nestedPoolingKernelSize ?? 3
+        imageSeqLength = try c.decodeIfPresent(Int.self, forKey: .imageSeqLength) ?? nestedImageSeqLength ?? 280
         audioSeqLength = try c.decodeIfPresent(Int.self, forKey: .audioSeqLength) ?? 750
     }
 }
