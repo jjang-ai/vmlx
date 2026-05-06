@@ -121,17 +121,34 @@ class DSV4BatchGenerator:
             f"DSV4Gen: stop_tokens at construction = {sorted(self.stop_tokens)} "
             f"(DSV4_EOS_ID={DSV4_EOS_ID} always-checked separately)"
         )
-        # DSV4 CSA layers can otherwise materialize large LxP attention
-        # worksets during prefill. Use a conservative chunk by default and
-        # flush MLX's transient cache after each chunk; callers may override
-        # after validation via DSV4_PREFILL_STEP_SIZE.
+        # DSV4 prefill defaults to SINGLE-SHOT.
+        #
+        # v1.5.6 (commit 00a78db4) established that chunking the DSV4
+        # prefill corrupts the compressor + indexer pool state mid-decode
+        # (broadcast_shapes mismatch on subsequent decode steps). v1.5.15
+        # silently re-introduced chunking at 512 with a comment claiming
+        # "current DeepseekV4Cache accumulates pool state correctly across
+        # calls" — this is unverified and contradicted by v1.5.6's
+        # empirical 14/14 probe matrix. The jang-tools DSV4 runtime is
+        # unchanged between 2.5.18 (v1.5.10 baseline) and 2.5.23 (current),
+        # so the chunking corruption v1.5.6 documented is still latent.
+        #
+        # Default: single-shot. Post-warmup the model has all kernels
+        # JIT-compiled so even long prompts complete under the Metal
+        # command-buffer watchdog. Env override DSV4_PREFILL_STEP_SIZE>0
+        # is available for users who hit watchdog-kill on extreme prompts
+        # (very rare; better to raise watchdog timeout instead).
         try:
-            _dsv4_step = int(os.environ.get("DSV4_PREFILL_STEP_SIZE", "512"))
+            _dsv4_step_env = os.environ.get("DSV4_PREFILL_STEP_SIZE")
+            _dsv4_step = int(_dsv4_step_env) if _dsv4_step_env else 0
         except (TypeError, ValueError):
-            _dsv4_step = 512
+            _dsv4_step = 0
         if _dsv4_step <= 0:
-            _dsv4_step = prefill_step_size
-        self.prefill_step_size = max(1, min(prefill_step_size, _dsv4_step))
+            # Single-shot — set step to a sentinel larger than any real
+            # prompt so the chunked loop runs exactly once.
+            self.prefill_step_size = 1 << 30
+        else:
+            self.prefill_step_size = _dsv4_step
         self.prefill_batch_size = 1  # always 1 for DSV4
         self.completion_batch_size = 1
         self.max_kv_size = max_kv_size
@@ -165,16 +182,14 @@ class DSV4BatchGenerator:
         return sampled, logprobs
 
     def _prefill_last_logits(self, token_ids: List[int], cache: List[Any]):
-        """Chunked DSV4 prefill returning logits for the last prompt token.
+        """DSV4 prefill returning logits for the last prompt token.
 
-        The earlier custom generator used one-shot prefill because an old
-        DSV4 cache bug made chunking suspicious. Current DeepseekV4Cache
-        accumulates compressor/indexer pool state correctly across calls.
-        Chunking is required in production: single-shot 6K+ prompts can
-        allocate enormous CSA worksets before MLX has a chance to drain
-        transients. This mirrors mlx-lm's prefill contract: process chunks
-        against the same cache, materialize the final-token logits for each
-        chunk, then clear transient MLX buffers before the next chunk.
+        Default behavior is SINGLE-SHOT (one model() call over the full
+        prompt). v1.5.6 verified that chunking corrupts the DSV4
+        compressor + indexer pool state — chunked prefill is therefore
+        opt-in only via DSV4_PREFILL_STEP_SIZE>0. When the env override
+        is set, this loop chunks against the same cache and clears
+        transient MLX buffers between chunks.
         """
         if not token_ids:
             return None

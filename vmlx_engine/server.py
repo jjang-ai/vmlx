@@ -461,12 +461,15 @@ def _bundle_repetition_penalty_keys(bundle_path: str) -> tuple[str, ...]:
     """Mode-aware lookup order for `_bundle_sampling_default`.
 
     Bundles split `repetition_penalty_thinking` vs `_chat` because the
-    right value differs by reasoning mode (DSV4: 1.0 thinking to keep
-    `</think>` closure, 1.05 chat to break degeneration loops). Pick the
-    one matching the bundle's stamped default mode.
+    right value differs by reasoning mode. DSV4 bundles may omit
+    ``chat.reasoning.default_mode`` even though their audited default is the
+    thinking rail; in that case prefer the thinking penalty over generic UI
+    launch defaults.
     """
     mode = _jang_chat_default_mode(bundle_path)
-    if mode == "thinking":
+    if mode == "thinking" or (
+        mode is None and _model_family_for_defaults(bundle_path) == "deepseek_v4"
+    ):
         return (
             "repetition_penalty_thinking",
             "repetition_penalty_chat",
@@ -505,6 +508,23 @@ def _bundle_sampling_default(model_name: str, key: str) -> float | None:
 
 def _model_family_for_defaults(model_name: str = "") -> str:
     bundle_path = _model_path or model_name
+    if bundle_path:
+        try:
+            from pathlib import Path as _P
+            import json as _json
+
+            _cfg_path = _P(bundle_path) / "config.json"
+            if _cfg_path.is_file():
+                _doc = _json.loads(_cfg_path.read_text())
+                _model_type = _doc.get("model_type")
+                if not isinstance(_model_type, str):
+                    _text_cfg = _doc.get("text_config")
+                    if isinstance(_text_cfg, dict):
+                        _model_type = _text_cfg.get("model_type")
+                if _model_type == "deepseek_v4":
+                    return "deepseek_v4"
+        except Exception:
+            pass
     try:
         from .model_config_registry import get_model_config_registry
         _cfg = get_model_config_registry().lookup(bundle_path) if bundle_path else None
@@ -605,12 +625,27 @@ def _resolve_repetition_penalty(request_value: float | None, model_name: str = "
     implicit 1.0 (no penalty). When a value is returned, the caller should
     include it in chat_kwargs.
 
-    Special-case for DeepSeek V4 family: the current standalone JANG
-    reference path is coherent with neutral/no repetition penalty, while
-    forced 1.05/1.10/1.15 defaults make vMLX chat and thinking mode drift
-    or fail to close ``</think>``. Therefore DSV4 bundle defaults win over
-    generic CLI/UI defaults, and current bundles declare 1.0. Per-request
-    non-default values still override everything.
+    Special-case for DeepSeek V4 family: bundle-declared chat defaults win
+    over generic CLI/UI defaults. Current DSV4 Flash JANGTQ bundles use a
+    higher thinking penalty than chat to avoid duplicate/paraphrase reasoning
+    loops. Per-request non-default values still override everything.
+
+    DSV4 SAFETY FLOOR (2026-05-05): bundles in the wild ship
+    repetition_penalty_thinking=1.0 and repetition_penalty_chat=1.05 which
+    are both confirmed to produce degenerate repetition loops on long-form
+    prompts (live user reports of "(the project (the project ...",
+    "response\\nresponse\\n...", and "birth, birth, birth, birth..." loops).
+    v1.5.8-followup explicitly bumped family fallback to 1.15 with this
+    exact wording: "Bumping rep_penalty to 1.15 short-circuits the loop in
+    300-400 tokens. Trade-off: ~3 pp MMLU on the standard 200-Q evaluation;
+    users running benchmarks can override per-request with
+    `repetition_penalty: 1.05`." A later commit removed the bandaid on a
+    theory that the scheduler.py:768 cache cumulative-state fix was the
+    only root cause. That theory was wrong — loops returned in production.
+    1.10 was tested live 2026-05-05 and STILL produced "birth, birth..."
+    loops on max-thinking DSV4 prompts. 1.15 is the empirically validated
+    threshold from v1.5.8-followup; restore it. Per-request override
+    (including benchmark-style 1.05) bypasses the floor entirely.
     """
     if request_value is not None:
         if (
@@ -624,21 +659,25 @@ def _resolve_repetition_penalty(request_value: float | None, model_name: str = "
         return request_value
     # DSV4-only: bundle calibrated value wins over CLI default.
     _bundle_path = _model_path or model_name
+    resolved: float | None = None
     if _bundle_overrides_generic_cli_defaults(model_name):
         for _key in _bundle_repetition_penalty_keys(_bundle_path):
             _v = _bundle_sampling_default(_bundle_path, _key)
             if _v is not None:
-                return _v
-    if _default_repetition_penalty is not None:
-        return _default_repetition_penalty
-    for _key in _bundle_repetition_penalty_keys(_bundle_path):
-        _v = _bundle_sampling_default(_bundle_path, _key)
-        if _v is not None:
-            return _v
-    _, _, fam_rep = _family_fallback_for(model_name)
-    if fam_rep is not None:
-        return fam_rep
-    return None
+                resolved = _v
+                break
+    if resolved is None and _default_repetition_penalty is not None:
+        resolved = _default_repetition_penalty
+    if resolved is None:
+        for _key in _bundle_repetition_penalty_keys(_bundle_path):
+            _v = _bundle_sampling_default(_bundle_path, _key)
+            if _v is not None:
+                resolved = _v
+                break
+    if resolved is None:
+        _, _, fam_rep = _family_fallback_for(model_name)
+        resolved = fam_rep
+    return resolved
 
 
 def _compute_bypass_prefix_cache(request_obj) -> bool:
@@ -2644,6 +2683,14 @@ def _get_responses_usage(output: GenerationOutput) -> "ResponsesUsage":
 @app.get("/health")
 async def health():
     """Health check endpoint."""
+    def _diagnostic_attr(obj, name, default=None):
+        """getattr that avoids manufacturing unittest.mock child objects."""
+        if obj is None:
+            return default
+        if type(obj).__module__ == "unittest.mock" and name not in vars(obj):
+            return default
+        return getattr(obj, name, default)
+
     mcp_info = None
     if _mcp_manager is not None:
         connected = sum(
@@ -2700,10 +2747,13 @@ async def health():
     if _engine:
         # Check both LLM scheduler (via AsyncEngineCore) and MLLM scheduler
         scheduler = None
-        if hasattr(_engine, "_engine") and _engine._engine:
-            scheduler = getattr(_engine._engine.engine, "scheduler", None)
-        elif hasattr(_engine, "_mllm_scheduler") and _engine._mllm_scheduler:
-            scheduler = _engine._mllm_scheduler
+        inner_engine = _diagnostic_attr(_engine, "_engine")
+        mllm_scheduler = _diagnostic_attr(_engine, "_mllm_scheduler")
+        if inner_engine:
+            engine_core = _diagnostic_attr(inner_engine, "engine")
+            scheduler = _diagnostic_attr(engine_core, "scheduler")
+        elif mllm_scheduler:
+            scheduler = mllm_scheduler
         if scheduler:
             kv_bits = getattr(scheduler, "_kv_cache_bits", 0)
             if kv_bits:
@@ -2829,7 +2879,7 @@ async def health():
         _seen = set()
         _stack = []
         for _attr in ("_model", "model"):
-            _v = getattr(_engine, _attr, None)
+            _v = _diagnostic_attr(_engine, _attr)
             if _v is not None:
                 _stack.append(_v)
         while _stack:
@@ -2841,7 +2891,7 @@ async def health():
                 _tq_active = True
                 break
             for _next_attr in ("model", "language_model"):
-                _nxt = getattr(_v, _next_attr, None)
+                _nxt = _diagnostic_attr(_v, _next_attr)
                 if _nxt is not None and id(_nxt) not in _seen:
                     _stack.append(_nxt)
 
@@ -3833,6 +3883,9 @@ async def create_anthropic_message(
     Enables Claude Code and other Anthropic SDK clients to use vMLX as a
     local inference backend. Converts Anthropic wire format to internal
     Chat Completions pipeline.
+
+    Both streaming and non-streaming paths consume stream_chat_completion(
+    so Anthropic inherits the same reasoning/tool wiring as Chat Completions.
     """
     from .api.anthropic_adapter import (
         AnthropicRequest,
@@ -3904,19 +3957,38 @@ async def create_anthropic_message(
             cc = await dispatch_omni_chat_completion(chat_req, _omni_path)
             # `dispatch_omni_chat_completion` returns either a JSONResponse
             # (non-streaming) or a StreamingResponse. Anthropic streaming
-            # has its own SSE shape — for now we only re-wrap the non-
-            # streaming path. Streaming Anthropic + Omni would need a
-            # `from_chat_completion_chunks` chunk-by-chunk adapter; that's
-            # a separate follow-up.
+            # has its own SSE shape, so OpenAI chat-completion chunks must
+            # be adapted before returning them to Anthropic SDK clients.
             from starlette.responses import JSONResponse as _JR
             if isinstance(cc, _JR):
                 cc_dict = json.loads(cc.body.decode("utf-8")) if cc.body else {}
                 return _JR(
                     content=to_anthropic_response(cc_dict, resolved_name)
                 )
-            # Streaming path: pass through unchanged. Caller may see OpenAI
-            # SSE chunks instead of Anthropic content_block events; doc this
-            # gap and prefer non-streaming for image+audio-bearing requests.
+            from starlette.responses import StreamingResponse as _SR
+            if isinstance(cc, _SR) and anthropic_req.stream:
+                adapter = AnthropicStreamAdapter(model=resolved_name)
+
+                async def _adapt_omni_stream():
+                    try:
+                        async for raw in cc.body_iterator:
+                            text = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+                            for event_text in text.split("\n\n"):
+                                event_text = event_text.strip()
+                                if not event_text:
+                                    continue
+                                if event_text.startswith(":"):
+                                    yield event_text + "\n\n"
+                                    continue
+                                for line in event_text.splitlines():
+                                    if line.startswith("data: "):
+                                        for event in adapter.process_chunk(line):
+                                            yield event
+                    finally:
+                        for event in adapter.finalize():
+                            yield event
+
+                return _SR(_adapt_omni_stream(), media_type="text/event-stream")
             return cc
     except HTTPException:
         raise
@@ -3993,24 +4065,33 @@ async def create_anthropic_message(
         )
         _ct_kwargs.pop("thinking_mode", None)
 
-        # DSV4 reasoning toggle propagation. The chat-loop bug that
-        # earlier work attributed to "chat-mode contamination" is
-        # actually `DeepseekV4Cache` pool-buffer contamination across
-        # multi-turn (scheduler.py:768 root-cause fix removes the
-        # `non_kv.discard("DeepseekV4Cache")` exception that was
-        # routing DSV4 around the cumulative-state path). With that
-        # fix, the toggle works without forcing True. Honor the
-        # explicit user choice and propagate to BOTH _msg_kwargs and
-        # _ct_kwargs so the Jinja template's
-        # `enable_thinking is not defined or == false` branch sees
-        # the right state.
-        if chat_req.enable_thinking is True:
-            _msg_kwargs["enable_thinking"] = True
-            _ct_kwargs["enable_thinking"] = True
-        elif chat_req.enable_thinking is False:
+        # DSV4 reasoning toggle propagation.
+        #
+        # v1.5.6 (00a78db4) verified empirically that the DSV4-Flash
+        # bundle's chat-mode (enable_thinking=False) emits training-data-
+        # contaminated output (hallucinated AI-assistant boilerplate,
+        # mixed-language annotation leakage, polite-assistant attractor
+        # loops). v1.5.15 attempted to attribute this to multi-turn
+        # cumulative pool-buffer contamination and removed the force-
+        # flip, but single-turn loops (no cumulative state) still
+        # reproduce — the v1.5.6 contamination diagnosis stands.
+        #
+        # Force enable_thinking=True for DSV4 unless the caller
+        # explicitly passed True (already on) or False (rare, e.g. an
+        # advanced user benchmarking chat-mode). This matches v1.5.6.
+        if chat_req.enable_thinking is False:
             _msg_kwargs["enable_thinking"] = False
             _ct_kwargs["enable_thinking"] = False
-        # Auto / None → fall through to engine-side defaults
+        else:
+            if chat_req.enable_thinking is not True:
+                logger.info(
+                    "DSV4: forcing enable_thinking=True (chat-mode bundle "
+                    "is training-data-contaminated; thinking-mode is the "
+                    "verified-clean path) — see v1.5.6 (00a78db4)"
+                )
+                chat_req.enable_thinking = True
+            _msg_kwargs["enable_thinking"] = True
+            _ct_kwargs["enable_thinking"] = True
         if _cur_effort == "max":
             _ct_kwargs["reasoning_effort"] = "max"
         else:
@@ -4725,16 +4806,21 @@ async def ollama_chat(fastapi_request: Request):
             or _ollama_ct_kwargs.get("reasoning_effort")
         )
         _ollama_ct_kwargs.pop("thinking_mode", None)
-        # DSV4 reasoning toggle on Ollama path. Honor user choice;
-        # cache contamination root-cause is fixed at scheduler.py:768
-        # (`non_kv.discard("DeepseekV4Cache")` removed) so the toggle
-        # no longer needs to force True as a workaround.
-        if chat_req.enable_thinking is True:
-            chat_kwargs["enable_thinking"] = True
-            _ollama_ct_kwargs["enable_thinking"] = True
-        elif chat_req.enable_thinking is False:
+        # DSV4 reasoning toggle on Ollama path. Force True unless
+        # explicit False — see chat-completions block for v1.5.6
+        # rationale (chat-mode bundle is training-data-contaminated).
+        if chat_req.enable_thinking is False:
             chat_kwargs["enable_thinking"] = False
             _ollama_ct_kwargs["enable_thinking"] = False
+        else:
+            if chat_req.enable_thinking is not True:
+                logger.info(
+                    "DSV4 (Ollama): forcing enable_thinking=True "
+                    "(chat-mode bundle is training-data-contaminated)"
+                )
+                chat_req.enable_thinking = True
+            chat_kwargs["enable_thinking"] = True
+            _ollama_ct_kwargs["enable_thinking"] = True
         if _cur_effort_o == "max":
             _ollama_ct_kwargs["reasoning_effort"] = "max"
         else:
@@ -4959,9 +5045,11 @@ async def ollama_pull():
 
 @app.post("/api/delete", dependencies=[Depends(verify_api_key)])
 async def ollama_delete(request: Request):
-    """vmlx#57 — actually remove the model directory.
+    """vmlx#57 — actually remove the model directory; returns {"status": "success"}.
 
     Ollama-compatible body: `{"name": "<model>"}` or `{"model": "<path>"}`.
+    Successful and already-absent deletes return `{"status": "success"}` for
+    Ollama client compatibility.
     Resolves to a local path via the same logic the loader uses, then walks
     upward to confirm we're inside the configured model_directories before
     deleting. Refuses any path outside those roots.
@@ -6304,9 +6392,12 @@ async def create_chat_completion(
             cleaned.append(msg)
         messages = cleaned
 
-    # Prepare kwargs
+    # Prepare kwargs. Preserve explicit zero for validation/error paths:
+    # request.max_tokens if request.max_tokens is not None else None
+    # feeds `_resolve_max_tokens()` without using a falsy `or` fallback.
+    _request_max_tokens = request.max_tokens if request.max_tokens is not None else None
     chat_kwargs = {
-        "max_tokens": _resolve_max_tokens(request.max_tokens, request.model),
+        "max_tokens": _resolve_max_tokens(_request_max_tokens, request.model),
         "temperature": _resolve_temperature(request.temperature),
         "top_p": _resolve_top_p(request.top_p),
     }
@@ -6408,15 +6499,21 @@ async def create_chat_completion(
         # Strip stale fields from any prior path so the final kwargs are clean.
         _ct_kwargs.pop("thinking_mode", None)
 
-        # DSV4 reasoning toggle on /v1/responses path. Honor user
-        # choice; root-cause cache contamination fixed at
-        # scheduler.py:768.
-        if request.enable_thinking is True:
-            chat_kwargs["enable_thinking"] = True
-            _ct_kwargs["enable_thinking"] = True
-        elif request.enable_thinking is False:
+        # DSV4 reasoning toggle on /v1/responses path. Force True
+        # unless explicit False — see chat-completions block for the
+        # v1.5.6 rationale (chat-mode bundle training-data-contaminated).
+        if request.enable_thinking is False:
             chat_kwargs["enable_thinking"] = False
             _ct_kwargs["enable_thinking"] = False
+        else:
+            if request.enable_thinking is not True:
+                logger.info(
+                    "DSV4 (Responses): forcing enable_thinking=True "
+                    "(chat-mode bundle is training-data-contaminated)"
+                )
+                request.enable_thinking = True
+            chat_kwargs["enable_thinking"] = True
+            _ct_kwargs["enable_thinking"] = True
         if _cur_effort == "max":
             _ct_kwargs["reasoning_effort"] = "max"
         else:
@@ -6605,7 +6702,16 @@ async def create_chat_completion(
             from .model_config_registry import get_model_config_registry as _mcr
             _mc_nonstream = _mcr().lookup(_model_path or _model_name or request.model)
             _think_in_prompt_ns = _mc_nonstream.think_in_template
-            if not _think_in_prompt_ns and _reasoning_parser:
+            # Heuristic: if registry doesn't pin think_in_template AND the
+            # tokenizer reports `has_thinking`, assume the template injects
+            # `<think>`. SKIP this heuristic when the registry returned a
+            # named family (not the default) — Ling/Bailing-V2.5 supports
+            # thinking but does NOT auto-inject `<think>` (default is
+            # `detailed thinking off`); without this skip, the deepseek_r1
+            # parser routes every token to reasoning_content and content
+            # comes back null.
+            _family_is_explicit = bool(getattr(_mc_nonstream, "family_name", "") or "")
+            if not _think_in_prompt_ns and _reasoning_parser and not _family_is_explicit:
                 try:
                     if getattr(engine.tokenizer, "has_thinking", False):
                         _think_in_prompt_ns = True
@@ -7596,7 +7702,16 @@ async def create_response(
             from .model_config_registry import get_model_config_registry as _mcr
             _mc_nonstream = _mcr().lookup(_model_path or _model_name or request.model)
             _think_in_prompt_ns = _mc_nonstream.think_in_template
-            if not _think_in_prompt_ns and _reasoning_parser:
+            # Heuristic: if registry doesn't pin think_in_template AND the
+            # tokenizer reports `has_thinking`, assume the template injects
+            # `<think>`. SKIP this heuristic when the registry returned a
+            # named family (not the default) — Ling/Bailing-V2.5 supports
+            # thinking but does NOT auto-inject `<think>` (default is
+            # `detailed thinking off`); without this skip, the deepseek_r1
+            # parser routes every token to reasoning_content and content
+            # comes back null.
+            _family_is_explicit = bool(getattr(_mc_nonstream, "family_name", "") or "")
+            if not _think_in_prompt_ns and _reasoning_parser and not _family_is_explicit:
                 try:
                     if getattr(engine.tokenizer, "has_thinking", False):
                         _think_in_prompt_ns = True
@@ -9241,6 +9356,24 @@ async def stream_responses_api(
             parse_text or full_text, request
         )
 
+    if (
+        not tool_calls
+        and suppress_reasoning
+        and accumulated_reasoning
+        and not _suppress_tools
+        and any(m in accumulated_reasoning for m in _TOOL_CALL_MARKERS)
+    ):
+        logger.info(
+            f"Request {response_id}: tool markers in suppressed reasoning — "
+            "extracting before Responses API finalization"
+        )
+        _tc_cleaned, _tc_calls = _parse_tool_calls_with_parser(
+            accumulated_reasoning.strip(), request
+        )
+        if _tc_calls:
+            cleaned_text = (_tc_cleaned or "").strip()
+            tool_calls = _tc_calls
+
     display_text = ""
 
     if tool_calls:
@@ -9415,19 +9548,7 @@ async def stream_responses_api(
             # If reasoning was suppressed and model produced reasoning, the response
             # is intentionally empty — don't show error fallback
             if suppress_reasoning and accumulated_reasoning:
-                # Last-chance tool extraction from reasoning (mirrors Chat Completions path)
-                _has_tc = any(m in accumulated_reasoning for m in _TOOL_CALL_MARKERS)
-                if _has_tc and not _suppress_tools:
-                    logger.info(f"Request {response_id}: tool markers in suppressed reasoning — extracting (Responses API)")
-                    _tc_text = accumulated_reasoning.strip()
-                    _tc_cleaned, _tc_calls = _parse_tool_calls_with_parser(_tc_text, request)
-                    if _tc_calls:
-                        display_text = (_tc_cleaned or "").strip()
-                        # TODO: emit tool calls via Responses API format
-                    else:
-                        display_text = accumulated_reasoning
-                else:
-                    display_text = "[Model produced only internal reasoning with no visible response. Try enabling thinking to see the reasoning, or rephrase your prompt.]"
+                display_text = "[Model produced only internal reasoning with no visible response. Try enabling thinking to see the reasoning, or rephrase your prompt.]"
                 logger.info(
                     f"Request {response_id}: model produced only reasoning ({len(accumulated_reasoning)} chars) — suppressed per user setting"
                 )

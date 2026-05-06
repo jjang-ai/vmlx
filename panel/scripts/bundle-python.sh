@@ -283,22 +283,57 @@ except FileNotFoundError:
     print('  Skipped: gemma4 vision.py not found')
 "
 
-# --- Patch: mlx_lm/models/deepseek_v3.py (Kimi K2.6 fp32 MLA decode) ---
-# Kimi K2.6 inherits the DeepSeek V3 MLA path. The bundled mlx-lm source
-# must contain the JANG fp32 L==1 SDPA fix at build time; relying on the
-# runtime installer is intentionally refused for signed vMLX bundles.
-echo "  Patching mlx_lm/models/deepseek_v3.py (Kimi K2.6 fp32 MLA decode)..."
-KIMI_PATCH_SRC="$HOME/jang/research/deepseek_v3_patched.py"
-KIMI_PATCH_DST="$SITE/mlx_lm/models/deepseek_v3.py"
-if [ -f "$KIMI_PATCH_SRC" ] && [ -f "$KIMI_PATCH_DST" ]; then
-  cp "$KIMI_PATCH_SRC" "$KIMI_PATCH_DST"
-  mkdir -p "$BUNDLE_DIR/python/lib/python3.12/research"
-  cp "$KIMI_PATCH_SRC" "$BUNDLE_DIR/python/lib/python3.12/research/deepseek_v3_patched.py"
-  echo "  Patched: deepseek_v3.py Kimi K2.6 fp32 MLA decode"
-elif [ -f "$KIMI_PATCH_DST" ] && grep -q "JANG fast fix" "$KIMI_PATCH_DST"; then
-  echo "  Already patched: deepseek_v3.py Kimi K2.6 fp32 MLA decode"
-else
-  echo "  WARNING: Kimi K2.6 deepseek_v3 patch source or target missing"
+# --- Patch: mlx_lm MLA fp32 SDPA absorb (DeepSeek V3 / V3.2 / Mistral 4) ---
+# The L==1 decode path for MLA-family models needs the q/k/v/mask cast to
+# fp32 before scaled_dot_product_attention or the absorb branch produces
+# logit drift. Upstream mlx_lm has carried this fix in some 0.31.x
+# releases but regressed it in 0.31.3, so vMLX vendors the patched files
+# at panel/scripts/patches/*.patched.py and copies them in at bundle time.
+# Rationale: this is a CONTROLLED FORK of three upstream files (Apache-2.0,
+# attribution preserved), not a runtime monkeypatch. Each rebuild lands
+# the deterministic patched source.
+PATCH_DIR="$REPO_DIR/panel/scripts/patches"
+for entry in \
+  "deepseek_v3.patched.py:mlx_lm/models/deepseek_v3.py:Kimi K2.6 fp32 MLA decode" \
+  "deepseek_v32.patched.py:mlx_lm/models/deepseek_v32.py:DSV3.2 fp32 MLA decode" \
+  "mistral4.patched.py:mlx_lm/models/mistral4.py:Mistral 4 fp32 MLA decode"; do
+  IFS=":" read -r src rel desc <<< "$entry"
+  src_path="$PATCH_DIR/$src"
+  dst_path="$SITE/$rel"
+  if [ ! -f "$src_path" ]; then
+    echo "ERROR: required patch source missing: $src_path" >&2
+    exit 1
+  fi
+  echo "  Installing $rel ($desc)..."
+  mkdir -p "$(dirname "$dst_path")"
+  cp "$src_path" "$dst_path"
+  if ! grep -q 'q_sdpa.*astype(mx\.float32)' "$dst_path"; then
+    echo "ERROR: $rel post-install does not contain q_sdpa fp32 cast" >&2
+    exit 1
+  fi
+done
+# Stage a copy under bundle research/ for build-traceability (matches the
+# v3 historical layout so existing diagnostics keep working).
+mkdir -p "$BUNDLE_DIR/python/lib/python3.12/research"
+cp "$PATCH_DIR/deepseek_v3.patched.py" \
+   "$BUNDLE_DIR/python/lib/python3.12/research/deepseek_v3_patched.py"
+
+# --- New model class: bailing_hybrid (Ling-2.6-flash / Bailing-V2.5) ---
+# mlx-lm 0.31.3 doesn't ship a model class for `bailing_hybrid` model_type
+# yet; vMLX vendors the validated implementation under panel/scripts/patches/.
+# This is a NEW file, not a patch over an upstream one — bundle-python.sh
+# just copies it in. Hard-fail if the file is missing.
+BAILING_SRC="$PATCH_DIR/bailing_hybrid.patched.py"
+BAILING_DST="$SITE/mlx_lm/models/bailing_hybrid.py"
+if [ ! -f "$BAILING_SRC" ]; then
+  echo "ERROR: required source missing: $BAILING_SRC" >&2
+  exit 1
+fi
+echo "  Installing mlx_lm/models/bailing_hybrid.py (Ling-2.6 / Bailing-V2.5 hybrid)..."
+cp "$BAILING_SRC" "$BAILING_DST"
+if ! grep -q 'class LanguageModel' "$BAILING_DST"; then
+  echo "ERROR: bailing_hybrid post-install missing LanguageModel class" >&2
+  exit 1
 fi
 
 # --- Patch: mlx_lm/models/ssm.py (Mamba/Nemotron-H hybrid state space model) ---
