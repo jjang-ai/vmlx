@@ -206,7 +206,7 @@ struct ChatSettingsPopover: View {
                     .pickerStyle(.menu)
                     .frame(width: 180)
                 }
-                tierChipRow(traceKey: "defaultReasoningParser",
+                tierChipRow(traceKey: "reasoningEffort",
                             isChatSet: draft.reasoningEffort != nil) {
                     draft.reasoningEffort = nil; writeBack()
                 }

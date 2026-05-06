@@ -81,7 +81,8 @@ public enum ToolCallParserRegistry {
         // mistral [TOOL_CALLS] / native tool format.
         case "mistral", "mistral3", "mistral4", "ministral3":
             return MistralToolCallParser()
-        case "deepseek", "deepseek_v3", "deepseek_r1", "deepseek_v32":
+        case "deepseek", "deepseek_v3", "deepseek_r1", "deepseek_v32",
+             "glm5", "glm5_1", "glm51", "glm_moe_dsa":
             return DeepSeekToolCallParser()
         // DeepSeek V4 (Flash / Pro) — DSML envelope with ｜DSML｜-framed
         // invoke/parameter blocks. The `deepseek_v4` model_type alias
@@ -103,11 +104,9 @@ public enum ToolCallParserRegistry {
             return XlamToolCallParser()
         case "functionary", "meetkai":
             return FunctionaryToolCallParser()
-        // GLM 4 family — `glm5` / `glm_moe_dsa` intentionally NOT here:
-        // the JANG stamp for GLM-5.1 bundles writes `tool_parser: "deepseek"`
-        // (GLM-5.1 uses DeepSeek's `[TOOL_CALLS]` JSON envelope), which
-        // routes through the "deepseek" alias above. Only GLM-4 and its
-        // MoE variant use the native glm47 tool parser.
+        // GLM 4 family uses the native glm47 tool parser. GLM-5 aliases
+        // route through the DeepSeek parser above because GLM-5.1 uses that
+        // JSON tool envelope.
         case "glm47", "glm4", "glm4_moe":
             return Glm47ToolCallParser()
         // MiniMax family — include `minimax_m2_5` (JANG-stamp for the
@@ -131,7 +130,8 @@ public enum ToolCallParserRegistry {
             "hermes", "qwen", "llama", "mistral", "mistral4", "deepseek",
             "dsml", "deepseek_v4", "kimi", "granite", "nemotron",
             "nemotron_h", "step3p5", "xlam", "functionary", "glm47",
-            "glm4", "glm4_moe", "glm5", "minimax", "minimax_m2",
+            "glm4", "glm4_moe", "glm5", "glm5_1", "glm51", "glm_moe_dsa",
+            "minimax", "minimax_m2",
             "minimax_m2_5", "gemma", "gemma4", "native",
         ]
     }

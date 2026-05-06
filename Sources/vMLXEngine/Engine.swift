@@ -2758,14 +2758,32 @@ public actor Engine {
         // user toggles TQ on and the /v1/cache/stats shows TQ inactive
         // for an MLA model.
         if self.modelCapabilities?.cacheType == "mla" && opts.enableTurboQuant {
+            let modelType = self.modelCapabilities?.modelType.lowercased() ?? ""
+            let family = self.modelCapabilities?.family.lowercased() ?? ""
+            let isDSV4 = modelType == "deepseek_v4" || family == "deepseek_v4"
+            let message: String
+            if isDSV4 {
+                message =
+                    "DeepSeek V4 loaded with TurboQuant=on. Generic " +
+                    "TurboQuant KV is skipped because DSV4 uses the " +
+                    "DSV4LayerCache composite MLA/SWA/CSA/HSA pool state, " +
+                    "not a plain per-head KV layout. Prompt-level " +
+                    "memory/disk cache serializes and restores that full " +
+                    "pool state via the DSV4 cache serializer. A separate " +
+                    "local-only partial TQ overlay is not enabled until it " +
+                    "is live-proven for this cache topology."
+            } else {
+                message =
+                    "MLA model loaded with TurboQuant=on. TurboQuant is " +
+                    "skipped on MLA layers because MLA's latent KV cache " +
+                    "is already a per-layer compressed projection (≈512-dim " +
+                    "c_kv vs full per-head K/V). Native MLA compression " +
+                    "supersedes TQ; no additional KV quantization is " +
+                    "applied. This is by design, not a bug."
+            }
             await logs.append(
                 .info, category: "cache",
-                "MLA model loaded with TurboQuant=on. TurboQuant is " +
-                "skipped on MLA layers because MLA's latent KV cache " +
-                "is already a per-layer compressed projection (≈512-dim " +
-                "c_kv vs full per-head K/V). Native MLA compression " +
-                "supersedes TQ; no additional KV quantization is " +
-                "applied. This is by design, not a bug.")
+                message)
         }
         self.cacheCoordinator = coord
         await logs.append(
@@ -3952,6 +3970,11 @@ public actor Engine {
         jangPressMmap = nil
         jangPressCanonicalMmapActive = false
         jangPressEmbed = nil
+        JangPressCanonicalExpertAdvisor.shared.configure(
+            enabled: false,
+            mmapEnabled: false,
+            enableRouterAdvice: false,
+            compressPct: 0)
         await logs.append(.info, category: "engine",
             "deep sleep — JangPress tier(s) released (mmap/mach/embed)")
         // iter-85 §113: drop MLX's pooled Metal buffer cache so the RSS
@@ -4635,6 +4658,8 @@ public actor Engine {
         if !runtimeRequested {
             if !turboQuantConfigured {
                 reason = "not-configured"
+            } else if isDSV4 {
+                reason = "dsv4-hybrid-pool-cache"
             } else if isMLA {
                 reason = "mla-native-cache"
             } else if tqDisabledViaEnv {

@@ -644,8 +644,8 @@ public actor ModelLibrary {
             || json["jang_config"] != nil
             || json["jang"] != nil
 
-        let isMXTQ = detectMXTQ(config: json, jang: jangJson)
-        let quantBits = detectQuantBits(config: json, jang: jangJson)
+        let isMXTQ = caps.isMXTQ || detectMXTQ(config: json, jang: jangJson)
+        let quantBits = caps.quantBits ?? detectQuantBits(config: json, jang: jangJson)
 
         // Modality refinement: embedding / image / rerank best-effort.
         if let mt = json["model_type"] as? String {
@@ -953,6 +953,12 @@ public actor ModelLibrary {
     }
 
     private func detectMXTQ(config: [String: Any], jang: [String: Any]) -> Bool {
+        if (config["weight_format"] as? String)?.lowercased() == "mxtq" {
+            return true
+        }
+        if (jang["weight_format"] as? String)?.lowercased() == "mxtq" {
+            return true
+        }
         if let q = config["quantization"] as? [String: Any],
            let method = q["method"] as? String,
            method.lowercased().contains("mxtq") { return true }
@@ -965,15 +971,43 @@ public actor ModelLibrary {
     }
 
     private func detectQuantBits(config: [String: Any], jang: [String: Any]) -> Int? {
+        if let b = mxtqBitWidth(config["mxtq_bits"]) { return b }
+        if let b = mxtqBitWidth(jang["mxtq_bits"]) { return b }
+        if let text = config["text_config"] as? [String: Any],
+           let b = mxtqBitWidth(text["mxtq_bits"]) { return b }
+        if let text = jang["text_config"] as? [String: Any],
+           let b = mxtqBitWidth(text["mxtq_bits"]) { return b }
         if let q = config["quantization"] as? [String: Any],
            let b = q["bits"] as? Int { return b }
         if let q = jang["quantization"] as? [String: Any] {
-            if let widths = q["bit_widths_used"] as? [Int], let first = widths.first {
-                return first
+            if let widths = q["bit_widths_used"] as? [Int], !widths.isEmpty {
+                let avg = Double(widths.reduce(0, +)) / Double(widths.count)
+                return Int(avg.rounded())
             }
             if let b = q["bits"] as? Int { return b }
         }
         return nil
+    }
+
+    private func mxtqBitWidth(_ value: Any?) -> Int? {
+        if let i = value as? Int { return i }
+        if let n = value as? NSNumber { return n.intValue }
+        if let s = value as? String, let i = Int(s) { return i }
+        guard let map = value as? [String: Any] else { return nil }
+        for key in ["routed_expert", "shared_expert", "attention", "lm_head"] {
+            if let i = map[key] as? Int { return i }
+            if let n = map[key] as? NSNumber { return n.intValue }
+            if let s = map[key] as? String, let i = Int(s) { return i }
+        }
+        let ints = map.values.compactMap { v -> Int? in
+            if let i = v as? Int { return i }
+            if let n = v as? NSNumber { return n.intValue }
+            if let s = v as? String { return Int(s) }
+            return nil
+        }
+        guard !ints.isEmpty else { return nil }
+        let avg = Double(ints.reduce(0, +)) / Double(ints.count)
+        return Int(avg.rounded())
     }
 
     private func sha256(_ s: String) -> String {

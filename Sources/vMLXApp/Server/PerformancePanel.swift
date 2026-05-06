@@ -62,8 +62,12 @@ struct PerformancePanel: View {
                 if let stats = try? await app.engine.cacheStats(),
                    let paged = stats["paged"] as? [String: Any]
                 {
-                    let h = (paged["hits"] as? Int) ?? 0
-                    let m = (paged["misses"] as? Int) ?? 0
+                    let h = (paged["hitCount"] as? Int)
+                        ?? (paged["hits"] as? Int)
+                        ?? 0
+                    let m = (paged["missCount"] as? Int)
+                        ?? (paged["misses"] as? Int)
+                        ?? 0
                     let rate = (paged["hitRate"] as? Double)
                         ?? (h + m > 0 ? Double(h) / Double(h + m) : 0)
                     await MainActor.run {

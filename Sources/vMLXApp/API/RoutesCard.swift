@@ -31,6 +31,8 @@ struct RoutesCard: View {
     @State private var query: String = ""
     @State private var expanded: Set<String> = []
     @State private var copiedRow: String? = nil
+    @State private var loadedCapabilities: ModelCapabilities? = nil
+    @State private var loadedSessionIsRemote = false
 
     private var visibleRoutes: [RouteEntry] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -73,6 +75,9 @@ struct RoutesCard: View {
                         .stroke(Theme.Colors.border, lineWidth: 1)
                 )
         )
+        .task(id: capabilityProbeKey) {
+            await refreshLoadedCapabilities()
+        }
     }
 
     // MARK: — header + filter
@@ -271,13 +276,59 @@ struct RoutesCard: View {
 
     private func matchesLoadedModality(_ required: RouteEntry.Modality) -> Bool {
         if required == .any { return true }
-        // Without a capability probe we can't fully know, so default to
-        // green for `running`. Routes that truly need a specific
-        // modality (image/audio/embed/rerank) stay green when any
-        // engine is loaded — the request itself will 503 if the
-        // modality isn't available, which is a better UX than false
-        // red dots before trying.
-        return true
+        if loadedSessionIsRemote { return true }
+        guard let caps = loadedCapabilities else { return false }
+        switch required {
+        case .any:
+            return true
+        case .text:
+            return caps.modality == .text || caps.modality == .vision
+        case .embedding:
+            return caps.modality == .embedding
+        case .rerank:
+            return caps.modality == .rerank
+        case .image:
+            return caps.modality == .image
+        case .audio:
+            return caps.family.lowercased().contains("omni")
+        }
+    }
+
+    private var capabilityProbeKey: String {
+        let state: String = {
+            switch app.engineState {
+            case .stopped: return "stopped"
+            case .loading: return "loading"
+            case .running: return "running"
+            case .standby(let depth): return "standby-\(depth)"
+            case .error: return "error"
+            }
+        }()
+        let sid = app.selectedServerSessionId?.uuidString
+            ?? app.activeSessionId?.uuidString
+            ?? "none"
+        return "\(sid)-\(state)"
+    }
+
+    @MainActor
+    private func refreshLoadedCapabilities() async {
+        guard let session = app.sessions.first(where: {
+            $0.id == app.selectedServerSessionId || $0.id == app.activeSessionId
+        }) ?? app.sessions.first(where: {
+            if case .running = $0.state { return true }
+            if case .standby = $0.state { return true }
+            return false
+        }) else {
+            loadedCapabilities = nil
+            loadedSessionIsRemote = false
+            return
+        }
+        loadedSessionIsRemote = session.isRemote
+        if session.isRemote {
+            loadedCapabilities = nil
+            return
+        }
+        loadedCapabilities = await app.engine(for: session.id).currentCapabilities()
     }
 
     private func firstLoadedModel() -> String? {

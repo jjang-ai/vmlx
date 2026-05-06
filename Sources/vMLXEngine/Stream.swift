@@ -3395,6 +3395,16 @@ extension Engine {
             && !tqDisabledViaEnv
             && !compileFirstSuppressesTQ
             && (jangTQEnabled || enableTurboQuant)
+        let turboQuantSuppressed =
+            (jangTQEnabled || enableTurboQuant) && !shouldActivateTQ
+        let turboQuantSuppressionReason: String = {
+            if !turboQuantSuppressed { return "none" }
+            if isDSV4 { return "dsv4-hybrid-pool-cache" }
+            if cacheTypeIsMLA { return "mla-native-cache" }
+            if tqDisabledViaEnv { return "env-disabled" }
+            if compileFirstSuppressesTQ { return "compile-first" }
+            return "policy"
+        }()
         // Iter 143 — Eric directive 2026-05-04: TQ default-on for ALL
         // models. The three skip paths (MLA / env-killswitch /
         // compile-first) each have a load-bearing justification:
@@ -3444,7 +3454,8 @@ extension Engine {
                 "compiled=\(params.enableCompiledDecode) nativeSlidingWindow=\(nativeSlidingWindow.map(String.init) ?? "nil") " +
                 "effectiveSWACompileWindow=\(effectiveSWACompileWindow) maxKVSize=\(params.maxKVSize.map(String.init) ?? "nil") " +
                 "compiledMaxCacheLength=\(params.compiledMaxCacheLength.map(String.init) ?? "nil") " +
-                "turboQuantActive=\(shouldActivateTQ) turboQuantSuppressed=\(compileFirstSuppressesTQ)\n"
+                "turboQuantActive=\(shouldActivateTQ) turboQuantSuppressed=\(turboQuantSuppressed) " +
+                "turboQuantSuppressionReason=\(turboQuantSuppressionReason)\n"
             try? FileHandle.standardError.write(contentsOf: Data(line.utf8))
         }
         return params
