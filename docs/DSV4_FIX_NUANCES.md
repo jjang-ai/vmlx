@@ -6,10 +6,12 @@
 
 ---
 
-## FIX 9 — DSV4 partial-MLA KV cache quantization (TQ-default for DSV4)
+## FIX 9 — DSV4 partial-MLA KV cache quantization (composite-aware, OPT-IN)
 
 **File:** `vmlx_engine/scheduler.py` `_quantize_cache_for_storage` DSV4 branch + `_wrap_make_cache_quantized` MLA-disable carve-out for DSV4.
-**One-liner:** DSV4 KV q4/q8 is now ENABLED by default (matching every other model). Composite-aware quantizer quantizes only the SWA local RotatingKVCache; compressor/indexer pool buffers (already-compressed latents) stay native.
+**One-liner:** DSV4 KV q4/q8 path is composite-aware: when user passes `--kv-cache-quantization q4`, the SWA local RotatingKVCache quantizes; compressor/indexer pool buffers (already-compressed latents) stay native. **NOT default.** CLI default remains `none` and DSV4 jang_config doesn't ship a `turboquant` block.
+
+**Codex 2026-05-06 #B5 honesty correction:** earlier docs claimed "DSV4 KV q4 is now ENABLED by default (matching every other model)" — that was wrong. Default for ALL families remains `none`. The fix here is that when the user OPTS IN via `--kv-cache-quantization q4`, the composite-aware path correctly quantizes only SWA without double-quantizing CSA/HSA pool buffers. Without this fix, opting in on DSV4 would either be silently disabled (MLA auto-off) or double-quantize and corrupt compressed latents.
 
 ### What was broken
 DSV4 kv quant was auto-disabled for ALL MLA models because naive whole-cache quantization would double-quantize the kv_lora compressed latents (compressor + indexer pool buffers). Codex flagged: "DSV4 SWA+CSA/HSA needs a composite serializer/reconstructor or an explicit 'unsupported' status for TQ KV quant."

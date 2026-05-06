@@ -744,12 +744,17 @@ export function registerChatHandlers(
             }
             // Check if model has a reasoning parser (for enable_thinking default)
             const detected = detectModelConfigFromDir(chat.modelPath);
+            const smeltActive = !!sessionConfig.smelt;
             chatIsMultimodal =
-              sessionConfig.isMultimodal === true
-                ? true
-                : sessionConfig.isMultimodal === false
-                  ? false
-                  : !!detected.isMultimodal;
+              smeltActive
+                ? false
+                : detected.isMultimodal === true
+                  ? true
+                  : sessionConfig.isMultimodal === true
+                    ? true
+                    : sessionConfig.isMultimodal === false
+                      ? false
+                      : false;
 
             if (
               sessionConfig.reasoningParser &&
@@ -1044,7 +1049,22 @@ export function registerChatHandlers(
           const _hasOaiToolCalls =
             typeof (m as any).toolCallsOaiJson === "string" &&
             (m as any).toolCallsOaiJson.length > 0;
-          if (!msgContent.trim() && !_hasOaiToolCalls) continue; // Skip entirely empty aborted messages
+          // Codex 2026-05-06 B2: don't drop reasoning-only assistant
+          // rows. A DSV4 turn that hits max_tokens during <think> emits
+          // empty output_text (correct — see server.py B1 fix) but
+          // populated reasoning_content. Dropping the row here would
+          // collapse the conversation into "user → user" pairs and
+          // cause the next turn to replay/merge wrong-prompt framing.
+          // Treat reasoning_content as substantive content for the
+          // skip-empty check.
+          const _hasReasoningContent =
+            typeof (m as any).reasoningContent === "string" &&
+            (m as any).reasoningContent.trim().length > 0;
+          if (
+            !msgContent.trim()
+            && !_hasOaiToolCalls
+            && !_hasReasoningContent
+          ) continue; // Skip entirely empty aborted messages
         }
         // Detect JSON content arrays (multimodal messages with images)
         if (
@@ -1533,6 +1553,13 @@ export function registerChatHandlers(
         // Track whether server sends real token counts (via usage in each SSE chunk)
         let serverSendsUsage = false;
 
+        // Codex 2026-05-06 #2: track if Responses-API stream emitted any
+        // text-delta. When the server sends final text via .done events
+        // only (no deltas), we fall back to consuming those — otherwise
+        // assistant message is blank and history rebuilds skip it,
+        // causing wrong-prompt replay on next turn.
+        let _sawResponsesTextDelta = false;
+
         // Track tool calls received during streaming for MCP auto-execution
         let receivedToolCalls: Array<{
           id: string;
@@ -1842,6 +1869,58 @@ export function registerChatHandlers(
                 (parsed.delta || parsed.text)
               ) {
                 emitDelta(parsed.delta || parsed.text, false);
+                _sawResponsesTextDelta = true;
+              }
+
+              // Codex 2026-05-06 #2: SSE final-text fallback. If a stream
+              // never emitted any response.output_text.delta events but
+              // the server sends final text via response.output_text.done
+              // or response.content_part.done or response.completed
+              // wrapping output[*].content[*].text, we MUST consume that
+              // final text — otherwise the assistant message is blank,
+              // gets skipped on next-turn rebuild (empty skip in
+              // buildMessagesForApi), consecutive user messages merge
+              // → new user prompt becomes invisible to the model and
+              // it replays the LAST coherent user turn (e.g. "testing").
+              if (
+                currentEventType === "response.output_text.done" &&
+                typeof parsed.text === "string" &&
+                parsed.text.length > 0 &&
+                !_sawResponsesTextDelta
+              ) {
+                emitDelta(parsed.text, false);
+                _sawResponsesTextDelta = true;
+              }
+              if (
+                currentEventType === "response.content_part.done" &&
+                parsed.part?.type === "output_text" &&
+                typeof parsed.part?.text === "string" &&
+                parsed.part.text.length > 0 &&
+                !_sawResponsesTextDelta
+              ) {
+                emitDelta(parsed.part.text, false);
+                _sawResponsesTextDelta = true;
+              }
+              if (
+                currentEventType === "response.completed" &&
+                !_sawResponsesTextDelta
+              ) {
+                // Walk parsed.response.output[*].content[*].text and
+                // emit any output_text we find.
+                const outputs = parsed.response?.output || [];
+                for (const item of outputs) {
+                  if (item?.type !== "message") continue;
+                  for (const part of item?.content || []) {
+                    if (
+                      part?.type === "output_text" &&
+                      typeof part.text === "string" &&
+                      part.text.length > 0
+                    ) {
+                      emitDelta(part.text, false);
+                      _sawResponsesTextDelta = true;
+                    }
+                  }
+                }
               }
 
               // Handle function_call items (tool calls) from Responses API
