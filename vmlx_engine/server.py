@@ -336,6 +336,12 @@ _FAMILY_FALLBACK_DEFAULTS: dict[str, tuple[float | None, float | None, float | N
     # this issue (10/12 cells OK at default rep) so the floor is
     # defensive rather than load-bearing for the K variant.
     "minimax_m2": (0.6, 0.95, 1.15),
+    # 2026-05-06 Codex Ling-2.6 review item #3: a user reported the
+    # Russian Three.js prompt looping into a 👀 token (47681 → ' \xed\x9f\xae')
+    # on Ling-2.6-flash-JANGTQ2-CRACK at default rep_penalty (1.0). Floor
+    # follows the DSV4/MiniMax pattern — defensive 1.15. ling_hybrid covers
+    # both bailing_hybrid and bailing_moe_v2_5 model_types.
+    "ling": (0.6, 0.95, 1.15),
 }
 
 
@@ -758,7 +764,7 @@ def _resolve_repetition_penalty(request_value: float | None, model_name: str = "
     # `--default-repetition-penalty=1.05` only when you know your
     # prompts won't trigger the long-context attractor. This MIN-floor
     # protects the default user path.
-    _SAFETY_FLOORS = {"deepseek_v4": 1.15, "minimax_m2": 1.15}
+    _SAFETY_FLOORS = {"deepseek_v4": 1.15, "minimax_m2": 1.15, "ling": 1.15}
     _family = _model_family_for_defaults(_bundle_path or model_name)
     _floor = _SAFETY_FLOORS.get(_family)
     # Codex 2026-05-06 #3: only skip the floor for GENUINELY explicit

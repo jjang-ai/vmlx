@@ -792,6 +792,11 @@ class Scheduler:
             self.disk_cache = DiskCacheManager(
                 cache_dir=cache_dir,
                 max_size_gb=self.config.disk_cache_max_gb,
+                # Codex 2026-05-06 follow-up: pass expected layer count
+                # so the safetensors header validator can hard-reject
+                # wrong-model L2 entries before mx.load triggers
+                # multi-hundred-GB metal::malloc.
+                expected_num_layers=int(n_layers) if n_layers else None,
             )
         elif self.config.enable_disk_cache and not self.config.enable_prefix_cache:
             logger.warning(

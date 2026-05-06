@@ -115,10 +115,19 @@ class DiskCacheManager:
             when this limit is exceeded. 0 = unlimited.
     """
 
-    def __init__(self, cache_dir: str, max_size_gb: float = 10.0):
+    def __init__(
+        self,
+        cache_dir: str,
+        max_size_gb: float = 10.0,
+        expected_num_layers: Optional[int] = None,
+    ):
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.max_size_bytes = int(max_size_gb * 1024 * 1024 * 1024) if max_size_gb > 0 else 0
+
+        # Codex 2026-05-06 follow-up: expected layer count from model config.
+        # Used by safetensors header validator to reject wrong-model L2 files.
+        self._expected_num_layers: Optional[int] = expected_num_layers
 
         # SQLite index for fast token hash → file lookup
         self._db_path = str(self.cache_dir / "cache_index.db")
@@ -267,6 +276,33 @@ class DiskCacheManager:
                 return None
 
             try:
+                # Codex 2026-05-06 follow-up: validate safetensors HEADER
+                # BEFORE mx.load. Skips files whose declared shapes describe
+                # multi-hundred-GB tensors (corrupt entry from older schema
+                # or interrupted write would otherwise blow up Metal here).
+                try:
+                    from .cache_record_validator import (
+                        reject_safetensors_or_warn,
+                    )
+                except Exception:
+                    reject_safetensors_or_warn = None
+                if reject_safetensors_or_warn is not None:
+                    if not reject_safetensors_or_warn(
+                        str(file_path),
+                        expected_num_layers=getattr(self, "_expected_num_layers", None),
+                        source=f"L2-prompt-disk-header:{token_hash[:12]}",
+                        delete_on_reject=True,
+                    ):
+                        # File deleted on reject; clear index too.
+                        conn.execute(
+                            "DELETE FROM cache_entries WHERE token_hash = ?",
+                            (token_hash,),
+                        )
+                        conn.commit()
+                        with self._stats_lock:
+                            self.misses += 1
+                        return None
+
                 # ─── Step 1: Load raw safetensors + metadata header ───
                 # Always load raw first so we can check for TQ-native format
                 # before falling back to mlx-lm's load_prompt_cache().
@@ -584,9 +620,9 @@ class DiskCacheManager:
         """Background thread: drain write queue and persist caches.
 
         Handles two queue item formats:
-        1. Standard: (token_hash, tokens, cache_data_flat, cache_metadata_flat)
+        1. Standard: (token_hash, tokens, cache_data_flat, cache_metadata_flat, cache_type)
            — Background thread writes safetensors from pre-serialized numpy arrays.
-        2. TQ-native: ("__tq_native__", token_hash, tokens, tmp_path, file_name)
+        2. TQ-native: ("__tq_native__", token_hash, tokens, tmp_path, file_name, cache_type)
            — File already written on main thread. Background does atomic rename + DB.
 
         All tensor data arrives pre-evaluated (mx.eval or numpy conversion on main).
@@ -896,15 +932,23 @@ class DiskCacheManager:
                 item = self._write_queue.get_nowait()
                 if isinstance(item[0], str) and item[0] == "__tq_native__":
                     # 6-tuple: ("__tq_native__", token_hash, tokens, tmp_path, file_name, cache_type)
-                    _, token_hash, tokens, tmp_path_str, file_name = item[:5]
+                    if len(item) >= 6:
+                        _, token_hash, tokens, tmp_path_str, file_name, cache_type = item
+                    else:
+                        _, token_hash, tokens, tmp_path_str, file_name = item
+                        cache_type = "assistant"
                     self._finalize_tq_native(
-                        token_hash, tokens, tmp_path_str, file_name
+                        token_hash, tokens, tmp_path_str, file_name, cache_type
                     )
                 else:
                     # 5-tuple: (token_hash, tokens, data, metadata, cache_type)
-                    token_hash, tokens, cache_data_flat, cache_metadata_flat = item[:4]
+                    if len(item) >= 5:
+                        token_hash, tokens, cache_data_flat, cache_metadata_flat, cache_type = item
+                    else:
+                        token_hash, tokens, cache_data_flat, cache_metadata_flat = item
+                        cache_type = "assistant"
                     self._write_cache(
-                        token_hash, tokens, cache_data_flat, cache_metadata_flat
+                        token_hash, tokens, cache_data_flat, cache_metadata_flat, cache_type
                     )
             except queue.Empty:
                 break

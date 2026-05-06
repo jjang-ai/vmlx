@@ -317,20 +317,40 @@ class BlockDiskStore:
             return None
 
         try:
+            # Codex 2026-05-06 follow-up: validate the safetensors HEADER
+            # BEFORE calling mx.load. Without this, a corrupt-header file
+            # whose declared shapes describe multi-hundred-GB tensors makes
+            # mx.load itself trigger [metal::malloc] BEFORE the post-load
+            # validator can reject the record. Reads only ~1 KB of header
+            # JSON and rejects + deletes the file if any tensor exceeds the
+            # 4 GB / 16 GB / 256K dim caps.
+            try:
+                from .cache_record_validator import (
+                    reject_safetensors_or_warn,
+                    reject_or_warn,
+                )
+            except Exception:
+                reject_safetensors_or_warn = None
+                reject_or_warn = None
+            if reject_safetensors_or_warn is not None:
+                if not reject_safetensors_or_warn(
+                    str(file_path),
+                    expected_num_layers=getattr(self, "_expected_num_layers", None),
+                    source=f"L2-disk-header:{hash_hex[:12]}",
+                    delete_on_reject=True,
+                ):
+                    # File deleted on reject; queue index cleanup too.
+                    self._queue_index_cleanup(hash_hex)
+                    with self._stats_lock:
+                        self.disk_misses += 1
+                    return None
+
             data = mx.load(str(file_path))
             cache_data = _deserialize_block(data, dtype)
-            # Codex 2026-05-06 contract #4: validate BEFORE returning.
-            # A stale/corrupt L2 entry can carry tensors with bogus shapes
-            # that cascade into ``cache.state = <bad-shape>`` then trigger
-            # multi-hundred-GB ``[metal::malloc]`` failures on next forward.
-            # The expected layer count is supplied by the caller via
-            # ``self._expected_num_layers`` (set at engine init from the
-            # model config); ``None`` skips that specific check but the
-            # per-tensor + total byte caps still apply.
-            try:
-                from .cache_record_validator import reject_or_warn
-            except Exception:
-                reject_or_warn = None  # validator unavailable — fail open
+            # Post-load validator (defense in depth): the header validator
+            # only sees declared shapes, not the deserialized cache_data
+            # tag/shape coherence. This catch covers bugs the header check
+            # couldn't see (e.g. tag mismatch, missing fields).
             if reject_or_warn is not None:
                 if not reject_or_warn(
                     cache_data,
