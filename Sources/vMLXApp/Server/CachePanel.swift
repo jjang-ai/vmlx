@@ -126,6 +126,7 @@ struct CachePanel: View {
         let tq = archInt("turboQuant")
         let q = archInt("quantized")
         let m = archInt("mamba")
+        let arrayState = archInt("arrayState")
         let other = archInt("other")
         let compiled = archBool("compiledDecodeConfigured")
         let tqRuntime = archBool("turboQuantRuntimeRequested")
@@ -133,6 +134,7 @@ struct CachePanel: View {
         let tqReason = archString("turboQuantSuppressionReason")
         let tqKeyBits = archInt("turboQuantKeyBits")
         let tqValueBits = archInt("turboQuantValueBits")
+        let diskTQEntries = diskInt("turboQuantEntryCount")
 
         if total == 0 {
             Text(L10n.ServerUI.loadModelForCacheBreakdown.render(appLocale))
@@ -149,12 +151,17 @@ struct CachePanel: View {
                     statCell("KV simple", "\(kv)")
                     statCell("Sliding window", "\(rot)")
                     statCell("Hybrid SSM", "\(m)")
+                    if arrayState > 0 {
+                        statCell("State arrays", "\(arrayState)")
+                    }
                     statCell("TurboQuant KV", "\(tq)")
                     statCell("Quantized KV", "\(q)")
                     statCell("Compiled decode", compiled ? "on" : "off")
                     statCell(
                         "TQ policy",
-                        tqRuntime ? "active" : (tqSuppressed ? "suppressed" : "off"))
+                        tqRuntime
+                            ? (tq > 0 || diskTQEntries > 0 ? "active" : "requested")
+                            : (tqSuppressed ? "suppressed" : "off"))
                     if tqRuntime && tqKeyBits > 0 && tqValueBits > 0 {
                         statCell("TQ bits", "\(tqKeyBits) / \(tqValueBits)")
                     }
@@ -250,6 +257,7 @@ struct CachePanel: View {
             let currentGB = diskDouble("currentGB")
             let maxGB = diskDouble("maxGB")
             let entryCount = diskInt("entryCount")
+            let tqEntries = diskInt("turboQuantEntryCount")
             let hits = diskInt("hitCount")
             let misses = diskInt("missCount")
             let hitRate = diskDouble("hitRate")
@@ -270,6 +278,9 @@ struct CachePanel: View {
                     statCell("Hit rate", String(format: "%.1f%%", hitRate * 100.0))
                     statCell("Hits / Misses", "\(hits) / \(misses)")
                     statCell("Stores", "\(diskInt("storeCount"))")
+                    if tqEntries > 0 {
+                        statCell("TQ entries", "\(tqEntries)")
+                    }
                 }
                 if !directory.isEmpty {
                     Text(directory)

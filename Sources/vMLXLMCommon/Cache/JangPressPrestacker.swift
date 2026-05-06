@@ -423,6 +423,12 @@ public enum JangPressPrestacker {
             && entry.lastPathComponent != hotCoreName
         {
             let dst = cache.appendingPathComponent(entry.lastPathComponent)
+            if isSafetensorsIndexFile(entry.lastPathComponent) {
+                if fm.fileExists(atPath: dst.path) {
+                    try? fm.removeItem(at: dst)
+                }
+                continue
+            }
             if entry.pathExtension == "safetensors"
                 && entry.lastPathComponent != "jangtq_runtime.safetensors"
             {
@@ -449,6 +455,10 @@ public enum JangPressPrestacker {
         // `packed`/`norms` keys into TurboQuantSwitchLinear and defeats the
         // whole mmap-backed JangPress path.
         name == "jangtq_stacked.safetensors" || name == "jangtq_stacked.json"
+    }
+
+    private static func isSafetensorsIndexFile(_ name: String) -> Bool {
+        name.hasSuffix(".safetensors.index.json")
     }
 
     private static func writeManifest(plan: [WriteTensor], source: URL, to url: URL) throws {

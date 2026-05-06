@@ -4146,6 +4146,9 @@ public actor Engine {
             // anyway.
             var entryCount = 0
             var currentBytes: Int64 = 0
+            var turboQuantEntryCount = 0
+            var turboQuantTensorKeyCount = 0
+            var turboQuantMarkerEntryCount = 0
             if let contents = try? FileManager.default.contentsOfDirectory(
                 at: disk.cacheDir,
                 includingPropertiesForKeys: [.fileSizeKey],
@@ -4156,6 +4159,18 @@ public actor Engine {
                     entryCount += 1
                     if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize {
                         currentBytes += Int64(size)
+                    }
+                    if let keys = Self.safetensorsHeaderKeys(at: url) {
+                        let tqKeys = keys.filter {
+                            $0.hasPrefix("tq_") || $0.hasPrefix("__tq_")
+                        }
+                        if !tqKeys.isEmpty {
+                            turboQuantEntryCount += 1
+                            turboQuantTensorKeyCount += tqKeys.count
+                        }
+                        if keys.contains("__tq_native_marker__") {
+                            turboQuantMarkerEntryCount += 1
+                        }
                     }
                 }
             }
@@ -4171,6 +4186,10 @@ public actor Engine {
                 "missCount": disk.misses,
                 "hitRate": hitRate,
                 "storeCount": disk.stores,
+                "hasTurboQuantEntries": turboQuantEntryCount > 0,
+                "turboQuantEntryCount": turboQuantEntryCount,
+                "turboQuantTensorKeyCount": turboQuantTensorKeyCount,
+                "turboQuantMarkerEntryCount": turboQuantMarkerEntryCount,
                 "directory": disk.cacheDir.path,
             ] as [String: Any]
         } else {
@@ -4410,15 +4429,16 @@ public actor Engine {
     /// Walk the loaded model's cache array and classify each layer by
     /// type. Counts are returned as a flat dict: `{"kvSimple":N,
     /// "rotating":N, "turboQuant":N, "quantized":N, "mamba":N,
-    /// "other":N, "total":N, "slidingWindowActive":Bool, "hybridSSMActive":Bool}`.
+    /// "arrayState":N, "other":N, "total":N, "slidingWindowActive":Bool,
+    /// "hybridSSMActive":Bool, "hybridStateActive":Bool}`.
     /// Synchronous inside `container.perform` because cache arrays are
     /// just Swift object references — no MLX eval involved.
     ///
     /// Important: `newCache(parameters:nil)` is a static topology probe.
     /// Runtime policy (TurboQuant requested/suppressed, compile-first
-    /// activation) is layered in from the most recent load options so
-    /// `/health` and CachePanel do not imply that TQ is broken just
-    /// because a fresh cache has not been promoted after prefill.
+    /// activation) is layered in from the most recent load options. Keep
+    /// `turboQuantActive` tied to materialized cache layers; policy-only
+    /// requests are reported separately as `turboQuantRuntimeRequested`.
     private func computeCacheLayerBreakdown(
         container: vMLXLMCommon.ModelContainer
     ) async -> [String: Any] {
@@ -4431,7 +4451,7 @@ public actor Engine {
             let cache = ctx.model.newCache(parameters: nil)
             var counts: [String: Int] = [
                 "kvSimple": 0, "rotating": 0, "turboQuant": 0,
-                "quantized": 0, "mamba": 0, "other": 0,
+                "quantized": 0, "mamba": 0, "arrayState": 0, "other": 0,
                 "compiledKV": 0, "compiledRotating": 0,
                 "compiledTurboQuant": 0, "compiledMamba": 0,
             ]
@@ -4462,6 +4482,8 @@ public actor Engine {
                     counts["mamba", default: 0] += 1
                 } else if layer is KVCacheSimple {
                     counts["kvSimple", default: 0] += 1
+                } else if layer is ArraysCache {
+                    counts["arrayState", default: 0] += 1
                 } else {
                     counts["other", default: 0] += 1
                 }
@@ -4474,14 +4496,16 @@ public actor Engine {
                 + (counts["turboQuant"] ?? 0)
                 + (counts["quantized"] ?? 0)
                 + (counts["mamba"] ?? 0)
+                + (counts["arrayState"] ?? 0)
                 + (counts["other"] ?? 0)
             var out: [String: Any] = counts.mapValues { $0 as Any }
             out["total"] = total
             out["countsScope"] = "fresh-cache-topology"
             out["slidingWindowActive"] = (counts["rotating"] ?? 0) > 0
             out["hybridSSMActive"] = (counts["mamba"] ?? 0) > 0
-            out["turboQuantActive"] =
-                (counts["turboQuant"] ?? 0) > 0 || hints.turboQuantRuntimeRequested
+            out["hybridStateActive"] =
+                (counts["mamba"] ?? 0) > 0 || (counts["arrayState"] ?? 0) > 0
+            out["turboQuantActive"] = (counts["turboQuant"] ?? 0) > 0
             out["turboQuantMaterializedLayers"] = counts["turboQuant"] ?? 0
             out["turboQuantConfigured"] = hints.turboQuantConfigured
             out["turboQuantJangConfigured"] = hints.turboQuantJangConfigured
@@ -4642,6 +4666,40 @@ public actor Engine {
             turboQuantKeyBits: keyBits,
             turboQuantValueBits: valueBits
         )
+    }
+
+    private static func safetensorsHeaderKeys(
+        at url: URL,
+        maxHeaderBytes: UInt64 = 32 * 1024 * 1024
+    ) -> [String]? {
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+
+            guard let prefix = try handle.read(upToCount: 8),
+                  prefix.count == 8
+            else {
+                return nil
+            }
+
+            var headerLength: UInt64 = 0
+            for (index, byte) in prefix.enumerated() {
+                headerLength |= UInt64(byte) << UInt64(index * 8)
+            }
+
+            guard headerLength > 0,
+                  headerLength <= maxHeaderBytes,
+                  let header = try handle.read(upToCount: Int(headerLength)),
+                  UInt64(header.count) == headerLength,
+                  let object = try JSONSerialization.jsonObject(with: header) as? [String: Any]
+            else {
+                return nil
+            }
+
+            return Array(object.keys)
+        } catch {
+            return nil
+        }
     }
 
     /// Clear all cache tiers without changing engine state.
