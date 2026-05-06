@@ -354,8 +354,17 @@ public enum Memory {
 
     /// Cause all cached buffers to be deallocated.
     public static func clearCache() {
-        _ = evalLock.withLock {
-            mlx_clear_cache()
+        do {
+            try withError {
+                _ = evalLock.withLock {
+                    mlx_clear_cache()
+                }
+            }
+        } catch {
+            let message = "[MLX] clearCache skipped after MLX error: \(error)\n"
+            if let data = message.data(using: .utf8) {
+                FileHandle.standardError.write(data)
+            }
         }
     }
 }

@@ -637,10 +637,13 @@ private struct ChatModelPicker: View {
                                 }
                                 let s = loadState(for: e)
                                 switch s {
-                                case .running, .loading, .standby:
+                                case .running, .standby:
                                     Button(L10n.Misc.stopUnload.render(appLocale)) {
                                         Task { await stopModel(for: e) }
                                     }
+                                case .loading:
+                                    Button("Loading…") {}
+                                        .disabled(true)
                                 case .stopped, .absent:
                                     Button(L10n.Misc.startLoad.render(appLocale)) {
                                         Task { await startModel(for: e) }
@@ -757,8 +760,10 @@ private struct ChatModelPicker: View {
                 guard let current = currentEntry() else { return }
                 Task {
                     switch currentState {
-                    case .running, .loading, .standby:
+                    case .running, .standby:
                         await stopModel(for: current)
+                    case .loading:
+                        break
                     case .stopped, .absent:
                         await startModel(for: current)
                     }
@@ -779,7 +784,7 @@ private struct ChatModelPicker: View {
                 )
             }
             .buttonStyle(.plain)
-            .disabled(currentEntry() == nil)
+            .disabled(currentEntry() == nil || currentState == .loading)
             .help(currentEntry() == nil
                   ? "Pick a model in the menu on the left first"
                   : buttonTooltip(for: currentState))
@@ -813,7 +818,7 @@ private struct ChatModelPicker: View {
     private func buttonTooltip(for s: LoadState) -> String {
         switch s {
         case .running: return "Unload this model from RAM"
-        case .loading: return "Loading in progress — click to cancel and unload"
+        case .loading: return "Loading in progress"
         case .standby: return "Wake / reload from standby"
         case .stopped: return "Load this model into RAM"
         case .absent:  return "Create a session and load this model"
