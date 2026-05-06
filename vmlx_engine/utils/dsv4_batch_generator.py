@@ -55,6 +55,12 @@ class _Request:
     matcher_state: Any = None
     finish_reason: Optional[str] = None
     prompt_processed: bool = False
+    # Clean prompt-boundary cache snapshot, captured immediately after
+    # prefill completes and BEFORE decode advances the live cache. Used
+    # by scheduler to populate prefix cache / L2 disk store with state
+    # that has no output-side contamination — solves the SWA wrap +
+    # CSA/HSA pool-drift problem without sacrificing cache hit rate.
+    prompt_snapshot: Optional[List[Any]] = None
 
 
 @dataclass
@@ -66,7 +72,11 @@ class _Response:
     finish_reason: Optional[str] = None
     current_state: Any = None
     match_sequence: Any = None
+    # `prompt_cache` is the LIVE cache used for decode (kept for back-compat
+    # with mlx_lm.BatchGenerator semantics that the scheduler expects).
+    # `prompt_cache_snapshot` is the clean prefill-time copy used for store.
     prompt_cache: Any = None
+    prompt_cache_snapshot: Any = None
 
 
 class DSV4BatchGenerator:
@@ -165,8 +175,234 @@ class DSV4BatchGenerator:
         # 43 layers for DSV4-Flash (caller will get this right via model.make_cache)
         return [KVCache() for _ in range(getattr(self.model, "n_layers", 43))]
 
-    def _sample(self, logits, sampler, processors, recent_tokens):
-        """Apply logits processors then sample. logits: (1, vocab)."""
+    @staticmethod
+    def _snapshot_dsv4_cache(cache_list: List[Any]) -> Optional[List[Any]]:
+        """Deep-copy a DSV4 cache list at the prompt boundary.
+
+        Captures a clean snapshot of `DeepseekV4Cache` (or any other cache
+        class in the list) IMMEDIATELY after prefill, before decode starts
+        advancing the live cache. This snapshot represents the prompt-only
+        state — no SWA wrap, no CSA/HSA pool drift from output tokens, no
+        cumulative contamination.
+
+        Used by scheduler to populate prefix cache + L2 disk store. The
+        guard at `_truncate_cache_to_prompt_length` is replaced by snapshot
+        consumption: when a request has a snapshot, scheduler stores that
+        directly (no rewind attempt). When no snapshot, the conservative
+        guard still fires.
+
+        Returns a NEW list of cache objects, deep-copied via numpy
+        roundtrip. Returns None if any layer fails to snapshot (caller
+        falls through to the conservative no-store path).
+        """
+        try:
+            import numpy as np
+            from jang_tools.dsv4.mlx_model import DeepseekV4Cache
+        except Exception:
+            return None
+
+        _force_realize = getattr(mx, "eval")
+        # Track per-snapshot copy failures so we can hard-fail the whole
+        # snapshot if any LEAF array fails to round-trip. Silent None
+        # leaves were a real bug (Codex 2026-05-05): if any DSV4 cache
+        # leaf is bf16, np.array(bf16_mx_array) raises a buffer-format
+        # error and would have left a None in place of real state →
+        # corrupted snapshot replays as garbage on cache hit.
+        copy_errors: List[str] = []
+
+        def _arr_copy(a):
+            """Force-realize and deep-copy an mx.array via numpy.
+
+            Casts bf16 → fp32 before numpy roundtrip because direct
+            np.array() on a bfloat16 mlx array raises:
+                "Item size 2 for PEP 3118 buffer format string B does
+                 not match the dtype B item size 1"
+            Restores fp32 → original dtype on the way back so the
+            snapshot's per-leaf dtype matches the live cache.
+            """
+            if a is None:
+                return None
+            try:
+                _force_realize(a)
+                src_dtype = a.dtype
+                # bf16 / non-numpy-mappable dtypes need fp32 staging.
+                # np.array() on bf16 raises buffer-format error.
+                use_fp32_stage = (
+                    str(src_dtype).endswith("bfloat16")
+                    or str(src_dtype).endswith("float8")
+                )
+                if use_fp32_stage:
+                    a_fp32 = a.astype(mx.float32)
+                    np_arr = np.array(a_fp32, copy=True)
+                    return mx.array(np_arr, dtype=mx.float32).astype(src_dtype)
+                return mx.array(np.array(a, copy=True), dtype=src_dtype)
+            except Exception as e:
+                copy_errors.append(f"{type(a).__name__}/{getattr(a,'dtype','?')}: {e}")
+                return None
+
+        snapshots: List[Any] = []
+        for layer_cache in cache_list:
+            try:
+                cls_name = type(layer_cache).__name__
+                if "DeepseekV4Cache" in cls_name:
+                    # DSV4 composite: state = (local_kv, comp_state, idx_state)
+                    local = getattr(layer_cache, "local", None)
+                    sliding_window = int(getattr(local, "max_size", 128) or 128)
+                    compress_ratio = getattr(layer_cache, "compress_ratio", None)
+
+                    new_cache = DeepseekV4Cache(
+                        sliding_window=sliding_window,
+                        compress_ratio=compress_ratio,
+                    )
+
+                    # Read state tuple via @property (returns nested tuples
+                    # of mx.arrays). Deep-copy each leaf array.
+                    state = layer_cache.state
+                    if state is not None:
+                        snap_state = []
+                        for sub in state:
+                            if sub is None:
+                                snap_state.append(None)
+                            elif isinstance(sub, (tuple, list)):
+                                snap_state.append(tuple(_arr_copy(x) for x in sub))
+                            else:
+                                snap_state.append(_arr_copy(sub))
+                        new_cache.state = tuple(snap_state)
+                    try:
+                        new_cache.meta_state = layer_cache.meta_state
+                    except Exception:
+                        pass
+                    snapshots.append(new_cache)
+                elif hasattr(layer_cache, "keys") and hasattr(layer_cache, "values"):
+                    from mlx_lm.models.cache import KVCache
+                    nc = type(layer_cache)() if "Cache" in cls_name else KVCache()
+                    try:
+                        k = layer_cache.keys
+                        v = layer_cache.values
+                        if k is not None and v is not None:
+                            nc.keys = _arr_copy(k)
+                            nc.values = _arr_copy(v)
+                            try:
+                                nc.offset = int(getattr(layer_cache, "offset", 0) or 0)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    snapshots.append(nc)
+                else:
+                    snapshots.append(None)
+            except Exception as e:
+                logger.debug(f"DSV4 snapshot failed for layer: {e}")
+                return None
+        # Hard-fail the whole snapshot if ANY leaf copy reported an
+        # error. Silent None leaves would corrupt cache replays.
+        if copy_errors:
+            logger.warning(
+                f"DSV4 snapshot REJECTED: {len(copy_errors)} leaf copy "
+                f"errors (first 3): {copy_errors[:3]}"
+            )
+            return None
+        return snapshots
+
+    @staticmethod
+    def _hard_repetition_block(
+        logits, recent_tokens, *,
+        run_threshold=2, window=20, diversity_window=16, diversity_min=8,
+    ):
+        """Hard-block degenerate-repetition tokens.
+
+        Three layered detectors, generated-tokens-only:
+          (1) Single-token repeat: any token at >=`run_threshold` in last
+              `window` positions → -inf. Threshold lowered to 2 to catch
+              "Stanford...Stanford" pairs that rep_penalty<<2 can't beat.
+          (2) 2-gram + 3-gram extension: block tokens that would extend
+              an already-repeated bigram/trigram.
+          (3) DIVERSITY COLLAPSE: when the last `diversity_window` decoded
+              tokens contain fewer than `diversity_min` unique values,
+              the model is in a degenerate attractor that cycles N
+              variants (e.g. case/space variants of the same word:
+              "VC, VC, fund, fund, venture, venture, Ventures, Ventures").
+              Variant-cycling bypasses single-token threshold. Block ALL
+              tokens that have appeared at all in the last
+              `diversity_window` positions — forces the model to pick a
+              novel token and break the cycle.
+
+        Verified live 2026-05-05:
+          - "Stanford Stanford..." (single-token, 100+) — (1) catches
+          - "Plan and Plan and ( ( ( (" — (2) catches
+          - "hora horora hora era ara" — (1) catches with threshold=2
+          - "VC VC fund fund management management ventures ventures Ventures Ventures ((( (((" — (3) catches diversity collapse
+
+        This is sampling-layer band-aid. The REAL root cause is DSV4
+        long-context attention drift (compressor/indexer pool
+        accumulation). Documented in DSV4_FIX_NUANCES.md.
+        """
+        if not recent_tokens:
+            return logits
+        tail = recent_tokens[-window:] if len(recent_tokens) > window else list(recent_tokens)
+        from collections import Counter
+
+        # (1) Single-token repeats — threshold=2 (was 3)
+        counts = Counter(tail)
+        offenders = set(t for t, c in counts.items() if c >= run_threshold)
+
+        # (2) 2-gram extension
+        if len(recent_tokens) >= 2:
+            prev1 = recent_tokens[-1]
+            ngram2_counter: Counter = Counter()
+            history = recent_tokens[-window:] if len(recent_tokens) > window else list(recent_tokens)
+            for i in range(len(history) - 1):
+                ngram2_counter[(history[i], history[i + 1])] += 1
+            for (a, b), c in ngram2_counter.items():
+                if c >= 2 and a == prev1:
+                    offenders.add(b)
+
+        # (3) 3-gram extension
+        if len(recent_tokens) >= 3:
+            prev1, prev2 = recent_tokens[-1], recent_tokens[-2]
+            ngram3_counter: Counter = Counter()
+            history = recent_tokens[-window:] if len(recent_tokens) > window else list(recent_tokens)
+            for i in range(len(history) - 2):
+                ngram3_counter[(history[i], history[i + 1], history[i + 2])] += 1
+            for (a, b, x), c in ngram3_counter.items():
+                if c >= 2 and a == prev2 and b == prev1:
+                    offenders.add(x)
+
+        # (4) Diversity collapse — variant-cycling attractor
+        if len(recent_tokens) >= diversity_window:
+            div_tail = recent_tokens[-diversity_window:]
+            unique_count = len(set(div_tail))
+            if unique_count < diversity_min:
+                # All recent tokens are recyclable in the attractor.
+                # Block them all to force novel sampling.
+                offenders.update(set(div_tail))
+
+        if not offenders:
+            return logits
+        try:
+            logits_2d = logits if logits.ndim == 2 else logits[None, :]
+            updated = logits_2d
+            neg_inf = mx.array(-float("inf"), dtype=logits_2d.dtype)
+            offender_arr = mx.array(sorted(offenders), dtype=mx.int32)
+            arange = mx.arange(logits_2d.shape[-1])
+            mask = mx.zeros((logits_2d.shape[-1],), dtype=mx.bool_)
+            for tid in sorted(offenders):
+                if 0 <= tid < logits_2d.shape[-1]:
+                    mask = mask | (arange == tid)
+            updated = mx.where(mask, neg_inf, updated)
+            return updated if logits.ndim == 2 else updated[0]
+        except Exception:
+            return logits
+
+    def _sample(self, logits, sampler, processors, recent_tokens, generated_tokens=None):
+        """Apply logits processors then sample. logits: (1, vocab).
+
+        `recent_tokens`: full prompt+generated context (used by rep_penalty
+            processor — mlx_lm convention).
+        `generated_tokens`: GENERATED-ONLY context (used by the hard n-gram
+            dedup so the prompt cannot poison the dedup state). When None,
+            falls back to `recent_tokens` for backwards compat.
+        """
         x = logits
         for p in processors or []:
             # processor signature: fn(token_context, logits) -> logits
@@ -174,6 +410,15 @@ class DSV4BatchGenerator:
                 x = p(recent_tokens, x)
             except TypeError:
                 x = p(x)
+        # DSV4 hard n-gram dedup — final logit warp BEFORE softmax. ONLY
+        # uses generated tokens to avoid prompt-token poisoning of the
+        # dedup state (Codex 2026-05-05). Without this, a prompt that
+        # legitimately repeats a word 3+ times would block that word for
+        # the entire generation. Disable via env
+        # VMLX_DSV4_HARD_REP_BLOCK=0 if it interferes (NOT recommended).
+        if os.environ.get("VMLX_DSV4_HARD_REP_BLOCK", "1") not in ("0", "false", "no"):
+            dedup_ctx = generated_tokens if generated_tokens is not None else recent_tokens
+            x = self._hard_repetition_block(x, dedup_ctx)
         # Convert log-probs via logsumexp normalization
         logprobs = x - mx.logsumexp(x, axis=-1, keepdims=True)
         # Sampler
@@ -331,11 +576,49 @@ class DSV4BatchGenerator:
                         r.finish_reason = "stop"
                         r.prompt_processed = True
                         continue
-                    # Sample first token from last logit position
-                    last_logits = self._prefill_last_logits(r.prompt_tokens, r.cache)
+
+                    # TWO-PHASE PREFILL FOR N-1 SNAPSHOT.
+                    #
+                    # Scheduler stores prefix cache under N-1 token keys
+                    # so the last prompt token gets re-fed on cache hit
+                    # (avoids positional duplication). Our snapshot must
+                    # match that convention or hits drift positionally.
+                    #
+                    # Phase 1: prefill all but last token, snapshot the
+                    #          cache state at N-1.
+                    # Phase 2: prefill the last token to advance the
+                    #          live cache to N (used for first-token
+                    #          decode logits).
+                    if len(r.prompt_tokens) >= 2:
+                        head_tokens = r.prompt_tokens[:-1]
+                        last_token = r.prompt_tokens[-1:]
+                        # Phase 1
+                        _ = self._prefill_last_logits(head_tokens, r.cache)
+                        try:
+                            r.prompt_snapshot = self._snapshot_dsv4_cache(r.cache)
+                            if r.prompt_snapshot is not None:
+                                logger.debug(
+                                    f"DSV4Gen: captured N-1 prompt-boundary "
+                                    f"snapshot ({len(r.prompt_snapshot)} layers, "
+                                    f"N-1={len(head_tokens)} tokens) "
+                                    f"for uid={r.uid}"
+                                )
+                        except Exception as _snap_err:
+                            logger.warning(
+                                f"DSV4Gen: snapshot capture failed: {_snap_err}"
+                            )
+                            r.prompt_snapshot = None
+                        # Phase 2 — feed the last token, get its logits
+                        last_logits = self._prefill_last_logits(last_token, r.cache)
+                    else:
+                        # Trivial 1-token prompt — no N-1 to snapshot.
+                        last_logits = self._prefill_last_logits(r.prompt_tokens, r.cache)
+                        r.prompt_snapshot = None
+
                     sampled, logprobs = self._sample(
                         last_logits, r.sampler, r.logits_processors,
                         self._processor_context(r),
+                        generated_tokens=list(r.out_tokens),
                     )
                     if hasattr(mx, "synchronize"):
                         mx.synchronize()
@@ -351,6 +634,7 @@ class DSV4BatchGenerator:
                         uid=r.uid, token=tok_id, logprobs=logprobs,
                         finish_reason=r.finish_reason,
                         prompt_cache=r.cache,
+                        prompt_cache_snapshot=r.prompt_snapshot,
                     ))
                 elif not r.prompt_processed:
                     # Prefix-cache hit path. The scheduler passes the cached
@@ -369,6 +653,7 @@ class DSV4BatchGenerator:
                     sampled, logprobs = self._sample(
                         last_logits, r.sampler, r.logits_processors,
                         self._processor_context(r),
+                        generated_tokens=list(r.out_tokens),
                     )
                     if hasattr(mx, "synchronize"):
                         mx.synchronize()
@@ -383,6 +668,7 @@ class DSV4BatchGenerator:
                         uid=r.uid, token=tok_id, logprobs=logprobs,
                         finish_reason=r.finish_reason,
                         prompt_cache=r.cache,
+                        prompt_cache_snapshot=r.prompt_snapshot,
                     ))
                 else:
                     # Decode
@@ -399,6 +685,7 @@ class DSV4BatchGenerator:
                     sampled, logprobs = self._sample(
                         last_logits, r.sampler, r.logits_processors,
                         self._processor_context(r),
+                        generated_tokens=list(r.out_tokens),
                     )
                     if hasattr(mx, "synchronize"):
                         mx.synchronize()
@@ -412,6 +699,7 @@ class DSV4BatchGenerator:
                         uid=r.uid, token=tok_id, logprobs=logprobs,
                         finish_reason=r.finish_reason,
                         prompt_cache=r.cache,
+                        prompt_cache_snapshot=r.prompt_snapshot,
                     ))
 
         return prompt_resps, gen_resps

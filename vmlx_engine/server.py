@@ -285,19 +285,57 @@ _FALLBACK_TOP_P = 0.9
 # Per-family entries are (temperature, top_p, repetition_penalty); None
 # fields fall through to the generic _FALLBACK_*.
 _FAMILY_FALLBACK_DEFAULTS: dict[str, tuple[float | None, float | None, float | None]] = {
-    # Empty by design. Earlier work added rep_penalty bandaids here
-    # (1.05 / 1.15 for "deepseek_v4") that were masking a real cache
-    # contamination bug — `DeepseekV4Cache` carries cumulative
-    # `compressor_state` + `indexer_state` pool buffers that survive
-    # `_truncate_cache_to_prompt_length` because line 768 explicitly
-    # discarded `DeepseekV4Cache` from the non-KV (cumulative-state)
-    # set. The pool buffers accumulated output-side artifacts across
-    # multi-turn → polite-assistant attractor loops in chat. Bench
-    # (SimpleEngine) was clean because it doesn't reuse caches.
-    # That root-cause is now fixed at scheduler.py:768. With the
-    # cumulative-state path correctly active for DSV4, the same
-    # rep_penalty that produced 91% MMLU (request default) works in
-    # chat too. Family-specific bandaids removed.
+    # DSV4-Flash safety floor.
+    #
+    # Three independent loop sources converge on DSV4-Flash and any one
+    # of them is enough to produce a deterministic attractor at the
+    # default sampling parameters:
+    #
+    # (1) Chat-mode contamination — bundle's training data leaks
+    #     polite-assistant boilerplate; defended at the API layer by
+    #     `is not True` force-flip in the `_is_dsv4` blocks.
+    # (2) Cumulative pool-buffer leakage — `DeepseekV4Cache`
+    #     compressor/indexer pool buffers carry output-side state
+    #     across turns; defended at scheduler.py:768 by routing DSV4
+    #     through the hybrid cumulative-state path with rejected-
+    #     post-output-snapshot semantics, plus the SWA+CSA+HSA cache
+    #     truncation guard at scheduler.py:1964 (refuse store when
+    #     RotatingKVCache has wrapped).
+    # (3) Self-reinforcing token attractors at low temperature even
+    #     within a single turn (no cache reuse, no chat mode) — most
+    #     visible on short-query prompts. Defended here.
+    #
+    # 1.15 was the validated value from v1.5.8 (44c571a6). Production
+    # users keep it; benchmark users override per-request to 1.05 to
+    # match the 91% MMLU baseline. ~3pp MMLU trade-off documented.
+    "deepseek_v4": (0.6, 0.95, 1.15),
+
+    # MiniMax-M2.7 safety floor.
+    #
+    # Bundle defaults are repetition_penalty=1.0 in jang_config (via
+    # generation_config.json). At rep=1.0, MiniMax JANGTQ thinking-mode
+    # falls into a rumination attractor on certain prompts: produces
+    # 600+ tokens of "The user asks... This is a request... The user
+    # wants... The assistant can comply..." paraphrasing the analysis
+    # without ever closing the <think> block. Reproduces with
+    # cache_salt (full cache bypass) — model-level rumination, not
+    # cache contamination.
+    #
+    # Live sweep at temperature=0.6, prompt="Tell me a 2-sentence
+    # story about a project to see the birth of a star." mode=on:
+    #   rep=1.00 → loop_score=0.250 LOOP
+    #   rep=1.05 → loop_score=0.370 LOOP
+    #   rep=1.10 → loop_score=0.397 LOOP (borderline)
+    #   rep=1.15 → loop_score=0.400 OK   (sweet spot lower bound)
+    #   rep=1.20 → loop_score=0.442 OK
+    #   rep=1.30 → loop_score=0.346 LOOP (penalty fragments output)
+    #
+    # 1.15 chosen as the floor — same as DSV4 — gives consistent
+    # behavior across families. Per-request override still wins.
+    # Note: MiniMax JANGTQ_K (mixed-bit) is markedly less prone to
+    # this issue (10/12 cells OK at default rep) so the floor is
+    # defensive rather than load-bearing for the K variant.
+    "minimax_m2": (0.6, 0.95, 1.15),
 }
 
 
@@ -677,6 +715,42 @@ def _resolve_repetition_penalty(request_value: float | None, model_name: str = "
     if resolved is None:
         _, _, fam_rep = _family_fallback_for(model_name)
         resolved = fam_rep
+
+    # MIN-floor enforcement for safety-critical families.
+    #
+    # DSV4 + MiniMax bundles ship `repetition_penalty=1.0` (thinking) or
+    # 1.05 (chat) in jang_config. Both are confirmed to produce
+    # degenerate repetition loops on long-form prompts (live user
+    # reports 2026-05-05: VC-fund Project Plan request → "Plan and
+    # Plan and Plan ... ( ( ( ( ( ( (" attractor at ~1000 chars of
+    # thinking; "birth, birth, birth..."; "(the project (the
+    # project..."; "response\\nresponse..."). Bundle calibration wins
+    # over family fallback in the precedence chain above, so simply
+    # listing 1.15 in `_FAMILY_FALLBACK_DEFAULTS` is not enough — the
+    # bundle's 1.0 wins.
+    #
+    # Apply a hard MIN-floor for these families. Per-request explicit
+    # values (request_value path early-return above) bypass the floor.
+    # CLI-default values DO get floored (they're operator-level
+    # defaults, not user-explicit choices).
+    #
+    # Trade-off: ~3pp MMLU on benchmark-style probes. Override per-
+    # request with `repetition_penalty=1.05` or run with
+    # `--default-repetition-penalty=1.05` only when you know your
+    # prompts won't trigger the long-context attractor. This MIN-floor
+    # protects the default user path.
+    _SAFETY_FLOORS = {"deepseek_v4": 1.15, "minimax_m2": 1.15}
+    _family = _model_family_for_defaults(_bundle_path or model_name)
+    _floor = _SAFETY_FLOORS.get(_family)
+    if _floor is not None and resolved is not None and resolved < _floor:
+        logger.info(
+            f"DSV4/MiniMax safety floor applied: bundle/CLI rep_penalty="
+            f"{resolved} raised to family floor {_floor} "
+            f"(family={_family}). Per-request override with "
+            f"repetition_penalty bypasses this floor."
+        )
+        resolved = _floor
+
     return resolved
 
 
@@ -4067,19 +4141,28 @@ async def create_anthropic_message(
 
         # DSV4 reasoning toggle propagation.
         #
-        # v1.5.6 (00a78db4) verified empirically that the DSV4-Flash
-        # bundle's chat-mode (enable_thinking=False) emits training-data-
-        # contaminated output (hallucinated AI-assistant boilerplate,
-        # mixed-language annotation leakage, polite-assistant attractor
-        # loops). v1.5.15 attempted to attribute this to multi-turn
-        # cumulative pool-buffer contamination and removed the force-
-        # flip, but single-turn loops (no cumulative state) still
-        # reproduce — the v1.5.6 contamination diagnosis stands.
+        # The DSV4-Flash bundle's chat-mode (enable_thinking=False) emits
+        # training-data-contaminated output: deterministic looping
+        # ("Birth Birth Birth..." attractor verified live), polite-
+        # assistant boilerplate, mixed-language annotation leakage. This
+        # is the bundle, not the runtime — coercing the API mode does
+        # not "fix" the bundle, it routes around the broken path.
         #
-        # Force enable_thinking=True for DSV4 unless the caller
-        # explicitly passed True (already on) or False (rare, e.g. an
-        # advanced user benchmarking chat-mode). This matches v1.5.6.
-        if chat_req.enable_thinking is False:
+        # Force enable_thinking=True regardless of caller value, UNLESS
+        # the env override `VMLX_DSV4_ALLOW_CHAT=1` is set (advanced
+        # users benchmarking chat-mode against the runtime trace must
+        # opt in deliberately). This matches v1.5.6's `is not True`
+        # semantics and ensures all 3 reasoning modes (auto / on / max)
+        # produce coherent output via the verified thinking path.
+        _allow_dsv4_chat = os.environ.get(
+            "VMLX_DSV4_ALLOW_CHAT", "0"
+        ).lower() in {"1", "true", "yes"}
+        if chat_req.enable_thinking is False and _allow_dsv4_chat:
+            logger.warning(
+                "DSV4: VMLX_DSV4_ALLOW_CHAT=1 — honoring explicit "
+                "enable_thinking=False. Output may loop or hallucinate "
+                "(chat-mode bundle is training-data-contaminated)."
+            )
             _msg_kwargs["enable_thinking"] = False
             _ct_kwargs["enable_thinking"] = False
         else:
@@ -4087,13 +4170,26 @@ async def create_anthropic_message(
                 logger.info(
                     "DSV4: forcing enable_thinking=True (chat-mode bundle "
                     "is training-data-contaminated; thinking-mode is the "
-                    "verified-clean path) — see v1.5.6 (00a78db4)"
+                    "only verified-coherent path). Override with "
+                    "VMLX_DSV4_ALLOW_CHAT=1 if you accept the risk."
                 )
                 chat_req.enable_thinking = True
             _msg_kwargs["enable_thinking"] = True
             _ct_kwargs["enable_thinking"] = True
+        # Pass valid effort levels through to the DSV4 encoder. The
+        # encoder's strict contract is `reasoning_effort in {None, "high",
+        # "max"}`. Previously this code stripped EVERYTHING that wasn't
+        # "max" — so panel's "Reasoning" middle button (which sends
+        # thinking_mode="reasoning" → reasoning_effort="medium") had its
+        # effort hint dropped entirely, leaving the model in default
+        # plain-thinking mode with no budget/close discipline. Fix:
+        # normalize "low"/"medium"/"high" to "high" (the encoder's only
+        # non-max option) so the effort hint actually reaches the
+        # template. Codex 2026-05-05.
         if _cur_effort == "max":
             _ct_kwargs["reasoning_effort"] = "max"
+        elif _cur_effort in ("low", "medium", "high"):
+            _ct_kwargs["reasoning_effort"] = "high"
         else:
             _ct_kwargs.pop("reasoning_effort", None)
 
@@ -4806,10 +4902,17 @@ async def ollama_chat(fastapi_request: Request):
             or _ollama_ct_kwargs.get("reasoning_effort")
         )
         _ollama_ct_kwargs.pop("thinking_mode", None)
-        # DSV4 reasoning toggle on Ollama path. Force True unless
-        # explicit False — see chat-completions block for v1.5.6
-        # rationale (chat-mode bundle is training-data-contaminated).
-        if chat_req.enable_thinking is False:
+        # DSV4 reasoning toggle on Ollama path. See chat-completions
+        # block for the full rationale (chat-mode bundle is training-
+        # data-contaminated; force-flip unless VMLX_DSV4_ALLOW_CHAT=1).
+        _allow_dsv4_chat_o = os.environ.get(
+            "VMLX_DSV4_ALLOW_CHAT", "0"
+        ).lower() in {"1", "true", "yes"}
+        if chat_req.enable_thinking is False and _allow_dsv4_chat_o:
+            logger.warning(
+                "DSV4 (Ollama): VMLX_DSV4_ALLOW_CHAT=1 — honoring "
+                "explicit enable_thinking=False. Output may loop."
+            )
             chat_kwargs["enable_thinking"] = False
             _ollama_ct_kwargs["enable_thinking"] = False
         else:
@@ -4823,6 +4926,8 @@ async def ollama_chat(fastapi_request: Request):
             _ollama_ct_kwargs["enable_thinking"] = True
         if _cur_effort_o == "max":
             _ollama_ct_kwargs["reasoning_effort"] = "max"
+        elif _cur_effort_o in ("low", "medium", "high"):
+            _ollama_ct_kwargs["reasoning_effort"] = "high"
         else:
             _ollama_ct_kwargs.pop("reasoning_effort", None)
         # Forward the resolved chat_template_kwargs so DSV4 encoder sees them.
@@ -6499,10 +6604,18 @@ async def create_chat_completion(
         # Strip stale fields from any prior path so the final kwargs are clean.
         _ct_kwargs.pop("thinking_mode", None)
 
-        # DSV4 reasoning toggle on /v1/responses path. Force True
-        # unless explicit False — see chat-completions block for the
-        # v1.5.6 rationale (chat-mode bundle training-data-contaminated).
-        if request.enable_thinking is False:
+        # DSV4 reasoning toggle on /v1/responses path. See chat-
+        # completions block for the full rationale (chat-mode bundle is
+        # training-data-contaminated; force-flip unless
+        # VMLX_DSV4_ALLOW_CHAT=1).
+        _allow_dsv4_chat_r = os.environ.get(
+            "VMLX_DSV4_ALLOW_CHAT", "0"
+        ).lower() in {"1", "true", "yes"}
+        if request.enable_thinking is False and _allow_dsv4_chat_r:
+            logger.warning(
+                "DSV4 (Responses): VMLX_DSV4_ALLOW_CHAT=1 — honoring "
+                "explicit enable_thinking=False. Output may loop."
+            )
             chat_kwargs["enable_thinking"] = False
             _ct_kwargs["enable_thinking"] = False
         else:
@@ -6516,6 +6629,8 @@ async def create_chat_completion(
             _ct_kwargs["enable_thinking"] = True
         if _cur_effort == "max":
             _ct_kwargs["reasoning_effort"] = "max"
+        elif _cur_effort in ("low", "medium", "high"):
+            _ct_kwargs["reasoning_effort"] = "high"
         else:
             _ct_kwargs.pop("reasoning_effort", None)
 
