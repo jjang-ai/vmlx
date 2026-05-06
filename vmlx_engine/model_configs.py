@@ -561,6 +561,59 @@ def register_all(registry=None):
         )
     )
 
+    # ── Ling-2.6-flash / Bailing-V2.5 (bailing_hybrid model_type) ──
+    # Hybrid MLA + Lightning-Attn-2 (Gated Linear Attention). Layer
+    # dispatch is controlled by `layer_group_size` (default 8 for
+    # Ling-2.6-flash): every group_size-th layer is MLA (softmax), the
+    # rest are linear-attn — see research/LING-RUNTIME-ARCHITECTURE.md
+    # §2. The runtime model class lives at
+    # `mlx_lm/models/bailing_hybrid.py` (vendored under
+    # `panel/scripts/patches/bailing_hybrid.patched.py` and installed by
+    # `bundle-python.sh`).
+    #
+    # Cache type "hybrid" — engine builds KVCache slots for the MLA
+    # layers and ArraysCache(size=1) for the linear-attn layers. The
+    # `<role>SYSTEM</role>...<|role_end|>` chat template hardcodes
+    # `detailed thinking off` and only flips on when the user's actual
+    # system message contains the literal string `detailed thinking on`.
+    # `think_in_template=True` so the deepseek_r1 reasoning parser can
+    # detect the template-opened `<think>` block without re-injection.
+    # MTP layer (`model.layers.32`) is loaded but skipped in standard
+    # generation; spec-decode wiring is a future pass. Tool format is
+    # DeepSeek-style.
+    #
+    # 2026-05-06 EOS correction: Ling-2.6 has TWO EOS tokens per
+    # `generation_config.json::eos_token_id`:
+    #   156892 = `<|endoftext|>`
+    #   156895 = `<|role_end|>`
+    # Earlier comment incorrectly transposed these IDs. Older bundles (<.20)
+    # whose `generation_config.json` missed the secondary EOS — or paths
+    # that bypass the BatchedEngine multi-eos UNION hook — would only stop
+    # at one of the two, producing the "answer never terminates, falls into
+    # one repeated token" loop. Registry now lists both so the union
+    # always covers both tokens regardless of bundle metadata.
+    _register(
+        ModelConfig(
+            family_name="ling",
+            model_types=["bailing_hybrid", "bailing_moe_v2_5"],
+            cache_type="hybrid",
+            eos_tokens=["<|role_end|>", "<|endoftext|>"],
+            tool_parser="deepseek",
+            reasoning_parser="deepseek_r1",
+            # think_in_template=False (default): Ling's chat template does NOT
+            # auto-inject `<think>` — it defaults to a hardcoded system
+            # `detailed thinking off`, and only opens `<think>` when the user
+            # supplies `detailed thinking on` in their system message. The
+            # deepseek_r1 reasoning parser detects `<think>...</think>`
+            # blocks dynamically; with think_in_template=True (DSV4-style),
+            # the parser assumes the response opens inside a think block and
+            # routes ALL output to `reasoning_content`, leaving `content`
+            # null — which is the symptom Ling exhibits with thinking-off.
+            think_in_template=False,
+            priority=20,
+        )
+    )
+
     # ── GLM family (CRITICAL: different reasoning parsers per variant) ──
 
     # GPT-OSS: Harmony <|channel|> protocol reasoning
