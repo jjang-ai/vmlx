@@ -64,14 +64,24 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
     /// Persist SSM layer states for a given token prefix. Mirrors
     /// `SSMStateCache.store(ssmStates:tokens:boundary:)` with the
     /// addition of an `isComplete` flag (parity with Python tuple).
+    ///
+    /// Iter 143: `mediaSalt` is now threaded through to the disk key
+    /// so VL/Omni paths don't collide with text-only prefixes that
+    /// happen to share a token prefix. Previously hardcoded to `nil`
+    /// here, which silently aliased text-only and audio/image variants
+    /// of the same prefix on disk → wrong SSM state restored on cold
+    /// start for hybrid-VL or Nemotron-Omni audio sessions.
     public func store(
         ssmStates: [MLXArray],
         tokens: [Int],
         boundary: Int,
+        mediaSalt: String? = nil,
         isComplete: Bool = true
     ) throws {
         guard !ssmStates.isEmpty, boundary > 0, boundary <= tokens.count else { return }
-        let key = Self.keyFor(tokens: tokens, boundary: boundary, modelKey: modelKey)
+        let key = Self.keyFor(
+            tokens: tokens, boundary: boundary,
+            mediaSalt: mediaSalt, modelKey: modelKey)
 
         // Pre-realize on calling thread — same rationale as
         // DiskCache.swift:114-116. GPU work must complete before the
@@ -109,12 +119,19 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
 
     /// Look up SSM layer states for a given token prefix + boundary.
     /// Returns nil on miss / corruption / decode failure.
+    ///
+    /// Iter 143: `mediaSalt` mirror of the store-side change. Pass the
+    /// same salt the L1 store consumed (typically derived from
+    /// `computeMediaSalt(images:videos:audios:)`).
     public func fetch(
         tokens: [Int],
-        boundary: Int
+        boundary: Int,
+        mediaSalt: String? = nil
     ) -> SSMStateCache.FetchResult? {
         guard boundary > 0, boundary <= tokens.count else { return nil }
-        let key = Self.keyFor(tokens: tokens, boundary: boundary, modelKey: modelKey)
+        let key = Self.keyFor(
+            tokens: tokens, boundary: boundary,
+            mediaSalt: mediaSalt, modelKey: modelKey)
         let safetensorsURL = self.safetensorsURL(for: key)
         let sidecarURL = self.sidecarURL(for: key)
 
@@ -181,14 +198,21 @@ public final class SSMCompanionDiskStore: @unchecked Sendable {
     /// was a write-only L2: every disk fetch missed L1's hash, so backfill
     /// silently failed (`AUDIT-SSM-WARMPASS-PARITY.md` §1). New formula
     /// delegates to `SSMStateCache.makeKey` so the two sites cannot drift.
-    /// Note: `mediaSalt` is not currently passed in by the caller chain;
-    /// the L1 site provides it. Pass `nil` here = no salt, which is fine
-    /// for the text path. VLM/Omni paths should be plumbed through to mix
-    /// it in (P1 follow-up — would otherwise break VLM L2 disk fetch).
-    public static func keyFor(tokens: [Int], boundary: Int, modelKey: String?) -> String {
+    ///
+    /// Iter 143: `mediaSalt` is now a real parameter (was hardcoded to
+    /// nil — flagged "P1 follow-up" in the prior comment). Threading it
+    /// through closes the L2 disk collision class for VL/Omni hybrid
+    /// sessions: text-only and audio/image variants of the same token
+    /// prefix used to share a key on disk → wrong SSM state restored.
+    /// The 3-arg form (no mediaSalt) is preserved as a thin wrapper so
+    /// existing tests + text-only callers don't need updating.
+    public static func keyFor(
+        tokens: [Int], boundary: Int,
+        mediaSalt: String? = nil, modelKey: String?
+    ) -> String {
         SSMStateCache.makeKey(
             tokens: tokens, boundary: boundary,
-            mediaSalt: nil, modelKey: modelKey
+            mediaSalt: mediaSalt, modelKey: modelKey
         )
     }
 }

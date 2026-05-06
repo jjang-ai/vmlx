@@ -137,7 +137,44 @@ public final class DiskCache: @unchecked Sendable {
         // itself happens OUTSIDE the lock because it's slow and each
         // hash lives in its own file.
         do {
-            try save(arrays: arrays, metadata: ["format": "mlx"], url: url)
+            // Iter 144 — atomic save. Pre-fix `save(...url:)` wrote
+            // directly to the final destination; a process kill mid-
+            // write left a partial-but-header-valid safetensors file
+            // on disk with no DB row, OR (during the SHA migration
+            // window) with a NULL fileSha256 row that fetch's
+            // `if let expected = storedSha` skipped — handing
+            // truncated tensors to the model. Now: write to a sibling
+            // `.tmp.<uuid>.safetensors` then rename(2) into place. The
+            // staging file must still end in `.safetensors`: MLX.save
+            // dispatches by path extension and rejects bare `.tmp`.
+            // Atomic on POSIX (kernel never observes a half-renamed inode).
+            let tmpPrefix = url.deletingPathExtension().lastPathComponent + ".tmp."
+            let tmpURL = url
+                .deletingLastPathComponent()
+                .appendingPathComponent(tmpPrefix + UUID().uuidString)
+                .appendingPathExtension("safetensors")
+            // Cleanup stale staging files for this hash from a prior crashed run.
+            if let siblings = try? FileManager.default.contentsOfDirectory(
+                at: cacheDir,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
+            ) {
+                for stale in siblings
+                    where stale.lastPathComponent.hasPrefix(tmpPrefix)
+                        && stale.pathExtension == "safetensors"
+                {
+                    try? FileManager.default.removeItem(at: stale)
+                }
+            }
+            try save(arrays: arrays, metadata: ["format": "mlx"], url: tmpURL)
+            // Atomic rename — kernel-level swap of inode pointers.
+            // If the destination already exists (rare race where two
+            // stores hashed identically), `replaceItem` swaps cleanly.
+            if FileManager.default.fileExists(atPath: url.path) {
+                _ = try FileManager.default.replaceItemAt(url, withItemAt: tmpURL)
+            } else {
+                try FileManager.default.moveItem(at: tmpURL, to: url)
+            }
 
             let fileSize: Int
             if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),

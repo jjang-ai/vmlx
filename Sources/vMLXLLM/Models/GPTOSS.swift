@@ -272,14 +272,16 @@ class MLPBlock: Module {
     let hiddenSize: Int
     let numLocalExperts: Int
     let numExpertsPerTok: Int
+    let layerIdx: Int
 
     @ModuleInfo(key: "experts") var experts: SwiGLUSwitchGLU
     @ModuleInfo(key: "router") var router: Linear
 
-    public init(_ config: GPTOSSConfiguration) {
+    public init(_ config: GPTOSSConfiguration, layerIdx: Int) {
         self.hiddenSize = config.hiddenSize
         self.numLocalExperts = config.localExperts
         self.numExpertsPerTok = config.expertsPerToken
+        self.layerIdx = layerIdx
 
         _experts.wrappedValue = SwiGLUSwitchGLU(
             inputDims: config.hiddenSize,
@@ -294,6 +296,7 @@ class MLPBlock: Module {
         let g = router(x)
         let (experts, indices) = mlxTopK(g, k: numExpertsPerTok, axis: -1)
         let stopIndices = MLX.stopGradient(indices)
+        JangPressRouteTelemetry.recordTopK(layer: layerIdx, indices: stopIndices)
         let expertWeights = softmax(experts, axis: -1, precise: true)
 
         var x = self.experts(x, stopIndices)
@@ -309,9 +312,9 @@ class GPTOSSTransformerBlock: Module {
     @ModuleInfo(key: "input_layernorm") var inputLayerNorm: RMSNorm
     @ModuleInfo(key: "post_attention_layernorm") var postAttentionLayerNorm: RMSNorm
 
-    public init(_ config: GPTOSSConfiguration) {
+    public init(_ config: GPTOSSConfiguration, layerIdx: Int) {
         _selfAttn.wrappedValue = AttentionBlock(config)
-        _mlp.wrappedValue = MLPBlock(config)
+        _mlp.wrappedValue = MLPBlock(config, layerIdx: layerIdx)
         _inputLayerNorm.wrappedValue = RMSNorm(
             dimensions: config.hiddenSize, eps: config.rmsNormEps)
         _postAttentionLayerNorm.wrappedValue = RMSNorm(
@@ -357,7 +360,9 @@ public class GPTOSSModelInner: Module {
                     "full_attention",
                 ], count: config.hiddenLayers / 2
             ).flatMap { $0 }
-        self.layers = (0 ..< config.hiddenLayers).map { _ in GPTOSSTransformerBlock(config) }
+        self.layers = (0 ..< config.hiddenLayers).map {
+            GPTOSSTransformerBlock(config, layerIdx: $0)
+        }
         self.windowSize = config.slidingWindow
         self.slidingAttentionIndex =
             self.layerTypes.firstIndex(of: "sliding_attention") ?? 0

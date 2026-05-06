@@ -43,6 +43,12 @@ int mlx_load_safetensors(
     mlx_map_string_to_string* res_1,
     const char* file,
     const mlx_stream s);
+int64_t mlx_safetensors_mmap_advise_routed(int32_t advice, int32_t pct);
+int64_t mlx_safetensors_mmap_advise_experts(
+    int32_t advice,
+    const int32_t* layers,
+    const int32_t* experts,
+    int64_t count);
 int mlx_save_writer(mlx_io_writer out_stream, const mlx_array a);
 int mlx_save(const char* file, const mlx_array a);
 int mlx_save_safetensors_writer(

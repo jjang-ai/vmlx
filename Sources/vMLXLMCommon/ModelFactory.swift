@@ -401,7 +401,14 @@ private func load<R>(loader: (ModelFactory) async throws -> sending R) async thr
             let model = try await loader(factory)
             return model
         } catch {
-            print("[ModelFactory] \(type(of: factory)) failed: \(error)")
+            // Iter 143 — structured stderr line. Factory errors are
+            // collected into `lastError` and re-thrown after all
+            // factories tried; this line tells operators which
+            // factory rejected so they can target a fix at the right
+            // family.
+            if let data = "[vMLX][factory] \(type(of: factory)) failed: \(error)\n".data(using: .utf8) {
+                try? FileHandle.standardError.write(contentsOf: data)
+            }
             lastError = error
         }
     }

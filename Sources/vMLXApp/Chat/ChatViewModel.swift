@@ -120,6 +120,21 @@ final class ChatViewModel {
         guard let app else { return nil }
         return await app.engine.settings.global()
     }
+
+    /// Returns the port the gateway is actually BOUND to, NOT the
+    /// configured/requested value. After auto-bump on collision (e.g.,
+    /// Ollama owns 8080, we get 8081) the configured port routes
+    /// requests into the wrong process. Audio buttons (Mic, TTS) MUST
+    /// use this accessor — they go out and back in via 127.0.0.1, and
+    /// the gateway port is the only one that has the audio routes
+    /// registered. Returns nil if the gateway is .disabled or .failed,
+    /// in which case the caller should NOT make an HTTP request.
+    @MainActor
+    func gatewayBoundPort() -> Int? {
+        guard let app else { return nil }
+        if case .running(let bound, _) = app.gatewayStatus { return bound }
+        return nil
+    }
     private var streamTask: Task<Void, Never>? = nil
 
     /// Optional server-session id — when set, `send()` targets the engine
@@ -132,6 +147,7 @@ final class ChatViewModel {
     /// "[stopped]" instead of a red error banner. Mirrors Electron's
     /// `intentionalStopRef` in `ChatInterface.tsx`.
     private var intentionalStop: Bool = false
+    private var defaultReasoningEnabledSeed: Bool = false
 
     /// Convenience alias used by Chat views — `isStreaming` reads better in
     /// view code, and the audit/UX-AUDIT items 9/13 spec their guards by name.
@@ -189,6 +205,18 @@ final class ChatViewModel {
             case .error:   phase = .error
             }
             message.toolStatuses[status.toolCallId] = phase
+            // Capture the executor's stdout/stderr at terminal phases —
+            // Stream.swift:482-487 yields `message: result.content` on
+            // both `.done` and `.error`. Persist into `toolOutputs` so
+            // InlineToolCallCard's expanded body renders the output
+            // (was always nil before this wire-up). Skip `.started` /
+            // `.running` so we don't wipe a captured output with a
+            // pre-execution status that doesn't carry one.
+            if status.phase == .done || status.phase == .error,
+               let out = status.message, !out.isEmpty
+            {
+                message.toolOutputs[status.toolCallId] = out
+            }
         }
     }
 
@@ -207,22 +235,44 @@ final class ChatViewModel {
         if activeSessionId == nil, let first = sessions.first {
             activeSessionId = first.id
             messages = Database.shared.messages(for: first.id)
+            // Iter 147 — startup recovery for persisted failed turns.
+            // A corrupted/stopped transcript from an older bad runtime can
+            // be the first chat auto-selected on launch. Then every later
+            // Load Model click appears to "still show the same garbage"
+            // even when no fresh generation happened. Keep the old session
+            // in the sidebar/history, but open a clean chat as the active
+            // surface when the selected transcript clearly contains a
+            // failed assistant turn.
+            if shouldStartCleanChatAfterFailedTranscript(messages) {
+                let failedId = first.id
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          self.activeSessionId == failedId,
+                          self.shouldStartCleanChatAfterFailedTranscript(self.messages)
+                    else { return }
+                    self.newSession()
+                    self.bannerMessage = "Opened a clean chat; the previous failed transcript is still in history."
+                }
+            }
         } else if sessions.isEmpty {
             newSession()
         }
-        // §244 — seed the Chat-level reasoning toggle from the global
-        // default. After attach, the toggle is the source of truth for
-        // what lands in `ChatRequest.enableThinking`, so seeding here
-        // means a user who has `defaultEnableThinking=true` in settings
-        // starts new chats with the toggle already ON. A subsequent
-        // flip by the user beats the default (proper override
-        // semantics), matching how every other sticky setting works.
+        refreshDefaultReasoningSeed(for: activeSessionId, applyToCurrentChat: true)
+    }
+
+    private func refreshDefaultReasoningSeed(
+        for chatId: UUID?,
+        applyToCurrentChat: Bool
+    ) {
+        guard let app else { return }
         Task { @MainActor [weak self] in
-            guard let self = self else { return }
+            guard let self else { return }
             let resolved = await app.engine.settings.resolved(
-                sessionId: nil, chatId: self.activeSessionId, request: nil)
-            if let def = resolved.settings.defaultEnableThinking {
-                self.reasoningEnabled = def
+                sessionId: nil, chatId: chatId, request: nil)
+            let seed = resolved.settings.defaultEnableThinking ?? false
+            self.defaultReasoningEnabledSeed = seed
+            if applyToCurrentChat, self.activeSessionId == chatId {
+                self.reasoningEnabled = seed
             }
         }
     }
@@ -243,6 +293,24 @@ final class ChatViewModel {
         sessions.insert(s, at: 0)
         activeSessionId = s.id
         messages = []
+        // Reset from the cached default so the prior chat's toggle does
+        // not bleed into the new session, while still honoring a configured
+        // defaultEnableThinking=true. Refresh asynchronously in case the
+        // settings changed since attach.
+        reasoningEnabled = defaultReasoningEnabledSeed
+        refreshDefaultReasoningSeed(for: s.id, applyToCurrentChat: true)
+    }
+
+    private func shouldStartCleanChatAfterFailedTranscript(
+        _ messages: [ChatMessage]
+    ) -> Bool {
+        messages.contains { m in
+            guard m.role == .assistant else { return false }
+            let trimmed = m.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed == "[stopped]"
+                || m.content.contains("\u{fffd}")
+                || m.content.hasPrefix("TheirName")
+        }
     }
 
     func selectSession(_ id: UUID) {
@@ -250,7 +318,15 @@ final class ChatViewModel {
         // running Task doesn't write deltas into the new chat's
         // messages array. The assistant message on the old chat stays
         // in SQLite with whatever it had collected so far.
+        //
+        // Iter 144 — flag the cancel as intentional so the stream's
+        // catch handler routes to `finishOk` (clean partial-stop)
+        // instead of `finishWithError` (red banner + "[engine error]
+        // Task cancelled" suffix). User-initiated chat-switch is not
+        // an error; the partial response on the old chat should keep
+        // its valid content.
         if isGenerating {
+            intentionalStop = true
             streamTask?.cancel()
             streamTask = nil
             isGenerating = false
@@ -814,8 +890,9 @@ final class ChatViewModel {
 
         streamTask?.cancel()
         let app = self.app
+        let effectiveServerSessionId = serverSessionId ?? app?.selectedServerSessionId
         let engine: Engine? = {
-            if let sid = serverSessionId { return app?.engine(for: sid) }
+            if let sid = effectiveServerSessionId { return app?.engine(for: sid) }
             return app?.engine
         }()
 
@@ -895,7 +972,7 @@ final class ChatViewModel {
         // the per-session SessionSettings blob. MainActor hop would be
         // wasteful here — we pass the raw UUID and let the Task do the
         // engine.settings.session(_:) lookup asynchronously.
-        let serverSid = serverSessionId
+        let serverSid = effectiveServerSessionId
         streamTask = Task { [weak self] in
             guard let engine = engine else { return }
             // Pull the 4-tier-resolved settings snapshot for this chat. The

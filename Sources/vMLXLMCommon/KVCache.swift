@@ -76,6 +76,35 @@ public protocol KVCache: Evaluatable, Updatable {
     func copy() -> any KVCache
 }
 
+/// Composite caches that internally wrap a RotatingKVCache expose the inner
+/// rotating cache so disk/paged restore can persist the real SWA state without
+/// knowing the concrete wrapper type. DSV4LayerCache uses this for its local
+/// SWA cache while keeping compressor/indexer pool state ephemeral.
+public protocol RotatingKVCacheWrapper: KVCache {
+    var rotating: RotatingKVCache { get }
+}
+
+/// Composite cache with a local rotating window plus long-context pooled
+/// state. DSV4 uses this for CSA/HSA: compressor and indexer each keep a
+/// cumulative pool and an incomplete-window buffer. Generic paged KV blocks
+/// cannot represent that state, but the disk serializer can round-trip it
+/// through this protocol without depending on the concrete model type.
+public enum HybridPoolBranch: Sendable {
+    case compressor
+    case indexer
+}
+
+public protocol HybridPoolCache: RotatingKVCacheWrapper {
+    var compressRatio: Int { get }
+    var slidingWindow: Int { get }
+
+    func hybridPool(branch: HybridPoolBranch) -> MLXArray?
+    func setHybridPool(branch: HybridPoolBranch, value: MLXArray?)
+
+    func hybridBuffers(branch: HybridPoolBranch) -> (kv: MLXArray?, gate: MLXArray?)
+    func setHybridBuffers(branch: HybridPoolBranch, kv: MLXArray?, gate: MLXArray?)
+}
+
 /// Protocol for caches that support efficient quantized operations
 ///
 /// **Usage Example:**
@@ -443,12 +472,12 @@ public class KVCacheSimple: BaseKVCache, CustomDebugStringConvertible {
 
 /// Rotating KV cache for sliding window attention
 public class RotatingKVCache: BaseKVCache, CustomDebugStringConvertible {
-    private var keep: Int
-    private var keys: MLXArray?
-    private var values: MLXArray?
-    private var maxCacheSize: Int
-    private var step: Int
-    private var idx: Int = 0
+    internal var keep: Int
+    internal var keys: MLXArray?
+    internal var values: MLXArray?
+    internal var maxCacheSize: Int
+    internal var step: Int
+    internal var idx: Int = 0
 
     public override var maxSize: Int? { maxCacheSize }
 
@@ -1176,7 +1205,12 @@ public class MambaCache: ArraysCache {
 
 /// Composite cache that manages multiple sub-caches
 public class CacheList: BaseKVCache {
-    private var caches: [KVCache]
+    // Iter 143 — bumped from `private` to `internal` so the
+    // BatchEngine's CompilableCacheList wrapper (same module) can
+    // walk the sub-caches without a reflection workaround. Same
+    // access semantics for clients outside the module — they still
+    // can't reach the field directly.
+    internal var caches: [KVCache]
 
     /// The number of sub-caches in this composite cache.
     public var count: Int { caches.count }
@@ -1381,7 +1415,10 @@ public func loadPromptCache(
             // For now, create an empty CacheList - this may not work correctly
             // for complex cache hierarchies loaded from Python
             cache = CacheList()
-            print("Warning: CacheList loading may not preserve sub-cache structure correctly")
+            // Iter 143 — structured stderr instead of raw print().
+            if let data = "[vMLX][cache] WARN: CacheList loading may not preserve sub-cache structure correctly (loaded from Python-format cache file).\n".data(using: .utf8) {
+                try? FileHandle.standardError.write(contentsOf: data)
+            }
         default:
             throw KVCacheError(message: "Unknown cache class: \(className)")
         }

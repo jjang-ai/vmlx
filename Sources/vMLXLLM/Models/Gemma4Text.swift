@@ -283,7 +283,12 @@ class Gemma4Attention: Module {
             cachedValues = sharedKV.values
         } else {
             // Normal path: project K/V, apply RoPE, update cache
-            usedOffset = cache?.offset ?? 0
+            // Avoid host-reading `cache.offset` after compiled-cache
+            // promotion. Shared-KV consumers receive `offsetArray`
+            // below and use that graph value for RoPE; scalar
+            // `usedOffset` is only needed for non-compiled caches.
+            let normalOffsetArray = graphOffsetArray(for: cache)
+            usedOffset = normalOffsetArray == nil ? (cache?.offset ?? 0) : 0
 
             var keys = keyProj(x).reshaped(B, L, nKVHeads, headDim)
 
@@ -437,27 +442,41 @@ class Gemma4Router: Module {
     }
 
     func callAsFunction(_ x: MLXArray) -> (indices: MLXArray, weights: MLXArray) {
-        // Pre-norm (RMSNormNoScale — no learnable weight)
-        var h = rmsNormNoScale(x, eps: eps)
-        h = h * rootSize
-        h = h * routerScale
+        // PARITY FIX 2026-05-01 — match Python mlx_lm.gemma4_text.Router
+        // exactly. Two divergences from the prior Swift impl:
+        //
+        //  1. Pre-norm: Python uses
+        //     `mx.fast.rms_norm(x, scale * root_size, eps)` (FUSED),
+        //     Swift was doing `rmsNormNoScale(x) * root_size * scale`
+        //     (separated). Mathematically equivalent only if rsqrt
+        //     dtype matches; on bf16 inputs the separated form
+        //     produces slight numeric drift. Use MLXFast.rmsNorm with
+        //     the precomputed (scale * root_size) weight.
+        //
+        //  2. Top-K then softmax (Python) vs softmax-all then take
+        //     top-K then renormalize (old Swift). These produce
+        //     DIFFERENT distributions when temperatures interact with
+        //     the renorm. Python is the reference.
+        //
+        // Reference: `~/jang/.venv/lib/python3.12/site-packages/
+        // mlx_lm/models/gemma4_text.py:117-143`.
+        let scaledWeight = routerScale * rootSize
+        let h = MLXFast.rmsNorm(x, weight: scaledWeight, eps: eps)
 
         let expertScores = proj(h)
-        // softmax already computes in float32 internally — no explicit cast needed
-        let routerProbs = softmax(expertScores, axis: -1)
 
-        // Top-K via argPartition on negated scores (get highest scores).
-        // Unary `-` keeps the dtype; the scalar-subtract form would insert
-        // an extra AsType + broadcast per step. See §27.
+        // Top-K indices first (no softmax). argPartition + slice keeps
+        // the highest `topK` scores' positions. Python uses
+        // `mx.argpartition(scores, kth=-topK)[..., -topK:]` — same shape.
         let topKIndices = argPartition(
-            -expertScores,
-            kth: topK - 1, axis: -1
+            -expertScores, kth: topK - 1, axis: -1
         )[.ellipsis, ..<topK]
 
-        var topKWeights = takeAlong(routerProbs, topKIndices, axis: -1)
-        // Renormalize
-        topKWeights = topKWeights / topKWeights.sum(axis: -1, keepDims: true)
-        // Per-expert scale indexed by selected experts
+        // Then softmax over only the selected experts' raw scores.
+        // No outer renormalize (the softmax IS the normalization).
+        let topKLogits = takeAlong(expertScores, topKIndices, axis: -1)
+        var topKWeights = softmax(topKLogits, axis: -1)
+        // Per-expert scale indexed by selected experts.
         topKWeights = topKWeights * perExpertScale[topKIndices]
 
         return (indices: topKIndices, weights: topKWeights)
@@ -541,9 +560,11 @@ class Gemma4DecoderLayer: Module {
     @ModuleInfo(key: "post_per_layer_input_norm") var postPerLayerInputNorm: Gemma4RMSNorm?
 
     @ModuleInfo(key: "layer_scalar") var layerScalar: MLXArray
+    let layerIndex: Int
 
     init(_ config: Gemma4TextConfiguration, layerIndex: Int) {
         self.hasMoE = config.enableMoeBlock && config.numExperts > 0
+        self.layerIndex = layerIndex
 
         self._selfAttention.wrappedValue = Gemma4Attention(config, layerIndex: layerIndex)
 
@@ -621,6 +642,7 @@ class Gemma4DecoderLayer: Module {
             h1 = postFeedforwardLayernorm1(h1)
 
             let (topKIndices, topKWeights) = router(h)
+            JangPressRouteTelemetry.recordTopK(layer: layerIndex, indices: topKIndices)
             var h2 = preFeedforwardLayernorm2(h)
             h2 = experts(h2, indices: topKIndices, weights: topKWeights)
             h2 = postFeedforwardLayernorm2(h2)
@@ -825,7 +847,7 @@ public class Gemma4Model: Module {
                 sharedOffsetArray: sharedOffsetArray)
 
             h = result.h
-            let layerOffsetArray = (layerCacheEntry as? BatchKVCache)?.offsetArray
+            let layerOffsetArray = graphOffsetArray(for: layerCacheEntry)
             intermediates[i] = (keys: result.keys, values: result.values, offset: result.offset, offsetArray: layerOffsetArray)
         }
 

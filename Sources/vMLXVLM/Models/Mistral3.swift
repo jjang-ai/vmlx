@@ -290,6 +290,25 @@ private enum Language {
         return expandedDimensions(scaling, axis: -1)
     }
 
+    static func getLlama4AttentionScale(
+        size: Int, offset: MLXArray, beta: Float, maxPositionEmbeddings: Int
+    ) -> MLXArray {
+        var offset = offset.asType(.float32)
+        if offset.ndim > 0 {
+            offset = offset[0..., .newAxis]
+        }
+        let positions = MLXArray(Int32(0) ..< Int32(size)).asType(.float32)
+        let scaling =
+            1 + beta
+            * MLX.log(
+                1 + MLX.floor((positions + offset) / Float(maxPositionEmbeddings))
+            )
+        if scaling.ndim == 2 {
+            return scaling[0..., .newAxis, 0..., .newAxis]
+        }
+        return scaling[0..., .newAxis]
+    }
+
     // MARK: Language Attention
 
     fileprivate class Attention: Module {
@@ -474,37 +493,45 @@ private enum Language {
                 h = embedTokens(inputs)
             }
 
-            let cache = cache ?? []
-            let offset = cache.first?.offset ?? 0
-
-            let faMask = createAttentionMask(h: h, cache: cache[faIndex])
+            let cacheArr = cache ?? []
+            let faCache = faIndex < cacheArr.count ? cacheArr[faIndex] : nil
+            let faMask = createAttentionMask(h: h, cache: faCache)
 
             var swaMask: MLXFast.ScaledDotProductAttentionMaskMode = .none
-            if let swaIndex, let slidingWindow, !cache.isEmpty {
-                let t = h.dim(1)
-                if t > 1 {
-                    let swaOffset = min(slidingWindow, cache[swaIndex].offset)
-                    swaMask = .array(
-                        createCausalMask(n: t, offset: swaOffset, windowSize: slidingWindow))
-                }
+            if let swaIndex, let slidingWindow, swaIndex < cacheArr.count {
+                swaMask = createAttentionMask(
+                    h: h, cache: cacheArr[swaIndex], windowSize: slidingWindow)
             }
 
             let beta = config.ropeParameters?["llama_4_scaling_beta"]?.asFloat() ?? 0.0
             let originalMaxPos =
                 config.ropeParameters?["original_max_position_embeddings"]?.asInt()
                 ?? config.maxPositionEmbeddings ?? 4096
-            let attentionScale = getLlama4AttentionScale(
-                start: offset,
-                stop: offset + h.dim(1),  // Use h's length (embeddings), not inputs (token IDs)
-                beta: beta,
-                maxPositionEmbeddings: originalMaxPos
-            ).asType(h.dtype)
+            let attentionScale: MLXArray
+            if beta != 0, let offsetArray = graphOffsetArray(for: cacheArr.first) {
+                attentionScale = getLlama4AttentionScale(
+                    size: h.dim(1),
+                    offset: offsetArray,
+                    beta: beta,
+                    maxPositionEmbeddings: originalMaxPos
+                ).asType(h.dtype)
+            } else if beta != 0 {
+                let offset = cacheArr.first?.offset ?? 0
+                attentionScale = getLlama4AttentionScale(
+                    start: offset,
+                    stop: offset + h.dim(1),  // Use h's length (embeddings), not inputs.
+                    beta: beta,
+                    maxPositionEmbeddings: originalMaxPos
+                ).asType(h.dtype)
+            } else {
+                attentionScale = MLXArray.ones([h.dim(1), 1]).asType(h.dtype)
+            }
 
             for (i, layer) in layers.enumerated() {
                 let mask = layer.useSliding ? swaMask : faMask
                 h = layer(
                     h, attentionScale: attentionScale, mask: mask,
-                    cache: cache.isEmpty ? nil : cache[i])
+                    cache: i < cacheArr.count ? cacheArr[i] : nil)
             }
 
             return norm(h)

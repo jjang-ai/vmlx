@@ -334,6 +334,7 @@ final class Qwen3NextSparseMoeBlock: Module {
     let normTopkProb: Bool
     let numExperts: Int
     let topK: Int
+    fileprivate let layerIdx: Int
 
     @ModuleInfo(key: "gate") var gate: Linear
     @ModuleInfo(key: "switch_mlp") var switchMLP: SwitchGLU
@@ -341,10 +342,11 @@ final class Qwen3NextSparseMoeBlock: Module {
     @ModuleInfo(key: "shared_expert") var sharedExpert: Qwen3NextMLP
     @ModuleInfo(key: "shared_expert_gate") var sharedExpertGate: Linear
 
-    init(_ args: Qwen3NextConfiguration) {
+    init(_ args: Qwen3NextConfiguration, layerIdx: Int) {
         self.normTopkProb = args.normTopkProb
         self.numExperts = args.numExperts
         self.topK = args.numExpertsPerTok
+        self.layerIdx = layerIdx
 
         _gate.wrappedValue = Linear(args.hiddenSize, args.numExperts, bias: false)
         _switchMLP.wrappedValue = SwitchGLU(
@@ -367,6 +369,7 @@ final class Qwen3NextSparseMoeBlock: Module {
         let k = topK
         let kth = gates.dim(-1) - k
         let inds = MLX.argPartition(gates, kth: kth, axis: -1)[.ellipsis, (kth)...]
+        JangPressRouteTelemetry.recordTopK(layer: layerIdx, indices: inds)
         var scores = MLX.takeAlong(gates, inds, axis: -1)
         if normTopkProb {
             scores = scores / scores.sum(axis: -1, keepDims: true)
@@ -412,7 +415,7 @@ final class Qwen3NextDecoderLayer: Module {
             && (layerIdx + 1) % args.decoderSparseStep == 0
 
         if useMoE {
-            _mlp.wrappedValue = Qwen3NextSparseMoeBlock(args)
+            _mlp.wrappedValue = Qwen3NextSparseMoeBlock(args, layerIdx: layerIdx)
         } else {
             _mlp.wrappedValue = Qwen3NextMLP(
                 dimensions: args.hiddenSize,
@@ -564,7 +567,9 @@ public class Qwen3NextModel: Module, LLMModel, KVCacheDimensionProvider {
                         sanitizedWeights.removeValue(
                             forKey: "\(prefix).experts.\(e).\(n).weight")!
                     }
-                    sanitizedWeights["\(prefix).switch_mlp.\(n).weight"] = MLX.stacked(toJoin)
+                    // RAM safety: per-layer materialize via canonical helper.
+                    sanitizedWeights["\(prefix).switch_mlp.\(n).weight"] =
+                        loadTimeMaterializedStacked(toJoin)
                 }
             }
         }

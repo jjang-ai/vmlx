@@ -157,8 +157,20 @@ struct MicRecorderButton: View {
             // by `EngineTranscribe.swift` and accepts file= + model=.
             // The gateway port is the user's app-wide setting; we read it
             // from the same global store the rest of the chat path uses.
-            let global = await vm.gatewayGlobalSettings()
-            let port = global?.gatewayPort ?? 8080
+            // P0 audit fix — must use the BOUND gateway port, not the
+            // configured/requested value. Auto-bump (gateway port taken
+            // by Ollama, etc.) makes the bound port differ from the
+            // configured one; previously this posted into the wrong
+            // process and 404'd silently. `gatewayBoundPort()` returns
+            // nil when the gateway is .disabled or .failed — bail with
+            // a user-actionable message rather than hammer 127.0.0.1
+            // on the wrong port and produce "HTTP -1".
+            let port: Int = await { @MainActor in vm.gatewayBoundPort() }()
+                ?? Int(0)
+            guard port > 0 else {
+                lastError = "Gateway is not running — enable it in Tray → Server, then retry."
+                return
+            }
             let endpointURL = URL(string: "http://127.0.0.1:\(port)/v1/audio/transcriptions")!
 
             let boundary = "Boundary-\(UUID().uuidString)"

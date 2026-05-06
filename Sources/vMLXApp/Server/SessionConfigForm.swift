@@ -228,13 +228,10 @@ struct SessionConfigForm: View {
         ValidatedField(title: "Max cache blocks",
                        value: intBinding(\.maxCacheBlocks, default: globalDefaults.maxCacheBlocks),
                        range: 16...10000, step: 16)
-        // iter-46 fix: pagedCacheBlockSize gates whether short prompts
-        // get any paged-cache benefit. Default 64 means sub-64-token
-        // chat prompts return nil from fetchPrefix without counting
-        // hits or misses. Lowering to 32 halves the short-prompt
-        // dead-zone at the cost of a ~2x hash-map size. Exposed here
-        // so power users running short chat workloads can tune.
-        // Only a CLI flag existed before this iter.
+        // pagedCacheBlockSize still tunes memory/eviction tradeoffs
+        // and shared-prefix granularity. PagedCacheManager also stores
+        // a final short tail block now, so exact-repeat sub-block
+        // prompts can hit without forcing users to lower this value.
         ValidatedField(title: "Paged block size",
                        value: intBinding(\.pagedCacheBlockSize,
                                          default: globalDefaults.pagedCacheBlockSize),
@@ -341,16 +338,12 @@ struct SessionConfigForm: View {
 
         // §403 — sliding-window override.
         //
-        // `auto` honors the model's `config.json::sliding_window` exactly
-        // (DSV4 Flash = 128 + Compressor pool, Gemma 4 = 4096 alternating
-        // hybrid). `long` forces full-context attention even when the
-        // config declares a window — escape hatch for thinking-model
-        // workflows where the trace exceeds the trained window and
-        // prompt visibility scrolls out. `bounded` forces a hard cap of
-        // `slidingWindowSize` on every layer regardless of model config
-        // — memory-frugal mode for long-running summarization on small
-        // RAM. Models without sliding_window in their config ignore
-        // this setting (no RotatingKVCache to swap).
+        // `auto` honors the model's config and lets compile-first SWA
+        // families (Laguna/Gemma/Mistral) take the bounded fast path.
+        // `long` is a full-context escape hatch; on bounded-SWA models it
+        // intentionally trades decode speed and memory for retention.
+        // `bounded` forces a hard cap of `slidingWindowSize` on every layer.
+        // Models without sliding_window in their config ignore this setting.
         Picker("Sliding window", selection: Binding(
             get: { s.slidingWindowMode ?? globalDefaults.slidingWindowMode },
             set: { s.slidingWindowMode = $0; commit() }
@@ -366,9 +359,7 @@ struct SessionConfigForm: View {
                                              default: globalDefaults.slidingWindowSize),
                            range: 256...262144, step: 256)
         }
-        Text("Auto: trust the model's training distribution. " +
-             "Long: ignore the model's window (helps thinking models " +
-             "drifting past 128 tokens). Bounded: hard cap memory.")
+        Text("Auto: fastest safe default. Long: full-context escape hatch; slower on SWA models. Bounded: hard cap memory.")
             .font(.caption)
             .foregroundStyle(.secondary)
     }
@@ -635,36 +626,11 @@ struct SessionConfigForm: View {
 
     @ViewBuilder
     private var advancedSection: some View {
-        // Smelt — sub-controls hidden when off. Audit 2026-04-15 finding #4.
-        // NOTE: Smelt is not yet wired in the Swift engine (Python-only).
-        // The engine logs a one-shot warning per request when the flag is
-        // on so users aren't silently no-opped. See `EngineDFlash.swift`
-        // / `StreamDFlash.swift` for the integrated DFlash replacement.
-        // iter-53: added explicit caption — the log warning only
-        // surfaces in the logs tab, and users flipping the toggle
-        // need to see the gap up-front.
-        toggleRow("Smelt mode (Python engine only)",
-                  boolBinding(\.smelt, default: globalDefaults.smelt))
-        Text(L10n.SessionConfig.smeltHelp.render(appLocale))
-            .font(Theme.Typography.caption)
-            .foregroundStyle(Theme.Colors.textLow)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.leading, 4)
-            .padding(.bottom, 2)
-        if (s.smelt ?? globalDefaults.smelt) {
-            // iter-62: globalDefaults.smeltMode defaults to "" which
-            // renders as a blank placeholder that looks like the field
-            // is broken. Fall back to "(inherit global)" so users know
-            // the field accepts input but currently has no default.
-            textFieldRow("Smelt variant",
-                         placeholder: globalDefaults.smeltMode.isEmpty
-                            ? "(inherit global — e.g. routed/default)"
-                            : globalDefaults.smeltMode,
-                         value: Binding(
-                            get: { s.smeltMode ?? "" },
-                            set: { s.smeltMode = $0.isEmpty ? nil : $0; commit() }
-                         ))
-        }
+        // Iter 143 — Smelt removed (Eric directive 2026-05-04). Cold-
+        // expert handling now lives in JangPress (`JangPressController`,
+        // `JangPressMmapTier`, `JangPressMachCache`). The JangPress
+        // controls block in this form (below, ~L740) replaces what
+        // Smelt used to expose.
 
         // JANG-DFlash speculative decoding — block diffusion drafter +
         // DDTree beam. Targets: MiniMax, Mistral 4, DeepSeek V3.
@@ -725,6 +691,154 @@ struct SessionConfigForm: View {
             ValidatedField(title: "Flash MoE slot bank",
                            value: intBinding(\.flashMoeSlotBank, default: globalDefaults.flashMoeSlotBank),
                            range: 32...4096, step: 32)
+        }
+
+        // §JANGPress — cold-weight mmap/Mach pressure tier. Per task
+        // #195 (iter 123) JangPress is a per-LOAD
+        // knob, not per-chat — `Engine.setupJangPress` reads `LoadOptions`
+        // (and falls back to `GlobalSettings`) at engine load time, never
+        // from `ChatSettingsCodable`. So these controls write directly to
+        // GlobalSettings via `app.engine.applySettings(g)`, same pattern
+        // as `loggingSection`. Restart required.
+        //
+        // Wiring traced:
+        //   • GlobalSettings fields:    Sources/vMLXEngine/Settings/SettingsTypes.swift:327-340
+        //   • LoadOptions fields:       Sources/vMLXEngine/Engine.swift:134-186
+        //   • Engine consumer:          Sources/vMLXEngine/Engine.swift:2261-2410 (setupJangPress)
+        //   • CLI parity:               Sources/vMLXCLI/main.swift:158-364
+        //   • cacheStats surface:       Sources/vMLXEngine/Engine.swift:3567-3631
+        //
+        // Iter 143 — explicit scope hint. The audit flagged that
+        // JangPress controls live under the per-Session form's
+        // "Advanced" disclosure but actually write to GlobalSettings.
+        // Make the scope unmistakable: a divider, a section header
+        // that names "Global", and a multi-line caption that explains
+        // restart-required + cache-stats verification.
+        Divider().opacity(0.3)
+        Text(L10n.SessionConfig.jangPressSectionHeader.render(appLocale))
+            .font(Theme.Typography.bodyHi)
+            .foregroundStyle(Theme.Colors.textHigh)
+            .padding(.top, 4)
+        Toggle("JangPress (cold-weight pressure tier)", isOn: Binding(
+            get: { globalDefaults.enableJangPress },
+            set: { newVal in
+                Task {
+                    var g = await app.engine.settings.global()
+                    g.enableJangPress = newVal
+                    await app.engine.applySettings(g)
+                    globalDefaults = g
+                }
+            }
+        ))
+        Text(L10n.SessionConfig.jangPressScopeCaption.render(appLocale))
+            .font(Theme.Typography.caption)
+            .foregroundStyle(Theme.Colors.textLow)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.leading, 4)
+            .padding(.bottom, 2)
+        if globalDefaults.enableJangPress {
+            // Cold % stepper. 0 = observe only. 100 = maximum
+            // cold eligibility in the auxiliary mmap/Mach tier. This
+            // is not canonical MLX-weight compression.
+            Stepper(value: Binding(
+                get: { globalDefaults.jangPressCompressPct },
+                set: { newVal in
+                    Task {
+                        var g = await app.engine.settings.global()
+                        g.jangPressCompressPct = max(0, min(100, newVal))
+                        await app.engine.applySettings(g)
+                        globalDefaults = g
+                    }
+                }
+            ), in: 0...100, step: 5) {
+                Text("Cold target %: \(globalDefaults.jangPressCompressPct)")
+            }
+            .padding(.leading, 20)
+            // Backend picker: .mmap (file-backed, default), .mach
+            // (vm_purgable_control), .none (disable). See JANGPress
+            // backend docs in Engine.swift:144-167.
+            Picker("Backend", selection: Binding(
+                get: { globalDefaults.jangPressBackend.isEmpty
+                    ? "mmap" : globalDefaults.jangPressBackend },
+                set: { newVal in
+                    Task {
+                        var g = await app.engine.settings.global()
+                        g.jangPressBackend = newVal
+                        await app.engine.applySettings(g)
+                        globalDefaults = g
+                    }
+                }
+            )) {
+                Text("mmap").tag("mmap")
+                Text("mach").tag("mach")
+                Text("none").tag("none")
+            }
+            .pickerStyle(.segmented)
+            .padding(.leading, 20)
+            // Force mode picker: .soft (madvise hint, failsafe), .force
+            // (msync MS_INVALIDATE, eager reclaim ~3× tok/s cost).
+            Picker("Release mode", selection: Binding(
+                get: { globalDefaults.jangPressForceMode.isEmpty
+                    ? "soft" : globalDefaults.jangPressForceMode },
+                set: { newVal in
+                    Task {
+                        var g = await app.engine.settings.global()
+                        g.jangPressForceMode = newVal
+                        await app.engine.applySettings(g)
+                        globalDefaults = g
+                    }
+                }
+            )) {
+                Text("soft").tag("soft")
+                Text("force").tag("force")
+            }
+            .pickerStyle(.segmented)
+            .padding(.leading, 20)
+            Toggle("Prefetch on miss", isOn: Binding(
+                get: { globalDefaults.jangPressEnablePrefetch },
+                set: { newVal in
+                    Task {
+                        var g = await app.engine.settings.global()
+                        g.jangPressEnablePrefetch = newVal
+                        await app.engine.applySettings(g)
+                        globalDefaults = g
+                    }
+                }
+            ))
+            .padding(.leading, 20)
+            // 2026-05-04 prestacker. Default ON. JANGTQ MoE bundles
+            // (MiniMax, DeepSeek) ship per-expert tensors; without this,
+            // sanitizers stack them into resident Metal buffers and
+            // defeat mmap. Cheap (one-shot per bundle) + cached, so
+            // safe to leave on for non-MoE bundles too.
+            Toggle("Pre-stack routed experts (low-RAM overlay)", isOn: Binding(
+                get: { globalDefaults.jangPressPrestack },
+                set: { newVal in
+                    Task {
+                        var g = await app.engine.settings.global()
+                        g.jangPressPrestack = newVal
+                        await app.engine.applySettings(g)
+                        globalDefaults = g
+                    }
+                }
+            ))
+            .padding(.leading, 20)
+            // Router-aware canonical mmap advice. Default OFF — the
+            // CPU-readback decode path is correct but currently costs
+            // 20-40% tok/s on most MoE families. Turn on only when
+            // memory pressure warrants the tradeoff.
+            Toggle("Router advice (decode-time MADV_DONTNEED)", isOn: Binding(
+                get: { globalDefaults.jangPressEnableRouterAdvice },
+                set: { newVal in
+                    Task {
+                        var g = await app.engine.settings.global()
+                        g.jangPressEnableRouterAdvice = newVal
+                        await app.engine.applySettings(g)
+                        globalDefaults = g
+                    }
+                }
+            ))
+            .padding(.leading, 20)
         }
 
         // §384 — Distributed toggle removed from UI. The engine has no
@@ -1118,13 +1232,19 @@ struct ModelPickerRow: View {
             .filter { $0.modality != .image }
     }
 
+    @MainActor
     private func pickUserDir() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Add"
-        if panel.runModal() == .OK, let url = panel.url {
+        // Iter 129 (vmlx#121 / #133): macOS 26 ad-hoc XPC failure
+        // mitigation via NSOpenPanelSafe.
+        let result = NSOpenPanelSafe.pick(configure: { panel in
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.allowsMultipleSelection = false
+            panel.prompt = "Add"
+        }, fallbackTitle: L10n.PickerFallback.modelDirTitle.render(appLocale),
+           fallbackMessage: L10n.PickerFallback.modelDirMessage.render(appLocale),
+           canChooseFiles: false)
+        if let url = result.url {
             Task {
                 await app.engine.modelLibrary.addUserDir(url)
                 await refresh(force: true)

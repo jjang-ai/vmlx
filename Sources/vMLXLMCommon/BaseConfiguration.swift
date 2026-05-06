@@ -115,7 +115,27 @@ public struct BaseConfiguration: Codable, Sendable {
 
                 // additional keys that are not layer instructions, see
                 // mlx-community/bitnet-b1.58-2B-4T-4bit
-                case "quant_method", "linear_class", "quantization_mode": continue
+                //
+                // JANGTQ/MXTQ bundles also store routed-expert control
+                // metadata inside the same top-level `quantization` object:
+                //
+                //   "quantization": {
+                //       "bits": 8,
+                //       "group_size": 32,
+                //       "mxtq_bits": 2,
+                //       "routed_expert_bits": 2
+                //   }
+                //
+                // Those scalar keys are not per-layer quantization
+                // instructions. Treating them as layer names makes the
+                // generic BaseConfiguration decoder try to decode `2` as a
+                // `{bits, group_size}` object and rejects valid DSV4-Flash
+                // JANGTQ bundles before the family-specific config parser
+                // ever runs.
+                case "quant_method", "linear_class", "quantization_mode",
+                     "mxtq_bits", "routed_expert_bits", "mxtq_seed",
+                     "seed", "weight_format":
+                    continue
 
                 default:
                     if let f = try? container.decode(Bool.self, forKey: key) {

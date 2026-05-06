@@ -109,11 +109,16 @@ class MiniMaxAttention: Module {
 class MiniMaxSparseMoeBlock: Module {
     let numExpertsPerTok: Int
 
+    /// Layer index inside the decoder stack. Used by JangPress route
+    /// telemetry only; never participates in math.
+    fileprivate let layerIndex: Int
+
     @ModuleInfo(key: "gate") var gate: Linear
     @ModuleInfo(key: "switch_mlp") var switchMLP: SwitchGLU
     @ParameterInfo(key: "e_score_correction_bias") var eScoreCorrectionBias: MLXArray
 
-    init(_ args: MiniMaxConfiguration) {
+    init(_ args: MiniMaxConfiguration, layerIndex: Int) {
+        self.layerIndex = layerIndex
         // Cold expert pruning: env override of effective top-k. The
         // mixed-bit `gather_qmm` kernel takes `k` as a compile-time-fixed
         // shape, so the only honest way to reduce its work per token is to
@@ -146,7 +151,15 @@ class MiniMaxSparseMoeBlock: Module {
     }
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
-        let gates = gate(x)
+        // CRITICAL: upcast x to fp32 before the gate Linear. Mirrors the
+        // Python reference (`mlx_lm/models/minimax.py:178`):
+        //     gates = self.gate(x.astype(mx.float32))
+        //
+        // With 154+ experts (post-prune), bf16 precision in the gate matmul
+        // produces near-tied scores that cause argpartition top-k to pick
+        // different experts on each run — non-deterministic garbage at T=0.
+        // (2026-05-02 fix; same fix applied to MiniMaxJANGTQ + vmlx-swift-lm.)
+        let gates = gate(x.asType(.float32))
 
         var scores = sigmoid(gates)
         let originalScores = scores
@@ -161,6 +174,7 @@ class MiniMaxSparseMoeBlock: Module {
         let numExperts = scores.shape[scores.ndim - 1]
         let inds = argPartition(scores, kth: numExperts - k, axis: -1)[
             .ellipsis, (numExperts - k) ..< numExperts]
+        JangPressRouteTelemetry.recordTopK(layer: layerIndex, indices: inds)
         scores = takeAlong(originalScores, inds, axis: -1)
 
         scores =
@@ -194,9 +208,9 @@ class MiniMaxDecoderLayer: Module {
     /// (see `FlashMoELayer` conformance at the bottom of this file).
     fileprivate var flashMoeShim: FlashMoEBlock? = nil
 
-    init(_ args: MiniMaxConfiguration) {
+    init(_ args: MiniMaxConfiguration, layerIndex: Int) {
         _selfAttn.wrappedValue = MiniMaxAttention(args)
-        _blockSparseMoe.wrappedValue = MiniMaxSparseMoeBlock(args)
+        _blockSparseMoe.wrappedValue = MiniMaxSparseMoeBlock(args, layerIndex: layerIndex)
         _inputLayerNorm.wrappedValue = RMSNorm(
             dimensions: args.hiddenSize, eps: args.rmsNormEps)
         _postAttentionLayerNorm.wrappedValue = RMSNorm(
@@ -226,7 +240,7 @@ public class MiniMaxModelInner: Module {
 
         _embedTokens.wrappedValue = Embedding(
             embeddingCount: args.vocabularySize, dimensions: args.hiddenSize)
-        self.layers = (0 ..< args.hiddenLayers).map { _ in MiniMaxDecoderLayer(args) }
+        self.layers = (0 ..< args.hiddenLayers).map { i in MiniMaxDecoderLayer(args, layerIndex: i) }
         _norm.wrappedValue = RMSNorm(dimensions: args.hiddenSize, eps: args.rmsNormEps)
     }
 
@@ -471,7 +485,7 @@ public class MiniMaxModel: Module, LLMModel, KVCacheDimensionProvider {
                         }
                         sanitizedWeights[
                             "\(prefix).block_sparse_moe.switch_mlp.\(updated).\(key)"
-                        ] = MLX.stacked(toJoin)
+                        ] = loadTimeMaterializedStacked(toJoin)
                     }
                 }
             }
@@ -553,9 +567,11 @@ extension MiniMaxDecoderLayer: FlashMoELayer {
         let gate = blockSparseMoe.gate
         let bias = blockSparseMoe.eScoreCorrectionBias
         let topK = blockSparseMoe.numExpertsPerTok
+        let layerIdx = blockSparseMoe.layerIndex
         block.topK = topK
         block.router = { x in
-            let gates = gate(x)
+            // Same fp32 upcast as the standard MiniMax MoE forward.
+            let gates = gate(x.asType(.float32))
             var scores = sigmoid(gates)
             let originalScores = scores
             scores = scores + bias
@@ -563,6 +579,7 @@ extension MiniMaxDecoderLayer: FlashMoELayer {
             let inds = argPartition(
                 scores, kth: numExperts - topK, axis: -1
             )[.ellipsis, (numExperts - topK) ..< numExperts]
+            JangPressRouteTelemetry.recordTopK(layer: layerIdx, indices: inds)
             var topScores = takeAlong(originalScores, inds, axis: -1)
             topScores = topScores
                 / (topScores.sum(axis: -1, keepDims: true) + MLXArray(Float(1e-20)))

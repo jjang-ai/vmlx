@@ -53,6 +53,7 @@ public enum CapabilityDetector {
 
         let isMXTQ = detectMXTQ(config: config, jang: jangJSON)
         let quantBits = detectQuantBits(config: config, jang: jangJSON)
+        let slidingWindow = detectSlidingWindow(config: config, jang: jangJSON)
 
         // Resolve the HF model_type up front (text_config wins for VLM
         // wrappers, matching ModelDetector tier 1).
@@ -85,11 +86,13 @@ public enum CapabilityDetector {
         // ── Tier 1: JANG stamped ──
         if let cap = detectFromJANGStamp(
             jang: jangJSON,
+            config: config,
             modelType: rawModelType,
             modality: modality,
             isJANG: isJANG,
             isMXTQ: isMXTQ,
-            quantBits: quantBits
+            quantBits: quantBits,
+            slidingWindow: slidingWindow
         ) {
             // Observability: surface the Tier-1 hit so ops can confirm
             // jang_config.capabilities actually won. Prior to the 94-bundle
@@ -150,6 +153,7 @@ public enum CapabilityDetector {
                 isJANG: isJANG,
                 isMXTQ: isMXTQ,
                 chatTemplate: silverChatTemplate(directory: directory),
+                slidingWindow: slidingWindow,
                 detectionSource: .modelTypeTable
             )
         }
@@ -282,6 +286,7 @@ public enum CapabilityDetector {
             isJANG: isJANG,
             isMXTQ: isMXTQ,
             chatTemplate: chatTemplate.isEmpty ? nil : chatTemplate,
+            slidingWindow: slidingWindow,
             detectionSource: .fallback
         )
     }
@@ -381,11 +386,13 @@ public enum CapabilityDetector {
 
     private static func detectFromJANGStamp(
         jang: [String: Any],
+        config: [String: Any],
         modelType: String,
         modality: ModelCapabilities.Modality,
         isJANG: Bool,
         isMXTQ: Bool,
-        quantBits: Int?
+        quantBits: Int?,
+        slidingWindow: Int?
     ) -> ModelCapabilities? {
         guard let caps = jang["capabilities"] as? [String: Any] else { return nil }
         let reasoning = caps["reasoning_parser"] as? String
@@ -400,7 +407,7 @@ public enum CapabilityDetector {
         // Modality override from the stamp if present.
         var stampedModality = modality
         if let m = caps["modality"] as? String,
-           let mv = ModelCapabilities.Modality(rawValue: m) {
+           let mv = normalizeModality(m) {
             stampedModality = mv
         }
 
@@ -418,6 +425,7 @@ public enum CapabilityDetector {
             isJANG: isJANG,
             isMXTQ: isMXTQ,
             chatTemplate: chatTemplate,
+            slidingWindow: slidingWindow ?? detectSlidingWindow(config: config, jang: jang),
             detectionSource: .jangStamped
         )
     }
@@ -546,6 +554,7 @@ public enum CapabilityDetector {
             isJANG: isJANG,
             isMXTQ: isMXTQ,
             chatTemplate: chatTemplate,
+            slidingWindow: detectSlidingWindow(config: config, jang: [:]),
             detectionSource: .templateSniff
         )
     }
@@ -779,6 +788,14 @@ public enum CapabilityDetector {
             if let hv = jang["has_vision"] as? Bool { return hv }
             if let arch = jang["architecture"] as? [String: Any],
                let hv = arch["has_vision"] as? Bool { return hv }
+            if let m = jang["modality"] as? String,
+               normalizeModality(m) == .vision { return true }
+            if let caps = jang["capabilities"] as? [String: Any],
+               let m = caps["modality"] as? String,
+               normalizeModality(m) == .vision { return true }
+            if let src = jang["source_model"] as? [String: Any],
+               let m = src["modality"] as? String,
+               normalizeModality(m) == .vision { return true }
             return nil
         }()
 
@@ -844,6 +861,12 @@ public enum CapabilityDetector {
     // MARK: - MXTQ / quant bits
 
     private static func detectMXTQ(config: [String: Any], jang: [String: Any]) -> Bool {
+        if (config["weight_format"] as? String)?.lowercased() == "mxtq" {
+            return true
+        }
+        if (jang["weight_format"] as? String)?.lowercased() == "mxtq" {
+            return true
+        }
         if let q = config["quantization"] as? [String: Any],
            let m = q["method"] as? String, m.lowercased().contains("mxtq") {
             return true
@@ -858,6 +881,12 @@ public enum CapabilityDetector {
     }
 
     private static func detectQuantBits(config: [String: Any], jang: [String: Any]) -> Int? {
+        if let b = mxtqBitWidth(config["mxtq_bits"]) { return b }
+        if let b = mxtqBitWidth(jang["mxtq_bits"]) { return b }
+        if let text = config["text_config"] as? [String: Any],
+           let b = mxtqBitWidth(text["mxtq_bits"]) { return b }
+        if let text = jang["text_config"] as? [String: Any],
+           let b = mxtqBitWidth(text["mxtq_bits"]) { return b }
         if let q = config["quantization"] as? [String: Any],
            let b = q["bits"] as? Int { return b }
         if let q = jang["quantization"] as? [String: Any] {
@@ -874,6 +903,86 @@ public enum CapabilityDetector {
             if let b = q["bits"] as? Int { return b }
         }
         return nil
+    }
+
+    private static func detectSlidingWindow(config: [String: Any], jang: [String: Any]) -> Int? {
+        // `resolveModelType` prefers text_config for VLM wrappers, so the
+        // native SWA window should follow the same precedence. Mistral 3.5
+        // is an important example: outer model_type=mistral3, inner
+        // text_config.model_type=ministral3, and text_config.sliding_window
+        // is null because the production text decoder has no SWA layers.
+        if let text = config["text_config"] as? [String: Any],
+           let v = firstPositiveInt(in: text, keys: slidingWindowKeys) {
+            return v
+        }
+        if let v = firstPositiveInt(in: config, keys: slidingWindowKeys) {
+            return v
+        }
+        if let caps = jang["capabilities"] as? [String: Any],
+           let v = firstPositiveInt(in: caps, keys: slidingWindowKeys) {
+            return v
+        }
+        if let text = jang["text_config"] as? [String: Any],
+           let v = firstPositiveInt(in: text, keys: slidingWindowKeys) {
+            return v
+        }
+        return firstPositiveInt(in: jang, keys: slidingWindowKeys)
+    }
+
+    private static let slidingWindowKeys = [
+        "sliding_window", "sliding_window_size", "slidingWindow",
+    ]
+
+    private static func firstPositiveInt(in dict: [String: Any], keys: [String]) -> Int? {
+        for key in keys {
+            if let i = intValue(dict[key]), i > 0 { return i }
+        }
+        return nil
+    }
+
+    private static func intValue(_ value: Any?) -> Int? {
+        if let i = value as? Int { return i }
+        if let n = value as? NSNumber { return n.intValue }
+        if let s = value as? String { return Int(s) }
+        return nil
+    }
+
+    private static func normalizeModality(_ value: String) -> ModelCapabilities.Modality? {
+        switch value.lowercased() {
+        case "text", "llm":
+            return .text
+        case "vision", "vl", "mllm", "multimodal", "omni", "audio", "video":
+            return .vision
+        case "embedding", "embed":
+            return .embedding
+        case "image":
+            return .image
+        case "rerank", "reranker":
+            return .rerank
+        default:
+            return ModelCapabilities.Modality(rawValue: value)
+        }
+    }
+
+    private static func mxtqBitWidth(_ value: Any?) -> Int? {
+        if let i = value as? Int { return i }
+        if let n = value as? NSNumber { return n.intValue }
+        if let s = value as? String, let i = Int(s) { return i }
+        guard let map = value as? [String: Any] else { return nil }
+        for key in ["routed_expert", "shared_expert", "attention", "lm_head"] {
+            if let i = map[key] as? Int { return i }
+            if let n = map[key] as? NSNumber { return n.intValue }
+            if let s = map[key] as? String, let i = Int(s) { return i }
+        }
+        let ints = map.values.compactMap { v -> Int? in
+            if let i = v as? Int { return i }
+            if let n = v as? NSNumber { return n.intValue }
+            if let s = v as? String { return Int(s) }
+            return nil
+        }
+        guard !ints.isEmpty else { return nil }
+        let avg = Double(ints.reduce(0, +)) / Double(ints.count)
+        return Int(avg.rounded())
     }
 
     // MARK: - Hybrid SSM config detection
@@ -894,6 +1003,7 @@ public enum CapabilityDetector {
         "nemotron_h", "nemotron_h_omni", "qwen3_next", "jamba",
         "falcon_h1", "granite_moe_hybrid",
         "lfm2", "lfm2_moe", "mimo_v2_flash", "baichuan_m1",
+        "bailing_hybrid", "bailing_moe_v2_5",
     ]
 
     private static func isHybridSSMConfig(

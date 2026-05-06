@@ -337,9 +337,9 @@ public enum JangSpecBundleLoader {
             guard let base = kindToBase[kind] else { continue }
             let s = slots[kind]!
             guard !s.qweight.isEmpty else { continue }
-            out["\(base).weight"] = stacked(s.qweight, axis: 0)
-            out["\(base).scales"] = stacked(s.scales, axis: 0)
-            out["\(base).biases"] = stacked(s.biases, axis: 0)
+            out["\(base).weight"] = loadTimeMaterializedStacked(s.qweight, axis: 0)
+            out["\(base).scales"] = loadTimeMaterializedStacked(s.scales, axis: 0)
+            out["\(base).biases"] = loadTimeMaterializedStacked(s.biases, axis: 0)
             slots[kind] = Slots()  // drop refs immediately
         }
     }

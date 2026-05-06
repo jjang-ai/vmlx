@@ -114,6 +114,9 @@ public enum OpenAIRoutes {
             }
             // P1-API-1: fold OpenAI v2 max_completion_tokens alias into max_tokens.
             chatReq.applyMaxCompletionTokensAlias()
+            // mlxstudio #100 — fold the Anthropic/Continue-extension-style
+            // nested `reasoning: { effort: "..." }` into the flat field.
+            chatReq.applyReasoningContainerAlias()
             do {
                 try chatReq.validate()
             } catch let err as ChatRequestValidationError {
@@ -126,7 +129,15 @@ public enum OpenAIRoutes {
             let id = "chatcmpl-\(UUID().uuidString.prefix(8).lowercased())"
             let created = Int(Date().timeIntervalSince1970)
 
-            await engine.wakeFromStandby()
+            // Capture wake notices (if any) so we can prepend them as
+            // SSE comment lines on the streaming response. The closure
+            // is `@Sendable` and writes into an actor-protected buffer —
+            // see `WakeNoticeBox` for the wrapper. Empty for non-wake or
+            // non-streaming code paths.
+            let wakeNotices = WakeNoticeBox()
+            await engine.wakeFromStandby(emitNotice: { msg in
+                await wakeNotices.append(msg)
+            })
             // Settings resolution happens inside `Engine.stream` →
             // `performOneGenerationPass`, which calls
             // `settings.resolved(request: RequestOverride.from(request))`
@@ -143,6 +154,7 @@ public enum OpenAIRoutes {
                 if let n = HTTPField.Name("x-vmlx-trace-id") {
                     headers[n] = id
                 }
+                let leadingNotices = await wakeNotices.snapshot()
                 return Response(
                     status: .ok,
                     headers: headers,
@@ -150,6 +162,7 @@ public enum OpenAIRoutes {
                         id: id, model: chatReq.model, created: created,
                         includeUsage: chatReq.streamOptions?.includeUsage ?? false,
                         includeReasoning: chatReq.includeReasoning ?? true,
+                        leadingComments: leadingNotices,
                         upstream: stream
                     )
                 )
@@ -601,284 +614,12 @@ public enum OpenAIRoutes {
         //
         // Conversation state (`previous_response_id`, `store`, background
         // mode) is not persisted — callers resend history each turn.
+        // Iter 139: /v1/responses inline body extracted to
+        // `handleResponses` static helper so the gateway can dispatch
+        // it with model-keyed engine resolution. Per-session route is
+        // now a 3-line wrapper.
         router.post("/v1/responses") { req, _ -> Response in
-            var req = req
-            let body = try await req.collectBody(upTo: 32 * 1024 * 1024)
-            let data = Data(buffer: body)
-            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return Self.errorJSON(.badRequest, "invalid JSON body")
-            }
-            let model = (obj["model"] as? String) ?? "default"
-
-            var messages: [ChatRequest.Message] = []
-            if let sys = obj["instructions"] as? String, !sys.isEmpty {
-                messages.append(.init(role: "system", content: .string(sys)))
-            }
-
-            if let s = obj["input"] as? String {
-                messages.append(.init(role: "user", content: .string(s)))
-            } else if let arr = obj["input"] as? [[String: Any]] {
-                // Each item: {type:"message", role, content:[parts]}
-                //       or:  {type:"function_call", call_id, name, arguments}
-                //       or:  {type:"function_call_output", call_id, output}
-                for item in arr {
-                    let type = (item["type"] as? String) ?? "message"
-                    switch type {
-                    case "function_call":
-                        let callId = (item["call_id"] as? String)
-                            ?? (item["id"] as? String) ?? UUID().uuidString
-                        let name = (item["name"] as? String) ?? ""
-                        let args = (item["arguments"] as? String) ?? "{}"
-                        let wrapped: [String: Any] = [
-                            "id": callId,
-                            "type": "function",
-                            "function": ["name": name, "arguments": args],
-                        ]
-                        var calls: [ChatRequest.ToolCall]? = nil
-                        if let d = try? JSONSerialization.data(withJSONObject: wrapped),
-                           let tc = try? JSONDecoder().decode(
-                               ChatRequest.ToolCall.self, from: d) {
-                            calls = [tc]
-                        }
-                        messages.append(.init(
-                            role: "assistant",
-                            content: .string(""),
-                            toolCalls: calls))
-                    case "function_call_output":
-                        let callId = (item["call_id"] as? String) ?? ""
-                        let output = (item["output"] as? String) ?? ""
-                        messages.append(.init(
-                            role: "tool",
-                            content: .string(output),
-                            toolCallId: callId))
-                    default:  // "message" or legacy
-                        let role = (item["role"] as? String) ?? "user"
-                        let content: ChatRequest.ContentValue
-                        if let s = item["content"] as? String {
-                            content = .string(s)
-                        } else if let parts = item["content"] as? [[String: Any]] {
-                            var out: [ChatRequest.ContentPart] = []
-                            for p in parts {
-                                let t = (p["type"] as? String) ?? "text"
-                                if t == "input_text" || t == "output_text" || t == "text" {
-                                    out.append(.init(type: "text",
-                                        text: p["text"] as? String))
-                                } else if t == "input_image" {
-                                    if let url = p["image_url"] as? String {
-                                        out.append(.init(type: "image_url",
-                                            imageUrl: .init(url: url)))
-                                    } else if let dict = p["image_url"] as? [String: Any],
-                                              let url = dict["url"] as? String {
-                                        out.append(.init(type: "image_url",
-                                            imageUrl: .init(url: url)))
-                                    }
-                                }
-                            }
-                            content = .parts(out)
-                        } else {
-                            content = .string("")
-                        }
-                        messages.append(.init(role: role, content: content))
-                    }
-                }
-            } else {
-                return Self.errorJSON(.badRequest, "missing 'input'")
-            }
-
-            // tools[] — accept function tools only; Codable round-trip
-            // because ChatRequest.Tool.Function has no public memberwise init.
-            var tools: [ChatRequest.Tool]? = nil
-            if let rawTools = obj["tools"] as? [[String: Any]] {
-                var collected: [ChatRequest.Tool] = []
-                for t in rawTools {
-                    let type = (t["type"] as? String) ?? "function"
-                    guard type == "function" else { continue }
-                    var fn: [String: Any] = [:]
-                    if let n = t["name"] as? String { fn["name"] = n }
-                    if let d = t["description"] as? String { fn["description"] = d }
-                    if let p = t["parameters"] as? [String: Any] { fn["parameters"] = p }
-                    let wrapped: [String: Any] = ["type": "function", "function": fn]
-                    if let d = try? JSONSerialization.data(withJSONObject: wrapped),
-                       let tool = try? JSONDecoder().decode(ChatRequest.Tool.self, from: d) {
-                        collected.append(tool)
-                    }
-                }
-                if !collected.isEmpty { tools = collected }
-            }
-
-            var toolChoice: ChatRequest.ToolChoice? = nil
-            if let s = obj["tool_choice"] as? String {
-                let w: [String: Any] = ["tool_choice": s]
-                if let d = try? JSONSerialization.data(withJSONObject: w),
-                   let decoded = try? JSONDecoder().decode(
-                       [String: ChatRequest.ToolChoice].self, from: d) {
-                    toolChoice = decoded["tool_choice"]
-                }
-            } else if let tc = obj["tool_choice"] as? [String: Any],
-                      let fn = tc["function"] as? [String: Any],
-                      let name = fn["name"] as? String {
-                toolChoice = .function(name: name)
-            }
-
-            var reasoningEffort: String? = nil
-            if let r = obj["reasoning"] as? [String: Any],
-               let e = r["effort"] as? String {
-                reasoningEffort = e
-            }
-
-            // iter-97 §175: pre-fix, this ChatRequest init only
-            // forwarded model/messages/stream/maxTokens/temperature/
-            // topP/reasoningEffort/tools/toolChoice. Every other
-            // parameter a caller sent on `/v1/responses` (seed,
-            // stop, top_k, min_p, repetition_penalty, frequency_
-            // penalty, presence_penalty) was silently dropped —
-            // the engine happily produced output using defaults,
-            // the user saw "my penalty had no effect" with no 400
-            // and no log. The chat-completions route (line 93) has
-            // been wiring these since iter-95 §173; Responses was
-            // inheriting a stale build. Parse each optional field
-            // defensively + forward only when present so the
-            // zero-cost default path stays intact.
-            let stopList: [String]? = {
-                if let arr = obj["stop"] as? [String], !arr.isEmpty { return arr }
-                if let s = obj["stop"] as? String, !s.isEmpty { return [s] }
-                return nil
-            }()
-            var chatReq = ChatRequest(
-                model: model,
-                messages: messages,
-                stream: obj["stream"] as? Bool,
-                maxTokens: obj["max_output_tokens"] as? Int,
-                temperature: obj["temperature"] as? Double,
-                topP: obj["top_p"] as? Double,
-                topK: obj["top_k"] as? Int,
-                minP: obj["min_p"] as? Double,
-                repetitionPenalty: obj["repetition_penalty"] as? Double,
-                stop: stopList,
-                seed: obj["seed"] as? Int,
-                reasoningEffort: reasoningEffort,
-                tools: tools,
-                toolChoice: toolChoice
-            )
-            // frequencyPenalty / presencePenalty are struct-var fields
-            // without init params — set them after construction.
-            chatReq.frequencyPenalty = obj["frequency_penalty"] as? Double
-            chatReq.presencePenalty = obj["presence_penalty"] as? Double
-            // §330 — mirror /v1/chat/completions stream_options wiring.
-            // /v1/responses constructs ChatRequest programmatically so
-            // the Codable decode path for stream_options never runs;
-            // clients passing `stream_options: {include_usage: true}`
-            // got a stream with no final usage chunk.
-            if let so = obj["stream_options"] as? [String: Any],
-               let include = so["include_usage"] as? Bool {
-                chatReq.streamOptions = .init(includeUsage: include)
-            }
-            // iter-67 (§96) — /v1/responses was the last chat-style route
-            // skipping `chatReq.validate()`. Chat/completions (line 93) +
-            // Anthropic /v1/messages (line 43) both call it; Responses
-            // silently let negative max_output_tokens / temperature=99 /
-            // etc. reach the engine as a 200 → partial stream. Align.
-            do {
-                try chatReq.validate()
-            } catch let err as ChatRequestValidationError {
-                return Self.errorJSON(.badRequest, err.description)
-            } catch {
-                return Self.errorJSON(.badRequest, "invalid request: \(error)")
-            }
-            await engine.wakeFromStandby()
-
-            let id = "resp_\(UUID().uuidString.prefix(8).lowercased())"
-            let created = Int(Date().timeIntervalSince1970)
-            let isStream = chatReq.stream ?? false
-
-            if isStream {
-                let upstream = await engine.stream(request: chatReq, id: id)
-                var headers: HTTPFields = [:]
-                headers[.contentType] = "text/event-stream; charset=utf-8"
-                headers[.cacheControl] = "no-cache"
-                headers[.connection] = "keep-alive"
-                if let n = HTTPField.Name("x-vmlx-trace-id") {
-                    headers[n] = id
-                }
-                return Response(
-                    status: .ok,
-                    headers: headers,
-                    body: SSEEncoder.responsesStream(
-                        id: id, model: model, created: created, upstream: upstream
-                    )
-                )
-            }
-
-            var content = ""
-            var reasoning = ""
-            var toolCalls: [ChatRequest.ToolCall] = []
-            var usage: StreamChunk.Usage? = nil
-            var allLogprobs: [TokenLogprob] = []
-            let stream = await engine.stream(request: chatReq, id: id)
-            do {
-                for try await chunk in stream {
-                    if let c = chunk.content { content += c }
-                    if let r = chunk.reasoning { reasoning += r }
-                    if let tcs = chunk.toolCalls { toolCalls.append(contentsOf: tcs) }
-                    if let u = chunk.usage { usage = u }
-                    if let lps = chunk.logprobs { allLogprobs.append(contentsOf: lps) }
-                }
-            } catch let err as EngineError {
-                // invalidRequest → 400; everything else → 500.
-                return Self.mapEngineError(err)
-            } catch {
-                return Self.errorJSON(.internalServerError, "\(error)")
-            }
-
-            // Assemble output[] blocks.
-            var output: [[String: Any]] = []
-            if !reasoning.isEmpty {
-                output.append([
-                    "type": "reasoning",
-                    "id": "rs_\(UUID().uuidString.prefix(8).lowercased())",
-                    "summary": [[
-                        "type": "summary_text",
-                        "text": reasoning,
-                    ] as [String: Any]],
-                ])
-            }
-            if !content.isEmpty || (toolCalls.isEmpty && reasoning.isEmpty) {
-                output.append([
-                    "type": "message",
-                    "id": "msg_\(UUID().uuidString.prefix(8).lowercased())",
-                    "role": "assistant",
-                    "status": "completed",
-                    "content": [[
-                        "type": "output_text",
-                        "text": content,
-                        "annotations": [] as [Any],
-                    ] as [String: Any]],
-                ])
-            }
-            for tc in toolCalls {
-                output.append([
-                    "type": "function_call",
-                    "id": "fc_\(UUID().uuidString.prefix(8).lowercased())",
-                    "call_id": tc.id,
-                    "name": tc.function.name,
-                    "arguments": tc.function.arguments,
-                    "status": "completed",
-                ])
-            }
-
-            var out: [String: Any] = [
-                "id": id,
-                "object": "response",
-                "created_at": created,
-                "status": "completed",
-                "model": model,
-                "output_text": content,
-                "output": output,
-            ]
-            if let u = usage {
-                out["usage"] = Self.responsesUsageEnvelope(u)
-            }
-            return Self.json(out, traceId: id)
+            return try await Self.handleResponses(req: req, engine: engine)
         }
 
         // POST /v1/embeddings — real embeddings via vMLXEmbedders
@@ -1798,11 +1539,16 @@ public enum OpenAIRoutes {
     /// Format a duration in seconds as `HH:MM:SS,mmm` (SRT) or
     /// `HH:MM:SS.mmm` (VTT).
     static func formatTimestamp(_ seconds: Double, useComma: Bool) -> String {
-        let total = max(0, seconds)
-        let hours = Int(total) / 3600
-        let minutes = (Int(total) % 3600) / 60
-        let secs = Int(total) % 60
-        let millis = Int((total - Double(Int(total))) * 1000)
+        // Round to nearest millisecond first so we work in integer
+        // milliseconds throughout — avoids the float-truncation bug
+        // where 3.456s became 3.455 because Double(3.456) is actually
+        // 3.4559999... and Int(... * 1000) truncates the .999. Tiny
+        // single-shot, but cumulative across a long Whisper transcript.
+        let totalMs = Int(round(max(0, seconds) * 1000))
+        let hours = totalMs / 3_600_000
+        let minutes = (totalMs / 60_000) % 60
+        let secs = (totalMs / 1_000) % 60
+        let millis = totalMs % 1_000
         let sep = useComma ? "," : "."
         return String(format: "%02d:%02d:%02d\(sep)%03d", hours, minutes, secs, millis)
     }
@@ -1853,6 +1599,296 @@ public enum OpenAIRoutes {
     ///
     /// Called from two sites: the non-stream response body and
     /// `SSEEncoder.responsesStream`'s `response.completed` event.
+    /// Iter 139 — extracted /v1/responses handler so the gateway can
+    /// dispatch this protocol with model-keyed engine resolution.
+    /// The per-session route is now a 3-line wrapper that calls this.
+    /// Verbatim port of the prior inline closure body — behavior is
+    /// identical end-to-end.
+    public static func handleResponses(
+        req: Request, engine: Engine
+    ) async throws -> Response {
+        var req = req
+        let body = try await req.collectBody(upTo: 32 * 1024 * 1024)
+        let data = Data(buffer: body)
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return Self.errorJSON(.badRequest, "invalid JSON body")
+        }
+        let model = (obj["model"] as? String) ?? "default"
+
+        var messages: [ChatRequest.Message] = []
+        if let sys = obj["instructions"] as? String, !sys.isEmpty {
+            messages.append(.init(role: "system", content: .string(sys)))
+        }
+
+        if let s = obj["input"] as? String {
+            messages.append(.init(role: "user", content: .string(s)))
+        } else if let arr = obj["input"] as? [[String: Any]] {
+            for item in arr {
+                let type = (item["type"] as? String) ?? "message"
+                switch type {
+                case "function_call":
+                    let callId = (item["call_id"] as? String)
+                        ?? (item["id"] as? String) ?? UUID().uuidString
+                    let name = (item["name"] as? String) ?? ""
+                    let args = (item["arguments"] as? String) ?? "{}"
+                    let wrapped: [String: Any] = [
+                        "id": callId,
+                        "type": "function",
+                        "function": ["name": name, "arguments": args],
+                    ]
+                    var calls: [ChatRequest.ToolCall]? = nil
+                    if let d = try? JSONSerialization.data(withJSONObject: wrapped),
+                       let tc = try? JSONDecoder().decode(
+                           ChatRequest.ToolCall.self, from: d) {
+                        calls = [tc]
+                    }
+                    messages.append(.init(
+                        role: "assistant",
+                        content: .string(""),
+                        toolCalls: calls))
+                case "function_call_output":
+                    let callId = (item["call_id"] as? String) ?? ""
+                    let output = (item["output"] as? String) ?? ""
+                    messages.append(.init(
+                        role: "tool",
+                        content: .string(output),
+                        toolCallId: callId))
+                default:
+                    let role = (item["role"] as? String) ?? "user"
+                    let content: ChatRequest.ContentValue
+                    if let s = item["content"] as? String {
+                        content = .string(s)
+                    } else if let parts = item["content"] as? [[String: Any]] {
+                        var out: [ChatRequest.ContentPart] = []
+                        for p in parts {
+                            let t = (p["type"] as? String) ?? "text"
+                            if t == "input_text" || t == "output_text" || t == "text" {
+                                out.append(.init(type: "text",
+                                    text: p["text"] as? String))
+                            } else if t == "input_image" {
+                                if let url = p["image_url"] as? String {
+                                    out.append(.init(type: "image_url",
+                                        imageUrl: .init(url: url)))
+                                } else if let dict = p["image_url"] as? [String: Any],
+                                          let url = dict["url"] as? String {
+                                    out.append(.init(type: "image_url",
+                                        imageUrl: .init(url: url)))
+                                }
+                            } else if t == "input_video" || t == "video_url" {
+                                // vMLX extension for video-capable VLMs
+                                // (Qwen3-VL, Nemotron-H-Omni). The core
+                                // ChatRequest/Stream path already knows how
+                                // to stage and validate `video_url`; the
+                                // Responses translator must preserve it just
+                                // like chat/completions does via Codable.
+                                if let url = p["video_url"] as? String {
+                                    out.append(.init(type: "video_url",
+                                        videoUrl: .init(url: url)))
+                                } else if let dict = p["video_url"] as? [String: Any],
+                                          let url = dict["url"] as? String {
+                                    out.append(.init(type: "video_url",
+                                        videoUrl: .init(url: url)))
+                                }
+                            } else if t == "input_audio" {
+                                if let dict = p["input_audio"] as? [String: Any] {
+                                    let data = dict["data"] as? String
+                                    let format = dict["format"] as? String
+                                    out.append(.init(
+                                        type: "input_audio",
+                                        inputAudio: .init(data: data, format: format)))
+                                }
+                            } else if t == "audio_url" {
+                                if let url = p["audio_url"] as? String {
+                                    out.append(.init(type: "audio_url",
+                                        audioUrl: .init(url: url)))
+                                } else if let dict = p["audio_url"] as? [String: Any],
+                                          let url = dict["url"] as? String {
+                                    out.append(.init(type: "audio_url",
+                                        audioUrl: .init(url: url)))
+                                }
+                            }
+                        }
+                        content = .parts(out)
+                    } else {
+                        content = .string("")
+                    }
+                    messages.append(.init(role: role, content: content))
+                }
+            }
+        } else {
+            return Self.errorJSON(.badRequest, "missing 'input'")
+        }
+
+        var tools: [ChatRequest.Tool]? = nil
+        if let rawTools = obj["tools"] as? [[String: Any]] {
+            var collected: [ChatRequest.Tool] = []
+            for t in rawTools {
+                let type = (t["type"] as? String) ?? "function"
+                guard type == "function" else { continue }
+                var fn: [String: Any] = [:]
+                if let n = t["name"] as? String { fn["name"] = n }
+                if let d = t["description"] as? String { fn["description"] = d }
+                if let p = t["parameters"] as? [String: Any] { fn["parameters"] = p }
+                let wrapped: [String: Any] = ["type": "function", "function": fn]
+                if let d = try? JSONSerialization.data(withJSONObject: wrapped),
+                   let tool = try? JSONDecoder().decode(ChatRequest.Tool.self, from: d) {
+                    collected.append(tool)
+                }
+            }
+            if !collected.isEmpty { tools = collected }
+        }
+
+        var toolChoice: ChatRequest.ToolChoice? = nil
+        if let s = obj["tool_choice"] as? String {
+            let w: [String: Any] = ["tool_choice": s]
+            if let d = try? JSONSerialization.data(withJSONObject: w),
+               let decoded = try? JSONDecoder().decode(
+                   [String: ChatRequest.ToolChoice].self, from: d) {
+                toolChoice = decoded["tool_choice"]
+            }
+        } else if let tc = obj["tool_choice"] as? [String: Any],
+                  let fn = tc["function"] as? [String: Any],
+                  let name = fn["name"] as? String {
+            toolChoice = .function(name: name)
+        }
+
+        var reasoningEffort: String? = nil
+        if let r = obj["reasoning"] as? [String: Any],
+           let e = r["effort"] as? String {
+            reasoningEffort = e
+        }
+
+        let stopList: [String]? = {
+            if let arr = obj["stop"] as? [String], !arr.isEmpty { return arr }
+            if let s = obj["stop"] as? String, !s.isEmpty { return [s] }
+            return nil
+        }()
+        var chatReq = ChatRequest(
+            model: model,
+            messages: messages,
+            stream: obj["stream"] as? Bool,
+            maxTokens: obj["max_output_tokens"] as? Int,
+            temperature: obj["temperature"] as? Double,
+            topP: obj["top_p"] as? Double,
+            topK: obj["top_k"] as? Int,
+            minP: obj["min_p"] as? Double,
+            repetitionPenalty: obj["repetition_penalty"] as? Double,
+            stop: stopList,
+            seed: obj["seed"] as? Int,
+            reasoningEffort: reasoningEffort,
+            tools: tools,
+            toolChoice: toolChoice
+        )
+        chatReq.frequencyPenalty = obj["frequency_penalty"] as? Double
+        chatReq.presencePenalty = obj["presence_penalty"] as? Double
+        if let so = obj["stream_options"] as? [String: Any],
+           let include = so["include_usage"] as? Bool {
+            chatReq.streamOptions = .init(includeUsage: include)
+        }
+        if let kwargs = obj["chat_template_kwargs"] as? [String: Any] {
+            chatReq.chatTemplateKwargs = decodeChatTemplateKwargs(kwargs)
+        }
+        do {
+            try chatReq.validate()
+        } catch let err as ChatRequestValidationError {
+            return Self.errorJSON(.badRequest, err.description)
+        } catch {
+            return Self.errorJSON(.badRequest, "invalid request: \(error)")
+        }
+        await engine.wakeFromStandby()
+
+        let id = "resp_\(UUID().uuidString.prefix(8).lowercased())"
+        let created = Int(Date().timeIntervalSince1970)
+        let isStream = chatReq.stream ?? false
+
+        if isStream {
+            let upstream = await engine.stream(request: chatReq, id: id)
+            var headers: HTTPFields = [:]
+            headers[.contentType] = "text/event-stream; charset=utf-8"
+            headers[.cacheControl] = "no-cache"
+            headers[.connection] = "keep-alive"
+            if let n = HTTPField.Name("x-vmlx-trace-id") {
+                headers[n] = id
+            }
+            return Response(
+                status: .ok,
+                headers: headers,
+                body: SSEEncoder.responsesStream(
+                    id: id, model: model, created: created, upstream: upstream
+                )
+            )
+        }
+
+        var content = ""
+        var reasoning = ""
+        var toolCalls: [ChatRequest.ToolCall] = []
+        var usage: StreamChunk.Usage? = nil
+        var allLogprobs: [TokenLogprob] = []
+        let stream = await engine.stream(request: chatReq, id: id)
+        do {
+            for try await chunk in stream {
+                if let c = chunk.content { content += c }
+                if let r = chunk.reasoning { reasoning += r }
+                if let tcs = chunk.toolCalls { toolCalls.append(contentsOf: tcs) }
+                if let u = chunk.usage { usage = u }
+                if let lps = chunk.logprobs { allLogprobs.append(contentsOf: lps) }
+            }
+        } catch let err as EngineError {
+            return Self.mapEngineError(err)
+        } catch {
+            return Self.errorJSON(.internalServerError, "\(error)")
+        }
+
+        var output: [[String: Any]] = []
+        if !reasoning.isEmpty {
+            output.append([
+                "type": "reasoning",
+                "id": "rs_\(UUID().uuidString.prefix(8).lowercased())",
+                "summary": [[
+                    "type": "summary_text",
+                    "text": reasoning,
+                ] as [String: Any]],
+            ])
+        }
+        if !content.isEmpty || (toolCalls.isEmpty && reasoning.isEmpty) {
+            output.append([
+                "type": "message",
+                "id": "msg_\(UUID().uuidString.prefix(8).lowercased())",
+                "role": "assistant",
+                "status": "completed",
+                "content": [[
+                    "type": "output_text",
+                    "text": content,
+                    "annotations": [] as [Any],
+                ] as [String: Any]],
+            ])
+        }
+        for tc in toolCalls {
+            output.append([
+                "type": "function_call",
+                "id": "fc_\(UUID().uuidString.prefix(8).lowercased())",
+                "call_id": tc.id,
+                "name": tc.function.name,
+                "arguments": tc.function.arguments,
+                "status": "completed",
+            ])
+        }
+
+        var out: [String: Any] = [
+            "id": id,
+            "object": "response",
+            "created_at": created,
+            "status": "completed",
+            "model": model,
+            "output_text": content,
+            "output": output,
+        ]
+        if let u = usage {
+            out["usage"] = Self.responsesUsageEnvelope(u)
+        }
+        return Self.json(out, traceId: id)
+    }
+
     public static func responsesUsageEnvelope(_ u: StreamChunk.Usage) -> [String: Any] {
         var r: [String: Any] = [
             "input_tokens": u.promptTokens,

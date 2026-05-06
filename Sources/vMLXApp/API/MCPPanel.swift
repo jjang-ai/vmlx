@@ -452,17 +452,21 @@ struct MCPPanel: View {
         }
     }
 
+    @MainActor
     private func pickConfigPath() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = []
-        panel.allowsOtherFileTypes = true
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        panel.message = "Pick an mcp.json config"
-        if panel.runModal() == .OK, let url = panel.url {
-            configPath = url.path
-        }
+        // Iter 129 (vmlx#121 / #133): macOS 26 ad-hoc XPC failure
+        // mitigation via NSOpenPanelSafe.
+        let result = NSOpenPanelSafe.pick(configure: { panel in
+            panel.allowedContentTypes = []
+            panel.allowsOtherFileTypes = true
+            panel.canChooseDirectories = false
+            panel.canChooseFiles = true
+            panel.allowsMultipleSelection = false
+            panel.message = "Pick an mcp.json config"
+        }, fallbackTitle: L10n.PickerFallback.mcpJsonTitle.render(appLocale),
+           fallbackMessage: L10n.PickerFallback.mcpJsonMessage.render(appLocale),
+           canChooseFiles: true)
+        if let url = result.url { configPath = url.path }
     }
 
     private func stateColor(_ state: MCPServerState) -> Color {

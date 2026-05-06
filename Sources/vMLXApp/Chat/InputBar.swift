@@ -402,7 +402,12 @@ struct InputBar: View {
             .font(Theme.Typography.body)
             .foregroundStyle(Theme.Colors.textHigh)
             .lineLimit(1...8)
-            .onSubmit { if canSend { vm.send() } }
+            // Iter 144 — also guard on `!vm.isGenerating` so a
+            // keyboard-Enter mid-stream doesn't double-dispatch
+            // alongside the in-flight generation. The send button
+            // (`buttonEnabled`) already includes this guard; the
+            // keyboard path was the silent gap.
+            .onSubmit { if canSend && !vm.isGenerating { vm.send() } }
             .onChange(of: vm.inputText) { _, _ in handleTextChange() }
             .onKeyPress(.upArrow) { handleUpArrow() }
             .onKeyPress(.downArrow) { handleDownArrow() }

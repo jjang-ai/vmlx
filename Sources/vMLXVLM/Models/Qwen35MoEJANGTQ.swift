@@ -137,6 +137,7 @@ enum Qwen35JANGTQLanguage {
         let normTopkProb: Bool
         let numExperts: Int
         let topK: Int
+        let layerIdx: Int
 
         @ModuleInfo(key: "gate") var gate: Linear
         @ModuleInfo(key: "switch_mlp") var switchMLP: TurboQuantSwitchGLU
@@ -144,10 +145,16 @@ enum Qwen35JANGTQLanguage {
         @ModuleInfo(key: "shared_expert") var sharedExpert: Qwen35Language.MLP
         @ModuleInfo(key: "shared_expert_gate") var sharedExpertGate: Linear
 
-        init(_ args: Qwen35Configuration.TextConfiguration, mxtqBits: Int, mxtqSeed: Int) {
+        init(
+            _ args: Qwen35Configuration.TextConfiguration,
+            layerIdx: Int,
+            mxtqBits: Int,
+            mxtqSeed: Int
+        ) {
             self.normTopkProb = args.normTopkProb
             self.numExperts = args.numExperts
             self.topK = args.numExpertsPerTok
+            self.layerIdx = layerIdx
 
             _gate.wrappedValue = Linear(args.hiddenSize, args.numExperts, bias: false)
             _switchMLP.wrappedValue = TurboQuantSwitchGLU(
@@ -173,6 +180,7 @@ enum Qwen35JANGTQLanguage {
             )([gates])
             let inds = routed[0]
             let scores = routed[1]
+            JangPressRouteTelemetry.recordTopK(layer: layerIdx, indices: inds)
 
             let y = switchMLP(x, inds)
             let combined = (y * scores[.ellipsis, .newAxis]).sum(axis: -2)
@@ -208,7 +216,11 @@ enum Qwen35JANGTQLanguage {
             }
 
             if args.numExperts > 0 {
-                _mlp.wrappedValue = SparseMoeBlock(args, mxtqBits: mxtqBits, mxtqSeed: mxtqSeed)
+                _mlp.wrappedValue = SparseMoeBlock(
+                    args,
+                    layerIdx: layerIdx,
+                    mxtqBits: mxtqBits,
+                    mxtqSeed: mxtqSeed)
             } else {
                 _mlp.wrappedValue = Qwen35Language.MLP(
                     dimensions: args.hiddenSize, hiddenDimensions: args.intermediateSize)
@@ -720,7 +732,8 @@ public class Qwen35MoEJANGTQ: Module, VLMModel {
                             sanitized.removeValue(
                                 forKey: "\(prefix).experts.\(e).\(orig).\(kind)")!
                         }
-                        sanitized["\(prefix).switch_mlp.\(updated).\(kind)"] = MLX.stacked(stacked)
+                        sanitized["\(prefix).switch_mlp.\(updated).\(kind)"] =
+                            loadTimeMaterializedStacked(stacked)
                     }
                 }
             }

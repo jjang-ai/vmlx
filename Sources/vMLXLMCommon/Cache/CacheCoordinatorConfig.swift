@@ -12,6 +12,14 @@ public struct CacheCoordinatorConfig: Sendable {
     /// Whether the on-disk L2 cache (SQLite + safetensors) is enabled.
     public var enableDiskCache: Bool
 
+    /// Whether the block-level on-disk L2 cache is enabled.
+    ///
+    /// This is separate from ``enableDiskCache``. The prompt-level disk
+    /// cache stores a whole serialized prompt entry; block disk stores
+    /// individual paged-prefix blocks using the same chain hashes as
+    /// ``PagedCacheManager``.
+    public var enableBlockDiskCache: Bool
+
     /// Whether the in-memory byte-budgeted L1.5 cache
     /// (`MemoryAwarePrefixCache`) is enabled. When on, the coordinator
     /// stores serialized KV arrays in RAM with memory-pressure
@@ -40,6 +48,13 @@ public struct CacheCoordinatorConfig: Sendable {
     /// Directory for disk cache files. If `nil`, a default temp directory is used.
     public var diskCacheDir: URL?
 
+    /// Maximum block-level disk cache size in gigabytes.
+    public var blockDiskCacheMaxGB: Double
+
+    /// Directory for block-level disk cache files. If `nil`, a default under
+    /// the disk cache directory is used.
+    public var blockDiskCacheDir: URL?
+
     /// Maximum number of SSM state entries in the companion LRU cache.
     public var ssmMaxEntries: Int
 
@@ -52,6 +67,7 @@ public struct CacheCoordinatorConfig: Sendable {
     public init(
         usePagedCache: Bool = true,
         enableDiskCache: Bool = true,
+        enableBlockDiskCache: Bool = false,
         enableMemoryCache: Bool = false,
         memoryCachePercent: Double = 0.30,
         memoryCacheTTLMinutes: Double = 0,
@@ -59,11 +75,14 @@ public struct CacheCoordinatorConfig: Sendable {
         maxCacheBlocks: Int = 1000,
         diskCacheMaxGB: Float = 10.0,
         diskCacheDir: URL? = nil,
+        blockDiskCacheMaxGB: Double = 10.0,
+        blockDiskCacheDir: URL? = nil,
         ssmMaxEntries: Int = 50,
         modelKey: String? = nil
     ) {
         self.usePagedCache = usePagedCache
         self.enableDiskCache = enableDiskCache
+        self.enableBlockDiskCache = enableBlockDiskCache
         self.enableMemoryCache = enableMemoryCache
         self.memoryCachePercent = memoryCachePercent
         self.memoryCacheTTLMinutes = memoryCacheTTLMinutes
@@ -71,6 +90,8 @@ public struct CacheCoordinatorConfig: Sendable {
         self.maxCacheBlocks = maxCacheBlocks
         self.diskCacheMaxGB = diskCacheMaxGB
         self.diskCacheDir = diskCacheDir
+        self.blockDiskCacheMaxGB = blockDiskCacheMaxGB
+        self.blockDiskCacheDir = blockDiskCacheDir
         self.ssmMaxEntries = ssmMaxEntries
         self.modelKey = modelKey
     }

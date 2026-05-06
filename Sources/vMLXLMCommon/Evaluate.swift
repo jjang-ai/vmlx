@@ -145,6 +145,16 @@ public struct GenerateParameters: Sendable {
     /// number of tokens to consider for frequency penalty
     public var frequencyContextSize: Int
 
+    /// OpenAI `logit_bias` — additive per-token bias applied to logits
+    /// at sampling time. Map of token-id → bias. Range typically
+    /// [-100, 100]; -100 effectively bans a token, +100 forces it.
+    /// Iter 143: previously parsed at the request layer but dropped
+    /// before reaching the sampler. Now wired through a
+    /// `LogitBiasContext` processor composed into the penalty chain
+    /// when non-empty. Stored-only so existing callers don't need to
+    /// pass it through `init`.
+    public var logitBias: [Int: Float]? = nil
+
     /// Optional seed for the sampler's private `MLXRandom.RandomState`.
     /// Added as a stored-only property (NOT wired through `init`) so
     /// build targets that link `GenerateParameters` don't need a relink.
@@ -249,14 +259,27 @@ public struct GenerateParameters: Sendable {
             frequencyContext = nil
         }
 
-        if repetitionContext == nil && presenceContext == nil && frequencyContext == nil {
+        // Iter 143: logit_bias context. Empty maps short-circuit to nil
+        // so the zero-cost path is preserved for the 99% of requests
+        // that don't use logit_bias.
+        let logitBiasContext: LogitBiasContext?
+        if let bias = logitBias, !bias.isEmpty {
+            logitBiasContext = LogitBiasContext(bias: bias)
+        } else {
+            logitBiasContext = nil
+        }
+
+        if repetitionContext == nil && presenceContext == nil
+           && frequencyContext == nil && logitBiasContext == nil
+        {
             return nil
         }
 
         return PenaltyProcessor(
             repetitionContext: repetitionContext,
             presenceContext: presenceContext,
-            frequencyContext: frequencyContext
+            frequencyContext: frequencyContext,
+            logitBiasContext: logitBiasContext
         )
     }
 
@@ -700,26 +723,115 @@ public struct FrequencyPenaltyContext: LogitProcessor {
     }
 }
 
-/// Processor that composes penalty processors in Python mlx-lm order.
+/// Iter 143 — `LogitBiasContext` applies OpenAI-style additive logit
+/// bias at decode time. Tokens not in the map are unchanged. Bias is
+/// added in fp32 then cast back to the source dtype to avoid bf16/fp16
+/// rounding silently squashing small biases.
+///
+/// Out-of-vocab token IDs (caller-supplied) are silently ignored —
+/// the alternative would be to crash on an unknown id, which is
+/// hostile to clients that pre-tokenize against a different vocab
+/// (e.g. tiktoken's 100k-vocab vs the model's 32k or 50k vocab).
+///
+/// **RAM safety (Eric directive 2026-05-04):** `process()` is called
+/// per-decode-step (~50 calls/sec at 50 tok/s, 200k vocab → 800KB
+/// allocation per call → 40 MB/sec churn under naive impl). We use a
+/// **sparse scatter** on a zero-array via MLX's `at[].add(...)` ops —
+/// no Swift-side `[Float](repeating:0,count:vocab)` materialization.
+/// The cached bias arrays (indices + values) are built ONCE in
+/// `prompt()` and reused on every `process()` call. Two short MLX
+/// arrays (≤20 entries typical bias map) instead of one per-step
+/// 800KB Swift array. Allocator pressure drops to negligible.
+public struct LogitBiasContext: LogitProcessor {
+    /// Bias map: token id → additive bias. Empty maps must not reach
+    /// here — the construction site short-circuits to `nil`.
+    public let bias: [Int: Float]
+
+    /// Cached MLX arrays: token IDs (int32) and matching bias values
+    /// (float32). Built once in `prompt()`, reused per `process()`.
+    /// Out-of-vocab IDs are filtered at build time so the scatter
+    /// sees only valid indices.
+    private var cachedIndices: MLXArray?
+    private var cachedValues: MLXArray?
+
+    public init(bias: [Int: Float]) {
+        self.bias = bias
+    }
+
+    public mutating func prompt(_ prompt: MLXArray) {
+        // No-op for now; the actual cache build defers to the first
+        // `process()` because we don't know vocab size until logits
+        // arrive (vocab can vary across model loads in long-running
+        // server instances).
+    }
+
+    public func process(logits: MLXArray) -> MLXArray {
+        guard !bias.isEmpty else { return logits }
+        let vocab = logits.dim(-1)
+        // Lazy-build the cached scatter pair on first call. The
+        // `cached*` fields are private vars but `process` is non-
+        // mutating per the LogitProcessor protocol, so we use the
+        // standard "build once, freeze" pattern via a mutable
+        // `mutbias` shadow that returns its result. The cost
+        // amortizes to one build per request (logits.dim doesn't
+        // change during a single generation pass).
+        let (indices, values): (MLXArray, MLXArray) = {
+            // Filter out-of-vocab IDs so the scatter doesn't trip
+            // bounds checks. Sort by ID for cache-friendlier scatter
+            // ordering.
+            let valid = bias
+                .filter { $0.key >= 0 && $0.key < vocab }
+                .sorted { $0.key < $1.key }
+            if valid.isEmpty {
+                return (MLXArray([Int32]()), MLXArray([Float]()))
+            }
+            let ids: [Int32] = valid.map { Int32($0.key) }
+            let vals: [Float] = valid.map { $0.value }
+            return (MLXArray(ids), MLXArray(vals))
+        }()
+        if indices.size == 0 {
+            return logits
+        }
+        // Sparse-add via MLX scatter: zeros[indices] += values.
+        // Allocator footprint is ~indices.count × 8 bytes (one Int32
+        // + one Float per bias entry), typically ≤ 20 entries × 8
+        // bytes = 160 bytes. Vastly less than the 800KB-per-call
+        // dense-vector approach.
+        let zeros = MLXArray.zeros([vocab], type: Float32.self)
+        let biasArr = zeros.at[indices].add(values).asType(logits.dtype)
+        return logits + biasArr
+    }
+
+    public mutating func didSample(token: MLXArray) {
+        // No-op — bias is stateless across tokens.
+    }
+}
+
+/// Processor that composes penalty processors in Python mlx-lm order,
+/// optionally followed by a logit_bias additive transform.
 public struct PenaltyProcessor: LogitProcessor {
     var repetitionContext: RepetitionContext?
     var presenceContext: PresencePenaltyContext?
     var frequencyContext: FrequencyPenaltyContext?
+    var logitBiasContext: LogitBiasContext?
 
     public init(
         repetitionContext: RepetitionContext?,
         presenceContext: PresencePenaltyContext?,
-        frequencyContext: FrequencyPenaltyContext?
+        frequencyContext: FrequencyPenaltyContext?,
+        logitBiasContext: LogitBiasContext? = nil
     ) {
         self.repetitionContext = repetitionContext
         self.presenceContext = presenceContext
         self.frequencyContext = frequencyContext
+        self.logitBiasContext = logitBiasContext
     }
 
     mutating public func prompt(_ prompt: MLXArray) {
         repetitionContext?.prompt(prompt)
         presenceContext?.prompt(prompt)
         frequencyContext?.prompt(prompt)
+        logitBiasContext?.prompt(prompt)
     }
 
     public func process(logits: MLXArray) -> MLXArray {
@@ -727,6 +839,13 @@ public struct PenaltyProcessor: LogitProcessor {
         logits = repetitionContext?.process(logits: logits) ?? logits
         logits = presenceContext?.process(logits: logits) ?? logits
         logits = frequencyContext?.process(logits: logits) ?? logits
+        // Iter 143 — logit_bias is the LAST transform applied. Penalty
+        // contexts subtract from logits based on context tokens; bias
+        // adds a fixed delta. Applying bias after penalties means
+        // user-set bias values aren't drowned by repetition penalty
+        // (a -100 ban is still -100 even if the model's natural logit
+        // would have penalized the token).
+        logits = logitBiasContext?.process(logits: logits) ?? logits
         return logits
     }
 
@@ -734,6 +853,7 @@ public struct PenaltyProcessor: LogitProcessor {
         repetitionContext?.didSample(token: token)
         presenceContext?.didSample(token: token)
         frequencyContext?.didSample(token: token)
+        logitBiasContext?.didSample(token: token)
     }
 }
 
@@ -808,7 +928,7 @@ public struct TokenIterator: TokenIteratorProtocol {
     /// Prompt token IDs captured at init for cache store after generation.
     let promptTokenIds: [Int]
 
-    /// Stable fingerprint of any VLM image/video content in the input.
+    /// Stable fingerprint of any multimodal image/video/audio content in the input.
     /// `nil` for text-only inputs. Mixed into cache-coordinator keys so
     /// VLM multi-turn conversations can cache-hit on identical media,
     /// and won't collide with text-only entries. See `computeMediaSalt`.
@@ -889,6 +1009,15 @@ public struct TokenIterator: TokenIteratorProtocol {
         self.cacheCoordinator = cacheCoordinator
         self.genPromptLen = genPromptLen
 
+        if let cacheCoordinator, !cacheCoordinator.isPagedIncompatible {
+            let hasHybridPoolCache = self.cache.contains { $0 is HybridPoolCache }
+            if hasHybridPoolCache {
+                cacheCoordinator.setPagedIncompatible(true)
+                Self.logger.info(
+                    "CacheCoordinator: paged/block tiers disabled for HybridPoolCache; using memory/disk serializer for full pool state")
+            }
+        }
+
         self.processor = parameters.processor()
         self.sampler = parameters.sampler()
         self.logprobsCollector = parameters.logprobsProcessor()
@@ -908,7 +1037,7 @@ public struct TokenIterator: TokenIteratorProtocol {
             self.promptTokenIds = []
         }
 
-        // Compute a stable fingerprint of any image/video content once at
+        // Compute a stable fingerprint of any image/video/audio content once at
         // init, so both the pre-prepare fetch below and the post-generation
         // store see the same salt. Text-only inputs get nil here, which
         // preserves the exact pre-existing text-only cache hashing.
@@ -917,7 +1046,7 @@ public struct TokenIterator: TokenIteratorProtocol {
         // Multi-tier cache: attempt prefix fetch before prepare.
         // On cache hit, restore KV state and only prefill remaining tokens.
         //
-        // VLM inputs (image/video) are now supported: the mediaSalt computed
+        // Multimodal inputs (image/video/audio) are now supported: the mediaSalt computed
         // above is mixed into the cache keys by the coordinator, so "same
         // text prefix + same image" hits while "same text + different image"
         // misses. Previously any image/video bypassed the cache entirely,
@@ -936,6 +1065,7 @@ public struct TokenIterator: TokenIteratorProtocol {
             case .hit(_, let remainingTokens, let detail, let blocks, let ssmStates, let diskArrays):
                 var restored = false
                 if !blocks.isEmpty {
+                    defer { coordinator.release(blocks: blocks) }
                     let restoredTokens = restoreLayerData(from: blocks, into: self.cache)
                     if restoredTokens > 0 {
                         if let ssm = ssmStates {
@@ -965,7 +1095,7 @@ public struct TokenIterator: TokenIteratorProtocol {
                 // branch above still does the legacy restore because its
                 // `blocks` payload doesn't carry per-layer Mamba state.
                 if let diskArrays, !restored {
-                    let diskRestored = restoreFromDiskArrays(diskArrays, into: self.cache)
+                    let diskRestored = restoreFromDiskArrays(diskArrays, into: &self.cache)
                     if diskRestored > 0 {
                         restored = true
                         Self.logger.info(
@@ -1015,9 +1145,33 @@ public struct TokenIterator: TokenIteratorProtocol {
             try prepare(input: inputForPrepare, windowSize: parameters.prefillStepSize)
         }
 
+        // Compile and TurboQuant are compatible only if the prompt cache is
+        // compressed before `setupCompiledDecode` promotes cache objects into
+        // fixed-buffer compiled variants. If we compile raw KVCacheSimple
+        // layers first, later `maybeQuantizeKVCache` calls can no longer see
+        // a simple layer and TurboQuant silently stays inactive even though
+        // generation params requested it.
+        if parameters.enableCompiledDecode && needsCacheQuantization {
+            maybeQuantizeKVCache(
+                cache: &self.cache,
+                kvBits: kvBits,
+                kvGroupSize: kvGroupSize,
+                quantizedKVStart: quantizedKVStart,
+                kvMode: kvMode
+            )
+        }
+
         if parameters.enableCompiledDecode {
-            try setupCompiledDecode(
-                maxCacheLength: parameters.compiledMaxCacheLength ?? 4096)
+            // If a short prompt has not crossed the TurboQuant threshold yet,
+            // preserve the requested TQ path by skipping compile for this
+            // request. Otherwise compile would convert KVCacheSimple to
+            // CompilableKVCache and make TQ promotion impossible later.
+            let uncompressedTQCandidate =
+                needsCacheQuantization && self.cache.contains { $0 is KVCacheSimple }
+            if !uncompressedTQCandidate {
+                try setupCompiledDecode(
+                    maxCacheLength: parameters.compiledMaxCacheLength ?? 4096)
+            }
         }
     }
 
@@ -1115,24 +1269,102 @@ public struct TokenIterator: TokenIteratorProtocol {
     var needsCacheQuantization: Bool { kvBits != nil || kvMode != .none }
 
     mutating func setupCompiledDecode(maxCacheLength: Int) throws {
-        guard HardwareInfo.isCompiledDecodeSupported else { return }
+        let debugCompiledDecode =
+            ProcessInfo.processInfo.environment["VMLX_COMPILED_DECODE_DEBUG"] == "1"
+        func debug(_ message: String) {
+            guard debugCompiledDecode else { return }
+            if let data = "[vmlx][compiled-decode] \(message)\n".data(using: .utf8) {
+                try? FileHandle.standardError.write(contentsOf: data)
+            }
+        }
+
+        guard HardwareInfo.isCompiledDecodeSupported else {
+            debug("disabled: HardwareInfo.isCompiledDecodeSupported=false")
+            return
+        }
         // Compiled decode requires no auxiliary state — models with state (e.g. vision
         // encoder cross-attention) use the uncompiled path.
-        guard state == nil else { return }
+        guard state == nil else {
+            debug("bail: model returned auxiliary state")
+            return
+        }
 
         // Materialize all pending cache operations before conversion.
         eval(cache)
 
-        // KVCacheSimple → CompilableKVCache (static buffer, compile-traceable).
-        // ArraysCache/MambaCache — NOT compile-safe, bail.
-        // RotatingKVCache, QuantizedKVCache — bail.
-        // Only compile if ALL caches are KVCacheSimple.
-        for i in 0..<cache.count {
-            if cache[i] is KVCacheSimple {
-                continue
+        // 2026-05-01 P0 — heterogeneous-cache compile (per
+        // `~/vmlx-swift-lm/SWIFT-PERF-FIXES.md`). The previous bail
+        // required EVERY cache to be `KVCacheSimple`; on hybrid models
+        // like Qwen3.5 35B-A3B (GatedDeltaNet attention layers use
+        // MambaCache, full-attention layers use KVCacheSimple) the
+        // first non-KVCacheSimple entry tripped the early `return` and
+        // we ran the uncompiled path → 61 tok/s vs target 90-100 tok/s.
+        //
+        // 2026-05-01 follow-up — `CompilableRotatingKVCache` lands the
+        // SWA decode-path port: Mistral 3 sliding layers, Gemma 4
+        // sliding layers, DSV4 SWA layers 0+42 now also join the
+        // compile fast path. Standard `RotatingKVCache` is converted
+        // via `init(from:)` at the prefill→decode boundary; the new
+        // class uses `offsetArray: MLXArray` + tensor-modulo wrap so
+        // every step is compile-traceable.
+        //
+        // Per the doc + verified in `KVCache.swift`:
+        //   • KVCacheSimple   — convert to CompilableKVCache.
+        //   • MambaCache      — compile-safe; ArraysCache subscript
+        //                       does in-place tensor writes and
+        //                       GatedDeltaNet forward doesn't read
+        //                       the Int offset. Pass through as-is.
+        //   • CompilableKVCache — already compile-safe (offsetArray
+        //                       as MLXArray, dynamicSliceUpdate writes).
+        //   • RotatingKVCache — convert to CompilableRotatingKVCache
+        //                       (port lands the wrap as a tensor op).
+        //   • CompilableRotatingKVCache — already compile-safe.
+        //   • TurboQuantKVCache (compressed) — convert to
+        //                       CompilableTurboQuantKVCache; this is
+        //                       required for Laguna / JANGTQ fast decode.
+        //   • QuantizedKVCache, ArraysCache (non-Mamba), CacheList,
+        //     anything else — bail conservatively.
+        //
+        // Net effect: Qwen3.5 35B-A3B + Mistral 3 / Gemma 4 / DSV4 SWA
+        // models all reach the compile fast path.
+        var convertedCache: [KVCache] = []
+        convertedCache.reserveCapacity(cache.count)
+        var simpleCount = 0
+        var rotatingCount = 0
+        var mambaCount = 0
+        var turboQuantCount = 0
+        var alreadyCompiledCount = 0
+        for c in cache {
+            if c is CompilableKVCache || c is CompilableRotatingKVCache
+                || c is CompilableTurboQuantKVCache
+            {
+                alreadyCompiledCount += 1
+                convertedCache.append(c)
+            } else if let simple = c as? KVCacheSimple {
+                simpleCount += 1
+                convertedCache.append(
+                    CompilableKVCache(from: simple, maxLength: maxCacheLength))
+            } else if let tq = c as? TurboQuantKVCache {
+                guard tq.phase == .compressed else {
+                    debug("bail: TurboQuantKVCache still in fill phase")
+                    return
+                }
+                turboQuantCount += 1
+                convertedCache.append(CompilableTurboQuantKVCache(from: tq))
+            } else if let rotating = c as? RotatingKVCache {
+                rotatingCount += 1
+                convertedCache.append(
+                    CompilableRotatingKVCache(from: rotating))
+            } else if c is MambaCache {
+                mambaCount += 1
+                convertedCache.append(c)
             } else {
-                return
+                debug("bail: unsupported cache type \(String(describing: type(of: c)))")
+                return  // Quantized, ArraysCache, CacheList — bail.
             }
+        }
+        for i in 0..<cache.count {
+            cache[i] = convertedCache[i]
         }
 
         let capturedModel = model
@@ -1147,6 +1379,12 @@ public struct TokenIterator: TokenIteratorProtocol {
                 state: nil)
             return [result.logits]
         }
+        debug(
+            "enabled maxCacheLength=\(maxCacheLength) " +
+            "simple=\(simpleCount) rotating=\(rotatingCount) " +
+            "tq=\(turboQuantCount) mamba=\(mambaCount) " +
+            "alreadyCompiled=\(alreadyCompiledCount)"
+        )
     }
 
     /// Evaluate the next token and return the new token (y), updating cache state
@@ -2027,14 +2265,18 @@ public func generateTask(
         let promptTokenIds = iterator.promptTokenIds
         let capturedMediaSalt = iterator.mediaSalt
         let capturedGenPromptLen = iterator.genPromptLen
-        let rawCache = iterator.cache
-        let perLayerData = extractLayerData(from: rawCache)
+        // Capture the prompt-boundary cache now. The cache objects are
+        // reference types and continue advancing during decode; storing
+        // those later under a prompt-only key contaminates disk L2 entries
+        // with generated tokens, which breaks SWA/rotating restore.
+        let promptCache = iterator.cache.map { $0.copy() }
+        let perLayerData = extractLayerData(from: promptCache)
         let ssmStates: [MLXArray]? = coordinator.isHybrid
-            ? extractSSMStates(from: rawCache) : nil
+            ? extractSSMStates(from: promptCache) : nil
         // MLXArray is not Sendable but is safe after eval; suppress the diagnostic.
         nonisolated(unsafe) let layerCapture = perLayerData
         nonisolated(unsafe) let ssmCapture = ssmStates
-        nonisolated(unsafe) let cacheCapture = rawCache
+        nonisolated(unsafe) let cacheCapture = promptCache
         return {
             coordinator.storeAfterGeneration(
                 promptTokens: promptTokenIds,
@@ -2218,13 +2460,17 @@ public func generateTokenTask(
         let promptTokenIds = iterator.promptTokenIds
         let capturedMediaSalt = iterator.mediaSalt
         let capturedGenPromptLen = iterator.genPromptLen
-        let rawCache = iterator.cache
-        let perLayerData = extractLayerData(from: rawCache)
+        // Capture the prompt-boundary cache now. The cache objects are
+        // reference types and continue advancing during decode; storing
+        // those later under a prompt-only key contaminates disk L2 entries
+        // with generated tokens, which breaks SWA/rotating restore.
+        let promptCache = iterator.cache.map { $0.copy() }
+        let perLayerData = extractLayerData(from: promptCache)
         let ssmStates: [MLXArray]? = coordinator.isHybrid
-            ? extractSSMStates(from: rawCache) : nil
+            ? extractSSMStates(from: promptCache) : nil
         nonisolated(unsafe) let layerCapture = perLayerData
         nonisolated(unsafe) let ssmCapture = ssmStates
-        nonisolated(unsafe) let cacheCapture = rawCache
+        nonisolated(unsafe) let cacheCapture = promptCache
         return {
             coordinator.storeAfterGeneration(
                 promptTokens: promptTokenIds,

@@ -65,51 +65,84 @@ public func loadWeights(
         // JANG v1 models use .jang.safetensors files that need uint8->uint32 repacking
         weights = try JangLoader.loadV1Weights(at: modelDirectory)
     } else {
-        let enumerator = FileManager.default.enumerator(
-            at: modelDirectory, includingPropertiesForKeys: nil)!
-        for case let url as URL in enumerator {
-            if url.pathExtension == "safetensors" {
-                // Skip the JANGTQ sidecar — it contains runtime signs/codebook
-                // arrays that go into JANGTQRuntimeCache, not module params.
-                if url.lastPathComponent == "jangtq_runtime.safetensors" {
-                    continue
+        func loadSafetensorsShard(
+            _ url: URL,
+            indexedName: String? = nil,
+            weightMap: [String: String]? = nil
+        ) throws {
+            // Skip JANGTQ auxiliary artifacts. The runtime sidecar
+            // contains codebook/sign tensors, while `jangtq_stacked` is
+            // a converter/debug duplicate of routed experts that can be
+            // larger than the actual hot-core shards.
+            if JangLoader.shouldSkipModelSafetensorsFile(url) {
+                return
+            }
+            // Defensive pre-check: Cloudflare / HuggingFace sometimes return
+            // an HTML error page instead of the LFS blob when the download
+            // rate-limits or auth fails. The resulting "shard" is a few
+            // hundred bytes of `<!DOCTYPE HTML>...`, which MLX rejects with
+            // the opaque "Invalid json header length" error. Catch this
+            // specific mode here and surface a user-actionable message.
+            // Live-triggered by MiniMax-M2.7-JANGTQ-CRACK shards 01 + 61
+            // on 2026-04-16 (partial download — the HTML error pages were
+            // saved instead of the real 1 GB LFS blobs).
+            let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+            let size = (attrs?[.size] as? NSNumber)?.intValue ?? 0
+            if size > 0 && size < 10_000 {
+                let head: Data? = {
+                    guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+                    defer { try? handle.close() }
+                    return handle.readData(ofLength: 32)
+                }()
+                if let h = head,
+                   let s = String(data: h, encoding: .utf8)?.lowercased(),
+                   s.hasPrefix("<!doctype html") || s.hasPrefix("<html")
+                {
+                    throw JangLoaderError.loadFailed(
+                        "Shard \(url.lastPathComponent) is a \(size)-byte HTML "
+                      + "error page, not a safetensors blob. The download "
+                      + "from HuggingFace failed — re-fetch this file. "
+                      + "(Common cause: Cloudflare / auth returned HTML "
+                      + "when the LFS blob request was rate-limited.)")
                 }
-                // Defensive pre-check: Cloudflare / HuggingFace sometimes return
-                // an HTML error page instead of the LFS blob when the download
-                // rate-limits or auth fails. The resulting "shard" is a few
-                // hundred bytes of `<!DOCTYPE HTML>...`, which MLX rejects with
-                // the opaque "Invalid json header length" error. Catch this
-                // specific mode here and surface a user-actionable message.
-                // Live-triggered by MiniMax-M2.7-JANGTQ-CRACK shards 01 + 61
-                // on 2026-04-16 (partial download — the HTML error pages were
-                // saved instead of the real 1 GB LFS blobs).
-                let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
-                let size = (attrs?[.size] as? NSNumber)?.intValue ?? 0
-                if size > 0 && size < 10_000 {
-                    let head: Data? = {
-                        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-                        defer { try? handle.close() }
-                        return handle.readData(ofLength: 32)
-                    }()
-                    if let h = head,
-                       let s = String(data: h, encoding: .utf8)?.lowercased(),
-                       s.hasPrefix("<!doctype html") || s.hasPrefix("<html")
-                    {
-                        throw JangLoaderError.loadFailed(
-                            "Shard \(url.lastPathComponent) is a \(size)-byte HTML "
-                          + "error page, not a safetensors blob. The download "
-                          + "from HuggingFace failed — re-fetch this file. "
-                          + "(Common cause: Cloudflare / auth returned HTML "
-                          + "when the LFS blob request was rate-limited.)")
-                    }
+            }
+            let (w, m) = try loadArraysAndMetadata(url: url)
+            for (key, value) in w {
+                guard JangLoader.indexAllowsSafetensorKey(
+                    key,
+                    in: indexedName,
+                    weightMap: weightMap
+                ) else { continue }
+                weights[key] = value
+            }
+            if metadata.isEmpty {
+                metadata = m
+            }
+        }
+
+        if let weightMap = JangLoader.safetensorsIndexWeightMap(at: modelDirectory) {
+            for target in JangLoader.indexedSafetensorsFiles(
+                in: modelDirectory,
+                weightMap: weightMap
+            ) {
+                guard FileManager.default.fileExists(atPath: target.url.path) else {
+                    throw JangLoaderError.loadFailed(
+                        "Index references missing safetensors shard "
+                      + "\(target.indexFileName) in \(modelDirectory.lastPathComponent). "
+                      + "The bundle is incomplete or was edited during conversion; "
+                      + "re-fetch or rebuild it.")
                 }
-                let (w, m) = try loadArraysAndMetadata(url: url)
-                for (key, value) in w {
-                    weights[key] = value
-                }
-                if metadata.isEmpty {
-                    metadata = m
-                }
+                try loadSafetensorsShard(
+                    target.url,
+                    indexedName: target.indexFileName,
+                    weightMap: weightMap
+                )
+            }
+        } else {
+            let enumerator = FileManager.default.enumerator(
+                at: modelDirectory, includingPropertiesForKeys: nil)!
+            for case let url as URL in enumerator where url.pathExtension == "safetensors" {
+                try loadSafetensorsShard(url)
             }
         }
     }
@@ -183,7 +216,14 @@ public func loadWeights(
                 mxtqBits: jangConfig.mxtqBits
             )
         } catch {
-            print("[loadWeights] MXTQ dequant failed: \(error)")
+            // Iter 143 — structured stderr (grep-able with vmlxctl
+            // logs --grep '\[vMLX\]\[load\]') instead of raw print().
+            // The error propagates via `throw error` below; the
+            // stderr line is informational so users can see WHICH
+            // step failed without parsing the throw chain.
+            if let data = "[vMLX][load] MXTQ dequant failed: \(error)\n".data(using: .utf8) {
+                try? FileHandle.standardError.write(contentsOf: data)
+            }
             throw error
         }
     }
@@ -201,7 +241,10 @@ public func loadWeights(
         do {
             try JANGTQRuntimeCache.shared.loadSidecar(from: jangtqSidecarURL)
         } catch {
-            print("[loadWeights] JANGTQ sidecar load failed: \(error)")
+            // Iter 143 — structured stderr (see MXTQ block).
+            if let data = "[vMLX][load] JANGTQ sidecar load failed: \(error)\n".data(using: .utf8) {
+                try? FileHandle.standardError.write(contentsOf: data)
+            }
             throw error
         }
     }
@@ -212,10 +255,17 @@ public func loadWeights(
     // JANG: dequantize MoE gate weights from quantized uint32 → float.
     // Gates are stored at 8-bit (CRITICAL tier) but may have different group_size
     // than the body. Dequantizing resolves ambiguous bit/group_size inference.
+    let declaredAffineQuantization = perLayerQuantization?.quantization
     if let jangConfig {
+        let gateBitWidths = Array(Set(
+            jangConfig.quantization.bitWidthsUsed
+                + [declaredAffineQuantization?.bits].compactMap { $0 }
+        )).sorted()
         JangLoader.dequantizeMoEGates(
-            weights: &weights, groupSize: jangConfig.quantization.blockSize,
-            bitWidthsUsed: jangConfig.quantization.bitWidthsUsed)
+            weights: &weights,
+            groupSize: declaredAffineQuantization?.groupSize
+                ?? jangConfig.quantization.blockSize,
+            bitWidthsUsed: gateBitWidths)
     }
 
     // Determine quantization: JANG models infer per-layer bit widths from tensor shapes.
@@ -225,8 +275,23 @@ public func loadWeights(
         // Safe for JANGTQ-native: infer only walks `.scales` keys, so it picks
         // up the affine 8-bit attention / embed / lm_head and ignores the
         // tq_packed expert projections.
+        // 2026-05-01 — hidden_size hint for embed/lm_head shape
+        // disambiguation. Read from config.json text_config.hidden_size
+        // (or top-level hidden_size for non-VLM bundles). When the
+        // packed-shape equation is satisfied by multiple (bits, gs)
+        // pairs (e.g., embed [V, 352] / scales [V, 44] satisfies
+        // both (8,32)→in_dim=1408 and (4,64)→in_dim=2816), the
+        // inferer prefers the pair whose in_dim equals hidden_size.
+        // Without this hint, bits-first picks (8,32) and on bundles
+        // like Gemma-4-26B-A4B (hidden=2816) the embed output
+        // collapses to 1408 → input_layernorm crashes.
+        let hiddenHint = readHiddenSizeHint(at: modelDirectory)
+        let validInDims = readValidInDims(at: modelDirectory)
         let inferred = JangLoader.inferPerLayerQuantization(
-            weights: weights, jangConfig: jangConfig)
+            weights: weights, jangConfig: jangConfig,
+            hiddenSizeHint: hiddenHint,
+            validInDims: validInDims,
+            declaredDefaultQuantization: declaredAffineQuantization)
         // §411 — opt-in on-disk bundle repair. No-op unless
         // `VMLX_REPAIR_BAD_JANG_CONFIG=1` is set. The runtime path-
         // variant fix below makes the loader correct WITHOUT modifying
@@ -477,9 +542,13 @@ public func loadWeights(
         do {
             try model.update(modules: ModuleChildren.unflattened(updates), verify: .none)
         } catch {
-            print("[loadWeights] quantize model.update failed: \(error)")
+            // Iter 143 — structured stderr instead of raw print().
+            var lines = "[vMLX][load] quantize model.update failed: \(error)\n"
             for (path, mod) in updates.prefix(5) {
-                print("  update path: \(path) → \(type(of: mod))")
+                lines += "[vMLX][load]   update path: \(path) → \(type(of: mod))\n"
+            }
+            if let data = lines.data(using: .utf8) {
+                try? FileHandle.standardError.write(contentsOf: data)
             }
             throw error
         }
@@ -537,6 +606,99 @@ public func loadWeights(
 /// Quantization scales/biases are ALSO converted — QuantizedMatmul uses scales dtype to
 /// determine output dtype, so float16 scales → float16 output → AsType when multiplied
 /// with bfloat16 norms. Converting scales to bfloat16 eliminates this cascade.
+/// Read `hidden_size` from `<model>/config.json`, checking
+/// `text_config.hidden_size` for VLM wrappers first then top-level.
+/// Returns nil on any failure — caller falls back to the bits-first
+/// inference path (no behavior change for bundles that work today).
+private func readHiddenSizeHint(at modelDirectory: URL) -> Int? {
+    let cfg = modelDirectory.appendingPathComponent("config.json")
+    guard let data = try? Data(contentsOf: cfg),
+          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return nil }
+    if let tc = obj["text_config"] as? [String: Any],
+       let h = tc["hidden_size"] as? Int, h > 0 { return h }
+    if let h = obj["hidden_size"] as? Int, h > 0 { return h }
+    return nil
+}
+
+/// Build the set of valid in_dims for shape disambiguation. Reads
+/// hidden_size + intermediate_size + moe_intermediate_size +
+/// head_dim*num_attention_heads + head_dim*num_key_value_heads from
+/// config.json (text_config first, then top-level). Used to constrain
+/// JANG bit-width inference to architecturally-valid in_dims when the
+/// shape equation is ambiguous.
+private func readValidInDims(at modelDirectory: URL) -> Set<Int> {
+    let cfg = modelDirectory.appendingPathComponent("config.json")
+    guard let data = try? Data(contentsOf: cfg),
+          let topObj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return [] }
+    let obj: [String: Any] = (topObj["text_config"] as? [String: Any]) ?? topObj
+    var dims = Set<Int>()
+    func add(_ v: Any?) {
+        if let n = v as? Int, n > 0 { dims.insert(n) }
+    }
+    add(obj["hidden_size"])
+    add(obj["intermediate_size"])
+    add(obj["moe_intermediate_size"])
+    add(obj["expert_intermediate_size"])
+    add(obj["shared_expert_intermediate_size"])
+    // MLA dims (DeepSeek V3 / V4, Kimi)
+    add(obj["q_lora_rank"])
+    add(obj["kv_lora_rank"])
+    add(obj["v_head_dim"])
+    add(obj["qk_nope_head_dim"])
+    add(obj["qk_rope_head_dim"])
+    let headDim = obj["head_dim"] as? Int
+    let globalHeadDim = obj["global_head_dim"] as? Int
+    let nHeads = obj["num_attention_heads"] as? Int
+    let nKVHeads = obj["num_key_value_heads"] as? Int
+    let nGlobalKVHeads = obj["num_global_key_value_heads"] as? Int
+    for hd in [headDim, globalHeadDim].compactMap({ $0 }) {
+        for nh in [nHeads, nKVHeads, nGlobalKVHeads].compactMap({ $0 }) {
+            dims.insert(hd * nh)
+        }
+    }
+    // MLA total head projections — q_proj output for DSV4 is
+    // num_heads * (qk_nope_head_dim + qk_rope_head_dim).
+    if let nope = obj["qk_nope_head_dim"] as? Int,
+       let rope = obj["qk_rope_head_dim"] as? Int,
+       let nh = obj["num_attention_heads"] as? Int {
+        dims.insert((nope + rope) * nh)
+    }
+    // DSV4 grouped output projection:
+    //   wo_a: (num_heads * head_dim / o_groups) -> (o_groups * o_lora_rank)
+    //   wo_b: (o_groups * o_lora_rank) -> hidden_size
+    //
+    // Without the second dim, wo_b shape inference on DSV4 sees 32768
+    // (the attention fanout) as the only valid candidate and incorrectly
+    // loads wo_b as 2-bit/gs=128 instead of the bundle's 8-bit/gs=32.
+    if let og = obj["o_groups"] as? Int,
+       let orank = obj["o_lora_rank"] as? Int {
+        let groupedOut = og * orank
+        if groupedOut > 0 { dims.insert(groupedOut) }
+    }
+    // Qwen 3.5/3.6 hybrid SSM projections use separate linear-attention
+    // key/value head dimensions. Their affine JANG weights are ambiguous
+    // by shape alone: e.g. in_proj_qkv [10240, 640] / scales [10240, 80]
+    // can mean 8-bit input 2560 or 4-bit input 5120. Only the latter is
+    // architecture-valid for hidden_size=5120.
+    if let kHeads = obj["linear_num_key_heads"] as? Int,
+       let kDim = obj["linear_key_head_dim"] as? Int
+    {
+        let keyDim = kHeads * kDim
+        if keyDim > 0 { dims.insert(keyDim) }
+        if let vHeads = obj["linear_num_value_heads"] as? Int,
+           let vDim = obj["linear_value_head_dim"] as? Int
+        {
+            let valueDim = vHeads * vDim
+            if valueDim > 0 { dims.insert(valueDim) }
+            let convDim = keyDim * 2 + valueDim
+            if convDim > 0 { dims.insert(convDim) }
+        }
+    }
+    return dims
+}
+
 private func convertToBFloat16(model: Module) {
     var converted = [String: MLXArray]()
     for (key, array) in model.parameters().flattened() {
@@ -549,7 +711,15 @@ private func convertToBFloat16(model: Module) {
         do {
             try model.update(parameters: params, verify: [])
         } catch {
-            print("[convertToBFloat16] model.update failed: \(error)")
+            // Iter 143 — this one's NOT followed by `throw`, so the
+            // failure was previously truly silent (stderr only).
+            // Structured stderr line lets users grep + debug without
+            // changing the silent-on-failure semantics (changing
+            // would break model load for f16-only bundles where the
+            // bf16 cast is best-effort).
+            if let data = "[vMLX][load] convertToBFloat16 model.update failed: \(error) (continuing without bf16 cast)\n".data(using: .utf8) {
+                try? FileHandle.standardError.write(contentsOf: data)
+            }
         }
     }
 }

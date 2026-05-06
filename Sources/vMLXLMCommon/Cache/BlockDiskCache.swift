@@ -22,10 +22,6 @@ public final class BlockDiskCache: @unchecked Sendable {
     public private(set) var stores: Int = 0
     public private(set) var evictions: Int = 0
 
-    private let ioQueue = DispatchQueue(
-        label: "net.jangqai.vmlx.blockdiskcache.io",
-        qos: .utility)
-
     public init(
         cacheDir: URL,
         maxSizeGB: Double = 10.0,
@@ -129,45 +125,41 @@ public final class BlockDiskCache: @unchecked Sendable {
         let now = Date().timeIntervalSince1970
         let key = modelKey
 
-        ioQueue.async { [weak self] in
-            guard let self else { return }
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
 
-            try? FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true)
-
-            do {
-                try payload.write(to: url, options: .atomic)
-            } catch {
-                FileHandle.standardError.write(
-                    "[BlockDiskCache] write failed \(url.path): \(error)\n"
-                        .data(using: .utf8)!)
-                return
-            }
-
-            self.lock.lock()
-            defer { self.lock.unlock() }
-            guard let db = self.db else { return }
-            let sql = """
-            INSERT OR REPLACE INTO blocks
-                (hash, model_key, token_count, byte_size, last_access, created_at)
-            VALUES (?, ?, ?, ?, ?, ?);
-            """
-            var stmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-            defer { sqlite3_finalize(stmt) }
-            let TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-            sqlite3_bind_text(stmt, 1, blockHash, -1, TRANSIENT)
-            sqlite3_bind_text(stmt, 2, key, -1, TRANSIENT)
-            sqlite3_bind_int64(stmt, 3, Int64(tokenCount))
-            sqlite3_bind_int64(stmt, 4, Int64(bytes))
-            sqlite3_bind_double(stmt, 5, now)
-            sqlite3_bind_double(stmt, 6, now)
-            _ = sqlite3_step(stmt)
-            self.stores += 1
-
-            self.evictIfOverBudgetLocked()
+        do {
+            try payload.write(to: url, options: .atomic)
+        } catch {
+            FileHandle.standardError.write(
+                "[BlockDiskCache] write failed \(url.path): \(error)\n"
+                    .data(using: .utf8)!)
+            return
         }
+
+        lock.lock()
+        defer { lock.unlock() }
+        guard let db else { return }
+        let sql = """
+        INSERT OR REPLACE INTO blocks
+            (hash, model_key, token_count, byte_size, last_access, created_at)
+        VALUES (?, ?, ?, ?, ?, ?);
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        let TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(stmt, 1, blockHash, -1, TRANSIENT)
+        sqlite3_bind_text(stmt, 2, key, -1, TRANSIENT)
+        sqlite3_bind_int64(stmt, 3, Int64(tokenCount))
+        sqlite3_bind_int64(stmt, 4, Int64(bytes))
+        sqlite3_bind_double(stmt, 5, now)
+        sqlite3_bind_double(stmt, 6, now)
+        _ = sqlite3_step(stmt)
+        stores += 1
+
+        evictIfOverBudgetLocked()
     }
 
     private func evictIfOverBudgetLocked() {
@@ -230,7 +222,7 @@ public final class BlockDiskCache: @unchecked Sendable {
     private func touchAccessTime(blockHash: String) {
         let key = modelKey
         let now = Date().timeIntervalSince1970
-        ioQueue.async { [weak self] in
+        DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
             self.lock.lock()
             defer { self.lock.unlock() }

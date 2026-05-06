@@ -156,7 +156,7 @@ public actor DownloadManager {
         // re-hydrate siblings from HF and continue via the existing
         // Range-header path. Corrupt sidecar = silently start empty;
         // we never want a bad persistence layer to break app launch.
-        Self.loadSidecar().forEach { persisted in
+        for persisted in Self.loadSidecar() {
             var job = persisted
             // Completed/cancelled jobs survive for history; everything
             // in-flight at the prior quit needs user confirmation
@@ -275,6 +275,25 @@ public actor DownloadManager {
         _jobs[id] = job
         broadcast(.cancelled(id))
         persistSidecar()
+        // Iter 144 — cancelled downloads must not leave half-baked
+        // shards under localPath. Pre-fix the worker just stopped and
+        // partial files persisted forever in
+        // `~/.cache/huggingface/hub/models--<org>--<repo>/...`. Worse,
+        // a partial-but-large shard's byte count was treated as
+        // "already downloaded" on the next launch, but if the
+        // `FileHandle.write` at line ~622 was interrupted mid-buffer,
+        // those bytes can be silently corrupt — resume sends
+        // `Range: bytes=N-` from the corrupt tail and the model fails
+        // to load with a cryptic safetensors shape error.
+        //
+        // Cleanup policy: nuke the entire `snapshots/main` dir for
+        // this repo. Scoped to a single repo's cacheDir (see
+        // `cacheDir(for:)`) so other models are unaffected. Cancel is
+        // a user-explicit "I don't want this" — pause+resume is the
+        // distinct keep-partials flow.
+        if let dir = job.localPath {
+            try? FileManager.default.removeItem(at: dir)
+        }
     }
 
     public func clearCompleted() {
@@ -616,14 +635,33 @@ public actor DownloadManager {
                         if resumeFrom > 0,
                            FileManager.default.fileExists(atPath: dest.path)
                         {
-                            // Append the 206 body to the existing partial file.
-                            let partData = try Data(contentsOf: tmpURL, options: .mappedIfSafe)
-                            let handle = try FileHandle(forWritingTo: dest)
-                            try handle.seekToEnd()
-                            try handle.write(contentsOf: partData)
-                            try handle.close()
+                            // Iter 144 — stream-copy the 206 body
+                            // instead of mapping the whole shard into
+                            // RAM. Pre-fix `Data(contentsOf: tmpURL,
+                            // options: .mappedIfSafe)` would map the
+                            // entire range payload (gigabytes for
+                            // resumed-near-start shards) into the
+                            // process's address space and write it
+                            // back. Spike was the full shard size
+                            // even though only the diff bytes are
+                            // unique. 1 MiB chunks keep RSS bounded
+                            // and let the kernel pipeline reads.
+                            let reader = try FileHandle(forReadingFrom: tmpURL)
+                            defer { try? reader.close() }
+                            let writer = try FileHandle(forWritingTo: dest)
+                            defer { try? writer.close() }
+                            try writer.seekToEnd()
+                            var totalAppended: Int64 = 0
+                            let chunkSize = 1 << 20  // 1 MiB
+                            while true {
+                                if Task.isCancelled { break }
+                                let chunk = try reader.read(upToCount: chunkSize) ?? Data()
+                                if chunk.isEmpty { break }
+                                try writer.write(contentsOf: chunk)
+                                totalAppended &+= Int64(chunk.count)
+                            }
                             try? FileManager.default.removeItem(at: tmpURL)
-                            appended = Int64(partData.count)
+                            appended = totalAppended
                         } else {
                             if FileManager.default.fileExists(atPath: dest.path) {
                                 try FileManager.default.removeItem(at: dest)
@@ -681,6 +719,17 @@ public actor DownloadManager {
     private func addBytes(jobId: UUID, delta: Int64) {
         guard var job = _jobs[jobId] else { return }
         job.receivedBytes += delta
+        // Iter 144 — defensive clamp so the progress bar never goes
+        // past 1.0. KVO deltas can occasionally inflate
+        // `receivedBytes` past `totalBytes` when a resumed shard's
+        // seeded existingBytes overlaps with what the URLSessionTask
+        // reports having buffered/received pre-handler-registration.
+        // The actual on-disk size at completion is what matters; UI
+        // confusion from a >1.0 ratio is the visible artifact we
+        // prevent.
+        if job.totalBytes > 0, job.receivedBytes > job.totalBytes {
+            job.receivedBytes = job.totalBytes
+        }
 
         // 5-second sliding window speed.
         let now = Date()

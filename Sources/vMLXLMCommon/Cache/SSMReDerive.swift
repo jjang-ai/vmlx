@@ -156,19 +156,50 @@ public func maybeReDeriveSSMState(
     guard !stripped.isEmpty else { log("skip/empty-stripped"); return }
 
     do {
-        guard let states = try reDeriveSSMStates(
-            model: model, tokens: stripped
-        ) else { log("skip/no-ssm-states"); return }
-        coordinator.ssmStateCache.store(
-            ssmStates: states,
-            tokens: stripped,
-            boundary: stripped.count
-        )
+        let blockBoundary = hybridBlockDiskBoundary(
+            coordinator: coordinator,
+            strippedTokenCount: stripped.count)
+
+        if let blockBoundary {
+            let statesByBoundary = try reDeriveSSMStatesAtBoundaries(
+                model: model,
+                tokens: stripped,
+                boundaries: [blockBoundary, stripped.count])
+            guard let exactStates = statesByBoundary[stripped.count],
+                  !exactStates.isEmpty
+            else { log("skip/no-ssm-states"); return }
+            var storedBlockBoundary = false
+            if let blockStates = statesByBoundary[blockBoundary],
+               !blockStates.isEmpty
+            {
+                coordinator.ssmStateCache.store(
+                    ssmStates: blockStates,
+                    tokens: stripped,
+                    boundary: blockBoundary
+                )
+                storedBlockBoundary = true
+            }
+            coordinator.ssmStateCache.store(
+                ssmStates: exactStates,
+                tokens: stripped,
+                boundary: stripped.count
+            )
+            log("ok/stored stateCount=\(exactStates.count) blockBoundary=\(blockBoundary) blockStored=\(storedBlockBoundary)")
+        } else {
+            guard let states = try reDeriveSSMStates(
+                model: model, tokens: stripped
+            ) else { log("skip/no-ssm-states"); return }
+            coordinator.ssmStateCache.store(
+                ssmStates: states,
+                tokens: stripped,
+                boundary: stripped.count
+            )
+            log("ok/stored stateCount=\(states.count)")
+        }
         // Surface the re-derive event as a stats counter so
         // users watching the CachePanel can see "hybrid SSM helper
         // watcher" activity instead of wondering whether it ever ran.
         coordinator.ssmStateCache.markReDeriveFired()
-        log("ok/stored stateCount=\(states.count)")
     } catch {
         // Best-effort. A failed re-derive just means the next turn
         // re-prefills normally — no worse than the pre-2026-04-14
@@ -177,6 +208,25 @@ public func maybeReDeriveSSMState(
         // their platform/model combo.
         log("fail/\(error)")
     }
+}
+
+/// Largest BlockDisk boundary that can actually be restored on a later
+/// partial-prefix hit. BlockDisk persists full paged blocks only; hybrid SSM
+/// must have a companion snapshot at the same boundary or the KV restore is
+/// rejected for correctness.
+private func hybridBlockDiskBoundary(
+    coordinator: CacheCoordinator,
+    strippedTokenCount: Int
+) -> Int? {
+    guard coordinator.isHybrid,
+          coordinator.blockDiskCache != nil,
+          coordinator.pagedCache != nil
+    else { return nil }
+    let blockSize = coordinator.config.pagedBlockSize
+    guard blockSize > 0 else { return nil }
+    let boundary = (strippedTokenCount / blockSize) * blockSize
+    guard boundary > 0, boundary < strippedTokenCount else { return nil }
+    return boundary
 }
 
 /// §440 — capture-during-prefill (Python #109 native port). When the
@@ -305,4 +355,50 @@ public func reDeriveSSMStates(
 
     let states = extractSSMStates(from: freshCache)
     return states.isEmpty ? nil : states
+}
+
+/// Re-derive SSM state once while capturing snapshots at multiple token
+/// boundaries. Used for hybrid BlockDisk: the KV tier restores only full
+/// paged blocks, so a prompt of 284 cacheable tokens with a 64-token block
+/// needs an SSM snapshot at 256 as well as the exact 284-token boundary.
+public func reDeriveSSMStatesAtBoundaries(
+    model: any LanguageModel,
+    tokens: [Int],
+    boundaries: [Int],
+    prefillStepSize: Int = 512
+) throws -> [Int: [MLXArray]] {
+    guard !tokens.isEmpty else { return [:] }
+    let captureBoundaries = Array(Set(boundaries.filter { $0 > 0 && $0 <= tokens.count })).sorted()
+    guard !captureBoundaries.isEmpty else { return [:] }
+
+    let freshCache: [KVCache] = model.newCache(parameters: nil)
+    let hasSSMLayer = freshCache.contains { cache in
+        let desc = String(describing: type(of: cache))
+        return desc.contains("Mamba") || desc.contains("Arrays")
+    }
+    guard hasSSMLayer else { return [:] }
+
+    var out: [Int: [MLXArray]] = [:]
+    var cursor = 0
+    let step = max(1, prefillStepSize)
+
+    for boundary in captureBoundaries {
+        while cursor < boundary {
+            let end = min(boundary, cursor + step)
+            let chunk = Array(tokens[cursor..<end])
+            let tokenArray = MLXArray(chunk.map { Int32($0) })
+                .reshaped([1, chunk.count])
+            _ = model.callAsFunction(tokenArray, cache: freshCache)
+            MLX.eval(freshCache)
+            cursor = end
+            Memory.clearCache()
+        }
+
+        let states = extractSSMStates(from: freshCache)
+        if !states.isEmpty {
+            out[boundary] = states
+        }
+    }
+
+    return out
 }

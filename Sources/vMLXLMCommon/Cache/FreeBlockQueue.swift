@@ -78,9 +78,11 @@ public final class FreeBlockQueue: @unchecked Sendable {
     ///
     /// - Parameter block: The cache block to remove.
     /// - Complexity: O(1).
-    public func remove(_ block: CacheBlock) {
-        guard let node = nodeMap[block.blockId] else { return }
+    @discardableResult
+    public func remove(_ block: CacheBlock) -> Bool {
+        guard let node = nodeMap[block.blockId] else { return false }
         unlinkNode(node)
+        return true
     }
 
     /// Move a block to the back of the queue, marking it as most recently used.

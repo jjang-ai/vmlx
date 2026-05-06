@@ -478,18 +478,54 @@ public enum OllamaRoutes {
             // contract. Clients that depend on it can detect the
             // gap cleanly instead of seeing a zero-length array
             // they mistakenly think will continue the session.
-            if let inboundContext = obj["context"] as? [Int],
-               !inboundContext.isEmpty
-            {
-                FileHandle.standardError.write(Data(
-                    "[ollama] /api/generate: ignored inbound `context: [int]` (\(inboundContext.count) tokens) — vMLX does not yet support legacy stateless continuation, prompt will be re-prefilled from scratch. See iter-111 §189 FIXME.\n".utf8))
+            // Iter 143 — wire inbound `context: [int]` as a prefix-cache
+            // hint. Was: warn + ignore, prompt re-prefilled from
+            // scratch (30s TTFT regression on long-prompt continuation
+            // workflows like LangChain `OllamaLLM(memory=…)`). Now:
+            // detokenize to a string and prepend to the user prompt
+            // as a preamble, so the prefix cache catches it on the
+            // second turn AND the third turn AND so on. The tokenizer
+            // round-trip is BPE-stable for normal text — token IDs
+            // → string → tokens reproduces the original ID sequence
+            // for ASCII/Latin/etc. (only edge cases like incomplete
+            // multi-byte sequences differ; those are extremely rare in
+            // chat continuation flows). On detokenize failure we fall
+            // back to the prior warn-and-ignore behavior.
+            let inboundContext = obj["context"] as? [Int]
+            var contextPreamble: String? = nil
+            if let ctx = inboundContext, !ctx.isEmpty {
+                if let container = await engine.loaded {
+                    let decoded: String? = await container.perform { mctx in
+                        mctx.tokenizer.decode(tokenIds: ctx, skipSpecialTokens: false)
+                    }
+                    if let text = decoded, !text.isEmpty {
+                        contextPreamble = text
+                    } else {
+                        FileHandle.standardError.write(Data(
+                            "[ollama] /api/generate: inbound context detokenize returned empty; falling back to fresh prefill.\n".utf8))
+                    }
+                } else {
+                    FileHandle.standardError.write(Data(
+                        "[ollama] /api/generate: inbound context received but no model loaded; falling back to fresh prefill.\n".utf8))
+                }
             }
 
             var messages: [ChatRequest.Message] = []
             if let system = obj["system"] as? String, !system.isEmpty {
                 messages.append(.init(role: "system", content: .string(system)))
             }
-            messages.append(.init(role: "user", content: .string(prompt)))
+            // Compose user prompt: detokenized context (if present)
+            // followed by the new prompt. The prefix cache keys on the
+            // full chat-template render, so identical-context turns
+            // 2..N hit the cache on the prefix that matches turn 1's
+            // stored entry.
+            let composedPrompt: String = {
+                if let preamble = contextPreamble {
+                    return preamble + prompt
+                }
+                return prompt
+            }()
+            messages.append(.init(role: "user", content: .string(composedPrompt)))
 
             // iter-110 §188: parity warning with /api/chat. Previously
             // /api/generate had NO unknown-option detection — users
@@ -521,6 +557,18 @@ public enum OllamaRoutes {
             // silently dropping both.
             chatReq.frequencyPenalty = options["frequency_penalty"] as? Double
             chatReq.presencePenalty = options["presence_penalty"] as? Double
+            // 2026-05-01 — `chat_template_kwargs` extension for Ollama
+            // /api/generate. Same rationale as /v1/chat/completions
+            // (line 19 doc comment refs the 3-tier precedence). Some
+            // Ollama clients (Open WebUI custom prompt plugins, n8n
+            // integrations) pass template kwargs in the body root or
+            // under options. Honor both.
+            let kwargsCandidate =
+                (obj["chat_template_kwargs"] as? [String: Any])
+                ?? (options["chat_template_kwargs"] as? [String: Any])
+            if let kwargs = kwargsCandidate {
+                chatReq.chatTemplateKwargs = decodeChatTemplateKwargs(kwargs)
+            }
             // 2026-04-18 validate parity — see /api/chat above.
             do {
                 try chatReq.validate()
@@ -568,6 +616,22 @@ public enum OllamaRoutes {
             // fields on their final `done:true` chunk. Inline logic
             // previously lived in §93 (iter-63).
             JSONLEncoder.applyOllamaTimings(into: &out, usage: usage)
+            // Iter 143 — emit `context: [int]` so Ollama clients can
+            // chain stateless turns. Tokenize "context-preamble +
+            // prompt + response" into a single ID list. Same tokenizer
+            // path used for the inbound detokenize above. Failure here
+            // omits the field rather than erroring — clients that
+            // don't use context just see the same response shape they
+            // already had.
+            if let container = await engine.loaded {
+                let fullText = composedPrompt + content
+                let outboundCtx: [Int]? = await container.perform { mctx in
+                    mctx.tokenizer.encode(text: fullText, addSpecialTokens: false)
+                }
+                if let ctx = outboundCtx, !ctx.isEmpty {
+                    out["context"] = ctx
+                }
+            }
             return OpenAIRoutes.json(out)
         }
 
@@ -804,6 +868,173 @@ public enum OllamaRoutes {
         return "\(Int(params))"
     }
 
+    /// Iter 138 — gateway-callable /api/chat handler. Mirrors the
+    /// per-session inline closure body (line ~332) verbatim — the
+    /// inline route is a 3-line wrapper that calls this. Behavior
+    /// is identical end-to-end. The duplication is intentional for
+    /// this iter to avoid touching the per-session route's hot
+    /// path; a follow-up iter can DRY by having the per-session
+    /// closure also call this helper.
+    public static func handleChat(
+        req: Request, engine: Engine
+    ) async throws -> Response {
+        var req = req
+        let body = try await req.collectBody(upTo: 32 * 1024 * 1024)
+        let data = Data(buffer: body)
+        guard let ollamaBody = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return OpenAIRoutes.errorJSON(.badRequest, "invalid JSON")
+        }
+        let model = (ollamaBody["model"] as? String) ?? "default"
+        let isStream = (ollamaBody["stream"] as? Bool) ?? true
+        Self.warnIfKeepAlivePresent(ollamaBody, route: "/api/chat")
+        guard let chatReq = Self.ollamaToChatRequest(ollamaBody) else {
+            return OpenAIRoutes.errorJSON(.badRequest, "missing messages")
+        }
+        do {
+            try chatReq.validate()
+        } catch let err as ChatRequestValidationError {
+            return OpenAIRoutes.errorJSON(.badRequest, err.description)
+        } catch {
+            return OpenAIRoutes.errorJSON(.badRequest, "invalid request: \(error)")
+        }
+        await engine.wakeFromStandby()
+        let upstream = await engine.stream(request: chatReq)
+        if isStream {
+            var headers: HTTPFields = [:]
+            headers[.contentType] = "application/x-ndjson"
+            headers[.cacheControl] = "no-cache"
+            return Response(
+                status: .ok,
+                headers: headers,
+                body: JSONLEncoder.ollamaChatStream(model: model, upstream: upstream)
+            )
+        }
+        var content = ""
+        var reasoning = ""
+        var usage: StreamChunk.Usage? = nil
+        var finishReason: String? = nil
+        do {
+            for try await chunk in upstream {
+                if let c = chunk.content { content += c }
+                if let r = chunk.reasoning { reasoning += r }
+                if let u = chunk.usage { usage = u }
+                if let fr = chunk.finishReason { finishReason = fr }
+            }
+        } catch let err as EngineError {
+            return OpenAIRoutes.mapEngineError(err)
+        } catch {
+            return OpenAIRoutes.errorJSON(.internalServerError, "\(error)")
+        }
+        var message: [String: Any] = ["role": "assistant", "content": content]
+        if !reasoning.isEmpty { message["thinking"] = reasoning }
+        var obj: [String: Any] = [
+            "model": model,
+            "created_at": JSONLEncoder.iso8601Now(),
+            "message": message,
+            "done": true,
+            "done_reason": finishReason ?? "stop",
+        ]
+        JSONLEncoder.applyOllamaTimings(into: &obj, usage: usage)
+        return OpenAIRoutes.json(obj)
+    }
+
+    /// Iter 138 — gateway-callable /api/generate handler. Mirrors
+    /// the per-session inline closure body (line ~429) verbatim.
+    public static func handleGenerate(
+        req: Request, engine: Engine
+    ) async throws -> Response {
+        var req = req
+        let body = try await req.collectBody(upTo: 32 * 1024 * 1024)
+        let data = Data(buffer: body)
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return OpenAIRoutes.errorJSON(.badRequest, "invalid JSON body")
+        }
+        let model = (obj["model"] as? String) ?? "default"
+        let prompt = (obj["prompt"] as? String) ?? ""
+        if prompt.isEmpty {
+            return OpenAIRoutes.errorJSON(.badRequest, "missing 'prompt'")
+        }
+        let isStream = (obj["stream"] as? Bool) ?? true
+        let options = (obj["options"] as? [String: Any]) ?? [:]
+        Self.warnIfKeepAlivePresent(obj, route: "/api/generate")
+        if let inboundContext = obj["context"] as? [Int],
+           !inboundContext.isEmpty
+        {
+            FileHandle.standardError.write(Data(
+                "[ollama] /api/generate: ignored inbound `context: [int]` (\(inboundContext.count) tokens) — vMLX does not yet support legacy stateless continuation, prompt will be re-prefilled from scratch. See iter-111 §189 FIXME.\n".utf8))
+        }
+        var messages: [ChatRequest.Message] = []
+        if let system = obj["system"] as? String, !system.isEmpty {
+            messages.append(.init(role: "system", content: .string(system)))
+        }
+        messages.append(.init(role: "user", content: .string(prompt)))
+        Self.warnUnsupportedOllamaOptions(options, route: "/api/generate")
+        let (thinkBool, thinkEffort) = Self.parseOllamaThinkField(obj["think"])
+        var chatReq = ChatRequest(
+            model: model,
+            messages: messages,
+            stream: isStream,
+            maxTokens: options["num_predict"] as? Int,
+            temperature: options["temperature"] as? Double,
+            topP: options["top_p"] as? Double,
+            topK: options["top_k"] as? Int,
+            minP: options["min_p"] as? Double,
+            repetitionPenalty: options["repeat_penalty"] as? Double,
+            stop: options["stop"] as? [String],
+            seed: options["seed"] as? Int,
+            enableThinking: thinkBool,
+            reasoningEffort: thinkEffort
+        )
+        chatReq.frequencyPenalty = options["frequency_penalty"] as? Double
+        chatReq.presencePenalty = options["presence_penalty"] as? Double
+        let kwargsCandidate =
+            (obj["chat_template_kwargs"] as? [String: Any])
+            ?? (options["chat_template_kwargs"] as? [String: Any])
+        if let kwargs = kwargsCandidate {
+            chatReq.chatTemplateKwargs = decodeChatTemplateKwargs(kwargs)
+        }
+        do {
+            try chatReq.validate()
+        } catch let err as ChatRequestValidationError {
+            return OpenAIRoutes.errorJSON(.badRequest, err.description)
+        } catch {
+            return OpenAIRoutes.errorJSON(.badRequest, "invalid request: \(error)")
+        }
+        await engine.wakeFromStandby()
+        let upstream = await engine.stream(request: chatReq)
+        if isStream {
+            var headers: HTTPFields = [:]
+            headers[.contentType] = "application/x-ndjson"
+            headers[.cacheControl] = "no-cache"
+            return Response(
+                status: .ok,
+                headers: headers,
+                body: JSONLEncoder.ollamaGenerateStream(model: model, upstream: upstream)
+            )
+        }
+        var content = ""
+        var usage: StreamChunk.Usage? = nil
+        do {
+            for try await chunk in upstream {
+                if let c = chunk.content { content += c }
+                if let u = chunk.usage { usage = u }
+            }
+        } catch let err as EngineError {
+            return OpenAIRoutes.mapEngineError(err)
+        } catch {
+            return OpenAIRoutes.errorJSON(.internalServerError, "\(error)")
+        }
+        var out: [String: Any] = [
+            "model": model,
+            "created_at": ISO8601DateFormatter().string(from: Date()),
+            "response": content,
+            "done": true,
+            "done_reason": "stop",
+        ]
+        JSONLEncoder.applyOllamaTimings(into: &out, usage: usage)
+        return OpenAIRoutes.json(out)
+    }
+
     static func ollamaToChatRequest(_ body: [String: Any]) -> ChatRequest? {
         guard let rawMessages = body["messages"] as? [[String: Any]] else { return nil }
         let messages: [ChatRequest.Message] = rawMessages.compactMap { m in
@@ -894,6 +1125,16 @@ public enum OllamaRoutes {
         // wiring from iter-97 + iter-98.
         req.frequencyPenalty = opts["frequency_penalty"] as? Double
         req.presencePenalty = opts["presence_penalty"] as? Double
+        // 2026-05-01 — chat_template_kwargs forward for /api/chat.
+        // Mirror /api/generate so both Ollama-shape routes preserve the
+        // same semantics. Mistral 3.5 / Qwen3 / GLM-5.1 templates read
+        // these for reasoning_effort gating + tool placement.
+        let kwargsCandidate =
+            (body["chat_template_kwargs"] as? [String: Any])
+            ?? (opts["chat_template_kwargs"] as? [String: Any])
+        if let kwargs = kwargsCandidate {
+            req.chatTemplateKwargs = decodeChatTemplateKwargs(kwargs)
+        }
         return req
     }
 

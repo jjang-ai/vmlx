@@ -248,11 +248,20 @@ class DeepseekV3Attention: Module {
         // simply AND into the existing API. The required refactor is
         // ~150 LOC — larger than a single Ralph iter. Tracked as S03b.
         //
-        // Until then, keep the no-behavior-change call so indexer weights
-        // still load correctly from safetensors.
-        if let indexer = self.indexer, let qr = qr {
-            let offset = cache?.offset ?? 0
-            _ = indexer(x, qr: qr, mask: nil, offset: offset)
+        // Iter 143 — make the silent-wrong-output VISIBLE. Was: `_ =
+        // indexer(...)` (lazy-eval prunes; no compute, no compute,
+        // no warn). Now: emit a stderr warning ONCE per model load
+        // saying "sparse attention not yet wired; running dense
+        // fallback". Users who care about GLM-5.1 / DSV3.2 sparse
+        // attention quality will see the warning and know.
+        // The full sparse-gather wire (`applyDsaSparseGather` at
+        // line 332) is ready as a helper but the attention forward
+        // refactor to consume it is the open S03b task (~150 LOC).
+        if self.indexer != nil, qr != nil {
+            // One-shot warn. Static var via a Logger.warning so each
+            // model class only logs the first time the indexer is
+            // touched per session.
+            DeepseekV3Attention.warnIndexerOnce()
         }
 
         q = q.reshaped(B, L, self.numHeads, self.qHeadDim).transposed(0, 2, 1, 3)
@@ -283,11 +292,17 @@ class DeepseekV3Attention: Module {
 
         let queries = concatenated([qNope, qPe], axis: -1)
 
-        let output = attentionWithCacheUpdate(
+        // Iter 143 — MLA fp32 SDPA cast on L==1 (decode step). Closes
+        // the audit's Open #1 P0: bf16 drifts ~7.0 logit magnitude on
+        // MLA's compressed latent rep → repetition loops after ~14
+        // generated tokens. mlaScaledDotProductAttention does the
+        // cast (L==1 only — prefill stays bf16) AND skips
+        // attentionWithCacheUpdate's internal cache.update because we
+        // already updated the cache externally at line 278.
+        let output = mlaScaledDotProductAttention(
             queries: queries,
             keys: keys,
             values: values,
-            cache: cache,
             scale: scale,
             mask: mask
         )
@@ -378,6 +393,19 @@ class DeepseekV3Attention: Module {
         }
         return (kvLatent, kPe, merged)
     }
+
+    /// Iter 143 — warn-once on indexer-but-no-sparse. nonisolated lets
+    /// us read/write across actors without lock; the once-per-session
+    /// signal is best-effort and a duplicate warn from a true race
+    /// is harmless.
+    nonisolated(unsafe) private static var _indexerWarned: Bool = false
+    static func warnIndexerOnce() {
+        guard !_indexerWarned else { return }
+        _indexerWarned = true
+        if let data = "[vMLX][dsv3] WARN: model carries DSA indexer (GLM-5.1 / DSV3.2 / Kimi-K2.6) but Swift sparse-attention path is not yet wired (S03b task). Running DENSE fallback — output may differ from sparse reference. Indexer weights load correctly; only the forward path is dense.\n".data(using: .utf8) {
+            try? FileHandle.standardError.write(contentsOf: data)
+        }
+    }
 }
 
 class DeepseekV3MLP: Module, UnaryLayer {
@@ -456,6 +484,7 @@ class MoEGate: Module {
 class DeepseekV3MoE: Module, UnaryLayer {
     var config: DeepseekV3Configuration
     var numExpertsPerTok: Int
+    fileprivate let layerIdx: Int
     @ModuleInfo(key: "switch_mlp") var switchMLP: SwitchGLU
     var gate: MoEGate
     @ModuleInfo(key: "shared_experts") var sharedExperts: DeepseekV3MLP?
@@ -467,9 +496,10 @@ class DeepseekV3MoE: Module, UnaryLayer {
     /// the block manages its own weight residency via the slot bank.
     fileprivate var flashMoeShim: FlashMoEBlock?
 
-    init(config: DeepseekV3Configuration) {
+    init(config: DeepseekV3Configuration, layerIdx: Int) {
         self.config = config
         self.numExpertsPerTok = config.numExpertsPerTok ?? 1
+        self.layerIdx = layerIdx
 
         self._switchMLP.wrappedValue = SwitchGLU(
             inputDims: config.hiddenSize,
@@ -495,6 +525,7 @@ class DeepseekV3MoE: Module, UnaryLayer {
             y = shim(x)
         } else {
             let (indices, scores) = gate(x)
+            JangPressRouteTelemetry.recordTopK(layer: layerIdx, indices: indices)
             y = switchMLP(x, indices)
             y = (y * scores[.ellipsis, .newAxis]).sum(axis: -2)
         }
@@ -519,7 +550,7 @@ class DeepseekV3DecoderLayer: Module {
             layerIdx >= config.firstKDenseReplace,
             layerIdx % config.moeLayerFreq == 0
         {
-            self.mlp = DeepseekV3MoE(config: config)
+            self.mlp = DeepseekV3MoE(config: config, layerIdx: layerIdx)
         } else {
             self.mlp = DeepseekV3MLP(config: config)
         }
@@ -635,6 +666,7 @@ public class DeepseekV3Model: Module, LLMModel, KVCacheDimensionProvider, LoRAMo
 
     init(_ args: DeepseekV3Configuration) {
         self.args = args
+        self.kvHeads = Array(repeating: args.numAttentionHeads, count: args.numHiddenLayers)
         self.model = DeepseekV3ModelInner(config: args)
         self._lmHead.wrappedValue = Linear(args.hiddenSize, args.vocabSize, bias: false)
     }
@@ -728,7 +760,8 @@ public class DeepseekV3Model: Module, LLMModel, KVCacheDimensionProvider, LoRAMo
                         let joined = (0 ..< (args.nRoutedExperts ?? 1)).map {
                             weights["\(prefix).mlp.experts.\($0).\(projName).\(key)"]!
                         }
-                        newWeights["\(prefix).mlp.switch_mlp.\(projName).\(key)"] = stacked(joined)
+                        newWeights["\(prefix).mlp.switch_mlp.\(projName).\(key)"] =
+                            loadTimeMaterializedStacked(joined)
                     }
                 }
             }

@@ -39,17 +39,25 @@ private let kHadamardMultiblockSource = """
     uint total_d = meta[0];
     uint n_blocks = meta[1];
 
-    threadgroup float shmem[4096];
+    // Apple Silicon caps threadgroup memory at 32 KB = 8192 floats.
+    // The kernel must hold only ONE Hadamard block at a time. The old
+    // vMLX copy used `shmem[4096]` and loaded the entire `total_d` slab
+    // up front; Mistral-Medium-3.5 uses hidden=12288 and down_proj input
+    // 28672, so that path overwrote threadgroup memory and corrupted TQ
+    // rotations. This mirrors the fixed vmlx-swift-lm implementation.
+    threadgroup float shmem[8192];
 
-    for (uint i = tid; i < total_d; i += threads_per_tg) {
-        shmem[i] = static_cast<float>(x[batch_idx * total_d + i]) * signs[i];
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-
-    uint offset = 0;
+    uint cum_offset = 0;
     for (uint b = 0; b < n_blocks; b++) {
         uint d_b = meta[2u + b * 2u];
         uint log_b = meta[3u + b * 2u];
+
+        // Load this block's slice of (x*signs) into shmem[0..d_b].
+        for (uint i = tid; i < d_b; i += threads_per_tg) {
+            shmem[i] = static_cast<float>(x[batch_idx * total_d + cum_offset + i])
+                       * signs[cum_offset + i];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
 
         uint ept = (d_b + threads_per_tg - 1u) / threads_per_tg;
         if (ept == 0u) ept = 1u;
@@ -58,17 +66,18 @@ private let kHadamardMultiblockSource = """
             uint h = 1u << stage;
             uint two_h = 2u * h;
 
-            float newv[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            float newv[64];
+            for (uint k = 0; k < 64; k++) newv[k] = 0.0f;
             for (uint k = 0; k < ept; k++) {
                 uint i_local = tid * ept + k;
                 if (i_local < d_b) {
                     uint block_start = (i_local / two_h) * two_h;
                     uint pos = i_local - block_start;
-                    float a = shmem[offset + block_start + pos];
+                    float a = shmem[block_start + pos];
                     if (pos < h) {
-                        newv[k] = a + shmem[offset + block_start + pos + h];
+                        newv[k] = a + shmem[block_start + pos + h];
                     } else {
-                        newv[k] = shmem[offset + block_start + pos - h] - a;
+                        newv[k] = shmem[block_start + pos - h] - a;
                     }
                 }
             }
@@ -76,21 +85,18 @@ private let kHadamardMultiblockSource = """
             for (uint k = 0; k < ept; k++) {
                 uint i_local = tid * ept + k;
                 if (i_local < d_b) {
-                    shmem[offset + i_local] = newv[k];
+                    shmem[i_local] = newv[k];
                 }
             }
             threadgroup_barrier(mem_flags::mem_threadgroup);
         }
 
         float norm = 1.0f / sqrt(static_cast<float>(d_b));
-        for (uint k = 0; k < ept; k++) {
-            uint i_local = tid * ept + k;
-            if (i_local < d_b) {
-                out[batch_idx * total_d + offset + i_local] = shmem[offset + i_local] * norm;
-            }
+        for (uint i = tid; i < d_b; i += threads_per_tg) {
+            out[batch_idx * total_d + cum_offset + i] = shmem[i] * norm;
         }
-        offset += d_b;
         threadgroup_barrier(mem_flags::mem_threadgroup);
+        cum_offset += d_b;
     }
 """
 
@@ -175,17 +181,15 @@ private let kFusedSwiGLUSource = """
     }
 
     if (lane == 0) {
-        // §426 — DSV4 limited SwiGLU support. meta[5] = swiglu_limit
-        // (uint, 0 = no clamp; >0 = clamp ceiling). DSV4 trains with
-        // `silu(min(gate, 10)) * clip(up, ±10)`; the TurboQuant fused
-        // kernel previously baked plain SwiGLU which costs ~4.5 pp
-        // MMLU on DSV4-Flash. Other JANGTQ models (Qwen35-MoE, MiniMax,
-        // Holo3, GLM4-MoE) pass meta[5]=0 → no clamp, byte-identical
-        // to the prior kernel. Verified +4.5 pp MMLU on DSV4 in the
-        // Python prototype (jang/codex_dsv4_fixkit/scripts/runtime_dsv4_fixed.py).
-        uint swiglu_limit_int = meta[5];
-        float swiglu_lim = static_cast<float>(swiglu_limit_int);
-        bool apply_clamp = (swiglu_limit_int > 0u);
+        // 2026-05-04 (DSV4 SWA/CSA/HSA correctness pass):
+        // `meta[5]` carries the SwiGLU clamp magnitude × 1000 as uint, so
+        //   swiglu_limit = float(meta[5]) / 1000.0
+        // A value of 0 disables the clamp (ordinary SwiGLU). DeepSeek-V4
+        // sets this to 10000 → limit = 10.0, matching the codex_dsv4_fixkit
+        // reference. Other models pass 0 → no clamp → byte-identical to the
+        // pre-2026-05-04 kernel output.
+        uint swiglu_limit_q1000 = meta[5];
+        float swiglu_limit = static_cast<float>(swiglu_limit_q1000) * 0.001f;
 
         uint base_off = (token_idx * K + k_idx) * out_features;
         for (uint o = 0; o < n_outs; o++) {
@@ -194,9 +198,9 @@ private let kFusedSwiGLUSource = """
             float nu = static_cast<float>(norms_up[expert * out_features + oi]);
             float gv = acc_g[o] * ng;
             float uv = acc_u[o] * nu;
-            if (apply_clamp) {
-                gv = metal::min(gv, swiglu_lim);
-                uv = metal::max(metal::min(uv, swiglu_lim), -swiglu_lim);
+            if (swiglu_limit > 0.0f) {
+                gv = metal::min(gv, swiglu_limit);
+                uv = metal::max(metal::min(uv, swiglu_limit), -swiglu_limit);
             }
             out_act[base_off + oi] = (gv / (1.0f + metal::fast::exp(-gv))) * uv;
         }
@@ -409,28 +413,85 @@ public enum JANGTQKernels {
 
     /// Hadamard rotate `x` (any batch shape with `dim` last). Returns fp32.
     /// `signs` must be shape `(dim,)` fp32.
+    ///
+    /// Apple Silicon caps threadgroup memory at 32 KB = 8192 floats, so the
+    /// per-block Metal kernel can only process blocks up to 8192 elements.
+    /// Mistral-Medium-3.5 hits this on `down_proj.in_features=28672` →
+    /// `decomposePow2(28672) = [16384, 8192, 4096]`. The 16384-block has
+    /// no in-shmem implementation; split it in Swift with:
+    ///
+    ///     H_2n(u, v) = [H_n((u + v) / sqrt(2)), H_n((u - v) / sqrt(2))]
+    ///
+    /// Signs are applied once to the original input. Recursive leaves use
+    /// all-ones signs so the diagonal is not double-applied.
     public static func hadamardRotate(_ x: MLXArray, signs: MLXArray, dim: Int) -> MLXArray {
-        // Flatten leading dims into batch
-        var xFlat = x.reshaped([-1, dim]).asType(.float32)
+        let xFlat = x.reshaped([-1, dim]).asType(.float32)
         let batch = xFlat.shape[0]
-        let meta = makeHadamardMeta(totalDim: dim)
+
         let blocks = decomposePow2(dim)
-        let largestBlock = blocks.max() ?? dim
-        let tgSize = min(1024, max(32, largestBlock))
-        let outArrs = JANGTQKernelLibrary.hadamardMultiblock(
-            [xFlat, signs, meta],
-            template: nil,
-            grid: (tgSize, batch, 1),
-            threadGroup: (tgSize, 1, 1),
-            outputShapes: [[batch, dim]],
-            outputDTypes: [.float32]
-        )
-        var rot = outArrs[0]
-        // Restore leading shape
-        if x.ndim > 2 || (x.ndim == 2 && x.dim(0) != batch) {
-            rot = rot.reshaped(x.shape)
+        let maxBlock = blocks.max() ?? dim
+        if maxBlock <= 8192 {
+            let meta = makeHadamardMeta(totalDim: dim)
+            let tgSize = min(1024, max(32, maxBlock))
+            let outArrs = JANGTQKernelLibrary.hadamardMultiblock(
+                [xFlat, signs, meta],
+                template: nil,
+                grid: (tgSize, batch, 1),
+                threadGroup: (tgSize, 1, 1),
+                outputShapes: [[batch, dim]],
+                outputDTypes: [.float32]
+            )
+            var rot = outArrs[0]
+            if x.ndim > 2 || (x.ndim == 2 && x.dim(0) != batch) {
+                rot = rot.reshaped(x.shape)
+            }
+            return rot
         }
-        return rot
+
+        var blockOuts: [MLXArray] = []
+        var offset = 0
+        for d_b in blocks {
+            let blockX = xFlat[0..., offset..<(offset + d_b)]
+            let blockSigns = signs[offset..<(offset + d_b)]
+            blockOuts.append(
+                hadamardBlockRecursive(blockX, signs: blockSigns, d_b: d_b))
+            offset += d_b
+        }
+        let merged = MLX.concatenated(blockOuts, axis: -1)
+        if x.ndim > 2 || (x.ndim == 2 && x.dim(0) != batch) {
+            return merged.reshaped(x.shape)
+        }
+        return merged
+    }
+
+    private static func hadamardBlockRecursive(
+        _ x: MLXArray, signs: MLXArray, d_b: Int
+    ) -> MLXArray {
+        if d_b <= 8192 {
+            let meta = makeHadamardMeta(totalDim: d_b)
+            let tgSize = min(1024, max(32, d_b))
+            let outArrs = JANGTQKernelLibrary.hadamardMultiblock(
+                [x, signs, meta],
+                template: nil,
+                grid: (tgSize, x.shape[0], 1),
+                threadGroup: (tgSize, 1, 1),
+                outputShapes: [x.shape],
+                outputDTypes: [.float32]
+            )
+            return outArrs[0]
+        }
+
+        let xSigned = x * signs
+        let half = d_b / 2
+        let u = xSigned[0..., 0..<half]
+        let v = xSigned[0..., half..<d_b]
+        let invSqrt2 = MLXArray(Float(1.0 / sqrt(2.0)))
+        let a = (u + v) * invSqrt2
+        let b = (u - v) * invSqrt2
+        let onesSigns = MLXArray.ones([half], dtype: .float32)
+        let halfA = hadamardBlockRecursive(a, signs: onesSigns, d_b: half)
+        let halfB = hadamardBlockRecursive(b, signs: onesSigns, d_b: half)
+        return MLX.concatenated([halfA, halfB], axis: -1)
     }
 
     /// Fused gate+up+SwiGLU.
@@ -449,20 +510,25 @@ public enum JANGTQKernels {
         rhsIndices: MLXArray,
         batchTokens: Int, K: Int,
         inFeatures: Int, outFeatures: Int, bits: Int = 2,
-        // §426 — DSV4 limited-SwiGLU support. swiglu_limit > 0 enables
-        // the in-kernel `silu(min(gate, lim)) * clip(up, ±lim)` clamp
-        // that DSV4 trains with. Defaults to 0 (no clamp) so all
-        // existing JANGTQ callers (Qwen35-MoE, MiniMax, Holo3, GLM4-MoE,
-        // DeepseekV3) get byte-identical kernel output.
-        swigluLimit: Int = 0
+        // 2026-05-04 (DSV4 SWA/CSA/HSA correctness):
+        // SwiGLU clamp magnitude. 0.0 (default) preserves the historical
+        // ordinary-SwiGLU output bit-for-bit. DSV4 callers must pass 10.0
+        // — that activates `silu(min(gate, 10)) * clip(up, -10, 10)` per
+        // jang_tools/dsv4/mlx_model.py and codex_dsv4_fixkit/scripts/
+        // runtime_dsv4_fixed.py. The kernel encodes this as
+        // `meta[5] = round(swigluLimit * 1000)` (uint) and divides by
+        // 1000 inside Metal — small enough to fit in a uint32 for the
+        // realistic range while being ~1e-3 precise.
+        swigluLimit: Float = 0.0
     ) -> MLXArray {
         let valsPerU32 = 32 / bits
         let packedCols = (inFeatures + valsPerU32 - 1) / valsPerU32
         let nDispatches = batchTokens * K
+        let limitQ1000 = UInt32(max(0, Int((swigluLimit * 1000.0).rounded())))
         let meta = MLXArray([
             UInt32(K), UInt32(inFeatures), UInt32(outFeatures),
             UInt32(packedCols), UInt32(bits),
-            UInt32(max(0, swigluLimit)),
+            limitQ1000,
         ])
         let opt = 10
         let outGroups = (outFeatures + opt - 1) / opt

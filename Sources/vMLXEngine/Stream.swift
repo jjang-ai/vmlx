@@ -75,15 +75,44 @@ extension Engine {
     public func streamReal(
         request: ChatRequest
     ) -> AsyncThrowingStream<StreamChunk, Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task { [weak self] in
+        // Iter 144 — task-registration race fix.
+        //
+        // Capture-after-create pattern: a `_StreamTaskBox` is filled
+        // with the real driving Task right after construction so the
+        // body can self-identify on first actor hop without racing the
+        // external registration Task. The body does its own
+        // `setCurrentStreamTask(myself)` AND its own
+        // `clearCurrentStreamTaskIfMatches(myself)` on every exit path
+        // via a final `defer`, removing the prior pattern of:
+        //   (a) a no-op placeholder Task that lingered when the body
+        //       returned before external registration ran,
+        //   (b) `clearCurrentStreamTask` only on the happy path —
+        //       leaking a finished Task ref on early-return paths
+        //       (e.g. `EngineError.tooManyQueued`).
+        // Match-aware clear ensures a stale defer landing AFTER the
+        // next stream's registration cannot null out the new
+        // in-flight task.
+        let box = _StreamTaskBox()
+        return AsyncThrowingStream { continuation in
+            let task = Task { [weak self, box] in
                 guard let self else {
                     continuation.finish()
                     return
                 }
+                let me = box.task
                 // Register the driving task on the actor so `Engine.stop()`
-                // and any future admin endpoints can reach it.
-                await self.setCurrentStreamTask(Task { })  // placeholder; replaced below
+                // and any future admin endpoints can reach it. Also defer
+                // a match-aware clear so the slot is freed on every exit
+                // path including early-return rejections, without nulling
+                // a sibling stream's registration.
+                if let me { await self.setCurrentStreamTask(me) }
+                defer {
+                    if let me {
+                        Task.detached { [weak self] in
+                            await self?.clearCurrentStreamTaskIfMatches(me)
+                        }
+                    }
+                }
                 // Serialize with any in-flight generation — MLX's shared
                 // Metal command queue is NOT concurrency-safe, and a
                 // second generate() started while a first one is still
@@ -109,7 +138,49 @@ extension Engine {
                         return
                     }
                 }
-                await self.generationLock.acquire()
+                // Iter 144 — `acquire()` now throws CancellationError if
+                // the parent Task is cancelled while queued. Catch +
+                // finish early, skipping `release()` since we never
+                // owned the lock. The defer-based `clearCurrentStreamTaskIfMatches`
+                // still cleans up our task slot.
+                do {
+                    try await self.generationLock.acquire()
+                } catch {
+                    continuation.finish()
+                    return
+                }
+                // Post-cancel barrier — if the previous stream cancelled
+                // on a JANGTQ-active path, the prior cleanup did a 1s
+                // sleep + synchronize() before releasing the lock. That
+                // is heuristic; if MXTQ custom-encoder release lagged the
+                // sleep budget, the prefill we're about to start could
+                // race a still-open compute encoder and trip
+                // `_status < MTLCommandBufferStatusCommitted` or
+                // `addCompletedHandler: ... after commit call`.
+                // Drain again here, on the consuming side, so the
+                // hand-off is enforced at BOTH ends of the lock.
+                if await self.consumePostCancelBarrierForJangTQ() {
+                    MLX.Stream.defaultStream(.gpu).synchronize()
+                    MLX.Stream.defaultStream(.cpu).synchronize()
+                }
+
+                // §JANGPress — wake any compressed expert tiles before
+                // the engine touches them. Both backends are optional;
+                // calls are nil-checked, so the burst is microseconds
+                // when neither is configured.
+                //
+                // .mach backend (vm_purgable_control): controller's
+                //   willStartInference walks every registered tile and
+                //   flips NONVOLATILE. The kernel decompresses on access;
+                //   a discarded tile triggers disk-refault.
+                //
+                // .mmap backend (madvise): no per-turn wake needed —
+                //   willNeed/dontNeed is per-acquire/release; the
+                //   controller's job is owned by the tier itself.
+                //
+                // Failsafe property: if both backends are off, this
+                // block is two no-ops. Existing behavior is preserved.
+                await self.emberController?.willStartInference()
                 var wasCancelled = false
                 do {
                     // Q3 §299: wrap decode in `MLX.withError` so MLX/Metal
@@ -120,10 +191,14 @@ extension Engine {
                     // task-locally so other streams in flight keep the
                     // default abort behavior.
                     try await MLX.withError {
-                        try await self.performStreamingGeneration(
-                            request: request,
-                            continuation: continuation
-                        )
+                        try await JangPressRouteTelemetry.$controller.withValue(
+                            self.emberController
+                        ) {
+                            try await self.performStreamingGeneration(
+                                request: request,
+                                continuation: continuation
+                            )
+                        }
                     }
                     continuation.finish()
                 } catch is CancellationError {
@@ -133,12 +208,26 @@ extension Engine {
                     // Map caught MLX fatal-error to a clean Swift error
                     // with the raw message, instead of letting it bubble
                     // as a generic `.caught(...)`. HTTP maps this to 500.
-                    let msg: String = {
+                    let raw: String = {
                         if case .caught(let s) = mlxErr { return s }
                         return "\(mlxErr)"
                     }()
-                    await self.log(.error, "engine", "stream Metal commit failed: \(msg)")
-                    continuation.finish(throwing: EngineError.metalCommitFailed(msg))
+                    // Iter 144 — scrub developer-local paths and
+                    // multi-line C++ stack traces before forwarding to
+                    // the API client. MLX's `MLXError.caught` carries
+                    // strings like an absolute build-tree path under
+                    // `~/.build/checkouts/mlx/...:LINE`, plus the
+                    // failure message ("failed to commit command buffer
+                    // (kIOSurfaceTimeout)" etc.). The full string is
+                    // fine for engine logs; clients get the first line
+                    // with absolute paths replaced with "<mlx>".
+                    await self.log(.error, "engine", "stream Metal commit failed: \(raw)")
+                    let firstLine = raw.split(separator: "\n",
+                                              maxSplits: 1,
+                                              omittingEmptySubsequences: false)
+                                       .first.map(String.init) ?? raw
+                    let scrubbed = Self.scrubInternalPaths(firstLine)
+                    continuation.finish(throwing: EngineError.metalCommitFailed(scrubbed))
                 } catch {
                     await self.log(.error, "engine", "stream failed: \(error)")
                     continuation.finish(throwing: error)
@@ -224,6 +313,15 @@ extension Engine {
                     try? await Task.sleep(
                         nanoseconds: isJangTQPath ? 1_000_000_000 : 250_000_000
                     )
+                    // BLOCKER follow-up — flag the next stream to perform
+                    // an extra synchronize() barrier before prefill on
+                    // JANGTQ. The 1s sleep is heuristic; if MXTQ encoder
+                    // release ever lags it (large model, system under
+                    // pressure), the next prefill commit could trip a
+                    // Metal invariant. Belt-and-suspenders.
+                    if isJangTQPath {
+                        await self.markPostCancelBarrierPendingForJangTQ()
+                    }
                 } else {
                     // Non-cancel path: keep the commit barrier to force
                     // graph flush so the next request sees a clean
@@ -236,18 +334,73 @@ extension Engine {
                 // next FIFO waiter picks up the baton only AFTER MLX has
                 // quiesced and the actor state is clean.
                 await self.generationLock.release()
+                // Happy-path explicit clear before `didFinishInference`
+                // — preserves the cleanup ordering pinned by
+                // `JangPressReasoningLifecycleContractTests`. The
+                // top-of-body `defer { clearCurrentStreamTaskIfMatches }`
+                // covers early-return paths (e.g. tooManyQueued) and
+                // is a no-op on the happy path because the slot is
+                // already nil by the time the defer fires (match-aware).
                 await self.clearCurrentStreamTask()
+                // §JANGPress — kick the controller's quiesce countdown.
+                // Cheap when the controller is nil. When armed this
+                // schedules the cold-tile compaction to fire after
+                // `quiesceTimeoutMs` of idle (default 30 s), unless
+                // another inference arrives first (which cancels the
+                // timer in `willStartInference`).
+                await self.emberController?.didFinishInference()
             }
-            // Store a reference so the engine actor can cancel this
-            // specific task from `Engine.stop()`. We register it via a
-            // detached fire-and-forget — the actor hop is short and by the
-            // time the first event lands the registration has completed.
-            Task { [weak self] in
-                await self?.setCurrentStreamTask(task)
-            }
+            // Iter 144 — fill the box AFTER `task` is constructed. The
+            // body reads `box.task` on first actor hop. The 1-cycle gap
+            // between `Task { ... }` construction and this assignment is
+            // covered by the body's first `await self.setCurrentStreamTask`
+            // requiring an actor hop, which is enqueued AFTER the box is
+            // filled because the closure body cannot start running
+            // without first being scheduled — and scheduling happens at
+            // most one cycle later. Replaces the prior detached
+            // registration `Task` which raced the body's early-return
+            // exits.
+            box.task = task
             continuation.onTermination = { _ in task.cancel() }
         }
     }
+
+    /// Strip developer-local absolute paths from MLX error messages
+    /// before forwarding them to API clients. The full unscrubbed
+    /// message still goes to the engine log.
+    static func scrubInternalPaths(_ s: String) -> String {
+        // Replace anything that looks like an absolute Unix path under
+        // common build-tree roots with a placeholder. Conservative —
+        // only swaps obvious artifacts.
+        var out = s
+        let patterns: [String] = [
+            #"/Users/[^/\s]+/(?:[^\s]+/)?\.build/checkouts/mlx[^\s]*"#,
+            #"/Users/[^/\s]+/[^\s]*\.swift:\d+"#,
+            #"/Users/[^/\s]+/[^\s]*\.cpp:\d+"#,
+            #"/Users/[^/\s]+/[^\s]*\.mm:\d+"#,
+            #"/Users/[^/\s]+/[^\s]*\.h:\d+"#,
+        ]
+        for pat in patterns {
+            if let re = try? NSRegularExpression(pattern: pat) {
+                let range = NSRange(out.startIndex..., in: out)
+                out = re.stringByReplacingMatches(
+                    in: out, range: range, withTemplate: "<mlx>")
+            }
+        }
+        return out
+    }
+}
+
+/// Capture-after-create holder for `streamReal`. Filled with the real
+/// driving Task right after construction; the Task body reads it on
+/// first actor hop. Top-level rather than nested so Swift's
+/// `AsyncThrowingStream` initializer overload resolution stays
+/// unambiguous.
+final class _StreamTaskBox: @unchecked Sendable {
+    var task: Task<Void, Never>?
+}
+
+extension Engine {
 
     /// Hard ceiling used when neither the global nor session/chat
     /// settings provide a value. Matches Python server default.
@@ -544,18 +697,13 @@ extension Engine {
             return tc
         }
 
-        // Smelt mode is a dead setting in the Swift engine today —
-        // the Python bundled engine implements partial expert loading
-        // via `vmlx_engine/utils/smelt_loader.py`, but the Swift port
-        // has no equivalent load-path consumer yet. When a user enables
-        // it here we emit a one-shot warning so they don't silently
-        // get full-precision experts while expecting memory savings.
-        if resolved.settings.smelt {
-            await self.log(.warn, "engine",
-                "smelt mode is enabled but not wired in the Swift engine "
-                + "(Python-only). Loading full experts. This warning fires "
-                + "once per request — set smelt=false in Settings to silence.")
-        }
+        // Iter 143: Smelt mode removed (Eric directive 2026-05-04 —
+        // "remove it"). Smelt's partial-expert-loading goal is now
+        // covered by JangPress (mmap-based cold-tile compression via
+        // safetensors PROT_READ + madvise + Mach purgeable regions).
+        // See `Sources/vMLXLMCommon/Cache/JangPress*.swift`. Smelt
+        // settings/CLI/load-options were stripped; any old config
+        // file referencing smelt is silently ignored at decode time.
         // Default-off matches Python v1.3.36 server.py and §15 contract:
         // when neither the request nor resolved settings specify a value
         // (OpenAI clients that never send enable_thinking), reasoning must
@@ -607,6 +755,19 @@ extension Engine {
         // stamping and produces doubled tags. This mirrors
         // `vmlx_engine/engine/simple.py:445-453`'s `_should_inject_think`.
         let modelStampsThink = caps?.thinkInTemplate ?? false
+        // `modelStampsThink` means "the template owns the think open/close
+        // generation prompt." It does NOT mean the rendered prompt is always
+        // inside an open think block. Laguna/Qwen-style templates render:
+        //
+        //   enable_thinking=true  -> <assistant>\n<think>
+        //   enable_thinking=false -> <assistant>\n</think>
+        //
+        // The stream parser must therefore seed "currently inside think"
+        // only when thinking is actually enabled. Treating every stamping
+        // template as open made Laguna thinking-off/chat-mode responses get
+        // classified as reasoning and dropped or displayed as template
+        // garbage.
+        let promptStartsInThink = modelStampsThink && effectiveThinking
 
         // 3. Build UserInput + GenerateParameters
         //    VLM image flow: `buildChatMessages` is async because decoding
@@ -659,10 +820,36 @@ extension Engine {
             // — their templates DO accept the short `<image>` marker.
             return "<image>"
         }()
+        // The prompt-level reasoning-off stub is a family-specific hack,
+        // not a universal "thinking off" mechanism. It is valid for
+        // DeepSeek-style `<think>...</think>` models that do NOT have a
+        // template-owned thinking rail. It is invalid for Mistral 3.5 /
+        // Mistral 4 (`[MODEL_SETTINGS]` + `[THINK]`), Gemma/Harmony
+        // channel models, and every template-owned family where
+        // `enable_thinking=false` already renders the right close marker.
+        //
+        // Live Mistral-Medium-3.5 JANGTQ repro 2026-05-03: the old global
+        // injection appended a prior assistant message containing
+        // `<think>\n</think>\n\n`; the Mistral renderer treated it as
+        // literal assistant history and emitted `<think>...</think></s>`
+        // before generation, producing incoherent decode despite a correct
+        // `[INST]` prompt. Gate it to DeepSeek-style families only.
+        let family = (caps?.family ?? "").lowercased()
+        let modelType = (caps?.modelType ?? "").lowercased()
+        let parserNameForStub = (caps?.reasoningParser ?? "").lowercased()
+        let injectReasoningOffStub =
+            !modelStampsThink
+            && (
+                family.contains("deepseek")
+                || modelType.contains("deepseek")
+                || parserNameForStub == "deepseek_r1"
+            )
+
         let chatMessages = await Engine.buildChatMessages(
             from: request,
             effectiveThinking: effectiveThinking,
             modelStampsThink: modelStampsThink,
+            injectReasoningOffStub: injectReasoningOffStub,
             responseFormatInstruction: Engine.responseFormatInstruction(
                 from: request.responseFormat),
             imageMarker: imageMarker)
@@ -790,6 +977,11 @@ extension Engine {
         // different from Python. Deep audit 2026-04-14 #1 (HIGH).
         var templateExtras: [String: any Sendable] = [:]
         templateExtras["enable_thinking"] = effectiveThinking
+        // Kimi-K2.6's bundled chat_template.jinja uses `thinking`, while
+        // most other reasoning templates use `enable_thinking`. Send both
+        // names so chat-mode requests render the closed `<think></think>`
+        // prompt instead of accidentally starting inside an open think block.
+        templateExtras["thinking"] = effectiveThinking
         if let effort = request.reasoningEffort {
             templateExtras["reasoning_effort"] = effort
         }
@@ -818,6 +1010,20 @@ extension Engine {
         let chatTemplateOverride = resolved.settings.chatTemplate
         if !chatTemplateOverride.isEmpty {
             templateExtras["__chat_template_override__"] = chatTemplateOverride
+        } else if modelType == "deepseek_v4",
+                  let builtin = caps?.chatTemplate,
+                  !builtin.isEmpty
+        {
+            // DSV4 Flash/Pro bundles intentionally omit
+            // tokenizer_config.chat_template and instead ship
+            // jang_config.chat.encoder=encoding_dsv4. CapabilityDetector
+            // materializes the equivalent built-in Jinja template. Thread it
+            // through as a literal override so the generic LLM processor does
+            // not fall back to plain joined text. Keep this DSV4-only:
+            // other families may expose broken include-wrapper templates
+            // (Laguna) that the tokenizer bridge must bypass via native
+            // fallback rendering.
+            templateExtras["__chat_template_override__"] = builtin
         }
         let userInput = UserInput(
             chat: chatMessages, tools: toolSpecs,
@@ -854,7 +1060,11 @@ extension Engine {
         var prefillStart = Date()           // updated inside container.perform
         var firstTokenAt: Date?
         var pendingBuffer = ""
-        var inThinkBlock = false
+        // Seed the hand-rolled splitter only when the rendered prompt leaves
+        // generation inside an open think block. Thinking-off templates like
+        // Laguna deliberately render `</think>` before generation, so their
+        // first model token is visible content and must not be suppressed.
+        var inThinkBlock = promptStartsInThink
         let toolParser = ToolCallParserRegistry.make(toolParserName)
         let streamingAcc = StreamingAccumulator()
 
@@ -941,8 +1151,7 @@ extension Engine {
         let reasoningParser: ReasoningParser? = reasoningParserName
             .flatMap { ReasoningParserRegistry.make($0) }
         // Reset per-request state. `thinkInPrompt` tracks whether the chat
-        // template already stamped a `<think>` (Qwen3/MiniMax/Step/NemotronH
-        // families do, see `modelStampsThink` above).
+        // template already stamped an OPEN `<think>` for this request.
         // Round 16 / Rank 11 (§15 NO-REGRESSION): Harmony/GPT-OSS channel
         // markers must only be considered active when the template stamps
         // think tags AND the caller actually requested reasoning. With the
@@ -951,9 +1160,9 @@ extension Engine {
         // swallowing tokens destined for visible content and producing the
         // "reasoning OFF stuck UI" regression documented in
         // `feedback_reasoning_off_ui_stuck.md`.
-        let harmonyActive = modelStampsThink && effectiveThinking
+        let harmonyActive = promptStartsInThink
         reasoningParser?.resetState(
-            thinkInPrompt: modelStampsThink,
+            thinkInPrompt: promptStartsInThink,
             harmonyActive: harmonyActive
         )
         var parserPrevious = ""
@@ -1000,6 +1209,12 @@ extension Engine {
         struct CachePreFetch: Sendable {
             let matched: Int
             let detail: String
+            /// Reserved for callers that actually restore from the probe.
+            /// The Stream pre-fetch below only builds usage labels; it
+            /// releases any paged-cache pins immediately after composing
+            /// `detail`, because the real restore happens inside
+            /// TokenIterator's own coordinator fetch.
+            let pinnedBlocks: [vMLXLMCommon.CacheBlock]
         }
         // Cancellation check BEFORE entering the blocking container.perform
         // hop. If the user clicked stop while we were resolving settings,
@@ -1095,10 +1310,12 @@ extension Engine {
                 var genPromptLen = 0
                 do {
                     let rawMsgsFull = DefaultMessageGenerator().generate(from: userInput)
+                    var withGPContext = userInput.additionalContext ?? [:]
+                    withGPContext["add_generation_prompt"] = true as any Sendable
                     let withGP = try ctx.tokenizer.applyChatTemplate(
                         messages: rawMsgsFull,
                         tools: nil,
-                        additionalContext: ["add_generation_prompt": true as any Sendable]
+                        additionalContext: withGPContext
                     )
 
                     // Strip the trailing reasoning-off stub from the
@@ -1138,10 +1355,12 @@ extension Engine {
                     {
                         rawMsgsClosed.removeLast()
                     }
+                    var withoutGPContext = userInput.additionalContext ?? [:]
+                    withoutGPContext["add_generation_prompt"] = false as any Sendable
                     let withoutGPClosed = try ctx.tokenizer.applyChatTemplate(
                         messages: rawMsgsClosed,
                         tools: nil,
-                        additionalContext: ["add_generation_prompt": false as any Sendable]
+                        additionalContext: withoutGPContext
                     )
                     if withGP.count > withoutGPClosed.count {
                         genPromptLen = withGP.count - withoutGPClosed.count
@@ -1163,7 +1382,7 @@ extension Engine {
                 // string with an `+ssm(N)` suffix when the companion
                 // fetch populated non-nil states so the usage envelope
                 // reads honestly.
-                var preFetch = CachePreFetch(matched: 0, detail: "miss")
+                var preFetch = CachePreFetch(matched: 0, detail: "miss", pinnedBlocks: [])
                 if let coord = coordinator {
                     let tokenIds = lmInput.text.tokens.asArray(Int.self)
                     // Audit 2026-04-16: pass isMLLM for VLM pipeline so
@@ -1192,7 +1411,7 @@ extension Engine {
                         mediaSalt: preFetchSalt,
                         genPromptLen: genPromptLen
                     ) {
-                    case .hit(let matched, _, let tier, _, let ssm, let disk):
+                    case .hit(let matched, _, let tier, let blocks, let ssm, let disk):
                         // iter-86 §164: compose a rich detail string.
                         // Base tier is always present. Add `+ssm(count)`
                         // when companion states came back non-nil — on a
@@ -1212,12 +1431,16 @@ extension Engine {
                         if genPromptLen > 0 {
                             parts.append("gp(\(genPromptLen))")
                         }
+                        if !blocks.isEmpty {
+                            coord.release(blocks: blocks)
+                        }
                         preFetch = CachePreFetch(
                             matched: matched,
-                            detail: parts.joined(separator: "+")
+                            detail: parts.joined(separator: "+"),
+                            pinnedBlocks: []
                         )
                     case .miss:
-                        preFetch = CachePreFetch(matched: 0, detail: "miss")
+                        preFetch = CachePreFetch(matched: 0, detail: "miss", pinnedBlocks: [])
                     }
                 }
                 // iter-122 §197 RESOLVED — multi-turn partial-prefix cache
@@ -1261,6 +1484,37 @@ extension Engine {
         let cachePreFetch = performResult.cache
         let capturedGenPromptLen = performResult.genPromptLen
         let capturedPromptIds = performResult.promptTokenIds
+        // Iter 143 — wire JangPress embed-tier token-activity tracking.
+        // `JangPressEmbedTier.recordTokenActivity` was previously
+        // dormant (zero callers); the audit flagged it as a fully
+        // built-but-unused feature. Now it sees every prompt's token
+        // IDs at prefill time, so the Zipfian frequency map gets
+        // populated naturally per request. After enough samples land
+        // we trigger `applyZipfianAdvise` once to set MADV_DONTNEED
+        // on the cold (1 - hotPercent)% of vocab rows. Fire-and-
+        // forget — this is a memory-pressure hint, not a correctness
+        // path, and a temporary failure (e.g. zero-shard model) is
+        // safely a no-op inside the tier.
+        if let embed = self.jangPressEmbed, !capturedPromptIds.isEmpty {
+            // recordTokenActivity is bounded by stride sampling +
+            // distinct-token cap (see JangPressEmbedTier comments);
+            // safe to call inline.
+            embed.recordTokenActivity(capturedPromptIds)
+            // applyZipfianAdvise iterates ~200k vocab rows issuing
+            // madvise() per row → ~50-100ms syscall budget on
+            // M-series. Moving it OFF the request hot path so TTFT
+            // isn't stalled. Run on a detached low-priority Task so
+            // the kernel hint lands soon but doesn't compete with
+            // the engine actor for scheduling. Idempotent — multiple
+            // concurrent triggers from concurrent requests serialize
+            // safely on the JangPressEmbedTier's internal lock.
+            let stats = embed.snapshotIfBuilt()
+            if stats.distinctTokensSeen >= 256 {
+                Task.detached(priority: .background) { [weak embed] in
+                    embed?.applyZipfianAdvise()
+                }
+            }
+        }
         // Start the TTFT clock AFTER prep + pre-fetch. `vMLXLMCommon.generate`
         // builds the AsyncStream synchronously so first-event-arrival is a
         // fair proxy for the first decode step landing.
@@ -1434,6 +1688,7 @@ extension Engine {
                         reasoningProbeBuffer.removeFirst(keep)
                     }
                     if reasoningProbeBuffer.contains("<think>")
+                        || reasoningProbeBuffer.contains("</think>")
                         || reasoningProbeBuffer.contains("<|channel|>")   // GPT-OSS / Harmony
                         || reasoningProbeBuffer.contains("<|channel>")    // Gemma 4 open
                         || reasoningProbeBuffer.contains("<channel|>")    // Gemma 4 close
@@ -1452,8 +1707,15 @@ extension Engine {
                 // two families we always use the full parser — the O(N²)
                 // scan cost is negligible next to the alternative of
                 // leaking the structural tokens as visible content.
+                // Template-stamped thinking ON starts inside an open block
+                // with no opener in the decoded output; force the parser so
+                // it can see the eventual close. Thinking OFF does NOT belong
+                // here for Laguna/Qwen-style templates because the rendered
+                // prompt already contains `</think>` and generation starts in
+                // visible content.
                 let alwaysParse = (reasoningParserName == "gemma4"
-                    || reasoningParserName == "openai_gptoss")
+                    || reasoningParserName == "openai_gptoss"
+                    || promptStartsInThink)
                 let useFullParser = (reasoningParser != nil)
                     && (effectiveThinking || seenReasoningMarker || alwaysParse)
                 if useFullParser, let parser = reasoningParser {
@@ -1487,8 +1749,40 @@ extension Engine {
 
                 if !splitReasoning.isEmpty {
                     if !effectiveThinking || thinkingBudgetExhausted {
-                        // §15 reasoning-off OR budget exhausted: reroute to content.
-                        continuation.yield(StreamChunk(content: splitReasoning))
+                        // §15 NO-REGRESSION fallthrough vs BLOCKER #3:
+                        // the two cases diverge on `modelStampsThink`.
+                        //
+                        //   • `!modelStampsThink && !effectiveThinking`
+                        //     (the §15 case — the model emits free-form
+                        //     reasoning that the template did NOT request)
+                        //     → route reasoning to visible content so the
+                        //     UI never goes blank. See
+                        //     `feedback_reasoning_off_ui_stuck.md` —
+                        //     regressed 3+ times in the Electron app.
+                        //
+                        //   • `modelStampsThink && !effectiveThinking`
+                        //     (BLOCKER #3 — the chat template stamped
+                        //     `<think>` but the user wants reasoning OFF)
+                        //     → SUPPRESS the reasoning entirely. The
+                        //     parser is tracking the open block from
+                        //     `thinkInPrompt=true` and will recognize the
+                        //     `</think>` close, flipping any post-close
+                        //     bytes into `splitContent` which is emitted
+                        //     normally below. Routing this reasoning to
+                        //     `content` (the §15 path) leaks structural
+                        //     `<think>` block content to the user — the
+                        //     observed "loop" symptom.
+                        //
+                        // Budget-exhausted is independent of stamping —
+                        // always reroute the post-cap overflow to content
+                        // since we already emitted the synthetic close.
+                        if modelStampsThink && !effectiveThinking
+                            && !thinkingBudgetExhausted
+                        {
+                            // Drop on the floor — suppression sink.
+                        } else {
+                            continuation.yield(StreamChunk(content: splitReasoning))
+                        }
                     } else if thinkingBudgetCharCap > 0 {
                         // Budget enforcement: emit up to cap, then force-close.
                         let remaining = thinkingBudgetCharCap - reasoningCharsEmitted
@@ -1671,7 +1965,22 @@ extension Engine {
                     // LOGPROBS-IMPLEMENTATION.md.
                     pendingLogprobs = []
                 }
-                if stopHit { break }
+                if stopHit {
+                    // Iter 144 — held-back tail (the maxMarkerLenMinus1
+                    // bytes withheld for marker-detection in
+                    // `haveToolsOrParser && !streamingAcc.buffered`) is
+                    // intentionally NOT flushed here. By construction
+                    // those bytes are at offsets ≥ `emittedContentBytes`,
+                    // which itself is ≥ the stop-match start (the stop
+                    // pattern matched WITHIN the just-yielded slice).
+                    // So the held-back tail is positionally AFTER the
+                    // stop position — dropping it matches stop-string
+                    // semantics. A stream-audit reviewer flagged this
+                    // as a potential bug at confidence 80; the trace
+                    // shows it's correct. Don't re-flag without
+                    // re-tracing.
+                    break
+                }
 
                 // Tool-call streaming accumulator — detects markers and
                 // parses the full tool call when enough bytes have accrued.
@@ -1692,8 +2001,21 @@ extension Engine {
                 // guard; this block now only runs the parse+emit half.)
                 if haveToolsOrParser, streamingAcc.buffered, let parser = toolParser {
                     let parsed = parser.parse(streamingAcc.current)
-                    if !parsed.isEmpty {
-                        for p in parsed {
+                    // Iter 144 — drop calls with nil argumentsJSON.
+                    // Synthesizing `"{}"` previously let the engine
+                    // execute structurally-incomplete tool calls (e.g.
+                    // `<tool_call>{"name":"bash"}` with no args) up to
+                    // 3 times before the repetition detector fires.
+                    // For tools requiring arguments this is wasted work
+                    // at best, dangerous at worst. Skip the call and
+                    // fall through to the content-flush path below.
+                    let validParsed = parsed.filter { $0.argumentsJSON != nil }
+                    if validParsed.count < parsed.count {
+                        await self.log(.warn, "engine",
+                            "tool-call parser produced \(parsed.count - validParsed.count) calls with nil arguments — dropped (model emitted malformed JSON, e.g. missing `arguments` key)")
+                    }
+                    if !validParsed.isEmpty {
+                        for p in validParsed {
                             let call = ChatRequest.ToolCall(
                                 id: "call_\(UUID().uuidString.prefix(8))",
                                 type: "function",
@@ -1795,8 +2117,18 @@ extension Engine {
                 // character lands somewhere visible to the caller.
                 if streamingAcc.buffered, let parser = toolParser {
                     let parsed = parser.parse(streamingAcc.current)
-                    if !parsed.isEmpty {
-                        for p in parsed {
+                    // Iter 144 — same nil-arguments filter as the
+                    // mid-stream parse site above. End-of-stream flush
+                    // can also see truncated tool calls (model hit
+                    // max_tokens mid-JSON); drop them rather than
+                    // synthesize `"{}"` and execute.
+                    let validParsed = parsed.filter { $0.argumentsJSON != nil }
+                    if validParsed.count < parsed.count {
+                        await self.log(.warn, "engine",
+                            "end-of-stream tool-call parser dropped \(parsed.count - validParsed.count) calls with nil arguments (truncated JSON)")
+                    }
+                    if !validParsed.isEmpty {
+                        for p in validParsed {
                             let call = ChatRequest.ToolCall(
                                 id: "call_\(UUID().uuidString.prefix(8))",
                                 type: "function",
@@ -1896,6 +2228,20 @@ extension Engine {
                 // was hardcoded to 0 / "paged+disk" because mlx-swift-lm
                 // doesn't thread the fetch result back through
                 // GenerateCompletionInfo.
+                //
+                // Iter 144 — VLM caveat. `info.promptTokenCount` is
+                // post-prepare (text + expanded image-pad tokens),
+                // while `cachePreFetch.matched` is computed against
+                // the raw text-token array. For VLM requests with
+                // images, the ratio (cachedTokens / promptTokens) is
+                // mechanically lower than the user's intuition because
+                // image tokens are never cache-eligible but still
+                // count in the denominator. Numbers are mathematically
+                // consistent (matched ≤ raw text count ≤ expanded
+                // count), but operators reading the ratio for VLM
+                // workloads should know it's measuring "text-prefix
+                // hits" / "total tokens incl. image" not "cache
+                // hits" / "cacheable tokens".
                 let usage = StreamChunk.Usage(
                     promptTokens: info.promptTokenCount,
                     completionTokens: info.generationTokenCount,
@@ -2007,7 +2353,8 @@ extension Engine {
         // turn was already elided by `shouldSkipSSMStorage`, so the
         // next VL turn will just re-prefill normally (matches the
         // pre-§317 correctness baseline).
-        let isVLTurn = !userInput.images.isEmpty || !userInput.videos.isEmpty
+        let isVLTurn =
+            !userInput.images.isEmpty || !userInput.videos.isEmpty || !userInput.audios.isEmpty
         if collectedToolCalls.isEmpty,
            !Task.isCancelled,
            !isVLTurn,
@@ -2034,20 +2381,31 @@ extension Engine {
                 let captureIds = capturedPromptIds
                 let captureGP = capturedGenPromptLen
                 let captureContainer = container
+                // Iter 144 — capture the JangPress controller and rebind
+                // the TaskLocal inside the detached re-derive. Without
+                // this, `Task.detached` does not inherit the parent
+                // Task's TaskLocal values, so any
+                // `JangPressRouteTelemetry.recordTopK` issued from the
+                // re-derive's forward pass sees `controller = nil` and
+                // is silently dropped — undercounting expert activations
+                // on hybrid+thinking models.
+                let captureEmber = self.emberController
                 Task.detached(priority: .utility) {
                     // Late-cancel guard — if the parent Task was cancelled
                     // between spawn and our first resume point, bail before
                     // touching MLX arrays whose Metal resources may be
                     // mid-teardown.
                     if Task.isCancelled { return }
-                    await captureContainer.perform { (ctx: ModelContext) in
-                        if Task.isCancelled { return }
-                        maybeReDeriveSSMState(
-                            coordinator: captureCoord,
-                            model: ctx.model,
-                            promptTokenIds: captureIds,
-                            genPromptLen: captureGP,
-                            enableSSMReDerive: true)
+                    await JangPressRouteTelemetry.$controller.withValue(captureEmber) {
+                        await captureContainer.perform { (ctx: ModelContext) in
+                            if Task.isCancelled { return }
+                            maybeReDeriveSSMState(
+                                coordinator: captureCoord,
+                                model: ctx.model,
+                                promptTokenIds: captureIds,
+                                genPromptLen: captureGP,
+                                enableSSMReDerive: true)
+                        }
                     }
                 }
             }
@@ -2088,6 +2446,7 @@ extension Engine {
         from request: ChatRequest,
         effectiveThinking: Bool,
         modelStampsThink: Bool = false,
+        injectReasoningOffStub: Bool = true,
         responseFormatInstruction: String? = nil,
         imageMarker: String = "<image>"
     ) async -> [Chat.Message] {
@@ -2109,7 +2468,8 @@ extension Engine {
             role: Chat.Message.Role,
             text: String,
             images: [UserInput.Image],
-            videos: [UserInput.Video]
+            videos: [UserInput.Video],
+            audios: [UserInput.Audio]
         )] = []
         decoded.reserveCapacity(request.messages.count)
         for msg in request.messages {
@@ -2127,7 +2487,8 @@ extension Engine {
             // that references a prior image round-trips correctly.
             let images = await extractImages(from: msg.content)
             let videos = await extractVideos(from: msg.content)
-            decoded.append((role: role, text: text, images: images, videos: videos))
+            let audios = await extractAudios(from: msg.content)
+            decoded.append((role: role, text: text, images: images, videos: videos, audios: audios))
         }
 
         // Cap total images across the conversation. If we're over budget,
@@ -2143,14 +2504,15 @@ extension Engine {
                 decoded[i].images.removeFirst(drop)
                 toDrop -= drop
             }
-            // Logging: can't hop to the Engine actor from a static helper,
-            // so we print. The outer performOneGenerationPass already logs
-            // total image count — this cap event is secondary.
-            print(
-                "[vMLXEngine] multi-turn VL image cap: kept "
-                + "\(Self.maxTotalImagesPerRequest) of \(totalImages) images "
-                + "(oldest dropped)"
-            )
+            // Iter 143 — was raw `print()`. Static helper can't hop
+            // to Engine actor, but structured stderr + `[vMLX][vlm]`
+            // prefix keeps the line grep-able and consistent with the
+            // other load/factory/cache stderr lines. The outer
+            // performOneGenerationPass still logs total image count
+            // via Engine.logs; this cap event is secondary diagnostic.
+            if let data = "[vMLX][vlm] multi-turn VL image cap: kept \(Self.maxTotalImagesPerRequest) of \(totalImages) images (oldest dropped)\n".data(using: .utf8) {
+                try? FileHandle.standardError.write(contentsOf: data)
+            }
         }
 
         // VL image marker auto-insertion (perf+correctness audit 2026-04-16).
@@ -2189,10 +2551,18 @@ extension Engine {
             var renderedText = d.text
             // Check for ANY of the known markers so we don't double-insert
             // if the user already included one in the prompt themselves.
+            // Iter 144 — added the Qwen-family triple
+            // `<|vision_start|><|image_pad|><|vision_end|>` (resolved
+            // at line ~822 above as `imageMarker` for Qwen models).
+            // A user manually pasting that string in the prompt
+            // previously got it doubled, breaking image-token
+            // expansion. Audit catch from production review.
             let hasAnyMarker =
                 renderedText.contains("<|image|>")
                 || renderedText.contains("<image>")
                 || renderedText.contains("[IMG]")
+                || renderedText.contains("<|image_pad|>")
+                || renderedText.contains("<|vision_start|>")
             if !d.images.isEmpty && !hasAnyMarker {
                 // One marker per image, prefixed before the text. No newline
                 // between marker and text — some chat templates split on
@@ -2213,7 +2583,8 @@ extension Engine {
                 role: d.role,
                 content: renderedText,
                 images: d.images,
-                videos: d.videos))
+                videos: d.videos,
+                audios: d.audios))
         }
         let hasTools = !(request.tools?.isEmpty ?? true)
         // P1-STREAM-5: when response_format is set (json_object/json_schema),
@@ -2230,7 +2601,9 @@ extension Engine {
         // Skip injection when the template already stamps think tags —
         // doubling would confuse the parser (see ModelCapabilities
         // `thinkInTemplate`).
-        if !effectiveThinking && !hasTools && !modelStampsThink && !hasStructuredFormat {
+        if injectReasoningOffStub
+            && !effectiveThinking && !hasTools && !modelStampsThink && !hasStructuredFormat
+        {
             out.append(Chat.Message(role: .assistant, content: "<think>\n</think>\n\n"))
         }
         return out
@@ -2463,6 +2836,41 @@ extension Engine {
         }
     }
 
+    /// Extract audio parts from OpenAI-style multimodal content into
+    /// `UserInput.Audio` values. Supports vMLX `audio_url` and OpenAI
+    /// Responses/chat `input_audio` parts. Non-audio models simply ignore
+    /// these values because their processors never read `input.audios`.
+    static func extractAudios(
+        from content: ChatRequest.ContentValue?
+    ) async -> [UserInput.Audio] {
+        switch content {
+        case .none, .some(.string):
+            return []
+        case .some(.parts(let parts)):
+            var out: [UserInput.Audio] = []
+            for part in parts {
+                if part.type == "audio_url" {
+                    guard let audioURL = part.audioUrl,
+                          let localURL = await audioURL.loadAudioLocalURL()
+                    else {
+                        FileHandle.standardError.write(Data(
+                            "[vmlx][vl] audio_url fetch/decode failed\n".utf8))
+                        continue
+                    }
+                    out.append(.url(localURL))
+                } else if part.type == "input_audio" {
+                    guard let localURL = part.inputAudio?.loadAudioLocalURL() else {
+                        FileHandle.standardError.write(Data(
+                            "[vmlx][vl] input_audio base64 decode failed\n".utf8))
+                        continue
+                    }
+                    out.append(.url(localURL))
+                }
+            }
+            return out
+        }
+    }
+
     /// Convert OpenAI-style tools to vmlx-swift-lm ToolSpec dicts. JSON
     /// primitives are all Sendable (String/Int/Double/Bool/NSNumber), but
     /// `JSONSerialization.jsonObject` returns `Any`, so we round-trip via
@@ -2492,55 +2900,79 @@ extension Engine {
         request: ChatRequest,
         resolved: ResolvedSettings
     ) -> GenerateParameters {
+        let loadScopedOptions: LoadOptions? =
+            (request.sessionId == nil && request.chatId == nil)
+            ? self.lastLoadOptions
+            : nil
+
         var params = GenerateParameters()
-        params.prefillStepSize = resolved.settings.prefillStepSize
+        params.prefillStepSize =
+            loadScopedOptions?.prefillStepSize
+            ?? resolved.settings.prefillStepSize
 
         // §323 KIMI-K2.6-VMLX-INTEGRATION.md §2.6 #6-#8 — always chunk
         // prefill on DSV3-family MLA bundles (kimi_k25, deepseek_v3/v2/v32).
-        // Default 1024 trips the Metal watchdog on 100 GB+ MoE because the
-        // per-kernel JIT compile dominates cold first-forward. Clamp to
-        // 32 unless the operator explicitly set it lower. Python parity:
-        // `jang_tools.kimi_prune.generate_vl` uses `prefill_step_size=16/32`.
+        // Default 2048 trips the Metal watchdog on 100 GB+ MoE because the
+        // per-kernel JIT compile dominates cold first-forward. Kimi text
+        // parity is 16 tokens; VLM can use 32 in its model-specific prepare.
         let cacheTypeIsMLAForPrefill = (self.modelCapabilities?.cacheType == "mla")
-        if cacheTypeIsMLAForPrefill && params.prefillStepSize > 32 {
-            params.prefillStepSize = 32
+        if cacheTypeIsMLAForPrefill && params.prefillStepSize > 16 {
+            params.prefillStepSize = 16
         }
-        // §373 — sampling fallback priority (highest-to-lowest):
+        // §373 + §443 — sampling fallback priority (highest-to-lowest):
         //   1. explicit request field (OpenAI/Anthropic/Ollama/CLI body)
         //   2. user-set session/chat override (via SettingsStore cascade)
         //   3. model's `generation_config.json` (loadedModelDefaults)
-        //   4. compiled-in global default (0.7 / 0.9 / etc.)
+        //   4. **family-specific defaults** (FamilySamplingDefaultsRegistry)
+        //   5. compiled-in global default (0.7 / 0.9 / etc.)
         //
-        // The SettingsStore resolver collapses 1+2+4 into `resolved.*`
+        // The SettingsStore resolver collapses 1+2+5 into `resolved.*`
         // and exposes the provenance via `resolutionTrace`. When the
         // trace says `.global` we know nobody (request/chat/session)
         // actually set it, so `resolved.temperature` is just the compiled
-        // builtin and we swap in the model's recommended value. When the
-        // trace says `.request/.chat/.session` the user made an explicit
-        // choice — keep it. This bug fix (revised from the first §373
-        // draft) stops silently overriding user session overrides with
-        // generation_config when the user has opinions.
+        // builtin — at that point we consult the model's
+        // generation_config.json (tier 3), and if that's silent too, we
+        // fall through to the family registry (tier 4). When the trace
+        // says `.request/.chat/.session` the user made an explicit
+        // choice — keep it. Stops silently overriding user session
+        // overrides with generation_config when the user has opinions
+        // and stops shipping garbage-token-prone global defaults to
+        // families with known-good samplers (Nemotron-H, DeepSeek V3/V4).
         let md = self.loadedModelDefaults
         let trace = resolved.resolutionTrace
-        func pickDouble(_ traceKey: String, _ modelDefault: Double?, _ resolvedValue: Double) -> Double {
-            if trace[traceKey] == .global, let m = modelDefault { return m }
+        let familyDefaults = FamilySamplingDefaultsRegistry.defaults(
+            forFamily: self.modelCapabilities?.family ?? "")
+        func pickDouble(_ traceKey: String, _ modelDefault: Double?,
+                        _ familyDefault: Float?, _ resolvedValue: Double) -> Double {
+            if trace[traceKey] == .global {
+                if let m = modelDefault { return m }
+                if let f = familyDefault { return Double(f) }
+            }
             return resolvedValue
         }
-        func pickInt(_ traceKey: String, _ modelDefault: Int?, _ resolvedValue: Int) -> Int {
-            if trace[traceKey] == .global, let m = modelDefault { return m }
+        func pickInt(_ traceKey: String, _ modelDefault: Int?,
+                     _ familyDefault: Int?, _ resolvedValue: Int) -> Int {
+            if trace[traceKey] == .global {
+                if let m = modelDefault { return m }
+                if let f = familyDefault { return f }
+            }
             return resolvedValue
         }
         params.maxTokens = request.maxTokens
-            ?? pickInt("defaultMaxTokens", md.maxTokens, resolved.maxTokens)
+            ?? pickInt("defaultMaxTokens", md.maxTokens, nil, resolved.maxTokens)
         params.temperature = Float(request.temperature
-            ?? pickDouble("defaultTemperature", md.temperature, resolved.temperature))
+            ?? pickDouble("defaultTemperature", md.temperature,
+                          familyDefaults?.temperature, resolved.temperature))
         params.topP = Float(request.topP
-            ?? pickDouble("defaultTopP", md.topP, resolved.topP))
+            ?? pickDouble("defaultTopP", md.topP,
+                          familyDefaults?.topP, resolved.topP))
         params.topK = request.topK
-            ?? pickInt("defaultTopK", md.topK, resolved.topK)
+            ?? pickInt("defaultTopK", md.topK,
+                       familyDefaults?.topK, resolved.topK)
         params.minP = Float(request.minP ?? resolved.minP)
         params.repetitionPenalty = Float(request.repetitionPenalty
-            ?? pickDouble("defaultRepetitionPenalty", md.repetitionPenalty, resolved.repetitionPenalty))
+            ?? pickDouble("defaultRepetitionPenalty", md.repetitionPenalty,
+                          familyDefaults?.repetitionPenalty, resolved.repetitionPenalty))
         // iter-95 §173: wire OpenAI `frequency_penalty` +
         // `presence_penalty` through to the sampler. Evaluate.swift
         // has supported both since iter-25 (see `FrequencyPenalty`
@@ -2561,6 +2993,27 @@ extension Engine {
         if let pp = request.presencePenalty, pp != 0 {
             params.presencePenalty = Float(pp)
         }
+        // Iter 143: wire OpenAI `logit_bias` to the sampler. Replaces
+        // the iter-96 §174 FIXME (accepted-but-unwired). OpenAI sends
+        // bias as a `[token_id_string: number]` map; we parse the
+        // string keys to Int and drop unparseable entries silently
+        // (some clients ship empty strings or the literal "default"
+        // key — neither of which a Swift Int initializer can recover).
+        // Range is documented as [-100, 100]; we don't hard-clamp so
+        // power users sending [-200, 200] for stronger biases still get
+        // them. The LogitBiasContext handles out-of-vocab IDs by
+        // ignoring them (see Evaluate.swift LogitBiasContext.process).
+        if let rawBias = request.logitBias, !rawBias.isEmpty {
+            var parsed: [Int: Float] = [:]
+            for (key, value) in rawBias {
+                if let id = Int(key) {
+                    parsed[id] = Float(value)
+                }
+            }
+            if !parsed.isEmpty {
+                params.logitBias = parsed
+            }
+        }
         // iter-64: sampler seed. Samplers in Evaluate.swift hold
         // private RandomState instances that ignore the global
         // MLXRandom.seed() call earlier in stream(); this plumbs the
@@ -2575,17 +3028,148 @@ extension Engine {
         params.logprobs = request.logprobs ?? false
         params.topLogprobs = request.topLogprobs ?? 0
 
-        // Whole-model compiled decode (perf audit 2026-04-16). Enabling
-        // `enableCompiledDecode` wraps the entire model forward pass in
-        // `compile(shapeless: true)` at decode time — collapses the
-        // MoE routing + attention + FFN into ONE Metal dispatch per step
-        // (vs N separate dispatches). Matches Inferencer.app's approach
-        // which achieves 100 tok/s on Qwen 35B A3B MoE per reference's
-        // own SWIFT-PERF-FIXES.md. Requires CompilableKVCache which
-        // uses fixed-size buffers so compile() can trace through the
-        // forward. Enable via `VMLX_COMPILED_DECODE=1` env for A/B.
-        if ProcessInfo.processInfo.environment["VMLX_COMPILED_DECODE"] == "1" {
+        let env = ProcessInfo.processInfo.environment
+        let caps = self.modelCapabilities
+        let family = (caps?.family ?? "").lowercased()
+        let modelType = (caps?.modelType ?? "").lowercased()
+        let modality = caps?.modality ?? .unknown
+        let requestHasMedia = request.messages.contains { message in
+            guard case .parts(let parts) = message.content else { return false }
+            return parts.contains { part in
+                let kind = part.type.lowercased()
+                return kind != "text"
+                    || part.imageUrl != nil
+                    || part.videoUrl != nil
+                    || part.audioUrl != nil
+                    || part.inputAudio != nil
+            }
+        }
+        if (family.contains("laguna") || modelType.contains("laguna")),
+           let rp = params.repetitionPenalty,
+           rp != 0,
+           rp != 1.0 {
+            let lagunaRepContext = Int(
+                env["VMLX_LAGUNA_REPETITION_CONTEXT_SIZE"] ?? "256"
+            ) ?? 256
+            params.repetitionContextSize = max(
+                params.repetitionContextSize,
+                max(20, lagunaRepContext))
+        }
+        let slidingMode = (
+            loadScopedOptions?.slidingWindowMode
+            ?? resolved.settings.slidingWindowMode
+        ).lowercased()
+
+        // Whole-model compiled decode (perf audit 2026-04-16 and SWA
+        // follow-up). Enabling `enableCompiledDecode` wraps the entire
+        // decode forward pass in MLX compile(), collapsing MoE routing,
+        // attention, and FFN work into a single traced graph. Leaving this
+        // behind an env var made SWA/MoE models look "correct" but run at
+        // the 20-60 tok/s uncompiled floor. Apply a conservative family
+        // policy for model classes whose cache topology is known to be
+        // compile-safe after promotion.
+        //
+        // DSV4 is deliberately excluded: its HSA/CSA/SWA long-context path
+        // uses DSV4LayerCache pool-state semantics and must not be flattened
+        // into the generic SWA policy.
+        //
+        // Laguna is now included in the bounded-SWA compile-first policy,
+        // but only on the speed profile where default KV TurboQuant is
+        // suppressed below. Live repro 2026-05-03:
+        //
+        //   VMLX_COMPILED_DECODE=1 VMLX_DISABLE_TURBO_QUANT=1
+        //     → rotating=40, stable.
+        //
+        //   VMLX_COMPILED_DECODE=1 with KV TQ on a long prompt
+        //     → tq=10, SIGTRAP in LagunaMoE argPartition trace.
+        //
+        // So production default is "bounded rotating compile" for speed,
+        // while `VMLX_FORCE_TURBO_QUANT=1` remains a diagnostics-only
+        // memory-mode escape hatch.
+        let compileFirstFamilies: Set<String> = [
+            "laguna",
+            "qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_next",
+            "nemotron_h",
+            "minimax", "minimax_m2_5",
+            "mistral3", "ministral3", "mistral4",
+            "gemma3_text", "gemma4_text",
+            "mimo_v2_flash", "baichuan_m1", "afmoe", "gpt_oss",
+        ]
+        let boundedSwaFamilies: Set<String> = [
+            "laguna",
+            "mistral3", "ministral3", "mistral4",
+            "gemma3_text", "gemma4_text",
+            "pixtral",
+        ]
+        let isDSV4 = family == "deepseek_v4" || modelType == "deepseek_v4"
+        let textOnlyVLMCompileFamilies: Set<String> = [
+            "gemma4", "gemma4_text",
+        ]
+        let textOnlyVLMCompileEligible =
+            modality == .vision
+            && !requestHasMedia
+            && (textOnlyVLMCompileFamilies.contains(family)
+                || textOnlyVLMCompileFamilies.contains(modelType))
+        let compileEligibleModality =
+            modality == .text || textOnlyVLMCompileEligible
+        let isCompileFirstFamily =
+            !isDSV4
+            && compileEligibleModality
+            && (compileFirstFamilies.contains(family)
+                || modelType == "ministral3")
+        let isBoundedSWACompileFamily =
+            boundedSwaFamilies.contains(family)
+            || modelType == "laguna"
+            || modelType == "ministral3"
+        let nativeSlidingWindow = caps?.slidingWindow
+        let configuredSlidingWindow = max(
+            512,
+            loadScopedOptions?.slidingWindowSize
+                ?? resolved.settings.slidingWindowSize)
+        let effectiveSWACompileWindow: Int = {
+            switch slidingMode {
+            case "bounded":
+                return configuredSlidingWindow
+            case "auto":
+                // `auto` means honor `config.json::sliding_window`, not the
+                // global UI fallback. This matters for Laguna
+                // (`sliding_window=512`): compiling a 16k rotating state
+                // erased the intended SWA fast path and left decode near the
+                // uncompiled floor.
+                return max(512, nativeSlidingWindow ?? configuredSlidingWindow)
+            default:
+                return configuredSlidingWindow
+            }
+        }()
+
+        let compiledDecodeEnv = env["VMLX_COMPILED_DECODE"]
+        if compiledDecodeEnv == "1" {
             params.enableCompiledDecode = true
+        } else if compiledDecodeEnv == "0" {
+            params.enableCompiledDecode = false
+        } else if isCompileFirstFamily
+                    && !(isBoundedSWACompileFamily && slidingMode == "long") {
+            params.enableCompiledDecode = true
+        }
+
+        if params.enableCompiledDecode {
+            params.compiledMaxCacheLength = max(
+                params.compiledMaxCacheLength ?? 0, effectiveSWACompileWindow)
+
+            // Full-attention layers in Laguna/Gemma/Mistral/Pixtral can
+            // otherwise allocate their full declared context (Laguna is
+            // 131072). For the compile-first speed profile, cap those
+            // layers to the model-native SWA window in `auto`, or to the
+            // operator's explicit size in `bounded`. Do not cap Mistral 3.5
+            // / ministral3 production bundles that declare `sliding_window:
+            // null`; they have no SWA layers and should keep full-context
+            // semantics unless the operator explicitly chose `bounded`.
+            if isBoundedSWACompileFamily
+                && slidingMode != "long"
+                && (nativeSlidingWindow != nil || slidingMode == "bounded")
+            {
+                params.maxKVSize = effectiveSWACompileWindow
+            }
         }
 
         // TurboQuant KV-cache compression. Default on for every model
@@ -2614,8 +3198,8 @@ extension Engine {
         // forces TQ KV compression off without rebuilding or mucking with
         // settings files, so we can measure the decode-time cost of the TQ
         // compress+dequant cycle in isolation.
-        let tqDisabledViaEnv =
-            ProcessInfo.processInfo.environment["VMLX_DISABLE_TURBO_QUANT"] == "1"
+        let tqDisabledViaEnv = env["VMLX_DISABLE_TURBO_QUANT"] == "1"
+        let tqForcedViaEnv = env["VMLX_FORCE_TURBO_QUANT"] == "1"
 
         // JANG auto-activation: if the loaded model's `jang_config.json`
         // declares `"turboquant": {"enabled": true, ...}`, activate TQ
@@ -2625,16 +3209,55 @@ extension Engine {
         // governs MLX-format models without a calibrated TQ block.
         // Matches Engine.swift:36-41 documented intent.
         //
+        // 2026-05-01 STATUS: the auto-activation path is **dormant in
+        // practice** — every JANGTQ bundle currently in the wild omits
+        // the `turboquant` block (verified across 10+ bundles spanning
+        // Kimi K2.6, MiniMax M2.7, Qwen 3.5/3.6, DeepSeek V4, Nemotron-
+        // Omni, Laguna, Mistral 4 — see JangLoader.swift parser comment).
+        // TQ KV stays OFF for JANGTQ bundles unless the user explicitly
+        // toggles `enableTurboQuant`. This is consistent with the
+        // 2026-04-16 perf audit (default-on TQ KV cost 25-40 % on
+        // MoE/hybrid). The wiring is preserved so a future jang_tools
+        // release can opt a model in without a Swift-side change.
+        //
         // Precedence:
         //   1. MLA model       → skip (layer shape incompatible)
         //   2. env killswitch  → skip
-        //   3. JANG calibrated → activate with jang bits
+        //   3. JANG calibrated → activate with jang bits  (DORMANT — no
+        //                        bundle currently emits the block)
         //   4. global toggle   → activate with global turboQuantBits
+        //                        (the live opt-in path)
         //   5. otherwise       → skip (default OFF post 2026-04-16 audit)
         let jangTQEnabled = (self.loadedJangConfig?.turboquant.enabled == true)
-        let shouldActivateTQ = !cacheTypeIsMLA && !tqDisabledViaEnv && (
-            jangTQEnabled || resolved.settings.enableTurboQuant
-        )
+        let enableTurboQuant =
+            loadScopedOptions?.enableTurboQuant
+            ?? resolved.settings.enableTurboQuant
+        let compileFirstSuppressesTQ =
+            params.enableCompiledDecode
+            && isCompileFirstFamily
+            && !tqForcedViaEnv
+            && !jangTQEnabled
+        let shouldActivateTQ =
+            !cacheTypeIsMLA
+            && !tqDisabledViaEnv
+            && !compileFirstSuppressesTQ
+            && (jangTQEnabled || enableTurboQuant)
+        // Iter 143 — Eric directive 2026-05-04: TQ default-on for ALL
+        // models. The three skip paths (MLA / env-killswitch /
+        // compile-first) each have a load-bearing justification:
+        //  • MLA: latent KV is already compressed natively; logged
+        //    once at Engine.swift load time.
+        //  • env-killswitch: operator-explicit, no log needed.
+        //  • compile-first: the bounded-SWA fast path on
+        //    Laguna/Qwen3.5/Gemma/Mistral runs without the per-step
+        //    TQ compress/dequant cycle (25–40% faster per the
+        //    2026-04-16 audit). Override via VMLX_FORCE_TURBO_QUANT=1.
+        //    Per-request log not added here because
+        //    `buildGenerateParameters` is non-async (logging requires
+        //    actor hop). The load-time log line at
+        //    Engine.swift:2581 already documents the family-level
+        //    decision; CompiledDecodeMonitor inserts a one-shot info
+        //    line in `applyCompiledDecode` when compile is enabled.
         if shouldActivateTQ {
             let keyBits: Int
             let valueBits: Int
@@ -2642,12 +3265,22 @@ extension Engine {
                 keyBits = tq.defaultKeyBits
                 valueBits = tq.defaultValueBits
             } else {
-                let bits = resolved.settings.turboQuantBits
+                let bits =
+                    loadScopedOptions?.turboQuantBits
+                    ?? resolved.settings.turboQuantBits
                 keyBits = bits
                 valueBits = bits
             }
             params.kvMode = .turboQuant(keyBits: keyBits, valueBits: valueBits)
             params.kvBits = nil
+        }
+        if env["VMLX_COMPILED_DECODE_DEBUG"] == "1" {
+            let line = "[vmlx][generation-params] family=\(family) modelType=\(modelType) " +
+                "compiled=\(params.enableCompiledDecode) nativeSlidingWindow=\(nativeSlidingWindow.map(String.init) ?? "nil") " +
+                "effectiveSWACompileWindow=\(effectiveSWACompileWindow) maxKVSize=\(params.maxKVSize.map(String.init) ?? "nil") " +
+                "compiledMaxCacheLength=\(params.compiledMaxCacheLength.map(String.init) ?? "nil") " +
+                "turboQuantActive=\(shouldActivateTQ) turboQuantSuppressed=\(compileFirstSuppressesTQ)\n"
+            try? FileHandle.standardError.write(contentsOf: Data(line.utf8))
         }
         return params
     }

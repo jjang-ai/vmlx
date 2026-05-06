@@ -9,8 +9,25 @@ public enum ReasoningParserRegistry {
     public static func make(_ name: String) -> ReasoningParser? {
         switch name.lowercased() {
         case "qwen3":                         return Qwen3ReasoningParser()
-        case "deepseek_r1":                   return DeepSeekR1ReasoningParser()
-        case "mistral":                       return MistralReasoningParser()
+        case "deepseek_r1",
+             // GLM-5.1 / glm5 stamp routes here per silver registry —
+             // GLM-5.1 emits DeepSeek-style `<think>...</think>`. Without
+             // these aliases JANG bundles stamping `reasoning_parser:
+             // "glm5"` fell through to `nil` → reasoning leaked into
+             // delta.content (P0 silent failure from 2026-05-01 audit).
+             "glm5", "glm5_1", "glm51",
+             // Kimi K2.6 thinking-mode bundles also use DeepSeek
+             // `<think>` syntax per jang_tools.kimi_prune. Add alias so
+             // a future Kimi reasoning bundle doesn't leak.
+             "kimi", "kimi_k2", "kimi_k25", "kimi_k26",
+             // DeepSeek V4 explicit alias (silver-stamp may emit
+             // `deepseek_v4` instead of bare `deepseek_r1`).
+             "deepseek_v4":                   return DeepSeekR1ReasoningParser()
+        // Mistral 4 JANG bundles stamp `mistral4` directly — without
+        // this alias they fell through. Mistral 4 reasoning syntax is
+        // identical to Mistral 3's so the same parser handles it.
+        case "mistral", "mistral4", "ministral3":
+                                              return MistralReasoningParser()
         case "gemma4":                        return Gemma4ReasoningParser()
         case "openai_gptoss", "gptoss", "gpt_oss",
              "harmony", "glm47_flash":        return GptOssReasoningParser()
@@ -29,7 +46,11 @@ public enum ReasoningParserRegistry {
     }
 
     public static var registered: [String] {
-        ["qwen3", "deepseek_r1", "mistral", "gemma4", "openai_gptoss", "auto"]
+        ["qwen3", "deepseek_r1", "mistral", "mistral4", "ministral3",
+         "gemma4", "openai_gptoss", "harmony", "glm47_flash",
+         "glm5", "glm5_1", "glm51",
+         "kimi", "kimi_k2", "kimi_k25", "kimi_k26",
+         "deepseek_v4", "auto"]
     }
 }
 

@@ -152,11 +152,17 @@ public final class SSMStateCache: @unchecked Sendable {
         // SSMCompanionDiskStore's own lock. Failures are swallowed so a
         // disk-full / permission error never breaks generation — the
         // in-memory entry above is still authoritative.
+        //
+        // Iter 143: thread `mediaSalt` through to the disk write so VL/
+        // Omni hybrid prefixes don't collide with text-only prefixes
+        // sharing the same token sequence. Previously hardcoded nil
+        // here → silent L2 alias on cold start of the next session.
         if let disk = diskStore {
             try? disk.store(
                 ssmStates: copies,
                 tokens: tokens,
                 boundary: boundary,
+                mediaSalt: mediaSalt,
                 isComplete: isComplete)
         }
     }
@@ -199,7 +205,8 @@ public final class SSMStateCache: @unchecked Sendable {
             // safetensors deserialize, so they're already detached
             // from any lazy graph.
             if let disk = diskStore,
-               let result = disk.fetch(tokens: tokens, boundary: boundary)
+               let result = disk.fetch(
+                   tokens: tokens, boundary: boundary, mediaSalt: mediaSalt)
             {
                 // Hydrate into LRU. Subtract the miss we just bumped
                 // because the disk lookup found it — this is a hit

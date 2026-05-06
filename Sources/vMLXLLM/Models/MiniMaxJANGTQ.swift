@@ -147,13 +147,15 @@ private class MiniMaxJANGTQAttention: Module {
 
 private class MiniMaxJANGTQSparseMoeBlock: Module {
     let numExpertsPerTok: Int
+    fileprivate let layerIndex: Int
 
     @ModuleInfo(key: "gate") var gate: Linear
     @ModuleInfo(key: "switch_mlp") var switchMLP: TurboQuantSwitchGLU
     @ParameterInfo(key: "e_score_correction_bias") var eScoreCorrectionBias: MLXArray
 
-    init(_ args: MiniMaxJANGTQConfiguration) {
+    init(_ args: MiniMaxJANGTQConfiguration, layerIndex: Int) {
         self.numExpertsPerTok = args.numExpertsPerTok
+        self.layerIndex = layerIndex
 
         _gate.wrappedValue = Linear(args.hiddenSize, args.numLocalExperts, bias: false)
         _switchMLP.wrappedValue = TurboQuantSwitchGLU(
@@ -161,19 +163,31 @@ private class MiniMaxJANGTQSparseMoeBlock: Module {
             hiddenDims: args.intermediateSize,
             numExperts: args.numLocalExperts,
             bits: args.mxtqBits,
-            seed: args.mxtqSeed
+            seed: args.mxtqSeed,
+            gateBits: args.mxtqGateBits,
+            upBits: args.mxtqUpBits,
+            downBits: args.mxtqDownBits
         )
         _eScoreCorrectionBias.wrappedValue = MLXArray.zeros([args.numLocalExperts])
     }
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
-        let gates = gate(x)
+        // CRITICAL: upcast x to fp32 before the gate Linear. Mirrors the
+        // Python reference (`mlx_lm/models/minimax.py:178`):
+        //     gates = self.gate(x.astype(mx.float32))
+        //
+        // With 154+ experts, bf16 precision in the gate matmul produces
+        // near-tied scores that cause argpartition top-k to pick different
+        // experts on each run — non-deterministic garbage at T=0.
+        // (2026-05-02 fix.)
+        let gates = gate(x.asType(.float32))
         // Compiled router: fuses sigmoid + bias + topk + renorm into one graph.
         let router = miniMaxJANGTQCompiledRouter(
             numExperts: gates.dim(-1), k: numExpertsPerTok
         )
         let routed = router([gates, eScoreCorrectionBias])
         let inds = routed[0]
+        JangPressRouteTelemetry.recordTopK(layer: layerIndex, indices: inds)
         let scores = routed[1].asType(x.dtype)
 
         let y = switchMLP(x, inds)
@@ -189,9 +203,9 @@ private class MiniMaxJANGTQDecoderLayer: Module {
     @ModuleInfo(key: "input_layernorm") var inputLayerNorm: RMSNorm
     @ModuleInfo(key: "post_attention_layernorm") var postAttentionLayerNorm: RMSNorm
 
-    init(_ args: MiniMaxJANGTQConfiguration) {
+    init(_ args: MiniMaxJANGTQConfiguration, layerIndex: Int) {
         _selfAttn.wrappedValue = MiniMaxJANGTQAttention(args)
-        _blockSparseMoe.wrappedValue = MiniMaxJANGTQSparseMoeBlock(args)
+        _blockSparseMoe.wrappedValue = MiniMaxJANGTQSparseMoeBlock(args, layerIndex: layerIndex)
         _inputLayerNorm.wrappedValue = RMSNorm(
             dimensions: args.hiddenSize, eps: args.rmsNormEps)
         _postAttentionLayerNorm.wrappedValue = RMSNorm(
@@ -220,7 +234,7 @@ public class MiniMaxJANGTQModelInner: Module {
         self.args = args
         _embedTokens.wrappedValue = Embedding(
             embeddingCount: args.vocabularySize, dimensions: args.hiddenSize)
-        self.layers = (0 ..< args.hiddenLayers).map { _ in MiniMaxJANGTQDecoderLayer(args) }
+        self.layers = (0 ..< args.hiddenLayers).map { i in MiniMaxJANGTQDecoderLayer(args, layerIndex: i) }
         _norm.wrappedValue = RMSNorm(dimensions: args.hiddenSize, eps: args.rmsNormEps)
     }
 
@@ -298,7 +312,8 @@ public class MiniMaxJANGTQModel: Module, LLMModel, KVCacheDimensionProvider {
                         sanitized.removeValue(
                             forKey: "\(prefix).experts.\(e).\(orig).\(key)")!
                     }
-                    sanitized["\(prefix).switch_mlp.\(updated).\(key)"] = MLX.stacked(stacked)
+                    sanitized["\(prefix).switch_mlp.\(updated).\(key)"] =
+                        loadTimeMaterializedStacked(stacked)
                 }
             }
         }
@@ -331,7 +346,12 @@ public struct MiniMaxJANGTQConfiguration: Codable, Sendable {
 
     // JANGTQ-specific
     public var weightFormat: String = "mxtq"
+    /// Legacy scalar alias. Uniform JANGTQ profiles have one width; mixed
+    /// JANGTQ_K profiles must use the explicit projection fields below.
     public var mxtqBits: Int = 2
+    public var mxtqGateBits: Int = 2
+    public var mxtqUpBits: Int = 2
+    public var mxtqDownBits: Int = 2
     public var mxtqSeed: Int = 42
 
     enum CodingKeys: String, CodingKey {
@@ -355,14 +375,118 @@ public struct MiniMaxJANGTQConfiguration: Codable, Sendable {
         case useQkNorm = "use_qk_norm"
         case weightFormat = "weight_format"
         case mxtqBits = "mxtq_bits"
+        case mxtqProjectionBits = "mxtq_projection_bits"
+        case routedExpertProjectionBits = "routed_expert_projection_bits"
         case mxtqSeed = "mxtq_seed"
+    }
+
+    private struct DynamicCodingKey: CodingKey {
+        let stringValue: String
+        let intValue: Int?
+
+        init?(stringValue: String) {
+            self.stringValue = stringValue
+            self.intValue = Int(stringValue)
+        }
+
+        init?(intValue: Int) {
+            self.stringValue = "\(intValue)"
+            self.intValue = intValue
+        }
+    }
+
+    private struct ProjectionBits {
+        let gate: Int
+        let up: Int
+        let down: Int
+
+        static func uniform(_ bits: Int) -> ProjectionBits {
+            ProjectionBits(gate: bits, up: bits, down: bits)
+        }
+    }
+
+    private static func projectionBits(from map: [String: Int]) -> ProjectionBits? {
+        let gate = map["gate_proj"] ?? map["gate"] ?? map["w1"]
+        let up = map["up_proj"] ?? map["up"] ?? map["w3"]
+        let down = map["down_proj"] ?? map["down"] ?? map["w2"]
+        guard let gate, let up, let down else { return nil }
+        return ProjectionBits(gate: gate, up: up, down: down)
+    }
+
+    private static func decodeBits(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) -> ProjectionBits? {
+        if let flat = try? container.decodeIfPresent(Int.self, forKey: key) {
+            return .uniform(flat)
+        }
+        if let dict = try? container.decodeIfPresent([String: Int].self, forKey: key) {
+            if let projection = projectionBits(from: dict) {
+                return projection
+            }
+            if let routed = dict["routed_expert"] ?? dict["routed"] {
+                return .uniform(routed)
+            }
+            if let shared = dict["shared_expert"] ?? dict.values.first {
+                return .uniform(shared)
+            }
+        }
+        guard let nested = try? container.nestedContainer(
+            keyedBy: DynamicCodingKey.self,
+            forKey: key
+        ) else {
+            return nil
+        }
+
+        var directInts: [String: Int] = [:]
+        for nestedKey in nested.allKeys {
+            if let intValue = try? nested.decode(Int.self, forKey: nestedKey) {
+                directInts[nestedKey.stringValue] = intValue
+                continue
+            }
+            guard nestedKey.stringValue == "routed_expert"
+                    || nestedKey.stringValue == "routed"
+                    || nestedKey.stringValue == "experts",
+                  let routedContainer = try? nested.nestedContainer(
+                    keyedBy: DynamicCodingKey.self,
+                    forKey: nestedKey
+                  )
+            else { continue }
+
+            var routedMap: [String: Int] = [:]
+            for routedKey in routedContainer.allKeys {
+                if let intValue = try? routedContainer.decode(
+                    Int.self,
+                    forKey: routedKey
+                ) {
+                    routedMap[routedKey.stringValue] = intValue
+                }
+            }
+            if let projection = projectionBits(from: routedMap) {
+                return projection
+            }
+        }
+
+        if let projection = projectionBits(from: directInts) {
+            return projection
+        }
+        if let routed = directInts["routed_expert"] ?? directInts["routed"] {
+            return .uniform(routed)
+        }
+        if let shared = directInts["shared_expert"] ?? directInts.values.first {
+            return .uniform(shared)
+        }
+        return nil
     }
 
     // §346 T6 — custom decode so `mxtq_bits` accepts either a flat Int
     // (legacy) or a per-role dict `{routed_expert: N, shared_expert: N,
-    // ...}` (modern converter output). Default Codable synthesis rejects
-    // the dict form and would fail the whole config decode for a future
-    // JANGTQ4 bundle. Falls back to 2 only when both shapes are absent.
+    // ...}` (modern converter output). §428 extends this to MiniMax
+    // JANGTQ_K's per-projection routed-expert map:
+    // `{routed_expert:{gate_proj:2, up_proj:2, down_proj:4}}`.
+    // Default Codable synthesis rejects these dict forms and would fail
+    // or silently construct the down projection at the wrong bit width.
+    // Falls back to 2 only when every shape is absent.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.modelType =
@@ -391,18 +515,56 @@ public struct MiniMaxJANGTQConfiguration: Codable, Sendable {
             try container.decodeIfPresent(Bool.self, forKey: .useQkNorm) ?? true
         self.weightFormat =
             try container.decodeIfPresent(String.self, forKey: .weightFormat) ?? "mxtq"
-        if let flat = try? container.decodeIfPresent(Int.self, forKey: .mxtqBits) {
-            self.mxtqBits = flat
-        } else if let dict = try? container.decodeIfPresent(
-            [String: Int].self, forKey: .mxtqBits),
-            let routed = dict["routed_expert"] ?? dict["shared_expert"]
-                ?? dict.values.first
-        {
-            self.mxtqBits = routed
-        } else {
-            self.mxtqBits = 2
-        }
+        let projectionBits = Self.decodeBits(
+            from: container,
+            forKey: .routedExpertProjectionBits
+        ) ?? Self.decodeBits(
+            from: container,
+            forKey: .mxtqProjectionBits
+        ) ?? Self.decodeBits(
+            from: container,
+            forKey: .mxtqBits
+        ) ?? .uniform(2)
+        self.mxtqGateBits = projectionBits.gate
+        self.mxtqUpBits = projectionBits.up
+        self.mxtqDownBits = projectionBits.down
+        self.mxtqBits = projectionBits.gate
         self.mxtqSeed = try container.decodeIfPresent(Int.self, forKey: .mxtqSeed) ?? 42
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(modelType, forKey: .modelType)
+        try container.encode(hiddenSize, forKey: .hiddenSize)
+        try container.encode(intermediateSize, forKey: .intermediateSize)
+        try container.encode(attentionHeads, forKey: .attentionHeads)
+        try container.encode(kvHeads, forKey: .kvHeads)
+        try container.encode(maxPositionEmbeddings, forKey: .maxPositionEmbeddings)
+        try container.encode(numExpertsPerTok, forKey: .numExpertsPerTok)
+        try container.encode(numLocalExperts, forKey: .numLocalExperts)
+        try container.encode(sharedIntermediateSize, forKey: .sharedIntermediateSize)
+        try container.encode(hiddenLayers, forKey: .hiddenLayers)
+        try container.encode(rmsNormEps, forKey: .rmsNormEps)
+        try container.encode(ropeTheta, forKey: .ropeTheta)
+        try container.encode(rotaryDim, forKey: .rotaryDim)
+        try container.encode(vocabularySize, forKey: .vocabularySize)
+        try container.encode(tieWordEmbeddings, forKey: .tieWordEmbeddings)
+        try container.encode(scoringFunc, forKey: .scoringFunc)
+        try container.encodeIfPresent(headDim, forKey: .headDim)
+        try container.encode(useQkNorm, forKey: .useQkNorm)
+        try container.encode(weightFormat, forKey: .weightFormat)
+        try container.encode(mxtqBits, forKey: .mxtqBits)
+        try container.encode(mxtqSeed, forKey: .mxtqSeed)
+
+        let projection = [
+            "gate_proj": mxtqGateBits,
+            "up_proj": mxtqUpBits,
+            "down_proj": mxtqDownBits,
+        ]
+        if Set(projection.values).count > 1 {
+            try container.encode(projection, forKey: .mxtqProjectionBits)
+            try container.encode(projection, forKey: .routedExpertProjectionBits)
+        }
     }
 }
 

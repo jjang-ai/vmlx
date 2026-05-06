@@ -187,11 +187,27 @@ public struct AdminAuthMiddleware<Context: RequestContext>: RouterMiddleware {
         guard bearerOK || headerOK else {
             // iter-ralph §232 (M3): record the miss for per-IP bucket.
             await AdminAuthRateLimiter.shared.recordFailure(peer: peer)
-            let body = #"{"error":{"message":"admin token required","type":"auth_error","path":"\#(path)"}}"#
+            // Iter 144 — build error body via JSONSerialization rather
+            // than string interpolation. Pre-fix, a request to a path
+            // containing `"` (e.g. `/admin/wake?x="}`) produced a
+            // malformed JSON envelope. Echoing the path also gives
+            // attackers free confirmation of guarded paths — but the
+            // path itself is non-secret (it's in the request line);
+            // the real concern was JSON well-formedness for SDK
+            // consumers that fail closed on parse errors.
+            let envelope: [String: Any] = [
+                "error": [
+                    "message": "admin token required",
+                    "type": "auth_error",
+                    "path": path,
+                ] as [String: Any]
+            ]
+            let bodyData = (try? JSONSerialization.data(withJSONObject: envelope))
+                ?? Data(#"{"error":{"message":"admin token required","type":"auth_error"}}"#.utf8)
             var resp = Response(
                 status: .unauthorized,
                 headers: [.contentType: "application/json"],
-                body: .init(byteBuffer: .init(string: body))
+                body: .init(byteBuffer: .init(data: bodyData))
             )
             resp.headers[.wwwAuthenticate] = "Bearer realm=\"admin\""
             return resp

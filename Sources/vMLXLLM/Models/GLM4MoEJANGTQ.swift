@@ -266,17 +266,19 @@ private struct GLM4MoEJANGTQAffineProjection: Encodable {
 final class GLM4MoEJANGTQ: Module, UnaryLayer {
     let numExpertsPerTok: Int
     let gate: GLM4MoEGate
+    fileprivate let layerIdx: Int
 
     @ModuleInfo(key: "switch_mlp") var switchMLP: TurboQuantSwitchGLU
     @ModuleInfo(key: "shared_experts") var sharedExperts: GLM4MoEMLP?
 
-    init(_ config: GLM4MoEJANGTQConfiguration) {
+    init(_ config: GLM4MoEJANGTQConfiguration, layerIdx: Int) {
         guard let nRoutedExperts = config.nRoutedExperts else {
             fatalError("GLM4MoEJANGTQ requires nRoutedExperts")
         }
 
         self.numExpertsPerTok = config.numExpertsPerTok
         self.gate = GLM4MoEGate(config.asAffine())
+        self.layerIdx = layerIdx
 
         _switchMLP.wrappedValue = TurboQuantSwitchGLU(
             inputDims: config.hiddenSize,
@@ -297,6 +299,7 @@ final class GLM4MoEJANGTQ: Module, UnaryLayer {
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
         let (inds, scores) = gate(x)
+        JangPressRouteTelemetry.recordTopK(layer: layerIdx, indices: inds)
         var y = switchMLP(x, inds)
         y = (y * scores[.ellipsis, .newAxis]).sum(axis: -2).asType(y.dtype)
         if let sharedExperts {
@@ -320,7 +323,7 @@ final class GLM4MoEJANGTQDecoderLayer: Module {
         _attention.wrappedValue = GLM4MoEAttention(affine)
 
         if args.nRoutedExperts != nil && layerIdx >= args.firstKDenseReplace {
-            self.mlp = GLM4MoEJANGTQ(args)
+            self.mlp = GLM4MoEJANGTQ(args, layerIdx: layerIdx)
         } else {
             // First firstKDenseReplace layers are dense — stay affine.
             self.mlp = GLM4MoEMLP(affine)
@@ -438,7 +441,8 @@ public class GLM4MoEJANGTQModel: Module, LLMModel, KVCacheDimensionProvider {
                         sanitized.removeValue(
                             forKey: "\(prefix).experts.\(e).\(proj).\(kind)")!
                     }
-                    sanitized["\(prefix).switch_mlp.\(proj).\(kind)"] = MLX.stacked(stacked)
+                    sanitized["\(prefix).switch_mlp.\(proj).\(kind)"] =
+                        loadTimeMaterializedStacked(stacked)
                 }
             }
         }

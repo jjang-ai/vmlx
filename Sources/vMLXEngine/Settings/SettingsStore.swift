@@ -80,10 +80,104 @@ public actor SettingsStore {
         guard let data = db.getSession(id) else { return nil }
         let decoder = JSONDecoder()
         if let s = try? decoder.decode(SessionSettings.self, from: data) {
+            // BLOCKER #2 / §SWAMIG3 — one-shot migrations on first decode.
+            // Pre-v2 sessions stamped `kvCacheQuantization = "none"` when
+            // that was the global default; v2 flipped the default to
+            // "turboquant". Pre-v3 sessions can also carry
+            // `slidingWindowMode = "long"` from the old slow default, which
+            // pins Laguna/Mistral/Gemma SWA models to the 20 tok/s path even
+            // after the global default moved to "auto". `migrateSessionIfNeeded`
+            // is family-gated and stamps schemaVersion forward so each row is
+            // repaired once.
+            let migrated = Self.migrateSessionIfNeeded(s)
+            if migrated != s {
+                sessionCache[id] = migrated
+                // Persist the migration so subsequent loads skip it
+                // and external inspectors see the new state. Use the
+                // synchronous flush path — this is one-shot per row,
+                // not a hot-path write.
+                if let fixed = try? JSONEncoder().encode(migrated) {
+                    db.setSession(id, fixed)
+                }
+                return migrated
+            }
             sessionCache[id] = s
             return s
         }
         return nil
+    }
+
+    /// BLOCKER #2 / §SWAMIG3 — pure migration function. Returns a session
+    /// with any required field bumps applied + `schemaVersion` stamped to 3.
+    /// Idempotent: a session already at schemaVersion >= 3 is returned
+    /// unchanged.
+    static func migrateSessionIfNeeded(_ s: SessionSettings) -> SessionSettings {
+        guard s.schemaVersion < 3 else { return s }
+        var out = s
+
+        // Migration 1 — kvCacheQuantization default flip.
+        // Only bump explicit "none" values to "turboquant" when the
+        // model family is in the TQ-safe set. nil means "fall through
+        // to global", which is correct behavior; we don't touch nil.
+        // The TQ-safe set is heuristic on `modelPath.lastPathComponent`
+        // — we don't have the loaded ModelCapabilities at decode time.
+        // The conservative approach: only migrate when the path name
+        // clearly matches a TQ-safe family. Anything ambiguous is
+        // left alone.
+        if s.schemaVersion < 2, s.kvCacheQuantization?.lowercased() == "none" {
+            let pathComponent = s.modelPath.lastPathComponent.lowercased()
+            let tqSafePatterns = [
+                "qwen3", "qwen2", "llama-3", "llama3",
+                "mistral-small-3", "mistral-medium-3",
+                "deepseek-v3", "phi-3", "phi-4",
+                "gemma-3", "gemma3", "gemma-4", "gemma4",
+            ]
+            // Hybrid / MLA / unsupported families — DO NOT migrate.
+            // These either auto-disable TQ at load time or are not
+            // wired in Swift at all.
+            let unsafePatterns = [
+                "nemotron-h", "nemotron_h",        // hybrid SSM
+                "qwen3.5-a3b", "qwen3-5-a3b",      // hybrid SSM
+                "qwen3-next", "qwen3_next",        // hybrid SSM
+                "jamba", "lfm2", "falcon-h", "granite-moe-hybrid",
+                "deepseek-v4",                     // MLA (TQ has its own path)
+                "kimi-k2", "kimi-k25", "kimi-k26", // MLA
+                "mistral-medium-3.5",              // SWA compile-first, TQ suppressed by policy
+                "laguna",                          // SWA compile-first, TQ suppressed by policy
+            ]
+            let isUnsafe = unsafePatterns.contains(where: pathComponent.contains)
+            let isSafe = !isUnsafe && tqSafePatterns.contains(where: pathComponent.contains)
+            if isSafe {
+                out.kvCacheQuantization = "turboquant"
+            }
+        }
+
+        // Migration 2 — stale SWA long-mode repair.
+        //
+        // Early Swift builds and example runtimes used "long" as the sliding
+        // window default. For bounded-SWA families that now have a compiled
+        // decode fast path (Laguna, Mistral 3/3.5, Gemma 3/4 text/VL, Pixtral),
+        // a persisted per-session "long" override disables auto-compile and
+        // reproduces the observed ~20 tok/s Laguna floor. Only repair rows
+        // whose model path clearly belongs to those families, and only when
+        // the row predates schema v3; users who explicitly choose Long after
+        // this migration keep their override.
+        if s.schemaVersion < 3,
+           out.slidingWindowMode?.lowercased() == "long" {
+            let pathComponent = s.modelPath.lastPathComponent.lowercased()
+            let boundedSwaPatterns = [
+                "laguna",
+                "mistral-medium-3.5", "mistral3", "mistral-3", "ministral3",
+                "pixtral",
+                "gemma-3", "gemma3", "gemma-4", "gemma4",
+            ]
+            if boundedSwaPatterns.contains(where: pathComponent.contains) {
+                out.slidingWindowMode = "auto"
+            }
+        }
+
+        out.schemaVersion = 3
+        return out
     }
 
     /// Enumerate every session id that has a stored settings blob.
@@ -348,9 +442,7 @@ public actor SettingsStore {
         if let v = s?.flashMoeSlotBank { out.flashMoeSlotBank = v; trace["flashMoeSlotBank"] = .session } else { trace["flashMoeSlotBank"] = .global }
         if let v = s?.flashMoePrefetch { out.flashMoePrefetch = v; trace["flashMoePrefetch"] = .session } else { trace["flashMoePrefetch"] = .global }
         if let v = s?.flashMoeIoSplit { out.flashMoeIoSplit = v; trace["flashMoeIoSplit"] = .session } else { trace["flashMoeIoSplit"] = .global }
-        if let v = s?.smelt { out.smelt = v; trace["smelt"] = .session } else { trace["smelt"] = .global }
-        if let v = s?.smeltExperts { out.smeltExperts = v; trace["smeltExperts"] = .session } else { trace["smeltExperts"] = .global }
-        if let v = s?.smeltMode { out.smeltMode = v; trace["smeltMode"] = .session } else { trace["smeltMode"] = .global }
+        // Iter 143 — Smelt removed.
         if let v = s?.dflash { out.dflash = v; trace["dflash"] = .session } else { trace["dflash"] = .global }
         if let v = s?.dflashDrafterPath { out.dflashDrafterPath = v; trace["dflashDrafterPath"] = .session } else { trace["dflashDrafterPath"] = .global }
         if let v = s?.dflashBlockSize { out.dflashBlockSize = v; trace["dflashBlockSize"] = .session } else { trace["dflashBlockSize"] = .global }
@@ -439,6 +531,8 @@ extension Engine.LoadOptions {
         self.maxNumSeqs = r.maxNumSeqs
         self.prefillStepSize = r.prefillStepSize
         self.maxCacheBlocks = r.maxCacheBlocks
+        self.usePagedCache = r.usePagedCache
+        self.pagedCacheBlockSize = r.pagedCacheBlockSize
         self.enableTurboQuant = r.enableTurboQuant
         self.enableJANG = r.enableJANG
         self.enablePrefixCache = r.enablePrefixCache
@@ -452,6 +546,8 @@ extension Engine.LoadOptions {
         self.enableDiskCache = r.enableDiskCache
         self.diskCacheDir = r.diskCacheDir
         self.diskCacheMaxGB = r.diskCacheMaxGB
+        self.memoryCachePercent = r.memoryCachePercent
+        self.memoryCacheTTLMinutes = r.memoryCacheTTLMinutes
         // §355 — block-level disk cache fields forward to LoadOptions
         // so BlockDiskCache can be instantiated at load time.
         self.enableBlockDiskCache = r.enableBlockDiskCache
@@ -465,10 +561,7 @@ extension Engine.LoadOptions {
         self.slidingWindowMode = r.slidingWindowMode
         self.slidingWindowSize = r.slidingWindowSize
         self.enableSSMReDerive = r.enableSSMReDerive
-        // Smelt + Flash MoE
-        self.smelt = r.smelt
-        self.smeltExperts = r.smeltExperts
-        self.smeltMode = r.smeltMode
+        // Iter 143 — Smelt removed; Flash MoE only.
         self.flashMoe = r.flashMoe
         self.flashMoeSlotBank = r.flashMoeSlotBank
         self.flashMoePrefetch = r.flashMoePrefetch
@@ -484,5 +577,21 @@ extension Engine.LoadOptions {
         // Parser overrides
         self.defaultToolParser = r.defaultToolParser
         self.defaultReasoningParser = r.defaultReasoningParser
+        // JangPress is a load-time tier. The UI/CLI persist the choice
+        // in GlobalSettings, but the engine must consume the resolved
+        // snapshot captured for this specific load. Without this
+        // forwarding, bare LoadOptions defaults could override a user
+        // turning JangPress off in settings.
+        self.enableJangPress = r.enableJangPress
+        self.jangPressCompressPct = r.jangPressCompressPct
+        self.jangPressEnablePrefetch = r.jangPressEnablePrefetch
+        self.jangPressBackend = Engine.LoadOptions.JangPressBackend(
+            rawValue: r.jangPressBackend.lowercased()
+        ) ?? .mmap
+        self.jangPressForceMode = Engine.LoadOptions.JangPressForceMode(
+            rawValue: r.jangPressForceMode.lowercased()
+        ) ?? .soft
+        self.enableJangPressRouterAdvice = r.jangPressEnableRouterAdvice
+        self.jangPressPrestack = r.jangPressPrestack
     }
 }

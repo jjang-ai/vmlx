@@ -108,45 +108,65 @@ public class TurboQuantSwitchGLU: Module {
     public let inputDims: Int
     public let hiddenDims: Int
     public let numExperts: Int
+    /// Legacy scalar alias for uniform-bit callers. For mixed projection
+    /// profiles this equals `gateBits`; use the explicit fields below for
+    /// runtime decisions.
     public let bits: Int
+    public let gateBits: Int
+    public let upBits: Int
+    public let downBits: Int
     public let mxtqSeed: Int
-    /// §426 — DSV4 limited-SwiGLU clamp value (0 = ordinary SwiGLU).
-    /// DSV4 trains with `silu(min(gate, 10)) * clip(up, ±10)`; passing
-    /// 10 here forwards into the fused gate+up Metal kernel via
-    /// `meta[5]` so the routed-expert path matches DSV4's training
-    /// math. Other JANGTQ models (Qwen35-MoE, MiniMax, Holo3, GLM4-MoE)
-    /// leave this 0 and get byte-identical kernel output.
-    public let swigluLimit: Int
+    /// 2026-05-04 (DSV4 SWA/CSA/HSA correctness pass):
+    /// SwiGLU clamp magnitude. `0.0` (default) preserves ordinary SwiGLU
+    /// `silu(gate) * up` for every non-DSV4 caller — output is bit-identical
+    /// to the pre-2026-05-04 path. DSV4 sets this to `10.0` to activate the
+    /// limited-SwiGLU expression `silu(min(gate, 10)) * clip(up, -10, 10)`
+    /// the Python `_dsv4_swiglu` reference uses and the codex_dsv4_fixkit
+    /// Python runtime patch installs.
+    public let swigluLimit: Float
 
     public init(
         inputDims: Int, hiddenDims: Int, numExperts: Int,
         bits: Int = 2, seed: Int = 42,
-        swigluLimit: Int = 0
+        gateBits: Int? = nil,
+        upBits: Int? = nil,
+        downBits: Int? = nil,
+        swigluLimit: Float = 0.0
     ) {
+        let resolvedGateBits = gateBits ?? bits
+        let resolvedUpBits = upBits ?? bits
+        let resolvedDownBits = downBits ?? bits
+        precondition(
+            resolvedGateBits == resolvedUpBits,
+            "TurboQuantSwitchGLU fused gate/up path requires gateBits == upBits; add a non-fused fallback before using mixed gate/up bits.")
         self.inputDims = inputDims
         self.hiddenDims = hiddenDims
         self.numExperts = numExperts
-        self.bits = bits
+        self.bits = resolvedGateBits
+        self.gateBits = resolvedGateBits
+        self.upBits = resolvedUpBits
+        self.downBits = resolvedDownBits
         self.mxtqSeed = seed
         self.swigluLimit = swigluLimit
         self._gateProj.wrappedValue = TurboQuantSwitchLinear(
             inFeatures: inputDims, outFeatures: hiddenDims,
-            numExperts: numExperts, bits: bits, seed: seed
+            numExperts: numExperts, bits: resolvedGateBits, seed: seed
         )
         self._upProj.wrappedValue = TurboQuantSwitchLinear(
             inFeatures: inputDims, outFeatures: hiddenDims,
-            numExperts: numExperts, bits: bits, seed: seed
+            numExperts: numExperts, bits: resolvedUpBits, seed: seed
         )
         self._downProj.wrappedValue = TurboQuantSwitchLinear(
             inFeatures: hiddenDims, outFeatures: inputDims,
-            numExperts: numExperts, bits: bits, seed: seed
+            numExperts: numExperts, bits: resolvedDownBits, seed: seed
         )
         super.init()
     }
 
     /// Cache of compiled MoE fast-path closures keyed by
-    /// `(batchTokens, K, bits)`. Each closure captures the layer's
-    /// in/out dimensions and bit width and runs the full
+    /// `(batchTokens, K, gateBits, upBits, downBits)`. Each closure
+    /// captures the layer's in/out dimensions and projection bit widths
+    /// and runs the full
     /// rotate → fused gate+up+SwiGLU → rotate → gather chain inside
     /// one `mx.compile(shapeless: true)` graph. This collapses 4
     /// individual Metal kernel dispatches per layer into a single
@@ -155,6 +175,12 @@ public class TurboQuantSwitchGLU: Module {
     /// on Qwen 3.6 JANGTQ_2L (M4 Max).
     private var compiledCache: [String: ([MLXArray]) -> [MLXArray]] = [:]
 
+    private static let compiledFastPathEnabled: Bool = {
+        let raw = ProcessInfo.processInfo.environment["VMLX_TQ_SWITCH_GLU_COMPILE"]?
+            .lowercased()
+        return !(raw == "0" || raw == "false" || raw == "off" || raw == "no")
+    }()
+
     /// Forward through the JANGTQ MoE MLP fast path.
     /// `x` shape: `(batch, seq, hidden)`. `indices` shape: `(batch, seq, K)`.
     /// Returns `(batch, seq, K, hidden)` to match `SwitchGLU` semantics —
@@ -162,8 +188,8 @@ public class TurboQuantSwitchGLU: Module {
     public func callAsFunction(_ x: MLXArray, _ indices: MLXArray) -> MLXArray {
         guard let signsIn = JANGTQRuntimeCache.shared.signs(inFeatures: inputDims, seed: mxtqSeed),
               let signsDn = JANGTQRuntimeCache.shared.signs(inFeatures: hiddenDims, seed: mxtqSeed),
-              let cbGate  = JANGTQRuntimeCache.shared.codebook(inFeatures: inputDims, bits: bits),
-              let cbDown  = JANGTQRuntimeCache.shared.codebook(inFeatures: hiddenDims, bits: bits)
+              let cbGate  = JANGTQRuntimeCache.shared.codebook(inFeatures: inputDims, bits: gateBits),
+              let cbDown  = JANGTQRuntimeCache.shared.codebook(inFeatures: hiddenDims, bits: downBits)
         else {
             fatalError("JANGTQ runtime sidecar not loaded — call JANGTQRuntimeCache.shared.loadSidecar(...) first")
         }
@@ -178,7 +204,7 @@ public class TurboQuantSwitchGLU: Module {
 
         // BUG3 DIAG: dump xRot for layer 0 first call
         if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" {
-            nonisolated(unsafe) struct _GTQ { static var fired = false }
+            nonisolated struct _GTQ { static var fired = false }
             if !_GTQ.fired {
                 _GTQ.fired = true
                 let xRot0 = JANGTQKernels.hadamardRotate(xFlat, signs: signsIn, dim: inputDims)
@@ -197,19 +223,44 @@ public class TurboQuantSwitchGLU: Module {
             }
         }
 
-        let cacheKey = "bt\(batchTokens).K\(K).b\(bits)"
+        if !Self.compiledFastPathEnabled {
+            let xRot = JANGTQKernels.hadamardRotate(xFlat, signs: signsIn, dim: inputDims)
+            let xAct = JANGTQKernels.fusedGateUpSwiGLU(
+                xRot: xRot,
+                packedGate: gateProj.packed, normsGate: gateProj.norms,
+                packedUp: upProj.packed, normsUp: upProj.norms,
+                codebook: cbGate, rhsIndices: idxFlat,
+                batchTokens: batchTokens, K: K,
+                inFeatures: inputDims, outFeatures: hiddenDims, bits: gateBits,
+                swigluLimit: swigluLimit
+            )
+            let xActRot = JANGTQKernels.hadamardRotate(xAct, signs: signsDn, dim: hiddenDims)
+            let y = JANGTQKernels.gatherTQ(
+                xRot: xActRot,
+                packed: downProj.packed, norms: downProj.norms,
+                codebook: cbDown, rhsIndices: idxFlat,
+                nRows: batchTokens * K,
+                inFeatures: hiddenDims, outFeatures: inputDims, bits: downBits
+            )
+            var outShape = indices.shape
+            outShape.append(inputDims)
+            return y.reshaped(outShape).asType(x.dtype)
+        }
+
+        let cacheKey = "bt\(batchTokens).K\(K).gb\(gateBits).ub\(upBits).db\(downBits)"
         if compiledCache[cacheKey] == nil {
             // Capture dimensions in the closure; signs/codebooks come
             // from the runtime cache and don't need to be inputs (they
             // never change for a given (in_features, seed/bits) tuple).
             let inDim = self.inputDims
             let outDim = self.hiddenDims
-            let bitsLocal = self.bits
+            let gateBitsLocal = self.gateBits
+            let downBitsLocal = self.downBits
             let bt = batchTokens
             let kLocal = K
             // §426 — capture swiglu_limit for the compiled body. DSV4
-            // sets this to 10 to engage the kernel's limited-SwiGLU
-            // branch; everyone else passes 0 → kernel skips clamp +
+            // sets this to 10.0 to engage the kernel's limited-SwiGLU
+            // branch; everyone else passes 0.0 → kernel skips clamp +
             // emits byte-identical output to the pre-§426 path.
             let swigluLimitLocal = self.swigluLimit
             let body: ([MLXArray]) -> [MLXArray] = { args in
@@ -223,7 +274,7 @@ public class TurboQuantSwitchGLU: Module {
                     packedUp: args[3], normsUp: args[4],
                     codebook: args[9], rhsIndices: args[11],
                     batchTokens: bt, K: kLocal,
-                    inFeatures: inDim, outFeatures: outDim, bits: bitsLocal,
+                    inFeatures: inDim, outFeatures: outDim, bits: gateBitsLocal,
                     swigluLimit: swigluLimitLocal
                 )
                 let xActR = JANGTQKernels.hadamardRotate(xAct_, signs: args[8], dim: outDim)
@@ -232,7 +283,7 @@ public class TurboQuantSwitchGLU: Module {
                     packed: args[5], norms: args[6],
                     codebook: args[10], rhsIndices: args[11],
                     nRows: bt * kLocal,
-                    inFeatures: outDim, outFeatures: inDim, bits: bitsLocal
+                    inFeatures: outDim, outFeatures: inDim, bits: downBitsLocal
                 )
                 return [yLocal]
             }

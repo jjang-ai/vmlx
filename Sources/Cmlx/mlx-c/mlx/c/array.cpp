@@ -345,6 +345,16 @@ extern "C" mlx_dtype mlx_array_dtype(const mlx_array arr) {
   }
 }
 
+extern "C" int mlx_array_is_tracer(bool* res, const mlx_array arr) {
+  try {
+    *res = mlx_array_get_(arr).is_tracer();
+    return 0;
+  } catch (std::exception& e) {
+    mlx_error(e.what());
+    return 1;
+  }
+}
+
 extern "C" int mlx_array_eval(mlx_array arr) {
   try {
     mlx_array_get_(arr).eval();

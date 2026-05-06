@@ -318,16 +318,22 @@ struct AdvancedServerCard: View {
 
     // MARK: — file picker
 
+    @MainActor
     private func browseFile(assignTo binding: Binding<String>) {
         #if canImport(AppKit)
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = []  // any file
-        panel.title = "Select TLS file"
-        panel.prompt = "Select"
-        if panel.runModal() == .OK, let url = panel.url {
+        // Iter 129 (vmlx#121 / #133): macOS 26 ad-hoc XPC failure
+        // mitigation via NSOpenPanelSafe.
+        let result = NSOpenPanelSafe.pick(configure: { panel in
+            panel.canChooseFiles = true
+            panel.canChooseDirectories = false
+            panel.allowsMultipleSelection = false
+            panel.allowedContentTypes = []  // any file
+            panel.title = "Select TLS file"
+            panel.prompt = "Select"
+        }, fallbackTitle: L10n.PickerFallback.tlsFileTitle.render(appLocale),
+           fallbackMessage: L10n.PickerFallback.tlsFileMessage.render(appLocale),
+           canChooseFiles: true)
+        if let url = result.url {
             binding.wrappedValue = url.path
             dirty = true
         }

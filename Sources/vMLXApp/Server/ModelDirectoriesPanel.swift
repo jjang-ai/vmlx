@@ -339,17 +339,32 @@ struct ModelDirectoriesPanel: View {
         }
     }
 
+    @MainActor
     private func pickAndAddDir() {
         #if canImport(AppKit)
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.title = "Pick a model directory"
-        panel.prompt = "Add directory"
-        panel.message = "Choose a folder vMLX should scan for model directories. Each immediate subfolder is treated as one model."
-        if panel.runModal() == .OK, let url = panel.url {
+        // Iter 128 (vmlx#121 / #133): macOS 26 + ad-hoc-signed builds
+        // lose the XPC link to the file picker. NSOpenPanelSafe falls
+        // back to a manual-path text alert when XPC failure is
+        // detected, so users can always type/paste a directory path.
+        let result = NSOpenPanelSafe.pick(configure: { panel in
+            panel.canChooseFiles = false
+            panel.canChooseDirectories = true
+            panel.allowsMultipleSelection = false
+            panel.title = "Pick a model directory"
+            panel.prompt = "Add directory"
+            panel.message = "Choose a folder vMLX should scan for model directories. Each immediate subfolder is treated as one model."
+        }, fallbackTitle: L10n.PickerFallback.modelDirTitle.render(appLocale),
+           fallbackMessage: L10n.PickerFallback.modelDirMessage.render(appLocale),
+           canChooseFiles: false)
+        if let url = result.url {
+            if result.usedFallback {
+                bannerMessage = L10n.PickerFallback.manualPathBanner.format(
+                    locale: appLocale, url.lastPathComponent)
+            }
             Task { await addDir(url) }
+        } else if let reason = result.failureReason {
+            bannerMessage = L10n.PickerFallback.manualPathFailure.format(
+                locale: appLocale, reason)
         }
         #endif
     }

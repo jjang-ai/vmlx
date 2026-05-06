@@ -15,10 +15,10 @@ import MLXNN
 /// keys = applyRotaryPosition(rope, to: keys, cache: cache)
 /// ```
 ///
-/// When the cache is a `CompilableKVCache`, the offset is passed as an `MLXArray`
-/// (via `offsetArray`) so the compile tracer can track it through the graph without
-/// triggering a synchronous GPU readback. For all other cache types, the standard
-/// `Int`-based offset path is used.
+/// When the cache exposes an `offsetArray`, the offset is passed as an `MLXArray`
+/// so the compile tracer can track it through the graph without triggering a
+/// synchronous GPU readback. For all other cache types, the standard `Int`-based
+/// offset path is used.
 ///
 /// - Parameters:
 ///   - rope: A RoPE layer conforming to both `OffsetLayer` and `ArrayOffsetLayer`.
@@ -28,12 +28,32 @@ import MLXNN
 public func applyRotaryPosition<R: RoPELayer>(_ rope: R, to x: MLXArray, cache: KVCache?)
     -> MLXArray
 {
-    if let compilable = cache as? CompilableKVCache {
-        return rope(x, offset: compilable.offsetArray)
-    }
-    // Batched decode: use per-sequence [B]-shaped offsets for correct positional encoding.
-    if let batchCache = cache as? BatchKVCache {
-        return rope(x, offset: batchCache.offsetArray)
+    if let offsetArray = graphOffsetArray(for: cache) {
+        return rope(x, offset: offsetArray)
     }
     return rope(x, offset: cache?.offset ?? 0)
+}
+
+/// Returns a graph-visible cache offset when the cache exposes one.
+///
+/// `KVCache.offset` is an `Int` API for compatibility with the upstream
+/// mlx-swift model ports. Compile-safe caches keep the offset as an
+/// `MLXArray` so the value can flow through `compile()` without an
+/// `.item()` readback. Any model-side helper that needs positions beyond
+/// RoPE (for example llama4/YARN attention scaling or shared-KV offsets)
+/// should use this helper before falling back to `cache.offset`.
+public func graphOffsetArray(for cache: KVCache?) -> MLXArray? {
+    if let compilable = cache as? CompilableKVCache {
+        return compilable.offsetArray
+    }
+    if let compilableTQ = cache as? CompilableTurboQuantKVCache {
+        return compilableTQ.offsetArray
+    }
+    if let compilableRot = cache as? CompilableRotatingKVCache {
+        return compilableRot.offsetArray
+    }
+    if let batchCache = cache as? BatchKVCache {
+        return batchCache.offsetArray
+    }
+    return nil
 }

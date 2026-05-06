@@ -391,11 +391,18 @@ struct ChatSettingsPopover: View {
                     .textFieldStyle(.roundedBorder)
                     .font(Theme.Typography.mono)
                     Button {
-                        let panel = NSOpenPanel()
-                        panel.canChooseFiles = false
-                        panel.canChooseDirectories = true
-                        panel.allowsMultipleSelection = false
-                        if panel.runModal() == .OK, let url = panel.url {
+                        // Iter 129 (vmlx#121 / #133): macOS 26 ad-hoc
+                        // XPC failure mitigation via NSOpenPanelSafe.
+                        let result = NSOpenPanelSafe.pick(
+                            configure: { panel in
+                                panel.canChooseFiles = false
+                                panel.canChooseDirectories = true
+                                panel.allowsMultipleSelection = false
+                            },
+                            fallbackTitle: L10n.PickerFallback.chatWorkingDirTitle.render(appLocale),
+                            fallbackMessage: L10n.PickerFallback.chatWorkingDirMessage.render(appLocale),
+                            canChooseFiles: false)
+                        if let url = result.url {
                             draft.workingDirectory = url.path
                             writeBack()
                         }

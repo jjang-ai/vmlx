@@ -62,9 +62,17 @@ public class CompilableKVCache: BaseKVCache {
     /// Create from an existing KVCacheSimple (e.g., after prefill).
     /// Copies the existing cache state into a fixed-size buffer.
     public convenience init(from cache: KVCache, maxLength: Int = 4096) {
-        self.init(maxLength: maxLength)
-
         let existingState = cache.state
+        let existingSeqLen: Int = existingState.count >= 2
+            ? existingState[0].dim(2)
+            : 0
+        // A compile policy can request a nominal bound such as 4096 or
+        // 16384, but a real chat may already have prefetched more tokens
+        // before promotion. Allocate enough room for the existing cache
+        // plus at least one decode token; otherwise the copy below can OOB
+        // or the first dynamicSliceUpdate writes past the static buffer.
+        self.init(maxLength: max(maxLength, existingSeqLen + 1))
+
         if existingState.count >= 2 {
             let existingKeys = existingState[0]  // [B, H, seqLen, D]
             let existingValues = existingState[1]
@@ -75,9 +83,11 @@ public class CompilableKVCache: BaseKVCache {
             let kD = existingKeys.dim(3)
             let vD = existingValues.dim(3)
 
-            // Pre-allocate to maxLength
-            self.keys = MLXArray.zeros([B, H, maxLength, kD], dtype: existingKeys.dtype)
-            self.values = MLXArray.zeros([B, H, maxLength, vD], dtype: existingValues.dtype)
+            // Pre-allocate to the effective bound from self.init(...),
+            // not the caller's requested maxLength. The constructor may
+            // have grown self.maxLength to fit an already-prefilled chat.
+            self.keys = MLXArray.zeros([B, H, self.maxLength, kD], dtype: existingKeys.dtype)
+            self.values = MLXArray.zeros([B, H, self.maxLength, vD], dtype: existingValues.dtype)
 
             // Copy existing data at position 0
             self.keys![.ellipsis, ..<seqLen, 0...] = existingKeys

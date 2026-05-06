@@ -36,6 +36,7 @@ public struct LMInput {
     public let text: Text
     public let image: ProcessedImage?
     public let video: ProcessedVideo?
+    public let audio: ProcessedAudio?
 
     /// Representation of tokenized input text.
     public struct Text {
@@ -95,17 +96,33 @@ public struct LMInput {
         }
     }
 
+    /// Representation of prepared audio clip(s). Audio-capable processors
+    /// (currently Nemotron-H Omni/Parakeet) own loading/resampling and pass
+    /// canonical 16 kHz mono waveforms through to the model wrapper, which
+    /// computes the actual encoder embeddings.
+    public struct ProcessedAudio {
+        public let waveforms: [[Float]]
+        public let sampleRate: Int
+
+        public init(waveforms: [[Float]], sampleRate: Int = 16000) {
+            self.waveforms = waveforms
+            self.sampleRate = sampleRate
+        }
+    }
+
     public init(tokens: MLXArray, mask: MLXArray? = nil) {
         self.init(text: .init(tokens: tokens, mask: mask))
     }
 
     public init(
         text: LMInput.Text, image: LMInput.ProcessedImage? = nil,
-        video: LMInput.ProcessedVideo? = nil
+        video: LMInput.ProcessedVideo? = nil,
+        audio: LMInput.ProcessedAudio? = nil
     ) {
         self.text = text
         self.image = image
         self.video = video
+        self.audio = audio
     }
 }
 

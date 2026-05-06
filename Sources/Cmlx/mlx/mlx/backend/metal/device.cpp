@@ -402,7 +402,19 @@ bool Device::command_buffer_needs_commit(int index) {
 MTL::CommandBuffer* Device::get_command_buffer(int index) {
   auto& stream = get_stream_(index);
   if (stream.buffer == nullptr) {
-    stream.buffer = stream.queue->commandBufferWithUnretainedReferences();
+    // vMLX iter 126 — patch for ml-explore/mlx#3461 / fix mlx#3462.
+    // Metal CommandEncoder does NOT retain bound buffers under
+    // MTLResourceHazardTrackingModeUntracked + commandBufferWith-
+    // UnretainedReferences(). Swift structured concurrency can drop
+    // an MLXArray ref between encode and command-buffer completion
+    // → "Invalid Resource" race (caught under TurboQuant KV cache
+    // load on M5 Max @ qwen35-35b-a3b B=17/B=32, 0/10 reproduction).
+    //
+    // Use the retained variant (commandBuffer()) instead. Costs
+    // ~2.4% throughput (validated upstream) — safe & trivially
+    // worth it. When we sync mlx upstream and it includes the
+    // mlx#3462 land, this comment+wrapper can be reverted.
+    stream.buffer = stream.queue->commandBuffer();
     if (!stream.buffer) {
       throw std::runtime_error(
           "[metal::Device] Unable to create new command buffer");

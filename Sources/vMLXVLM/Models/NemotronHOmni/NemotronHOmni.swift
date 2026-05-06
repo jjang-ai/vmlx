@@ -15,6 +15,7 @@
 // NemotronHModel + `forwardFromEmbeddings(_:cache:)` to the backbone.
 
 import Foundation
+import AVFoundation
 import MLX
 import vMLXLLM
 import vMLXLMCommon
@@ -52,6 +53,13 @@ public struct NemotronHOmniConfiguration: Codable, Sendable {
     public let imageContextTokenId: Int
     public let videoContextTokenId: Int
     public let soundContextTokenId: Int
+    public let jangtqContext: NemotronHJANGTQContext?
+
+    enum JANGTQCodingKeys: String, CodingKey {
+        case weightFormat = "weight_format"
+        case mxtqBits = "mxtq_bits"
+        case mxtqSeed = "mxtq_seed"
+    }
 
     public init(from decoder: Decoder) throws {
         // The bundle's config.json is the LLM config directly. Decode it as
@@ -82,6 +90,18 @@ public struct NemotronHOmniConfiguration: Codable, Sendable {
         self.imageContextTokenId = 18
         self.videoContextTokenId = 131_081
         self.soundContextTokenId = 27
+
+        let c = try? decoder.container(keyedBy: JANGTQCodingKeys.self)
+        let weightFormat = (try? c?.decodeIfPresent(String.self, forKey: .weightFormat)) ?? nil
+        if weightFormat?.lowercased() == "mxtq" {
+            let bits = (try? c?.decodeIfPresent(Int.self, forKey: .mxtqBits)) ?? nil
+            let seed = (try? c?.decodeIfPresent(Int.self, forKey: .mxtqSeed)) ?? nil
+            self.jangtqContext = NemotronHJANGTQContext(
+                bits: bits ?? 2,
+                mxtqSeed: seed ?? 42)
+        } else {
+            self.jangtqContext = nil
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -115,7 +135,12 @@ public class NemotronHOmni: Module, VLMModel, KVCacheDimensionProvider, LoRAMode
     public init(_ config: NemotronHOmniConfiguration) {
         self.config = config
 
-        self._languageModel.wrappedValue = NemotronHModel(config.llmConfig)
+        if let jangtq = config.jangtqContext {
+            self._languageModel.wrappedValue = NemotronHModel(
+                jangtqContext: jangtq, configuration: config.llmConfig)
+        } else {
+            self._languageModel.wrappedValue = NemotronHModel(config.llmConfig)
+        }
         self._radioModel.wrappedValue = NemotronHRADIOVisionModel(
             embedDim: config.vitHiddenSize,
             numBlocks: config.visionNumBlocks,
@@ -153,14 +178,13 @@ public class NemotronHOmni: Module, VLMModel, KVCacheDimensionProvider, LoRAMode
         languageModel.callAsFunction(inputs, cache: cache)
     }
 
-    /// VLM prepare — accepts LMInput with text + optional image. Audio /
-    /// video must be passed via the higher-level `chat` API.
+    /// VLM prepare — accepts LMInput with text + optional image/video/audio.
     public func prepare(_ input: LMInput, cache: [any KVCache], windowSize: Int?) throws
         -> PrepareResult
     {
         let convertedCache = cache.compactMap { $0 as KVCache }
 
-        if input.image == nil && input.video == nil {
+        if input.image == nil && input.video == nil && input.audio == nil {
             // Text-only fast path.
             return .tokens(input.text)
         }
@@ -183,7 +207,20 @@ public class NemotronHOmni: Module, VLMModel, KVCacheDimensionProvider, LoRAMode
                 tokens: input.text.tokens,
                 inputsEmbeds: spliced,
                 replacement: videoEmbeds,
-                tokenId: config.imageContextTokenId)
+                tokenId: config.videoContextTokenId)
+        }
+        if let audio = input.audio {
+            let audioEmbeds = audio.waveforms.map { extractAudioEmbeds(waveform: $0) }
+            if !audioEmbeds.isEmpty {
+                let replacement = audioEmbeds.count == 1
+                    ? audioEmbeds[0]
+                    : MLX.concatenated(audioEmbeds, axis: 0)
+                spliced = spliceAtToken(
+                    tokens: input.text.tokens,
+                    inputsEmbeds: spliced,
+                    replacement: replacement,
+                    tokenId: config.soundContextTokenId)
+            }
         }
 
         let logits = languageModel.callAsFunction(
@@ -259,7 +296,7 @@ public class NemotronHOmni: Module, VLMModel, KVCacheDimensionProvider, LoRAMode
 
         // Build replacement-broadcast tensor: same shape as inputsEmbeds with
         // replacement[i] at the i-th placeholder slot, zeros elsewhere.
-        var replaceBuffer = MLXArray.zeros(inputsEmbeds.shape, dtype: inputsEmbeds.dtype)
+        let replaceBuffer = MLXArray.zeros(inputsEmbeds.shape, dtype: inputsEmbeds.dtype)
         var replIdx = 0
         let totalSlots = positions.count
         let B = inputsEmbeds.dim(0)
@@ -370,6 +407,8 @@ public struct NemotronHOmniProcessorConfiguration: Codable, Sendable {
 public struct NemotronHOmniProcessor: UserInputProcessor {
     private let config: NemotronHOmniProcessorConfiguration
     private let tokenizer: any Tokenizer
+    private static let soundSampleRate = 16000
+    private static let soundNumMelBins = 128
 
     public init(_ config: NemotronHOmniProcessorConfiguration, tokenizer: any Tokenizer) {
         self.config = config
@@ -392,7 +431,11 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
         // know N total tiles → expand 256 image tokens per tile (post pixel
         // shuffle 32×32 → 16×16).
         var processedImage: LMInput.ProcessedImage?
+        var processedVideo: LMInput.ProcessedVideo?
+        var processedAudio: LMInput.ProcessedAudio?
         var totalImageTokens = 0
+        var totalVideoTokens = 0
+        var totalAudioTokens = 0
         let tokensPerTile = 256
 
         if !input.images.isEmpty {
@@ -404,6 +447,30 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
             let totalTiles = counts.reduce(0, +)
             totalImageTokens = totalTiles * tokensPerTile
         }
+        if !input.videos.isEmpty {
+            let videoPixels = try await preprocess(videos: input.videos)
+            processedVideo = LMInput.ProcessedVideo(
+                pixels: videoPixels,
+                frames: [THW(videoPixels.dim(0), config.imageSize, config.imageSize)])
+            totalVideoTokens = videoPixels.dim(0) * tokensPerTile
+        }
+        if !input.audios.isEmpty {
+            var waveforms: [[Float]] = []
+            for audio in input.audios {
+                let waveform = try loadAudioWaveform(audio)
+                guard !waveform.isEmpty else { continue }
+                waveforms.append(waveform)
+                let mel = nemotronOmniExtractMelFeatures(
+                    waveform, sampleRate: Self.soundSampleRate,
+                    nMels: Self.soundNumMelBins)
+                totalAudioTokens += Self.parakeetSubsampledFrameCount(mel.dim(1))
+            }
+            if !waveforms.isEmpty {
+                processedAudio = LMInput.ProcessedAudio(
+                    waveforms: waveforms,
+                    sampleRate: Self.soundSampleRate)
+            }
+        }
 
         // Insert media placeholders into the user message before tokenization.
         // Source convention (Python `model.py`): "<img>" + N×"<image>" + "</img>\n"
@@ -413,6 +480,14 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
             media += String(repeating: "<image>", count: totalImageTokens)
             media += "</img>\n"
         }
+        if totalVideoTokens > 0 {
+            media += String(repeating: "<video>", count: totalVideoTokens)
+            media += "\n"
+        }
+        if totalAudioTokens > 0 {
+            media += String(repeating: "<so_embedding>", count: totalAudioTokens)
+            media += "\n"
+        }
 
         // Build messages with media prepended to the LAST user message.
         var messages = Qwen2VLMessageGenerator().generate(from: input)
@@ -420,7 +495,17 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
             for i in (0 ..< messages.count).reversed() {
                 if (messages[i]["role"] as? String) == "user" {
                     if let oldContent = messages[i]["content"] as? String {
-                        messages[i]["content"] = media + oldContent
+                        // Engine.buildChatMessages may have inserted one
+                        // generic `<image>` / `<video>` marker per attachment.
+                        // Nemotron owns exact placeholder counts (256 per
+                        // visual tile/group, one per audio encoder frame), so
+                        // strip generic markers before prepending the precise
+                        // media block.
+                        let cleaned = oldContent
+                            .replacingOccurrences(of: "<image>", with: "")
+                            .replacingOccurrences(of: "<video>", with: "")
+                            .replacingOccurrences(of: "<so_embedding>", with: "")
+                        messages[i]["content"] = media + cleaned
                     } else {
                         messages[i]["content"] = media
                     }
@@ -437,7 +522,52 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
 
         return LMInput(
             text: .init(tokens: promptArray, mask: mask),
-            image: processedImage)
+            image: processedImage,
+            video: processedVideo,
+            audio: processedAudio)
+    }
+
+    private static func parakeetSubsampledFrameCount(_ frames: Int) -> Int {
+        // Three stride-2 convs with kernel=3 padding=1 -> ceil(T/2)^3.
+        let once = (frames + 1) / 2
+        let twice = (once + 1) / 2
+        return (twice + 1) / 2
+    }
+
+    private func preprocess(videos: [UserInput.Video]) async throws -> MLXArray {
+        var batches: [MLXArray] = []
+        for video in videos {
+            let url: URL
+            switch video {
+            case .url(let u):
+                url = u
+            case .avAsset(let asset):
+                guard let avURL = (asset as? AVURLAsset)?.url else {
+                    throw VLMError.processing("Nemotron-H Omni requires URL-backed videos")
+                }
+                url = avURL
+            case .frames:
+                throw VLMError.processing("Nemotron-H Omni frame-backed videos are not wired yet")
+            }
+            batches.append(try await nemotronOmniPreprocessVideo(
+                url: url,
+                imageSize: config.imageSize,
+                videoTemporalPatchDim: 2))
+        }
+        return batches.count == 1 ? batches[0] : MLX.concatenated(batches, axis: 0)
+    }
+
+    private func loadAudioWaveform(_ audio: UserInput.Audio) throws -> [Float] {
+        switch audio {
+        case .url(let url):
+            return try nemotronOmniLoadAudioFile(
+                url, targetSampleRate: Double(Self.soundSampleRate))
+        case .samples(let samples, let sampleRate):
+            guard sampleRate == Self.soundSampleRate else {
+                throw VLMError.processing(
+                    "Nemotron-H Omni raw audio samples must be \(Self.soundSampleRate) Hz; got \(sampleRate)")
+            }
+            return samples
+        }
     }
 }
-

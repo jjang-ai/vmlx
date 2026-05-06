@@ -547,7 +547,9 @@ public class AfMoEModel: Module, LLMModel, KVCacheDimensionProvider {
                             sanitizedWeights.removeValue(
                                 forKey: "\(prefix).mlp.experts.\(e).\(n).\(k)")!
                         }
-                        sanitizedWeights["\(prefix).mlp.experts.\(n).\(k)"] = MLX.stacked(toJoin)
+                        // RAM safety: per-layer materialize via canonical helper.
+                        sanitizedWeights["\(prefix).mlp.experts.\(n).\(k)"] =
+                            loadTimeMaterializedStacked(toJoin)
                     }
                 }
             }

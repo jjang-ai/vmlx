@@ -8,6 +8,7 @@
 //
 
 import MLX
+import vMLXLMCommon
 
 public final class Qwen35MoE: Qwen35 {
     public override func sanitize(weights: [String: MLXArray]) -> [String: MLXArray] {
@@ -58,10 +59,12 @@ public final class Qwen35MoE: Qwen35 {
                     downs.append(d)
                 }
                 if ok {
-                    let stackedGate = stacked(gates, axis: 0)  // [E, I, H]
-                    let stackedUp = stacked(ups, axis: 0)      // [E, I, H]
-                    let stackedDown = stacked(downs, axis: 0)  // [E, H, I]
-                    let gateUp = concatenated([stackedGate, stackedUp], axis: 1) // [E, 2I, H]
+                    let stackedGate = loadTimeMaterializedStacked(gates, axis: 0) // [E, I, H]
+                    let stackedUp = loadTimeMaterializedStacked(ups, axis: 0)     // [E, I, H]
+                    let stackedDown = loadTimeMaterializedStacked(downs, axis: 0) // [E, H, I]
+                    let gateUp = concatenated([stackedGate, stackedUp], axis: 1)  // [E, 2I, H]
+                    MLX.eval(gateUp)
+                    MLX.Memory.clearCache()
                     remapped["\(prefix).experts.gate_up_proj"] = gateUp
                     remapped["\(prefix).experts.down_proj"] = stackedDown
                 }

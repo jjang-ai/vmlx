@@ -605,9 +605,9 @@ struct TrayItem: View {
                 }
             }
             // §403 — sliding-window override picker. Auto = honor model
-            // config; Long = force full-context (escape hatch for
-            // thinking models that drift past their trained window);
-            // Bounded = hard cap of `slidingWindowSize` for memory.
+            // config and keep compile-first SWA families on the fast path;
+            // Long = force full-context and may slow SWA models; Bounded =
+            // hard cap of `slidingWindowSize` for memory.
             LabeledField("Sliding window") {
                 Picker("", selection: Binding(
                     get: { draft.slidingWindowMode },
@@ -850,10 +850,18 @@ struct TrayItem: View {
 
     private func openAppWindow() {
         NSApp.activate(ignoringOtherApps: true)
-        for w in NSApp.windows where w.canBecomeMain {
-            w.makeKeyAndOrderFront(nil)
-            break
+        // Iter 144 — prefer the main app window (no "downloads" /
+        // "settings" identifier) so the tray "Open vMLX" doesn't
+        // accidentally surface the Downloads window when it's first
+        // in NSApp.windows order. Falls back to any canBecomeMain
+        // window if no untagged window is found.
+        let candidates = NSApp.windows.filter { $0.canBecomeMain }
+        let primary = candidates.first { w in
+            let id = w.identifier?.rawValue ?? ""
+            return !id.contains("downloads") && !id.contains("settings")
         }
+        let target = primary ?? candidates.first
+        target?.makeKeyAndOrderFront(nil)
     }
 
     private func slider(

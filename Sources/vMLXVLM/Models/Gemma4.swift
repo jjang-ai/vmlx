@@ -562,7 +562,8 @@ private class TextAttn: Module {
             else { q = rope(q, offset: off) }
             cK = sharedKV.keys; cV = sharedKV.values
         } else {
-            off = cache?.offset ?? 0
+            let normalOffsetArray = graphOffsetArray(for: cache)
+            off = normalOffsetArray == nil ? (cache?.offset ?? 0) : 0
             var k = kP(x).reshaped(B, L, nKV, hD)
             let v: MLXArray
             if useKEqV { v = rmsNormNoScale(k, eps: eps) } else if let vP { v = rmsNormNoScale(vP(x).reshaped(B, L, nKV, hD), eps: eps) } else { v = rmsNormNoScale(k, eps: eps) }
@@ -606,11 +607,17 @@ private class TextRouter: Module {
         super.init()
     }
     func callAsFunction(_ x: MLXArray) -> (MLXArray, MLXArray) {
-        var h = rmsNormNoScale(x, eps: eps) * rs * sc
-        let s = proj(h); let p = softmax(s, axis: -1)
+        // Keep the VLM inline text router in parity with
+        // vMLXLLM/Models/Gemma4Text.swift and Python mlx_lm:
+        // fused RMSNorm with scale*sqrt(hidden)^-1, then top-k on
+        // raw expert scores, then softmax only over selected experts.
+        let h = MLXFast.rmsNorm(x, weight: sc * rs, eps: eps)
+        let s = proj(h)
         // Unary `-` avoids AsType cascade. See §27 + mlp_bfloat16_upcast.md.
         let ti = argPartition(-s, kth: topK - 1, axis: -1)[.ellipsis, ..<topK]
-        var tw = takeAlong(p, ti, axis: -1); tw = tw / tw.sum(axis: -1, keepDims: true); tw = tw * pes[ti]
+        let topLogits = takeAlong(s, ti, axis: -1)
+        var tw = softmax(topLogits, axis: -1)
+        tw = tw * pes[ti]
         return (ti, tw)
     }
 }
@@ -635,6 +642,7 @@ private class TextExperts: Module {
 
 private class TextLayer: Module {
     let hasMoE: Bool
+    let layerIndex: Int
     @ModuleInfo(key: "self_attn") var attn: TextAttn; @ModuleInfo var mlp: TextMLP
     @ModuleInfo var router: TextRouter?; @ModuleInfo var experts: TextExperts?
     @ModuleInfo(key: "input_layernorm") var iLN: G4RMSNorm; @ModuleInfo(key: "post_attention_layernorm") var paLN: G4RMSNorm
@@ -648,6 +656,7 @@ private class TextLayer: Module {
 
     init(_ cfg: G4TextConfig, i: Int) {
         hasMoE = cfg.enableMoeBlock && cfg.numExperts > 0
+        layerIndex = i
         _attn.wrappedValue = TextAttn(cfg, layerIndex: i)
         let fks = cfg.numHiddenLayers - cfg.numKvSharedLayers
         let isShared = cfg.numKvSharedLayers > 0 && i >= fks
@@ -683,7 +692,9 @@ private class TextLayer: Module {
         var h = paLN(aOut); h = r + h; r = h
         if hasMoE, let router, let experts, let pfLN2, let pffLN1, let pffLN2 {
             var h1 = mlp(pfLN(h)); h1 = pffLN1(h1)
-            let (ti, tw) = router(h); var h2 = experts(pfLN2(h), idx: ti, wts: tw); h2 = pffLN2(h2)
+            let (ti, tw) = router(h)
+            JangPressRouteTelemetry.recordTopK(layer: layerIndex, indices: ti)
+            var h2 = experts(pfLN2(h), idx: ti, wts: tw); h2 = pffLN2(h2)
             h = h1 + h2
         } else { h = mlp(pfLN(h)) }
         h = pffLN(h); h = r + h
@@ -776,7 +787,7 @@ private class TextModel: Module {
             else { skv = nil; soff = nil; soffArr = nil }
             let ce = prevIdx == i ? (i < lc.count ? lc[i] : nil) : nil
             let res = l(h, mask: isGlobal ? gm : sm, cache: ce, perLayerInput: pliList[i], sharedKV: skv, sharedOffset: soff, sharedOffsetArray: soffArr)
-            let layerOffArr = (ce as? BatchKVCache)?.offsetArray
+            let layerOffArr = graphOffsetArray(for: ce)
             h = res.h; intermediates[i] = (res.keys, res.values, res.offset, layerOffArr)
         }
         return norm(h)
@@ -1023,7 +1034,7 @@ public struct Gemma4Processor: UserInputProcessor {
         var processedImage: LMInput.ProcessedImage?
         if !input.images.isEmpty {
             let ps = config.patchSize; let maxP = config.maxSoftTokens * config.poolingKernelSize * config.poolingKernelSize
-            var arrays = try input.images.map { img -> MLXArray in
+            let arrays = try input.images.map { img -> MLXArray in
                 let ci = try img.asCIImage()
                 let (w, h) = (Int(ci.extent.width), Int(ci.extent.height))
                 let f = sqrt(Float(maxP * ps * ps) / Float(w * h))

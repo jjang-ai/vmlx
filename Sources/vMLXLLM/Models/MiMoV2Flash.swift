@@ -271,17 +271,19 @@ class MiMoV2FlashMoEGate: Module {
 class MiMoV2FlashMoE: Module, UnaryLayer {
     let numExpertsPerTok: Int
     let gate: MiMoV2FlashMoEGate
+    fileprivate let layerIdx: Int
 
     @ModuleInfo(key: "switch_mlp") var switchMLP: SwitchGLU
     @ModuleInfo(key: "shared_experts") var sharedExperts: MiMoV2FlashMLP?
 
-    init(_ config: MiMoV2FlashConfiguration) {
+    init(_ config: MiMoV2FlashConfiguration, layerIdx: Int) {
         guard let nRoutedExperts = config.nRoutedExperts else {
             fatalError("MiMoV2FlashMoE requires nRoutedExperts.")
         }
 
         self.numExpertsPerTok = config.numExpertsPerTok
         self.gate = MiMoV2FlashMoEGate(config)
+        self.layerIdx = layerIdx
 
         _switchMLP.wrappedValue = SwitchGLU(
             inputDims: config.hiddenSize,
@@ -300,6 +302,7 @@ class MiMoV2FlashMoE: Module, UnaryLayer {
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
         let (inds, scores) = gate(x)
+        JangPressRouteTelemetry.recordTopK(layer: layerIdx, indices: inds)
         var y = switchMLP(x, inds)
         y = (y * scores[.ellipsis, .newAxis]).sum(axis: -2).asType(y.dtype)
         if let sharedExperts {
@@ -317,10 +320,10 @@ class MiMoV2FlashDecoderLayer: Module {
     @ModuleInfo(key: "input_layernorm") var inputLayerNorm: RMSNorm
     @ModuleInfo(key: "post_attention_layernorm") var postAttentionLayerNorm: RMSNorm
 
-    init(_ config: MiMoV2FlashConfiguration, isMoe: Bool, isSlidingWindow: Bool) {
+    init(_ config: MiMoV2FlashConfiguration, isMoe: Bool, isSlidingWindow: Bool, layerIdx: Int) {
         self.isSlidingWindow = isSlidingWindow
         _selfAttn.wrappedValue = MiMoV2FlashAttention(config, isSlidingWindow: isSlidingWindow)
-        self.mlp = isMoe ? MiMoV2FlashMoE(config) : MiMoV2FlashMLP(config)
+        self.mlp = isMoe ? MiMoV2FlashMoE(config, layerIdx: layerIdx) : MiMoV2FlashMLP(config)
         _inputLayerNorm.wrappedValue = RMSNorm(
             dimensions: config.hiddenSize, eps: config.layernormEpsilon)
         _postAttentionLayerNorm.wrappedValue = RMSNorm(
@@ -353,7 +356,8 @@ public class MiMoV2FlashModelInner: Module {
             MiMoV2FlashDecoderLayer(
                 config,
                 isMoe: config.moeLayerFreq[index] == 1,
-                isSlidingWindow: config.hybridLayerPattern[index] == 1
+                isSlidingWindow: config.hybridLayerPattern[index] == 1,
+                layerIdx: index
             )
         }
         _norm.wrappedValue = RMSNorm(
@@ -446,7 +450,7 @@ public class MiMoV2FlashModel: Module, LLMModel, KVCacheDimensionProvider {
                                 forKey: "\(prefix).mlp.experts.\($0).\(projName).\(key)")!
                         }
                         sanitizedWeights["\(prefix).mlp.switch_mlp.\(projName).\(key)"] =
-                            MLX.stacked(toJoin)
+                            loadTimeMaterializedStacked(toJoin)
                     }
                 }
             }

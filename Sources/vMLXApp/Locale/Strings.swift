@@ -1685,10 +1685,10 @@ public enum L10n {
             zh: "清除"
         )
         public static let tokenPlaceholder = L10nEntry(
-            en: "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-            ja: "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-            ko: "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-            zh: "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            en: "<huggingface-token>",
+            ja: "<huggingface-token>",
+            ko: "<huggingface-token>",
+            zh: "<huggingface-token>"
         )
         public static let tokenSaved = L10nEntry(
             en: "Token saved to Keychain",
@@ -2046,12 +2046,8 @@ public enum L10n {
             ko: "API 키",
             zh: "API 密钥"
         )
-        public static let smeltHelp = L10nEntry(
-            en: "Smelt (partial expert loading) is Python-only today. Toggle persists but the Swift engine loads full experts and emits a `smelt mode is enabled but not wired` warning per request. DFlash below is the Swift equivalent for speculative decode.",
-            ja: "Smelt (部分的エキスパートロード) は現在 Python 専用です。トグルは保存されますが、Swift エンジンはフルエキスパートをロードし、リクエストごとに `smelt mode is enabled but not wired` 警告を出します。下の DFlash は投機的デコードの Swift 版です。",
-            ko: "Smelt (부분 전문가 로딩)은 현재 Python 전용입니다. 토글은 유지되지만 Swift 엔진은 전체 전문가를 로드하고 요청당 `smelt mode is enabled but not wired` 경고를 표시합니다. 아래 DFlash는 추측 디코딩의 Swift 등가물입니다.",
-            zh: "Smelt（部分专家加载）目前仅支持 Python。切换会保存但 Swift 引擎会加载完整专家，每次请求发出 `smelt mode is enabled but not wired` 警告。下方的 DFlash 是推测解码的 Swift 等效项。"
-        )
+        // Iter 143 — Smelt removed (Eric directive 2026-05-04). Cold-
+        // expert handling now lives in JangPress.
         public static let distributedHelp = L10nEntry(
             en: "Distributed compute across multiple Macs is planned for v1.1 (feat/distributed-rdma branch). Toggle persists to settings but has no runtime effect yet.",
             ja: "複数の Mac にまたがる分散コンピューティングは v1.1 で予定されています (feat/distributed-rdma ブランチ)。トグルは設定に保存されますが、まだ実行時の効果はありません。",
@@ -2063,6 +2059,22 @@ public enum L10n {
             ja: "TurboQuant ビット: %lld",
             ko: "TurboQuant 비트: %lld",
             zh: "TurboQuant 位数: %lld"
+        )
+        // Iter 143 — JangPress UI scope hint. Eric directive: make the
+        // section header explicit about Global vs per-session scope so
+        // users moving from the Python panel don't expect Smelt-style
+        // per-session behavior.
+        public static let jangPressSectionHeader = L10nEntry(
+            en: "JangPress (Global — applies to next model load)",
+            ja: "JangPress（グローバル — 次回のモデル読み込み時に適用）",
+            ko: "JangPress (전역 — 다음 모델 로드 시 적용)",
+            zh: "JangPress（全局 — 在下次模型加载时应用）"
+        )
+        public static let jangPressScopeCaption = L10nEntry(
+            en: "Load-time global setting. Changes apply on the next model load — restart the engine to take effect. The mmap backend can drop auxiliary file-backed pages under pressure; it does not replace or compress MLX's canonical model-weight copy. Use cache stats to verify what is actually active.",
+            ja: "ロード時のグローバル設定です。変更は次回のモデル読み込み時に適用されます — 反映するにはエンジンを再起動してください。mmap バックエンドは圧迫時に補助的なファイルバッキングページを破棄できます。MLX の正規モデル重みコピーは置き換えや圧縮されません。実際に有効なものはキャッシュ統計で確認してください。",
+            ko: "로드 시 전역 설정입니다. 변경 사항은 다음 모델 로드 시 적용됩니다 — 적용하려면 엔진을 재시작하세요. mmap 백엔드는 압박 상황에서 보조 파일 기반 페이지를 폐기할 수 있습니다. MLX의 정식 모델 가중치 사본은 교체되거나 압축되지 않습니다. 실제로 활성화된 항목은 캐시 통계로 확인하세요.",
+            zh: "加载时全局设置。更改将在下次模型加载时应用 — 请重启引擎以生效。mmap 后端可在压力下丢弃辅助文件支持的页面；不替换或压缩 MLX 的标准模型权重副本。请使用缓存统计来验证实际生效的内容。"
         )
         public static let diskCacheDirFormat = L10nEntry(
             en: "Disk cache dir: %@",
@@ -2429,6 +2441,93 @@ public enum L10n {
             ja: "既定レベル",
             ko: "기본 수준",
             zh: "默认级别"
+        )
+    }
+
+    // MARK: - NSOpenPanel macOS 26 XPC fallback (iter 134)
+    //
+    // Iter 128-129 (vmlx#121, #133) added a manual-path entry alert
+    // shown when NSOpenPanel's XPC connection fails on macOS 26 ad-
+    // hoc-signed builds. The strings below are user-facing — they
+    // appear in the alert title / message and in banner text. Iter
+    // 134 routes them through L10n so non-English users see localized
+    // copy.
+    public enum PickerFallback {
+        public static let modelDirTitle = L10nEntry(
+            en: "Type a model directory path",
+            ja: "モデルディレクトリのパスを入力",
+            ko: "모델 디렉터리 경로 입력",
+            zh: "输入模型目录路径"
+        )
+        public static let modelDirMessage = L10nEntry(
+            en: "macOS blocked the file picker (XPC error common on ad-hoc-signed builds, vmlx#121). Enter the directory path manually below — it will be scanned just like a picker selection.",
+            ja: "macOS がファイルピッカーをブロックしました（ad-hoc 署名ビルドで発生する XPC エラー、vmlx#121）。下にディレクトリのパスを直接入力してください — ピッカーで選択した場合と同じようにスキャンされます。",
+            ko: "macOS가 파일 선택기를 차단했습니다 (ad-hoc 서명 빌드에서 흔한 XPC 오류, vmlx#121). 아래에 디렉터리 경로를 직접 입력하세요 — 선택기로 고른 것과 동일하게 스캔됩니다.",
+            zh: "macOS 已阻止文件选择器 (ad-hoc 签名构建上常见的 XPC 错误，vmlx#121)。请在下方手动输入目录路径 — 它将像选择器选择一样被扫描。"
+        )
+        public static let cwdTitle = L10nEntry(
+            en: "Type working-directory path",
+            ja: "作業ディレクトリのパスを入力",
+            ko: "작업 디렉터리 경로 입력",
+            zh: "输入工作目录路径"
+        )
+        public static let cwdMessage = L10nEntry(
+            en: "macOS blocked the file picker (XPC error common on ad-hoc builds, vmlx#121). Type the directory the bash tool should run in.",
+            ja: "macOS がファイルピッカーをブロックしました（ad-hoc ビルドで発生する XPC エラー、vmlx#121）。bash ツールを実行するディレクトリを入力してください。",
+            ko: "macOS가 파일 선택기를 차단했습니다 (ad-hoc 빌드에서 흔한 XPC 오류, vmlx#121). bash 도구가 실행될 디렉터리를 입력하세요.",
+            zh: "macOS 已阻止文件选择器 (ad-hoc 构建上常见的 XPC 错误，vmlx#121)。请输入 bash 工具运行所在目录。"
+        )
+        public static let mcpJsonTitle = L10nEntry(
+            en: "Type mcp.json path",
+            ja: "mcp.json のパスを入力",
+            ko: "mcp.json 경로 입력",
+            zh: "输入 mcp.json 路径"
+        )
+        public static let mcpJsonMessage = L10nEntry(
+            en: "macOS blocked the file picker (XPC error common on ad-hoc builds, vmlx#121). Type the path to your mcp.json config.",
+            ja: "macOS がファイルピッカーをブロックしました（ad-hoc ビルドで発生する XPC エラー、vmlx#121）。mcp.json 設定ファイルのパスを入力してください。",
+            ko: "macOS가 파일 선택기를 차단했습니다 (ad-hoc 빌드에서 흔한 XPC 오류, vmlx#121). mcp.json 설정 파일의 경로를 입력하세요.",
+            zh: "macOS 已阻止文件选择器 (ad-hoc 构建上常见的 XPC 错误，vmlx#121)。请输入 mcp.json 配置文件的路径。"
+        )
+        public static let tlsFileTitle = L10nEntry(
+            en: "Type TLS file path",
+            ja: "TLS ファイルのパスを入力",
+            ko: "TLS 파일 경로 입력",
+            zh: "输入 TLS 文件路径"
+        )
+        public static let tlsFileMessage = L10nEntry(
+            en: "macOS blocked the file picker (XPC error common on ad-hoc builds, vmlx#121). Type the absolute path to your TLS certificate or key file.",
+            ja: "macOS がファイルピッカーをブロックしました（ad-hoc ビルドで発生する XPC エラー、vmlx#121）。TLS 証明書またはキーファイルの絶対パスを入力してください。",
+            ko: "macOS가 파일 선택기를 차단했습니다 (ad-hoc 빌드에서 흔한 XPC 오류, vmlx#121). TLS 인증서 또는 키 파일의 절대 경로를 입력하세요.",
+            zh: "macOS 已阻止文件选择器 (ad-hoc 构建上常见的 XPC 错误，vmlx#121)。请输入 TLS 证书或密钥文件的绝对路径。"
+        )
+        public static let chatWorkingDirTitle = L10nEntry(
+            en: "Type working directory path",
+            ja: "作業ディレクトリのパスを入力",
+            ko: "작업 디렉터리 경로 입력",
+            zh: "输入工作目录路径"
+        )
+        public static let chatWorkingDirMessage = L10nEntry(
+            en: "macOS blocked the file picker (XPC error, vmlx#121). Type the directory the bash tool should run in.",
+            ja: "macOS がファイルピッカーをブロックしました（XPC エラー、vmlx#121）。bash ツールを実行するディレクトリを入力してください。",
+            ko: "macOS가 파일 선택기를 차단했습니다 (XPC 오류, vmlx#121). bash 도구가 실행될 디렉터리를 입력하세요.",
+            zh: "macOS 已阻止文件选择器 (XPC 错误，vmlx#121)。请输入 bash 工具运行所在目录。"
+        )
+        /// Banner shown after a successful manual-path fallback. Format
+        /// arg is the directory's last-component name.
+        public static let manualPathBanner = L10nEntry(
+            en: "Used manual path entry (file picker blocked by macOS 26 XPC). Adding %@…",
+            ja: "手動パス入力を使用しました（macOS 26 XPC によりファイルピッカーがブロック）。%@ を追加しています…",
+            ko: "수동 경로 입력을 사용했습니다 (macOS 26 XPC가 파일 선택기를 차단). %@을(를) 추가 중…",
+            zh: "已使用手动路径输入 (macOS 26 XPC 阻止了文件选择器)。正在添加 %@…"
+        )
+        /// Banner shown when manual fallback also fails (empty path,
+        /// non-existent path, etc.). Format arg is the failure reason.
+        public static let manualPathFailure = L10nEntry(
+            en: "Could not add directory: %@",
+            ja: "ディレクトリを追加できませんでした：%@",
+            ko: "디렉터리를 추가할 수 없습니다: %@",
+            zh: "无法添加目录：%@"
         )
     }
 }

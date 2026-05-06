@@ -4,6 +4,7 @@ import Hummingbird
 import HummingbirdTLS
 import NIOSSL
 import vMLXEngine
+import vMLXLMCommon
 
 /// Multi-engine gateway server.
 ///
@@ -206,24 +207,143 @@ public struct GatewayServer {
         router.get("/health") { _, _ -> Response in
             let engines = await enumerate()
             var loadedModels: [String] = []
+            // Iter 143 — gateway /health parity with iter-140 per-session
+            // /health: emit per-engine cache_summary + arch flags +
+            // continuous_batching marker so monitors scraping the
+            // gateway port see the same observability surface as a
+            // direct hit on a session port. Per-session stays
+            // authoritative for the full per-stat breakdown
+            // (/v1/cache/stats); /health is the compact summary tier.
+            var perSession: [[String: Any]] = []
+            // Aggregates rolled across every engine. Lets a single
+            // /health probe answer "what's our cluster cache hit rate".
+            var aggHits = 0
+            var aggMisses = 0
+            var aggInflight = 0
+            var aggWaiting = 0
+            var aggDiskBytesUsed: Int64 = 0
             for engine in engines {
+                let state = engine.state
+                let stateStr: String = {
+                    switch state {
+                    case .stopped: return "stopped"
+                    case .loading: return "loading"
+                    case .running: return "running"
+                    case .standby(.soft): return "soft_sleep"
+                    case .standby(.deep): return "deep_sleep"
+                    case .error: return "error"
+                    }
+                }()
+                var entry: [String: Any] = [
+                    "state": stateStr,
+                ]
                 if let lp = await engine.loadedModelPath {
-                    // Mirror the per-session /health displayName resolution
-                    // so gateway users see the same repo-shape name.
+                    // Mirror the per-session /health displayName
+                    // resolution so gateway users see the same
+                    // repo-shape name.
                     let entries = await engine.modelLibrary.entries()
                     let canonical = lp.resolvingSymlinksInPath().standardizedFileURL
                     let name = entries.first(where: {
                         $0.canonicalPath.standardizedFileURL == canonical
                     })?.displayName ?? lp.lastPathComponent
                     loadedModels.append(name)
+                    entry["model"] = name
+                }
+                let lock = await engine.generationLock
+                let inflight = await lock.isHeld ? 1 : 0
+                let waiting = await lock.waitingCount
+                entry["inflight"] = inflight
+                entry["waiting"] = waiting
+                aggInflight += inflight
+                aggWaiting += waiting
+                if state == .running, let stats = try? await engine.cacheStats() {
+                    var summary: [String: Any] = [:]
+                    if let paged = stats["paged"] as? [String: Any] {
+                        var p: [String: Any] = [:]
+                        if let enabled = paged["enabled"] { p["enabled"] = enabled }
+                        if let hr = paged["hitRate"] { p["hit_rate"] = hr }
+                        if let h = paged["hitCount"] {
+                            p["hits"] = h
+                            if let hi = h as? Int { aggHits += hi }
+                        }
+                        if let m = paged["missCount"] {
+                            p["misses"] = m
+                            if let mi = m as? Int { aggMisses += mi }
+                        }
+                        if let bs = paged["blockSize"] { p["block_size"] = bs }
+                        if let bu = paged["blocksInUse"] { p["blocks_in_use"] = bu }
+                        summary["paged"] = p
+                    }
+                    if let disk = stats["disk"] as? [String: Any] {
+                        var d: [String: Any] = [:]
+                        if let enabled = disk["enabled"] { d["enabled"] = enabled }
+                        if let hr = disk["hitRate"] { d["hit_rate"] = hr }
+                        if let bytes = disk["bytesUsed"] {
+                            d["bytes_used"] = bytes
+                            if let bi = bytes as? Int64 { aggDiskBytesUsed += bi }
+                            else if let bi = bytes as? Int { aggDiskBytesUsed += Int64(bi) }
+                        }
+                        if let cap = disk["bytesCap"] { d["bytes_cap"] = cap }
+                        summary["disk"] = d
+                    }
+                    if let ssm = stats["ssm"] as? [String: Any] {
+                        summary["ssm"] = ssm
+                    }
+                    if let jp = stats["jangPress"] as? [String: Any] {
+                        summary["jangpress"] = jp
+                    }
+                    if let arch = stats["architecture"] as? [String: Any] {
+                        var a: [String: Any] = [:]
+                        if let h = arch["hybridSSMActive"] { a["hybrid_ssm"] = h }
+                        if let s = arch["slidingWindowActive"] { a["sliding_window"] = s }
+                        if let t = arch["turboQuantActive"] { a["turbo_quant"] = t }
+                        summary["architecture"] = a
+                    }
+                    if !summary.isEmpty { entry["cache_summary"] = summary }
+                }
+                perSession.append(entry)
+            }
+            // Aggregate hit rate (totals make a single dashboard tile
+            // possible). Avoid divide-by-zero when no engine has yet
+            // touched the paged tier.
+            let totalAccesses = aggHits + aggMisses
+            let aggHitRate: Double = totalAccesses > 0
+                ? Double(aggHits) / Double(totalAccesses)
+                : 0.0
+            let aggregate: [String: Any] = [
+                "paged": [
+                    "hits": aggHits,
+                    "misses": aggMisses,
+                    "hit_rate": aggHitRate,
+                ] as [String: Any],
+                "disk": [
+                    "bytes_used": aggDiskBytesUsed,
+                ] as [String: Any],
+                "inflight": aggInflight,
+                "waiting": aggWaiting,
+            ]
+            // Iter 143 — gateway `continuous_batching` is true only
+            // when ANY engine has built its BatchEngine instance.
+            // Mirrors per-session honesty marker. Until callers
+            // actually invoke `engine.batchEngine(...)`, we run
+            // through GenerationLock-serial and report false.
+            var anyBatchEngineLive = false
+            for e in engines {
+                if (await e.batchEngineInstance) != nil {
+                    anyBatchEngineLive = true
+                    break
                 }
             }
             return Self.json([
                 "status": "ok",
                 "engine": "vmlx-swift-gateway",
+                "scheduling": anyBatchEngineLive ? "batch-engine" : "serial-fifo",
+                "continuous_batching": anyBatchEngineLive,
                 "sessions": engines.count,
                 "loaded_models": loadedModels,
                 "loaded_models_count": loadedModels.count,
+                "engines": perSession,
+                "aggregate": aggregate,
             ])
         }
 
@@ -240,11 +360,10 @@ public struct GatewayServer {
 
         // POST /v1/completions — legacy text completion. Same dispatch.
         router.post("/v1/completions") { req, ctx -> Response in
-            return try await Self.handleOpenAIChat(
-                req: req, ctx: ctx,
+            return try await Self.handleOpenAICompletions(
+                req: req,
                 resolver: resolver,
-                enumerate: enumerate,
-                defaultEngine: defaultEngine
+                enumerate: enumerate
             )
         }
 
@@ -324,13 +443,218 @@ public struct GatewayServer {
             }
         }
 
-        // Ollama (`/api/chat`, `/api/generate`) and Anthropic (`/v1/messages`)
-        // are NOT exposed on the gateway in v1. Each protocol has a non-
-        // trivial encoder (NDJSON for Ollama, anthropic SSE event family
-        // for messages) and gracefully sharing those across engines is a
-        // separate refactor. Per-session ports still serve them correctly.
-        // GET /unsupported-protocols returns the documented list so SDK
-        // probing surfaces a useful 404 instead of a silent connection.
+        // iter 138 — gateway protocol fan-out for Ollama, Anthropic, and
+        // OpenAI Responses. Per user directive 2026-05-03: "make sure the
+        // api ollama and anthropic and chat and respones all hook up to
+        // gatwway port and is passed thru to the proper model".
+        //
+        // Each route reads the `model` field from the request body,
+        // resolves to the matching engine via the shared resolver, then
+        // delegates to the per-session handler logic (which already
+        // exists in vMLXServer/Routes/{Anthropic,Ollama,OpenAI}Routes.swift).
+        // The per-session implementations stay authoritative; the
+        // gateway just dispatches.
+        //
+        // Streaming encoders (Anthropic SSE event family, Ollama NDJSON,
+        // Responses event family) are reused via the shared SSEEncoder /
+        // JSONLEncoder modules — each protocol's encoder is already
+        // gateway-safe (no engine actor isolation required).
+
+        // POST /v1/messages — Anthropic Messages API on gateway.
+        router.post("/v1/messages") { req, _ -> Response in
+            return try await Self.handleAnthropicMessages(
+                req: req, resolver: resolver, enumerate: enumerate)
+        }
+
+        // POST /api/chat — Ollama chat on gateway.
+        router.post("/api/chat") { req, _ -> Response in
+            return try await Self.handleOllamaChat(
+                req: req, resolver: resolver, enumerate: enumerate)
+        }
+
+        // POST /api/generate — Ollama text-completion on gateway.
+        router.post("/api/generate") { req, _ -> Response in
+            return try await Self.handleOllamaGenerate(
+                req: req, resolver: resolver, enumerate: enumerate)
+        }
+
+        // POST /v1/responses — OpenAI Responses API on gateway.
+        router.post("/v1/responses") { req, _ -> Response in
+            return try await Self.handleResponsesAPI(
+                req: req, resolver: resolver, enumerate: enumerate)
+        }
+
+        // Iter 143 — Ollama discovery routes on the gateway. These are
+        // model-list / version probes that Ollama clients (Open WebUI,
+        // GitHub Copilot, LangChain Ollama, ollama-js) hit BEFORE
+        // /api/chat to populate model pickers and feature-gate. Without
+        // them on the gateway, those clients see an empty list + silently
+        // disable tool-calling. iter-138 added the actual generation
+        // routes (/api/chat, /api/generate) but not these read-only
+        // probes — the missing pieces.
+
+        // GET /api/version — same Ollama version pin as the per-session
+        // route. Static; no model resolution needed.
+        router.get("/api/version") { _, _ -> Response in
+            return Self.json(["version": "0.12.6"])
+        }
+
+        // GET /api/tags — union the model libraries across every
+        // registered engine. The per-session route serves only its own
+        // engine's library; the gateway aggregates so a single SDK base
+        // URL sees every available model.
+        router.get("/api/tags") { _, _ -> Response in
+            let engines = await enumerate()
+            // Walk every engine, scan + collect, dedupe by canonical
+            // path so a model that appears in multiple engines'
+            // libraries (sharing the same HF cache) is reported once.
+            var seen = Set<String>()
+            var models: [[String: Any]] = []
+            for engine in engines {
+                _ = await engine.modelLibrary.scan(force: false)
+                let entries = await engine.modelLibrary.entries()
+                for e in entries {
+                    let key = e.canonicalPath.standardizedFileURL.path
+                    if seen.contains(key) { continue }
+                    seen.insert(key)
+                    let iso = ISO8601DateFormatter().string(from: e.detectedAt)
+                    models.append([
+                        "name": e.displayName,
+                        "model": e.displayName,
+                        "modified_at": iso,
+                        "size": e.totalSizeBytes,
+                        "digest": e.id,
+                        "details": [
+                            "parent_model": "",
+                            "format": e.isJANG ? "jang" : (e.isMXTQ ? "mxtq" : "mlx"),
+                            "family": e.family,
+                            "families": [e.family],
+                            "parameter_size": OllamaRoutes.humanParamSize(
+                                e.totalSizeBytes, quantBits: e.quantBits),
+                            "quantization_level": e.quantBits.map { "Q\($0)" } ?? "",
+                        ] as [String: Any],
+                    ])
+                }
+            }
+            return Self.json(["models": models])
+        }
+
+        // GET /api/ps — every loaded model across every engine. SDK
+        // clients hit this to know what's resident before deciding
+        // whether to send a request that would trigger a load.
+        router.get("/api/ps") { _, _ -> Response in
+            let engines = await enumerate()
+            var models: [[String: Any]] = []
+            let iso = ISO8601DateFormatter().string(from: Date())
+            for engine in engines {
+                guard let path = await engine.loadedModelPath else { continue }
+                _ = await engine.modelLibrary.scan(force: false)
+                let entries = await engine.modelLibrary.entries()
+                let canonical = path.resolvingSymlinksInPath().standardizedFileURL
+                let matched = entries.first(where: {
+                    $0.canonicalPath.standardizedFileURL == canonical
+                })
+                let displayName = matched?.displayName ?? path.lastPathComponent
+                var model: [String: Any] = [
+                    "name": displayName,
+                    "model": displayName,
+                    "expires_at": iso,
+                    "size_vram": 0,
+                ]
+                if let e = matched {
+                    model["size"] = e.totalSizeBytes
+                    model["digest"] = e.id
+                    model["details"] = [
+                        "parent_model": "",
+                        "format": e.isJANG ? "jang" : (e.isMXTQ ? "mxtq" : "mlx"),
+                        "family": e.family,
+                        "families": [e.family],
+                        "parameter_size": OllamaRoutes.humanParamSize(
+                            e.totalSizeBytes, quantBits: e.quantBits),
+                        "quantization_level": e.quantBits.map { "Q\($0)" } ?? "",
+                    ] as [String: Any]
+                } else {
+                    model["size"] = 0
+                    model["digest"] = ""
+                    model["details"] = [:] as [String: Any]
+                }
+                models.append(model)
+            }
+            return Self.json(["models": models])
+        }
+
+        // POST /api/show — find a named model anywhere in the gateway's
+        // engines. Body: `{"name": "<displayName>"}` or `{"model": ...}`.
+        router.post("/api/show") { req, _ -> Response in
+            var req = req
+            let body = try await req.collectBody(upTo: 1024 * 1024)
+            let data = Data(buffer: body)
+            let obj = (try? JSONSerialization.jsonObject(with: data)
+                       as? [String: Any]) ?? [:]
+            let name = (obj["name"] as? String)
+                ?? (obj["model"] as? String)
+                ?? ""
+            if name.isEmpty {
+                return Self.errorJSON(
+                    .badRequest, "missing 'name' or 'model'")
+            }
+            let engines = await enumerate()
+            for engine in engines {
+                _ = await engine.modelLibrary.scan(force: false)
+                let entries = await engine.modelLibrary.entries()
+                guard let e = entries.first(where: { $0.displayName == name }) else {
+                    continue
+                }
+                let caps = OllamaCapabilities.capabilities(
+                    family: e.family, modality: e.modality)
+                let modelfile = """
+                    # vMLX model
+                    FROM \(e.displayName)
+                    # format: \(e.isJANG ? "jang" : "mlx")
+
+                    """
+                return Self.json([
+                    "license": "",
+                    "modelfile": modelfile,
+                    "parameters": "",
+                    "template": "",
+                    "details": [
+                        "parent_model": "",
+                        "format": e.isJANG ? "jang" : "mlx",
+                        "family": e.family,
+                        "families": [e.family],
+                        "parameter_size": OllamaRoutes.humanParamSize(
+                            e.totalSizeBytes, quantBits: e.quantBits),
+                        "quantization_level": e.quantBits.map { "Q\($0)" } ?? "",
+                    ] as [String: Any],
+                    "capabilities": caps,
+                ])
+            }
+            return Self.errorJSON(.notFound, "model not found: \(name)")
+        }
+
+        // POST /api/embeddings + /api/embed — Ollama embedding routes
+        // dispatched by `model` field. Both shapes (legacy `prompt`,
+        // newer `input`) are translated to the OpenAI-compatible
+        // request body the engine.embeddings path consumes.
+        router.post("/api/embeddings") { req, _ -> Response in
+            return try await Self.handleOllamaEmbed(
+                req: req, resolver: resolver, enumerate: enumerate)
+        }
+        router.post("/api/embed") { req, _ -> Response in
+            return try await Self.handleOllamaEmbed(
+                req: req, resolver: resolver, enumerate: enumerate)
+        }
+
+        // POST /v1/messages/count_tokens — Anthropic preflight on
+        // gateway. Iter 143: real implementation; resolves engine by
+        // body's `model` field then delegates to the per-session
+        // helper which uses the loaded tokenizer.
+        router.post("/v1/messages/count_tokens") { req, _ -> Response in
+            return try await Self.handleAnthropicCountTokens(
+                req: req, resolver: resolver, enumerate: enumerate)
+        }
+
         router.get("/v1/_gateway/info") { _, _ -> Response in
             return Self.json([
                 "supported": [
@@ -338,19 +662,28 @@ public struct GatewayServer {
                     "POST /v1/chat/completions",
                     "POST /v1/completions",
                     "POST /v1/embeddings",
+                    "POST /v1/messages (Anthropic — iter 138)",
+                    "POST /v1/messages/count_tokens (Anthropic preflight — iter 143)",
+                    "POST /api/chat (Ollama — iter 138)",
+                    "POST /api/generate (Ollama — iter 138)",
+                    "GET  /api/version (Ollama — iter 143)",
+                    "GET  /api/tags (Ollama discovery — iter 143)",
+                    "GET  /api/ps (Ollama loaded-model probe — iter 143)",
+                    "POST /api/show (Ollama model details — iter 143)",
+                    "POST /api/embeddings (Ollama — iter 143)",
+                    "POST /api/embed (Ollama — iter 143)",
+                    "POST /v1/responses (OpenAI Responses — iter 138)",
                     "POST /v1/images/generations",
                     "POST /v1/images/edits (JSON + base64 only)",
                     "GET  /health",
                 ],
                 "unsupported_in_gateway": [
-                    "POST /api/chat (Ollama) — use the per-session port",
-                    "POST /api/generate (Ollama) — use the per-session port",
-                    "POST /v1/messages (Anthropic) — use the per-session port",
                     "POST /v1/images/edits (multipart/form-data) — JSON+base64 works here, multipart requires per-session port",
                     "/v1/audio/* — use the per-session port",
-                    "/v1/mcp/* — use the per-session port",
+                    "/v1/mcp/* — per-session by definition (each session owns its own MCP subprocess pool)",
+                    "/api/pull, /api/delete, /api/blobs/* — model-management routes are per-session (download/delete touches a specific engine's library)",
                 ],
-                "note": "Gateway dispatches by `model` field. List loaded models at /v1/models.",
+                "note": "Gateway dispatches by `model` field. List loaded models at /v1/models or /api/tags.",
             ])
         }
 
@@ -516,6 +849,369 @@ public struct GatewayServer {
             obj["usage"] = usageObj
         }
         return json(obj)
+    }
+
+    /// /v1/completions handler — legacy text-completion wire shape.
+    /// Gateway must not reuse `handleOpenAIChat`: legacy clients send
+    /// `prompt`, expect `choices[0].text`, and use the flat logprobs
+    /// envelope. This mirrors the per-session OpenAIRoutes implementation
+    /// while adding model-keyed engine resolution.
+    static func handleOpenAICompletions(
+        req: Request,
+        resolver: @escaping EngineResolver,
+        enumerate: @escaping EngineEnumerator
+    ) async throws -> Response {
+        var req = req
+        let body = try await req.collectBody(upTo: 32 * 1024 * 1024)
+        let data = Data(buffer: body)
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return errorJSON(.badRequest, "invalid JSON body")
+        }
+        let model = (obj["model"] as? String) ?? "default"
+        let prompt: String
+        if let s = obj["prompt"] as? String {
+            prompt = s
+        } else if let arr = obj["prompt"] as? [String] {
+            prompt = arr.joined(separator: "\n")
+        } else {
+            return errorJSON(.badRequest, "missing 'prompt'")
+        }
+
+        guard let engine = await resolver(model) else {
+            return await modelNotFound(model: model, enumerate: enumerate)
+        }
+
+        let stopList: [String]? = {
+            if let arr = obj["stop"] as? [String], !arr.isEmpty { return arr }
+            if let s = obj["stop"] as? String, !s.isEmpty { return [s] }
+            return nil
+        }()
+        var chatReq = ChatRequest(
+            model: model,
+            messages: [.init(role: "user", content: .string(prompt))],
+            stream: obj["stream"] as? Bool,
+            maxTokens: obj["max_tokens"] as? Int,
+            temperature: obj["temperature"] as? Double,
+            topP: obj["top_p"] as? Double,
+            topK: obj["top_k"] as? Int,
+            minP: obj["min_p"] as? Double,
+            repetitionPenalty: obj["repetition_penalty"] as? Double,
+            stop: stopList,
+            seed: obj["seed"] as? Int
+        )
+        chatReq.frequencyPenalty = obj["frequency_penalty"] as? Double
+        chatReq.presencePenalty = obj["presence_penalty"] as? Double
+        if let so = obj["stream_options"] as? [String: Any],
+           let include = so["include_usage"] as? Bool {
+            chatReq.streamOptions = .init(includeUsage: include)
+        }
+        if let flag = obj["logprobs"] as? Bool {
+            chatReq.logprobs = flag
+        } else if let n = obj["logprobs"] as? Int {
+            chatReq.logprobs = true
+            chatReq.topLogprobs = n
+        }
+        if let n = obj["top_logprobs"] as? Int {
+            chatReq.topLogprobs = n
+        }
+        do {
+            try chatReq.validate()
+        } catch let err as ChatRequestValidationError {
+            return errorJSON(.badRequest, err.description)
+        } catch {
+            return errorJSON(.badRequest, "invalid request: \(error)")
+        }
+
+        await engine.wakeFromStandby()
+        let id = "cmpl-\(UUID().uuidString.prefix(8).lowercased())"
+        let created = Int(Date().timeIntervalSince1970)
+        let isStream = chatReq.stream ?? false
+
+        if isStream {
+            let stream = await engine.stream(request: chatReq, id: id)
+            var headers: HTTPFields = [:]
+            headers[.contentType] = "text/event-stream; charset=utf-8"
+            headers[.cacheControl] = "no-cache"
+            headers[.connection] = "keep-alive"
+            if let n = HTTPField.Name("x-vmlx-trace-id") {
+                headers[n] = id
+            }
+            return Response(
+                status: .ok,
+                headers: headers,
+                body: SSEEncoder.textCompletionStream(
+                    id: id, model: model, created: created, upstream: stream
+                )
+            )
+        }
+
+        var content = ""
+        var finishReason: String? = nil
+        var usage: StreamChunk.Usage? = nil
+        var allLogprobs: [TokenLogprob] = []
+        let stream = await engine.stream(request: chatReq, id: id)
+        do {
+            for try await chunk in stream {
+                if let c = chunk.content { content += c }
+                if let fr = chunk.finishReason { finishReason = fr }
+                if let u = chunk.usage { usage = u }
+                if let lps = chunk.logprobs { allLogprobs.append(contentsOf: lps) }
+            }
+        } catch let err as EngineError {
+            return OpenAIRoutes.mapEngineError(err)
+        } catch {
+            return errorJSON(.internalServerError, "\(error)")
+        }
+
+        if let fimFlag = obj["truncate_fim"] as? Bool, fimFlag {
+            content = FIMTruncator.truncate(content)
+        }
+
+        var choice0: [String: Any] = [
+            "text": content,
+            "index": 0,
+            "finish_reason": finishReason ?? "stop",
+        ]
+        if !allLogprobs.isEmpty {
+            var tokens: [String] = []
+            var tokenLogprobs: [Float] = []
+            var textOffsets: [Int] = []
+            var topLogprobsArr: [[String: Float]] = []
+            var runningOffset = 0
+            for lp in allLogprobs {
+                tokens.append(lp.token)
+                tokenLogprobs.append(lp.logprob)
+                textOffsets.append(runningOffset)
+                runningOffset += lp.token.utf8.count
+                if lp.topLogprobs.isEmpty {
+                    topLogprobsArr.append([:])
+                } else {
+                    var dict: [String: Float] = [:]
+                    for alt in lp.topLogprobs { dict[alt.token] = alt.logprob }
+                    topLogprobsArr.append(dict)
+                }
+            }
+            choice0["logprobs"] = [
+                "tokens": tokens,
+                "token_logprobs": tokenLogprobs,
+                "top_logprobs": topLogprobsArr,
+                "text_offset": textOffsets,
+            ] as [String: Any]
+        }
+
+        var out: [String: Any] = [
+            "id": id,
+            "object": "text_completion",
+            "created": created,
+            "model": model,
+            "choices": [choice0],
+        ]
+        if let u = usage {
+            var usageObj: [String: Any] = [
+                "prompt_tokens": u.promptTokens,
+                "completion_tokens": u.completionTokens,
+                "total_tokens": u.promptTokens + u.completionTokens,
+                "prompt_tokens_details": ["cached_tokens": u.cachedTokens] as [String: Any],
+            ]
+            if let tps = u.tokensPerSecond { usageObj["tokens_per_second"] = tps }
+            if let pps = u.promptTokensPerSecond { usageObj["prompt_tokens_per_second"] = pps }
+            if let ttft = u.ttftMs { usageObj["ttft_ms"] = ttft }
+            if let prefill = u.prefillMs { usageObj["prefill_ms"] = prefill }
+            if let total = u.totalMs { usageObj["total_ms"] = total }
+            if let detail = u.cacheDetail { usageObj["cache_detail"] = detail }
+            out["usage"] = usageObj
+        }
+        return json(out)
+    }
+
+    // MARK: - Iter 138 protocol fan-out (Anthropic / Ollama / Responses)
+
+    /// Gateway dispatcher for POST /v1/messages — Anthropic Messages API.
+    static func handleAnthropicMessages(
+        req: Request, resolver: @escaping EngineResolver,
+        enumerate: @escaping EngineEnumerator
+    ) async throws -> Response {
+        // Sniff body for `model` then delegate. We collect the full body
+        // here and re-wrap it because AnthropicRoutes.handleMessages
+        // re-collects on its own — but we need the body once first to
+        // resolve the engine. Use a 32 MB cap matching the inline route.
+        var sniffReq = req
+        let body = try await sniffReq.collectBody(upTo: 32 * 1024 * 1024)
+        let data = Data(buffer: body)
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let model = obj["model"] as? String
+        else {
+            return errorJSON(.badRequest, "Missing or invalid `model` field")
+        }
+        guard let engine = await resolver(model) else {
+            return await modelNotFound(model: model, enumerate: enumerate)
+        }
+        // Re-wrap body for the per-session helper. Hummingbird requests
+        // are single-pass; the helper expects to call collectBody(),
+        // so we synthesize a fresh Request with the buffered body.
+        let buf = ByteBufferAllocator().buffer(data: data)
+        let replay = Request(head: req.head, body: .init(buffer: buf))
+        return try await AnthropicRoutes.handleMessages(req: replay, engine: engine)
+    }
+
+    /// Gateway dispatcher for POST /api/chat — Ollama chat.
+    static func handleOllamaChat(
+        req: Request, resolver: @escaping EngineResolver,
+        enumerate: @escaping EngineEnumerator
+    ) async throws -> Response {
+        var sniffReq = req
+        let body = try await sniffReq.collectBody(upTo: 32 * 1024 * 1024)
+        let data = Data(buffer: body)
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let model = obj["model"] as? String
+        else {
+            return errorJSON(.badRequest, "Missing or invalid `model` field")
+        }
+        guard let engine = await resolver(model) else {
+            return await modelNotFound(model: model, enumerate: enumerate)
+        }
+        let buf = ByteBufferAllocator().buffer(data: data)
+        let replay = Request(head: req.head, body: .init(buffer: buf))
+        return try await OllamaRoutes.handleChat(req: replay, engine: engine)
+    }
+
+    /// Gateway dispatcher for POST /api/generate — Ollama text completion.
+    static func handleOllamaGenerate(
+        req: Request, resolver: @escaping EngineResolver,
+        enumerate: @escaping EngineEnumerator
+    ) async throws -> Response {
+        var sniffReq = req
+        let body = try await sniffReq.collectBody(upTo: 32 * 1024 * 1024)
+        let data = Data(buffer: body)
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let model = obj["model"] as? String
+        else {
+            return errorJSON(.badRequest, "Missing or invalid `model` field")
+        }
+        guard let engine = await resolver(model) else {
+            return await modelNotFound(model: model, enumerate: enumerate)
+        }
+        let buf = ByteBufferAllocator().buffer(data: data)
+        let replay = Request(head: req.head, body: .init(buffer: buf))
+        return try await OllamaRoutes.handleGenerate(req: replay, engine: engine)
+    }
+
+    /// Gateway dispatcher for POST /v1/responses — OpenAI Responses API.
+    /// Iter 139: fully wired now that OpenAIRoutes.handleResponses is
+    /// extracted as a public static helper. Resolves engine by model
+    /// then delegates.
+    static func handleResponsesAPI(
+        req: Request, resolver: @escaping EngineResolver,
+        enumerate: @escaping EngineEnumerator
+    ) async throws -> Response {
+        var sniffReq = req
+        let body = try await sniffReq.collectBody(upTo: 32 * 1024 * 1024)
+        let data = Data(buffer: body)
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let model = obj["model"] as? String
+        else {
+            return errorJSON(.badRequest, "Missing or invalid `model` field")
+        }
+        guard let engine = await resolver(model) else {
+            return await modelNotFound(model: model, enumerate: enumerate)
+        }
+        let buf = ByteBufferAllocator().buffer(data: data)
+        let replay = Request(head: req.head, body: .init(buffer: buf))
+        return try await OpenAIRoutes.handleResponses(req: replay, engine: engine)
+    }
+
+    /// Iter 143 — gateway dispatcher for POST /api/embeddings + /api/embed.
+    /// Translates Ollama's `prompt` / `input` shape to the OpenAI body the
+    /// engine.embeddings path consumes, then unwraps the result back into
+    /// Ollama's response envelope. Mirrors the per-session
+    /// `ollamaEmbedHandler` body in `OllamaRoutes.swift:591`.
+    static func handleOllamaEmbed(
+        req: Request,
+        resolver: @escaping EngineResolver,
+        enumerate: @escaping EngineEnumerator
+    ) async throws -> Response {
+        var sniffReq = req
+        let body = try await sniffReq.collectBody(upTo: 16 * 1024 * 1024)
+        let data = Data(buffer: body)
+        guard let obj = try? JSONSerialization.jsonObject(with: data)
+                as? [String: Any]
+        else {
+            return errorJSON(.badRequest, "invalid JSON body")
+        }
+        let modelName = (obj["model"] as? String) ?? ""
+        guard !modelName.isEmpty else {
+            return errorJSON(.badRequest, "Missing or invalid `model` field")
+        }
+        guard let engine = await resolver(modelName) else {
+            return await modelNotFound(model: modelName, enumerate: enumerate)
+        }
+        var openAI: [String: Any] = ["model": modelName]
+        if let prompt = obj["prompt"] {
+            openAI["input"] = prompt
+        } else if let input = obj["input"] {
+            openAI["input"] = input
+        } else {
+            return errorJSON(.badRequest, "missing 'prompt' or 'input'")
+        }
+        await engine.wakeFromStandby()
+        do {
+            let result = try await engine.embeddings(request: openAI)
+            let dataArr = (result["data"] as? [[String: Any]]) ?? []
+            let vectors: [[Float]] = dataArr.compactMap {
+                $0["embedding"] as? [Float]
+            }
+            let promptEvalCount: Int = {
+                if let usage = result["usage"] as? [String: Any],
+                   let tokens = usage["prompt_tokens"] as? Int
+                { return tokens }
+                return 0
+            }()
+            if vectors.count == 1 {
+                return json([
+                    "embedding": vectors[0],
+                    "model": result["model"] ?? "",
+                    "prompt_eval_count": promptEvalCount,
+                    "total_duration": 0,
+                    "load_duration": 0,
+                ])
+            }
+            return json([
+                "embeddings": vectors,
+                "model": result["model"] ?? "",
+                "prompt_eval_count": promptEvalCount,
+                "total_duration": 0,
+                "load_duration": 0,
+            ])
+        } catch let err as EngineError {
+            return OpenAIRoutes.mapEngineError(err)
+        } catch {
+            return errorJSON(.internalServerError, "\(error)")
+        }
+    }
+
+    /// Iter 143 — gateway dispatcher for POST /v1/messages/count_tokens.
+    /// Resolves engine by `model` field then delegates to the per-session
+    /// helper which uses the loaded tokenizer.
+    static func handleAnthropicCountTokens(
+        req: Request,
+        resolver: @escaping EngineResolver,
+        enumerate: @escaping EngineEnumerator
+    ) async throws -> Response {
+        var sniffReq = req
+        let body = try await sniffReq.collectBody(upTo: 32 * 1024 * 1024)
+        let data = Data(buffer: body)
+        guard let obj = try? JSONSerialization.jsonObject(with: data)
+                as? [String: Any],
+              let model = obj["model"] as? String
+        else {
+            return errorJSON(.badRequest, "Missing or invalid `model` field")
+        }
+        guard let engine = await resolver(model) else {
+            return await modelNotFound(model: model, enumerate: enumerate)
+        }
+        let buf = ByteBufferAllocator().buffer(data: data)
+        let replay = Request(head: req.head, body: .init(buffer: buf))
+        return try await AnthropicRoutes.handleCountTokens(req: replay, engine: engine)
     }
 
     static func modelNotFound(

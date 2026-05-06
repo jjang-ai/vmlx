@@ -777,15 +777,20 @@ struct TerminalScreen: View {
 
     // MARK: actions
 
+    @MainActor
     private func pickCwd() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.directoryURL = cwd
-        if panel.runModal() == .OK, let url = panel.url {
-            cwd = url
-        }
+        // Iter 129 (vmlx#121 / #133): macOS 26 ad-hoc XPC failure
+        // mitigation. NSOpenPanelSafe falls back to manual-path entry
+        // when the picker XPC link is dead.
+        let result = NSOpenPanelSafe.pick(configure: { panel in
+            panel.canChooseFiles = false
+            panel.canChooseDirectories = true
+            panel.allowsMultipleSelection = false
+            panel.directoryURL = cwd
+        }, fallbackTitle: L10n.PickerFallback.cwdTitle.render(appLocale),
+           fallbackMessage: L10n.PickerFallback.cwdMessage.render(appLocale),
+           canChooseFiles: false)
+        if let url = result.url { cwd = url }
     }
 
     /// Refresh the cached `modelEntries` snapshot. Called on appear and

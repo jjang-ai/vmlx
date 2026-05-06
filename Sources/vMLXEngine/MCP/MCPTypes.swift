@@ -51,8 +51,17 @@ public struct MCPServerConfig: Sendable, Codable, Equatable {
     public var args: [String]?
     public var env: [String: String]?
 
-    // sse
+    // sse / streamable-http
     public var url: String?
+    /// HTTP headers sent with every SSE/Streamable-HTTP request to a
+    /// remote MCP server. Required for Exa / GitHub / other auth-
+    /// gated servers that expect `Authorization: Bearer <token>` (or
+    /// custom `X-*` keys). Iter 130 (vmlx#131): previously the SSE
+    /// transport scraped `env` keys starting with "Authorization"/
+    /// "X-" — fragile + non-discoverable. Headers now have a dedicated
+    /// field and the env scrape stays as a deprecated fallback for
+    /// existing configs.
+    public var headers: [String: String]?
 
     // common
     public var enabled: Bool
@@ -70,6 +79,7 @@ public struct MCPServerConfig: Sendable, Codable, Equatable {
         args: [String]? = nil,
         env: [String: String]? = nil,
         url: String? = nil,
+        headers: [String: String]? = nil,
         enabled: Bool = true,
         timeout: Double = 30.0,
         skipSecurityValidation: Bool = false
@@ -80,6 +90,7 @@ public struct MCPServerConfig: Sendable, Codable, Equatable {
         self.args = args
         self.env = env
         self.url = url
+        self.headers = headers
         self.enabled = enabled
         self.timeout = timeout
         self.skipSecurityValidation = skipSecurityValidation
@@ -92,6 +103,7 @@ public struct MCPServerConfig: Sendable, Codable, Equatable {
         case args
         case env
         case url
+        case headers
         case enabled
         case timeout
         case skipSecurityValidation = "skip_security_validation"
@@ -206,12 +218,16 @@ private struct RawServerEntry: Codable {
     var args: [String]?
     var env: [String: String]?
     var url: String?
+    /// HTTP headers for SSE/Streamable-HTTP transports. Iter 130
+    /// (vmlx#131) — required for Exa / GitHub / other auth-gated
+    /// remote MCP servers.
+    var headers: [String: String]?
     var enabled: Bool?
     var timeout: Double?
     var skipSecurityValidation: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case transport, command, args, env, url, enabled, timeout
+        case transport, command, args, env, url, headers, enabled, timeout
         case skipSecurityValidation = "skip_security_validation"
     }
 
@@ -233,6 +249,7 @@ private struct RawServerEntry: Codable {
             args: args,
             env: env,
             url: url,
+            headers: headers,
             enabled: enabled ?? true,
             timeout: timeout ?? 30.0,
             skipSecurityValidation: skipSecurityValidation ?? false

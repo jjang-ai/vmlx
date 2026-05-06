@@ -353,6 +353,11 @@ public actor BatchEngine {
         while activeSlots.count < maxBatchSize && !waitQueue.isEmpty {
             let request = waitQueue.removeFirst()
             let cache = context.model.newCache(parameters: request.parameters)
+            if let cacheCoordinator, !cacheCoordinator.isPagedIncompatible,
+               cache.contains(where: { $0 is HybridPoolCache })
+            {
+                cacheCoordinator.setPagedIncompatible(true)
+            }
             let slot = BatchSlot(from: request, cache: cache, stopTokenIDs: stopTokenIDs)
             activeSlots.append(slot)
         }
@@ -413,6 +418,13 @@ public actor BatchEngine {
             if case .hit(_, let remaining, let detail, let blocks, let ssmStates, let diskArrays) = result {
                 var restored = false
                 if !blocks.isEmpty {
+                    // Iter 144 — release paged-cache pins as soon as the
+                    // block payload has been copied into the slot's KV
+                    // cache. Same pattern as Evaluate.swift TokenIterator
+                    // restore site. Without this, fetch'd blocks stay
+                    // ref-pinned for the lifetime of the slot, preventing
+                    // PagedCacheManager from evicting them under pressure.
+                    defer { coordinator.release(blocks: blocks) }
                     let restoredTokens = restoreLayerData(from: blocks, into: slot.cache)
                     if restoredTokens > 0 {
                         if let ssm = ssmStates {
@@ -433,7 +445,7 @@ public actor BatchEngine {
                 // here would double-write and crash on hybrid VL JANG.
                 // See Evaluate.swift for the full root-cause comment.
                 if let diskArrays, !restored {
-                    let diskRestored = restoreFromDiskArrays(diskArrays, into: slot.cache)
+                    let diskRestored = restoreFromDiskArrays(diskArrays, into: &slot.cache)
                     if diskRestored > 0 {
                         restored = true
                         Self.logger.info(

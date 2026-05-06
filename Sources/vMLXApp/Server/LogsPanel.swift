@@ -20,6 +20,13 @@ struct LogsPanel: View {
 
     // Feed state
     @State private var lines: [LogStore.Line] = []
+    /// Iter 144 — cached filter result. Pre-fix `visibleLines` was a
+    /// computed property that re-ran a 2000-element `.filter` on
+    /// EVERY SwiftUI body re-evaluation. During streaming, body
+    /// re-evaluates 60+×/sec → 120K predicate evals/sec on the main
+    /// thread → palpable scroll stutter. Now we recompute only when
+    /// one of the filter inputs changes.
+    @State private var filteredCache: [LogStore.Line] = []
     @State private var pendingLines: [LogStore.Line] = []
     @State private var paused: Bool = false
     @State private var autoScroll: Bool = true
@@ -69,6 +76,15 @@ struct LogsPanel: View {
             streamTask?.cancel()
             streamTask = nil
         }
+        // Iter 144 — refresh the filter cache only when a filter input
+        // changes. Pre-fix the `visibleLines` computed property
+        // re-ran on every body evaluation (60+×/sec during stream).
+        .onChange(of: lines.count) { _, _ in recomputeFiltered() }
+        .onChange(of: minLevel) { _, _ in recomputeFiltered() }
+        .onChange(of: selectedCategories) { _, _ in recomputeFiltered() }
+        .onChange(of: searchText) { _, _ in recomputeFiltered() }
+        .onChange(of: reverseOrder) { _, _ in recomputeFiltered() }
+        .onAppear { recomputeFiltered() }
         // UI-8: changing the level picker no longer drops the buffer.
         // The stream subscribes at `.trace` and we filter client-side,
         // so toggling INFO ↔ DEBUG is purely a re-filter.
@@ -209,10 +225,16 @@ struct LogsPanel: View {
                     userScrolledUp = nowUp
                 }
                 .onChange(of: filtered.count) { _, _ in
+                    // Iter 144 — in reverse-order mode, newest is at
+                    // `filtered.first`. Pre-fix used `.last + .top`
+                    // anchor which scrolls to the OLDEST entry, not
+                    // the newest — auto-scroll appeared broken on
+                    // newest-first views.
+                    let target = reverseOrder ? filtered.first : filtered.last
                     guard autoScroll, !paused, !userScrolledUp,
-                          let last = filtered.last else { return }
+                          let target else { return }
                     withAnimation(.linear(duration: 0.08)) {
-                        proxy.scrollTo(last.id, anchor: reverseOrder ? .top : .bottom)
+                        proxy.scrollTo(target.id, anchor: reverseOrder ? .top : .bottom)
                     }
                 }
 
@@ -220,10 +242,14 @@ struct LogsPanel: View {
                 // the user scrolls up past the threshold, regardless of
                 // pause state. Tapping snaps back and clears the unread
                 // counter. UI-2.
-                if userScrolledUp, let last = filtered.last {
+                if userScrolledUp,
+                   let target = reverseOrder ? filtered.first : filtered.last
+                {
                     Button {
                         withAnimation(.easeOut(duration: 0.2)) {
-                            proxy.scrollTo(last.id,
+                            // Iter 144 — same reverseOrder fix as
+                            // auto-scroll above.
+                            proxy.scrollTo(target.id,
                                            anchor: reverseOrder ? .top : .bottom)
                         }
                         userScrolledUp = false
@@ -332,7 +358,12 @@ struct LogsPanel: View {
 
     // MARK: - Behavior
 
-    private var visibleLines: [LogStore.Line] {
+    /// Iter 144 — kept as a fallback for view code that still reads
+    /// it, but the hot path uses `filteredCache` updated by
+    /// `recomputeFiltered()` via `.onChange`.
+    private var visibleLines: [LogStore.Line] { filteredCache }
+
+    private func recomputeFiltered() {
         let filter = LogFilter(
             minLevel: minLevel,
             categories: selectedCategories.isEmpty ? nil : selectedCategories,
@@ -340,7 +371,7 @@ struct LogsPanel: View {
             since: nil
         )
         let matched = lines.filter(filter.matches)
-        return reverseOrder ? matched.reversed() : matched
+        filteredCache = reverseOrder ? matched.reversed() : matched
     }
 
     private func subscribeStream() async {

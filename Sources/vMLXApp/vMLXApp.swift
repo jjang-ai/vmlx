@@ -1042,6 +1042,32 @@ final class AppState {
             ? "0.0.0.0"
             : (resolved.settings.defaultHost.isEmpty ? "127.0.0.1" : resolved.settings.defaultHost)
         let http = httpServer(for: id)
+        // mlxstudio #44 — session port auto-bump. Per-session HTTP
+        // servers previously crashed `startSession` whenever the
+        // configured port was taken (Ollama on 11434, another vMLX
+        // session on 5273+i, etc.). The gateway gained auto-bump in
+        // GatewayActor.swift:195 but per-session servers didn't —
+        // asymmetric. Now: pre-flight via `firstAvailablePort` from
+        // the configured port over a 32-port window. If we bump,
+        // record the actual bound port back into `s.port` and surface
+        // a one-shot banner. If the entire 32-port window is taken,
+        // fall through to the existing portInUse throw so the user
+        // sees a clean error.
+        var actualPort = s.port
+        if !Engine.isPortFree(actualPort) {
+            do {
+                actualPort = try Engine.firstAvailablePort(
+                    startingAt: actualPort + 1, limit: 32)
+                flashBanner(
+                    "Session port \(s.port) was taken — bound to \(actualPort) instead. " +
+                    "Edit the session in the Server tab to pin a stable port.")
+            } catch {
+                // Re-throw as the existing portInUse path so the
+                // unified error pipeline surfaces it.
+                flashBanner("All ports in [\(s.port)..\(s.port+32)] are taken — pick a different one in the Server tab.")
+                return
+            }
+        }
         do {
             // iter-52: TLS plumbing. CLI had it since v1; SwiftUI
             // sessions didn't — users with ssl_keyfile/ssl_certfile
@@ -1052,7 +1078,7 @@ final class AppState {
             let tlsCert = resolved.settings.sslCertFile
             try await http.start(
                 host: bindHost,
-                port: s.port,
+                port: actualPort,
                 apiKey: resolved.settings.apiKey,
                 adminToken: resolved.settings.adminToken,
                 logLevel: LogStore.Level(rawValue: resolved.settings.defaultLogLevel) ?? .info,
@@ -1063,7 +1089,7 @@ final class AppState {
             )
             if let idx2 = sessions.firstIndex(where: { $0.id == id }) {
                 sessions[idx2].host = bindHost
-                sessions[idx2].port = s.port
+                sessions[idx2].port = actualPort
                 sessions[idx2].pid = Int(ProcessInfo.processInfo.processIdentifier)
                 // §359 — snapshot alias at start so SessionCard can
                 // render it as a badge. Cleared by stopSession.
@@ -1219,9 +1245,23 @@ struct RootView: View {
 
     var body: some View {
         @Bindable var s = state
-        NavigationSplitView {
+        // Iter 148 — replace the root NavigationSplitView with a plain
+        // HStack shell. On macOS state restoration the split-view
+        // occasionally restored into an empty accessibility tree: visible
+        // vertical dividers, traffic-light buttons, but no sidebar/detail
+        // controls. The app process and DB were alive; SwiftUI simply
+        // restored the split container into a blank column state. The app
+        // already has its own inner chat/sidebar split, so the root does
+        // not need NavigationSplitView behavior here.
+        HStack(spacing: 0) {
             Sidebar(mode: $s.mode)
-        } detail: {
+                .frame(width: 220)
+                .overlay(alignment: .trailing) {
+                    Rectangle()
+                        .fill(Theme.Colors.border)
+                        .frame(width: 1)
+                }
+
             VStack(spacing: 0) {
                 UpdateAvailableBanner()
                 DownloadStatusBar()
@@ -1245,6 +1285,7 @@ struct RootView: View {
                 .background(Theme.Colors.background)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.Colors.background)
         // `vmlx://` deep-link handler. Called by macOS when the user
         // (or Shortcuts, or another app) opens a `vmlx://...` URL.
@@ -1299,22 +1340,22 @@ struct RootView: View {
         }
         .task {
             // Bind the TrayItem lifecycle callbacks once RootView mounts.
-            // Each callback dispatches the corresponding Engine actor call
-            // on a background task so the popover button tap remains
-            // responsive. `start` re-loads using the last-used LoadOptions
-            // (via `lastLoadOptions`); `restart` stops then re-loads with
-            // the same retained options.
+            // Each callback dispatches the corresponding full session
+            // lifecycle operation on a background task so the popover
+            // button tap remains responsive. Keep this routed through
+            // AppState.startSession/stopSession so tray controls use the
+            // selected session engine, resolved settings snapshot, HTTP
+            // listener, and gateway registration. Calling `st.engine.load`
+            // directly here bypasses per-session settings and often targets
+            // the default engine instead of the model the user selected.
             let st = state
             st.onTrayStartServer = {
                 Task { @MainActor in
-                    let eng = st.engine
-                    if let opts = await eng.lastLoadOptions {
-                        let stream = await eng.load(opts)
-                        for try await _ in stream {}
+                    if let id = st.selectedServerSessionId ?? st.sessions.first?.id {
+                        await st.startSession(id)
                     } else if let path = st.selectedModelPath {
-                        let opts = Engine.LoadOptions(modelPath: path)
-                        let stream = await eng.load(opts)
-                        for try await _ in stream {}
+                        let id = await st.createSession(forModel: path)
+                        await st.startSession(id)
                     } else {
                         st.flashBanner("Pick a model in the Server tab first")
                         st.mode = .server
@@ -1340,31 +1381,42 @@ struct RootView: View {
             }
             st.onTrayRestartServer = {
                 Task { @MainActor in
-                    let eng = st.engine
-                    let opts = await eng.lastLoadOptions
                     // Full teardown to drop the HTTP listener, then
-                    // re-load. Matches onTrayStopServer shape so
-                    // restart is a stop+start pair, not a silent
-                    // engine-only reload.
+                    // re-load through the same session settings path as
+                    // Server/Chat Load Model.
                     if let id = st.selectedServerSessionId ?? st.sessions.first?.id {
                         await st.stopSession(id)
+                        await st.startSession(id)
+                    } else if let path = st.selectedModelPath {
+                        let id = await st.createSession(forModel: path)
+                        await st.startSession(id)
                     } else {
-                        await eng.stop()
-                    }
-                    if let opts {
-                        let stream = await eng.load(opts)
-                        for try await _ in stream {}
+                        await st.engine.stop()
+                        st.flashBanner("Pick a model in the Server tab first")
+                        st.mode = .server
                     }
                 }
             }
             st.onTraySoftSleepServer = {
-                Task { try? await st.engine.softSleep() }
+                Task { @MainActor in
+                    let eng = (st.selectedServerSessionId ?? st.sessions.first?.id)
+                        .map { st.engine(for: $0) } ?? st.engine
+                    try? await eng.softSleep()
+                }
             }
             st.onTrayDeepSleepServer = {
-                Task { try? await st.engine.deepSleep() }
+                Task { @MainActor in
+                    let eng = (st.selectedServerSessionId ?? st.sessions.first?.id)
+                        .map { st.engine(for: $0) } ?? st.engine
+                    try? await eng.deepSleep()
+                }
             }
             st.onTrayWakeServer = {
-                Task { try? await st.engine.wake() }
+                Task { @MainActor in
+                    let eng = (st.selectedServerSessionId ?? st.sessions.first?.id)
+                        .map { st.engine(for: $0) } ?? st.engine
+                    try? await eng.wake()
+                }
             }
         }
         .sheet(isPresented: Binding(get: { state.showSetup },

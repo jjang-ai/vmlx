@@ -242,6 +242,7 @@ class BailingMoeGate: Module, UnaryLayer {
 
 class BailingMoeSparseMoeBlock: Module, UnaryLayer {
     let args: BailingMoeConfiguration
+    fileprivate let layerIdx: Int
     @ModuleInfo(key: "switch_mlp") var switchMLP: SwitchGLU
     @ModuleInfo(key: "gate") var gate: BailingMoeGate
     @ModuleInfo(key: "shared_experts") var sharedExperts: BailingMoeMLP?
@@ -250,8 +251,9 @@ class BailingMoeSparseMoeBlock: Module, UnaryLayer {
     /// with a slot-bank streamer; `sharedExperts` still runs natively.
     fileprivate var flashMoeShim: FlashMoEBlock? = nil
 
-    init(_ args: BailingMoeConfiguration) {
+    init(_ args: BailingMoeConfiguration, layerIdx: Int) {
         self.args = args
+        self.layerIdx = layerIdx
         _switchMLP.wrappedValue = SwitchGLU(
             inputDims: args.hiddenSize, hiddenDims: args.moeIntermediateSize,
             numExperts: args.numExperts,
@@ -275,6 +277,7 @@ class BailingMoeSparseMoeBlock: Module, UnaryLayer {
             out = shim(x)
         } else {
             let (inds, weights) = gate.groupSelect(x)
+            JangPressRouteTelemetry.recordTopK(layer: layerIdx, indices: inds)
             out = switchMLP(x, inds)
             out = (out * weights[.ellipsis, .newAxis]).sum(axis: -2)
         }
@@ -304,7 +307,7 @@ class BailingMoeTransformerBlock: Module {
             dimensions: args.hiddenSize, eps: args.rmsNormEps)
 
         if args.numExperts > 0 && layerIdx >= args.firstKDenseReplace {
-            _mlp.wrappedValue = BailingMoeSparseMoeBlock(args)
+            _mlp.wrappedValue = BailingMoeSparseMoeBlock(args, layerIdx: layerIdx)
         } else {
             _mlp.wrappedValue = BailingMoeMLP(args)
         }
@@ -369,6 +372,48 @@ public class BailingMoeModel: Module, LLMModel, KVCacheDimensionProvider {
         } else {
             return model.embedTokens.asLinear(out)
         }
+    }
+
+    /// Stack per-expert checkpoints into the `switch_mlp` tile that
+    /// `BailingMoeSparseMoeBlock` expects. Ling-class checkpoints land
+    /// with 73k+ per-expert weight keys (256 routed × 96 layers × 3
+    /// projections); without this sanitize the model never sees the
+    /// switch_mlp tensors. Per-layer materialize via the canonical
+    /// helper releases the per-expert temporaries instead of pinning
+    /// the whole lazy graph until first eval.
+    public func sanitize(weights: [String: MLXArray]) -> [String: MLXArray] {
+        var sanitized = weights
+        if configuration.tieWordEmbeddings {
+            sanitized["lm_head.weight"] = nil
+        }
+
+        // Probe at the first layer that runs the MoE path.
+        let probeLayer = configuration.firstKDenseReplace
+        let probeKey =
+            "model.layers.\(probeLayer).mlp.experts.0.up_proj.weight"
+        guard sanitized[probeKey] != nil else {
+            return sanitized
+        }
+
+        for l in 0 ..< configuration.hiddenLayers {
+            guard l >= configuration.firstKDenseReplace, configuration.numExperts > 0
+            else { continue }
+            let prefix = "model.layers.\(l)"
+            for n in ["up_proj", "down_proj", "gate_proj"] {
+                for k in ["weight", "scales", "biases"] {
+                    let first = "\(prefix).mlp.experts.0.\(n).\(k)"
+                    guard sanitized[first] != nil else { continue }
+                    let toJoin = (0 ..< configuration.numExperts).map { e in
+                        sanitized.removeValue(
+                            forKey: "\(prefix).mlp.experts.\(e).\(n).\(k)")!
+                    }
+                    sanitized["\(prefix).mlp.switch_mlp.\(n).\(k)"] =
+                        loadTimeMaterializedStacked(toJoin)
+                }
+            }
+        }
+
+        return sanitized
     }
 }
 

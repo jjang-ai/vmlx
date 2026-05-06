@@ -43,6 +43,11 @@ public actor MCPStdioClient {
     private var process: Process?
     private var stdinPipe: Pipe?
     private var stdoutPipe: Pipe?
+    /// Iter 144 — stderr pipe must be drained or the subprocess
+    /// deadlocks at the ~64 KB kernel buffer cap. Held here so
+    /// `stop()` can detach the readability handler before we let go
+    /// of the Pipe (matches the stdoutPipe pattern).
+    private var stderrPipe: Pipe?
     private var readTask: Task<Void, Never>?
     /// Buffered stdout bytes waiting for a newline.
     private var readBuffer = Data()
@@ -128,6 +133,18 @@ public actor MCPStdioClient {
         req.httpMethod = "GET"
         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         req.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        // Iter 130 (vmlx#131): explicit `headers` dict — primary
+        // source for SSE/HTTP auth (Authorization: Bearer, X-API-Key,
+        // etc.). Required for Exa / GitHub / other auth-gated remote
+        // MCP servers.
+        if let headers = server.headers {
+            for (k, v) in headers {
+                req.setValue(v, forHTTPHeaderField: k)
+            }
+        }
+        // Deprecated env-key scrape — kept for back-compat with
+        // existing configs that stash auth headers in `env`. New
+        // configs SHOULD use `headers`.
         if let overrides = server.env {
             for (k, v) in overrides where k.lowercased().hasPrefix("authorization") || k.hasPrefix("X-") || k.hasPrefix("x-") {
                 req.setValue(v, forHTTPHeaderField: k)
@@ -243,9 +260,19 @@ public actor MCPStdioClient {
     private func launchAndStoreStreams(_ proc: Process) throws {
         let stdin = Pipe()
         let stdout = Pipe()
+        // Iter 144 — drain stderr or the subprocess deadlocks at ~64 KB.
+        // Pre-fix the manager set `proc.standardError = Pipe()` but
+        // never attached a `readabilityHandler`, so once the kernel
+        // pipe buffer filled (~64 KB on macOS), the subprocess
+        // BLOCKED on `write(stderr, ...)`. For a long-running MCP
+        // server emitting routine warnings/debug, this is hours of
+        // operation away from a hard hang. Drain to engine logs and
+        // tag with the server name so `/admin/logs` shows the real
+        // failure cause.
+        let stderr = Pipe()
         proc.standardInput = stdin
         proc.standardOutput = stdout
-        proc.standardError = Pipe()
+        proc.standardError = stderr
 
         // Merge env with the caller's overrides. We keep the parent
         // environment as the baseline so stdio servers inherit PATH
@@ -267,6 +294,25 @@ public actor MCPStdioClient {
         self.process = proc
         self.stdinPipe = stdin
         self.stdoutPipe = stdout
+        self.stderrPipe = stderr
+        // Drain stderr — see comment at the Pipe() above for why.
+        // Discard text quietly (most MCP servers write copious debug
+        // to stderr); future enhancement could route to engine logs
+        // gated on a verbose flag.
+        let serverName = self.server.name
+        stderr.fileHandleForReading.readabilityHandler = { fh in
+            let chunk = fh.availableData
+            if chunk.isEmpty { return }
+            // Bound the per-line forwarding to avoid log spam from
+            // pathological servers; truncate at 4 KB.
+            let cap = min(chunk.count, 4096)
+            if let s = String(data: chunk.prefix(cap), encoding: .utf8),
+               !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                FileHandle.standardError.write(Data(
+                    "[mcp \(serverName) stderr] \(s)\n".utf8))
+            }
+        }
         // Use `readabilityHandler` instead of a blocking read loop.
         // The previous impl called `handle.availableData` inside an
         // actor Task which blocked the actor's executor thread until
@@ -303,6 +349,11 @@ public actor MCPStdioClient {
         if let stdout = stdoutPipe {
             stdout.fileHandleForReading.readabilityHandler = nil
         }
+        // Iter 144 — detach stderr handler before nilling the pipe;
+        // same Dispatch-source-on-released-pipe crash class.
+        if let stderr = stderrPipe {
+            stderr.fileHandleForReading.readabilityHandler = nil
+        }
         if let proc = process {
             proc.terminationHandler = nil
             if proc.isRunning {
@@ -314,6 +365,7 @@ public actor MCPStdioClient {
         process = nil
         stdinPipe = nil
         stdoutPipe = nil
+        stderrPipe = nil
 
         // Cancel SSE stream task + clean up endpoint-readiness latch.
         sseStreamTask?.cancel()
@@ -488,6 +540,15 @@ public actor MCPStdioClient {
             req.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
             req.httpBody = data
             req.timeoutInterval = max(30, server.timeout)
+            // Iter 130 (vmlx#131): explicit headers dict — primary
+            // source. Used by every POST so auth-gated servers stay
+            // authenticated past the initial GET handshake.
+            if let headers = server.headers {
+                for (k, v) in headers {
+                    req.setValue(v, forHTTPHeaderField: k)
+                }
+            }
+            // Deprecated env-key scrape (back-compat).
             if let overrides = server.env {
                 for (k, v) in overrides where k.lowercased().hasPrefix("authorization") || k.hasPrefix("X-") || k.hasPrefix("x-") {
                     req.setValue(v, forHTTPHeaderField: k)

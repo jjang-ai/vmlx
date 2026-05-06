@@ -24,15 +24,54 @@ Two forcing functions:
    upstream `mlx-swift`, `mlx-swift-examples`, or `vmlx-swift-lm`.
    Vendor everything and commit fixes directly.
 
-As of 2026-04-13 PM, the vendoring is complete: `Cmlx` + all 8 MLX
-Swift targets live next to our `vMLX*` targets under one
-`Package.swift`. Current `dev` HEAD adds §341 (Jinja `not in` for
-Nemotron templates), §342 (MCP toggle resolver), §343/§344/§345
-(multi-family thinking-leak audits — Qwen3.6, Gemma4, MiniMax),
-§346 (JANGTQ `mxtq_bits` flat Int OR per-role dict decode — unblocks
-Qwen3.6-JANGTQ4), §338 (JSON-Schema tool argument coercion, vmlx#47),
-§339 (image model folder discovery, mlxstudio #82/#85/#96), and §340
-(one-click MCP import from Claude Desktop clipboard format).
+As of 2026-05-02, vMLX Swift is the **main app** (Python panel
+demoted to legacy, see [vmlx_swift_v2_known_issues.md](
+https://github.com/jjang-ai/vmlx/blob/dev/) tracker). Vendoring is
+complete: `Cmlx` + all 8 MLX Swift targets live next to our `vMLX*`
+targets under one `Package.swift`.
+
+**Current `dev` HEAD highlights** (newest at top, full log in
+`PROGRESS.md`):
+
+- **JangPress (axis E weight tier) — default ON @ pct=70.**
+  Routed-MoE expert weights tier-out to `madvise(DONTNEED)` (mmap
+  failsafe — kernel ignores under low pressure, reclaims up to 70%
+  of routed mass under actual pressure). 6+ MoE families covered by
+  13 tile-name regex patterns (Qwen3.5/3.6 MoE, Mistral 4, DSV3.x,
+  Kimi K2, Laguna, MiniMax M2.x, Holo3, DSV4, Nemotron H Cascade /
+  MXFP4 / Cascade-2). `--enable-jangpress` / `--jangpress-compress-
+  pct` / `--jangpress-backend {mmap|mach|none}` /
+  `--jangpress-force-mode {soft|force}`. `GET /v1/cache/jangpress`
+  returns live state. See `Sources/vMLXLMCommon/Cache/
+  JANGPRESS-PRODUCTION.md`.
+- **mlx#3461 / mlx#3462 patch (iter 126).** Vendored mlx 0.31.1's
+  `commandBufferWithUnretainedReferences()` + Swift structured
+  concurrency MLXArray drop hits Metal "Invalid Resource" race
+  under TurboQuant KV cache load. Patched `device.cpp:405` to
+  retained `commandBuffer()` (~2.4% throughput cost — safe trade
+  per upstream measurement on M5 Max @ qwen35-35b-a3b B=17/B=32).
+- **kvCacheQuantization ↔ enableTurboQuant CLI symmetry (iter 127,
+  parity with mlxstudio#138).** SettingsStore resolver derives Bool
+  from canonical String, so `vmlx serve --kv-cache-quantization
+  none` now actually disables TQ; `--disable-turbo-quant` also
+  demotes the string. No more silent re-derive overriding the
+  user's choice.
+- **Engine.LoadOptions ↔ GlobalSettings alignment (iter 101).**
+  Bare-init defaults match GlobalSettings tier-1 — fixes 3 prod
+  call sites that were silently shipping stricter caches than
+  configured.
+- **MXTQ PRNG parity — RESOLVED (iter 93).** `NumPyPCG64.swift`
+  ships bit-identical PCG64 port; `JangMXTQDequant` uses it for
+  sign generation. MiniMax-M2.7-JANGTQ-CRACK decodes at 46.59 tok/s
+  (Python ref 44.3).
+- **JANGTQ-VL thread fix (iter 33).** Dedicated single-worker
+  `mllm-worker_0` executor for VLM `step()` — fixes Stream(gpu, 1)
+  Metal crashes on Qwen3.6-MoE-VL JANGTQ bundles. Live-verified
+  Qwen3.6-35B-A3B-JANGTQ4: T2 30/31 cached (97% prefix hit).
+- §341–§346, §338, §339, §340 (Jinja `not in`, MCP toggle resolver,
+  thinking-leak audits, JANGTQ `mxtq_bits` flat-or-dict, JSON-
+  Schema tool arg coercion, image model folder discovery, MCP
+  one-click import — all already covered in PROGRESS.md).
 
 ---
 
@@ -358,29 +397,73 @@ Prioritized list in `PROGRESS.md`. Headline items:
   Gemma4 sibling layout, MiniMax, Mistral3 SwitchGLU (2026-04-14).
   Remaining families TBD — tracked in Flash MoE README.
 
-### Recently fixed
+### Recently fixed (2026-04-15 → 2026-05-02)
 
-- **JANGTQ MXTQ PRNG parity** — `NumPyPCG64.swift` ships a bit-identical
-  PCG64 port; `JangMXTQDequant` uses it for sign generation. The older
-  `TQHadamard.generateRandomSigns` drand48 path is deprecated with a
-  "do NOT revert" marker. MiniMax-M2.7-JANGTQ-CRACK decodes at 46.59
-  tok/s (Python reference: 44.3). Resolved iter-93, 2026-04-20.
-- **JANGTQ `mxtq_bits` per-role dict** — §346. `JangLoader` now accepts
-  both a flat `Int` and a per-role `{shared_expert, routed_expert, ...}`
-  dict, which unblocks Qwen3.6-JANGTQ4 (previously emitted garbage).
+- **JangPress integration + axis-orthogonality regression guard.** 26-
+  pin contract test family covers per-load tier (not per-chat),
+  jang_config / generation_config orthogonality, SSM × JangPress (axis
+  F vs E), VL multi-turn + audio (Parakeet/Whisper) compose, API
+  surface (`GET /v1/cache/jangpress` + cacheStats), RAM accounting
+  (mach_task_info quirk + phys_footprint canonical), M-chip support
+  (no Metal/version gate), pct sweep × tile-pattern, CLI writeback
+  symmetry. JANGPRESS-PRODUCTION.md ships the verification matrix.
+- **mlx#3461 unretained-resource race patch** — vendored
+  `Sources/Cmlx/mlx/mlx/backend/metal/device.cpp:405` switched from
+  `commandBufferWithUnretainedReferences()` to retained
+  `commandBuffer()`. Eliminates "Invalid Resource" races under
+  TurboQuant KV cache load + Swift structured-concurrency MLXArray
+  drop. Cost: ~2.4% throughput.
+- **kvCacheQuantization ↔ enableTurboQuant symmetry** (mlxstudio#138
+  parity). CLI flags `--disable-turbo-quant`, `--enable-turbo-quant`,
+  `--kv-cache-quantization` now writeback BOTH the Bool and the
+  canonical String so the resolver doesn't silently re-derive over
+  the user's choice.
+- **Engine.LoadOptions ↔ GlobalSettings alignment.** Bare-init
+  defaults match GlobalSettings tier-1 (`prefillStepSize=2048`,
+  `maxCacheBlocks=1000`, `kvCacheQuantization="turboquant"`). 3
+  production call sites no longer silently ship stricter caches.
+- **NSOpenPanel macOS 26 XPC fix (vmlx#121, #133).**
+  Iter 128-129. `Sources/vMLXApp/Common/NSOpenPanelSafe.swift`
+  detects XPC failure (no UI rendered in <50ms) and falls back to a
+  text-input alert. Applied to all 6 NSOpenPanel call sites
+  (ModelDirectoriesPanel, TerminalScreen, SessionConfigForm,
+  MCPPanel, AdvancedServerCard, ChatSettingsPopover). Ad-hoc-signed
+  dev builds and downloaded-from-source builds no longer silently
+  fail their "Add directory…" buttons.
+- **MCP headers field (vmlx#131).** Iter 130. MCPServerConfig now
+  carries `headers: [String: String]?`; both SSE startup GET and
+  per-message POST iterate it. Required for Exa / GitHub / other
+  auth-gated remote MCPs. Round-trip + Claude-Desktop
+  `mcpServers.<name>.headers` decoding pinned.
+- **JANG dense Hadamard dispatch bug.** Fixed instance `__call__`
+  override + `dir()` walker miss that caused garbage on JANG dense
+  bundles converted with `--hadamard` and bits>=3 (Qwen3.6-27B-JANG_4M-
+  CRACK, Gemma 31B). Synced to all 3 bundled-python locations.
+- **JANGTQ-VL thread fix.** `mllm-worker_0` dedicated single-worker
+  executor — fixes Stream(gpu, 1) Metal crashes on Qwen3.6-MoE-VL
+  JANGTQ bundles.
+- **DSV4 Jinja kwargs.** Template only branches on
+  `reasoning_effort=='max'`; 'high' was a silent no-op. Fixed in 3
+  endpoint paths.
+- **JANGTQ MXTQ PRNG parity** — `NumPyPCG64.swift` ships bit-
+  identical PCG64 port; `JangMXTQDequant` uses it for sign
+  generation. The older `TQHadamard.generateRandomSigns` drand48
+  path is deprecated with a "do NOT revert" marker. MiniMax-M2.7-
+  JANGTQ-CRACK decodes at 46.59 tok/s (Python ref 44.3).
+- **JANGTQ `mxtq_bits` per-role dict** — §346. `JangLoader` accepts
+  both a flat `Int` and a per-role `{shared_expert, routed_expert,
+  ...}` dict, which unblocks Qwen3.6-JANGTQ4.
 - **Nemotron Jinja templates** — §341. Jinja runtime now correctly
   evaluates `not in` operator for Nemotron/Cascade chat templates.
-- **Thinking-leak audit** — §343/§344/§345. Qwen3.6, Gemma4, and MiniMax
+- **Thinking-leak audit** — §343/§344/§345. Qwen3.6, Gemma4, MiniMax
   reasoning parsers drained at EOS via `parser.finishStreaming`; §15
   reasoning-off → `.content` reroute verified across families.
 - **MCP one-click import** — §340. Paste a Claude Desktop
-  `mcpServers` JSON blob; the app imports allowlisted entries
-  (`MCPClipboardImport.swift`).
-- **JSON-Schema tool argument coercion** — §338 (vmlx#47). Tool args
-  are coerced to declared schema types before dispatch so stringly-typed
-  LLM output lands cleanly in the bash/tool handlers.
+  `mcpServers` JSON blob; the app imports allowlisted entries.
+- **JSON-Schema tool argument coercion** — §338 (vmlx#47). Tool
+  args are coerced to declared schema types before dispatch.
 - **Image model folder discovery** — §339 (mlxstudio #82/#85/#96).
-  Image tab auto-detects Flux / Qwen-Image / Z-Image layouts from disk.
+  Image tab auto-detects Flux / Qwen-Image / Z-Image layouts.
 
 ### Known deferred items (2026-04-14)
 

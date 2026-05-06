@@ -117,14 +117,16 @@ class Qwen3MoESparseMoeBlock: Module, UnaryLayer {
     let numExperts: Int
     let topK: Int
     let normTopkProb: Bool
+    fileprivate let layerIdx: Int
 
     @ModuleInfo(key: "gate") var gate: Linear
     @ModuleInfo(key: "switch_mlp") var switchMLP: SwitchGLU
 
-    init(_ args: Qwen3MoEConfiguration) {
+    init(_ args: Qwen3MoEConfiguration, layerIdx: Int) {
         self.numExperts = args.numExperts
         self.topK = args.numExpertsPerToken
         self.normTopkProb = args.normTopkProb
+        self.layerIdx = layerIdx
 
         _gate.wrappedValue = Linear(args.hiddenSize, numExperts, bias: false)
         _switchMLP.wrappedValue = SwitchGLU(
@@ -138,6 +140,7 @@ class Qwen3MoESparseMoeBlock: Module, UnaryLayer {
 
         let k = topK
         let inds = MLX.argPartition(-gates, kth: k - 1, axis: -1)[.ellipsis, ..<k]
+        JangPressRouteTelemetry.recordTopK(layer: layerIdx, indices: inds)
         var scores = MLX.takeAlong(softGates, inds, axis: -1)
 
         if normTopkProb {
@@ -174,7 +177,7 @@ class Qwen3MoeDecoderLayer: Module {
         if !args.mlpOnlyLayers.contains(layerIdx),
             args.numExperts > 0, (layerIdx + 1) % args.decoderSparseStep == 0
         {
-            self.mlp = Qwen3MoESparseMoeBlock(args)
+            self.mlp = Qwen3MoESparseMoeBlock(args, layerIdx: layerIdx)
         } else {
             self.mlp = Qwen3MoEMLP(
                 dimensions: args.hiddenSize, hiddenDimensions: args.intermediateSize)
@@ -275,7 +278,11 @@ public class Qwen3MoEModel: Module, LLMModel, KVCacheDimensionProvider {
                         sanitizedWeights.removeValue(
                             forKey: "\(prefix).mlp.experts.\(e).\(n).weight")!
                     }
-                    sanitizedWeights["\(prefix).mlp.switch_mlp.\(n).weight"] = MLX.stacked(toJoin)
+                    // RAM safety: lazy stacked() pins per-expert tensors
+                    // alive (Ling-class 256e × 96L × 3 = 73k temporaries →
+                    // OOM). Materialize per-layer via the canonical helper.
+                    sanitizedWeights["\(prefix).mlp.switch_mlp.\(n).weight"] =
+                        loadTimeMaterializedStacked(toJoin)
                 }
             }
         }

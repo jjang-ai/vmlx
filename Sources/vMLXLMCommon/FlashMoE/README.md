@@ -81,9 +81,9 @@ evict, replace, clear).
 - Temporal prefetch warm-up on first token (scan cached turns).
 - CacheCoordinator hook so flash-moe stats land in
   `cacheStats()["flashMoe"]`.
-- Mutually-exclusive checks with distributed, smelt (when/if
-  smelt is re-introduced), and MCP tool use that could confuse
-  the slot bank.
+- Mutually-exclusive checks with distributed and MCP tool use that
+  could confuse the slot bank. (Smelt removed 2026-05-04 — see
+  JangPress for cold-expert handling.)
 
 ## Key design parity with Python
 
@@ -101,7 +101,7 @@ evict, replace, clear).
 
 ## Non-goals
 
-- Not porting the smelt mode (user directive — smelt is deprecated).
+- Smelt removed entirely 2026-05-04 (Eric directive). JangPress is the cold-expert handler.
 - Not porting speculative decoding (user directive — jang-spec
   replaces it).
 - Not building a separate safetensors mmap layer — we use direct

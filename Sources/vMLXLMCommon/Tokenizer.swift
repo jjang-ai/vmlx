@@ -97,9 +97,30 @@ public struct NaiveStreamingDetokenizer: StreamingDetokenizer {
         let newSegment = tokenizer.decode(tokenIds: segmentTokens)
         let new = newSegment.suffix(newSegment.count - segment.count)
 
-        // if the new segment ends with REPLACEMENT CHARACTER this means
-        // that the token didn't produce a complete unicode character
-        if new.last == "\u{fffd}" {
+        // Iter 143 — Laguna `????` UTF-8 corruption fix.
+        //
+        // The original guard `new.last == "\u{fffd}"` handles ONLY the
+        // case where a multi-byte sequence is split such that the
+        // incomplete bytes land at the very end of the suffix. But for
+        // tokenizers that decode each token independently then string-
+        // concatenate (sentencepiece-derived Mistral / Laguna), an
+        // emoji can split such that the FFFD lands EARLIER in the
+        // suffix while the trailing bytes of the next token decode as
+        // ordinary text. Example:
+        //
+        //   Token A → "\u{fffd}"          (incomplete leading bytes)
+        //   Token B → "\u{fffd}world"     (trailing bytes + plain text)
+        //
+        // In that case `new.last == "d"`, the original guard fires
+        // false, and we yield "FFFD FFFD world" — the visible `???`
+        // on Laguna live tests 2026-05-03.
+        //
+        // Fix: guard on `new.contains("\u{fffd}")` so any embedded
+        // replacement char defers emission until the next token is
+        // appended. Once subsequent tokens complete the UTF-8
+        // sequence, the joined decode of segmentTokens drops the FFFDs
+        // and the natural suffix delta produces clean text.
+        if new.contains("\u{fffd}") {
             return nil
         }
 

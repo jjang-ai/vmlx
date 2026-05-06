@@ -91,9 +91,22 @@ public enum JangConfigRepair {
             return
         }
 
-        // Write backup (skip if it already exists).
+        // Iter 143 — abort cleanly if backup write fails (read-only
+        // model dir, full disk, permissions). Previously the backup
+        // attempt was `try?`-swallowed AND the marker was stamped
+        // unconditionally below, so a read-only directory would
+        // (1) skip the backup, (2) fail the patch write, and
+        // (3) write the marker — next load reads the still-broken
+        // config and skips repair forever.
         if !FileManager.default.fileExists(atPath: backupURL.path) {
-            try? FileManager.default.copyItem(at: configURL, to: backupURL)
+            do {
+                try FileManager.default.copyItem(at: configURL, to: backupURL)
+            } catch {
+                if let data = "[vMLX][JangConfigRepair] WARN: backup write failed (\(error)); aborting repair to avoid lossy patch.\n".data(using: .utf8) {
+                    try? FileHandle.standardError.write(contentsOf: data)
+                }
+                return
+            }
         }
 
         // Build patched config and write atomically.
@@ -109,21 +122,55 @@ public enum JangConfigRepair {
         patched["quantization"] = quantBlock
 
         let tmpURL = modelDirectory.appendingPathComponent("config.json.tmp")
-        if let out = try? JSONSerialization.data(
+        // Iter 143 — gate the marker on actual successful patch write.
+        // The prior implementation stamped the marker even when the
+        // tmp → replaceItemAt rename failed silently, leaving the
+        // directory marked-as-repaired with an unrepaired config.
+        guard let out = try? JSONSerialization.data(
             withJSONObject: patched, options: [.prettyPrinted, .sortedKeys]
-        ) {
-            try? out.write(to: tmpURL, options: .atomic)
-            _ = try? FileManager.default.replaceItemAt(configURL, withItemAt: tmpURL)
+        ) else {
+            if let data = "[vMLX][JangConfigRepair] WARN: serialize failed; aborting repair.\n".data(using: .utf8) {
+                try? FileHandle.standardError.write(contentsOf: data)
+            }
+            return
+        }
+        do {
+            try out.write(to: tmpURL, options: .atomic)
+        } catch {
+            if let data = "[vMLX][JangConfigRepair] WARN: tmp write failed (\(error)); aborting repair.\n".data(using: .utf8) {
+                try? FileHandle.standardError.write(contentsOf: data)
+            }
+            return
+        }
+        do {
+            _ = try FileManager.default.replaceItemAt(configURL, withItemAt: tmpURL)
+        } catch {
+            // Clean up the tmp file rather than leaving an orphan.
+            try? FileManager.default.removeItem(at: tmpURL)
+            if let data = "[vMLX][JangConfigRepair] WARN: replaceItemAt failed (\(error)); aborting repair without marker so next load can retry.\n".data(using: .utf8) {
+                try? FileHandle.standardError.write(contentsOf: data)
+            }
+            return
         }
 
         // Stamp marker. Body is informational; presence is what the
-        // idempotency check reads.
+        // idempotency check reads. We reach here only after the patch
+        // landed successfully — so the marker accurately reflects
+        // "this directory is repaired".
         let markerBody =
             "vmlx-swift JangConfigRepair v1 — repaired \(mismatches.count) per-layer "
           + "(bits, group_size) entries against on-disk safetensors shapes. "
           + "Original config saved at config.json.bak. "
           + "Timestamp: \(ISO8601DateFormatter().string(from: Date()))\n"
-        try? markerBody.write(to: markerURL, atomically: true, encoding: .utf8)
+        if (try? markerBody.write(to: markerURL, atomically: true, encoding: .utf8)) == nil {
+            // Marker write failed but the patch succeeded — log + leave
+            // it. Next load will detect "no marker, but quant block
+            // already matches inferred" → no-op via collectMismatches
+            // returning empty.
+            if let data = "[vMLX][JangConfigRepair] WARN: marker write failed; repair may be re-attempted on next load (will be no-op).\n".data(using: .utf8) {
+                try? FileHandle.standardError.write(contentsOf: data)
+            }
+        }
     }
 
     /// Compare declared per-layer quantization (from config.json's

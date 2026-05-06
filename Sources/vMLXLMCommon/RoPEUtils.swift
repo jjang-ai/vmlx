@@ -9,6 +9,16 @@ import Foundation
 import MLX
 import MLXNN
 
+/// Iter 143 — emit a stderr warning when a RoPE config is malformed,
+/// in lieu of crashing. Once LogStore is reachable from vMLXLMCommon
+/// without a circular dep, replace these with structured log lines.
+@inline(__always)
+private func ropeWarn(_ message: String) {
+    if let data = "[vMLX][rope] WARN: \(message)\n".data(using: .utf8) {
+        try? FileHandle.standardError.write(contentsOf: data)
+    }
+}
+
 public class Llama3RoPE: Module, OffsetLayer, ArrayOffsetLayer {
     let dims: Int
     let maxPositionEmbeddings: Int
@@ -26,8 +36,18 @@ public class Llama3RoPE: Module, OffsetLayer, ArrayOffsetLayer {
         self.maxPositionEmbeddings = maxPositionEmbeddings
         self.traditional = traditional
 
-        guard let scalingConfig = scalingConfig else {
-            fatalError("Llama3RoPE requires scaling_config")
+        // Iter 143 — graceful fallback. Was: `fatalError("Llama3RoPE
+        // requires scaling_config")` which crashed engine load on any
+        // Llama-3 community quant whose `rope_scaling` block was
+        // truncated or absent. Now we log + use the standard
+        // (factor=1.0) Llama 3 defaults so the model loads with
+        // standard-context behavior; long-context inference may be
+        // suboptimal but the engine stays up.
+        let scalingConfig: [String: StringOrNumber] = scalingConfig ?? [:]
+        if scalingConfig.isEmpty {
+            ropeWarn(
+                "Llama3RoPE: scaling_config absent — using factor=1.0/8192 defaults. "
+                + "Long-context inference may underperform until rope_scaling is restored.")
         }
 
         let factor = scalingConfig["factor"]?.asFloat() ?? 1.0
@@ -268,17 +288,34 @@ public func initializeRope(
             mscaleAllDim: mscaleAllDim
         )
     } else if ropeType == "longrope" {
-        guard let config = scalingConfig else {
-            fatalError("longrope requires scaling_config")
-        }
-        guard let origMax = config["original_max_position_embeddings"]?.asInt() else {
-            fatalError("longrope requires original_max_position_embeddings")
-        }
-        guard let shortFactor = config["short_factor"]?.asFloats() else {
-            fatalError("longrope requires short_factor")
-        }
-        guard let longFactor = config["long_factor"]?.asFloats() else {
-            fatalError("longrope requires long_factor")
+        // Iter 143 — graceful fallback. Was 4 fatalErrors that crashed
+        // engine load on any Phi-3-class community quant whose
+        // `rope_scaling` block was truncated. Now: missing fields
+        // produce a warn + fallback to plain RoPE (standard context
+        // length); long-context inference will be suboptimal but the
+        // engine stays up.
+        guard let config = scalingConfig,
+              let origMax = config["original_max_position_embeddings"]?.asInt(),
+              let shortFactor = config["short_factor"]?.asFloats(),
+              let longFactor = config["long_factor"]?.asFloats()
+        else {
+            let missing: [String] = {
+                guard let config = scalingConfig else {
+                    return ["scaling_config (entire block)"]
+                }
+                var m: [String] = []
+                if config["original_max_position_embeddings"]?.asInt() == nil {
+                    m.append("original_max_position_embeddings")
+                }
+                if config["short_factor"]?.asFloats() == nil { m.append("short_factor") }
+                if config["long_factor"]?.asFloats() == nil { m.append("long_factor") }
+                return m
+            }()
+            ropeWarn(
+                "longrope: missing fields \(missing.joined(separator: ",")) — "
+                + "falling back to standard RoPE; long-context inference may be wrong "
+                + "for this bundle until rope_scaling is restored.")
+            return RoPE(dimensions: dims, traditional: traditional, base: base, scale: 1.0)
         }
 
         return SuScaledRoPE(
@@ -303,6 +340,14 @@ public func initializeRope(
         }
         return RoPE(dimensions: dims, traditional: traditional, base: base, scale: 1.0)
     } else {
-        fatalError("Unsupported RoPE type: \(ropeType)")
+        // Iter 143 — graceful fallback for unsupported rope_type. Was
+        // a fatalError that crashed engine load on any model with a
+        // future/exotic rope_type the Swift port doesn't yet
+        // recognize (Phi-4 variants, Qwen exp configs). Plain RoPE
+        // works for prompts up to the model's natural context.
+        ropeWarn(
+            "Unsupported RoPE type '\(ropeType)' — falling back to plain RoPE. "
+            + "Add a handler in initializeRope to support this type properly.")
+        return RoPE(dimensions: dims, traditional: traditional, base: base, scale: 1.0)
     }
 }

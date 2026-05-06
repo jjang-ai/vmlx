@@ -160,13 +160,37 @@ struct CommandBar: View {
             ))
         }
 
-        // Models
+        // Models — BLOCKER #4. Previously this only set
+        // `app.selectedModelPath`, which is a UI cursor, not a load
+        // command. Cmd+K → "Load model: X" looked successful (palette
+        // closed, tray pill flipped) but no engine.load fired, so the
+        // user's next chat message hit the "Model not running" banner
+        // with no breadcrumb back to the failed action. Now we route
+        // through `startSession` (creating a session row if needed)
+        // exactly like the chat dropdown's auto-load (BLOCKER #1) and
+        // the Server tab's Load Model button. Failures land on the
+        // session's `.error(msg)` state, which both `SessionView`
+        // (top of the Server tab) and `ChatScreen.ChatStateBanner`
+        // already render with retry CTAs, plus `startSession` calls
+        // `flashBanner("Engine load failed: …")` for global visibility
+        // when the user is on neither tab. Single error pipeline,
+        // three surfaces.
         for entry in models {
             out.append(.init(
                 title: "Load model: \(entry.displayName)",
                 subtitle: entry.family,
                 icon: "cpu",
-                run: { app.selectedModelPath = entry.canonicalPath }
+                run: {
+                    Task { @MainActor in
+                        let sid: UUID
+                        if let existing = app.sessionId(forModelPath: entry.canonicalPath) {
+                            sid = existing
+                        } else {
+                            sid = await app.createSession(forModel: entry.canonicalPath)
+                        }
+                        await app.startSession(sid)
+                    }
+                }
             ))
         }
 

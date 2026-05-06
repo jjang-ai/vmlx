@@ -182,6 +182,7 @@ class GLM4MoEGate: Module {
 class GLM4MoE: Module, UnaryLayer {
     let numExpertsPerTok: Int
     let gate: GLM4MoEGate
+    fileprivate let layerIdx: Int
 
     @ModuleInfo(key: "switch_mlp") var switchMLP: SwitchGLU
     @ModuleInfo(key: "shared_experts") var sharedExperts: GLM4MoEMLP?
@@ -190,13 +191,14 @@ class GLM4MoE: Module, UnaryLayer {
     /// with a slot-bank streamer; `sharedExperts` still runs natively.
     fileprivate var flashMoeShim: FlashMoEBlock? = nil
 
-    init(_ config: GLM4MoEConfiguration) {
+    init(_ config: GLM4MoEConfiguration, layerIdx: Int) {
         guard let nRoutedExperts = config.nRoutedExperts else {
             fatalError("GLM4MoE requires nRoutedExperts")
         }
 
         self.numExpertsPerTok = config.numExpertsPerTok
         self.gate = GLM4MoEGate(config)
+        self.layerIdx = layerIdx
 
         _switchMLP.wrappedValue = SwitchGLU(
             inputDims: config.hiddenSize,
@@ -220,6 +222,7 @@ class GLM4MoE: Module, UnaryLayer {
             y = shim(x)
         } else {
             let (inds, scores) = gate(x)
+            JangPressRouteTelemetry.recordTopK(layer: layerIdx, indices: inds)
             y = switchMLP(x, inds)
             y = (y * scores[.ellipsis, .newAxis]).sum(axis: -2).asType(y.dtype)
         }
@@ -241,7 +244,7 @@ class GLM4MoEDecoderLayer: Module {
         _attention.wrappedValue = GLM4MoEAttention(args)
 
         if args.nRoutedExperts != nil && layerIdx >= args.firstKDenseReplace {
-            self.mlp = GLM4MoE(args)
+            self.mlp = GLM4MoE(args, layerIdx: layerIdx)
         } else {
             self.mlp = GLM4MoEMLP(args)
         }
@@ -339,7 +342,8 @@ public class GLM4MoEModel: Module, LLMModel, KVCacheDimensionProvider {
                             sanitized.removeValue(
                                 forKey: "\(prefix).mlp.experts.\(e).\(n).\(k)")!
                         }
-                        sanitized["\(prefix).mlp.switch_mlp.\(n).\(k)"] = MLX.stacked(toJoin)
+                        sanitized["\(prefix).mlp.switch_mlp.\(n).\(k)"] =
+                            loadTimeMaterializedStacked(toJoin)
                     }
                 }
             }

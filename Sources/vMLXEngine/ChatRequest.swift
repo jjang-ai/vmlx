@@ -38,15 +38,17 @@ public struct ChatRequest: Codable, Sendable {
     //     400 — the semantic mismatch is severe enough that silently
     //     producing one completion or omitting logprobs would break
     //     the caller's downstream expectation.
-    //   - `frequency_penalty`, `presence_penalty`, `top_logprobs`
-    //     are RANGE-CHECKED but otherwise accepted silently. The
-    //     engine ignores them. Most OpenAI SDKs send defaults from
-    //     their own config (e.g., frequency_penalty=0); rejecting
-    //     those broke ~100% of vanilla-config callers without
-    //     warning.
-    //   - `logit_bias` + `response_format` are accepted as-is; the
-    //     engine ignores them. Listed in `validate()` as no-op-on-
-    //     present so the absent path doesn't break SDK round-trip.
+    //   - `frequency_penalty` / `presence_penalty` are RANGE-CHECKED
+    //     and they are now fully wired (§173) — `Stream.buildGenerateParameters`
+    //     forwards them into `GenerateParameters` and the sampler's
+    //     `FrequencyPenalty` / `PresencePenalty` LogitProcessors apply
+    //     them per-token. `top_logprobs` is RANGE-CHECKED and accepted
+    //     for SDK round-trip but the engine still doesn't emit
+    //     alternative-token rows (only the chosen-token logprob).
+    //   - `logit_bias` / `response_format` remain
+    //     accepted-but-unwired — accepted silently by `validate()`
+    //     so the absent path doesn't break SDK round-trip, but the
+    //     engine ignores them. See FIXME(iter-96 §174) on logitBias.
     //
     // Remove a field from the accept-silent list below AND extend
     // `Engine.stream` to actually honor it when real support lands.
@@ -81,18 +83,16 @@ public struct ChatRequest: Codable, Sendable {
     public var presencePenalty: Double?
 
     /// OpenAI `logit_bias` — per-token sampling bias dictionary.
+    /// Wire format: `{"<token_id>": <bias>, …}` where bias is a
+    /// number typically in [-100, 100]; -100 effectively bans the
+    /// token, +100 forces it.
     ///
-    /// FIXME(iter-96 §174): accepted-but-unwired. The sampler in
-    /// `Evaluate.swift` has no `LogitBiasContext` processor today,
-    /// so this field is decoded + Codable-mapped but never reaches
-    /// the sampler. Previously this was uncommented; now we label
-    /// it explicitly so the next iteration can implement
-    /// (a) a `LogitBiasContext: LogitProcessor` that adds the bias
-    /// dict to the logits at decode time, (b) a `params.logitBias`
-    /// field on `GenerateParameters`, and (c) the Stream.swift
-    /// wiring that forwards the map. The matching UI surface
-    /// should either disable the field or badge "not wired" until
-    /// the processor lands.
+    /// Iter 143: WIRED through to the sampler via `LogitBiasContext`
+    /// (Evaluate.swift). Stream.swift's buildGenerateParameters
+    /// parses string keys → Int token IDs and forwards as
+    /// `GenerateParameters.logitBias`. Out-of-vocab IDs are silently
+    /// ignored (see LogitBiasContext.process). Resolves the prior
+    /// iter-96 §174 FIXME.
     public var logitBias: [String: Double]?
 
     /// OpenAI `response_format` — JSON-object / JSON-schema
@@ -252,10 +252,97 @@ public struct ChatRequest: Codable, Sendable {
     }
 
     public struct ContentPart: Codable, Sendable {
-        public var type: String   // "text" | "image_url" | "video_url"
+        public var type: String   // "text" | "image_url" | "video_url" | "audio_url" | "input_audio"
         public var text: String?
         public var imageUrl: ImageURL?
         public var videoUrl: VideoURL?
+        public var audioUrl: AudioURL?
+        public var inputAudio: InputAudio?
+
+        public struct AudioURL: Codable, Sendable {
+            public var url: String
+            public init(url: String) {
+                self.url = url
+            }
+
+            /// Returns a local audio file URL. Supports file://, absolute
+            /// paths, data:audio/*;base64, and bounded HTTP(S) downloads.
+            public func loadAudioLocalURL() async -> URL? {
+                let raw = url
+                if raw.hasPrefix("file://") { return URL(string: raw) }
+                if raw.hasPrefix("/") { return URL(fileURLWithPath: raw) }
+                if raw.hasPrefix("data:") {
+                    guard let comma = raw.firstIndex(of: ","),
+                          let bytes = Data(
+                            base64Encoded: String(raw[raw.index(after: comma)...]),
+                            options: .ignoreUnknownCharacters)
+                    else { return nil }
+                    let ext: String
+                    if raw.contains("audio/wav") || raw.contains("audio/x-wav") {
+                        ext = "wav"
+                    } else if raw.contains("audio/mpeg") || raw.contains("audio/mp3") {
+                        ext = "mp3"
+                    } else if raw.contains("audio/flac") {
+                        ext = "flac"
+                    } else {
+                        ext = "wav"
+                    }
+                    let tmp = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("vmlx-audio-\(UUID().uuidString).\(ext)")
+                    do {
+                        try bytes.write(to: tmp)
+                        return tmp
+                    } catch {
+                        return nil
+                    }
+                }
+                if raw.hasPrefix("http://") || raw.hasPrefix("https://") {
+                    guard let u = URL(string: raw) else { return nil }
+                    do {
+                        var req = URLRequest(url: u)
+                        req.timeoutInterval = 20
+                        let (data, _) = try await URLSession.shared.data(for: req)
+                        guard data.count <= 128 * 1024 * 1024 else { return nil }
+                        let ext = u.pathExtension.isEmpty ? "wav" : u.pathExtension
+                        let tmp = FileManager.default.temporaryDirectory
+                            .appendingPathComponent("vmlx-audio-\(UUID().uuidString).\(ext)")
+                        try data.write(to: tmp)
+                        return tmp
+                    } catch {
+                        return nil
+                    }
+                }
+                return nil
+            }
+        }
+
+        public struct InputAudio: Codable, Sendable {
+            public var data: String?
+            public var format: String?
+
+            public init(data: String? = nil, format: String? = nil) {
+                self.data = data
+                self.format = format
+            }
+
+            public func loadAudioLocalURL() -> URL? {
+                guard let data,
+                      let bytes = Data(base64Encoded: data, options: .ignoreUnknownCharacters)
+                else { return nil }
+                let ext = (format?.isEmpty == false ? format! : "wav")
+                    .lowercased()
+                    .trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+                let tmp = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("vmlx-audio-\(UUID().uuidString).\(ext.isEmpty ? "wav" : ext)")
+                do {
+                    try bytes.write(to: tmp)
+                    return tmp
+                } catch {
+                    return nil
+                }
+            }
+        }
+
         public struct VideoURL: Codable, Sendable {
             public var url: String
             public init(url: String) {
@@ -384,18 +471,24 @@ public struct ChatRequest: Codable, Sendable {
             type: String,
             text: String? = nil,
             imageUrl: ImageURL? = nil,
-            videoUrl: VideoURL? = nil
+            videoUrl: VideoURL? = nil,
+            audioUrl: AudioURL? = nil,
+            inputAudio: InputAudio? = nil
         ) {
             self.type = type
             self.text = text
             self.imageUrl = imageUrl
             self.videoUrl = videoUrl
+            self.audioUrl = audioUrl
+            self.inputAudio = inputAudio
         }
 
         enum CodingKeys: String, CodingKey {
             case type, text
             case imageUrl = "image_url"
             case videoUrl = "video_url"
+            case audioUrl = "audio_url"
+            case inputAudio = "input_audio"
         }
     }
 
@@ -485,7 +578,29 @@ public struct ChatRequest: Codable, Sendable {
         case thinkingBudget = "thinking_budget"
         case maxToolIterations = "max_tool_iterations"
         case maxCompletionTokens = "max_completion_tokens"
+        // mlxstudio #100 — Continue extension + Anthropic-shaped clients
+        // send the nested form `reasoning: { effort: "medium" }` instead
+        // of the flat OpenAI `reasoning_effort: "medium"`. Without this
+        // alias the field decoded to nil → `effortImpliesThinking` was
+        // false → enable_thinking defaulted to false → reasoning never
+        // fired even when the user explicitly requested it. Decoded
+        // into `reasoningContainer`, folded into `reasoningEffort` via
+        // `applyReasoningContainerAlias()` post-decode.
+        case reasoningContainer = "reasoning"
     }
+
+    /// Anthropic-shaped reasoning container: `{ "effort": "low|medium|high|max", "type": "..." }`.
+    /// Only `effort` is consumed today — other fields are forward-compat
+    /// stubs. See `applyReasoningContainerAlias()` for the fold logic.
+    public struct ReasoningContainer: Codable, Sendable {
+        public var effort: String?
+        public var type: String?
+        public init(effort: String? = nil, type: String? = nil) {
+            self.effort = effort
+            self.type = type
+        }
+    }
+    public var reasoningContainer: ReasoningContainer?
 
     /// OpenAI v2 alias for `max_tokens`. Stored as-is via Codable
     /// auto-synthesis; the route handler folds it into `maxTokens` via
@@ -499,6 +614,21 @@ public struct ChatRequest: Codable, Sendable {
     public mutating func applyMaxCompletionTokensAlias() {
         if maxTokens == nil, let v = maxCompletionTokens, v > 0 {
             maxTokens = v
+        }
+    }
+
+    /// mlxstudio #100 — fold the nested `reasoning: { effort: "..." }`
+    /// container into the flat `reasoning_effort` field. Continue
+    /// extension and other Anthropic-shaped clients send the nested
+    /// form. The flat field wins if both are present (matches
+    /// max_completion_tokens precedence).
+    /// Idempotent.
+    public mutating func applyReasoningContainerAlias() {
+        if reasoningEffort == nil,
+           let effort = reasoningContainer?.effort,
+           !effort.isEmpty
+        {
+            reasoningEffort = effort
         }
     }
 

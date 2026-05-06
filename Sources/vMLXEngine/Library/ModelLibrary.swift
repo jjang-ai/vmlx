@@ -140,12 +140,20 @@ public actor ModelLibrary {
         // Without this the `GET /v1/models` route would miss them.
         // Idempotent — the DB's upsert ignores duplicates.
         if let home = ProcessInfo.processInfo.environment["HOME"] {
-            let legacy = URL(fileURLWithPath: home)
-                .appendingPathComponent(".mlxstudio/models")
-            if FileManager.default.fileExists(atPath: legacy.path) {
-                let existing = Set(database.userDirs().map { $0.standardizedFileURL.path })
-                if !existing.contains(legacy.standardizedFileURL.path) {
-                    database.addUserDir(legacy)
+            let fm = FileManager.default
+            let existing = Set(database.userDirs().map { $0.standardizedFileURL.path })
+            // Auto-register any of these legacy/canonical roots that
+            // exist on disk. Idempotent via the existing-set check.
+            // Iter 143: `~/models` is the new canonical location per
+            // Eric's 2026-05-04 directive.
+            let candidates = [
+                URL(fileURLWithPath: home).appendingPathComponent("models"),
+                URL(fileURLWithPath: home).appendingPathComponent(".mlxstudio/models"),
+            ]
+            for candidate in candidates {
+                guard fm.fileExists(atPath: candidate.path) else { continue }
+                if !existing.contains(candidate.standardizedFileURL.path) {
+                    database.addUserDir(candidate)
                     pendingForcedRescan = true
                 }
             }
@@ -259,13 +267,29 @@ public actor ModelLibrary {
             return roots.map { $0.standardizedFileURL }
         }()
         let target = path.standardizedFileURL
+        // Iter 144 — STRICT subpath only. The pre-fix `target.path ==
+        // root.path` branch was a defense gap: a corrupted DB row
+        // with `canonicalPath` set to the root itself
+        // (~/.cache/huggingface/hub or ~/.mlxstudio/models) would
+        // pass the safety fence and the next `fm.removeItem(at:
+        // target)` would `rm -rf` the entire root — every model the
+        // user has cached, gone. Now require the target to live
+        // strictly UNDER a known root, never equal to the root.
         let isUnderKnown = knownRoots.contains { root in
             target.path.hasPrefix(root.path + "/")
-                || target.path == root.path
         }
         guard isUnderKnown else {
             throw EngineError.unsupportedModelType(
-                "refuse to delete \(target.path): not under a known model root")
+                "refuse to delete \(target.path): not strictly under a known model root")
+        }
+        // Defense in depth — also reject empty / "/" / single-segment
+        // paths that somehow slipped past the root check. A model dir
+        // is at minimum `<root>/<sanitized-id>/...`, so `target` must
+        // have at least 2 path components past the root prefix.
+        // Cheap belt: count the path components and require ≥ 3.
+        if target.pathComponents.count < 3 {
+            throw EngineError.unsupportedModelType(
+                "refuse to delete \(target.path): suspiciously shallow path")
         }
 
         // iter-124 §150: refuse if any engine is mid-load on this path.
@@ -413,13 +437,23 @@ public actor ModelLibrary {
                     .appendingPathComponent(".cache/huggingface/hub"))
                 r.append(URL(fileURLWithPath: home)
                     .appendingPathComponent(".mlxstudio/models"))
+                // Iter 143 — Eric directive 2026-05-04: models now live
+                // under ~/models. Add as a known root so admin paths
+                // resolve cleanly + delete-entry safety fence accepts it.
+                r.append(URL(fileURLWithPath: home)
+                    .appendingPathComponent("models"))
             }
             r.append(contentsOf: database.userDirs())
             return r.map { $0.standardizedFileURL }
         }()
         let target = url.standardizedFileURL
+        // Iter 144 — strict-subpath only. Admin routes that pass a
+        // caller-supplied URL through this gate must NOT see the
+        // root itself slip past as a valid model path. The
+        // delete-entry fence at the top of this file got the same
+        // treatment; both gates now agree.
         return roots.contains { root in
-            target.path.hasPrefix(root.path + "/") || target.path == root.path
+            target.path.hasPrefix(root.path + "/")
         }
     }
 

@@ -28,10 +28,30 @@ import Foundation
 public actor GenerationLock {
 
     private var held: Bool = false
-    // B2 §261: waiters now carry an id so cancellation can remove them
-    // by identity. The tuple order is (id, continuation); /health sees
-    // `waiters.count` which stays accurate under cancellation.
-    private var waiters: [(UUID, CheckedContinuation<Void, Never>)] = []
+    // B2 §261: waiters carry an id so cancellation can remove them by
+    // identity. /health reads `waiters.count`.
+    //
+    // Iter 144 — switched to `CheckedContinuation<Void, Error>` so
+    // cancellation can resume with `CancellationError` instead of a
+    // bare resume. The bare-resume path was a real bug:
+    //
+    //   1. Task A holds (held=true).
+    //   2. Task B queued in waiters.
+    //   3. Task B parent cancels → onCancel → dropWaiter removes +
+    //      resumes B's continuation with success.
+    //   4. Task B returns from acquire() thinking it owns the lock.
+    //   5. Task.checkCancellation throws somewhere later in the body.
+    //   6. Cleanup catches CancellationError, calls release().
+    //   7. release() sees empty waiters → sets held=false.
+    //      ← A still actually holds. Lock is corrupt.
+    //   8. Next acquire() sees held=false, runs CONCURRENT with A.
+    //      Metal command-queue race → process abort.
+    //
+    // The fix: make acquire() throwing. dropWaiter resumes with
+    // `CancellationError`, which propagates out of `try await acquire()`.
+    // Caller catches BEFORE calling release(), so the lock state is
+    // never wrongly mutated by a task that never owned it.
+    private var waiters: [(UUID, CheckedContinuation<Void, Error>)] = []
 
     public init() {}
 
@@ -47,22 +67,18 @@ public actor GenerationLock {
     /// "tasks in flight OR blocked" count.
     public var inflightOrQueued: Int { (held ? 1 : 0) + waiters.count }
 
-    public func acquire() async {
+    public func acquire() async throws {
         if !held {
             held = true
             return
         }
-        // B2 §261: cancel-aware wait. Without this, an outer Task that
-        // cancels mid-acquire leaks its continuation in `waiters` — the
-        // /health `waiting` counter inflates forever, and a subsequent
-        // release() hands the baton to a dead Task whose work never
-        // runs. `withTaskCancellationHandler` gives us an `onCancel`
-        // hook that wakes the waiter; we then drop it from the queue
-        // and return normally, letting the outer Task's next `try`
-        // observe the CancellationError.
+        // B2 §261 + iter 144: cancel-aware wait. The continuation now
+        // throws `CancellationError` on cancel rather than resuming
+        // with success — see the type-level comment on `waiters` above
+        // for the bug this prevents.
         let id = UUID()
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
                 waiters.append((id, cont))
             }
         } onCancel: { [weak self] in
@@ -72,14 +88,15 @@ public actor GenerationLock {
         }
     }
 
-    /// B2 §261: remove a cancelled waiter by id. If the waiter had
-    /// already been dequeued and resumed, this is a no-op. If it was
-    /// still pending, resume it so the outer Task completes and the
-    /// counter decrements.
+    /// B2 §261 + iter 144: remove a cancelled waiter by id. If the
+    /// waiter had already been dequeued and resumed (won the baton),
+    /// this is a no-op. Otherwise resume with `CancellationError` so
+    /// the caller's `try await acquire()` throws and they don't go on
+    /// to do work or call `release()` on a lock they never owned.
     private func dropWaiter(id: UUID) {
         guard let idx = waiters.firstIndex(where: { $0.0 == id }) else { return }
         let entry = waiters.remove(at: idx)
-        entry.1.resume()
+        entry.1.resume(throwing: CancellationError())
     }
 
     public func release() {
@@ -95,8 +112,13 @@ public actor GenerationLock {
     /// Helper — acquires, runs the body, releases on both success and
     /// error paths. Prefer this over manual acquire/release so a thrown
     /// error doesn't leak the lock.
-    public func withLock<T>(_ body: () async throws -> T) async rethrows -> T {
-        await acquire()
+    ///
+    /// Iter 144 — `acquire()` now throws on cancellation, so this
+    /// helper does too. If acquire throws, body never runs and release
+    /// isn't called (we never owned the lock). If body throws, we
+    /// release and rethrow.
+    public func withLock<T>(_ body: () async throws -> T) async throws -> T {
+        try await acquire()
         do {
             let result = try await body()
             release()

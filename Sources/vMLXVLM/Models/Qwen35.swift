@@ -880,8 +880,11 @@ enum Qwen35Language {
             }
 
             let convInput = concatenated([convState, mixedQKV], axis: 1)
+                .reshaped(B, convState.dim(1) + S, convDim)
             if let cache, convKernelSize > 1 {
-                cache[0] = convInput[0..., (-(convKernelSize - 1))...]
+                let end = convInput.dim(1)
+                let start = max(0, end - (convKernelSize - 1))
+                cache[0] = convInput[0..., start ..< end, 0...]
             }
 
             let convOut = silu(conv1d(convInput))
@@ -925,6 +928,7 @@ enum Qwen35Language {
         let normTopkProb: Bool
         let numExperts: Int
         let topK: Int
+        let layerIdx: Int
 
         @ModuleInfo(key: "gate") var gate: Linear
         @ModuleInfo(key: "switch_mlp") var switchMLP: SwitchGLU
@@ -932,10 +936,11 @@ enum Qwen35Language {
         @ModuleInfo(key: "shared_expert") var sharedExpert: MLP
         @ModuleInfo(key: "shared_expert_gate") var sharedExpertGate: Linear
 
-        init(_ args: Qwen35Configuration.TextConfiguration) {
+        init(_ args: Qwen35Configuration.TextConfiguration, layerIdx: Int) {
             self.normTopkProb = args.normTopkProb
             self.numExperts = args.numExperts
             self.topK = args.numExpertsPerTok
+            self.layerIdx = layerIdx
 
             _gate.wrappedValue = Linear(args.hiddenSize, args.numExperts, bias: false)
             _switchMLP.wrappedValue = SwitchGLU(
@@ -959,6 +964,7 @@ enum Qwen35Language {
             let kth = gates.dim(-1) - topK
             let inds = MLX.argPartition(gates, kth: kth, axis: -1)[.ellipsis, kth...]
             var scores = MLX.takeAlong(gates, inds, axis: -1)
+            JangPressRouteTelemetry.recordTopK(layer: layerIdx, indices: inds)
             if normTopkProb {
                 scores = scores / scores.sum(axis: -1, keepDims: true)
             }
@@ -994,7 +1000,7 @@ enum Qwen35Language {
             }
 
             if args.numExperts > 0 {
-                _mlp.wrappedValue = SparseMoeBlock(args)
+                _mlp.wrappedValue = SparseMoeBlock(args, layerIdx: layerIdx)
             } else {
                 _mlp.wrappedValue = MLP(
                     dimensions: args.hiddenSize, hiddenDimensions: args.intermediateSize)
@@ -1061,6 +1067,9 @@ enum Qwen35Language {
                 hiddenStates = inputsEmbeds
             } else {
                 hiddenStates = embedTokens(inputs)
+            }
+            if hiddenStates.ndim == 2 {
+                hiddenStates = hiddenStates[.newAxis, 0..., 0...]
             }
 
             var cacheArray = cache

@@ -242,14 +242,32 @@ class Mistral4Attention: Module {
 
         // Llama 4 position-dependent query scaling
         if llama4Beta > 0 {
-            let offset = cache?.offset ?? 0
-            let l4Scale = 1.0 + llama4Beta * log(1.0 + floor(Float(offset) / Float(llama4MaxPos)))
-            if l4Scale != 1.0 {
-                queries = queries * l4Scale
+            if let offsetArray = graphOffsetArray(for: cache) {
+                var scaleArray =
+                    1.0 + llama4Beta
+                    * MLX.log(
+                        1.0
+                            + MLX.floor(
+                                offsetArray.asType(.float32) / Float(llama4MaxPos)))
+                if scaleArray.ndim > 0 {
+                    scaleArray = scaleArray[0..., .newAxis, .newAxis, .newAxis]
+                }
+                queries = queries * scaleArray.asType(queries.dtype)
+            } else {
+                let offset = cache?.offset ?? 0
+                let l4Scale =
+                    1.0 + llama4Beta
+                    * log(1.0 + floor(Float(offset) / Float(llama4MaxPos)))
+                if l4Scale != 1.0 {
+                    queries = queries * l4Scale
+                }
             }
         }
 
-        let output = MLXFast.scaledDotProductAttention(
+        // Iter 143 — MLA fp32 SDPA cast on L==1 (decode step). See
+        // `mlaScaledDotProductAttention` in AttentionUtils.swift +
+        // DSV3 call site for the rationale.
+        let output = mlaScaledDotProductAttention(
             queries: queries, keys: keys, values: values, scale: scale, mask: mask)
         return oProj(output.transposed(0, 2, 1, 3).reshaped(B, L, -1))
     }
@@ -322,14 +340,19 @@ class Mistral4MoE: Module, UnaryLayer {
     @ModuleInfo(key: "switch_mlp") var switchMLP: SwitchGLU
     @ModuleInfo(key: "shared_experts") var sharedExperts: Mistral4MLP?
 
+    /// Layer index inside the decoder stack. Used by JangPress route
+    /// telemetry; pure decode-time read, never participates in math.
+    fileprivate let layerIndex: Int
+
     /// Flash MoE Phase 2b shim. When non-nil, the routed experts
     /// path is served from the slot-bank streamer instead of the
     /// in-memory `switchMLP`. `sharedExperts` still runs natively so
     /// the always-on shared MLP contribution is preserved.
     fileprivate var flashMoeShim: FlashMoEBlock? = nil
 
-    init(_ config: Mistral4Configuration) {
+    init(_ config: Mistral4Configuration, layerIndex: Int) {
         self.gate = Mistral4MoEGate(config)
+        self.layerIndex = layerIndex
         self._switchMLP.wrappedValue = SwitchGLU(
             inputDims: config.hiddenSize,
             hiddenDims: config.moeIntermediateSize,
@@ -353,6 +376,7 @@ class Mistral4MoE: Module, UnaryLayer {
             y = shim(x)
         } else {
             let (inds, scores) = gate(x)
+            JangPressRouteTelemetry.recordTopK(layer: layerIndex, indices: inds)
             y = switchMLP(x, inds)
             y = (y * expandedDimensions(scores, axis: -1)).sum(axis: -2)
         }
@@ -379,7 +403,7 @@ class Mistral4DecoderLayer: Module {
             && layerIndex % config.moeLayerFreq == 0
 
         if isMoE {
-            self._mlp.wrappedValue = Mistral4MoE(config)
+            self._mlp.wrappedValue = Mistral4MoE(config, layerIndex: layerIndex)
         } else {
             self._mlp.wrappedValue = Mistral4MLP(
                 hiddenSize: config.hiddenSize, intermediateSize: config.intermediateSize)

@@ -85,7 +85,14 @@ extension Engine {
         let userSlots = max(8, g.flashMoeSlotBank)
         let autoSlots = autoSizeSlotBank(modelPath: opts.modelPath)
         let effectiveSlots: Int
-        if g.flashMoeSlotBank <= 64, let auto = autoSlots, auto > userSlots {
+        // Iter 143: replaced the magic `64` with the named sentinel
+        // constant so the auto-size threshold is grep-able and can't
+        // drift from the SettingsTypes.swift default. Users who set
+        // any value > sentinel (typical: 256, 512, 1024) get exactly
+        // what they asked for.
+        if g.flashMoeSlotBank <= GlobalSettings.flashMoeSlotBankAutoSentinel,
+           let auto = autoSlots, auto > userSlots
+        {
             effectiveSlots = min(2048, auto)
             await self.logs.append(
                 .info, category: "flashMoE",

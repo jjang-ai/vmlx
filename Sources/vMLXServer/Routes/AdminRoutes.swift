@@ -65,6 +65,15 @@ public enum AdminRoutes {
                 "scheduling": "serial-fifo",
                 "inflight": inflight,
                 "waiting": waiting,
+                // Iter 143 — flip `continuous_batching` to TRUE only
+                // when the lazily-built BatchEngine instance is alive.
+                // Going through `engine.batchEngine(...)` causes it to
+                // be built; until then `streamReal` runs through the
+                // GenerationLock-serial path and we honestly report
+                // `false`. The iter-140 explicit-honesty marker is
+                // preserved — the new shape is "false until you
+                // actually wire batching".
+                "continuous_batching": (await engine.batchEngineInstance) != nil,
             ]
             if let model { body["model"] = model }
             if let detail { body["detail"] = detail }
@@ -76,6 +85,53 @@ public enum AdminRoutes {
             let idle = await engine.idleTimer.sleepCountdowns()
             if let soft = idle.soft { body["idle_soft_seconds"] = Int(soft) }
             if let deep = idle.deep { body["idle_deep_seconds"] = Int(deep) }
+
+            // Iter 140 — surface a compact cache_summary on /health so
+            // monitors + dashboards can see live cache hit rates,
+            // disk-tier sizing, and JangPress backend without polling
+            // the larger /v1/cache/stats endpoint. Cheap (engine
+            // already keeps these counts) and deeply load-bearing for
+            // the user's "make sure health and stats has the proper
+            // cache hit and jangpress info" directive.
+            if state == .running, let stats = try? await engine.cacheStats() {
+                var summary: [String: Any] = [:]
+                if let paged = stats["paged"] as? [String: Any] {
+                    var p: [String: Any] = [:]
+                    if let enabled = paged["enabled"] { p["enabled"] = enabled }
+                    if let hr = paged["hitRate"] { p["hit_rate"] = hr }
+                    if let h = paged["hitCount"] { p["hits"] = h }
+                    if let m = paged["missCount"] { p["misses"] = m }
+                    if let bs = paged["blockSize"] { p["block_size"] = bs }
+                    if let bu = paged["blocksInUse"] { p["blocks_in_use"] = bu }
+                    summary["paged"] = p
+                }
+                if let disk = stats["disk"] as? [String: Any] {
+                    var d: [String: Any] = [:]
+                    if let enabled = disk["enabled"] { d["enabled"] = enabled }
+                    if let hr = disk["hitRate"] { d["hit_rate"] = hr }
+                    if let bytes = disk["bytesUsed"] { d["bytes_used"] = bytes }
+                    if let cap = disk["bytesCap"] { d["bytes_cap"] = cap }
+                    summary["disk"] = d
+                }
+                if let ssm = stats["ssm"] as? [String: Any] {
+                    summary["ssm"] = ssm
+                }
+                // JangPress (axis E cold-weight tier) — backend tag +
+                // pct + hot-fraction pulled from the live controller.
+                if let jp = stats["jangPress"] as? [String: Any] {
+                    summary["jangpress"] = jp
+                }
+                if let arch = stats["architecture"] as? [String: Any] {
+                    // Only include the high-signal fields, not the full
+                    // per-layer breakdown which lives at /v1/cache/stats.
+                    var a: [String: Any] = [:]
+                    if let h = arch["hybridSSMActive"] { a["hybrid_ssm"] = h }
+                    if let s = arch["slidingWindowActive"] { a["sliding_window"] = s }
+                    if let t = arch["turboQuantActive"] { a["turbo_quant"] = t }
+                    summary["architecture"] = a
+                }
+                if !summary.isEmpty { body["cache_summary"] = summary }
+            }
             return OpenAIRoutes.json(body)
         }
 
@@ -136,6 +192,49 @@ public enum AdminRoutes {
             }
         }
 
+        // Iter 143 — admin batch-engine controls. Continuous batching
+        // is opt-in (iter-9 reference; production polish TBD per
+        // Engine.batchEngine doc). Operators can:
+        //   • POST /admin/batch-engine/start  — build the engine
+        //   • POST /admin/batch-engine/stop   — shutdown + free
+        //   • GET  /admin/batch-engine        — status snapshot
+        router.get("/admin/batch-engine") { _, _ -> Response in
+            let live = (await engine.batchEngineInstance) != nil
+            var out: [String: Any] = ["live": live]
+            if let bx = await engine.batchEngineInstance {
+                out["max_batch_size"] = await bx.maxBatchSize
+                out["pending"] = await bx.pendingCount
+                out["active"] = await bx.activeCount
+                out["running"] = await bx.isRunning
+            }
+            return OpenAIRoutes.json(out)
+        }
+        router.post("/admin/batch-engine/start") { req, _ -> Response in
+            var req = req
+            let body = try? await req.collectBody(upTo: 1024)
+            var maxBatchSize = 8
+            if let body,
+               let obj = try? JSONSerialization.jsonObject(with: Data(buffer: body))
+                       as? [String: Any],
+               let m = obj["max_batch_size"] as? Int, m > 0, m <= 32
+            {
+                maxBatchSize = m
+            }
+            guard let bx = await engine.batchEngine(maxBatchSize: maxBatchSize) else {
+                return OpenAIRoutes.errorJSON(
+                    .serviceUnavailable,
+                    "no model loaded — load a model first")
+            }
+            return OpenAIRoutes.json([
+                "status": "started",
+                "max_batch_size": await bx.maxBatchSize,
+            ])
+        }
+        router.post("/admin/batch-engine/stop") { _, _ -> Response in
+            await engine.shutdownBatchEngine()
+            return OpenAIRoutes.json(["status": "stopped"])
+        }
+
         // POST /admin/wake — optional JSON body `{model: "<path>"}` lets the
         // caller swap to a different model on wake (otherwise the retained
         // `lastLoadOptions` from the previous load is replayed). Empty body
@@ -161,7 +260,8 @@ public enum AdminRoutes {
                         .badRequest,
                         "model path must live under a configured model root")
                 }
-                override = Engine.LoadOptions(modelPath: url)
+                let resolved = await engine.settings.resolved(sessionId: nil)
+                override = Engine.LoadOptions(modelPath: url, from: resolved)
             }
             do {
                 try await engine.wake(override: override)
@@ -303,6 +403,25 @@ public enum AdminRoutes {
                 // shared mapper so .promptTooLong → 413, .modelNotFound
                 // → 404, .notLoaded → 503 get the right status codes
                 // instead of collapsing to 501.
+                return OpenAIRoutes.mapEngineError(err)
+            } catch {
+                return OpenAIRoutes.errorJSON(.notImplemented, "\(error)")
+            }
+        }
+
+        // GET /v1/cache/jangpress — JANGPress-only sub-view of /v1/cache/stats.
+        //
+        // Surfaces the cold-weight tier counters in isolation so a
+        // monitoring tool can poll just this endpoint without the
+        // full prefix-cache + KV-encoding payload. Reports backend
+        // (mmap | mach | none) plus per-backend stats.
+        // See `vMLXLMCommon/Cache/JANGPRESS-USAGE.md`.
+        router.get("/v1/cache/jangpress") { _, _ -> Response in
+            do {
+                let stats = try await engine.cacheStats()
+                let ember = stats["jangPress"] ?? ["backend": "none"]
+                return OpenAIRoutes.json(["jangPress": ember])
+            } catch let err as EngineError {
                 return OpenAIRoutes.mapEngineError(err)
             } catch {
                 return OpenAIRoutes.errorJSON(.notImplemented, "\(error)")

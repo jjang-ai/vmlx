@@ -49,7 +49,9 @@ struct ChatScreen: View {
                     // Only bounce to Server tab as a LAST resort when the
                     // chat has zero model selected yet (cold first-run).
                     Task { @MainActor in
-                        await loadChatModelInline(app: app, vm: vm)
+                        await loadChatModelInline(
+                            app: app, vm: vm,
+                            startFreshIfCurrentChatHasMessages: true)
                     }
                 } onRetry: {
                     // iter-133 §159: the Retry button on the .error banner
@@ -69,7 +71,9 @@ struct ChatScreen: View {
                     // don't stick around.
                     vm.bannerMessage = nil
                     Task { @MainActor in
-                        await loadChatModelInline(app: app, vm: vm)
+                        await loadChatModelInline(
+                            app: app, vm: vm,
+                            startFreshIfCurrentChatHasMessages: true)
                     }
                 }
 
@@ -208,11 +212,21 @@ struct EngineStateBanner: View {
                     )
                 )
             case .standby(.soft):
+                // Iter 144 — gate spinner + "restoring caches" copy on
+                // isStreaming. Pre-fix the banner ALWAYS said "Waking
+                // up model and restoring caches…" with a spinner when
+                // the engine sat in soft sleep — even at idle with no
+                // message in flight. That's a UI lie. The actual
+                // wake-up only fires when a message hits the engine
+                // via `wakeFromStandby`. Idle soft-standby gets a
+                // calmer "Light sleep — wakes on next message" copy.
                 ColoredBanner(
                     icon: "moon.zzz",
                     tint: Theme.Colors.warning,
-                    title: "Waking up model and restoring caches…",
-                    showSpinner: true
+                    title: isStreaming
+                        ? "Waking up model and restoring caches…"
+                        : "Light sleep — wakes on next message",
+                    showSpinner: isStreaming
                 )
             case .standby(.deep):
                 ColoredBanner(
@@ -229,11 +243,31 @@ struct EngineStateBanner: View {
                     cta: ("Load Model", onLoadModel)
                 )
             case .error(let msg):
+                // P1 #7 — when the throw text mentions the legacy
+                // Python panel (laguna, ministral3, future families
+                // that don't have a Swift port yet), swap the Retry
+                // CTA for "Open Legacy Panel" so the user has a
+                // working path forward instead of being stuck retrying
+                // an unsupported load.
+                let mentionsLegacyPanel = msg.lowercased().contains("legacy python panel")
+                    || msg.lowercased().contains("/applications/vmlx.app")
                 ColoredBanner(
                     icon: "xmark.octagon",
                     tint: Theme.Colors.danger,
                     title: msg,
-                    cta: ("Retry", onRetry)
+                    cta: mentionsLegacyPanel
+                        ? ("Open Legacy Panel", {
+                            // Best-effort launch of the bundled
+                            // Electron app. NSWorkspace returns
+                            // success/failure but UX-wise we just
+                            // open and let the OS handle "not
+                            // installed" gracefully (the user sees
+                            // the standard "app not found" Finder
+                            // dialog).
+                            let url = URL(fileURLWithPath: "/Applications/vMLX.app")
+                            NSWorkspace.shared.open(url)
+                          })
+                        : ("Retry", onRetry)
                 )
             case .running:
                 if isStreaming && !hasContent {
@@ -368,7 +402,28 @@ private struct ChatTopBar: View {
             Text(currentTitle)
                 .font(Theme.Typography.bodyHi)
                 .foregroundStyle(Theme.Colors.textHigh)
+            // Iter 143 — model arch pills (TQ / hybrid / SWA) so users
+            // see at a glance what's loaded. Same pill design as
+            // CachePanel + TrayItem; polls cacheStats every 5s.
+            ChatHeaderArchPills()
             Spacer()
+
+            // Iter 145 — always-visible clean transcript escape.
+            // The sidebar can be collapsed or visually empty while a
+            // corrupted persisted chat is selected; burying "New Chat"
+            // only in that sidebar made the Load Model path look like it
+            // was still generating garbage even after the runtime fix had
+            // landed. Keep an icon-level escape in the top bar where the
+            // user is already testing.
+            Button {
+                vm.bannerMessage = nil
+                vm.newSession()
+            } label: {
+                Image(systemName: "plus.bubble")
+                    .foregroundStyle(Theme.Colors.textMid)
+            }
+            .buttonStyle(.borderless)
+            .help("New Chat")
 
             // In-chat model picker — fixes the "no way to pick a model
             // from Chat" gap the audit flagged as #2 priority. Lists
@@ -776,7 +831,7 @@ private struct ChatModelPicker: View {
 
     private func currentEntry() -> ModelLibrary.ModelEntry? {
         guard !currentAlias.isEmpty else { return nil }
-        return entries.first(where: { $0.displayName == currentAlias })
+        return modelEntry(in: entries, matching: currentAlias)
     }
 
     private func currentEntryState() -> LoadState {
@@ -814,11 +869,78 @@ private struct ChatModelPicker: View {
             vm.bannerMessage = "No active chat — open or create a chat first."
             return
         }
+
+        // iter 137 — chat-vs-model compatibility warning. Per user
+        // directive 2026-05-03: "if curent chat uer is in is not
+        // compatible with previous model and user is trying to change
+        // to model that is not compatible cache or parser then warn
+        // to open new chat".
+        //
+        // The check fires only when the chat ALREADY has turns. A
+        // fresh chat is always compat-safe because there's no
+        // accumulated KV / parser state to be invalidated.
+        //
+        // Detection is read-only file-based (`CapabilityDetector.detect`
+        // never loads weights, just walks config.json + jang_config.json
+        // + generation_config.json). Cheap enough to run on every
+        // dropdown click. The warning is non-blocking — we set a
+        // banner and proceed with the load. User can manually start
+        // a new chat to clean-slate.
+        let priorAlias = await app.engine.settings.chat(chatId)?.modelAlias
+        if !vm.messages.isEmpty,
+           let prior = priorAlias,
+           !prior.isEmpty,
+           prior != alias
+        {
+            let entries = await app.engine.modelLibrary.entries()
+            let priorEntry = entries.first { $0.displayName == prior }
+            let newEntry = entries.first { $0.displayName == alias }
+            if let priorURL = priorEntry?.canonicalPath,
+               let newURL = newEntry?.canonicalPath
+            {
+                let priorCaps = CapabilityDetector.detect(at: priorURL)
+                let newCaps = CapabilityDetector.detect(at: newURL)
+                var diffs: [String] = []
+                if priorCaps.family != newCaps.family {
+                    diffs.append("family \(priorCaps.family) → \(newCaps.family)")
+                }
+                if priorCaps.cacheType != newCaps.cacheType {
+                    diffs.append("cache \(priorCaps.cacheType) → \(newCaps.cacheType)")
+                }
+                if priorCaps.reasoningParser != newCaps.reasoningParser {
+                    let p = priorCaps.reasoningParser ?? "none"
+                    let n = newCaps.reasoningParser ?? "none"
+                    diffs.append("reasoning \(p) → \(n)")
+                }
+                if priorCaps.toolParser != newCaps.toolParser {
+                    let p = priorCaps.toolParser ?? "none"
+                    let n = newCaps.toolParser ?? "none"
+                    diffs.append("tools \(p) → \(n)")
+                }
+                if !diffs.isEmpty {
+                    vm.bannerMessage =
+                        "⚠ Switching model with active chat history. " +
+                        "Differences: \(diffs.joined(separator: ", ")). " +
+                        "If output looks broken (loops, garbage, missing reasoning), " +
+                        "start a new chat to reset cache + parser state."
+                }
+            }
+        }
+
         // Persist the alias on the chat-level settings row so future
         // turns pick it up. ChatViewModel.send() already reads this.
         var chat = await app.engine.settings.chat(chatId) ?? .init()
         chat.modelAlias = alias
         await app.engine.settings.setChat(chatId, chat)
+
+        // BLOCKER #1 — picking from the chat dropdown should actually
+        // load the model. Previously this only persisted the alias and
+        // the user had to tab to Server and click Load. Resolve the
+        // alias → entry and route through loadChatModelInline, which
+        // reuses an existing session, fast-paths .running/.loading
+        // (just rebinds the observer), wakes from .standby, and only
+        // pays full startSession on .stopped/.error.
+        await loadChatModelInline(app: app, vm: vm)
     }
 
     /// Start / load the model associated with `entry`. Creates a
@@ -827,12 +949,34 @@ private struct ChatModelPicker: View {
     /// already running (AppState.startSession is idempotent).
     @MainActor
     private func startModel(for entry: ModelLibrary.ModelEntry) async {
+        // Iter 146 — top-bar Load Model must behave like the stopped/
+        // error banner Load Model. The user often hits THIS control
+        // while an old failed transcript is still selected; loading the
+        // weights but leaving the corrupted assistant turn on screen
+        // makes the app appear to have generated the same bad text
+        // again. Create a clean chat for chat-top-bar loads too, and
+        // carry the chosen model alias forward.
+        if !vm.messages.isEmpty {
+            vm.bannerMessage = nil
+            vm.newSession()
+            if let chatId = vm.activeSessionId {
+                var chat = await app.engine.settings.chat(chatId) ?? .init()
+                chat.modelAlias = entry.displayName
+                await app.engine.settings.setChat(chatId, chat)
+                currentAlias = entry.displayName
+            }
+        }
+
         let sid: UUID
         if let existing = app.sessionId(forModelPath: entry.canonicalPath) {
             sid = existing
         } else {
             sid = await app.createSession(forModel: entry.canonicalPath)
         }
+        vm.serverSessionId = sid
+        app.selectedServerSessionId = sid
+        app.selectedModelPath = entry.canonicalPath
+        app.rebindEngineObserver()
         await app.startSession(sid)
     }
 
@@ -841,6 +985,7 @@ private struct ChatModelPicker: View {
     @MainActor
     private func stopModel(for entry: ModelLibrary.ModelEntry) async {
         guard let sid = app.sessionId(forModelPath: entry.canonicalPath) else { return }
+        if vm.serverSessionId == sid { vm.serverSessionId = nil }
         await app.stopSession(sid)
     }
 
@@ -889,6 +1034,17 @@ private struct ChatModelPicker: View {
 /// and no entries have been discovered yet.
 @MainActor
 private func loadChatModelInline(app: AppState, vm: ChatViewModel) async {
+    await loadChatModelInline(
+        app: app, vm: vm,
+        startFreshIfCurrentChatHasMessages: false)
+}
+
+@MainActor
+private func loadChatModelInline(
+    app: AppState,
+    vm: ChatViewModel,
+    startFreshIfCurrentChatHasMessages: Bool
+) async {
     // Prefer the chat's currently-configured model. `currentAlias` is
     // set by the ChatModelPicker when the user picks a model row;
     // falling back to `selectedModelPath` covers the "just loaded via
@@ -902,7 +1058,7 @@ private func loadChatModelInline(app: AppState, vm: ChatViewModel) async {
     let entries = await app.engine.modelLibrary.entries()
     var target: ModelLibrary.ModelEntry? = nil
     if let alias = targetAlias, !alias.isEmpty {
-        target = entries.first { $0.displayName == alias }
+        target = modelEntry(in: entries, matching: alias)
     }
     if target == nil, let path = app.selectedModelPath {
         let canonical = path.standardizedFileURL.resolvingSymlinksInPath()
@@ -917,6 +1073,25 @@ private func loadChatModelInline(app: AppState, vm: ChatViewModel) async {
         app.mode = .server
         return
     }
+    // Iter 145 — Load Model / Retry from the stopped/error banner is
+    // recovery UX, not "continue this exact transcript". If the current
+    // chat already has persisted content, especially a failed/corrupted
+    // assistant turn, reusing it makes a fixed runtime look unchanged:
+    // the old text is still selected and the user has no visual proof
+    // the new engine path is clean. For banner-triggered loads only,
+    // create a fresh chat and carry the resolved model alias forward.
+    // The picker path intentionally calls the 2-arg overload above so
+    // normal model switching keeps history and shows the compatibility
+    // warning instead of silently discarding turns.
+    if startFreshIfCurrentChatHasMessages, !vm.messages.isEmpty {
+        vm.newSession()
+        vm.bannerMessage = nil
+        if let chatId = vm.activeSessionId {
+            var chat = await app.engine.settings.chat(chatId) ?? .init()
+            chat.modelAlias = entry.displayName
+            await app.engine.settings.setChat(chatId, chat)
+        }
+    }
     // Reuse existing session if we already have one for this path; the
     // session's saved settings (port, host, quant, prefill step, etc.)
     // carry forward. Auto-create a fresh one (default settings +
@@ -930,6 +1105,7 @@ private func loadChatModelInline(app: AppState, vm: ChatViewModel) async {
     } else {
         sid = await app.createSession(forModel: entry.canonicalPath)
     }
+    vm.serverSessionId = sid
     // §430 — When the user lands on Chat from another tab (e.g. just
     // loaded a model from Terminal mode), the engine for `sid` may
     // already be `.running` or mid-`.loading`. In that case the chat
@@ -962,5 +1138,102 @@ private func loadChatModelInline(app: AppState, vm: ChatViewModel) async {
         app.rebindEngineObserver()
     case .stopped, .error:
         await app.startSession(sid)
+    }
+}
+
+private func modelEntry(
+    in entries: [ModelLibrary.ModelEntry],
+    matching alias: String
+) -> ModelLibrary.ModelEntry? {
+    let trimmed = alias.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    if let exact = entries.first(where: { $0.displayName == trimmed }) {
+        return exact
+    }
+    if let byFolder = entries.first(where: {
+        $0.canonicalPath.lastPathComponent == trimmed
+    }) {
+        return byFolder
+    }
+    // ChatModelPicker disambiguates duplicate display names as
+    // "Name (parent-folder)". Resolve that shape back to the matching
+    // canonical path so duplicate aliases don't break Load Model.
+    return entries.first { e in
+        let parent = e.canonicalPath.deletingLastPathComponent().lastPathComponent
+        return trimmed == "\(e.displayName) (\(parent))"
+    }
+}
+
+// MARK: - Iter 143 — Chat header arch pills
+
+/// Inline cluster of architecture pills (TQ / hybrid / SWA) rendered
+/// in the chat top bar. Polls `Engine.cacheStats()` every 5s while a
+/// model is loaded — same data path as `CachePanel` but at a slower
+/// refresh cadence because the chat header is a glance-tier surface,
+/// not a live debugging panel.
+///
+/// Hides entirely when no engine is loaded so the bar stays clean for
+/// fresh-launch + image-only sessions.
+private struct ChatHeaderArchPills: View {
+    @Environment(AppState.self) private var app
+    @State private var hybridActive = false
+    @State private var swaActive = false
+    @State private var tqActive = false
+    @State private var loaded = false
+
+    var body: some View {
+        Group {
+            if loaded {
+                HStack(spacing: 6) {
+                    if tqActive { archPill("TQ", tint: Theme.Colors.accent, textTint: Theme.Colors.accentHi) }
+                    if hybridActive { archPill("hybrid", tint: Theme.Colors.accent, textTint: Theme.Colors.accentHi) }
+                    if swaActive { archPill("SWA", tint: Theme.Colors.success, textTint: Theme.Colors.success) }
+                }
+            } else {
+                EmptyView()
+            }
+        }
+        .task {
+            // Initial sample + 5s refresh while the view is alive.
+            await refresh()
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)
+                if Task.isCancelled { break }
+                await refresh()
+            }
+        }
+    }
+
+    private func refresh() async {
+        guard let engine = app.activeEngine else {
+            loaded = false
+            return
+        }
+        do {
+            let s = try await engine.cacheStats()
+            loaded = (s["loaded"] as? Bool) ?? false
+            if let arch = s["architecture"] as? [String: Any] {
+                hybridActive = (arch["hybridSSMActive"] as? Bool) ?? false
+                swaActive = (arch["slidingWindowActive"] as? Bool) ?? false
+                tqActive = (arch["turboQuantActive"] as? Bool) ?? false
+            } else {
+                hybridActive = false
+                swaActive = false
+                tqActive = false
+            }
+        } catch {
+            loaded = false
+        }
+    }
+
+    @ViewBuilder
+    private func archPill(_ text: String, tint: Color, textTint: Color) -> some View {
+        Text(text)
+            .font(Theme.Typography.caption)
+            .foregroundStyle(textTint)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(tint.opacity(0.15)))
+            .overlay(Capsule().stroke(tint.opacity(0.4), lineWidth: 1))
     }
 }

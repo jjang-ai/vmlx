@@ -447,6 +447,7 @@ final class Qwen35JANGTQSparseMoeBlock: Module, UnaryLayer {
     let normTopkProb: Bool
     let numExperts: Int
     let topK: Int
+    let layerIdx: Int
 
     @ModuleInfo(key: "gate") var gate: Linear
     @ModuleInfo(key: "switch_mlp") var switchMLP: TurboQuantSwitchGLU
@@ -454,10 +455,11 @@ final class Qwen35JANGTQSparseMoeBlock: Module, UnaryLayer {
     @ModuleInfo(key: "shared_expert") var sharedExpert: Qwen3NextMLP
     @ModuleInfo(key: "shared_expert_gate") var sharedExpertGate: Linear
 
-    init(_ args: Qwen35JANGTQTextConfiguration) {
+    init(_ args: Qwen35JANGTQTextConfiguration, layerIdx: Int) {
         self.normTopkProb = args.normTopkProb
         self.numExperts = args.numExperts
         self.topK = args.numExpertsPerTok
+        self.layerIdx = layerIdx
 
         _gate.wrappedValue = Linear(args.hiddenSize, args.numExperts, bias: false)
         _switchMLP.wrappedValue = TurboQuantSwitchGLU(
@@ -487,6 +489,7 @@ final class Qwen35JANGTQSparseMoeBlock: Module, UnaryLayer {
         )([gates])
         let inds = routed[0]
         let scores = routed[1]
+        JangPressRouteTelemetry.recordTopK(layer: layerIdx, indices: inds)
 
         let y = switchMLP(x, inds)
         let combined = (y * scores[.ellipsis, .newAxis]).sum(axis: -2)
@@ -526,7 +529,7 @@ final class Qwen35JANGTQDecoderLayer: Module {
         }
 
         if args.numExperts > 0 {
-            _mlp.wrappedValue = Qwen35JANGTQSparseMoeBlock(args)
+            _mlp.wrappedValue = Qwen35JANGTQSparseMoeBlock(args, layerIdx: layerIdx)
         } else {
             _mlp.wrappedValue = Qwen3NextMLP(
                 dimensions: args.hiddenSize,
@@ -590,6 +593,9 @@ public class Qwen35JANGTQTextModelInner: Module {
 
     func callAsFunction(_ inputs: MLXArray, cache: [KVCache?]? = nil) -> MLXArray {
         var hiddenStates = embedTokens(inputs)
+        if hiddenStates.ndim == 2 {
+            hiddenStates = hiddenStates[.newAxis, 0..., 0...]
+        }
 
         var cacheArray = cache
         if cacheArray == nil {
@@ -723,7 +729,8 @@ public class Qwen35JANGTQTextModel: Module, LLMModel, KVCacheDimensionProvider {
                             weights.removeValue(
                                 forKey: "\(prefix).experts.\(e).\(orig).\(kind)")!
                         }
-                        weights["\(prefix).switch_mlp.\(updated).\(kind)"] = MLX.stacked(stacked)
+                        weights["\(prefix).switch_mlp.\(updated).\(kind)"] =
+                            loadTimeMaterializedStacked(stacked)
                     }
                 }
             }

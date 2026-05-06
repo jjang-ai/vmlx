@@ -22,6 +22,12 @@ struct RequestLogPanel: View {
     @State private var paused: Bool = false
     @State private var userScrolledUp: Bool = false
     @State private var unread: Int = 0
+    /// Iter 144 — buffer of lines that arrived while paused. Mirrors
+    /// the `pendingLines` pattern in LogsPanel. Pre-fix, paused
+    /// dropped lines entirely; user expectation is "hold and flush
+    /// on resume".
+    @State private var pendingLines: [LogStore.Line] = []
+    private static let pendingCap: Int = 1000
     @State private var contentHeight: CGFloat = 0
     @State private var viewportHeight: CGFloat = 0
     @State private var scrollOffset: CGFloat = 0
@@ -211,7 +217,18 @@ struct RequestLogPanel: View {
 
     private var footer: some View {
         HStack(spacing: Theme.Spacing.sm) {
-            Button(action: { paused.toggle() }) {
+            Button(action: {
+                let wasPaused = paused
+                paused.toggle()
+                // Iter 144 — flush pending buffer on resume.
+                if wasPaused, !pendingLines.isEmpty {
+                    lines.append(contentsOf: pendingLines)
+                    pendingLines.removeAll(keepingCapacity: true)
+                    if lines.count > maxBuffer {
+                        lines.removeFirst(lines.count - maxBuffer)
+                    }
+                }
+            }) {
                 HStack(spacing: 4) {
                     Image(systemName: paused ? "play.fill" : "pause.fill")
                     Text(paused ? "Resume" : "Pause")
@@ -239,6 +256,14 @@ struct RequestLogPanel: View {
                 if Task.isCancelled { return }
                 guard line.category == "server" else { continue }
                 if paused {
+                    // Iter 144 — buffer instead of dropping. Bounded
+                    // at `pendingCap` so a runaway log volume during
+                    // a long pause doesn't OOM. Flush hook lives in
+                    // the pause-toggle button.
+                    pendingLines.append(line)
+                    if pendingLines.count > Self.pendingCap {
+                        pendingLines.removeFirst(pendingLines.count - Self.pendingCap)
+                    }
                     if userScrolledUp { unread += 1 }
                     continue
                 }

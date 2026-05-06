@@ -127,6 +127,12 @@ struct CachePanel: View {
         let q = archInt("quantized")
         let m = archInt("mamba")
         let other = archInt("other")
+        let compiled = archBool("compiledDecodeConfigured")
+        let tqRuntime = archBool("turboQuantRuntimeRequested")
+        let tqSuppressed = archBool("turboQuantSuppressed")
+        let tqReason = archString("turboQuantSuppressionReason")
+        let tqKeyBits = archInt("turboQuantKeyBits")
+        let tqValueBits = archInt("turboQuantValueBits")
 
         if total == 0 {
             Text(L10n.ServerUI.loadModelForCacheBreakdown.render(appLocale))
@@ -145,6 +151,16 @@ struct CachePanel: View {
                     statCell("Hybrid SSM", "\(m)")
                     statCell("TurboQuant KV", "\(tq)")
                     statCell("Quantized KV", "\(q)")
+                    statCell("Compiled decode", compiled ? "on" : "off")
+                    statCell(
+                        "TQ policy",
+                        tqRuntime ? "active" : (tqSuppressed ? "suppressed" : "off"))
+                    if tqRuntime && tqKeyBits > 0 && tqValueBits > 0 {
+                        statCell("TQ bits", "\(tqKeyBits) / \(tqValueBits)")
+                    }
+                    if tqSuppressed && !tqReason.isEmpty {
+                        statCell("TQ reason", tqReason)
+                    }
                     if other > 0 {
                         statCell("Other", "\(other)")
                     }
@@ -470,6 +486,8 @@ struct CachePanel: View {
             Text(value)
                 .font(Theme.Typography.mono)
                 .foregroundStyle(Theme.Colors.textHigh)
+                .lineLimit(1)
+                .truncationMode(.middle)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Theme.Spacing.sm)
@@ -553,6 +571,7 @@ struct CachePanel: View {
     private func arch(_ key: String) -> Any? { (stats["architecture"] as? [String: Any])?[key] }
     private func archInt(_ key: String) -> Int { (arch(key) as? Int) ?? 0 }
     private func archBool(_ key: String) -> Bool { (arch(key) as? Bool) ?? false }
+    private func archString(_ key: String) -> String { (arch(key) as? String) ?? "" }
 
     private func pagedInt(_ key: String) -> Int { (paged(key) as? Int) ?? 0 }
     private func pagedDouble(_ key: String) -> Double { (paged(key) as? Double) ?? 0 }

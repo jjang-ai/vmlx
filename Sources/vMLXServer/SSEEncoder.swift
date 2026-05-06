@@ -20,16 +20,37 @@ import vMLXLMCommon
 public enum SSEEncoder {
 
     /// Build the ResponseBody that streams an OpenAI chat.completion.chunk SSE.
+    ///
+    /// `leadingComments` is emitted as `: <comment>\n\n` SSE comment lines
+    /// BEFORE the role chunk. Spec-compliant clients ignore comment lines,
+    /// but the bytes hit the wire immediately so curl users / stream
+    /// inspectors see "something happened". Used by route handlers to
+    /// surface wake-from-deep-sleep notices (see
+    /// `Engine.wakeFromStandby(emitNotice:)`).
     public static func chatCompletionStream(
         id: String,
         model: String,
         created: Int,
         includeUsage: Bool,
         includeReasoning: Bool = true,
+        leadingComments: [String] = [],
         upstream: AsyncThrowingStream<StreamChunk, Error>
     ) -> ResponseBody {
         ResponseBody { writer in
             let allocator = ByteBufferAllocator()
+
+            // 0. Optional leading comments — wake-from-sleep notices etc.
+            // Sanitize: strip any embedded \n or \r so a single comment
+            // can't smuggle a `data:` line. SSE comments are bounded by
+            // the line that starts with `:` — a stray newline would
+            // break the framing.
+            for raw in leadingComments {
+                let safe = raw
+                    .replacingOccurrences(of: "\n", with: " ")
+                    .replacingOccurrences(of: "\r", with: " ")
+                try await writer.write(
+                    allocator.buffer(string: ": \(safe)\n\n"))
+            }
 
             // 1. First chunk: role=assistant
             let roleChunk = Self.chunkJSON(

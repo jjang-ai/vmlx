@@ -16,7 +16,7 @@ struct ServerScreen: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
                 SessionDashboard(selection: Binding(
                     get: { s.selectedServerSessionId ?? s.sessions.first?.id },
-                    set: { s.selectedServerSessionId = $0 }
+                    set: { selectSession($0) }
                 ))
 
                 if let selected = currentSelection {
@@ -52,13 +52,10 @@ struct ServerScreen: View {
         }
         .background(Theme.Colors.background)
         .onAppear {
-            // Keep the global engineState mirrored into the selected session's
-            // state so SessionCard / SessionView paint correctly. The rest of
-            // the fields (pid, latency, load progress) come from AppState.
-            syncSelected()
+            if app.selectedServerSessionId == nil {
+                selectSession(app.sessions.first?.id)
+            }
         }
-        .onChange(of: app.engineState) { _, _ in syncSelected() }
-        .onChange(of: app.loadProgress) { _, _ in syncSelected() }
     }
 
     private var currentSelection: Session? {
@@ -66,14 +63,21 @@ struct ServerScreen: View {
         return app.sessions.first(where: { $0.id == id })
     }
 
-    /// Mirror AppState.engineState + loadProgress into the selected session's
-    /// copy so the single-session Phase-3 world stays in sync. When
-    /// multi-engine lands each Session will feed off its own Engine actor
-    /// instead of the shared one.
-    private func syncSelected() {
-        guard let id = app.selectedServerSessionId ?? app.sessions.first?.id else { return }
-        guard let idx = app.sessions.firstIndex(where: { $0.id == id }) else { return }
-        app.sessions[idx].state = app.engineState
-        app.sessions[idx].loadProgress = app.loadProgress
+    /// Selection is the only thing ServerScreen should mutate. Session
+    /// state/load progress are owned by AppState.observePerSessionEngine;
+    /// mirroring the global `engineState` back into the selected row reverts
+    /// the app to the old single-engine model and can overwrite a just-created
+    /// or loading row with stale state.
+    private func selectSession(_ id: UUID?) {
+        guard app.selectedServerSessionId != id else { return }
+        app.selectedServerSessionId = id
+        if let id {
+            app.engineState = app.engine(for: id).state
+            app.loadProgress = app.sessions.first(where: { $0.id == id })?.loadProgress
+        } else {
+            app.engineState = .stopped
+            app.loadProgress = nil
+        }
+        app.rebindEngineObserver()
     }
 }

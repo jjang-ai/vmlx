@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// MCP security validator. Pared-down port of
-// `vmlx_engine/mcp/security.py` — just the defensive checks that
-// matter for first-run safety, not the full allowlist/sandboxing
-// infrastructure Python ships for multi-tenant deployments.
+// MCP security validator. Port of `vmlx_engine/mcp/security.py`.
 //
 // What we validate:
-//  - `command` is an absolute path OR a basename that resolves via PATH
-//  - no shell metacharacters in command/args/env
+//  - `command` is in the executable allowlist (basename only) or is a
+//    skipSecurityValidation override (mlxstudio#31)
+//  - no shell metacharacters in command/args/env (the 11-character set)
+//  - NUL byte rejection in args + env keys + env values
+//  - `LD_PRELOAD`/`DYLD_INSERT_LIBRARIES` etc. blocked in `env`
+//    (loader-injection attack surface)
 //  - for SSE transport: URL is http/https (not file:// or javascript:)
-//  - environment keys don't collide with known secrets (AWS_*, etc —
-//    returning a warning string, not an error)
 //
 // What we don't yet validate (future session):
 //  - binary signing
@@ -23,6 +22,54 @@
 import Foundation
 
 public enum MCPSecurity {
+
+    /// Allowlist of executable basenames permitted as MCP `command`.
+    /// Mirrors `vmlx_engine/mcp/security.py:ALLOWED_COMMANDS`. Iter 143:
+    /// previously absent — any binary on PATH could execute. Per
+    /// mlxstudio#31 the allowlist includes `bun, bunx, deno,
+    /// python3.10–3.13, java` for IDE-bundled MCP servers.
+    public static let allowedCommands: Set<String> = [
+        // Node.js + JS/TS package runners (most official MCP servers)
+        "npx", "npm", "node",
+        "bun", "bunx",
+        "deno",
+        // Python package runners (mlxstudio#31)
+        "uvx", "uv",
+        "python", "python3",
+        "python3.10", "python3.11", "python3.12", "python3.13",
+        "pip", "pipx",
+        // JVM (mlxstudio#31: JetBrains IDE MCP servers run as
+        // `java -classpath … com.intellij.mcpserver.stdio.…`)
+        "java",
+        // Official MCP servers when installed globally
+        "mcp-server-filesystem",
+        "mcp-server-fs",
+        "mcp-server-sqlite",
+        "mcp-server-postgres",
+        "mcp-server-github",
+        "mcp-server-slack",
+        "mcp-server-memory",
+        "mcp-server-puppeteer",
+        "mcp-server-brave-search",
+        "mcp-server-google-maps",
+        "mcp-server-fetch",
+        // Containerized MCP servers
+        "docker",
+    ]
+
+    /// Environment variables that can hijack process loading. Setting
+    /// any of these via the MCP `env` map is rejected because a
+    /// malicious config could redirect dynamic linking to attacker code.
+    /// Mirror of Python's `dangerous_env_vars`. PATH/PYTHONPATH/NODE_PATH
+    /// are intentionally allowed because real MCP servers need them.
+    public static let dangerousEnvKeys: Set<String> = [
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH",
+        "NODE_OPTIONS",            // can inject --require to load arbitrary code
+        "ELECTRON_RUN_AS_NODE",    // turns Electron apps into plain Node.js
+    ]
 
     /// Run all safety checks against a server config. Returns `nil`
     /// when the config is acceptable, or a short human-readable string
@@ -45,6 +92,17 @@ public enum MCPSecurity {
         if containsShellMetachar(command) {
             return "command contains shell metacharacters: \(command)"
         }
+        // Allowlist check on basename. Caller can opt out per-server
+        // via `skip_security_validation: true` in mcp.json — but
+        // MCPConfigLoader gates the entire validate(_:) call on that
+        // flag already, so reaching this point means the user did NOT
+        // opt out and the basename must be on the allowlist.
+        let basename = (command as NSString).lastPathComponent
+        if !allowedCommands.contains(basename) {
+            return "command '\(basename)' is not in the MCP allowlist. " +
+                   "Set `skip_security_validation: true` on the server " +
+                   "to override (development only)."
+        }
         if let args = s.args {
             for (i, arg) in args.enumerated() {
                 // Args CAN contain paths, flags, spaces — we only
@@ -63,6 +121,11 @@ public enum MCPSecurity {
                 }
                 if v.contains("\0") {
                     return "env value for '\(k)' has illegal characters"
+                }
+                // Reject loader-injection env vars regardless of value.
+                // Matches Python's `dangerous_env_vars` rejection.
+                if dangerousEnvKeys.contains(k.uppercased()) {
+                    return "env key '\(k)' is blocked (loader-injection vector)"
                 }
             }
         }

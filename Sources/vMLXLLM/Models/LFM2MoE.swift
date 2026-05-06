@@ -260,17 +260,19 @@ class Lfm2MoeSparseMoeBlock: Module, UnaryLayer {
     let topK: Int
     let normTopKProb: Bool
     let useExpertBias: Bool
+    fileprivate let layerIdx: Int
 
     @ModuleInfo(key: "gate") var gate: Linear
     @ModuleInfo(key: "switch_mlp") var switchMLP: SwitchGLU
     @ModuleInfo(key: "expert_bias") var expertBias: MLXArray?
 
-    init(_ args: LFM2MoEConfiguration) {
+    init(_ args: LFM2MoEConfiguration, layerIdx: Int) {
         self.args = args
         self.numExperts = args.numExperts
         self.topK = args.numExpertsPerToken
         self.normTopKProb = args.normTopkProb
         self.useExpertBias = args.useExpertBias
+        self.layerIdx = layerIdx
 
         _gate.wrappedValue = Linear(args.hiddenSize, numExperts, bias: false)
         _switchMLP.wrappedValue = SwitchGLU(
@@ -294,6 +296,7 @@ class Lfm2MoeSparseMoeBlock: Module, UnaryLayer {
 
         let k = topK
         let indices = argPartition(-gates, kth: k - 1, axis: -1)[.ellipsis, ..<k]
+        JangPressRouteTelemetry.recordTopK(layer: layerIdx, indices: indices)
         var scores = takeAlong(gates, indices, axis: -1)
         if normTopKProb {
             let denom = scores.sum(axis: -1, keepDims: true) + MLXArray(1e-20, dtype: scores.dtype)
@@ -335,7 +338,7 @@ class LFM2MoEDecoderLayer: Module {
         if usesDenseFeedForward {
             _feedForward.wrappedValue = LFM2MoEMLP(args)
         } else {
-            _feedForward.wrappedValue = Lfm2MoeSparseMoeBlock(args)
+            _feedForward.wrappedValue = Lfm2MoeSparseMoeBlock(args, layerIdx: layerIdx)
         }
 
         _operatorNorm.wrappedValue = RMSNorm(dimensions: args.hiddenSize, eps: args.normEps)
@@ -478,7 +481,8 @@ public class LFM2MoEModel: Module, LLMModel, KVCacheDimensionProvider {
                 let stacked = (0 ..< configuration.numExperts).map { expert -> MLXArray in
                     sanitized.removeValue(forKey: "\(expertPrefix).\(expert).\(name).weight")!
                 }
-                sanitized["\(prefix).feed_forward.switch_mlp.\(name).weight"] = MLX.stacked(stacked)
+                sanitized["\(prefix).feed_forward.switch_mlp.\(name).weight"] =
+                    loadTimeMaterializedStacked(stacked)
             }
         }
 

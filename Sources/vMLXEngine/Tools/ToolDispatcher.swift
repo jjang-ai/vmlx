@@ -335,9 +335,23 @@ extension Engine {
         // First, ensure the assistant's tool_call message is represented.
         // The caller is expected to have already appended the assistant
         // message with `toolCalls` set; we just add the tool response.
+        //
+        // Iter 144 — frame errors with an explicit "Error:" prefix so
+        // the model can recover instead of treating the error like a
+        // successful return value. OpenAI's spec puts `is_error` in
+        // tool-message metadata, but the chat-template render only
+        // sees `content` for most templates, so prefixing is the
+        // template-agnostic guardrail. The reviewer audit caught that
+        // `result.isError` was set but never surfaced to the model;
+        // a tool that returned `{"error":"timeout"}` would be treated
+        // as success and the model would keep iterating.
+        let framedContent: String =
+            result.isError
+                ? "Error: \(result.content)"
+                : result.content
         newMessages.append(ChatRequest.Message(
             role: "tool",
-            content: .string(result.content),
+            content: .string(framedContent),
             name: result.name,
             toolCalls: nil,
             toolCallId: result.toolCallId

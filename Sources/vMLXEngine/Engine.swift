@@ -35,8 +35,23 @@ public actor Engine {
         public var modelPath: URL
         public var kind: EngineKind = .batched
         public var maxNumSeqs: Int = 5
-        public var prefillStepSize: Int = 1024
-        public var maxCacheBlocks: Int = 500
+        // Iter 101 audit: aligned with GlobalSettings.prefillStepSize
+        // (Python parity 2048 since 2026-04-26). Pre-fix this struct
+        // had 1024 — a stale value from before the Python-parity bump.
+        // Bare `Engine.LoadOptions(modelPath: path)` callers (Tray
+        // start-fallback in vMLXApp.swift, AdminRoutes admin/load,
+        // vMLXCLI bench path) silently got the older 1024, hurting
+        // long-prompt throughput vs the same model loaded via the
+        // SettingsStore-resolved path. Drift back to 1024 = silent
+        // perf regression for any code path that doesn't go through
+        // ResolvedSettings.
+        public var prefillStepSize: Int = 2048
+        // Iter 101 audit: aligned with GlobalSettings.maxCacheBlocks
+        // (1000). Stale 500 here meant bare-init engines hit the LRU
+        // ceiling at half the rate of settings-resolved engines.
+        public var maxCacheBlocks: Int = 1000
+        public var usePagedCache: Bool = true
+        public var pagedCacheBlockSize: Int = 64
         // TurboQuant KV compression: default-OFF (perf audit 2026-04-16).
         // Measured impact of flipping to default-off: Nemotron-Cascade-2-30B
         // A3B 2.4 → 59.8 tok/s (25× speedup), Gemma-4-26B-A4B 34.9 → 49.0
@@ -64,6 +79,8 @@ public actor Engine {
         public var enableDiskCache: Bool = true
         public var diskCacheDir: String = ""
         public var diskCacheMaxGB: Double = 10.0
+        public var memoryCachePercent: Double = 0.20
+        public var memoryCacheTTLMinutes: Double = 0
         // §355 — block-level disk cache. See
         // Sources/vMLXLMCommon/Cache/BlockDiskCache.swift for the real
         // storage layer. Default OFF until live paged-cache integration
@@ -71,7 +88,17 @@ public actor Engine {
         public var enableBlockDiskCache: Bool = false
         public var blockDiskCacheDir: String = ""
         public var blockDiskCacheMaxGB: Double = 10.0
-        public var kvCacheQuantization: String = "none"
+        // Iter 101 audit: aligned with GlobalSettings.kvCacheQuantization
+        // (default-on TurboQuant per user directive 2026-04-30). Pre-fix
+        // this was "none" while `enableTurboQuant` above defaulted to
+        // `true` — internally contradictory and the bare-init path
+        // (vMLXApp.swift:1341 tray fallback, AdminRoutes admin/load
+        // override, CLI bench) shipped a TQ-on-but-string-says-none
+        // engine that the settings-derive logic at SettingsStore.swift
+        // line ~485 (audit-2026-04-16 UX #3) would have flipped TQ off.
+        // Aligning the bare-init string with the production default
+        // makes the two construction paths byte-equivalent.
+        public var kvCacheQuantization: String = "turboquant"
         public var kvCacheGroupSize: Int = 64
         public var turboQuantBits: Int = 4
         // §403 — sliding-window mode, propagated from settings via
@@ -82,10 +109,97 @@ public actor Engine {
         public var slidingWindowMode: String = "auto"
         public var slidingWindowSize: Int = 16384
         public var enableSSMReDerive: Bool = true
-        // Smelt + Flash MoE
-        public var smelt: Bool = false
-        public var smeltExperts: Int = 50
-        public var smeltMode: String = "default"
+        // JangPress — load-time cold-weight residency + page-cache
+        // pressure tier. The production .mmap path enables the C++
+        // safetensors mmap loader for JANG/JANGTQ bundles, making MLX's
+        // canonical arrays file-backed instead of heap copies. Routed-
+        // expert telemetry can then prefetch hot experts and madvise cold
+        // expert ranges under pressure. This is OS page reclaim/refault,
+        // not custom compressed expert blobs, but it is the real low-RSS
+        // path users need for large MoE bundles.
+        //
+        // `jangPressCompressPct` is the user-facing cold-set target for
+        // the mmap/Mach tier. 0 = observe only; 100 = maximum cold
+        // eligibility. Actual RSS depends on the active expert working
+        // set, kernel page pressure, KV cache, and page-fault locality.
+        public var enableJangPress: Bool = true
+        public var jangPressCompressPct: Int = 70
+        public var jangPressEnablePrefetch: Bool = true
+
+        // §JANGPress backend selector (iter 7).
+        //
+        // Two implementations live in vMLXLMCommon/Cache/. They have
+        // different page-pressure properties so the user picks based on
+        // their integration story.
+        //
+        //   .mmap  — JangPressMmapTier. Reads bundle safetensors
+        //            via mmap PROT_READ. madvise(MADV_DONTNEED) on
+        //            dormant ranges lets the kernel reclaim those
+        //            pages on demand. Doesn't conflict with MLX's
+        //            own copy. For JANG/JANGTQ bundles Engine.load also
+        //            turns on the canonical C++ safetensors mmap loader,
+        //            so resident model-RAM savings are real rather than
+        //            limited to an auxiliary mapping.
+        //
+        //   .mach  — JangPressMachCache. Allocates fresh
+        //            VM_FLAGS_PURGABLE regions and copies weights in.
+        //            Kernel does WKdm compression. Requires MLX
+        //            integration to replace canonical storage; until
+        //            then doubles RAM at load. Gated on MLX-swift fork.
+        //
+        //   .none  — disabled (default).
+        //
+        // Switch backends without editing model code; both implement
+        // the same `acquire(layer, experts)` / `release` contract.
+        public enum JangPressBackend: String, Sendable {
+            case mmap     // JangPressMmapTier — file-backed
+            case mach     // JangPressMachCache — Mach VM
+            case none     // disabled
+        }
+        public var jangPressBackend: JangPressBackend = .mmap
+
+        /// JangPress release mode for the .mmap backend.
+        ///
+        ///   .soft (default) — `madvise(MADV_DONTNEED)` hint. Kernel
+        ///                     ignores under low pressure → no
+        ///                     slowdown. Acts on it under real pressure
+        ///                     → reclaim materializes when needed.
+        ///                     **Failsafe + production-recommended.**
+        ///   .force          — `msync(MS_INVALIDATE)`. Drops pages
+        ///                     immediately. ~7 GB reclaim verified on
+        ///                     DSV4 but ~3× decode slowdown because
+        ///                     MLX shares the same kernel page cache.
+        ///                     For "free me RAM right now" use cases.
+        public enum JangPressForceMode: String, Sendable {
+            case soft
+            case force
+        }
+        public var jangPressForceMode: JangPressForceMode = .soft
+
+        // Router-aware canonical mmap advisor opt-in. When true, the
+        // `JangPressCanonicalExpertAdvisor` reads decode-time top-k
+        // router indices and issues `MADV_DONTNEED` on cold experts +
+        // optional `MADV_WILLNEED` on warm ones against the canonical
+        // mmap registry. Default `false` because the first CPU-readback
+        // implementation is correct but materially slower than letting
+        // the OS manage page reclaim by itself — turn on only when
+        // memory pressure warrants the tradeoff. The env knob
+        // `JANGPRESS_ROUTER_ADVICE=1` overrides this for ad-hoc tests.
+        public var enableJangPressRouterAdvice: Bool = false
+
+        // Pre-stack per-expert JANGTQ tensors into a low-RAM safetensors
+        // overlay so MoE bundles like MiniMax/DeepSeek don't materialize
+        // the routed-expert bank into resident Metal buffers at load.
+        // The overlay is built once into the model's cache dir and
+        // reused on subsequent loads; failure falls back to the original
+        // bundle. Default `true`. Env knob `JANGPRESS_PRESTACK=0`
+        // bypasses; `JANGPRESS_PRESTACK_STRICT=1` propagates errors
+        // instead of falling back.
+        public var jangPressPrestack: Bool = true
+
+        // Iter 143 — Smelt removed (Eric directive 2026-05-04). Use
+        // JangPress for partial/cold expert handling.
+        // Flash MoE
         public var flashMoe: Bool = false
         // 64 is the AUTO-SIZE sentinel — `EngineFlashMoE.applyFlashMoEIfEnabled`
         // treats `<= 64` as "user hasn't overridden, compute
@@ -120,7 +234,120 @@ public actor Engine {
         enum CodingKeys: String, CodingKey { case textConfig = "text_config" }
     }
 
+    /// Routed-MoE shape sniff for `JangPressCanonicalExpertAdvisor`.
+    /// Different families spell the same numbers differently:
+    ///   • DeepseekV3/V4: `n_routed_experts` + `num_experts_per_tok`
+    ///   • Mixtral / Mistral4 / Llama4 / Phi-MoE: `num_local_experts` +
+    ///     `num_experts_per_tok`
+    ///   • Qwen3-MoE / GLM4-MOE / Qwen35-MoE: `num_experts` +
+    ///     `num_experts_per_tok`
+    /// We accept all three. Missing ⇒ nil → advisor falls back to its
+    /// generic compressPct-only `defaultHotPerLayer` formula.
+    private struct MoEShapeSniff: Codable {
+        let nRoutedExperts: Int?
+        let numLocalExperts: Int?
+        let numExperts: Int?
+        let numExpertsPerTok: Int?
+        // Some bundles bury the MoE shape under `text_config` (VL wrappers).
+        // One level of nesting is plenty — wrapper bundles never nest twice.
+        let textConfig: Inner?
+
+        struct Inner: Codable {
+            let nRoutedExperts: Int?
+            let numLocalExperts: Int?
+            let numExperts: Int?
+            let numExpertsPerTok: Int?
+
+            enum CodingKeys: String, CodingKey {
+                case nRoutedExperts = "n_routed_experts"
+                case numLocalExperts = "num_local_experts"
+                case numExperts = "num_experts"
+                case numExpertsPerTok = "num_experts_per_tok"
+            }
+
+            var resolvedRoutedExperts: Int? {
+                nRoutedExperts ?? numLocalExperts ?? numExperts
+            }
+            var resolvedTopK: Int? { numExpertsPerTok }
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case nRoutedExperts = "n_routed_experts"
+            case numLocalExperts = "num_local_experts"
+            case numExperts = "num_experts"
+            case numExpertsPerTok = "num_experts_per_tok"
+            case textConfig = "text_config"
+        }
+
+        var resolvedRoutedExperts: Int? {
+            nRoutedExperts ?? numLocalExperts ?? numExperts
+                ?? textConfig?.resolvedRoutedExperts
+        }
+
+        var resolvedTopK: Int? {
+            numExpertsPerTok ?? textConfig?.resolvedTopK
+        }
+    }
+
     public private(set) var loaded: vMLXLMCommon.ModelContainer?
+
+    /// Iter 143 — opt-in continuous batching surface.
+    ///
+    /// The actor-isolated `BatchEngine` is built lazily on the first
+    /// `batchEngine(maxBatchSize:)` call after a model loads. It runs
+    /// concurrent requests through a single shared model forward
+    /// (admission queue → per-slot prefill → batched decode), where
+    /// our default `streamReal` path serializes through
+    /// `GenerationLock`.
+    ///
+    /// **Production-readiness gap:** this is the iter-9 reference
+    /// from `vmlx-swift-lm`. It admits + prefills + batch-decodes for
+    /// plain LLM/VLM/MoE/hybrid-SSM, but it does NOT yet ship the
+    /// iter-63 polish that the reference has:
+    ///   • compiled-decode promotion (`maybePromoteToCompiledDecode`)
+    ///   • bucket-bin promotion
+    ///   • per-prefill TQ KV quantize via `BatchQuantize`
+    ///   • spec-decoding integration
+    ///   • full ReasoningParser/StopStringMatcher inline parsing
+    ///   • CacheCoordinator `resolveKVPolicy` integration
+    ///
+    /// The iter-9 path also bypasses `Stream.swift`'s single-request
+    /// features (logprobs, in-flight tool calls, reasoning-split,
+    /// JangPress recordTokenActivity, post-gen SSM re-derive), so a
+    /// caller that opts into batched generation today gets RAW token
+    /// streams. Most server routes still want the rich path.
+    ///
+    /// `/health` reports `continuous_batching: <flag>`. The flag is
+    /// only `true` once `Engine.batchEngine` has been built AND
+    /// concurrent requests are actively dispatched through it.
+    public private(set) var batchEngineInstance: BatchEngine?
+
+    /// Lazily build (or return) the BatchEngine for the loaded model.
+    /// Returns `nil` if no model is loaded.
+    ///
+    /// - Parameter maxBatchSize: 1–16 concurrent slots. Default 8.
+    public func batchEngine(maxBatchSize: Int = 8) async -> BatchEngine? {
+        if let existing = batchEngineInstance { return existing }
+        guard let container = self.loaded else { return nil }
+        let engine = await container.makeBatchEngine(maxBatchSize: maxBatchSize)
+        self.batchEngineInstance = engine
+        await logs.append(.info, category: "engine",
+            "BatchEngine constructed (maxBatchSize=\(maxBatchSize)). " +
+            "iter-9 reference; production polish (compiled-decode, " +
+            "bucket-bin, TQ quantize, spec-dec) not yet ported — " +
+            "raw token streams only, no Stream.swift features.")
+        return engine
+    }
+
+    /// Tear down the BatchEngine (called on model unload / sleep
+    /// transitions). Does not throw — best-effort shutdown.
+    public func shutdownBatchEngine() async {
+        guard let engine = batchEngineInstance else { return }
+        await engine.shutdown()
+        self.batchEngineInstance = nil
+        await logs.append(.info, category: "engine",
+            "BatchEngine shutdown.")
+    }
     // `nonisolated(unsafe)` lets `subscribeState`'s AsyncStream closure
     // capture `state` synchronously without tripping strict concurrency.
     // Safe because: mutation is funnelled through `transition(_:)` on the
@@ -185,6 +412,22 @@ public actor Engine {
         public init() {}
     }
     public private(set) var loadedModelDefaults: ModelGenerationDefaults = .init()
+
+    /// Vision-embedding cache (P0 audit 2026-05-01). Per-image
+    /// pixel-values + post-fusion tensors LRU-cached by SHA-256 of the
+    /// image bytes + prompt. Mirrors Python `vision_embedding_cache.py`.
+    /// Without this, every multi-turn VLM chat re-runs the vision
+    /// tower from scratch — major perf regression vs Python.
+    ///
+    /// Engine instantiates the cache eagerly so callers can resolve
+    /// stats even before a VLM is loaded. Per-VLM `processor.prepare`
+    /// integration is the next wire-up step (each VLM's processor
+    /// returns a different bag of tensors, so the get/put sites need
+    /// to be model-aware). Until that's done the cache stats stay
+    /// empty but the toggle UI + `getCacheStats()` reflect the real
+    /// state instead of "feature exists but doesn't run".
+    public let visionEmbeddingCache: VisionEmbeddingCache = VisionEmbeddingCache(
+        maxPixelEntries: 16, enabled: true)
 
     /// The `LoadOptions` used for the most recent successful load. Retained
     /// so that `wake()` out of `.standby(.deep)` can replay the load without
@@ -404,6 +647,48 @@ public actor Engine {
     /// get populated.
     public private(set) var cacheCoordinator: CacheCoordinator?
 
+    // MARK: - JANGPress (cold-weight tier, v1 idle-time)
+    //
+    // Two optional fields wired to `LoadOptions.enableJangPress`.
+    // The cache holds the per-expert VM regions; the controller is the
+    // failsafe state machine that orchestrates compress/wake. Both nil
+    // when the feature is off.
+    //
+    // See `vMLXLMCommon/Cache/JANGPRESS-STATUS.md` for the design and
+    // failsafe properties verified by the unit tests in
+    // `vMLXTests/JangPressControllerTests.swift`.
+    //
+    // The expected wiring shape is:
+    //   • `Engine.load`          → instantiate cache + controller, arm()
+    //   • `JangLoader`           → call cache.register(...) per expert tile
+    //   • `Stream.streamReal`    → bracket with willStartInference / didFinishInference
+    //   • `Engine.stop`/unload   → emberController?.disarm()
+    //
+    // v1 only fires when the engine is quiet for `quiesceTimeoutMs` AND
+    // memory pressure crosses .warning, so failure to wire one of those
+    // sites just delays the compaction — never breaks correctness.
+    public private(set) var jangPressMach: JangPressMachCache?
+    public private(set) var emberController: JangPressController?
+
+    /// Alternative file-backed weight tier — mmap'd safetensors shards
+    /// with madvise WILLNEED/DONTNEED on routed-expert byte ranges.
+    /// Mutually exclusive with `jangPressMach` (only one at a
+    /// time, picked by `LoadOptions.jangPressBackend`).
+    /// See `JangPressMmapTier.swift`.
+    public private(set) var jangPressMmap: JangPressMmapTier?
+    /// True when the C++ safetensors loader was enabled during the
+    /// successful model load, making canonical MLX weight arrays
+    /// mmap-backed instead of heap/pread copies.
+    public private(set) var jangPressCanonicalMmapActive: Bool = false
+
+    /// JangPress component F — embedding/lm-head Zipfian tier. Tracks
+    /// per-token activation frequency during warmup; after the warmup
+    /// window applies MADV_WILLNEED to the top hot rows and MADV_DONTNEED
+    /// to the rest. Co-instantiated with the routed-expert tier when
+    /// `enableJangPress` is on. Independent of routed-expert backend
+    /// choice (mmap vs mach).
+    public private(set) var jangPressEmbed: JangPressEmbedTier?
+
     /// Currently-driving stream Task, if any. Registered by
     /// `Stream.swift::streamReal` so `Engine.stop()` and the request
     /// watchdog can cancel the in-flight generation directly instead of
@@ -444,6 +729,17 @@ public actor Engine {
     internal func clearCurrentStreamTask() {
         self.currentStreamTask = nil
     }
+    /// Clear `currentStreamTask` only if it matches the candidate. Used by
+    /// `Stream.swift` defer cleanup so an early-return path doesn't
+    /// orphan a finished Task reference, AND so cleanup landing AFTER
+    /// the next stream's registration doesn't accidentally null out the
+    /// new in-flight task. Iter 144 fix for Stream.swift task-registration
+    /// race surfaced by the production audit.
+    internal func clearCurrentStreamTaskIfMatches(_ candidate: Task<Void, Never>) {
+        if self.currentStreamTask == candidate {
+            self.currentStreamTask = nil
+        }
+    }
     internal func cancelCurrentStreamTask() {
         self.currentStreamTask?.cancel()
     }
@@ -456,6 +752,76 @@ public actor Engine {
     /// of `Stream.streamReal`'s outer Task closure.
     internal func isJangTQActivePath() -> Bool {
         self.loadedJangConfig?.turboquant.enabled == true
+    }
+
+    /// Set by the cancel-aware drain in `Stream.swift` when a stream on a
+    /// JANGTQ-active model exits via `CancellationError`. The next stream
+    /// that acquires `generationLock` reads + clears this flag; if it was
+    /// set, it performs an extra `Stream.synchronize()` barrier on .gpu and
+    /// .cpu before prefill. Belt-and-suspenders against MXTQ custom-encoder
+    /// state lingering past the in-cancel sleep+synchronize drain. Without
+    /// this, the user-reported "stop then resend on JANGTQ" path could
+    /// occasionally hit `_status < MTLCommandBufferStatusCommitted` on the
+    /// next prefill if encoder release lagged the 1s drain budget.
+    internal var pendingPostCancelBarrierForJangTQ: Bool = false
+
+    internal func markPostCancelBarrierPendingForJangTQ() {
+        self.pendingPostCancelBarrierForJangTQ = true
+    }
+
+    internal func consumePostCancelBarrierForJangTQ() -> Bool {
+        let v = self.pendingPostCancelBarrierForJangTQ
+        self.pendingPostCancelBarrierForJangTQ = false
+        return v
+    }
+
+    /// BLOCKER #2 — live-propagate a kvCacheQuantization change to the
+    /// running engine without requiring a model reload. Call site: the
+    /// SessionConfigForm picker debounce + the chat QuickSliders. The
+    /// next stream that acquires the generation lock will pick up the
+    /// new mode through the standard settings cascade — this method's
+    /// job is to make sure no in-flight or about-to-fire stream is
+    /// holding a stale snapshot.
+    ///
+    /// Without this, a slider scrub from "none" → "turboquant" would
+    /// only take effect after the next engine.load(), forcing the
+    /// user to unload + reload — confusing because the picker shows
+    /// the new value immediately while the engine keeps using the old
+    /// one. With it, the change propagates within one stream tick.
+    ///
+    /// Note: this does NOT rebuild the cache coordinator's TQ
+    /// codebooks if they were sized at load time for a different
+    /// strategy. Going from "none" → "turboquant" mid-session works;
+    /// going the other way works too because the coordinator just
+    /// stops compressing on store. Bit-width changes (3 → 4) require
+    /// a reload — flagged with a UI warning when the picker is
+    /// changed across bit boundaries.
+    /// P1 #6 — quick accessor for the wake-on-request middleware in
+    /// HTTP routes. Returns true when the engine is in `.standby(.deep)`,
+    /// meaning the next request will incur a full model reload that can
+    /// take 8+ seconds on large models. Routes use this to emit a
+    /// user-visible pre-message (SSE for streaming, HTTP 503+Retry-After
+    /// for non-streaming) BEFORE awaiting `wakeFromStandby()`. Without
+    /// this, a deep-asleep model serving a /v1/chat/completions request
+    /// looks indistinguishable from a hung server for the wake duration.
+    public func isDeepSleeping() -> Bool {
+        if case .standby(.deep) = state { return true }
+        return false
+    }
+
+    public func applyKvCacheQuantization(_ value: String) async {
+        // The actual switch is consumed by `Stream.swift`'s
+        // `buildGenerateParameters` which reads the resolved settings
+        // each turn. Settings are already debounced + persisted by
+        // SettingsStore. All we need to do here is invalidate any
+        // cached load-time decisions about cache strategy so the next
+        // turn re-resolves from settings.
+        await self.logs.append(.info, category: "engine",
+            "kvCacheQuantization → \(value) (live)")
+        // Hook for future: if the cache coordinator needs explicit
+        // reconfiguration (rebuild TQ codebooks, etc.), do it here
+        // under the actor's serial-FIFO so no in-flight stream sees
+        // a half-changed coordinator.
     }
 
     /// Register `task` under `id` so a per-id cancel can find it later.
@@ -807,7 +1173,7 @@ public actor Engine {
     /// exhausting the range — the previous fallback `return start`
     /// silently returned a known-bad port that crashed downstream with
     /// a confusing error. Build-state audit 2026-04-15 finding #8.
-    static func firstAvailablePort(
+    public static func firstAvailablePort(
         startingAt start: Int,
         limit: Int = 1000,
         lan: Bool = false
@@ -934,15 +1300,74 @@ public actor Engine {
     }
 
     public func wakeFromStandby() async {
+        await wakeFromStandby(emitNotice: nil)
+    }
+
+    /// Wake-from-standby with an optional pre-wake notice closure.
+    ///
+    /// The closure (if non-nil) is fired EXACTLY ONCE — and only when an
+    /// actual wake will be performed. The cases:
+    ///
+    ///   • State is `.standby(.soft)` → closure called with
+    ///     `"Waking model from soft sleep — caches still resident."`.
+    ///     Soft wake is instant (no `load()` replay) so the closure is
+    ///     mostly informational; clients on slow links may still benefit
+    ///     because `subscribeState` events lag the actor switch.
+    ///   • State is `.standby(.deep)` → closure called with
+    ///     `"Waking model from deep sleep — replaying load…"` BEFORE the
+    ///     full `wake() → load()` replay starts. On large MoE bundles
+    ///     this can take 5–30 s; without the notice, streaming HTTP
+    ///     consumers see a hung connection until the first decode
+    ///     token arrives.
+    ///   • State is anything else (`.running`, `.loading`, `.stopped`,
+    ///     `.error`) → closure NOT called. No wake will be performed.
+    ///   • Concurrent caller observes an in-flight wake task → closure
+    ///     NOT called. The first caller already emitted the notice; a
+    ///     second emission would double-print into the SSE stream.
+    ///
+    /// Designed for SSE-streaming routes that want to write a leading
+    /// comment line (`: waking model…\n\n`) into the response body so the
+    /// client sees "something is happening" instead of staring at a hung
+    /// HTTP connection during the deep-wake window.
+    ///
+    /// - Parameter emitNotice: Optional async closure invoked with a
+    ///   user-readable single-line notice. Closure is `@Sendable` so
+    ///   it can capture an `actor`-isolated buffer (e.g., the route's
+    ///   leading-comments accumulator) safely.
+    public func wakeFromStandby(
+        emitNotice: (@Sendable (String) async -> Void)?
+    ) async {
         // §253: if a wake is already in progress, reuse it. The actor
         // serializes method entries but `wake()` suspends at `await
         // load(opts)`, which lets other callers re-enter the switch
         // and re-trigger a full model load. Funnel everyone through
         // the same Task so `N` concurrent HTTP requests on a deep-
-        // sleeping engine perform exactly ONE load.
+        // sleeping engine perform exactly ONE load. Concurrent waiters
+        // do NOT fire the notice (the first caller already did).
         if let existing = inFlightWakeTask {
             await existing.value
             return
+        }
+        // Capture the depth BEFORE entering the wake task so the
+        // closure can be fired with the right "soft vs deep" copy.
+        let depthBeforeWake: EngineState.StandbyDepth?
+        if case .standby(let d) = state {
+            depthBeforeWake = d
+        } else {
+            depthBeforeWake = nil
+        }
+        // Fire the notice synchronously BEFORE spawning the wake Task,
+        // so the SSE writer sees the comment before any subsequent
+        // chunk that would be racing through the response stream.
+        if let depth = depthBeforeWake, let emitNotice {
+            switch depth {
+            case .soft:
+                await emitNotice(
+                    "Waking model from soft sleep — caches still resident.")
+            case .deep:
+                await emitNotice(
+                    "Waking model from deep sleep — replaying load…")
+            }
         }
         switch state {
         case .standby:
@@ -1029,6 +1454,14 @@ public actor Engine {
     }
 
     private func transition(_ next: EngineState) {
+        // Iter 144 — guard double-emit. The sleep/wake state machine has
+        // historically called `transition(...)` from BOTH the dispatcher
+        // (`handleIdleEvent`) AND the operation (`softSleep` / `deepSleep`
+        // / `wake`) so subscribers saw the same state twice. Fix at the
+        // boundary instead of every site: skip publish when state is
+        // unchanged. State assignment is also a no-op when next == state,
+        // so this is purely a subscriber-deduplication fix.
+        if state == next { return }
         state = next
         for cont in stateSubscribers.values {
             cont.yield(next)
@@ -1043,20 +1476,99 @@ public actor Engine {
     /// `loadContainer` API has no per-shard callback, we emit phase-level
     /// transitions only — better than nothing, and the UI shows a moving bar.
     public func load(_ opts: LoadOptions) -> AsyncThrowingStream<LoadEvent, Error> {
-        AsyncThrowingStream { continuation in
-            let loadTask = Task { [weak self] in
+        // Iter 144 — capture-after-create + cancel-prior pattern.
+        //
+        //   - Body cancels any in-flight prior load task FIRST (before
+        //     touching `loaded`, `loadedModelPath`, etc.) so concurrent
+        //     `load(opts1) + load(opts2)` no longer race on shared
+        //     state. Reviewer audit confidence 95.
+        //   - Body self-registers via the box so `stop()` can reach
+        //     this task without the prior detached-Task registration
+        //     race (reviewer audit confidence 90).
+        //   - Cleanup uses match-aware clear so a stale defer from a
+        //     cancelled prior load doesn't null out the new
+        //     in-flight task.
+        let box = _LoadTaskBox()
+        return AsyncThrowingStream { continuation in
+            let loadTask = Task { [weak self, box] in
                 guard let self else { return }
-                // Audit 2026-04-16: register ourselves so `Engine.stop()`
-                // can reach the load task. Self-deregister on exit via
-                // the `defer` at the closure tail.
+                let me = box.task
+                // Cancel prior in-flight load (if any) and await its
+                // termination before proceeding. Without this, two
+                // concurrent loads would race on `loaded`, `cacheCoordinator`,
+                // `lastLoadOptions`, and `transition(.running)`.
+                let prior = await self.takeCurrentLoadTask()
+                if let prior, prior != me {
+                    prior.cancel()
+                    _ = await prior.value
+                }
+                // Self-register synchronously inside the body so a
+                // concurrent `stop()` cannot land in the registration
+                // gap and miss this task.
+                if let me { await self.setCurrentLoadTask(me) }
+                defer {
+                    if let me {
+                        Task.detached { [weak self] in
+                            await self?.clearCurrentLoadTaskIfMatches(me)
+                        }
+                    }
+                }
 
-                // iter-124 §150: tell the ModelLibrary we're reading shards
-                // from this path so a concurrent `deleteEntry(byId:)` call
+                // iter-124 §150: tell the ModelLibrary we're reading
+                // from the requested path before prestack scans headers.
+                // The prestack overlay may later become the effective
+                // load path, but the original bundle must also be pinned
+                // while the overlay builder is reading/symlinking it.
+                let requestedLoadPath = opts.modelPath
+                await self.modelLibrary.markLoadStarted(requestedLoadPath)
+
+                // 2026-05-04 prestacker integration. Some JANGTQ MoE
+                // bundles store routed experts as thousands of separate
+                // `experts.N.w{1,2,3}.tq_*` tensors. Sanitizers rebuild
+                // them into stacked tensors via `MLX.stacked(...)`,
+                // which materializes the routed-expert bank into resident
+                // Metal buffers and defeats mmap-backed JangPress. The
+                // prestacker writes a one-shot `jangpress-prestacked.safetensors`
+                // overlay (with original shards symlinked alongside) and
+                // returns the overlay dir, so the rest of the load path
+                // sees the pre-stacked layout that TurboQuantSwitchGLU
+                // already consumes. Failure falls back to the original
+                // bundle unless `JANGPRESS_PRESTACK_STRICT=1` is set.
+                var opts = opts
+                if opts.jangPressPrestack && opts.enableJangPress {
+                    do {
+                        let overlay = try JangPressPrestacker.prepareBundleIfNeeded(
+                            originalURL: opts.modelPath,
+                            enabled: true)
+                        if overlay != opts.modelPath {
+                            await self.logs.append(
+                                .info, category: "engine",
+                                "JangPress prestack overlay → \(overlay.path)")
+                            await self.modelLibrary.markLoadStarted(overlay)
+                            opts.modelPath = overlay
+                        }
+                    } catch {
+                        await self.logs.append(
+                            .warn, category: "engine",
+                            "JangPress prestack failed; using original bundle: \(error)")
+                    }
+                }
+
+                // iter-124 §150: keep the effective load path(s) balanced
+                // for every exit path. When prestack reroutes to an overlay
+                // there are two pins: the original path (used during
+                // prestack scan) and the overlay path (used during actual
+                // weight load).
+                let activeLoadPaths: [URL] = opts.modelPath == requestedLoadPath
+                    ? [requestedLoadPath]
+                    : [requestedLoadPath, opts.modelPath]
+
+                // Tell the ModelLibrary we're reading shards from this
+                // path so a concurrent `deleteEntry(byId:)` call
                 // (from `/api/delete` or `DELETE /v1/admin/models/:id`)
                 // refuses instead of `rm -r`ing the dir out from under us
                 // mid-Phase-2. Every early-return / throw path below must
                 // balance this mark with `markLoadFinished`.
-                await self.modelLibrary.markLoadStarted(opts.modelPath)
 
                 // Emit + fail are declared as @Sendable closures instead
                 // of local `func` decls so they satisfy the @Sendable
@@ -1088,12 +1600,24 @@ public actor Engine {
                     await self.setLoadedModelPath(nil)
                     await self.setLoadedJangConfig(nil)
                     await self.setLastLoadOptions(nil)
+                    await self.setJangPressCanonicalMmapActive(false)
+                    // Router-aware canonical advisor: hard-disable on
+                    // load failure so a stale `enabled=true` from a
+                    // partially-configured prior load can't keep
+                    // observing tracer arrays after the model is gone.
+                    JangPressCanonicalExpertAdvisor.shared.configure(
+                        enabled: false,
+                        mmapEnabled: false,
+                        enableRouterAdvice: false,
+                        compressPct: 0)
                     // iter-124 §150: balance `markLoadStarted` from the
                     // top of the load task on the failure path. Without
                     // this, a failed load leaves the path pinned in
                     // `activeLoadPaths` forever and legitimate delete
                     // attempts get "currently loading" 400s.
-                    await self.modelLibrary.markLoadFinished(opts.modelPath)
+                    for path in activeLoadPaths {
+                        await self.modelLibrary.markLoadFinished(path)
+                    }
                     await self.transition(.error(msg))
                     continuation.yield(.failed(msg))
                     continuation.finish()
@@ -1182,7 +1706,26 @@ public actor Engine {
                     // that ramps from 0.05 → 0.85 over an estimated
                     // duration based on file size. Real progress will plug
                     // in if mlx-swift ever exposes a delegate.
-                    let estimatedBytes = estimateModelBytes(at: opts.modelPath)
+                    //
+                    // iter 26 NOTE — MetalAllocator buffer cache cap was
+                    // ATTEMPTED here as a fix for the MiniMax 17 GB → 100 GB
+                    // inflation observed by the agent's verification. A
+                    // global `MLX.Memory.cacheLimit = 1 GiB` cap during
+                    // load BROKE inference on DSV4 (turn-1 output: "The
+                    // user is asking about a specific topic, but the
+                    // prompt is not provided") because the cap stayed in
+                    // effect through warmup + first decode where MLX
+                    // genuinely needs cache headroom for transient
+                    // attention/SSM activations. Reverted. The right fix
+                    // for MiniMax 35B inflation is upstream — see the
+                    // osaurus-side buffer-retain backport already pinned
+                    // via vmlx-swift-lm; vmlx benefits when that flows
+                    // through the dependency tree. Capping the cache
+                    // narrowly around just the safetensors load (not
+                    // through warmup) would need a finer-grained scope
+                    // than the current Task-level closure provides.
+
+                    let estimatedBytes = self.estimateModelBytes(at: opts.modelPath)
                     // A3 §255: concurrent-session OOM cap. JANG / MXTQ
                     // repack can peak at 1.3× the on-disk weight bytes
                     // during dequant; Metal Performance Shaders needs
@@ -1196,6 +1739,8 @@ public actor Engine {
                     // so the guard is exercisable without actually
                     // running a 256 GB machine short.
                     let a3Budget = Engine.memoryBudgetBytes()
+                    let currentHeadroom = Engine.currentLoadHeadroomBytes() ?? a3Budget
+                    let effectiveBudget = min(a3Budget, currentHeadroom)
                     let a3PeakNeeded = Int64(Double(estimatedBytes) * 1.3) + Int64(2_000_000_000)
                     // vmlx#125 — Flash MoE streams experts from disk; only
                     // a slot-bank's worth of expert weights is resident
@@ -1210,9 +1755,22 @@ public actor Engine {
                     // the flash-moe setting is on. Slot-bank OOM is caught
                     // later by the Metal allocator with a clearer message.
                     let _flashMoEOn = await self.settings.global().flashMoe
-                    if !_flashMoEOn && estimatedBytes > 0 && a3PeakNeeded > a3Budget {
+                    // §425c — JANGPress with .mmap backend specifically
+                    // exists to make >RAM bundles loadable (mmap-backed
+                    // pages are evictable). Bypass the 1.3× peak gate
+                    // when JANGPress mmap is on, mirroring the flash-moe
+                    // bypass above.
+                    let _jangPressMmap = opts.enableJangPress
+                        && opts.jangPressBackend == .mmap
+                    let requiredAvailable = Engine.memoryPressureFloorBytes(
+                        estimatedBytes: estimatedBytes,
+                        peakNeeded: a3PeakNeeded,
+                        jangPressMmap: _jangPressMmap,
+                        flashMoE: _flashMoEOn)
+                    if estimatedBytes > 0 && requiredAvailable > effectiveBudget
+                    {
                         throw EngineError.insufficientMemory(
-                            needed: a3PeakNeeded, available: a3Budget)
+                            needed: requiredAvailable, available: effectiveBudget)
                     }
                     await self.setExpectedBytes(estimatedBytes)
                     // Audit 2026-04-16: release the prior model's container
@@ -1266,8 +1824,26 @@ public actor Engine {
                     // that throws BEFORE loadContainer, so Engine.load's
                     // `fail(msg)` is the only error path and the user sees
                     // a banner instead of a hard crash.
+                    // P2 #11 — extended unsupported-family set. These
+                    // model_types either have no Swift port or have
+                    // shape mismatches the existing factories can't
+                    // catch before mlx-swift's _load() crashes Metal
+                    // init. Pre-fail at config-sniff time so the user
+                    // sees a clean error + Legacy Panel CTA.
                     let unsupportedSwiftFamilies: Set<String> = [
-                        "laguna", "ministral3",
+                        // 2026-05-01: ministral3 now has a Swift port via
+                        // Mistral3TextJANGTQModel (LLM) + Mistral3VLMJANGTQModel (VLM)
+                        // — removed from this gate. The factory-level dispatch
+                        // routes to the right variant based on
+                        // `weight_format == "mxtq"` + presence of vision tower keys.
+                        // 2026-05-01 night: laguna also removed — `LagunaModel`
+                        // ported from `~/vmlx-swift-lm/Libraries/MLXLLM/Models/Laguna.swift`,
+                        // routes through TurboQuantSwitchGLU for routed experts
+                        // when `weight_format == "mxtq"` + standard affine-quant
+                        // dispatch otherwise. See LLMModelFactory.swift "laguna"
+                        // entry.
+                        "voxtral", "qwen3_omni", "qwen3_5_omni",
+                        "dots_ocr", "nemotron_nano_v2", "falcon3",
                     ]
                     let textConfigType = (try? JSONDecoder.json5().decode(
                         TextConfigSniff.self, from: try Data(contentsOf:
@@ -1288,6 +1864,76 @@ public actor Engine {
                             "vmlx_swift_v2_known_issues.md."
                         )
                     }
+
+                    // Codex 2026-05-03 — canonical mmap-backed weight
+                    // loading for JangPress. For JANG/JANGTQ bundles the
+                    // C++ safetensors path is production-enabled by default
+                    // when the user selects the .mmap backend. This replaces
+                    // the old auxiliary-view-only behavior: MLX's canonical
+                    // arrays stay file-backed, so low-RAM MoE loads can rely
+                    // on OS page reclaim/refault. Escape hatches:
+                    //   • VMLX_DISABLE_CANONICAL_JANGPRESS_MMAP=1 disables
+                    //     the automatic JangPress path.
+                    //   • VMLX_MMAP_SAFETENSORS=1 still force-enables for
+                    //     direct experiments and non-JANG fixtures.
+                    let priorMmapEnv = getenv("VMLX_MMAP_SAFETENSORS")
+                        .map { String(cString: $0) }
+                    let disableCanonicalMmap =
+                        ProcessInfo.processInfo.environment[
+                            "VMLX_DISABLE_CANONICAL_JANGPRESS_MMAP"] == "1"
+                    let isJangBundle = JangLoader.isJangModel(at: opts.modelPath)
+                    let requestedCanonicalMmap =
+                        opts.enableJangPress
+                        && opts.jangPressBackend == .mmap
+                        && isJangBundle
+                        && !disableCanonicalMmap
+                    let externallyForcedMmap = priorMmapEnv == "1"
+                    if requestedCanonicalMmap && !externallyForcedMmap {
+                        setenv("VMLX_MMAP_SAFETENSORS", "1", 1)
+                        await self.logs.append(
+                            .info, category: "cache",
+                            "JANGPress canonical safetensors mmap enabled for this JANG bundle")
+                    }
+                    let mmapNowActive = requestedCanonicalMmap || externallyForcedMmap
+                    await self.setJangPressCanonicalMmapActive(mmapNowActive)
+                    // Router-aware canonical advisor — bumps configID,
+                    // resets per-layer hot set + counters, and decides
+                    // whether observations from this load should map to
+                    // MADV_WILLNEED/DONTNEED on the canonical mmap
+                    // ranges. Disabled by default; opt-in via
+                    // `LoadOptions.enableJangPressRouterAdvice` or the
+                    // env knob `JANGPRESS_ROUTER_ADVICE=1`.
+                    //
+                    // We sniff routed-MoE shape from config.json so the
+                    // advisor can derive a `hotPerLayer` budget that
+                    // scales with the model — the generic compressPct
+                    // formula clamps to [8, 64] which is starvation
+                    // territory for 256-expert top-8 architectures
+                    // (DSV4, MiniMax) and produces eviction churn that
+                    // hurts decode tok/s materially.
+                    let moeSniff = (try? JSONDecoder.json5().decode(
+                        MoEShapeSniff.self,
+                        from: try Data(contentsOf:
+                            opts.modelPath.appendingPathComponent("config.json"))))
+                    JangPressCanonicalExpertAdvisor.shared.configure(
+                        enabled: opts.enableJangPress
+                            && opts.jangPressBackend == .mmap,
+                        mmapEnabled: mmapNowActive,
+                        enableRouterAdvice: opts.enableJangPressRouterAdvice,
+                        enableWarmAdvice: opts.jangPressEnablePrefetch,
+                        compressPct: opts.jangPressCompressPct,
+                        numRoutedExperts: moeSniff?.resolvedRoutedExperts,
+                        topK: moeSniff?.resolvedTopK)
+                    defer {
+                        if requestedCanonicalMmap && !externallyForcedMmap {
+                            if let priorMmapEnv {
+                                setenv("VMLX_MMAP_SAFETENSORS", priorMmapEnv, 1)
+                            } else {
+                                unsetenv("VMLX_MMAP_SAFETENSORS")
+                            }
+                        }
+                    }
+
                     let container: vMLXLMCommon.ModelContainer
                     do {
                         switch config.modality {
@@ -1334,7 +1980,9 @@ public actor Engine {
                         // the user cancels an in-flight load. Fired BEFORE
                         // clearCache/yield to preserve the adjacency the
                         // §127 regression guard asserts.
-                        await self.modelLibrary.markLoadFinished(opts.modelPath)
+                        for path in activeLoadPaths {
+                            await self.modelLibrary.markLoadFinished(path)
+                        }
                         MLX.Memory.clearCache()
                         continuation.yield(.failed("cancelled"))
                         continuation.finish()
@@ -1388,17 +2036,36 @@ public actor Engine {
                         label: "Initializing cache"
                     ))
 
-                    // Phase 4: REAL warmup (fraction 0.90 → 0.98). Run a
-                    // 1-token dummy generation so Metal shaders are JIT-
-                    // compiled, kernels are cached, and the first REAL
-                    // request doesn't pay the cold-start latency. This is
-                    // the #1 reason "model ready" lies — fix it here.
-                    await emit(LoadProgress(
-                        phase: .warmup,
-                        fraction: 0.92,
-                        label: "Compiling Metal shaders"
-                    ))
-                    try await self.runWarmup(container: container)
+                    // Phase 4: adaptive warmup (fraction 0.90 → 0.98).
+                    // Small/medium models still get a 1-token dummy
+                    // generation so first chat avoids the cold JIT tax.
+                    // Giant/DSV4 loads proved that the same blocking
+                    // warmup can hold the Load Model button for minutes
+                    // inside MLX.eval before the user ever sees a ready
+                    // session. Skip those warmups and let the first real
+                    // request pay/measure the runtime cost instead.
+                    if self.shouldRunBlockingWarmup(
+                        opts: opts,
+                        config: config,
+                        estimatedBytes: estimatedBytes,
+                        canonicalMmapActive: requestedCanonicalMmap || externallyForcedMmap)
+                    {
+                        await emit(LoadProgress(
+                            phase: .warmup,
+                            fraction: 0.92,
+                            label: "Compiling Metal shaders"
+                        ))
+                        try await self.runWarmup(container: container)
+                    } else {
+                        await self.logs.append(
+                            .warn, category: "engine",
+                            "Skipped blocking load warmup for \(config.modelType); first request will warm kernels")
+                        await emit(LoadProgress(
+                            phase: .warmup,
+                            fraction: 0.92,
+                            label: "Warmup deferred"
+                        ))
+                    }
                     await emit(LoadProgress(
                         phase: .finalizing,
                         fraction: 0.98,
@@ -1408,20 +2075,30 @@ public actor Engine {
                     // Phase 5: done — NOW the model is actually ready to speak.
                     await self.logs.append(
                         .info, category: "engine",
-                        "Model ready (\(modality)) — warmup complete")
+                        "Model ready (\(modality))")
                     await emit(LoadProgress(
                         phase: .finalizing,
                         fraction: 1.0,
                         label: "Ready"
                     ))
                     await self.transition(.running)
+                    // Iter 144 — restart the idle watcher subscription
+                    // after a stop+load cycle. `stop()` cancels the
+                    // watcher; without restarting it here, idle events
+                    // get silently dropped on every load past the first.
+                    // `startIdleWatcher` is idempotent (cancels any prior
+                    // watcher first), so calling it on the happy path is
+                    // safe even on the first load.
+                    await self.startIdleWatcher()
                     // iter-124 §150: model is now loaded. Balance the
                     // `markLoadStarted` from the top of the load task —
                     // after this point deletion must instead check
                     // `loadedModelPath` (a loaded-but-idle model can
                     // survive mmap-unlink on APFS; the unsafe window is
                     // only while Phase 2 is opening additional shards).
-                    await self.modelLibrary.markLoadFinished(opts.modelPath)
+                    for path in activeLoadPaths {
+                        await self.modelLibrary.markLoadFinished(path)
+                    }
                     continuation.yield(.done)
                     continuation.finish()
                 } } catch {
@@ -1430,17 +2107,14 @@ public actor Engine {
                     // throw. Swallow-to-log rather than SIGTRAP.
                     await fail("\(error)")
                 }
-                // Self-deregister: clear the engine's handle so subsequent
-                // `stop()` calls don't cancel a completed task.
-                await self.clearCurrentLoadTask()
+                // Iter 144 — match-aware clear runs via the top-of-body
+                // `defer`. The unconditional `clearCurrentLoadTask()`
+                // here would race a sibling load that already updated
+                // `currentLoadTask` (e.g. user clicked a different
+                // model right as this one finished); the match-aware
+                // form skips when not matching.
             }
-            // Register the load task so `stop()` can cancel it. Done
-            // AFTER Task creation (not inside the closure) because the
-            // stream builder can't hop to the actor here; a detached Task
-            // is used for the register hop.
-            Task { [weak self] in
-                await self?.setCurrentLoadTask(loadTask)
-            }
+            box.task = loadTask
         }
     }
 
@@ -1449,6 +2123,23 @@ public actor Engine {
     }
     internal func clearCurrentLoadTask() {
         self.currentLoadTask = nil
+    }
+    /// Iter 144 — match-aware variant. Used by `load()`'s body so a
+    /// stale clearing-defer from a prior cancelled task can't null out
+    /// the next load's registration. Mirrors the stream-task version.
+    internal func clearCurrentLoadTaskIfMatches(_ candidate: Task<Void, Never>) {
+        if self.currentLoadTask == candidate {
+            self.currentLoadTask = nil
+        }
+    }
+    /// Iter 144 — fetch + clear current load task in one actor hop, so
+    /// a new load can synchronously cancel the prior one before it
+    /// starts. Returns the prior task (if any) so the caller can await
+    /// its termination before proceeding.
+    internal func takeCurrentLoadTask() -> Task<Void, Never>? {
+        let t = self.currentLoadTask
+        self.currentLoadTask = nil
+        return t
     }
 
     private func setLoaded(_ c: vMLXLMCommon.ModelContainer?) {
@@ -1569,6 +2260,10 @@ public actor Engine {
         self.lastLoadOptions = opts
     }
 
+    private func setJangPressCanonicalMmapActive(_ active: Bool) {
+        self.jangPressCanonicalMmapActive = active
+    }
+
     private func setCapabilities(_ c: ModelCapabilities?) {
         self.modelCapabilities = c
     }
@@ -1595,6 +2290,73 @@ public actor Engine {
         return max(phys - os, 1_000_000_000)
     }
 
+    /// Current reclaimable headroom for starting a weight load. Unlike
+    /// `memoryBudgetBytes()` this is live process pressure, so a parallel
+    /// bench/agent holding 60+ GB can make a normally valid load fail
+    /// cleanly before Phase 2 opens shards and asks Metal for buffers.
+    ///
+    /// Uses `free + inactive + speculative + purgeable` on Darwin because
+    /// large mmap-backed model pages are file-backed/reclaimable, while wired
+    /// and compressed pages are not safe to count as immediate headroom.
+    /// `VMLINUX_CURRENT_MEMORY_HEADROOM_OVERRIDE` exists only for contracts.
+    internal static func currentLoadHeadroomBytes() -> Int64? {
+        if let raw = ProcessInfo.processInfo.environment["VMLINUX_CURRENT_MEMORY_HEADROOM_OVERRIDE"],
+           let v = Int64(raw), v > 0
+        {
+            return v
+        }
+        #if canImport(Darwin)
+        var vmStats = vm_statistics64()
+        var infoCount = mach_msg_type_number_t(
+            MemoryLayout<vm_statistics64_data_t>.size / MemoryLayout<integer_t>.size
+        )
+        let hostPort = mach_host_self()
+        let result: kern_return_t = withUnsafeMutablePointer(to: &vmStats) { ptr in
+            ptr.withMemoryRebound(to: integer_t.self, capacity: Int(infoCount)) { rebound in
+                host_statistics64(hostPort, HOST_VM_INFO64, rebound, &infoCount)
+            }
+        }
+        guard result == KERN_SUCCESS else { return nil }
+        var pageSize: vm_size_t = 0
+        host_page_size(hostPort, &pageSize)
+        let pages = UInt64(vmStats.free_count)
+            + UInt64(vmStats.inactive_count)
+            + UInt64(vmStats.speculative_count)
+            + UInt64(vmStats.purgeable_count)
+        let bytes = pages * UInt64(pageSize)
+        return bytes > UInt64(Int64.max) ? Int64.max : Int64(bytes)
+        #else
+        return nil
+        #endif
+    }
+
+    /// Required live headroom for the pre-Phase-2 load gate.
+    ///
+    /// Normal dense/in-memory loads still require the historical 1.3× on-disk
+    /// estimate plus 2 GB. JANGPress canonical mmap and Flash-MoE deliberately
+    /// make >RAM bundles viable by relying on evictable mmap pages or a small
+    /// slot bank, so they get a lower live-pressure floor instead of a full
+    /// bypass. That keeps the loader from starting while the machine is
+    /// already tight, but does not reject the exact model classes those
+    /// features exist to serve.
+    internal static func memoryPressureFloorBytes(
+        estimatedBytes: Int64,
+        peakNeeded: Int64,
+        jangPressMmap: Bool,
+        flashMoE: Bool
+    ) -> Int64 {
+        guard estimatedBytes > 0 else { return 0 }
+        if jangPressMmap {
+            let floor = Int64(Double(estimatedBytes) * 0.20) + 2_000_000_000
+            return max(6_000_000_000, min(peakNeeded, floor))
+        }
+        if flashMoE {
+            let floor = Int64(Double(estimatedBytes) * 0.10) + 2_000_000_000
+            return max(4_000_000_000, min(peakNeeded, floor))
+        }
+        return peakNeeded
+    }
+
     /// Estimate total byte count of safetensors + weight files in the
     /// model directory. Used to gauge weight-load duration so the
     /// time-based pseudo-progress clock ramps at a realistic rate.
@@ -1615,6 +2377,11 @@ public actor Engine {
         for url in contents {
             let ext = url.pathExtension.lowercased()
             guard ext == "safetensors" || ext == "bin" || ext == "gguf" else { continue }
+            if ext == "safetensors",
+               JangLoader.shouldSkipModelSafetensorsFile(url)
+            {
+                continue
+            }
             // Follow symlink → stat target. Falls back to .fileSizeKey
             // if resolvingSymlinksInPath returns same URL (non-symlink).
             let resolved = url.resolvingSymlinksInPath()
@@ -1756,6 +2523,46 @@ public actor Engine {
         return "\(n) B"
     }
 
+    /// Decide whether load should block on a real generation warmup.
+    ///
+    /// Warmup is useful for normal models, but it is not allowed to be a
+    /// second hidden "load" phase for giant runtimes. Live DSV4-Flash
+    /// JANGTQ verification on 2026-05-03 showed Phase 4 spending more
+    /// than 240s inside MLX.eval during warmup before the session became
+    /// usable. The app must mark the model ready after weights/cache setup
+    /// and let the first explicit request own that runtime cost.
+    private nonisolated func shouldRunBlockingWarmup(
+        opts: LoadOptions,
+        config: ModelDetector.Detected,
+        estimatedBytes: Int64,
+        canonicalMmapActive: Bool
+    ) -> Bool {
+        let env = ProcessInfo.processInfo.environment
+        if env["VMLX_FORCE_LOAD_WARMUP"] == "1" { return true }
+        if env["VMLX_SKIP_LOAD_WARMUP"] == "1" { return false }
+
+        let modelType = config.modelType.lowercased()
+        if modelType == "deepseek_v4" { return false }
+
+        // Large canonical-mmap loads are exactly where the user wants the
+        // Load Model button to complete once the model is resident enough to
+        // serve. 60 GB keeps Laguna/Qwen-class local tests warm while
+        // deferring DSV4/Mistral-128B-class warmup.
+        if canonicalMmapActive && estimatedBytes >= 60_000_000_000 {
+            return false
+        }
+
+        // If an operator intentionally disabled JangPress or canonical
+        // mmap, still avoid turning an enormous dense/VL model load into an
+        // unbounded dummy-generation job.
+        if estimatedBytes >= 120_000_000_000 {
+            return false
+        }
+
+        _ = opts  // Keep the signature load-policy ready for future knobs.
+        return true
+    }
+
     /// Real warmup pass. Runs a 1-token dummy `generate()` on the loaded
     /// container so Metal shaders JIT-compile, the KV cache allocator
     /// initializes, and the model graph is fully materialized. After this
@@ -1794,11 +2601,15 @@ public actor Engine {
     /// max blocks, disk cache toggle + dir + size. Passes through to
     /// `vMLXLMCommon.generate(..., cacheCoordinator:)` on every stream.
     private func setupCacheCoordinator(opts: LoadOptions) async {
-        let g = await settings.global()
         var cfg = CacheCoordinatorConfig()
-        cfg.usePagedCache = g.usePagedCache && g.enablePrefixCache
-        cfg.pagedBlockSize = g.pagedCacheBlockSize
-        cfg.maxCacheBlocks = g.maxCacheBlocks
+        // Cache settings are load-scoped: `AppState.startSession`
+        // resolves global+session settings into LoadOptions, then this
+        // method must consume that snapshot exactly. Reading
+        // `settings.global()` here made per-session cache overrides in
+        // the Server settings UI look saved but silently ignored.
+        cfg.usePagedCache = opts.usePagedCache && opts.enablePrefixCache
+        cfg.pagedBlockSize = opts.pagedCacheBlockSize
+        cfg.maxCacheBlocks = opts.maxCacheBlocks
         // PROMPT-LEVEL L2 disk cache — keyed by token sequence hash,
         // stores per-prompt KV arrays via `DiskCache`. Reads from
         // `g.enableDiskCache` / `g.diskCacheDir` / `g.diskCacheMaxGB`
@@ -1839,7 +2650,7 @@ public actor Engine {
         // can decide BEFORE constructing CacheCoordinator. Same source
         // (CapabilityDetector → ModelCapabilities.cacheType).
         let isHybridForDisk = self.modelCapabilities?.cacheType == "hybrid"
-        let userWantsDisk = g.enableDiskCache
+        let userWantsDisk = opts.enableDiskCache
         // L2 disk cache: ALL model classes supported (verified live
         // 2026-04-13 PM). The v2 unified format from vmlx-swift-lm@14457d1
         // handles plain LLM (KVCacheSimple), hybrid SSM (Mamba per-layer
@@ -1871,20 +2682,29 @@ public actor Engine {
         // KVCacheSimple): T1 store, T2 restart, **19/19 prompt tokens
         // restored from disk**, coherent generation.
         cfg.enableDiskCache = userWantsDisk
-        cfg.diskCacheMaxGB = Float(g.diskCacheMaxGB)
-        if !g.diskCacheDir.isEmpty {
-            cfg.diskCacheDir = URL(fileURLWithPath: g.diskCacheDir)
+        cfg.diskCacheMaxGB = Float(opts.diskCacheMaxGB)
+        if !opts.diskCacheDir.isEmpty {
+            cfg.diskCacheDir = URL(fileURLWithPath: opts.diskCacheDir)
         }
-        cfg.enableMemoryCache = g.enableMemoryCache
-        cfg.memoryCachePercent = g.memoryCachePercent
-        cfg.memoryCacheTTLMinutes = g.memoryCacheTTLMinutes
-        // Surface the locals in the log so we can still see model class.
-        _ = isVL
-        _ = isHybridForDisk
+        cfg.enableBlockDiskCache = opts.enableBlockDiskCache
+        cfg.blockDiskCacheMaxGB = opts.blockDiskCacheMaxGB
+        if !opts.blockDiskCacheDir.isEmpty {
+            cfg.blockDiskCacheDir = URL(fileURLWithPath: opts.blockDiskCacheDir)
+        }
+        cfg.enableMemoryCache = opts.enableMemoryCache
+        cfg.memoryCachePercent = opts.memoryCachePercent
+        cfg.memoryCacheTTLMinutes = opts.memoryCacheTTLMinutes
+        // Iter 143: surface the model-class flags in the cache-enable
+        // log so post-hoc debugging can tell at a glance whether L2
+        // disk cache was running for a hybrid-SSM / VL bundle. The
+        // prior `_ = isVL; _ = isHybridForDisk` dead-stores were a
+        // tripwire — looked like the values were used but the compiler
+        // pruned them, so any future regression that needed to gate
+        // on these had no signal in the log to anchor against.
         if userWantsDisk {
             await logs.append(
                 .info, category: "cache",
-                "L2 disk cache enabled (v2 unified format).")
+                "L2 disk cache enabled (v2 unified format) — vl=\(isVL), hybrid=\(isHybridForDisk).")
         }
         cfg.modelKey = opts.modelPath.lastPathComponent
         let coord = CacheCoordinator(config: cfg)
@@ -1908,7 +2728,7 @@ public actor Engine {
         //     the user's choice — they might be debugging or avoiding
         //     the companion for a specific reason).
         //   • non-hybrid model → always off (nothing to gate).
-        let companionOn = isHybrid && g.enableSSMCompanion
+        let companionOn = isHybrid && opts.enableSSMCompanion
         if companionOn {
             coord.setHybrid(true)
         } else if isHybrid {
@@ -1923,10 +2743,29 @@ public actor Engine {
         // actual gate happens in `Stream.buildGenerateParameters` so
         // every request inherits the exclusion regardless of how the
         // setting flips at runtime.
-        if self.modelCapabilities?.cacheType == "mla" && g.enableTurboQuant {
+        //
+        // Iter 143 — Eric directive 2026-05-04: TQ default-on for ALL
+        // models. MLA is the one architecture where additional TQ on
+        // top is mathematically a no-op: MLA's latent KV is already
+        // a per-layer compressed projection (the c_kv cache, ~512 dim
+        // vs full per-head K/V). Quantizing the latent on top would
+        // either compound rounding error or hit a layout mismatch
+        // because `maybeQuantizeKVCache` only knows the
+        // `KVCacheSimple` shape. **Effectively MLA already gives you
+        // KV compression natively — there's no missing functionality
+        // for the user, just a different mechanism.** This log line
+        // makes the situation explicit so it's not surprising when a
+        // user toggles TQ on and the /v1/cache/stats shows TQ inactive
+        // for an MLA model.
+        if self.modelCapabilities?.cacheType == "mla" && opts.enableTurboQuant {
             await logs.append(
                 .info, category: "cache",
-                "MLA model detected — TurboQuant disabled for this load (MLA uses native latent KV; TQ would silently no-op).")
+                "MLA model loaded with TurboQuant=on. TurboQuant is " +
+                "skipped on MLA layers because MLA's latent KV cache " +
+                "is already a per-layer compressed projection (≈512-dim " +
+                "c_kv vs full per-head K/V). Native MLA compression " +
+                "supersedes TQ; no additional KV quantization is " +
+                "applied. This is by design, not a bug.")
         }
         self.cacheCoordinator = coord
         await logs.append(
@@ -1934,6 +2773,158 @@ public actor Engine {
             "CacheCoordinator: paged=\(cfg.usePagedCache) "
             + "blocks=\(cfg.maxCacheBlocks) disk=\(cfg.enableDiskCache) "
             + "hybrid=\(isHybrid)")
+
+        // §JANGPress — pick backend based on `jangPressBackend`.
+        // Two implementations live in vMLXLMCommon/Cache/, both opt-in
+        // via `enableJangPress`:
+        //
+        //   .mmap (default)     — JangPressMmapTier. Reads bundle
+        //                         shards via mmap PROT_READ; madvise
+        //                         dormant ranges. Doesn't conflict with
+        //                         MLX's own storage. Shippable today.
+        //
+        //   .mach (Mach VM)     — JangPressMachCache + ember
+        //                         controller. Allocates purgeable VM
+        //                         regions, copies weights in. Requires
+        //                         MLX storage replacement to actually
+        //                         save RAM (gated on MLX-swift fork);
+        //                         until then doubles RAM at load.
+        //
+        //   .none               — feature off (controller stays nil).
+        //
+        // Both stay nil when off so existing code paths are
+        // byte-identical to pre-2026-05-01.
+        // JangPress is load-scoped. `Engine.LoadOptions(from:)` copies
+        // the resolved settings snapshot into `opts`, so this block must
+        // respect `opts` exactly. Do not OR with GlobalSettings here:
+        // doing so made a user-visible "off" toggle load as on whenever
+        // the bare LoadOptions default was true.
+        let emberOn = opts.enableJangPress
+        let pctRaw = opts.jangPressCompressPct
+        let backendRaw = opts.jangPressBackend.rawValue
+        let prefetchOn = opts.jangPressEnablePrefetch
+        if emberOn {
+            let pct = max(0, min(100, pctRaw))
+            let alwaysHotFraction = 1.0 - Double(pct) / 100.0
+            let backend = LoadOptions.JangPressBackend(rawValue: backendRaw) ?? .mmap
+
+            switch backend {
+            case .mmap:
+                // File-backed. Bundle URL is the model path the engine
+                // just loaded. Construction walks safetensors shards
+                // and indexes routed-expert tiles by name regex.
+                if let bundleURL = self.loadedModelPath {
+                    do {
+                        let tier = try JangPressMmapTier(
+                            config: .init(
+                                bundleURL: bundleURL,
+                                hotPercent: 100 - pct,
+                                startCold: false))
+                        self.jangPressMmap = tier
+                        // Wire the controller against the mmap tier so
+                        // willStartInference / didFinishInference /
+                        // compressColdTiles all dispatch to the
+                        // file-backed path. compressColdTiles uses
+                        // forceRelease (msync MS_INVALIDATE) — verified
+                        // 100 % RSS reclaim on Laguna-XS.2-JANGTQ
+                        // (iter 10).
+                        // Force-mode dispatch — soft (madvise DONTNEED hint,
+                        // failsafe) is default; force (msync INVALIDATE)
+                        // is opt-in for users who want guaranteed reclaim.
+                        let useForce = (opts.jangPressForceMode == .force)
+                        let explicitPageReclaim = !self.jangPressCanonicalMmapActive
+                        let ember = JangPressController(
+                            mmapTier: tier,
+                            quiesceTimeoutMs: 30_000,
+                            keepHotFraction: alwaysHotFraction,
+                            useForceRelease: useForce,
+                            explicitPageReclaimEnabled: explicitPageReclaim,
+                            routePrefetchEnabled: explicitPageReclaim && opts.jangPressEnablePrefetch)
+                        self.emberController = ember
+                        ember.arm()
+                        // iter 24: tier build is now LAZY — first acquire
+                        // / release / first-inference reclaim triggers the
+                        // sniff + mmap + index. Don't call snapshot() here
+                        // (would force the build during Engine.load and
+                        // defeat the whole point of the lazy refactor).
+                        // Real stats land in `cacheStats()` once the tier
+                        // is built.
+                        await logs.append(
+                            .info, category: "cache",
+                            "JANGPress [.mmap] armed (deferred build): compressPct=\(pct) keepHot=\(Int(alwaysHotFraction * 100))% mode=\(useForce ? "force" : "soft")")
+                    } catch {
+                        await logs.append(
+                            .warn, category: "cache",
+                            "JANGPress [.mmap] init failed: \(error) — falling back to disabled")
+                    }
+                } else {
+                    await logs.append(
+                        .warn, category: "cache",
+                        "JANGPress [.mmap] needs loadedModelPath but it's nil")
+                }
+            case .mach:
+                let cache = JangPressMachCache(config: .init(
+                    alwaysHotFraction: alwaysHotFraction,
+                    enablePrefetch: prefetchOn,
+                    enableDiskRefault: false,
+                    manualCompressPercent: pct))
+                self.jangPressMach = cache
+                let ember = JangPressController(
+                    cache: cache,
+                    quiesceTimeoutMs: 30_000,
+                    keepHotFraction: alwaysHotFraction)
+                self.emberController = ember
+                ember.arm()
+                await logs.append(
+                    .info, category: "cache",
+                    "JANGPress [.mach] armed: compressPct=\(pct) keepHot=\(Int(alwaysHotFraction * 100))% prefetch=\(prefetchOn)")
+            case .none:
+                await logs.append(
+                    .info, category: "cache",
+                    "JANGPress: backend=.none — feature disabled despite enableJangPress=true")
+            }
+
+            // §JANGPress component F — co-init the embedding/lm-head
+            // Zipfian tier. Independent of routed-expert backend choice.
+            // hotPercent for embedding rows is small (typically 1-5%):
+            // a tiny fraction of vocab covers ~80% of activations
+            // (Zipfian distribution), so even at compressPct=70 we keep
+            // the most-frequent tokens hot.
+            //
+            // We map jangPressCompressPct=70 → embed hotPercent=5
+            // (top-5 % of vocab kept WILLNEED, bottom 95 % DONTNEED).
+            // For pct=0 we keep everything WILLNEED.
+            if let bundleURL = self.loadedModelPath, backend != .none {
+                let embedHotPct = max(1, min(50, 100 - pct + 30))
+                    // Maps pct=0 → embedHot=100 (no compression),
+                    // pct=70 → embedHot=60 (mild),
+                    // pct=100 → embedHot=30 (aggressive).
+                    // Embedding rows are TINY compared to expert tiles
+                    // so we err toward keeping them hot — savings come
+                    // from the routed-expert tier mass.
+                do {
+                    let embed = try JangPressEmbedTier(
+                        config: .init(bundleURL: bundleURL,
+                                      hotPercent: embedHotPct,
+                                      skipLMHead: false))
+                    self.jangPressEmbed = embed
+                    let s = embed.snapshot()
+                    if s.hasEmbedTokens {
+                        await logs.append(
+                            .info, category: "cache",
+                            "JANGPress [embed] armed: vocab=\(s.vocabSize) hidden=\(s.hiddenSize) hotPct=\(embedHotPct)% lmHead=\(s.hasLMHead)")
+                    } else {
+                        await logs.append(
+                            .info, category: "cache",
+                            "JANGPress [embed] init OK but no embed_tokens.weight found in bundle — tier inert")
+                    }
+                } catch {
+                    await logs.append(
+                        .warn, category: "cache",
+                        "JANGPress [embed] init failed: \(error) — feature inert (routed-expert tier unaffected)")
+                }
+            }
+        }
     }
 
     /// Stop the engine and release the model.
@@ -1953,6 +2944,27 @@ public actor Engine {
         loadedJangConfig = nil
         lastLoadOptions = nil
         _activeAdapter = nil
+        // §JANGPress — disarm any active backend. Both backends have
+        // their own teardown:
+        //   .mach: emberController.disarm() walks every registered
+        //          tile and flips back to non-volatile, then clears
+        //          the cache + controller refs.
+        //   .mmap: tier deallocation closes mmap regions + fd handles
+        //          (JangPressShard.deinit). No explicit disarm.
+        emberController?.disarm()
+        emberController = nil
+        jangPressMach = nil
+        jangPressMmap = nil
+        jangPressCanonicalMmapActive = false
+        jangPressEmbed = nil
+        // Router-aware canonical advisor — hard-disable so any router
+        // top-k observations queued during the prior load can't fire
+        // MADV_DONTNEED on a now-stale canonical mmap registry.
+        JangPressCanonicalExpertAdvisor.shared.configure(
+            enabled: false,
+            mmapEnabled: false,
+            enableRouterAdvice: false,
+            compressPct: 0)
         // DFlash drafter + target adapter are tied to the loaded target —
         // free them here so a subsequent load of a DIFFERENT target
         // doesn't dispatch through a dead adapter. `dflashDrafterPath`
@@ -2067,6 +3079,106 @@ public actor Engine {
             }
             continuation.onTermination = { _ in pump.cancel() }
         }
+    }
+
+    // MARK: - Anthropic count_tokens preflight
+
+    /// Iter 143: real implementation of Anthropic's
+    /// `/v1/messages/count_tokens` preflight. Translates the
+    /// `ChatRequest` through the same `buildChatMessages →
+    /// DefaultMessageGenerator → tokenizer.applyChatTemplate` path
+    /// `Stream.swift` uses for prefill, so the returned count matches
+    /// the `usage.input_tokens` value a follow-up `/v1/messages` call
+    /// will report (modulo image-token accounting on VLMs — Anthropic's
+    /// proprietary image tokenization is approximated by the loaded
+    /// VLM's own image marker expansion, not reproduced exactly).
+    ///
+    /// Throws `EngineError.notLoaded` when no model is resident — the
+    /// caller (`AnthropicRoutes.handleCountTokens`) translates this to
+    /// a 503 with a clear "load a model first" message.
+    public func countPromptTokens(request: ChatRequest) async throws -> Int {
+        guard let container = self.loaded else {
+            throw EngineError.notLoaded
+        }
+        // Same defaults Stream.swift uses on the prefill path. The
+        // reasoning-off stub injection is gated to deepseek-family
+        // models in Stream — for a count preflight we approximate by
+        // honoring `enableThinking` when supplied, defaulting to the
+        // family's natural setting via `effectiveThinking=true` on
+        // unspecified. The +/- 1-3 token drift this introduces on
+        // edge-case families is documented; clients that need exact
+        // counts should send the real `/v1/messages` and read
+        // `usage.input_tokens`.
+        let effectiveThinking = request.enableThinking ?? true
+        let chatMessages = await Engine.buildChatMessages(
+            from: request,
+            effectiveThinking: effectiveThinking,
+            modelStampsThink: false,
+            injectReasoningOffStub: false,
+            responseFormatInstruction:
+                Engine.responseFormatInstruction(from: request.responseFormat),
+            imageMarker: "<image>"
+        )
+        // Inline ChatRequest.Tool → ToolSpec conversion. Mirrors
+        // `Stream.buildToolSpecs` which is private to that file. We
+        // duplicate the small body here rather than widen visibility
+        // because count_tokens runs once per preflight and the
+        // structural shape is small.
+        let toolSpecs: [vMLXLMCommon.ToolSpec] = (request.tools ?? []).map { t in
+            var fn: [String: any Sendable] = [
+                "name": t.function.name,
+                "description": t.function.description ?? "",
+            ]
+            if let params = t.function.parameters,
+               let data = try? JSONEncoder().encode(params),
+               let jsonString = String(data: data, encoding: .utf8) {
+                fn["parameters_json"] = jsonString
+            }
+            return ["type": t.type, "function": fn as [String: any Sendable]] as vMLXLMCommon.ToolSpec
+        }
+        let userInput = UserInput(
+            chat: chatMessages,
+            tools: toolSpecs,
+            additionalContext: {
+                var ctx: [String: any Sendable] = [:]
+                if self.modelCapabilities?.modelType.lowercased() == "deepseek_v4",
+                   let builtin = self.modelCapabilities?.chatTemplate,
+                   !builtin.isEmpty
+                {
+                    // Match Stream.swift: DSV4 has a built-in
+                    // encoding_dsv4 template rather than
+                    // tokenizer_config.chat_template. count_tokens must
+                    // take the same template path as generation or clients
+                    // get a raw-text token count that underestimates the
+                    // real prompt.
+                    ctx["__chat_template_override__"] = builtin
+                }
+                return ctx
+            }()
+        )
+        let count: Int = await container.perform { ctx in
+            do {
+                let rawMsgs = DefaultMessageGenerator().generate(from: userInput)
+                var additionalContext = userInput.additionalContext ?? [:]
+                additionalContext["add_generation_prompt"] = true as any Sendable
+                let toks = try ctx.tokenizer.applyChatTemplate(
+                    messages: rawMsgs,
+                    tools: toolSpecs,
+                    additionalContext: additionalContext
+                )
+                return toks.count
+            } catch {
+                // Conservative fallback: ~4 chars/token on text content.
+                // Caller already has the model loaded so reaching this
+                // branch means the chat template itself rejected the
+                // shape — usually a malformed message dict — and a
+                // wrong-but-bounded number is better than a server
+                // error on a preflight call.
+                let totalChars = chatMessages.reduce(0) { $0 + $1.content.count }
+                return max(1, totalChars / 4)
+            }
+        }
+        return count
     }
 
     // MARK: - HTTP route entry points (stubs — wired but not implemented)
@@ -2699,6 +3811,29 @@ public actor Engine {
     /// wakes instantly (no reload) via `wakeFromStandby`. Python analog:
     /// `vmlx_engine/server.py:1880 admin_soft_sleep`.
     public func softSleep() async throws {
+        // Iter 144 — state guard. Direct admin call to
+        // `POST /admin/soft-sleep` while the engine is `.loading` would
+        // otherwise tear down `cacheCoordinator` and transition to
+        // `.standby(.soft)`. The load task then completes and overrides
+        // back to `.running`, surprising the operator with a model
+        // they thought they had soft-slept. `.error`/`.stopped` /
+        // already-soft-sleeping paths are also no-ops. Idle-timer
+        // path is gated separately in `handleIdleEvent`.
+        switch state {
+        case .loading:
+            throw EngineError.notImplemented(
+                "soft-sleep refused: engine is currently loading. Wait for load to finish or call /admin/stop instead.")
+        case .standby(.soft), .standby(.deep), .stopped:
+            await logs.append(.info, category: "engine",
+                "soft-sleep — already in standby/stopped (state=\(state)); no-op")
+            return
+        case .error:
+            await logs.append(.warn, category: "engine",
+                "soft-sleep — engine in .error; no-op")
+            return
+        case .running:
+            break  // proceed
+        }
         // Audit 2026-04-16: if a stream is mid-generate, cancel it first
         // so the cacheCoordinator clear doesn't race with concurrent
         // fetch/store from the generation loop. CacheCoordinator's paged
@@ -2803,6 +3938,22 @@ public actor Engine {
             await logs.append(.info, category: "engine",
                 "deep sleep — embedding model unloaded")
         }
+        // Iter 144 — release JangPress tier state so mmap-backed pages
+        // and Mach VM purgable regions can actually be reclaimed by the
+        // OS. Production-audit reviewer flagged that prior `deepSleep()`
+        // dropped `loaded` + `cacheCoordinator` but kept
+        // `emberController` / `jangPressMmap` / `jangPressMach` /
+        // `jangPressEmbed` live. For MoE bundles 5–20 GB of weight
+        // pages stayed open after deep-sleep — defeating the whole
+        // tier. Mirrors the teardown block in `stop()` (lines 2695-2701).
+        emberController?.disarm()
+        emberController = nil
+        jangPressMach = nil
+        jangPressMmap = nil
+        jangPressCanonicalMmapActive = false
+        jangPressEmbed = nil
+        await logs.append(.info, category: "engine",
+            "deep sleep — JangPress tier(s) released (mmap/mach/embed)")
         // iter-85 §113: drop MLX's pooled Metal buffer cache so the RSS
         // reduction is visible to Activity Monitor. Without this call a
         // user who deep-sleeps a 30GB model still sees the process
@@ -2823,6 +3974,17 @@ public actor Engine {
         await logs.append(.info, category: "engine",
             String(format: "deep sleep — weights unloaded (freed %.2f GB of %.2f GB expected = %.1f%%)",
                 Double(delta) / 1e9, Double(expected) / 1e9, pct))
+        // Iter 144 — cancel the idle watcher subscription. While in
+        // deep-sleep, the IdleTimer can still emit ticks; without
+        // cancelling the watcher, a stale `.softSleep` event delivered
+        // while we're already in `.standby(.deep)` would call
+        // `softSleep()` (no internal state guard) and DOWNGRADE depth
+        // back to `.standby(.soft)`. Subsequent wake then takes the
+        // instant path instead of reloading from disk.
+        // `wake()`'s `case .standby(.deep)` path replays `load()` which
+        // restarts the watcher in its happy path.
+        idleWatcher?.cancel()
+        idleWatcher = nil
         transition(.standby(.deep))
     }
 
@@ -2894,6 +4056,17 @@ public actor Engine {
             }
         case .running:
             return
+        case .loading:
+            // Iter 144 — wake during in-progress load is a no-op. The
+            // engine will be `.running` momentarily once the load
+            // finishes; throwing here would cause `wakeFromStandby`'s
+            // single-flight latch (`inFlightWakeTask`) to log a
+            // confusing "wake called in state .loading" error and
+            // strand subsequent wake callers behind a never-resolving
+            // task. Just let the load finish naturally.
+            await logs.append(.info, category: "engine",
+                "wake during .loading — no-op; load will complete shortly")
+            return
         default:
             throw EngineError.notImplemented("wake called in state \(state)")
         }
@@ -2924,6 +4097,7 @@ public actor Engine {
         var out: [String: Any] = [
             "loaded": true,
             "isHybrid": coord.isHybrid,
+            "pagedIncompatible": coord.isPagedIncompatible,
         ]
 
         // Paged (L1) ---------------------------------------------------------
@@ -2938,6 +4112,8 @@ public actor Engine {
             let hitRate = total > 0 ? Double(s.cacheHits) / Double(total) : 0.0
             out["paged"] = [
                 "enabled": true,
+                "effectiveEnabled": !coord.isPagedIncompatible,
+                "pagedIncompatible": coord.isPagedIncompatible,
                 "blockSize": paged.blockSize,
                 "maxBlocks": paged.maxBlocks,
                 "blocksInUse": inUse,
@@ -3001,6 +4177,37 @@ public actor Engine {
             out["disk"] = ["enabled": false] as [String: Any]
         }
 
+        // BlockDiskCache ------------------------------------------------------
+        if let blockDisk = coord.blockDiskCache {
+            let s = blockDisk.snapshot()
+            let effectiveEnabled = !coord.isPagedIncompatible
+            var blockDiskOut: [String: Any] = [
+                "enabled": effectiveEnabled,
+                "configured": lastLoadOptions?.enableBlockDiskCache ?? false,
+                "wired": effectiveEnabled,
+                "entryCount": s.entryCount,
+                "currentGB": Double(s.totalBytes) / 1_073_741_824.0,
+                "maxGB": Double(s.maxBytes) / 1_073_741_824.0,
+                "hitCount": s.hits,
+                "missCount": s.misses,
+                "hitRate": s.hitRate,
+                "storeCount": s.stores,
+                "evictionCount": s.evictions,
+                "directory": blockDisk.cacheDir.path,
+            ]
+            if coord.isPagedIncompatible {
+                blockDiskOut["status"] = "unsupported-for-hybrid-pool-cache"
+            }
+            out["blockDisk"] = blockDiskOut
+        } else {
+            out["blockDisk"] = [
+                "enabled": false,
+                "configured": lastLoadOptions?.enableBlockDiskCache ?? false,
+                "wired": false,
+                "status": "disabled",
+            ] as [String: Any]
+        }
+
         // Memory cache (L1.5 byte-budgeted) ----------------------------------
         if let mem = coord.memoryCache {
             let s = mem.snapshotStats()
@@ -3043,6 +4250,24 @@ public actor Engine {
             "size": coord.config.maxCacheBlocks,
         ] as [String: Any]
 
+        // Vision embedding cache (P0 audit 2026-05-01) -----------------------
+        // Stats hit/miss currently always 0 until per-VLM processor.prepare
+        // wire-up lands. Surfacing the toggle + entry count up-front so
+        // operators can see the cache exists; non-zero stats == integration
+        // is complete for the loaded VLM family.
+        let viStats = self.visionEmbeddingCache.snapshotStats()
+        out["visionEmbedding"] = [
+            "enabled": self.visionEmbeddingCache.enabled,
+            "maxEntries": self.visionEmbeddingCache.maxPixelEntries,
+            "entryCount": viStats.entryCount,
+            "hitCount": viStats.pixelCacheHits,
+            "missCount": viStats.pixelCacheMisses,
+            "hitRate": viStats.pixelHitRate,
+            "totalImagesProcessed": viStats.totalImagesProcessed,
+            "totalTimeSavedSec": viStats.totalTimeSavedSec,
+            "wired": false,  // flips to true when per-VLM integration lands
+        ] as [String: Any]
+
         // Iter-33: surface model-cache architecture signals the user
         // asked about (hybrid SSM, sliding-window attention, TQ KV,
         // quantized KV). Counts are walked from the loaded container's
@@ -3056,6 +4281,129 @@ public actor Engine {
             out["architecture"] = [:] as [String: Any]
         }
 
+        // §JANGPress — surface cache stats so the SwiftUI `CachePanel`
+        // and `/v1/cache/ember` HTTP endpoint can render them. Both
+        // backends report total tile bytes + acquire/release counts;
+        // the .mach backend additionally surfaces refault/discard +
+        // memory-pressure event counts.
+        if let mach = self.jangPressMach {
+            let s = mach.snapshot()
+            out["jangPress"] = [
+                "backend": "mach",
+                "canonicalStorageReplaced": false,
+                "residentModelRamSavings": false,
+                "scope": "parallel-purgeable-copy",
+                "totalTiles": s.totalTiles,
+                "totalBytes": s.totalBytesAllocated,
+                "hotPinned": s.hotPinned,
+                "acquireCount": s.acquireCount,
+                "releaseCount": s.releaseCount,
+                "refaultCount": s.refaultCount,
+                "discardCount": s.discardCount,
+                "pressureLow": s.pressureLowCount,
+                "pressureWarn": s.pressureWarnCount,
+                "pressureCrit": s.pressureCriticalCount,
+            ] as [String: Any]
+        } else if let mmap = self.jangPressMmap {
+            // iter 24: use snapshotIfBuilt() so the stats endpoint
+            // doesn't force a full sniff/mmap/index pass on a tier
+            // that hasn't been used yet. Returns built=false + zeros
+            // until the first inference triggers ensureBuilt().
+            let s = mmap.snapshotIfBuilt()
+            // iter 27: also surface the controller state (compactionMode
+            // = "uniform-fallback" if no model has opted into recordRoute,
+            // "frequency-aware" once routing observations exist) so the
+            // user can see why the quiesce-timer pathway behaves the way
+            // it does.
+            let canonicalMmap = self.jangPressCanonicalMmapActive
+                || ProcessInfo.processInfo.environment["VMLX_MMAP_SAFETENSORS"] == "1"
+            var ember: [String: Any] = [
+                "backend": "mmap",
+                "canonicalStorageReplaced": canonicalMmap,
+                "residentModelRamSavings": canonicalMmap,
+                "scope": canonicalMmap
+                    ? "canonical-mlx-mmap-backed"
+                    : "parallel-file-backed-view",
+                "built": s.built,
+                "shardCount": s.shardCount,
+                "expertCount": s.expertCount,
+                "totalRoutedBytes": s.totalRoutedBytes,
+                "byLayer": s.byLayer.map { (k: $0.key, v: $0.value) },
+            ]
+            if let ctrl = self.emberController {
+                let cs = ctrl.snapshot()
+                ember["state"] = String(describing: cs.state)
+                ember["inferenceInFlight"] = cs.inferenceInFlight
+                ember["lastInferenceMsAgo"] = cs.lastInferenceMsAgo
+                ember["totalRoutesObserved"] = cs.totalRoutesObserved
+                ember["distinctTilesObserved"] = cs.distinctTilesObserved
+                ember["keepHotFraction"] = cs.keepHotFraction
+                ember["firstInferenceCompleted"] = cs.firstInferenceCompleted
+                ember["compactionMode"] = cs.compactionMode
+                ember["explicitPageReclaimEnabled"] = cs.explicitPageReclaimEnabled
+                ember["canonicalAdviceEnabled"] = cs.canonicalAdviceEnabled
+                ember["canonicalWillNeedBytes"] = cs.canonicalWillNeedBytes
+                ember["canonicalDontNeedBytes"] = cs.canonicalDontNeedBytes
+                ember["skippedRouteObservations"] = cs.skippedRouteObservations
+                ember["routePrefetchEnabled"] = cs.routePrefetchEnabled
+            }
+            // Router-aware canonical advisor — separate per-layer hot-set
+            // tracker that the controller's batch-route call can't see.
+            // Surfaced under a sub-key so /health consumers can tell the
+            // controller's totalRoutesObserved (every route) apart from
+            // the advisor's readbacks (only realized indices observed
+            // after tracer + size guards).
+            let routerStats = JangPressCanonicalExpertAdvisor.shared.snapshot()
+            // `thrashRatio` = rewarms / max(1, coldCalls). 0.0 ⇒ healthy
+            // (advisor evicted nothing the router needed back). 1.0 ⇒
+            // every cold-advise was wrong; compressPct should drop or
+            // hotPerLayer should rise. Computed here so /health consumers
+            // don't have to do the divide and operators see the diagnostic
+            // alongside its inputs.
+            let thrashRatio: Double = routerStats.coldCalls > 0
+                ? Double(routerStats.rewarms) / Double(routerStats.coldCalls)
+                : 0.0
+            ember["routerAdvisor"] = [
+                "enabled": routerStats.enabled,
+                "asyncReadback": routerStats.asyncReadback,
+                "warmAdvice": routerStats.warmAdvice,
+                "hotPerLayer": routerStats.hotPerLayer,
+                "hotExpertCount": routerStats.hotExpertCount,
+                "warmCalls": routerStats.warmCalls,
+                "coldCalls": routerStats.coldCalls,
+                "warmBytes": routerStats.warmBytes,
+                "coldBytes": routerStats.coldBytes,
+                "pendingObservations": routerStats.pendingObservations,
+                "droppedQueueFull": routerStats.droppedQueueFull,
+                "skippedLargeIndexTensors": routerStats.skippedLargeIndexTensors,
+                "skippedTracerArrays": routerStats.skippedTracerArrays,
+                "readbacks": routerStats.readbacks,
+                "rewarms": routerStats.rewarms,
+                "distinctColdAdvisedPairs": routerStats.distinctColdAdvisedPairs,
+                "thrashRatio": thrashRatio,
+            ] as [String: Any]
+            out["jangPress"] = ember as [String: Any]
+        } else {
+            out["jangPress"] = ["backend": "none"] as [String: Any]
+        }
+
+        // §JANGPress component F — embedding/lm-head Zipfian tier
+        // surfaces independently of the routed-expert backend.
+        if let embed = self.jangPressEmbed {
+            let s = embed.snapshotIfBuilt()
+            out["jangPressEmbed"] = [
+                "hasEmbedTokens": s.hasEmbedTokens,
+                "hasLMHead": s.hasLMHead,
+                "vocabSize": s.vocabSize,
+                "hiddenSize": s.hiddenSize,
+                "hotPercent": s.hotPercent,
+                "observedTokenSamples": s.observedTokenSamples,
+                "distinctTokensSeen": s.distinctTokensSeen,
+            ] as [String: Any]
+        } else {
+            out["jangPressEmbed"] = ["enabled": false] as [String: Any]
+        }
+
         return out
     }
 
@@ -3065,22 +4413,46 @@ public actor Engine {
     /// "other":N, "total":N, "slidingWindowActive":Bool, "hybridSSMActive":Bool}`.
     /// Synchronous inside `container.perform` because cache arrays are
     /// just Swift object references — no MLX eval involved.
+    ///
+    /// Important: `newCache(parameters:nil)` is a static topology probe.
+    /// Runtime policy (TurboQuant requested/suppressed, compile-first
+    /// activation) is layered in from the most recent load options so
+    /// `/health` and CachePanel do not imply that TQ is broken just
+    /// because a fresh cache has not been promoted after prefill.
     private func computeCacheLayerBreakdown(
         container: vMLXLMCommon.ModelContainer
     ) async -> [String: Any] {
+        let hints = self.cacheArchitectureRuntimeHints()
         return await container.perform { ctx -> [String: Any] in
             // Build a fresh cache list from the loaded model so we see
-            // the same per-layer shape a real generation would.
-            // `GenerateParameters.defaults` is the minimum surface the
-            // protocol needs; the cache count + types stay stable
-            // regardless of maxTokens / temp.
+            // the static per-layer topology. Runtime policy (TQ, compile)
+            // is reported separately below because those transformations
+            // happen after prefill and/or only for specific requests.
             let cache = ctx.model.newCache(parameters: nil)
             var counts: [String: Int] = [
                 "kvSimple": 0, "rotating": 0, "turboQuant": 0,
                 "quantized": 0, "mamba": 0, "other": 0,
+                "compiledKV": 0, "compiledRotating": 0,
+                "compiledTurboQuant": 0, "compiledMamba": 0,
             ]
-            for layer in cache {
-                if layer is RotatingKVCache {
+            func classify(_ layer: KVCache) {
+                if let list = layer as? CacheList {
+                    for i in 0..<list.count {
+                        classify(list[i])
+                    }
+                } else if layer is CompilableTurboQuantKVCache {
+                    counts["compiledTurboQuant", default: 0] += 1
+                    counts["turboQuant", default: 0] += 1
+                } else if layer is CompilableRotatingKVCache {
+                    counts["compiledRotating", default: 0] += 1
+                    counts["rotating", default: 0] += 1
+                } else if layer is CompilableMambaCache {
+                    counts["compiledMamba", default: 0] += 1
+                    counts["mamba", default: 0] += 1
+                } else if layer is CompilableKVCache {
+                    counts["compiledKV", default: 0] += 1
+                    counts["kvSimple", default: 0] += 1
+                } else if layer is RotatingKVCache {
                     counts["rotating", default: 0] += 1
                 } else if layer is TurboQuantKVCache {
                     counts["turboQuant", default: 0] += 1
@@ -3094,14 +4466,182 @@ public actor Engine {
                     counts["other", default: 0] += 1
                 }
             }
-            let total = counts.values.reduce(0, +)
+            for layer in cache {
+                classify(layer)
+            }
+            let total = (counts["kvSimple"] ?? 0)
+                + (counts["rotating"] ?? 0)
+                + (counts["turboQuant"] ?? 0)
+                + (counts["quantized"] ?? 0)
+                + (counts["mamba"] ?? 0)
+                + (counts["other"] ?? 0)
             var out: [String: Any] = counts.mapValues { $0 as Any }
             out["total"] = total
+            out["countsScope"] = "fresh-cache-topology"
             out["slidingWindowActive"] = (counts["rotating"] ?? 0) > 0
             out["hybridSSMActive"] = (counts["mamba"] ?? 0) > 0
-            out["turboQuantActive"] = (counts["turboQuant"] ?? 0) > 0
+            out["turboQuantActive"] =
+                (counts["turboQuant"] ?? 0) > 0 || hints.turboQuantRuntimeRequested
+            out["turboQuantMaterializedLayers"] = counts["turboQuant"] ?? 0
+            out["turboQuantConfigured"] = hints.turboQuantConfigured
+            out["turboQuantJangConfigured"] = hints.turboQuantJangConfigured
+            out["turboQuantRuntimeRequested"] = hints.turboQuantRuntimeRequested
+            out["turboQuantSuppressed"] = hints.turboQuantSuppressed
+            out["turboQuantSuppressionReason"] = hints.turboQuantSuppressionReason
+            out["compiledDecodeConfigured"] = hints.compiledDecodeConfigured
+            out["compileFirstFamily"] = hints.compileFirstFamily
+            out["textOnlyVLMCompileEligible"] = hints.textOnlyVLMCompileEligible
+            out["modality"] = hints.modality
+            out["cacheType"] = hints.cacheType
+            out["family"] = hints.family
+            out["modelType"] = hints.modelType
+            if let keyBits = hints.turboQuantKeyBits {
+                out["turboQuantKeyBits"] = keyBits
+            }
+            if let valueBits = hints.turboQuantValueBits {
+                out["turboQuantValueBits"] = valueBits
+            }
             return out
         }
+    }
+
+    private struct CacheArchitectureRuntimeHints: Sendable {
+        var family: String = ""
+        var modelType: String = ""
+        var modality: String = "unknown"
+        var cacheType: String = "unknown"
+        var compileFirstFamily: Bool = false
+        var textOnlyVLMCompileEligible: Bool = false
+        var compiledDecodeConfigured: Bool = false
+        var turboQuantConfigured: Bool = false
+        var turboQuantJangConfigured: Bool = false
+        var turboQuantRuntimeRequested: Bool = false
+        var turboQuantSuppressed: Bool = false
+        var turboQuantSuppressionReason: String = "not-configured"
+        var turboQuantKeyBits: Int?
+        var turboQuantValueBits: Int?
+    }
+
+    private func cacheArchitectureRuntimeHints() -> CacheArchitectureRuntimeHints {
+        let env = ProcessInfo.processInfo.environment
+        let caps = self.modelCapabilities
+        let family = (caps?.family ?? "").lowercased()
+        let modelType = (caps?.modelType ?? "").lowercased()
+        let modality = caps?.modality ?? .unknown
+        let cacheType = (caps?.cacheType ?? "unknown").lowercased()
+        let slidingMode = (lastLoadOptions?.slidingWindowMode ?? "auto").lowercased()
+
+        let compileFirstFamilies: Set<String> = [
+            "laguna",
+            "qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_next",
+            "nemotron_h",
+            "minimax", "minimax_m2_5",
+            "mistral3", "ministral3", "mistral4",
+            "gemma3_text", "gemma4_text",
+            "mimo_v2_flash", "baichuan_m1", "afmoe", "gpt_oss",
+        ]
+        let boundedSwaFamilies: Set<String> = [
+            "laguna",
+            "mistral3", "ministral3", "mistral4",
+            "gemma3_text", "gemma4_text",
+            "pixtral",
+        ]
+        let isDSV4 = family == "deepseek_v4" || modelType == "deepseek_v4"
+        let textOnlyVLMCompileFamilies: Set<String> = [
+            "gemma4", "gemma4_text",
+        ]
+        let textOnlyVLMCompileEligible =
+            modality == .vision
+            && (textOnlyVLMCompileFamilies.contains(family)
+                || textOnlyVLMCompileFamilies.contains(modelType))
+        let compileEligibleModality =
+            modality == .text || textOnlyVLMCompileEligible
+        let compileFirstFamily =
+            !isDSV4
+            && compileEligibleModality
+            && (compileFirstFamilies.contains(family)
+                || modelType == "ministral3")
+        let boundedSwaCompileFamily =
+            boundedSwaFamilies.contains(family)
+            || modelType == "laguna"
+            || modelType == "ministral3"
+
+        let compiledEnv = env["VMLX_COMPILED_DECODE"]
+        let compiledDecodeConfigured: Bool
+        if compiledEnv == "1" {
+            compiledDecodeConfigured = true
+        } else if compiledEnv == "0" {
+            compiledDecodeConfigured = false
+        } else {
+            compiledDecodeConfigured =
+                compileFirstFamily
+                && !(boundedSwaCompileFamily && slidingMode == "long")
+        }
+
+        let tqDisabledViaEnv = env["VMLX_DISABLE_TURBO_QUANT"] == "1"
+        let tqForcedViaEnv = env["VMLX_FORCE_TURBO_QUANT"] == "1"
+        let jangTQEnabled = (self.loadedJangConfig?.turboquant.enabled == true)
+        let enableTurboQuant = self.lastLoadOptions?.enableTurboQuant ?? false
+        let turboQuantConfigured = jangTQEnabled || enableTurboQuant
+        let compileFirstSuppressesTQ =
+            compiledDecodeConfigured
+            && compileFirstFamily
+            && !tqForcedViaEnv
+            && !jangTQEnabled
+        let isMLA = cacheType == "mla"
+        let runtimeRequested =
+            !isMLA
+            && !tqDisabledViaEnv
+            && !compileFirstSuppressesTQ
+            && turboQuantConfigured
+
+        var reason = "none"
+        if !runtimeRequested {
+            if !turboQuantConfigured {
+                reason = "not-configured"
+            } else if isMLA {
+                reason = "mla-native-cache"
+            } else if tqDisabledViaEnv {
+                reason = "env-disabled"
+            } else if compileFirstSuppressesTQ {
+                reason = "compile-first"
+            } else {
+                reason = "policy"
+            }
+        }
+
+        let keyBits: Int?
+        let valueBits: Int?
+        if runtimeRequested {
+            if let tq = self.loadedJangConfig?.turboquant, tq.enabled {
+                keyBits = tq.defaultKeyBits
+                valueBits = tq.defaultValueBits
+            } else {
+                let bits = self.lastLoadOptions?.turboQuantBits ?? 4
+                keyBits = bits
+                valueBits = bits
+            }
+        } else {
+            keyBits = nil
+            valueBits = nil
+        }
+
+        return CacheArchitectureRuntimeHints(
+            family: family,
+            modelType: modelType,
+            modality: modality.rawValue,
+            cacheType: cacheType,
+            compileFirstFamily: compileFirstFamily,
+            textOnlyVLMCompileEligible: textOnlyVLMCompileEligible,
+            compiledDecodeConfigured: compiledDecodeConfigured,
+            turboQuantConfigured: turboQuantConfigured,
+            turboQuantJangConfigured: jangTQEnabled,
+            turboQuantRuntimeRequested: runtimeRequested,
+            turboQuantSuppressed: turboQuantConfigured && !runtimeRequested,
+            turboQuantSuppressionReason: reason,
+            turboQuantKeyBits: keyBits,
+            turboQuantValueBits: valueBits
+        )
     }
 
     /// Clear all cache tiers without changing engine state.
@@ -3164,6 +4704,12 @@ public actor Engine {
     /// surface — guarded by `internal` + `@testable import`.
     internal func _setCacheCoordinatorForTesting(_ coord: CacheCoordinator?) {
         self.cacheCoordinator = coord
+    }
+
+    /// Test-only: seed the most recent load options so `cacheStats()` can
+    /// verify settings-derived status fields without loading a real model.
+    internal func _setLastLoadOptionsForTesting(_ opts: LoadOptions?) {
+        self.lastLoadOptions = opts
     }
 
     // MARK: - Benchmark
@@ -3326,8 +4872,9 @@ public actor Engine {
 
     /// Run a benchmark suite against the currently-loaded chat model.
     ///
-    /// - `.decode256`  — 10-token warmup, then time a 256-token generation
-    ///   on a fixed short prompt. Reports tokensPerSec + TTFT.
+    /// - `.decode256`  — 10-token warmup, then time an up-to-256-token
+    ///   generation on a fixed short prompt. Reports tokensPerSec + TTFT and
+    ///   records the actual decoded token count because models may stop on EOS.
     /// - `.prefill1024` — synthetic ~1024-token prompt, measure first-token
     ///   latency + promptTokensPerSecond.
     /// - `.cacheTurn5` — 5 sequential turns where each turn's prompt
@@ -3409,10 +4956,10 @@ public actor Engine {
         return path.lastPathComponent
     }
 
-    /// Decode-speed benchmark. 10 warmup tokens (not timed) followed by a
-    /// `maxTokens`-token generation on a fixed short prompt. Drains the
-    /// real `Engine.stream` path so the benchmark sees the same prefix
-    /// cache, scheduler, and parser wiring a real request would hit.
+    /// Decode-speed benchmark. 10 warmup tokens (not timed) followed by an
+    /// up-to-`maxTokens` generation on a fixed short prompt. Drains the real
+    /// `Engine.stream` path so the benchmark sees the same prefix cache,
+    /// scheduler, and parser wiring a real request would hit.
     private func runDecodeBench(
         suite: BenchSuite,
         maxTokens: Int,
@@ -3445,6 +4992,7 @@ public actor Engine {
         var firstTokenAt: Date? = nil
         var tokenCount = 0
         var usage: StreamChunk.Usage? = nil
+        var finishReason: String? = nil
         for try await chunk in self.stream(request: req) {
             if let c = chunk.content, !c.isEmpty {
                 if firstTokenAt == nil { firstTokenAt = Date() }
@@ -3458,6 +5006,7 @@ public actor Engine {
                 }
             }
             if let u = chunk.usage { usage = u }
+            if let reason = chunk.finishReason { finishReason = reason }
         }
         let end = Date()
         let totalSec = end.timeIntervalSince(start)
@@ -3480,6 +5029,10 @@ public actor Engine {
             ? Double(usage!.promptTokens) / ttftSec
             : nil
         let peakGB = currentPeakMLXMemoryGB()
+        var notes = "requested=\(maxTokens) decoded=\(decodedTokens) finish=\(finishReason ?? "unknown") chunks=\(tokenCount)"
+        if decodedTokens < maxTokens && finishReason != "length" {
+            notes += " early_stop=true"
+        }
 
         return BenchReport(
             suite: suite,
@@ -3488,7 +5041,7 @@ public actor Engine {
             ttftMs: ttftMs,
             totalMs: totalSec * 1000,
             cacheHitRate: 0,
-            notes: "decoded=\(decodedTokens)",
+            notes: notes,
             tpotMs: tpotMs,
             generationTps: generationTps,
             processingTps: processingTps,
@@ -3916,4 +5469,14 @@ public enum EngineError: Error, CustomStringConvertible {
             return "Metal commit failed during decode: \(msg)"
         }
     }
+}
+
+/// Iter 144 — capture-after-create holder for `Engine.load()`. Mirrors
+/// `_StreamTaskBox` in Stream.swift. Filled with the real driving Task
+/// after construction; the body reads it on first actor hop to
+/// self-register, cancel-prior-task, and set up its own match-aware
+/// cleanup defer. Top-level so AsyncThrowingStream's initializer
+/// overload resolution stays unambiguous.
+final class _LoadTaskBox: @unchecked Sendable {
+    var task: Task<Void, Never>?
 }

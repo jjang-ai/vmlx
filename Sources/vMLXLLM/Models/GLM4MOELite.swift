@@ -275,8 +275,9 @@ class GLM4MoELiteAttention: Module {
         // Create queries
         let queries = concatenated([qNope, qPe], axis: -1)
 
-        // Compute attention
-        var output = MLXFast.scaledDotProductAttention(
+        // Compute attention — iter 143 MLA fp32 SDPA cast on L==1
+        // (GLM-5.1 / GLM4 MoE Lite is MLA-class).
+        var output = mlaScaledDotProductAttention(
             queries: queries,
             keys: keys,
             values: values,
@@ -377,6 +378,7 @@ class GLM4MoELiteGate: Module {
 class GLM4MoELiteMoE: Module, UnaryLayer {
     let numExpertsPerTok: Int
     let gate: GLM4MoELiteGate
+    fileprivate let layerIdx: Int
 
     @ModuleInfo(key: "switch_mlp") var switchMLP: SwitchGLU
     @ModuleInfo(key: "shared_experts") var sharedExperts: GLM4MoELiteMLP?
@@ -384,13 +386,14 @@ class GLM4MoELiteMoE: Module, UnaryLayer {
     /// Flash MoE Phase 2b shim.
     fileprivate var flashMoeShim: FlashMoEBlock? = nil
 
-    init(_ config: GLM4MoELiteConfiguration) {
+    init(_ config: GLM4MoELiteConfiguration, layerIdx: Int) {
         guard let nRoutedExperts = config.nRoutedExperts else {
             fatalError("GLM4MoELiteMoE requires nRoutedExperts")
         }
 
         self.numExpertsPerTok = config.numExpertsPerTok
         self.gate = GLM4MoELiteGate(config)
+        self.layerIdx = layerIdx
 
         _switchMLP.wrappedValue = SwitchGLU(
             inputDims: config.hiddenSize,
@@ -414,6 +417,7 @@ class GLM4MoELiteMoE: Module, UnaryLayer {
             y = shim(x)
         } else {
             let (inds, scores) = gate(x)
+            JangPressRouteTelemetry.recordTopK(layer: layerIdx, indices: inds)
             y = switchMLP(x, inds)
             y = (y * scores[.ellipsis, .newAxis]).sum(axis: -2).asType(y.dtype)
         }
@@ -438,7 +442,7 @@ class GLM4MoELiteDecoderLayer: Module {
             layerIdx >= config.firstKDenseReplace,
             layerIdx % config.moeLayerFreq == 0
         {
-            self.mlp = GLM4MoELiteMoE(config)
+            self.mlp = GLM4MoELiteMoE(config, layerIdx: layerIdx)
         } else {
             self.mlp = GLM4MoELiteMLP(config)
         }
@@ -529,7 +533,8 @@ public class GLM4MoELiteModel: Module, LLMModel, KVCacheDimensionProvider {
                             sanitized.removeValue(
                                 forKey: "\(prefix).mlp.experts.\(e).\(n).\(k)")!
                         }
-                        sanitized["\(prefix).mlp.switch_mlp.\(n).\(k)"] = MLX.stacked(toJoin)
+                        sanitized["\(prefix).mlp.switch_mlp.\(n).\(k)"] =
+                            loadTimeMaterializedStacked(toJoin)
                     }
                 }
             }

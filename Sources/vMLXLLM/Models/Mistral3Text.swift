@@ -15,7 +15,7 @@ import MLXNN
 ///   - beta: Scaling factor (llama_4_scaling_beta)
 ///   - maxPositionEmbeddings: Original max position embeddings
 /// - Returns: Scaling tensor of shape [stop - start, 1]
-private func getLlama4AttentionScale(
+internal func getLlama4AttentionScale(
     start: Int, stop: Int, beta: Float, maxPositionEmbeddings: Int
 ) -> MLXArray {
     let positions = MLXArray(Int32(start) ..< Int32(stop))
@@ -24,6 +24,34 @@ private func getLlama4AttentionScale(
         * MLX.log(
             1 + MLX.floor(positions.asType(.float32) / Float(maxPositionEmbeddings))
         )
+    return scaling[0..., .newAxis]
+}
+
+/// Graph-visible variant matching upstream mlx-lm's
+/// `_get_llama_4_attn_scale(size, offset, ...)`.
+///
+/// The `start/stop` overload above is fine for prefill and uncompiled
+/// decode. Once `setupCompiledDecode` promotes caches to
+/// `CompilableKVCache` / `CompilableRotatingKVCache`, reading
+/// `cache.offset` would call `.item()` during `compile()`. Use this
+/// overload with `graphOffsetArray(for:)` so position-dependent scaling
+/// remains inside the graph.
+internal func getLlama4AttentionScale(
+    size: Int, offset: MLXArray, beta: Float, maxPositionEmbeddings: Int
+) -> MLXArray {
+    var offset = offset.asType(.float32)
+    if offset.ndim > 0 {
+        offset = offset[0..., .newAxis]
+    }
+    let positions = MLXArray(Int32(0) ..< Int32(size)).asType(.float32)
+    let scaling =
+        1 + beta
+        * MLX.log(
+            1 + MLX.floor((positions + offset) / Float(maxPositionEmbeddings))
+        )
+    if scaling.ndim == 2 {
+        return scaling[0..., .newAxis, 0..., .newAxis]
+    }
     return scaling[0..., .newAxis]
 }
 
@@ -226,13 +254,6 @@ public class Mistral3TextModelInner: Module {
             h = embedTokens(inputs)
         }
 
-        let offset: Int
-        if let cache {
-            offset = cache[0].offset
-        } else {
-            offset = 0
-        }
-
         // Create full attention mask
         let faMask = createAttentionMask(h: h, cache: cache?[faIdx])
 
@@ -244,19 +265,33 @@ public class Mistral3TextModelInner: Module {
             swaMask = .none
         }
 
-        // Compute attention scale: use llama4 scaling if parameters are available,
-        // otherwise use a constant scale of 1.0
+        // Compute attention scale. Upstream mlx-lm accepts an array
+        // offset here; do the same for compiled decode so Mistral3 /
+        // Ministral3 does not host-read `cache.offset` after cache
+        // promotion. beta==0 is identically 1 and deliberately skips all
+        // offset work (current Mistral-Medium-3.5 bundles use beta 0).
         let attnScale: MLXArray
         if let ropeParams = args.ropeParameters,
             let llama4ScalingBeta = ropeParams["llama_4_scaling_beta"]?.asFloat(),
-            let originalMaxPosEmbed = ropeParams["original_max_position_embeddings"]?.asInt()
+            let originalMaxPosEmbed = ropeParams["original_max_position_embeddings"]?.asInt(),
+            llama4ScalingBeta != 0
         {
-            attnScale = getLlama4AttentionScale(
-                start: offset,
-                stop: offset + inputs.dim(1),
-                beta: llama4ScalingBeta,
-                maxPositionEmbeddings: originalMaxPosEmbed
-            ).asType(h.dtype)
+            if let offsetArray = graphOffsetArray(for: cache?.first) {
+                attnScale = getLlama4AttentionScale(
+                    size: inputs.dim(1),
+                    offset: offsetArray,
+                    beta: llama4ScalingBeta,
+                    maxPositionEmbeddings: originalMaxPosEmbed
+                ).asType(h.dtype)
+            } else {
+                let offset = cache?.first?.offset ?? 0
+                attnScale = getLlama4AttentionScale(
+                    start: offset,
+                    stop: offset + inputs.dim(1),
+                    beta: llama4ScalingBeta,
+                    maxPositionEmbeddings: originalMaxPosEmbed
+                ).asType(h.dtype)
+            }
         } else {
             attnScale = MLXArray.ones([inputs.dim(1), 1]).asType(h.dtype)
         }

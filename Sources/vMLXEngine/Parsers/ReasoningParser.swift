@@ -254,6 +254,21 @@ public final class Qwen3ReasoningParser: BaseThinkingReasoningParser {
             if modelOutput.contains(startToken) {
                 return super.extractReasoning(modelOutput)
             }
+            // Iter 144 — Laguna leak fix. When the chat template
+            // pre-stamps `<think>` (think_in_template=true family —
+            // Laguna, Qwen3.5, MiniMax, GLM-5.1, etc.), the model's
+            // generation starts INSIDE the think block. The first
+            // assistant token is reasoning content, but the model
+            // hasn't (and won't) emit a fresh `<think>` opener
+            // because the template already did. Pre-iter-144 this
+            // branch returned `(nil, modelOutput)` — leaking the
+            // entire reasoning prose as visible content. Honor the
+            // base class's `thinkInPrompt` flag (set by
+            // `resetState(thinkInPrompt: true, ...)` when the
+            // request's chat template stamped the opener).
+            if thinkInPrompt {
+                return (modelOutput, nil)
+            }
             return (nil, modelOutput)
         }
         return super.extractReasoning(modelOutput)
@@ -276,6 +291,13 @@ public final class DeepSeekR1ReasoningParser: BaseThinkingReasoningParser {
             }
         }
         if !hasStart && !hasEnd {
+            // Iter 144 — same think_in_template fix as Qwen3 above.
+            // GLM-5.1 / Kimi-K2.6 thinking bundles + DSV4 reasoning
+            // alias all route here and may have stamped `<think>` in
+            // the chat template, leaving generation to start inside.
+            if thinkInPrompt {
+                return (modelOutput, nil)
+            }
             return (nil, modelOutput)
         }
         return super.extractReasoning(modelOutput)
@@ -290,6 +312,13 @@ public final class MistralReasoningParser: BaseThinkingReasoningParser {
             if modelOutput.contains(startToken) {
                 return super.extractReasoning(modelOutput)
             }
+            // Iter 144 — Mistral 4 / ministral3 / Mistral 3 same
+            // think_in_template family. Honor `thinkInPrompt` so
+            // template-stamped `[THINK]` doesn't leak reasoning
+            // into delta.content.
+            if thinkInPrompt {
+                return (modelOutput, nil)
+            }
             return (nil, modelOutput)
         }
         return super.extractReasoning(modelOutput)
@@ -300,9 +329,15 @@ public final class MistralReasoningParser: BaseThinkingReasoningParser {
 
 public final class Gemma4ReasoningParser: ReasoningParser {
     private static let soc = "<|channel>"
+    private static let socAlt = "<|channel|>"
     private static let eoc = "<channel|>"
     private static let eot = "<turn|>"
     private static let thoughtStart = "<|channel>thought"
+    private static let thoughtStartAlt = "<|channel|>thought"
+    private static let degradedThoughtStart = "thought\n"
+    private static let degradedThoughtStartAlt = "|thought\n"
+    private static let xmlThoughtStart = "<thought>"
+    private static let xmlThoughtEnd = "</thought>"
 
     private var emittedReasoning: Int = 0
     private var emittedContent: Int = 0
@@ -314,9 +349,34 @@ public final class Gemma4ReasoningParser: ReasoningParser {
     public func resetState(thinkInPrompt: Bool, harmonyActive: Bool) {
         emittedReasoning = 0
         emittedContent = 0
-        sawThought = false
+        // 2026-05-01 FIX — when the chat template already stamped
+        // `<|channel>thought\n` as part of the assistant prefix, the
+        // model's output stream STARTS inside the thought block. The
+        // `<|channel>thought` marker never appears in the OUTPUT, only
+        // in the prompt. Without this seed the parser falls into the
+        // else branch (no thoughtStart found) and emits the entire
+        // reasoning buffer as plain content, leaking the literal word
+        // "thought" + whatever the model wrote before `<channel|>`.
+        // Live-caught on Gemma-4-26B-A4B JANG_4M-CRACK 2026-05-01:
+        // a "What is 12+15?" prompt produced `content='thought27'`
+        // because the model emitted `thought\n…calc…<channel|>27` and
+        // the parser only stripped `<channel|>` not the leading
+        // "thought" body.
+        sawThought = thinkInPrompt
         sawEoc = false
+        // Also: when sawThought is seeded true, the streaming
+        // accumulator must treat the buffer-prefix as reasoning
+        // BEFORE the parser sees `<|channel>thought` literally. We
+        // achieve this in `extractReasoningStreaming` by checking
+        // `sawThought` early.
+        thoughtInPromptSeed = thinkInPrompt
     }
+
+    /// True when `resetState` was called with `thinkInPrompt=true`
+    /// — i.e., the chat template already stamped the open `<|channel>thought`
+    /// marker. Used by the streaming extractor to seed reasoning mode
+    /// before any output tokens arrive.
+    private var thoughtInPromptSeed: Bool = false
 
     /// End-of-stream flush for Gemma 4's lookahead buffering.
     ///
@@ -354,7 +414,7 @@ public final class Gemma4ReasoningParser: ReasoningParser {
         var text = modelOutput
         while text.hasSuffix(Self.eot) { text.removeLast(Self.eot.count) }
 
-        if let thoughtRange = text.range(of: Self.thoughtStart) {
+        if let thoughtRange = Self.firstThoughtStartRange(in: text) {
             var afterSoc = String(text[thoughtRange.upperBound...])
             if afterSoc.hasPrefix("\n") { afterSoc.removeFirst() }
 
@@ -370,11 +430,62 @@ public final class Gemma4ReasoningParser: ReasoningParser {
                 return (reasoning.isEmpty ? nil : reasoning, nil)
             }
         }
+        if let thoughtRange = Self.degradedThoughtStartRange(in: text) {
+            let afterSoc = String(text[thoughtRange.upperBound...])
+            if let eocRange = afterSoc.range(of: Self.eoc) {
+                var reasoning = String(afterSoc[..<eocRange.lowerBound])
+                var content = String(afterSoc[eocRange.upperBound...])
+                while content.hasSuffix(Self.eot) { content.removeLast(Self.eot.count) }
+                reasoning = stripResidualMarkers(reasoning).trimmingCharacters(in: .whitespacesAndNewlines)
+                content = stripResidualMarkers(content).trimmingCharacters(in: .whitespacesAndNewlines)
+                return (reasoning.isEmpty ? nil : reasoning, content.isEmpty ? nil : content)
+            } else {
+                let reasoning = stripResidualMarkers(afterSoc).trimmingCharacters(in: .whitespacesAndNewlines)
+                return (reasoning.isEmpty ? nil : reasoning, nil)
+            }
+        }
+        if let thoughtRange = text.range(of: Self.xmlThoughtStart) {
+            var afterSoc = String(text[thoughtRange.upperBound...])
+            if afterSoc.hasPrefix("\n") { afterSoc.removeFirst() }
 
-        // No thoughtStart found — could still contain stray `<|channel>` /
-        // `<channel|>` fragments from the model (we observe this on Gemma
-        // 4 31B JANG_4M). Strip before returning as plain content so the
-        // §15 reasoning-off reroute doesn't surface them.
+            if let endRange = afterSoc.range(of: Self.xmlThoughtEnd) {
+                var reasoning = String(afterSoc[..<endRange.lowerBound])
+                var content = String(afterSoc[endRange.upperBound...])
+                while content.hasSuffix(Self.eot) { content.removeLast(Self.eot.count) }
+                reasoning = stripResidualMarkers(reasoning).trimmingCharacters(in: .whitespacesAndNewlines)
+                content = stripResidualMarkers(content).trimmingCharacters(in: .whitespacesAndNewlines)
+                return (reasoning.isEmpty ? nil : reasoning, content.isEmpty ? nil : content)
+            } else {
+                let reasoning = stripResidualMarkers(afterSoc).trimmingCharacters(in: .whitespacesAndNewlines)
+                return (reasoning.isEmpty ? nil : reasoning, nil)
+            }
+        }
+
+        // 2026-05-01 FIX — when the chat template already stamped the
+        // `<|channel>thought\n` open marker in the PROMPT, the output
+        // stream starts AFTER that marker. The model's text begins
+        // inside reasoning mode and we should split on the FIRST
+        // `<channel|>` close: everything before is reasoning, after
+        // is content.
+        if thoughtInPromptSeed, let eocRange = text.range(of: Self.eoc) {
+            var reasoning = String(text[..<eocRange.lowerBound])
+            var content = String(text[eocRange.upperBound...])
+            while content.hasSuffix(Self.eot) { content.removeLast(Self.eot.count) }
+            reasoning = stripResidualMarkers(reasoning).trimmingCharacters(in: .whitespacesAndNewlines)
+            content = stripResidualMarkers(content).trimmingCharacters(in: .whitespacesAndNewlines)
+            return (reasoning.isEmpty ? nil : reasoning, content.isEmpty ? nil : content)
+        }
+        if thoughtInPromptSeed {
+            // No close yet — entire output is reasoning.
+            let reasoning = stripResidualMarkers(text).trimmingCharacters(in: .whitespacesAndNewlines)
+            return (reasoning.isEmpty ? nil : reasoning, nil)
+        }
+
+        // No thoughtStart found AND not seeded — could still contain
+        // stray `<|channel>` / `<channel|>` fragments from the model
+        // (we observe this on Gemma 4 31B JANG_4M). Strip before
+        // returning as plain content so the §15 reasoning-off reroute
+        // doesn't surface them.
         let cleaned = stripResidualMarkers(text).trimmingCharacters(in: .whitespacesAndNewlines)
         return (nil, cleaned.isEmpty ? nil : cleaned)
     }
@@ -383,8 +494,12 @@ public final class Gemma4ReasoningParser: ReasoningParser {
         if delta.isEmpty { return nil }
 
         let (reasoningText, contentText) = parseAccumulated(current)
-        let thoughtInCurrent = current.contains(Self.thoughtStart)
+        let thoughtInCurrent =
+            Self.firstThoughtStartRange(in: current) != nil
+            || Self.degradedThoughtStartRange(in: current) != nil
+            || current.contains(Self.xmlThoughtStart)
         let eocInCurrent = current.contains(Self.eoc)
+            || current.contains(Self.xmlThoughtEnd)
 
         if thoughtInCurrent && !sawThought { sawThought = true }
         if eocInCurrent && sawThought && !sawEoc { sawEoc = true }
@@ -424,7 +539,10 @@ public final class Gemma4ReasoningParser: ReasoningParser {
         // Skip pure special-token deltas
         let stripped = delta.trimmingCharacters(in: .whitespacesAndNewlines)
         if stripped == Self.soc || stripped == Self.eoc || stripped == Self.eot ||
-           stripped == Self.thoughtStart || stripped == Self.thoughtStart + "\n" {
+           stripped == Self.socAlt ||
+           stripped == Self.thoughtStart || stripped == Self.thoughtStart + "\n" ||
+           stripped == Self.thoughtStartAlt || stripped == Self.thoughtStartAlt + "\n" ||
+           stripped == Self.xmlThoughtStart || stripped == Self.xmlThoughtEnd {
             return nil
         }
 
@@ -456,16 +574,52 @@ public final class Gemma4ReasoningParser: ReasoningParser {
         var text = input
         while text.hasSuffix(Self.eot) { text.removeLast(Self.eot.count) }
 
-        guard let thoughtRange = text.range(of: Self.thoughtStart) else {
+        // 2026-05-01 FIX — when chat template stamped `<|channel>thought\n`
+        // in the prompt, output starts inside reasoning. Look for the
+        // close `<channel|>` once. If absent, return all-reasoning
+        // (cheap — no extra full-string scans). Live-caught on
+        // Gemma-4-26B-A4B JANG_4M-CRACK: content="thought27".
+        if thoughtInPromptSeed {
+            if let eocRange = text.range(of: Self.eoc) {
+                let reasoning = String(text[..<eocRange.lowerBound])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                var content = String(text[eocRange.upperBound...])
+                while content.hasSuffix(Self.eot) { content.removeLast(Self.eot.count) }
+                content = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                return (reasoning.isEmpty ? nil : reasoning,
+                        content.isEmpty ? nil : content)
+            }
+            // No close yet — entire text is reasoning.
+            // Skip stripResidualMarkers/stripPartialEoc on hot path
+            // (per-token call); finishStreaming flush handles trailing
+            // partial markers.
+            let r = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (r.isEmpty ? nil : r, nil)
+        }
+
+        let afterSoc: String
+        let closeToken: String
+        if let thoughtRange = Self.firstThoughtStartRange(in: text) {
+            var full = String(text[thoughtRange.upperBound...])
+            if full.hasPrefix("\n") { full.removeFirst() }
+            afterSoc = full
+            closeToken = Self.eoc
+        } else if let thoughtRange = Self.degradedThoughtStartRange(in: text) {
+            afterSoc = String(text[thoughtRange.upperBound...])
+            closeToken = Self.eoc
+        } else if let thoughtRange = text.range(of: Self.xmlThoughtStart) {
+            var full = String(text[thoughtRange.upperBound...])
+            if full.hasPrefix("\n") { full.removeFirst() }
+            afterSoc = full
+            closeToken = Self.xmlThoughtEnd
+        } else {
             let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
             return (nil, t.isEmpty ? nil : t)
         }
-        var afterSoc = String(text[thoughtRange.upperBound...])
-        if afterSoc.hasPrefix("\n") { afterSoc.removeFirst() }
 
-        if let eocRange = afterSoc.range(of: Self.eoc) {
-            var reasoning = String(afterSoc[..<eocRange.lowerBound])
-            var content = String(afterSoc[eocRange.upperBound...])
+        if let closeRange = afterSoc.range(of: closeToken) {
+            var reasoning = String(afterSoc[..<closeRange.lowerBound])
+            var content = String(afterSoc[closeRange.upperBound...])
             while content.hasSuffix(Self.eot) { content.removeLast(Self.eot.count) }
             // §241b: models sometimes re-emit `<|channel>thought` inside
             // the reasoning block (observed live on Gemma-4-31B-JANG_4M).
@@ -493,8 +647,18 @@ public final class Gemma4ReasoningParser: ReasoningParser {
     private func stripResidualMarkers(_ s: String) -> String {
         var out = s
         out = out.replacingOccurrences(of: Self.thoughtStart, with: "")
+        out = out.replacingOccurrences(of: Self.thoughtStartAlt, with: "")
         out = out.replacingOccurrences(of: Self.soc, with: "")
+        out = out.replacingOccurrences(of: Self.socAlt, with: "")
         out = out.replacingOccurrences(of: Self.eoc, with: "")
+        out = out.replacingOccurrences(of: Self.xmlThoughtStart, with: "")
+        out = out.replacingOccurrences(of: Self.xmlThoughtEnd, with: "")
+        if out.hasPrefix(Self.degradedThoughtStartAlt) {
+            out.removeFirst(Self.degradedThoughtStartAlt.count)
+        }
+        if out.hasPrefix(Self.degradedThoughtStart) {
+            out.removeFirst(Self.degradedThoughtStart.count)
+        }
         return out
     }
 
@@ -506,7 +670,17 @@ public final class Gemma4ReasoningParser: ReasoningParser {
         // `<|ch`...`<|channel`). The previous implementation only checked
         // eoc, so prefixes like `<|channel` got emitted as reasoning →
         // leaked as content under the §15 reasoning-off reroute.
-        let markers = [Self.thoughtStart, Self.soc, Self.eoc]
+        let markers = [
+            Self.thoughtStart,
+            Self.thoughtStartAlt,
+            Self.degradedThoughtStart,
+            Self.degradedThoughtStartAlt,
+            Self.soc,
+            Self.socAlt,
+            Self.eoc,
+            Self.xmlThoughtStart,
+            Self.xmlThoughtEnd,
+        ]
         for marker in markers {
             var len = marker.count - 1
             while len > 0 {
@@ -518,6 +692,24 @@ public final class Gemma4ReasoningParser: ReasoningParser {
             }
         }
         return s
+    }
+
+    private static func firstThoughtStartRange(in text: String) -> Range<String.Index>? {
+        let ranges = [text.range(of: thoughtStart), text.range(of: thoughtStartAlt)]
+            .compactMap { $0 }
+        return ranges.min { lhs, rhs in lhs.lowerBound < rhs.lowerBound }
+    }
+
+    private static func degradedThoughtStartRange(in text: String) -> Range<String.Index>? {
+        guard let first = text.firstIndex(where: { !$0.isWhitespace }) else { return nil }
+        let rest = text[first...]
+        if rest.hasPrefix(degradedThoughtStart) {
+            return first..<text.index(first, offsetBy: degradedThoughtStart.count)
+        }
+        if rest.hasPrefix(degradedThoughtStartAlt) {
+            return first..<text.index(first, offsetBy: degradedThoughtStartAlt.count)
+        }
+        return nil
     }
 }
 

@@ -49,7 +49,7 @@
 //       enablePrefixCache, enableSSMCompanion, enableSSMReDerive,
 //       enableDiskCache, diskCacheDir, diskCacheMaxGB, enableMemoryCache,
 //       memoryCachePercent, usePagedCache, pagedCacheBlockSize,
-//       maxCacheBlocks, smelt, flashMoe slot-bank size, idleSoftSec,
+//       maxCacheBlocks, flashMoe slot-bank size, idleSoftSec,
 //       idleDeepSec, idleEnabled.
 //
 //   • **Per-session** — server-binding fields read when the HTTP listener
@@ -145,6 +145,16 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     /// "continuous" toggle. Kept on the struct so settings JSON dumps
     /// + cluster-round-trip don't drop the key, but changing it has
     /// zero runtime effect.
+    ///
+    /// Iter 143: regardless of this field's value, the runtime
+    /// reports `continuous_batching: false` on /health (per-session
+    /// AdminRoutes.swift:78 + gateway GatewayServer.swift) because
+    /// Engine.streamReal serializes per-engine MLX work via
+    /// GenerationLock — `BatchEngine` actor is implemented but not
+    /// yet consumed (706 LOC at vMLXLMCommon/BatchEngine/BatchEngine.swift).
+    /// Activating continuous batching requires both wiring the actor
+    /// AND resolving MTLCommandBuffer concurrency-safety (currently
+    /// unsafe across encoders).
     public var continuousBatching: Bool = true    // cli.py --continuous-batching (ORPHAN)
     /// §332 ORPHAN — Python-parity. vMLX emits every token as soon as
     /// the sampler produces it (see Stream.swift:988 `next()`), so
@@ -302,20 +312,60 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     public var enableTurboQuant: Bool = true
     public var turboQuantBits: Int = 4
 
+    // §JANGPress — load-time cold-weight observability + page-cache
+    // pressure tier.
+    //
+    // The shippable `.mmap` backend opens a parallel file-backed view
+    // of routed-expert / embed tensors and can issue madvise hints on
+    // cold ranges. MLX still owns its canonical heap/Metal copy of the
+    // weights, so this is NOT steady-state resident model-RAM
+    // compression. It is useful for page-cache pressure behavior,
+    // spike-survival/diagnostics, and future storage-replacement work.
+    //
+    // `jangPressCompressPct` is the 0-100 user-facing cold-set target
+    // for that auxiliary tier. 0 = observe only; 100 = maximum cold
+    // eligibility. Actual RSS movement depends on OS pressure and does
+    // not imply the model's canonical MLX copy was compressed.
+    public var enableJangPress: Bool = true
+    public var jangPressCompressPct: Int = 70
+    public var jangPressEnablePrefetch: Bool = true
+    /// Backend selector — `"mmap"` (file-backed, default), `"mach"`
+    /// (vm_purgable_control), or `"none"`. Mirrors
+    /// `Engine.LoadOptions.JangPressBackend`. See
+    /// `vMLXLMCommon/Cache/CACHE-ARCHITECTURE.md` for tradeoffs.
+    public var jangPressBackend: String = "mmap"
+    /// JangPress release mode for the .mmap backend.
+    ///   `"soft"` (default) — `madvise(DONTNEED)` hint, failsafe.
+    ///   `"force"`          — `msync(MS_INVALIDATE)`, eager reclaim
+    ///                        with ~3× tok/s cost.
+    /// Mirrors `Engine.LoadOptions.JangPressForceMode`.
+    public var jangPressForceMode: String = "soft"
+    /// Router-aware canonical mmap advice. When true, routed-MoE
+    /// layers report top-k expert ids during decode and JangPress
+    /// issues `MADV_DONTNEED` for older experts beyond the per-layer
+    /// hot-set budget. Default `false` — the CPU readback path is
+    /// correct but tok/s-costly; the env knob `JANGPRESS_ROUTER_ADVICE=1`
+    /// can also force it on for ad-hoc experiments.
+    public var jangPressEnableRouterAdvice: Bool = false
+    /// Pre-stack per-expert JANGTQ tensors into a low-RAM safetensors
+    /// overlay so MoE bundles like MiniMax/DeepSeek don't materialize
+    /// the routed-expert bank into resident Metal buffers at load. The
+    /// engine writes the overlay once into the cache dir and reuses it
+    /// across loads. Default `true`. Set `JANGPRESS_PRESTACK=0` to skip.
+    public var jangPressPrestack: Bool = true
+
     // §403 — sliding-window mode override.
     //
     // Per-model `config.json::sliding_window` declares the trained
     // attention window (e.g. DSV4 Flash = 128 with Compressor pool,
     // Gemma 4 = 4096 alternating). For some workflows we want to
     // override:
-    //   • `auto`   — honor the model's config exactly (default).
-    //                Best fidelity to training distribution.
+    //   • `auto`   — honor the model's config exactly (default) and let
+    //                compile-first SWA families use their bounded fast path.
     //   • `long`   — force full-context attention even when config
-    //                declares a window. Escape hatch for DSV4 when
-    //                the Compressor pool path is degraded — output
-    //                `> sliding_window` tokens lose visibility of
-    //                the original prompt under SW=128 + degraded
-    //                Compressor.
+    //                declares a window. Escape hatch only; on bounded-SWA
+    //                families this may disable compiled decode and increase
+    //                memory use.
     //   • `bounded`— force a hard sliding window of `slidingWindowSize`
     //                regardless of model config. Memory-frugal mode
     //                for old hardware. Default size 16384 covers
@@ -351,14 +401,24 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
     // SSM companion
     public var enableSSMCompanion: Bool = true    // vMLX-only: hybrid SSM companion cache
 
-    // Smelt mode (partial expert loading)
-    public var smelt: Bool = false                // cli.py --smelt
-    public var smeltExperts: Int = 50             // cli.py --smelt-experts
-    public var smeltMode: String = "default"      // doc-only --smelt-mode (per MEMORY)
+    // Iter 143 — Smelt removed (Eric directive 2026-05-04). Partial-
+    // expert workloads now covered by JangPress (Cache/JangPress*.swift).
+    // Old smelt/smeltExperts/smeltMode settings keys silently ignored
+    // on Codable decode via SettingsKeyAuditor (see decode notes).
 
     // Flash MoE
     public var flashMoe: Bool = false             // cli.py --flash-moe
-    public var flashMoeSlotBank: Int = 64         // cli.py --flash-moe-slot-bank default=64
+    /// The auto-size sentinel — `EngineFlashMoE.applyFlashMoEIfEnabled`
+    /// treats `<= flashMoeSlotBankAutoSentinel` (64) as "user hasn't
+    /// overridden; compute layers × experts_per_tok × 1.5". Default is
+    /// 64 so out-of-the-box every MoE model gets a tuned slot-bank
+    /// size. Iter 143: hardened the constant + docstring after the
+    /// audit flagged this as "looks small vs Python panel default 256"
+    /// — the real picture is that 64 IS the auto signal, and auto
+    /// emits 256–720 range depending on model depth + experts_per_tok.
+    /// Users who want a fixed size set anything > 64.
+    public static let flashMoeSlotBankAutoSentinel: Int = 64
+    public var flashMoeSlotBank: Int = 64         // cli.py --flash-moe-slot-bank default=64 (auto-size sentinel)
     public var flashMoePrefetch: String = "none"  // cli.py --flash-moe-prefetch: none|temporal
     public var flashMoeIoSplit: Int = 4           // cli.py --flash-moe-io-split
 
@@ -534,6 +594,19 @@ public struct GlobalSettings: Codable, Sendable, Equatable {
 /// session can't exist without a model.
 public struct SessionSettings: Codable, Sendable, Equatable {
     public var modelPath: URL
+    /// BLOCKER #2 — settings schema version. Bumped when a session
+    /// migration runs against this row. Currently:
+    ///   • 0 (or absent in JSON): pre-v2 default; on first load,
+    ///     SettingsStore.session(_:) decodes, applies family-gated
+    ///     migrations (e.g., kvCacheQuantization "none" → "turboquant"
+    ///     for TQ-safe families and stale SWA `long` → `auto` for
+    ///     Laguna/Mistral/Gemma families), and stamps `schemaVersion = 3`
+    ///     so the migration only runs once per session row.
+    ///   • 3: post-v2.0.0-GA + SWA-speed migration. Sessions written by v3 builds
+    ///     skip the migration.
+    /// Decoder defaults absent values to 0, so existing JSON blobs
+    /// read fine without a forced re-encode at startup.
+    public var schemaVersion: Int = 0
     public var modelAlias: String? = nil      // cli.py --served-model-name
     public var displayName: String? = nil
     public var host: String? = nil
@@ -579,9 +652,9 @@ public struct SessionSettings: Codable, Sendable, Equatable {
     public var flashMoeSlotBank: Int? = nil
     public var flashMoePrefetch: String? = nil
     public var flashMoeIoSplit: Int? = nil
-    public var smelt: Bool? = nil
-    public var smeltExperts: Int? = nil
-    public var smeltMode: String? = nil
+    // Iter 143 — Smelt removed; old per-session smelt/smeltExperts/
+    // smeltMode override fields stripped. Codable will silently skip
+    // these keys when decoding old saved sessions.
 
     // DFlash (per-session overrides)
     public var dflash: Bool? = nil

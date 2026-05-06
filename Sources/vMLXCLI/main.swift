@@ -145,6 +145,36 @@ struct Serve: AsyncParsableCommand {
     @Option(name: .long, help: "KV quantization group size (default 64).")
     var kvCacheGroupSize: Int?
 
+    // §JANGPress — cold-weight tier for routed MoE experts. See
+    // `vMLXLMCommon/Cache/JANGPRESS-USAGE.md`. Default OFF; flipping
+    // any of these to ON enables the feature.
+    // Both `--enable-jangpress` (canonical, matches JANGPRESS-AGENTS.md
+    // doc + GlobalSettings.enableJangPress field name) and the legacy
+    // `--enable-routed-expert-cache` are accepted. Iter 113 flipped the
+    // GlobalSettings default ON, so passing the flag is a no-op when
+    // settings are pristine — the explicit pass exists for users who
+    // saved enableJangPress=false to GlobalSettings via another path
+    // and want to re-enable just for one CLI run.
+    @Flag(name: [.customLong("enable-jangpress"),
+                 .customLong("enable-routed-expert-cache")],
+          help: "JANGPress — let the kernel compress/evict dormant routed-expert weights under memory pressure. See JANGPRESS-USAGE.md.")
+    var enableJangPress: Bool = false
+    @Option(name: .long,
+            help: "0..100 — fraction of routed-expert pool open to compression (0=none, 100=max). GlobalSettings default 70 (iter 113).")
+    var jangPressCompressPct: Int?
+    @Option(name: .long,
+            help: "Backend: mmap (file-backed, default) | mach (vm_purgable_control) | none.")
+    var jangPressBackend: String?
+    @Option(name: .long,
+            help: "Force mode: soft (madvise DONTNEED hint, default — failsafe ~1% overhead) | force (msync MS_INVALIDATE, eager reclaim with ~3× tok/s slowdown).")
+    var jangPressForceMode: String?
+    @Flag(name: [.customLong("disable-jangpress-prestack")],
+          help: "Skip the routed-expert pre-stack overlay (writes per-bundle into ~/Library/Caches/vmlx/jangpress-prestack). Default ON.")
+    var disableJangPressPrestack: Bool = false
+    @Flag(name: [.customLong("enable-jangpress-router-advice")],
+          help: "Turn on decode-time MADV_DONTNEED advice for cold experts. Default OFF — costs 20-40% tok/s on most MoE families.")
+    var enableJangPressRouterAdvice: Bool = false
+
     // Prefix cache
     @Flag(name: [.customLong("disable-prefix-cache")], help: "Disable L1 paged prefix cache.")
     var disablePrefixCache: Bool = false
@@ -173,13 +203,8 @@ struct Serve: AsyncParsableCommand {
     @Option(name: .long, help: "Flash MoE I/O parallelism (default 4).")
     var flashMoeIoSplit: Int?
 
-    // Smelt partial-expert loading
-    @Flag(name: [.customLong("smelt")], help: "Enable smelt mode (partial expert loading).")
-    var smelt: Bool = false
-    @Option(name: .long, help: "Smelt expert count (default 50).")
-    var smeltExperts: Int?
-    @Option(name: .long, help: "Smelt mode: default | aggressive.")
-    var smeltMode: String?
+    // Iter 143 — Smelt removed (Eric directive 2026-05-04). Use
+    // JangPress for partial/cold expert handling.
 
     // SSM re-derive
     @Flag(name: [.customLong("disable-ssm-re-derive")], help: "Disable post-generation SSM re-derive for hybrid+thinking models.")
@@ -267,10 +292,31 @@ struct Serve: AsyncParsableCommand {
             // leaves the existing settings value alone. Disable flags win
             // over enable flags when both are somehow set (shouldn't happen
             // but guards against accidental both-flagged).
-            if disableTurboQuant { g.enableTurboQuant = false; dirty = true }
-            else if enableTurboQuant { g.enableTurboQuant = true; dirty = true }
+            // Iter 127 (mlxstudio#138 parity): the SettingsStore resolver
+            // unconditionally derives `enableTurboQuant` from the string
+            // `kvCacheQuantization` (== "turboquant"), so CLI flags that
+            // touch only ONE of the pair get clobbered on the next
+            // resolve. Mirror writes in BOTH directions so the
+            // canonical-string and Bool-bool views stay coherent.
+            if disableTurboQuant {
+                g.enableTurboQuant = false
+                if g.kvCacheQuantization.lowercased() == "turboquant" {
+                    g.kvCacheQuantization = "none"
+                }
+                dirty = true
+            } else if enableTurboQuant {
+                g.enableTurboQuant = true
+                g.kvCacheQuantization = "turboquant"
+                dirty = true
+            }
             if let bits = turboQuantBits { g.turboQuantBits = bits; dirty = true }
-            if let q = kvCacheQuantization, !q.isEmpty { g.kvCacheQuantization = q; dirty = true }
+            if let q = kvCacheQuantization, !q.isEmpty {
+                g.kvCacheQuantization = q
+                // Symmetry: derive Bool from string so resolver doesn't
+                // overwrite the CLI choice.
+                g.enableTurboQuant = (q.lowercased() == "turboquant")
+                dirty = true
+            }
             if let gs = kvCacheGroupSize { g.kvCacheGroupSize = gs; dirty = true }
             if disablePrefixCache { g.enablePrefixCache = false; dirty = true }
             else if enablePrefixCache { g.enablePrefixCache = true; dirty = true }
@@ -284,12 +330,43 @@ struct Serve: AsyncParsableCommand {
                 if let pf = flashMoePrefetch, !pf.isEmpty { g.flashMoePrefetch = pf }
                 if let io = flashMoeIoSplit { g.flashMoeIoSplit = io }
             }
-            if smelt {
-                g.smelt = true; dirty = true
-                if let e = smeltExperts { g.smeltExperts = e }
-                if let m = smeltMode, !m.isEmpty { g.smeltMode = m }
-            }
+            // Iter 143 — Smelt removed.
             if disableSsmReDerive { g.enableSSMReDerive = false; dirty = true }
+            // §JANGPress CLI overrides. Mirror of the .mmap/.mach
+            // backend selector in `Engine.LoadOptions`. Default OFF;
+            // any flag flips it on.
+            if enableJangPress {
+                g.enableJangPress = true; dirty = true
+            }
+            if let pct = jangPressCompressPct {
+                g.jangPressCompressPct = max(0, min(100, pct)); dirty = true
+            }
+            if let backend = jangPressBackend, !backend.isEmpty {
+                let allowed: Set<String> = ["mmap", "mach", "none"]
+                if allowed.contains(backend.lowercased()) {
+                    g.jangPressBackend = backend.lowercased()
+                    dirty = true
+                } else {
+                    FileHandle.standardError.write(Data(
+                        "[cli] --jangpress-backend=\(backend) not recognized; allowed: mmap | mach | none\n".utf8))
+                }
+            }
+            if let forceMode = jangPressForceMode, !forceMode.isEmpty {
+                let allowed: Set<String> = ["soft", "force"]
+                if allowed.contains(forceMode.lowercased()) {
+                    g.jangPressForceMode = forceMode.lowercased()
+                    dirty = true
+                } else {
+                    FileHandle.standardError.write(Data(
+                        "[cli] --jangpress-force-mode=\(forceMode) not recognized; allowed: soft | force\n".utf8))
+                }
+            }
+            if disableJangPressPrestack {
+                g.jangPressPrestack = false; dirty = true
+            }
+            if enableJangPressRouterAdvice {
+                g.jangPressEnableRouterAdvice = true; dirty = true
+            }
             // §282 idle lifecycle wiring.
             if let s = idleSoftSec { g.idleSoftSec = s; dirty = true }
             if let d = idleDeepSec { g.idleDeepSec = d; dirty = true }

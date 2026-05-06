@@ -15,6 +15,8 @@ public enum CacheDetail: String, Sendable {
     case memory
     /// The on-disk L2 cache.
     case disk
+    /// Block-level on-disk cache materialized back into paged blocks.
+    case blockDisk
     /// No cache tier had a match.
     case miss
 }
@@ -69,6 +71,9 @@ public final class CacheCoordinator: @unchecked Sendable {
     /// The on-disk L2 cache, or `nil` if disabled.
     public let diskCache: DiskCache?
 
+    /// The block-level on-disk L2 cache, or `nil` if disabled.
+    public let blockDiskCache: BlockDiskCache?
+
     /// The in-memory byte-budgeted L1.5 cache, or `nil` if disabled.
     /// Stores whole-prompt payloads (same dict-of-MLXArray format as
     /// the disk tier) with memory-pressure eviction.
@@ -80,7 +85,13 @@ public final class CacheCoordinator: @unchecked Sendable {
     /// Whether the model has hybrid (attention + SSM) layers.
     private var _isHybrid: Bool = false
 
-    /// Lock protecting `_isHybrid`.
+    /// Whether generic paged/block KV tiers are incompatible with this
+    /// model's cache topology. DSV4 hybrid-pool caches carry CSA/HSA pool
+    /// tensors that cannot be represented as independent per-token KV blocks;
+    /// the prompt-level disk/memory serializer handles them instead.
+    private var _isPagedIncompatible: Bool = false
+
+    /// Lock protecting `_isHybrid` and `_isPagedIncompatible`.
     private let lock = OSAllocatedUnfairLock()
 
     // MARK: - Initialization
@@ -112,6 +123,20 @@ public final class CacheCoordinator: @unchecked Sendable {
             self.diskCache = nil
         }
 
+        if config.enableBlockDiskCache {
+            let baseDir = config.diskCacheDir
+                ?? FileManager.default.temporaryDirectory
+                    .appendingPathComponent("vmlx_disk_cache")
+            let dir = config.blockDiskCacheDir
+                ?? baseDir.appendingPathComponent("block_l2", isDirectory: true)
+            self.blockDiskCache = try? BlockDiskCache(
+                cacheDir: dir,
+                maxSizeGB: config.blockDiskCacheMaxGB,
+                modelKey: config.modelKey ?? "default")
+        } else {
+            self.blockDiskCache = nil
+        }
+
         if config.enableMemoryCache {
             let memCfg = MemoryCacheConfig(
                 maxMemoryPercent: config.memoryCachePercent,
@@ -133,13 +158,14 @@ public final class CacheCoordinator: @unchecked Sendable {
             modelKey: config.modelKey)
 
         // §441c — wire SSMCompanionDiskStore as a write-through tier
-        // when the L2 disk cache is enabled AND the coordinator owns
-        // a stable cache directory. Reuses the same `diskCacheDir` so
-        // SSM companion state lives next to KV blocks and gets purged
-        // together on `clear()`. Failures are silent — disk-tier
-        // unavailability degrades gracefully to in-memory only.
-        if config.enableDiskCache {
+        // when either persistent KV tier is enabled AND the coordinator
+        // owns a stable cache directory. BlockDiskCache can persist KV
+        // blocks across `clear()` / restart; hybrid models need the SSM
+        // companion to persist alongside those blocks or a disk-backed
+        // KV hit is mathematically unusable.
+        if config.enableDiskCache || config.enableBlockDiskCache {
             let baseDir = config.diskCacheDir
+                ?? config.blockDiskCacheDir?.deletingLastPathComponent()
                 ?? FileManager.default.temporaryDirectory
                     .appendingPathComponent("vmlx_disk_cache")
             let ssmDir = baseDir.appendingPathComponent("ssm_companion")
@@ -164,6 +190,31 @@ public final class CacheCoordinator: @unchecked Sendable {
     /// Whether the model is hybrid (has both attention and SSM layers).
     public var isHybrid: Bool {
         lock.withLock { _isHybrid }
+    }
+
+    /// Mark the model as incompatible with generic paged/block KV tiers.
+    /// Use this for cache classes conforming to ``HybridPoolCache``.
+    public func setPagedIncompatible(_ incompatible: Bool) {
+        lock.withLock { _isPagedIncompatible = incompatible }
+    }
+
+    /// Whether paged/block KV tiers should be skipped for this model.
+    public var isPagedIncompatible: Bool {
+        lock.withLock { _isPagedIncompatible }
+    }
+
+    /// Release paged-cache blocks returned by ``fetch(tokens:mediaSalt:genPromptLen:isMLLM:)``.
+    ///
+    /// Paged-cache hits pin their blocks so the restore path can read
+    /// `cacheData` without racing a concurrent allocation. Callers must
+    /// release those pins as soon as restore has copied the arrays into the
+    /// live model cache. Disk and memory hits return an empty block list, so
+    /// this helper is a cheap no-op for those tiers.
+    public func release(blocks: [CacheBlock]) {
+        guard let pagedCache, !blocks.isEmpty else { return }
+        for block in blocks {
+            pagedCache.freeBlock(block)
+        }
     }
 
     // MARK: - Store helpers
@@ -192,8 +243,9 @@ public final class CacheCoordinator: @unchecked Sendable {
     ///
     /// For hybrid models, SSM companion states are fetched alongside paged cache hits.
     ///
-    /// The `mediaSalt` argument is a stable fingerprint of any VLM image or
-    /// video content associated with the prompt (see ``computeMediaSalt(for:)``).
+    /// The `mediaSalt` argument is a stable fingerprint of any multimodal
+    /// image, video, or audio content associated with the prompt (see
+    /// ``computeMediaSalt(for:)``).
     /// When non-`nil` it is mixed into every tier's hash so VLM inputs with
     /// the same text prefix but different media don't alias. Pass `nil` for
     /// text-only inputs to preserve the exact pre-existing hash.
@@ -201,7 +253,7 @@ public final class CacheCoordinator: @unchecked Sendable {
     /// - Parameters:
     ///   - tokens: The full token sequence to look up, including any
     ///     chat-template generation-prompt suffix (e.g. `<|im_start|>assistant\n`).
-    ///   - mediaSalt: Optional VLM media fingerprint; `nil` for text-only.
+    ///   - mediaSalt: Optional multimodal media fingerprint; `nil` for text-only.
     ///   - genPromptLen: Number of trailing tokens that represent the
     ///     chat template's `add_generation_prompt=true` suffix. When
     ///     non-zero, those tokens are stripped from the key used for
@@ -240,6 +292,9 @@ public final class CacheCoordinator: @unchecked Sendable {
         let hashTokens: [Int] = stripLen > 0
             ? Array(tokens.prefix(tokens.count - stripLen))
             : tokens
+        func hasRequiredHybridSSM(_ states: [MLXArray]?) -> Bool {
+            !isHybrid || !(states?.isEmpty ?? true)
+        }
 
         // iter-122 §197 investigation trace (see storeAfterGeneration's
         // matching trace). VMLX_CACHE_TRACE=1 surfaces the fetch-key
@@ -252,27 +307,40 @@ public final class CacheCoordinator: @unchecked Sendable {
                 "[cache-trace] fetch len=\(hashTokens.count) full64=[\(full)] gp_strip=\(stripLen) isMLLM=\(isMLLM) hasMediaSalt=\(mediaSalt != nil) memEntries=\(memCount) paged=\(pagedCache != nil) mem=\(memoryCache != nil) disk=\(diskCache != nil)\n".utf8))
         }
 
-        // Tier 1: Paged cache (in-memory)
-        if let pagedCache,
+        // Tier 1: Paged cache (in-memory). Hybrid-pool caches (DSV4
+        // CSA/HSA) are not representable as generic per-token KV blocks;
+        // skip this tier so memory/disk can restore the full pool state.
+        if !isPagedIncompatible,
+           let pagedCache,
            let result = pagedCache.fetchPrefix(tokens: hashTokens, mediaSalt: mediaSalt)
         {
             var ssmStates: [MLXArray]? = nil
+            var canUsePagedHit = true
             if isHybrid {
                 ssmStates = ssmStateCache.fetch(
                     tokens: hashTokens,
                     boundary: ssmBoundary(result.matchedTokens),
                     mediaSalt: mediaSalt
                 )
+                if ssmStates?.isEmpty ?? true {
+                    release(blocks: result.blocks)
+                    // Hybrid correctness: attention KV without the matching
+                    // SSM state is not a valid prefix restore. Continue to
+                    // lower tiers; disk may still carry folded Mamba state.
+                    canUsePagedHit = false
+                }
             }
-            let matched = result.matchedTokens
-            return .hit(
-                matchedTokens: matched,
-                remainingTokens: Array(tokens.dropFirst(matched)),
-                detail: .paged,
-                blocks: result.blocks,
-                ssmStates: ssmStates,
-                diskArrays: nil
-            )
+            if canUsePagedHit {
+                let matched = result.matchedTokens
+                return .hit(
+                    matchedTokens: matched,
+                    remainingTokens: Array(tokens.dropFirst(matched)),
+                    detail: .paged,
+                    blocks: result.blocks,
+                    ssmStates: ssmStates,
+                    diskArrays: nil
+                )
+            }
         }
 
         // Tier 1.5: Byte-budgeted whole-prompt memory cache.
@@ -285,14 +353,20 @@ public final class CacheCoordinator: @unchecked Sendable {
                 let ssmStates = resolveSSMStates(
                     forTokens: hashTokens, boundary: ssmBoundary(matched), diskArrays: arrays,
                     mediaSalt: mediaSalt)
-                return .hit(
-                    matchedTokens: matched,
-                    remainingTokens: Array(tokens.dropFirst(matched)),
-                    detail: .memory,
-                    blocks: [],
-                    ssmStates: ssmStates,
-                    diskArrays: arrays
-                )
+                if !hasRequiredHybridSSM(ssmStates) {
+                    // Memory L1.5 can hold KV-only serialized entries from
+                    // thinking-template turns. Do not extend them on hybrid
+                    // models unless the companion state is present too.
+                } else {
+                    return .hit(
+                        matchedTokens: matched,
+                        remainingTokens: Array(tokens.dropFirst(matched)),
+                        detail: .memory,
+                        blocks: [],
+                        ssmStates: ssmStates,
+                        diskArrays: arrays
+                    )
+                }
             }
         }
 
@@ -303,23 +377,7 @@ public final class CacheCoordinator: @unchecked Sendable {
                 let ssmStates = resolveSSMStates(
                     forTokens: hashTokens, boundary: ssmBoundary(matched), diskArrays: arrays,
                     mediaSalt: mediaSalt)
-                return .hit(
-                    matchedTokens: matched,
-                    remainingTokens: Array(tokens.dropFirst(matched)),
-                    detail: .disk,
-                    blocks: [],
-                    ssmStates: ssmStates,
-                    diskArrays: arrays
-                )
-            }
-
-            if hashTokens.count > 1 {
-                let shorter = Array(hashTokens.dropLast())
-                if let arrays = diskCache.fetch(tokens: shorter, mediaSalt: mediaSalt) {
-                    let matched = shorter.count
-                    let ssmStates = resolveSSMStates(
-                        forTokens: shorter, boundary: matched, diskArrays: arrays,
-                        mediaSalt: mediaSalt)
+                if hasRequiredHybridSSM(ssmStates) {
                     return .hit(
                         matchedTokens: matched,
                         remainingTokens: Array(tokens.dropFirst(matched)),
@@ -330,6 +388,64 @@ public final class CacheCoordinator: @unchecked Sendable {
                     )
                 }
             }
+
+            if hashTokens.count > 1 {
+                let shorter = Array(hashTokens.dropLast())
+                if let arrays = diskCache.fetch(tokens: shorter, mediaSalt: mediaSalt) {
+                    let matched = shorter.count
+                    // Iter 144 — apply `ssmBoundary(matched)` like the
+                    // primary disk path above. Pre-fix the fallback
+                    // passed bare `matched`, which drifted from the
+                    // store-side key on MLLM hybrid models (where
+                    // ssmBoundary maps `matched → max(0, matched-1)`)
+                    // — the SSM companion was stored at boundary N-1
+                    // but fetched at N, producing a silent SSM miss
+                    // and a cold re-derive on every fallback hit.
+                    let ssmStates = resolveSSMStates(
+                        forTokens: shorter, boundary: ssmBoundary(matched), diskArrays: arrays,
+                        mediaSalt: mediaSalt)
+                    if hasRequiredHybridSSM(ssmStates) {
+                        return .hit(
+                            matchedTokens: matched,
+                            remainingTokens: Array(tokens.dropFirst(matched)),
+                            detail: .disk,
+                            blocks: [],
+                            ssmStates: ssmStates,
+                            diskArrays: arrays
+                        )
+                    }
+                }
+            }
+        }
+
+        // Tier 2b: Block-level disk cache. This is lower priority than
+        // prompt-level DiskCache because it stores decoded KV blocks rather
+        // than the full TQ/native serialized cache, but it can still recover
+        // the longest persisted paged prefix when whole-prompt disk misses.
+        if !isPagedIncompatible,
+           let blockHit = fetchBlockDiskPrefix(tokens: hashTokens, mediaSalt: mediaSalt)
+        {
+            let matched = blockHit.matchedTokens
+            let ssmStates: [MLXArray]?
+            if isHybrid {
+                ssmStates = ssmStateCache.fetch(
+                    tokens: hashTokens,
+                    boundary: ssmBoundary(matched),
+                    mediaSalt: mediaSalt)
+            } else {
+                ssmStates = nil
+            }
+            if hasRequiredHybridSSM(ssmStates) {
+                return .hit(
+                    matchedTokens: matched,
+                    remainingTokens: Array(tokens.dropFirst(matched)),
+                    detail: .blockDisk,
+                    blocks: blockHit.blocks,
+                    ssmStates: ssmStates,
+                    diskArrays: nil
+                )
+            }
+            release(blocks: blockHit.blocks)
         }
 
         // All tiers missed
@@ -474,9 +590,20 @@ public final class CacheCoordinator: @unchecked Sendable {
         // bearing entries. Sliding-attention slots are re-prefilled
         // on the next turn's remaining-token pass, which is exactly
         // what their semantics want.
-        if let pagedCache {
+        if !isPagedIncompatible, let pagedCache {
             pagedCache.storeTokenSequence(
                 tokens: storeTokens, layerData: blockLayerData, mediaSalt: mediaSalt)
+        }
+
+        // Store the same full blocks in block-level disk L2 when enabled.
+        // This is opt-in and only useful with paged cache enabled because the
+        // fetch path materializes disk blocks back into pinned CacheBlock
+        // instances for the existing restore/release pipeline.
+        if !isPagedIncompatible, blockDiskCache != nil, pagedCache != nil {
+            storeBlockDiskSequence(
+                tokens: storeTokens,
+                blockLayerData: blockLayerData,
+                mediaSalt: mediaSalt)
         }
 
         // Store in disk cache (L2 on-disk, unified format v2).
@@ -568,6 +695,13 @@ public final class CacheCoordinator: @unchecked Sendable {
         totalTokens: Int
     ) -> [[(keys: MLXArray, values: MLXArray)]] {
         guard totalTokens > 0, !layerData.isEmpty else { return [] }
+        let completeLayerData = layerData.map { kv -> (keys: MLXArray, values: MLXArray)? in
+            guard let kv,
+                  kv.keys.dim(2) >= totalTokens,
+                  kv.values.dim(2) >= totalTokens
+            else { return nil }
+            return kv
+        }
 
         var blocks: [[(keys: MLXArray, values: MLXArray)]] = []
         var offset = 0
@@ -576,7 +710,7 @@ public final class CacheCoordinator: @unchecked Sendable {
             let end = min(offset + blockSize, totalTokens)
             var blockData: [(keys: MLXArray, values: MLXArray)] = []
 
-            for kv in layerData {
+            for kv in completeLayerData {
                 guard let kv else { continue }
                 // KV tensors are [B, H, T, D] — slice along axis 2 (sequence dim)
                 let slicedKeys = kv.keys[.ellipsis, offset ..< end, 0...]
@@ -591,12 +725,125 @@ public final class CacheCoordinator: @unchecked Sendable {
         return blocks
     }
 
+    private func storeBlockDiskSequence(
+        tokens: [Int],
+        blockLayerData: [[(keys: MLXArray, values: MLXArray)]],
+        mediaSalt: String? = nil
+    ) {
+        guard let blockDiskCache else { return }
+
+        var parentHash: String? = nil
+        var chunkIndex = 0
+        var offset = 0
+
+        while offset < tokens.count {
+            let end = min(offset + config.pagedBlockSize, tokens.count)
+            let chunk = Array(tokens[offset..<end])
+            let hash = CacheBlock.computeBlockHash(
+                parentHash: parentHash,
+                tokenIds: chunk,
+                modelKey: config.modelKey,
+                mediaSalt: mediaSalt)
+
+            if chunkIndex < blockLayerData.count,
+               let payload = Self.encodeBlockDiskPayload(blockLayerData[chunkIndex])
+            {
+                blockDiskCache.store(
+                    blockHash: hash,
+                    tokenCount: chunk.count,
+                    payload: payload)
+            }
+
+            parentHash = hash
+            offset = end
+            chunkIndex += 1
+        }
+    }
+
+    private func fetchBlockDiskPrefix(
+        tokens: [Int],
+        mediaSalt: String? = nil
+    ) -> PrefixFetchResult? {
+        guard let blockDiskCache, let pagedCache else { return nil }
+
+        var parentHash: String? = nil
+        var matchedBlocks: [CacheBlock] = []
+        var offset = 0
+
+        while offset < tokens.count {
+            let end = min(offset + config.pagedBlockSize, tokens.count)
+            let chunk = Array(tokens[offset..<end])
+            let hash = CacheBlock.computeBlockHash(
+                parentHash: parentHash,
+                tokenIds: chunk,
+                modelKey: config.modelKey,
+                mediaSalt: mediaSalt)
+
+            guard let payload = blockDiskCache.fetch(blockHash: hash),
+                  let blockData = Self.decodeBlockDiskPayload(payload)
+            else { break }
+
+            guard let block = pagedCache.allocateBlock() else {
+                break
+            }
+            block.tokenIds = chunk
+            block.cacheData = blockData.map { Optional($0) }
+            pagedCache.registerBlock(block, hash: hash)
+
+            matchedBlocks.append(block)
+            parentHash = hash
+            offset = end
+        }
+
+        guard !matchedBlocks.isEmpty else { return nil }
+        return PrefixFetchResult(
+            matchedTokens: matchedBlocks.reduce(0) { $0 + $1.tokenCount },
+            remainingTokens: Array(tokens[offset...]),
+            blocks: matchedBlocks)
+    }
+
+    private static func encodeBlockDiskPayload(
+        _ layerData: [(keys: MLXArray, values: MLXArray)]
+    ) -> Data? {
+        guard !layerData.isEmpty else { return nil }
+        var arrays: [String: MLXArray] = [:]
+        arrays.reserveCapacity(layerData.count * 2)
+        for (idx, kv) in layerData.enumerated() {
+            arrays["layer_\(idx)_keys"] = kv.keys
+            arrays["layer_\(idx)_values"] = kv.values
+        }
+        MLX.eval(Array(arrays.values))
+        return try? saveToData(
+            arrays: arrays,
+            metadata: [
+                "format": "vmlx-blockdisk-v1",
+                "layer_count": String(layerData.count),
+            ])
+    }
+
+    private static func decodeBlockDiskPayload(
+        _ payload: Data
+    ) -> [(keys: MLXArray, values: MLXArray)]? {
+        guard let arrays = try? loadArrays(data: payload) else { return nil }
+        var out: [(keys: MLXArray, values: MLXArray)] = []
+        var idx = 0
+        while let keys = arrays["layer_\(idx)_keys"],
+              let values = arrays["layer_\(idx)_values"]
+        {
+            out.append((keys: keys, values: values))
+            idx += 1
+        }
+        return out.isEmpty ? nil : out
+    }
+
     // MARK: - Clear
 
     /// Clear all cache tiers, releasing all cached data.
     public func clear() {
         pagedCache?.clear()
         diskCache?.clear()
+        // BlockDiskCache is persistent by design. Keep entries across
+        // coordinator clears just like an app restart; eviction owns size.
         memoryCache?.clear()
         ssmStateCache.clear()
     }

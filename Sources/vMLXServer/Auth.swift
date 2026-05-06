@@ -106,6 +106,19 @@ public struct BearerAuthMiddleware<Context: RequestContext>: RouterMiddleware {
 
         let header = request.headers[.authorization] ?? ""
         let xApiKey = request.headers[HTTPField.Name("x-api-key")!] ?? ""
+        // Iter 144 — accept lowercase `bearer` per RFC 6750 §2.1
+        // (auth-scheme names are case-insensitive). Some clients
+        // (older python-requests, certain CDN proxies that
+        // canonicalize headers) send `bearer TOKEN` rather than
+        // `Bearer TOKEN`. Pre-fix the proxy-trip silently 401'd those
+        // requests. Case-fold ONLY the scheme prefix; the token after
+        // the space stays case-sensitive.
+        let normalizedHeader: String = {
+            if header.lowercased().hasPrefix("bearer ") {
+                return "Bearer " + header.dropFirst("bearer ".count)
+            }
+            return header
+        }()
         let expectedBearer = "Bearer \(key)"
         // iter-87 §115: use constant-time comparison so an attacker on
         // LAN (when server binds 0.0.0.0) can't recover the API key
@@ -113,10 +126,24 @@ public struct BearerAuthMiddleware<Context: RequestContext>: RouterMiddleware {
         // a one-byte-wrong header and a fully wrong header. Swift's
         // stdlib `==` on `String` is variable-time (early-exit on
         // first mismatch).
-        let bearerOK = Self.constantTimeEquals(header, expectedBearer)
+        let bearerOK = Self.constantTimeEquals(normalizedHeader, expectedBearer)
         let xApiKeyOK = Self.constantTimeEquals(xApiKey, key)
+        // Iter 144 — `?api_key=TOKEN` query-string fallback. OpenAI
+        // SDK falls back to this when proxies strip Authorization
+        // headers (some CDNs / reverse proxies do this for cache-key
+        // normalization). Python `vmlx_engine/server.py` accepts the
+        // form; Swift parity gap caught by audit. Constant-time
+        // compare even though query strings appear in access logs —
+        // the LAN timing oracle still applies on the value compare.
+        let queryApiKey = Self.extractQueryParam(query: request.uri.query, name: "api_key")
+        let queryOK: Bool
+        if let qk = queryApiKey, !qk.isEmpty {
+            queryOK = Self.constantTimeEquals(qk, key)
+        } else {
+            queryOK = false
+        }
 
-        guard bearerOK || xApiKeyOK else {
+        guard bearerOK || xApiKeyOK || queryOK else {
             let body = #"{"error":{"message":"unauthorized","type":"auth_error"}}"#
             var resp = Response(
                 status: .unauthorized,
@@ -129,6 +156,27 @@ public struct BearerAuthMiddleware<Context: RequestContext>: RouterMiddleware {
         return try await next(request, context)
     }
 
+    /// Extract a single query parameter from a raw query string.
+    /// Returns the URL-decoded value, or nil if the param is absent
+    /// or empty. Used for `?api_key=` fallback (iter 144).
+    /// Parses manually to avoid pulling in URLComponents (which has
+    /// its own UTF-8 quirks on RFC 3986 reserved chars) and to keep
+    /// the import surface tight (no HummingbirdCore needed here).
+    static func extractQueryParam(query: String?, name: String) -> String? {
+        guard let raw = query, !raw.isEmpty else { return nil }
+        for pair in raw.split(separator: "&", omittingEmptySubsequences: true) {
+            let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2 else { continue }
+            let k = String(parts[0])
+            if k == name {
+                let v = String(parts[1])
+                // Percent-decode using the standard URL decoder.
+                return v.removingPercentEncoding ?? v
+            }
+        }
+        return nil
+    }
+
     /// Constant-time string comparison for token / API-key checks.
     ///
     /// Mitigates timing-oracle attacks where an attacker on LAN
@@ -138,17 +186,24 @@ public struct BearerAuthMiddleware<Context: RequestContext>: RouterMiddleware {
     /// the elapsed time is independent of where the first mismatch
     /// occurs. Length-mismatch also flips the accumulator so a short
     /// prefix of a longer key doesn't return true.
+    ///
+    /// Iter 144 — accumulator type bumped from `UInt8` to `Int` so a
+    /// length difference of exactly 256 (or any 256-multiple) doesn't
+    /// truncate to 0. Pre-fix, a token of length N compared against
+    /// the same token padded with 256 null bytes returned `true`
+    /// (false positive). Now the length XOR is preserved at full
+    /// width and any non-equal length forces `diff != 0`.
     static func constantTimeEquals(_ a: String, _ b: String) -> Bool {
         let ab = Array(a.utf8)
         let bb = Array(b.utf8)
         // Force the loop to a fixed count derived from max length so a
         // length mismatch doesn't leak via loop-iteration count.
         let n = max(ab.count, bb.count)
-        var diff: UInt8 = UInt8(ab.count ^ bb.count) & 0xFF
+        var diff: Int = ab.count ^ bb.count
         for i in 0..<n {
             let x: UInt8 = i < ab.count ? ab[i] : 0
             let y: UInt8 = i < bb.count ? bb[i] : 0
-            diff |= (x ^ y)
+            diff |= Int(x ^ y)
         }
         return diff == 0
     }

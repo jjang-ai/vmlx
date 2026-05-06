@@ -67,9 +67,19 @@ public struct UserInput {
             case .url(let url):
                 return AVAsset(url: url)
             case .frames:
-                fatalError(
-                    "calling asAVAsset() on Video Input with VideoFames provided is unsupported and deprecated - please use MediaProcessing.asProcessedSequence() instead"
-                )
+                // Iter 143 — graceful degrade. Was: fatalError that
+                // crashed the engine if any caller (notably the
+                // mlx-swift-examples test path) hit this branch.
+                // Returning a non-playable AVURLAsset stub means the
+                // caller's downstream `loadValuesAsynchronously` /
+                // `tracks(withMediaType:)` will surface a normal
+                // AVFoundation error instead of taking down the
+                // process. The deprecated message + the warn line
+                // both push callers to MediaProcessing.asProcessedSequence().
+                if let data = "[vMLX][UserInput.Video] WARN: asAVAsset() called on .frames variant — returning non-playable stub. Use MediaProcessing.asProcessedSequence() instead.\n".data(using: .utf8) {
+                    try? FileHandle.standardError.write(contentsOf: data)
+                }
+                return AVURLAsset(url: URL(fileURLWithPath: "/dev/null"))
             }
         }
     }
@@ -137,6 +147,14 @@ public struct UserInput {
         }
     }
 
+    /// Representation of an audio resource for audio-capable multimodal
+    /// models. Most model families ignore this; Nemotron-H Omni's processor
+    /// loads URL clips into canonical Parakeet waveforms.
+    public enum Audio {
+        case url(URL)
+        case samples([Float], sampleRate: Int = 16000)
+    }
+
     /// Representation of processing to apply to media.
     public struct Processing: Sendable {
         public var resize: CGSize?
@@ -161,6 +179,9 @@ public struct UserInput {
                 self.videos = messages.reduce(into: []) { result, message in
                     result.append(contentsOf: message.videos)
                 }
+                self.audios = messages.reduce(into: []) { result, message in
+                    result.append(contentsOf: message.audios)
+                }
             }
         }
     }
@@ -176,6 +197,9 @@ public struct UserInput {
     /// If the ``prompt-swift.property`` is a ``Prompt-swift.enum/chat(_:)`` this will
     /// collect the videos from the chat messages, otherwise these are the stored videos with the ``UserInput``.
     public var videos = [Video]()
+
+    /// The audio clips associated with the `UserInput`.
+    public var audios = [Audio]()
 
     public var tools: [ToolSpec]?
 
@@ -196,11 +220,12 @@ public struct UserInput {
     /// - ``init(chat:tools:additionalContext:)``
     public init(
         prompt: String, images: [Image] = [Image](), videos: [Video] = [Video](),
+        audios: [Audio] = [Audio](),
         tools: [ToolSpec]? = nil,
         additionalContext: [String: any Sendable]? = nil
     ) {
         self.prompt = .chat([
-            .user(prompt, images: images, videos: videos)
+            .user(prompt, images: images, videos: videos, audios: audios)
         ])
         self.tools = tools
         self.additionalContext = additionalContext
@@ -241,12 +266,14 @@ public struct UserInput {
     /// - ``init(chat:tools:additionalContext:)``
     public init(
         messages: [Message], images: [Image] = [Image](), videos: [Video] = [Video](),
+        audios: [Audio] = [Audio](),
         tools: [ToolSpec]? = nil,
         additionalContext: [String: any Sendable]? = nil
     ) {
         self.prompt = .messages(messages)
         self.images = images
         self.videos = videos
+        self.audios = audios
         self.tools = tools
         self.additionalContext = additionalContext
     }
@@ -289,6 +316,9 @@ public struct UserInput {
         self.videos = chat.reduce(into: []) { result, message in
             result.append(contentsOf: message.videos)
         }
+        self.audios = chat.reduce(into: []) { result, message in
+            result.append(contentsOf: message.audios)
+        }
 
         self.processing = processing
         self.tools = tools
@@ -313,6 +343,7 @@ public struct UserInput {
         prompt: Prompt,
         images: [Image] = [Image](),
         videos: [Video] = [Video](),
+        audios: [Audio] = [Audio](),
         processing: Processing = .init(),
         tools: [ToolSpec]? = nil, additionalContext: [String: any Sendable]? = nil
     ) {
@@ -321,6 +352,7 @@ public struct UserInput {
         case .text, .messages:
             self.images = images
             self.videos = videos
+            self.audios = audios
         case .chat:
             break
         }

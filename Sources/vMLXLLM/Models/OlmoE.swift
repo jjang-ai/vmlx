@@ -91,14 +91,16 @@ class OlmoeSparseMoeBlock: Module, UnaryLayer {
     let numExperts: Int
     let topK: Int
     let normTopkProb: Bool
+    fileprivate let layerIdx: Int
 
     @ModuleInfo(key: "gate") var gate: Linear
     @ModuleInfo(key: "switch_mlp") var switchMLP: SwitchGLU
 
-    init(_ args: OlmoEConfiguration) {
+    init(_ args: OlmoEConfiguration, layerIdx: Int) {
         self.numExperts = args.numExperts
         self.topK = args.numExpertsPerToken
         self.normTopkProb = args.normTopkProb
+        self.layerIdx = layerIdx
 
         self._gate.wrappedValue = Linear(args.hiddenSize, numExperts, bias: false)
         self._switchMLP.wrappedValue = SwitchGLU(
@@ -113,6 +115,7 @@ class OlmoeSparseMoeBlock: Module, UnaryLayer {
 
         let k = topK
         let inds = MLX.argPartition(-routingWeights, kth: k - 1, axis: -1)[.ellipsis, ..<k]
+        JangPressRouteTelemetry.recordTopK(layer: layerIdx, indices: inds)
         var scores = MLX.takeAlong(routingWeights, inds, axis: -1)
 
         if normTopkProb {
@@ -136,9 +139,9 @@ class OlmoETransformerBlock: Module {
     /// Flash MoE Phase 2b shim — see `MiniMax.swift` for rationale.
     fileprivate var flashMoeShim: FlashMoEBlock? = nil
 
-    init(_ args: OlmoEConfiguration) {
+    init(_ args: OlmoEConfiguration, layerIdx: Int) {
         self._attention.wrappedValue = OlmoEAttention(args)
-        self._mlp.wrappedValue = OlmoeSparseMoeBlock(args)
+        self._mlp.wrappedValue = OlmoeSparseMoeBlock(args, layerIdx: layerIdx)
         self._inputLayerNorm.wrappedValue = RMSNorm(
             dimensions: args.hiddenSize, eps: args.rmsNormEps)
         self._postAttentionLayerNorm.wrappedValue = RMSNorm(
@@ -169,7 +172,7 @@ public class OlmoEModelInner: Module {
         self._embedTokens.wrappedValue = Embedding(
             embeddingCount: args.vocabularySize, dimensions: args.hiddenSize)
 
-        self.layers = (0 ..< args.hiddenLayers).map { _ in OlmoETransformerBlock(args) }
+        self.layers = (0 ..< args.hiddenLayers).map { i in OlmoETransformerBlock(args, layerIdx: i) }
         self.norm = RMSNorm(dimensions: args.hiddenSize, eps: args.rmsNormEps)
     }
 
@@ -228,7 +231,8 @@ public class OlmoEModel: Module, LLMModel, KVCacheDimensionProvider {
                         let toJoin = (0 ..< configuration.numExperts).map { e in
                             sanitized.removeValue(forKey: "\(prefix).mlp.experts.\(e).\(n).\(k)")!
                         }
-                        sanitized["\(prefix).mlp.switch_mlp.\(n).\(k)"] = MLX.stacked(toJoin)
+                        sanitized["\(prefix).mlp.switch_mlp.\(n).\(k)"] =
+                            loadTimeMaterializedStacked(toJoin)
                     }
                 }
             }
@@ -346,6 +350,7 @@ extension OlmoETransformerBlock: FlashMoELayer {
         let gate = mlp.gate
         let topK = mlp.topK
         let normTopkProb = mlp.normTopkProb
+        let layerIdx = mlp.layerIdx
         block.topK = topK
         block.router = { x in
             let routerLogits = gate(x)
@@ -353,6 +358,7 @@ extension OlmoETransformerBlock: FlashMoELayer {
             let inds = MLX.argPartition(
                 -routingWeights, kth: topK - 1, axis: -1
             )[.ellipsis, ..<topK]
+            JangPressRouteTelemetry.recordTopK(layer: layerIdx, indices: inds)
             var scores = MLX.takeAlong(routingWeights, inds, axis: -1)
             if normTopkProb {
                 scores = scores / MLX.sum(scores, axis: -1, keepDims: true)

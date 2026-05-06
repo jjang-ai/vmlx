@@ -65,28 +65,28 @@ public enum TQPhase: Sendable {
 /// - Full reset: If trim below prefix boundary, decode → truncate → re-encode.
 ///   This only happens if speculative decoding rejects ALL generated tokens
 ///   AND the prefix, which is extremely rare.
-public final class TurboQuantKVCache: BaseKVCache, @unchecked Sendable {
+public class TurboQuantKVCache: BaseKVCache, @unchecked Sendable {
 
     public private(set) var phase: TQPhase = .fill
 
     // Fill phase storage
-    private var floatKeys: MLXArray?
-    private var floatValues: MLXArray?
+    internal var floatKeys: MLXArray?
+    internal var floatValues: MLXArray?
 
     // Compressed phase storage
     public private(set) var compressedKeys: EncodedKeys?
     public private(set) var compressedValues: EncodedValues?
 
     // Decoded prefix (persistent float buffer for attention reads)
-    private var decodedKeyBuffer: MLXArray?
-    private var decodedValueBuffer: MLXArray?
+    internal var decodedKeyBuffer: MLXArray?
+    internal var decodedValueBuffer: MLXArray?
 
     // Unified buffer: [decoded_prefix | window_slots]
-    private var unifiedKeys: MLXArray?
-    private var unifiedValues: MLXArray?
+    internal var unifiedKeys: MLXArray?
+    internal var unifiedValues: MLXArray?
 
     /// Number of tokens in the decoded prefix.
-    private var prefixTokenCount: Int = 0
+    internal var prefixTokenCount: Int = 0
 
     /// Pre-allocated window step size. Window grows in chunks to avoid per-token allocation.
     /// Bumped 256 → 4096 on 2026-04-18 to address Qwen3.6-JANGTQ2 burst crash
@@ -95,14 +95,19 @@ public final class TurboQuantKVCache: BaseKVCache, @unchecked Sendable {
     /// while keeping the per-slot footprint bounded (~8MB extra per layer
     /// per slot at typical 35B dims). If users report context > 4096 tokens
     /// slowdown, raise further — this is a conservative bump.
-    private let windowStep = 4096
+    internal let windowStep = 4096
 
     /// Number of tokens written into the window region of the unified buffer.
-    private var windowOffset = 0
+    internal var windowOffset = 0
 
     /// Encoder state (codebooks, rotation signs, QJL matrix).
     /// Created during compression, reused for any subsequent decode operations.
-    private var encoderState: TQEncoder.EncoderState?
+    internal var encoderState: TQEncoder.EncoderState?
+    /// Value-side encoder state. Most classic attention models have
+    /// key_dim == value_dim, but MLA / hybrid-SSM families such as Ling
+    /// use wider keys than values (e.g. 192 vs 128). Reusing the key
+    /// state's Hadamard signs for values crashes and is mathematically wrong.
+    internal var valueEncoderState: TQEncoder.EncoderState?
 
     // Configuration
     public let keyBits: Int
@@ -154,18 +159,22 @@ public final class TurboQuantKVCache: BaseKVCache, @unchecked Sendable {
         // Derive encoder params from the encoded payload itself. They are
         // fully determined by the dim/indexBits/seed fields, so we don't
         // need to store anything extra on disk to recover them.
-        let dim = encodedKeys.shape.last ?? 0
-        guard dim > 0 else { return }
+        let keyDim = encodedKeys.shape.last ?? 0
+        let valueDim = encodedValues.shape.last ?? 0
+        guard keyDim > 0, valueDim > 0 else { return }
         let kBits = encodedKeys.indexBits + 1   // keys split (b-1) MSE bits + 1 QJL bit
         let vBits = encodedValues.indexBits     // values use all b bits for MSE
         let seed = encodedKeys.seed
 
-        let state = TQEncoder.EncoderState(
-            dim: dim, keyBits: kBits, valueBits: vBits, seed: seed)
-        self.encoderState = state
+        let keyState = TQEncoder.EncoderState(
+            dim: keyDim, keyBits: kBits, valueBits: vBits, seed: seed)
+        let valueState = TQEncoder.EncoderState(
+            dim: valueDim, keyBits: kBits, valueBits: vBits, seed: seed)
+        self.encoderState = keyState
+        self.valueEncoderState = valueState
 
-        let dKeys = TQEncoder.decodeKeys(encodedKeys, state: state)
-        let dValues = TQEncoder.decodeValues(encodedValues, state: state)
+        let dKeys = TQEncoder.decodeKeys(encodedKeys, state: keyState)
+        let dValues = TQEncoder.decodeValues(encodedValues, state: valueState)
 
         // Materialize lazily-built tensors immediately (same pattern as
         // compressFloatKV) so MLX doesn't graph 30+ layers at once on a
@@ -192,6 +201,59 @@ public final class TurboQuantKVCache: BaseKVCache, @unchecked Sendable {
         self.offset = sourceOffset
 
         // Drop any fill-phase storage that may still be hanging around.
+        self.floatKeys = nil
+        self.floatValues = nil
+    }
+
+    /// Restore from already-decoded float keys/values without dropping back
+    /// to fill phase.
+    ///
+    /// Paged/block cache tiers store the decoded float KV that `state`
+    /// exposes from a compressed TurboQuant cache. Assigning that payload
+    /// through `state =` makes the cache `.fill`, so a later quantization
+    /// threshold can encode an already-decoded lossy prefix again. That
+    /// compounds quality loss across turns. This method seats the decoded
+    /// tensors directly as the compressed-phase prefix, leaves encoded
+    /// payloads nil, and keeps decode writes on the normal float window.
+    public func restoreFromDecodedKV(
+        keys dKeys: MLXArray,
+        values dValues: MLXArray,
+        sourceOffset: Int
+    ) {
+        guard dKeys.ndim == 4, dValues.ndim == 4, sourceOffset > 0 else {
+            return
+        }
+
+        let dim = dKeys.dim(3)
+        if encoderState == nil {
+            encoderState = TQEncoder.EncoderState(
+                dim: dim, keyBits: keyBits, valueBits: valueBits)
+        }
+        let valueDim = dValues.dim(3)
+        if valueEncoderState == nil {
+            valueEncoderState = TQEncoder.EncoderState(
+                dim: valueDim, keyBits: keyBits, valueBits: valueBits)
+        }
+
+        MLX.eval(dKeys, dValues)
+
+        self.compressedKeys = nil
+        self.compressedValues = nil
+        self.decodedKeyBuffer = dKeys
+        self.decodedValueBuffer = dValues
+        self.prefixTokenCount = dKeys.dim(2)
+
+        let B = dKeys.dim(0), H = dKeys.dim(1)
+        let kD = dKeys.dim(3), vD = dValues.dim(3)
+        let windowK = MLXArray.zeros([B, H, windowStep, kD], dtype: dKeys.dtype)
+        let windowV = MLXArray.zeros([B, H, windowStep, vD], dtype: dValues.dtype)
+        self.unifiedKeys = concatenated([dKeys, windowK], axis: 2)
+        self.unifiedValues = concatenated([dValues, windowV], axis: 2)
+        self.windowOffset = 0
+
+        self.phase = .compressed
+        self.offset = sourceOffset
+
         self.floatKeys = nil
         self.floatValues = nil
     }
@@ -231,15 +293,19 @@ public final class TurboQuantKVCache: BaseKVCache, @unchecked Sendable {
 
     /// Compress float KV data into TurboQuant format and set up unified buffer.
     private func compressFloatKV(keys: MLXArray, values: MLXArray, sourceOffset: Int) {
-        let dim = keys.dim(keys.ndim - 1)
+        let keyDim = keys.dim(keys.ndim - 1)
+        let valueDim = values.dim(values.ndim - 1)
 
-        let state = TQEncoder.EncoderState(
-            dim: dim, keyBits: keyBits, valueBits: valueBits)
-        self.encoderState = state
+        let keyState = TQEncoder.EncoderState(
+            dim: keyDim, keyBits: keyBits, valueBits: valueBits)
+        let valueState = TQEncoder.EncoderState(
+            dim: valueDim, keyBits: keyBits, valueBits: valueBits)
+        self.encoderState = keyState
+        self.valueEncoderState = valueState
 
         // Encode
-        let encodedKeys = TQEncoder.encodeKeys(keys, state: state, sinkTokens: sinkTokens)
-        let encodedValues = TQEncoder.encodeValues(values, state: state, sinkTokens: sinkTokens)
+        let encodedKeys = TQEncoder.encodeKeys(keys, state: keyState, sinkTokens: sinkTokens)
+        let encodedValues = TQEncoder.encodeValues(values, state: valueState, sinkTokens: sinkTokens)
 
         // Evaluate immediately so MLX doesn't graph 30+ layers at once and freeze.
         // MLX.eval() is MLX's lazy tensor materialization — NOT code evaluation.
@@ -249,8 +315,8 @@ public final class TurboQuantKVCache: BaseKVCache, @unchecked Sendable {
         MLX.eval(encodedValues.indicesPacked, encodedValues.vectorNorms)
 
         // Decode once into persistent float buffer
-        let dKeys = TQEncoder.decodeKeys(encodedKeys, state: state)
-        let dValues = TQEncoder.decodeValues(encodedValues, state: state)
+        let dKeys = TQEncoder.decodeKeys(encodedKeys, state: keyState)
+        let dValues = TQEncoder.decodeValues(encodedValues, state: valueState)
 
         // Store compressed data
         self.compressedKeys = encodedKeys
@@ -479,6 +545,7 @@ public final class TurboQuantKVCache: BaseKVCache, @unchecked Sendable {
         new.prefixTokenCount = prefixTokenCount
         new.windowOffset = windowOffset
         new.encoderState = encoderState
+        new.valueEncoderState = valueEncoderState
 
         // Compressed data: struct copy (MLXArray is reference-counted internally).
         // EncodedKeys/EncodedValues are read-only after creation, so sharing is safe.
@@ -515,5 +582,6 @@ public final class TurboQuantKVCache: BaseKVCache, @unchecked Sendable {
         prefixTokenCount = 0
         offset = 0
         encoderState = nil
+        valueEncoderState = nil
     }
 }

@@ -237,6 +237,7 @@ struct SessionDashboard: View {
         let id = await app.createSession(forModel: url)
         selection = id
         showCreatePopover = false
+        await app.startSession(id)
     }
 
     private func startSession(_ id: UUID) async { await app.startSession(id) }

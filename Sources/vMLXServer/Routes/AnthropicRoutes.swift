@@ -23,172 +23,321 @@ public enum AnthropicRoutes {
         engine: Engine
     ) {
         router.post("/v1/messages") { req, _ -> Response in
-            var req = req
-            let body = try await req.collectBody(upTo: 32 * 1024 * 1024)
-            let data = Data(buffer: body)
-            guard let anthropicBody = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return OpenAIRoutes.errorJSON(.badRequest, "invalid JSON")
-            }
-            let model = (anthropicBody["model"] as? String) ?? "default"
-            let isStream = (anthropicBody["stream"] as? Bool) ?? false
-
-            // iter-107 §185: Anthropic-specific pre-checks that the
-            // shared ChatRequest.validate() doesn't enforce.
-            //
-            //   (a) `max_tokens` is required per the Anthropic spec;
-            //       OpenAI treats it as optional and our validator
-            //       inherited the OpenAI semantics. A Cohere/Anthropic-
-            //       compatible client expected a 400 here and instead
-            //       got HTTP 200 with an engine-default cap.
-            //
-            //   (b) `temperature` is bounded 0.0-1.0 on Anthropic;
-            //       OpenAI allows up to 2.0 and validate() uses the
-            //       OpenAI range. temp=1.8 was sneaking past the
-            //       wrapper and producing Anthropic-noncompliant
-            //       sampler behavior.
-            //
-            // Both checks run BEFORE the generic validate() so the
-            // Anthropic-specific error message takes precedence.
-            if anthropicBody["max_tokens"] == nil {
-                return OpenAIRoutes.errorJSON(
-                    .badRequest,
-                    "missing required field `max_tokens` (Anthropic spec requires max_tokens on every /v1/messages call)")
-            }
-            if let rawTemp = anthropicBody["temperature"] as? Double,
-               rawTemp > 1.0
-            {
-                return OpenAIRoutes.errorJSON(
-                    .badRequest,
-                    "`temperature` (\(rawTemp)) exceeds Anthropic's 1.0 upper bound — use the OpenAI-compatible /v1/chat/completions route if you need 1.0-2.0 range")
-            }
-
-            // Translate Anthropic → ChatRequest. Full logic: server.py:2664.
-            let chatReq = Self.anthropicToChatRequest(anthropicBody)
-            // 2026-04-18 validate-parity fix — OpenAI + gateway paths
-            // call `chatReq.validate()` before streaming; Anthropic was
-            // silently skipping the range check, so a wild temperature=99
-            // or negative max_tokens hit the engine as HTTP 200 instead
-            // of a clean 400. Live-triggered by the production audit.
-            do {
-                try chatReq.validate()
-            } catch let err as ChatRequestValidationError {
-                return OpenAIRoutes.errorJSON(.badRequest, err.description)
-            } catch {
-                return OpenAIRoutes.errorJSON(.badRequest, "invalid request: \(error)")
-            }
-            await engine.wakeFromStandby()
-            // 4-tier settings resolution happens inside `Engine.stream`.
-            let upstream = await engine.stream(request: chatReq)
-
-            if isStream {
-                var headers: HTTPFields = [:]
-                headers[.contentType] = "text/event-stream; charset=utf-8"
-                headers[.cacheControl] = "no-cache"
-                return Response(
-                    status: .ok,
-                    headers: headers,
-                    body: Self.streamingBody(model: model, upstream: upstream)
-                )
-            }
-
-            // Non-streaming — collect reasoning, content, and tool calls
-            // into Anthropic's content-block array so clients see the same
-            // shape they'd get from `client.messages.create(stream=False)`.
-            var thinking = ""
-            var content = ""
-            var toolCalls: [ChatRequest.ToolCall] = []
-            var usage: StreamChunk.Usage? = nil
-            var finishReason: String? = nil
-            do {
-                for try await chunk in upstream {
-                    if let r = chunk.reasoning { thinking += r }
-                    if let c = chunk.content { content += c }
-                    if let tcs = chunk.toolCalls { toolCalls.append(contentsOf: tcs) }
-                    if let u = chunk.usage { usage = u }
-                    if let fr = chunk.finishReason { finishReason = fr }
-                }
-            } catch let err as EngineError {
-                return OpenAIRoutes.mapEngineError(err)
-            } catch {
-                return OpenAIRoutes.errorJSON(.internalServerError, "\(error)")
-            }
-            var blocks: [[String: Any]] = []
-            if !thinking.isEmpty {
-                blocks.append([
-                    "type": "thinking",
-                    "thinking": thinking,
-                ] as [String: Any])
-            }
-            if !content.isEmpty || (blocks.isEmpty && toolCalls.isEmpty) {
-                // Ensure at least one text block when no reasoning/tools.
-                blocks.append([
-                    "type": "text",
-                    "text": content,
-                ] as [String: Any])
-            }
-            for tc in toolCalls {
-                // Parse `arguments` JSON string into a dict for `input`.
-                let argsData = tc.function.arguments.data(using: .utf8) ?? Data("{}".utf8)
-                let input = (try? JSONSerialization.jsonObject(with: argsData))
-                    as? [String: Any] ?? [:]
-                blocks.append([
-                    "type": "tool_use",
-                    "id": tc.id,
-                    "name": tc.function.name,
-                    "input": input,
-                ] as [String: Any])
-            }
-            let obj: [String: Any] = [
-                "id": "msg_\(UUID().uuidString.prefix(12).lowercased())",
-                "type": "message",
-                "role": "assistant",
-                "content": blocks,
-                "model": model,
-                "stop_reason": Self.mapStopReason(finishReason),
-                "usage": Self.usageEnvelope(usage),
-            ]
-            return OpenAIRoutes.json(obj)
+            return try await Self.handleMessages(req: req, engine: engine)
         }
 
         // POST /v1/messages/count_tokens — token-count preflight used
         // by Anthropic SDKs for budget planning before a real send.
         //
-        // iter-108 §186: returns a labeled 501 rather than a hand-
-        // rolled tokenizer count. The honest reason is that building
-        // a count that MATCHES the prompt_tokens from a subsequent
-        // /v1/messages call requires re-running the same chat-template
-        // + image-marker + tool-spec path that Engine.stream sets up
-        // inside its container actor. Exposing a public entry point
-        // that reaches the loaded tokenizer without breaking actor
-        // isolation needs a dedicated Engine method — not a shortcut
-        // here at the wrapper layer. A wrong count would silently
-        // poison every budget decision the client makes (they'd over-
-        // or under-cap max_tokens based on bad info), which is worse
-        // than an honest 501.
+        // Iter 143: real implementation. Goes through the SAME chat-
+        // template path Stream.swift uses for prefill, so the returned
+        // `input_tokens` matches what a follow-up /v1/messages call
+        // reports as `usage.input_tokens` (modulo image-token
+        // approximation on VLMs — see Engine.countPromptTokens).
+        // Anthropic SDKs preflight this before every send when budget
+        // tracking is on; the prior 501 hard-failed Claude Desktop /
+        // Continue.dev under those configs.
+        router.post("/v1/messages/count_tokens") { req, _ -> Response in
+            return try await Self.handleCountTokens(req: req, engine: engine)
+        }
+    }
+
+    /// Iter 143 — extracted for the gateway to dispatch
+    /// /v1/messages/count_tokens too. Same end-to-end behavior as the
+    /// per-session route.
+    public static func handleCountTokens(
+        req: Request, engine: Engine
+    ) async throws -> Response {
+        var req = req
+        let body = try await req.collectBody(upTo: 32 * 1024 * 1024)
+        let data = Data(buffer: body)
+        guard let anthropicBody = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return OpenAIRoutes.errorJSON(.badRequest, "invalid JSON")
+        }
+        // count_tokens does NOT require `max_tokens` (unlike /v1/messages)
+        // — it's a preflight, not a generation request. We do still
+        // enforce Anthropic's temperature 0.0-1.0 bound for parity with
+        // /v1/messages so SDKs don't get inconsistent error shapes.
+        if let rawTemp = anthropicBody["temperature"] as? Double, rawTemp > 1.0 {
+            return OpenAIRoutes.errorJSON(
+                .badRequest,
+                "`temperature` (\(rawTemp)) exceeds Anthropic's 1.0 upper bound")
+        }
+        // Same translation as /v1/messages so the count uses the exact
+        // same chat-template path as the actual prefill will.
+        let chatReq = Self.anthropicToChatRequest(anthropicBody)
+        let count: Int
+        do {
+            count = try await engine.countPromptTokens(request: chatReq)
+        } catch EngineError.notLoaded {
+            return OpenAIRoutes.errorJSON(
+                .serviceUnavailable,
+                "no model loaded — count_tokens needs the loaded tokenizer to apply the model's chat template. Load a model first via vmlxctl serve / POST /v1/sessions.")
+        } catch {
+            return OpenAIRoutes.errorJSON(
+                .internalServerError,
+                "count_tokens failed: \(error)")
+        }
+        return OpenAIRoutes.json([
+            "input_tokens": count,
+        ])
+    }
+
+    /// Iter 138 — extracted from `register()`'s closure body so the
+    /// gateway can dispatch /v1/messages too. The per-session route
+    /// passes the resident `engine`; the gateway resolves the engine
+    /// from the request body's `model` field then calls this same
+    /// helper. Behavior is identical end-to-end.
+    public static func handleMessages(
+        req: Request, engine: Engine
+    ) async throws -> Response {
+        var req = req
+        let body = try await req.collectBody(upTo: 32 * 1024 * 1024)
+        let data = Data(buffer: body)
+        guard let anthropicBody = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return OpenAIRoutes.errorJSON(.badRequest, "invalid JSON")
+        }
+        let model = (anthropicBody["model"] as? String) ?? "default"
+        let isStream = (anthropicBody["stream"] as? Bool) ?? false
+
+        // iter-107 §185: Anthropic-specific pre-checks that the
+        // shared ChatRequest.validate() doesn't enforce.
         //
-        // FIXME(iter-108 §186): wire a real count via an Engine-
-        // public method that:
-        //   1. Acquires the llm container (same path as Stream.swift)
-        //   2. Applies the chat template through `tokenizer.applyChat
-        //      Template(messages:tools:additionalContext:)`
-        //   3. Returns token count (no generation).
-        // Until then, clients that call count_tokens should fall back
-        // to their own tiktoken-based estimate or just send the real
-        // /v1/messages call and read prompt_tokens from usage. The
-        // status:"not-implemented" field lets SDKs detect this.
-        router.post("/v1/messages/count_tokens") { _, _ -> Response in
-            return OpenAIRoutes.json(
-                [
-                    "type": "error",
-                    "status": "not-implemented",
-                    "error": [
-                        "type": "not_implemented_error",
-                        "message": "vMLX does not yet implement /v1/messages/count_tokens — wiring the real count through the loaded tokenizer + chat template is tracked by iter-108 §186 FIXME in AnthropicRoutes.swift. Send a real /v1/messages call and read usage.input_tokens from the response for an exact count, or use a tiktoken-based client-side estimate for planning.",
-                    ] as [String: Any],
-                ],
-                status: .notImplemented
+        //   (a) `max_tokens` is required per the Anthropic spec;
+        //       OpenAI treats it as optional and our validator
+        //       inherited the OpenAI semantics. A Cohere/Anthropic-
+        //       compatible client expected a 400 here and instead
+        //       got HTTP 200 with an engine-default cap.
+        //
+        //   (b) `temperature` is bounded 0.0-1.0 on Anthropic;
+        //       OpenAI allows up to 2.0 and validate() uses the
+        //       OpenAI range. temp=1.8 was sneaking past the
+        //       wrapper and producing Anthropic-noncompliant
+        //       sampler behavior.
+        //
+        // Both checks run BEFORE the generic validate() so the
+        // Anthropic-specific error message takes precedence.
+        if anthropicBody["max_tokens"] == nil {
+            return OpenAIRoutes.errorJSON(
+                .badRequest,
+                "missing required field `max_tokens` (Anthropic spec requires max_tokens on every /v1/messages call)")
+        }
+        if let rawTemp = anthropicBody["temperature"] as? Double,
+           rawTemp > 1.0
+        {
+            return OpenAIRoutes.errorJSON(
+                .badRequest,
+                "`temperature` (\(rawTemp)) exceeds Anthropic's 1.0 upper bound — use the OpenAI-compatible /v1/chat/completions route if you need 1.0-2.0 range")
+        }
+
+        // Iter 143 — detect Anthropic prompt-caching markers and
+        // SEMANTICALLY honor them via vMLX's prefix cache. The
+        // marker tells us "cache up to this point"; vMLX's prefix
+        // cache automatically catches the longest matching prefix on
+        // turn 2+, so the marked content effectively IS cached as
+        // long as the user reuses the same system+system-block
+        // prefix in subsequent calls. We extract the marked prefix
+        // text length and surface it in (a) a log line + (b) a
+        // response header so SDK budget trackers can confirm vMLX
+        // is honoring the hint. The header reports "honored: N
+        // chars" instead of the prior "ignored: true" — clients
+        // upgrading to iter-143+ vMLX see the cache hint working.
+        let cacheControlInfo = Self.cacheControlPrefixInfo(in: anthropicBody)
+        let hasCacheControl = cacheControlInfo.markerCount > 0
+        if hasCacheControl {
+            await engine.logs.append(
+                .info, category: "anthropic",
+                "/v1/messages cache_control honored: \(cacheControlInfo.markerCount) marker(s), \(cacheControlInfo.prefixChars) chars of prefix text. vMLX prefix cache will catch this prefix on turns 2+ via longest-prefix match (not Anthropic's explicit boundary contract, but the cached content matches).")
+        }
+
+        // Translate Anthropic → ChatRequest. Full logic: server.py:2664.
+        let chatReq = Self.anthropicToChatRequest(anthropicBody)
+        do {
+            try chatReq.validate()
+        } catch let err as ChatRequestValidationError {
+            return OpenAIRoutes.errorJSON(.badRequest, err.description)
+        } catch {
+            return OpenAIRoutes.errorJSON(.badRequest, "invalid request: \(error)")
+        }
+        await engine.wakeFromStandby()
+        let upstream = await engine.stream(request: chatReq)
+
+        if isStream {
+            var headers: HTTPFields = [:]
+            headers[.contentType] = "text/event-stream; charset=utf-8"
+            headers[.cacheControl] = "no-cache"
+            // Iter 143 — surface cache_control honoring so SDKs can
+            // verify vMLX is acting on the hint. Updated from the
+            // earlier "Ignored" header — vMLX now extracts the marked
+            // prefix and routes it through the longest-prefix cache.
+            if hasCacheControl,
+               let name = HTTPField.Name("X-vMLX-Cache-Control-Honored")
+            {
+                headers[name] = "true; \(cacheControlInfo.markerCount) marker(s), \(cacheControlInfo.prefixChars) chars cached via prefix-match"
+            }
+            return Response(
+                status: .ok,
+                headers: headers,
+                body: Self.streamingBody(model: model, upstream: upstream)
             )
         }
+
+        var thinking = ""
+        var content = ""
+        var toolCalls: [ChatRequest.ToolCall] = []
+        var usage: StreamChunk.Usage? = nil
+        var finishReason: String? = nil
+        do {
+            for try await chunk in upstream {
+                if let r = chunk.reasoning { thinking += r }
+                if let c = chunk.content { content += c }
+                if let tcs = chunk.toolCalls { toolCalls.append(contentsOf: tcs) }
+                if let u = chunk.usage { usage = u }
+                if let fr = chunk.finishReason { finishReason = fr }
+            }
+        } catch let err as EngineError {
+            return OpenAIRoutes.mapEngineError(err)
+        } catch {
+            return OpenAIRoutes.errorJSON(.internalServerError, "\(error)")
+        }
+        var blocks: [[String: Any]] = []
+        if !thinking.isEmpty {
+            blocks.append([
+                "type": "thinking",
+                "thinking": thinking,
+            ] as [String: Any])
+        }
+        if !content.isEmpty || (blocks.isEmpty && toolCalls.isEmpty) {
+            blocks.append([
+                "type": "text",
+                "text": content,
+            ] as [String: Any])
+        }
+        for tc in toolCalls {
+            let argsData = tc.function.arguments.data(using: .utf8) ?? Data("{}".utf8)
+            let input = (try? JSONSerialization.jsonObject(with: argsData))
+                as? [String: Any] ?? [:]
+            blocks.append([
+                "type": "tool_use",
+                "id": tc.id,
+                "name": tc.function.name,
+                "input": input,
+            ] as [String: Any])
+        }
+        let obj: [String: Any] = [
+            "id": "msg_\(UUID().uuidString.prefix(12).lowercased())",
+            "type": "message",
+            "role": "assistant",
+            "content": blocks,
+            "model": model,
+            "stop_reason": Self.mapStopReason(finishReason),
+            "usage": Self.usageEnvelope(usage),
+        ]
+        // Iter 143 — surface cache_control drop on non-stream too.
+        // SDKs that don't stream (Claude Desktop's first-paint synchronous
+        // probe, claude-cli's `--output text`) must see this signal.
+        if hasCacheControl {
+            return Self.jsonWithCacheControlWarn(obj)
+        }
+        return OpenAIRoutes.json(obj)
+    }
+
+    /// Iter 143 — JSON response wrapped with the
+    /// `X-vMLX-Cache-Control-Honored` header so SDKs verify vMLX
+    /// is acting on the cache_control hint via its prefix cache.
+    static func jsonWithCacheControlWarn(_ obj: [String: Any]) -> Response {
+        let data = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8)
+        var buf = ByteBuffer()
+        buf.writeBytes(data)
+        var headers: HTTPFields = [.contentType: "application/json"]
+        if let name = HTTPField.Name("X-vMLX-Cache-Control-Honored") {
+            headers[name] = "true; cached via longest-prefix match"
+        }
+        return Response(
+            status: .ok,
+            headers: headers,
+            body: .init(byteBuffer: buf)
+        )
+    }
+
+    /// Iter 143 — walk the Anthropic body for cache_control markers
+    /// and report (count, total prefix chars). Called when we detect
+    /// any marker so the response header can quantify what's being
+    /// cached. The "prefix chars" is the cumulative text length of
+    /// every text block AT OR BEFORE a marker — that's the implicit
+    /// cache-up-to-here boundary in Anthropic's contract.
+    static func cacheControlPrefixInfo(in body: [String: Any]) -> (markerCount: Int, prefixChars: Int) {
+        var count = 0
+        var chars = 0
+        // System blocks (array form). Each text block contributes its
+        // text length; the cache_control marker on a block claims
+        // "everything up to and including this block is stable".
+        if let sys = body["system"] as? [[String: Any]] {
+            var runningChars = 0
+            for block in sys {
+                if let t = block["text"] as? String {
+                    runningChars += t.count
+                }
+                if block["cache_control"] != nil {
+                    count += 1
+                    chars = max(chars, runningChars)
+                }
+            }
+        }
+        // Messages content blocks.
+        if let msgs = body["messages"] as? [[String: Any]] {
+            var runningChars = chars  // continue from system
+            for m in msgs {
+                if let parts = m["content"] as? [[String: Any]] {
+                    for p in parts {
+                        if let t = p["text"] as? String {
+                            runningChars += t.count
+                        }
+                        if p["cache_control"] != nil {
+                            count += 1
+                            chars = max(chars, runningChars)
+                        }
+                    }
+                }
+            }
+        }
+        // Tools may carry cache_control on the spec.
+        if let tools = body["tools"] as? [[String: Any]] {
+            for t in tools where t["cache_control"] != nil {
+                count += 1
+                // Tool spec text contributes a few hundred chars
+                // typically; estimate via JSON-encoded length.
+                if let data = try? JSONSerialization.data(withJSONObject: t),
+                   let s = String(data: data, encoding: .utf8) {
+                    chars += s.count
+                }
+            }
+        }
+        return (markerCount: count, prefixChars: chars)
+    }
+
+    /// Iter 143 — walk the Anthropic body for any `cache_control`
+    /// markers in `system`/`messages`/`tools` content blocks. Returns
+    /// true on the first hit so we don't pay for a full traversal on
+    /// the 99% of requests that don't use prompt caching.
+    static func detectCacheControl(in body: [String: Any]) -> Bool {
+        // System blocks (array form). String form has no markers.
+        if let sys = body["system"] as? [[String: Any]] {
+            for block in sys where block["cache_control"] != nil { return true }
+        }
+        // Messages → content arrays.
+        if let msgs = body["messages"] as? [[String: Any]] {
+            for m in msgs {
+                if let parts = m["content"] as? [[String: Any]] {
+                    for p in parts where p["cache_control"] != nil { return true }
+                }
+            }
+        }
+        // Tools may carry cache_control on the spec.
+        if let tools = body["tools"] as? [[String: Any]] {
+            for t in tools where t["cache_control"] != nil { return true }
+        }
+        return false
     }
 
     static func streamingBody(
@@ -793,7 +942,7 @@ public enum AnthropicRoutes {
             else if budget > 0 { effort = "low" }
         }
 
-        return ChatRequest(
+        var chatReq = ChatRequest(
             model: (body["model"] as? String) ?? "default",
             messages: messages,
             stream: body["stream"] as? Bool,
@@ -812,5 +961,15 @@ public enum AnthropicRoutes {
             includeReasoning: body["include_reasoning"] as? Bool,
             thinkingBudget: budgetTokens
         )
+        // 2026-05-01 — `chat_template_kwargs` extension for Anthropic
+        // /v1/messages. Anthropic clients hitting Mistral 3.5 / Qwen3
+        // models via vMLX may pass extra Jinja vars through this
+        // OpenAI-shaped extension field; without this forward, those
+        // vars get dropped on Anthropic-shaped requests but propagate
+        // on /v1/chat/completions — confusing behavioral asymmetry.
+        if let kwargs = body["chat_template_kwargs"] as? [String: Any] {
+            chatReq.chatTemplateKwargs = decodeChatTemplateKwargs(kwargs)
+        }
+        return chatReq
     }
 }

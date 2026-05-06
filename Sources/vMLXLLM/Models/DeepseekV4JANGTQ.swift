@@ -57,6 +57,17 @@ import MLX
 import MLXNN
 import vMLXLMCommon
 
+private func _dsv4RuntimeDiagnosticsEnabled() -> Bool {
+    let env = ProcessInfo.processInfo.environment
+    return env["DSV4_DIAG"] == "1" || env["DSV4_DUMP_LOGITS"] == "1"
+}
+
+private func _dsv4WriteStderr(_ message: String) {
+    if let data = message.data(using: .utf8) {
+        try? FileHandle.standardError.write(contentsOf: data)
+    }
+}
+
 // MARK: - Compiled hot-path fixtures (Phase S1 speedup, 2026-04-24)
 //
 // Each fixture is a `compile(shapeless: true)` wrapper around a small
@@ -114,10 +125,6 @@ nonisolated(unsafe) private let _dsv4CompiledHyperHeadArr: ([MLXArray]) -> [MLXA
         return [(expandedDimensions(pre, axis: -1) * xF32).sum(axis: 2)]
     }
     // TEMP DISABLE COMPILE 2026-04-25: shape-cache bug
-    return body
-    if HardwareInfo.isCompiledDecodeSupported {
-        return compile(shapeless: true, body)
-    }
     return body
 }()
 private func _dsv4CompiledHyperHead(
@@ -291,7 +298,7 @@ private let _dsv4HcSplitSinkhornKernelSource: String = """
 /// Lazy-init handle to the fused mHC Sinkhorn Metal kernel. Set to `nil`
 /// when GPU isn't available (Swift tests on Linux, etc.); falls back to
 /// the ops path in that case.
-nonisolated(unsafe) private let _dsv4HcSplitSinkhornKernel: MLXFast.MLXFastKernel = {
+private let _dsv4HcSplitSinkhornKernel: MLXFast.MLXFastKernel = {
     return MLXFast.metalKernel(
         name: "deepseek_v4_hc_split_sinkhorn",
         inputNames: ["mixes", "scale", "base", "eps"],
@@ -374,6 +381,11 @@ public struct DeepseekV4JANGTQConfiguration: Codable, Sendable {
     public var indexHeadDim: Int = 128
     public var indexTopk: Int = 512
     public var jangtqRoutedBits: Int = 2
+    /// Optional per-layer routed expert bit plan for mixed DSV4 JANGTQ
+    /// bundles. The scalar `routed_expert_bits` remains the fallback for
+    /// uniform bundles, but real JANGTQ2-family bundles can protect a
+    /// handful of layers at 4-bit while most experts stay 2-bit.
+    public var jangtqRoutedBitsByLayer: [Int: Int] = [:]
     public var jangtqGroupSize: Int = 64
     public var jangtqSeed: Int = 42
 
@@ -404,6 +416,10 @@ public struct DeepseekV4JANGTQConfiguration: Codable, Sendable {
         // Reference pattern: i = layerIdx - 1; ratio = 4 if i%2 else 128
         let i = layerIdx - 1
         return i % 2 == 1 ? 4 : 128
+    }
+
+    public func routedExpertBits(forLayer layerIdx: Int) -> Int {
+        jangtqRoutedBitsByLayer[layerIdx] ?? jangtqRoutedBits
     }
 
     enum CodingKeys: String, CodingKey {
@@ -443,6 +459,7 @@ public struct DeepseekV4JANGTQConfiguration: Codable, Sendable {
         case indexHeadDim = "index_head_dim"
         case indexTopk = "index_topk"
         case jangtqRoutedBits = "routed_expert_bits"
+        case jangtqRoutedBitsByLayer = "routed_expert_bits_by_layer"
         case jangtqGroupSize = "group_size"
         case jangtqSeed = "mxtq_seed"
         case quantization
@@ -540,6 +557,20 @@ public struct DeepseekV4JANGTQConfiguration: Codable, Sendable {
         self.indexHeadDim = try opt(.indexHeadDim, 128)
         self.indexTopk = try opt(.indexTopk, 512)
         self.jangtqRoutedBits = try opt(.jangtqRoutedBits, 2)
+        if let byLayer = try c.decodeIfPresent(
+            [String: Int].self,
+            forKey: .jangtqRoutedBitsByLayer
+        ) {
+            var mapped: [Int: Int] = [:]
+            for (layer, bits) in byLayer {
+                if let i = Int(layer), bits > 0 {
+                    mapped[i] = bits
+                }
+            }
+            self.jangtqRoutedBitsByLayer = mapped
+        } else {
+            self.jangtqRoutedBitsByLayer = [:]
+        }
         self.jangtqGroupSize = try opt(.jangtqGroupSize, 64)
         self.jangtqSeed = try opt(.jangtqSeed, 42)
         self.quantization = try c.decodeIfPresent(HFQuant.self, forKey: .quantization)
@@ -551,18 +582,23 @@ public struct DeepseekV4JANGTQConfiguration: Codable, Sendable {
 /// hc_split_sinkhorn — produces (pre, post, comb) from input `mixes`.
 /// Math mirrors Python `_hc_split_sinkhorn_ops` in mlx_model.py.
 ///
-/// Fast path: when env `DSV4_DISABLE_HC_KERNEL` is NOT set, dispatches to
-/// the fused Metal kernel (`_dsv4HcSplitSinkhornFused`) which collapses
-/// the entire pre/post/comb compute + 20 Sinkhorn iterations into ONE GPU
-/// kernel launch. Mirrors Python's PR #1192 optimization.
+/// Production path: default to the pure MLX ops implementation.
 ///
-/// Slow path: falls back to MLX ops when the env-flag is set OR when the
-/// kernel hasn't been initialized (e.g. CPU-only test envs).
+/// 2026-05-03 live Swift verification isolated the fused Metal kernel as
+/// numerically bad on DSV4-Flash-JANGTQ: fresh-cache quick chat emitted
+/// `fr_text_text...`, while the same run with `DSV4_DISABLE_HC_KERNEL=1`
+/// answered `Paris` and the thinking check produced `17 + 28 = 45.`. Keep
+/// the fused kernel available only for explicit parity work via
+/// `DSV4_ENABLE_HC_KERNEL=1`; do not run it in production until its Sinkhorn
+/// math is cross-runtime verified.
 func hcSplitSinkhorn(
     mixes: MLXArray, scale: MLXArray, base: MLXArray,
     hcMult: Int, iters: Int, eps: Float
 ) -> (pre: MLXArray, post: MLXArray, comb: MLXArray) {
-    let useKernel = ProcessInfo.processInfo.environment["DSV4_DISABLE_HC_KERNEL"] != "1"
+    let env = ProcessInfo.processInfo.environment
+    let useKernel =
+        env["DSV4_ENABLE_HC_KERNEL"] == "1"
+        && env["DSV4_DISABLE_HC_KERNEL"] != "1"
     if useKernel {
         // Build (or reuse cached) eps array if eps != default 1e-6.
         let epsArr: MLXArray
@@ -583,7 +619,7 @@ func hcSplitSinkhorn(
 }
 
 /// Pure-ops fallback (the original implementation). Used when the fused
-/// Metal kernel is disabled via `DSV4_DISABLE_HC_KERNEL=1`.
+/// Metal kernel is not explicitly enabled via `DSV4_ENABLE_HC_KERNEL=1`.
 private func _hcSplitSinkhornOps(
     mixes: MLXArray, scale: MLXArray, base: MLXArray,
     hcMult: Int, iters: Int, eps: Float
@@ -894,15 +930,18 @@ final class DeepseekV4MoE: Module, UnaryLayer {
         self.config = config
         self.layerIdx = layerIdx
         self.gate = DSV4MoEGate(config: config, layerIdx: layerIdx)
-        // §395 — JANGTQ-quantized routed experts. Bundle ships
+        // §395 + §421d — JANGTQ-quantized routed experts. Bundle ships
         // `tq_bits/tq_norms/tq_packed` per expert; loading those into a
         // vanilla `SwitchGLU` would error with `unhandledKeys`. The
         // TurboQuantSwitchGLU sibling expects exactly that triad and
         // runs the fused gate+up+SwiGLU through the JANGTQ Metal
-        // kernels. Bits + seed flow from config (resolved by
-        // `resolveQuantOverrides()` from nested HF `quantization` block
-        // when JANG-named keys are absent). Mirrors MiniMaxJANGTQ
-        // pattern in MiniMaxJANGTQ.swift:148-154.
+        // kernels. Bits + seed flow from config. For uniform bundles
+        // `routed_expert_bits` is enough; DSV4 JANGTQ2-family mixed
+        // bundles additionally inject `routed_expert_bits_by_layer`
+        // from safetensors headers before model construction so layers
+        // 0/1/2/37/39 can run at 4-bit while the rest stay 2-bit.
+        // Mirrors MiniMaxJANGTQ pattern but with DSV4's per-layer
+        // override because one scalar bit width is not expressive enough.
         //
         // §426 — DSV4 trains routed experts with `silu(min(gate, 10))
         // * clip(up, ±10)` (LimitedSwiGLU). Earlier this comment said
@@ -912,16 +951,17 @@ final class DeepseekV4MoE: Module, UnaryLayer {
         // jang/research/DSV4-FLASH-MMLU-2026-04-26-DAY-LOG.md (§441)
         // measured a +4.5 pp MMLU jump after baking the clamp into
         // the same kernel. Mirror that fix here by forwarding
-        // `swigluLimit: 10` → `meta[5]` → in-kernel clamp branch.
+        // `swigluLimit: 10.0` → `meta[5] = 10000` → in-kernel clamp branch.
         // Other JANGTQ models leave swigluLimit=0 → kernel skips
         // clamp → byte-identical output to pre-§426.
+        let routedBits = config.routedExpertBits(forLayer: layerIdx)
         self._switchMLP.wrappedValue = TurboQuantSwitchGLU(
             inputDims: config.hiddenSize,
             hiddenDims: config.moeIntermediateSize,
             numExperts: config.nRoutedExperts,
-            bits: config.jangtqRoutedBits,
+            bits: routedBits,
             seed: config.jangtqSeed,
-            swigluLimit: Int(config.swigluLimit)
+            swigluLimit: config.swigluLimit
         )
         self._sharedExperts.wrappedValue = DeepseekV4MLP(
             config: config,
@@ -930,20 +970,17 @@ final class DeepseekV4MoE: Module, UnaryLayer {
         super.init()
     }
 
-    // Stand-in: vMLX SwitchGLU doesn't currently accept LimitedSwiGLU activation.
-    // See TODO above. For now, the default SwiGLU runs (no clamp) — potentially
-    // unstable for deep MoE stacks on DSV4. Swift port needs custom SwitchGLU
-    // that wires LimitedSwiGLU activation, OR post-process routed outputs.
     func callAsFunction(_ x: MLXArray) -> MLXArray {
         fatalError("call with inputIds — use .forward(x, inputIds:) directly")
     }
 
     func forward(_ x: MLXArray, inputIds: MLXArray) -> MLXArray {
         let (inds, scores) = gate(x, inputIds: inputIds)
-        var yRouted = switchMLP(x, inds)
+        JangPressRouteTelemetry.recordTopK(layer: layerIdx, indices: inds)
+        let yRouted = switchMLP(x, inds)
         // BUG3 DIAG: trace MoE internals
         if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" && layerIdx == 0 {
-            nonisolated(unsafe) struct _GM { static var fired = false }
+            nonisolated struct _GM { static var fired = false }
             if !_GM.fired {
                 _GM.fired = true
                 let lastIdx = x.dim(1) - 1
@@ -952,21 +989,23 @@ final class DeepseekV4MoE: Module, UnaryLayer {
                 let scoresV = scores[0..<1, lastIdx..<(lastIdx+1), 0..<scores.dim(2)].asType(.float32).flattened().asArray(Float.self)
                 let yRV = yRouted[0..<1, lastIdx..<(lastIdx+1), 0..<yRouted.dim(2), 0..<8].asType(.float32).flattened().asArray(Float.self)
                 let yRn = sqrt((yRouted.asType(.float32) * yRouted.asType(.float32)).sum()).item(Float.self)
-                var msg = "[BUG3-MOE] x[0,L-1,:8]=\(xV)\n[BUG3-MOE] inds=\(indsV) scores=\(scoresV)\n[BUG3-MOE] yRouted shape=\(yRouted.shape) full_norm=\(yRn) per-K[:8]=\(yRV)\n"
+                let msg = "[BUG3-MOE] x[0,L-1,:8]=\(xV)\n[BUG3-MOE] inds=\(indsV) scores=\(scoresV)\n[BUG3-MOE] yRouted shape=\(yRouted.shape) full_norm=\(yRn) per-K[:8]=\(yRV)\n"
                 if let d = msg.data(using: .utf8) { try? FileHandle.standardError.write(contentsOf: d) }
             }
         }
-        // ── Bug 3 fix attempt (2026-04-25): Python `_DSV4SwiGLU` clamps
-        // gate to [-∞, swiglu_limit] and up to [-swiglu_limit, swiglu_limit]
-        // BEFORE silu*up. Swift's TurboQuantSwitchGLU bakes plain SwiGLU
-        // without clamps. We can't easily inject the clamp inside the
-        // fused Metal kernel, so post-apply a symmetric clamp on the
-        // fused output. Not bit-exact to Python but bounds extreme
-        // values that could produce wrong-sign logits over 43 layers.
-        if config.swigluLimit > 0 {
-            let lim = MLXArray(config.swigluLimit * config.swigluLimit)
-            yRouted = MLX.clip(yRouted, min: -lim, max: lim)
-        }
+        // §441 / §426 — do not post-clamp the down-projection output.
+        // DSV4's limited SwiGLU clamp belongs inside the gate/up
+        // activation:
+        //
+        //   gate = min(gate, limit)
+        //   up   = clip(up, -limit, limit)
+        //   act  = silu(gate) * up
+        //
+        // `TurboQuantSwitchGLU` now forwards `swigluLimit` into the
+        // fused gate/up Metal kernel, so the routed down projection sees
+        // the already-limited activation. A prior Swift workaround clipped
+        // `yRouted` after down_proj to ±limit²; that is not source math and
+        // can collapse DSV4 logits. Keep the output linear here.
         // §404 — fp32 accumulator on the routed-expert weighted sum.
         //
         // Without the fp32 cast each expert contribution is summed in
@@ -987,7 +1026,7 @@ final class DeepseekV4MoE: Module, UnaryLayer {
             .sum(axis: -2)
         let sharedOut = sharedExperts(x).asType(.float32)
         if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" && layerIdx == 0 {
-            nonisolated(unsafe) struct _GM2 { static var fired = false }
+            nonisolated struct _GM2 { static var fired = false }
             if !_GM2.fired {
                 _GM2.fired = true
                 let lastIdx = yF32.dim(1) - 1
@@ -1023,12 +1062,17 @@ public enum DSV4PoolBranch {
     case indexer
 }
 
-public final class DSV4LayerCache: KVCache, CustomDebugStringConvertible {
+public final class DSV4LayerCache: HybridPoolCache, CustomDebugStringConvertible {
     public let local: RotatingKVCache
+    public var rotating: RotatingKVCache { local }
+    public let slidingWindow: Int
+    public let compressRatio: Int
     public var compressorState = DSV4PoolState()
     public var indexerState = DSV4PoolState()
 
-    public init(slidingWindow: Int, keep: Int = 0, step: Int = 256) {
+    public init(slidingWindow: Int, compressRatio: Int = 1, keep: Int = 0, step: Int = 256) {
+        self.slidingWindow = slidingWindow
+        self.compressRatio = max(1, compressRatio)
         self.local = RotatingKVCache(maxSize: slidingWindow, keep: keep, step: step)
     }
 
@@ -1050,18 +1094,35 @@ public final class DSV4LayerCache: KVCache, CustomDebugStringConvertible {
     }
     public func innerState() -> [MLXArray] { local.innerState() }
     @discardableResult
-    public func trim(_ n: Int) -> Int { local.trim(n) }
+    public func trim(_ n: Int) -> Int {
+        let trimmed = local.trim(n)
+        // DSV4 long-context pools are position-keyed. Any local trim
+        // invalidates incomplete raw windows; pooled rows overlapping the
+        // trimmed suffix must be dropped proportionally to the layer's
+        // compress ratio, mirroring jang-tools DeepseekV4Cache.trim().
+        compressorState.bufferKv = nil
+        compressorState.bufferGate = nil
+        indexerState.bufferKv = nil
+        indexerState.bufferGate = nil
+        guard n > 0 else { return trimmed }
+        let rowsToDrop = max(1, n / max(1, compressRatio))
+        compressorState.pooled = Self.trimTrailingPoolRows(
+            compressorState.pooled, drop: rowsToDrop)
+        indexerState.pooled = Self.trimTrailingPoolRows(
+            indexerState.pooled, drop: rowsToDrop)
+        return trimmed
+    }
     public func makeMask(
         n: Int, windowSize: Int?, returnArray: Bool
     ) -> MLXFast.ScaledDotProductAttentionMaskMode {
         return local.makeMask(n: n, windowSize: windowSize, returnArray: returnArray)
     }
     public func copy() -> any KVCache {
-        // Pool state not deep-copied — DSV4 long-context decode does not
-        // currently exercise prompt-cache reuse; if it ever does, port
-        // Python's DeepseekV4Cache.copy().
+        // Copy the local rotating ring plus the CSA/HSA pool state so any
+        // future cache snapshots keep DSV4 long-context history intact.
         let c = DSV4LayerCache(
             slidingWindow: local.maxSize ?? 128,
+            compressRatio: compressRatio,
             keep: 0, step: 256
         )
         c.state = self.state
@@ -1075,6 +1136,51 @@ public final class DSV4LayerCache: KVCache, CustomDebugStringConvertible {
         "DSV4LayerCache(window=\(local.maxSize ?? -1), offset=\(offset), "
             + "comp.pooled=\(compressorState.pooled?.dim(1) ?? 0), "
             + "idx.pooled=\(indexerState.pooled?.dim(1) ?? 0))"
+    }
+
+    private static func trimTrailingPoolRows(_ pool: MLXArray?, drop: Int) -> MLXArray? {
+        guard let pool else { return nil }
+        let rows = pool.dim(1)
+        let keep = max(0, rows - drop)
+        if keep == 0 { return nil }
+        if keep < rows {
+            return pool[0..., 0..<keep, 0...]
+        }
+        return pool
+    }
+
+    public func hybridPool(branch: HybridPoolBranch) -> MLXArray? {
+        switch branch {
+        case .compressor: return compressorState.pooled
+        case .indexer: return indexerState.pooled
+        }
+    }
+
+    public func setHybridPool(branch: HybridPoolBranch, value: MLXArray?) {
+        switch branch {
+        case .compressor: compressorState.pooled = value
+        case .indexer: indexerState.pooled = value
+        }
+    }
+
+    public func hybridBuffers(branch: HybridPoolBranch) -> (kv: MLXArray?, gate: MLXArray?) {
+        switch branch {
+        case .compressor:
+            return (compressorState.bufferKv, compressorState.bufferGate)
+        case .indexer:
+            return (indexerState.bufferKv, indexerState.bufferGate)
+        }
+    }
+
+    public func setHybridBuffers(branch: HybridPoolBranch, kv: MLXArray?, gate: MLXArray?) {
+        switch branch {
+        case .compressor:
+            compressorState.bufferKv = kv
+            compressorState.bufferGate = gate
+        case .indexer:
+            indexerState.bufferKv = kv
+            indexerState.bufferGate = gate
+        }
     }
 
     private func readState(_ branch: DSV4PoolBranch) -> DSV4PoolState {
@@ -1621,21 +1727,17 @@ final class DeepseekV4Attention: Module {
         // rsqrt → multiply, then cast back to original dtype, makes
         // the rescale numerically equivalent to Python's
         // `_dsv4_per_head_rms_fp32` and stops the drift.
-        // DIAG (2026-04-25): trace V4Attention.callAsFunction shapes at decode time
-        do {
+        // DSV4_DIAG=1 keeps shape tracing available without burning
+        // production decode time on stderr writes.
+        if _dsv4RuntimeDiagnosticsEnabled() {
             let msg = "[v4attn-diag layer=\(layerIdx)] x.shape=\(x.shape) B=\(B) L=\(L) cache.offset=\(cache?.offset ?? -1)\n"
-            if let data = msg.data(using: .utf8) {
-                try? FileHandle.standardError.write(contentsOf: data)
-            }
+            _dsv4WriteStderr(msg)
         }
         let qResidual = qNorm(wqA(x))
-        // DIAG: q reshape
-        do {
+        if _dsv4RuntimeDiagnosticsEnabled() {
             let qBefore = wqB(qResidual)
             let msg = "[v4attn-diag layer=\(layerIdx)] qResidual.shape=\(qResidual.shape) wqB(qResidual).shape=\(qBefore.shape) target_q=(\(B),\(L),\(nHeads),\(headDim)) elements=\(B*L*nHeads*headDim) wkv_in_dim=\(hiddenSize)\n"
-            if let data = msg.data(using: .utf8) {
-                try? FileHandle.standardError.write(contentsOf: data)
-            }
+            _dsv4WriteStderr(msg)
         }
         var q = wqB(qResidual).reshaped(B, L, nHeads, headDim)
         let qDtype = q.dtype
@@ -1680,10 +1782,31 @@ final class DeepseekV4Attention: Module {
         //       - else (prefill or non-indexer layer) → bool visibility mask
         //         AND'd with indexer-selected (when present) and concatenated
         //         to the window mask before SDPA.
-        // Engaged when `VMLX_DSV4_LONG_CTX=1`.
+        // 2026-05-01 Python parity: default-on per
+        // `~/jang/research/experiments/dsv4-mmlu-200q-2026-05-01/`.
+        //
+        // **Locked-in MMLU 200q numbers** (M4 Max, same bundle / test /
+        // extractor across runs — earlier 30q/76.7 % numbers were
+        // tainted by a stale extractor + smaller budget):
+        //
+        //     run                         LONG_CTX   MMLU 200q
+        //     ──────────────────────────  ─────────  ──────────
+        //     Published HF baseline       0 (old)    69.5 %
+        //     Today LC=0 (extractor v2)   0          74.5 %
+        //     Today LC=1 (default ON)     1          81.5 %
+        //
+        // **+12 pp vs published, +7 pp vs LC=0** — that 7 pp is the
+        // architecture-only contribution from letting HSA + CSA run
+        // (Compressor + Indexer pipeline) instead of bypassing to
+        // plain KVCache. Same architectural change applies to Swift.
+        //
+        // Killswitch: `VMLX_DSV4_LONG_CTX=0` reverts to the prior
+        // plain-KV path for debugging or A/B; default engages the
+        // Compressor + Indexer pipeline.
         let v4Cache = cache as? DSV4LayerCache
         var sdpaMask = mask
-        let useLongCtx = ProcessInfo.processInfo.environment["VMLX_DSV4_LONG_CTX"] == "1"
+        let useLongCtx =
+            ProcessInfo.processInfo.environment["VMLX_DSV4_LONG_CTX"] != "0"
         if compressRatio > 0 && useLongCtx, let comp = compressor {
             let pooled = comp(x, rope: self.rope, startPos: offset,
                               cache: v4Cache, branch: .compressor)
@@ -1746,7 +1869,11 @@ final class DeepseekV4Attention: Module {
         // `attnSink: (n_heads=64,)` which (a) has the wrong shape and
         // (b) injects spurious per-head bias into SDPA logits → garbage
         // tokens. Removing sinks restores parity with Python.
-        var out = MLXFast.scaledDotProductAttention(
+        // Iter 143 — MLA fp32 SDPA cast on L==1 (decode step). DSV4
+        // inherits DSV3's compressed-latent KV scheme; same bf16
+        // drift class. mlaScaledDotProductAttention is a no-op on
+        // L>1 (prefill) so no perf regression.
+        var out = mlaScaledDotProductAttention(
             queries: q,
             keys: keys,
             values: values,
@@ -1797,7 +1924,7 @@ final class DeepseekV4Attention: Module {
 
         if let qWoA = woA as? QuantizedLinear {
             // Per reference DeepseekV4.swift:333-345 — the per-group
-            // batched quantizedMatmul requires a singleton dim between
+            // batched quantizedMM requires a singleton dim between
             // G and OUT on the weight side so the kernel's batch broadcast
             // resolves (G, B, L, gf) × (G, 1, OUT, in_packed) →
             // (G, B, L, OUT). Without the `.expandedDimensions(axis: 1)`
@@ -1810,7 +1937,7 @@ final class DeepseekV4Attention: Module {
                 .expandedDimensions(axis: 1)
             let wBiases = qWoA.biases?.reshaped(oGroups, oLoraRank, -1)
                 .expandedDimensions(axis: 1)
-            let outQ = MLX.quantizedMatmul(
+            let outQ = MLX.quantizedMM(
                 xT, wPacked, scales: wScales, biases: wBiases,
                 transpose: true,
                 groupSize: qWoA.groupSize, bits: qWoA.bits,
@@ -1887,13 +2014,15 @@ final class DeepseekV4DecoderLayer: Module {
     ) -> (collapsed: MLXArray, post: MLXArray, comb: MLXArray) {
         let (B, L, H, D) = (h.dim(0), h.dim(1), h.dim(2), h.dim(3))
         // DIAG (2026-04-25): trace shape on first 5 calls (covers prefill +
-        // first decode hcCollapse calls, both ATTN and FFN HC).
-        if DeepseekV4DecoderLayer._hcCollapseTraceCount < 5 {
+        // first decode hcCollapse calls, both ATTN and FFN HC). Must stay
+        // env-gated; DSV4's hot path calls this every layer and production
+        // stderr logging was visible during live model verification.
+        if _dsv4RuntimeDiagnosticsEnabled()
+            && DeepseekV4DecoderLayer._hcCollapseTraceCount < 5
+        {
             DeepseekV4DecoderLayer._hcCollapseTraceCount += 1
             let msg = "[hcCollapse-diag #\(DeepseekV4DecoderLayer._hcCollapseTraceCount)] h.shape=\(h.shape) expected (B, L, \(config.hcMult), \(config.hiddenSize)) fn.shape=\(fn.shape)\n"
-            if let data = msg.data(using: .utf8) {
-                try? FileHandle.standardError.write(contentsOf: data)
-            }
+            _dsv4WriteStderr(msg)
         }
         // ── DO NOT REMOVE THE `.asType(.float32)` BELOW ──────────────────────
         // The `flat` tensor has shape (B, L, hc_mult * hidden) = (B, L, 16384)
@@ -1914,7 +2043,7 @@ final class DeepseekV4DecoderLayer: Module {
         )
         // BUG3 DIAG: dump first call's pre/post/comb at last position
         if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" {
-            nonisolated(unsafe) struct _G4 { static var fired = false }
+            nonisolated struct _G4 { static var fired = false }
             if !_G4.fired {
                 _G4.fired = true
                 let lastIdx = L - 1
@@ -1956,15 +2085,12 @@ final class DeepseekV4DecoderLayer: Module {
         cache: KVCache?,
         inputIds: MLXArray
     ) -> MLXArray {
-        // DIAG (2026-04-25): trace decoder layer entry, especially during decode
-        if DeepseekV4DecoderLayer._layerCallCount < 50 || DeepseekV4DecoderLayer._layerCallCount % 43 == 0 {
-            DeepseekV4DecoderLayer._layerCallCount += 1
+        DeepseekV4DecoderLayer._layerCallCount += 1
+        let layerIdxLocal = DeepseekV4DecoderLayer._layerCallCount  // approximate
+        let diagEnabled = _dsv4RuntimeDiagnosticsEnabled()
+        if diagEnabled && (layerIdxLocal <= 50 || layerIdxLocal % 43 == 0) {
             let msg = "[layer-call #\(DeepseekV4DecoderLayer._layerCallCount)] h.shape=\(h.shape) inputIds.shape=\(inputIds.shape) cache.offset=\(cache?.offset ?? -1)\n"
-            if let data = msg.data(using: .utf8) {
-                try? FileHandle.standardError.write(contentsOf: data)
-            }
-        } else {
-            DeepseekV4DecoderLayer._layerCallCount += 1
+            _dsv4WriteStderr(msg)
         }
         // ATTN HC
         var residual = h
@@ -1973,7 +2099,6 @@ final class DeepseekV4DecoderLayer: Module {
         )
         x = inputLayerNorm(x)
         // BUG3 DIAG: dump pre-attn collapsed input
-        let layerIdxLocal = DeepseekV4DecoderLayer._layerCallCount  // approximate
         if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" && layerIdxLocal <= 1 {
             let lastIdx = x.dim(1) - 1
             let v = x[0..<1, lastIdx..<(lastIdx+1), 0..<8].asType(.float32).flattened().asArray(Float.self)
@@ -2005,10 +2130,9 @@ final class DeepseekV4DecoderLayer: Module {
         (x, post, comb) = hcCollapse(
             hNew, fn: hcFfnFn, scale: hcFfnScale, base: hcFfnBase
         )
-        // DIAG: shape after FFN hcCollapse
-        if DeepseekV4DecoderLayer._layerCallCount <= 50 {
+        if diagEnabled && layerIdxLocal <= 50 {
             let s = "[layer-flow #\(DeepseekV4DecoderLayer._layerCallCount)] post-FFN-hcCollapse x.shape=\(x.shape) residual.shape=\(residual.shape)\n"
-            if let d = s.data(using: .utf8) { try? FileHandle.standardError.write(contentsOf: d) }
+            _dsv4WriteStderr(s)
         }
         if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" && layerIdxLocal <= 1 {
             let lastIdx = x.dim(1) - 1
@@ -2033,16 +2157,14 @@ final class DeepseekV4DecoderLayer: Module {
             let msg = "[BUG3-FFN] post-mlp x[0,L-1,:8]=\(v) shape=\(x.shape) full_norm=\(xn)\n"
             if let d = msg.data(using: .utf8) { try? FileHandle.standardError.write(contentsOf: d) }
         }
-        // DIAG: mlp output shape
-        if DeepseekV4DecoderLayer._layerCallCount <= 50 {
+        if diagEnabled && layerIdxLocal <= 50 {
             let s = "[layer-flow #\(DeepseekV4DecoderLayer._layerCallCount)] post-mlp x.shape=\(x.shape)\n"
-            if let d = s.data(using: .utf8) { try? FileHandle.standardError.write(contentsOf: d) }
+            _dsv4WriteStderr(s)
         }
         hNew = hcExpand(blockOut: x, residual: residual, post: post, comb: comb)
-        // DIAG: final return shape
-        if DeepseekV4DecoderLayer._layerCallCount <= 50 {
+        if diagEnabled && layerIdxLocal <= 50 {
             let s = "[layer-flow #\(DeepseekV4DecoderLayer._layerCallCount)] return hNew.shape=\(hNew.shape)\n"
-            if let d = s.data(using: .utf8) { try? FileHandle.standardError.write(contentsOf: d) }
+            _dsv4WriteStderr(s)
         }
 
         return hNew
@@ -2080,16 +2202,13 @@ public class DeepseekV4JANGTQModelInner: Module {
     func callAsFunction(_ inputIds: MLXArray, cache: [KVCache]?) -> MLXArray {
         // Embed → tile to hc_mult copies
         let h0 = embed(inputIds)  // (B, L, hidden)
-        // DIAG (2026-04-25): trace first call's h0 shape
-        do {
+        if _dsv4RuntimeDiagnosticsEnabled() {
             let msg = "[forward-diag] inputIds.shape=\(inputIds.shape) h0.shape=\(h0.shape) hidden=\(config.hiddenSize) hcMult=\(config.hcMult)\n"
-            if let data = msg.data(using: .utf8) {
-                try? FileHandle.standardError.write(contentsOf: data)
-            }
+            _dsv4WriteStderr(msg)
         }
         // BUG3 DIAG: post-embed first-token first-8-elements
         if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" {
-            nonisolated(unsafe) struct _G2 { static var fired = false }
+            nonisolated struct _G2 { static var fired = false }
             if !_G2.fired {
                 _G2.fired = true
                 let v = h0[0..<1, 0..<1, 0..<8].asType(.float32).flattened().asArray(Float.self)
@@ -2111,7 +2230,7 @@ public class DeepseekV4JANGTQModelInner: Module {
             h = layer(h, mask: mask, cache: cache?[i], inputIds: inputIds)
             // BUG3 DIAG: dump first layer's output (h is (B, L, hcMult, hidden))
             if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" && i < 2 {
-                nonisolated(unsafe) struct _G3 { static var fired: [Int: Bool] = [:] }
+                nonisolated struct _G3 { static var fired: [Int: Bool] = [:] }
                 if _G3.fired[i] == nil {
                     _G3.fired[i] = true
                     let lastIdx = h.dim(1) - 1
@@ -2182,10 +2301,10 @@ public final class DeepseekV4JANGTQModel: Module, LLMModel, KVCacheDimensionProv
         model.layers
     }
 
-    /// §417 (2026-04-25) — Long-context cache override.
+    /// §417 (2026-04-25) + 2026-05-01 default-flip — Long-context cache.
     ///
-    /// When `VMLX_DSV4_LONG_CTX=1`, return per-layer caches sized to
-    /// match each layer's `compressRatio`:
+    /// Returns per-layer caches sized to match each layer's
+    /// `compressRatio`:
     ///   • `compressRatio == 0` → plain `RotatingKVCache(slidingWindow)`.
     ///     The layer never engages the long-context branch.
     ///   • `compressRatio > 0`  → `DSV4LayerCache(slidingWindow)` carrying
@@ -2193,10 +2312,15 @@ public final class DeepseekV4JANGTQModel: Module, LLMModel, KVCacheDimensionProv
     ///     calls, mirroring Python `Model.make_cache` at
     ///     `mlx_model.py:1542-1569`.
     ///
-    /// When the env-flag is unset, fall back to plain RotatingKVCache for
-    /// every layer so short-prompt decode is unchanged.
+    /// 2026-05-01: default-on. Python research
+    /// (`~/jang/research/dsv4/DSV4-COMPLETE-STATUS-2026-05-01.md`)
+    /// shipped the same flip and measured 60→76.7 % MMLU 30q on
+    /// JANGTQ — letting HSA + CSA actually run instead of bypassing
+    /// to plain KVCache. Killswitch: `VMLX_DSV4_LONG_CTX=0` reverts
+    /// to the prior plain-KV path for debugging.
     public func newCache(parameters: GenerateParameters?) -> [KVCache] {
-        let useLongCtx = ProcessInfo.processInfo.environment["VMLX_DSV4_LONG_CTX"] == "1"
+        let useLongCtx =
+            ProcessInfo.processInfo.environment["VMLX_DSV4_LONG_CTX"] != "0"
         let window = config.slidingWindow
         guard useLongCtx else {
             return (0..<config.numHiddenLayers).map { _ in
@@ -2209,7 +2333,7 @@ public final class DeepseekV4JANGTQModel: Module, LLMModel, KVCacheDimensionProv
         return (0..<config.numHiddenLayers).map { i in
             let r = config.effectiveCompressRatio(forLayer: i)
             if r > 0 {
-                return DSV4LayerCache(slidingWindow: window)
+                return DSV4LayerCache(slidingWindow: window, compressRatio: r)
             }
             return RotatingKVCache(maxSize: window, keep: 0)
         }
@@ -2223,7 +2347,7 @@ public final class DeepseekV4JANGTQModel: Module, LLMModel, KVCacheDimensionProv
         let logits = lmHead(h)
         // BUG3 DIAG: dump first call's exit logits + hidden state for cross-runtime compare
         if ProcessInfo.processInfo.environment["DSV4_DUMP_LOGITS"] == "1" {
-            nonisolated(unsafe) struct _G { static var fired = false }
+            nonisolated struct _G { static var fired = false }
             if !_G.fired {
                 _G.fired = true
                 // Hidden state: last position
@@ -2266,13 +2390,15 @@ public final class DeepseekV4JANGTQModel: Module, LLMModel, KVCacheDimensionProv
             if key.hasPrefix("mtp.") { continue }
             // Drop rotary inv_freq (recomputed from rope_theta)
             if key.contains("rotary_emb.inv_freq") { continue }
-            // §395 — DSV4-Flash JANGTQ ships per-expert `.tq_bits` (shape [1])
-            // alongside `tq_packed` + `tq_norms`. The bit count is already
-            // known from `config.jangtqRoutedBits` (resolved from nested
-            // `quantization.bits` if needed), so the per-tensor copy is
-            // redundant. TurboQuantSwitchLinear does NOT declare a
-            // `tq_bits` @ParameterInfo, so leaving it in the sanitized
-            // weights triggers `unhandledKeys`. Strip it here.
+            // §395 + §421d — DSV4-Flash JANGTQ ships per-expert
+            // `.tq_bits` (shape [1]) alongside `tq_packed` +
+            // `tq_norms`. TurboQuantSwitchLinear does NOT declare a
+            // `tq_bits` @ParameterInfo, so leaving it in sanitized
+            // weights triggers `unhandledKeys`. The information is not
+            // thrown away: LLMModelFactory peeks the safetensors headers
+            // before model construction and injects
+            // `routed_expert_bits_by_layer`, which is the only shape
+            // needed to pick the right codebook/stride per MoE layer.
             if key.hasSuffix(".tq_bits") { continue }
             // §415 (2026-04-25) — Indexer is now wired via @ModuleInfo on
             // `DeepseekV4Attention` (`compressRatio == 4` layers only).
@@ -2380,7 +2506,7 @@ public final class DeepseekV4JANGTQModel: Module, LLMModel, KVCacheDimensionProv
             guard perExpert.count == n else { continue }
             let ordered = (0..<n).compactMap { perExpert[$0] }
             guard ordered.count == n else { continue }
-            sanitized[stackKey] = MLX.stacked(ordered)
+            sanitized[stackKey] = loadTimeMaterializedStacked(ordered)
         }
 
         return sanitized
@@ -2464,7 +2590,7 @@ public class DSV4RoPE: Module, OffsetLayer, ArrayOffsetLayer {
                 func correctionDim(_ n: Float) -> Float {
                     return Float(dims) * log(orig / (n * 2 * .pi)) / (2 * log(base))
                 }
-                var low = max(floor(correctionDim(betaFast)), 0)
+                let low = max(floor(correctionDim(betaFast)), 0)
                 var high = min(ceil(correctionDim(betaSlow)), Float(dims - 1))
                 if low == high { high += 0.001 }
 

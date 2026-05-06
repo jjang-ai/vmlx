@@ -14,6 +14,11 @@ import MLX
 /// - Returns: An array of optional `(keys, values)` tuples, one per layer.
 public func extractLayerData(from cache: [any KVCache]) -> [(keys: MLXArray, values: MLXArray)?] {
     cache.map { layer in
+        if let compilable = layer as? CompilableKVCache {
+            let state = compilable.state
+            guard state.count == 2 else { return nil }
+            return (keys: state[0], values: state[1])
+        }
         if let simple = layer as? KVCacheSimple {
             let state = simple.state
             guard state.count == 2 else { return nil }
@@ -35,11 +40,25 @@ public func extractLayerData(from cache: [any KVCache]) -> [(keys: MLXArray, val
             guard state.count == 2 else { return nil }
             return (keys: state[0], values: state[1])
         }
+        if let rotating = layer as? RotatingKVCache {
+            // Non-wrapped SWA/rotating caches expose a normal temporal KV
+            // prefix through `state`. The block splitter below only keeps
+            // layers whose state covers the full stored prefix, so long
+            // prompts that have wrapped are safely skipped instead of
+            // serialized as corrupt partial context.
+            let state = rotating.state
+            guard state.count == 2 else { return nil }
+            return (keys: state[0], values: state[1])
+        }
         if let cacheList = layer as? CacheList {
             // CacheList: check sub-caches for KV data.
             // Sub-cache[0] is typically MambaCache, Sub-cache[1] is KVCacheSimple.
             // We only extract the KV part; SSM state is handled separately.
             for i in 0..<cacheList.count {
+                if let compilable = cacheList[i] as? CompilableKVCache {
+                    let state = compilable.state
+                    if state.count == 2 { return (keys: state[0], values: state[1]) }
+                }
                 if let simple = cacheList[i] as? KVCacheSimple {
                     let state = simple.state
                     if state.count == 2 { return (keys: state[0], values: state[1]) }
@@ -53,10 +72,14 @@ public func extractLayerData(from cache: [any KVCache]) -> [(keys: MLXArray, val
                     let state = tq.state
                     if state.count == 2 { return (keys: state[0], values: state[1]) }
                 }
+                if let rotating = cacheList[i] as? RotatingKVCache {
+                    let state = rotating.state
+                    if state.count == 2 { return (keys: state[0], values: state[1]) }
+                }
             }
             return nil
         }
-        // MambaCache, ArraysCache, RotatingKVCache — no KV extraction
+        // MambaCache, ArraysCache — no KV extraction
         return nil
     }
 }
@@ -94,20 +117,27 @@ public func restoreLayerData(from blocks: [CacheBlock], into cache: [any KVCache
     }
 
     // Build mapping: block layer index → cache layer index
-    // Only KVCacheSimple, QuantizedKVCache, TurboQuantKVCache, and CacheList-with-KV layers are KV-bearing
+    // Only CompilableKVCache, KVCacheSimple, QuantizedKVCache,
+    // TurboQuantKVCache, RotatingKVCache, and CacheList-with-KV layers are KV-bearing.
     var kvCacheIndices: [Int] = []
     for (i, layer) in cache.enumerated() {
-        if layer is KVCacheSimple {
+        if layer is CompilableKVCache {
+            kvCacheIndices.append(i)
+        } else if layer is KVCacheSimple {
             kvCacheIndices.append(i)
         } else if layer is QuantizedKVCache {
             kvCacheIndices.append(i)
         } else if layer is TurboQuantKVCache {
             kvCacheIndices.append(i)
+        } else if layer is RotatingKVCache {
+            kvCacheIndices.append(i)
         } else if let cacheList = layer as? CacheList {
             // Check if any sub-cache is KV-bearing
             for j in 0..<cacheList.count {
-                if cacheList[j] is KVCacheSimple || cacheList[j] is QuantizedKVCache
+                if cacheList[j] is CompilableKVCache
+                    || cacheList[j] is KVCacheSimple || cacheList[j] is QuantizedKVCache
                     || cacheList[j] is TurboQuantKVCache
+                    || cacheList[j] is RotatingKVCache
                 {
                     kvCacheIndices.append(i)
                     break
@@ -118,6 +148,35 @@ public func restoreLayerData(from blocks: [CacheBlock], into cache: [any KVCache
 
     // Block layers should match KV-bearing cache layers
     guard numBlockLayers == kvCacheIndices.count else { return 0 }
+
+    // Iter 143 — cross-block KV-head shape consistency check. Mirror of
+    // Python prefix_cache.py n_kv_heads guard: every cached block's
+    // per-layer KV state must agree on `n_kv_heads`. Blocks captured
+    // under different head layouts cannot be safely concatenated; doing
+    // so silently corrupts the next forward pass. Cheap probe (one
+    // .dim(1) per block-layer pair) so it stays in the hot path.
+    if blocks.count >= 2 {
+        for blockLayerIdx in 0..<numBlockLayers {
+            var firstKv: Int?
+            for block in blocks {
+                guard let data = block.cacheData,
+                      blockLayerIdx < data.count,
+                      let kv = data[blockLayerIdx]
+                else { continue }
+                let kvHeads = kv.keys.dim(1)
+                if let want = firstKv {
+                    if kvHeads != want {
+                        let outcome = CacheValidator.Outcome.reject(
+                            reason: "paged blocks disagree on n_kv_heads at layer \(blockLayerIdx): \(want) vs \(kvHeads)")
+                        CacheValidator.logReject(outcome, tier: "paged")
+                        return 0
+                    }
+                } else {
+                    firstKv = kvHeads
+                }
+            }
+        }
+    }
 
     for (blockLayerIdx, cacheLayerIdx) in kvCacheIndices.enumerated() {
         var keySlices: [MLXArray] = []
@@ -142,7 +201,9 @@ public func restoreLayerData(from blocks: [CacheBlock], into cache: [any KVCache
             restoredValues = restoredValues.asType(.bfloat16)
         }
 
-        if let simple = cache[cacheLayerIdx] as? KVCacheSimple {
+        if let compilable = cache[cacheLayerIdx] as? CompilableKVCache {
+            compilable.state = [restoredKeys, restoredValues]
+        } else if let simple = cache[cacheLayerIdx] as? KVCacheSimple {
             simple.state = [restoredKeys, restoredValues]
         } else if let quantizedCache = cache[cacheLayerIdx] as? QuantizedKVCache {
             let qKeys = quantized(restoredKeys, groupSize: quantizedCache.groupSize, bits: quantizedCache.bits)
@@ -154,11 +215,18 @@ public func restoreLayerData(from blocks: [CacheBlock], into cache: [any KVCache
             quantizedCache.state = stateArrays
             quantizedCache.offset = restoredKeys.dim(2)
         } else if let tq = cache[cacheLayerIdx] as? TurboQuantKVCache {
-            // Setting state transitions TQ to fill phase with the restored float KV.
-            // The model will re-compress during the next generation cycle if needed.
-            tq.state = [restoredKeys, restoredValues]
+            tq.restoreFromDecodedKV(
+                keys: restoredKeys,
+                values: restoredValues,
+                sourceOffset: restoredKeys.dim(2))
+        } else if let rotating = cache[cacheLayerIdx] as? RotatingKVCache {
+            restoreRotatingDecodedKV(rotating, keys: restoredKeys, values: restoredValues)
         } else if let cacheList = cache[cacheLayerIdx] as? CacheList {
             for i in 0..<cacheList.count {
+                if let compilable = cacheList[i] as? CompilableKVCache {
+                    compilable.state = [restoredKeys, restoredValues]
+                    break
+                }
                 if let simple = cacheList[i] as? KVCacheSimple {
                     simple.state = [restoredKeys, restoredValues]
                     break
@@ -175,7 +243,14 @@ public func restoreLayerData(from blocks: [CacheBlock], into cache: [any KVCache
                     break
                 }
                 if let tq = cacheList[i] as? TurboQuantKVCache {
-                    tq.state = [restoredKeys, restoredValues]
+                    tq.restoreFromDecodedKV(
+                        keys: restoredKeys,
+                        values: restoredValues,
+                        sourceOffset: restoredKeys.dim(2))
+                    break
+                }
+                if let rotating = cacheList[i] as? RotatingKVCache {
+                    restoreRotatingDecodedKV(rotating, keys: restoredKeys, values: restoredValues)
                     break
                 }
             }
@@ -184,6 +259,25 @@ public func restoreLayerData(from blocks: [CacheBlock], into cache: [any KVCache
 
     let totalTokens = blocks.reduce(0) { $0 + $1.tokenCount }
     return totalTokens
+}
+
+private func restoreRotatingDecodedKV(
+    _ rotating: RotatingKVCache,
+    keys: MLXArray,
+    values: MLXArray
+) {
+    let tokenCount = keys.dim(2)
+    guard tokenCount <= (rotating.maxSize ?? tokenCount) else {
+        return
+    }
+    rotating.state = [keys, values]
+    rotating.metaState = [
+        String(rotating.keep),
+        String(rotating.maxCacheSize),
+        String(rotating.step),
+        String(tokenCount),
+        String(tokenCount),
+    ]
 }
 
 // MARK: - SSM State Extraction
@@ -302,7 +396,7 @@ public func restoreSSMStates(_ states: [MLXArray], into cache: [any KVCache]) {
 /// - Returns: The total number of tokens restored, measured from the first
 ///   attention layer's key tensor sequence dim, or `0` if nothing matched.
 @discardableResult
-public func restoreFromDiskArrays(_ arrays: [String: MLXArray], into cache: [any KVCache]) -> Int {
+public func restoreFromDiskArrays(_ arrays: [String: MLXArray], into cache: inout [any KVCache]) -> Int {
     // Audit R4 (P1): wire CacheValidator into the disk restore entry point.
     // Catches the silent-corruption class where a stale disk entry from a
     // different model (or older checkpoint) gets pulled into the live KV
@@ -330,7 +424,7 @@ public func restoreFromDiskArrays(_ arrays: [String: MLXArray], into cache: [any
 
     let version = TQDiskSerializer.formatVersion(of: arrays)
     if version >= 2 {
-        return restoreFromV2Arrays(arrays, into: cache)
+        return restoreFromV2Arrays(arrays, into: &cache)
     }
     return restoreFromLegacyArrays(arrays, into: cache)
 }
@@ -343,7 +437,7 @@ public func restoreFromDiskArrays(_ arrays: [String: MLXArray], into cache: [any
 @discardableResult
 private func restoreFromV2Arrays(
     _ arrays: [String: MLXArray],
-    into cache: [any KVCache]
+    into cache: inout [any KVCache]
 ) -> Int {
     let indexed = TQDiskSerializer.deserializeIndexed(arrays)
     guard !indexed.isEmpty else { return 0 }
@@ -385,11 +479,14 @@ private func restoreFromV2Arrays(
 
         case .tq(let comp):
             // Restore the compressed prefix into the existing
-            // TurboQuantKVCache instance (or a TQ inside a CacheList).
-            // If the runtime created a different cache class for this
-            // layer we silently no-op and let the caller re-prefill —
-            // matches the behavior for Mamba kind mismatches.
-            restoreTQLayer(comp, into: cache[i])
+            // TurboQuantKVCache instance (or a TQ inside a CacheList). If
+            // the fresh runtime cache is KVCacheSimple (the Laguna / JANGTQ
+            // normal path, so prefill can promote to TQ after threshold), we
+            // replace that array slot with a real TurboQuantKVCache. Without
+            // this, memory/disk hits restore only the rotating layers, leave
+            // full-attention layers empty, and compiled decode sees
+            // `simple=N tq=0` on the measured request after a TQ warmup.
+            restoreTQLayer(comp, into: &cache, at: i)
             // TQ layers don't expose a sequence-dim tensor in the same way
             // as KV layers, so they can't drive `totalTokens`. The
             // attention sequence length is sourced from the .standard
@@ -417,6 +514,12 @@ private func restoreFromV2Arrays(
             // CacheCoordinator.swift that previously dropped Gemma4 SWA,
             // Mistral4-with-maxKVSize, MiMoV2Flash, BaichuanM1.
             restoreRotatingLayer(comp, into: cache[i])
+            if totalTokens == 0 {
+                totalTokens = comp.offset
+            }
+
+        case .deepseekV4(let comp):
+            restoreDeepseekV4Layer(comp, into: cache[i])
             if totalTokens == 0 {
                 totalTokens = comp.offset
             }
@@ -536,7 +639,9 @@ private func restoreFromLegacyArrays(
     // Build mapping of KV-bearing cache layer indices (same logic as restoreLayerData).
     var kvCacheIndices: [Int] = []
     for (i, layer) in cache.enumerated() {
-        if layer is KVCacheSimple {
+        if layer is CompilableKVCache {
+            kvCacheIndices.append(i)
+        } else if layer is KVCacheSimple {
             kvCacheIndices.append(i)
         } else if layer is QuantizedKVCache {
             kvCacheIndices.append(i)
@@ -544,7 +649,8 @@ private func restoreFromLegacyArrays(
             kvCacheIndices.append(i)
         } else if let cacheList = layer as? CacheList {
             for j in 0..<cacheList.count {
-                if cacheList[j] is KVCacheSimple || cacheList[j] is QuantizedKVCache
+                if cacheList[j] is CompilableKVCache
+                    || cacheList[j] is KVCacheSimple || cacheList[j] is QuantizedKVCache
                     || cacheList[j] is TurboQuantKVCache
                 {
                     kvCacheIndices.append(i)
@@ -587,7 +693,9 @@ private func restoreKVLayer(
     values restoredValues: MLXArray,
     into layer: any KVCache
 ) {
-    if let simple = layer as? KVCacheSimple {
+    if let compilable = layer as? CompilableKVCache {
+        compilable.state = [restoredKeys, restoredValues]
+    } else if let simple = layer as? KVCacheSimple {
         simple.state = [restoredKeys, restoredValues]
     } else if let quantizedCache = layer as? QuantizedKVCache {
         let qKeys = quantized(
@@ -601,9 +709,16 @@ private func restoreKVLayer(
         quantizedCache.state = stateArrays
         quantizedCache.offset = restoredKeys.dim(2)
     } else if let tq = layer as? TurboQuantKVCache {
-        tq.state = [restoredKeys, restoredValues]
+        tq.restoreFromDecodedKV(
+            keys: restoredKeys,
+            values: restoredValues,
+            sourceOffset: restoredKeys.dim(2))
     } else if let cacheList = layer as? CacheList {
         for i in 0..<cacheList.count {
+            if let compilable = cacheList[i] as? CompilableKVCache {
+                compilable.state = [restoredKeys, restoredValues]
+                return
+            }
             if let simple = cacheList[i] as? KVCacheSimple {
                 simple.state = [restoredKeys, restoredValues]
                 return
@@ -623,7 +738,10 @@ private func restoreKVLayer(
                 return
             }
             if let tq = cacheList[i] as? TurboQuantKVCache {
-                tq.state = [restoredKeys, restoredValues]
+                tq.restoreFromDecodedKV(
+                    keys: restoredKeys,
+                    values: restoredValues,
+                    sourceOffset: restoredKeys.dim(2))
                 return
             }
         }
@@ -662,9 +780,12 @@ private func restoreQKVLayer(
 /// classes — caller will re-prefill that layer via the standard path.
 private func restoreTQLayer(
     _ comp: TQDiskSerializer.TQLayerComponents,
-    into layer: any KVCache
+    into cache: inout [any KVCache],
+    at index: Int
 ) {
-    if let tq = layer as? TurboQuantKVCache {
+    guard index < cache.count else { return }
+
+    if let tq = cache[index] as? TurboQuantKVCache {
         tq.restoreCompressed(
             encodedKeys: comp.encodedKeys,
             encodedValues: comp.encodedValues,
@@ -672,7 +793,22 @@ private func restoreTQLayer(
         )
         return
     }
-    if let cacheList = layer as? CacheList {
+
+    if cache[index] is KVCacheSimple {
+        let tq = TurboQuantKVCache(
+            keyBits: comp.encodedKeys.indexBits + 1,
+            valueBits: comp.encodedValues.indexBits)
+        tq.restoreCompressed(
+            encodedKeys: comp.encodedKeys,
+            encodedValues: comp.encodedValues,
+            sourceOffset: comp.offset)
+        if tq.phase == .compressed {
+            cache[index] = tq
+        }
+        return
+    }
+
+    if let cacheList = cache[index] as? CacheList {
         for i in 0..<cacheList.count {
             if let tq = cacheList[i] as? TurboQuantKVCache {
                 tq.restoreCompressed(
@@ -710,14 +846,49 @@ private func restoreRotatingLayer(
         apply(rot)
         return
     }
+    if let wrapper = layer as? RotatingKVCacheWrapper {
+        apply(wrapper.rotating)
+        return
+    }
     if let cacheList = layer as? CacheList {
         for i in 0..<cacheList.count {
             if let rot = cacheList[i] as? RotatingKVCache {
                 apply(rot)
                 return
             }
+            if let wrapper = cacheList[i] as? RotatingKVCacheWrapper {
+                apply(wrapper.rotating)
+                return
+            }
         }
     }
+}
+
+/// Restore a DSV4 hybrid-pool layer: local rotating ring plus compressor
+/// and indexer pool/buffer tensors.
+private func restoreDeepseekV4Layer(
+    _ comp: TQDiskSerializer.DeepseekV4LayerComponents,
+    into layer: any KVCache
+) {
+    guard let hybrid = layer as? HybridPoolCache else { return }
+    hybrid.rotating.state = [comp.keys, comp.values]
+    hybrid.rotating.metaState = [
+        String(comp.keep),
+        String(comp.maxSize),
+        String(comp.step),
+        String(comp.offset),
+        String(comp.idx),
+    ]
+    hybrid.setHybridPool(branch: .compressor, value: comp.poolComp)
+    hybrid.setHybridPool(branch: .indexer, value: comp.poolIdx)
+    hybrid.setHybridBuffers(
+        branch: .compressor,
+        kv: comp.bufCompKV,
+        gate: comp.bufCompGate)
+    hybrid.setHybridBuffers(
+        branch: .indexer,
+        kv: comp.bufIdxKV,
+        gate: comp.bufIdxGate)
 }
 
 /// Helper: restore Mamba SSM state into a `MambaCache` layer (or a

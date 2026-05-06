@@ -178,15 +178,15 @@ struct SessionView: View {
                     Text(L10n.ServerUI.starting.render(appLocale))
                         .font(Theme.Typography.bodyHi)
                         .foregroundStyle(Theme.Colors.textMid)
-                    buttonTile("Cancel", color: Theme.Colors.danger) { Task { await app.engine.stop() } }
+                    buttonTile("Cancel", color: Theme.Colors.danger) { Task { await stopSession() } }
                 case .running:
-                    buttonTile("Stop", color: Theme.Colors.danger) { Task { await app.engine.stop() } }
+                    buttonTile("Stop", color: Theme.Colors.danger) { Task { await stopSession() } }
                 case .standby:
-                    buttonTile("Wake", color: Theme.Colors.accent) { Task { await app.engine.wakeFromStandby() } }
-                    buttonTile("Stop", color: Theme.Colors.danger) { Task { await app.engine.stop() } }
+                    buttonTile("Wake", color: Theme.Colors.accent) { Task { await wakeSession() } }
+                    buttonTile("Stop", color: Theme.Colors.danger) { Task { await stopSession() } }
                 case .error:
                     buttonTile("Reconnect", color: Theme.Colors.accent) { Task { await startSession() } }
-                    buttonTile("Stop", color: Theme.Colors.danger) { Task { await app.engine.stop() } }
+                    buttonTile("Stop", color: Theme.Colors.danger) { Task { await stopSession() } }
                 }
             }
         }
@@ -209,17 +209,18 @@ struct SessionView: View {
     }
 
     private func startSession() async {
-        let resolved = await app.engine.settings.resolved(sessionId: session.id)
-        let opts = Engine.LoadOptions(modelPath: session.modelPath, from: resolved)
-        do {
-            for try await event in await app.engine.load(opts) {
-                if case .failed(let msg) = event {
-                    app.flashBanner("Engine load failed: \(msg)")
-                }
-            }
-        } catch {
-            app.flashBanner("Engine load failed: \(error)")
-        }
+        await app.startSession(session.id)
+    }
+
+    private func stopSession() async {
+        await app.stopSession(session.id)
+    }
+
+    private func wakeSession() async {
+        let eng = app.engine(for: session.id)
+        await eng.wakeFromStandby()
+        app.selectedServerSessionId = session.id
+        app.rebindEngineObserver()
     }
 
     // MARK: - Bottom tabbed panel

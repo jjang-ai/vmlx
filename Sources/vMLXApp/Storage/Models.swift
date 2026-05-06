@@ -63,6 +63,13 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     /// tool-calls JSON so InlineToolCallCard can re-render its pill after
     /// a reload.
     var toolStatuses: [String: ToolCallStatus] = [:]
+    /// Captured tool output keyed by `tool_call.id`. Populated from the
+    /// `.done` / `.error` `StreamChunk.ToolStatus` events whose `message`
+    /// field carries the executor's stdout/stderr (Stream.swift:486 —
+    /// `message: result.content`). Without this dict, the
+    /// `InlineToolCallCard` expanded body would always render empty
+    /// because `inlineToolCalls` previously hardcoded `output: nil`.
+    var toolOutputs: [String: String] = [:]
     var createdAt: Date
     var isStreaming: Bool
 
@@ -74,7 +81,7 @@ struct ChatMessage: Identifiable, Codable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, sessionId, role, content, reasoning, imageData, videoPaths, toolCallsJSON
-        case toolStatuses, createdAt, isStreaming
+        case toolStatuses, toolOutputs, createdAt, isStreaming
     }
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
@@ -83,6 +90,7 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         lhs.imageData == rhs.imageData && lhs.videoPaths == rhs.videoPaths &&
         lhs.toolCallsJSON == rhs.toolCallsJSON &&
         lhs.toolStatuses == rhs.toolStatuses &&
+        lhs.toolOutputs == rhs.toolOutputs &&
         lhs.createdAt == rhs.createdAt && lhs.isStreaming == rhs.isStreaming
     }
     func hash(into hasher: inout Hasher) {
@@ -100,6 +108,7 @@ struct ChatMessage: Identifiable, Codable, Hashable {
          videoPaths: [String] = [],
          toolCallsJSON: String? = nil,
          toolStatuses: [String: ToolCallStatus] = [:],
+         toolOutputs: [String: String] = [:],
          createdAt: Date = .now,
          isStreaming: Bool = false) {
         self.id = id
@@ -111,6 +120,7 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         self.videoPaths = videoPaths
         self.toolCallsJSON = toolCallsJSON
         self.toolStatuses = toolStatuses
+        self.toolOutputs = toolOutputs
         self.createdAt = createdAt
         self.isStreaming = isStreaming
     }
@@ -128,6 +138,10 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         self.videoPaths  = try c.decodeIfPresent([String].self, forKey: .videoPaths) ?? []
         self.toolCallsJSON = try c.decodeIfPresent(String.self, forKey: .toolCallsJSON)
         self.toolStatuses  = try c.decodeIfPresent([String: ToolCallStatus].self, forKey: .toolStatuses) ?? [:]
+        // Pre-2026-05-01 rows have no `toolOutputs` key — default to empty
+        // so existing chat history loads. New rows persist the captured
+        // tool stdout/stderr alongside the lifecycle phase.
+        self.toolOutputs = try c.decodeIfPresent([String: String].self, forKey: .toolOutputs) ?? [:]
         self.createdAt   = try c.decode(Date.self, forKey: .createdAt)
         self.isStreaming = try c.decodeIfPresent(Bool.self, forKey: .isStreaming) ?? false
     }
@@ -151,9 +165,17 @@ struct ChatMessage: Identifiable, Codable, Hashable {
                 args = ""
             }
             let status = toolStatuses[id] ?? .pending
+            // Surface captured tool output (set by ChatViewModel when
+            // the engine emits a `.done` / `.error` ToolStatus chunk
+            // with `message: result.content`). Empty string normalizes
+            // to nil so InlineToolCallCard's expanded body doesn't
+            // render an "Output" section for a tool that genuinely
+            // produced no stdout.
+            let captured = toolOutputs[id]
+            let output = (captured?.isEmpty ?? true) ? nil : captured
             return InlineToolCall(
                 id: id, name: name, arguments: args,
-                status: status, output: nil, exitCode: nil
+                status: status, output: output, exitCode: nil
             )
         }
     }

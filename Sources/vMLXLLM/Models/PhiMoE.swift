@@ -114,15 +114,17 @@ class PhiMoESparseMoeBlock: Module {
     let ffnDim: Int
     let numExperts: Int
     let topK: Int
+    fileprivate let layerIdx: Int
 
     @ModuleInfo(key: "gate") var gate: Linear
     @ModuleInfo(key: "switch_mlp") var switchMLP: SwitchGLU
 
-    init(_ args: PhiMoEConfiguration) {
+    init(_ args: PhiMoEConfiguration, layerIdx: Int) {
         self.hiddenDim = args.hiddenSize
         self.ffnDim = args.intermediateSize
         self.numExperts = args.numLocalExperts
         self.topK = args.numExpertsPerToken
+        self.layerIdx = layerIdx
 
         self._gate.wrappedValue = Linear(hiddenDim, numExperts, bias: false)
         self._switchMLP.wrappedValue = SwitchGLU(
@@ -139,6 +141,7 @@ class PhiMoESparseMoeBlock: Module {
                 kth: k - 1,
                 axis: -1
             )[.ellipsis, ..<k])
+        JangPressRouteTelemetry.recordTopK(layer: layerIdx, indices: inds)
         let scores = MLX.softmax(MLX.takeAlong(gates, inds, axis: -1), axis: -1, precise: true)
 
         let y = switchMLP(x, inds)
@@ -157,11 +160,11 @@ class PhiMoEDecoderLayer: Module {
     /// Flash MoE Phase 2b shim. See `MiniMax.swift` for rationale.
     fileprivate var flashMoeShim: FlashMoEBlock? = nil
 
-    init(_ args: PhiMoEConfiguration) {
+    init(_ args: PhiMoEConfiguration, layerIdx: Int) {
         self.hiddenSize = args.hiddenSize
 
         self._selfAttn.wrappedValue = PhiMoEAttention(args)
-        self._blockSparseMoe.wrappedValue = PhiMoESparseMoeBlock(args)
+        self._blockSparseMoe.wrappedValue = PhiMoESparseMoeBlock(args, layerIdx: layerIdx)
         self._inputLayerNorm.wrappedValue = LayerNorm(
             dimensions: args.hiddenSize, eps: args.rmsNormEps)
         self._postAttentionLayerNorm.wrappedValue = LayerNorm(
@@ -197,7 +200,7 @@ public class PhiMoEModelInner: Module {
 
         self._embedTokens.wrappedValue = Embedding(
             embeddingCount: args.vocabularySize, dimensions: args.hiddenSize)
-        self.layers = (0 ..< args.hiddenLayers).map { _ in PhiMoEDecoderLayer(args) }
+        self.layers = (0 ..< args.hiddenLayers).map { i in PhiMoEDecoderLayer(args, layerIdx: i) }
         self._norm.wrappedValue = LayerNorm(dimensions: args.hiddenSize, eps: args.rmsNormEps)
     }
 
@@ -249,7 +252,7 @@ public class PhiMoEModel: Module, LLMModel, KVCacheDimensionProvider {
                                 forKey: "\(prefix).block_sparse_moe.experts.\(e).\(n).\(k)")!
                         }
                         sanitizedWeights["\(prefix).block_sparse_moe.switch_mlp.\(m).\(k)"] =
-                            MLX.stacked(toJoin)
+                            loadTimeMaterializedStacked(toJoin)
                     }
                 }
             }

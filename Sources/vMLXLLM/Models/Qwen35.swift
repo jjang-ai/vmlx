@@ -271,8 +271,11 @@ final class Qwen35GatedDeltaNet: Module {
         }
 
         let convInput = concatenated([convState, qkv], axis: 1)
+            .reshaped(B, convState.dim(1) + S, convDim)
         if let cache {
-            cache[0] = convInput[0..., (-(convKernelSize - 1))...]
+            let end = convInput.dim(1)
+            let start = max(0, end - (convKernelSize - 1))
+            cache[0] = convInput[0..., start ..< end, 0...]
         }
 
         let convOut = silu(conv1d(convInput))
@@ -411,6 +414,7 @@ final class Qwen35SparseMoeBlock: Module, UnaryLayer {
     let normTopkProb: Bool
     let numExperts: Int
     let topK: Int
+    fileprivate let layerIdx: Int
 
     @ModuleInfo(key: "gate") var gate: Linear
     @ModuleInfo(key: "switch_mlp") var switchMLP: SwitchGLU
@@ -418,10 +422,11 @@ final class Qwen35SparseMoeBlock: Module, UnaryLayer {
     @ModuleInfo(key: "shared_expert") var sharedExpert: Qwen3NextMLP
     @ModuleInfo(key: "shared_expert_gate") var sharedExpertGate: Linear
 
-    init(_ args: Qwen35TextConfiguration) {
+    init(_ args: Qwen35TextConfiguration, layerIdx: Int) {
         self.normTopkProb = args.normTopkProb
         self.numExperts = args.numExperts
         self.topK = args.numExpertsPerTok
+        self.layerIdx = layerIdx
 
         _gate.wrappedValue = Linear(args.hiddenSize, args.numExperts, bias: false)
         _switchMLP.wrappedValue = SwitchGLU(
@@ -444,6 +449,7 @@ final class Qwen35SparseMoeBlock: Module, UnaryLayer {
         let k = topK
         let kth = gates.dim(-1) - k
         let inds = MLX.argPartition(gates, kth: kth, axis: -1)[.ellipsis, (kth)...]
+        JangPressRouteTelemetry.recordTopK(layer: layerIdx, indices: inds)
         var scores = MLX.takeAlong(gates, inds, axis: -1)
         if normTopkProb {
             scores = scores / scores.sum(axis: -1, keepDims: true)
@@ -482,7 +488,7 @@ final class Qwen35DecoderLayer: Module {
         }
 
         if args.numExperts > 0 {
-            _mlp.wrappedValue = Qwen35SparseMoeBlock(args)
+            _mlp.wrappedValue = Qwen35SparseMoeBlock(args, layerIdx: layerIdx)
         } else {
             _mlp.wrappedValue = Qwen3NextMLP(
                 dimensions: args.hiddenSize,
@@ -553,6 +559,9 @@ public class Qwen35TextModelInner: Module {
 
     func callAsFunction(_ inputs: MLXArray, cache: [KVCache?]? = nil) -> MLXArray {
         var hiddenStates = embedTokens(inputs)
+        if hiddenStates.ndim == 2 {
+            hiddenStates = hiddenStates[.newAxis, 0..., 0...]
+        }
 
         var cacheArray = cache
         if cacheArray == nil {

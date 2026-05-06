@@ -46,6 +46,10 @@ public struct ModelCapabilities: Sendable, Codable, Equatable, Hashable {
     public var isJANG: Bool
     public var isMXTQ: Bool
     public var chatTemplate: String?
+    /// Native sliding-window attention size from `config.json`, when the
+    /// model declares one. This is the trained per-layer SWA window, not
+    /// the operator override from server settings.
+    public var slidingWindow: Int?
     public var detectionSource: Source
 
     public init(
@@ -62,6 +66,7 @@ public struct ModelCapabilities: Sendable, Codable, Equatable, Hashable {
         isJANG: Bool = false,
         isMXTQ: Bool = false,
         chatTemplate: String? = nil,
+        slidingWindow: Int? = nil,
         detectionSource: Source = .fallback
     ) {
         self.family = family
@@ -77,6 +82,7 @@ public struct ModelCapabilities: Sendable, Codable, Equatable, Hashable {
         self.isJANG = isJANG
         self.isMXTQ = isMXTQ
         self.chatTemplate = chatTemplate
+        self.slidingWindow = slidingWindow
         self.detectionSource = detectionSource
     }
 
@@ -400,6 +406,11 @@ public enum ModelTypeTable {
               priority: 10),
         .init(family: "bailing_moe", modelTypes: ["bailing_moe"],
               priority: 10),
+        .init(family: "bailing_hybrid",
+              modelTypes: ["bailing_hybrid", "bailing_moe_v2_5"],
+              cacheType: "hybrid",
+              toolParser: "deepseek", reasoningParser: "deepseek_r1",
+              thinkInTemplate: false, priority: 8),
         .init(family: "starcoder", modelTypes: ["starcoder2"], priority: 30),
         .init(family: "stablelm", modelTypes: ["stablelm"], priority: 30),
         .init(family: "baichuan", modelTypes: ["baichuan"], priority: 30),

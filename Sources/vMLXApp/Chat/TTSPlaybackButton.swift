@@ -120,11 +120,22 @@ struct TTSPlaybackButton: View {
     let text: String
     let isGenerating: Bool
     @StateObject private var controller = TTSPlaybackController()
-    @AppStorage("vmlx.gatewayPort") private var gatewayPortStorage: Int = 8080
+    // P0 audit fix — drop the orphan `@AppStorage("vmlx.gatewayPort")`
+    // UserDefaults key. Nothing else in the app writes that key, so it
+    // was always 8080 from the seed default regardless of what the user
+    // configured in Tray → Server. Read the BOUND port from AppState's
+    // gatewayStatus instead so post-bump + post-reconfig both work.
+    @Environment(AppState.self) private var app
 
     var body: some View {
         Button {
-            controller.toggle(text: text, port: gatewayPortStorage)
+            // Bail with a clear error if gateway isn't running rather
+            // than hammer the wrong port.
+            guard case .running(let bound, _) = app.gatewayStatus else {
+                controller.lastError = "Gateway is not running — enable it in Tray → Server."
+                return
+            }
+            controller.toggle(text: text, port: bound)
         } label: {
             Image(systemName: iconName)
                 .font(.system(size: 10))

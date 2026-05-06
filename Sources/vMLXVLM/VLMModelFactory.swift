@@ -46,6 +46,43 @@ public struct BaseProcessorConfiguration: Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case processorClass = "processor_class"
+        case imageProcessorType = "image_processor_type"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let processorClass = try c.decodeIfPresent(String.self, forKey: .processorClass),
+           !processorClass.isEmpty
+        {
+            self.processorClass = processorClass
+            return
+        }
+
+        // Nemotron-H Omni preprocessor_config.json follows the HF
+        // AutoProcessor shape and currently has only
+        // `image_processor_type = NemotronH_Nano_Omni_Reasoning_V3ImageProcessor`.
+        // Without this fallback the VLM load path dies while decoding
+        // preprocessor_config before the registry override can choose
+        // NemotronHOmniProcessor.
+        if let imageProcessorType = try c.decodeIfPresent(
+            String.self, forKey: .imageProcessorType),
+           imageProcessorType.contains("NemotronH_Nano_Omni")
+        {
+            self.processorClass = "NemotronHOmniProcessor"
+            return
+        }
+
+        throw DecodingError.keyNotFound(
+            CodingKeys.processorClass,
+            DecodingError.Context(
+                codingPath: decoder.codingPath,
+                debugDescription:
+                    "Missing processor_class and no known processor fallback"))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(processorClass, forKey: .processorClass)
     }
 }
 
@@ -141,15 +178,39 @@ public enum VLMTypeRegistry {
                 return Mistral4VLM(config)
             }
             if check?.textConfig?.modelType == "ministral3" {
+                // 2026-05-01 PORT — Mistral-Medium-3.5 with vision tower.
+                // JANGTQ-format → Mistral3VLMJANGTQ (full VL stack:
+                // PixtralVision tower + Mistral3JANGTQLanguageModel +
+                // Mistral3MultiModalProjector). Non-JANGTQ → still
+                // throw because the dense Mistral-Medium-3.5 (88-layer
+                // 256K YaRN) text config doesn't fit the
+                // Mistral3VLMConfiguration shape that Mistral3VLM
+                // expects (Mistral-Small-3.1 24B skeleton).
+                struct MXTQProbe: Codable {
+                    let weightFormat: String?
+                    let mxtqBits: Int?
+                    let mxtqSeed: Int?
+                    enum CodingKeys: String, CodingKey {
+                        case weightFormat = "weight_format"
+                        case mxtqBits = "mxtq_bits"
+                        case mxtqSeed = "mxtq_seed"
+                    }
+                }
+                if let probe = try? JSONDecoder.json5().decode(MXTQProbe.self, from: data),
+                   probe.weightFormat == "mxtq"
+                {
+                    let cfg = try JSONDecoder.json5().decode(
+                        Mistral3VLMConfiguration.self, from: data)
+                    return Mistral3VLMJANGTQ(
+                        cfg, bits: probe.mxtqBits ?? 2, seed: probe.mxtqSeed ?? 42)
+                }
                 throw NSError(
                     domain: "vMLXVLM", code: 4001,
                     userInfo: [NSLocalizedDescriptionKey:
-                        "Mistral-Medium-3.5 (mistral3 wrapper + ministral3 inner) " +
-                        "doesn't have a native Swift VLM port yet. Use the legacy " +
-                        "Python panel (/Applications/vMLX.app) — it routes through " +
-                        "jang_tools.mistral3 with vision-tower strip + " +
-                        "language_model→model prefix remap. Track in " +
-                        "vmlx_swift_v2_known_issues.md."])
+                        "Mistral-Medium-3.5 dense (non-JANGTQ) wrapper has no Swift " +
+                        "port yet — config shape doesn't match Mistral-Small-3.1 24B " +
+                        "skeleton. JANGTQ variant works (Mistral3VLMJANGTQ). For dense, " +
+                        "use the legacy Python panel."])
             }
             let config = try JSONDecoder.json5().decode(Mistral3VLMConfiguration.self, from: data)
             return Mistral3VLM(config)
@@ -165,8 +226,10 @@ public enum VLMTypeRegistry {
         //                                config.json carries `nemotron_h`
         //                                (the LLM type) and a sibling
         //                                `config_omni.json` flags multimodal
-        // The dispatch picks Omni when `config_omni.json` is present, else
-        // falls back to the LLM-only NemotronHModel via the LLM factory.
+        // Engine.ModelDetector only routes `nemotron_h` here when the bundle
+        // is actually Omni/multimodal; text-only Nemotron-H stays in
+        // LLMModelFactory.
+        "nemotron_h": create(NemotronHOmniConfiguration.self, NemotronHOmni.init),
         "nemotron_h_omni": create(NemotronHOmniConfiguration.self, NemotronHOmni.init),
     ]
 }
@@ -531,11 +594,32 @@ public final class VLMModelFactory: ModelFactory {
                 error.filename, configuration.name, error.underlying)
         }
 
-        // Override processor type based on model type for models that need special handling
-        // Mistral3 models ship with "PixtralProcessor" in their config but need Mistral3Processor
-        // to handle spatial merging correctly
+        // Override processor type based on model type for models that need
+        // special handling. Mistral3 / ministral3 / mistral4 bundles ship
+        // with "PixtralProcessor" in their preprocessor_config.json but
+        // need their family-specific processor to handle spatial merging
+        // correctly (Mistral 3.x family) or the Mistral 4 wrapper. Without
+        // the override, the bundle's `processor_class` from disk wins and
+        // we instantiate PixtralProcessor against the wrong-shape inputs
+        // → silent garbage output or shape-mismatch crash mid-decode.
+        //
+        // Audit 2026-05-01: previous map only knew "mistral3", so a
+        // Mistral-Medium-3.5 bundle whose top-level model_type was already
+        // "ministral3" (some HF repos write it that way for the wrapper)
+        // missed the override and kept PixtralProcessor. ministral3 also
+        // appears as text_config.model_type when the wrapper is "mistral3"
+        // — already handled above by the unsupported-family throw, so the
+        // map entry here covers the wrapper case.
+        // Also fold mistral4 into the map: same processor-class confusion.
+        // mistral4 is not in the override list — Mistral 4's preprocessor
+        // already ships a working `processor_class` and the Mistral3Processor
+        // shape doesn't match. If a Mistral4 bundle ships a wrong class, we
+        // add it here once a verified pairing exists.
         let processorTypeOverrides: [String: String] = [
-            "mistral3": "Mistral3Processor"
+            "mistral3":   "Mistral3Processor",
+            "ministral3": "Mistral3Processor",
+            "nemotron_h": "NemotronHOmniProcessor",
+            "nemotron_h_omni": "NemotronHOmniProcessor",
         ]
         let processorType =
             processorTypeOverrides[baseConfig.modelType] ?? baseProcessorConfig.processorClass

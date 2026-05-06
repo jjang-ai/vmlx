@@ -224,15 +224,17 @@ class Llama4MLP: Module, UnaryLayer {
 class Llama4MoE: Module, UnaryLayer {
     let topK: Int
     let numExperts: Int
+    fileprivate let layerIdx: Int
 
     @ModuleInfo(key: "experts") var experts: SwitchGLU
     @ModuleInfo(key: "router") var router: Linear
     @ModuleInfo(key: "shared_expert") var sharedExpert: Llama4MLP
 
-    init(_ args: Llama4Configuration) {
+    init(_ args: Llama4Configuration, layerIdx: Int) {
         self.topK = args.numExpertsPerTok
         assert(self.topK == 1, "Llama4 MoE expects top-1 routing")
         self.numExperts = args.numLocalExperts
+        self.layerIdx = layerIdx
 
         self._experts.wrappedValue = SwitchGLU(
             inputDims: args.hiddenSize, hiddenDims: args.intermediateSize,
@@ -246,6 +248,7 @@ class Llama4MoE: Module, UnaryLayer {
         let logits = router(x)
         let k = topK
         let indices = MLX.argPartition(-logits, kth: k - 1, axis: -1)[.ellipsis, ..<k]
+        JangPressRouteTelemetry.recordTopK(layer: layerIdx, indices: indices)
         var scores = MLX.takeAlong(logits, indices, axis: -1)
         scores = MLX.sigmoid(scores.asType(.float32)).asType(x.dtype)
 
@@ -276,7 +279,7 @@ class Llama4TransformerBlock: Module {
         self.isMoeLayer =
             (layerIdx % args.interleaveMoeLayerStep) == (args.interleaveMoeLayerStep - 1)
         if isMoeLayer {
-            self.feedForward = Llama4MoE(args)
+            self.feedForward = Llama4MoE(args, layerIdx: layerIdx)
         } else {
             self.feedForward = Llama4MLP(
                 hiddenSize: args.hiddenSize, intermediateSize: args.intermediateSizeMLP)

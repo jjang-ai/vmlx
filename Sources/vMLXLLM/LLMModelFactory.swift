@@ -58,33 +58,100 @@ public enum LLMTypeRegistry {
                 return Qwen35MoEModel(config)
             },
             "qwen3_5_text": create(Qwen35TextConfiguration.self, Qwen35TextModel.init),
-            // Laguna (poolside) + ministral3 (Mistral-Medium-3.5 inner text):
-            // No native Swift port yet — these architectures are still
-            // Python-only. Register the entries here so the user gets a
-            // CLEAN actionable error instead of the cryptic
-            // "Unsupported model type: laguna" / a VLM-shape crash on
-            // mistral3 source bundles. Tracking: vmlx_swift_v2_known_issues.md
-            // [BLOCKER for laguna users] / [BLOCKER for ministral3 users].
-            "laguna": { _ in
-                throw NSError(
-                    domain: "vMLXLLM", code: 4001,
-                    userInfo: [NSLocalizedDescriptionKey:
-                        "Laguna (poolside) doesn't have a native Swift port yet. " +
-                        "Use the legacy Python panel (/Applications/vMLX.app) to " +
-                        "load Laguna bundles for now — it routes through " +
-                        "jang_tools.laguna which decodes correctly. Track " +
-                        "Swift port progress in vmlx_swift_v2_known_issues.md."])
+            // Laguna (Poolside 33B / 3B-active hybrid MoE). JANGTQ/mxtq
+            // bundles route routed experts through TurboQuantSwitchGLU.
+            // Affine/mxfp4 bundles route the same MoE through SwitchGLU.
+            // Both formats share LagunaModel.sanitize(), which splits fused
+            // gate_up_proj tensors into gate_proj/up_proj.
+            "laguna": { data in
+                let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                let cfg = try JSONDecoder.json5().decode(
+                    LagunaConfiguration.self, from: data)
+                let weightFormat = (obj?["weight_format"] as? String)?.lowercased()
+                let isMxtq = weightFormat == "mxtq" || obj?["mxtq_bits"] != nil
+                let jangtqContext: LagunaMoEContext?
+                if isMxtq {
+                    let (bits, seed) = LLMModelFactory.probeJANGTQBitsSeed(
+                        data: data, defaultBits: 2)
+                    jangtqContext = LagunaMoEContext(bits: bits, mxtqSeed: seed)
+                } else {
+                    jangtqContext = nil
+                }
+                return LagunaModel(cfg, jangtq: jangtqContext)
             },
-            "ministral3": { _ in
+            // 2026-05-01 PORT — ministral3 (Mistral-Medium-3.5 inner text
+            // model_type). Routes to JANGTQ variant when
+            // `weight_format == "mxtq"`, otherwise to the dense
+            // Mistral3TextModel which already handles the standard
+            // Mistral 3 architecture. Brings up the JANGQ-AI /
+            // OsaurusAI Mistral-Medium-3.5-128B bundles which were
+            // previously thrown.
+            // 2026-05-01 PORT — ministral3 (Mistral-Medium-3.5 inner text
+            // model_type). Routes to JANGTQ variant when
+            // `weight_format == "mxtq"`, otherwise to the dense
+            // Mistral3TextModel. Brings up the JANGQ-AI / OsaurusAI
+            // Mistral-Medium-3.5-128B bundles which were previously
+            // thrown.
+            "ministral3": { data in
+                let (bits, seed, isJangTQ) =
+                    LLMModelFactory.probeMistralJANGTQ(data: data)
+                if isJangTQ {
+                    let cfg = try JSONDecoder.json5().decode(
+                        Mistral3TextConfiguration.self, from: data)
+                    return Mistral3TextJANGTQModel(cfg, bits: bits, seed: seed)
+                }
+                let cfg = try JSONDecoder.json5().decode(
+                    Mistral3TextConfiguration.self, from: data)
+                return Mistral3TextModel(cfg)
+            },
+            // P2 #11 — clean throw-with-message guards for families
+            // that have no Swift port yet. Without these, mlx-swift's
+            // `_load()` would crash mid-Metal-init with a generic
+            // "Unsupported model type" or a shape-mismatch fatalError;
+            // with them, the load fails fast at factory time, the
+            // unified error pipeline surfaces the message + the
+            // ChatScreen banner offers the "Open Legacy Panel" CTA.
+            "voxtral": { _ in
                 throw NSError(
-                    domain: "vMLXLLM", code: 4001,
+                    domain: "vMLXLLM", code: 4002,
                     userInfo: [NSLocalizedDescriptionKey:
-                        "Mistral-Medium-3.5 (ministral3 inner text type) doesn't " +
-                        "have a native Swift text decoder yet. Use the legacy " +
-                        "Python panel (/Applications/vMLX.app) to load these " +
-                        "bundles — it routes through jang_tools.mistral3 with " +
-                        "the proper vision-tower strip + language_model→model " +
-                        "prefix remap. Track in vmlx_swift_v2_known_issues.md."])
+                        "Voxtral (Mistral audio-aware LM) doesn't have a Swift port yet. " +
+                        "Use the legacy Python panel (/Applications/vMLX.app)."])
+            },
+            "qwen3_omni": { _ in
+                throw NSError(
+                    domain: "vMLXLLM", code: 4002,
+                    userInfo: [NSLocalizedDescriptionKey:
+                        "Qwen3-Omni (multimodal+audio) has no Swift port. " +
+                        "Use the legacy Python panel (/Applications/vMLX.app)."])
+            },
+            "qwen3_5_omni": { _ in
+                throw NSError(
+                    domain: "vMLXLLM", code: 4002,
+                    userInfo: [NSLocalizedDescriptionKey:
+                        "Qwen3.5-Omni (multimodal+audio) has no Swift port. " +
+                        "Use the legacy Python panel (/Applications/vMLX.app)."])
+            },
+            "dots_ocr": { _ in
+                throw NSError(
+                    domain: "vMLXLLM", code: 4002,
+                    userInfo: [NSLocalizedDescriptionKey:
+                        "dots.ocr has no Swift port. " +
+                        "Use the legacy Python panel (/Applications/vMLX.app)."])
+            },
+            "nemotron_nano_v2": { _ in
+                throw NSError(
+                    domain: "vMLXLLM", code: 4002,
+                    userInfo: [NSLocalizedDescriptionKey:
+                        "Nemotron-Nano-V2 has no Swift port. " +
+                        "Use the legacy Python panel (/Applications/vMLX.app)."])
+            },
+            "falcon3": { _ in
+                throw NSError(
+                    domain: "vMLXLLM", code: 4002,
+                    userInfo: [NSLocalizedDescriptionKey:
+                        "Falcon-3 has no Swift port. " +
+                        "Use the legacy Python panel (/Applications/vMLX.app)."])
             },
         ]
     }
@@ -140,6 +207,11 @@ public enum LLMTypeRegistry {
                 return DeepseekV4JANGTQModel(config)
             },
             "kimi_k25": { data in
+                try Self.makeDeepseekV3OrJANGTQ(family: "kimi_k25", data: data)
+            },
+            // §425b — older Kimi K2 bundles ship without the kimi_k25
+            // outer wrapper (model_type=kimi_k2 directly). Same dispatcher.
+            "kimi_k2": { data in
                 try Self.makeDeepseekV3OrJANGTQ(family: "kimi_k25", data: data)
             },
             // GLM-5.1 smoke-test alias (Ralph iter 12, S02 quick-win).
@@ -236,49 +308,19 @@ public enum LLMTypeRegistry {
             "olmo2": create(Olmo2Configuration.self, Olmo2Model.init),
             "olmo3": create(Olmo3Configuration.self, Olmo3Model.init),
             "bailing_moe": create(BailingMoeConfiguration.self, BailingMoeModel.init),
+            "bailing_hybrid": create(BailingHybridConfiguration.self, BailingHybridModel.init),
+            "bailing_moe_v2_5": create(BailingHybridConfiguration.self, BailingHybridModel.init),
             "lfm2_moe": create(LFM2MoEConfiguration.self, LFM2MoEModel.init),
             "nanochat": create(NanoChatConfiguration.self, NanoChatModel.init),
             "nemotron_h": { data in
-                // §438 — JANGTQ detection. Nemotron-H bundles ship in
-                // three flavors per ~/jang/research/NEMOTRON-OMNI-RUNTIME-2026-04-28.md:
-                //   • MXFP4   — stock 4-bit affine, loads via the standard
-                //     NemotronHModel below
-                //   • JANGTQ4 — TurboQuant 4-bit codec on routed experts
-                //   • JANGTQ2 — TurboQuant 2-bit codec on routed experts
-                //
-                // The JANGTQ flavors carry `weight_format=="mxtq"` at the
-                // top of jang_config.json AND per-expert `tq_packed`
-                // tensors at `backbone.layers.N.mixer.experts.E.{up,down}_proj`.
-                // The TurboQuantSwitchLinear-backed Model wrapper that
-                // consumes those tensors lands in a follow-up iter; the
-                // load-bearing primitive (NemotronHJANGTQSwitchMLP) was
-                // shipped in §437 but the Model+sanitize wrapper isn't
-                // wired yet. Detect the JANGTQ flavor at config-load
-                // time and emit a clear error so users see the gap
-                // instead of a silent garbage forward pass.
-                struct JANGTQProbe: Codable {
-                    let weightFormat: String?
-                    enum CodingKeys: String, CodingKey {
-                        case weightFormat = "weight_format"
-                    }
-                }
-                if let probe = try? JSONDecoder.json5().decode(JANGTQProbe.self, from: data),
-                   probe.weightFormat == "mxtq"
-                {
-                    throw NSError(
-                        domain: "vMLXLLM.LLMModelFactory",
-                        code: 438,
-                        userInfo: [
-                            NSLocalizedDescriptionKey: """
-                            Nemotron-H JANGTQ bundle detected (weight_format=mxtq) but \
-                            the NemotronHJANGTQModel wrapper isn't wired yet. \
-                            Components are in place (§437 NemotronHJANGTQSwitchMLP); \
-                            the Model+sanitize wrapper lands in a follow-up iter. \
-                            For now, use the MXFP4 bundle of the same model to load.
-                            """
-                        ])
-                }
                 let config = try JSONDecoder.json5().decode(NemotronHConfiguration.self, from: data)
+                if FormatSniff.isMXTQ(from: data) {
+                    let (bits, seed) = LLMModelFactory.probeJANGTQBitsSeed(
+                        data: data, defaultBits: 2)
+                    return NemotronHModel(
+                        jangtqContext: NemotronHJANGTQContext(bits: bits, mxtqSeed: seed),
+                        configuration: config)
+                }
                 return NemotronHModel(config)
             },
             "afmoe": create(AfMoEConfiguration.self, AfMoEModel.init),
@@ -293,11 +335,48 @@ public enum LLMTypeRegistry {
                     }
                     enum CodingKeys: String, CodingKey { case textConfig = "text_config" }
                 }
-                if let check = try? JSONDecoder.json5().decode(TextConfigCheck.self, from: data),
-                    check.textConfig?.modelType == "mistral4"
-                {
+                let check = try? JSONDecoder.json5().decode(TextConfigCheck.self, from: data)
+                if check?.textConfig?.modelType == "mistral4" {
                     let config = try JSONDecoder.json5().decode(Mistral4Configuration.self, from: data)
                     return Mistral4Model(config)
+                }
+                // P2 #11 + e2e test 2026-05-01 — when text_config.model_type is
+                // "ministral3" (Mistral-Medium-3.5 wrapped in mistral3), there's
+                // no Swift port. The Engine.swift unsupported-family guard at
+                // line 1342 catches this BEFORE the factory is called for the
+                // GUI/serve path, but bench-direct calls
+                // `LLMModelFactory.shared.loadContainer` directly and bypasses
+                // that sniff — landing here and trying to load with
+                // Mistral3TextModel which throws an opaque "Unhandled keys
+                // [language_model, multi_modal_projector, vision_tower]" error.
+                // Throw the same actionable message so every load entry-point
+                // (Engine.load, bench-direct, serve, vmlxctl chat) hits a
+                // clean error + Legacy Panel CTA from a single source.
+                if check?.textConfig?.modelType == "ministral3" {
+                    // 2026-05-01 — Mistral-Medium-3.5 (mistral3 wrapper +
+                    // ministral3 inner). When the bundle is JANGTQ-format,
+                    // route to the dedicated text-only JANGTQ model. The
+                    // wrapper's vision_tower + multi_modal_projector keys
+                    // are stripped by the model's own sanitize() pass,
+                    // so the LLM-only loader path can consume the
+                    // language_model.* prefix correctly.
+                    let (bits, seed, isJangTQ) =
+                        LLMModelFactory.probeMistralJANGTQ(data: data)
+                    if isJangTQ {
+                        let cfg = try JSONDecoder.json5().decode(
+                            Mistral3TextConfiguration.self, from: data)
+                        return Mistral3TextJANGTQModel(cfg, bits: bits, seed: seed)
+                    }
+                    // Non-JANGTQ Mistral-Medium-3.5 still has the VLM
+                    // wrapper structure — needs the VLM loader path.
+                    throw NSError(
+                        domain: "vMLXLLM", code: 4001,
+                        userInfo: [NSLocalizedDescriptionKey:
+                            "Mistral-Medium-3.5 dense (non-JANGTQ) routes through " +
+                            "VLMModelFactory due to vision tower keys. The LLM-only " +
+                            "factory path is reserved for the JANGTQ variant " +
+                            "(weight_format=mxtq). For dense bundles, load via " +
+                            "the VLM path."])
                 }
                 let config = try JSONDecoder.json5().decode(Mistral3TextConfiguration.self, from: data)
                 return Mistral3TextModel(config)
@@ -338,13 +417,44 @@ public enum LLMTypeRegistry {
     fileprivate static func makeDeepseekV3OrJANGTQ(
         family: String, data: Data
     ) throws -> any LanguageModel {
-        if FormatSniff.isMXTQ(from: data) {
+        // §425: Kimi-K2.6 wraps LLM dims under text_config (the bundle is
+        // multimodal-shaped even when no vision tower is loaded). Promote
+        // text_config keys + carry forward outer JANGTQ metadata so the
+        // downstream Codable decoders see a flat config. Plain DeepSeek V3
+        // bundles fall through unchanged.
+        let effectiveData: Data
+        do {
+            if let json = try JSONSerialization.jsonObject(
+                with: data, options: [.fragmentsAllowed]) as? [String: Any],
+                let textConfig = json["text_config"] as? [String: Any]
+            {
+                var merged = textConfig
+                for k in [
+                    "weight_format", "mxtq_bits", "mxtq_seed",
+                    "model_type", "quantization",
+                    "routed_expert_bits", "group_size",
+                ] {
+                    if merged[k] == nil, let v = json[k] {
+                        merged[k] = v
+                    }
+                }
+                merged["model_type"] = family
+                effectiveData = try JSONSerialization.data(
+                    withJSONObject: merged, options: [])
+            } else {
+                effectiveData = data
+            }
+        } catch {
+            effectiveData = data
+        }
+
+        if FormatSniff.isMXTQ(from: effectiveData) {
             let config = try JSONDecoder.json5().decode(
-                DeepseekV3JANGTQConfiguration.self, from: data)
+                DeepseekV3JANGTQConfiguration.self, from: effectiveData)
             return DeepseekV3JANGTQModel(config)
         }
         let config = try JSONDecoder.json5().decode(
-            DeepseekV3Configuration.self, from: data)
+            DeepseekV3Configuration.self, from: effectiveData)
         return DeepseekV3Model(config)
     }
 }
@@ -756,6 +866,51 @@ public final class LLMModelFactory: ModelFactory {
         self.modelRegistry = modelRegistry
     }
 
+    /// Probe a Mistral 3 / Mistral 3.5 / ministral3 config blob for the
+    /// JANGTQ markers (`weight_format == "mxtq"` + `mxtq_bits` + `mxtq_seed`)
+    /// without committing to the full Codable decode. `mxtq_bits` may be
+    /// either a flat Int (uniform) or a dict (per-role); we extract the
+    /// canonical default bit width from either form.
+    static func probeMistralJANGTQ(data: Data) -> (bits: Int, seed: Int, isJangTQ: Bool) {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return (2, 42, false) }
+        let isJangTQ = (obj["weight_format"] as? String) == "mxtq"
+        let seed = (obj["mxtq_seed"] as? Int) ?? 42
+        var bits = 2
+        if let flat = obj["mxtq_bits"] as? Int { bits = flat }
+        else if let dict = obj["mxtq_bits"] as? [String: Any] {
+            // Prefer "default" / "attention" / "shared_expert" — the
+            // dense decoder uses the highest-fidelity profile available.
+            for k in ["attention", "default", "shared_expert", "embed_lm_head"] {
+                if let v = dict[k] as? Int { bits = v; break }
+            }
+        }
+        return (bits, seed, isJangTQ)
+    }
+
+    /// Generic JANGTQ bits/seed probe for MoE families that route through
+    /// `TurboQuantSwitchGLU` (Laguna, future Qwen MoE variants, etc.). The
+    /// factory's `_load` prelude already flattens `mxtq_bits.routed_expert`
+    /// into a scalar at the top level when jang_config.json provides the
+    /// dict form, so a flat Int read covers both shapes. Falls back to the
+    /// caller-supplied `defaultBits` when nothing is set (e.g. affine-quant
+    /// bundles where `TurboQuantSwitchGLU` is wired but never activates
+    /// because no `tq_packed` keys land at sanitize time).
+    static func probeJANGTQBitsSeed(
+        data: Data, defaultBits: Int
+    ) -> (bits: Int, seed: Int) {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return (defaultBits, 42) }
+        let seed = (obj["mxtq_seed"] as? Int) ?? 42
+        if let flat = obj["mxtq_bits"] as? Int { return (flat, seed) }
+        if let dict = obj["mxtq_bits"] as? [String: Any],
+           let routed = dict["routed_expert"] as? Int
+        {
+            return (routed, seed)
+        }
+        return (defaultBits, seed)
+    }
+
     /// Shared instance with default behavior.
     public static let shared = LLMModelFactory(
         typeRegistry: LLMTypeRegistry.shared, modelRegistry: LLMRegistry.shared)
@@ -790,18 +945,31 @@ public final class LLMModelFactory: ModelFactory {
             var configDict = try JSONSerialization.jsonObject(with: configData) as? [String: Any],
             let jangDict = try? JSONSerialization.jsonObject(with: jangData) as? [String: Any]
         {
+            func isMissingJSON(_ value: Any?) -> Bool {
+                guard let value else { return true }
+                return value is NSNull
+            }
+
             for key in ["weight_format", "mxtq_seed"] {
-                if configDict[key] == nil, let v = jangDict[key] {
+                if isMissingJSON(configDict[key]), !isMissingJSON(jangDict[key]) {
+                    let v = jangDict[key]!
                     configDict[key] = v
                 }
             }
-            // mxtq_bits is a dict {attention, routed_expert, ...} — pull the
-            // routed_expert bit width out as the scalar the Swift config wants.
-            if configDict["mxtq_bits"] == nil,
-                let bitsMap = jangDict["mxtq_bits"] as? [String: Any],
-                let routed = bitsMap["routed_expert"] as? Int
+            // `mxtq_bits` is usually a dict `{attention, routed_expert, ...}`.
+            // Uniform routed experts can be flattened to the scalar older
+            // Swift config decoders expect. Mixed JANGTQ_K profiles carry
+            // `{routed_expert:{gate_proj,up_proj,down_proj}}`; preserve the
+            // dict so MiniMaxJANGTQConfiguration and the projection-bit header
+            // sniffer can see the richer plan.
+            if isMissingJSON(configDict["mxtq_bits"]),
+               let bitsMap = jangDict["mxtq_bits"] as? [String: Any]
             {
-                configDict["mxtq_bits"] = routed
+                if let routed = bitsMap["routed_expert"] as? Int {
+                    configDict["mxtq_bits"] = routed
+                } else {
+                    configDict["mxtq_bits"] = bitsMap
+                }
             }
             if let merged = try? JSONSerialization.data(withJSONObject: configDict) {
                 configData = merged
@@ -836,9 +1004,10 @@ public final class LLMModelFactory: ModelFactory {
         // This runs unconditionally for every model type. Safe for
         // non-JANGTQ bundles: no `tq_packed` tensors → returns nil →
         // configData unchanged.
-        if let inferredBits = JangLoader.peekRoutedBitsFromSafetensors(
+        let inferredBits = JangLoader.peekRoutedBitsFromSafetensors(
             modelDirectory: modelDirectory, configData: configData
-        ) {
+        )
+        if let inferredBits {
             // Check whether configData ALREADY agrees. If it does we
             // don't need to overwrite (avoids serialization round-trip
             // for the common well-formed-bundle case).
@@ -883,6 +1052,61 @@ public final class LLMModelFactory: ModelFactory {
             }
             configData = JangLoader.injectRoutedBits(
                 into: configData, bits: inferredBits)
+        }
+
+        // MiniMax JANGTQ_K and future mixed-projection SwiGLU bundles can
+        // have gate/up/down routed experts at different widths. A scalar
+        // `mxtq_bits` would be wrong, so the scalar probe above returns nil;
+        // recover the per-projection plan from headers and inject it under
+        // explicit projection keys consumed by family-specific decoders.
+        if inferredBits == nil,
+           let projectionBits = JangLoader.peekRoutedProjectionBitsFromSafetensors(
+            modelDirectory: modelDirectory,
+            configData: configData
+           )
+        {
+            let unique = Set(projectionBits.values).sorted()
+            if unique.count > 1 {
+                let detail = ["gate_proj", "up_proj", "down_proj"]
+                    .compactMap { key in projectionBits[key].map { "\(key):\($0)" } }
+                    .joined(separator: ",")
+                let line = "[§421k] mixed routed projection bits detected "
+                    + "(\(detail)); preserving per-projection plan\n"
+                try? FileHandle.standardError.write(contentsOf: Data(line.utf8))
+            }
+            configData = JangLoader.injectRoutedProjectionBits(
+                into: configData,
+                bitsByProjection: projectionBits
+            )
+        }
+
+        // DSV4 JANGTQ2-family bundles can be mixed 2/4-bit at the
+        // routed-expert layer level (for example hash-routed layers
+        // protected at 4-bit while most layers remain 2-bit). The scalar
+        // `mxtq_bits` path above deliberately returns nil on disagreement,
+        // because a single bit value would be wrong. Preserve the richer
+        // layer plan so DeepseekV4JANGTQConfiguration can build each
+        // TurboQuantSwitchGLU at the bit width matching its on-disk
+        // tq_packed stride.
+        if let dsv4BitsByLayer = JangLoader.peekDSV4RoutedBitsByLayerFromSafetensors(
+            modelDirectory: modelDirectory, configData: configData
+        ) {
+            let unique = Set(dsv4BitsByLayer.values).sorted()
+            if unique.count > 1 {
+                let sample = dsv4BitsByLayer
+                    .sorted(by: { $0.key < $1.key })
+                    .prefix(8)
+                    .map { "\($0.key):\($0.value)" }
+                    .joined(separator: ",")
+                let line = "[§421d] DSV4 mixed routed bits detected "
+                    + "(bits=\(unique), layers=\(dsv4BitsByLayer.count), "
+                    + "sample={\(sample)}); preserving per-layer plan\n"
+                try? FileHandle.standardError.write(contentsOf: Data(line.utf8))
+            }
+            configData = JangLoader.injectRoutedBitsByLayer(
+                into: configData,
+                bitsByLayer: dsv4BitsByLayer
+            )
         }
 
         let baseConfig: BaseConfiguration

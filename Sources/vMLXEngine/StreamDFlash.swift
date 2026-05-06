@@ -67,13 +67,29 @@ extension Engine {
             modelStampsThink: self.modelCapabilities?.thinkInTemplate ?? false,
             responseFormatInstruction: Engine.responseFormatInstruction(
                 from: request.responseFormat))
+        let dsv4TemplateOverride: String? = {
+            guard self.modelCapabilities?.modelType.lowercased() == "deepseek_v4",
+                  let builtin = self.modelCapabilities?.chatTemplate,
+                  !builtin.isEmpty
+            else { return nil }
+            return builtin
+        }()
 
         struct TokenizeResult: Sendable {
             let promptIDs: [Int]
             let eosIDs: Set<Int>
         }
         let tokenized: TokenizeResult = try await container.perform { ctx in
-            let userInput = UserInput(chat: chatMessages, tools: nil)
+            var templateExtras: [String: any Sendable] = [:]
+            if let builtin = dsv4TemplateOverride {
+                // Keep DFlash prompt tokenization on the same DSV4 built-in
+                // encoding_dsv4 template as the standard stream path.
+                templateExtras["__chat_template_override__"] = builtin
+            }
+            let userInput = UserInput(
+                chat: chatMessages,
+                tools: nil,
+                additionalContext: templateExtras.isEmpty ? nil : templateExtras)
             let prepared = try await ctx.processor.prepare(input: userInput)
             let ids = prepared.text.tokens.asArray(Int.self)
             var eos: Set<Int> = []
@@ -126,7 +142,9 @@ extension Engine {
         // lifecycle 1-for-1.
         let coordinator = self.cacheCoordinator
         let genPromptLen = await Self.computeGenPromptLen(
-            container: container, chatMessages: chatMessages)
+            container: container,
+            chatMessages: chatMessages,
+            chatTemplateOverride: dsv4TemplateOverride)
 
         struct RunResult {
             var outcomes: [JangDFlashBlockOutcome]
@@ -138,7 +156,7 @@ extension Engine {
 
         let runResult: RunResult = try await container.perform { ctx in
             // Build a fresh per-model cache for this request.
-            let freshCache = specDec.target.makeCache()
+            var freshCache = specDec.target.makeCache()
             // Coordinator lookup using the same key-stripping rules as
             // the standard path (mediaSalt nil — DFlash guarded out of
             // VLM requests above).
@@ -159,7 +177,7 @@ extension Engine {
                     if !blocks.isEmpty {
                         _ = restoreLayerData(from: blocks, into: freshCache)
                     } else if let arrays = diskArrays {
-                        _ = restoreFromDiskArrays(arrays, into: freshCache)
+                        _ = restoreFromDiskArrays(arrays, into: &freshCache)
                     }
                     _ = ssmStates  // SSMStateCache already applied by fetch
                 case .miss:
@@ -295,20 +313,31 @@ extension Engine {
     /// stripping requires both paths to agree on the number.
     fileprivate static func computeGenPromptLen(
         container: vMLXLMCommon.ModelContainer,
-        chatMessages: [Chat.Message]
+        chatMessages: [Chat.Message],
+        chatTemplateOverride: String? = nil
     ) async -> Int {
         let n = await container.perform { ctx -> Int in
             do {
                 let userInput = UserInput(chat: chatMessages, tools: nil)
                 let rawMsgs = DefaultMessageGenerator().generate(from: userInput)
+                var withContext: [String: any Sendable] = [
+                    "add_generation_prompt": true as any Sendable
+                ]
+                var withoutContext: [String: any Sendable] = [
+                    "add_generation_prompt": false as any Sendable
+                ]
+                if let chatTemplateOverride, !chatTemplateOverride.isEmpty {
+                    withContext["__chat_template_override__"] = chatTemplateOverride
+                    withoutContext["__chat_template_override__"] = chatTemplateOverride
+                }
                 let withGP = try ctx.tokenizer.applyChatTemplate(
                     messages: rawMsgs,
                     tools: nil,
-                    additionalContext: ["add_generation_prompt": true as any Sendable])
+                    additionalContext: withContext)
                 let withoutGP = try ctx.tokenizer.applyChatTemplate(
                     messages: rawMsgs,
                     tools: nil,
-                    additionalContext: ["add_generation_prompt": false as any Sendable])
+                    additionalContext: withoutContext)
                 return max(0, withGP.count - withoutGP.count)
             } catch {
                 return 0

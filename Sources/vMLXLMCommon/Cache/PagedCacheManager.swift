@@ -137,13 +137,18 @@ public final class PagedCacheManager: @unchecked Sendable {
 
     /// Internal free (caller must hold the lock).
     private func _freeBlock(_ block: CacheBlock) {
+        let wasReferenced = block.refCount > 0
         block.decrementRef()
         if block.refCount == 0 {
-            hashMap.remove(block)
-            block.reset()
+            if block.blockHash == nil || block.cacheData == nil || block.tokenIds.isEmpty {
+                hashMap.remove(block)
+                block.reset()
+            }
             freeQueue.append(block)
-            stats.allocatedBlocks -= 1
-            stats.freeBlocks += 1
+            if wasReferenced {
+                stats.allocatedBlocks -= 1
+                stats.freeBlocks += 1
+            }
         }
     }
 
@@ -230,8 +235,9 @@ public final class PagedCacheManager: @unchecked Sendable {
         var chunkIndex = 0
         var offset = 0
 
-        while offset + blockSize <= tokens.count {
-            let chunk = Array(tokens[offset..<(offset + blockSize)])
+        while offset < tokens.count {
+            let end = min(offset + blockSize, tokens.count)
+            let chunk = Array(tokens[offset..<end])
             let hash = CacheBlock.computeBlockHash(
                 parentHash: parentHash, tokenIds: chunk,
                 modelKey: modelKey, mediaSalt: mediaSalt)
@@ -239,18 +245,25 @@ public final class PagedCacheManager: @unchecked Sendable {
             // Skip if this block already exists in the cache.
             if hashMap.find(hash: hash) != nil {
                 parentHash = hash
-                offset += blockSize
+                offset = end
                 chunkIndex += 1
                 continue
+            }
+
+            // A block with zero restorable layer payloads is not a cache
+            // entry. Registering it would make future prefix probes report
+            // token hits while `restoreLayerData` restores nothing. This
+            // happens for cache topologies represented by another tier
+            // (for example DSV4 hybrid-pool caches).
+            guard chunkIndex < layerData.count, !layerData[chunkIndex].isEmpty else {
+                break
             }
 
             // Allocate a new block.
             guard let block = _allocateBlock() else { break }
 
             block.tokenIds = chunk
-            if chunkIndex < layerData.count {
-                block.cacheData = layerData[chunkIndex].map { Optional($0) }
-            }
+            block.cacheData = layerData[chunkIndex].map { Optional($0) }
 
             block.blockHash = hash
             hashMap.insert(block)
@@ -269,7 +282,7 @@ public final class PagedCacheManager: @unchecked Sendable {
             freeQueue.append(block)
 
             parentHash = hash
-            offset += blockSize
+            offset = end
             chunkIndex += 1
         }
     }
@@ -290,20 +303,43 @@ public final class PagedCacheManager: @unchecked Sendable {
         var matchedBlocks: [CacheBlock] = []
         var offset = 0
 
-        while offset + blockSize <= tokens.count {
-            let chunk = Array(tokens[offset..<(offset + blockSize)])
+        while offset < tokens.count {
+            let end = min(offset + blockSize, tokens.count)
+            let chunk = Array(tokens[offset..<end])
             let hash = CacheBlock.computeBlockHash(
                 parentHash: parentHash, tokenIds: chunk,
                 modelKey: modelKey, mediaSalt: mediaSalt)
 
             if let block = _findCachedBlock(hash: hash) {
-                // Mark as most-recently-used so subsequent evictions reclaim
-                // cold blocks first. Safe because the block is cached-but-free
-                // and still resident in the freeQueue. Part of vmlx #68 fix.
-                freeQueue.touch(block)
+                // Pin the cached-free block while the caller restores KV.
+                // A cached block at refCount 0 normally lives in freeQueue
+                // so it can be evicted under pressure. Leaving it there after
+                // incrementRef would not actually protect the read: a
+                // concurrent _allocateBlock() could still pop and reset it.
+                // Remove it from freeQueue for the lifetime of this fetch;
+                // freeBlock() will append it back without clearing the hash
+                // or cacheData once the caller releases the pin.
+                //
+                // Iter 144 — `incrementRef` pins the block while the
+                // engine reads from `block.cacheData` for KV restore.
+                // Without this, a concurrent `storeTokenSequence`
+                // calling `_allocateBlock()` could pop the same block
+                // from freeQueue and `reset()` clear its cacheData
+                // mid-read — torn / garbage tensors. Caller MUST call
+                // `freeBlock(block)` on every block in
+                // `result.blocks` once restore is complete. TokenIterator
+                // and BatchEngine release immediately after `restoreLayerData`;
+                // Stream's usage-only probe releases immediately after it
+                // composes the displayed cache tier.
+                if block.refCount == 0 {
+                    _ = freeQueue.remove(block)
+                    stats.allocatedBlocks += 1
+                    stats.freeBlocks -= 1
+                }
+                block.incrementRef()
                 matchedBlocks.append(block)
                 parentHash = hash
-                offset += blockSize
+                offset = end
             } else {
                 break
             }
@@ -311,7 +347,7 @@ public final class PagedCacheManager: @unchecked Sendable {
 
         guard !matchedBlocks.isEmpty else { return nil }
 
-        let matchedTokens = matchedBlocks.count * blockSize
+        let matchedTokens = matchedBlocks.reduce(0) { $0 + $1.tokenCount }
         let remainingTokens = Array(tokens[offset...])
 
         return PrefixFetchResult(
