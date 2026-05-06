@@ -685,36 +685,55 @@ def _resolve_repetition_penalty(request_value: float | None, model_name: str = "
     threshold from v1.5.8-followup; restore it. Per-request override
     (including benchmark-style 1.05) bypasses the floor entirely.
     """
+    # Codex 2026-05-06 #3: previously this function early-returned the
+    # request_value (or stale-default-replacement) without ever hitting
+    # the safety floor below. Stale UI defaults like 1.0 from the panel
+    # would resolve to bundle's 1.0 and ship to the engine, bypassing the
+    # DSV4/MiniMax 1.15 floor. Now: collect `resolved`, then run the
+    # floor enforcement at the end for ALL paths except genuine non-stale
+    # explicit overrides.
+    _bundle_path = _model_path or model_name
+    resolved: float | None = None
+    is_explicit_override = False  # True only for non-stale explicit values
+
     if request_value is not None:
         if (
             _bundle_overrides_generic_cli_defaults(model_name)
             and _is_stale_dsv4_ui_default("repetition_penalty", request_value)
         ):
+            # Stale UI default — replace with bundle value (still goes
+            # through the floor below).
             for _key in _bundle_repetition_penalty_keys(model_name):
                 _v = _bundle_sampling_default(model_name, _key)
                 if _v is not None:
-                    return _v
-        return request_value
-    # DSV4-only: bundle calibrated value wins over CLI default.
-    _bundle_path = _model_path or model_name
-    resolved: float | None = None
-    if _bundle_overrides_generic_cli_defaults(model_name):
-        for _key in _bundle_repetition_penalty_keys(_bundle_path):
-            _v = _bundle_sampling_default(_bundle_path, _key)
-            if _v is not None:
-                resolved = _v
-                break
-    if resolved is None and _default_repetition_penalty is not None:
-        resolved = _default_repetition_penalty
-    if resolved is None:
-        for _key in _bundle_repetition_penalty_keys(_bundle_path):
-            _v = _bundle_sampling_default(_bundle_path, _key)
-            if _v is not None:
-                resolved = _v
-                break
-    if resolved is None:
-        _, _, fam_rep = _family_fallback_for(model_name)
-        resolved = fam_rep
+                    resolved = _v
+                    break
+            if resolved is None:
+                resolved = request_value
+        else:
+            # Genuine non-stale explicit value (user override or non-DSV4
+            # path). Skip the floor — user is opting in.
+            resolved = request_value
+            is_explicit_override = True
+    else:
+        # DSV4-only: bundle calibrated value wins over CLI default.
+        if _bundle_overrides_generic_cli_defaults(model_name):
+            for _key in _bundle_repetition_penalty_keys(_bundle_path):
+                _v = _bundle_sampling_default(_bundle_path, _key)
+                if _v is not None:
+                    resolved = _v
+                    break
+        if resolved is None and _default_repetition_penalty is not None:
+            resolved = _default_repetition_penalty
+        if resolved is None:
+            for _key in _bundle_repetition_penalty_keys(_bundle_path):
+                _v = _bundle_sampling_default(_bundle_path, _key)
+                if _v is not None:
+                    resolved = _v
+                    break
+        if resolved is None:
+            _, _, fam_rep = _family_fallback_for(model_name)
+            resolved = fam_rep
 
     # MIN-floor enforcement for safety-critical families.
     #
@@ -742,12 +761,21 @@ def _resolve_repetition_penalty(request_value: float | None, model_name: str = "
     _SAFETY_FLOORS = {"deepseek_v4": 1.15, "minimax_m2": 1.15}
     _family = _model_family_for_defaults(_bundle_path or model_name)
     _floor = _SAFETY_FLOORS.get(_family)
-    if _floor is not None and resolved is not None and resolved < _floor:
+    # Codex 2026-05-06 #3: only skip the floor for GENUINELY explicit
+    # user overrides (non-stale request value). Stale UI defaults (the
+    # 1.0 panel's send by default) and bundle/CLI defaults all get
+    # floored.
+    if (
+        _floor is not None
+        and resolved is not None
+        and resolved < _floor
+        and not is_explicit_override
+    ):
         logger.info(
-            f"DSV4/MiniMax safety floor applied: bundle/CLI rep_penalty="
+            f"DSV4/MiniMax safety floor applied: rep_penalty="
             f"{resolved} raised to family floor {_floor} "
-            f"(family={_family}). Per-request override with "
-            f"repetition_penalty bypasses this floor."
+            f"(family={_family}). Genuine per-request explicit override "
+            f"bypasses this floor; stale UI defaults do NOT."
         )
         resolved = _floor
 
@@ -7539,12 +7567,43 @@ async def create_response(
             _ct_kwargs["reasoning_effort"] = "none"
 
 
-    # DSV4 reasoning_effort filter — the Jinja template only branches on
-    # `reasoning_effort=='max'`. Any other value (`high`, `medium`, ...) is
-    # a silent no-op that confuses downstream parsing. Mirror the v1.3.93
-    # fix already in chat_completion / ollama / msgs paths so the Responses
-    # API behaves identically.
+    # DSV4 force-thinking + reasoning_effort handling — REAL /v1/responses
+    # path (Codex 2026-05-06 #1 #2). This is the actual route panel uses;
+    # the DSV4 block earlier in this same function (~7430) only sets the
+    # default system prompt. Without this block, panel sends through
+    # /v1/responses → DSV4 chat-mode contamination + bare-thinking with no
+    # effort hint. Symptom: "testing" framing replays into long-context
+    # turns, model collapses to fragment loops.
     if _is_dsv4_resp_msgs:
+        # (a) Force enable_thinking=True unless VMLX_DSV4_ALLOW_CHAT=1.
+        #     Chat-mode bundle is training-data-contaminated; thinking-mode
+        #     is the only verified-coherent path.
+        _allow_dsv4_chat_resp = os.environ.get(
+            "VMLX_DSV4_ALLOW_CHAT", "0"
+        ).lower() in {"1", "true", "yes"}
+        if request.enable_thinking is False and _allow_dsv4_chat_resp:
+            logger.warning(
+                "DSV4 (/v1/responses): VMLX_DSV4_ALLOW_CHAT=1 — honoring "
+                "explicit enable_thinking=False. Output may loop."
+            )
+            chat_kwargs["enable_thinking"] = False
+            _ct_kwargs["enable_thinking"] = False
+        else:
+            if request.enable_thinking is not True:
+                logger.info(
+                    "DSV4 (/v1/responses): forcing enable_thinking=True "
+                    "(chat-mode bundle is training-data-contaminated)"
+                )
+                request.enable_thinking = True
+            chat_kwargs["enable_thinking"] = True
+            _ct_kwargs["enable_thinking"] = True
+
+        # (b) reasoning_effort handling — DSV4 encoder only injects the
+        #     REASONING_EFFORT_MAX template at index 0 when effort=='max'.
+        #     'high' is currently a render no-op in the bundle encoder
+        #     but pass it through (forward-compat). 'low'/'medium' are
+        #     normalized to 'high' so a future encoder version that
+        #     handles non-max tiers picks them up.
         _cur_resp_effort = (
             getattr(request, "reasoning_effort", None)
             or _ct_kwargs.get("reasoning_effort")
@@ -7552,8 +7611,19 @@ async def create_response(
         _ct_kwargs.pop("thinking_mode", None)
         if _cur_resp_effort == "max":
             _ct_kwargs["reasoning_effort"] = "max"
+        elif _cur_resp_effort in ("low", "medium", "high"):
+            _ct_kwargs["reasoning_effort"] = "high"
         else:
             _ct_kwargs.pop("reasoning_effort", None)
+
+        # (c) Diagnostic log so we can verify what actually goes to the
+        #     encoder. Codex requested explicit log of effective values.
+        logger.info(
+            f"DSV4 (/v1/responses) effective: enable_thinking="
+            f"{chat_kwargs.get('enable_thinking')}, reasoning_effort="
+            f"{_ct_kwargs.get('reasoning_effort')}, "
+            f"messages={len(messages) if messages else 0}"
+        )
 
     # Forward extra chat_template_kwargs to engine (exclude enable_thinking, already handled)
     if _ct_kwargs:
@@ -7855,7 +7925,27 @@ async def create_response(
         # parsers (esp. Gemma 4 channel markers, Qwen 3.6 think tags) need the
         # special tokens that clean_output_text strips for display.
         _raw_for_parse = getattr(output, "raw_text", "") or output.text
+        # DSV4 /v1/responses debug instrumentation (Codex 2026-05-06 #84):
+        # log raw model output to confirm whether parser is failing or
+        # model emitted </think> immediately, etc.
+        if _is_dsv4_resp_msgs:
+            _raw_len = len(_raw_for_parse) if _raw_for_parse else 0
+            _has_open = "<think>" in (_raw_for_parse or "")
+            _has_close = "</think>" in (_raw_for_parse or "")
+            logger.info(
+                f"DSV4 (/v1/responses) raw_output: len={_raw_len}, "
+                f"has_<think>={_has_open}, has_</think>={_has_close}, "
+                f"think_in_prompt={_think_in_prompt_ns}, "
+                f"head={(_raw_for_parse or '')[:200]!r}, "
+                f"tail={(_raw_for_parse or '')[-200:]!r}"
+            )
         reasoning_text, remaining_text = request_parser.extract_reasoning(_raw_for_parse)
+        if _is_dsv4_resp_msgs:
+            logger.info(
+                f"DSV4 (/v1/responses) parser: reasoning_len="
+                f"{len(reasoning_text or '')}, remaining_len="
+                f"{len(remaining_text or '')}"
+            )
         if remaining_text is not None:
             content_for_parsing = remaining_text
         elif reasoning_text is not None:
@@ -9644,8 +9734,13 @@ async def stream_responses_api(
                 and not reasoning_was_streamed
                 and not suppress_reasoning
             ):
-                # Model only produced reasoning with no content — use as fallback.
-                # Skip if reasoning was already streamed as deltas (avoids duplication).
+                # Edge case: reasoning was accumulated but NEVER streamed as
+                # deltas (e.g., parser produced full block at end without
+                # incremental events). Use as fallback. NEVER falls through
+                # here when reasoning_was_streamed=True — that would be the
+                # B1 bug Codex caught (reasoning leaks into output_text →
+                # client sees internal thinking as visible answer →
+                # next-turn history pollution).
                 display_text = accumulated_reasoning
             elif display_text:
                 # Fallback: re-parse if streaming didn't accumulate
@@ -9654,11 +9749,26 @@ async def stream_responses_api(
                 )
                 if content_text:
                     display_text = content_text
-                elif reasoning_text:
+                elif reasoning_text and not reasoning_was_streamed:
+                    # Codex 2026-05-06 B1: only fall back to reasoning if it
+                    # wasn't already streamed. Otherwise we double-emit and
+                    # pollute next-turn history.
                     display_text = reasoning_text
+                else:
+                    # Reasoning streamed + no content extractable → empty
+                    # final text. Caller (panel) should fall back to
+                    # reasoning_content for display, not output_text.
+                    display_text = ""
 
         if not display_text:
-            display_text = clean_output_text(full_text) if full_text else ""
+            # Codex 2026-05-06 B1: if reasoning was streamed and we have no
+            # content, keep display_text EMPTY rather than falling back to
+            # full_text (which contains the reasoning text). Empty
+            # output_text is the correct signal — client renders the
+            # already-streamed reasoning_content. Falling back to full_text
+            # here was the bug that pollutes history.
+            if not reasoning_was_streamed:
+                display_text = clean_output_text(full_text) if full_text else ""
         if not display_text:
             # If reasoning was suppressed and model produced reasoning, the response
             # is intentionally empty — don't show error fallback
@@ -9666,6 +9776,18 @@ async def stream_responses_api(
                 display_text = "[Model produced only internal reasoning with no visible response. Try enabling thinking to see the reasoning, or rephrase your prompt.]"
                 logger.info(
                     f"Request {response_id}: model produced only reasoning ({len(accumulated_reasoning)} chars) — suppressed per user setting"
+                )
+            elif reasoning_was_streamed:
+                # Reasoning-only completion is now intentional (B1 fix).
+                # Empty display_text means the panel should render the
+                # reasoning_content that was already streamed. Don't emit
+                # the "[Model produced no response]" placeholder which
+                # would itself become visible content.
+                display_text = ""
+                logger.info(
+                    f"Request {response_id}: reasoning-only completion "
+                    f"({len(accumulated_reasoning)} chars reasoning, no content) — "
+                    f"empty output_text is correct; client renders reasoning_content"
                 )
             else:
                 display_text = (
