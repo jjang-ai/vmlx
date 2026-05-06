@@ -778,6 +778,7 @@ public struct GatewayServer {
 
         var content = "", reasoning = ""
         var toolCalls: [ChatRequest.ToolCall] = []
+        var seenToolCallKeys = Set<String>()
         var finishReason: String? = nil
         var usage: StreamChunk.Usage? = nil
         let stream = await engine.stream(request: chatReq, id: id)
@@ -785,7 +786,10 @@ public struct GatewayServer {
             for try await chunk in stream {
                 if let c = chunk.content { content += c }
                 if let r = chunk.reasoning { reasoning += r }
-                if let tcs = chunk.toolCalls { toolCalls.append(contentsOf: tcs) }
+                if let tcs = chunk.toolCalls {
+                    ToolCallDeduper.appendUnique(
+                        tcs, to: &toolCalls, seen: &seenToolCallKeys)
+                }
                 if let fr = chunk.finishReason { finishReason = fr }
                 if let u = chunk.usage { usage = u }
             }

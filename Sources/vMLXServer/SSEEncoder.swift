@@ -63,6 +63,7 @@ public enum SSEEncoder {
             var finishReason: String? = nil
             var lastUsage: StreamChunk.Usage? = nil
             var toolCallIndex = 0
+            var seenToolCallKeys = Set<String>()
             // iter-90 §118: track whether the stream ended due to an
             // upstream throw. When true, the final stop-finish chunk
             // and the usage frame are skipped — emitting them after
@@ -117,6 +118,9 @@ public enum SSEEncoder {
                         }
                         if let tcs = chunk.toolCalls, !tcs.isEmpty {
                             for tc in tcs {
+                                guard ToolCallDeduper.insert(
+                                    tc, seen: &seenToolCallKeys)
+                                else { continue }
                                 let delta: [String: Any] = [
                                     "tool_calls": [[
                                         "index": toolCallIndex,
@@ -384,6 +388,7 @@ public enum SSEEncoder {
             // the final event can differentiate success vs failure.
             var hadError = false
             var seenToolCalls: [String: (outputIndex: Int, itemId: String, name: String)] = [:]
+            var seenExactToolCalls = Set<String>()
             // Accumulate each tool_call's streaming arguments by call id so
             // `response.output_item.done` can emit the FINAL assembled
             // argument string (not the hardcoded empty) on close. Deep
@@ -572,6 +577,9 @@ public enum SSEEncoder {
                         }
                         if let tcs = chunk.toolCalls, !tcs.isEmpty {
                             for tc in tcs {
+                                guard ToolCallDeduper.insert(
+                                    tc, seen: &seenExactToolCalls)
+                                else { continue }
                                 let (itemId, outputIndex) = try await openToolCall(
                                     callId: tc.id, name: tc.function.name)
                                 if !tc.function.arguments.isEmpty {

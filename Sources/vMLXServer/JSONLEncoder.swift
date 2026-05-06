@@ -29,6 +29,7 @@ public enum JSONLEncoder {
             // are ignored by those clients. Mirrors the stateful wrapper
             // from vmlx_engine/api/ollama_adapter.py added in v1.3.50.
             var toolCallBuffer: [[String: Any]] = []
+            var seenToolCallKeys = Set<String>()
 
             // 2026-04-18 heartbeat — Ollama NDJSON clients can't parse
             // SSE comments, but they DO tolerate empty-content "ping"
@@ -59,7 +60,11 @@ public enum JSONLEncoder {
                             message["thinking"] = reasoning
                         }
                         if let tcs = chunk.toolCalls, !tcs.isEmpty {
-                            let encoded = tcs.map { tc -> [String: Any] in
+                            let uniqueCalls = tcs.filter {
+                                ToolCallDeduper.insert(
+                                    $0, seen: &seenToolCallKeys)
+                            }
+                            let encoded = uniqueCalls.map { tc -> [String: Any] in
                                 let args = Self.parseJSONObject(tc.function.arguments) ?? [:]
                                 return [
                                     "function": [
@@ -70,8 +75,10 @@ public enum JSONLEncoder {
                             }
                             // Keep delta emission for clients that read inline,
                             // AND buffer for the final chunk.
-                            message["tool_calls"] = encoded
-                            toolCallBuffer.append(contentsOf: encoded)
+                            if !encoded.isEmpty {
+                                message["tool_calls"] = encoded
+                                toolCallBuffer.append(contentsOf: encoded)
+                            }
                         }
                         let obj: [String: Any] = [
                             "model": model,

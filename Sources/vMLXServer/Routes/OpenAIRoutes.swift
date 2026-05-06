@@ -172,6 +172,7 @@ public enum OpenAIRoutes {
             var content = ""
             var reasoning = ""
             var toolCalls: [ChatRequest.ToolCall] = []
+            var seenToolCallKeys = Set<String>()
             var finishReason: String? = nil
             var usage: StreamChunk.Usage? = nil
             var allLogprobs: [TokenLogprob] = []
@@ -180,7 +181,10 @@ public enum OpenAIRoutes {
                 for try await chunk in stream {
                     if let c = chunk.content { content += c }
                     if let r = chunk.reasoning { reasoning += r }
-                    if let tcs = chunk.toolCalls { toolCalls.append(contentsOf: tcs) }
+                    if let tcs = chunk.toolCalls {
+                        ToolCallDeduper.appendUnique(
+                            tcs, to: &toolCalls, seen: &seenToolCallKeys)
+                    }
                     if let fr = chunk.finishReason { finishReason = fr }
                     if let u = chunk.usage { usage = u }
                     if let lps = chunk.logprobs { allLogprobs.append(contentsOf: lps) }
@@ -1822,6 +1826,7 @@ public enum OpenAIRoutes {
         var content = ""
         var reasoning = ""
         var toolCalls: [ChatRequest.ToolCall] = []
+        var seenToolCallKeys = Set<String>()
         var usage: StreamChunk.Usage? = nil
         var allLogprobs: [TokenLogprob] = []
         let stream = await engine.stream(request: chatReq, id: id)
@@ -1829,7 +1834,10 @@ public enum OpenAIRoutes {
             for try await chunk in stream {
                 if let c = chunk.content { content += c }
                 if let r = chunk.reasoning { reasoning += r }
-                if let tcs = chunk.toolCalls { toolCalls.append(contentsOf: tcs) }
+                if let tcs = chunk.toolCalls {
+                    ToolCallDeduper.appendUnique(
+                        tcs, to: &toolCalls, seen: &seenToolCallKeys)
+                }
                 if let u = chunk.usage { usage = u }
                 if let lps = chunk.logprobs { allLogprobs.append(contentsOf: lps) }
             }

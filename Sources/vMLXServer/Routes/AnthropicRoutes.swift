@@ -185,13 +185,17 @@ public enum AnthropicRoutes {
         var thinking = ""
         var content = ""
         var toolCalls: [ChatRequest.ToolCall] = []
+        var seenToolCallKeys = Set<String>()
         var usage: StreamChunk.Usage? = nil
         var finishReason: String? = nil
         do {
             for try await chunk in upstream {
                 if let r = chunk.reasoning { thinking += r }
                 if let c = chunk.content { content += c }
-                if let tcs = chunk.toolCalls { toolCalls.append(contentsOf: tcs) }
+                if let tcs = chunk.toolCalls {
+                    ToolCallDeduper.appendUnique(
+                        tcs, to: &toolCalls, seen: &seenToolCallKeys)
+                }
                 if let u = chunk.usage { usage = u }
                 if let fr = chunk.finishReason { finishReason = fr }
             }
@@ -431,6 +435,7 @@ public enum AnthropicRoutes {
 
             var finishReason: String? = nil
             var usage: StreamChunk.Usage? = nil
+            var seenToolCallKeys = Set<String>()
             // Iter-18: wrap the upstream with the shared heartbeat
             // helper so thinking-model prefill doesn't trigger a
             // nginx / SDK idle-timeout disconnect. Anthropic SSE uses
@@ -485,6 +490,9 @@ public enum AnthropicRoutes {
                         // the original code emitted one start/stop pair per
                         // delta, which SDK clients reject as malformed.
                         for tc in tcs {
+                            guard ToolCallDeduper.insert(
+                                tc, seen: &seenToolCallKeys)
+                            else { continue }
                             let alreadyOpen: Bool
                             if case .toolUse(_, let openId) = open, openId == tc.id {
                                 alreadyOpen = true
