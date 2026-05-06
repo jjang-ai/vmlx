@@ -1,0 +1,587 @@
+# Copyright © 2024 Apple Inc.
+
+import math
+from dataclasses import dataclass, field
+from functools import partial
+from typing import Any, Dict, Optional
+
+import mlx.core as mx
+import mlx.nn as nn
+from mlx.nn.layers.distributed import shard_inplace, shard_linear, sum_gradients
+from mlx_lm.models.cache import KVCache
+
+from .activations import swiglu
+from .base import BaseModelArgs, create_attention_mask, scaled_dot_product_attention
+from .mla import MultiLinear
+from .pipeline import PipelineMixin
+from .rope_utils import initialize_rope
+from .switch_layers import SwitchGLU
+
+
+@dataclass
+class ModelArgs(BaseModelArgs):
+    model_type: str = "mistral4"
+    vocab_size: int = 131072
+    hidden_size: int = 4096
+    intermediate_size: int = 12288
+    moe_intermediate_size: int = 2048
+    num_hidden_layers: int = 36
+    num_attention_heads: int = 32
+    num_key_value_heads: int = 32
+    n_shared_experts: Optional[int] = 1
+    n_routed_experts: Optional[int] = 128
+    routed_scaling_factor: float = 1.0
+    kv_lora_rank: int = 256
+    q_lora_rank: int = 1024
+    qk_rope_head_dim: int = 64
+    v_head_dim: int = 128
+    qk_nope_head_dim: int = 64
+    topk_method: str = "noaux_tc"
+    scoring_func: str = "softmax"
+    norm_topk_prob: bool = True
+    n_group: int = 1
+    topk_group: int = 1
+    num_experts_per_tok: int = 4
+    moe_layer_freq: int = 1
+    first_k_dense_replace: int = 0
+    max_position_embeddings: int = 2048
+    rms_norm_eps: float = 1e-6
+    rope_theta: float = 10000.0
+    rope_scaling: Dict = None
+    rope_parameters: Dict = None
+    rope_interleave: bool = True
+    attention_bias: bool = False
+    hidden_act: str = "silu"
+    mlp_bias: bool = False
+    head_dim: int = 128
+    qk_head_dim: int = 128
+
+    def __post_init__(self):
+        if hasattr(super(), '__post_init__'):
+            super().__post_init__()
+        if self.rope_parameters is not None and self.rope_scaling is None:
+            self.rope_scaling = self.rope_parameters
+        # Extract rope_theta from rope_parameters if nested (VLM text_config layout)
+        if self.rope_parameters is not None and "rope_theta" in self.rope_parameters:
+            self.rope_theta = self.rope_parameters["rope_theta"]
+
+
+class Mistral4Attention(nn.Module):
+    def __init__(self, config: ModelArgs):
+        super().__init__()
+        self.config = config
+        self.hidden_size = config.hidden_size
+        self.num_heads = config.num_attention_heads
+        self.max_position_embeddings = config.max_position_embeddings
+        self.rope_theta = config.rope_theta
+        self.q_lora_rank = config.q_lora_rank
+        self.qk_rope_head_dim = config.qk_rope_head_dim
+        self.kv_lora_rank = config.kv_lora_rank
+        self.v_head_dim = config.v_head_dim
+        self.qk_nope_head_dim = config.qk_nope_head_dim
+        self.q_head_dim = config.qk_nope_head_dim + config.qk_rope_head_dim
+
+        self.scale = self.q_head_dim**-0.5
+
+        if self.q_lora_rank is None:
+            self.q_proj = nn.Linear(
+                self.hidden_size, self.num_heads * self.q_head_dim, bias=False
+            )
+        else:
+            self.q_a_proj = nn.Linear(
+                self.hidden_size, self.q_lora_rank, bias=config.attention_bias
+            )
+            self.q_a_layernorm = nn.RMSNorm(self.q_lora_rank, eps=1e-6)
+            self.q_b_proj = nn.Linear(
+                self.q_lora_rank, self.num_heads * self.q_head_dim, bias=False
+            )
+
+        self.kv_a_proj_with_mqa = nn.Linear(
+            self.hidden_size,
+            self.kv_lora_rank + self.qk_rope_head_dim,
+            bias=config.attention_bias,
+        )
+        self.kv_a_layernorm = nn.RMSNorm(self.kv_lora_rank, eps=1e-6)
+        self.embed_q = MultiLinear(
+            self.qk_nope_head_dim, self.kv_lora_rank, self.num_heads
+        )
+        self.unembed_out = MultiLinear(
+            self.kv_lora_rank, self.v_head_dim, self.num_heads
+        )
+
+        self.o_proj = nn.Linear(
+            self.num_heads * self.v_head_dim,
+            self.hidden_size,
+            bias=config.attention_bias,
+        )
+
+        # Mistral 4: llama_4_scaling_beta per-position attention scaling
+        self._has_llama4_scaling = (
+            self.config.rope_scaling is not None
+            and "llama_4_scaling_beta" in self.config.rope_scaling
+        )
+        if self._has_llama4_scaling:
+            self._llama4_beta = self.config.rope_scaling["llama_4_scaling_beta"]
+            self._llama4_orig_max_pos = self.config.rope_scaling.get(
+                "original_max_position_embeddings", 8192
+            )
+
+        self.rope = initialize_rope(
+            dims=self.qk_rope_head_dim,
+            base=self.rope_theta,
+            traditional=config.rope_interleave,
+            max_position_embeddings=self.max_position_embeddings,
+            scaling_config=self.config.rope_scaling,
+        )
+
+    def __call__(
+        self,
+        x: mx.array,
+        mask: Optional[mx.array] = None,
+        cache: Optional[Any] = None,
+    ) -> mx.array:
+        B, L, D = x.shape
+
+        if self.q_lora_rank is None:
+            q = self.q_proj(x)
+        else:
+            q = self.q_b_proj(self.q_a_layernorm(self.q_a_proj(x)))
+
+        q = q.reshape(B, L, self.num_heads, self.q_head_dim).transpose(0, 2, 1, 3)
+        q_nope, q_pe = mx.split(q, [self.qk_nope_head_dim], axis=-1)
+        compressed_kv = self.kv_a_proj_with_mqa(x)
+        compressed_kv, k_pe = mx.split(compressed_kv, [self.kv_lora_rank], axis=-1)
+        k_pe = k_pe.reshape(B, L, 1, self.qk_rope_head_dim).transpose(0, 2, 1, 3)
+        kv_latent = self.kv_a_layernorm(compressed_kv)
+
+        offset = cache.offset if cache is not None else 0
+        if isinstance(offset, mx.array):
+            offset_int = (offset if offset.ndim == 0 else offset[0]).item()
+        else:
+            offset_int = offset
+        q_pe = self.rope(q_pe, offset)
+        k_pe = self.rope(k_pe, offset)
+
+        kv_latent = mx.expand_dims(kv_latent, axis=1)
+
+        if cache is not None:
+            kv_latent, k_pe = cache.update_and_fetch(kv_latent, k_pe)
+
+        # Mistral 4: llama_4_scaling_beta per-position attention scaling
+        attn_scale = self.scale
+        if self._has_llama4_scaling:
+            scaling = 1 + self._llama4_beta * mx.log(
+                1 + mx.floor(mx.arange(offset_int, offset_int + L) / self._llama4_orig_max_pos)
+            )
+            attn_scale = (scaling[:, None] * self.scale).astype(q_pe.dtype)
+
+        pe_scores = (q_pe * attn_scale) @ k_pe.swapaxes(-1, -2)
+        if mask is not None:
+            pe_scores = mx.where(
+                mask,
+                pe_scores,
+                mx.array(mx.finfo(pe_scores.dtype).min, pe_scores.dtype),
+            )
+
+        if L == 1:
+            q_nope = self.embed_q(q_nope)
+            k = v = kv_latent
+            q_sdpa = q_nope.astype(mx.float32)
+            k_sdpa = k.astype(mx.float32)
+            v_sdpa = v.astype(mx.float32)
+            mask_sdpa = pe_scores.astype(mx.float32)
+        else:
+            k = self.embed_q(kv_latent, transpose=False)
+            v = self.unembed_out(kv_latent)
+            q_sdpa, k_sdpa, v_sdpa, mask_sdpa = q_nope, k, v, pe_scores
+
+        output = scaled_dot_product_attention(
+            q_sdpa, k_sdpa, v_sdpa, cache=cache, scale=self.scale, mask=mask_sdpa
+        )
+        if L == 1:
+            output = output.astype(kv_latent.dtype)
+            output = self.unembed_out(output)
+
+        output = output.transpose(0, 2, 1, 3).reshape(B, L, -1)
+        return self.o_proj(output)
+
+
+class Mistral4MLP(nn.Module):
+    def __init__(
+        self, config: ModelArgs, hidden_size: int = None, intermediate_size: int = None
+    ):
+        super().__init__()
+        self.config = config
+        self.hidden_size = config.hidden_size if hidden_size is None else hidden_size
+        self.intermediate_size = (
+            config.intermediate_size if intermediate_size is None else intermediate_size
+        )
+
+        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
+        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
+        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
+
+    def __call__(self, x):
+        down_proj = self.down_proj(swiglu(self.gate_proj(x), self.up_proj(x)))
+        return down_proj
+
+
+class MoEGate(nn.Module):
+    def __init__(self, config: ModelArgs):
+        super().__init__()
+        self.config = config
+        self.top_k = config.num_experts_per_tok
+        self.scoring_func = config.scoring_func
+        self.norm_topk_prob = config.norm_topk_prob
+        self.n_routed_experts = config.n_routed_experts
+        self.routed_scaling_factor = config.routed_scaling_factor
+        self.n_group = config.n_group
+        self.topk_group = config.topk_group
+        self.weight = mx.zeros((self.n_routed_experts, config.hidden_size))
+        self.e_score_correction_bias = mx.zeros((self.n_routed_experts,))
+
+    def __call__(self, x):
+        gates = x @ self.weight.T
+
+        if self.scoring_func == "softmax":
+            scores = mx.softmax(gates.astype(mx.float32), axis=-1)
+        else:
+            scores = mx.sigmoid(gates.astype(mx.float32))
+            scores = scores + self.e_score_correction_bias
+
+        orig_scores = scores
+
+        if self.n_group > 1:
+            scores = mx.unflatten(scores, axis=-1, shape=(self.n_group, -1))
+            group_scores = mx.topk(scores, 2, axis=-1).sum(axis=-1, keepdims=True)
+            k = self.n_group - self.topk_group
+            group_idx = mx.argpartition(group_scores, kth=k - 1, axis=-2)[..., :k, :]
+            scores = mx.put_along_axis(
+                scores, mx.stop_gradient(group_idx), mx.array(0.0), axis=-2
+            )
+            scores = mx.flatten(scores, -2, -1)
+
+        top_k = self.top_k
+        inds = mx.argpartition(-scores, kth=top_k - 1, axis=-1)[..., :top_k]
+        scores = mx.take_along_axis(orig_scores, inds, axis=-1)
+        if top_k > 1 and self.norm_topk_prob:
+            denominator = scores.sum(axis=-1, keepdims=True)
+            scores = scores / denominator
+        scores = scores * self.routed_scaling_factor
+
+        return inds, scores
+
+
+class Mistral4MoE(nn.Module):
+    def __init__(self, config: ModelArgs):
+        super().__init__()
+        self.config = config
+        self.num_experts_per_tok = config.num_experts_per_tok
+        self.switch_mlp = SwitchGLU(
+            config.hidden_size,
+            config.moe_intermediate_size,
+            config.n_routed_experts,
+        )
+
+        self.gate = MoEGate(config)
+        if config.n_shared_experts is not None:
+            intermediate_size = config.moe_intermediate_size * config.n_shared_experts
+            self.shared_experts = Mistral4MLP(
+                config=config, intermediate_size=intermediate_size
+            )
+
+        self.sharding_group = None
+
+    def __call__(self, x):
+        if self.sharding_group is not None:
+            x = sum_gradients(self.sharding_group)(x)
+
+        inds, scores = self.gate(x)
+        y = self.switch_mlp(x, inds)
+        y = (y * scores[..., None]).sum(axis=-2).astype(y.dtype)
+        if self.config.n_shared_experts is not None:
+            y = y + self.shared_experts(x)
+
+        if self.sharding_group is not None:
+            y = mx.distributed.all_sum(y, group=self.sharding_group)
+
+        return y
+
+
+class Mistral4DecoderLayer(nn.Module):
+    def __init__(self, config: ModelArgs, layer_idx: int):
+        super().__init__()
+        self.self_attn = Mistral4Attention(config)
+        self.mlp = (
+            Mistral4MoE(config)
+            if (
+                config.n_routed_experts is not None
+                and layer_idx >= config.first_k_dense_replace
+                and layer_idx % config.moe_layer_freq == 0
+            )
+            else Mistral4MLP(config)
+        )
+        self.input_layernorm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = nn.RMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps
+        )
+
+    def __call__(
+        self,
+        x: mx.array,
+        mask: Optional[mx.array] = None,
+        cache: Optional[Any] = None,
+    ) -> mx.array:
+        r = self.self_attn(self.input_layernorm(x), mask, cache)
+        h = x + r
+        r = self.mlp(self.post_attention_layernorm(h))
+        return h + r
+
+
+class Mistral4Model(PipelineMixin, nn.Module):
+    def __init__(self, config: ModelArgs):
+        super().__init__()
+        self.vocab_size = config.vocab_size
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
+        self.layers = [
+            Mistral4DecoderLayer(config, idx)
+            for idx in range(config.num_hidden_layers)
+        ]
+        self.norm = nn.RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+    def __call__(
+        self,
+        x: mx.array,
+        cache: Optional[Any] = None,
+        input_embeddings: Optional[mx.array] = None,
+    ) -> mx.array:
+        if input_embeddings is not None:
+            h = input_embeddings
+        else:
+            h = self.embed_tokens(x)
+
+        pipeline_rank = self.pipeline_rank
+        pipeline_size = self.pipeline_size
+
+        if cache is None:
+            cache = [None] * len(self.pipeline_layers)
+        mask = create_attention_mask(h, cache[0], return_array=True)
+
+        # Receive from the previous process in the pipeline
+        if pipeline_rank < pipeline_size - 1:
+            h = mx.distributed.recv_like(h, (pipeline_rank + 1))
+
+        for l, c in zip(self.pipeline_layers, cache):
+            h = l(h, mask, cache=c)
+
+        # Send to the next process in the pipeline
+        if pipeline_rank != 0:
+            h = mx.distributed.send(h, (pipeline_rank - 1) % pipeline_size)
+            if cache[-1] is not None:
+                cache[-1].keys = mx.depends(cache[-1].keys, h)
+
+        # Broadcast h while keeping it in the graph
+        if pipeline_size > 1:
+            h = mx.distributed.all_gather(h)[: h.shape[0]]
+
+        return self.norm(h)
+
+
+class Model(nn.Module):
+    def __init__(self, config: ModelArgs):
+        super().__init__()
+        self.args = config
+        self.model_type = config.model_type
+        self.model = Mistral4Model(config)
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+
+    def __call__(
+        self,
+        inputs: mx.array,
+        cache: Optional[Any] = None,
+        input_embeddings: Optional[mx.array] = None,
+    ):
+        out = self.model(inputs, cache, input_embeddings=input_embeddings)
+        return self.lm_head(out)
+
+    def make_cache(self):
+        return [KVCache() for _ in self.model.pipeline_layers]
+
+    @property
+    def layers(self):
+        return self.model.pipeline_layers
+
+    def sanitize(self, weights):
+        def dequant(weight, scale_inv):
+            dtype = mx.bfloat16
+            weight = mx.from_fp8(weight, dtype=mx.bfloat16)
+            bs = 128  # block size
+            m, n = weight.shape
+            pad_bottom = (-m) % bs
+            pad_side = (-n) % bs
+            weight = mx.pad(weight, ((0, pad_bottom), (0, pad_side)))
+            weight = weight.reshape(
+                ((m + pad_bottom) // bs, bs, (n + pad_side) // bs, bs)
+            )
+            weight = (weight * scale_inv[:, None, :, None]).reshape(
+                m + pad_bottom, n + pad_side
+            )
+            return weight[:m, :n].astype(dtype)
+
+        # Remap for int4
+        new_weights = {}
+        for k, v in weights.items():
+            if k.endswith("weight_shape"):
+                base = k.replace("weight_shape", "")
+                new_weights[base + "weight"] = weights[base + "weight_packed"].view(
+                    mx.uint32
+                )
+                s = weights[base + "weight_scale"]
+                new_weights[base + "scales"] = s
+                new_weights[base + "biases"] = -8 * s
+            elif not (k.endswith("weight_scale") or k.endswith("weight_packed")):
+                new_weights[k] = v
+        weights = new_weights
+
+        # Dequantize fp8
+        new_weights = {}
+        for k, v in weights.items():
+            if "weight_scale_inv" in k:
+                scale_inv = v
+                wk = k.replace("_scale_inv", "")
+                weight = weights[wk]
+                weight = dequant(weight, scale_inv)
+                new_weights[wk] = weight
+            elif k not in new_weights:
+                new_weights[k] = v
+        weights = new_weights
+
+        # Stack experts
+        for l in range(self.args.num_hidden_layers):
+            prefix = f"model.layers.{l}"
+            for n, m in [("w1", "gate_proj"), ("w2", "down_proj"), ("w3", "up_proj")]:
+                for k in ["weight", "scales", "biases"]:
+                    if f"{prefix}.mlp.experts.0.{m}.{k}" in weights:
+                        to_join = [
+                            weights.pop(f"{prefix}.mlp.experts.{e}.{m}.{k}")
+                            for e in range(self.args.n_routed_experts)
+                        ]
+                        weights[f"{prefix}.mlp.switch_mlp.{m}.{k}"] = mx.stack(to_join)
+            prefix = f"model.layers.{l}.self_attn"
+            if f"{prefix}.kv_b_proj.weight" in weights:
+                layer = self.model.layers[l].self_attn.embed_q
+                quantized = f"{prefix}.kv_b_proj.scales" in weights
+                v = weights.pop(f"{prefix}.kv_b_proj.weight")
+                head_dim = self.args.qk_nope_head_dim + self.args.v_head_dim
+
+                if quantized:
+                    dims = self.args.kv_lora_rank
+                    scales = weights.pop(f"{prefix}.kv_b_proj.scales")
+                    biases = weights.pop(f"{prefix}.kv_b_proj.biases")
+                    # Try to infer bits and group size
+                    bits = (v.shape[-1] * 32) // dims
+                    group_size = dims // scales.shape[-1]
+                    v = mx.dequantize(
+                        v, scales, biases, bits=bits, group_size=group_size
+                    )
+                num_heads = self.args.num_attention_heads
+                v = v.reshape(num_heads, head_dim, -1)
+                wk = mx.contiguous(
+                    v[:, : self.args.qk_nope_head_dim, :].swapaxes(-1, -2)
+                )
+                wv = mx.contiguous(v[:, self.args.qk_nope_head_dim :, :])
+                if quantized:
+                    wk, wk_scales, wk_biases = mx.quantize(
+                        wk, bits=bits, group_size=group_size
+                    )
+                    wv, wv_scales, wv_biases = mx.quantize(
+                        wv, bits=bits, group_size=group_size
+                    )
+                    weights[f"{prefix}.embed_q.scales"] = wk_scales
+                    weights[f"{prefix}.unembed_out.scales"] = wv_scales
+                    weights[f"{prefix}.embed_q.biases"] = wk_biases
+                    weights[f"{prefix}.unembed_out.biases"] = wv_biases
+                weights[f"{prefix}.embed_q.weight"] = wk
+                weights[f"{prefix}.unembed_out.weight"] = wv
+
+        # Remove any unused precomputed rotary freqs
+        return {
+            k: v
+            for k, v in weights.items()
+            if "rotary_emb.inv_freq" not in k
+        }
+
+    def shard(self, group: Optional[mx.distributed.Group] = None):
+        group = group or mx.distributed.init()
+        N = group.size()
+        rank = group.rank()
+        for layer in self.model.layers:
+            # Shard the self attention
+            if layer.self_attn.q_lora_rank is None:
+                layer.self_attn.q_proj = shard_linear(
+                    layer.self_attn.q_proj, "all-to-sharded", group=group
+                )
+            else:
+                layer.self_attn.q_b_proj = shard_linear(
+                    layer.self_attn.q_b_proj, "all-to-sharded", group=group
+                )
+            layer.self_attn.num_heads //= N
+            num_heads = layer.self_attn.num_heads
+            sh = rank * num_heads
+            eh = sh + num_heads
+
+            def shard_heads(w):
+                return w[sh:eh]
+
+            layer.self_attn.embed_q.apply(shard_heads)
+            layer.self_attn.unembed_out.apply(shard_heads)
+
+            layer.self_attn.o_proj = shard_linear(
+                layer.self_attn.o_proj, "sharded-to-all", group=group
+            )
+
+            # Shard the MLP
+            if isinstance(layer.mlp, Mistral4MLP):
+                layer.mlp.gate_proj = shard_linear(
+                    layer.mlp.gate_proj, "all-to-sharded", group=group
+                )
+                layer.mlp.down_proj = shard_linear(
+                    layer.mlp.down_proj, "sharded-to-all", group=group
+                )
+                layer.mlp.up_proj = shard_linear(
+                    layer.mlp.up_proj, "all-to-sharded", group=group
+                )
+
+            # Shard the MoE. Shard in place since the MoE should be responsible
+            # for aggregating the results.
+            else:
+                layer.mlp.sharding_group = group
+                shard_inplace(
+                    layer.mlp.shared_experts.gate_proj, "all-to-sharded", group=group
+                )
+                shard_inplace(
+                    layer.mlp.shared_experts.down_proj, "sharded-to-all", group=group
+                )
+                shard_inplace(
+                    layer.mlp.shared_experts.up_proj, "all-to-sharded", group=group
+                )
+                shard_inplace(
+                    layer.mlp.switch_mlp.gate_proj, "all-to-sharded", group=group
+                )
+                shard_inplace(
+                    layer.mlp.switch_mlp.down_proj, "sharded-to-all", group=group
+                )
+                shard_inplace(
+                    layer.mlp.switch_mlp.up_proj, "all-to-sharded", group=group
+                )
+
+    @property
+    def layers(self):
+        return self.model.pipeline_layers
+
+    @property
+    def cast_predicate(self):
+        def predicate(k):
+            return "e_score_correction_bias" not in k
+
+        return predicate

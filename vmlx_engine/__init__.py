@@ -12,7 +12,7 @@ Features:
 - Support for LLM and multimodal models
 """
 
-__version__ = "1.5.15"
+__version__ = "1.5.20"
 
 # mlx_lm 0.31.x changed create_attention_mask() to require return_array and
 # window_size positional args.  mlx_vlm's qwen3_5/language.py calls
@@ -102,6 +102,84 @@ def _install_mlx_vlm_registry_patches() -> None:
             _KV_MODEL_CONFIG["kimi_k25"] = _KV_MODEL_CONFIG["kimi_vl"]
     except Exception:
         pass
+
+
+def _patch_loaded_mlx_vlm_registry_module(module_name: str, module) -> None:
+    """Patch mlx_vlm registry modules without importing them eagerly."""
+    try:
+        if module_name == "mlx_vlm.utils":
+            _mapping = getattr(module, "MODEL_REMAPPING", None)
+            if _mapping is not None:
+                _mapping.setdefault("kimi_k25", "kimi_vl")
+        elif module_name == "mlx_vlm.prompt_utils":
+            _model_config = getattr(module, "MODEL_CONFIG", None)
+            _message_format = getattr(module, "MessageFormat", None)
+            if _model_config is not None and _message_format is not None:
+                _model_config.setdefault("gemma4", _message_format.LIST_WITH_IMAGE_TYPE)
+                _model_config.setdefault("gemma4_text", _message_format.LIST_WITH_IMAGE_TYPE)
+                if "kimi_k25" not in _model_config and "kimi_vl" in _model_config:
+                    _model_config["kimi_k25"] = _model_config["kimi_vl"]
+    except Exception:
+        pass
+
+
+def _install_mlx_vlm_registry_import_hook() -> None:
+    """Patch mlx_vlm registries lazily when callers import those modules.
+
+    This preserves the no-eager-mlx_vlm-import rule above: importing
+    vmlx_engine alone must not create mlx_vlm's thread-bound MLX stream.
+    """
+    import importlib.abc
+    import importlib.machinery
+    import sys
+
+    targets = {"mlx_vlm.utils", "mlx_vlm.prompt_utils"}
+
+    class _VLMRegistryPatchLoader(importlib.abc.Loader):
+        def __init__(self, wrapped):
+            self._wrapped = wrapped
+
+        def create_module(self, spec):
+            create = getattr(self._wrapped, "create_module", None)
+            if create is not None:
+                return create(spec)
+            return None
+
+        def exec_module(self, module):
+            self._wrapped.exec_module(module)
+            _patch_loaded_mlx_vlm_registry_module(module.__name__, module)
+
+    class _VLMRegistryPatchFinder(importlib.abc.MetaPathFinder):
+        _vmlx_vlm_registry_patch_finder = True
+
+        def find_spec(self, fullname, path, target=None):
+            if fullname not in targets:
+                return None
+            spec = importlib.machinery.PathFinder.find_spec(fullname, path)
+            if spec is None or spec.loader is None:
+                return spec
+            if not isinstance(spec.loader, _VLMRegistryPatchLoader):
+                spec.loader = _VLMRegistryPatchLoader(spec.loader)
+            return spec
+
+    for _name in targets:
+        if _name in sys.modules:
+            _patch_loaded_mlx_vlm_registry_module(_name, sys.modules[_name])
+
+    if not any(getattr(f, "_vmlx_vlm_registry_patch_finder", False) for f in sys.meta_path):
+        sys.meta_path.insert(0, _VLMRegistryPatchFinder())
+
+
+_install_mlx_vlm_registry_import_hook()
+
+# Install tracked runtime patches for upstream model dispatch/numeric fixes.
+# This is intentionally after the lightweight mlx_lm compatibility shims and
+# before lazy exports so importing vmlx_engine prepares the process for model
+# loads without requiring each loader to remember patch bootstrap order.
+try:
+    from vmlx_engine import runtime_patches as _runtime_patches  # noqa: F401
+except Exception:
+    pass
 
 # All imports are lazy to allow usage on non-Apple Silicon platforms
 # (e.g., CI running on Linux) where mlx_lm is not available.
