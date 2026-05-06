@@ -634,8 +634,9 @@ public struct ChatRequest: Codable, Sendable {
 
     /// Anthropic-compat extension: caps the number of tokens generated
     /// inside the reasoning/`<think>` segment. When the budget is
-    /// exhausted mid-reasoning, the engine force-closes the block
-    /// (injects `</think>`) and continues with visible content.
+    /// exhausted mid-reasoning, the engine stops emitting additional
+    /// reasoning deltas and routes overflow as visible content without
+    /// surfacing structural tags.
     /// 0 disables the cap.
     public var thinkingBudget: Int?
 

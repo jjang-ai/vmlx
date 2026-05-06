@@ -51,7 +51,7 @@ func applyBlockDiskOverride(to opts: inout Engine.LoadOptions) {
     }
 }
 
-func oneLine(_ s: String, limit: Int = 220) -> String {
+func oneLine(_ s: String, limit: Int = envInt("CACHE_PROBE_CONTENT_LIMIT", default: 220)) -> String {
     let collapsed = s.replacingOccurrences(of: "\n", with: "\\n")
     return collapsed.count > limit ? String(collapsed.prefix(limit)) + "..." : collapsed
 }
@@ -139,6 +139,8 @@ let minCompletionTokens = envInt("CACHE_PROBE_MIN_COMPLETION_TOKENS", default: 1
 let minContentChars = envInt("CACHE_PROBE_MIN_CONTENT_CHARS", default: 1)
 let minTurn2GenerationTps = Double(envString("CACHE_PROBE_MIN_TURN2_TPS", default: "0")) ?? 0
 let routerDrainMs = envInt("CACHE_PROBE_DRAIN_ROUTER_ADVICE_MS", default: 0)
+let thinkingBudget = envInt("CACHE_PROBE_THINKING_BUDGET", default: 0)
+let reasoningEffort = envString("CACHE_PROBE_REASONING_EFFORT", default: "")
 let failOnLeak = envBool("CACHE_PROBE_FAIL_ON_LEAK", default: true)
 let failWhitespaceOnly = envBool("CACHE_PROBE_FAIL_WHITESPACE_ONLY", default: true)
 
@@ -190,6 +192,7 @@ print("bundle=\(bundle.path)")
 print("mode=\(mode) cacheDir=\(cacheRoot.path)")
 RuntimeShared.reportLoadOptions(opts)
 print("JangPress=\(opts.enableJangPress) routerAdvice=\(opts.enableJangPressRouterAdvice) sliding=\(opts.slidingWindowMode)")
+print("Thinking=\(envBool("CACHE_PROBE_THINKING", default: false)) reasoningEffort=\(reasoningEffort.isEmpty ? "nil" : reasoningEffort) thinkingBudget=\(thinkingBudget > 0 ? String(thinkingBudget) : "nil")")
 if !required.isEmpty {
     print("[requirements] \(required.sorted().joined(separator: ",")) minCompletionTokens=\(minCompletionTokens) minContentChars=\(minContentChars) minTurn2Tps=\(minTurn2GenerationTps)")
 }
@@ -210,7 +213,9 @@ func runTurn(_ label: String, prompt: String) async throws -> TurnProbe {
         [RuntimeShared.userMsg(prompt)],
         maxTokens: maxTokens,
         temperature: 0.0,
-        enableThinking: envBool("CACHE_PROBE_THINKING", default: false))
+        enableThinking: envBool("CACHE_PROBE_THINKING", default: false),
+        reasoningEffort: reasoningEffort.isEmpty ? nil : reasoningEffort,
+        thinkingBudget: thinkingBudget > 0 ? thinkingBudget : nil)
     let t = Date()
     let result = try await RuntimeShared.drainStreamDetailed(
         engine, req, printContent: false, printReasoningTick: false)

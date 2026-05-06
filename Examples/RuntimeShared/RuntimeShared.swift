@@ -166,6 +166,7 @@ public enum RuntimeShared {
         topP: Double? = nil,
         enableThinking: Bool = false,
         reasoningEffort: String? = nil,
+        thinkingBudget: Int? = nil,
         tools: [ChatRequest.Tool]? = nil
     ) -> ChatRequest {
         ChatRequest(
@@ -177,7 +178,8 @@ public enum RuntimeShared {
             enableThinking: enableThinking,
             reasoningEffort: reasoningEffort,
             tools: tools,
-            includeReasoning: true
+            includeReasoning: true,
+            thinkingBudget: thinkingBudget
         )
     }
 

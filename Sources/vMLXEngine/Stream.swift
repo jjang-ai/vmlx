@@ -987,6 +987,11 @@ extension Engine {
         }
         if let budget = request.thinkingBudget, budget > 0 {
             templateExtras["thinking_budget"] = budget
+            // Nemotron-H Omni sidecar templates use `reasoning_budget`
+            // for the visible prompt hint. Keep both names wired so the
+            // API's Anthropic-compatible `thinking_budget` reaches native
+            // HF/JANG templates without per-family request branching.
+            templateExtras["reasoning_budget"] = budget
         }
         // OpenAI `chat_template_kwargs` — caller-provided per-request
         // template variables (e.g. assistant_prefix, enable_tools). Merged
@@ -1109,10 +1114,9 @@ extension Engine {
         }()
 
         // Anthropic-compat `thinking_budget`. Caps the cumulative chars
-        // emitted as reasoning. When the cap is hit mid-block we force-close
-        // the reasoning segment by injecting `</think>\n` to content and
-        // flip `thinkingBudgetExhausted` so any further `.reasoning` deltas
-        // get rerouted to visible content. 0 (or nil) disables the cap.
+        // emitted as reasoning. When the cap is hit mid-block, flip
+        // `thinkingBudgetExhausted` so any further `.reasoning` deltas get
+        // rerouted to visible content. 0 (or nil) disables the cap.
         // We use a 4-chars-per-token approximation because the streaming
         // path operates on decoded text deltas; an exact token count would
         // require re-tokenizing every chunk and is not worth the perf hit.
@@ -1120,6 +1124,51 @@ extension Engine {
         let thinkingBudgetCharCap = thinkingBudgetTokens * 4
         var reasoningCharsEmitted = 0
         var thinkingBudgetExhausted = false
+        var postBudgetReasoningBuffer = ""
+        var postBudgetVisibleStarted = false
+
+        func yieldPostBudgetContent(_ text: String) {
+            guard !text.isEmpty else { return }
+            if postBudgetVisibleStarted {
+                continuation.yield(StreamChunk(content: text))
+                return
+            }
+
+            postBudgetReasoningBuffer += text
+            if let close = postBudgetReasoningBuffer.range(of: "</think>") {
+                let visible = String(postBudgetReasoningBuffer[close.upperBound...])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                postBudgetReasoningBuffer = ""
+                postBudgetVisibleStarted = true
+                if !visible.isEmpty {
+                    continuation.yield(StreamChunk(content: visible))
+                }
+                return
+            }
+            if let boundary = postBudgetReasoningBuffer.range(of: "\n\n") {
+                let visible = String(postBudgetReasoningBuffer[boundary.upperBound...])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                postBudgetReasoningBuffer = ""
+                postBudgetVisibleStarted = true
+                if !visible.isEmpty {
+                    continuation.yield(StreamChunk(content: visible))
+                }
+                return
+            }
+
+            // Last-resort no-close/no-paragraph path. Avoid an indefinitely
+            // blank response, but only after buffering enough text that we are
+            // unlikely to be cutting a marker or a short reasoning tail.
+            if postBudgetReasoningBuffer.count > 1024 {
+                let visible = postBudgetReasoningBuffer
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                postBudgetReasoningBuffer = ""
+                postBudgetVisibleStarted = true
+                if !visible.isEmpty {
+                    continuation.yield(StreamChunk(content: visible))
+                }
+            }
+        }
 
         // Real reasoning parser dispatch. When CapabilityDetector stamped a
         // `reasoningParser` on the loaded model, prefer it over the hand-rolled
@@ -1774,12 +1823,13 @@ extension Engine {
                         //     observed "loop" symptom.
                         //
                         // Budget-exhausted is independent of stamping —
-                        // always reroute the post-cap overflow to content
-                        // since we already emitted the synthetic close.
+                        // always reroute the post-cap overflow to content.
                         if modelStampsThink && !effectiveThinking
                             && !thinkingBudgetExhausted
                         {
                             // Drop on the floor — suppression sink.
+                        } else if thinkingBudgetExhausted && effectiveThinking {
+                            yieldPostBudgetContent(splitReasoning)
                         } else {
                             continuation.yield(StreamChunk(content: splitReasoning))
                         }
@@ -1792,21 +1842,16 @@ extension Engine {
                             continuation.yield(StreamChunk(reasoning: allowed))
                             reasoningCharsEmitted += allowed.count
                             if !overflow.isEmpty {
-                                // Force-close the reasoning segment with a
-                                // synthetic </think> in the content stream so
-                                // downstream parsers (and the chat UI) flip
-                                // out of the reasoning state.
-                                continuation.yield(StreamChunk(content: "</think>\n"))
-                                continuation.yield(StreamChunk(content: overflow))
                                 thinkingBudgetExhausted = true
                                 inThinkBlock = false
+                                yieldPostBudgetContent(overflow)
                             }
                         } else {
-                            // Already at cap on entry — synthesize close once.
-                            continuation.yield(StreamChunk(content: "</think>\n"))
-                            continuation.yield(StreamChunk(content: splitReasoning))
+                            // Already at cap on entry: overflow is visible
+                            // content, but never emit raw structural tags.
                             thinkingBudgetExhausted = true
                             inThinkBlock = false
+                            yieldPostBudgetContent(splitReasoning)
                         }
                     } else {
                         // P1-STREAM-3: For in-template thinking models (Qwen3,
@@ -1852,6 +1897,10 @@ extension Engine {
                 let haveToolsOrParser = toolParser != nil
                     || (mergedTools?.isEmpty == false)
                 var emittableContent = splitContent
+                if !splitContent.isEmpty && !postBudgetReasoningBuffer.isEmpty {
+                    postBudgetReasoningBuffer = ""
+                    postBudgetVisibleStarted = true
+                }
                 if haveToolsOrParser && !splitContent.isEmpty {
                     let wasBuffered = streamingAcc.buffered
                     _ = streamingAcc.feed(splitContent)

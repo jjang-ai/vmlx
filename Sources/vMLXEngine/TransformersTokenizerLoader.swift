@@ -36,6 +36,8 @@ public struct TransformersTokenizerLoader: vMLXLMCommon.TokenizerLoader {
             Self.shouldForceMistralTemplateFallback(in: directory)
         let forceBailingTemplateFallback =
             Self.shouldForceBailingTemplateFallback(in: directory)
+        let forceNemotronTemplateFallback =
+            Self.shouldForceNemotronTemplateFallback(in: directory)
         let mistralDefaultSystemMessage =
             Self.loadMistralDefaultSystemMessage(in: directory)
         do {
@@ -45,6 +47,7 @@ public struct TransformersTokenizerLoader: vMLXLMCommon.TokenizerLoader {
                 forceLagunaTemplateFallback: forceLagunaTemplateFallback,
                 forceMistralTemplateFallback: forceMistralTemplateFallback,
                 forceBailingTemplateFallback: forceBailingTemplateFallback,
+                forceNemotronTemplateFallback: forceNemotronTemplateFallback,
                 mistralDefaultSystemMessage: mistralDefaultSystemMessage)
         } catch Tokenizers.TokenizerError.unsupportedTokenizer(let name) {
             // swift-transformers allowlists a fixed set of tokenizer classes
@@ -84,6 +87,7 @@ public struct TransformersTokenizerLoader: vMLXLMCommon.TokenizerLoader {
                 forceLagunaTemplateFallback: forceLagunaTemplateFallback,
                 forceMistralTemplateFallback: forceMistralTemplateFallback,
                 forceBailingTemplateFallback: forceBailingTemplateFallback,
+                forceNemotronTemplateFallback: forceNemotronTemplateFallback,
                 mistralDefaultSystemMessage: mistralDefaultSystemMessage)
         }
     }
@@ -180,6 +184,34 @@ public struct TransformersTokenizerLoader: vMLXLMCommon.TokenizerLoader {
             || textModelType == "bailing_moe_v2_5"
     }
 
+    /// Nemotron-H Omni bundles can carry a newer sidecar
+    /// `chat_template.jinja` than the embedded tokenizer_config template.
+    /// The sidecar adds multimodal placeholder counting and a
+    /// `reasoning_budget` prompt hook; swift-transformers only consumes the
+    /// embedded template by default. Force the native renderer for this
+    /// bundle shape so reasoning budgets and Omni media rails are coherent.
+    static func shouldForceNemotronTemplateFallback(in directory: URL) -> Bool {
+        guard
+            let cfgData = try? Data(contentsOf:
+                directory.appendingPathComponent("config.json")),
+            let cfg = try? JSONSerialization.jsonObject(with: cfgData) as? [String: Any]
+        else { return false }
+        let modelType = ((cfg["model_type"] as? String) ?? "").lowercased()
+        let textModelType = (((cfg["text_config"] as? [String: Any])?["model_type"] as? String)
+            ?? "").lowercased()
+        guard modelType == "nemotron_h" || textModelType == "nemotron_h" else {
+            return false
+        }
+        let sidecar = directory.appendingPathComponent("chat_template.jinja")
+        guard
+            FileManager.default.fileExists(atPath: sidecar.path),
+            let template = try? String(contentsOf: sidecar, encoding: .utf8)
+        else { return false }
+        return template.contains("reasoning_budget")
+            || FileManager.default.fileExists(
+                atPath: directory.appendingPathComponent("config_omni.json").path)
+    }
+
     static func loadMistralDefaultSystemMessage(in directory: URL) -> String? {
         guard shouldForceMistralTemplateFallback(in: directory) else { return nil }
         let url = directory.appendingPathComponent("SYSTEM_PROMPT.txt")
@@ -273,6 +305,7 @@ struct TransformersTokenizerBridge: vMLXLMCommon.Tokenizer, @unchecked Sendable 
     private let forceLagunaTemplateFallback: Bool
     private let forceMistralTemplateFallback: Bool
     private let forceBailingTemplateFallback: Bool
+    private let forceNemotronTemplateFallback: Bool
     private let mistralDefaultSystemMessage: String?
 
     init(
@@ -280,12 +313,14 @@ struct TransformersTokenizerBridge: vMLXLMCommon.Tokenizer, @unchecked Sendable 
         forceLagunaTemplateFallback: Bool = false,
         forceMistralTemplateFallback: Bool = false,
         forceBailingTemplateFallback: Bool = false,
+        forceNemotronTemplateFallback: Bool = false,
         mistralDefaultSystemMessage: String? = nil
     ) {
         self.upstream = upstream
         self.forceLagunaTemplateFallback = forceLagunaTemplateFallback
         self.forceMistralTemplateFallback = forceMistralTemplateFallback
         self.forceBailingTemplateFallback = forceBailingTemplateFallback
+        self.forceNemotronTemplateFallback = forceNemotronTemplateFallback
         self.mistralDefaultSystemMessage = mistralDefaultSystemMessage
     }
 
@@ -343,6 +378,9 @@ struct TransformersTokenizerBridge: vMLXLMCommon.Tokenizer, @unchecked Sendable 
             in: cleanContext,
             key: "enable_thinking",
             default: false)
+        let reasoningBudget = ChatTemplateFallback.int(
+            in: cleanContext,
+            keys: ["reasoning_budget", "thinking_budget"])
         if overrideTemplate == nil
             && !enableThinking
             && upstream.bosToken == "]~!b["
@@ -408,6 +446,21 @@ struct TransformersTokenizerBridge: vMLXLMCommon.Tokenizer, @unchecked Sendable 
             }
             return upstream.encode(text: rendered, addSpecialTokens: false)
         }
+        if overrideTemplate == nil && forceNemotronTemplateFallback {
+            let rendered = ChatTemplateFallback.renderNemotron(
+                messages: messages,
+                addGenerationPrompt: addGen,
+                bosToken: upstream.bosToken,
+                tools: tools,
+                enableThinking: enableThinking,
+                reasoningBudget: reasoningBudget)
+            if ProcessInfo.processInfo.environment["VMLX_TEMPLATE_TRACE"] == "1" {
+                let preview = rendered.prefix(2000)
+                FileHandle.standardError.write(Data(
+                    "[template-trace] nemotron native fallback enable_thinking=\(enableThinking) reasoning_budget=\(reasoningBudget.map(String.init) ?? "nil") add_generation_prompt=\(addGen)\n\(preview)\n[template-trace] end nemotron prompt\n".utf8))
+            }
+            return upstream.encode(text: rendered, addSpecialTokens: false)
+        }
         do {
             if let template = overrideTemplate {
                 return try upstream.applyChatTemplate(
@@ -457,7 +510,8 @@ struct TransformersTokenizerBridge: vMLXLMCommon.Tokenizer, @unchecked Sendable 
                 tokenExists: { upstream.convertTokenToId($0) != nil },
                 tools: tools,
                 reasoningEffort: reasoningEffort,
-                enableThinking: enableThinking)
+                enableThinking: enableThinking,
+                reasoningBudget: reasoningBudget)
             return upstream.encode(text: rendered, addSpecialTokens: false)
         }
     }
@@ -497,7 +551,8 @@ enum ChatTemplateFallback {
         tokenExists: (String) -> Bool,
         tools: [[String: any Sendable]]? = nil,
         reasoningEffort: String? = nil,
-        enableThinking: Bool = false
+        enableThinking: Bool = false,
+        reasoningBudget: Int? = nil
     ) -> String {
         // Laguna / Poolside family. The public bundles ship
         // `tokenizer_config.json::chat_template` as only:
@@ -558,7 +613,8 @@ enum ChatTemplateFallback {
                 addGenerationPrompt: addGenerationPrompt,
                 bosToken: bosToken,
                 tools: tools,
-                enableThinking: enableThinking)
+                enableThinking: enableThinking,
+                reasoningBudget: reasoningBudget)
         }
 
         // Mistral family — sniff `[INST]` special token. This is the
@@ -983,7 +1039,8 @@ enum ChatTemplateFallback {
         addGenerationPrompt: Bool,
         bosToken: String?,
         tools: [[String: any Sendable]]?,
-        enableThinking: Bool
+        enableThinking: Bool,
+        reasoningBudget: Int? = nil
     ) -> String {
         var out = ""
         if let bos = bosToken, !bos.isEmpty { out += bos }
@@ -998,6 +1055,10 @@ enum ChatTemplateFallback {
             } else {
                 body.append(message)
             }
+        }
+
+        let lastUserIndex = body.indices.reversed().first {
+            ((body[$0]["role"] as? String) ?? "user") == "user"
         }
 
         if !systemContent.isEmpty || !(tools?.isEmpty ?? true) {
@@ -1020,7 +1081,7 @@ enum ChatTemplateFallback {
             out += "<|im_end|>\n"
         }
 
-        for message in body {
+        for (idx, message) in body.enumerated() {
             let role = (message["role"] as? String) ?? "user"
             switch role {
             case "assistant":
@@ -1044,7 +1105,16 @@ enum ChatTemplateFallback {
                 out += stringifyContent(message["content"])
                 out += "\n</tool_response>\n<|im_end|>\n"
             case "user", "system", "developer":
-                let content = sanitizeNemotronContent(stringifyContent(message["content"]))
+                var content = sanitizeNemotronContent(stringifyContent(message["content"]))
+                if role == "user",
+                   let budget = reasoningBudget,
+                   budget > 0,
+                   !content.contains("{thinking token budget:")
+                {
+                    if lastUserIndex == idx {
+                        content += "\n\n{thinking token budget: \(budget)}"
+                    }
+                }
                 let emitRole = role == "developer" ? "system" : role
                 out += "<|im_start|>\(emitRole)\n"
                 out += content.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1381,5 +1451,21 @@ enum ChatTemplateFallback {
         if let n = v as? Int { return n != 0 }
         if let s = v as? String { return s.lowercased() == "true" || s == "1" }
         return def
+    }
+
+    /// Read the first positive Int from additionalContext.
+    static func int(
+        in context: [String: any Sendable]?,
+        keys: [String]
+    ) -> Int? {
+        guard let ctx = context else { return nil }
+        for key in keys {
+            guard let v = ctx[key] else { continue }
+            if let n = v as? Int, n > 0 { return n }
+            if let n = v as? Int64, n > 0 { return Int(n) }
+            if let n = v as? NSNumber, n.intValue > 0 { return n.intValue }
+            if let s = v as? String, let n = Int(s), n > 0 { return n }
+        }
+        return nil
     }
 }
