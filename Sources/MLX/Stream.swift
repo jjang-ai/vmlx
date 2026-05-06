@@ -57,7 +57,7 @@ public struct StreamOrDevice: Sendable, CustomStringConvertible, Equatable {
 
     /// Internal context -- used with Cmlx calls.
     public var ctx: mlx_stream {
-        stream.ctx
+        stream.checkedContext
     }
 
     public var description: String {
@@ -87,7 +87,7 @@ private class ClosureBox {
 
 public final class Stream: @unchecked Sendable, Equatable {
 
-    let ctx: mlx_stream
+    var ctx: mlx_stream
 
     public static let gpu = Stream(mlx_default_gpu_stream_new())
     public static let cpu = Stream(mlx_default_cpu_stream_new())
@@ -158,9 +158,7 @@ public final class Stream: @unchecked Sendable, Equatable {
     /// Default stream on the default device.
     public init() {
         let device = Device.defaultDevice()
-        var ctx = mlx_stream_new()
-        mlx_get_default_stream(&ctx, device.ctx)
-        self.ctx = ctx
+        self.ctx = Stream.makeDefaultStreamContext(for: device)
     }
 
     @available(*, deprecated, message: "use init(Device) -- index not supported")
@@ -174,9 +172,7 @@ public final class Stream: @unchecked Sendable, Equatable {
     ///
     /// See also ``withNewDefaultStream(device:_:)-5bwc3``
     public init(_ device: Device) {
-        self.ctx = evalLock.withLock {
-            mlx_stream_new_device(device.ctx)
-        }
+        self.ctx = Stream.makeNewStreamContext(for: device)
     }
 
     deinit {
@@ -193,15 +189,49 @@ public final class Stream: @unchecked Sendable, Equatable {
     }
 
     static public func defaultStream(_ device: Device) -> Stream {
-        switch device.deviceType {
-        case .cpu: .cpu
-        case .gpu: .gpu
-        default: fatalError("Unexpected device type: \(device)")
-        }
+        Stream(Stream.makeDefaultStreamContext(for: device))
     }
 
     public static func == (lhs: Stream, rhs: Stream) -> Bool {
         mlx_stream_equal(lhs.ctx, rhs.ctx)
+    }
+}
+
+extension Stream {
+    var checkedContext: mlx_stream {
+        // C stream constructors report failures by returning an empty handle;
+        // repair it here before a later C API surfaces a misleading IO error.
+        if ctx.ctx == nil {
+            ctx = Stream.makeDefaultStreamContext(for: Device.defaultDevice())
+            if ctx.ctx == nil {
+                ctx = Stream.makeNewStreamContext(for: Device.cpu)
+            }
+        }
+        return ctx
+    }
+
+    private static func makeDefaultStreamContext(for device: Device) -> mlx_stream {
+        evalLock.withLock {
+            var ctx = mlx_stream_new()
+            if mlx_get_default_stream(&ctx, device.ctx) != 0 || ctx.ctx == nil {
+                if ctx.ctx != nil {
+                    mlx_stream_free(ctx)
+                }
+                ctx = mlx_stream_new_device(device.ctx)
+            }
+            return ctx
+        }
+    }
+
+    private static func makeNewStreamContext(for device: Device) -> mlx_stream {
+        evalLock.withLock {
+            var ctx = mlx_stream_new_device(device.ctx)
+            if ctx.ctx == nil {
+                ctx = mlx_stream_new()
+                _ = mlx_get_default_stream(&ctx, device.ctx)
+            }
+            return ctx
+        }
     }
 }
 

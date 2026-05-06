@@ -82,7 +82,12 @@ extern "C" int mlx_synchronize(mlx_stream stream) {
 }
 extern "C" int mlx_get_default_stream(mlx_stream* stream, mlx_device dev) {
   try {
-    mlx_stream_set_(*stream, mlx::core::default_stream(mlx_device_get_(dev)));
+    auto device = mlx_device_get_(dev);
+    try {
+      mlx_stream_set_(*stream, mlx::core::default_stream(device));
+    } catch (std::exception&) {
+      mlx_stream_set_(*stream, mlx::core::new_stream(device));
+    }
     return 0;
   } catch (std::exception& e) {
     mlx_error(e.what());
@@ -100,8 +105,13 @@ extern "C" int mlx_set_default_stream(mlx_stream stream) {
 }
 extern "C" mlx_stream mlx_default_cpu_stream_new(void) {
   try {
-    return mlx_stream_new_(
-        mlx::core::default_stream(mlx::core::Device::DeviceType::cpu));
+    try {
+      return mlx_stream_new_(
+          mlx::core::default_stream(mlx::core::Device::DeviceType::cpu));
+    } catch (std::exception&) {
+      return mlx_stream_new_(
+          mlx::core::new_stream(mlx::core::Device::DeviceType::cpu));
+    }
   } catch (std::exception& e) {
     mlx_error(e.what());
     return mlx_stream_new_();
@@ -109,8 +119,13 @@ extern "C" mlx_stream mlx_default_cpu_stream_new(void) {
 }
 extern "C" mlx_stream mlx_default_gpu_stream_new(void) {
   try {
-    return mlx_stream_new_(
-        mlx::core::default_stream(mlx::core::Device::DeviceType::gpu));
+    try {
+      return mlx_stream_new_(
+          mlx::core::default_stream(mlx::core::Device::DeviceType::gpu));
+    } catch (std::exception&) {
+      return mlx_stream_new_(
+          mlx::core::new_stream(mlx::core::Device::DeviceType::gpu));
+    }
   } catch (std::exception& e) {
     mlx_error(e.what());
     return mlx_stream_new_();

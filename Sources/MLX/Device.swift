@@ -130,7 +130,7 @@ public final class Device: @unchecked Sendable, Equatable {
 
     /// Return the current default stream.
     static func defaultStream() -> Stream {
-        _tlDefaultDevice.defaultStream
+        Stream.defaultStream(_tlDefaultDevice)
     }
 
     /// Set the default device globally.  Prefer the scoped version, ``withDefaultDevice(_:_:)-17vjl``.
