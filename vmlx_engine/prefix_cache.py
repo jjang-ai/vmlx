@@ -960,6 +960,18 @@ class BlockAwarePrefixCache:
         # and full_attention layers use num_global_key_value_heads).
         self._allowed_n_kv_heads: Optional[set] = None
 
+        # Codex 2026-05-06 #4: expected layer count derived from model config.
+        # Used by reconstruct_cache to hard-reject blocks whose layer count
+        # diverges (canonical "wrong-model L2 entry" signal).
+        self._expected_num_layers: Optional[int] = None
+        for _attr in ("args", "config"):
+            _cfg = getattr(model, _attr, None)
+            if _cfg is not None:
+                _ln = getattr(_cfg, "num_hidden_layers", 0)
+                if _ln:
+                    self._expected_num_layers = int(_ln)
+                    break
+
     def _get_n_kv_heads(self) -> int:
         """Get expected KV head count from model config (cached).
 
@@ -2288,6 +2300,29 @@ class BlockAwarePrefixCache:
             num_layers = len(all_block_data[0])
             if num_layers == 0:
                 return None
+
+            # Codex 2026-05-06 contract #4: validate every block before
+            # reconstructing tensors. A single corrupt block whose
+            # entries carry nonsense shapes used to cascade through
+            # ``mx.concatenate(...)`` then ``cache.state = state`` then
+            # blow up on the next forward pass with a 555 GB
+            # ``[metal::malloc]`` request. Validate up-front; on any
+            # failure, force cache miss and let the scheduler re-prefill.
+            try:
+                from .cache_record_validator import reject_or_warn as _reject_or_warn
+            except Exception:
+                _reject_or_warn = None
+            if _reject_or_warn is not None:
+                _expected_layers = getattr(self, "_expected_num_layers", None)
+                if _expected_layers is None:
+                    _expected_layers = num_layers  # at least guard layer-count drift across blocks
+                for _bi, _block_data in enumerate(all_block_data):
+                    if not _reject_or_warn(
+                        _block_data,
+                        expected_num_layers=_expected_layers,
+                        source=f"reconstruct[block={_bi}]",
+                    ):
+                        return None
 
             # Import cache classes
             try:

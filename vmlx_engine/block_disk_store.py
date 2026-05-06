@@ -138,12 +138,21 @@ class BlockDiskStore:
         self,
         cache_dir: str,
         max_size_gb: float = 10.0,
+        expected_num_layers: Optional[int] = None,
         **kwargs,
     ):
         self.cache_dir = Path(cache_dir)
         self.blocks_dir = self.cache_dir / "blocks"
         self.blocks_dir.mkdir(parents=True, exist_ok=True)
         self.max_size_bytes = int(max(0.0, max_size_gb) * 1024**3)
+
+        # Codex 2026-05-06 contract #4: expected layer count from model
+        # config (e.g. 43 for DSV4-Flash). Validator hard-rejects cache
+        # records whose layer count differs — that is the canonical
+        # "wrong-model L2 entry" signal. ``None`` skips the check (e.g.
+        # a generic store without model context); per-tensor + total
+        # byte caps still apply.
+        self._expected_num_layers: Optional[int] = expected_num_layers
 
         # SQLite index
         self._db_path = self.cache_dir / "block_index.db"
@@ -310,6 +319,29 @@ class BlockDiskStore:
         try:
             data = mx.load(str(file_path))
             cache_data = _deserialize_block(data, dtype)
+            # Codex 2026-05-06 contract #4: validate BEFORE returning.
+            # A stale/corrupt L2 entry can carry tensors with bogus shapes
+            # that cascade into ``cache.state = <bad-shape>`` then trigger
+            # multi-hundred-GB ``[metal::malloc]`` failures on next forward.
+            # The expected layer count is supplied by the caller via
+            # ``self._expected_num_layers`` (set at engine init from the
+            # model config); ``None`` skips that specific check but the
+            # per-tensor + total byte caps still apply.
+            try:
+                from .cache_record_validator import reject_or_warn
+            except Exception:
+                reject_or_warn = None  # validator unavailable — fail open
+            if reject_or_warn is not None:
+                if not reject_or_warn(
+                    cache_data,
+                    expected_num_layers=getattr(self, "_expected_num_layers", None),
+                    source=f"L2-disk:{hash_hex[:12]}",
+                ):
+                    # Reject + queue cleanup so we don't try this entry again.
+                    self._queue_index_cleanup(hash_hex)
+                    with self._stats_lock:
+                        self.disk_misses += 1
+                    return None
             with self._stats_lock:
                 self.disk_hits += 1
             # Queue access metadata update to background (non-blocking)
