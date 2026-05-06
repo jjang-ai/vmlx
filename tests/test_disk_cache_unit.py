@@ -237,3 +237,67 @@ class TestDiskCacheUnit:
                 mgr._pool.put(conn)
         finally:
             mgr.shutdown()
+
+    def test_shutdown_flush_preserves_standard_cache_type(self):
+        """Shutdown flush must not demote queued system/user cache entries."""
+        tmpdir = tempfile.mkdtemp(prefix="vmlx_disk_cache_test_")
+        mgr = _create_manager(tmpdir)
+        did_shutdown = False
+        try:
+            mgr._stop_event.set()
+            mgr._writer_thread.join(timeout=2.0)
+
+            seen = {}
+
+            def fake_write_cache(token_hash, tokens, cache_data, metadata, cache_type="assistant"):
+                seen["args"] = (token_hash, tokens, cache_data, metadata, cache_type)
+
+            mgr._write_cache = fake_write_cache
+            mgr._write_queue.put(("hash", [1, 2, 3], ["data"], {"m": 1}, "system"))
+
+            mgr.shutdown()
+            did_shutdown = True
+
+            assert seen["args"][-1] == "system"
+        finally:
+            if not did_shutdown:
+                mgr.shutdown()
+
+    def test_shutdown_flush_preserves_tq_native_cache_type(self):
+        """Shutdown flush must pass cache_type through TQ-native finalization."""
+        tmpdir = tempfile.mkdtemp(prefix="vmlx_disk_cache_test_")
+        mgr = _create_manager(tmpdir)
+        did_shutdown = False
+        try:
+            mgr._stop_event.set()
+            mgr._writer_thread.join(timeout=2.0)
+
+            seen = {}
+
+            def fake_finalize_tq_native(
+                token_hash,
+                tokens,
+                tmp_path_str,
+                file_name,
+                cache_type="assistant",
+            ):
+                seen["args"] = (
+                    token_hash,
+                    tokens,
+                    tmp_path_str,
+                    file_name,
+                    cache_type,
+                )
+
+            mgr._finalize_tq_native = fake_finalize_tq_native
+            mgr._write_queue.put(
+                ("__tq_native__", "hash", [1, 2, 3], "tmp.safetensors", "cache.safetensors", "user")
+            )
+
+            mgr.shutdown()
+            did_shutdown = True
+
+            assert seen["args"][-1] == "user"
+        finally:
+            if not did_shutdown:
+                mgr.shutdown()

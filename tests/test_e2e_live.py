@@ -23,6 +23,10 @@ import time
 import urllib.request
 import urllib.error
 
+import pytest
+
+pytestmark = [pytest.mark.slow, pytest.mark.integration]
+
 # ── Config ──────────────────────────────────────────────────────────────
 
 DEFAULT_MODELS = [

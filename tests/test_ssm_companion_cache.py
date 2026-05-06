@@ -160,6 +160,21 @@ def test_deep_copy_returns_different_object_than_stored():
     assert states[0] is not original[0]
 
 
+def test_store_detaches_from_live_state_after_store():
+    """Mutating the caller's live SSM state after store must not corrupt the
+    cached prompt-boundary companion."""
+    cache = SSMCompanionCache(max_entries=5)
+    original = [_FakeSSMLayer(1.0)]
+    cache.store([1, 2, 3], 3, original)
+
+    original[0].cache[0] = mx.array([777.0, 777.0, 777.0, 777.0])
+
+    entry = cache.fetch([1, 2, 3], 3)
+    assert entry is not None
+    states, _ = entry
+    assert states[0].cache[0].tolist() == [1.0, 1.0, 1.0, 1.0]
+
+
 def test_deep_copy_handles_multi_layer():
     cache = SSMCompanionCache(max_entries=5)
     original = [_FakeSSMLayer(float(i)) for i in range(8)]
@@ -270,6 +285,42 @@ def test_lru_fetch_updates_position():
     assert cache.fetch([2], 1) is None  # evicted
     assert cache.fetch([3], 1) is not None
     assert cache.fetch([4], 1) is not None
+
+
+def test_byte_budget_evicts_oldest_entries():
+    cache = SSMCompanionCache(max_entries=10, max_bytes=96)
+    cache.store([1], 1, [_FakeSSMLayer(1.0, shape=(8,))])  # 32 bytes
+    cache.store([2], 1, [_FakeSSMLayer(2.0, shape=(8,))])  # 32 bytes
+    cache.store([3], 1, [_FakeSSMLayer(3.0, shape=(8,))])  # 32 bytes
+    assert cache.size == 3
+    assert cache.total_nbytes == 96
+
+    cache.store([4], 1, [_FakeSSMLayer(4.0, shape=(8,))])
+    assert cache.size == 3
+    assert cache.total_nbytes == 96
+    assert cache.fetch([1], 1) is None
+    assert cache.fetch([2], 1) is not None
+    assert cache.fetch([4], 1) is not None
+
+
+def test_byte_budget_skips_single_oversized_entry():
+    cache = SSMCompanionCache(max_entries=10, max_bytes=16)
+    cache.store([1], 1, [_FakeSSMLayer(1.0, shape=(8,))])  # 32 bytes
+    assert cache.size == 0
+    assert cache.total_nbytes == 0
+    assert cache.fetch([1], 1) is None
+
+
+def test_byte_budget_accounting_clears_and_replaces_existing_key():
+    cache = SSMCompanionCache(max_entries=10, max_bytes=128)
+    cache.store([1], 1, [_FakeSSMLayer(1.0, shape=(8,))])  # 32 bytes
+    assert cache.total_nbytes == 32
+    cache.store([1], 1, [_FakeSSMLayer(2.0, shape=(16,))])  # 64 bytes
+    assert cache.size == 1
+    assert cache.total_nbytes == 64
+    cache.clear()
+    assert cache.size == 0
+    assert cache.total_nbytes == 0
 
 
 # ----------------------------------------------------------------------
@@ -557,3 +608,46 @@ def test_ec2_mllm_n_minus_one_single_token_path():
     c.store([42], 0, [layer])
     assert c.size == 0
     assert c.fetch([42], 0) is None
+
+
+def test_disk_store_round_trips_across_cache_instances(tmp_path):
+    """Scheduler-owned SSM L2 must survive process/cache recreation.
+
+    L1 remains in-memory only, but when the scheduler attaches a model-scoped
+    SSMCompanionDiskStore, a second cache instance with the same model key
+    must be able to restore the companion state. A different model key must
+    miss against the same directory.
+    """
+    from vmlx_engine.utils.ssm_companion_disk_store import SSMCompanionDiskStore
+
+    tokens = [10, 20, 30, 40]
+    disk1 = SSMCompanionDiskStore(directory=tmp_path, budget_bytes=32 * 1024 * 1024)
+    cache1 = SSMCompanionCache(
+        max_entries=2,
+        model_key="ling|jangtq2|cache-schema-a",
+        disk_store=disk1,
+    )
+    cache1.store(tokens, 4, [_FakeSSMLayer(7.0, n_arrays=2)], is_complete=True)
+
+    disk2 = SSMCompanionDiskStore(directory=tmp_path, budget_bytes=32 * 1024 * 1024)
+    cache2 = SSMCompanionCache(
+        max_entries=2,
+        model_key="ling|jangtq2|cache-schema-a",
+        disk_store=disk2,
+    )
+    entry = cache2.fetch(tokens, 4)
+    assert entry is not None
+    states, is_complete = entry
+    assert is_complete is True
+    assert len(states) == 1
+    assert len(states[0].cache) == 2
+    assert states[0].cache[0].tolist() == [7.0, 7.0, 7.0, 7.0]
+    assert cache2.size == 1
+
+    disk3 = SSMCompanionDiskStore(directory=tmp_path, budget_bytes=32 * 1024 * 1024)
+    cache3 = SSMCompanionCache(
+        max_entries=2,
+        model_key="different-model",
+        disk_store=disk3,
+    )
+    assert cache3.fetch(tokens, 4) is None

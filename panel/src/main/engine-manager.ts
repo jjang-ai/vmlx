@@ -223,7 +223,21 @@ async function getVersionFromBinary(path: string): Promise<string> {
       const { execFile: execFileCb } = await import('child_process')
       const { promisify } = await import('util')
       const execFileAsync = promisify(execFileCb)
-      const pyResult = await execFileAsync(shebang, ['-c', "import importlib.metadata; print(importlib.metadata.version('vmlx-engine'))"])
+      const pyResult = await execFileAsync(
+        shebang,
+        [
+          '-B', '-s', '-c',
+          "import importlib.metadata as m\nfor name in ('vmlx', 'vmlx-engine'):\n    try:\n        print(m.version(name)); break\n    except m.PackageNotFoundError:\n        pass",
+        ],
+        {
+          env: {
+            ...process.env,
+            PYTHONDONTWRITEBYTECODE: '1',
+            PYTHONNOUSERSITE: '1',
+            PYTHONPATH: '',
+          },
+        },
+      )
       const ver = pyResult.stdout.trim()
       if (/^\d+\.\d+\.\d+/.test(ver)) {
         console.log(`[Engine Manager] Version: ${ver}`)
@@ -429,8 +443,8 @@ export function installEngineStreaming(
       return
     }
     cmd = bundledPython
-    // -s: suppress user site-packages to ensure pip installs into bundled env only
-    args = ['-s', '-m', 'pip', 'install', '--force-reinstall', '--no-deps', sourcePath]
+    // -B: do not write bytecode into a signed bundle; -s: suppress user site-packages
+    args = ['-B', '-s', '-m', 'pip', 'install', '--force-reinstall', '--no-deps', sourcePath]
   } else {
     const built = buildInstallCommand(method, action, installerPath)
     cmd = built.cmd
@@ -444,6 +458,7 @@ export function installEngineStreaming(
   const installEnv: Record<string, string | undefined> = { ...process.env }
   if (method === 'bundled-update') {
     // Isolate bundled Python from user's system packages
+    installEnv.PYTHONDONTWRITEBYTECODE = '1'
     installEnv.PYTHONNOUSERSITE = '1'
     installEnv.PYTHONPATH = ''
   }
@@ -537,11 +552,16 @@ export function checkEngineVersion(): { current: string; bundled: string; needsU
     try {
       current = execFileSync(
         bundledPython,
-        ['-s', '-c', "import importlib.metadata as m; print(m.version('vmlx'))"],
+        ['-B', '-s', '-c', "import importlib.metadata as m; print(m.version('vmlx'))"],
         {
           encoding: 'utf-8',
           timeout: 30000,
-          env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
+          env: {
+            ...process.env,
+            PYTHONDONTWRITEBYTECODE: '1',
+            PYTHONNOUSERSITE: '1',
+            PYTHONPATH: '',
+          },
         },
       ).trim()
     } catch (_) {
@@ -587,9 +607,14 @@ export function checkEngineVersion(): { current: string; bundled: string; needsU
     const sourceHash = hashSourceFiles(sourcePath)
     if (sourceHash) {
       try {
-        const installed = execFileSync(bundledPython, ['-s', '-c', 'import vmlx_engine; import pathlib; print(pathlib.Path(vmlx_engine.__file__).parent)'], {
+        const installed = execFileSync(bundledPython, ['-B', '-s', '-c', 'import vmlx_engine; import pathlib; print(pathlib.Path(vmlx_engine.__file__).parent)'], {
           encoding: 'utf-8', timeout: 30000,
-          env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
+          env: {
+            ...process.env,
+            PYTHONDONTWRITEBYTECODE: '1',
+            PYTHONNOUSERSITE: '1',
+            PYTHONPATH: '',
+          },
         }).trim()
         if (installed && existsSync(installed)) {
           const installedHash = hashSourceFiles(join(installed, '..'))

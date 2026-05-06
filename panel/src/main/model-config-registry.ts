@@ -249,6 +249,15 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'deepseek_vl_v2': 'deepseek-vl',
   'deepseek2': 'deepseek',
   'deepseek': 'deepseek',
+  // ── Ling / Bailing family (inclusionAI / Ant Group) ──
+  // Hybrid MLA + Lightning-Attn-2 (linear attention). Engine-side
+  // model_configs.py registers `bailing_hybrid`/`bailing_moe_v2_5`
+  // as family `bailing_hybrid` with cache_type=hybrid, deepseek_r1
+  // reasoning, deepseek tool parser. See research/LING-RUNTIME-ARCHITECTURE.md.
+  'bailing_hybrid': 'ling',
+  'bailing_moe_v2_5': 'ling',
+  'bailing_moe_linear': 'ling',
+  'bailing_moe': 'ling',
   // ── GLM family ──
   'chatglm': 'glm4',
   'glm4': 'glm4',
@@ -357,6 +366,27 @@ function configToDetected(family: string, config: Omit<ModelConfig, 'pattern' | 
   }
 }
 
+function resolveJangMultimodal(jangCfg: any, parsedConfig: any): boolean {
+  const hasVisionConfig = 'vision_config' in parsedConfig
+  const modality =
+    jangCfg?.capabilities?.modality ??
+    jangCfg?.modality ??
+    parsedConfig?._jang_modality
+
+  // Explicit converter stamps are authoritative. A JANG bundle may keep a
+  // vision_config in config.json even when the emitted artifact is text-only.
+  if (typeof jangCfg?.has_vision === 'boolean') {
+    return jangCfg.has_vision
+  }
+  if (typeof jangCfg?.architecture?.has_vision === 'boolean') {
+    return jangCfg.architecture.has_vision
+  }
+  if (typeof modality === 'string') {
+    return modality !== 'text' && modality !== 'embedding' && modality !== 'rerank'
+  }
+  return hasVisionConfig
+}
+
 /**
  * Detect model configuration ONLY by reading the model's config.json.
  * This is the authoritative way. We no longer guess based on folder name/regex.
@@ -410,11 +440,12 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
           if (existsSync(jangConfigPath)) {
             try {
               const jangCfg = JSON.parse(readFileSync(jangConfigPath, 'utf-8'))
-              // VLM: check has_vision (not config.json vision_config)
+              detected.isMultimodal = resolveJangMultimodal(jangCfg, parsed)
+            } catch {
               if ('vision_config' in parsed) {
-                detected.isMultimodal = jangCfg?.architecture?.has_vision === true
+                detected.isMultimodal = true
               }
-            } catch { /* ignore parse errors */ }
+            }
           } else if ('vision_config' in parsed) {
             detected.isMultimodal = true
           }

@@ -103,7 +103,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   usePagedCache: true,
   pagedCacheBlockSize: 64,
   maxCacheBlocks: 1000,
-  kvCacheQuantization: 'none',
+  kvCacheQuantization: 'auto',
   kvCacheGroupSize: 64,
   omniBackend: 'stage1',
   enableDiskCache: true,
@@ -638,14 +638,14 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {!batchingOff && prefixOff && <IncompatWarning text="KV cache quantization requires prefix cache. Enable 'Prefix Cache' above to use KV cache quantization." />}
         {!effectivelyNoBatching && !prefixOff && isMambaCache && <PerformanceHint text="Hybrid model detected — cache quantization only compresses the attention layers. Non-attention layers (Mamba/GatedDeltaNet) are stored at full precision." />}
 
-        {/* Live KV cache (TurboQuant) — automatic, default-on for JANG bundles. */}
+        {/* Live KV cache (TurboQuant) — automatic for compatible bundles. */}
         <div className="block">
           <span className="text-xs font-medium text-muted-foreground">
             Live KV Cache Compression
-            <Tooltip text="Compresses the active KV cache during generation using TurboQuant (3-bit Hadamard rotation + per-channel codebooks). Default-on for any JANG / JANGTQ bundle. ~5× memory savings on the hot path with ≤1% quality regression on the calibrated set. Independent of the stored-cache setting below." />
+            <Tooltip text="In Auto mode the engine uses TurboQuant for compatible live KV caches and q4 stored-prefix compression as the fallback for cache families that need a different restore codec, including DSV4 composite SWA/CSA/HSA." />
           </span>
           <div className="cfg-input flex items-center justify-between" style={{ background: 'var(--card)', cursor: 'default' }}>
-            <span>TurboQuant (3-bit) — auto</span>
+            <span>TurboQuant / stored-q4 auto</span>
             <span className="text-xs px-2 py-0.5 rounded" style={{ background: 'var(--success-bg, rgba(34,197,94,0.15))', color: 'var(--success-fg, rgb(34,197,94))' }}>ON · Default</span>
           </div>
         </div>
@@ -654,15 +654,16 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <div className="block">
           <span className="text-xs font-medium text-muted-foreground">
             Stored Cache Quantization
-            <Tooltip text="Controls how completed prompt states are stored in the prefix cache. TurboQuant handles live generation cache compression automatically (above). This setting controls ADDITIONAL compression of stored cache entries: q8 (8-bit, ~2x) or q4 (4-bit, ~4x). Use 'None' if you want stored caches at full precision." />
+            <Tooltip text="Controls how completed prompt states are stored in the prefix cache. Auto keeps the engine's production codec choice. None explicitly disables stored-cache quantization. q8/q4 force the generic stored-cache codec." />
           </span>
           <select value={config.kvCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching || prefixOff}>
+            <option value="auto">Auto (TurboQuant when compatible, q4 stored fallback)</option>
             <option value="none">{t('sessions.config.kvQuantNone')}</option>
             <option value="q8">q8 (8-bit, ~2x stored cache savings)</option>
             <option value="q4">q4 (4-bit, ~4x stored cache savings)</option>
           </select>
         </div>
-        {config.kvCacheQuantization !== 'none' && (
+        {config.kvCacheQuantization !== 'auto' && config.kvCacheQuantization !== 'none' && (
           <SliderField
             label="Group Size"
             tooltip="Number of elements quantized together. Smaller groups preserve more precision but use slightly more memory for scale/zero-point metadata. Default 64 is optimal for most models."
@@ -882,7 +883,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         </Field>
         <SelectField
           label="Multimodal Support (VLM)"
-          tooltip="Vision-Language Model mode for models like Qwen2-VL, Qwen3-VL, Pixtral, InternVL, or LLaVA. Auto: detected from config.json (vision_config presence). Force On: always use MLLM scheduler. Force Off: never use MLLM scheduler even if auto-detected."
+          tooltip="Vision-Language Model mode for models like Qwen2-VL, Qwen3-VL, Pixtral, InternVL, or LLaVA. Auto-detected VLMs launch with the MLLM scheduler even if an older saved session says off. Smelt still forces text-only loading."
           value={smeltActive ? 'off' : config.isMultimodal === true ? 'on' : config.isMultimodal === false ? 'off' : 'auto'}
           onChange={v => onChange('isMultimodal', v === 'on' ? true : v === 'off' ? false : undefined)}
           options={[
@@ -899,7 +900,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           <InfoNote text="VLM mode forced ON — the MLLM scheduler handles image/video processing with full prefix cache, paged KV cache, and KV quantization support." />
         )}
         {!smeltActive && config.isMultimodal === false && (
-          <InfoNote text="VLM mode forced OFF — auto-detection is bypassed. Use this only if the model is incorrectly detected as multimodal." />
+          <InfoNote text="VLM mode is off only when the model is not auto-detected as multimodal. Detected VLM bundles launch with image/video support." />
         )}
         {/* Video sampling — only relevant for VL models that accept video_url.
             Qwen 3.6 / Qwen3.5-VL both have native video understanding via

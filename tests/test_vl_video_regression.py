@@ -356,9 +356,7 @@ class TestCv2ImportError:
         import sys
         import importlib
         # Simulate cv2 failing to load
-        if "cv2" in sys.modules:
-            _saved = sys.modules["cv2"]
-            monkeypatch.setitem(sys.modules, "cv2", None)
+        monkeypatch.setitem(sys.modules, "cv2", None)
         with pytest.raises(ImportError, match="opencv"):
             # extract_frames is module-level in mllm.py
             from vmlx_engine.models import mllm
@@ -776,6 +774,25 @@ class TestIssueGuards:
         coerced = [v if isinstance(v, mx.array) else mx.array(v) for v in mixed]
         out = mx.concatenate(coerced, axis=0)
         assert out.shape == (2, 3, 224, 224)
+
+    def test_runtime_patches_auto_bootstrap(self):
+        """Tracked runtime patches must install from vmlx_engine import.
+
+        This keeps dev/system-Python runs aligned with the bundled Python
+        patch step and prevents Kimi/DSV4 load paths from relying on each
+        caller remembering private bootstrap order.
+        """
+        src = Path("/private/tmp/vmlx-1.3.66-build/vmlx_engine/__init__.py").read_text()
+        patch_src = Path(
+            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/runtime_patches/__init__.py"
+        ).read_text()
+        assert "runtime_patches" in src, "vmlx_engine import must bootstrap runtime_patches"
+        assert "_kimi_k25_mla.install()" in patch_src, (
+            "runtime_patches package must install Kimi K2.6 MLA patch"
+        )
+        assert "deepseek_v4_register" in patch_src, (
+            "runtime_patches package must register DSV4 model_type"
+        )
 
     def test_kimi_k26_cache_stack_mla_compat(self):
         """Kimi K2.6 × full cache stack — MLA compatibility audit.
@@ -1889,8 +1906,8 @@ class TestMlxstudio73ReconstructFailReleasesBlocks:
         src = Path(
             "/private/tmp/vmlx-1.3.66-build/vmlx_engine/scheduler.py"
         ).read_text()
-        # Find the 'Reconstruction failed, treat as cache miss' branch
-        idx = src.find("Reconstruction failed, treat as cache miss")
+        # Find the worker-side paged-cache reconstruction-failure branch.
+        idx = src.find("reconstruction failed, treating as cache miss")
         assert idx > 0, "the bugfix anchor must survive refactors"
         # Immediately below must call release_cache(request_id)
         window = src[idx:idx + 1200]
@@ -2762,7 +2779,7 @@ class TestAsyncSSMRederiveReasoningHybrid:
             "silently lose all SSM prefix hits"
         )
         # Queue cap
-        assert ">= 20" in src and "pop(0)" in src, (
+        assert "SSM_REDERIVE_QUEUE_CAP" in src and "pop(0)" in src, (
             "queue cap + FIFO eviction must be preserved (unbounded queue "
             "growth under sustained load = memory leak on busy servers)"
         )
@@ -2861,7 +2878,7 @@ class TestAsyncSSMRederiveReasoningHybrid:
             "cap-check (pop oldest before append) must precede append — "
             "otherwise queue grows unboundedly"
         )
-        assert ">= 20" in preceding, "cap constant must remain 20"
+        assert "SSM_REDERIVE_QUEUE_CAP" in preceding, "cap constant must be centralized"
 
 
 class TestReasoningContractEndToEnd:
@@ -3130,12 +3147,17 @@ class TestMlxstudio63MemoryPressureGuard:
             '"/api/generate"',
         ]
         for ep in endpoints_wired:
-            # rfind skips the module-level inference_endpoints list
-            # (~line 251) and lands on the @app.post decorator itself.
-            idx = src.rfind(ep)
-            assert idx > 0, f"endpoint {ep} not found in server.py"
-            window = src[idx:idx + 500]
-            assert "check_memory_pressure" in window, (
+            found = False
+            pos = 0
+            while True:
+                idx = src.find(ep, pos)
+                if idx < 0:
+                    break
+                if "check_memory_pressure" in src[idx:idx + 700]:
+                    found = True
+                    break
+                pos = idx + len(ep)
+            assert found, (
                 f"mlxstudio#63: {ep} missing check_memory_pressure — "
                 f"kernel panic still possible on this entry point"
             )
@@ -7887,12 +7909,12 @@ class TestAsyncSsmRederiveQueue:
             "Scheduler missing _ssm_rederive_queue — async re-derive "
             "contract broken"
         )
-        assert "Cap queue at 20 entries" in src, (
+        assert "SSM_REDERIVE_QUEUE_CAP = 8" in src, (
             "Scheduler queue cap comment missing — without a cap the "
             "queue grows unbounded under sustained thinking-model load"
         )
-        assert "len(self._ssm_rederive_queue) >= 20" in src, (
-            "Scheduler must enforce the 20-entry cap with >= check"
+        assert "len(self._ssm_rederive_queue) >= SSM_REDERIVE_QUEUE_CAP" in src, (
+            "Scheduler must enforce the centralized queue cap with >= check"
         )
 
     def test_queue_pops_oldest_on_overflow(self):

@@ -164,8 +164,40 @@ class DSV4BatchGenerator:
         self.max_kv_size = max_kv_size
         self._uid_count = 0
         self._requests: List[_Request] = []
-        # Pin device default stream
+        # Pin a concrete MLX stream owned by this generator. Using the
+        # device object implicitly resolves Stream(gpu, 0), which can be
+        # absent in the scheduler worker thread on cache-hit replay.
         self._device = mx.default_device()
+        self._stream = stream or mx.default_stream(self._device)
+
+    def _refresh_thread_stream(self):
+        """Bind the generator to this worker thread's default MLX stream."""
+        try:
+            self._stream = mx.default_stream(self._device)
+        except Exception:
+            pass
+
+    def _sync(self):
+        if not hasattr(mx, "synchronize"):
+            return
+        try:
+            mx.synchronize(self._stream)
+        except TypeError:
+            mx.synchronize()
+
+    def _sampled_token_id(self, sampled) -> int:
+        """Materialize a sampled token on this worker thread's stream."""
+        with mx.stream(self._stream):
+            try:
+                # Re-home the scalar onto the active worker stream before
+                # tolist()/item() forces synchronization. Cache-hit replay can
+                # otherwise leave the sampled scalar associated with a stale
+                # Stream(gpu, 0) object from an earlier request/thread.
+                sampled = sampled + mx.zeros_like(sampled)
+            except Exception:
+                pass
+            self._sync()
+            return int(sampled.tolist()[0]) if hasattr(sampled, "tolist") else int(sampled.item())
 
     # ---------- helpers ----------
     def _make_new_cache(self):
@@ -204,7 +236,7 @@ class DSV4BatchGenerator:
         _force_realize = getattr(mx, "eval")
         # Track per-snapshot copy failures so we can hard-fail the whole
         # snapshot if any LEAF array fails to round-trip. Silent None
-        # leaves were a real bug (Codex 2026-05-05): if any DSV4 cache
+        # leaves were a real bug: if any DSV4 cache
         # leaf is bf16, np.array(bf16_mx_array) raises a buffer-format
         # error and would have left a None in place of real state →
         # corrupted snapshot replays as garbage on cache hit.
@@ -241,10 +273,20 @@ class DSV4BatchGenerator:
                 return None
 
         snapshots: List[Any] = []
+
+        def _is_dsv4_cache(obj) -> bool:
+            try:
+                return any(
+                    cls.__name__ in {"DeepseekV4Cache", "PoolQuantizedV4Cache"}
+                    for cls in type(obj).__mro__
+                )
+            except Exception:
+                return False
+
         for layer_cache in cache_list:
             try:
                 cls_name = type(layer_cache).__name__
-                if "DeepseekV4Cache" in cls_name:
+                if _is_dsv4_cache(layer_cache):
                     # DSV4 composite: state = (local_kv, comp_state, idx_state)
                     local = getattr(layer_cache, "local", None)
                     sliding_window = int(getattr(local, "max_size", 128) or 128)
@@ -412,7 +454,7 @@ class DSV4BatchGenerator:
                 x = p(x)
         # DSV4 hard n-gram dedup — final logit warp BEFORE softmax. ONLY
         # uses generated tokens to avoid prompt-token poisoning of the
-        # dedup state (Codex 2026-05-05). Without this, a prompt that
+        # dedup state. Without this, a prompt that
         # legitimately repeats a word 3+ times would block that word for
         # the entire generation. Disable via env
         # VMLX_DSV4_HARD_REP_BLOCK=0 if it interferes (NOT recommended).
@@ -446,9 +488,10 @@ class DSV4BatchGenerator:
             chunk = all_ids[:, off:min(off + step, total)]
             logits = self.model(chunk, cache=cache)
             last_logits = logits[:, -1, :]
-            mx.eval(last_logits)
             if hasattr(mx, "synchronize"):
-                mx.synchronize()
+                self._sync()
+            else:
+                mx.eval(last_logits)
             if hasattr(mx, "clear_cache"):
                 mx.clear_cache()
         return last_logits
@@ -545,6 +588,7 @@ class DSV4BatchGenerator:
         """
         prompt_resps: List[_Response] = []
         gen_resps: List[_Response] = []
+        self._refresh_thread_stream()
 
         # On first call, warm up MLX kernels so the user's prefill
         # doesn't have to JIT-compile every routed-expert / hash-router
@@ -553,20 +597,19 @@ class DSV4BatchGenerator:
         # the warmup state. After this, the user's prefill paths use
         # the precompiled kernels.
         if not self._warmed_up:
-            with mx.stream(self._device):
+            with mx.stream(self._stream):
                 try:
                     _warm_cache = self._make_new_cache()
                     _warm_ids = mx.array([[0]], dtype=mx.int32)
                     _ = self.model(_warm_ids, cache=_warm_cache)
-                    if hasattr(mx, "synchronize"):
-                        mx.synchronize()
+                    self._sync()
                     logger.info("DSV4Gen: kernel warmup done")
                 except Exception as _wexc:
                     logger.warning(f"DSV4Gen: warmup failed (continuing anyway): {_wexc}")
             self._warmed_up = True
 
         for r in list(self._requests):
-            with mx.stream(self._device):
+            with mx.stream(self._stream):
                 if r.cache is None:
                     # Prefill — chunked through one DeepseekV4Cache instance.
                     # This preserves SWA+CSA/HSA state while bounding transient
@@ -620,9 +663,8 @@ class DSV4BatchGenerator:
                         self._processor_context(r),
                         generated_tokens=list(r.out_tokens),
                     )
-                    if hasattr(mx, "synchronize"):
-                        mx.synchronize()
-                    tok_id = int(sampled.tolist()[0]) if hasattr(sampled, "tolist") else int(sampled.item())
+                    self._sync()
+                    tok_id = self._sampled_token_id(sampled)
                     r.out_tokens.append(tok_id)
                     r.prompt_processed = True
                     # Check stop
@@ -655,9 +697,8 @@ class DSV4BatchGenerator:
                         self._processor_context(r),
                         generated_tokens=list(r.out_tokens),
                     )
-                    if hasattr(mx, "synchronize"):
-                        mx.synchronize()
-                    tok_id = int(sampled.tolist()[0]) if hasattr(sampled, "tolist") else int(sampled.item())
+                    self._sync()
+                    tok_id = self._sampled_token_id(sampled)
                     r.out_tokens.append(tok_id)
                     r.prompt_processed = True
                     if tok_id == DSV4_EOS_ID or tok_id in self.stop_tokens:
@@ -679,17 +720,15 @@ class DSV4BatchGenerator:
                     last_id = r.out_tokens[-1]
                     ids = mx.array([[last_id]], dtype=mx.int32)
                     logits = self.model(ids, cache=r.cache)
-                    if hasattr(mx, "synchronize"):
-                        mx.synchronize()
+                    self._sync()
                     last_logits = logits[:, -1, :]
                     sampled, logprobs = self._sample(
                         last_logits, r.sampler, r.logits_processors,
                         self._processor_context(r),
                         generated_tokens=list(r.out_tokens),
                     )
-                    if hasattr(mx, "synchronize"):
-                        mx.synchronize()
-                    tok_id = int(sampled.tolist()[0]) if hasattr(sampled, "tolist") else int(sampled.item())
+                    self._sync()
+                    tok_id = self._sampled_token_id(sampled)
                     r.out_tokens.append(tok_id)
                     if tok_id == DSV4_EOS_ID or tok_id in self.stop_tokens:
                         r.finish_reason = "stop"

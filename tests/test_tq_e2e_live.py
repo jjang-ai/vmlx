@@ -31,6 +31,10 @@ import time
 import urllib.request
 import urllib.error
 
+import pytest
+
+pytestmark = [pytest.mark.slow, pytest.mark.integration]
+
 # ── Config ──────────────────────────────────────────────────────────────
 DEFAULT_MODELS = [
     os.path.expanduser("~/jang/models/Qwen3.5-4B-JANG_2S"),

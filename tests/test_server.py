@@ -204,6 +204,27 @@ class TestHelperFunctions:
         }))
         assert not is_mllm_model(str(llm_dir))
 
+
+class TestOllamaCompatibilityProbe:
+    """Ollama-compatible clients probe these before sending real requests."""
+
+    def test_root_and_version_do_not_require_api_key(self, monkeypatch):
+        from fastapi.testclient import TestClient
+        from vmlx_engine import server
+
+        monkeypatch.setattr(server, "_api_key", "secret-token", raising=False)
+        client = TestClient(server.app)
+
+        root = client.get("/")
+        assert root.status_code == 200
+        assert "Ollama" in root.text
+        assert client.head("/").status_code == 200
+
+        version = client.get("/api/version")
+        assert version.status_code == 200
+        assert version.json()["version"] == "0.12.6"
+        assert client.head("/api/version").status_code == 200
+
     def test_extract_multimodal_content_text_only(self):
         """Test extracting content from text-only messages."""
         from vmlx_engine.server import extract_multimodal_content, Message
@@ -757,3 +778,76 @@ def pytest_addoption(parser):
         default="http://localhost:8000",
         help="URL of the vmlx-engine server for integration tests",
     )
+
+
+class TestDSV4RepetitionPenaltyFloor:
+    """DSV4 family safety floor — bundle calibrations as low as 1.0 (thinking)
+    and 1.05 (chat) are confirmed live-broken on long prompts (degenerate
+    "(the project (the project ..." and "response\\nresponse..." loops).
+
+    The engine MUST clamp server-resolved rep_penalty to >= 1.15 for any
+    deepseek_v4 model. Panel/UI default values often arrive as request fields,
+    so low request values must not bypass the floor.
+    """
+
+    def _set_dsv4_path(self, monkeypatch, tmp_path, sampling_defaults):
+        """Build a fake DSV4 bundle dir + point _model_path at it."""
+        import json
+        cfg = {"model_type": "deepseek_v4"}
+        (tmp_path / "config.json").write_text(json.dumps(cfg))
+        jang_cfg = {
+            "model_family": "deepseek_v4",
+            "chat": {"sampling_defaults": sampling_defaults,
+                     "reasoning": {"default_mode": "chat"}},
+        }
+        (tmp_path / "jang_config.json").write_text(json.dumps(jang_cfg))
+        import vmlx_engine.server as srv
+        monkeypatch.setattr(srv, "_model_path", str(tmp_path))
+        monkeypatch.setattr(srv, "_default_repetition_penalty", None)
+        return srv
+
+    def test_floor_clamps_thinking_1_0_to_1_10(self, monkeypatch, tmp_path):
+        srv = self._set_dsv4_path(monkeypatch, tmp_path, {
+            "repetition_penalty_thinking": 1.0,
+            "repetition_penalty_chat": 1.05,
+            "repetition_penalty": 1.0,
+        })
+        # No request override; resolver should clamp
+        result = srv._resolve_repetition_penalty(None, str(tmp_path))
+        assert result >= 1.15, (
+            f"DSV4 thinking-mode floor missing: resolver returned {result}, "
+            f"expected >= 1.15 (v1.5.8-followup empirical loop-break threshold). Bundles ship 1.0 (no penalty) and produce "
+            f"degenerate repetition loops on long prompts.")
+
+    def test_floor_clamps_chat_1_05_to_1_10(self, monkeypatch, tmp_path):
+        srv = self._set_dsv4_path(monkeypatch, tmp_path, {
+            "repetition_penalty_chat": 1.05,
+            "repetition_penalty_thinking": 1.0,
+        })
+        result = srv._resolve_repetition_penalty(None, str(tmp_path))
+        assert result >= 1.15, (
+            f"DSV4 chat-mode floor missing: resolver returned {result}, "
+            f"expected >= 1.15")
+
+    def test_low_per_request_value_is_still_floored(self, monkeypatch, tmp_path):
+        srv = self._set_dsv4_path(monkeypatch, tmp_path, {
+            "repetition_penalty_chat": 1.05,
+        })
+        result = srv._resolve_repetition_penalty(1.05, str(tmp_path))
+        assert result == 1.15, (
+            f"Low request rep_penalty must not bypass DSV4 floor: got {result}")
+
+    def test_floor_does_not_affect_non_dsv4_families(self, monkeypatch, tmp_path):
+        import json
+        # Build a non-DSV4 bundle
+        cfg = {"model_type": "qwen3_moe"}
+        (tmp_path / "config.json").write_text(json.dumps(cfg))
+        jang_cfg = {"chat": {"sampling_defaults": {"repetition_penalty_chat": 1.0}}}
+        (tmp_path / "jang_config.json").write_text(json.dumps(jang_cfg))
+        import vmlx_engine.server as srv
+        monkeypatch.setattr(srv, "_model_path", str(tmp_path))
+        monkeypatch.setattr(srv, "_default_repetition_penalty", None)
+        result = srv._resolve_repetition_penalty(None, str(tmp_path))
+        # Non-DSV4 families don't get the DSV4 floor — None or actual is fine.
+        assert result is None or result < 1.15, (
+            f"Floor leaked to non-DSV4 family: got {result}")

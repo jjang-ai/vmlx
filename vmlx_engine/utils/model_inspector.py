@@ -35,6 +35,7 @@ def _detect_turboquant_layer_types(
         Tuple of (layer_types list, key_dim, val_dim).
         layer_types[i] is "attention" or "ssm".
     """
+    model_type = str(text_cfg.get("model_type", "") or "").lower()
     key_dim = text_cfg.get("head_dim", 128)
     val_dim = text_cfg.get("head_dim", 128)
     if text_cfg.get("kv_lora_rank", 0) > 0:
@@ -42,6 +43,21 @@ def _detect_turboquant_layer_types(
             "qk_rope_head_dim", 64
         )
         val_dim = text_cfg.get("v_head_dim", 128)
+
+    # Ling/Bailing hybrid does not ship an explicit layer_types list, but
+    # mlx_lm.models.bailing_hybrid deterministically chooses MLA attention
+    # layers by layer_group_size and uses ArraysCache for every other GLA/SSM
+    # layer. Treat it as a hybrid TQ cache, not as all-attention.
+    if model_type in ("bailing_hybrid", "bailing_moe_v2_5"):
+        group = int(text_cfg.get("layer_group_size") or 0)
+        if group > 0:
+            layer_types = []
+            full_groups = n_layers // group
+            tail_start = full_groups * group
+            for i in range(n_layers):
+                is_global = ((i + 1) % group == 0) or (i >= tail_start)
+                layer_types.append("attention" if is_global else "ssm")
+            return layer_types, key_dim, val_dim
 
     layer_type_list = text_cfg.get("layer_types", [])
     hybrid_pattern = text_cfg.get("hybrid_override_pattern", "")
@@ -140,6 +156,13 @@ def is_mla_model(config: Any) -> bool:
         cfg.get("llm_config") if isinstance(cfg.get("llm_config"), dict) else None,
     ):
         if not isinstance(sub, dict):
+            continue
+        model_type = str(sub.get("model_type", "") or "").lower()
+        if model_type in ("bailing_hybrid", "bailing_moe_v2_5"):
+            # Ling/Bailing has kv_lora_rank, but its runtime expands MLA
+            # keys/values to full per-head KVCache on four global layers and
+            # uses ArraysCache for the remaining GLA/SSM layers. It is not the
+            # CacheList compressed-latent MLA layout that TurboQuant must skip.
             continue
         try:
             if int(sub.get("kv_lora_rank") or 0) > 0:

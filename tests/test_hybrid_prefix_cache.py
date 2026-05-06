@@ -99,6 +99,26 @@ class MockHybridModel:
         ]
 
 
+class MockNemotronNoCacheBlocksModel:
+    """52 transformer blocks, but only M/* layers own cache state."""
+
+    class Args:
+        num_hidden_layers = 52
+        num_attention_heads = 32
+        num_key_value_heads = 8
+        hidden_size = 4096
+        head_dim = 128
+        kv_lora_rank = 0
+
+    args = Args()
+
+    def make_cache(self):
+        return [
+            MockArraysCache() if i % 5 else MockKVCache(n_kv_heads=8, seq_len=0)
+            for i in range(29)
+        ]
+
+
 # ---------------------------------------------------------------------------
 # Tests: _extract_cache_states includes SSM layers
 # ---------------------------------------------------------------------------
@@ -176,6 +196,28 @@ class TestExtractCacheStatesHybrid:
         # Should be normalized to 8 heads
         keys, values = extracted[0]["state"]
         assert keys.shape[1] == 8, f"Expected 8 KV heads after normalization, got {keys.shape[1]}"
+
+
+def test_block_prefix_cache_expected_layers_use_cache_slots_not_hidden_blocks():
+    from vmlx_engine.paged_cache import PagedCacheManager
+    from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+    cache = BlockAwarePrefixCache(
+        model=MockNemotronNoCacheBlocksModel(),
+        paged_cache_manager=PagedCacheManager(4, 8),
+    )
+
+    assert cache._expected_num_layers == 29
+
+
+def test_scheduler_expected_layers_use_cache_slots_not_hidden_blocks():
+    from vmlx_engine.scheduler import Scheduler
+
+    sched = object.__new__(Scheduler)
+    sched.model = MockNemotronNoCacheBlocksModel()
+    sched._hybrid_num_layers = None
+
+    assert sched._expected_cache_layer_count() == 29
 
 
 # ---------------------------------------------------------------------------

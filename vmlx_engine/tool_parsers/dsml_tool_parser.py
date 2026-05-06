@@ -80,11 +80,23 @@ class DSMLToolParser(ToolParser):
         rf'<{re.escape(DSML_PREFIX)}parameter\s+name="([^"]+)"\s+string="(true|false)"\s*>(.*?)</{re.escape(DSML_PREFIX)}parameter>',
         re.DOTALL,
     )
+    _MALFORMED_PARAM_VALUE_RE = re.compile(
+        rf'<{re.escape(DSML_PREFIX)}parameter\s+name="([^"]+)"[^>]*?\bvalue\s*"?([^">\s]*)"?',
+        re.DOTALL,
+    )
     _MALFORMED_NAME_RE = re.compile(
         rf'<{re.escape(DSML_PREFIX)}(?:tool_call_type|tool_call|tool_calls)[^>]*?(?:type|name)="([^"]+)"',
         re.DOTALL,
     )
     _ATTR_RE = re.compile(r'"attributes"\s*:\s*"([^"}\n]*)', re.DOTALL)
+    _HTMLISH_INVOKE_RE = re.compile(
+        r"<invoke_([A-Za-z_][A-Za-z0-9_]*)\b[^>]*>(.*)",
+        re.DOTALL,
+    )
+    _HTMLISH_PARAM_RE = re.compile(
+        r'<param\s+name=["\']?([A-Za-z_][A-Za-z0-9_]*)["\']?[^>]*>([^<]*)',
+        re.DOTALL,
+    )
 
     def _has_dsml(self, text: str) -> bool:
         return self.INVOKE_OPEN_PREFIX in text
@@ -221,13 +233,19 @@ class DSMLToolParser(ToolParser):
         schema = schemas.get(name)
         if not schema:
             return []
-        args = self._parse_params(m.group(2))
         params_schema = schema.get("parameters") or {}
         required = (
             params_schema.get("required") or []
             if isinstance(params_schema, dict)
             else []
         )
+        args = self._parse_params(m.group(2))
+        if any(p not in args for p in required):
+            body = m.group(2)
+            for pm in self._MALFORMED_PARAM_VALUE_RE.finditer(body):
+                p_name, raw = pm.group(1), pm.group(2)
+                if p_name not in args and raw:
+                    args[p_name] = raw
         if any(p not in args for p in required):
             return []
         return [
@@ -238,14 +256,145 @@ class DSMLToolParser(ToolParser):
             )
         ]
 
+    def _repair_htmlish_invoke(
+        self, text: str, request: Any | None
+    ) -> list[dict[str, Any]]:
+        """Repair DSV4's degraded ``<invoke_name><param ...>`` form.
+
+        Live DSV4 JANGTQ can degrade canonical DSML into HTML-ish tags after
+        the reasoning parser strips ``</think>``, for example::
+
+            <invoke_list_directory><br />
+            <param name="path".">.</br />
+            </inv
+
+        This is schema-gated for the same reason as the other repair paths: we
+        only emit a tool call when the function and parameters exist in the
+        request's tool schema.
+        """
+        schemas = self._tool_schemas(request)
+        if not schemas:
+            return []
+        m = self._HTMLISH_INVOKE_RE.search(text)
+        if not m:
+            return []
+        name, body = m.group(1), m.group(2)
+        schema = schemas.get(name)
+        if not schema:
+            return []
+        params_schema = schema.get("parameters") or {}
+        props = (
+            params_schema.get("properties") or {}
+            if isinstance(params_schema, dict)
+            else {}
+        )
+        required = (
+            params_schema.get("required") or []
+            if isinstance(params_schema, dict)
+            else []
+        )
+        args: dict[str, Any] = {}
+        for pm in self._HTMLISH_PARAM_RE.finditer(body):
+            p_name, raw = pm.group(1), pm.group(2)
+            if p_name in props:
+                value = re.sub(r"<br\s*/?>", "", raw, flags=re.IGNORECASE).strip()
+                if value:
+                    args[p_name] = value
+        if not args and len(props) == 1 and ">.<" in text:
+            args[next(iter(props))] = "."
+        if any(p not in args for p in required):
+            return []
+        return [
+            self._make_tool_call(
+                name=name,
+                arguments=json.dumps(args, ensure_ascii=False),
+                id_=generate_tool_id(),
+            )
+        ]
+
+    def _try_encoding_dsv4_parse(self, model_output: str):
+        """Route DSML extraction through the canonical DSV4 chat-template
+        encoder when it's loaded. Returns ExtractedToolCallInformation on
+        success, None when encoding_dsv4 isn't available or the parse
+        produced nothing actionable (caller falls back to regex)."""
+        try:
+            from vmlx_engine.loaders.dsv4_chat_encoder import (
+                _load_encoding_dsv4_module,
+            )
+        except Exception:
+            return None
+        try:
+            enc = _load_encoding_dsv4_module()
+        except Exception:
+            return None
+        parse_fn = getattr(enc, "parse_message_from_completion_text", None)
+        if parse_fn is None:
+            return None
+        try:
+            parsed = parse_fn(model_output)
+        except Exception:
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        raw_calls = parsed.get("tool_calls") or []
+        if not raw_calls:
+            return None
+        tool_calls = []
+        for tc in raw_calls:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") or {}
+            name = fn.get("name") or tc.get("name")
+            args = fn.get("arguments") if isinstance(fn, dict) else tc.get("arguments")
+            if not isinstance(name, str) or not name:
+                continue
+            if isinstance(args, dict):
+                args_str = json.dumps(args, ensure_ascii=False)
+            elif isinstance(args, str):
+                args_str = args
+            else:
+                args_str = json.dumps(args or {}, ensure_ascii=False)
+            tool_calls.append(
+                self._make_tool_call(
+                    name=name, arguments=args_str, id_=generate_tool_id()
+                )
+            )
+        if not tool_calls:
+            return None
+        residue = parsed.get("content") or ""
+        if isinstance(residue, list):
+            residue = "".join(
+                p.get("text", "") if isinstance(p, dict) else str(p) for p in residue
+            )
+        residue = (residue or "").strip() or None
+        return ExtractedToolCallInformation(
+            tools_called=True,
+            tool_calls=tool_calls,
+            content=residue,
+        )
+
     def extract_tool_calls(
         self, model_output: str, request: Any | None = None
     ) -> ExtractedToolCallInformation:
-        """Non-streaming path — parse entire completion and return tool calls + residue."""
-        if DSML_PREFIX not in model_output:
+        """Non-streaming path — parse entire completion and return tool calls + residue.
+
+        Routing precedence (added 2026-05-04):
+          1. Canonical ``encoding_dsv4.parse_message_from_completion_text``
+             when the DSV4 chat-template encoder is loaded — this matches the
+             round-trip semantics of the converter exactly and handles
+             nested / multi-line / parameter-string-coerced invokes that the
+             generic regex misses.
+          2. Fallback to the regex-based path below when encoding_dsv4 is
+             unavailable (e.g. non-DSV4 bundle still requesting `dsml` parser).
+        """
+        if DSML_PREFIX not in model_output and "<invoke_" not in model_output:
             return ExtractedToolCallInformation(
                 tools_called=False, tool_calls=[], content=model_output
             )
+
+        canonical = self._try_encoding_dsv4_parse(model_output)
+        if canonical is not None:
+            return canonical
 
         tool_calls = []
         for m in self._INVOKE_RE.finditer(model_output):
@@ -265,6 +414,9 @@ class DSMLToolParser(ToolParser):
 
         if not tool_calls:
             tool_calls = self._repair_malformed_dsml(model_output, request)
+
+        if not tool_calls:
+            tool_calls = self._repair_htmlish_invoke(model_output, request)
 
         # Residue content = everything OUTSIDE the invoke blocks. Strip the
         # matched spans and collapse surrounding whitespace so the chat UI

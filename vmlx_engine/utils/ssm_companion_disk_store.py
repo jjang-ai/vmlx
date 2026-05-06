@@ -305,6 +305,23 @@ class SSMCompanionDiskStore:
         flat: Dict[str, mx.array] = {}
         if data_path.exists() and data_path.stat().st_size > 0:
             try:
+                try:
+                    from vmlx_engine.cache_record_validator import (
+                        reject_safetensors_or_warn,
+                    )
+                except Exception:
+                    reject_safetensors_or_warn = None
+                if reject_safetensors_or_warn is not None:
+                    if not reject_safetensors_or_warn(
+                        str(data_path),
+                        source=f"SSM-companion-header:{key[:12]}",
+                        delete_on_reject=True,
+                    ):
+                        try:
+                            side_path.unlink()
+                        except OSError:
+                            pass
+                        return None
                 flat = mx.load(str(data_path))  # type: ignore[assignment]
             except Exception as e:
                 logger.debug("SSM disk store load failed %s: %s", key, e)
@@ -466,6 +483,48 @@ class SSMCompanionDiskStore:
                     sub.rmdir()
                 except OSError:
                     pass
+
+    def stats(self) -> Dict[str, Any]:
+        """Best-effort L2 footprint stats for health/cache endpoints."""
+        if self._dir is None:
+            return {
+                "enabled": False,
+                "directory": None,
+                "entries": 0,
+                "bytes": 0,
+                "budget_bytes": self._budget,
+            }
+        entries = 0
+        total = 0
+        try:
+            for sub in self._dir.iterdir() if self._dir.exists() else []:
+                if not sub.is_dir():
+                    continue
+                for f in sub.iterdir():
+                    if f.suffix != ".safetensors":
+                        continue
+                    entries += 1
+                    try:
+                        total += f.stat().st_size
+                    except OSError:
+                        pass
+                    side = f.with_suffix(".json")
+                    if side.exists():
+                        try:
+                            total += side.stat().st_size
+                        except OSError:
+                            pass
+        except OSError:
+            pass
+        return {
+            "enabled": True,
+            "directory": str(self._dir),
+            "entries": entries,
+            "bytes": total,
+            "bytes_mb": round(total / (1024 * 1024), 2),
+            "budget_bytes": self._budget,
+            "budget_gb": round(self._budget / (1024 ** 3), 3),
+        }
 
     def _enforce_budget(self) -> None:
         """LRU eviction by mtime under the disk byte budget."""

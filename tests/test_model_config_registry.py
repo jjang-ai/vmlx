@@ -267,6 +267,51 @@ class TestModelConfigRegistry:
         empty_registry.clear()
         assert len(empty_registry._configs) == 0
 
+    def test_jang_stamp_model_type_alias_preserves_registered_family_fields(
+        self, empty_registry, tmp_path
+    ):
+        """A JANG stamp may name the HF model_type, not the vMLX family.
+
+        Ling bundles stamp capabilities.family="bailing_hybrid". The canonical
+        registry family is "ling", and that entry carries the dual EOS tokens
+        required to stop generation. The stamp should override parser/cache
+        fields without discarding the registered family identity or EOS list.
+        """
+        import json
+
+        empty_registry.register(
+            ModelConfig(
+                family_name="ling",
+                model_types=["bailing_hybrid", "bailing_moe_v2_5"],
+                cache_type="hybrid",
+                eos_tokens=["<|role_end|>", "<|endoftext|>"],
+                tool_parser="deepseek",
+                reasoning_parser="deepseek_r1",
+                priority=10,
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "capabilities": {
+                        "family": "bailing_hybrid",
+                        "cache_type": "hybrid",
+                        "tool_parser": "deepseek",
+                        "reasoning_parser": "deepseek_r1",
+                        "think_in_template": False,
+                        "modality": "text",
+                    }
+                }
+            )
+        )
+
+        result = empty_registry.lookup(str(tmp_path))
+
+        assert result.family_name == "ling"
+        assert result.eos_tokens == ["<|role_end|>", "<|endoftext|>"]
+        assert result.cache_type == "hybrid"
+        assert result.tool_parser == "deepseek"
+
 
 class TestModelConfigs:
     """Tests for the pre-registered model configurations.
@@ -721,6 +766,7 @@ class TestModelConfigComprehensiveChecks:
     VALID_TOOL_PARSERS = {
         None, "qwen", "llama", "mistral", "deepseek", "hermes",
         "granite", "glm47", "step3p5", "nemotron", "minimax", "kimi",
+        "dsml",
         # Gemma family: commit 3294a2da added `gemma3` for Google's
         # documented ``` ```tool_code\\nname(k=v)\\n``` ``` format, and
         # `gemma3n` for Gemma 3n (same parser, separate registry entry).

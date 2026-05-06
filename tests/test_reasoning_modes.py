@@ -60,6 +60,42 @@ def test_invalid_thinking_mode_rejected():
         )
 
 
+def test_dsv4_reasoning_only_nonstream_falls_back_to_visible_content():
+    from vmlx_engine import server
+
+    text = server._dsv4_visible_content_fallback(
+        "",
+        "Project plan draft",
+        is_dsv4=True,
+        suppress_reasoning=False,
+    )
+
+    assert text == "Project plan draft"
+
+
+def test_dsv4_reasoning_only_fallback_respects_suppression_and_family():
+    from vmlx_engine import server
+
+    assert server._dsv4_visible_content_fallback(
+        "",
+        "hidden",
+        is_dsv4=True,
+        suppress_reasoning=True,
+    ) == ""
+    assert server._dsv4_visible_content_fallback(
+        "",
+        "hidden",
+        is_dsv4=False,
+        suppress_reasoning=False,
+    ) == ""
+    assert server._dsv4_visible_content_fallback(
+        "visible",
+        "hidden",
+        is_dsv4=True,
+        suppress_reasoning=False,
+    ) == "visible"
+
+
 def test_dsv4_bundle_defaults_override_stale_ui_defaults(tmp_path, monkeypatch):
     """Old chats saved generic 0.7/1.0/1.1 values as explicit request
     overrides. For DSV4 those are not real user intent; they are stale UI
@@ -96,6 +132,44 @@ def test_dsv4_bundle_defaults_override_stale_ui_defaults(tmp_path, monkeypatch):
     assert server._resolve_temperature(0.2) == 0.2
     assert server._resolve_top_p(0.8) == 0.8
     assert server._resolve_repetition_penalty(1.25) == 1.25
+    assert server._resolve_repetition_penalty(1.05) == 1.15
+
+
+def test_ling_stamped_bailing_family_gets_ling_safety_floor(tmp_path, monkeypatch):
+    """Ling JANGTQ bundles stamp capabilities.family=bailing_hybrid.
+
+    That is the HF model_type, not the canonical vMLX family. The server's
+    family default resolver must still identify it as "ling" so default CLI/UI
+    repetition_penalty=1.0 gets raised to the Ling floor.
+    """
+    import json
+    from vmlx_engine import server
+    import vmlx_engine.model_config_registry as mcr
+
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "bailing_hybrid"}))
+    (tmp_path / "jang_config.json").write_text(json.dumps({
+        "capabilities": {
+            "family": "bailing_hybrid",
+            "cache_type": "hybrid",
+            "tool_parser": "deepseek",
+            "reasoning_parser": "deepseek_r1",
+            "think_in_template": False,
+            "modality": "text",
+        }
+    }))
+
+    mcr.ModelConfigRegistry._instance = None
+    mcr._configs_loaded = False
+    mcr.get_model_config_registry().clear_cache()
+    monkeypatch.setattr(server, "_model_path", str(tmp_path))
+    monkeypatch.setattr(server, "_model_name", "ling")
+    monkeypatch.setattr(server, "_default_repetition_penalty", 1.0)
+    server._jang_sampling_defaults_cache.clear()
+    server._generation_defaults_cache.clear()
+
+    assert server._model_family_for_defaults() == "ling"
+    assert server._resolve_repetition_penalty(None) == 1.15
+    assert server._resolve_repetition_penalty(1.0) == 1.15
 
 
 @pytest.mark.asyncio

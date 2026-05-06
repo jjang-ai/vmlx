@@ -145,6 +145,17 @@ def deserialize_tq_cache(
     if not HAS_MLX:
         raise RuntimeError("MLX required for TQ deserialization")
 
+    try:
+        from .cache_record_validator import validate_tq_native_metadata
+    except Exception:
+        validate_tq_native_metadata = None
+    if validate_tq_native_metadata is not None:
+        ok, reason = validate_tq_native_metadata(
+            tensors, metadata, source="tq-native-deserialize"
+        )
+        if not ok:
+            raise ValueError(f"unsafe TQ-native metadata: {reason}")
+
     from mlx_lm.models.cache import KVCache
 
     num_layers = int(metadata.get("__num_layers__", "0"))
@@ -368,7 +379,13 @@ def _deserialize_cache_list_layer(
     """
     from mlx_lm.models.cache import KVCache
 
-    sub_count = int(metadata.get(f"__layer_{i}_cl_count__", "0"))
+    sub_count = _parse_bounded_int(
+        metadata,
+        f"__layer_{i}_cl_count__",
+        default=0,
+        lo=0,
+        hi=64,
+    )
     sub_caches = []
 
     for j in range(sub_count):
@@ -385,9 +402,9 @@ def _deserialize_cache_list_layer(
                 from jang_tools.turboquant.pipeline import decode_keys, decode_values
 
                 ck_shape = tuple(json.loads(metadata.get(f"__{prefix}_ck_shape__", "[]")))
-                ck_bits = int(metadata.get(f"__{prefix}_ck_bits__", "3"))
+                ck_bits = _parse_bounded_int(metadata, f"__{prefix}_ck_bits__", default=3, lo=1, hi=8)
                 cv_shape = tuple(json.loads(metadata.get(f"__{prefix}_cv_shape__", "[]")))
-                cv_bits = int(metadata.get(f"__{prefix}_cv_bits__", "3"))
+                cv_bits = _parse_bounded_int(metadata, f"__{prefix}_cv_bits__", default=3, lo=1, hi=8)
 
                 encoded_keys = EncodedKeys(
                     indices_packed=tensors[f"{prefix}_ck_indices_packed"],
@@ -403,15 +420,15 @@ def _deserialize_cache_list_layer(
                 )
                 # Create TQ cache for encoder access (decode needs encoder)
                 from jang_tools.turboquant.cache import TurboQuantKVCache as _TQ_CL
-                _key_dim = int(metadata.get(f"__{prefix}_key_dim__", "128"))
-                _val_dim = int(metadata.get(f"__{prefix}_value_dim__", "128"))
-                _key_bits = int(metadata.get(f"__{prefix}_key_bits__", "3"))
-                _val_bits = int(metadata.get(f"__{prefix}_value_bits__", "3"))
+                _key_dim = _parse_bounded_int(metadata, f"__{prefix}_key_dim__", default=128, lo=1, hi=262144)
+                _val_dim = _parse_bounded_int(metadata, f"__{prefix}_value_dim__", default=128, lo=1, hi=262144)
+                _key_bits = _parse_bounded_int(metadata, f"__{prefix}_key_bits__", default=3, lo=1, hi=8)
+                _val_bits = _parse_bounded_int(metadata, f"__{prefix}_value_bits__", default=3, lo=1, hi=8)
                 _tq_cl = _TQ_CL(key_dim=_key_dim, value_dim=_val_dim,
                                  key_bits=_key_bits, value_bits=_val_bits)
                 kv.keys = decode_keys(encoded_keys, _tq_cl.key_encoder)
                 kv.values = decode_values(encoded_values, _tq_cl.value_encoder)
-                kv.offset = int(metadata.get(f"__{prefix}_offset__", "0"))
+                kv.offset = _parse_bounded_int(metadata, f"__{prefix}_offset__", default=0, lo=0, hi=2_000_000)
             except Exception as e:
                 logger.warning("CacheList sub-cache %d/%d TQ decode failed: %s", i, j, e)
             sub_caches.append(kv)
@@ -423,8 +440,7 @@ def _deserialize_cache_list_layer(
             sub_meta_str = metadata.get(f"__{prefix}_meta__", "")
             if sub_meta_str:
                 try:
-                    meta_list = json.loads(sub_meta_str)
-                    kv.offset = int(meta_list[0]) if meta_list else 0
+                    kv.offset = _parse_meta_offset_str(sub_meta_str, f"{prefix}_meta")
                 except (json.JSONDecodeError, ValueError, IndexError):
                     kv.offset = kv.keys.shape[2] if kv.keys is not None and kv.keys.ndim >= 3 else 0
             else:
@@ -481,7 +497,9 @@ def _deserialize_tq_layer(
 
     try:
         ck_shape = tuple(json.loads(metadata.get(f"__{prefix}_ck_shape__", "[]")))
-        ck_bits = int(metadata.get(f"__{prefix}_ck_bits__", "3"))
+        ck_bits = _parse_bounded_int(
+            metadata, f"__{prefix}_ck_bits__", default=3, lo=1, hi=8
+        )
     except (json.JSONDecodeError, ValueError):
         logger.warning("TQ layer %d: invalid ck metadata", i)
         return None
@@ -505,7 +523,9 @@ def _deserialize_tq_layer(
 
     try:
         cv_shape = tuple(json.loads(metadata.get(f"__{prefix}_cv_shape__", "[]")))
-        cv_bits = int(metadata.get(f"__{prefix}_cv_bits__", "3"))
+        cv_bits = _parse_bounded_int(
+            metadata, f"__{prefix}_cv_bits__", default=3, lo=1, hi=8
+        )
     except (json.JSONDecodeError, ValueError):
         logger.warning("TQ layer %d: invalid cv metadata", i)
         return None
@@ -521,12 +541,12 @@ def _deserialize_tq_layer(
     # decode_keys/decode_values require (encoded, encoder) — the encoder
     # contains codebook tables needed for dequantization. We create a
     # TurboQuantKVCache to get the encoder, then decode.
-    offset = int(metadata.get(f"__{prefix}_offset__", "0"))
-    key_dim = int(metadata.get(f"__{prefix}_key_dim__", "128"))
-    value_dim = int(metadata.get(f"__{prefix}_value_dim__", "128"))
-    key_bits = int(metadata.get(f"__{prefix}_key_bits__", "3"))
-    value_bits = int(metadata.get(f"__{prefix}_value_bits__", "3"))
-    sink_tokens = int(metadata.get(f"__{prefix}_sink_tokens__", "0"))
+    offset = _parse_bounded_int(metadata, f"__{prefix}_offset__", default=0, lo=0, hi=2_000_000)
+    key_dim = _parse_bounded_int(metadata, f"__{prefix}_key_dim__", default=128, lo=1, hi=262144)
+    value_dim = _parse_bounded_int(metadata, f"__{prefix}_value_dim__", default=128, lo=1, hi=262144)
+    key_bits = _parse_bounded_int(metadata, f"__{prefix}_key_bits__", default=3, lo=1, hi=8)
+    value_bits = _parse_bounded_int(metadata, f"__{prefix}_value_bits__", default=3, lo=1, hi=8)
+    sink_tokens = _parse_bounded_int(metadata, f"__{prefix}_sink_tokens__", default=0, lo=0, hi=2_000_000)
 
     try:
         from jang_tools.turboquant.cache import TurboQuantKVCache as _TQ
@@ -598,8 +618,12 @@ def _deserialize_quantized_kv(
 
     try:
         from mlx_lm.models.cache import QuantizedKVCache
-        qk_count = int(metadata.get(f"__layer_{i}_qk_count__", "0"))
-        qv_count = int(metadata.get(f"__layer_{i}_qv_count__", "0"))
+        qk_count = _parse_bounded_int(
+            metadata, f"__layer_{i}_qk_count__", default=0, lo=0, hi=8
+        )
+        qv_count = _parse_bounded_int(
+            metadata, f"__layer_{i}_qv_count__", default=0, lo=0, hi=8
+        )
 
         keys_tuple = tuple(tensors[f"layer_{i}_qk_{j}"] for j in range(qk_count))
         values_tuple = tuple(tensors[f"layer_{i}_qv_{j}"] for j in range(qv_count))
@@ -654,7 +678,9 @@ def _deserialize_cumulative_layer(
     from mlx_lm.models.cache import KVCache
 
     cls_name = metadata.get(f"__layer_{i}_cumulative_class__", "")
-    state_count = int(metadata.get(f"__layer_{i}_state_count__", "0"))
+    state_count = _parse_bounded_int(
+        metadata, f"__layer_{i}_state_count__", default=0, lo=0, hi=64
+    )
 
     state_arrays = []
     for j in range(state_count):
@@ -694,9 +720,35 @@ def _parse_offset(metadata: Dict[str, str], i: int) -> Optional[int]:
     if not meta_str:
         return None
     try:
-        meta_list = json.loads(meta_str)
-        if isinstance(meta_list, list) and meta_list:
-            return int(meta_list[0])
+        return _parse_meta_offset_str(meta_str, f"layer {i} meta")
     except (json.JSONDecodeError, ValueError, IndexError):
         pass
     return None
+
+
+def _parse_meta_offset_str(meta_str: str, label: str) -> int:
+    meta_list = json.loads(meta_str)
+    if not isinstance(meta_list, list) or not meta_list:
+        return 0
+    value = int(meta_list[0])
+    if not 0 <= value <= 2_000_000:
+        raise ValueError(f"{label}: offset {value} outside [0, 2000000]")
+    return value
+
+
+def _parse_bounded_int(
+    metadata: Dict[str, str],
+    key: str,
+    *,
+    default: int,
+    lo: int,
+    hi: int,
+) -> int:
+    raw = metadata.get(key, str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError, OverflowError) as e:
+        raise ValueError(f"{key}: invalid integer {raw!r}: {e}") from e
+    if value < lo or value > hi:
+        raise ValueError(f"{key}: {value} outside [{lo}, {hi}]")
+    return value

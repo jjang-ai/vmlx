@@ -54,7 +54,7 @@ without explicit opt-in.
 
 API
 ---
-    cache = SSMCompanionCache(max_entries=50)
+    cache = SSMCompanionCache(max_entries=20, max_bytes=512 * 1024 * 1024)
     cache.store(token_ids, num_tokens, ssm_states, is_complete=True)
     entry = cache.fetch(token_ids, num_tokens)
     if entry is not None:
@@ -82,7 +82,6 @@ import hashlib
 import json
 import logging
 from collections import OrderedDict
-import copy as copy_module
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -135,23 +134,39 @@ class SSMCompanionCache:
     LRU eviction keeps it bounded.
     """
 
-    def __init__(self, max_entries: int = 20, model_key: str = ""):
+    def __init__(
+        self,
+        max_entries: int = 20,
+        model_key: str = "",
+        disk_store: Any = None,
+        max_bytes: Optional[int] = None,
+    ):
         if max_entries < 1:
             raise ValueError("max_entries must be >= 1")
         # Internal storage: key -> (states, is_complete) tuple.
         self._store: OrderedDict[str, Tuple[List[Any], bool]] = OrderedDict()
         self._max_entries = max_entries
+        self._max_bytes = int(max_bytes) if max_bytes is not None else None
+        if self._max_bytes is not None and self._max_bytes < 1:
+            raise ValueError("max_bytes must be >= 1 when set")
+        self._entry_nbytes: Dict[str, int] = {}
+        self._total_nbytes = 0
         # Model identity prefix mixed into every key. Empty string is the
         # legacy "single-model" behavior — safe default.
         self._model_key = str(model_key or "")
-        # Optional L2 disk store (vmlx#110). Off-by-default; resolves to
-        # None unless VMLX_ENABLE_SSM_DISK_CACHE=1 is set in env.
-        try:
-            from .ssm_companion_disk_store import get_disk_store
+        # Optional L2 disk store (vmlx#110). A scheduler can pass a
+        # model-scoped store directly when block-disk cache is enabled. If
+        # not supplied, the legacy env-gated singleton remains available for
+        # explicit standalone tests/tools.
+        if disk_store is not None:
+            self._disk = disk_store
+        else:
+            try:
+                from .ssm_companion_disk_store import get_disk_store
 
-            self._disk = get_disk_store()
-        except Exception:
-            self._disk = None
+                self._disk = get_disk_store()
+            except Exception:
+                self._disk = None
 
         # Auxiliary index: maps checkpoint length -> (key, prefix_hash)
         # so fetch_longest_prefix can find the best resume point for
@@ -171,9 +186,37 @@ class SSMCompanionCache:
         return self._max_entries
 
     @property
+    def max_bytes(self) -> Optional[int]:
+        return self._max_bytes
+
+    @property
+    def total_nbytes(self) -> int:
+        """Approximate resident bytes held by stored SSM states."""
+        return self._total_nbytes
+
+    @property
     def model_key(self) -> str:
         """Opaque model identity string mixed into every cache key."""
         return self._model_key
+
+    @property
+    def disk_enabled(self) -> bool:
+        return self._disk is not None
+
+    @property
+    def disk_directory(self) -> Optional[str]:
+        directory = getattr(self._disk, "directory", None)
+        return str(directory) if directory is not None else None
+
+    def attach_disk_store(self, disk_store: Any) -> None:
+        """Attach a scheduler-owned L2 store after construction.
+
+        Scheduler initialization builds the hybrid layout before the paged
+        block-disk directory is known. This explicit hook avoids mutating env
+        globals and keeps the SSM L2 namespace aligned with the block cache
+        namespace for the loaded model.
+        """
+        self._disk = disk_store
 
     def _key(self, token_ids: List[int], num_tokens: int) -> str:
         """Deterministic SHA-256 hash key.
@@ -226,28 +269,82 @@ class SSMCompanionCache:
         """
         if num_tokens <= 0 or not ssm_states:
             return
+        stored_states = self._clone_states(ssm_states, key_hint="store")
+        if stored_states is None:
+            logger.debug(
+                "SSM store skipped: failed to detach/materialize %d layers",
+                len(ssm_states),
+            )
+            return
+        stored_nbytes = self._estimate_state_nbytes(stored_states)
+        if self._max_bytes is not None and stored_nbytes > self._max_bytes:
+            logger.info(
+                "SSM store skipped: entry is %.1fMB, above cache budget %.1fMB",
+                stored_nbytes / (1024 * 1024),
+                self._max_bytes / (1024 * 1024),
+            )
+            return
         key = self._key(token_ids, num_tokens)
         prefix_hash = self._prefix_hash(token_ids, num_tokens)
         # Remove existing entry to update its LRU position
         if key in self._store:
-            del self._store[key]
-            self._length_index.get(num_tokens, {}).pop(prefix_hash, None)
-        self._store[key] = (ssm_states, is_complete)
+            self._drop_key(key)
+        self._store[key] = (stored_states, is_complete)
+        self._entry_nbytes[key] = stored_nbytes
+        self._total_nbytes += stored_nbytes
         # Record in length index so fetch_longest_prefix can locate it.
         self._length_index.setdefault(num_tokens, {})[prefix_hash] = key
-        # Evict oldest if over limit
-        while len(self._store) > self._max_entries:
-            evict_key, _ = self._store.popitem(last=False)
-            self._index_remove(evict_key)
+        self._evict_if_needed()
         # vmlx#110 — write-through to L2 disk store. Failures are silent
         # (L1 still has the data; disk is best-effort warm-start cache).
         if self._disk is not None:
             try:
                 self._disk.store(
-                    key, ssm_states, is_complete, token_ids, num_tokens
+                    key, stored_states, is_complete, token_ids, num_tokens
                 )
             except Exception as e:
                 logger.debug("SSM disk write-through failed: %s", e)
+
+    def _clone_states(self, states: List[Any], *, key_hint: str) -> Optional[List[Any]]:
+        """Detach SSM state objects from caller-owned/live cache buffers.
+
+        SSM layers mutate in-place during forward. Storing live objects by
+        reference lets later decode/prefill work corrupt the supposedly clean
+        companion entry. Clone on store and on fetch so both sides are isolated.
+        """
+        cloned_states: List[Any] = []
+        for s in states:
+            try:
+                src_dict = getattr(s, "__dict__", None)
+                if src_dict is None:
+                    c = deepcopy(s)
+                else:
+                    cls = type(s)
+                    c = cls.__new__(cls)
+                    c.__dict__.update(src_dict)
+                if hasattr(c, "cache") and isinstance(c.cache, list):
+                    c.cache = [
+                        (mx.array(a) * 1 if a is not None else None)
+                        for a in c.cache
+                    ]
+                    materialise = [x for x in c.cache if x is not None]
+                    if materialise:
+                        _mx_materialize(*materialise)
+                if getattr(c, "lengths", None) is not None:
+                    try:
+                        c.lengths = mx.array(c.lengths) * 1
+                        _mx_materialize(c.lengths)
+                    except Exception:
+                        pass
+                cloned_states.append(c)
+            except Exception as err:
+                logger.debug(
+                    "SSM companion clone failed (%s err=%s) — cache miss",
+                    key_hint,
+                    type(err).__name__,
+                )
+                return None
+        return cloned_states
 
     def _prefix_hash(self, token_ids: List[int], num_tokens: int) -> str:
         """Stable family identifier: same sha256 for any (longer) token list
@@ -309,37 +406,40 @@ class SSMCompanionCache:
                 if disk_entry is None:
                     return None
                 disk_states, disk_complete = disk_entry
+                logger.info(
+                    "SSM disk HIT: N=%d hash=%s states=%d complete=%s",
+                    num_tokens,
+                    key[:12],
+                    len(disk_states),
+                    disk_complete,
+                )
+                disk_nbytes = self._estimate_state_nbytes(disk_states)
+                if self._max_bytes is not None and disk_nbytes > self._max_bytes:
+                    logger.info(
+                        "SSM disk hit not backfilled: entry %.1fMB exceeds "
+                        "L1 budget %.1fMB",
+                        disk_nbytes / (1024 * 1024),
+                        self._max_bytes / (1024 * 1024),
+                    )
+                    fresh = self._clone_states(
+                        disk_states, key_hint=f"disk:{key[:12]}"
+                    )
+                    if fresh is None:
+                        return None
+                    return (fresh, disk_complete)
                 # Backfill L1 so subsequent hits skip disk altogether.
                 self._store[key] = (disk_states, disk_complete)
+                self._entry_nbytes[key] = disk_nbytes
+                self._total_nbytes += disk_nbytes
                 prefix_hash = self._prefix_hash(token_ids, num_tokens)
                 self._length_index.setdefault(num_tokens, {})[prefix_hash] = key
-                while len(self._store) > self._max_entries:
-                    evict_key, _ = self._store.popitem(last=False)
-                    self._index_remove(evict_key)
-                # Disk fetch already performed deepcopy + materialize; we
-                # can return its result directly. Mirror the L1 contract by
-                # producing fresh deep copies for the caller.
-                fresh: List[Any] = []
-                for s in disk_states:
-                    try:
-                        c = deepcopy(s)
-                        if hasattr(c, "cache") and isinstance(c.cache, list):
-                            c.cache = [
-                                (mx.array(a) * 1 if a is not None else None)
-                                for a in c.cache
-                            ]
-                            mat = [x for x in c.cache if x is not None]
-                            if mat:
-                                _mx_materialize(*mat)
-                        if getattr(c, "lengths", None) is not None:
-                            try:
-                                c.lengths = mx.array(c.lengths) * 1
-                                _mx_materialize(c.lengths)
-                            except Exception:
-                                pass
-                        fresh.append(c)
-                    except Exception:
-                        return None
+                self._evict_if_needed()
+                # Disk fetch already performed deepcopy + materialize. Mirror
+                # the L1 contract by producing fresh detached copies for the
+                # caller anyway; request forward mutates the returned state.
+                fresh = self._clone_states(disk_states, key_hint=f"disk:{key[:12]}")
+                if fresh is None:
+                    return None
                 return (fresh, disk_complete)
             return None
         states, is_complete = entry
@@ -348,53 +448,9 @@ class SSMCompanionCache:
         # Deep-copy each layer to prevent in-place mutation by the model's
         # forward pass corrupting the stored companion. SSM state is
         # cumulative — generation updates it token by token.
-        copied: List[Any] = []
-        for s in states:
-            try:
-                # 2026-04-30 known limitation: cross-thread MLX array clone
-                # always trips the Metal-stream guard. The scheduler's
-                # `_run_ssm_rederive_idle` runs on the loader_executor
-                # thread and stores arrays on its stream; subsequent fetch
-                # from a request-handler thread can neither materialize
-                # nor clone those arrays without raising
-                # `RuntimeError: There is no Stream(gpu, N) in current thread`.
-                # Even storing-side numpy bridges only partially detach.
-                # Until MLX exposes a stream-detach primitive (or the
-                # engine routes fetches through the loader_executor too),
-                # the companion is write-only across sessions for hybrid+
-                # thinking models. The release-on-miss fix at
-                # scheduler.py:2381 (P0-1) ensures KV blocks remain
-                # cache-resident, so the paged + block-disk tiers still
-                # deliver cross-session warm-pass benefit.
-                # Tracking: AUDIT-SSM-WARMPASS-FINAL.md §3.
-                cls = type(s)
-                c = cls.__new__(cls)
-                src_dict = getattr(s, "__dict__", None)
-                if src_dict is not None:
-                    c.__dict__.update(src_dict)
-                if hasattr(c, "cache") and isinstance(c.cache, list):
-                    c.cache = [
-                        (mx.array(a) * 1 if a is not None else None)
-                        for a in c.cache
-                    ]
-                    materialise = [x for x in c.cache if x is not None]
-                    if materialise:
-                        _mx_materialize(*materialise)
-                if getattr(c, "lengths", None) is not None:
-                    try:
-                        c.lengths = mx.array(c.lengths) * 1
-                        _mx_materialize(c.lengths)
-                    except Exception:
-                        pass
-                copied.append(c)
-            except Exception as _dc_err:
-                # Cross-thread Metal-stream guard tripped. Documented limit;
-                # silently miss so engine falls back to full prefill.
-                logger.debug(
-                    "SSM companion clone failed (key=%s err=%s) — cache miss",
-                    key[:12], type(_dc_err).__name__
-                )
-                return None
+        copied = self._clone_states(states, key_hint=key[:12])
+        if copied is None:
+            return None
         return (copied, is_complete)
 
     def fetch_longest_prefix(
@@ -449,6 +505,69 @@ class SSMCompanionCache:
         """Drop all entries."""
         self._store.clear()
         self._length_index.clear()
+        self._entry_nbytes.clear()
+        self._total_nbytes = 0
+
+    def _evict_if_needed(self) -> None:
+        """Evict LRU entries until both entry and byte budgets are satisfied."""
+        while self._store and len(self._store) > self._max_entries:
+            evict_key = next(iter(self._store))
+            self._drop_key(evict_key)
+        while (
+            self._store
+            and self._max_bytes is not None
+            and self._total_nbytes > self._max_bytes
+        ):
+            evict_key = next(iter(self._store))
+            self._drop_key(evict_key)
+
+    def _drop_key(self, key: str) -> None:
+        """Remove a stored entry and all auxiliary accounting."""
+        self._store.pop(key, None)
+        self._total_nbytes -= self._entry_nbytes.pop(key, 0)
+        if self._total_nbytes < 0:
+            self._total_nbytes = 0
+        self._index_remove(key)
+
+    @staticmethod
+    def _estimate_state_nbytes(states: List[Any]) -> int:
+        """Best-effort byte count for SSM companion entries.
+
+        SSM cache objects differ by upstream model family; count common array
+        fields instead of assuming one class layout. This is intentionally
+        conservative and only controls eviction/accounting.
+        """
+        seen: set[int] = set()
+        total = 0
+
+        def add_array(arr: Any) -> None:
+            nonlocal total
+            if arr is None:
+                return
+            ident = id(arr)
+            if ident in seen:
+                return
+            seen.add(ident)
+            try:
+                total += int(getattr(arr, "nbytes", 0) or 0)
+            except Exception:
+                pass
+
+        for layer in states:
+            cache = getattr(layer, "cache", None)
+            if isinstance(cache, (list, tuple)):
+                for arr in cache:
+                    add_array(arr)
+            else:
+                add_array(cache)
+            add_array(getattr(layer, "lengths", None))
+            state = getattr(layer, "state", None)
+            if isinstance(state, (list, tuple)):
+                for arr in state:
+                    add_array(arr)
+            else:
+                add_array(state)
+        return total
 
 
 # ----------------------------------------------------------------------

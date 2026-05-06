@@ -77,7 +77,7 @@ const DEFAULT_CONFIG: SessionConfig = {
     usePagedCache: true,
     pagedCacheBlockSize: 64,
     maxCacheBlocks: 1000,
-    kvCacheQuantization: 'none',
+    kvCacheQuantization: 'auto',
     kvCacheGroupSize: 64,
     enableDiskCache: false,
     diskCacheMaxGb: 10,
@@ -123,7 +123,7 @@ function buildCommandPreview(
     detected?: DetectedConfig
 ): string {
     const parts = ['vmlx-engine serve', modelPath]
-    const isVLM = config.isMultimodal ?? !!detected?.isMultimodal
+    const isVLM = !!detected?.isMultimodal || config.isMultimodal === true
 
     parts.push('--host', config.host)
     parts.push('--port', config.port.toString())
@@ -177,9 +177,9 @@ function buildCommandPreview(
         if (config.maxCacheBlocks && config.maxCacheBlocks > 0) parts.push('--max-cache-blocks', config.maxCacheBlocks.toString())
     }
 
-    if (!prefixCacheOff && config.kvCacheQuantization && config.kvCacheQuantization !== 'none') {
+    if (!prefixCacheOff && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
         parts.push('--kv-cache-quantization', config.kvCacheQuantization)
-        if (config.kvCacheGroupSize && config.kvCacheGroupSize !== 64) {
+        if (config.kvCacheQuantization !== 'none' && config.kvCacheGroupSize && config.kvCacheGroupSize !== 64) {
             parts.push('--kv-cache-group-size', config.kvCacheGroupSize.toString())
         }
     }
@@ -364,8 +364,13 @@ describe('VLM Mode', () => {
         expect(hasFlag(out, '--is-mllm')).toBe(true)
     })
 
-    it('manual isMultimodal overrides detected', () => {
+    it('auto-detected VLM wins over stale isMultimodal=false', () => {
         const out = preview({ isMultimodal: false }, { isMultimodal: true })
+        expect(hasFlag(out, '--is-mllm')).toBe(true)
+    })
+
+    it('manual isMultimodal=false is respected when detection is not VLM', () => {
+        const out = preview({ isMultimodal: false }, { isMultimodal: false })
         expect(hasFlag(out, '--is-mllm')).toBe(false)
     })
 })
@@ -447,9 +452,14 @@ describe('KV Cache Quantization', () => {
         expect(getFlagValue(out, '--kv-cache-quantization')).toBe('q4')
     })
 
-    it('omits quantization when "none"', () => {
-        const out = preview({ kvCacheQuantization: 'none' })
+    it('omits quantization in auto mode', () => {
+        const out = preview({ kvCacheQuantization: 'auto' })
         expect(hasFlag(out, '--kv-cache-quantization')).toBe(false)
+    })
+
+    it('passes explicit none to disable auto quantization', () => {
+        const out = preview({ kvCacheQuantization: 'none' })
+        expect(getFlagValue(out, '--kv-cache-quantization')).toBe('none')
     })
 
     it('sets custom group size', () => {

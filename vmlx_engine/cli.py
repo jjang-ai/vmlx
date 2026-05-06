@@ -31,14 +31,31 @@ def serve_command(args):
 
     logger = logging.getLogger(__name__)
 
-    # mlxstudio#138: --kv-cache-quantization explicit-pass detection.
+    # mlxstudio#138/#156: --kv-cache-quantization explicit-pass detection.
     # default=None lets us tell "user didn't pass it" from "user said none".
-    # When explicit, set VMLX_DISABLE_TQ_KV so the JANG loader doesn't
-    # silently shadow the user's choice with calibrated TurboQuant KV.
-    _kv_quant_explicit = args.kv_cache_quantization is not None
+    # Omitted flag means production auto mode: TurboQuant KV for compatible
+    # JANG/JANGTQ bundles and q4 stored-prefix compression as the fallback.
+    # Explicit values remain exact: q4/q8/none disable loader-level TQ so the
+    # user's requested stored-cache codec is the only active cache codec.
+    _kv_quant_explicit = getattr(args, "kv_cache_quantization", None) is not None
     if not _kv_quant_explicit:
-        args.kv_cache_quantization = "none"
+        _default_kvq = os.environ.get("VMLX_DEFAULT_KV_CACHE_QUANTIZATION", "q4")
+        if _default_kvq not in ("none", "q4", "q8"):
+            logger.warning(
+                "Invalid VMLX_DEFAULT_KV_CACHE_QUANTIZATION=%r; using q4",
+                _default_kvq,
+            )
+            _default_kvq = "q4"
+        args.kv_cache_quantization = _default_kvq
+        args.kv_cache_quantization_explicit = False
+        os.environ.setdefault("VMLX_FORCE_TQ_AUTO", "1")
+        logger.info(
+            "KV cache auto mode: TurboQuant enabled for compatible models; "
+            "stored prefix cache quantization=%s",
+            args.kv_cache_quantization,
+        )
     elif _kv_quant_explicit:
+        args.kv_cache_quantization_explicit = True
         os.environ["VMLX_DISABLE_TQ_KV"] = "1"
         logger.info(
             f"--kv-cache-quantization={args.kv_cache_quantization} explicit; "
@@ -207,24 +224,44 @@ def serve_command(args):
         from .model_config_registry import get_model_config_registry
         _mc = get_model_config_registry().lookup(args.model)
         # DSV4-Flash auto-config. DSV4_LONG_CTX=1 is the only supported
-        # runtime mode (tri-mode SWA+CSA/HSA). The upstream JANG prefill
-        # shape bug is patched in-process by load_jangtq_dsv4. POOL_QUANT
-        # stays off because PoolQuantizedV4Cache is not a subclass of
-        # DeepseekV4Cache in DeepseekV4Attention's isinstance gates.
+        # runtime mode (tri-mode SWA+CSA/HSA). Pool quant is enabled by
+        # default only when the installed JANG runtime's PoolQuantizedV4Cache
+        # subclasses DeepseekV4Cache; explicit DSV4_POOL_QUANT env overrides
+        # are preserved for debug/bisect.
         if _mc.family_name == "deepseek_v4":
             _is_dsv4_model = True
-            os.environ["DSV4_LONG_CTX"] = "1"
-            os.environ["DSV4_POOL_QUANT"] = "0"
+            try:
+                from .loaders.load_jangtq_dsv4 import (
+                    _configure_dsv4_pool_quant_default,
+                )
+                _dsv4_pool_quant = _configure_dsv4_pool_quant_default()
+            except Exception:
+                os.environ["DSV4_LONG_CTX"] = "1"
+                os.environ.setdefault("DSV4_POOL_QUANT", "0")
+                _dsv4_pool_quant = os.environ.get("DSV4_POOL_QUANT", "0")
+            if getattr(args, "kv_cache_quantization", "none") != "none":
+                _old_kvq = args.kv_cache_quantization
+                args.kv_cache_quantization = "none"
+                args.kv_cache_quantization_explicit = True
+                os.environ["VMLINUX_DISABLE_TQ_KV"] = "1"
+                os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
+                logger.info(
+                    "DSV4-Flash native SWA+CSA/HSA cache owns cache "
+                    "compression; forcing generic --kv-cache-quantization "
+                    "%s -> none. DSV4_POOL_QUANT=%s controls the "
+                    "DeepseekV4Cache-compatible CSA/HSA pool codec.",
+                    _old_kvq,
+                    _dsv4_pool_quant,
+                )
             # Paged + block-disk L2 are honored as the user requests them.
-            # The DSV4-aware paged schema (scheduler.py: deepseek_v4_v6
+            # The DSV4-aware paged schema (scheduler.py: deepseek_v4_v7
             # nested-state serialization) handles the mixed KVCache /
             # DeepseekV4Cache layer layout via the prefill mask-trim patch
             # installed by load_jangtq_dsv4. Short prompts (<512 tokens)
-            # still skip store via scheduler.py:3643 because each composite
-            # block carries gigabytes of HSA/CSA pool state.
+            # stores composite prompt-boundary state with N-1 prompt keys.
             logger.info(
                 "DSV4-Flash detected — DSV4_LONG_CTX=1 (tri-mode SWA+CSA/HSA), "
-                "DSV4_POOL_QUANT=0. Upstream prefill shape bug patched in-process "
+                f"DSV4_POOL_QUANT={_dsv4_pool_quant}. Upstream prefill shape bug patched in-process "
                 "by load_jangtq_dsv4."
             )
         if _mc.family_name != "unknown":
@@ -589,6 +626,12 @@ def serve_command(args):
             cache_memory_mb=args.cache_memory_mb,
             cache_memory_percent=args.cache_memory_percent,
             cache_ttl_minutes=getattr(args, 'cache_ttl_minutes', 0),
+            ssm_state_cache_size=max(1, int(getattr(args, 'ssm_state_cache_size', 8))),
+            ssm_state_cache_max_mb=(
+                max(1, int(args.ssm_state_cache_mb))
+                if getattr(args, 'ssm_state_cache_mb', None) is not None
+                else None
+            ),
             # Paged cache options
             use_paged_cache=args.use_paged_cache,
             paged_cache_block_size=args.paged_cache_block_size,
@@ -596,6 +639,9 @@ def serve_command(args):
             # KV cache quantization
             kv_cache_quantization=args.kv_cache_quantization,
             kv_cache_group_size=args.kv_cache_group_size,
+            kv_cache_quantization_explicit=getattr(
+                args, "kv_cache_quantization_explicit", False
+            ),
             # Disk cache
             enable_disk_cache=args.enable_disk_cache,
             disk_cache_dir=args.disk_cache_dir,
@@ -826,8 +872,19 @@ def bench_command(args):
     # also disables JANG-calibrated TurboQuant when the user passes
     # --kv-cache-quantization explicitly.
     if args.kv_cache_quantization is None:
-        args.kv_cache_quantization = "none"
+        args.kv_cache_quantization = os.environ.get(
+            "VMLX_DEFAULT_KV_CACHE_QUANTIZATION", "q4"
+        )
+        if args.kv_cache_quantization not in ("none", "q4", "q8"):
+            print(
+                "Invalid VMLX_DEFAULT_KV_CACHE_QUANTIZATION="
+                f"{args.kv_cache_quantization!r}; using q4"
+            )
+            args.kv_cache_quantization = "q4"
+        args.kv_cache_quantization_explicit = False
+        os.environ.setdefault("VMLX_FORCE_TQ_AUTO", "1")
     else:
+        args.kv_cache_quantization_explicit = True
         os.environ["VMLX_DISABLE_TQ_KV"] = "1"
 
     # Smelt mode: set server globals
@@ -887,6 +944,12 @@ def bench_command(args):
             cache_memory_mb=args.cache_memory_mb,
             cache_memory_percent=args.cache_memory_percent,
             cache_ttl_minutes=getattr(args, 'cache_ttl_minutes', 0),
+            ssm_state_cache_size=max(1, int(getattr(args, 'ssm_state_cache_size', 8))),
+            ssm_state_cache_max_mb=(
+                max(1, int(args.ssm_state_cache_mb))
+                if getattr(args, 'ssm_state_cache_mb', None) is not None
+                else None
+            ),
             # Paged cache options
             use_paged_cache=args.use_paged_cache,
             paged_cache_block_size=args.paged_cache_block_size,
@@ -894,6 +957,9 @@ def bench_command(args):
             # KV cache quantization
             kv_cache_quantization=args.kv_cache_quantization,
             kv_cache_group_size=args.kv_cache_group_size,
+            kv_cache_quantization_explicit=getattr(
+                args, "kv_cache_quantization_explicit", False
+            ),
             model_path=args.model,
             # Disk cache (prompt-level L2)
             enable_disk_cache=getattr(args, 'enable_disk_cache', False),
@@ -1111,13 +1177,22 @@ def bench_detok_command(args):
 
 
 def _check_macos_compat():
-    """mlxstudio#90 — bundled MLX is compiled with `minos 26.0`. macOS < 26
-    crashes on import with a cryptic
+    """mlxstudio#90/#104 — fail before importing incompatible MLX wheels.
+
+    Some bundled installs accidentally ship a macosx_26_0 `mlx-metal` wheel
+    into a macOS 15 app. Importing it then fails deep in Metal with:
+        Failed to load the default metallib. This library is using language
+        version 4.0 which is not supported on this OS.
+    Inspect wheel tags before importing `mlx` so the panel shows an actionable
+    compatibility error instead of a native crash.
+
+    Older systems also crash with:
         Symbol not found: __ZNSt13exception_ptr31__from_native_exception_pointerEPv
-    libc++ symbol that landed in macOS 14.5+. Surface a clear actionable
-    error before the import.
     """
-    import platform, sys
+    import importlib.metadata
+    import platform
+    import re
+    import sys
     if sys.platform != "darwin":
         return
     try:
@@ -1134,6 +1209,32 @@ def _check_macos_compat():
             "Upgrade to macOS 14.5+ (Sonoma) or 15.x (Sequoia) and retry.\n"
         )
         sys.exit(2)
+    for dist_name in ("mlx-metal", "mlx"):
+        try:
+            dist = importlib.metadata.distribution(dist_name)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        except Exception:
+            continue
+        try:
+            wheel_files = [p for p in dist.files or [] if str(p).endswith(".dist-info/WHEEL")]
+            wheel_text = dist.locate_file(wheel_files[0]).read_text() if wheel_files else ""
+        except Exception:
+            wheel_text = ""
+        for major_s, minor_s in re.findall(r"macosx_(\d+)_(\d+)_arm64", wheel_text):
+            required = (int(major_s), int(minor_s))
+            if required > ver:
+                sys.stderr.write(
+                    f"vmlx bundled {dist_name} wheel requires macOS "
+                    f"{required[0]}.{required[1]}+ but this Mac is running "
+                    f"{platform.mac_ver()[0]}.\n"
+                    "This wheel can fail during Metal initialization with:\n"
+                    "  Failed to load the default metallib. This library is "
+                    "using language version 4.0 which is not supported on this OS.\n"
+                    "Install a vMLX build whose bundled MLX wheel tag matches "
+                    "your macOS version, or upgrade macOS.\n"
+                )
+                sys.exit(2)
 
 
 def _check_no_duplicate_mlx():
@@ -1370,6 +1471,21 @@ Examples:
              "0 = never expire, entries only evicted when cache is full. (default: 0)",
     )
     serve_parser.add_argument(
+        "--ssm-state-cache-size",
+        type=int,
+        default=8,
+        help="Maximum in-memory SSM companion entries for hybrid models. These "
+             "entries can be large, so the default is conservative. (default: 8)",
+    )
+    serve_parser.add_argument(
+        "--ssm-state-cache-mb",
+        type=int,
+        default=int(os.environ.get("VMLINUX_SSM_STATE_CACHE_MB", "512")),
+        help="Approximate memory budget in MB for hybrid SSM companion states. "
+             "Entries above the budget are skipped; older entries are evicted "
+             "when the total exceeds it. (default: 512)",
+    )
+    serve_parser.add_argument(
         "--stream-interval",
         type=int,
         default=1,
@@ -1434,10 +1550,11 @@ Examples:
              "q8 = 8-bit (minimal quality loss, ~2x savings). "
              "q4 = 4-bit (slight quality loss, ~4x savings). "
              "Cache is stored compressed but decompressed for generation (no inference slowdown). "
-             "Requires --continuous-batching. Passing this flag explicitly disables "
-             "JANG-calibrated TurboQuant KV (jang_config.turboquant.enabled) so your "
-             "choice is honored — set VMLX_FORCE_TQ_AUTO=1 or omit this flag to keep "
-             "the bundle's calibrated TQ. (default: none)",
+             "Requires --continuous-batching. Omitting this flag uses production auto "
+             "mode: TurboQuant KV for compatible models plus q4 stored-prefix fallback. "
+             "Passing the flag explicitly disables JANG-calibrated TurboQuant KV so your "
+             "choice is honored. Set VMLX_DEFAULT_KV_CACHE_QUANTIZATION=none to turn "
+             "the stored-prefix fallback off. (default: auto q4)",
     )
     serve_parser.add_argument(
         "--kv-cache-group-size",
@@ -1883,6 +2000,18 @@ Examples:
         default=0,
         help="Cache entry time-to-live in minutes. 0=disabled (default: 0)",
     )
+    bench_parser.add_argument(
+        "--ssm-state-cache-size",
+        type=int,
+        default=8,
+        help="Maximum in-memory SSM companion entries for hybrid models (default: 8)",
+    )
+    bench_parser.add_argument(
+        "--ssm-state-cache-mb",
+        type=int,
+        default=int(os.environ.get("VMLINUX_SSM_STATE_CACHE_MB", "512")),
+        help="Approximate memory budget in MB for hybrid SSM companion states (default: 512)",
+    )
     # Paged cache options (experimental)
     bench_parser.add_argument(
         "--use-paged-cache",
@@ -1908,7 +2037,8 @@ Examples:
         default=None,
         choices=["none", "q4", "q8"],
         help="Quantize KV cache to reduce GPU memory (~2-4x). q8=8-bit, q4=4-bit. "
-             "Passing this flag explicitly disables JANG-calibrated TurboQuant KV. (default: none)",
+             "Passing this flag explicitly disables JANG-calibrated TurboQuant KV. "
+             "Omitting it uses auto q4 stored-prefix fallback.",
     )
     bench_parser.add_argument(
         "--kv-cache-group-size",

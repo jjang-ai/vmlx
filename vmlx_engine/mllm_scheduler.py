@@ -208,6 +208,7 @@ class MLLMSchedulerConfig:
     # KV cache quantization for prefix cache storage
     kv_cache_quantization: str = "none"  # "none", "q4", "q8"
     kv_cache_group_size: int = 64
+    kv_cache_quantization_explicit: bool = False
 
     # Memory-aware cache settings (L1, recommended for large models)
     use_memory_aware_cache: bool = True  # Use memory-based eviction
@@ -231,8 +232,11 @@ class MLLMSchedulerConfig:
     # Model path (used to scope disk cache per model)
     model_path: Optional[str] = None
 
-    # Hybrid SSM state cache size (companion cache for SSM layer states)
-    ssm_state_cache_size: int = 50
+    # Hybrid SSM state cache budget (companion cache for SSM layer states).
+    # These entries can be tens or hundreds of MB each on Nemotron/Gemma
+    # hybrid models, so bound by both count and bytes.
+    ssm_state_cache_size: int = 8
+    ssm_state_cache_max_mb: Optional[int] = 512
 
     # Maximum images per request (guard against Metal OOM from excessive images)
     max_images_per_request: int = 20
@@ -429,24 +433,16 @@ class MLLMScheduler:
             logger.warning(f"Failed to detect hybrid cache model: {e}")
 
         # Detect mixed-attention models (e.g. Gemma 4 = 25 sliding + 5 full).
-        # These models break under the paged prefix-cache reconstruct path:
-        # reconstructed KV drifts enough from fresh-prefill KV that rep_pen=1.1
-        # can no longer escape degenerate basins, producing word loops like
-        # "step-by-step-step-by-step-…" on the third multi-turn request.
-        # Root cause is still under investigation. Until it's fixed, every
-        # request on these models is transparently served as if the client
-        # had sent `cache_salt` / `skip_prefix_cache=True`. Other models
-        # (uniform attention, hybrid SSM) keep their full cache behaviour.
-        self._force_bypass_prefix_cache = False
+        # Detection is diagnostic only. The cache path must preserve
+        # RotatingKVCache metadata instead of bypassing all prefix tiers.
+        self._mixed_attention_cache_model = False
         try:
-            self._force_bypass_prefix_cache = self._model_has_mixed_attention(lang_model)
-            if self._force_bypass_prefix_cache:
-                logger.warning(
+            self._mixed_attention_cache_model = self._model_has_mixed_attention(lang_model)
+            if self._mixed_attention_cache_model:
+                logger.info(
                     "VLM mixed-attention model detected (e.g. Gemma 4 sliding+full). "
-                    "Prefix cache is auto-bypassed on every request — multi-turn "
-                    "reconstructed KV state causes generation loops at the current "
-                    "rep_penalty floor. Use `cache_salt` to document the bypass "
-                    "explicitly in benchmark runs."
+                    "Prefix cache remains enabled; RotatingKVCache metadata will be "
+                    "preserved during truncation and paged/L2 reconstruction."
                 )
         except Exception as e:
             logger.debug(f"Mixed-attention detection failed: {e}")
@@ -748,19 +744,84 @@ class MLLMScheduler:
         rip it off. If you're adapting this code, please credit the original
         author: Jinho Jang (github.com/jjang-ai/vmlx).
         """
+        def _cfg_model_type(cfg: Any) -> str:
+            if cfg is None:
+                return ""
+            if isinstance(cfg, dict):
+                mt = cfg.get("model_type") or ""
+                if not mt and isinstance(cfg.get("text_config"), dict):
+                    mt = cfg["text_config"].get("model_type") or ""
+                return str(mt).lower()
+            mt = getattr(cfg, "model_type", "") or ""
+            if not mt:
+                tc = getattr(cfg, "text_config", None)
+                mt = getattr(tc, "model_type", "") if tc is not None else ""
+            return str(mt or "").lower()
+
+        def _cfg_kv_lora_rank(cfg: Any) -> int:
+            if cfg is None:
+                return 0
+            if isinstance(cfg, dict):
+                raw = cfg
+            else:
+                raw = getattr(cfg, "_raw_config", None)
+            vals = []
+            if isinstance(cfg, dict):
+                vals.append(cfg.get("kv_lora_rank", 0))
+                tc = cfg.get("text_config")
+                if isinstance(tc, dict):
+                    vals.append(tc.get("kv_lora_rank", 0))
+            else:
+                vals.append(getattr(cfg, "kv_lora_rank", 0))
+                tc = getattr(cfg, "text_config", None)
+                if tc is not None:
+                    vals.append(getattr(tc, "kv_lora_rank", 0))
+            if isinstance(raw, dict):
+                vals.append(raw.get("kv_lora_rank", 0))
+                tc = raw.get("text_config")
+                if isinstance(tc, dict):
+                    vals.append(tc.get("kv_lora_rank", 0))
+            for val in vals:
+                try:
+                    iv = int(val or 0)
+                except (TypeError, ValueError):
+                    iv = 0
+                if iv > 0:
+                    return iv
+            return 0
+
         try:
-            lm = self.model.language_model if hasattr(self.model, 'language_model') else self.model
-            # Check backbone args for kv_lora_rank (MLA indicator)
-            model = getattr(lm, 'model', lm)
-            if hasattr(model, 'args') and getattr(model.args, 'kv_lora_rank', 0) > 0:
-                return True
-            # Check config for kv_lora_rank
-            cfg = getattr(lm, 'config', None)
-            if cfg:
-                raw = getattr(cfg, '_raw_config', {})
-                if raw.get('kv_lora_rank', 0) > 0:
+            lm = self.model.language_model if hasattr(self.model, "language_model") else self.model
+            candidates = [self.model, lm]
+            for obj in list(candidates):
+                inner = getattr(obj, "model", None)
+                if inner is not None and inner not in candidates:
+                    candidates.append(inner)
+
+            cfgs = []
+            for obj in candidates:
+                for attr in ("args", "config", "text_config"):
+                    cfg = getattr(obj, attr, None)
+                    if cfg is not None:
+                        cfgs.append(cfg)
+                        raw = getattr(cfg, "_raw_config", None)
+                        if isinstance(raw, dict):
+                            cfgs.append(raw)
+                        tc = getattr(cfg, "text_config", None)
+                        if tc is not None:
+                            cfgs.append(tc)
+                        if isinstance(cfg, dict) and isinstance(cfg.get("text_config"), dict):
+                            cfgs.append(cfg["text_config"])
+
+            for cfg in cfgs:
+                model_type = _cfg_model_type(cfg)
+                if model_type in ("bailing_hybrid", "bailing_moe_v2_5"):
+                    # Ling/Bailing's runtime stores full per-head KV, not H=1
+                    # compressed MLA latents. Keep normal KV/TQ cache support.
+                    continue
+                if _cfg_kv_lora_rank(cfg) > 0:
                     return True
-                if getattr(cfg, 'model_type', '') == 'mistral4':
+                if model_type == "mistral4":
                     return True
         except Exception:
             pass
@@ -856,6 +917,15 @@ class MLLMScheduler:
 
         self._kv_cache_bits = bits
         self._kv_cache_group_size = group_size
+
+    @staticmethod
+    def _validate_cache(cache: Any, *, source: str) -> bool:
+        """Validate live VLM cache objects before store/reuse."""
+        try:
+            from .cache_record_validator import reject_live_cache_or_warn
+            return reject_live_cache_or_warn(cache, source=source)
+        except Exception:
+            return cache is not None and (not isinstance(cache, list) or len(cache) > 0)
 
     def _quantize_cache_for_storage(self, cache: List[Any]) -> List[Any]:
         """
@@ -1353,6 +1423,8 @@ class MLLMScheduler:
             kv_cache_bits=self._kv_cache_bits,
             kv_cache_group_size=self._kv_cache_group_size,
             ssm_state_cache_size=self.config.ssm_state_cache_size,
+            ssm_state_cache_max_mb=self.config.ssm_state_cache_max_mb,
+            enable_prefix_cache=self.config.enable_prefix_cache,
         )
         self._current_sampler_params = new_params
 
@@ -1434,12 +1506,6 @@ class MLLMScheduler:
         # memory-aware, legacy, disk L2, block disk, SSM companion, and the
         # multimodal vision / pixel_values caches.
         if kwargs.get("bypass_prefix_cache", False):
-            request._bypass_prefix_cache = True
-
-        # Model-level forced bypass (e.g. Gemma 4 mixed-attention). Applies
-        # BEFORE any per-request check so the scheduler treats these as if
-        # the client had sent `cache_salt`. See __init__ for rationale.
-        if getattr(self, "_force_bypass_prefix_cache", False):
             request._bypass_prefix_cache = True
 
         with self._queue_lock:
@@ -1890,6 +1956,14 @@ class MLLMScheduler:
                                     logger.debug(
                                         f"Cache truncation failed for {request_id}"
                                     )
+                                elif not self._validate_cache(
+                                    cache_blocks,
+                                    source=f"mllm-paged-store:{request_id}",
+                                ):
+                                    logger.warning(
+                                        f"VLM paged cache store rejected unsafe "
+                                        f"live cache for {request_id}"
+                                    )
                                 else:
                                     # NOTE: gen_prompt_len is already stripped from _extracted_tokens
                                     # by the batch generator (_original_token_ids at line 1411-1413).
@@ -1909,6 +1983,17 @@ class MLLMScheduler:
                                             logger.debug(f"VLM disk cache store failed for {request_id}: {de}")
                                     if getattr(self, '_kv_cache_bits', 0):
                                         cache_blocks = self._quantize_cache_for_storage(cache_blocks)
+                                        if not self._validate_cache(
+                                            cache_blocks,
+                                            source=f"mllm-paged-store-quant:{request_id}",
+                                        ):
+                                            logger.warning(
+                                                f"VLM paged cache store rejected unsafe "
+                                                f"quantized live cache for {request_id}"
+                                            )
+                                            cache_blocks = None
+                                    if cache_blocks is None:
+                                        continue
                                     cache_states = self._extract_cache_states(cache_blocks)
                                     if cache_states:
                                         self.block_aware_cache.store_cache(
@@ -1942,7 +2027,10 @@ class MLLMScheduler:
                             raw_cache = raw_cache()
                         if raw_cache:
                             cache_to_store = self._truncate_hybrid_cache(raw_cache, prompt_len)
-                            if cache_to_store is not None:
+                            if cache_to_store is not None and self._validate_cache(
+                                cache_to_store,
+                                source=f"mllm-memory-store:{request_id}",
+                            ):
                                 # L2: persist to disk (skip hybrid — SSM can't be reconstructed on fetch)
                                 if self.disk_cache is not None and not self._is_hybrid:
                                     try:
@@ -1951,6 +2039,17 @@ class MLLMScheduler:
                                         logger.debug(f"VLM disk store failed for {request_id}: {de}")
                                 if getattr(self, '_kv_cache_bits', 0):
                                     cache_to_store = self._quantize_cache_for_storage(cache_to_store)
+                                    if not self._validate_cache(
+                                        cache_to_store,
+                                        source=f"mllm-memory-store-quant:{request_id}",
+                                    ):
+                                        logger.warning(
+                                            f"VLM memory-aware cache store rejected unsafe "
+                                            f"quantized live cache for {request_id}"
+                                        )
+                                        cache_to_store = None
+                                if cache_to_store is None:
+                                    continue
                                 stored = self.memory_aware_cache.store(prompt_tokens, cache_to_store)
                                 if stored:
                                     logger.info(
@@ -1978,7 +2077,10 @@ class MLLMScheduler:
                             raw_cache = raw_cache()
                         if raw_cache:
                             cache_to_store = self._truncate_hybrid_cache(raw_cache, prompt_len)
-                            if cache_to_store is not None:
+                            if cache_to_store is not None and self._validate_cache(
+                                cache_to_store,
+                                source=f"mllm-prefix-store:{request_id}",
+                            ):
                                 if self.disk_cache is not None and not self._is_hybrid:
                                     try:
                                         self.disk_cache.store(prompt_tokens, cache_to_store)
@@ -1986,6 +2088,17 @@ class MLLMScheduler:
                                         logger.debug(f"VLM disk store failed for {request_id}: {de}")
                                 if getattr(self, '_kv_cache_bits', 0):
                                     cache_to_store = self._quantize_cache_for_storage(cache_to_store)
+                                    if not self._validate_cache(
+                                        cache_to_store,
+                                        source=f"mllm-prefix-store-quant:{request_id}",
+                                    ):
+                                        logger.warning(
+                                            f"VLM legacy prefix cache store rejected unsafe "
+                                            f"quantized live cache for {request_id}"
+                                        )
+                                        cache_to_store = None
+                                if cache_to_store is None:
+                                    continue
                                 self.prefix_cache.store_cache(prompt_tokens, cache_to_store)
                                 logger.debug(
                                     f"VLM stored legacy prefix cache for {request_id} "
@@ -2587,6 +2700,25 @@ class MLLMScheduler:
                     stats["disk_cache"] = disk_stats
                 except Exception:
                     stats["disk_cache"] = {"type": "disk", "enabled": True}
+
+            if self.batch_generator is not None:
+                ssm_cache = getattr(self.batch_generator, "_ssm_state_cache", None)
+                if ssm_cache is not None:
+                    nbytes = int(getattr(ssm_cache, "total_nbytes", 0) or 0)
+                    max_bytes = getattr(ssm_cache, "max_bytes", None)
+                    stats["ssm_companion_cache"] = {
+                        "entries": int(getattr(ssm_cache, "size", 0) or 0),
+                        "max_entries": int(getattr(ssm_cache, "max_entries", 0) or 0),
+                        "nbytes": nbytes,
+                        "nbytes_mb": round(nbytes / (1024 * 1024), 2),
+                        "max_bytes": max_bytes,
+                        "max_bytes_mb": (
+                            round(max_bytes / (1024 * 1024), 2)
+                            if max_bytes is not None
+                            else None
+                        ),
+                        "disk_enabled": bool(getattr(ssm_cache, "disk_enabled", False)),
+                    }
 
             return stats
 

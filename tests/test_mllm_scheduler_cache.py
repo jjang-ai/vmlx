@@ -46,6 +46,11 @@ class TestMLLMSchedulerConfigParity:
         assert hasattr(config, "prefix_cache_size")
         assert config.prefix_cache_size == 100
 
+    def test_ssm_companion_budget_defaults(self):
+        config = MLLMSchedulerConfig()
+        assert config.ssm_state_cache_size == 8
+        assert config.ssm_state_cache_max_mb == 512
+
     def test_disk_cache_fields(self):
         config = MLLMSchedulerConfig()
         assert hasattr(config, "enable_disk_cache")
@@ -122,6 +127,8 @@ class TestMLLMSchedulerConfigParity:
             "cache_memory_mb",
             "cache_memory_percent",
             "cache_ttl_minutes",
+            "ssm_state_cache_size",
+            "ssm_state_cache_max_mb",
             "prefix_cache_size",
             "enable_disk_cache",
             "disk_cache_dir",
@@ -166,6 +173,8 @@ class TestConfigForwarding:
             "cache_memory_mb",
             "cache_memory_percent",
             "cache_ttl_minutes",
+            "ssm_state_cache_size",
+            "ssm_state_cache_max_mb",
             "prefix_cache_size",
             "enable_disk_cache",
             "disk_cache_dir",

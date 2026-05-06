@@ -180,15 +180,26 @@ class ModelConfigRegistry:
                 return None
 
             # Start from an existing family config if the stamp's family name
-            # matches one we know — preserves specialty fields (eos_tokens,
-            # special_tokens_to_clean, architecture_hints). Fall back to a
-            # fresh ModelConfig otherwise.
+            # matches one we know OR if the stamped family is actually a
+            # model_type alias registered under a canonical family. Ling
+            # bundles stamp "family": "bailing_hybrid" because that is the
+            # HF model_type, but the registry family is "ling" and carries
+            # the required dual-EOS list + sampling defaults. Treating the
+            # stamp as a brand-new family silently drops those fields.
             base = None
             for c in self._configs:
                 if c.family_name == family:
                     base = c
                     break
             if base is None:
+                family_l = str(family).lower()
+                for c in self._configs:
+                    if family_l in {str(mt).lower() for mt in c.model_types}:
+                        base = c
+                        break
+            if base is None:
+                # Fall back to a fresh ModelConfig only when the stamp names a
+                # genuinely unknown family/model_type.
                 # Build from scratch — stamp is authoritative enough that we
                 # trust it even when the family isn't in the registry table.
                 base = ModelConfig(

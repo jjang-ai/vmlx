@@ -98,6 +98,7 @@ HELPER FUNCTIONS
 """
 
 import logging
+import inspect
 import os
 import time
 from collections import OrderedDict
@@ -160,6 +161,87 @@ class _MaybeStream:
         if self._cm is not None:
             return self._cm.__exit__(*exc)
         return False
+
+
+def _as_input_mapping(inputs: Any) -> Dict[str, Any]:
+    """Normalize processor outputs to a plain mapping.
+
+    HuggingFace processors may return BatchFeature/BatchEncoding objects,
+    dataclass-like outputs, or a regular dict. The batched VLM path only needs
+    key lookup, so convert once at the boundary.
+    """
+    if isinstance(inputs, dict):
+        return inputs
+    if hasattr(inputs, "data") and isinstance(getattr(inputs, "data"), dict):
+        return dict(inputs.data)
+    try:
+        return dict(inputs)
+    except Exception:
+        pass
+    out: Dict[str, Any] = {}
+    for key in (
+        "input_ids",
+        "attention_mask",
+        "pixel_values",
+        "images",
+        "image_grid_thw",
+        "video_grid_thw",
+    ):
+        if hasattr(inputs, key):
+            out[key] = getattr(inputs, key)
+    return out
+
+
+def _call_processor_direct(
+    processor: Any,
+    *,
+    prompts: Any,
+    images: Optional[List[str]],
+    add_special_tokens: bool,
+) -> Dict[str, Any]:
+    """Call a VLM processor without mlx_vlm.process_inputs' bad `.process` trap.
+
+    mlx-vlm's process_inputs() does `getattr(processor, "process", processor)`
+    and immediately calls inspect.signature() on it. Some modern processor
+    wrappers expose a non-callable `.process` field that points at the tokenizer
+    wrapper, which raises `TypeError: TokenizerWrapper object is not callable`
+    before the actual processor __call__ can run. Prefer a callable
+    `processor.process`; otherwise invoke the processor itself with signature
+    filtering.
+    """
+    process_method = getattr(processor, "process", None)
+    if callable(process_method):
+        from mlx_vlm.utils import process_inputs
+
+        return _as_input_mapping(
+            process_inputs(
+                processor,
+                prompts=prompts,
+                images=images,
+                add_special_tokens=add_special_tokens,
+            )
+        )
+
+    if not callable(processor):
+        raise TypeError(
+            f"VLM processor {type(processor).__name__} is not callable and "
+            "does not expose a callable .process method"
+        )
+
+    kwargs: Dict[str, Any] = {
+        "text": prompts,
+        "images": images,
+        "padding": True,
+        "return_tensors": "mlx",
+        "add_special_tokens": add_special_tokens,
+    }
+    try:
+        params = inspect.signature(processor).parameters
+    except (TypeError, ValueError):
+        params = {}
+    if params and not any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        kwargs = {k: v for k, v in kwargs.items() if k in params}
+    return _as_input_mapping(processor(**kwargs))
 
 # TurboQuantKVCache class name for isinstance-free detection.
 # TQ is a drop-in replacement for KVCache (positional, sliceable, has .state/.keys/.values)
@@ -319,6 +401,15 @@ def _dequantize_cache(cache: List[Any]) -> List[Any]:
         else:
             result.append(layer_cache)
     return result
+
+
+def _validate_prompt_cache(cache: Any, *, source: str) -> bool:
+    """Drop unsafe live prefix-cache objects before model forward."""
+    try:
+        from .cache_record_validator import reject_live_cache_or_warn
+        return reject_live_cache_or_warn(cache, source=source)
+    except Exception:
+        return cache is not None and (not isinstance(cache, list) or len(cache) > 0)
 
 
 def _fix_hybrid_cache(
@@ -1006,7 +1097,9 @@ class MLLMBatchGenerator:
         disk_cache: Optional[Any] = None,
         kv_cache_bits: int = 0,
         kv_cache_group_size: int = 64,
-        ssm_state_cache_size: int = 50,
+        ssm_state_cache_size: int = 8,
+        ssm_state_cache_max_mb: Optional[int] = 512,
+        enable_prefix_cache: bool = True,
     ):
         """
         Initialize MLLM batch generator.
@@ -1030,6 +1123,12 @@ class MLLMBatchGenerator:
             kv_cache_bits: Quantization bits (0=none, 4=q4, 8=q8)
             kv_cache_group_size: Quantization group size
             ssm_state_cache_size: Max entries in HybridSSMStateCache (LRU)
+            ssm_state_cache_max_mb: Approximate resident-memory budget for
+                companion SSM state. Large hybrid/VLM entries are skipped or
+                LRU-evicted once this budget is exceeded.
+            enable_prefix_cache: Enables SSM companion cache work for hybrid
+                prefix-cache hits/stores. When false, no hidden companion
+                lookup/store/re-derive work is performed.
         """
         self.model = model
         self.processor = processor
@@ -1041,10 +1140,34 @@ class MLLMBatchGenerator:
         self._kv_cache_bits = kv_cache_bits
         self._kv_cache_group_size = kv_cache_group_size
 
+        self._prefix_cache_enabled = bool(enable_prefix_cache)
+        self._ssm_companion_enabled = bool(
+            self._prefix_cache_enabled
+            and (
+                block_aware_cache is not None
+                or memory_aware_cache is not None
+                or prefix_cache is not None
+                or disk_cache is not None
+            )
+        )
+
         # Companion SSM state cache for hybrid models (MambaCache + KVCache).
         # Stores SSM layer states at prompt boundary so hybrid cache HITs can
-        # skip the full prefix instead of wasting the KV cache hit.
-        self._ssm_state_cache = HybridSSMStateCache(max_entries=ssm_state_cache_size)
+        # skip the full prefix instead of wasting the KV cache hit. It is
+        # intentionally absent when prefix cache is disabled, so benchmark and
+        # cache-bypass runs do not pay hidden SSM clone/re-derive costs.
+        self._ssm_state_cache = (
+            HybridSSMStateCache(
+                max_entries=ssm_state_cache_size,
+                max_bytes=(
+                    int(ssm_state_cache_max_mb) * 1024 * 1024
+                    if ssm_state_cache_max_mb is not None
+                    else None
+                ),
+            )
+            if self._ssm_companion_enabled
+            else None
+        )
 
         # Async rederive queue for MLLM thinking models. When we capture SSM
         # state post-full-prefill (is_complete=False, gpl-contaminated), we
@@ -1423,21 +1546,21 @@ class MLLMBatchGenerator:
         # get their images processed through that path. When the prompt has images but
         # no "<image>" literal, bypass prepare_inputs and call process_inputs directly
         # which invokes the processor's native __call__ (handles any image token format).
-        if all_images and "<image>" not in request.prompt:
-            from mlx_vlm.utils import process_inputs
-            inputs = process_inputs(
+        _process_attr = getattr(self.processor, "process", None)
+        if all_images and ("<image>" not in request.prompt or (hasattr(self.processor, "process") and not callable(_process_attr))):
+            inputs = _call_processor_direct(
                 self.processor,
                 prompts=request.prompt,
                 images=all_images,
                 add_special_tokens=False,
             )
         else:
-            inputs = prepare_inputs(
+            inputs = _as_input_mapping(prepare_inputs(
                 self.processor,
                 images=all_images if all_images else None,
                 prompts=request.prompt,
                 image_token_index=image_token_index,
-            )
+            ))
 
         # Issue #56 Bug 1 root fix — normalize input_ids to mx.int32.
         # mlx_vlm's various processors (Mistral3 / Pixtral / Gemma4 / Qwen3.5-VL)
@@ -2009,7 +2132,13 @@ class MLLMBatchGenerator:
             # legacy prefix, disk L2, SSM companion — so benchmark runs get
             # fresh execution without pollution from prior multimodal requests.
             _mllm_bypass = bool(getattr(req, "_bypass_prefix_cache", False))
-            if self.block_aware_cache is not None and req.prompt_cache is None and not has_images and not _mllm_bypass:
+            if (
+                self._prefix_cache_enabled
+                and self.block_aware_cache is not None
+                and req.prompt_cache is None
+                and not has_images
+                and not _mllm_bypass
+            ):
                 if req.input_ids is not None:
                     try:
                         _full_token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
@@ -2036,7 +2165,10 @@ class MLLMBatchGenerator:
                                 # For hybrid models without companion SSM state, the cached
                                 # KV blocks are useless — skip reconstruction entirely to
                                 # avoid allocating huge tensors that will be thrown away.
-                                is_hybrid = self._is_hybrid
+                                is_hybrid = (
+                                    self._is_hybrid
+                                    and self._ssm_state_cache is not None
+                                )
 
                                 if is_hybrid:
                                     # Check companion SSM state cache BEFORE reconstruction.
@@ -2161,6 +2293,12 @@ class MLLMBatchGenerator:
                                         # Dequantize failed — release block refs to prevent leak
                                         self.block_aware_cache.release_cache(req.request_id)
                                         continue
+                                    if not _validate_prompt_cache(
+                                        reconstructed,
+                                        source=f"mllm-paged-fetch:{req.request_id}",
+                                    ):
+                                        self.block_aware_cache.release_cache(req.request_id)
+                                        continue
                                 if is_hybrid and ssm_states is not None and reconstructed is not None:
                                     # Full hybrid cache reconstruction:
                                     # KV from paged cache + SSM from companion cache
@@ -2176,6 +2314,12 @@ class MLLMBatchGenerator:
                                         if layer_idx not in kv_set and ssm_idx < len(ssm_states):
                                             full_cache[layer_idx] = ssm_states[ssm_idx]
                                             ssm_idx += 1
+                                    if not _validate_prompt_cache(
+                                        full_cache,
+                                        source=f"mllm-hybrid-paged-fetch:{req.request_id}",
+                                    ):
+                                        self.block_aware_cache.release_cache(req.request_id)
+                                        continue
                                     # TQ recompress safe: blocks now store original float16
                                     req.prompt_cache = full_cache
                                     req._cached_tokens = block_table.num_tokens
@@ -2205,6 +2349,12 @@ class MLLMBatchGenerator:
                                             f"{block_table.num_tokens} cached (KV+SSM)"
                                         )
                                 elif not is_hybrid and reconstructed is not None:
+                                    if not _validate_prompt_cache(
+                                        reconstructed,
+                                        source=f"mllm-attn-paged-fetch:{req.request_id}",
+                                    ):
+                                        self.block_aware_cache.release_cache(req.request_id)
+                                        continue
                                     # Pure attention VLM: TQ recompress safe (original float16)
                                     req.prompt_cache = reconstructed
                                     req._cached_tokens = block_table.num_tokens
@@ -2256,7 +2406,12 @@ class MLLMBatchGenerator:
                         logger.warning(f"Failed to fetch paged cache for {req.request_id}: {e}")
 
             # Memory-aware or legacy prefix cache fetch (non-paged paths)
-            elif (self.memory_aware_cache is not None or self.prefix_cache is not None) and req.prompt_cache is None and not _mllm_bypass:
+            elif (
+                self._prefix_cache_enabled
+                and (self.memory_aware_cache is not None or self.prefix_cache is not None)
+                and req.prompt_cache is None
+                and not _mllm_bypass
+            ):
                 if req.input_ids is not None:
                     try:
                         _full_token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
@@ -2282,6 +2437,11 @@ class MLLMBatchGenerator:
                                     cache = _dequantize_cache(cache)
                                     if cache is None:
                                         continue  # Dequantize failed, full prefill
+                                if not _validate_prompt_cache(
+                                    cache,
+                                    source=f"mllm-memory-fetch:{req.request_id}",
+                                ):
+                                    continue
 
                                 # Hybrid model check (same logic as paged path)
                                 is_hybrid = self._is_hybrid
@@ -2336,7 +2496,12 @@ class MLLMBatchGenerator:
             # L2: Disk cache fallback when in-memory cache missed.
             # DiskCacheManager.fetch() returns Optional[List[Any]] (exact match only,
             # no partial prefix), NOT a tuple like prefix_cache.fetch_cache().
-            if req.prompt_cache is None and self.disk_cache is not None and not _mllm_bypass:
+            if (
+                self._prefix_cache_enabled
+                and req.prompt_cache is None
+                and self.disk_cache is not None
+                and not _mllm_bypass
+            ):
                 if req.input_ids is not None:
                     try:
                         _full_token_list = req.input_ids.tolist() if req.input_ids.ndim == 1 else req.input_ids[0].tolist()
@@ -2369,6 +2534,11 @@ class MLLMBatchGenerator:
                                         disk_result = _dequantize_cache(disk_result)
                                     if disk_result is None:
                                         pass  # Dequantize failed, full prefill
+                                    elif not _validate_prompt_cache(
+                                        disk_result,
+                                        source=f"mllm-disk-fetch:{req.request_id}",
+                                    ):
+                                        pass
                                     else:
                                         req.prompt_cache = disk_result
                                         req._cached_tokens = len(token_list)
@@ -2446,12 +2616,25 @@ class MLLMBatchGenerator:
                     else:
                         cache_for_fix = req.prompt_cache
                 if req.prompt_cache is not None:
+                    if not _validate_prompt_cache(
+                        cache_for_fix,
+                        source=f"mllm-prefill-cache:{req.request_id}",
+                    ):
+                        req.prompt_cache = None
+                        cache_for_fix = None
+                if req.prompt_cache is not None:
                     req_cache = _fix_hybrid_cache(
                         cache_for_fix, self.language_model,
                         kv_positions=self._hybrid_kv_positions,
                         num_model_layers=self._hybrid_num_layers,
                     )
-                    pass  # TQ recompress removed from fetch paths
+                    # Paged/memory/disk cache reconstruction returns plain
+                    # KVCache objects. For JANG/JANGTQ VLMs whose loader
+                    # patched make_cache() to TurboQuantKVCache, re-wrap the
+                    # fetched KV layers before the prefill tail so the live
+                    # decode path keeps the same TQ memory profile as cold
+                    # prefill. If the model is not TQ-backed this is a no-op.
+                    req_cache = _recompress_to_tq(req_cache, self.language_model)
                 else:
                     try:
                         if hasattr(self.language_model, 'make_cache'):
@@ -2570,7 +2753,7 @@ class MLLMBatchGenerator:
                 # the SSM state advances during prefill of remaining tokens,
                 # so the next turn needs a fresh companion keyed on the longer
                 # token list.  (Fixes alternating miss/hit pattern — #45)
-                if self._is_hybrid:
+                if self._is_hybrid and self._ssm_companion_enabled:
                     # Guard: skip SSM capture+rederive on tokens containing
                     # image placeholder IDs. Rederive's text-only forward
                     # pass would produce wrong state at vision positions,

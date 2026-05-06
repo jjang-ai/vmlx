@@ -228,7 +228,8 @@ class TestSchedulerBypassGating:
         ), "scheduler.py legacy prefix_cache fetch is no longer gated on _bypass"
         # disk L2 fallback must be gated
         assert (
-            "self.disk_cache is not None and not _bypass" in src
+            "self.disk_cache is not None" in src
+            and "and not _bypass" in src[src.index("# L2: Disk cache fallback"): src.index("disk_cache = self.disk_cache.fetch", src.index("# L2: Disk cache fallback"))]
         ), "scheduler.py disk L2 fetch is no longer gated on _bypass"
 
     def test_scheduler_store_path_honors_bypass(self):
@@ -498,7 +499,7 @@ class TestServerForwarding:
         assert "force-disabling paged cache" not in sched
         assert '"deepseek_v4"' in prefix
         assert '"deepseek_v4"' in disk
-        assert "dsv4_cache_schema=deepseek_v4_v6" in sched
+        assert "dsv4_cache_schema=deepseek_v4_v7" in sched
 
     def test_paged_l2_schema_invalidates_old_block_namespaces_for_all_families(self):
         """Global paged-cache contract changes must move every family to a
@@ -580,16 +581,15 @@ class TestHappyPathStillUsesCache:
 
 
 # ---------------------------------------------------------------------------
-# Mixed-attention auto-bypass (Gemma 4 sliding + full pattern)
+# Mixed-attention RotatingKVCache support (Gemma 4 sliding + full pattern)
 # ---------------------------------------------------------------------------
 
 
-class TestMixedAttentionAutoBypass:
+class TestMixedAttentionRotatingCacheSupport:
     """Gemma 4 and similar models with interleaved sliding-window + full
-    attention layers drift under the prefix-cache reconstruct path and
-    produce word loops on the 3rd multi-turn request. The schedulers
-    detect this at init and transparently bypass the prefix cache on
-    every request.
+    attention layers need RotatingKVCache metadata preserved across
+    truncation/reconstruction. The old implementation blanket-bypassed the
+    cache; production should exercise the real cache path instead.
     """
 
     def _read(self, path):
@@ -601,11 +601,11 @@ class TestMixedAttentionAutoBypass:
         assert "def _model_has_mixed_attention(" in src, (
             "scheduler.py lost the _model_has_mixed_attention helper"
         )
-        assert "_force_bypass_prefix_cache" in src, (
-            "scheduler.py lost the _force_bypass_prefix_cache flag"
+        assert "_mixed_attention_cache_model" in src, (
+            "scheduler.py should keep mixed-attention detection for diagnostics"
         )
-        assert 'request._bypass_prefix_cache = True' in src, (
-            "scheduler.add_request no longer forces the per-request bypass flag"
+        assert "_force_bypass_prefix_cache" not in src, (
+            "scheduler.py reintroduced the mixed-attention prefix-cache bypass"
         )
 
     def test_mllm_scheduler_has_mixed_attention_helper(self):
@@ -613,8 +613,11 @@ class TestMixedAttentionAutoBypass:
         assert "def _model_has_mixed_attention(" in src, (
             "mllm_scheduler.py lost the _model_has_mixed_attention helper"
         )
-        assert "_force_bypass_prefix_cache" in src, (
-            "mllm_scheduler.py lost the _force_bypass_prefix_cache flag"
+        assert "_mixed_attention_cache_model" in src, (
+            "mllm_scheduler.py should keep mixed-attention detection for diagnostics"
+        )
+        assert "_force_bypass_prefix_cache" not in src, (
+            "mllm_scheduler.py reintroduced the mixed-attention prefix-cache bypass"
         )
 
     def test_mixed_attention_helper_detects_gemma4_layer_types(self):

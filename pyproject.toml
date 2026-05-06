@@ -64,7 +64,7 @@ dependencies = [
     # promotion from optional [mxtq] to a hard dependency. The PyPI package
     # is named `jang` (not `jang-tools` — that's the local repo dir name);
     # `import jang_tools` works because that's the package import name.
-    "jang>=2.5.15",
+    "jang>=2.5.26",
     # PyTorch — REQUIRED for Nemotron-3-Nano-Omni multimodal dispatch.
     # `jang_tools.nemotron_omni_chat._import_torch()` lazy-imports torch on
     # the FIRST image / audio / video request to an Omni bundle; without
@@ -96,7 +96,7 @@ ui = [
 # pinning `vmlx[mxtq]` in their requirements; the real install is now a
 # hard dependency above so plain `pip install vmlx` works for all bundles.
 mxtq = [
-    "jang>=2.5.15",
+    "jang>=2.5.26",
 ]
 dev = [
     "pytest>=7.0.0",
@@ -144,7 +144,7 @@ audio = [
 # (intentionally same pin) so `pip install vmlx[jang]` is a
 # friendly alias. Pin tracks the hard dep above — bump in lockstep.
 jang = [
-    "jang>=2.5.15",
+    "jang>=2.5.26",
 ]
 # Image generation dependencies (Flux, Z-Image-Turbo via mflux)
 image = [

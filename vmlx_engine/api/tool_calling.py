@@ -64,6 +64,11 @@ def check_and_inject_fallback_tools(
     # If ALL tool names made it into a prompt and the prompt also contains a
     # concrete parser-native exemplar for those names, the template handled
     # tools correctly. Otherwise inject a concrete native exemplar.
+    _dsv4_has_native_dsml_schema = (
+        is_dsv4_prompt
+        and "<｜DSML｜tool_calls>" in prompt
+        and all(name in prompt for name in tool_names)
+    )
     _dsv4_has_concrete_dsml_examples = (
         is_dsv4_prompt
         and all(f'<｜DSML｜invoke name="{name}"' in prompt for name in tool_names)
@@ -73,7 +78,7 @@ def check_and_inject_fallback_tools(
         and all(f"<function={name}>" in prompt for name in tool_names)
     )
     if all(name in prompt for name in tool_names) and (
-        (not is_dsv4_prompt or _dsv4_has_concrete_dsml_examples)
+        (not is_dsv4_prompt or _dsv4_has_native_dsml_schema or _dsv4_has_concrete_dsml_examples)
         and (not is_qwen_native_tool_prompt or _qwen_has_concrete_tool_examples)
     ):
         return prompt

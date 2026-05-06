@@ -18,6 +18,9 @@ Registered patches (auto-installed on ``import vmlx_engine.runtime_patches``):
 """
 
 # Eagerly install every patch on first import so they land before any
-# model load path walks config.json.model_type. Safe: each register()
-# guards against already-patched state internally.
+# model load path walks config.json.model_type. Safe: each installer guards
+# against already-patched state internally.
 from . import deepseek_v4_register  # noqa: F401
+from . import kimi_k25_mla as _kimi_k25_mla
+
+_kimi_k25_mla.install()
