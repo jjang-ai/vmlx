@@ -33,6 +33,7 @@ struct APIScreen: View {
     @State private var hostBinding: String = "127.0.0.1"
     @State private var portBinding: Int = 8000
     @State private var lanBinding: Bool = false
+    @State private var gatewayHostBinding: String = "127.0.0.1"
 
     /// O5 §291 — admin-token mirror. Loaded from GlobalSettings.adminToken
     /// on screen appear; writes flow through `Server.applyAuthCredentials`
@@ -76,6 +77,8 @@ struct APIScreen: View {
                 RoutesCard(
                     host: connectHost(hostBinding),
                     port: portBinding,
+                    gatewayHost: gatewaySDKEndpoint?.host,
+                    gatewayPort: gatewaySDKEndpoint?.port,
                     bearer: keys.first?.value,
                     admin: adminTokenForCurl)
                 AdvancedServerCard()
@@ -101,6 +104,18 @@ struct APIScreen: View {
     private var endpointURL: String {
         let h = connectHost(hostBinding)
         return "http://\(h):\(portBinding)"
+    }
+
+    private var gatewaySDKEndpoint: (host: String, port: Int)? {
+        guard case .running(let bound, _) = app.gatewayStatus else { return nil }
+        return (connectHost(gatewayHostBinding), bound)
+    }
+
+    private var sdkEndpointURL: String {
+        if let gateway = gatewaySDKEndpoint {
+            return "http://\(gateway.host):\(gateway.port)"
+        }
+        return endpointURL
     }
 
     /// Machine-visible LAN URL (when LAN binding is on). This is what the QR
@@ -176,15 +191,21 @@ struct APIScreen: View {
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
             HStack {
-                Text(endpointURL)
+                Text(sdkEndpointURL)
                     .font(Theme.Typography.mono)
                     .foregroundStyle(Theme.Colors.textHigh)
                     .textSelection(.enabled)
                 Spacer()
-                Button(L10n.TrayUI.copy.render(appLocale)) { copyToPasteboard(endpointURL) }
+                Button(L10n.TrayUI.copy.render(appLocale)) { copyToPasteboard(sdkEndpointURL) }
                     .buttonStyle(.plain)
                     .font(Theme.Typography.bodyHi)
                     .foregroundStyle(Theme.Colors.accent)
+            }
+            if let gateway = gatewaySDKEndpoint {
+                Text("SDK examples use the live gateway at \(gateway.host):\(gateway.port); per-session-only routes still use \(endpointURL).")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textLow)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             HStack(spacing: Theme.Spacing.md) {
@@ -565,7 +586,7 @@ struct APIScreen: View {
     // MARK: - snippet strings
 
     private var currentSnippet: String {
-        let ep = endpointURL
+        let ep = sdkEndpointURL
         let key = bearerRequired ? "$VMLX_API_KEY" : "not-needed"
         switch snippetFormat {
         case .curl:
@@ -648,6 +669,7 @@ struct APIScreen: View {
         hostBinding = g.defaultHost
         portBinding = g.defaultPort
         lanBinding = (g.defaultHost == "0.0.0.0")
+        gatewayHostBinding = g.gatewayLAN ? "0.0.0.0" : "127.0.0.1"
         bearerRequired = (g.apiKey != nil && !(g.apiKey ?? "").isEmpty)
         adminTokenField = g.adminToken ?? ""
         keys = APIKeyManager.shared.list()

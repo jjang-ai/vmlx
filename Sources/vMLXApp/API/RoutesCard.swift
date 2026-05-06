@@ -22,6 +22,8 @@ struct RoutesCard: View {
 
     let host: String
     let port: Int
+    let gatewayHost: String?
+    let gatewayPort: Int?
     let bearer: String?
     let admin: String?
 
@@ -83,6 +85,9 @@ struct RoutesCard: View {
             Text("\(visibleRoutes.count)/\(RouteCatalog.all.count)")
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
+            if gatewayPort != nil {
+                tag("Gateway SDK routes", tint: Theme.Colors.accent)
+            }
             Spacer()
             TextField(L10n.Misc.routeFilterPlaceholder.render(appLocale),
                       text: $query)
@@ -153,9 +158,10 @@ struct RoutesCard: View {
                 authBadge(route.auth)
                 Spacer()
                 Button {
+                    let endpoint = endpoint(for: route)
                     let cmd = RouteCatalog.curl(
                         for: route,
-                        host: host, port: port,
+                        host: endpoint.host, port: endpoint.port,
                         bearer: bearer, admin: admin,
                         model: firstLoadedModel())
                     copyToPasteboard(cmd)
@@ -199,6 +205,8 @@ struct RoutesCard: View {
                 if let a = route.docsAnchor {
                     tag("#\(a)", tint: .secondary)
                 }
+                let ep = endpoint(for: route)
+                tag("Endpoint: \(ep.kind)", tint: ep.kind == "gateway" ? Theme.Colors.accent : .secondary)
             }
             .font(.system(size: 10))
 
@@ -220,7 +228,8 @@ struct RoutesCard: View {
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
             Text(RouteCatalog.curl(for: route,
-                                   host: host, port: port,
+                                   host: endpoint(for: route).host,
+                                   port: endpoint(for: route).port,
                                    bearer: bearer, admin: admin,
                                    model: firstLoadedModel()))
                 .font(.system(size: 11, design: .monospaced))
@@ -279,9 +288,16 @@ struct RoutesCard: View {
             if case .running = $0.state { return true }
             return false
         }) {
-            return s.displayName ?? s.modelPath.lastPathComponent
+            return s.displayName
         }
         return nil
+    }
+
+    private func endpoint(for route: RouteEntry) -> (host: String, port: Int, kind: String) {
+        if let gatewayHost, let gatewayPort, RouteCatalog.gatewaySupports(route) {
+            return (gatewayHost, gatewayPort, "gateway")
+        }
+        return (host, port, "session")
     }
 
     // MARK: — badges + helpers

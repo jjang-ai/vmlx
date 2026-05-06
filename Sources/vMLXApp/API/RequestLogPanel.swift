@@ -50,7 +50,7 @@ struct RequestLogPanel: View {
             RoundedRectangle(cornerRadius: Theme.Radius.lg)
                 .stroke(Theme.Colors.border, lineWidth: 1)
         )
-        .task { await subscribe() }
+        .task(id: app.selectedServerSessionId) { await subscribe() }
         .onDisappear {
             streamTask?.cancel()
             streamTask = nil

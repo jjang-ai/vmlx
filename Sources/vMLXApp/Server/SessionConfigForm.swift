@@ -621,7 +621,7 @@ struct SessionConfigForm: View {
     private var remoteAPIKeyRow: some View {
         HStack {
             Text(L10n.SessionConfig.apiKey.render(appLocale)).frame(width: 140, alignment: .leading)
-            SecureField("sk-... (left blank for unauthenticated remotes)",
+            SecureField("API key (optional; stored locally)",
                         text: Binding(
                           get: { s.remoteAPIKey ?? "" },
                           set: { s.remoteAPIKey = $0.isEmpty ? nil : $0; commit() }

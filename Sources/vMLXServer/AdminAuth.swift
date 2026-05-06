@@ -58,6 +58,8 @@ actor AdminAuthRateLimiter {
 /// Paths that require the token:
 ///   * `/admin/*`        — soft/deep sleep, wake, restart, shutdown
 ///   * `/v1/cache/*`     — warm, flush, stats, entry enumeration
+///   * `/v1/adapters/*`  — adapter load/unload/fuse mutations
+///   * `DELETE /api/delete` — destructive Ollama-compatible model delete
 ///
 /// If `adminToken` is nil or empty the middleware is a no-op (matches the
 /// dev default where nobody has set one yet). Once a token is configured

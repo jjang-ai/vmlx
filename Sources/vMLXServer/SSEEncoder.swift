@@ -640,8 +640,9 @@ public enum SSEEncoder {
                     "model": model,
                 ] as [String: Any],
             ]
-            if !hadError, let u = lastUsage {
-                var r = completed["response"] as! [String: Any]
+            if !hadError, let u = lastUsage,
+               var r = completed["response"] as? [String: Any]
+            {
                 // iter-67 (§96) — include tokens_per_second / ttft_ms /
                 // prefill_ms / total_ms in the `response.completed`
                 // usage dict for parity with chat/completions,

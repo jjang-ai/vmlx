@@ -2,7 +2,7 @@ import Foundation
 
 /// O1 §290 — the single-source-of-truth catalog of every HTTP route
 /// vMLX registers. Hand-authored against the six route files in
-/// `Sources/vMLXServer/Routes/` so the API screen renders a live
+/// `Sources/vMLXServer/Routes/` plus the global gateway so the API screen renders a live
 /// discoverable list instead of users guessing paths from source.
 ///
 /// When a new route lands, add an entry here AND register it in the
@@ -71,7 +71,7 @@ public struct RouteEntry: Identifiable, Hashable, Sendable {
 }
 
 public enum RouteCatalog {
-    /// Full table — 52 routes as of §290.
+    /// Full table of discoverable per-session routes plus the gateway info route.
     public static let all: [RouteEntry] = [
         // MARK: Liveness
         .init(method: .get, path: "/health",
@@ -89,7 +89,7 @@ public enum RouteCatalog {
               auth: .bearer, streams: true, modality: .text,
               sampleBody: #"{"model":"<model>","messages":[{"role":"user","content":"hi"}],"stream":true}"#,
               docsAnchor: "chat-completions"),
-        .init(method: .delete, path: "/v1/chat/completions/:id/cancel",
+        .init(method: .post, path: "/v1/chat/completions/:id/cancel",
               family: .openAI, brief: "Cancel an in-flight chat completion by request id",
               auth: .bearer, streams: false, modality: .text, sampleBody: "",
               docsAnchor: "chat-completions-cancel"),
@@ -98,7 +98,7 @@ public enum RouteCatalog {
               auth: .bearer, streams: true, modality: .text,
               sampleBody: #"{"model":"<model>","prompt":"Once upon","max_tokens":64}"#,
               docsAnchor: "completions"),
-        .init(method: .delete, path: "/v1/completions/:id/cancel",
+        .init(method: .post, path: "/v1/completions/:id/cancel",
               family: .openAI, brief: "Cancel a legacy completion",
               auth: .bearer, streams: false, modality: .text, sampleBody: "",
               docsAnchor: "completions-cancel"),
@@ -116,6 +116,34 @@ public enum RouteCatalog {
               family: .openAI, brief: "List known models across library roots + loaded flag",
               auth: .bearer, streams: false, modality: .any, sampleBody: "",
               docsAnchor: "models"),
+        .init(method: .get, path: "/v1/tokenizer_info",
+              family: .openAI, brief: "Loaded tokenizer metadata and special-token ids",
+              auth: .bearer, streams: false, modality: .text, sampleBody: "",
+              docsAnchor: "tokenizer-info"),
+        .init(method: .get, path: "/tokenizer_info",
+              family: .openAI, brief: "Compatibility alias for /v1/tokenizer_info",
+              auth: .bearer, streams: false, modality: .text, sampleBody: "",
+              docsAnchor: "tokenizer-info-alias"),
+        .init(method: .post, path: "/v1/tokenize",
+              family: .openAI, brief: "Tokenize text with the loaded model tokenizer",
+              auth: .bearer, streams: false, modality: .text,
+              sampleBody: #"{"text":"hello","add_special_tokens":false}"#,
+              docsAnchor: "tokenize"),
+        .init(method: .post, path: "/tokenize",
+              family: .openAI, brief: "Compatibility alias for /v1/tokenize",
+              auth: .bearer, streams: false, modality: .text,
+              sampleBody: #"{"text":"hello","add_special_tokens":false}"#,
+              docsAnchor: "tokenize-alias"),
+        .init(method: .post, path: "/v1/detokenize",
+              family: .openAI, brief: "Decode token ids with the loaded model tokenizer",
+              auth: .bearer, streams: false, modality: .text,
+              sampleBody: #"{"tokens":[1,2,3],"skip_special_tokens":true}"#,
+              docsAnchor: "detokenize"),
+        .init(method: .post, path: "/detokenize",
+              family: .openAI, brief: "Compatibility alias for /v1/detokenize",
+              auth: .bearer, streams: false, modality: .text,
+              sampleBody: #"{"tokens":[1,2,3],"skip_special_tokens":true}"#,
+              docsAnchor: "detokenize-alias"),
         .init(method: .post, path: "/v1/images/generations",
               family: .openAI, brief: "Flux / Z-Image generation (seed, n, response_format)",
               auth: .bearer, streams: false, modality: .image,
@@ -135,12 +163,12 @@ public enum RouteCatalog {
               auth: .bearer, streams: false, modality: .audio, sampleBody: "",
               docsAnchor: "audio-translate"),
         .init(method: .post, path: "/v1/audio/speech",
-              family: .openAI, brief: "TTS — Kokoro / Parler / Dia voice synthesis",
+              family: .openAI, brief: "TTS audio synthesis; response headers report backend",
               auth: .bearer, streams: false, modality: .audio,
               sampleBody: #"{"model":"kokoro","input":"hello world","voice":"af_sky"}"#,
               docsAnchor: "audio-speech"),
         .init(method: .get, path: "/v1/audio/voices",
-              family: .openAI, brief: "Enumerate available TTS voices",
+              family: .openAI, brief: "TTS voice catalog; placeholder-only until neural voices ship",
               auth: .bearer, streams: false, modality: .audio, sampleBody: "",
               docsAnchor: "audio-voices"),
         .init(method: .post, path: "/v1/responses",
@@ -148,7 +176,7 @@ public enum RouteCatalog {
               auth: .bearer, streams: true, modality: .text,
               sampleBody: #"{"model":"<model>","input":"hi","stream":true}"#,
               docsAnchor: "responses"),
-        .init(method: .delete, path: "/v1/responses/:id/cancel",
+        .init(method: .post, path: "/v1/responses/:id/cancel",
               family: .openAI, brief: "Cancel an in-flight Responses session",
               auth: .bearer, streams: false, modality: .text, sampleBody: "",
               docsAnchor: "responses-cancel"),
@@ -172,7 +200,7 @@ public enum RouteCatalog {
               sampleBody: #"{"model":"<model>","messages":[{"role":"user","content":"hi"}],"stream":true}"#,
               docsAnchor: "ollama-chat"),
         .init(method: .post, path: "/api/generate",
-              family: .ollama, brief: "Ollama generate (context[] legacy array)",
+              family: .ollama, brief: "Ollama generate; legacy stateless context[] is rejected",
               auth: .bearer, streams: true, modality: .text,
               sampleBody: #"{"model":"<model>","prompt":"hi","stream":true}"#,
               docsAnchor: "ollama-generate"),
@@ -210,7 +238,7 @@ public enum RouteCatalog {
               docsAnchor: "ollama-pull"),
         .init(method: .delete, path: "/api/delete",
               family: .ollama, brief: "Delete a model from the library",
-              auth: .bearer, streams: false, modality: .any,
+              auth: .admin, streams: false, modality: .any,
               sampleBody: #"{"name":"<model>"}"#,
               docsAnchor: "ollama-delete"),
         .init(method: .post, path: "/api/copy",
@@ -229,9 +257,13 @@ public enum RouteCatalog {
               sampleBody: #"{"name":"<alias>"}"#,
               docsAnchor: "ollama-push"),
         .init(method: .head, path: "/api/blobs/:digest",
-              family: .ollama, brief: "Check if a blob is already cached",
+              family: .ollama, brief: "Blob existence probe; returns 501 until a blob store exists",
               auth: .bearer, streams: false, modality: .any, sampleBody: "",
               docsAnchor: "ollama-blobs"),
+        .init(method: .post, path: "/api/blobs/:digest",
+              family: .ollama, brief: "Blob upload; returns 501, use /api/pull instead",
+              auth: .bearer, streams: false, modality: .any, sampleBody: "",
+              docsAnchor: "ollama-blobs-upload"),
 
         // MARK: Admin (admin-token gated)
         .init(method: .post, path: "/admin/soft-sleep",
@@ -251,6 +283,19 @@ public enum RouteCatalog {
               family: .admin, brief: "Run the in-process BenchSuite against loaded model",
               auth: .admin, streams: false, modality: .text, sampleBody: "",
               docsAnchor: "admin-benchmark"),
+        .init(method: .get, path: "/admin/batch-engine",
+              family: .admin, brief: "Continuous batching status snapshot",
+              auth: .admin, streams: false, modality: .any, sampleBody: "",
+              docsAnchor: "admin-batch-engine"),
+        .init(method: .post, path: "/admin/batch-engine/start",
+              family: .admin, brief: "Start the continuous batch engine",
+              auth: .admin, streams: false, modality: .text,
+              sampleBody: #"{"max_batch_size":8}"#,
+              docsAnchor: "admin-batch-engine-start"),
+        .init(method: .post, path: "/admin/batch-engine/stop",
+              family: .admin, brief: "Stop the continuous batch engine",
+              auth: .admin, streams: false, modality: .any, sampleBody: "",
+              docsAnchor: "admin-batch-engine-stop"),
         .init(method: .post, path: "/admin/dflash/load",
               family: .admin, brief: "Attach a JANG-DFlash drafter for speculative decoding",
               auth: .admin, streams: false, modality: .text,
@@ -278,12 +323,44 @@ public enum RouteCatalog {
               auth: .admin, streams: false, modality: .any,
               sampleBody: #"{"level":"debug"}"#,
               docsAnchor: "admin-log-level-set"),
+        .init(method: .get, path: "/admin/cache/stats",
+              family: .admin, brief: "Admin alias for /v1/cache/stats",
+              auth: .admin, streams: false, modality: .any, sampleBody: "",
+              docsAnchor: "admin-cache-stats"),
+        .init(method: .post, path: "/admin/cache/clear",
+              family: .admin, brief: "Admin alias for cache clear",
+              auth: .admin, streams: false, modality: .any,
+              sampleBody: "{}",
+              docsAnchor: "admin-cache-clear"),
+
+        // MARK: Adapters
+        .init(method: .get, path: "/v1/adapters",
+              family: .admin, brief: "Inspect active LoRA / DoRA adapter state",
+              auth: .bearer, streams: false, modality: .any, sampleBody: "",
+              docsAnchor: "adapters-list"),
+        .init(method: .post, path: "/v1/adapters/load",
+              family: .admin, brief: "Load a LoRA / DoRA adapter from a model-root path",
+              auth: .admin, streams: false, modality: .text,
+              sampleBody: #"{"path":"/path/to/adapter"}"#,
+              docsAnchor: "adapters-load"),
+        .init(method: .post, path: "/v1/adapters/unload",
+              family: .admin, brief: "Unload the active adapter",
+              auth: .admin, streams: false, modality: .text, sampleBody: "",
+              docsAnchor: "adapters-unload"),
+        .init(method: .post, path: "/v1/adapters/fuse",
+              family: .admin, brief: "Fuse the active adapter into base weights",
+              auth: .admin, streams: false, modality: .text, sampleBody: "",
+              docsAnchor: "adapters-fuse"),
 
         // MARK: Cache (admin-gated)
         .init(method: .get, path: "/v1/cache/stats",
               family: .cache, brief: "Prefix / paged / memory / disk / SSM / TQ stats",
               auth: .admin, streams: false, modality: .any, sampleBody: "",
               docsAnchor: "cache-stats"),
+        .init(method: .get, path: "/v1/cache/jangpress",
+              family: .cache, brief: "JangPress cold-weight tier status and advice counters",
+              auth: .admin, streams: false, modality: .any, sampleBody: "",
+              docsAnchor: "cache-jangpress"),
         .init(method: .post, path: "/v1/cache/clear",
               family: .cache, brief: "Drop every tier's cache entries",
               auth: .admin, streams: false, modality: .any,
@@ -296,12 +373,12 @@ public enum RouteCatalog {
         .init(method: .post, path: "/v1/cache/warm",
               family: .cache, brief: "Prefill a prompt into the paged cache",
               auth: .admin, streams: false, modality: .text,
-              sampleBody: #"{"prompt":"Hello world","model":"<model>"}"#,
+              sampleBody: #"{"prompts":["Hello world"],"model":"<model>"}"#,
               docsAnchor: "cache-warm"),
-        .init(method: .get, path: "/v1/cache",
-              family: .cache, brief: "Cache subsystem root / overview",
+        .init(method: .delete, path: "/v1/cache",
+              family: .cache, brief: "Flush all cache tiers and return post-clear stats",
               auth: .admin, streams: false, modality: .any, sampleBody: "",
-              docsAnchor: "cache-root"),
+              docsAnchor: "cache-flush"),
 
         // MARK: MCP
         .init(method: .get, path: "/v1/mcp/servers",
@@ -317,10 +394,16 @@ public enum RouteCatalog {
               auth: .bearer, streams: false, modality: .any,
               sampleBody: #"{"server":"<name>","tool":"<tool>","arguments":{}}"#,
               docsAnchor: "mcp-execute"),
-        .init(method: .get, path: "/mcp/:server/**",
+        .init(method: .post, path: "/mcp/:server/**",
               family: .mcp, brief: "Raw MCP passthrough (streams SSE for tool calls)",
               auth: .bearer, streams: true, modality: .any, sampleBody: "",
               docsAnchor: "mcp-passthrough"),
+
+        // MARK: Gateway
+        .init(method: .get, path: "/v1/_gateway/info",
+              family: .liveness, brief: "Gateway-supported route list and unsupported per-session surfaces",
+              auth: .bearer, streams: false, modality: .any, sampleBody: "",
+              docsAnchor: "gateway-info"),
     ]
 
     /// Convenience: routes grouped by family, preserving `all` order.
@@ -332,6 +415,37 @@ public enum RouteCatalog {
             return (f, rs)
         }
     }
+
+    /// Routes implemented by `GatewayServer`. The API screen uses this to
+    /// generate SDK curl examples against the actual bound gateway port while
+    /// keeping per-session-only routes on the session listener.
+    public static func gatewaySupports(_ route: RouteEntry) -> Bool {
+        let key = "\(route.method.rawValue) \(route.path)"
+        return gatewayRouteKeys.contains(key)
+    }
+
+    private static let gatewayRouteKeys: Set<String> = [
+        "GET /health",
+        "GET /metrics",
+        "GET /v1/models",
+        "POST /v1/chat/completions",
+        "POST /v1/completions",
+        "POST /v1/embeddings",
+        "POST /v1/images/generations",
+        "POST /v1/images/edits",
+        "POST /v1/messages",
+        "POST /v1/messages/count_tokens",
+        "POST /v1/responses",
+        "GET /api/version",
+        "GET /api/tags",
+        "GET /api/ps",
+        "POST /api/show",
+        "POST /api/chat",
+        "POST /api/generate",
+        "POST /api/embeddings",
+        "POST /api/embed",
+        "GET /v1/_gateway/info",
+    ]
 
     /// Substitute tokens in a sample body + full URL for copy-curl.
     /// - `{host}`, `{port}`, `{bearer}`, `{admin}`, `{model}` replaced.

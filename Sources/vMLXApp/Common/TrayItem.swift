@@ -470,9 +470,15 @@ struct TrayItem: View {
                         set: { draft.gatewayLAN = $0; schedulePush() }))
                     .font(.system(size: 11))
                     .toggleStyle(.switch)
-                Text("SDK base URL: http://\(draft.gatewayLAN ? "0.0.0.0" : "127.0.0.1"):\(draft.gatewayPort)")
+                Text("SDK base URL: \(gatewaySDKBaseURL)")
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(.secondary)
+                if draft.gatewayLAN {
+                    Text("LAN clients should use this Mac's LAN IP; 0.0.0.0 is only the bind address.")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 // §358 — persistent gateway status pill. Replaces the
                 // 3-sec flashBanner-only signal. Green = bound at
                 // configured port. Orange = auto-bumped (port was taken,
@@ -1138,6 +1144,16 @@ struct TrayItem: View {
                         msg as NSString))
             }
         }
+    }
+
+    private var gatewaySDKBaseURL: String {
+        let port: Int
+        if case .running(let bound, _) = app.gatewayStatus {
+            port = bound
+        } else {
+            port = draft.gatewayPort
+        }
+        return "http://127.0.0.1:\(port)"
     }
 
     /// R2 §303 — plain-English text for tray arch pill tooltip.
