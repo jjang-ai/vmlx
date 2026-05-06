@@ -393,9 +393,11 @@ def get_model_config_registry() -> ModelConfigRegistry:
     """Get the global model config registry, auto-loading configs on first access."""
     global _configs_loaded
     registry = ModelConfigRegistry()
-    if not _configs_loaded:
+    # The singleton can be recreated by tests or embedding hosts while the
+    # module-level loaded flag survives. Never return an empty global registry.
+    if not _configs_loaded or not registry._configs:
         with _configs_lock:
-            if not _configs_loaded:
+            if not _configs_loaded or not registry._configs:
                 try:
                     from .model_configs import register_all
                     register_all(registry)
