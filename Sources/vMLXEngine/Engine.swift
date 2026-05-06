@@ -4162,7 +4162,8 @@ public actor Engine {
                     }
                     if let keys = Self.safetensorsHeaderKeys(at: url) {
                         let tqKeys = keys.filter {
-                            $0.hasPrefix("tq_") || $0.hasPrefix("__tq_")
+                            $0.hasPrefix("tq_")
+                                || ($0.hasPrefix("__tq_") && $0 != "__tq_native_marker__")
                         }
                         if !tqKeys.isEmpty {
                             turboQuantEntryCount += 1
