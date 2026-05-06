@@ -150,6 +150,42 @@ public enum RuntimeShared {
     public static func userMsg(_ text: String) -> ChatRequest.Message {
         ChatRequest.Message(role: "user", content: .string(text))
     }
+    public static func userMediaMsg(
+        _ text: String,
+        imagePaths: [String] = [],
+        videoPaths: [String] = [],
+        audioPaths: [String] = [],
+        inputAudioPaths: [String] = []
+    ) -> ChatRequest.Message {
+        var parts: [ChatRequest.ContentPart] = []
+        parts.reserveCapacity(
+            imagePaths.count + videoPaths.count + audioPaths.count + inputAudioPaths.count + 1)
+        for path in imagePaths {
+            parts.append(ChatRequest.ContentPart(
+                type: "image_url",
+                imageUrl: .init(url: mediaURLString(path))))
+        }
+        for path in videoPaths {
+            parts.append(ChatRequest.ContentPart(
+                type: "video_url",
+                videoUrl: .init(url: mediaURLString(path))))
+        }
+        for path in audioPaths {
+            parts.append(ChatRequest.ContentPart(
+                type: "audio_url",
+                audioUrl: .init(url: mediaURLString(path))))
+        }
+        for path in inputAudioPaths {
+            if let data = try? Data(contentsOf: URL(fileURLWithPath: path)) {
+                let format = URL(fileURLWithPath: path).pathExtension
+                parts.append(ChatRequest.ContentPart(
+                    type: "input_audio",
+                    inputAudio: .init(data: data.base64EncodedString(), format: format)))
+            }
+        }
+        parts.append(ChatRequest.ContentPart(type: "text", text: text))
+        return ChatRequest.Message(role: "user", content: .parts(parts))
+    }
     public static func systemMsg(_ text: String) -> ChatRequest.Message {
         ChatRequest.Message(role: "system", content: .string(text))
     }
@@ -199,6 +235,17 @@ public enum RuntimeShared {
         for tag in leakTags where content.contains(tag) {
             fatalError("[\(label)] LEAKED tag \(tag) in: \(content.prefix(120))")
         }
+    }
+
+    private static func mediaURLString(_ raw: String) -> String {
+        if raw.hasPrefix("file://")
+            || raw.hasPrefix("http://")
+            || raw.hasPrefix("https://")
+            || raw.hasPrefix("data:")
+        {
+            return raw
+        }
+        return URL(fileURLWithPath: raw).absoluteString
     }
 
     public struct DrainResult: Sendable {

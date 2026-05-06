@@ -820,6 +820,14 @@ extension Engine {
             // — their templates DO accept the short `<image>` marker.
             return "<image>"
         }()
+        let videoMarker: String = {
+            let fam = (caps?.family ?? "").lowercased()
+            let mt = (caps?.modelType ?? "").lowercased()
+            if fam.contains("qwen") || mt.contains("qwen") {
+                return "<|vision_start|><|video_pad|><|vision_end|>"
+            }
+            return "<video>"
+        }()
         // The prompt-level reasoning-off stub is a family-specific hack,
         // not a universal "thinking off" mechanism. It is valid for
         // DeepSeek-style `<think>...</think>` models that do NOT have a
@@ -852,7 +860,8 @@ extension Engine {
             injectReasoningOffStub: injectReasoningOffStub,
             responseFormatInstruction: Engine.responseFormatInstruction(
                 from: request.responseFormat),
-            imageMarker: imageMarker)
+            imageMarker: imageMarker,
+            videoMarker: videoMarker)
 
         // Merge MCP tools into the spec list the model sees.
         //
@@ -2497,7 +2506,8 @@ extension Engine {
         modelStampsThink: Bool = false,
         injectReasoningOffStub: Bool = true,
         responseFormatInstruction: String? = nil,
-        imageMarker: String = "<image>"
+        imageMarker: String = "<image>",
+        videoMarker: String = "<video>"
     ) async -> [Chat.Message] {
         var out: [Chat.Message] = []
         out.reserveCapacity(request.messages.count + 1)
@@ -2620,12 +2630,16 @@ extension Engine {
                 let markers = String(repeating: imageMarker, count: d.images.count)
                 renderedText = markers + renderedText
             }
-            // Video marker auto-insert for Qwen-family VLMs (Qwen2.5-VL,
-            // Qwen3-VL) that use `<video>` as the video placeholder. Other
-            // families don't accept video today — no per-family branch
-            // needed yet; Qwen is the only video-capable family we register.
-            if !d.videos.isEmpty && !renderedText.contains("<video>") {
-                let vMarkers = String(repeating: "<video>", count: d.videos.count)
+            // Video marker auto-insert. Qwen3.6/Qwen3-VL bundles need the
+            // full `<|vision_start|><|video_pad|><|vision_end|>` triple so
+            // `QwenVL.replacePaddingTokens` can expand frame placeholders;
+            // Nemotron Omni uses the literal `<video>` token from
+            // `config_omni.json`.
+            let hasAnyVideoMarker =
+                renderedText.contains("<video>")
+                || renderedText.contains("<|video_pad|>")
+            if !d.videos.isEmpty && !hasAnyVideoMarker {
+                let vMarkers = String(repeating: videoMarker, count: d.videos.count)
                 renderedText = vMarkers + renderedText
             }
             out.append(Chat.Message(

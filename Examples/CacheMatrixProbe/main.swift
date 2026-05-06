@@ -28,6 +28,26 @@ func envCSV(_ key: String) -> Set<String> {
         .filter { !$0.isEmpty })
 }
 
+func envList(_ key: String) -> [String] {
+    guard let raw = ProcessInfo.processInfo.environment[key], !raw.isEmpty else {
+        return []
+    }
+    return raw
+        .split(separator: ",")
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+}
+
+func envPathList(_ pluralKey: String, _ singularKey: String) -> [String] {
+    var values = envList(pluralKey)
+    if let single = ProcessInfo.processInfo.environment[singularKey],
+       !single.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    {
+        values.append(single.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+    return values
+}
+
 func applyBlockDiskOverride(to opts: inout Engine.LoadOptions) {
     let env = ProcessInfo.processInfo.environment
 
@@ -132,6 +152,17 @@ let basePrompt = envString("CACHE_PROBE_PROMPT", default: String(repeating:
     "This is a cache validation prompt with stable repeated context about Apple Silicon, memory hierarchy, routers, sliding windows, and SSM state. ",
     count: 10) + "Answer with exactly one short sentence.")
 let secondPrompt = envString("CACHE_PROBE_SECOND_PROMPT", default: basePrompt)
+let imagePaths = envPathList("CACHE_PROBE_IMAGES", "CACHE_PROBE_IMAGE")
+let videoPaths = envPathList("CACHE_PROBE_VIDEOS", "CACHE_PROBE_VIDEO")
+let audioPaths = envPathList("CACHE_PROBE_AUDIOS", "CACHE_PROBE_AUDIO")
+let inputAudioPaths = envPathList("CACHE_PROBE_INPUT_AUDIOS", "CACHE_PROBE_INPUT_AUDIO")
+let turn2ImagePaths = envPathList("CACHE_PROBE_TURN2_IMAGES", "CACHE_PROBE_TURN2_IMAGE")
+let turn2VideoPaths = envPathList("CACHE_PROBE_TURN2_VIDEOS", "CACHE_PROBE_TURN2_VIDEO")
+let turn2AudioPaths = envPathList("CACHE_PROBE_TURN2_AUDIOS", "CACHE_PROBE_TURN2_AUDIO")
+let turn2InputAudioPaths = envPathList("CACHE_PROBE_TURN2_INPUT_AUDIOS", "CACHE_PROBE_TURN2_INPUT_AUDIO")
+let replayTurn1InTurn2 = envBool("CACHE_PROBE_MULTITURN_HISTORY", default: false)
+let turn1ExpectedTerms = envList("CACHE_PROBE_TURN1_EXPECT")
+let turn2ExpectedTerms = envList("CACHE_PROBE_TURN2_EXPECT")
 let maxTokens = envInt("CACHE_PROBE_MAX_TOKENS", default: 24)
 let slidingMode = envString("CACHE_PROBE_SLIDING_MODE", default: "auto")
 let required = envCSV("CACHE_PROBE_REQUIRE")
@@ -193,6 +224,7 @@ print("mode=\(mode) cacheDir=\(cacheRoot.path)")
 RuntimeShared.reportLoadOptions(opts)
 print("JangPress=\(opts.enableJangPress) routerAdvice=\(opts.enableJangPressRouterAdvice) sliding=\(opts.slidingWindowMode)")
 print("Thinking=\(envBool("CACHE_PROBE_THINKING", default: false)) reasoningEffort=\(reasoningEffort.isEmpty ? "nil" : reasoningEffort) thinkingBudget=\(thinkingBudget > 0 ? String(thinkingBudget) : "nil")")
+print("Media turn1 images=\(imagePaths.count) videos=\(videoPaths.count) audios=\(audioPaths.count) inputAudios=\(inputAudioPaths.count) turn2 images=\(turn2ImagePaths.count) videos=\(turn2VideoPaths.count) audios=\(turn2AudioPaths.count) inputAudios=\(turn2InputAudioPaths.count) history=\(replayTurn1InTurn2)")
 if !required.isEmpty {
     print("[requirements] \(required.sorted().joined(separator: ",")) minCompletionTokens=\(minCompletionTokens) minContentChars=\(minContentChars) minTurn2Tps=\(minTurn2GenerationTps)")
 }
@@ -208,9 +240,9 @@ struct TurnProbe {
     var elapsed: TimeInterval
 }
 
-func runTurn(_ label: String, prompt: String) async throws -> TurnProbe {
+func runTurn(_ label: String, messages: [ChatRequest.Message]) async throws -> TurnProbe {
     let req = RuntimeShared.makeRequest(
-        [RuntimeShared.userMsg(prompt)],
+        messages,
         maxTokens: maxTokens,
         temperature: 0.0,
         enableThinking: envBool("CACHE_PROBE_THINKING", default: false),
@@ -231,10 +263,38 @@ func runTurn(_ label: String, prompt: String) async throws -> TurnProbe {
     return TurnProbe(label: label, result: result, elapsed: elapsed)
 }
 
+func userTurn(
+    prompt: String,
+    images: [String],
+    videos: [String],
+    audios: [String],
+    inputAudios: [String]
+) -> ChatRequest.Message {
+    if images.isEmpty && videos.isEmpty && audios.isEmpty && inputAudios.isEmpty {
+        return RuntimeShared.userMsg(prompt)
+    }
+    return RuntimeShared.userMediaMsg(
+        prompt,
+        imagePaths: images,
+        videoPaths: videos,
+        audioPaths: audios,
+        inputAudioPaths: inputAudios)
+}
+
+func visibleOrFallback(_ turn: TurnProbe) -> String {
+    turn.result.content.isEmpty ? turn.result.reasoning : turn.result.content
+}
+
 let before = try await engine.cacheStats()
 print("[stats.before] paged.h=\(stat(before, "paged", "hitCount")) paged.m=\(stat(before, "paged", "missCount")) disk.h=\(stat(before, "disk", "hitCount")) disk.m=\(stat(before, "disk", "missCount")) disk.store=\(stat(before, "disk", "storeCount")) disk.tqEntries=\(stat(before, "disk", "turboQuantEntryCount")) disk.tqKeys=\(stat(before, "disk", "turboQuantTensorKeyCount")) block.h=\(stat(before, "blockDisk", "hitCount")) block.m=\(stat(before, "blockDisk", "missCount")) block.store=\(stat(before, "blockDisk", "storeCount")) mem.h=\(stat(before, "memory", "hitCount")) mem.m=\(stat(before, "memory", "missCount"))")
 
-let turn1 = try await runTurn("turn1", prompt: basePrompt)
+let turn1Message = userTurn(
+    prompt: basePrompt,
+    images: imagePaths,
+    videos: videoPaths,
+    audios: audioPaths,
+    inputAudios: inputAudioPaths)
+let turn1 = try await runTurn("turn1", messages: [turn1Message])
 let after1 = try await engine.cacheStats()
 print("[stats.after1] paged.h=\(stat(after1, "paged", "hitCount")) paged.m=\(stat(after1, "paged", "missCount")) disk.h=\(stat(after1, "disk", "hitCount")) disk.m=\(stat(after1, "disk", "missCount")) disk.store=\(stat(after1, "disk", "storeCount")) disk.entries=\(stat(after1, "disk", "entryCount")) disk.tqEntries=\(stat(after1, "disk", "turboQuantEntryCount")) disk.tqKeys=\(stat(after1, "disk", "turboQuantTensorKeyCount")) block.h=\(stat(after1, "blockDisk", "hitCount")) block.m=\(stat(after1, "blockDisk", "missCount")) block.store=\(stat(after1, "blockDisk", "storeCount")) block.entries=\(stat(after1, "blockDisk", "entryCount")) mem.h=\(stat(after1, "memory", "hitCount")) mem.m=\(stat(after1, "memory", "missCount")) ssm.h=\(stat(after1, "ssmCompanion", "hitCount")) ssm.m=\(stat(after1, "ssmCompanion", "missCount"))")
 
@@ -243,7 +303,20 @@ if mode == "blockdisk" || envBool("CACHE_PROBE_CLEAR_BEFORE_TURN2", default: fal
     await engine.clearCaches()
 }
 
-let turn2 = try await runTurn("turn2", prompt: secondPrompt)
+let turn2Message = userTurn(
+    prompt: secondPrompt,
+    images: turn2ImagePaths,
+    videos: turn2VideoPaths,
+    audios: turn2AudioPaths,
+    inputAudios: turn2InputAudioPaths)
+let turn2Messages: [ChatRequest.Message] = replayTurn1InTurn2
+    ? [
+        turn1Message,
+        RuntimeShared.assistantMsg(visibleOrFallback(turn1)),
+        turn2Message,
+    ]
+    : [turn2Message]
+let turn2 = try await runTurn("turn2", messages: turn2Messages)
 if routerDrainMs > 0 {
     print("[probe] waiting \(routerDrainMs)ms for async router advice drain")
     try await Task.sleep(nanoseconds: UInt64(routerDrainMs) * 1_000_000)
@@ -300,9 +373,22 @@ func validateTurn(_ turn: TurnProbe, failures: inout [String]) {
     }
 }
 
+func validateExpectedTerms(_ terms: [String], in turn: TurnProbe, failures: inout [String]) {
+    guard !terms.isEmpty else { return }
+    let haystack = visibleOrFallback(turn).lowercased()
+    for term in terms {
+        let needle = term.lowercased()
+        if !haystack.contains(needle) {
+            failures.append("\(turn.label) expected term missing: \(term)")
+        }
+    }
+}
+
 var failures: [String] = []
 validateTurn(turn1, failures: &failures)
 validateTurn(turn2, failures: &failures)
+validateExpectedTerms(turn1ExpectedTerms, in: turn1, failures: &failures)
+validateExpectedTerms(turn2ExpectedTerms, in: turn2, failures: &failures)
 
 for requirement in required {
     switch requirement {
@@ -328,6 +414,24 @@ for requirement in required {
         let tokens = (turn2.result.finalUsage ?? turn2.result.lastUsage)?.completionTokens ?? 0
         if tokens < minCompletionTokens {
             failures.append("required turn2 completion token floor not met: \(tokens) < \(minCompletionTokens)")
+        }
+    case "image", "images":
+        if imagePaths.isEmpty && turn2ImagePaths.isEmpty {
+            failures.append("required image path was not configured")
+        }
+    case "video", "videos":
+        if videoPaths.isEmpty && turn2VideoPaths.isEmpty {
+            failures.append("required video path was not configured")
+        }
+    case "audio", "audios":
+        if audioPaths.isEmpty && inputAudioPaths.isEmpty
+            && turn2AudioPaths.isEmpty && turn2InputAudioPaths.isEmpty
+        {
+            failures.append("required audio path was not configured")
+        }
+    case "multiturn-history", "history":
+        if !replayTurn1InTurn2 {
+            failures.append("required multi-turn history replay was not enabled")
         }
     case "speed", "tps":
         let tps = (turn2.result.finalUsage ?? turn2.result.lastUsage)?.tokensPerSecond ?? 0

@@ -433,9 +433,9 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
         var processedImage: LMInput.ProcessedImage?
         var processedVideo: LMInput.ProcessedVideo?
         var processedAudio: LMInput.ProcessedAudio?
-        var totalImageTokens = 0
-        var totalVideoTokens = 0
-        var totalAudioTokens = 0
+        var imageTokenCounts: [Int] = []
+        var videoTokenCounts: [Int] = []
+        var audioTokenCounts: [Int] = []
         let tokensPerTile = 256
 
         if !input.images.isEmpty {
@@ -444,15 +444,22 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
             processedImage = LMInput.ProcessedImage(
                 pixels: pixels,
                 frames: counts.map { THW($0, config.imageSize, config.imageSize) })
-            let totalTiles = counts.reduce(0, +)
-            totalImageTokens = totalTiles * tokensPerTile
+            imageTokenCounts = counts.map { $0 * tokensPerTile }
         }
         if !input.videos.isEmpty {
-            let videoPixels = try await preprocess(videos: input.videos)
+            var batches: [MLXArray] = []
+            var frames: [THW] = []
+            for video in input.videos {
+                let batch = try await preprocess(video: video)
+                batches.append(batch)
+                let frame = THW(batch.dim(0), config.imageSize, config.imageSize)
+                frames.append(frame)
+                videoTokenCounts.append(frame.t * tokensPerTile)
+            }
+            let videoPixels = batches.count == 1 ? batches[0] : MLX.concatenated(batches, axis: 0)
             processedVideo = LMInput.ProcessedVideo(
                 pixels: videoPixels,
-                frames: [THW(videoPixels.dim(0), config.imageSize, config.imageSize)])
-            totalVideoTokens = videoPixels.dim(0) * tokensPerTile
+                frames: frames)
         }
         if !input.audios.isEmpty {
             var waveforms: [[Float]] = []
@@ -463,7 +470,8 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
                 let mel = nemotronOmniExtractMelFeatures(
                     waveform, sampleRate: Self.soundSampleRate,
                     nMels: Self.soundNumMelBins)
-                totalAudioTokens += Self.parakeetSubsampledFrameCount(mel.dim(1))
+                let tokenCount = Self.parakeetSubsampledFrameCount(mel.dim(1))
+                audioTokenCounts.append(tokenCount)
             }
             if !waveforms.isEmpty {
                 processedAudio = LMInput.ProcessedAudio(
@@ -472,47 +480,11 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
             }
         }
 
-        // Insert media placeholders into the user message before tokenization.
-        // Source convention (Python `model.py`): "<img>" + N×"<image>" + "</img>\n"
-        var media = ""
-        if totalImageTokens > 0 {
-            media += "<img>"
-            media += String(repeating: "<image>", count: totalImageTokens)
-            media += "</img>\n"
-        }
-        if totalVideoTokens > 0 {
-            media += String(repeating: "<video>", count: totalVideoTokens)
-            media += "\n"
-        }
-        if totalAudioTokens > 0 {
-            media += String(repeating: "<so_embedding>", count: totalAudioTokens)
-            media += "\n"
-        }
-
-        // Build messages with media prepended to the LAST user message.
-        var messages = Qwen2VLMessageGenerator().generate(from: input)
-        if !media.isEmpty {
-            for i in (0 ..< messages.count).reversed() {
-                if (messages[i]["role"] as? String) == "user" {
-                    if let oldContent = messages[i]["content"] as? String {
-                        // Engine.buildChatMessages may have inserted one
-                        // generic `<image>` / `<video>` marker per attachment.
-                        // Nemotron owns exact placeholder counts (256 per
-                        // visual tile/group, one per audio encoder frame), so
-                        // strip generic markers before prepending the precise
-                        // media block.
-                        let cleaned = oldContent
-                            .replacingOccurrences(of: "<image>", with: "")
-                            .replacingOccurrences(of: "<video>", with: "")
-                            .replacingOccurrences(of: "<so_embedding>", with: "")
-                        messages[i]["content"] = media + cleaned
-                    } else {
-                        messages[i]["content"] = media
-                    }
-                    break
-                }
-            }
-        }
+        let messages = buildMessages(
+            from: input,
+            imageTokenCounts: imageTokenCounts,
+            videoTokenCounts: videoTokenCounts,
+            audioTokenCounts: audioTokenCounts)
 
         let promptTokens = try tokenizer.applyChatTemplate(
             messages: messages, tools: input.tools,
@@ -527,6 +499,81 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
             audio: processedAudio)
     }
 
+    private func buildMessages(
+        from input: UserInput,
+        imageTokenCounts: [Int],
+        videoTokenCounts: [Int],
+        audioTokenCounts: [Int]
+    ) -> [Message] {
+        var imageIndex = 0
+        var videoIndex = 0
+        var audioIndex = 0
+
+        func mediaBlock(images: Int, videos: Int, audios: Int) -> String {
+            var media = ""
+            for _ in 0 ..< images where imageIndex < imageTokenCounts.count {
+                media += "<img>"
+                media += String(repeating: "<image>", count: imageTokenCounts[imageIndex])
+                media += "</img>\n"
+                imageIndex += 1
+            }
+            for _ in 0 ..< videos where videoIndex < videoTokenCounts.count {
+                media += String(repeating: "<video>", count: videoTokenCounts[videoIndex])
+                media += "\n"
+                videoIndex += 1
+            }
+            for _ in 0 ..< audios where audioIndex < audioTokenCounts.count {
+                media += String(repeating: "<so_embedding>", count: audioTokenCounts[audioIndex])
+                media += "\n"
+                audioIndex += 1
+            }
+            return media
+        }
+
+        func cleaned(_ content: String) -> String {
+            content
+                .replacingOccurrences(of: "<image>", with: "")
+                .replacingOccurrences(of: "<video>", with: "")
+                .replacingOccurrences(of: "<so_embedding>", with: "")
+        }
+
+        switch input.prompt {
+        case .chat(let chat):
+            return chat.map { message in
+                let media = mediaBlock(
+                    images: message.images.count,
+                    videos: message.videos.count,
+                    audios: message.audios.count)
+                return [
+                    "role": message.role.rawValue,
+                    "content": media + cleaned(message.content),
+                ]
+            }
+        case .text(let text):
+            let media = mediaBlock(
+                images: imageTokenCounts.count,
+                videos: videoTokenCounts.count,
+                audios: audioTokenCounts.count)
+            return [["role": "user", "content": media + cleaned(text)]]
+        case .messages(let messages):
+            var raw = messages
+            let media = mediaBlock(
+                images: imageTokenCounts.count,
+                videos: videoTokenCounts.count,
+                audios: audioTokenCounts.count)
+            guard !media.isEmpty else { return raw }
+            for i in (0 ..< raw.count).reversed() {
+                if (raw[i]["role"] as? String) == "user" {
+                    let oldContent = raw[i]["content"] as? String ?? ""
+                    raw[i]["content"] = media + cleaned(oldContent)
+                    return raw
+                }
+            }
+            raw.append(["role": "user", "content": media])
+            return raw
+        }
+    }
+
     private static func parakeetSubsampledFrameCount(_ frames: Int) -> Int {
         // Three stride-2 convs with kernel=3 padding=1 -> ceil(T/2)^3.
         let once = (frames + 1) / 2
@@ -534,27 +581,23 @@ public struct NemotronHOmniProcessor: UserInputProcessor {
         return (twice + 1) / 2
     }
 
-    private func preprocess(videos: [UserInput.Video]) async throws -> MLXArray {
-        var batches: [MLXArray] = []
-        for video in videos {
-            let url: URL
-            switch video {
-            case .url(let u):
-                url = u
-            case .avAsset(let asset):
-                guard let avURL = (asset as? AVURLAsset)?.url else {
-                    throw VLMError.processing("Nemotron-H Omni requires URL-backed videos")
-                }
-                url = avURL
-            case .frames:
-                throw VLMError.processing("Nemotron-H Omni frame-backed videos are not wired yet")
+    private func preprocess(video: UserInput.Video) async throws -> MLXArray {
+        let url: URL
+        switch video {
+        case .url(let u):
+            url = u
+        case .avAsset(let asset):
+            guard let avURL = (asset as? AVURLAsset)?.url else {
+                throw VLMError.processing("Nemotron-H Omni requires URL-backed videos")
             }
-            batches.append(try await nemotronOmniPreprocessVideo(
-                url: url,
-                imageSize: config.imageSize,
-                videoTemporalPatchDim: 2))
+            url = avURL
+        case .frames:
+            throw VLMError.processing("Nemotron-H Omni frame-backed videos are not wired yet")
         }
-        return batches.count == 1 ? batches[0] : MLX.concatenated(batches, axis: 0)
+        return try await nemotronOmniPreprocessVideo(
+            url: url,
+            imageSize: config.imageSize,
+            videoTemporalPatchDim: 2)
     }
 
     private func loadAudioWaveform(_ audio: UserInput.Audio) throws -> [Float] {
