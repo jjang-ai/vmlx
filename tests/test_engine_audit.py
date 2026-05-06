@@ -1535,8 +1535,10 @@ class TestV4FixHybridCacheDequantize:
         # Find the prefill section where _fix_hybrid_cache is called on req.prompt_cache
         idx = source.find("req_cache = _fix_hybrid_cache(")
         assert idx != -1
-        # Look at the ~500 chars before this call (accounts for None guard block)
-        before = source[max(0, idx - 500):idx]
+        # Look at the nearby prefill branch before this call. Keep the window
+        # wide enough to include the explicit dequantize failure guard without
+        # becoming a whole-file substring assertion.
+        before = source[max(0, idx - 1200):idx]
         assert "_dequantize_cache" in before, (
             "Must call _dequantize_cache before _fix_hybrid_cache in prefill path"
         )
@@ -1959,6 +1961,92 @@ class TestV5DisplayTextInit:
         )
 
 
+class TestResponsesSuppressedReasoningToolCalls:
+    """Suppressed reasoning can still contain a real tool call."""
+
+    def test_responses_extracts_suppressed_reasoning_tool_calls_before_finalize(self):
+        """Tool calls found only in suppressed reasoning must enter the Responses tool branch."""
+        import inspect
+        from vmlx_engine.server import stream_responses_api
+
+        source = inspect.getsource(stream_responses_api)
+        extract_idx = source.find("tool markers in suppressed reasoning")
+        branch_idx = source.find("if tool_calls:")
+
+        assert extract_idx != -1, (
+            "Responses API must extract tool calls from suppressed reasoning before finalization"
+        )
+        assert branch_idx != -1, "Responses API tool_calls branch missing"
+        assert extract_idx < branch_idx, (
+            "Suppressed-reasoning tool extraction must run before the final tool_calls branch"
+        )
+        assert "TODO: emit tool calls via Responses API format" not in source, (
+            "Responses API must not leave parsed suppressed-reasoning tool calls un-emitted"
+        )
+
+
+class TestAnthropicOmniStreamingAdapter:
+    """Anthropic Omni streaming must not leak OpenAI SSE chunks."""
+
+    def test_omni_streaming_path_uses_anthropic_adapter(self):
+        import inspect
+        from vmlx_engine.server import create_anthropic_message
+
+        source = inspect.getsource(create_anthropic_message)
+        assert "and anthropic_req.stream" in source
+        assert "AnthropicStreamAdapter(model=resolved_name)" in source
+        assert "adapter.process_chunk(line)" in source
+        assert 'media_type="text/event-stream"' in source
+        assert "pass through unchanged" not in source
+        assert "Caller may see OpenAI" not in source
+
+
+class TestDSV4FastLoadSwitchGLUScope:
+    """DSV4 fast-load speed patch must not hijack other SwitchGLU models."""
+
+    def test_switchglu_patch_is_marker_scoped_and_idempotent(self):
+        import inspect
+        from vmlx_engine.loaders.load_jangtq_dsv4 import _try_fast_load_dsv4
+
+        source = inspect.getsource(_try_fast_load_dsv4)
+        assert "_vmlx_dsv4_original_call" in source, (
+            "Fast-load patch must keep the original SwitchGLU.__call__ instead of wrapping wrappers"
+        )
+        assert "_vmlx_dsv4_fused_fastpath" in source, (
+            "Fast-load patch must mark only DSV4 modules as eligible for fused decoding"
+        )
+        guard_idx = source.find('if not getattr(self, "_vmlx_dsv4_fused_fastpath", False):')
+        gp_idx = source.find("gp = self.gate_proj")
+        assert guard_idx != -1 and gp_idx != -1 and guard_idx < gp_idx, (
+            "Non-DSV4 SwitchGLU modules must fall back before the DSV4 TurboQuant path"
+        )
+
+    def test_fast_load_switchglu_threads_down_proj_bits(self):
+        import inspect
+        from vmlx_engine.loaders.load_jangtq_dsv4 import _try_fast_load_dsv4
+
+        source = inspect.getsource(_try_fast_load_dsv4)
+        assert "dp_bits=None" in source
+        assert "dp_bits=dp.bits" in source
+        assert "make_gather_tq_decode_per_row(out_f, in_f, dp_bits, k)" in source
+        assert "cache_key = (in_f, out_f, bits, dp_bits, k, limit_milli)" in source
+
+
+class TestDSV4SidecarManifestRuntimePatch:
+    """DSV4 sidecars must be invalidated when runtime patches change."""
+
+    def test_manifest_records_and_checks_runtime_patch_version(self):
+        import inspect
+        import vmlx_engine.loaders.load_jangtq_dsv4 as loader
+
+        fast_source = inspect.getsource(loader._try_fast_load_dsv4)
+        write_source = inspect.getsource(loader._write_sidecar_after_hydrate)
+
+        assert hasattr(loader, "_INSTANT_LOAD_RUNTIME_PATCH")
+        assert '"runtime_patch": _INSTANT_LOAD_RUNTIME_PATCH' in write_source
+        assert 'manifest.get("runtime_patch") != _INSTANT_LOAD_RUNTIME_PATCH' in fast_source
+
+
 class TestV5FixHybridCacheExcept:
     """_fix_hybrid_cache outermost except must return fresh cache, not broken original."""
 
@@ -1990,6 +2078,76 @@ class TestV5FixHybridCacheExcept:
         assert "hasattr(language_model, 'make_cache')" in source, (
             "Must check hasattr before calling make_cache in except handler"
         )
+
+
+class TestGenerationBatchFastNoLogprobs:
+    """Text BatchGenerator should not materialize full-vocab logprobs per token."""
+
+    def test_generation_step_keeps_logprobs_transient(self):
+        source = Path("./vmlx_engine/utils/mamba_cache.py").read_text()
+        func_start = source.find("def _patch_generation_step_sync")
+        assert func_start >= 0
+        func_body = source[func_start: source.find("\ndef ", func_start + 10)]
+        assert "vMLX does not expose" in func_body
+        assert "self._next_logprobs = [None] * len(self.uids)" in func_body
+        assert "mx.eval(inputs, self._current_logprobs)" not in func_body
+        assert "mx.async_eval(self._next_tokens, self._next_logprobs" not in func_body
+
+
+class TestHybridSSMCompanionCacheGating:
+    """Hybrid SSM companion work must obey the prefix-cache enable flag."""
+
+    def test_llm_scheduler_does_not_init_or_store_ssm_when_prefix_cache_disabled(self):
+        source = Path("./vmlx_engine/scheduler.py").read_text()
+        init_idx = source.index("self._ssm_state_cache: Optional[HybridSSMStateCache] = None")
+        init_block = source[init_idx : source.index("# Prompt lookup decoding", init_idx)]
+        assert "self.config.enable_prefix_cache" in init_block
+        assert "HybridSSMStateCache(" in init_block
+        assert "max_entries=_ssm_cache_size" in init_block
+        assert "max_bytes=(" in init_block
+
+        store_idx = source.index("# Hybrid SSM companion state capture.")
+        store_block = source[store_idx : source.index("# Store cache for future reuse", store_idx)]
+        assert "and self.config.enable_prefix_cache" in store_block
+
+        rederive_idx = source.index("# ── Deferred SSM re-derive")
+        rederive_block = source[rederive_idx : source.index("return output", rederive_idx)]
+        assert "and self.config.enable_prefix_cache" in rederive_block
+
+    def test_mllm_batch_generator_disables_hidden_ssm_work_without_prefix_cache(self):
+        source = Path("./vmlx_engine/mllm_batch_generator.py").read_text()
+        assert "enable_prefix_cache: bool = True" in source
+        assert "self._prefix_cache_enabled = bool(enable_prefix_cache)" in source
+        assert "self._ssm_companion_enabled = bool(" in source
+        assert "if self._ssm_companion_enabled" in source
+        assert "else None" in source
+        assert "self._prefix_cache_enabled" in source
+        assert "block_aware_cache is not None" in source
+        assert "if self._is_hybrid and self._ssm_companion_enabled:" in source
+
+    def test_mllm_scheduler_threads_prefix_cache_flag_to_batch_generator(self):
+        source = Path("./vmlx_engine/mllm_scheduler.py").read_text()
+        generator_idx = source.index("self.batch_generator = MLLMBatchGenerator(")
+        generator_block = source[generator_idx : source.index("self._current_sampler_params", generator_idx)]
+        assert "enable_prefix_cache=self.config.enable_prefix_cache" in generator_block
+
+
+class TestStartupCompatibilityGuards:
+    def test_cli_checks_mlx_wheel_macos_tag_before_import(self):
+        source = Path("./vmlx_engine/cli.py").read_text()
+        check_idx = source.index("def _check_macos_compat")
+        check_block = source[check_idx: source.index("def _check_no_duplicate_mlx", check_idx)]
+        assert "importlib.metadata.distribution" in check_block
+        assert "macosx_(\\d+)_(\\d+)_arm64" in check_block
+        assert "Failed to load the default metallib" in check_block
+        assert "_check_macos_compat()" in source
+
+    def test_bundled_python_requires_mflux_for_image_models(self):
+        bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
+        verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
+        assert '"mflux>=0.16.0"' in bundle_script
+        assert '("mflux", "mflux image runtime"' in verify_script
+        assert '"mflux.models.common.config.model_config"' in verify_script
 
 
 class TestV5PortUniqueMigration:
@@ -2204,3 +2362,70 @@ class TestV6MapHFModel:
             f"mapHFModel must be used in both searchHF and getRecommendedModels "
             f"(found {usages} usage(s), expected >= 2)"
         )
+
+
+class TestMLLMTurboQuantFetchPath:
+    """Fetched VLM prefix/L2 caches must re-enter the TQ live-cache path."""
+
+    def test_process_prompts_recompresses_fetched_prompt_cache(self):
+        import inspect
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        source = inspect.getsource(MLLMBatchGenerator._process_prompts)
+
+        assert "_recompress_to_tq(req_cache, self.language_model)" in source
+        assert "TQ recompress removed from fetch paths" not in source
+
+
+class TestMLLMMlaDetection:
+    """MLLM MLA detection should match the LLM scheduler's nuance."""
+
+    def test_detects_raw_text_config_kv_lora_rank(self):
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+
+        class _Cfg:
+            _raw_config = {
+                "text_config": {
+                    "model_type": "kimi_k25",
+                    "kv_lora_rank": 512,
+                }
+            }
+
+        class _LM:
+            config = _Cfg()
+
+        class _Model:
+            language_model = _LM()
+
+        scheduler = MLLMScheduler.__new__(MLLMScheduler)
+        scheduler.model = _Model()
+
+        assert scheduler._detect_mla() is True
+
+    def test_bailing_ling_mla_is_not_treated_as_compressed_latent(self):
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+
+        class _Args:
+            model_type = "bailing_hybrid"
+            kv_lora_rank = 512
+
+        class _LM:
+            args = _Args()
+
+        class _Model:
+            language_model = _LM()
+
+        scheduler = MLLMScheduler.__new__(MLLMScheduler)
+        scheduler.model = _Model()
+
+        assert scheduler._detect_mla() is False
+
+
+class TestHybridSSMEnvNames:
+    """Hybrid SSM resume controls must use the documented VMLX_* names."""
+
+    def test_scheduler_uses_vmlx_disable_ssm_prefix_resume(self):
+        source = Path("vmlx_engine/scheduler.py").read_text()
+
+        assert "VMLX_DISABLE_SSM_PREFIX_RESUME" in source
+        assert "VMLINUX_DISABLE_SSM_PREFIX_RESUME" not in source

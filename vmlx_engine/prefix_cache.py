@@ -678,7 +678,7 @@ class PrefixCacheManager:
 
 
 def _is_dsv4_cache_class(class_name: str) -> bool:
-    return "DeepseekV4Cache" in (class_name or "")
+    return (class_name or "") in {"DeepseekV4Cache", "PoolQuantizedV4Cache"}
 
 
 def _cache_data_has_dsv4(cache_data) -> bool:
@@ -725,6 +725,13 @@ def _dsv4_cache_meta(layer_state: Dict[str, Any]) -> Dict[str, Any]:
             meta["sliding_window"] = sw
     if "pool_quant" in layer_state:
         meta["pool_quant"] = layer_state.get("pool_quant")
+    if "local_quant_meta" in layer_state:
+        try:
+            meta["local_quant_meta"] = [
+                str(x) for x in layer_state.get("local_quant_meta") or []
+            ]
+        except Exception:
+            meta["local_quant_meta"] = layer_state.get("local_quant_meta")
     return meta
 
 
@@ -960,11 +967,23 @@ class BlockAwarePrefixCache:
         # and full_attention layers use num_global_key_value_heads).
         self._allowed_n_kv_heads: Optional[set] = None
 
-        # Codex 2026-05-06 #4: expected layer count derived from model config.
+        # Expected layer count is derived from the model's
+        # cache contract. Hybrid models such as Nemotron-H have no-cache MoE
+        # blocks (52 transformer blocks, 29 Mamba/attention cache entries), so
+        # validating against raw num_hidden_layers rejects legitimate L2 blocks.
         # Used by reconstruct_cache to hard-reject blocks whose layer count
         # diverges (canonical "wrong-model L2 entry" signal).
         self._expected_num_layers: Optional[int] = None
+        if model is not None and hasattr(model, "make_cache"):
+            try:
+                _cache = model.make_cache() or []
+                if len(_cache) > 0:
+                    self._expected_num_layers = len(_cache)
+            except Exception:
+                self._expected_num_layers = None
         for _attr in ("args", "config"):
+            if self._expected_num_layers is not None:
+                break
             _cfg = getattr(model, _attr, None)
             if _cfg is not None:
                 _ln = getattr(_cfg, "num_hidden_layers", 0)
@@ -1001,25 +1020,38 @@ class BlockAwarePrefixCache:
             mm = getattr(self.model, 'model', None)
             if mm is not None and mm is not self.model:
                 candidates.append(mm)
-            # TWO-PASS scan: MLA detection MUST come first.
-            # VLM wrappers (e.g., mistral3 wrapping mistral4) have
-            # num_key_value_heads=32 on model.args but kv_lora_rank
-            # only on a nested text_config. Single-pass breaks on the
-            # first num_key_value_heads=32 before finding kv_lora_rank.
-            #
-            # Pass 1: scan ALL candidates for kv_lora_rank (MLA → H=1)
+            # TWO-PASS scan: MLA detection MUST come first. Most MLA models
+            # store compressed latent cache with H=1, but Ling/Bailing stores
+            # full expanded KV heads in MLAAttention.update_and_fetch().
+            # Do not slice those blocks down to one head.
             for model_obj in candidates:
                 for attr in ('args', 'config', 'text_config'):
                     cfg = getattr(model_obj, attr, None)
                     if cfg is None:
                         continue
+                    model_type = str(getattr(cfg, 'model_type', '') or '').lower()
+                    if not model_type:
+                        tc = getattr(cfg, 'text_config', None)
+                        if tc is not None:
+                            model_type = str(
+                                getattr(tc, 'model_type', '') or ''
+                            ).lower()
                     kv_lora_rank = getattr(cfg, 'kv_lora_rank', 0)
                     if not kv_lora_rank:
                         tc = getattr(cfg, 'text_config', None)
                         if tc is not None:
                             kv_lora_rank = getattr(tc, 'kv_lora_rank', 0)
                     if kv_lora_rank and kv_lora_rank > 0:
-                        n_kv = 1  # MLA: compressed latent, single "head"
+                        if model_type in ('bailing_hybrid', 'bailing_moe_v2_5'):
+                            n_kv = int(getattr(cfg, 'num_attention_heads', 0) or 0)
+                            if not n_kv:
+                                tc = getattr(cfg, 'text_config', None)
+                                if tc is not None:
+                                    n_kv = int(
+                                        getattr(tc, 'num_attention_heads', 0) or 0
+                                    )
+                        else:
+                            n_kv = 1  # MLA compressed latent, single "head"
                         break
                 if n_kv:
                     break
@@ -2301,7 +2333,7 @@ class BlockAwarePrefixCache:
             if num_layers == 0:
                 return None
 
-            # Codex 2026-05-06 contract #4: validate every block before
+            # Validate every block before
             # reconstructing tensors. A single corrupt block whose
             # entries carry nonsense shapes used to cascade through
             # ``mx.concatenate(...)`` then ``cache.state = state`` then
@@ -2553,11 +2585,45 @@ class BlockAwarePrefixCache:
                             sliding_window=sliding_window,
                             compress_ratio=compress_ratio,
                         )
-                        cache.state = state
-                        try:
-                            cache.meta_state = meta
-                        except Exception:
-                            pass
+                        local_quant_meta = cache_meta.get("local_quant_meta")
+                        if local_quant_meta:
+                            # DSV4 q4/q8 storage keeps CSA/HSA pool buffers
+                            # native but stores local SWA KV as QuantizedKVCache.
+                            # Rebuild that composite explicitly; assigning this
+                            # state through DeepseekV4Cache.state would feed a
+                            # quantized tuple into RotatingKVCache.state.
+                            from mlx_lm.models.cache import QuantizedKVCache
+
+                            local_state, compressor_state, indexer_state = state
+                            qlocal = QuantizedKVCache()
+                            qlocal.state = local_state
+                            qlocal.meta_state = tuple(local_quant_meta)
+                            cache.local = qlocal  # type: ignore[attr-defined]
+                            cache.compressor_state = dict(
+                                zip(
+                                    ("buffer_kv", "buffer_gate", "pooled"),
+                                    compressor_state,
+                                )
+                            )
+                            cache.indexer_state = dict(
+                                zip(
+                                    ("buffer_kv", "buffer_gate", "pooled"),
+                                    indexer_state,
+                                )
+                            )
+                            cache._vmlx_dsv4_local_meta_state = tuple(meta or ())
+                            cache._vmlx_dsv4_local_quant_meta = tuple(local_quant_meta)
+                            cache._vmlx_dsv4_sliding_window = sliding_window
+                            try:
+                                cache._vmlx_dsv4_keep = int(meta[0]) if meta else 0
+                            except Exception:
+                                cache._vmlx_dsv4_keep = 0
+                        else:
+                            cache.state = state
+                            try:
+                                cache.meta_state = meta
+                            except Exception:
+                                pass
                     except Exception as e:
                         logger.warning(
                             f"Cannot reconstruct layer {layer_idx} "

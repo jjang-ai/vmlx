@@ -95,9 +95,9 @@ function buildCommandPreview(
 
   // KV cache quantization — requires prefix cache ON (works for both LLM and VLM)
   // Hybrid/Mamba models allowed — Python scheduler only quantizes KVCache layers
-  if (!prefixCacheOff && config.kvCacheQuantization && config.kvCacheQuantization !== 'none') {
+  if (!prefixCacheOff && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
     parts.push('--kv-cache-quantization', config.kvCacheQuantization)
-    if (config.kvCacheGroupSize && config.kvCacheGroupSize !== 64) {
+    if (config.kvCacheQuantization !== 'none' && config.kvCacheGroupSize && config.kvCacheGroupSize !== 64) {
       parts.push('--kv-cache-group-size', config.kvCacheGroupSize.toString())
     }
   }

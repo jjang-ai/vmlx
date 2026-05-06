@@ -14,6 +14,127 @@ from pathlib import Path
 import pytest
 
 
+def test_bailing_hybrid_is_not_compressed_latent_mla_for_cache_policy():
+    """Ling/Bailing has kv_lora_rank but stores expanded KV on global layers."""
+    from vmlx_engine.utils.model_inspector import (
+        _detect_turboquant_layer_types,
+        is_mla_model,
+    )
+
+    cfg = {
+        "model_type": "bailing_hybrid",
+        "num_hidden_layers": 32,
+        "layer_group_size": 8,
+        "kv_lora_rank": 512,
+        "qk_nope_head_dim": 128,
+        "qk_rope_head_dim": 64,
+        "v_head_dim": 128,
+    }
+
+    assert is_mla_model(cfg) is False
+    layer_types, key_dim, value_dim = _detect_turboquant_layer_types(cfg, 32)
+    assert key_dim == 192
+    assert value_dim == 128
+    assert [i for i, t in enumerate(layer_types) if t == "attention"] == [
+        7,
+        15,
+        23,
+        31,
+    ]
+    assert layer_types.count("ssm") == 28
+
+
+def test_bailing_hybrid_turboquant_layers_ignore_mtp_cache_slot():
+    """Bailing MTP heads live in model.layers but not in generation cache."""
+    from vmlx_engine.utils.model_inspector import _detect_turboquant_layer_types
+
+    cfg = {
+        "model_type": "bailing_hybrid",
+        "num_hidden_layers": 32,
+        "layer_group_size": 8,
+        "kv_lora_rank": 512,
+        "qk_nope_head_dim": 128,
+        "qk_rope_head_dim": 64,
+        "v_head_dim": 128,
+    }
+    layer_types, _, _ = _detect_turboquant_layer_types(cfg, 32)
+    assert len(layer_types) == 32
+    assert layer_types.count("attention") == 4
+
+
+def test_nemotron_turboquant_layer_types_skip_moe_but_keep_native_cache_slots():
+    """Nemotron's pattern has Mamba, attention, and no-cache MoE layers.
+
+    TurboQuant cache patching must run detection over the full layer pattern,
+    then produce one cache entry for every native M/* cache slot. Running
+    detection over the already-short native cache length double-skips MoE
+    layers and causes nemotron_h to index past the cache list at generation.
+    """
+    from vmlx_engine.utils.model_inspector import _detect_turboquant_layer_types
+
+    pattern = "MEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEMEM*EMEMEMEME"
+    cfg = {
+        "model_type": "nemotron_h",
+        "num_hidden_layers": len(pattern),
+        "hybrid_override_pattern": pattern,
+        "head_dim": 64,
+    }
+
+    layer_types, key_dim, value_dim = _detect_turboquant_layer_types(
+        cfg, len(pattern)
+    )
+
+    assert key_dim == 64
+    assert value_dim == 64
+    assert len(layer_types) == pattern.count("M") + pattern.count("*")
+    assert layer_types.count("ssm") == pattern.count("M")
+    assert layer_types.count("attention") == pattern.count("*")
+
+
+def test_jang_loader_turboquant_make_cache_preserves_nemotron_cache_count():
+    from mlx_lm.models.cache import ArraysCache, KVCache
+    from vmlx_engine.utils.jang_loader import _patch_turboquant_make_cache
+
+    pattern = "MEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEMEM*EMEMEMEME"
+    native_cache = [
+        ArraysCache(size=2) if ch == "M" else KVCache()
+        for ch in pattern
+        if ch in ("M", "*")
+    ]
+
+    class FakeModel:
+        layers = [object() for _ in pattern]
+
+        def make_cache(self):
+            return list(native_cache)
+
+    model = FakeModel()
+    _patch_turboquant_make_cache(
+        model,
+        {
+            "turboquant": {
+                "enabled": True,
+                "default_key_bits": 3,
+                "default_value_bits": 3,
+                "critical_key_bits": 4,
+                "critical_value_bits": 4,
+                "critical_layers": [0, 1, 2, -3, -2, -1],
+            }
+        },
+        {
+            "model_type": "nemotron_h",
+            "num_hidden_layers": len(pattern),
+            "hybrid_override_pattern": pattern,
+            "head_dim": 64,
+        },
+    )
+
+    patched = model.make_cache()
+    assert len(patched) == len(native_cache)
+    assert sum(type(c).__name__ == "ArraysCache" for c in patched) == pattern.count("M")
+    assert sum(type(c).__name__ == "TurboQuantKVCache" for c in patched) == pattern.count("*")
+
+
 def _make_model_dir(tmp_path, config, weight_files=None):
     """Create a minimal model directory for testing."""
     model_dir = tmp_path / "test-model"

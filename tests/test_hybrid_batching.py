@@ -532,15 +532,18 @@ class TestCachedTokensZeroOnFailure:
         from vmlx_engine.scheduler import Scheduler
         import inspect
 
-        source = inspect.getsource(Scheduler.add_request)
+        source = inspect.getsource(Scheduler._schedule_waiting)
         # Find the reconstruction failure path
         lines = source.split('\n')
         for i, line in enumerate(lines):
             if 'reconstruction failed' in line:
                 # Look in nearby lines for cached_tokens = 0
-                context = '\n'.join(lines[max(0, i-5):i+5])
+                context = '\n'.join(lines[max(0, i-5):i+16])
                 assert 'cached_tokens = 0' in context, (
                     "cached_tokens must be zeroed on reconstruction failure"
+                )
+                assert 'release_cache(request.request_id)' in context, (
+                    "reconstruction failure must release fetched block refs"
                 )
                 break
         else:

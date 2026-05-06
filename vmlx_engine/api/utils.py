@@ -509,8 +509,7 @@ def extract_multimodal_content(
         # history anchors and are required for tool-result continuation.
         if role == "assistant" and not tool_calls:
             empty_content = (
-                content is None
-                or content == ""
+                content == ""
                 or (isinstance(content, list) and len(content) == 0)
             )
             if empty_content:

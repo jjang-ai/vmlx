@@ -76,14 +76,12 @@ BACKENDS = {
 CACHEABLE = {"legacy_prefix", "mem_aware", "paged", "paged_blockdisk", "paged_promptdisk"}
 
 
-def server_log_had_auto_bypass(log_path):
-    """Return True if the mixed-attention auto-bypass warning fired in this
-    server's log. Gemma 4 (and other mixed sliding+full models) force-bypass
-    prefix cache per §2, so cache hits legitimately stay 0."""
+def server_log_had_mixed_attention(log_path):
+    """Return True if mixed-attention diagnostics fired in this server log."""
     try:
         with open(log_path, "r") as f:
             data = f.read()
-        return "Prefix cache is auto-bypassed on every request" in data
+        return "mixed-attention model detected" in data
     except Exception:
         return False
 
@@ -125,7 +123,7 @@ ROWS = [
         is_vl=False,
         backend="paged_blockdisk",
         kv_quant="none",
-        notes="mixed attn auto-bypass (§2)",
+        notes="mixed attention + RotatingKVCache paged/L2",
     ),
     dict(
         id="X5",
@@ -134,7 +132,7 @@ ROWS = [
         is_vl=False,
         backend="mem_aware",
         kv_quant="none",
-        notes="TQ + mixed-attn auto-bypass (§2). TurboQuant auto-enabled.",
+        notes="TQ + mixed attention. TurboQuant auto-enabled.",
     ),
     dict(
         id="X6",
@@ -440,27 +438,22 @@ def run_row(row):
         f"  backend={backend_name}  load={load_s:.0f}s  t7={t_elapsed:.2f}s"
     )
 
-    # Extra assertion for cacheable rows: mid must exceed pre.
-    # Mixed-attention models (Gemma 4 family) auto-bypass prefix cache by
-    # design (§2) — cache_growth does not apply, record as OK-bypass.
-    auto_bypass = server_log_had_auto_bypass(log)
-    results["final"]["auto_bypass_detected"] = auto_bypass
+    # Extra assertion for cacheable rows: mid must exceed pre. Mixed-attention
+    # models are no longer exempt; RotatingKVCache preservation is part of the
+    # production cache contract.
+    mixed_attention = server_log_had_mixed_attention(log)
+    results["final"]["mixed_attention_detected"] = mixed_attention
     if row["backend"] in CACHEABLE and not (mid_hits > pre_hits):
-        if auto_bypass:
-            print(f"  cache_growth: OK-bypass (mixed-attention auto-bypass per §2)")
-            results["turns"].append({
-                "name": "cache_growth",
-                "status": "OK",
-                "fail": None,
-                "reply": "auto-bypass (mixed-attention) — expected 0 hits",
-            })
-        else:
-            results["turns"].append({
-                "name": "cache_growth",
-                "status": "FAIL",
-                "fail": f"hits did not grow ({pre_hits} -> {mid_hits}) on cacheable backend {row['backend']} (no auto-bypass warning in server log)",
-                "reply": "",
-            })
+        results["turns"].append({
+            "name": "cache_growth",
+            "status": "FAIL",
+            "fail": (
+                f"hits did not grow ({pre_hits} -> {mid_hits}) on cacheable "
+                f"backend {row['backend']}"
+                + (" (mixed-attention diagnostic was present)" if mixed_attention else "")
+            ),
+            "reply": "",
+        })
 
     proc.terminate()
     time.sleep(2)

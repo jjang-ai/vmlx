@@ -24,7 +24,7 @@ fi
 # vmlx_engine still reports the old version. Refuse to package the .app
 # in that case so no DMG ever ships an installer/runtime version mismatch.
 PKG_VERSION="$(node -p "require('$PANEL/package.json').version")"
-BUNDLED_VERSION="$(PYTHONNOUSERSITE=1 PYTHONPATH= "$PY" -s -c 'import vmlx_engine; print(vmlx_engine.__version__)' 2>/dev/null || echo "MISSING")"
+BUNDLED_VERSION="$(PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH= "$PY" -B -s -c 'import vmlx_engine; print(vmlx_engine.__version__)' 2>/dev/null || echo "MISSING")"
 if [ "$PKG_VERSION" != "$BUNDLED_VERSION" ]; then
   echo "❌ RELEASE BLOCKED — bundled-python vmlx_engine version drift"
   echo "   package.json version : $PKG_VERSION"
@@ -38,7 +38,7 @@ echo "  ok   bundled vmlx_engine version matches package.json ($PKG_VERSION)"
 
 # Isolated imports — no user site, no PYTHONPATH leakage (same env as the
 # running engine). -s suppresses user site-packages the way sessions.ts does.
-PYTHONNOUSERSITE=1 PYTHONPATH= "$PY" -s - <<'PYEOF'
+PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH= "$PY" -B -s - <<'PYEOF'
 import sys
 
 REQUIRED = [
@@ -50,6 +50,8 @@ REQUIRED = [
     ("mlx_vlm.models.gemma4", "mlx-vlm gemma4", "cherry-picked gemma4 dir missing or incomplete — re-sync from an mlx-vlm wheel that has it"),
     ("mlx_vlm.models.gemma3", "mlx-vlm gemma3", "bundled mlx-vlm gemma3 missing"),
     ("mlx_vlm.models.qwen3_vl", "mlx-vlm qwen3_vl", "bundled mlx-vlm qwen3_vl missing"),
+    ("mflux", "mflux image runtime", "bundled mflux package missing — Image tab and Server-tab image models will fail before ready"),
+    ("mflux.models.common.config.model_config", "mflux ModelConfig", "mflux install incomplete — cannot resolve local image model configs"),
     ("jang_tools", "jang-tools", "bundled jang-tools package missing"),
     ("jang_tools.load_jangtq", "jang_tools.load_jangtq", "JANGTQ fast-path loader missing from bundled jang-tools"),
     ("jang_tools.turboquant.tq_kernel", "jang_tools.turboquant.tq_kernel", "TQ Metal kernel runtime missing from bundled jang-tools"),

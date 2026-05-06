@@ -674,6 +674,12 @@ def _patch_generation_step_sync():
                         sample_logits = processor(token_context[e], sample_logits)
                     processed_logits.append(sample_logits)
                 logits = mx.concatenate(processed_logits, axis=0)
+            # mlx-lm's stock GenerationBatch stores and materializes a full
+            # vocab-sized logprob vector every token. vMLX does not expose
+            # logprobs on the text BatchGenerator path, and PLD speculative
+            # verification is gated to MLLMBatchGenerator only. Keep logprobs
+            # as a transient GPU value for samplers that need normalized
+            # probabilities, but do not store/eval it per token.
             logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
             if any(self.samplers):
                 all_samples = []
@@ -685,7 +691,7 @@ def _patch_generation_step_sync():
             else:
                 sampled = self.fallback_sampler(logprobs)
             self._next_tokens = sampled
-            self._next_logprobs = list(logprobs)
+            self._next_logprobs = [None] * len(self.uids)
             # Drain on active stream first.
             if hasattr(mx, "synchronize"):
                 mx.synchronize()
@@ -705,6 +711,8 @@ def _patch_generation_step_sync():
                 inputs = inputs.tolist()
             for sti, ti in zip(self.tokens, inputs):
                 sti.append(ti)
+            if len(self._current_logprobs) != len(inputs):
+                self._current_logprobs = [None] * len(inputs)
             return inputs, self._current_logprobs
 
         _step_with_sync._vmlx_synchronize_patched = True

@@ -639,6 +639,11 @@ export class ApiGateway extends EventEmitter {
   ): Promise<void> {
     // GET endpoints (no body)
     if (method === "GET") {
+      if (url === "/") {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.end("Ollama is running\n");
+        return;
+      }
       if (url === "/api/tags") return this.handleOllamaTags(res);
       if (url === "/api/ps") return this.handleOllamaPs(res);
       if (url === "/api/version")
@@ -669,8 +674,8 @@ export class ApiGateway extends EventEmitter {
       return this.sendJson(res, 404, { error: "Unknown endpoint" });
     }
 
-    // HEAD for health checks from some clients
-    if (method === "HEAD" && url === "/") {
+    // HEAD for health/version checks from Ollama-compatible clients.
+    if (method === "HEAD" && (url === "/" || url === "/api/version")) {
       res.writeHead(200);
       res.end();
       return;
@@ -725,6 +730,70 @@ export class ApiGateway extends EventEmitter {
     this.sendJson(res, 200, { models });
   }
 
+  private translateOllamaMessages(messages: any): any[] {
+    if (!Array.isArray(messages)) return [];
+    return messages.map((msg: any) => {
+      if (!msg || !Array.isArray(msg.images) || msg.images.length === 0) {
+        return msg;
+      }
+      const parts: any[] = [];
+      const text = msg.content || "";
+      if (text) parts.push({ type: "text", text });
+      for (const img of msg.images) {
+        if (typeof img !== "string") continue;
+        const url = img.startsWith("data:")
+          ? img
+          : `data:image/png;base64,${img}`;
+        parts.push({ type: "image_url", image_url: { url } });
+      }
+      const { images: _images, content: _content, ...rest } = msg;
+      return {
+        ...rest,
+        role: msg.role || "user",
+        content: parts,
+      };
+    });
+  }
+
+  private ollamaResponseFormat(format: any): any | undefined {
+    if (format === "json") return { type: "json_object" };
+    if (format && typeof format === "object" && !Array.isArray(format)) {
+      return {
+        type: "json_schema",
+        json_schema: {
+          name: "ollama_schema",
+          strict: false,
+          schema: format,
+        },
+      };
+    }
+    return undefined;
+  }
+
+  private openAIToolCallsToOllama(
+    toolCalls: any[] | undefined | null,
+  ): any[] | undefined {
+    if (!toolCalls) return undefined;
+    const converted = toolCalls
+      .filter((tc: any) => tc?.function?.name)
+      .map((tc: any) => {
+        let args: any = tc.function.arguments;
+        if (typeof args === "string") {
+          try {
+            args = args.length > 0 ? JSON.parse(args) : {};
+          } catch {
+            args = { _raw: args };
+          }
+        } else if (args == null) {
+          args = {};
+        }
+        return {
+          function: { name: tc.function.name, arguments: args },
+        };
+      });
+    return converted.length > 0 ? converted : undefined;
+  }
+
   // ── /api/chat ──
 
   private async handleOllamaChat(
@@ -765,8 +834,9 @@ export class ApiGateway extends EventEmitter {
     const opts = parsed.options || {};
     const openaiBody: any = {
       model: parsed.model || session.modelName,
-      messages: parsed.messages || [],
+      messages: this.translateOllamaMessages(parsed.messages || []),
       stream: parsed.stream !== false,
+      stream_options: { include_usage: true },
     };
     if (opts.num_predict != null) openaiBody.max_tokens = opts.num_predict;
     if (opts.temperature != null) openaiBody.temperature = opts.temperature;
@@ -776,17 +846,17 @@ export class ApiGateway extends EventEmitter {
     if (opts.repeat_penalty != null)
       openaiBody.repetition_penalty = opts.repeat_penalty;
     if (parsed.tools) openaiBody.tools = parsed.tools;
+    if (parsed.cache_salt != null) openaiBody.cache_salt = parsed.cache_salt;
+    if (parsed.skip_prefix_cache != null)
+      openaiBody.skip_prefix_cache = parsed.skip_prefix_cache;
     // Ollama `think` is tri-state: true=on, false=off, undefined=default.
     // Node gateway previously only handled truthy, silently dropping `think: false`
     // so Copilot/Ollama clients that request thinking-OFF were ignored and the
     // model kept reasoning. Matches vmlx_engine/api/ollama_adapter.py line 48.
     if (parsed.think !== undefined && parsed.think !== null)
       openaiBody.enable_thinking = Boolean(parsed.think);
-    if (parsed.format)
-      openaiBody.response_format =
-        typeof parsed.format === "string"
-          ? { type: "json_object" }
-          : parsed.format;
+    const responseFormat = this.ollamaResponseFormat(parsed.format);
+    if (responseFormat) openaiBody.response_format = responseFormat;
 
     const isStreaming = parsed.stream !== false;
     const modelForResponse = parsed.model || session.modelName;
@@ -824,26 +894,14 @@ export class ApiGateway extends EventEmitter {
               eval_count: openai.usage?.completion_tokens || 0,
               prompt_eval_count: openai.usage?.prompt_tokens || 0,
             };
-            if (choice?.message?.tool_calls) {
-              // mlxstudio#72: Ollama's tool_calls schema expects `arguments`
-              // as an object. OpenAI emits it as a JSON-encoded string.
-              // Translate, dropping the OpenAI-only `id`/`type` wrappers.
-              response.message.tool_calls = (
-                choice.message.tool_calls as any[]
-              ).map((tc: any) => {
-                let args: any = tc.function?.arguments ?? {};
-                if (typeof args === "string") {
-                  try {
-                    args = JSON.parse(args);
-                  } catch {
-                    args = { _raw: args };
-                  }
-                }
-                return {
-                  function: { name: tc.function?.name || "", arguments: args },
-                };
-              });
-            }
+            const reasoning =
+              choice?.message?.reasoning_content || choice?.message?.reasoning;
+            if (reasoning) response.message.thinking = reasoning;
+            const convertedToolCalls = this.openAIToolCallsToOllama(
+              choice?.message?.tool_calls,
+            );
+            if (convertedToolCalls)
+              response.message.tool_calls = convertedToolCalls;
             this.sendJson(res, 200, response);
           } catch (_) {
             this.sendJson(res, 502, {
@@ -860,6 +918,7 @@ export class ApiGateway extends EventEmitter {
 
         let buffer = "";
         let content = "";
+        let thinking = "";
         let toolCalls: any[] | null = null;
         let doneReason: string | null = null;
         let done = false;
@@ -890,6 +949,11 @@ export class ApiGateway extends EventEmitter {
 
               if (delta?.content) {
                 content += delta.content;
+              }
+              const reasoningDelta =
+                delta?.reasoning_content || delta?.reasoning;
+              if (reasoningDelta) {
+                thinking += reasoningDelta;
               }
 
               // tool_calls may arrive in one delta chunk or be fragmented
@@ -948,27 +1012,12 @@ export class ApiGateway extends EventEmitter {
                       ? "tool_calls"
                       : doneReason || "stop",
                 };
+                if (thinking) ollamaMsg.message.thinking = thinking;
                 if (toolCalls) {
-                  // Parse accumulated JSON-string arguments into objects
-                  // (Ollama protocol requirement). Drop entries that ended
-                  // up nameless — they're stale OpenAI delta noise.
-                  ollamaMsg.message.tool_calls = toolCalls
-                    .filter((tc: any) => tc.function?.name)
-                    .map((tc: any) => {
-                      let args: any = tc.function.arguments;
-                      if (typeof args === "string") {
-                        try {
-                          args = args.length > 0 ? JSON.parse(args) : {};
-                        } catch {
-                          args = { _raw: args };
-                        }
-                      } else if (args == null) {
-                        args = {};
-                      }
-                      return {
-                        function: { name: tc.function.name, arguments: args },
-                      };
-                    });
+                  const convertedToolCalls =
+                    this.openAIToolCallsToOllama(toolCalls);
+                  if (convertedToolCalls)
+                    ollamaMsg.message.tool_calls = convertedToolCalls;
                 }
                 if (usage) {
                   ollamaMsg.eval_count = usage.completion_tokens;
@@ -990,7 +1039,11 @@ export class ApiGateway extends EventEmitter {
               JSON.stringify({
                 model: modelForResponse,
                 created_at: new Date().toISOString(),
-                message: { role: "assistant", content },
+                message: {
+                  role: "assistant",
+                  content,
+                  ...(thinking ? { thinking } : {}),
+                },
                 done: true,
                 done_reason: doneReason || "stop",
               }) + "\n",
@@ -1064,7 +1117,15 @@ export class ApiGateway extends EventEmitter {
     if (opts.num_predict != null) openaiBody.max_tokens = opts.num_predict;
     if (opts.temperature != null) openaiBody.temperature = opts.temperature;
     if (opts.top_p != null) openaiBody.top_p = opts.top_p;
+    if (opts.top_k != null) openaiBody.top_k = opts.top_k;
     if (opts.stop) openaiBody.stop = opts.stop;
+    if (opts.repeat_penalty != null)
+      openaiBody.repetition_penalty = opts.repeat_penalty;
+    if (parsed.cache_salt != null) openaiBody.cache_salt = parsed.cache_salt;
+    if (parsed.skip_prefix_cache != null)
+      openaiBody.skip_prefix_cache = parsed.skip_prefix_cache;
+    const responseFormat = this.ollamaResponseFormat(parsed.format);
+    if (responseFormat) openaiBody.response_format = responseFormat;
 
     const modelForResponse = parsed.model || session.modelName;
 
@@ -1242,7 +1303,10 @@ export class ApiGateway extends EventEmitter {
         family: (cfg.family || cfg.modelFamily || "mlx") as string,
         families: [(cfg.family || cfg.modelFamily || "mlx") as string],
         parameter_size: cfg.parameterSize || "",
-        quantization_level: cfg.quantization || cfg.bits ? String(cfg.quantization || `${cfg.bits}bit`) : "",
+        quantization_level:
+          cfg.quantization || cfg.bits
+            ? String(cfg.quantization || `${cfg.bits}bit`)
+            : "",
       },
       model_info: { name: modelName },
       capabilities,

@@ -46,6 +46,30 @@ def _state_dict(c):
     }
 
 
+def test_pool_quantized_v4_cache_is_detected_as_dsv4_composite():
+    from jang_tools.dsv4.pool_quant_cache import PoolQuantizedV4Cache
+    from vmlx_engine.prefix_cache import _is_dsv4_cache_class
+    from vmlx_engine.scheduler import Scheduler
+
+    cache = PoolQuantizedV4Cache(sliding_window=128, compress_ratio=4)
+
+    assert Scheduler._is_dsv4_cache_object(cache)
+    assert _is_dsv4_cache_class("PoolQuantizedV4Cache")
+
+
+def test_pool_quantized_v4_cache_does_not_route_to_hybrid_ssm():
+    from jang_tools.dsv4.pool_quant_cache import PoolQuantizedV4Cache
+    from mlx_lm.models.cache import KVCache
+    from vmlx_engine.scheduler import Scheduler
+
+    class _Model:
+        def make_cache(self):
+            return [KVCache(), PoolQuantizedV4Cache(sliding_window=128, compress_ratio=4)]
+
+    assert Scheduler._model_uses_dsv4_cache(_Model())
+    assert not Scheduler._is_hybrid_model(_Model())
+
+
 def test_dsv4_block_slice_uses_deepseek_v4_tag_only_on_terminal_block():
     from vmlx_engine.paged_cache import PagedCacheManager
     from vmlx_engine.prefix_cache import BlockAwarePrefixCache
@@ -233,6 +257,214 @@ def test_dsv4_fetch_prefers_n_minus_one_terminal_partial_after_restart():
     assert isinstance(rebuilt[0], DeepseekV4Cache)
 
 
+def test_dsv4_storage_quantization_is_forced_off_for_composite_cache():
+    """DSV4 prefix/paged/L2 storage must keep the native composite cache.
+
+    DeepseekV4Cache already contains SWA local cache plus compressed CSA/HSA
+    pools. The only DSV4-supported compression layer is the native
+    PoolQuantizedV4Cache pool codec; generic QuantizedKVCache must not wrap
+    the local SWA state at prefix/paged/L2 boundaries.
+    """
+    from jang_tools.dsv4.mlx_model import DeepseekV4Cache
+    from mlx_lm.models.cache import QuantizedKVCache, RotatingKVCache
+    from vmlx_engine.scheduler import Scheduler
+
+    scheduler = Scheduler.__new__(Scheduler)
+    scheduler._kv_cache_bits = 4
+    scheduler._kv_cache_group_size = 64
+
+    source = _make_dsv4_state_cache()
+    stored = scheduler._quantize_cache_for_storage([source])
+
+    assert stored[0] is source
+    assert isinstance(stored[0], DeepseekV4Cache)
+    assert isinstance(stored[0].local, RotatingKVCache)
+    assert not isinstance(stored[0].local, QuantizedKVCache)
+    assert not hasattr(stored[0], "_vmlx_dsv4_local_quant_meta")
+
+
+def test_dsv4_scheduler_forces_generic_kv_quantization_off():
+    """SchedulerConfig q4/q8 must not enable generic KV quant for DSV4."""
+    from types import SimpleNamespace
+
+    from jang_tools.dsv4.mlx_model import DeepseekV4Cache
+    from vmlx_engine.scheduler import Scheduler, SchedulerConfig
+
+    class _Tokenizer:
+        eos_token_id = 1
+        name_or_path = "DeepSeek-V4-Flash-JANGTQ"
+
+        def encode(self, *_args, **_kwargs):
+            return [1]
+
+    class _Model:
+        args = SimpleNamespace(model_type="deepseek_v4", kv_lora_rank=512)
+        config = {"model_type": "deepseek_v4"}
+
+        def make_cache(self):
+            return [DeepseekV4Cache(sliding_window=128, compress_ratio=4)]
+
+    config = SchedulerConfig(
+        enable_prefix_cache=True,
+        use_paged_cache=True,
+        kv_cache_quantization="q4",
+        model_path="/models/DeepSeek-V4-Flash-JANGTQ",
+    )
+    scheduler = Scheduler(_Model(), _Tokenizer(), config)
+
+    assert scheduler._uses_dsv4_cache
+    assert scheduler.config.kv_cache_quantization == "none"
+    assert scheduler._kv_cache_bits == 0
+
+
+def test_dsv4_native_pool_codec_stays_distinct_from_generic_kv_quant():
+    """Pin the intended split: native pool quant yes, generic KV quant no."""
+    import inspect
+    from vmlx_engine.scheduler import Scheduler
+
+    init_src = inspect.getsource(Scheduler.__init__)
+    quant_src = inspect.getsource(Scheduler._quantize_cache_for_storage)
+
+    assert "DSV4 composite cache detected" in init_src
+    assert "DSV4_POOL_QUANT" in init_src
+    assert "wrap any component in generic QuantizedKVCache" in quant_src
+
+
+def test_dsv4_serve_path_forces_generic_kv_quantization_off():
+    """The CLI/app serve path must not pass q4/q8 generic KV quant to DSV4."""
+    import inspect
+    from vmlx_engine import cli
+
+    src = inspect.getsource(cli.serve_command)
+
+    assert 'args.kv_cache_quantization = "none"' in src
+    assert "DSV4-Flash native SWA+CSA/HSA cache owns cache" in src
+    assert 'os.environ["VMLINUX_DISABLE_TQ_KV"] = "1"' in src
+
+
+def test_dsv4_cached_prefix_kickoff_avoids_cross_thread_mx_eval():
+    """DSV4 cache-hit kickoff must not use mx.eval on worker-thread tensors."""
+    import inspect
+    from vmlx_engine.utils.dsv4_batch_generator import DSV4BatchGenerator
+
+    source = inspect.getsource(DSV4BatchGenerator._prefill_last_logits)
+
+    sync_idx = source.find('if hasattr(mx, "synchronize")')
+    fallback_idx = source.find("mx.eval(last_logits)")
+
+    assert sync_idx != -1
+    assert fallback_idx != -1
+    assert sync_idx < fallback_idx
+
+
+def test_loop_prone_families_use_long_repetition_context():
+    """Ling/MiniMax/DSV4 phrase loops are longer than the old 20-token window."""
+    import inspect
+    from vmlx_engine.scheduler import Scheduler
+
+    class LingModel:
+        config = {"model_type": "bailing_hybrid"}
+
+    class MiniMaxModel:
+        config = {"model_type": "minimax_m2"}
+
+    assert Scheduler._detect_model_type_for_runtime(LingModel()) == "bailing_hybrid"
+    assert Scheduler._detect_model_type_for_runtime(MiniMaxModel()) == "minimax_m2"
+
+    source = inspect.getsource(Scheduler._create_batch_generator)
+    assert "_rep_context_size = 512 if self._long_repetition_context else 20" in source
+
+
+def test_hybrid_ssm_rederive_uses_n_minus_one_cache_key():
+    """Hybrid SSM companion must align with paged KV's N-1 cache key.
+
+    The paged cache stores prompt[:-1] so cache hits re-feed the final prompt
+    token. Storing clean SSM companion at the full-N prompt length guarantees
+    every Ling/Bailing hit misses SSM and falls back to full prefill.
+    """
+    import inspect
+    from vmlx_engine.scheduler import Scheduler
+
+    source = inspect.getsource(Scheduler._cleanup_finished)
+    assert "companion_tokens = (" in source
+    assert "all_tokens[:-1]" in source
+    assert "(list(companion_tokens), companion_len, request_id)" in source
+
+    import vmlx_engine.scheduler as scheduler_mod
+
+    assert scheduler_mod.SSM_REDERIVE_MIN_TOKENS == 1
+
+
+def test_hybrid_ssm_companion_fetch_is_worker_deferred():
+    """Hybrid SSM companion clone must not run on the API thread.
+
+    Deferred re-derive stores MLX arrays on the scheduler worker stream.
+    Fetching/cloning those arrays in add_request() makes valid companion
+    entries look like misses due MLX's thread-local stream guard.
+    """
+    import inspect
+    from vmlx_engine.scheduler import Scheduler
+
+    add_src = inspect.getsource(Scheduler.add_request)
+    schedule_src = inspect.getsource(Scheduler._schedule_waiting)
+    finalize_src = inspect.getsource(Scheduler._finalize_hybrid_paged_cache_on_worker)
+
+    assert "_hybrid_prompt_cache_needs_worker_ssm = True" in add_src
+    assert "_paged_block_table_needs_worker_reconstruct = True" in add_src
+    assert "_ssm_state_cache.fetch(" not in add_src
+    assert "reconstruct_cache(block_table)" in schedule_src
+    assert "_hybrid_prompt_cache_needs_worker_ssm" in schedule_src
+    assert "_finalize_hybrid_paged_cache_on_worker" in schedule_src
+    assert "_ssm_state_cache.fetch(" in finalize_src
+    assert "hybrid paged HIT" in finalize_src
+
+
+def test_hybrid_ssm_l2_is_model_scoped_and_block_disk_backed():
+    """Hybrid SSM L2 must be wired with block-disk, not a hidden global env."""
+    import inspect
+    from vmlx_engine.scheduler import Scheduler
+
+    init_src = inspect.getsource(Scheduler.__init__)
+    stats_src = inspect.getsource(Scheduler._get_ssm_cache_stats)
+
+    assert "compute_model_cache_key(" in init_src
+    assert "model_key=_ssm_model_key" in init_src
+    assert "attach_disk_store(_ssm_disk)" in init_src
+    assert 'os.path.join(cache_dir, "ssm_companion")' in init_src
+    assert "Hybrid SSM companion L2 enabled" in init_src
+    assert "disk_enabled" in stats_src
+    assert "disk.stats()" in stats_src
+
+
+def test_bailing_mla_cache_uses_expanded_attention_heads():
+    """Ling/Bailing MLA stores full per-head KV, not H=1 compressed latents."""
+    from types import SimpleNamespace
+
+    from vmlx_engine.paged_cache import PagedCacheManager
+    from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+    from vmlx_engine.scheduler import Scheduler
+
+    model = SimpleNamespace(
+        config=SimpleNamespace(
+            model_type="bailing_hybrid",
+            kv_lora_rank=512,
+            num_attention_heads=32,
+            num_key_value_heads=1,
+        )
+    )
+
+    scheduler = Scheduler.__new__(Scheduler)
+    scheduler.model = model
+    assert scheduler._detect_n_kv_heads() == 32
+
+    cache = BlockAwarePrefixCache(
+        model=model,
+        paged_cache_manager=PagedCacheManager(block_size=64, max_blocks=2),
+    )
+    assert cache._get_n_kv_heads() == 32
+    assert cache._get_allowed_n_kv_heads() == {32}
+
+
 # ============================================================================
 # DSV4 SWA+CSA+HSA cache truncation guard (scheduler.py:1964) regression tests
 # ============================================================================
@@ -293,18 +525,19 @@ def test_dsv4_truncation_refuses_post_generation_cache():
 def test_dsv4_truncation_allows_zero_trim_clean_state():
     """Pin: the guard does NOT block clean-boundary stores.
 
-    When target_len == current_len (no trim needed), the cache is at the
-    prompt boundary (no decode happened yet, or caller captured a clean
-    snapshot). Guard should return a valid truncated list.
+    `_truncate_cache_to_prompt_length` stores prompt_len - 1 tokens, because
+    cache hits re-feed the last prompt token for first-token logits. When a
+    caller already passes an N-1 prompt-boundary snapshot, the guard should
+    return a valid truncated list.
     """
     from vmlx_engine.scheduler import Scheduler
 
     c = _make_dsv4_state_cache()
-    # Simulate fresh-prefilled cache (no decode yet): offset == target.
-    c.local.offset = 28  # at prompt boundary, no wrap
+    # Simulate a clean N-1 prompt-boundary snapshot: offset == prompt_len - 1.
+    c.local.offset = 27
     # _truncate_cache_to_prompt_length is @staticmethod — call directly.
     result = Scheduler._truncate_cache_to_prompt_length([c], 28)
-    # to_trim == 0 → guard does not fire, returns the rebuilt cache list
+    # to_trim == 0 -> guard does not fire, returns the rebuilt cache list
     assert result is not None
     assert len(result) == 1
 

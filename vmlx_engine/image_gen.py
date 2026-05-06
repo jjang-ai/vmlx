@@ -207,7 +207,8 @@ def _normalize_for_lookup(raw: str) -> str:
     Rules (applied in order):
       1. Lowercase
       2. Strip HuggingFace org prefix (`org/name` -> `name`)
-      3. Strip quant decoration suffixes: `-mflux-Nbit`, `-mflux`, `-Nbit`, `_Nbit`
+      3. vmlx#96 decoration-strip: strip quant suffixes:
+         `-mflux-Nbit`, `-mflux`, `-Nbit`, `_Nbit`
       4. Strip explicit user prefix markers used in the UI (e.g. `int-`, `ext-`,
          `int_`, `ext_`) — Mark (@LewnWorx, mlxstudio#82) renames launched
          instances with INT/EXT prefixes for local/external differentiation.
@@ -221,7 +222,8 @@ def _normalize_for_lookup(raw: str) -> str:
     s = (raw or "").strip().lower()
     if "/" in s:
         s = s.rsplit("/", 1)[-1]
-    # Order matters: -mflux-Nbit before -mflux before -Nbit
+    # vmlx#96 second-chance decoration-strip. Order matters:
+    # -mflux-Nbit before -mflux before -Nbit.
     s = re.sub(r"-mflux-\d+bit$", "", s)
     s = re.sub(r"-mflux$", "", s)
     s = re.sub(r"[-_]\d+bit$", "", s)
@@ -394,11 +396,6 @@ class ImageGenEngine:
             mflux_name: Canonical mflux model name for ModelConfig.from_name().
                         If not provided, resolved from model_name.
         """
-        try:
-            from mflux.models.common.config.model_config import ModelConfig
-        except ImportError:
-            raise ImportError("mflux not installed. Install with: pip install mflux")
-
         # mlxstudio#82: resolve canonical mflux name via unconditional
         # normalization. Prior behaviour skipped the normalization block
         # whenever caller passed `mflux_name` explicitly, which trapped
@@ -460,8 +457,30 @@ class ImageGenEngine:
                     f"Pass mflux_class explicitly, add to _NAME_TO_CLASS, or "
                     f"ensure the model path contains a model_index.json whose "
                     f"_class_name is one of: {sorted(_DIFFUSERS_CLASS_TO_MFLUX.keys())}. "
-                    f"Known keys: {sorted(set(_NAME_TO_CLASS.keys()))}"
+                    f"Known keys: {sorted(_NAME_TO_CLASS.keys())}"
                 )
+
+        # Local-file validation runs after class resolution so unknown names
+        # still produce the precise "Cannot determine mflux class" error. For
+        # edit models, preserve the historical optional-dependency contract:
+        # if mflux is absent, report that before the missing local path.
+        _is_edit_request = normalized in EDIT_MODELS or resolved_name in EDIT_MODELS.values()
+        if not model_path or not Path(model_path).is_dir():
+            if _is_edit_request:
+                try:
+                    from mflux.models.common.config.model_config import ModelConfig  # noqa: F401
+                except ImportError:
+                    raise ImportError("mflux not installed. Install with: pip install mflux")
+            requested = mflux_name or model_name
+            raise RuntimeError(
+                f"No local model files found for {requested}. "
+                f"Download the model first from the Image tab."
+            )
+
+        try:
+            from mflux.models.common.config.model_config import ModelConfig
+        except ImportError:
+            raise ImportError("mflux not installed. Install with: pip install mflux")
 
         logger.info(f"Loading image model: {resolved_name} (class={resolved_class}, quantize={quantize})")
         start = time.perf_counter()
@@ -486,26 +505,20 @@ class ImageGenEngine:
         model_config = ModelConfig.from_name(resolved_name)
 
         # Load from local path (NEVER silently download from HuggingFace)
-        if model_path and Path(model_path).is_dir():
-            logger.info(f"Loading {resolved_class} from local path: {model_path}")
-            try:
-                self._model = ModelClass(
-                    model_config=model_config,
-                    quantize=quantize,
-                    model_path=model_path,
-                    lora_paths=[],
-                )
-            except TypeError:
-                # Some classes (SeedVR2) don't accept lora_paths
-                self._model = ModelClass(
-                    model_config=model_config,
-                    quantize=quantize,
-                    model_path=model_path,
-                )
-        else:
-            raise RuntimeError(
-                f"No local model files found for {resolved_name}. "
-                f"Download the model first from the Image tab."
+        logger.info(f"Loading {resolved_class} from local path: {model_path}")
+        try:
+            self._model = ModelClass(
+                model_config=model_config,
+                quantize=quantize,
+                model_path=model_path,
+                lora_paths=[],
+            )
+        except TypeError:
+            # Some classes (SeedVR2) don't accept lora_paths
+            self._model = ModelClass(
+                model_config=model_config,
+                quantize=quantize,
+                model_path=model_path,
             )
 
         # Fix quantized embeddings with non-uint32 weights (mflux bug)

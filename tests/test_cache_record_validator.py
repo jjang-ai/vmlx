@@ -1,8 +1,7 @@
 """Hard regression tests for cache-record validation.
 
-Pins the Codex 2026-05-06 contract item #4: malformed/bogus cache records must
-miss the cache, never trigger ``[metal::malloc]`` allocations of hundreds of
-gigabytes.
+Pins the cache-safety contract: malformed/bogus cache records must miss the
+cache, never trigger ``[metal::malloc]`` allocations of hundreds of gigabytes.
 
 The original crash:
     [Engine error: [metal::malloc] Attempting to allocate 468462801024 bytes
@@ -14,6 +13,7 @@ allocation and assert it is rejected.
 
 from __future__ import annotations
 
+import json
 import sys
 import types
 
@@ -209,9 +209,248 @@ def test_reject_or_warn_returns_true_on_clean():
     ) is True
 
 
+def test_quantized_kv_huge_meta_offset_rejected():
+    """A small quantized record with a poisoned offset must reject before
+    QuantizedKVCache.from_state can restore the offset and allocate later."""
+    (validate_cache_record, _, _, _, _) = _import_validator()
+    qtuple = (
+        _stub_tensor((1, 8, 64, 128), itemsize=1),
+        _stub_tensor((1, 8, 1, 1)),
+        _stub_tensor((1, 8, 1, 1)),
+    )
+    cache_data = [("quantized_kv", qtuple, qtuple, ("999999999999", "64", "4"))]
+    ok, reason, _ = validate_cache_record(
+        cache_data, expected_num_layers=1, source="test:qmeta",
+    )
+    assert not ok
+    assert "offset" in reason.lower()
+
+
+def test_dsv4_huge_rotating_meta_offset_rejected():
+    """DSV4 local RotatingKVCache meta_state must not be allowed to carry a
+    huge offset/index through prefix reconstruction."""
+    (validate_cache_record, _, _, _, _) = _import_validator()
+    state = {
+        "local": (
+            _stub_tensor((1, 8, 64, 128)),
+            _stub_tensor((1, 8, 64, 128)),
+        ),
+        "compressor": _stub_tensor((1, 1, 64, 512)),
+    }
+    cache_data = [
+        (
+            "deepseek_v4",
+            state,
+            ("0", "128", "999999999999", "0"),
+            "DeepseekV4Cache",
+            {"sliding_window": 128},
+        )
+    ]
+    ok, reason, _ = validate_cache_record(
+        cache_data, expected_num_layers=1, source="test:dsv4meta",
+    )
+    assert not ok
+    assert "offset" in reason.lower()
+
+
+def test_dsv4_prefill_rotating_meta_idx_may_exceed_sliding_window():
+    """DSV4 prompt-boundary snapshots can have _idx > sliding_window.
+
+    mlx-lm RotatingKVCache keeps full multi-token prefill tensors before
+    decode starts rotating in place, so DSV4 long-context L2 validation must
+    cap idx by the corruption ceiling, not by sliding_window/max_size.
+    """
+    (validate_cache_record, _, _, _, _) = _import_validator()
+    state = (
+        (
+            _stub_tensor((1, 1, 391, 512)),
+            _stub_tensor((1, 1, 391, 512)),
+        ),
+        (
+            _stub_tensor((1, 3, 512)),
+            _stub_tensor((1, 3, 512)),
+            _stub_tensor((1, 97, 512)),
+        ),
+        (
+            _stub_tensor((1, 3, 512)),
+            _stub_tensor((1, 3, 512)),
+            _stub_tensor((1, 97, 512)),
+        ),
+    )
+    cache_data = [
+        (
+            "deepseek_v4",
+            state,
+            ("0", "128", "391", "391"),
+            "DeepseekV4Cache",
+            {"sliding_window": 128, "compress_ratio": 4},
+        )
+    ]
+    ok, reason, _ = validate_cache_record(
+        cache_data, expected_num_layers=1, source="test:dsv4meta-valid-prefill",
+    )
+    assert ok, reason
+
+
+def test_rotating_kv_bad_max_size_rejected():
+    (validate_cache_record, _, _, _, _) = _import_validator()
+    cache_data = [
+        (
+            "rotating_kv",
+            _stub_tensor((1, 8, 64, 128)),
+            _stub_tensor((1, 8, 64, 128)),
+            999999999,
+            0,
+        )
+    ]
+    ok, reason, _ = validate_cache_record(
+        cache_data, expected_num_layers=1, source="test:rotating",
+    )
+    assert not ok
+    assert "max_size" in reason.lower()
+
+
+def test_tq_native_metadata_huge_decode_shape_rejected():
+    from vmlx_engine.cache_record_validator import validate_tq_native_metadata
+
+    tensors = {
+        "tq_0_ck_indices_packed": _stub_tensor((1,), itemsize=4),
+        "tq_0_ck_qjl_packed": _stub_tensor((1,), itemsize=4),
+        "tq_0_ck_residual_norms": _stub_tensor((1,)),
+        "tq_0_ck_vector_norms": _stub_tensor((1,)),
+        "tq_0_cv_indices_packed": _stub_tensor((1,), itemsize=4),
+        "tq_0_cv_vector_norms": _stub_tensor((1,)),
+    }
+    metadata = {
+        "__tq_native__": "true",
+        "__num_layers__": "1",
+        "__layer_0_class__": "TurboQuantKVCache",
+        "__tq_0_ck_shape__": json.dumps([1, 8, 999999, 128]),
+        "__tq_0_ck_bits__": "3",
+        "__tq_0_cv_shape__": json.dumps([1, 8, 64, 128]),
+        "__tq_0_cv_bits__": "3",
+        "__tq_0_offset__": "64",
+        "__tq_0_key_dim__": "128",
+        "__tq_0_value_dim__": "128",
+        "__tq_0_key_bits__": "3",
+        "__tq_0_value_bits__": "3",
+        "__tq_0_sink_tokens__": "0",
+    }
+    ok, reason = validate_tq_native_metadata(tensors, metadata, expected_num_layers=1)
+    assert not ok
+    assert "shape" in reason.lower() or "dim" in reason.lower()
+
+
+def test_tq_native_metadata_huge_offset_rejected():
+    from vmlx_engine.cache_record_validator import validate_tq_native_metadata
+
+    tensors = {
+        "tq_0_ck_indices_packed": _stub_tensor((1,), itemsize=4),
+        "tq_0_ck_qjl_packed": _stub_tensor((1,), itemsize=4),
+        "tq_0_ck_residual_norms": _stub_tensor((1,)),
+        "tq_0_ck_vector_norms": _stub_tensor((1,)),
+        "tq_0_cv_indices_packed": _stub_tensor((1,), itemsize=4),
+        "tq_0_cv_vector_norms": _stub_tensor((1,)),
+    }
+    metadata = {
+        "__tq_native__": "true",
+        "__num_layers__": "1",
+        "__layer_0_class__": "TurboQuantKVCache",
+        "__tq_0_ck_shape__": json.dumps([1, 8, 64, 128]),
+        "__tq_0_ck_bits__": "3",
+        "__tq_0_cv_shape__": json.dumps([1, 8, 64, 128]),
+        "__tq_0_cv_bits__": "3",
+        "__tq_0_offset__": "999999999999",
+        "__tq_0_key_dim__": "128",
+        "__tq_0_value_dim__": "128",
+        "__tq_0_key_bits__": "3",
+        "__tq_0_value_bits__": "3",
+        "__tq_0_sink_tokens__": "0",
+    }
+    ok, reason = validate_tq_native_metadata(tensors, metadata, expected_num_layers=1)
+    assert not ok
+    assert "offset" in reason.lower()
+
+
+def test_live_cache_rejects_quantized_tuple_huge_shape():
+    from vmlx_engine.cache_record_validator import validate_live_cache
+
+    qtuple = (
+        _stub_tensor((1, 8, 999999, 128), itemsize=1),
+        _stub_tensor((1, 8, 1, 1)),
+        _stub_tensor((1, 8, 1, 1)),
+    )
+    layer = types.SimpleNamespace(
+        keys=qtuple,
+        values=qtuple,
+        offset=64,
+        group_size=64,
+        bits=4,
+    )
+    ok, reason, _ = validate_live_cache([layer], source="test:live-qtuple")
+    assert not ok
+    assert "dim" in reason.lower() or "bytes" in reason.lower()
+
+
+def test_live_cache_rejects_rotating_huge_offset():
+    from vmlx_engine.cache_record_validator import validate_live_cache
+
+    layer = types.SimpleNamespace(
+        keys=_stub_tensor((1, 8, 64, 128)),
+        values=_stub_tensor((1, 8, 64, 128)),
+        offset=999999999999,
+        max_size=128,
+        keep=0,
+        _idx=0,
+    )
+    ok, reason, _ = validate_live_cache([layer], source="test:live-rotating")
+    assert not ok
+    assert "offset" in reason.lower()
+
+
+def test_live_cache_rejects_tq_encoded_huge_shape_when_keys_cleared():
+    from vmlx_engine.cache_record_validator import validate_live_cache
+
+    encoded = types.SimpleNamespace(
+        shape=(1, 8, 999999, 128),
+        indices_packed=_stub_tensor((1,), itemsize=4),
+        qjl_packed=_stub_tensor((1,), itemsize=4),
+        residual_norms=_stub_tensor((1,)),
+        vector_norms=_stub_tensor((1,)),
+    )
+    layer = types.SimpleNamespace(
+        keys=None,
+        values=None,
+        _compressed_keys=encoded,
+        _compressed_values=encoded,
+        offset=64,
+        key_dim=128,
+        value_dim=128,
+        key_bits=4,
+        value_bits=4,
+        sink_tokens=0,
+    )
+    ok, reason, _ = validate_live_cache([layer], source="test:live-tq")
+    assert not ok
+    assert "shape" in reason.lower() or "dim" in reason.lower()
+
+
+def test_live_cache_accepts_clean_kv_layer():
+    from vmlx_engine.cache_record_validator import validate_live_cache
+
+    layer = types.SimpleNamespace(
+        keys=_stub_tensor((1, 8, 64, 128)),
+        values=_stub_tensor((1, 8, 64, 128)),
+        offset=64,
+    )
+    ok, reason, nbytes = validate_live_cache([layer], source="test:live-clean")
+    assert ok, reason
+    assert nbytes > 0
+
+
 # ============================================================================
-# Pre-mx.load safetensors header validation (Codex 2026-05-06 follow-up).
-# Codex's E case: "corrupt synthetic cache file => must reject before mx.load/decode"
+# Pre-mx.load safetensors header validation.
+# Corrupt synthetic cache file => must reject before mx.load/decode.
 # ============================================================================
 
 
@@ -235,7 +474,7 @@ def _write_safetensors_header(path, header_dict, *, total_data_size=0):
 
 
 def test_header_validator_rejects_437gb_tensor(tmp_path):
-    """Codex's E case: a header declaring a single 437 GB tensor must be
+    """A header declaring a single 437 GB tensor must be
     rejected BEFORE mx.load is called. This is the exact crash class."""
     (_, _, MAX_TENSOR_BYTES, _, _) = _import_validator()
     from vmlx_engine.cache_record_validator import (  # noqa: E402
@@ -309,14 +548,30 @@ def test_header_validator_rejects_layer_count_mismatch(tmp_path):
     header = {
         "layer_99_keys": {
             "dtype": "BF16",
-            "shape": [1, 8, 64, 128],
-            "data_offsets": [0, 1024],
+            "shape": [1],
+            "data_offsets": [0, 2],
         }
     }
-    _write_safetensors_header(p, header)
+    _write_safetensors_header(p, header, total_data_size=2)
     ok, reason = validate_safetensors_header(str(p), expected_num_layers=43)
     assert not ok
     assert "layer" in reason.lower()
+
+
+def test_header_validator_rejects_bad_data_offsets(tmp_path):
+    from vmlx_engine.cache_record_validator import validate_safetensors_header
+    p = tmp_path / "bogus_offsets.safetensors"
+    header = {
+        "layer_0_keys": {
+            "dtype": "BF16",
+            "shape": [4],
+            "data_offsets": [0, 2],  # should be 8 bytes for 4 BF16 values
+        }
+    }
+    _write_safetensors_header(p, header, total_data_size=2)
+    ok, reason = validate_safetensors_header(str(p))
+    assert not ok
+    assert "data_offsets" in reason.lower()
 
 
 def test_header_validator_rejects_truncated(tmp_path):
@@ -350,18 +605,21 @@ def test_header_validator_accepts_clean_dsv4(tmp_path):
     from vmlx_engine.cache_record_validator import validate_safetensors_header
     p = tmp_path / "clean.safetensors"
     header = {}
+    offset = 0
     for i in range(43):
         header[f"layer_{i}_keys"] = {
             "dtype": "BF16",
-            "shape": [1, 128, 64, 128],  # ~2 MB per tensor
-            "data_offsets": [i * 2_000_000, (i + 1) * 2_000_000],
+            "shape": [1, 1, 1, 1],
+            "data_offsets": [offset, offset + 2],
         }
+        offset += 2
         header[f"layer_{i}_values"] = {
             "dtype": "BF16",
-            "shape": [1, 128, 64, 128],
-            "data_offsets": [(i + 43) * 2_000_000, (i + 44) * 2_000_000],
+            "shape": [1, 1, 1, 1],
+            "data_offsets": [offset, offset + 2],
         }
-    _write_safetensors_header(p, header)
+        offset += 2
+    _write_safetensors_header(p, header, total_data_size=offset)
     ok, reason = validate_safetensors_header(str(p), expected_num_layers=43)
     assert ok, reason
 

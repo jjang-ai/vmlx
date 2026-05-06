@@ -857,6 +857,67 @@ class TestFallbackToolPromptFormat:
         assert '"path": "."' in result.tool_calls[0]["arguments"]
         assert result.content is None
 
+    def test_dsml_parser_repairs_partial_invoke_with_malformed_value_attr(self):
+        from vmlx_engine.tool_parsers.dsml_tool_parser import DSMLToolParser
+
+        text = (
+            '<｜DSML｜invoke name="list_directory">\n'
+            '  <｜DSML｜parameter name="path" string value"."></'
+        )
+        req = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "list_directory",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        result = DSMLToolParser(None).extract_tool_calls(text, request=req)
+
+        assert result.tools_called
+        assert result.tool_calls[0]["name"] == "list_directory"
+        assert '"path": "."' in result.tool_calls[0]["arguments"]
+        assert result.content is None
+
+    def test_dsml_parser_repairs_htmlish_invoke_degradation(self):
+        from vmlx_engine.tool_parsers.dsml_tool_parser import DSMLToolParser
+
+        text = (
+            '<invoke_list_directory><br />\n'
+            '<param name="path".">.</br />\n'
+            '</inv'
+        )
+        req = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "list_directory",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        result = DSMLToolParser(None).extract_tool_calls(text, request=req)
+
+        assert result.tools_called
+        assert result.tool_calls[0]["name"] == "list_directory"
+        assert '"path": "."' in result.tool_calls[0]["arguments"]
+        assert result.content is None
+
     def test_generic_parser_handles_laguna_arg_key_value_tool_call(self):
         from vmlx_engine.api.tool_calling import parse_tool_calls
 
@@ -951,10 +1012,73 @@ class TestFallbackToolPromptFormat:
         assert calls[0].function.name == "list_directory"
         assert '"path": "."' in calls[0].function.arguments
 
-    def test_dsv4_encoder_keeps_function_arguments_as_dsml_params(self):
-        from vmlx_engine.loaders.dsv4_chat_encoder import apply_chat_template
+    def test_server_repairs_dsv4_partial_tool_intent_from_request_args(self, monkeypatch):
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ResponsesRequest
 
-        prompt = apply_chat_template(
+        monkeypatch.setattr(server, "_tool_call_parser", None)
+        req = ResponsesRequest(
+            model="m",
+            input="Use the list_directory tool for path '.' and do not answer in prose.",
+            tools=[
+                {
+                    "type": "function",
+                    "name": "list_directory",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                }
+            ],
+        )
+
+        cleaned, calls = server._parse_tool_calls_with_parser(
+            "I'll use the tool to inspect the current directory.\n\n<｜DSML｜tool_c",
+            req,
+        )
+
+        assert cleaned == ""
+        assert calls
+        assert calls[0].function.name == "list_directory"
+        assert '"path": "."' in calls[0].function.arguments
+
+    def _write_fake_dsv4_encoder(self, model_path):
+        enc_dir = model_path / "encoding"
+        enc_dir.mkdir(parents=True, exist_ok=True)
+        (enc_dir / "encoding_dsv4.py").write_text(
+            """
+import json
+
+def encode_messages(messages, **kwargs):
+    out = []
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            for tc in msg.get("tool_calls") or []:
+                fn = tc.get("function") or {}
+                args = fn.get("arguments") or {}
+                if isinstance(args, str):
+                    args = json.loads(args)
+                for k, v in args.items():
+                    out.append(f'<parameter name="{k}">{v}</parameter>')
+        if msg.get("role") == "tool":
+            out.append(f'<tool_result>{msg.get("content", "")}</tool_result>')
+    return "\\n".join(out)
+
+def parse_message_from_completion_text(raw_text, **kwargs):
+    return {"role": "assistant", "content": raw_text, "tool_calls": []}
+""",
+            encoding="utf-8",
+        )
+
+    def test_dsv4_encoder_keeps_function_arguments_as_dsml_params(self, tmp_path):
+        import vmlx_engine.loaders.dsv4_chat_encoder as dsv4_chat_encoder
+
+        model_path = tmp_path / "DeepSeek-V4-Flash-JANGTQ"
+        self._write_fake_dsv4_encoder(model_path)
+        dsv4_chat_encoder._encoding_cache.clear()
+
+        prompt = dsv4_chat_encoder.apply_chat_template(
             [
                 {"role": "system", "content": "Use tools."},
                 {"role": "user", "content": "List."},
@@ -976,12 +1100,45 @@ class TestFallbackToolPromptFormat:
                 {"role": "user", "content": "What file appeared?"},
             ],
             enable_thinking=False,
-            model_path="/Volumes/EricsLLMDrive/jangq-ai/DeepSeek-V4-Flash-JANGTQ",
+            model_path=str(model_path),
         )
 
         assert 'parameter name="path"' in prompt
         assert 'parameter name="arguments"' not in prompt
         assert "<tool_result>README.md</tool_result>" in prompt
+
+    def test_dsv4_encoder_auto_discovers_home_models_encoding(self, tmp_path, monkeypatch):
+        import vmlx_engine.loaders.dsv4_chat_encoder as dsv4_chat_encoder
+
+        model_path = tmp_path / "models" / "Sources" / "DeepSeek-V4-Flash"
+        self._write_fake_dsv4_encoder(model_path)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.delenv("DSV4_ENCODING_DIR", raising=False)
+        monkeypatch.delenv("VMLX_MODELS_DIR", raising=False)
+        monkeypatch.delenv("VLLM_MODELS_DIR", raising=False)
+        monkeypatch.delenv("VMLINUX_MODELS_DIR", raising=False)
+        dsv4_chat_encoder._encoding_cache.clear()
+
+        prompt = dsv4_chat_encoder.apply_chat_template(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "list_directory",
+                                "arguments": {"path": "."},
+                            },
+                        }
+                    ],
+                }
+            ],
+            enable_thinking=False,
+        )
+
+        assert 'parameter name="path"' in prompt
 
 
 # ─── ToolDefinition Validation ───────────────────────────────────────────────

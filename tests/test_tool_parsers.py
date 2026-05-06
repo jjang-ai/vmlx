@@ -430,6 +430,27 @@ class TestNemotronToolParser:
         assert args["city"] == "Paris"
         assert args["units"] == "celsius"
 
+    def test_function_without_opening_tool_call_marker(self, parser):
+        """Nemotron can emit template body without the leading <tool_call>.
+
+        Live Responses auto-tool-choice produced:
+        <function=list_directory>... </function></tool_call>
+        The parser should still convert it to a structured call instead of
+        leaking raw tool markup into output_text.
+        """
+        text = (
+            "<function=list_directory>\n"
+            "<parameter=path>\n.\n</parameter>\n"
+            "</function>\n</tool_call>"
+        )
+        result = parser.extract_tool_calls(text)
+
+        assert result.tools_called
+        assert result.tool_calls[0]["name"] == "list_directory"
+        args = json.loads(result.tool_calls[0]["arguments"])
+        assert args["path"] == "."
+        assert result.content is None
+
     def test_json_format(self, parser):
         """Test parsing Nemotron with JSON arguments."""
         text = '<tool_call><function=calculate>{"expression": "2*3"}</function></tool_call>'

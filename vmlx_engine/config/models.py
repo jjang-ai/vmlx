@@ -48,9 +48,28 @@ class TurboquantSettings(BaseModel):
 class KVCacheConfig(BaseModel):
     """KV cache memory configuration."""
 
-    quantization: str = "turboquant"  # "none", "q4", "q8", "turboquant"
+    quantization: str = "q4"  # "none", "q4", "q8"; TurboQuant is auto-detected
     memory_limit_mb: Optional[int] = None
     turboquant: TurboquantSettings = Field(default_factory=TurboquantSettings)
+
+    @field_validator("quantization", mode="before")
+    @classmethod
+    def validate_quantization(cls, v):
+        # Back-compat: older YAML/docs used "turboquant" as a synthetic
+        # quantization choice. The real serve CLI now uses q4/q8/none for
+        # stored prefix-cache snapshots while JANG/JANGTQ TurboQuant KV is
+        # activated from the bundle metadata. Map the stale alias to the
+        # production auto-mode fallback instead of letting it leak further.
+        if v is None:
+            return "q4"
+        val = str(v).lower()
+        if val == "turboquant":
+            return "q4"
+        if val not in ("none", "q4", "q8"):
+            raise ValueError(
+                "kv_cache.quantization must be one of: none, q4, q8"
+            )
+        return val
 
 
 # =============================================================================

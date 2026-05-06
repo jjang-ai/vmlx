@@ -38,6 +38,21 @@ DEFAULT_PY = Path(
 )
 OUT_DIR = Path("/tmp/vmlx_family_audit")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
+FALLBACK_MODEL_ROOTS = [
+    Path("/Users/eric/models/JANGQ"),
+    Path("/Users/eric/models/dealign.ai"),
+    Path("/Users/eric/models/Sources"),
+    Path("/Users/eric/.lmstudio/models"),
+    Path("/Users/eric/.mlxstudio/models"),
+]
+MODEL_NAME_ALIASES = {
+    "Nemotron-3-Nano-Omni-30B-A3B-JANGTQ2": [
+        "Nemotron-Omni-Nano-JANGTQ-CRACK",
+    ],
+    "Nemotron-3-Nano-Omni-30B-A3B-JANGTQ4": [
+        "Nemotron-Omni-Nano-JANGTQ4-CRACK",
+    ],
+}
 
 
 @dataclass
@@ -68,7 +83,7 @@ ROWS: list[ModelRow] = [
         slow=True,
         notes=[
             "DSV4 SWA+CSA/HSA heterogenous cache; paged/block L2 must use "
-            "deepseek_v4_v6 composite-state serialization, not generic KV blocks"
+            "deepseek_v4_v7 composite-state serialization, not generic KV blocks"
         ],
     ),
     ModelRow(
@@ -82,7 +97,7 @@ ROWS: list[ModelRow] = [
         slow=True,
         notes=[
             "DSV4 canonical encoder + EOS [end,user,assistant] required; "
-            "DeepseekV4Cache paged/L2 v4 schema must be active"
+            "DeepseekV4Cache paged/L2 v7 schema must be active"
         ],
     ),
     ModelRow(
@@ -156,6 +171,28 @@ ROWS: list[ModelRow] = [
         kind="omni",
         expect_reasoning=True,
         expect_tool_parser="nemotron",
+        cache_profile="hybrid_ssm",
+        slow=True,
+    ),
+    ModelRow(
+        id="ling_flash_tq",
+        label="Ling-2.6-flash JANGTQ",
+        path="/Users/eric/models/JANGQ/Ling-2.6-flash-JANGTQ",
+        family="bailing_hybrid",
+        expect_reasoning=True,
+        cache_profile="hybrid_ssm",
+        slow=True,
+        notes=[
+            "Bailing/Ling hybrid row. This catches the repeated emoji/token-loop "
+            "failure seen in panel chat and validates SSM companion-cache budgets."
+        ],
+    ),
+    ModelRow(
+        id="ling_flash_tq2_crack",
+        label="Ling-2.6-flash JANGTQ2 CRACK",
+        path="/Users/eric/models/dealign.ai/Ling-2.6-flash-JANGTQ2-CRACK",
+        family="bailing_hybrid",
+        expect_reasoning=True,
         cache_profile="hybrid_ssm",
         slow=True,
     ),
@@ -238,6 +275,27 @@ ROWS: list[ModelRow] = [
         ],
     ),
     ModelRow(
+        id="minimax_m27_tq_k",
+        label="MiniMax-M2.7 JANGTQ_K mixed-bit",
+        path="/Users/eric/models/JANGQ/MiniMax-M2.7-JANGTQ_K",
+        family="minimax",
+        expect_reasoning=True,
+        expect_tool_parser="minimax",
+        slow=True,
+        notes=[
+            "Mixed per-projection routed expert bits: gate/up 2-bit and down 4-bit."
+        ],
+    ),
+    ModelRow(
+        id="minimax_m27_small_tq",
+        label="MiniMax-M2.7 Small JANGTQ",
+        path="/Users/eric/models/JANGQ/MiniMax-M2.7-Small-JANGTQ",
+        family="minimax",
+        expect_reasoning=True,
+        expect_tool_parser="minimax",
+        slow=True,
+    ),
+    ModelRow(
         id="minimax_m27_tq4_crack",
         label="MiniMax-M2.7 JANGTQ4 CRACK",
         path="/Volumes/EricsLLMDrive/dealignai/MiniMax-M2.7-JANGTQ4-CRACK",
@@ -269,6 +327,22 @@ def read_json(path: Path) -> dict[str, Any]:
     except Exception as exc:
         return {"_read_error": f"{type(exc).__name__}: {exc}"}
     return {}
+
+
+def resolve_model_dir(path: str) -> Path:
+    model_dir = Path(path)
+    if model_dir.is_dir():
+        return model_dir
+    names = [model_dir.name]
+    if model_dir.name.endswith("-CRACK"):
+        names.append(model_dir.name[: -len("-CRACK")])
+    names.extend(MODEL_NAME_ALIASES.get(model_dir.name, []))
+    for root in FALLBACK_MODEL_ROOTS:
+        for name in names:
+            candidate = root / name
+            if candidate.is_dir():
+                return candidate
+    return model_dir
 
 
 def summarize_safetensors(model_dir: Path, max_files: int = 9999) -> dict[str, Any]:
@@ -316,7 +390,7 @@ def summarize_safetensors(model_dir: Path, max_files: int = 9999) -> dict[str, A
 
 
 def static_audit(row: ModelRow) -> dict[str, Any]:
-    model_dir = Path(row.path)
+    model_dir = resolve_model_dir(row.path)
     cfg = read_json(model_dir / "config.json")
     gen = read_json(model_dir / "generation_config.json")
     jang = read_json(model_dir / "jang_config.json")
@@ -392,7 +466,8 @@ def static_audit(row: ModelRow) -> dict[str, Any]:
     return {
         "id": row.id,
         "label": row.label,
-        "path": row.path,
+        "path": str(model_dir),
+        "declared_path": row.path,
         "exists": model_dir.is_dir(),
         "family_expected": row.family,
         "kind": row.kind,
@@ -511,6 +586,47 @@ def has_duplicate_block(text: str, min_len: int = 80) -> bool:
     return False
 
 
+def simple_loop_score(text: str) -> float:
+    words = re.findall(r"[\w']+", text.lower())
+    if len(words) < 20:
+        return 0.0
+    worst = 0
+    for n in (1, 2, 3):
+        grams = [" ".join(words[i : i + n]) for i in range(0, len(words) - n + 1)]
+        if not grams:
+            continue
+        counts: dict[str, int] = {}
+        for gram in grams:
+            counts[gram] = counts.get(gram, 0) + 1
+        worst = max(worst, max(counts.values()))
+    return worst / max(1, len(words))
+
+
+def text_quality_summary(text: str) -> dict[str, Any]:
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    digit_lines = sum(1 for ln in lines if re.fullmatch(r"\d+[\).]?", ln))
+    cyrillic = len(re.findall(r"[А-Яа-яЁё]", text))
+    latin = len(re.findall(r"[A-Za-z]", text))
+    cjk = len(re.findall(r"[\u3400-\u9fff]", text))
+    words = re.findall(r"[A-Za-zА-Яа-яЁё]{3,}", text)
+    return {
+        "lines": len(lines),
+        "digit_lines": digit_lines,
+        "digit_line_ratio": digit_lines / max(1, len(lines)),
+        "cyrillic_chars": cyrillic,
+        "latin_chars": latin,
+        "cjk_chars": cjk,
+        "word_count": len(words),
+    }
+
+
+def write_probe_output(row_id: str, name: str, payload: dict[str, Any]) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"{row_id}_{name}")
+    path = OUT_DIR / f"{safe}_{int(time.time())}.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return str(path)
+
+
 def post_chat(
     base: str,
     model: str,
@@ -536,14 +652,15 @@ def post_chat(
 
 
 def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_running: bool = False) -> dict[str, Any]:
+    model_dir = resolve_model_dir(row.path)
     result: dict[str, Any] = {
         "id": row.id,
         "label": row.label,
-        "path": row.path,
+        "path": str(model_dir),
+        "declared_path": row.path,
         "status": "UNKNOWN",
         "checks": [],
     }
-    model_dir = Path(row.path)
     if not model_dir.is_dir():
         result["status"] = "SKIP"
         result["reason"] = "path missing"
@@ -554,13 +671,15 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         return result
 
     log = OUT_DIR / f"{row.id}_{int(time.time())}.log"
+    block_cache_dir = OUT_DIR / f"{row.id}_block_cache_{int(time.time())}"
+    block_cache_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         str(py),
         "-s",
         "-m",
         "vmlx_engine.cli",
         "serve",
-        row.path,
+        str(model_dir),
         "--host",
         "127.0.0.1",
         "--port",
@@ -597,6 +716,8 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         "--enable-block-disk-cache",
         "--block-disk-cache-max-gb",
         "10",
+        "--block-disk-cache-dir",
+        str(block_cache_dir),
         "--reasoning-parser",
         "auto",
         "--tool-call-parser",
@@ -618,6 +739,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         )
     result["pid"] = proc.pid
     result["log"] = str(log)
+    result["block_disk_cache_dir"] = str(block_cache_dir)
 
     base = f"http://127.0.0.1:{port}"
     loaded = False
@@ -648,8 +770,8 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         check(
             "dsv4_paged_cache_composite_enabled",
             "DeepseekV4Cache-aware paged prefix cache enabled" in log_text
-            and "deepseek_v4_v6" in log_text,
-            "DSV4 must keep paged/L2 cache on and use the deepseek_v4 v4 composite-state schema",
+            and "deepseek_v4_v7" in log_text,
+            "DSV4 must keep paged/L2 cache on and use the deepseek_v4 v7 composite-state schema",
         )
         check(
             "dsv4_canonical_encoder_shim",
@@ -677,18 +799,22 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
     supported_modes = (
         caps.get("supported_modes", []) if code == 200 and isinstance(caps, dict) else []
     )
+    experimental_modes = (
+        caps.get("experimental_modes", []) if code == 200 and isinstance(caps, dict) else []
+    )
     expected_modes = ["instruct"]
     if row.expect_reasoning:
         expected_modes.append("reasoning")
-    if row.family == "deepseek_v4":
-        expected_modes.append("max")
     check(
         "model_capabilities_endpoint",
         code == 200
         and all(mode in supported_modes for mode in expected_modes)
         and (
             row.family != "deepseek_v4"
-            or caps.get("cache", {}).get("dsv4_composite_state") is True
+            or (
+                "max" in experimental_modes
+                and caps.get("cache", {}).get("dsv4_composite_state") is True
+            )
         ),
         {"code": code, "caps": caps},
     )
@@ -761,6 +887,155 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
                 "content": max_content[:300],
                 "reasoning_chars": len(max_reasoning),
                 "reasoning_head": max_reasoning[:240],
+            },
+        )
+
+        long_prompts = [
+            (
+                "vc_project_plan",
+                "For our VC fund, we are trying to document everything we do, "
+                "create cadences, and bring in a student from the Haskayne Propel "
+                "2026 project plan program. Help fill this form field by field. "
+                "Proposed Project Name: Process optimisation and document "
+                "standardization for the VC fund. What is the project's goal? "
+                "The primary deliverable must be realistic and achievable within "
+                "50 hours by a student unfamiliar with our organization and "
+                "industry. Please outline the project timeline. What will the "
+                "student work on each week at about 6 hours per week? Weeks 1 "
+                "and 8 have preset onboarding and offboarding activities. Please "
+                "break down specialized skills or mindsets required. Students may "
+                "need to work with people from diverse backgrounds and should be "
+                "strong in Microsoft software, process mapping, documentation, "
+                "stakeholder interviews, and organized project management. Please "
+                "think carefully, then produce a concise usable draft with clear "
+                "headings and no repeated filler."
+            ),
+            (
+                "game_design_long_context",
+                "Create a single HTML file for a Three.js game. The player is a "
+                "hunter moving through a forest with a shotgun while hostile "
+                "boars, moose, and other enemies spawn with different behavior. "
+                "Include projectile physics, collision detection, enemy AI, spawn "
+                "timers, acceleration over time, health, score, and a compact UI "
+                "layer over the canvas. Explain the architecture first, then give "
+                "the complete file. Avoid repeating the same noun or phrase."
+            ),
+        ]
+        for probe_name, prompt in long_prompts:
+            code, long_resp = http_json(
+                "POST",
+                f"{base}/v1/chat/completions",
+                {
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "enable_thinking": True,
+                    "chat_template_kwargs": {"enable_thinking": True},
+                    "max_tokens": 900,
+                    "temperature": 0.6,
+                    "top_p": 0.95,
+                    "stream": False,
+                },
+                timeout=420,
+            )
+            long_content, long_reasoning, long_finish = extract_chat_text(long_resp)
+            full_text = f"{long_reasoning}\n{long_content}".strip()
+            loop_score = simple_loop_score(full_text)
+            artifact = write_probe_output(
+                row.id,
+                f"dsv4_long_{probe_name}",
+                {
+                    "request": {"prompt": prompt, "max_tokens": 900},
+                    "code": code,
+                    "finish": long_finish,
+                    "content": long_content,
+                    "reasoning": long_reasoning,
+                    "content_chars": len(long_content),
+                    "reasoning_chars": len(long_reasoning),
+                    "loop_score": loop_score,
+                    "raw_response": long_resp,
+                },
+            )
+            check(
+                f"dsv4_long_context_full_output_{probe_name}",
+                code == 200
+                and len(full_text) >= 120
+                and len(long_content) >= 40
+                and not has_duplicate_block(full_text)
+                and loop_score < 0.25,
+                {
+                    "code": code,
+                    "finish": long_finish,
+                    "content_chars": len(long_content),
+                    "reasoning_chars": len(long_reasoning),
+                    "loop_score": loop_score,
+                    "artifact": artifact,
+                    "head": full_text[:400],
+                    "tail": full_text[-400:],
+                },
+            )
+
+    if row.family == "bailing_hybrid":
+        code, ling_resp = http_json(
+            "POST",
+            f"{base}/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Привет. Напиши краткий план одной HTML/Three.js "
+                            "игры: охотник бежит по лесу, стреляет из дробовика, "
+                            "а кабаны и лоси появляются как враги. Ответь по-русски "
+                            "структурировано, без повторения одного слова или символа."
+                        ),
+                    }
+                ],
+                "enable_thinking": False,
+                "chat_template_kwargs": {"enable_thinking": False},
+                "max_tokens": 420,
+                "temperature": 0.6,
+                "top_p": 0.95,
+                "stream": False,
+            },
+            timeout=300,
+        )
+        ling_content, ling_reasoning, ling_finish = extract_chat_text(ling_resp)
+        ling_full = f"{ling_reasoning}\n{ling_content}".strip()
+        ling_loop_score = simple_loop_score(ling_full)
+        ling_quality = text_quality_summary(ling_full)
+        ling_artifact = write_probe_output(
+            row.id,
+            "ling_multilingual_game_prompt",
+            {
+                "code": code,
+                "finish": ling_finish,
+                "content": ling_content,
+                "reasoning": ling_reasoning,
+                "loop_score": ling_loop_score,
+                "quality": ling_quality,
+                "raw_response": ling_resp,
+            },
+        )
+        check(
+            "ling_multilingual_loop_trigger",
+            code == 200
+            and len(ling_full) >= 120
+            and not has_duplicate_block(ling_full)
+            and ling_loop_score < 0.25
+            and ling_full.count("👀") < 8
+            and ling_quality["word_count"] >= 24
+            and ling_quality["digit_line_ratio"] < 0.35,
+            {
+                "code": code,
+                "finish": ling_finish,
+                "content_chars": len(ling_content),
+                "reasoning_chars": len(ling_reasoning),
+                "loop_score": ling_loop_score,
+                "quality": ling_quality,
+                "artifact": ling_artifact,
+                "head": ling_full[:300],
+                "tail": ling_full[-300:],
             },
         )
 
@@ -905,7 +1180,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         model,
         cache_messages,
         thinking=False,
-        max_tokens=80,
+        max_tokens=512,
         temperature=0.1,
     )
     c_cache, _, _ = extract_chat_text(r_cache["body"])
@@ -914,7 +1189,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         model,
         cache_messages,
         thinking=False,
-        max_tokens=80,
+        max_tokens=512,
         temperature=0.1,
     )
     c_cache_repeat, _, _ = extract_chat_text(r_cache_repeat["body"])
@@ -936,9 +1211,9 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         or int(_sched_cache.get("cache_hits") or _sched_cache.get("hits") or 0) > 0
         or int(_block_disk.get("disk_hits") or 0) > 0
     )
-    _cache_bypass_expected = (
+    _mixed_attention_detected = (
         row.family == "gemma4"
-        and "Prefix cache is auto-bypassed on every request" in log_text
+        and "mixed-attention model detected" in log_text
     )
     check(
         "cache_second_turn_coherent",
@@ -947,13 +1222,13 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         and c_cache.lower().count("blue") >= 3
         and c_cache_repeat.lower().count("blue") >= 3
         and not has_duplicate_block(c_cache + c_cache_repeat)
-        and (_cache_hit_observed or _cache_bypass_expected),
+        and _cache_hit_observed,
         {
             "content": c_cache[:240],
             "repeat_content": c_cache_repeat[:240],
             "repeat_usage": _repeat_usage,
             "cache_hit_observed": _cache_hit_observed,
-            "cache_bypass_expected": _cache_bypass_expected,
+            "mixed_attention_detected": _mixed_attention_detected,
             "cache_stats": stats1 if code == 200 else stats0,
         },
     )

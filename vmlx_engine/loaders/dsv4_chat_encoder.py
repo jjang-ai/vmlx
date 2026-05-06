@@ -42,18 +42,14 @@ Tool calls are DSML format (``vmlx_engine/tool_parsers/dsml_tool_parser.py``
 
 Long-context mode (``DSV4_LONG_CTX``):
 
-  * Default ``0`` (matches upstream JANG safe default) — ``Model.make_cache()``
-    returns plain ``KVCache`` for every layer. Prompts up to
-    sliding_window=128 behave identically to the pre-make_cache path; longer
-    prompts fall back to local-only sliding-window attention (still coherent
-    per ``mlx_model.py:1314``, but loses pooled-global benefit).
-  * Opt-in ``1`` — ``Model.make_cache()`` returns ``DeepseekV4Cache`` on
-    ``compress_ratio>0`` layers (CSA/HSA + SWA composite). Paged prefix cache
-    uses a dedicated ``deepseek_v4`` block record with ``deepseek_v4_v6``
-    metadata; v4/v5/v6 keys DSV4 prompt cache blocks at N-1 tokens so the
-    last prompt token is re-fed on prefix hits. **Currently has a known
-    upstream JANG prefill shape bug for prompts >sliding_window — opt in
-    only after JANG ships the fix.**
+  * ``1`` is the supported runtime mode. ``Model.make_cache()`` returns
+    ``DeepseekV4Cache`` on ``compress_ratio>0`` layers (CSA/HSA + SWA
+    composite) and plain ``KVCache`` on local-only layers.
+  * Paged prefix cache uses a dedicated ``deepseek_v4`` block record with
+    ``deepseek_v4_v7`` metadata; v7 keys DSV4 prompt cache blocks at N-1
+    tokens so the last prompt token is re-fed on prefix hits. The loader
+    installs the prefill mask-trim patch required for prompts beyond the
+    sliding window.
   * ``cache_salt`` / ``skip_prefix_cache`` still bypass all cache layers for
     benchmarks, but DSV4 is no longer force-bypassed by family.
 
@@ -73,6 +69,54 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _default_encoding_dirs() -> List[Path]:
+    """Return likely local DSV4 encoding directories.
+
+    Production callers should pass ``model_path``. This fallback covers app
+    sessions/tests where an older persisted DSV4 path no longer exists but the
+    user has the bundle or source checkout in the standard local model roots.
+    Keep the search shallow so startup does not walk large model trees.
+    """
+    dirs: List[Path] = []
+
+    def add(path: Path) -> None:
+        if path not in dirs:
+            dirs.append(path)
+
+    roots = [Path.home() / "models"]
+    # Accept either the canonical name or the historical typo'd one.
+    extra_root = (
+        os.environ.get("VMLX_MODELS_DIR")
+        or os.environ.get("VLLM_MODELS_DIR")
+        or os.environ.get("VMLINUX_MODELS_DIR")
+    )
+    if extra_root:
+        roots.insert(0, Path(extra_root).expanduser())
+    volumes = Path("/Volumes")
+    if volumes.exists():
+        try:
+            roots.extend(p for p in volumes.iterdir() if p.is_dir())
+        except Exception:
+            pass
+
+    for root in roots:
+        try:
+            if not root.exists():
+                continue
+            add(root / "Sources" / "DeepSeek-V4-Flash" / "encoding")
+            for pattern in (
+                "DeepSeek-V4-Flash*/encoding",
+                "JANGQ/DeepSeek-V4-Flash*/encoding",
+                "*/DeepSeek-V4-Flash*/encoding",
+                "*/*DeepSeek-V4-Flash*/encoding",
+            ):
+                for match in root.glob(pattern):
+                    add(match)
+        except Exception:
+            continue
+    return dirs
 
 
 def _load_encoding_dsv4_module(
@@ -100,6 +144,7 @@ def _load_encoding_dsv4_module(
         mp = Path(model_path)
         candidates.append(mp / "encoding")
         candidates.append(mp)
+    candidates.extend(_default_encoding_dirs())
 
     for d in candidates:
         f = d / "encoding_dsv4.py"
@@ -114,7 +159,7 @@ def _load_encoding_dsv4_module(
             return mod
 
     # Fall back to the jang_tools adapter which will raise a clear
-    # FileNotFoundError if DSV4_ENCODING_DIR isn't set.
+    # FileNotFoundError if neither an explicit path nor DSV4_ENCODING_DIR is set.
     try:
         from jang_tools.dsv4.encoding_adapter import _load_encoding_module
     except ImportError as e:

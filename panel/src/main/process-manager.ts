@@ -129,7 +129,7 @@ export class ProcessManager extends EventEmitter {
     if (opts.pythonPath) {
       cmd = opts.pythonPath
       args = [
-        '-s', '-m', 'vmlx_engine.cli', 'serve',
+        '-B', '-s', '-m', 'vmlx_engine.cli', 'serve',
         '--model', model,
         '--port', String(port),
         '--host', '127.0.0.1',
@@ -150,7 +150,12 @@ export class ProcessManager extends EventEmitter {
 
     const child = spawn(cmd, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
+      env: {
+        ...process.env,
+        PYTHONDONTWRITEBYTECODE: '1',
+        PYTHONNOUSERSITE: '1',
+        PYTHONPATH: '',
+      },
     })
 
     managed.process = child

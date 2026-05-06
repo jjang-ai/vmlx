@@ -53,9 +53,10 @@ import tempfile
 import threading
 import time
 import uuid
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, UploadFile
@@ -336,7 +337,7 @@ _FAMILY_FALLBACK_DEFAULTS: dict[str, tuple[float | None, float | None, float | N
     # this issue (10/12 cells OK at default rep) so the floor is
     # defensive rather than load-bearing for the K variant.
     "minimax_m2": (0.6, 0.95, 1.15),
-    # 2026-05-06 Codex Ling-2.6 review item #3: a user reported the
+    # Ling-2.6 production review item: a user reported the
     # Russian Three.js prompt looping into a 👀 token (47681 → ' \xed\x9f\xae')
     # on Ling-2.6-flash-JANGTQ2-CRACK at default rep_penalty (1.0). Floor
     # follows the DSV4/MiniMax pattern — defensive 1.15. ling_hybrid covers
@@ -394,6 +395,24 @@ def _strip_think_for_tool_parse(text: str) -> str:
                 _, _, stripped = text.partition(end_tag)
                 break
     return stripped.strip()
+
+
+def _dsv4_visible_content_fallback(
+    content: str | None,
+    reasoning: str | None,
+    *,
+    is_dsv4: bool,
+    suppress_reasoning: bool,
+) -> str | None:
+    """Surface DSV4 reasoning-only non-stream completions as visible text."""
+    if (
+        is_dsv4
+        and not suppress_reasoning
+        and not (content or "").strip()
+        and (reasoning or "").strip()
+    ):
+        return reasoning
+    return content
 
 
 _jang_sampling_defaults_cache: dict[str, dict] = {}
@@ -691,7 +710,7 @@ def _resolve_repetition_penalty(request_value: float | None, model_name: str = "
     threshold from v1.5.8-followup; restore it. Per-request override
     (including benchmark-style 1.05) bypasses the floor entirely.
     """
-    # Codex 2026-05-06 #3: previously this function early-returned the
+    # Previously this function early-returned the
     # request_value (or stale-default-replacement) without ever hitting
     # the safety floor below. Stale UI defaults like 1.0 from the panel
     # would resolve to bundle's 1.0 and ship to the engine, bypassing the
@@ -700,7 +719,7 @@ def _resolve_repetition_penalty(request_value: float | None, model_name: str = "
     # explicit overrides.
     _bundle_path = _model_path or model_name
     resolved: float | None = None
-    is_explicit_override = False  # True only for non-stale explicit values
+    is_explicit_override = False  # retained for diagnostics; floors are mandatory
 
     if request_value is not None:
         if (
@@ -718,7 +737,9 @@ def _resolve_repetition_penalty(request_value: float | None, model_name: str = "
                 resolved = request_value
         else:
             # Genuine non-stale explicit value (user override or non-DSV4
-            # path). Skip the floor — user is opting in.
+            # path). Still goes through the family floor below for
+            # loop-prone runtimes; otherwise a panel-sent default 1.0
+            # bypasses the only protection Ling/MiniMax/DSV4 have.
             resolved = request_value
             is_explicit_override = True
     else:
@@ -754,10 +775,11 @@ def _resolve_repetition_penalty(request_value: float | None, model_name: str = "
     # listing 1.15 in `_FAMILY_FALLBACK_DEFAULTS` is not enough — the
     # bundle's 1.0 wins.
     #
-    # Apply a hard MIN-floor for these families. Per-request explicit
-    # values (request_value path early-return above) bypass the floor.
-    # CLI-default values DO get floored (they're operator-level
-    # defaults, not user-explicit choices).
+    # Apply a hard MIN-floor for these families. This intentionally applies
+    # to request values too: the panel frequently sends persisted generic
+    # defaults (1.0/1.05/1.10) as if they were explicit user choices, and
+    # letting those bypass the floor reintroduces the exact Ling/DSV4/MiniMax
+    # loop failures this resolver exists to prevent.
     #
     # Trade-off: ~3pp MMLU on benchmark-style probes. Override per-
     # request with `repetition_penalty=1.05` or run with
@@ -767,21 +789,15 @@ def _resolve_repetition_penalty(request_value: float | None, model_name: str = "
     _SAFETY_FLOORS = {"deepseek_v4": 1.15, "minimax_m2": 1.15, "ling": 1.15}
     _family = _model_family_for_defaults(_bundle_path or model_name)
     _floor = _SAFETY_FLOORS.get(_family)
-    # Codex 2026-05-06 #3: only skip the floor for GENUINELY explicit
-    # user overrides (non-stale request value). Stale UI defaults (the
-    # 1.0 panel's send by default) and bundle/CLI defaults all get
-    # floored.
     if (
         _floor is not None
         and resolved is not None
         and resolved < _floor
-        and not is_explicit_override
     ):
         logger.info(
-            f"DSV4/MiniMax safety floor applied: rep_penalty="
+            f"DSV4/MiniMax/Ling safety floor applied: rep_penalty="
             f"{resolved} raised to family floor {_floor} "
-            f"(family={_family}). Genuine per-request explicit override "
-            f"bypasses this floor; stale UI defaults do NOT."
+            f"(family={_family}, explicit_request={is_explicit_override})."
         )
         resolved = _floor
 
@@ -1887,16 +1903,59 @@ def _parse_tool_calls_with_parser(
         allowed = _allowed_tool_names()
         if not allowed:
             return text, None
+        def _request_text() -> str:
+            def _content_text(value: Any) -> str:
+                if isinstance(value, str):
+                    return value
+                if isinstance(value, list):
+                    parts = []
+                    for item in value:
+                        if isinstance(item, dict):
+                            parts.append(str(item.get("text") or item.get("content") or ""))
+                        elif isinstance(item, str):
+                            parts.append(item)
+                    return "\n".join(p for p in parts if p)
+                if isinstance(value, dict):
+                    return str(value.get("text") or value.get("content") or "")
+                return ""
+
+            chunks: list[str] = []
+            raw_input = getattr(request, "input", None)
+            if isinstance(raw_input, str):
+                chunks.append(raw_input)
+            elif isinstance(raw_input, list):
+                for item in raw_input:
+                    if isinstance(item, dict):
+                        chunks.append(_content_text(item.get("content") or item.get("text")))
+            for msg in getattr(request, "messages", None) or []:
+                if isinstance(msg, dict):
+                    chunks.append(_content_text(msg.get("content")))
+            return "\n".join(c for c in chunks if c)
+
         stripped = text.strip()
+        request_text = _request_text()
+        combined_text = f"{stripped}\n{request_text}"
+
         m = re.match(
             r"^<\s*use\s+the\s+([A-Za-z_][\w.-]*)\s+tool\b",
             stripped,
             flags=re.IGNORECASE | re.DOTALL,
         )
-        if not m:
-            return text, None
-        name = m.group(1)
-        if name not in allowed:
+        name = m.group(1) if m else None
+        if not name:
+            named_hits = [n for n in allowed if re.search(rf"\b{re.escape(n)}\b", stripped)]
+            if len(named_hits) == 1:
+                name = named_hits[0]
+        if not name and len(allowed) == 1:
+            tool_intent = re.search(
+                r"\b(?:use|call|invoke|tool_call|function_call)\b|"
+                r"<｜DSML｜tool_c|<\s*tool_call",
+                stripped,
+                flags=re.IGNORECASE,
+            )
+            if tool_intent:
+                name = next(iter(allowed))
+        if not name or name not in allowed:
             return text, None
 
         schema = None
@@ -1926,10 +1985,10 @@ def _parse_tool_calls_with_parser(
                 rf"\b{re.escape(p_name)}\b\s*(?:=|:|to|is)?\s*['\"]([^'\"]+)['\"]",
                 flags=re.IGNORECASE,
             )
-            pm = pat.search(stripped)
+            pm = pat.search(combined_text)
             if pm:
                 args[p_name] = pm.group(1)
-        if not args and len(props) == 1 and ("'.'" in stripped or '"."' in stripped):
+        if not args and len(props) == 1 and ("'.'" in combined_text or '"."' in combined_text):
             args[next(iter(props))] = "."
         if any(p not in args for p in required):
             return text, None
@@ -1947,9 +2006,11 @@ def _parse_tool_calls_with_parser(
 
     def _generic_parse_filtered(text: str) -> tuple[str, list | None]:
         cleaned, calls = parse_tool_calls(text)
-        calls = _filter_to_request_tools(calls)
         if calls:
-            return cleaned, calls
+            calls = _filter_to_request_tools(calls)
+            if calls:
+                return cleaned, calls
+            return text, None
         repaired_cleaned, repaired_calls = _repair_instruction_echo_tool_call(text)
         if repaired_calls:
             return repaired_cleaned, repaired_calls
@@ -2786,6 +2847,23 @@ def _get_responses_usage(output: GenerationOutput) -> "ResponsesUsage":
         if cached > 0
         else None,
     )
+
+
+@app.get("/")
+async def ollama_root():
+    """Ollama-compatible root probe.
+
+    Several clients verify an Ollama provider with GET/HEAD / before
+    probing /api/version. Real Ollama returns a plain text liveness string;
+    returning 404 here makes those clients report a generic version failure.
+    """
+    return Response(content="Ollama is running\n", media_type="text/plain")
+
+
+@app.head("/")
+async def ollama_root_head():
+    """HEAD variant of the Ollama root liveness probe."""
+    return Response(status_code=200)
 
 
 @app.get("/health")
@@ -4191,12 +4269,21 @@ async def create_anthropic_message(
         _allow_dsv4_chat = os.environ.get(
             "VMLX_DSV4_ALLOW_CHAT", "0"
         ).lower() in {"1", "true", "yes"}
-        if chat_req.enable_thinking is False and _allow_dsv4_chat:
-            logger.warning(
-                "DSV4: VMLX_DSV4_ALLOW_CHAT=1 — honoring explicit "
-                "enable_thinking=False. Output may loop or hallucinate "
-                "(chat-mode bundle is training-data-contaminated)."
-            )
+        _dsv4_tools_need_direct_rail = bool(getattr(chat_req, "tools", None))
+        if chat_req.enable_thinking is False and (
+            _allow_dsv4_chat or _dsv4_tools_need_direct_rail
+        ):
+            if _allow_dsv4_chat:
+                logger.warning(
+                    "DSV4: VMLX_DSV4_ALLOW_CHAT=1 — honoring explicit "
+                    "enable_thinking=False. Output may loop or hallucinate "
+                    "(chat-mode bundle is training-data-contaminated)."
+                )
+            else:
+                logger.info(
+                    "DSV4: honoring enable_thinking=False for tool call "
+                    "request so DSML is emitted outside the reasoning rail."
+                )
             _msg_kwargs["enable_thinking"] = False
             _ct_kwargs["enable_thinking"] = False
         else:
@@ -4219,7 +4306,7 @@ async def create_anthropic_message(
         # plain-thinking mode with no budget/close discipline. Fix:
         # normalize "low"/"medium"/"high" to "high" (the encoder's only
         # non-max option) so the effort hint actually reaches the
-        # template. Codex 2026-05-05.
+        # template.
         if _cur_effort == "max":
             _ct_kwargs["reasoning_effort"] = "max"
         elif _cur_effort in ("low", "medium", "high"):
@@ -4724,7 +4811,13 @@ async def ollama_ps():
     return {"models": entries}
 
 
-@app.get("/api/version", dependencies=[Depends(verify_api_key)])
+@app.head("/api/version")
+async def ollama_version_head():
+    """HEAD variant for Ollama client version probes."""
+    return Response(status_code=200)
+
+
+@app.get("/api/version")
 async def ollama_version():
     """Ollama version shim for client compat checks.
 
@@ -4732,6 +4825,11 @@ async def ollama_version():
     Real Ollama is on 0.12.x; we report a plausible recent real version so
     other version-gated clients don't refuse to connect. Kept in sync with
     panel/src/main/api-gateway.ts.
+
+    This endpoint intentionally does not require vMLX API-key auth. Ollama
+    clients generally perform unauthenticated provider verification before
+    sending chat requests, and refusing this harmless metadata probe surfaces
+    as "Unable to verify Ollama server version".
     """
     return {"version": "0.12.6"}
 
@@ -6645,11 +6743,23 @@ async def create_chat_completion(
         _allow_dsv4_chat_r = os.environ.get(
             "VMLX_DSV4_ALLOW_CHAT", "0"
         ).lower() in {"1", "true", "yes"}
-        if request.enable_thinking is False and _allow_dsv4_chat_r:
-            logger.warning(
-                "DSV4 (Responses): VMLX_DSV4_ALLOW_CHAT=1 — honoring "
-                "explicit enable_thinking=False. Output may loop."
-            )
+        _dsv4_resp_direct_rail = bool(getattr(request, "tools", None)) or (
+            getattr(request, "tool_choice", None) == "none"
+        )
+        if request.enable_thinking is False and (
+            _allow_dsv4_chat_r or _dsv4_resp_direct_rail
+        ):
+            if _allow_dsv4_chat_r:
+                logger.warning(
+                    "DSV4 (Responses): VMLX_DSV4_ALLOW_CHAT=1 — honoring "
+                    "explicit enable_thinking=False. Output may loop."
+                )
+            else:
+                logger.info(
+                    "DSV4 (Responses): honoring enable_thinking=False for "
+                    "tool/tool-result request so visible text or DSML is "
+                    "emitted outside the reasoning rail."
+                )
             chat_kwargs["enable_thinking"] = False
             _ct_kwargs["enable_thinking"] = False
         else:
@@ -6910,6 +7020,12 @@ async def create_chat_completion(
             if not content_for_parsing and reasoning_text:
                 content_for_parsing = reasoning_text
             reasoning_text = None
+        content_for_parsing = _dsv4_visible_content_fallback(
+            content_for_parsing,
+            reasoning_text,
+            is_dsv4=_is_dsv4,
+            suppress_reasoning=_suppress,
+        )
 
         # Post-parse cleaning: the parser operates on raw_text which carries
         # special markers (Gemma 4 `<|channel>`/`<channel|>`/`<turn|>`, Qwen
@@ -7008,6 +7124,86 @@ async def create_chat_completion(
 # =============================================================================
 # Responses API (OpenAI /v1/responses)
 # =============================================================================
+
+
+_RESPONSES_HISTORY_MAX = int(os.environ.get("VMLX_RESPONSES_HISTORY_MAX", "512"))
+_responses_history: "OrderedDict[str, list[dict]]" = OrderedDict()
+_responses_history_lock = threading.Lock()
+
+
+def _clone_response_messages(messages: list[dict]) -> list[dict]:
+    """JSON-deep-copy response history so later request mutation cannot leak."""
+    try:
+        return json.loads(json.dumps(messages))
+    except Exception:
+        return [dict(m) for m in messages if isinstance(m, dict)]
+
+
+def _responses_output_to_assistant_messages(output_items: list) -> list[dict]:
+    """Convert a Responses output array back to chat-history assistant turns."""
+    assistant_messages: list[dict] = []
+    content_parts: list[str] = []
+
+    def _field(obj, name, default=None):
+        if isinstance(obj, dict):
+            return obj.get(name, default)
+        return getattr(obj, name, default)
+
+    for item in output_items or []:
+        item_type = _field(item, "type")
+        if item_type == "reasoning":
+            # Reasoning is display metadata, not replayable chat content.
+            continue
+        if item_type == "function_call":
+            name = _field(item, "name", "")
+            arguments = _field(item, "arguments", "{}")
+            call_id = _field(item, "call_id") or f"call_{uuid.uuid4().hex[:8]}"
+            assistant_messages.append(
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": name, "arguments": arguments},
+                        }
+                    ],
+                }
+            )
+            continue
+        content = _field(item, "content") or []
+        for part in content:
+            ptype = _field(part, "type")
+            text = _field(part, "text")
+            if ptype in ("output_text", "text") and text:
+                content_parts.append(text)
+    if content_parts:
+        assistant_messages.append(
+            {"role": "assistant", "content": "\n".join(content_parts)}
+        )
+    return assistant_messages
+
+
+def _responses_store_history(response_id: str, messages: list[dict]) -> None:
+    if not response_id:
+        return
+    with _responses_history_lock:
+        _responses_history[response_id] = _clone_response_messages(messages)
+        _responses_history.move_to_end(response_id)
+        while len(_responses_history) > _RESPONSES_HISTORY_MAX:
+            _responses_history.popitem(last=False)
+
+
+def _responses_get_history(response_id: str | None) -> list[dict]:
+    if not response_id:
+        return []
+    with _responses_history_lock:
+        history = _responses_history.get(response_id)
+        if history is None:
+            return []
+        _responses_history.move_to_end(response_id)
+        return _clone_response_messages(history)
 
 
 def _extract_text_from_content(content) -> str:
@@ -7448,6 +7644,21 @@ async def create_response(
         request.instructions,
         preserve_multimodal=_preserve_mm,
     )
+    if request.previous_response_id:
+        previous_messages = _responses_get_history(request.previous_response_id)
+        if previous_messages:
+            messages = previous_messages + messages
+            logger.debug(
+                "Responses API restored %d history message(s) from %s",
+                len(previous_messages),
+                request.previous_response_id,
+            )
+        else:
+            logger.info(
+                "Responses API previous_response_id=%s not found in local history; "
+                "continuing with request input only",
+                request.previous_response_id,
+            )
 
     # DSV4 default-system-prompt injection (Responses path). See
     # /v1/chat/completions block for full rationale.
@@ -7574,7 +7785,7 @@ async def create_response(
 
 
     # DSV4 force-thinking + reasoning_effort handling — REAL /v1/responses
-    # path (Codex 2026-05-06 #1 #2). This is the actual route panel uses;
+    # path. This is the actual route panel uses;
     # the DSV4 block earlier in this same function (~7430) only sets the
     # default system prompt. Without this block, panel sends through
     # /v1/responses → DSV4 chat-mode contamination + bare-thinking with no
@@ -7587,11 +7798,23 @@ async def create_response(
         _allow_dsv4_chat_resp = os.environ.get(
             "VMLX_DSV4_ALLOW_CHAT", "0"
         ).lower() in {"1", "true", "yes"}
-        if request.enable_thinking is False and _allow_dsv4_chat_resp:
-            logger.warning(
-                "DSV4 (/v1/responses): VMLX_DSV4_ALLOW_CHAT=1 — honoring "
-                "explicit enable_thinking=False. Output may loop."
-            )
+        _dsv4_resp_direct_rail = bool(getattr(request, "tools", None)) or (
+            getattr(request, "tool_choice", None) == "none"
+        )
+        if request.enable_thinking is False and (
+            _allow_dsv4_chat_resp or _dsv4_resp_direct_rail
+        ):
+            if _allow_dsv4_chat_resp:
+                logger.warning(
+                    "DSV4 (/v1/responses): VMLX_DSV4_ALLOW_CHAT=1 — honoring "
+                    "explicit enable_thinking=False. Output may loop."
+                )
+            else:
+                logger.info(
+                    "DSV4 (/v1/responses): honoring enable_thinking=False "
+                    "for tool/tool-result request so visible text or DSML is "
+                    "emitted outside the reasoning rail."
+                )
             chat_kwargs["enable_thinking"] = False
             _ct_kwargs["enable_thinking"] = False
         else:
@@ -7623,7 +7846,7 @@ async def create_response(
             _ct_kwargs.pop("reasoning_effort", None)
 
         # (c) Diagnostic log so we can verify what actually goes to the
-        #     encoder. Codex requested explicit log of effective values.
+        #     encoder. Keep explicit logs of effective values.
         logger.info(
             f"DSV4 (/v1/responses) effective: enable_thinking="
             f"{chat_kwargs.get('enable_thinking')}, reasoning_effort="
@@ -7732,7 +7955,7 @@ async def create_response(
     # Pass merged tools to engine
     if all_tools:
         chat_kwargs["tools"] = convert_tools_for_template(all_tools)
-    elif _is_dsv4_resp_msgs and any(
+    elif not _suppress_tools and _is_dsv4_resp_msgs and any(
         isinstance(m, dict) and m.get("role") == "tool" for m in messages
     ):
         historical_tools = _synthesize_tools_from_message_tool_calls(messages)
@@ -7931,7 +8154,7 @@ async def create_response(
         # parsers (esp. Gemma 4 channel markers, Qwen 3.6 think tags) need the
         # special tokens that clean_output_text strips for display.
         _raw_for_parse = getattr(output, "raw_text", "") or output.text
-        # DSV4 /v1/responses debug instrumentation (Codex 2026-05-06 #84):
+        # DSV4 /v1/responses debug instrumentation:
         # log raw model output to confirm whether parser is failing or
         # model emitted </think> immediately, etc.
         if _is_dsv4_resp_msgs:
@@ -7972,6 +8195,12 @@ async def create_response(
             if not content_for_parsing and reasoning_text:
                 content_for_parsing = reasoning_text
             reasoning_text = None
+        content_for_parsing = _dsv4_visible_content_fallback(
+            content_for_parsing,
+            reasoning_text,
+            is_dsv4=_is_dsv4_resp_msgs,
+            suppress_reasoning=_suppress,
+        )
 
         # Post-parse cleaning — matches the chat_completions path so content
         # emitted by /v1/responses is stripped of residual `<channel|>`,
@@ -8079,12 +8308,17 @@ async def create_response(
                 fc_kwargs["call_id"] = tc_call_id
             output_items.append(ResponsesFunctionCall(**fc_kwargs))
 
-    return ResponsesObject(
+    response_obj = ResponsesObject(
         model=request.model,
         output=output_items,
         usage=_get_responses_usage(output),
         previous_response_id=request.previous_response_id,
     )
+    _responses_store_history(
+        response_obj.id,
+        messages + _responses_output_to_assistant_messages(output_items),
+    )
+    return response_obj
 
 
 def _inject_json_instruction(messages: list, instruction: str) -> list:
@@ -9744,7 +9978,7 @@ async def stream_responses_api(
                 # deltas (e.g., parser produced full block at end without
                 # incremental events). Use as fallback. NEVER falls through
                 # here when reasoning_was_streamed=True — that would be the
-                # B1 bug Codex caught (reasoning leaks into output_text →
+                # B1 bug: reasoning leaks into output_text →
                 # client sees internal thinking as visible answer →
                 # next-turn history pollution).
                 display_text = accumulated_reasoning
@@ -9756,7 +9990,7 @@ async def stream_responses_api(
                 if content_text:
                     display_text = content_text
                 elif reasoning_text and not reasoning_was_streamed:
-                    # Codex 2026-05-06 B1: only fall back to reasoning if it
+                    # Only fall back to reasoning if it
                     # wasn't already streamed. Otherwise we double-emit and
                     # pollute next-turn history.
                     display_text = reasoning_text
@@ -9767,7 +10001,7 @@ async def stream_responses_api(
                     display_text = ""
 
         if not display_text:
-            # Codex 2026-05-06 B1: if reasoning was streamed and we have no
+            # If reasoning was streamed and we have no
             # content, keep display_text EMPTY rather than falling back to
             # full_text (which contains the reasoning text). Empty
             # output_text is the correct signal — client renders the
@@ -9917,29 +10151,34 @@ async def stream_responses_api(
     _resp_extra: dict = {}
     if _resp_status == "incomplete":
         _resp_extra["incomplete_details"] = {"reason": "max_output_tokens"}
+    completed_response = {
+        "id": response_id,
+        "object": "response",
+        "created_at": created_at,
+        "status": _resp_status,
+        "model": request.model,
+        "output": all_output_items,
+        **_resp_extra,
+        "usage": {
+            "input_tokens": prompt_tokens,
+            "output_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+            **(
+                {"input_tokens_details": {"cached_tokens": _cached}}
+                if _cached > 0
+                else {}
+            ),
+        },
+    }
+    _responses_store_history(
+        response_id,
+        messages + _responses_output_to_assistant_messages(all_output_items),
+    )
     yield _sse(
         "response.completed",
         {
             "type": "response.completed",
-            "response": {
-                "id": response_id,
-                "object": "response",
-                "created_at": created_at,
-                "status": _resp_status,
-                "model": request.model,
-                "output": all_output_items,
-                **_resp_extra,
-                "usage": {
-                    "input_tokens": prompt_tokens,
-                    "output_tokens": completion_tokens,
-                    "total_tokens": prompt_tokens + completion_tokens,
-                    **(
-                        {"input_tokens_details": {"cached_tokens": _cached}}
-                        if _cached > 0
-                        else {}
-                    ),
-                },
-            },
+            "response": completed_response,
         },
     )
 

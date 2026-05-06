@@ -634,9 +634,14 @@ export class SessionManager extends EventEmitter {
           if (config.reasoningParser === undefined || config.reasoningParser === 'auto') {
             config.reasoningParser = freshConfig.reasoningParser || 'auto'
           }
-          // Refresh multimodal detection from disk — but only if user hasn't explicitly overridden
-          // (undefined = auto-detect, true/false = user forced via "Force On"/"Force Off" in settings)
-          if (config.isMultimodal === undefined) {
+          // Refresh multimodal detection from disk. A detected VLM must win
+          // over stale saved `isMultimodal=false` from older sessions; otherwise
+          // the app launches text-only and strips media for Qwen/Pixtral/etc.
+          // Smelt is handled later at launch time because it intentionally
+          // forces text-only loading.
+          if (freshConfig.isMultimodal === true) {
+            config.isMultimodal = true
+          } else if (config.isMultimodal === undefined) {
             config.isMultimodal = freshConfig.isMultimodal
           }
           // Log if model type changed
@@ -713,12 +718,14 @@ export class SessionManager extends EventEmitter {
 
     let proc: ChildProcess
     if (engineResult.type === 'bundled') {
-      // Bundled Python: spawn python3 -s -m vmlx_engine.cli serve <model> --host ... --port ...
+      // Bundled Python: spawn python3 -B -s -m vmlx_engine.cli serve <model> --host ... --port ...
+      // -B: do not write __pycache__ into the signed app bundle at runtime
       // -s: suppress user site-packages (~/.local/lib/python3.12/site-packages)
       // This avoids shebang path issues with relocatable Python and ensures
       // the app uses ONLY its bundled engine, never system-installed mlx-lm/vmlx-engine.
       const bundledEnv: Record<string, string | undefined> = {
         ...spawnEnv,
+        PYTHONDONTWRITEBYTECODE: '1',
         PYTHONNOUSERSITE: '1',  // Extra safety: disable user site-packages
         PYTHONPATH: undefined,  // Clear any inherited PYTHONPATH
         // vmlx#102/#116: brew-installed mlx/mlx-c can collide with bundled mlx
@@ -728,10 +735,10 @@ export class SessionManager extends EventEmitter {
         DYLD_FALLBACK_LIBRARY_PATH: undefined,
         DYLD_INSERT_LIBRARIES: undefined,
       }
-      const fullCmd = `${engineResult.pythonPath} -s -m vmlx_engine.cli ${args.join(' ')}`
+      const fullCmd = `${engineResult.pythonPath} -B -s -m vmlx_engine.cli ${args.join(' ')}`
       this.pushLog(sessionId, `$ ${fullCmd}`)
       this.emit('session:log', { sessionId, data: `$ ${fullCmd}\n` })
-      proc = spawn(engineResult.pythonPath, ['-s', '-m', 'vmlx_engine.cli', ...args], {
+      proc = spawn(engineResult.pythonPath, ['-B', '-s', '-m', 'vmlx_engine.cli', ...args], {
         env: bundledEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: true,  // Separate process group so we can kill entire group
@@ -1866,9 +1873,10 @@ export class SessionManager extends EventEmitter {
     // before smelt was turned on.
     const smeltActive = !!(config as any).smelt
     const isVLM = smeltActive ? false
-      : config.isMultimodal === true ? true
-        : config.isMultimodal === false ? false
-          : !!detected.isMultimodal
+      : detected.isMultimodal ? true
+        : config.isMultimodal === true ? true
+          : config.isMultimodal === false ? false
+            : false
     if (isVLM) args.push('--is-mllm')
 
     if (config.continuousBatching) args.push('--continuous-batching')
@@ -1965,9 +1973,9 @@ export class SessionManager extends EventEmitter {
     // KV cache quantization for stored prefix cache entries
     // TurboQuant handles live generation cache compression (always active).
     // q8/q4 here is ADDITIONAL compression for stored cache entries.
-    if (!prefixCacheOff && config.kvCacheQuantization && config.kvCacheQuantization !== 'none') {
+    if (!prefixCacheOff && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
       args.push('--kv-cache-quantization', config.kvCacheQuantization)
-      if (config.kvCacheGroupSize && config.kvCacheGroupSize !== 64) {
+      if (config.kvCacheQuantization !== 'none' && config.kvCacheGroupSize && config.kvCacheGroupSize !== 64) {
         args.push('--kv-cache-group-size', config.kvCacheGroupSize.toString())
       }
     }
@@ -2211,10 +2219,15 @@ export class SessionManager extends EventEmitter {
       const venvPython = join(sourceDir, '.venv', 'bin', 'python3')
       if (existsSync(venvPython)) {
         try {
-          execFileSync(venvPython, ['-s', '-c', 'import vmlx_engine'], {
+          execFileSync(venvPython, ['-B', '-s', '-c', 'import vmlx_engine'], {
             encoding: 'utf-8',
             timeout: 10000,
-            env: { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: '' },
+            env: {
+              ...process.env,
+              PYTHONDONTWRITEBYTECODE: '1',
+              PYTHONNOUSERSITE: '1',
+              PYTHONPATH: '',
+            },
           })
           console.log(`[SESSIONS] Using project venv: ${venvPython}`)
           return { type: 'bundled', pythonPath: venvPython }

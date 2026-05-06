@@ -6,7 +6,7 @@ Prefix: VMLX_
 
 Examples:
     VMLX_CODEBOOK_MEMORY_LIMIT_MB=65536
-    VMLX_KV_CACHE_QUANTIZATION=turboquant
+    VMLX_MEMORY_KV_CACHE_QUANTIZATION=q4
     VMLX_TURBOQUANT_KEY_BITS=4
     VMLX_HYBRID_SSM_RECOMPUTE=full
     VMLX_USE_METAL=true
@@ -24,6 +24,8 @@ ENV_PREFIX = "VMLX_"
 # Mapping from env var names to config paths
 ENV_TO_PATH = {
     # Memory settings
+    # Back-compat alias for older docs/configs.
+    "VMLX_KV_CACHE_QUANTIZATION": "memory.kv_cache.quantization",
     "VMLX_MEMORY_TOTAL_BUDGET_PERCENT": "memory.total_budget_percent",
     "VMLX_MEMORY_KV_CACHE_QUANTIZATION": "memory.kv_cache.quantization",
     "VMLX_MEMORY_KV_CACHE_MEMORY_LIMIT_MB": "memory.kv_cache.memory_limit_mb",

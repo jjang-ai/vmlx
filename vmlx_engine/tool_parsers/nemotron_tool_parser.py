@@ -37,7 +37,7 @@ class NemotronToolParser(ToolParser):
 
     # Pattern for Nemotron-style with parameters
     TOOL_CALL_PATTERN = re.compile(
-        r"<tool_call>\s*<function=([^>]+)>(.*?)</function>\s*</tool_call>",
+        r"(?:<tool_call>\s*)?<function=([^>]+)>(.*?)</function>\s*(?:</tool_call>)?",
         re.DOTALL,
     )
 
@@ -53,7 +53,7 @@ class NemotronToolParser(ToolParser):
         """
         Extract tool calls from Nemotron model output.
         """
-        if "<tool_call>" not in model_output:
+        if "<tool_call>" not in model_output and "<function=" not in model_output:
             return ExtractedToolCallInformation(
                 tools_called=False, tool_calls=[], content=model_output
             )
@@ -137,10 +137,10 @@ class NemotronToolParser(ToolParser):
         """
         Extract tool calls from streaming Nemotron model output.
         """
-        if "<tool_call>" not in current_text:
+        if "<tool_call>" not in current_text and "<function=" not in current_text:
             return {"content": delta_text}
 
-        if "</tool_call>" in delta_text:
+        if "</tool_call>" in delta_text or "</function>" in delta_text:
             result = self.extract_tool_calls(current_text)
             if result.tools_called:
                 return {

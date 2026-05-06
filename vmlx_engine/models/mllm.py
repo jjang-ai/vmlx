@@ -33,6 +33,57 @@ from vmlx_engine.mllm_cache import MLLMPrefixCacheManager
 logger = logging.getLogger(__name__)
 
 
+_VLM_STREAM = None
+
+
+def _vlm_stream():
+    """Create one stream for simple mlx-vlm generation paths.
+
+    The batched VLM scheduler already pins MLX work to a dedicated stream.
+    SimpleEngine's direct `mlx_vlm.stream_generate` path must do the same or
+    JANGTQ/VL kernels can later materialize on a thread with no MLX stream.
+    """
+    global _VLM_STREAM
+    if _VLM_STREAM is None:
+        try:
+            import mlx.core as mx
+
+            _VLM_STREAM = mx.new_stream(mx.default_device())
+        except Exception:
+            try:
+                import mlx.core as mx
+
+                _VLM_STREAM = mx.default_stream(mx.default_device())
+            except Exception:
+                _VLM_STREAM = False
+    return None if _VLM_STREAM is False else _VLM_STREAM
+
+
+class _MaybeVLMStream:
+    __slots__ = ("_cm",)
+
+    def __init__(self):
+        self._cm = None
+        stream = _vlm_stream()
+        if stream is not None:
+            try:
+                import mlx.core as mx
+
+                self._cm = mx.stream(stream)
+            except Exception:
+                self._cm = None
+
+    def __enter__(self):
+        if self._cm is not None:
+            self._cm.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        if self._cm is not None:
+            return self._cm.__exit__(*exc)
+        return False
+
+
 class TempFileManager:
     """Thread-safe manager for tracking and cleaning up temporary files."""
 
@@ -1443,16 +1494,17 @@ class MLXMultimodalLM:
         else:
             formatted_prompt = prompt
 
-        for chunk in stream_generate(
-            self.model,
-            self.processor,
-            formatted_prompt,
-            all_images if all_images else None,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            **kwargs,
-        ):
-            yield chunk
+        with _MaybeVLMStream():
+            for chunk in stream_generate(
+                self.model,
+                self.processor,
+                formatted_prompt,
+                all_images if all_images else None,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                **kwargs,
+            ):
+                yield chunk
 
     def chat(
         self,
@@ -1930,31 +1982,32 @@ class MLXMultimodalLM:
             )
 
         try:
-            for chunk in stream_generate(
-                self.model,
-                self.processor,
-                formatted_prompt,
-                all_images if all_images else None,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                prompt_cache=prompt_cache,
-                **kwargs,
-            ):
-                token_count += 1
-                # chunk is a GenerationResult with .text attribute containing the new token
-                new_text = chunk.text if hasattr(chunk, "text") else str(chunk)
-                accumulated_text += new_text
+            with _MaybeVLMStream():
+                for chunk in stream_generate(
+                    self.model,
+                    self.processor,
+                    formatted_prompt,
+                    all_images if all_images else None,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    prompt_cache=prompt_cache,
+                    **kwargs,
+                ):
+                    token_count += 1
+                    # chunk is a GenerationResult with .text attribute containing the new token
+                    new_text = chunk.text if hasattr(chunk, "text") else str(chunk)
+                    accumulated_text += new_text
 
-                chunk_prompt_tokens = getattr(chunk, "prompt_tokens", 0)
-                if chunk_prompt_tokens:
-                    last_prompt_tokens = chunk_prompt_tokens
+                    chunk_prompt_tokens = getattr(chunk, "prompt_tokens", 0)
+                    if chunk_prompt_tokens:
+                        last_prompt_tokens = chunk_prompt_tokens
 
-                yield MLLMOutput(
-                    text=new_text,  # Just the new token for streaming
-                    finish_reason=None,
-                    prompt_tokens=last_prompt_tokens,
-                    completion_tokens=token_count,
-                )
+                    yield MLLMOutput(
+                        text=new_text,  # Just the new token for streaming
+                        finish_reason=None,
+                        prompt_tokens=last_prompt_tokens,
+                        completion_tokens=token_count,
+                    )
         except Exception as e:
             # Catch OOM and other generation errors to prevent server crash.
             # Try to free Metal memory before reporting the error.

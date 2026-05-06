@@ -38,7 +38,7 @@ echo "==> Upgrading pip..."
 # Uses opencv-python-headless instead of opencv-python (no GUI deps, smaller)
 echo "==> Installing dependencies..."
 "$PYTHON" -m pip install \
-  "mlx>=0.29.0" "mlx-lm>=0.30.2" "mlx-vlm>=0.1.0" \
+  "mlx>=0.29.0" "mlx-lm>=0.31.2" "mlx-vlm>=0.4.3" \
   "transformers>=4.40.0" "tokenizers>=0.19.0" "huggingface-hub>=0.23.0" \
   "numpy>=1.24.0" "pillow>=10.0.0" \
   "opencv-python-headless>=4.8.0" \
@@ -48,6 +48,7 @@ echo "==> Installing dependencies..."
   "requests>=2.28.0" "tabulate>=0.9.0" "mlx-embeddings>=0.0.5" \
   "tiktoken>=0.7.0" \
   "soundfile>=0.12" \
+  "mflux>=0.16.0" \
   "timm>=1.0.20"  # Kimi K2.6 tokenizer + Nemotron-Omni audio (soundfile) + Omni RADIO ViT (timm)
 
 # Install mlx-audio for STT/TTS (--no-deps: it pins exact mlx-lm/transformers versions
@@ -83,7 +84,7 @@ if [ -f "$VMLX_LOCAL/pyproject.toml" ] && [ -d "$VMLX_LOCAL/vmlx_engine" ]; then
   "$PYTHON" -m pip install --no-deps "$VMLX_LOCAL"
 else
   echo "    local vmlx missing, falling back to PyPI"
-  "$PYTHON" -m pip install --no-deps "vmlx>=1.5.9"
+  "$PYTHON" -m pip install --no-deps "vmlx>=1.5.24"
 fi
 JANG_LOCAL="$HOME/jang/jang-tools"
 if [ -f "$JANG_LOCAL/pyproject.toml" ]; then
@@ -91,7 +92,7 @@ if [ -f "$JANG_LOCAL/pyproject.toml" ]; then
   "$PYTHON" -m pip install --no-deps "$JANG_LOCAL"
 else
   echo "    local jang-tools missing, falling back to PyPI"
-  "$PYTHON" -m pip install --no-deps "jang>=2.5.15"
+  "$PYTHON" -m pip install --no-deps "jang>=2.5.26"
 fi
 
 # Verify it works
@@ -427,6 +428,39 @@ if [ "$ENABLE_USER_SITE" = "False" ]; then
 else
   echo "WARNING: -s flag did not suppress user site-packages"
 fi
+
+echo ""
+# Post-bundle: rewrite shebangs in console scripts to the install location.
+# pip bakes the source bundled-python path into shebangs (e.g.
+# `#!/Users/eric/mlx/vllm-mlx/panel/bundled-python/python/bin/python3`),
+# which would ship to users and never resolve. Rewrite to the .app install
+# path so terminal users running `vmlx-serve` directly work.
+#
+# Use env -S so the script entry points also run with -B -s. Without -B,
+# direct console-script use writes __pycache__ into the signed .app bundle
+# and invalidates the sealed Resources signature after first launch.
+echo "==> Rewriting console-script shebangs to install path..."
+INSTALL_PYTHON="/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
+INSTALL_SHEBANG="/usr/bin/env -S $INSTALL_PYTHON -B -s"
+SOURCE_PYTHON="$BUNDLE_DIR/python/bin/python3"
+SHEBANG_FIXED=0
+for SCRIPT in "$BUNDLE_DIR/python/bin/"*; do
+  if [ -f "$SCRIPT" ] && head -c 2 "$SCRIPT" 2>/dev/null | grep -q '^#!'; then
+    if head -1 "$SCRIPT" 2>/dev/null | grep -qF "$SOURCE_PYTHON"; then
+      sed -i '' "1s|^#!$SOURCE_PYTHON\$|#!$INSTALL_SHEBANG|" "$SCRIPT"
+      SHEBANG_FIXED=$((SHEBANG_FIXED + 1))
+    fi
+  fi
+done
+echo "  rewrote $SHEBANG_FIXED shebangs to $INSTALL_SHEBANG"
+# Sanity check — no script should still reference the source path
+LEAKED=$(grep -lF "$SOURCE_PYTHON" "$BUNDLE_DIR/python/bin/"* 2>/dev/null | head -3)
+if [ -n "$LEAKED" ]; then
+  echo "ERROR: source path still in shebangs after rewrite:"
+  echo "$LEAKED"
+  exit 1
+fi
+echo "  no source-path leaks (good)"
 
 echo ""
 echo "==> Bundle size:"

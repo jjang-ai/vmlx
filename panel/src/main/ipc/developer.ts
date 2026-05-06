@@ -8,7 +8,12 @@ let cancelled = false
 let bufferedLogLines: string[] = []  // Persists across component mounts for reconnection
 
 function buildCliEnv(): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = { ...process.env, PYTHONNOUSERSITE: '1', PYTHONPATH: undefined }
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    PYTHONDONTWRITEBYTECODE: '1',
+    PYTHONNOUSERSITE: '1',
+    PYTHONPATH: undefined,
+  }
   try {
     const hfToken = db.getSetting('hf_api_key')
     if (hfToken) env.HF_TOKEN = hfToken
@@ -23,7 +28,7 @@ function resolveCliSpawn(subcommandArgs: string[]): { cmd: string; args: string[
   if (engineResult?.type === 'bundled') {
     return {
       cmd: engineResult.pythonPath,
-      args: ['-s', '-m', 'vmlx_engine.cli', ...subcommandArgs],
+      args: ['-B', '-s', '-m', 'vmlx_engine.cli', ...subcommandArgs],
       env,
     }
   }
@@ -37,7 +42,7 @@ function resolveCliSpawn(subcommandArgs: string[]): { cmd: string; args: string[
   // Last resort: bare python3 (may not have vmlx_engine installed)
   return {
     cmd: 'python3',
-    args: ['-s', '-m', 'vmlx_engine.cli', ...subcommandArgs],
+    args: ['-B', '-s', '-m', 'vmlx_engine.cli', ...subcommandArgs],
     env,
   }
 }

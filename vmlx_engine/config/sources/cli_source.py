@@ -7,7 +7,7 @@ Usage:
     # In server startup
     args = parse_cli_args([
         "--codebook-memory-limit-mb", "65536",
-        "--kv-cache-quantization", "turboquant",
+        "--kv-cache-quantization", "q4",
         "--turboquant-key-bits", "4",
         "--hybrid-ssm-recompute", "full",
         "--use-metal",
@@ -106,12 +106,21 @@ class CLIConfigSource:
         for cli_arg, config_path, arg_type in CLI_ARGS:
             # Handle negation flags
             normalized_key = cli_arg.lstrip("-").replace("-", "_")
+            raw_key = cli_arg
+            dashed_key = cli_arg.lstrip("-")
+
+            value_present = False
+            value = None
+            for key in (normalized_key, raw_key, dashed_key):
+                if key in args:
+                    value_present = True
+                    value = args[key]
+                    break
 
             if cli_arg == "--no-metal":
-                if normalized_key in args:
-                    self._overrides[config_path] = not bool(args[normalized_key])
-            elif normalized_key in args:
-                value = args[normalized_key]
+                if value_present:
+                    self._overrides[config_path] = not bool(value)
+            elif value_present:
                 if value is None:
                     continue
 
@@ -174,7 +183,7 @@ def create_argument_parser() -> argparse.ArgumentParser:
 Examples:
   vmlx serve Qwen3.5-35B-A3B-CODEBOOK-TEST \\
       --codebook-memory-limit-mb 65536 \\
-      --kv-cache-quantization turboquant \\
+      --kv-cache-quantization q4 \\
       --turboquant-key-bits 4 \\
       --hybrid-ssm-recompute full \\
       --use-metal
@@ -195,8 +204,11 @@ Examples:
     )
     mem_group.add_argument(
         "--kv-cache-quantization",
-        choices=["none", "q4", "q8", "turboquant"],
-        help="KV cache quantization method",
+        choices=["none", "q4", "q8"],
+        help=(
+            "Stored KV/prefix-cache quantization method. JANG/JANGTQ "
+            "TurboQuant KV is auto-detected from bundle metadata."
+        ),
     )
     mem_group.add_argument(
         "--codebook-memory-limit-mb",
@@ -326,7 +338,7 @@ def parse_cli_args(args: Optional[List[str]] = None) -> Dict[str, Any]:
     # Convert Namespace to dict, excluding None values
     result = {}
     for key, value in vars(parsed).items():
-        if value is not None:
+        if value is not None and value is not False:
             # Convert underscores to hyphens for CLI keys
             cli_key = f"--{key.replace('_', '-')}"
             result[cli_key] = value

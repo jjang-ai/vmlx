@@ -954,16 +954,18 @@ class TestEngineState:
 
 class TestLoadMethod:
 
-    def test_mflux_not_installed_raises(self):
+    def test_mflux_not_installed_raises(self, tmp_path):
         from vmlx_engine.image_gen import ImageGenEngine
         engine = ImageGenEngine()
+        (tmp_path / "transformer").mkdir()
+        (tmp_path / "transformer" / "0.safetensors").write_bytes(b"fake")
 
         with patch.dict(sys.modules, {"mflux": None, "mflux.models": None,
                                        "mflux.models.common": None,
                                        "mflux.models.common.config": None,
                                        "mflux.models.common.config.model_config": None}):
             with pytest.raises(ImportError, match="mflux not installed"):
-                engine.load("schnell")
+                engine.load("schnell", model_path=str(tmp_path))
 
     def test_alias_resolution_flux_schnell(self, tmp_path):
         """load('flux-schnell') should resolve to 'schnell' internally."""

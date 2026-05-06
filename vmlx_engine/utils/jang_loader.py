@@ -142,16 +142,11 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
 
     _tq_cfg = jang_cfg.get("turboquant")
     if not _tq_cfg:
-        # 2026-05-02: removed auto-enable. The Swift-side TurboQuant regression
-        # fix (2026-04-16: Nemotron 2.4→61.4 t/s, 25× speedup; Gemma4 26B
-        # 34.9→49 +40%; Qwen9B 69→98 +42%) found that default-on TQ KV taxed
-        # every MoE/hybrid model AND on Qwen3.6-27B-JANG_4M-CRACK (hybrid SSM
-        # VLM, mixed [4,8] bits) it produces incoherent garbage output (the
-        # exact symptom in mlxstudio#95-class reports). Bundles that NEED TQ
-        # KV must set `turboquant.enabled: true` in jang_config.json
-        # explicitly (calibrated bundles do this at convert time).
-        # Override: env VMLX_FORCE_TQ_AUTO=1 re-enables the legacy auto path
-        # for A/B comparison only.
+        # Auto mode is selected by the CLI/panel when the user has not
+        # explicitly disabled TQ. Bundles with a calibrated turboquant block
+        # use it directly; older JANG/JANGTQ bundles get conservative defaults.
+        # Explicit `--kv-cache-quantization ...` sets VMLX_DISABLE_TQ_KV=1
+        # before load if the user wants generic q4/q8 storage without live TQ.
         import os as _os_tq
         if _os_tq.environ.get("VMLX_FORCE_TQ_AUTO") == "1":
             _tq_cfg = {
@@ -163,7 +158,7 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
                 "critical_layers": [0, 1, 2, -3, -2, -1],
                 "seed": 42,
             }
-            logger.info("  TurboQuant auto-enabled via VMLX_FORCE_TQ_AUTO=1 (legacy path)")
+            logger.info("  TurboQuant auto-enabled via VMLX_FORCE_TQ_AUTO=1")
         else:
             logger.info(
                 "  TurboQuant: not enabled (jang_config has no `turboquant` block; "
@@ -180,7 +175,18 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
         logger.warning("  TurboQuant config found but turboquant module not available")
         return
 
-    n_layers = len(model.layers)
+    # Use the model's native cache contract, not `len(model.layers)`.
+    # Ling/Bailing appends MTP layers to `model.layers` but intentionally
+    # omits them from make_cache()/forward generation. Counting layers here
+    # produced an extra TQ cache slot and a fake attention layer.
+    try:
+        _native_cache = model.make_cache()
+        n_layers = len(_native_cache)
+        _native_cache_types = [type(c).__name__ for c in _native_cache]
+        del _native_cache
+    except Exception:
+        n_layers = len(model.layers)
+        _native_cache_types = []
     # Use _tq_cfg (which may be auto-generated defaults) instead of re-reading jang_cfg
     tq_config = TurboQuantConfig.from_jang_config({"turboquant": _tq_cfg}, n_layers)
     if not tq_config:
@@ -189,14 +195,54 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
     # Get text config (may be nested under text_config for VLM wrappers)
     _text_cfg = model_config.get("text_config", model_config)
 
+    try:
+        _logical_layers = int(
+            _text_cfg.get("num_hidden_layers")
+            or model_config.get("num_hidden_layers")
+            or len(getattr(model, "layers", []) or [])
+            or n_layers
+        )
+    except Exception:
+        _logical_layers = n_layers
+
     _layer_types, _key_dim, _val_dim = _detect_turboquant_layer_types(
-        _text_cfg, n_layers, root_cfg=model_config
+        _text_cfg, _logical_layers, root_cfg=model_config
     )
+    if len(_layer_types) != n_layers:
+        _native_layer_types, _native_key_dim, _native_val_dim = (
+            _detect_turboquant_layer_types(_text_cfg, n_layers, root_cfg=model_config)
+        )
+        if len(_native_layer_types) == n_layers:
+            _layer_types, _key_dim, _val_dim = (
+                _native_layer_types,
+                _native_key_dim,
+                _native_val_dim,
+            )
+        elif _native_cache_types:
+            _layer_types = [
+                "ssm" if t in ("ArraysCache", "MambaCache", "BatchMambaCache")
+                else "attention"
+                for t in _native_cache_types
+            ]
+            logger.warning(
+                "  TurboQuant cache layout inferred from native make_cache types "
+                "(detector produced %d entries for %d native cache slots)",
+                len(_native_layer_types),
+                n_layers,
+            )
+        else:
+            logger.warning(
+                "  TurboQuant cache layout mismatch: detector produced %d "
+                "entries for %d native cache slots; falling back to all-attention",
+                len(_layer_types),
+                n_layers,
+            )
+            _layer_types = ["attention"] * n_layers
 
     _n_attn = sum(1 for t in _layer_types if t == "attention")
     _n_ssm = sum(1 for t in _layer_types if t == "ssm")
     _n_cache = len(_layer_types)
-    _n_skip = n_layers - _n_cache
+    _n_skip = max(0, _logical_layers - _n_cache)
     if _n_ssm > 0 or _n_skip > 0:
         logger.info(
             f"  Hybrid model: {_n_attn} attention + {_n_ssm} SSM"
@@ -297,6 +343,11 @@ def is_jang_model(model_path: str | Path) -> bool:
     # capability-only stamp on a stock MLX bundle.
     JANG_CODEC_FORMATS = {"jang", "jjqf", "mxq", "mxtq"}
     if fmt in JANG_CODEC_FORMATS or weight_format in JANG_CODEC_FORMATS:
+        return True
+    # Legacy JANG/JJQF bundles can carry an otherwise-empty config file. Treat
+    # presence of the stamp as JANG unless it explicitly declares a stock MLX
+    # weight format, which is the capability-only case above documents.
+    if fmt is None and weight_format is None:
         return True
     return False
 

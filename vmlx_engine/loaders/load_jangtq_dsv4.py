@@ -53,6 +53,7 @@ _INSTANT_LOAD_PATCH_INSTALLED = False
 # Sidecar manifest schema version. Bump when the on-disk layout changes so
 # stale caches are auto-invalidated.
 _INSTANT_LOAD_SCHEMA = 1
+_INSTANT_LOAD_RUNTIME_PATCH = "dsv4-prefill-mask-v1-switchglu-marker-v2-mla-bitfix-v1"
 _SIDECAR_FILENAME = "jangtq_stacked.safetensors"
 _SIDECAR_MANIFEST = "jangtq_stacked.json"
 
@@ -198,23 +199,34 @@ def _bundle_shard_signature(model_path) -> dict:
 def _sidecar_paths(model_path):
     """Return ``(sidecar_safetensors, sidecar_manifest)`` for the bundle.
 
-    Tries the bundle directory first (so the cache lives next to the
-    weights and survives bundle moves). Falls back to
-    ``~/.cache/vmlx-engine/jangtq-stacked/<sha8>/`` when the bundle is
-    read-only (DMG-mounted, network share, etc.).
+    Always uses ``~/.cache/vmlx-engine/jangtq-stacked/<sha16>/`` so the
+    sidecar never pollutes the bundle directory. Earlier behavior wrote
+    next to the weights when writable, but that bloats user model dirs
+    by ~65 GB per DSV4 bundle and contaminates HF re-uploads.
+
+    For bundle-dir compatibility: if a legacy sidecar still exists next
+    to the weights it is honored at load time (``_try_fast_load_dsv4``
+    checks both locations). Writes always go to ``~/.cache``.
     """
     from hashlib import sha256
     from pathlib import Path
 
     bundle = Path(model_path).resolve()
-    primary = bundle / _SIDECAR_FILENAME
-    primary_manifest = bundle / _SIDECAR_MANIFEST
-    if os.access(str(bundle), os.W_OK):
-        return primary, primary_manifest
     digest = sha256(str(bundle).encode()).hexdigest()[:16]
     cache_dir = Path.home() / ".cache" / "vmlx-engine" / "jangtq-stacked" / digest
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / _SIDECAR_FILENAME, cache_dir / _SIDECAR_MANIFEST
+
+
+def _legacy_bundle_sidecar_paths(model_path):
+    """Legacy in-bundle sidecar path (for back-compat with older releases
+    that wrote sidecars next to the weights). Read-only — used by
+    ``_try_fast_load_dsv4`` when ``_sidecar_paths`` has nothing.
+    """
+    from pathlib import Path
+
+    bundle = Path(model_path).resolve()
+    return bundle / _SIDECAR_FILENAME, bundle / _SIDECAR_MANIFEST
 
 
 def _try_fast_load_dsv4(model, model_path, mxtq_seed) -> bool:
@@ -234,7 +246,20 @@ def _try_fast_load_dsv4(model, model_path, mxtq_seed) -> bool:
 
     sidecar, manifest_path = _sidecar_paths(model_path)
     if not sidecar.exists() or not manifest_path.exists():
-        return False
+        # Back-compat: legacy releases wrote the sidecar next to the bundle.
+        # If a current ~/.cache one isn't present, fall back to the legacy
+        # in-bundle path (read-only). New writes still go to ~/.cache via
+        # _sidecar_paths.
+        legacy_sidecar, legacy_manifest = _legacy_bundle_sidecar_paths(model_path)
+        if legacy_sidecar.exists() and legacy_manifest.exists():
+            _log.info(
+                "DSV4 fast-load: using legacy in-bundle sidecar at %s "
+                "(future writes will go to ~/.cache)",
+                legacy_sidecar,
+            )
+            sidecar, manifest_path = legacy_sidecar, legacy_manifest
+        else:
+            return False
     try:
         manifest = json.loads(manifest_path.read_text())
     except Exception as e:
@@ -246,6 +271,12 @@ def _try_fast_load_dsv4(model, model_path, mxtq_seed) -> bool:
             manifest.get("schema"), _INSTANT_LOAD_SCHEMA,
         )
         return False
+    if manifest.get("runtime_patch") != _INSTANT_LOAD_RUNTIME_PATCH:
+        _log.info(
+            "DSV4 fast-load: runtime patch=%r vs current=%r — invalidating",
+            manifest.get("runtime_patch"), _INSTANT_LOAD_RUNTIME_PATCH,
+        )
+        return False
     if manifest.get("mxtq_seed") != int(mxtq_seed):
         _log.info("DSV4 fast-load: seed mismatch — invalidating")
         return False
@@ -254,6 +285,21 @@ def _try_fast_load_dsv4(model, model_path, mxtq_seed) -> bool:
         return False
 
     try:
+        try:
+            from vmlx_engine.cache_record_validator import reject_safetensors_or_warn
+        except Exception:
+            reject_safetensors_or_warn = None
+        if reject_safetensors_or_warn is not None:
+            if not reject_safetensors_or_warn(
+                str(sidecar),
+                source="dsv4-fast-load-sidecar",
+                delete_on_reject=True,
+            ):
+                try:
+                    manifest_path.unlink()
+                except OSError:
+                    pass
+                return False
         weights = mx.load(str(sidecar))
     except Exception as e:
         _log.warning("DSV4 fast-load: mx.load(%s) failed (%s)", sidecar, e)
@@ -355,18 +401,25 @@ def _try_fast_load_dsv4(model, model_path, mxtq_seed) -> bool:
         from jang_tools.turboquant.gather_tq_kernel import make_gather_tq_decode_per_row
         from jang_tools.turboquant.hadamard_kernel import hadamard_rotate_metal
 
-        _orig_switchglu_call = SwitchGLU.__call__
+        _orig_switchglu_call = getattr(
+            SwitchGLU, "_vmlx_dsv4_original_call", SwitchGLU.__call__
+        )
+        setattr(SwitchGLU, "_vmlx_dsv4_original_call", _orig_switchglu_call)
         _decode_compiled: dict = {}
 
-        def _get_compiled_decode(in_f, out_f, bits, k, swiglu_limit=0.0):
+        def _get_compiled_decode(
+            in_f, out_f, bits, k, swiglu_limit=0.0, dp_bits=None
+        ):
+            if dp_bits is None:
+                dp_bits = bits
             limit_milli = int(round(float(swiglu_limit or 0.0) * 1000.0))
-            cache_key = (in_f, out_f, bits, k, limit_milli)
+            cache_key = (in_f, out_f, bits, dp_bits, k, limit_milli)
             if cache_key in _decode_compiled:
                 return _decode_compiled[cache_key]
             fused_gu = make_fused_gate_up_swiglu_decode(
                 in_f, out_f, bits, k, swiglu_limit=swiglu_limit
             )
-            gather_dn = make_gather_tq_decode_per_row(out_f, in_f, bits, k)
+            gather_dn = make_gather_tq_decode_per_row(out_f, in_f, dp_bits, k)
 
             def _mlp(x_flat, pg, ng, pu, nu, pd, nd, cb_gate, cb_down, signs_in, signs_dn, idx_flat):
                 x_rot = hadamard_rotate_metal(x_flat, signs_in)
@@ -378,6 +431,8 @@ def _try_fast_load_dsv4(model, model_path, mxtq_seed) -> bool:
             return _decode_compiled[cache_key]
 
         def _dsv4_fused_switchglu_call(self, x, indices):
+            if not getattr(self, "_vmlx_dsv4_fused_fastpath", False):
+                return _orig_switchglu_call(self, x, indices)
             gp = self.gate_proj
             up = self.up_proj
             dp = self.down_proj
@@ -395,7 +450,12 @@ def _try_fast_load_dsv4(model, model_path, mxtq_seed) -> bool:
             if can_fast and not getattr(self, "training", False):
                 idx_flat = indices.reshape(-1).astype(mx.uint32)
                 compiled_mlp = _get_compiled_decode(
-                    gp.in_features, gp.out_features, gp.bits, k, swiglu_limit
+                    gp.in_features,
+                    gp.out_features,
+                    gp.bits,
+                    k,
+                    swiglu_limit,
+                    dp_bits=dp.bits,
                 )
                 y = compiled_mlp(
                     x_flat.astype(mx.float32),
@@ -432,12 +492,15 @@ def _try_fast_load_dsv4(model, model_path, mxtq_seed) -> bool:
             return x_out.squeeze(-2)
 
         SwitchGLU.__call__ = _dsv4_fused_switchglu_call
-        n_patched = sum(
-            1 for _, m in model.named_modules()
-            if isinstance(m, SwitchGLU)
-            and isinstance(getattr(m, "gate_proj", None), TurboQuantSwitchLinear)
-            and isinstance(getattr(m, "up_proj", None), TurboQuantSwitchLinear)
-        )
+        n_patched = 0
+        for _, m in model.named_modules():
+            if (
+                isinstance(m, SwitchGLU)
+                and isinstance(getattr(m, "gate_proj", None), TurboQuantSwitchLinear)
+                and isinstance(getattr(m, "up_proj", None), TurboQuantSwitchLinear)
+            ):
+                setattr(m, "_vmlx_dsv4_fused_fastpath", True)
+                n_patched += 1
         _log.info(
             "DSV4 fast-load: SwitchGLU fused gate+up patch applied (%d TQ instances)",
             n_patched,
@@ -563,6 +626,7 @@ def _write_sidecar_after_hydrate(model, model_path, mxtq_seed) -> None:
 
     manifest = {
         "schema": _INSTANT_LOAD_SCHEMA,
+        "runtime_patch": _INSTANT_LOAD_RUNTIME_PATCH,
         "mxtq_seed": int(mxtq_seed),
         "shard_signature": _bundle_shard_signature(model_path),
         "groups": groups,
@@ -638,6 +702,37 @@ def _install_dsv4_instant_load_patch() -> None:
     _orig_streaming = _lj._hydrate_dsv4_jangtq_streaming
 
     def _patched_streaming(model, model_path, mxtq_seed, skip_params_eval=False):
+        # JANGTQ-PRESTACK STANDARD: a bundle whose model.safetensors already
+        # ships routed-expert tensors pre-stacked under
+        # `{prefix}.{ffn|mlp|block_sparse_moe}.switch_mlp.{proj}.tq_packed`
+        # IS the format the sidecar would cache. Skip both (a) the fast-load
+        # sidecar attempt and (b) the post-hydrate sidecar write, otherwise
+        # the loader emits a 65 GB jangtq_stacked.safetensors next to a
+        # bundle that doesn't need one and that the user explicitly built to
+        # avoid. The generic loader (deferred-to inside _orig_streaming) has
+        # its own prestack_pat branch that picks up these tensors directly.
+        try:
+            from pathlib import Path as _P
+            import json as _json
+            _idx_path = _P(model_path) / "model.safetensors.index.json"
+            if _idx_path.is_file():
+                _idx = _json.loads(_idx_path.read_text())
+                _is_prestacked = any(
+                    ".switch_mlp." in k and ".tq_packed" in k
+                    for k in _idx.get("weight_map", {})
+                )
+            else:
+                _is_prestacked = False
+        except Exception:
+            _is_prestacked = False
+        if _is_prestacked:
+            _log.info(
+                "DSV4 bundle is JANGTQ-PRESTACK format — skipping sidecar "
+                "fast-load + post-hydrate sidecar write."
+            )
+            return _orig_streaming(
+                model, model_path, mxtq_seed, skip_params_eval=skip_params_eval
+            )
         if os.environ.get("JANGTQ_DISABLE_DSV4_FAST_LOAD", "0") != "1":
             if _try_fast_load_dsv4(model, model_path, mxtq_seed):
                 return
@@ -710,6 +805,29 @@ def _install_dsv4_memory_defaults() -> None:
         pass
 
 
+def _configure_dsv4_pool_quant_default() -> str:
+    """Use DSV4 pool quant when the installed JANG runtime supports it.
+
+    Older JANG builds used a peer ``PoolQuantizedV4Cache`` class that failed
+    DeepseekV4Cache isinstance gates. Current JANG subclasses DeepseekV4Cache,
+    which is the correct SWA+CSA/HSA-compatible path and should be the default.
+    Preserve an explicit user env override.
+    """
+    os.environ["DSV4_LONG_CTX"] = "1"
+    if "DSV4_POOL_QUANT" in os.environ:
+        return os.environ["DSV4_POOL_QUANT"]
+    supported = False
+    try:
+        from jang_tools.dsv4.mlx_model import DeepseekV4Cache
+        from jang_tools.dsv4.pool_quant_cache import PoolQuantizedV4Cache
+
+        supported = issubclass(PoolQuantizedV4Cache, DeepseekV4Cache)
+    except Exception as e:
+        _log.warning("DSV4 pool quant support check failed: %s", e)
+    os.environ["DSV4_POOL_QUANT"] = "1" if supported else "0"
+    return os.environ["DSV4_POOL_QUANT"]
+
+
 def load_jangtq_dsv4_model(model_path: str, *, skip_params_eval: bool = True) -> Tuple[Any, Any]:
     """Load a DeepSeek V4 JANGTQ bundle.
 
@@ -740,10 +858,10 @@ def load_jangtq_dsv4_model(model_path: str, *, skip_params_eval: bool = True) ->
     # DSV4_LONG_CTX=1 is the only supported runtime mode. The upstream JANG
     # prefill shape bug for prompts > sliding_window is patched in this
     # process by ``_install_dsv4_prefill_patch()`` (called below). Pool
-    # quant remains off because PoolQuantizedV4Cache is not a subclass of
-    # DeepseekV4Cache in the engine's isinstance gates.
-    os.environ["DSV4_LONG_CTX"] = "1"
-    os.environ["DSV4_POOL_QUANT"] = "0"
+    # quant is enabled by default only when the installed JANG runtime's
+    # PoolQuantizedV4Cache subclasses DeepseekV4Cache.
+    pool_quant = _configure_dsv4_pool_quant_default()
+    _log.info("DSV4 runtime defaults: DSV4_LONG_CTX=1, DSV4_POOL_QUANT=%s", pool_quant)
     _install_dsv4_memory_defaults()
 
     # Eagerly register mlx_lm.models.deepseek_v4 so the underlying loader

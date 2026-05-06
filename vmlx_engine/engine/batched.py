@@ -204,6 +204,9 @@ class BatchedEngine(BaseEngine):
             max_cache_blocks=getattr(self._scheduler_config, "max_cache_blocks", 1000),
             kv_cache_quantization=getattr(self._scheduler_config, "kv_cache_quantization", "none"),
             kv_cache_group_size=getattr(self._scheduler_config, "kv_cache_group_size", 64),
+            kv_cache_quantization_explicit=getattr(
+                self._scheduler_config, "kv_cache_quantization_explicit", False
+            ),
             # Memory-aware cache settings
             use_memory_aware_cache=getattr(self._scheduler_config, "use_memory_aware_cache", True),
             cache_memory_mb=getattr(self._scheduler_config, "cache_memory_mb", None),
@@ -221,8 +224,11 @@ class BatchedEngine(BaseEngine):
             block_disk_cache_max_gb=getattr(self._scheduler_config, "block_disk_cache_max_gb", 10.0),
             # Model path for disk cache scoping
             model_path=getattr(self._scheduler_config, "model_path", None) or self._model_name,
-            # Hybrid SSM state cache size
-            ssm_state_cache_size=getattr(self._scheduler_config, "ssm_state_cache_size", 50),
+            # Hybrid SSM companion cache budget
+            ssm_state_cache_size=getattr(self._scheduler_config, "ssm_state_cache_size", 8),
+            ssm_state_cache_max_mb=getattr(
+                self._scheduler_config, "ssm_state_cache_max_mb", 512
+            ),
             # Hand the loader executor to the scheduler so step() runs on
             # the same worker thread as the load (JANGTQ Metal kernel
             # stream-isolation fix).
@@ -271,14 +277,15 @@ class BatchedEngine(BaseEngine):
         )
         loop = asyncio.get_running_loop()
 
-        # GH#138: when the user explicitly sets `--kv-cache-quantization
-        # {q4,q8,none}`, skip TurboQuant patching so their choice actually
-        # applies. Default behavior (no flag) keeps TurboQuant auto-on for
-        # JANG-stamped bundles. q8 KV pairs cleanly with 8-bit attention
-        # weights on bundles like Qwen3.6-27B-CRACK; TurboQuant 3-bit is
-        # a different tradeoff users should opt into explicitly.
+        # GH#138/#156: only explicit `--kv-cache-quantization {q4,q8,none}`
+        # disables TurboQuant patching. In auto mode the scheduler may still
+        # use q4 for stored prefix-cache entries, while compatible JANG/JANGTQ
+        # bundles keep TurboQuantKVCache for the live decode cache.
         _kvq = getattr(self._scheduler_config, "kv_cache_quantization", None)
-        _skip_tq = _kvq in ("q4", "q8", "none")
+        _kvq_explicit = getattr(
+            self._scheduler_config, "kv_cache_quantization_explicit", False
+        )
+        _skip_tq = _kvq_explicit and _kvq in ("q4", "q8", "none")
 
         def _load():
             # Pre-warm MLX internal streams on this worker thread BEFORE
