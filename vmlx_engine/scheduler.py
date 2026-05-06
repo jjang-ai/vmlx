@@ -667,14 +667,27 @@ class Scheduler:
                             "block-cache",
                             "default",
                         )
+                    # Codex 2026-05-06 #4: derive expected layer count
+                    # from model config and pass to BlockDiskStore so the
+                    # validator can hard-reject wrong-model L2 entries.
+                    _expected_n_layers = None
+                    for _attr in ("args", "config"):
+                        _cfg = getattr(self.model, _attr, None)
+                        if _cfg:
+                            _ln = getattr(_cfg, "num_hidden_layers", 0)
+                            if _ln:
+                                _expected_n_layers = int(_ln)
+                                break
                     try:
                         block_disk_store = BlockDiskStore(
                             cache_dir=cache_dir,
                             max_size_gb=self.config.block_disk_cache_max_gb,
+                            expected_num_layers=_expected_n_layers,
                         )
                         logger.info(
                             f"Block disk cache enabled: dir={cache_dir}, "
-                            f"max={self.config.block_disk_cache_max_gb}GB"
+                            f"max={self.config.block_disk_cache_max_gb}GB, "
+                            f"expected_layers={_expected_n_layers}"
                         )
                     except Exception as e:
                         logger.error(
