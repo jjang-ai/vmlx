@@ -286,7 +286,7 @@ func visibleOrFallback(_ turn: TurnProbe) -> String {
 }
 
 let before = try await engine.cacheStats()
-print("[stats.before] paged.h=\(stat(before, "paged", "hitCount")) paged.m=\(stat(before, "paged", "missCount")) disk.h=\(stat(before, "disk", "hitCount")) disk.m=\(stat(before, "disk", "missCount")) disk.store=\(stat(before, "disk", "storeCount")) disk.tqEntries=\(stat(before, "disk", "turboQuantEntryCount")) disk.tqKeys=\(stat(before, "disk", "turboQuantTensorKeyCount")) block.h=\(stat(before, "blockDisk", "hitCount")) block.m=\(stat(before, "blockDisk", "missCount")) block.store=\(stat(before, "blockDisk", "storeCount")) mem.h=\(stat(before, "memory", "hitCount")) mem.m=\(stat(before, "memory", "missCount"))")
+print("[stats.before] prefix.h=\(stat(before, "prefixCache", "hitCount")) prefix.m=\(stat(before, "prefixCache", "missCount")) paged.h=\(stat(before, "paged", "hitCount")) paged.m=\(stat(before, "paged", "missCount")) disk.h=\(stat(before, "disk", "hitCount")) disk.m=\(stat(before, "disk", "missCount")) disk.store=\(stat(before, "disk", "storeCount")) disk.tqEntries=\(stat(before, "disk", "turboQuantEntryCount")) disk.tqKeys=\(stat(before, "disk", "turboQuantTensorKeyCount")) block.h=\(stat(before, "blockDisk", "hitCount")) block.m=\(stat(before, "blockDisk", "missCount")) block.store=\(stat(before, "blockDisk", "storeCount")) mem.h=\(stat(before, "memory", "hitCount")) mem.m=\(stat(before, "memory", "missCount"))")
 
 let turn1Message = userTurn(
     prompt: basePrompt,
@@ -296,7 +296,7 @@ let turn1Message = userTurn(
     inputAudios: inputAudioPaths)
 let turn1 = try await runTurn("turn1", messages: [turn1Message])
 let after1 = try await engine.cacheStats()
-print("[stats.after1] paged.h=\(stat(after1, "paged", "hitCount")) paged.m=\(stat(after1, "paged", "missCount")) disk.h=\(stat(after1, "disk", "hitCount")) disk.m=\(stat(after1, "disk", "missCount")) disk.store=\(stat(after1, "disk", "storeCount")) disk.entries=\(stat(after1, "disk", "entryCount")) disk.tqEntries=\(stat(after1, "disk", "turboQuantEntryCount")) disk.tqKeys=\(stat(after1, "disk", "turboQuantTensorKeyCount")) block.h=\(stat(after1, "blockDisk", "hitCount")) block.m=\(stat(after1, "blockDisk", "missCount")) block.store=\(stat(after1, "blockDisk", "storeCount")) block.entries=\(stat(after1, "blockDisk", "entryCount")) mem.h=\(stat(after1, "memory", "hitCount")) mem.m=\(stat(after1, "memory", "missCount")) ssm.h=\(stat(after1, "ssmCompanion", "hitCount")) ssm.m=\(stat(after1, "ssmCompanion", "missCount"))")
+print("[stats.after1] prefix.h=\(stat(after1, "prefixCache", "hitCount")) prefix.m=\(stat(after1, "prefixCache", "missCount")) paged.h=\(stat(after1, "paged", "hitCount")) paged.m=\(stat(after1, "paged", "missCount")) disk.h=\(stat(after1, "disk", "hitCount")) disk.m=\(stat(after1, "disk", "missCount")) disk.store=\(stat(after1, "disk", "storeCount")) disk.entries=\(stat(after1, "disk", "entryCount")) disk.tqEntries=\(stat(after1, "disk", "turboQuantEntryCount")) disk.tqKeys=\(stat(after1, "disk", "turboQuantTensorKeyCount")) block.h=\(stat(after1, "blockDisk", "hitCount")) block.m=\(stat(after1, "blockDisk", "missCount")) block.store=\(stat(after1, "blockDisk", "storeCount")) block.entries=\(stat(after1, "blockDisk", "entryCount")) mem.h=\(stat(after1, "memory", "hitCount")) mem.m=\(stat(after1, "memory", "missCount")) ssm.h=\(stat(after1, "ssmCompanion", "hitCount")) ssm.m=\(stat(after1, "ssmCompanion", "missCount"))")
 
 if mode == "blockdisk" || envBool("CACHE_PROBE_CLEAR_BEFORE_TURN2", default: false) {
     print("[probe] clearing in-memory caches before turn2; persistent BlockDiskCache is retained")
@@ -322,7 +322,7 @@ if routerDrainMs > 0 {
     try await Task.sleep(nanoseconds: UInt64(routerDrainMs) * 1_000_000)
 }
 let after2 = try await engine.cacheStats()
-print("[stats.after2] paged.h=\(stat(after2, "paged", "hitCount")) paged.m=\(stat(after2, "paged", "missCount")) disk.h=\(stat(after2, "disk", "hitCount")) disk.m=\(stat(after2, "disk", "missCount")) disk.store=\(stat(after2, "disk", "storeCount")) disk.entries=\(stat(after2, "disk", "entryCount")) disk.tqEntries=\(stat(after2, "disk", "turboQuantEntryCount")) disk.tqKeys=\(stat(after2, "disk", "turboQuantTensorKeyCount")) block.h=\(stat(after2, "blockDisk", "hitCount")) block.m=\(stat(after2, "blockDisk", "missCount")) block.store=\(stat(after2, "blockDisk", "storeCount")) block.entries=\(stat(after2, "blockDisk", "entryCount")) mem.h=\(stat(after2, "memory", "hitCount")) mem.m=\(stat(after2, "memory", "missCount")) ssm.h=\(stat(after2, "ssmCompanion", "hitCount")) ssm.m=\(stat(after2, "ssmCompanion", "missCount"))")
+print("[stats.after2] prefix.h=\(stat(after2, "prefixCache", "hitCount")) prefix.m=\(stat(after2, "prefixCache", "missCount")) paged.h=\(stat(after2, "paged", "hitCount")) paged.m=\(stat(after2, "paged", "missCount")) disk.h=\(stat(after2, "disk", "hitCount")) disk.m=\(stat(after2, "disk", "missCount")) disk.store=\(stat(after2, "disk", "storeCount")) disk.entries=\(stat(after2, "disk", "entryCount")) disk.tqEntries=\(stat(after2, "disk", "turboQuantEntryCount")) disk.tqKeys=\(stat(after2, "disk", "turboQuantTensorKeyCount")) block.h=\(stat(after2, "blockDisk", "hitCount")) block.m=\(stat(after2, "blockDisk", "missCount")) block.store=\(stat(after2, "blockDisk", "storeCount")) block.entries=\(stat(after2, "blockDisk", "entryCount")) mem.h=\(stat(after2, "memory", "hitCount")) mem.m=\(stat(after2, "memory", "missCount")) ssm.h=\(stat(after2, "ssmCompanion", "hitCount")) ssm.m=\(stat(after2, "ssmCompanion", "missCount"))")
 
 if let arch = after2["architecture"] as? [String: Any] {
     print("[architecture] \(arch)")
@@ -333,6 +333,7 @@ if let jp = after2["jangPress"] as? [String: Any] {
 
 let diskHit = deltaInt(after1, after2, "disk", "hitCount") > 0
 let pagedHit = deltaInt(after1, after2, "paged", "hitCount") > 0
+let prefixHit = deltaInt(after1, after2, "prefixCache", "hitCount") > 0
 let memHit = deltaInt(after1, after2, "memory", "hitCount") > 0
 let blockHit = deltaInt(after1, after2, "blockDisk", "hitCount") > 0
 let ssmHit = deltaInt(after1, after2, "ssmCompanion", "hitCount") > 0
@@ -392,6 +393,8 @@ validateExpectedTerms(turn2ExpectedTerms, in: turn2, failures: &failures)
 
 for requirement in required {
     switch requirement {
+    case "prefix", "prefix-cache":
+        if !prefixHit { failures.append("required prefix cache hit did not occur on turn2") }
     case "paged":
         if !pagedHit { failures.append("required paged hit did not occur on turn2") }
     case "disk":
@@ -463,7 +466,7 @@ for requirement in required {
     }
 }
 
-print("[verdict] diskHit=\(diskHit) diskStore=\(diskStore) blockDiskHit=\(blockHit) blockDiskStore=\(blockStore) pagedHit=\(pagedHit) memoryHit=\(memHit) ssmHit=\(ssmHit) canonicalMmap=\(canonicalMmap) routeEvidence=\(routeEvidence) willNeedEvidence=\(willNeedEvidence) controllerRoutes=\(routesObserved) controllerWillNeedBytes=\(willNeedBytes) dontNeedBytes=\(dontNeedBytes) advisorEnabled=\(advisorEnabled) advisorReadbacks=\(advisorReadbacks) advisorWarmBytes=\(advisorWarmBytes) advisorColdBytes=\(advisorColdBytes)")
+print("[verdict] diskHit=\(diskHit) diskStore=\(diskStore) blockDiskHit=\(blockHit) blockDiskStore=\(blockStore) prefixHit=\(prefixHit) pagedHit=\(pagedHit) memoryHit=\(memHit) ssmHit=\(ssmHit) canonicalMmap=\(canonicalMmap) routeEvidence=\(routeEvidence) willNeedEvidence=\(willNeedEvidence) controllerRoutes=\(routesObserved) controllerWillNeedBytes=\(willNeedBytes) dontNeedBytes=\(dontNeedBytes) advisorEnabled=\(advisorEnabled) advisorReadbacks=\(advisorReadbacks) advisorWarmBytes=\(advisorWarmBytes) advisorColdBytes=\(advisorColdBytes)")
 
 if failures.isEmpty {
     print("[probe.pass] requirements satisfied")

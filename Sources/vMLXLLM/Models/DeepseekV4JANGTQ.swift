@@ -1118,17 +1118,20 @@ public final class DSV4LayerCache: HybridPoolCache, CustomDebugStringConvertible
         return local.makeMask(n: n, windowSize: windowSize, returnArray: returnArray)
     }
     public func copy() -> any KVCache {
-        // Copy the local rotating ring plus the CSA/HSA pool state so any
-        // future cache snapshots keep DSV4 long-context history intact.
+        // Copy the local rotating ring plus the CSA/HSA pool state so prompt
+        // snapshots keep DSV4 long-context history intact. MLX slices such as
+        // `arr[.ellipsis]` can remain view-backed, which is unsafe here because
+        // decode mutates the live rotating ring and pool buffers after the
+        // prompt-boundary snapshot is captured.
         let c = DSV4LayerCache(
             slidingWindow: local.maxSize ?? 128,
             compressRatio: compressRatio,
             keep: 0, step: 256
         )
-        c.state = self.state
+        c.state = self.state.map { Self.copyArray($0) }
         c.metaState = self.metaState
-        c.compressorState = self.compressorState
-        c.indexerState = self.indexerState
+        c.compressorState = Self.copyPoolState(self.compressorState)
+        c.indexerState = Self.copyPoolState(self.indexerState)
         return c
     }
 
@@ -1147,6 +1150,24 @@ public final class DSV4LayerCache: HybridPoolCache, CustomDebugStringConvertible
             return pool[0..., 0..<keep, 0...]
         }
         return pool
+    }
+
+    private static func copyArray(_ array: MLXArray) -> MLXArray {
+        let copy = array * 1
+        MLX.eval(copy)
+        return copy
+    }
+
+    private static func copyArray(_ array: MLXArray?) -> MLXArray? {
+        guard let array else { return nil }
+        return copyArray(array)
+    }
+
+    private static func copyPoolState(_ state: DSV4PoolState) -> DSV4PoolState {
+        DSV4PoolState(
+            bufferKv: copyArray(state.bufferKv),
+            bufferGate: copyArray(state.bufferGate),
+            pooled: copyArray(state.pooled))
     }
 
     public func hybridPool(branch: HybridPoolBranch) -> MLXArray? {

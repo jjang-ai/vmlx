@@ -58,12 +58,29 @@ extension Engine {
             return nil
         }
 
+        let family = (self.modelCapabilities?.family ?? "").lowercased()
+        let modelType = (self.modelCapabilities?.modelType ?? "").lowercased()
+        let isDSV4 = family == "deepseek_v4" || modelType == "deepseek_v4"
+        var effectiveThinking = request.enableThinking
+            ?? resolved.enableThinking
+            ?? false
+        if isDSV4 {
+            let allowChat = ["1", "true", "yes"].contains(
+                ProcessInfo.processInfo.environment["VMLX_DSV4_ALLOW_CHAT", default: "0"]
+                    .lowercased())
+            if request.enableThinking == false && allowChat {
+                effectiveThinking = false
+            } else if effectiveThinking != true {
+                effectiveThinking = true
+                await self.log(.info, "engine",
+                    "DFlash DSV4: forcing enable_thinking=true; set VMLX_DSV4_ALLOW_CHAT=1 for chat-mode diagnostics")
+            }
+        }
+
         // -- Tokenize prompt via the tokenizer's chat template --
         let chatMessages = await Engine.buildChatMessages(
             from: request,
-            effectiveThinking: request.enableThinking
-                ?? resolved.enableThinking
-                ?? false,
+            effectiveThinking: effectiveThinking,
             modelStampsThink: self.modelCapabilities?.thinkInTemplate ?? false,
             responseFormatInstruction: Engine.responseFormatInstruction(
                 from: request.responseFormat))
@@ -79,8 +96,27 @@ extension Engine {
             let promptIDs: [Int]
             let eosIDs: Set<Int>
         }
+        let effectiveThinkingForTemplate = effectiveThinking
         let tokenized: TokenizeResult = try await container.perform { ctx in
             var templateExtras: [String: any Sendable] = [:]
+            templateExtras["enable_thinking"] = effectiveThinkingForTemplate
+            templateExtras["thinking"] = effectiveThinkingForTemplate
+            if let effort = request.reasoningEffort?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased(),
+               !effort.isEmpty,
+               effort != "none"
+            {
+                if isDSV4 {
+                    if effort == "max" {
+                        templateExtras["reasoning_effort"] = "max"
+                    } else if effort == "low" || effort == "medium" || effort == "high" {
+                        templateExtras["reasoning_effort"] = "high"
+                    }
+                } else {
+                    templateExtras["reasoning_effort"] = effort
+                }
+            }
             if let builtin = dsv4TemplateOverride {
                 // Keep DFlash prompt tokenization on the same DSV4 built-in
                 // encoding_dsv4 template as the standard stream path.
@@ -162,10 +198,11 @@ extension Engine {
             // VLM requests above).
             var matched = 0
             var detail = "miss"
-            if let coord = coordinator {
+            let cacheSalt = request.cacheSalt.map { "cache_salt:\($0)" }
+            if let coord = coordinator, request.skipPrefixCache != true {
                 switch coord.fetch(
                     tokens: tokenized.promptIDs,
-                    mediaSalt: nil,
+                    mediaSalt: cacheSalt,
                     genPromptLen: genPromptLen
                 ) {
                 case .hit(let m, _, let tier, let blocks, let ssmStates, let diskArrays):
@@ -274,7 +311,7 @@ extension Engine {
         // `cacheCoordinator.storeAfterGeneration` call. Per-layer KV
         // + SSM states come out of the final cache via the extractor
         // helpers shared with the standard path.
-        if let coord = coordinator {
+        if let coord = coordinator, request.skipPrefixCache != true {
             await container.perform { ctx in
                 let layerData = extractLayerData(from: runResult.finalCache)
                 let ssmArr = extractSSMStates(from: runResult.finalCache)
@@ -284,7 +321,7 @@ extension Engine {
                     perLayerData: layerData,
                     ssmStates: ssm,
                     cache: runResult.finalCache,
-                    mediaSalt: nil,
+                    mediaSalt: request.cacheSalt.map { "cache_salt:\($0)" },
                     genPromptLen: genPromptLen
                 )
             }

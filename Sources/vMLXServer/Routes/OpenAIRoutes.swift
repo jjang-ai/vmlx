@@ -415,6 +415,12 @@ public enum OpenAIRoutes {
             )
             chatReq.frequencyPenalty = obj["frequency_penalty"] as? Double
             chatReq.presencePenalty = obj["presence_penalty"] as? Double
+            chatReq.cacheSalt = obj["cache_salt"] as? String
+            chatReq.skipPrefixCache = obj["skip_prefix_cache"] as? Bool
+            if let mode = obj["thinking_mode"] as? String {
+                chatReq.thinkingMode = mode
+                chatReq.applyReasoningContainerAlias()
+            }
             // §330 — stream_options pass-through. /v1/chat/completions
             // reads streamOptions.include_usage at line 150 to decide
             // whether to emit a final usage-only SSE chunk. Legacy
@@ -1761,6 +1767,10 @@ public enum OpenAIRoutes {
            let e = r["effort"] as? String {
             reasoningEffort = e
         }
+        if reasoningEffort == nil,
+           let mode = obj["thinking_mode"] as? String {
+            reasoningEffort = ChatRequest.normalizeReasoningAlias(mode)
+        }
 
         let stopList: [String]? = {
             if let arr = obj["stop"] as? [String], !arr.isEmpty { return arr }
@@ -1785,6 +1795,12 @@ public enum OpenAIRoutes {
         )
         chatReq.frequencyPenalty = obj["frequency_penalty"] as? Double
         chatReq.presencePenalty = obj["presence_penalty"] as? Double
+        chatReq.cacheSalt = obj["cache_salt"] as? String
+        chatReq.skipPrefixCache = obj["skip_prefix_cache"] as? Bool
+        if let mode = obj["thinking_mode"] as? String {
+            chatReq.thinkingMode = mode
+            chatReq.applyReasoningContainerAlias()
+        }
         if let so = obj["stream_options"] as? [String: Any],
            let include = so["include_usage"] as? Bool {
             chatReq.streamOptions = .init(includeUsage: include)

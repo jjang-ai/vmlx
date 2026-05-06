@@ -263,11 +263,9 @@ struct SessionConfigForm: View {
         // let users set them to disagree. Toggle removed.
         //
         // TurboQuant bits stepper still renders — gated on the picker
-        // currently reading "turboquant". The orphan `enableBlockDiskCache`
-        // toggle was also removed: it's a Python-parity field that has
-        // never had a Swift consumer. The L2 disk cache below IS the
-        // disk cache on Swift. If a future block-level store lands it
-        // will have its own field + clear semantics.
+        // currently reading "turboquant". BlockDisk is a separate
+        // block-level persistent tier from the whole-prompt L2 disk cache,
+        // so it needs its own visible switch.
         if (s.kvCacheQuantization ?? globalDefaults.kvCacheQuantization)
             .lowercased() == "turboquant"
         {
@@ -282,6 +280,7 @@ struct SessionConfigForm: View {
         toggleRow("Prefix cache",     boolBinding(\.enablePrefixCache,     default: globalDefaults.enablePrefixCache))
         toggleRow("SSM companion",    boolBinding(\.enableSSMCompanion,    default: globalDefaults.enableSSMCompanion))
         toggleRow("L2 disk cache",    boolBinding(\.enableDiskCache,       default: globalDefaults.enableDiskCache))
+        toggleRow("Block disk cache", boolBinding(\.enableBlockDiskCache,  default: globalDefaults.enableBlockDiskCache))
         // Directory + GB cap: previously only in Tray, not per-session.
         // Audit 2026-04-16 — disk cache dir was unconfigurable anywhere
         // per-session; users with external SSDs couldn't redirect the
@@ -308,6 +307,14 @@ struct SessionConfigForm: View {
             HStack {
                 Text(L10n.SessionConfig.diskCacheMaxFormat.format(
                     locale: appLocale, Int64(globalDefaults.diskCacheMaxGB)))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.leading, 20)
+        }
+        if s.enableBlockDiskCache ?? globalDefaults.enableBlockDiskCache {
+            HStack {
+                Text("Block disk budget: \(Int(globalDefaults.blockDiskCacheMaxGB)) GB")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }

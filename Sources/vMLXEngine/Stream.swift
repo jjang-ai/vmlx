@@ -746,6 +746,21 @@ extension Engine {
         // model swap. Settings default remains the fallback for unknown
         // models.
         let caps = self.modelCapabilities
+        let family = (caps?.family ?? "").lowercased()
+        let modelType = (caps?.modelType ?? "").lowercased()
+        let isDSV4 = family == "deepseek_v4" || modelType == "deepseek_v4"
+        if isDSV4 {
+            let allowChat = ["1", "true", "yes"].contains(
+                ProcessInfo.processInfo.environment["VMLX_DSV4_ALLOW_CHAT", default: "0"]
+                    .lowercased())
+            if request.enableThinking == false && allowChat {
+                effectiveThinking = false
+            } else if effectiveThinking != true {
+                effectiveThinking = true
+                await self.log(.info, "engine",
+                    "DSV4: forcing enable_thinking=true; set VMLX_DSV4_ALLOW_CHAT=1 for chat-mode diagnostics")
+            }
+        }
         let toolParserName =
             caps?.toolParser ?? resolved.settings.defaultToolParser
         // `thinkInTemplate` — when the chat template already stamps
@@ -842,8 +857,6 @@ extension Engine {
         // literal assistant history and emitted `<think>...</think></s>`
         // before generation, producing incoherent decode despite a correct
         // `[INST]` prompt. Gate it to DeepSeek-style families only.
-        let family = (caps?.family ?? "").lowercased()
-        let modelType = (caps?.modelType ?? "").lowercased()
         let parserNameForStub = (caps?.reasoningParser ?? "").lowercased()
         let injectReasoningOffStub =
             !modelStampsThink
@@ -991,7 +1004,9 @@ extension Engine {
         // names so chat-mode requests render the closed `<think></think>`
         // prompt instead of accidentally starting inside an open think block.
         templateExtras["thinking"] = effectiveThinking
-        if let effort = request.reasoningEffort {
+        if let effort = normalizedReasoningEffort(
+            request.reasoningEffort, modelType: modelType, family: family)
+        {
             templateExtras["reasoning_effort"] = effort
         }
         if let budget = request.thinkingBudget, budget > 0 {
@@ -2990,6 +3005,25 @@ extension Engine {
         }
     }
 
+    private func normalizedReasoningEffort(
+        _ effort: String?,
+        modelType: String,
+        family: String
+    ) -> String? {
+        guard let effort else { return nil }
+        let lower = effort.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !lower.isEmpty, lower != "none" else { return nil }
+        let isDSV4 = family == "deepseek_v4" || modelType == "deepseek_v4"
+        if isDSV4 {
+            if lower == "max" { return "max" }
+            if lower == "low" || lower == "medium" || lower == "high" {
+                return "high"
+            }
+            return nil
+        }
+        return lower
+    }
+
     /// Build vMLXLMCommon.GenerateParameters from request + resolved settings.
     private func buildGenerateParameters(
         request: ChatRequest,
@@ -2999,6 +3033,12 @@ extension Engine {
             (request.sessionId == nil && request.chatId == nil)
             ? self.lastLoadOptions
             : nil
+
+        let env = ProcessInfo.processInfo.environment
+        let caps = self.modelCapabilities
+        let family = (caps?.family ?? "").lowercased()
+        let modelType = (caps?.modelType ?? "").lowercased()
+        let isDSV4 = family == "deepseek_v4" || modelType == "deepseek_v4"
 
         var params = GenerateParameters()
         params.prefillStepSize =
@@ -3011,7 +3051,16 @@ extension Engine {
         // per-kernel JIT compile dominates cold first-forward. Kimi text
         // parity is 16 tokens; VLM can use 32 in its model-specific prepare.
         let cacheTypeIsMLAForPrefill = (self.modelCapabilities?.cacheType == "mla")
-        if cacheTypeIsMLAForPrefill && params.prefillStepSize > 16 {
+        if isDSV4 {
+            let override = env["DSV4_PREFILL_STEP_SIZE"]
+                ?? env["VMLX_DSV4_PREFILL_STEP_SIZE"]
+                ?? env["VMLINUX_DSV4_PREFILL_STEP_SIZE"]
+            if let override, let step = Int(override), step > 0 {
+                params.prefillStepSize = step
+            } else {
+                params.prefillStepSize = 1 << 30
+            }
+        } else if cacheTypeIsMLAForPrefill && params.prefillStepSize > 16 {
             params.prefillStepSize = 16
         }
         // §373 + §443 — sampling fallback priority (highest-to-lowest):
@@ -3068,6 +3117,20 @@ extension Engine {
         params.repetitionPenalty = Float(request.repetitionPenalty
             ?? pickDouble("defaultRepetitionPenalty", md.repetitionPenalty,
                           familyDefaults?.repetitionPenalty, resolved.repetitionPenalty))
+        if env["VMLX_DISABLE_FAMILY_REP_FLOOR"] != "1" {
+            let floor: Float? =
+                if isDSV4 {
+                    1.15
+                } else if family == "minimax_m2" || modelType == "minimax_m2"
+                            || family.hasPrefix("minimax") || modelType.hasPrefix("minimax") {
+                    1.15
+                } else {
+                    nil
+                }
+            if let floor, (params.repetitionPenalty ?? 0) < floor {
+                params.repetitionPenalty = floor
+            }
+        }
         // iter-95 §173: wire OpenAI `frequency_penalty` +
         // `presence_penalty` through to the sampler. Evaluate.swift
         // has supported both since iter-25 (see `FrequencyPenalty`
@@ -3123,10 +3186,6 @@ extension Engine {
         params.logprobs = request.logprobs ?? false
         params.topLogprobs = request.topLogprobs ?? 0
 
-        let env = ProcessInfo.processInfo.environment
-        let caps = self.modelCapabilities
-        let family = (caps?.family ?? "").lowercased()
-        let modelType = (caps?.modelType ?? "").lowercased()
         let modality = caps?.modality ?? .unknown
         let requestHasMedia = request.messages.contains { message in
             guard case .parts(let parts) = message.content else { return false }
@@ -3196,7 +3255,6 @@ extension Engine {
             "gemma3_text", "gemma4_text",
             "pixtral",
         ]
-        let isDSV4 = family == "deepseek_v4" || modelType == "deepseek_v4"
         let textOnlyVLMCompileFamilies: Set<String> = [
             "gemma4", "gemma4_text",
         ]
@@ -3369,6 +3427,18 @@ extension Engine {
             params.kvMode = .turboQuant(keyBits: keyBits, valueBits: valueBits)
             params.kvBits = nil
         }
+        if isDSV4, env["VMLX_DSV4_HARD_REP_BLOCK"] != "0" {
+            params.hardRepetitionWindow =
+                Int(env["VMLX_DSV4_HARD_REP_WINDOW"] ?? "") ?? 24
+            params.hardRepetitionMaxNGram =
+                Int(env["VMLX_DSV4_HARD_REP_MAX_NGRAM"] ?? "") ?? 3
+            params.hardRepetitionUnigramMaxCount =
+                Int(env["VMLX_DSV4_HARD_REP_UNIGRAM_COUNT"] ?? "") ?? 3
+            params.hardRepetitionNGramMaxCount =
+                Int(env["VMLX_DSV4_HARD_REP_NGRAM_COUNT"] ?? "") ?? 2
+        }
+        params.cacheSalt = request.cacheSalt
+        params.skipPrefixCache = request.skipPrefixCache == true
         if env["VMLX_COMPILED_DECODE_DEBUG"] == "1" {
             let line = "[vmlx][generation-params] family=\(family) modelType=\(modelType) " +
                 "compiled=\(params.enableCompiledDecode) nativeSlidingWindow=\(nativeSlidingWindow.map(String.init) ?? "nil") " +

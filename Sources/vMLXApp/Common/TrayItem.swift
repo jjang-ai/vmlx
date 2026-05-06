@@ -650,6 +650,22 @@ struct TrayItem: View {
                     format: "%.0f")
             }
             Toggle(
+                "Block disk cache",
+                isOn: Binding(
+                    get: { draft.enableBlockDiskCache },
+                    set: { draft.enableBlockDiskCache = $0; schedulePush() }))
+                .font(.system(size: 11))
+                .toggleStyle(.switch)
+            if draft.enableBlockDiskCache {
+                slider(
+                    label: "Block budget GB",
+                    value: Binding(
+                        get: { draft.blockDiskCacheMaxGB },
+                        set: { draft.blockDiskCacheMaxGB = $0; schedulePush() }),
+                    range: 1.0...100.0, step: 1.0,
+                    format: "%.0f")
+            }
+            Toggle(
                 L10n.TrayPanel.prefixCache.render(appLocale),
                 isOn: Binding(
                     get: { draft.enablePrefixCache },

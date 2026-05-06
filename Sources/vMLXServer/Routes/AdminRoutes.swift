@@ -105,15 +105,40 @@ public enum AdminRoutes {
                     if let bu = paged["blocksInUse"] { p["blocks_in_use"] = bu }
                     summary["paged"] = p
                 }
+                if let prefix = stats["prefixCache"] as? [String: Any] {
+                    var p: [String: Any] = [:]
+                    if let enabled = prefix["enabled"] { p["enabled"] = enabled }
+                    if let hr = prefix["hitRate"] { p["hit_rate"] = hr }
+                    if let h = prefix["hitCount"] { p["hits"] = h }
+                    if let m = prefix["missCount"] { p["misses"] = m }
+                    if let source = prefix["source"] { p["source"] = source }
+                    summary["prefix"] = p
+                }
                 if let disk = stats["disk"] as? [String: Any] {
                     var d: [String: Any] = [:]
                     if let enabled = disk["enabled"] { d["enabled"] = enabled }
                     if let hr = disk["hitRate"] { d["hit_rate"] = hr }
                     if let bytes = disk["bytesUsed"] { d["bytes_used"] = bytes }
                     if let cap = disk["bytesCap"] { d["bytes_cap"] = cap }
+                    if let current = disk["currentGB"] { d["current_gb"] = current }
+                    if let max = disk["maxGB"] { d["max_gb"] = max }
                     summary["disk"] = d
                 }
-                if let ssm = stats["ssm"] as? [String: Any] {
+                if let block = stats["blockDisk"] as? [String: Any] {
+                    var b: [String: Any] = [:]
+                    if let enabled = block["enabled"] { b["enabled"] = enabled }
+                    if let configured = block["configured"] { b["configured"] = configured }
+                    if let hr = block["hitRate"] { b["hit_rate"] = hr }
+                    if let h = block["hitCount"] { b["hits"] = h }
+                    if let m = block["missCount"] { b["misses"] = m }
+                    if let stores = block["storeCount"] { b["stores"] = stores }
+                    if let entries = block["entryCount"] { b["entries"] = entries }
+                    if let status = block["status"] { b["status"] = status }
+                    summary["block_disk"] = b
+                }
+                if let ssm = (stats["ssmCompanion"] as? [String: Any])
+                    ?? (stats["ssm"] as? [String: Any])
+                {
                     summary["ssm"] = ssm
                 }
                 // JangPress (axis E cold-weight tier) — backend tag +

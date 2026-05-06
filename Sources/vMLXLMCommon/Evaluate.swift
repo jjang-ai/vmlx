@@ -170,6 +170,19 @@ public struct GenerateParameters: Sendable {
     /// Only meaningful when `logprobs == true`. Range: 0–20.
     public var topLogprobs: Int = 0
 
+    /// Optional generated-token-only hard repetition guard. When enabled, the
+    /// processor blocks loop-forming generated tokens without poisoning the
+    /// state from repeated words in the prompt.
+    public var hardRepetitionWindow: Int = 0
+    public var hardRepetitionMaxNGram: Int = 0
+    public var hardRepetitionUnigramMaxCount: Int = 3
+    public var hardRepetitionNGramMaxCount: Int = 2
+
+    /// Optional explicit cache-key salt and request-local prefix-cache bypass.
+    /// These are engine extensions used by API routes; model math is unchanged.
+    public var cacheSalt: String? = nil
+    public var skipPrefixCache: Bool = false
+
     public init(
         maxTokens: Int? = nil,
         maxKVSize: Int? = nil,
@@ -269,8 +282,20 @@ public struct GenerateParameters: Sendable {
             logitBiasContext = nil
         }
 
+        let hardRepetitionContext: GeneratedOnlyHardRepetitionContext?
+        if hardRepetitionWindow > 0, hardRepetitionMaxNGram > 0 {
+            hardRepetitionContext = GeneratedOnlyHardRepetitionContext(
+                windowSize: hardRepetitionWindow,
+                maxNGram: hardRepetitionMaxNGram,
+                unigramMaxCount: hardRepetitionUnigramMaxCount,
+                ngramMaxCount: hardRepetitionNGramMaxCount)
+        } else {
+            hardRepetitionContext = nil
+        }
+
         if repetitionContext == nil && presenceContext == nil
            && frequencyContext == nil && logitBiasContext == nil
+           && hardRepetitionContext == nil
         {
             return nil
         }
@@ -279,7 +304,8 @@ public struct GenerateParameters: Sendable {
             repetitionContext: repetitionContext,
             presenceContext: presenceContext,
             frequencyContext: frequencyContext,
-            logitBiasContext: logitBiasContext
+            logitBiasContext: logitBiasContext,
+            hardRepetitionContext: hardRepetitionContext
         )
     }
 
@@ -807,24 +833,121 @@ public struct LogitBiasContext: LogitProcessor {
     }
 }
 
+/// Generated-token-only hard repetition guard.
+///
+/// DSV4 can enter loops where multiplicative repetition penalty is not enough
+/// to knock the attractor token out of argmax. This guard intentionally ignores
+/// the prompt and only tracks sampled output tokens, avoiding the prompt
+/// poisoning failure mode where a repeated prompt word becomes impossible to
+/// generate later.
+public struct GeneratedOnlyHardRepetitionContext: LogitProcessor {
+    private let windowSize: Int
+    private let maxNGram: Int
+    private let unigramMaxCount: Int
+    private let ngramMaxCount: Int
+    private var generated: [Int] = []
+
+    public init(
+        windowSize: Int = 24,
+        maxNGram: Int = 3,
+        unigramMaxCount: Int = 3,
+        ngramMaxCount: Int = 2
+    ) {
+        self.windowSize = max(1, windowSize)
+        self.maxNGram = max(1, maxNGram)
+        self.unigramMaxCount = max(1, unigramMaxCount)
+        self.ngramMaxCount = max(1, ngramMaxCount)
+    }
+
+    public mutating func prompt(_ prompt: MLXArray) {
+        generated.removeAll(keepingCapacity: true)
+    }
+
+    public func process(logits: MLXArray) -> MLXArray {
+        let blocked = blockedTokens(vocabSize: logits.dim(-1))
+        guard !blocked.isEmpty else { return logits }
+        let indices = MLXArray(blocked.map { UInt32($0) })
+        let values = MLXArray(Array(repeating: -Float.infinity, count: blocked.count))
+            .reshaped(1, -1)
+            .asType(logits.dtype)
+        logits[0..., indices] = values
+        return logits
+    }
+
+    public mutating func didSample(token: MLXArray) {
+        generated.append(token.item(Int.self))
+        if generated.count > windowSize {
+            generated.removeFirst(generated.count - windowSize)
+        }
+    }
+
+    private func blockedTokens(vocabSize: Int) -> [Int] {
+        guard vocabSize > 0, !generated.isEmpty else { return [] }
+        let window = Array(generated.suffix(windowSize))
+        var blocked = Set<Int>()
+
+        var counts: [Int: Int] = [:]
+        for token in window {
+            counts[token, default: 0] += 1
+        }
+        for (token, count) in counts where count >= unigramMaxCount
+            && token >= 0 && token < vocabSize
+        {
+            blocked.insert(token)
+        }
+
+        guard window.count >= 2, maxNGram >= 2 else {
+            return blocked.sorted()
+        }
+        let upper = min(maxNGram, window.count + 1)
+        for n in 2...upper {
+            guard window.count >= n - 1 else { continue }
+            let suffix = Array(window.suffix(n - 1))
+            var followers: [Int: Int] = [:]
+            if window.count >= n {
+                for start in 0...(window.count - n) {
+                    var matches = true
+                    for j in 0..<(n - 1) where window[start + j] != suffix[j] {
+                        matches = false
+                        break
+                    }
+                    if matches {
+                        let follower = window[start + n - 1]
+                        followers[follower, default: 0] += 1
+                    }
+                }
+            }
+            for (token, count) in followers where count >= ngramMaxCount
+                && token >= 0 && token < vocabSize
+            {
+                blocked.insert(token)
+            }
+        }
+        return blocked.sorted()
+    }
+}
+
 /// Processor that composes penalty processors in Python mlx-lm order,
-/// optionally followed by a logit_bias additive transform.
+/// optionally followed by logit_bias and hard generated-repeat blocking.
 public struct PenaltyProcessor: LogitProcessor {
     var repetitionContext: RepetitionContext?
     var presenceContext: PresencePenaltyContext?
     var frequencyContext: FrequencyPenaltyContext?
     var logitBiasContext: LogitBiasContext?
+    var hardRepetitionContext: GeneratedOnlyHardRepetitionContext?
 
     public init(
         repetitionContext: RepetitionContext?,
         presenceContext: PresencePenaltyContext?,
         frequencyContext: FrequencyPenaltyContext?,
-        logitBiasContext: LogitBiasContext? = nil
+        logitBiasContext: LogitBiasContext? = nil,
+        hardRepetitionContext: GeneratedOnlyHardRepetitionContext? = nil
     ) {
         self.repetitionContext = repetitionContext
         self.presenceContext = presenceContext
         self.frequencyContext = frequencyContext
         self.logitBiasContext = logitBiasContext
+        self.hardRepetitionContext = hardRepetitionContext
     }
 
     mutating public func prompt(_ prompt: MLXArray) {
@@ -832,6 +955,7 @@ public struct PenaltyProcessor: LogitProcessor {
         presenceContext?.prompt(prompt)
         frequencyContext?.prompt(prompt)
         logitBiasContext?.prompt(prompt)
+        hardRepetitionContext?.prompt(prompt)
     }
 
     public func process(logits: MLXArray) -> MLXArray {
@@ -846,6 +970,9 @@ public struct PenaltyProcessor: LogitProcessor {
         // (a -100 ban is still -100 even if the model's natural logit
         // would have penalized the token).
         logits = logitBiasContext?.process(logits: logits) ?? logits
+        // Hard generated-repeat blocking is last so no additive bias can
+        // resurrect a loop token once it has been banned for this step.
+        logits = hardRepetitionContext?.process(logits: logits) ?? logits
         return logits
     }
 
@@ -854,6 +981,7 @@ public struct PenaltyProcessor: LogitProcessor {
         presenceContext?.didSample(token: token)
         frequencyContext?.didSample(token: token)
         logitBiasContext?.didSample(token: token)
+        hardRepetitionContext?.didSample(token: token)
     }
 }
 
@@ -929,10 +1057,15 @@ public struct TokenIterator: TokenIteratorProtocol {
     let promptTokenIds: [Int]
 
     /// Stable fingerprint of any multimodal image/video/audio content in the input.
-    /// `nil` for text-only inputs. Mixed into cache-coordinator keys so
-    /// VLM multi-turn conversations can cache-hit on identical media,
-    /// and won't collide with text-only entries. See `computeMediaSalt`.
+    /// `nil` for text-only inputs with no explicit cache salt. Mixed into
+    /// cache-coordinator keys so VLM multi-turn conversations can cache-hit
+    /// on identical media, and callers can isolate text prompts by setting
+    /// `GenerateParameters.cacheSalt`. See `computeMediaSalt`.
     let mediaSalt: String?
+
+    /// Request-local cache bypass. When true, this iterator neither fetches nor
+    /// stores prefix cache entries for the prompt.
+    let skipPrefixCache: Bool
 
     /// Number of trailing tokens in `promptTokenIds` that belong to the
     /// chat template's `add_generation_prompt=true` suffix. Stripped
@@ -975,6 +1108,7 @@ public struct TokenIterator: TokenIteratorProtocol {
         self.cacheCoordinator = nil
         self.promptTokenIds = []
         self.mediaSalt = nil
+        self.skipPrefixCache = false
         self.genPromptLen = 0
 
         self.promptPrefillTime = try measure {
@@ -1039,9 +1173,19 @@ public struct TokenIterator: TokenIteratorProtocol {
 
         // Compute a stable fingerprint of any image/video/audio content once at
         // init, so both the pre-prepare fetch below and the post-generation
-        // store see the same salt. Text-only inputs get nil here, which
-        // preserves the exact pre-existing text-only cache hashing.
-        self.mediaSalt = computeMediaSalt(for: input)
+        // store see the same salt. `cacheSalt` is folded into the same key
+        // field but never logged verbatim.
+        let mediaFingerprint = computeMediaSalt(for: input)
+        let explicitSalt = parameters.cacheSalt?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let explicitSalt, !explicitSalt.isEmpty, let mediaFingerprint {
+            self.mediaSalt = "\(mediaFingerprint)|cache_salt:\(explicitSalt)"
+        } else if let explicitSalt, !explicitSalt.isEmpty {
+            self.mediaSalt = "cache_salt:\(explicitSalt)"
+        } else {
+            self.mediaSalt = mediaFingerprint
+        }
+        self.skipPrefixCache = parameters.skipPrefixCache
 
         // Multi-tier cache: attempt prefix fetch before prepare.
         // On cache hit, restore KV state and only prefill remaining tokens.
@@ -1057,7 +1201,9 @@ public struct TokenIterator: TokenIteratorProtocol {
         // `.rotating` LayerKind, so sliding-window layers now participate
         // in the same fetch/restore path as standard KV. Reference
         // commit `bf942a8`.
-        if let coordinator = cacheCoordinator, !promptTokenIds.isEmpty {
+        if skipPrefixCache {
+            Self.logger.info("Prefix cache bypass requested for this generation")
+        } else if let coordinator = cacheCoordinator, !promptTokenIds.isEmpty {
             let result = coordinator.fetch(
                 tokens: promptTokenIds, mediaSalt: mediaSalt,
                 genPromptLen: genPromptLen)
@@ -1209,6 +1355,7 @@ public struct TokenIterator: TokenIteratorProtocol {
         self.cacheCoordinator = nil
         self.promptTokenIds = []
         self.mediaSalt = nil
+        self.skipPrefixCache = false
         self.genPromptLen = 0
 
         self.promptPrefillTime = try measure {
@@ -2261,7 +2408,8 @@ public func generateTask(
     // Capture cache coordinator state and extract KV data before consuming the iterator.
     let cacheStoreAction: (@Sendable () -> Void)? = {
         guard let coordinator = iterator.cacheCoordinator,
-              !iterator.promptTokenIds.isEmpty else { return nil }
+              !iterator.promptTokenIds.isEmpty,
+              !iterator.skipPrefixCache else { return nil }
         let promptTokenIds = iterator.promptTokenIds
         let capturedMediaSalt = iterator.mediaSalt
         let capturedGenPromptLen = iterator.genPromptLen
@@ -2456,7 +2604,8 @@ public func generateTokenTask(
     // Capture cache coordinator state and extract KV data before consuming the iterator.
     let cacheStoreAction: (@Sendable () -> Void)? = {
         guard let coordinator = iterator.cacheCoordinator,
-              !iterator.promptTokenIds.isEmpty else { return nil }
+              !iterator.promptTokenIds.isEmpty,
+              !iterator.skipPrefixCache else { return nil }
         let promptTokenIds = iterator.promptTokenIds
         let capturedMediaSalt = iterator.mediaSalt
         let capturedGenPromptLen = iterator.genPromptLen

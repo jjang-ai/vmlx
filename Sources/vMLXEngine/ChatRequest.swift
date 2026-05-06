@@ -17,6 +17,9 @@ public struct ChatRequest: Codable, Sendable {
     public var seed: Int?
     public var enableThinking: Bool?
     public var reasoningEffort: String?
+    /// Compatibility alias used by panel/Responses clients. Folded into
+    /// `reasoningEffort` by `applyReasoningContainerAlias()`.
+    public var thinkingMode: String?
     public var tools: [Tool]?
     public var toolChoice: ToolChoice?
     /// Optional session scope — vMLX extension. When set, the 4-tier
@@ -120,6 +123,14 @@ public struct ChatRequest: Codable, Sendable {
     /// `assistant_prefix`) without a CLI rebuild.
     public var chatTemplateKwargs: [String: JSONValue]?
 
+    /// vMLX cache-key salt. Mixed into prefix-cache keys so clients can force
+    /// isolation without changing prompt text. Never logged verbatim.
+    public var cacheSalt: String?
+
+    /// vMLX cache bypass flag. When true, the request neither fetches nor stores
+    /// prompt prefix cache entries.
+    public var skipPrefixCache: Bool?
+
     public struct ResponseFormat: Codable, Sendable {
         public var type: String?
         public var jsonSchema: JSONSchemaSpec?
@@ -204,12 +215,15 @@ public struct ChatRequest: Codable, Sendable {
         seed: Int? = nil,
         enableThinking: Bool? = nil,
         reasoningEffort: String? = nil,
+        thinkingMode: String? = nil,
         tools: [Tool]? = nil,
         toolChoice: ToolChoice? = nil,
         includeReasoning: Bool? = nil,
         sessionId: String? = nil,
         chatId: String? = nil,
-        thinkingBudget: Int? = nil
+        thinkingBudget: Int? = nil,
+        cacheSalt: String? = nil,
+        skipPrefixCache: Bool? = nil
     ) {
         self.model = model
         self.messages = messages
@@ -224,12 +238,15 @@ public struct ChatRequest: Codable, Sendable {
         self.seed = seed
         self.enableThinking = enableThinking
         self.reasoningEffort = reasoningEffort
+        self.thinkingMode = thinkingMode
         self.tools = tools
         self.toolChoice = toolChoice
         self.includeReasoning = includeReasoning
         self.sessionId = sessionId
         self.chatId = chatId
         self.thinkingBudget = thinkingBudget
+        self.cacheSalt = cacheSalt
+        self.skipPrefixCache = skipPrefixCache
     }
 
     /// Multimodal content: either a plain string OR an array of parts (text/image_url).
@@ -562,6 +579,7 @@ public struct ChatRequest: Codable, Sendable {
         case repetitionPenalty = "repetition_penalty"
         case enableThinking = "enable_thinking"
         case reasoningEffort = "reasoning_effort"
+        case thinkingMode = "thinking_mode"
         case toolChoice = "tool_choice"
         case sessionId = "session_id"
         case chatId = "chat_id"
@@ -575,6 +593,8 @@ public struct ChatRequest: Codable, Sendable {
         case streamOptions = "stream_options"
         case includeReasoning = "include_reasoning"
         case chatTemplateKwargs = "chat_template_kwargs"
+        case cacheSalt = "cache_salt"
+        case skipPrefixCache = "skip_prefix_cache"
         case thinkingBudget = "thinking_budget"
         case maxToolIterations = "max_tool_iterations"
         case maxCompletionTokens = "max_completion_tokens"
@@ -630,6 +650,47 @@ public struct ChatRequest: Codable, Sendable {
         {
             reasoningEffort = effort
         }
+        if reasoningEffort == nil,
+           let mode = thinkingMode,
+           let effort = Self.normalizeReasoningAlias(mode)
+        {
+            reasoningEffort = effort
+        }
+        if enableThinking == nil,
+           let mode = thinkingMode,
+           Self.reasoningAliasDisablesThinking(mode)
+        {
+            enableThinking = false
+        }
+    }
+
+    /// Normalize panel / API reasoning aliases without promoting `high` to
+    /// DSV4's experimental `max` tier. Model-specific encoder normalization
+    /// happens later in `Stream`.
+    public static func normalizeReasoningAlias(_ raw: String) -> String? {
+        let lower = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch lower {
+        case "", "default", "auto":
+            return nil
+        case "none", "off", "chat", "false", "0":
+            return "none"
+        case "low":
+            return "low"
+        case "medium", "reasoning", "think", "thinking", "on", "true", "1":
+            return "medium"
+        case "high":
+            return "medium"
+        case "max":
+            return "max"
+        default:
+            return lower
+        }
+    }
+
+    public static func reasoningAliasDisablesThinking(_ raw: String) -> Bool {
+        let lower = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return lower == "none" || lower == "off" || lower == "chat"
+            || lower == "false" || lower == "0"
     }
 
     /// Anthropic-compat extension: caps the number of tokens generated

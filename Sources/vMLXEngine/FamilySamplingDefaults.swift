@@ -85,6 +85,7 @@ public enum FamilySamplingDefaultsRegistry {
         "deepseek_v4": FamilySamplingDefaults(
             temperature: 0.6,
             topP: 0.95,
+            repetitionPenalty: 1.15,
             source: "project_dsv4_swift_loop_diagnosis.md"),
 
         // DeepSeek-V3 likewise.
@@ -92,6 +93,15 @@ public enum FamilySamplingDefaultsRegistry {
             temperature: 0.6,
             topP: 0.95,
             source: "project_dsv4_swift_loop_diagnosis.md"),
+
+        // MiniMax M2 reasoning-mode loop guard. The uniform JANGTQ bundle can
+        // rumination-loop at rep=1.0; 1.15 is the validated lower bound from
+        // DSV4_FIX_NUANCES.md.
+        "minimax_m2": FamilySamplingDefaults(
+            temperature: 0.6,
+            topP: 0.95,
+            repetitionPenalty: 1.15,
+            source: "DSV4_FIX_NUANCES.md Fix 8"),
 
         // Qwen3.5 / Qwen3.6 family ships its own generation_config
         // (T=0.7 top_p=0.8) which is fine. No override here so

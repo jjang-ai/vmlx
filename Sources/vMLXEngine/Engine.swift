@@ -4265,9 +4265,20 @@ public actor Engine {
         ] as [String: Any]
 
         // Prefix cache (same underlying paged pool) --------------------------
+        // The Swift prefix cache is implemented by PagedCacheManager's
+        // block-hash lookup. Surface the same counters under prefixCache so
+        // probes and API clients can assert prefix hits without knowing that
+        // implementation detail.
+        let prefixHits = (out["paged"] as? [String: Any])?["hitCount"] as? Int ?? 0
+        let prefixMisses = (out["paged"] as? [String: Any])?["missCount"] as? Int ?? 0
+        let prefixTotal = prefixHits + prefixMisses
         out["prefixCache"] = [
             "enabled": coord.config.usePagedCache,
             "size": coord.config.maxCacheBlocks,
+            "hitCount": prefixHits,
+            "missCount": prefixMisses,
+            "hitRate": prefixTotal > 0 ? Double(prefixHits) / Double(prefixTotal) : 0.0,
+            "source": "paged",
         ] as [String: Any]
 
         // Vision embedding cache (P0 audit 2026-05-01) -----------------------

@@ -18,9 +18,12 @@ struct CachePanel: View {
     @State private var pollTask: Task<Void, Never>? = nil
     @State private var archExpanded: Bool = true
     @State private var pagedExpanded: Bool = true
+    @State private var prefixExpanded: Bool = true
     @State private var memoryExpanded: Bool = true
     @State private var diskExpanded: Bool = true
+    @State private var blockDiskExpanded: Bool = true
     @State private var ssmExpanded: Bool = true
+    @State private var jangPressExpanded: Bool = true
     @State private var clearInFlight: Bool = false
     @State private var warmInFlight: Bool = false
     @State private var warmStatus: String? = nil
@@ -63,6 +66,15 @@ struct CachePanel: View {
 
                 Divider().overlay(Theme.Colors.border)
 
+                DisclosureGroup(isExpanded: $prefixExpanded) {
+                    prefixSection
+                } label: {
+                    sectionLabel("Prefix cache", enabled: prefix("enabled"))
+                }
+                .tint(Theme.Colors.textMid)
+
+                Divider().overlay(Theme.Colors.border)
+
                 DisclosureGroup(isExpanded: $memoryExpanded) {
                     memorySection
                 } label: {
@@ -81,6 +93,15 @@ struct CachePanel: View {
 
                 Divider().overlay(Theme.Colors.border)
 
+                DisclosureGroup(isExpanded: $blockDiskExpanded) {
+                    blockDiskSection
+                } label: {
+                    sectionLabel("Block disk (paged blocks)", enabled: blockDisk("enabled"))
+                }
+                .tint(Theme.Colors.textMid)
+
+                Divider().overlay(Theme.Colors.border)
+
                 DisclosureGroup(isExpanded: $ssmExpanded) {
                     ssmSection
                 } label: {
@@ -88,6 +109,22 @@ struct CachePanel: View {
                         sectionLabel("SSM Companion", enabled: ssm("enabled"))
                         if (ssm("enabled") as? Bool) == true {
                             hybridPill
+                        }
+                    }
+                }
+                .tint(Theme.Colors.textMid)
+
+                Divider().overlay(Theme.Colors.border)
+
+                DisclosureGroup(isExpanded: $jangPressExpanded) {
+                    jangPressSection
+                } label: {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        sectionLabel(
+                            "JangPress",
+                            enabled: ((jangPress("backend") as? String) ?? "none") != "none")
+                        if (jangPress("canonicalStorageReplaced") as? Bool) == true {
+                            pill(text: "canonical", tint: Theme.Colors.success, textTint: Theme.Colors.success)
                         }
                     }
                 }
@@ -215,6 +252,29 @@ struct CachePanel: View {
     }
 
     @ViewBuilder
+    private var prefixSection: some View {
+        if (prefix("enabled") as? Bool) == true {
+            let hits = prefixInt("hitCount")
+            let misses = prefixInt("missCount")
+            let hitRate = prefixDouble("hitRate")
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                LazyVGrid(columns: [
+                    GridItem(.flexible()),
+                    GridItem(.flexible()),
+                ], spacing: Theme.Spacing.sm) {
+                    statCell("Source", prefixString("source").isEmpty ? "paged" : prefixString("source"))
+                    statCell("Size", "\(prefixInt("size"))")
+                    statCell("Hit rate", String(format: "%.1f%%", hitRate * 100.0))
+                    statCell("Hits / Misses", "\(hits) / \(misses)")
+                }
+            }
+            .padding(.top, Theme.Spacing.sm)
+        } else {
+            disabledHint(.prefix)
+        }
+    }
+
+    @ViewBuilder
     private var memorySection: some View {
         if (memory("enabled") as? Bool) == true {
             let currentMB = memoryDouble("currentMemoryMB")
@@ -298,6 +358,51 @@ struct CachePanel: View {
     }
 
     @ViewBuilder
+    private var blockDiskSection: some View {
+        if (blockDisk("configured") as? Bool) == true {
+            let currentGB = blockDiskDouble("currentGB")
+            let maxGB = blockDiskDouble("maxGB")
+            let hits = blockDiskInt("hitCount")
+            let misses = blockDiskInt("missCount")
+            let hitRate = blockDiskDouble("hitRate")
+            let status = blockDiskString("status")
+            let directory = blockDiskString("directory")
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                if maxGB > 0 {
+                    ProgressBar(
+                        label: "Blocks on disk",
+                        detail: String(format: "%.2f / %.1f GB", currentGB, maxGB),
+                        fraction: currentGB / maxGB,
+                        tint: Theme.Colors.success
+                    )
+                }
+                LazyVGrid(columns: [
+                    GridItem(.flexible()),
+                    GridItem(.flexible()),
+                ], spacing: Theme.Spacing.sm) {
+                    statCell("Status", status.isEmpty ? ((blockDisk("enabled") as? Bool) == true ? "wired" : "disabled") : status)
+                    statCell("Entries", "\(blockDiskInt("entryCount"))")
+                    statCell("Hit rate", String(format: "%.1f%%", hitRate * 100.0))
+                    statCell("Hits / Misses", "\(hits) / \(misses)")
+                    statCell("Stores", "\(blockDiskInt("storeCount"))")
+                    statCell("Evictions", "\(blockDiskInt("evictionCount"))")
+                }
+                if !directory.isEmpty {
+                    Text(directory)
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.textLow)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .padding(.top, 2)
+                }
+            }
+            .padding(.top, Theme.Spacing.sm)
+        } else {
+            disabledHint(.blockDisk)
+        }
+    }
+
+    @ViewBuilder
     private var ssmSection: some View {
         if (ssm("enabled") as? Bool) == true {
             let hits = ssmInt("hitCount")
@@ -327,6 +432,39 @@ struct CachePanel: View {
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.textLow)
                 .padding(.top, Theme.Spacing.sm)
+        }
+    }
+
+    @ViewBuilder
+    private var jangPressSection: some View {
+        let backend = jangPressString("backend")
+        if backend != "none" && !backend.isEmpty {
+            let router = jangPress("routerAdvisor") as? [String: Any] ?? [:]
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                LazyVGrid(columns: [
+                    GridItem(.flexible()),
+                    GridItem(.flexible()),
+                ], spacing: Theme.Spacing.sm) {
+                    statCell("Backend", backend)
+                    statCell("Scope", jangPressString("scope"))
+                    statCell("Routes", "\(jangPressInt("totalRoutesObserved"))")
+                    statCell("Tiles", "\(jangPressInt("distinctTilesObserved"))")
+                    statCell("Canonical warm", bytesString(jangPressDouble("canonicalWillNeedBytes")))
+                    statCell("Canonical cold", bytesString(jangPressDouble("canonicalDontNeedBytes")))
+                    statCell("Router advisor", ((router["enabled"] as? Bool) == true) ? "on" : "off")
+                    statCell("Advisor hot experts", "\((router["hotExpertCount"] as? Int) ?? 0)")
+                    statCell("Advisor readbacks", "\((router["readbacks"] as? Int) ?? 0)")
+                    statCell("Advisor thrash", String(format: "%.2f", (router["thrashRatio"] as? Double) ?? 0))
+                }
+                if let mode = jangPress("compactionMode") as? String, !mode.isEmpty {
+                    Text(mode)
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.textLow)
+                }
+            }
+            .padding(.top, Theme.Spacing.sm)
+        } else {
+            disabledHint(.jangPress)
         }
     }
 
@@ -473,17 +611,23 @@ struct CachePanel: View {
     }
 
     private enum CacheTier {
-        case paged, memory, disk, ssm
+        case paged, prefix, memory, disk, blockDisk, ssm, jangPress
         var disabledHelp: String {
             switch self {
             case .paged:
                 return "Enable `Use paged cache` in Server settings to let long multi-turn prompts reuse previous-turn KV state in-memory."
+            case .prefix:
+                return "Prefix cache is surfaced from the paged lookup counters. Enable paged cache to get prefix-hit accounting."
             case .memory:
                 return "Enable `Memory cache (L1.5)` in Server settings for byte-budgeted whole-prompt reuse. Useful for long sessions with RAM to spare."
             case .disk:
                 return "Enable `Disk cache (L2)` in Server settings to persist KV state across restarts. Default on for new installs."
+            case .blockDisk:
+                return "Enable `Block disk cache` for block-level paged cache persistence. Hybrid-pool DSV4 disables this tier because CSA/HSA pool state cannot be represented as generic KV blocks."
             case .ssm:
                 return "SSM companion tier is auto-enabled for hybrid models (Nemotron-H, Qwen3.5-A3B, Jamba, FalconH1, Mamba variants). Off for pure-attention models."
+            case .jangPress:
+                return "Enable JangPress before loading a model to expose cold-weight mmap/Mach pressure stats and router-aware expert advice."
             }
         }
     }
@@ -576,9 +720,12 @@ struct CachePanel: View {
     // MARK: - Value extractors
 
     private func paged(_ key: String) -> Any? { (stats["paged"] as? [String: Any])?[key] }
+    private func prefix(_ key: String) -> Any? { (stats["prefixCache"] as? [String: Any])?[key] }
     private func memory(_ key: String) -> Any? { (stats["memory"] as? [String: Any])?[key] }
     private func disk(_ key: String) -> Any? { (stats["disk"] as? [String: Any])?[key] }
+    private func blockDisk(_ key: String) -> Any? { (stats["blockDisk"] as? [String: Any])?[key] }
     private func ssm(_ key: String) -> Any? { (stats["ssmCompanion"] as? [String: Any])?[key] }
+    private func jangPress(_ key: String) -> Any? { (stats["jangPress"] as? [String: Any])?[key] }
     private func arch(_ key: String) -> Any? { (stats["architecture"] as? [String: Any])?[key] }
     private func archInt(_ key: String) -> Int { (arch(key) as? Int) ?? 0 }
     private func archBool(_ key: String) -> Bool { (arch(key) as? Bool) ?? false }
@@ -586,13 +733,37 @@ struct CachePanel: View {
 
     private func pagedInt(_ key: String) -> Int { (paged(key) as? Int) ?? 0 }
     private func pagedDouble(_ key: String) -> Double { (paged(key) as? Double) ?? 0 }
+    private func prefixInt(_ key: String) -> Int { (prefix(key) as? Int) ?? 0 }
+    private func prefixDouble(_ key: String) -> Double { (prefix(key) as? Double) ?? 0 }
+    private func prefixString(_ key: String) -> String { (prefix(key) as? String) ?? "" }
     private func memoryInt(_ key: String) -> Int { (memory(key) as? Int) ?? 0 }
     private func memoryDouble(_ key: String) -> Double { (memory(key) as? Double) ?? 0 }
     private func diskInt(_ key: String) -> Int { (disk(key) as? Int) ?? 0 }
     private func diskDouble(_ key: String) -> Double { (disk(key) as? Double) ?? 0 }
     private func diskString(_ key: String) -> String { (disk(key) as? String) ?? "" }
+    private func blockDiskInt(_ key: String) -> Int { (blockDisk(key) as? Int) ?? 0 }
+    private func blockDiskDouble(_ key: String) -> Double { (blockDisk(key) as? Double) ?? 0 }
+    private func blockDiskString(_ key: String) -> String { (blockDisk(key) as? String) ?? "" }
     private func ssmInt(_ key: String) -> Int { (ssm(key) as? Int) ?? 0 }
     private func ssmDouble(_ key: String) -> Double { (ssm(key) as? Double) ?? 0 }
+    private func jangPressInt(_ key: String) -> Int { (jangPress(key) as? Int) ?? 0 }
+    private func jangPressDouble(_ key: String) -> Double {
+        if let v = jangPress(key) as? Double { return v }
+        if let v = jangPress(key) as? Int { return Double(v) }
+        if let v = jangPress(key) as? Int64 { return Double(v) }
+        if let v = jangPress(key) as? UInt64 { return Double(v) }
+        return 0
+    }
+    private func jangPressString(_ key: String) -> String { (jangPress(key) as? String) ?? "" }
+    private func bytesString(_ bytes: Double) -> String {
+        if bytes >= 1_073_741_824 {
+            return String(format: "%.2f GB", bytes / 1_073_741_824)
+        }
+        if bytes >= 1_048_576 {
+            return String(format: "%.1f MB", bytes / 1_048_576)
+        }
+        return String(format: "%.0f B", bytes)
+    }
 }
 
 // MARK: - ProgressBar
