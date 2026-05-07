@@ -658,6 +658,39 @@ def extract_responses_function_calls(resp: Any) -> list[dict[str, Any]]:
     return calls
 
 
+def extract_anthropic_text_and_stop(resp: Any) -> tuple[str, str]:
+    """Return visible Anthropic text blocks and stop reason.
+
+    The live audit uses exact-answer probes. Do not inspect the whole JSON
+    object for the expected word, because reasoning/thinking blocks can mention
+    the target string while the model never emits a visible answer.
+    """
+    if not isinstance(resp, dict):
+        return "", ""
+    texts: list[str] = []
+    for block in resp.get("content") or []:
+        if isinstance(block, dict) and block.get("type") == "text":
+            texts.append(block.get("text") or "")
+    return "\n".join(texts), str(resp.get("stop_reason") or "")
+
+
+def extract_ollama_visible_text_and_stop(resp: Any) -> tuple[str, str]:
+    """Return visible Ollama text and done reason.
+
+    Ollama has a separate ``message.thinking`` rail. For exact-answer checks,
+    only ``message.content`` is the answer.
+    """
+    if not isinstance(resp, dict):
+        return "", ""
+    msg = resp.get("message") or {}
+    return str(msg.get("content") or ""), str(resp.get("done_reason") or "")
+
+
+def is_non_length_stop(stop: str) -> bool:
+    stop = (stop or "").strip().lower()
+    return stop not in {"length", "max_tokens"}
+
+
 def has_duplicate_block(text: str, min_len: int = 80) -> bool:
     compact = re.sub(r"\s+", " ", text)
     if len(compact) < min_len * 2:
@@ -1397,8 +1430,21 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         },
         timeout=240,
     )
-    anth_text = json.dumps(anth)[:1000].lower()
-    check("anthropic_messages_basic", code == 200 and "anthropic-ok" in anth_text, {"code": code, "body": anth, "elapsed_sec": anth_elapsed})
+    anth_text, anth_stop = extract_anthropic_text_and_stop(anth)
+    check(
+        "anthropic_messages_basic",
+        code == 200
+        and normalize_short_answer(anth_text).lower() == "anthropic-ok"
+        and is_non_length_stop(anth_stop),
+        {
+            "code": code,
+            "visible_text": anth_text,
+            "normalized_text": normalize_short_answer(anth_text),
+            "stop_reason": anth_stop,
+            "body": anth,
+            "elapsed_sec": anth_elapsed,
+        },
+    )
 
     code, ollama, ollama_elapsed = request_json(
         "ollama_chat_basic",
@@ -1412,8 +1458,21 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         },
         timeout=240,
     )
-    ollama_text = json.dumps(ollama)[:1000].lower()
-    check("ollama_chat_basic", code == 200 and "ollama-ok" in ollama_text, {"code": code, "body": ollama, "elapsed_sec": ollama_elapsed})
+    ollama_text, ollama_stop = extract_ollama_visible_text_and_stop(ollama)
+    check(
+        "ollama_chat_basic",
+        code == 200
+        and normalize_short_answer(ollama_text).lower() == "ollama-ok"
+        and is_non_length_stop(ollama_stop),
+        {
+            "code": code,
+            "visible_text": ollama_text,
+            "normalized_text": normalize_short_answer(ollama_text),
+            "done_reason": ollama_stop,
+            "body": ollama,
+            "elapsed_sec": ollama_elapsed,
+        },
+    )
 
     # Cache exact-hit coherence. Multi-turn memory is covered by the chat
     # recall checks above; this check isolates cache mechanics with a prompt
