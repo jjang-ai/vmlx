@@ -39,10 +39,20 @@ logger = logging.getLogger(__name__)
 def _render_with_tokenizer(
     model: ThinkingTemplateModel, *, enable_thinking: bool
 ) -> str:
-    """Render the chat template via transformers AutoTokenizer.
+    """Render the chat template the same way the engine does.
 
-    Mirrors the engine apply_chat_template kwargs path used in
-    vmlx_engine/engine/simple.py:407 and :709.
+    Engine prompt-render path (see vmlx_engine/engine/simple.py:389-446 and
+    :687-752):
+
+    1. Default path: ``tokenizer.apply_chat_template`` from transformers.
+    2. DSV4-Flash bundles ship ``encoding/encoding_dsv4.py`` instead of a
+       Jinja template; tokenizer_config.json has no ``chat_template`` key
+       and ``apply_chat_template`` raises ValueError. The engine falls
+       through to ``vmlx_engine.loaders.dsv4_chat_encoder.apply_chat_template``.
+
+    This helper mirrors that fallthrough so the audit verifies exactly
+    what the engine renders. Tests that fail here are template bugs
+    visible to the engine, not test bugs.
     """
     from transformers import AutoTokenizer
 
@@ -50,13 +60,25 @@ def _render_with_tokenizer(
         str(model.model_path), trust_remote_code=True
     )
     messages = [{"role": "user", "content": model.sample_user_message}]
-    rendered = tok.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,
-        enable_thinking=enable_thinking,
-    )
-    return rendered if isinstance(rendered, str) else str(rendered)
+    try:
+        rendered = tok.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=enable_thinking,
+        )
+        return rendered if isinstance(rendered, str) else str(rendered)
+    except ValueError as exc:
+        if "chat_template" in str(exc) and model.family == "deepseek_v4":
+            from vmlx_engine.loaders.dsv4_chat_encoder import (
+                apply_chat_template as dsv4_apply,
+            )
+            return dsv4_apply(
+                messages,
+                enable_thinking=enable_thinking,
+                model_path=str(model.model_path),
+            )
+        raise
 
 
 def _has_unclosed_open_think(prompt: str) -> bool:
