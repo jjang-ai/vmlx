@@ -48,7 +48,7 @@ alone.
 | #141 DSV4-Flash conversion tools fail | Related to converter/JANG tooling, not just runtime. | Needs reproduction in `/Users/eric/jang`; do not close from engine tests. |
 | #139 VLM no stream in worker thread | Source fixed and live-source verified on Gemma-4-26B image streaming; no `No Stream(gpu)` error, coherent streamed output. | Needs signed app release verification. |
 | #138 `--kv-cache-quantization` overridden by TurboQuant | Source tests confirm explicit q4/q8/none is respected; DSV4 uses native SWA/CSA/HSA cache and hybrid SSM disables generic KV/TQ-KV by default. | Needs packaged CLI check. |
-| #137 prompt_lookup.py stale docs | Documentation issue. | Pending doc cleanup; not release-blocking for runtime. |
+| #137 prompt_lookup.py stale docs | Fixed locally: `prompt_lookup.py` now describes scheduler-owned PLD verification/reinsert/cache restore instead of "Phase 2 future"; regression test added; issue commented with verification. | Push/package pending. Not release-blocking for runtime. |
 | #136 PFlash speculative prefill | Feature request. | Backlog; no source fix claimed. |
 | #135 draft-model speculative under batching | Feature request/perf. | Backlog; no source fix claimed. |
 | #134 PLD on hybrid SSM | Feature/perf proposal. | Backlog; overlaps SSM checkpoint/replay work but not a current bug fix. |
