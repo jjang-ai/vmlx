@@ -770,6 +770,21 @@ export class ApiGateway extends EventEmitter {
     return undefined;
   }
 
+  private shouldForwardOllamaReasoningEffort(parsed: any, openaiBody: any): boolean {
+    if (parsed?.reasoning_effort == null) return false;
+    if (openaiBody?.enable_thinking === false) return false;
+    const ct = parsed?.chat_template_kwargs;
+    if (
+      ct &&
+      typeof ct === "object" &&
+      !Array.isArray(ct) &&
+      ct.enable_thinking === false
+    ) {
+      return false;
+    }
+    return true;
+  }
+
   private openAIToolCallsToOllama(
     toolCalls: any[] | undefined | null,
   ): any[] | undefined {
@@ -861,7 +876,7 @@ export class ApiGateway extends EventEmitter {
     ) {
       openaiBody.enable_thinking = Boolean(parsed.enable_thinking);
     }
-    if (parsed.reasoning_effort != null)
+    if (this.shouldForwardOllamaReasoningEffort(parsed, openaiBody))
       openaiBody.reasoning_effort = parsed.reasoning_effort;
     if (
       parsed.chat_template_kwargs &&
@@ -1160,7 +1175,7 @@ export class ApiGateway extends EventEmitter {
     ) {
       openaiBody.enable_thinking = Boolean(parsed.enable_thinking);
     }
-    if (parsed.reasoning_effort != null)
+    if (this.shouldForwardOllamaReasoningEffort(parsed, openaiBody))
       openaiBody.reasoning_effort = parsed.reasoning_effort;
     if (
       parsed.chat_template_kwargs &&

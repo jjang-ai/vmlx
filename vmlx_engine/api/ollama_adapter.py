@@ -19,6 +19,16 @@ import time
 from typing import Any
 
 
+def _should_forward_reasoning_effort(body: dict, req: dict[str, Any]) -> bool:
+    """Reasoning effort is only meaningful when thinking is not explicitly off."""
+    if req.get("enable_thinking") is False:
+        return False
+    ct_kwargs = body.get("chat_template_kwargs")
+    if isinstance(ct_kwargs, dict) and ct_kwargs.get("enable_thinking") is False:
+        return False
+    return body.get("reasoning_effort") is not None
+
+
 def ollama_chat_to_openai(body: dict) -> dict:
     """Convert Ollama /api/chat request to OpenAI /v1/chat/completions."""
     opts = body.get("options", {})
@@ -91,7 +101,7 @@ def ollama_chat_to_openai(body: dict) -> dict:
     # (Mistral 4 / GPT-OSS: "none"/"low"/"medium"/"high") or supply custom
     # chat_template_kwargs must reach the parser. Without this passthrough,
     # Mistral 4 on the Ollama adapter loses reasoning-effort level entirely.
-    if body.get("reasoning_effort") is not None:
+    if _should_forward_reasoning_effort(body, req):
         req["reasoning_effort"] = body["reasoning_effort"]
     if isinstance(body.get("chat_template_kwargs"), dict):
         req["chat_template_kwargs"] = body["chat_template_kwargs"]
@@ -180,7 +190,7 @@ def ollama_generate_to_openai_chat(body: dict) -> dict:
         req["enable_thinking"] = body["think"]
     elif body.get("enable_thinking") is not None:
         req["enable_thinking"] = body["enable_thinking"]
-    if body.get("reasoning_effort") is not None:
+    if _should_forward_reasoning_effort(body, req):
         req["reasoning_effort"] = body["reasoning_effort"]
     if isinstance(body.get("chat_template_kwargs"), dict):
         req["chat_template_kwargs"] = body["chat_template_kwargs"]
