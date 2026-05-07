@@ -542,6 +542,30 @@ def test_dsv4_truncation_allows_zero_trim_clean_state():
     assert len(result) == 1
 
 
+def test_dsv4_length_capped_clean_snapshot_is_cacheable():
+    """Length-capped DSV4 output can still donate a prompt snapshot.
+
+    The unsafe case is trimming the live post-generation DeepseekV4Cache.
+    DSV4BatchGenerator now captures an N-1 prompt-boundary snapshot before
+    decode, so capped generations with that snapshot must still reach paged/L2
+    storage.
+    """
+    import inspect
+    from vmlx_engine import scheduler
+
+    src = (
+        inspect.getsource(scheduler.Scheduler.step)
+        + inspect.getsource(scheduler.Scheduler._cleanup_finished)
+    )
+
+    assert "_extracted_cache_from_prompt_snapshot" in src
+    assert "RequestStatus.FINISHED_LENGTH_CAPPED" in src
+    assert (
+        'and not getattr(request, "_extracted_cache_from_prompt_snapshot", False)'
+        in src
+    )
+
+
 def test_dsv4_unsafe_override_in_cache_scope_key():
     """Pin: when VMLX_DSV4_TRUST_TRIMMED_CACHE is set, the dsv4 cache scope
     key includes that env so debug runs don't share namespace with safe runs.

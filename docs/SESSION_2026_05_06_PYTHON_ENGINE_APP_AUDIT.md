@@ -789,9 +789,15 @@ Production interpretation:
   dedicated speed benchmark before a performance claim.
 - Qwen3.6 JANG_4M does not reproduce the exact JANG_4L Metal-timeout issue.
   Keep the GitHub issue open until the exact model path is available and tested.
-- DSV4 is not cleared in this pass. When the model is available, verify native
-  SWA/CSA/HSA composite cache, DSV4 pool compression, prefix/paged/L2 hits, no
-  generic TurboQuant KV, and read full long-context output to completion.
+- Qwen3.6 dense follow-up passed after the audit budget was raised for
+  thinking-on recall: `/tmp/vmlx_family_audit/live_qwen_dense_after_reasoning_budget_gate.json`.
+  Both local dense rows (`MXFP4`, `JANG_4M`) now stop with the recall answer
+  instead of being false-failed at 220 tokens.
+- Nemotron Omni TQ2/TQ4 passed the non-streaming API/cache matrix:
+  `/tmp/vmlx_family_audit/live_nemotron_omni_tq2_tq4_after_qwen_gate.json`.
+- DSV4 is not production-cleared. Cache mechanics improved and are now tested,
+  but strict reasoning/final-answer split fails for max and long-context rows.
+  See §8.9.
 
 ## §8.8 MiniMax Thinking-Off Prompt Contract (2026-05-07)
 
@@ -840,3 +846,50 @@ Live verification:
 |---|---|---|---|
 | MiniMax M2.7 JANGTQ_K | `/tmp/vmlx_family_audit/live_minimax_both_after_stable_think_sentinel.json` | PASS | OpenAI chat, Responses history/tool, Anthropic, Ollama, mixed-bit gate/up/down load, paged/L2 cache coherence all passed. Anthropic exact answer returned `Paris`; Ollama exact answer returned `Paris`; cache `tokens_saved=98`, L2 `disk_hits=2`, `disk_writes=13`, TurboQuant KV active for plain KV layers. |
 | MiniMax M2.7 Small JANGTQ | `/tmp/vmlx_family_audit/live_minimax_both_after_stable_think_sentinel.json` | PASS | Regression check for templates that already emit open `<think>` in thinking-off. Anthropic and Ollama exact answers both returned `Paris`; cache `tokens_saved=98`, L2 `disk_hits=2`, `disk_writes=13`, TurboQuant KV active. |
+
+## §8.9 DSV4 Composite Cache vs Reasoning Split (2026-05-07)
+
+DSV4 has two separate states now:
+
+1. **Cache mechanics improved and verified.**
+   - Generic runtime TurboQuant KV is forced off for DSV4 even when the CLI is
+     started with `--kv-cache-quantization q4`.
+   - `DSV4_POOL_QUANT=1` owns native SWA+CSA/HSA pool compression.
+   - Paged/L2 uses `deepseek_v4_v7` composite-state serialization with N-1
+     prompt-token keys.
+   - Length-capped completions can now donate the clean prompt-boundary
+     snapshot captured before decode; the old cleanup path skipped every
+     DSV4 length-capped store even when the snapshot was clean.
+   - Focused live proof:
+     `/tmp/vmlx_dsv4_after_snapshot_fix_probe_1778149260.json`.
+     Repeat hit showed `cache_hits=4`, `tokens_saved=75`, `disk_hits=2`,
+     `disk_writes=3`, `turboquant_kv_cache.enabled=false`,
+     `kv_cache_quantization.bits=0`.
+
+2. **Reasoning/final-answer split is still not production-clean.**
+   - `BatchedEngine` now preserves cumulative output token IDs and
+     `server.py` can split DSV4 non-stream output on the real `</think>` token
+     ID (`128822`) when the model emits it. Short arithmetic proof:
+     `duplicate=False`, visible content separated from reasoning in
+     `/tmp/vmlx_dsv4_after_snapshot_fix_probe_1778149260.json`.
+   - Strict full DSV4 matrix:
+     `/tmp/vmlx_family_audit/live_dsv4_after_strict_reasoning_split_cache_visible_runner.json`
+     fails `dsv4_thinking_mode_max`,
+     `dsv4_long_context_full_output_vc_project_plan`, and
+     `dsv4_long_context_full_output_game_design_long_context` because the model
+     often never emits `</think>` on long/max prompts. The server fallback then
+     surfaces reasoning as visible content (`content_equals_reasoning=true`).
+   - `VMLINUX_DSV4_ALLOW_CHAT=1` chat-mode comparison improved the VC form
+     prompt (`content_chars=1558`, `reasoning_chars=1146`, no duplicate), but a
+     long game prompt still length-capped with duplicated reasoning:
+     `/tmp/vmlx_dsv4_chatmode_allow_probe_1778149639.json`.
+
+Current production interpretation:
+
+- DSV4 SWA+CSA/HSA prefix/paged/L2 cache should remain enabled with native pool
+  quant and generic TQ KV disabled.
+- Do not claim DSV4 max/long-context reasoning is fully fixed yet. The next fix
+  must make the model reliably emit a final-answer phase, or route defaults to a
+  proven chat/instruct path for prompts where thinking mode stays unclosed.
+- The audit harness now fails DSV4 rows when `content` is just a duplicate of
+  `reasoning_content`, so future green rows cannot hide this failure mode.

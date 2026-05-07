@@ -972,6 +972,7 @@ class BatchedEngine(BaseEngine):
             return GenerationOutput(
                 text=clean_output_text(output.output_text),
                 raw_text=output.output_text,
+                tokens=list(getattr(output, "output_token_ids", []) or []),
                 prompt_tokens=output.prompt_tokens,
                 completion_tokens=output.completion_tokens,
                 cached_tokens=getattr(output, "cached_tokens", 0),
@@ -1011,6 +1012,7 @@ class BatchedEngine(BaseEngine):
         return GenerationOutput(
             text=text,
             raw_text=raw,
+            tokens=list(getattr(output, "output_token_ids", []) or []),
             prompt_tokens=output.prompt_tokens,
             completion_tokens=output.completion_tokens,
             cached_tokens=getattr(output, "cached_tokens", 0),

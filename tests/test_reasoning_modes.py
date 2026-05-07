@@ -96,6 +96,41 @@ def test_dsv4_reasoning_only_fallback_respects_suppression_and_family():
     ) == "visible"
 
 
+def test_dsv4_token_id_split_uses_close_marker_boundary():
+    from vmlx_engine import server
+
+    class Tokenizer:
+        def decode(self, ids):
+            table = {
+                11: "reason",
+                12: "ing",
+                21: " Paris",
+                1: "<｜end▁of▁sentence｜>",
+            }
+            return "".join(table.get(i, f"<{i}>") for i in ids)
+
+    reasoning, content = server._dsv4_split_reasoning_from_token_ids(
+        [128821, 11, 12, 128822, 21, 1],
+        Tokenizer(),
+    )
+
+    assert reasoning == "reasoning"
+    assert content == "Paris"
+
+
+def test_dsv4_token_id_split_ignores_unclosed_reasoning():
+    from vmlx_engine import server
+
+    class Tokenizer:
+        def decode(self, ids):
+            return "should not decode"
+
+    assert server._dsv4_split_reasoning_from_token_ids(
+        [128821, 11, 12],
+        Tokenizer(),
+    ) == (None, None)
+
+
 def test_dsv4_bundle_defaults_override_stale_ui_defaults(tmp_path, monkeypatch):
     """Old chats saved generic 0.7/1.0/1.1 values as explicit request
     overrides. For DSV4 those are not real user intent; they are stale UI
