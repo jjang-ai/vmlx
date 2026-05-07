@@ -60,6 +60,10 @@ def check_and_inject_fallback_tools(
         and "<tools>" in prompt
         and "<function=example_function_name>" in prompt
     )
+    is_zaya_native_tool_prompt = (
+        "<zyphra_tool_call>" in prompt
+        and "<tools>" in prompt
+    )
 
     # If ALL tool names made it into a prompt and the prompt also contains a
     # concrete parser-native exemplar for those names, the template handled
@@ -77,9 +81,14 @@ def check_and_inject_fallback_tools(
         is_qwen_native_tool_prompt
         and all(f"<function={name}>" in prompt for name in tool_names)
     )
+    _zaya_has_concrete_tool_examples = (
+        is_zaya_native_tool_prompt
+        and all(f"<function={name}>" in prompt for name in tool_names)
+    )
     if all(name in prompt for name in tool_names) and (
         (not is_dsv4_prompt or _dsv4_has_native_dsml_schema or _dsv4_has_concrete_dsml_examples)
         and (not is_qwen_native_tool_prompt or _qwen_has_concrete_tool_examples)
+        and (not is_zaya_native_tool_prompt or _zaya_has_concrete_tool_examples)
     ):
         return prompt
 
@@ -147,6 +156,58 @@ def check_and_inject_fallback_tools(
             "</｜DSML｜invoke>\n\n"
             "For a request to list the current directory, set the path parameter to \".\" exactly. "
             "Do not explain inability to call tools; emit the DSML call."
+        )
+    elif is_zaya_native_tool_prompt:
+        zaya_lines = [
+            "You have access to these tools. When a user asks you to use one, "
+            "you must call it instead of fabricating a result.",
+            "",
+        ]
+        first_name = "FUNCTION_NAME"
+        first_param = "arg1"
+        for idx, tool in enumerate(template_tools):
+            func = tool.get("function", {})
+            name = func.get("name", "") or "unknown_tool"
+            if idx == 0:
+                first_name = name
+            zaya_lines.append(f"Tool: {name}")
+            desc = func.get("description", "")
+            if desc:
+                zaya_lines.append(f"  description: {desc}")
+            params = func.get("parameters", {}) or {}
+            props = params.get("properties", {}) if isinstance(params, dict) else {}
+            required = set(params.get("required", []) if isinstance(params, dict) else [])
+            if props:
+                zaya_lines.append("  parameters:")
+                for p_name, p_schema in props.items():
+                    if idx == 0 and first_param == "arg1":
+                        first_param = p_name
+                    p_type = (
+                        p_schema.get("type", "string")
+                        if isinstance(p_schema, dict)
+                        else "string"
+                    )
+                    req = "required" if p_name in required else "optional"
+                    p_desc = (
+                        p_schema.get("description", "")
+                        if isinstance(p_schema, dict)
+                        else ""
+                    )
+                    suffix = f": {p_desc}" if p_desc else ""
+                    zaya_lines.append(f"    - {p_name} ({p_type}, {req}){suffix}")
+            zaya_lines.append("")
+        tool_prompt = (
+            "\n".join(zaya_lines).rstrip()
+            + "\n\nWhen a tool call is needed, emit ONLY this native Zyphra XML shape. "
+            "Do not emit JSON result data, markdown, prose, generic XML tool tags, or a fake directory listing.\n"
+            "<zyphra_tool_call>\n"
+            f"<function={first_name}>\n"
+            f"<parameter={first_param}>\n"
+            "VALUE HERE\n"
+            f"</parameter>\n"
+            f"</function>\n"
+            "</zyphra_tool_call>\n\n"
+            "For a request to list the current directory, set path to \".\" exactly."
         )
     elif is_qwen_native_tool_prompt:
         qwen_lines = [

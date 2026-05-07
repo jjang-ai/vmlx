@@ -796,6 +796,96 @@ class TestFallbackToolPromptFormat:
         assert "fake directory listing" in rendered
         assert "tools" not in tokenizer.last_kwargs
 
+    def test_zaya_fallback_injects_concrete_native_tool_example(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            last_kwargs = None
+
+            def apply_chat_template(self, messages, **kwargs):
+                self.last_kwargs = kwargs
+                return "\n".join(m.get("content", "") for m in messages)
+
+        prompt = (
+            "<|system|>\n# Tools\n<tools>\n"
+            '{"type":"function","function":{"name":"list_directory"}}\n'
+            "</tools>\n"
+            "<zyphra_tool_call>\n"
+            "<function=example_function_name>\n"
+            "<parameter=example_parameter_1>\nvalue_1\n</parameter>\n"
+            "</function>\n</zyphra_tool_call>\n"
+            "<|user|>\nUse list_directory\n<|assistant|>\n"
+        )
+        messages = [{"role": "user", "content": "Use list_directory for path '.'"}]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_directory",
+                    "description": "List files",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            }
+        ]
+
+        tokenizer = FakeTokenizer()
+        rendered = check_and_inject_fallback_tools(
+            prompt,
+            messages,
+            tools,
+            tokenizer,
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+        )
+
+        assert "<zyphra_tool_call>" in rendered
+        assert "<function=list_directory>" in rendered
+        assert "<parameter=path>" in rendered
+        assert "<tool_call>" not in rendered
+        assert "fake directory listing" in rendered
+        assert "tools" not in tokenizer.last_kwargs
+
+    def test_zaya_fallback_skips_when_concrete_native_example_present(self):
+        from unittest.mock import MagicMock
+
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        tokenizer = MagicMock()
+        prompt = (
+            "<tools>{\"name\":\"list_directory\"}</tools>\n"
+            "<zyphra_tool_call>\n"
+            "<function=list_directory>\n"
+            "<parameter=path>VALUE HERE</parameter>\n"
+            "</function>\n"
+            "</zyphra_tool_call>"
+        )
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_directory",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                    },
+                },
+            }
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            prompt,
+            [{"role": "user", "content": "Use list_directory"}],
+            tools,
+            tokenizer,
+            {"tokenize": False, "tools": tools},
+        )
+
+        assert rendered == prompt
+        tokenizer.apply_chat_template.assert_not_called()
+
     def test_dsml_parser_repairs_schema_gated_malformed_old_dsv4_tool_call(self):
         from vmlx_engine.tool_parsers.dsml_tool_parser import DSMLToolParser
 
