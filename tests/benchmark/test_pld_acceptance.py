@@ -117,6 +117,41 @@ def run_task(
             "elapsed": elapsed, "rate": rate, "text": text}
 
 
+def run_partial_accept_stress_task(port: int, temperature: float = 0.0,
+                                   save_dir: Optional[str] = None) -> dict:
+    """Task designed to trigger hybrid SSM partial-accept replay (issue #134).
+
+    Uses high-repetition prompts where n-gram matches are very likely but the
+    model is likely to accept some (not all) draft tokens on hybrid SSM/ATT
+    models.  The repeating pattern gives PLD many K=2 candidates; the midpoint
+    mismatch potential forces partial-accept paths.
+
+    On hybrid models, check /health?pld_ssm_replay.attempts > 0 after this task.
+    """
+    # Prompt engineered for partial-accept: exact repetition at start,
+    # then forced semantic divergence in the middle of the repeated unit.
+    # K=2 means d0 often accepted (exact n-gram), d1 sometimes rejected (model
+    # diverges at midpoint of the repeated unit).
+    repeat_unit = (
+        "The function returns a list of tuples. "
+        "Each tuple contains an integer index and a string value. "
+    )
+    partial_prompt = (
+        repeat_unit * 6
+        + "\n\nContinue the pattern:\n"
+        + repeat_unit * 2
+        + "Each tuple contains an integer index and "
+    )
+    return run_task(
+        port,
+        "Partial-accept stress (hybrid SSM replay)",
+        partial_prompt,
+        max_tokens=400,
+        temperature=temperature,
+        save_dir=save_dir,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8080)
@@ -203,12 +238,17 @@ modern identity theory, touching on mereological essentialism and four-dimension
     results.append(run_task(args.port, "Open-ended reasoning", chat_prompt, max_tokens=400,
                             temperature=args.temperature, save_dir=args.save_outputs))
 
+    # ── Task 5: Partial-accept stress (hybrid SSM replay — issue #134) ────
+    results.append(run_partial_accept_stress_task(
+        args.port, temperature=args.temperature, save_dir=args.save_outputs
+    ))
+
     # ── Summary ───────────────────────────────────────────────────────────
     print(f"\n{'='*60}")
     print("Benchmark complete. Approximate token rates by task:")
     print("(approx_tokens = max(sse_events, len(text)//4); exact counts in server log)")
     for r in results:
-        print(f"  {r['name']:30s}  {r['rate']:6.0f} tok/s  "
+        print(f"  {r['name']:40s}  {r['rate']:6.0f} tok/s  "
               f"(≈{r['approx_tokens']} tokens, {r['sse_events']} SSE events, "
               f"{r['elapsed']:.1f}s)")
 
@@ -220,6 +260,8 @@ modern identity theory, touching on mereological essentialism and four-dimension
     print(f"  vmlx-providers logs lg 500 | grep 'finished:'")
     print("\nFor PLD speculative decode stats:")
     print(f"  vmlx-providers logs lg 500 | grep 'PLD-spec' | awk -F'=' '{{print $2}}' | sort | uniq -c")
+    print("\nFor hybrid SSM replay stats (issue #134):")
+    print(f"  curl -s http://127.0.0.1:{args.port}/health | python3 -m json.tool | grep -A5 pld_ssm_replay")
 
 
 if __name__ == "__main__":
