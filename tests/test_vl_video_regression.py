@@ -6408,9 +6408,12 @@ class TestCacheLayerStackCombined:
 
 
 class TestTurboQuantDefaultAndSpeed:
-    """TurboQuant is the production default for JANG/JANGTQ models.
-    Per user priority: no speed damage, VL+video support, hybrid SSM
-    interop, L2 disk persistence of TurboQuant blocks.
+    """TurboQuant weight/runtime fast paths are default for compatible JANGTQ.
+
+    Cache codecs are stricter than weight decode: standard-KV JANGTQ can use
+    live TurboQuant KV / stored q4 when compatible, DSV4 uses its native
+    SWA+CSA/HSA compression, and hybrid SSM auto mode disables live TQ-KV until
+    a typed codec covers both positional KV and companion SSM state.
 
     Live-verified iter 6 against Qwen3.6-35B-A3B-JANGTQ2 from
     ~/.mlxstudio/models/MLXModels/dealignai/:
@@ -6419,7 +6422,6 @@ class TestTurboQuantDefaultAndSpeed:
       auto-activation. Log confirms:
         "MXTQ/JANGTQ VLM detected — using native TurboQuant fast path"
         "TurboQuant auto-enabled (JANG model, no explicit config)"
-        "TurboQuant enabled: 3-bit keys, 3-bit values, 6 critical layers"
         P15 mx.compile(router-only) applied
         P18 QKV fusion applied when arch permits
 
@@ -6455,17 +6457,16 @@ class TestTurboQuantDefaultAndSpeed:
         # Opt-OUT via env is acceptable (for debugging)
         # but no opt-IN required
 
-    def test_turboquant_kv_cache_on_hybrid_models(self):
-        """Qwen3.5 hybrid SSM + TurboQuant: attention layers use
-        TurboQuantKVCache, SSM layers use ArraysCache. Both must
-        coexist in the layer stack without mixing up types."""
-        jang_src = Path(
-            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/utils/jang_loader.py"
-        ).read_text()
-        assert "hybrid" in jang_src.lower()
-        # BatchKVCache.merge handles TurboQuantKVCache → KVCache via .state
-        # per MEMORY.md (Nemotron 3 Super fix). Pin that the cache type
-        # validator accepts TurboQuant keys=None.
+    def test_hybrid_ssm_auto_mode_disables_live_tq_kv(self):
+        """Hybrid SSM cache state must not be partially TQ-quantized."""
+        cli_src = Path("/private/tmp/vmlx-1.3.66-build/vmlx_engine/cli.py").read_text()
+        sched_src = Path("/private/tmp/vmlx-1.3.66-build/vmlx_engine/scheduler.py").read_text()
+
+        assert "Hybrid SSM cache model detected" in cli_src
+        assert 'os.environ["VMLX_DISABLE_TQ_KV"] = "1"' in cli_src
+        assert 'args.kv_cache_quantization = "none"' in cli_src
+        assert "VMLX_ALLOW_HYBRID_KV_QUANT" in sched_src
+        assert "disabling generic KV cache" in sched_src
 
     def test_l2_disk_persists_turboquant_blocks(self):
         """The safetensors __metadata__ collision (fixed 686aae56) was
