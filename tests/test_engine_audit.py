@@ -2614,6 +2614,49 @@ class TestPromptLookupDocumentation:
         assert "Hybrid SSM/attention models need family-aware" in doc
 
 
+class TestDistributedStreamingUnicode:
+    """vmlx#124 class: distributed streaming must not per-token decode UTF-8."""
+
+    def test_distributed_generate_loop_uses_streaming_detokenizer(self):
+        source = Path("vmlx_engine/distributed/engine.py").read_text()
+        body_start = source.index("async def _generate_impl")
+        body_end = source.index("\n    def _apply_chat_template", body_start)
+        body = source[body_start:body_end]
+
+        assert "tokenizer.decode([next_tok_id])" not in body
+        assert "_make_streaming_detokenizer(tokenizer)" in body
+        assert "_add_streaming_token(detokenizer, next_tok_id)" in body
+        assert "_finalize_streaming_detokenizer(detokenizer)" in body
+
+    def test_streaming_helpers_do_not_emit_incomplete_cyrillic(self):
+        from vmlx_engine.distributed.engine import (
+            _add_streaming_token,
+            _finalize_streaming_detokenizer,
+        )
+
+        class FakeDetokenizer:
+            def __init__(self):
+                self.text = ""
+
+            def add_token(self, token):
+                # Token 1 is an incomplete byte span. A per-token decode path
+                # would emit U+FFFD here; a streaming path must wait.
+                if token == 1:
+                    self.text = ""
+                elif token == 2:
+                    self.text = "Пр"
+
+            def finalize(self):
+                self.text = "Привет"
+
+        detok = FakeDetokenizer()
+
+        assert _add_streaming_token(detok, 1) == ""
+        assert _add_streaming_token(detok, 2) == "Пр"
+        assert _finalize_streaming_detokenizer(detok) == "ивет"
+        assert "\ufffd" not in detok.text
+
+
 class TestJangVLMFallbacks:
     """JANG VLM loaders must not silently drop working image support."""
 
