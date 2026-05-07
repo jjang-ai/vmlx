@@ -1,6 +1,7 @@
 import json
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import mlx.core as mx
 import pytest
@@ -321,6 +322,138 @@ def test_zaya_typed_cca_l2_disk_hit_restores_full_cache():
         assert diff.item() == 0.0
     finally:
         store2.shutdown()
+
+
+def test_zaya_scheduler_uses_typed_cca_not_hybrid_ssm_companion():
+    model = Model(_small_args())
+
+    from vmlx_engine.scheduler import Scheduler, SchedulerConfig
+
+    tokenizer = SimpleNamespace(
+        eos_token_id=1,
+        encode=lambda text, add_special_tokens=False: [1, 2],
+        decode=lambda ids: "",
+    )
+    scheduler = Scheduler(
+        model,
+        tokenizer,
+        SchedulerConfig(
+            enable_prefix_cache=True,
+            use_paged_cache=True,
+            use_memory_aware_cache=False,
+            enable_block_disk_cache=False,
+            kv_cache_quantization="q4",
+        ),
+    )
+
+    assert scheduler._uses_zaya_cache is True
+    assert scheduler._is_hybrid is True
+    assert scheduler._ssm_state_cache is None
+    assert scheduler._kv_cache_bits == 0
+    assert scheduler.config.kv_cache_quantization == "none"
+    assert scheduler.block_aware_cache is not None
+
+
+def test_zaya_scheduler_forces_prefix_only_to_paged_cache():
+    """ZAYA CCA must never use memory-aware/legacy prefix cache stores.
+
+    Those generic paths do not serialize CCA conv_state/prev_hs, and would
+    otherwise store decode-contaminated post-generation state. The scheduler
+    should defensively route any prefix-only ZAYA configuration to the typed
+    paged cache path.
+    """
+
+    model = Model(_small_args())
+
+    from vmlx_engine.scheduler import Scheduler, SchedulerConfig
+
+    tokenizer = SimpleNamespace(
+        eos_token_id=1,
+        encode=lambda text, add_special_tokens=False: [1, 2],
+        decode=lambda ids: "",
+    )
+    scheduler = Scheduler(
+        model,
+        tokenizer,
+        SchedulerConfig(
+            enable_prefix_cache=True,
+            use_paged_cache=False,
+            use_memory_aware_cache=False,
+            enable_block_disk_cache=False,
+            kv_cache_quantization="none",
+        ),
+    )
+
+    assert scheduler._uses_zaya_cache is True
+    assert scheduler.config.use_paged_cache is True
+    assert scheduler.config.use_memory_aware_cache is False
+    assert scheduler.block_aware_cache is not None
+    assert scheduler.memory_aware_cache is None
+    assert scheduler.prefix_cache is None
+
+
+def test_zaya_scheduler_stores_clean_prompt_boundary_for_paged_cache():
+    """Live scheduler store must use clean ZAYA CCA prompt-boundary state.
+
+    A finished decode cache contains generated-token CCA conv_state/prev_hs.
+    The scheduler must not reuse that post-output state. It should re-prefill
+    the N-1 cache key and store that clean typed cache so the next identical
+    prompt can hit paged prefix cache.
+    """
+
+    from vmlx_engine.request import Request, SamplingParams
+    from vmlx_engine.scheduler import Scheduler, SchedulerConfig
+
+    mx.random.seed(21)
+    model = Model(_small_args())
+    tokenizer = SimpleNamespace(
+        eos_token_id=0,
+        eos_token_ids=[0],
+        clean_up_tokenization_spaces=False,
+        encode=lambda text, add_special_tokens=False: [1, 2, 3, 4],
+        decode=lambda ids: "".join(chr(65 + (int(i) % 26)) for i in ids),
+    )
+    scheduler = Scheduler(
+        model,
+        tokenizer,
+        SchedulerConfig(
+            max_num_seqs=1,
+            enable_prefix_cache=True,
+            use_paged_cache=True,
+            use_memory_aware_cache=False,
+            paged_cache_block_size=8,
+            max_cache_blocks=8,
+            kv_cache_quantization="q4",
+            prefill_batch_size=1,
+            completion_batch_size=1,
+            prefill_step_size=8,
+        ),
+    )
+
+    request = Request(
+        request_id="zaya-clean-store",
+        prompt=[1, 2, 3, 4],
+        prompt_token_ids=[1, 2, 3, 4],
+        sampling_params=SamplingParams(max_tokens=1, temperature=0.0),
+    )
+    scheduler.add_request(request)
+
+    for _ in range(8):
+        scheduler.step()
+        if request.is_finished():
+            break
+
+    assert request.is_finished(), "ZAYA scheduler request did not finish"
+    assert scheduler.block_aware_cache is not None
+    table, remaining = scheduler.block_aware_cache.fetch_cache(
+        "zaya-clean-store-repeat",
+        [1, 2, 3, 4],
+    )
+
+    assert table is not None
+    assert table.num_tokens == 3
+    assert remaining == [4]
+    assert scheduler.block_aware_cache.paged_cache.stats.cache_hits >= 1
 
 
 def test_zaya_batch_generator_finishes_with_moe_no_state_cache():

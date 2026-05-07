@@ -329,11 +329,16 @@ class Scheduler:
         self._ewma_ttft: float = 0.0
         self._ttft_alpha: float = 0.1
 
-        # Track if model uses mixed cache types. DSV4's DeepseekV4Cache is a
-        # first-class composite attention cache, not an SSM companion cache.
-        self._is_hybrid = self._is_hybrid_model(model)
-        self._uses_dsv4_cache = self._model_uses_dsv4_cache(model)
         self._model_type_for_runtime = self._detect_model_type_for_runtime(model)
+        # Track if model uses mixed cache types. DSV4's DeepseekV4Cache and
+        # ZAYA's CCA CacheList are first-class typed cache contracts, not SSM
+        # companion-cache rows.
+        self._uses_dsv4_cache = self._model_uses_dsv4_cache(model)
+        self._uses_zaya_cache = (
+            self._model_type_for_runtime == "zaya"
+            or self._model_uses_zaya_cache(model)
+        )
+        self._is_hybrid = self._is_hybrid_model(model)
         self._long_repetition_context = self._model_type_for_runtime in {
             "deepseek_v4",
             "minimax_m2",
@@ -343,6 +348,7 @@ class Scheduler:
         self._tq_active = getattr(model, "make_cache", None) and getattr(
             model.make_cache, "__name__", ""
         ) in ("_tq_make_cache", "_turboquant_make_cache")
+        self._log_runtime_cache_contract(model)
 
         # mlxstudio#138: surface the precedence when both knobs are set.
         # Without VMLX_DISABLE_TQ_KV, the loader's TQ patch wins because
@@ -371,8 +377,21 @@ class Scheduler:
         _hybrid_kvq_env = os.environ.get("VMLX_ALLOW_HYBRID_KV_QUANT")
         _allow_hybrid_kvq = _hybrid_kvq_env in ("1", "true", "True", "yes", "on")
         if (
+            self._uses_zaya_cache
+            and self.config.kv_cache_quantization != "none"
+        ):
+            logger.info(
+                "ZAYA/CCA typed cache detected — disabling generic KV cache "
+                "quantization (was: %s). ZAYA CCA can only quantize the "
+                "standard KV subcache after a typed partial codec proves "
+                "conv_state/prev_hs parity.",
+                self.config.kv_cache_quantization,
+            )
+            self.config.kv_cache_quantization = "none"
+        elif (
             self._is_hybrid
             and not self._uses_dsv4_cache
+            and not self._uses_zaya_cache
             and self.config.kv_cache_quantization != "none"
             and not _allow_hybrid_kvq
         ):
@@ -388,6 +407,7 @@ class Scheduler:
         elif (
             self._is_hybrid
             and not self._uses_dsv4_cache
+            and not self._uses_zaya_cache
             and self.config.kv_cache_quantization != "none"
             and _allow_hybrid_kvq
         ):
@@ -436,6 +456,7 @@ class Scheduler:
         if (
             self._is_hybrid
             and not self._uses_dsv4_cache
+            and not self._uses_zaya_cache
             and self.config.enable_prefix_cache
             and hasattr(model, "make_cache")
         ):
@@ -492,17 +513,24 @@ class Scheduler:
                 )
             except Exception as _e:
                 logger.warning(f"Failed to init hybrid SSM cache layout: {_e}")
-        elif self._is_hybrid and not self._uses_dsv4_cache:
-            if self._model_type_for_runtime == "zaya":
+        elif self._uses_zaya_cache:
+            if self.config.enable_prefix_cache and self.config.use_paged_cache:
+                logger.info(
+                    "ZAYA/CCA typed paged prefix cache enabled — terminal "
+                    "blocks store CCA conv_state + prev_hs and block disk L2 "
+                    "uses zaya_cca_v1 serialization. Generic TurboQuant KV "
+                    "remains disabled for this family."
+                )
+            else:
                 logger.info(
                     "ZAYA/CCA cache contract detected but prefix cache is disabled; "
                     "CCA prompt-state lookup/store/re-derive is disabled for this run"
                 )
-            else:
-                logger.info(
-                    "Hybrid SSM cache detected but prefix cache is disabled; "
-                    "SSM companion lookup/store/re-derive is disabled for this run"
-                )
+        elif self._is_hybrid and not self._uses_dsv4_cache:
+            logger.info(
+                "Hybrid SSM cache detected but prefix cache is disabled; "
+                "SSM companion lookup/store/re-derive is disabled for this run"
+            )
 
         # Prompt lookup decoding — measurement state (Phase 1)
         # Maps request_id -> (draft_tokens, expected_start_output_idx, hit_count)
@@ -562,6 +590,18 @@ class Scheduler:
         # Auto-detect hybrid models (MambaCache + KVCache) and switch to
         # paged cache, since memory-aware cache can't truncate MambaCache.
         if (
+            self.config.enable_prefix_cache
+            and not self.config.use_paged_cache
+            and self._uses_zaya_cache
+        ):
+            logger.info(
+                "ZAYA/CCA typed cache requires paged prefix cache. "
+                "Auto-switching prefix-only configuration to paged cache "
+                "so zaya_cca_v1 records carry KV + conv_state + prev_hs."
+            )
+            self.config.use_paged_cache = True
+            self.config.use_memory_aware_cache = False
+        elif (
             self.config.enable_prefix_cache
             and not self.config.use_paged_cache
             and self.config.use_memory_aware_cache
@@ -696,6 +736,7 @@ class Scheduler:
                         # cache — C3, extended for DSV4 tri-mode cache schema).
                         quant_tag = self.config.kv_cache_quantization or "none"
                         dsv4_scope = ""
+                        zaya_scope = ""
                         if self._uses_dsv4_cache:
                             # Include the unsafe-override env in the scope so
                             # safe/default runs can NEVER share namespace with
@@ -714,10 +755,13 @@ class Scheduler:
                                 f":dsv4_unsafe_trim={_unsafe_trim}"
                                 ":dsv4_cache_schema=deepseek_v4_v7"
                             )
+                        elif self._uses_zaya_cache:
+                            zaya_scope = ":zaya_cache_schema=zaya_cca_v1"
                         block_scope_key = (
                             f"{self.config.model_path}:quant={quant_tag}"
                             f":paged_cache_schema={PAGED_CACHE_SCHEMA_VERSION}"
                             f"{dsv4_scope}"
+                            f"{zaya_scope}"
                         )
                         model_hash = hashlib.sha256(
                             block_scope_key.encode()
@@ -759,6 +803,7 @@ class Scheduler:
                         if (
                             self._is_hybrid
                             and not self._uses_dsv4_cache
+                            and not self._uses_zaya_cache
                             and self._ssm_state_cache is not None
                         ):
                             try:
@@ -810,7 +855,11 @@ class Scheduler:
                     model_path=self.config.model_path,
                     smelt_enabled=self.config.smelt_enabled,
                     smelt_pct=self.config.smelt_pct,
-                    tq_enabled=self._tq_active and not self._uses_dsv4_cache,
+                    tq_enabled=(
+                        self._tq_active
+                        and not self._uses_dsv4_cache
+                        and not self._uses_zaya_cache
+                    ),
                     kv_quant_bits=self._kv_cache_bits,
                 )
                 logger.info(
@@ -845,7 +894,11 @@ class Scheduler:
                     model_path=self.config.model_path,
                     smelt_enabled=self.config.smelt_enabled,
                     smelt_pct=self.config.smelt_pct,
-                    tq_enabled=self._tq_active and not self._uses_dsv4_cache,
+                    tq_enabled=(
+                        self._tq_active
+                        and not self._uses_dsv4_cache
+                        and not self._uses_zaya_cache
+                    ),
                     kv_quant_bits=self._kv_cache_bits,
                 )
                 _bytes_msg = (
@@ -955,6 +1008,47 @@ class Scheduler:
             return any(Scheduler._is_dsv4_cache_object(c) for c in (model.make_cache() or []))
         except Exception:
             return False
+
+    @staticmethod
+    def _model_uses_zaya_cache(model: Any) -> bool:
+        """Return True when model.make_cache() contains ZAYA CCA cache slots."""
+        if not hasattr(model, "make_cache"):
+            return False
+        try:
+            cache = model.make_cache() or []
+            names = [type(c).__name__ for c in cache]
+            return "ZayaNoStateCache" in names or (
+                "CacheList" in names
+                and any("zaya" in str(type(c).__module__).lower() for c in cache)
+            )
+        except Exception:
+            return False
+
+    def _log_runtime_cache_contract(self, model: Any) -> None:
+        """Log per-layer cache classes for production-gate topology checks."""
+        if not hasattr(model, "make_cache"):
+            return
+        try:
+            cache = model.make_cache() or []
+            layout = []
+            for idx, slot in enumerate(cache):
+                cls = type(slot).__name__
+                if cls == "CacheList":
+                    sub = [
+                        type(sub_slot).__name__
+                        for sub_slot in getattr(slot, "caches", ())
+                    ]
+                    layout.append(f"{idx}:CacheList({','.join(sub)})")
+                else:
+                    layout.append(f"{idx}:{cls}")
+            logger.info(
+                "Runtime cache layout: model_type=%s layers=%d layout=%s",
+                self._model_type_for_runtime or "unknown",
+                len(cache),
+                ";".join(layout),
+            )
+        except Exception as exc:
+            logger.debug("Runtime cache layout logging skipped: %s", exc)
 
     @staticmethod
     def _is_dsv4_cache_class_name(class_name: str) -> bool:
@@ -1589,18 +1683,31 @@ class Scheduler:
                 _ = self.model(input_ids, cache=fresh_cache)
                 # Materialize after each chunk to prevent massive lazy graph
                 eval_args = []
-                for c in fresh_cache:
-                    if hasattr(c, "keys") and c.keys is not None:
+                def _collect_cache_arrays(cache_obj):
+                    if cache_obj is None:
+                        return
+                    if hasattr(cache_obj, "caches") and isinstance(
+                        getattr(cache_obj, "caches", None), (list, tuple)
+                    ):
+                        for sub_cache in cache_obj.caches:
+                            _collect_cache_arrays(sub_cache)
+                        return
+                    if hasattr(cache_obj, "keys") and cache_obj.keys is not None:
                         # QuantizedKVCache: keys/values are tuples of arrays
-                        if isinstance(c.keys, tuple):
-                            eval_args.extend(c.keys)
-                            eval_args.extend(c.values)
+                        if isinstance(cache_obj.keys, tuple):
+                            eval_args.extend(cache_obj.keys)
+                            eval_args.extend(cache_obj.values)
                         else:
-                            eval_args.extend([c.keys, c.values])
-                    elif hasattr(c, "cache") and isinstance(c.cache, list):
-                        for arr in c.cache:
+                            eval_args.extend([cache_obj.keys, cache_obj.values])
+                    elif hasattr(cache_obj, "cache") and isinstance(
+                        cache_obj.cache, list
+                    ):
+                        for arr in cache_obj.cache:
                             if hasattr(arr, "shape"):
                                 eval_args.append(arr)
+
+                for c in fresh_cache:
+                    _collect_cache_arrays(c)
                 if eval_args:
                     mx.eval(*eval_args)
 
@@ -2960,14 +3067,21 @@ class Scheduler:
                 request.shared_prefix_blocks = len(block_table.block_ids)
                 request.remaining_tokens = remaining
                 request._paged_block_table_needs_worker_reconstruct = True
-                if self._is_hybrid and not self._uses_dsv4_cache:
+                if (
+                    self._is_hybrid
+                    and not self._uses_dsv4_cache
+                    and not self._uses_zaya_cache
+                ):
                     request._hybrid_prompt_cache_needs_worker_ssm = True
                     request._hybrid_ssm_fetch_tokens = list(_fetch_tokens)
                 if getattr(self, "_kv_cache_bits", 0) and self._uses_dsv4_cache:
                     request._prompt_cache_needs_worker_dequant = True
-                request._cache_detail = (
-                    "paged+dsv4" if self._uses_dsv4_cache else "paged"
-                )
+                if self._uses_dsv4_cache:
+                    request._cache_detail = "paged+dsv4"
+                elif self._uses_zaya_cache:
+                    request._cache_detail = "paged+zaya_cca"
+                else:
+                    request._cache_detail = "paged"
                 logger.info(
                     f"Request {request.request_id}: paged cache hit, "
                     f"{request.cached_tokens} tokens in "
@@ -3333,6 +3447,7 @@ class Scheduler:
         if (
             not self._is_hybrid
             or self._uses_dsv4_cache
+            or self._uses_zaya_cache
             or self._ssm_state_cache is None
             or self.block_aware_cache is None
             or block_table is None
@@ -4070,6 +4185,59 @@ class Scheduler:
                                             f"truncation needed."
                                         )
                                         cache_for_extract = snapshot_cache
+                                    elif self._uses_zaya_cache:
+                                        # ZAYA CCA cache is path-dependent:
+                                        # CacheList(KVCache, ArraysCache)
+                                        # stores standard KV plus CCA
+                                        # conv_state/prev_hs. The live cache
+                                        # returned after decode has already
+                                        # absorbed generated tokens in the CCA
+                                        # state and cannot be rewound safely.
+                                        #
+                                        # Store the same N-1 key used by the
+                                        # paged-prefix path by running a clean
+                                        # prompt-only prefill for exactly those
+                                        # key tokens. This is slower on cold
+                                        # store but preserves exact typed CCA
+                                        # semantics and enables correct paged/L2
+                                        # reuse on the next identical prefix.
+                                        zaya_prompt_tokens = list(
+                                            request.prompt_token_ids
+                                        )
+                                        _gpl_z = (
+                                            getattr(request, "_gen_prompt_len", 0)
+                                            or 0
+                                        )
+                                        if 0 < _gpl_z < len(zaya_prompt_tokens):
+                                            zaya_prompt_tokens = zaya_prompt_tokens[
+                                                :-_gpl_z
+                                            ]
+                                        zaya_key_tokens = (
+                                            zaya_prompt_tokens[:-1]
+                                            if len(zaya_prompt_tokens) > 1
+                                            else []
+                                        )
+                                        if zaya_key_tokens:
+                                            logger.info(
+                                                "ZAYA prefix cache store using "
+                                                "clean prompt-boundary re-prefill "
+                                                "(%d cache-key tokens from %d "
+                                                "prompt tokens).",
+                                                len(zaya_key_tokens),
+                                                len(zaya_prompt_tokens),
+                                            )
+                                            cache_for_extract = (
+                                                self._prefill_for_prompt_only_cache(
+                                                    zaya_key_tokens
+                                                )
+                                            )
+                                            if cache_for_extract is not None:
+                                                request._extracted_cache_key_tokens = (
+                                                    list(zaya_key_tokens)
+                                                )
+                                                request._extracted_cache_from_prompt_snapshot = True
+                                        else:
+                                            cache_for_extract = None
                                     else:
                                         # Paged cache: truncate to N-1 tokens so the
                                         # last prompt token can be re-fed on cache hit.
@@ -4143,8 +4311,13 @@ class Scheduler:
                                                 )
                                         if extracted_cache:
                                             request._extracted_cache = extracted_cache
-                                            request._extracted_cache_from_prompt_snapshot = (
+                                            request._extracted_cache_from_prompt_snapshot = bool(
                                                 snapshot_cache is not None
+                                                or getattr(
+                                                    request,
+                                                    "_extracted_cache_from_prompt_snapshot",
+                                                    False,
+                                                )
                                             )
                                             logger.info(
                                                 f"Extracted {len(extracted_cache)} "
@@ -4281,6 +4454,7 @@ class Scheduler:
             if (
                 self._is_hybrid
                 and not self._uses_dsv4_cache
+                and not self._uses_zaya_cache
                 and self.config.enable_prefix_cache
                 and self._ssm_state_cache is not None
                 and request is not None
@@ -4454,170 +4628,141 @@ class Scheduler:
                         and request._extracted_cache is not None
                     ):
                         try:
+                            cache_key_override = getattr(
+                                request, "_extracted_cache_key_tokens", None
+                            )
                             prompt_tokens = list(request.prompt_token_ids)
-                            # Strip generation prompt tokens from cache key.
-                            # Original gen_prompt_len prefix cache fix by Jinho Jang
-                            # (eric@jangq.ai) — vMLX. This solved 100% cache miss for
-                            # all thinking models (Nemotron, Qwen3, DeepSeek-R1, Mistral 4).
-                            # Chat templates append assistant role tokens at the end
-                            # (e.g., <|im_start|>assistant\n<think>\n) which always
-                            # differ on subsequent turns. Including them in the block
-                            # hash causes 100% cache misses in multi-turn conversations.
-                            gen_prompt_len = getattr(request, "_gen_prompt_len", 0)
                             cache_data = request._extracted_cache
-                            if gen_prompt_len > 0 and gen_prompt_len < len(
-                                prompt_tokens
-                            ):
-                                prompt_tokens = prompt_tokens[:-gen_prompt_len]
-                                # Also truncate KV cache data to match shortened key.
-                                # Without this, KV has more tokens than the key,
-                                # causing duplicate KV entries on cache hit → <unk> flood.
-                                # cache_data is extracted state dicts (not raw objects),
-                                # so truncate the tensors within each dict directly.
-                                target = len(prompt_tokens) - 1  # N-1 for re-feed
-                                if target > 0:
-                                    truncated_dicts = []
-                                    trunc_ok = True
-                                    for sd in cache_data:
-                                        if not isinstance(sd, dict):
-                                            trunc_ok = False
-                                            break
-                                        state = sd.get("state")
-                                        cls_name = sd.get("class_name", "")
-                                        if self._is_dsv4_cache_class_name(cls_name) and state is not None:
-                                            try:
-                                                from jang_tools.dsv4.mlx_model import (
-                                                    DeepseekV4Cache,
-                                                )
-
-                                                cache = DeepseekV4Cache(
-                                                    sliding_window=int(
-                                                        sd.get("sliding_window")
-                                                        or 128
-                                                    ),
-                                                    compress_ratio=sd.get(
-                                                        "compress_ratio"
-                                                    ),
-                                                )
-                                                cache.state = state
-                                                try:
-                                                    cache.meta_state = sd.get(
-                                                        "meta_state", ()
-                                                    )
-                                                except Exception:
-                                                    pass
-                                                current_len = int(
-                                                    getattr(cache, "offset", 0) or 0
-                                                )
-                                                to_trim = max(0, current_len - target)
-                                                # SAFETY: gen_prompt_len stripping
-                                                # also calls cache.trim() on a
-                                                # reconstructed DeepseekV4Cache. The
-                                                # same SWA RotatingKVCache wrap
-                                                # constraint applies here: if the
-                                                # original prefill exceeded
-                                                # sliding_window, the SWA buffer has
-                                                # wrapped and cannot be safely
-                                                # rewound. Refuse the trim and skip
-                                                # this cache (caller falls through
-                                                # to fresh prefill on next-turn).
-                                                # Symmetric with Fix 1 guard.
-                                                local = getattr(cache, "local", None)
-                                                _swa = int(
-                                                    getattr(local, "max_size", 128) or 128
-                                                )
-                                                if to_trim > 0 and current_len > _swa:
-                                                    logger.info(
-                                                        f"DSV4 gen_prompt_len strip "
-                                                        f"skipped: current_len="
-                                                        f"{current_len}, target="
-                                                        f"{target}, sliding_window="
-                                                        f"{_swa} → SWA wrapped, "
-                                                        f"trim unsafe."
-                                                    )
-                                                    trunc_ok = False
-                                                    break
-                                                if to_trim:
-                                                    cache.trim(to_trim)
-                                                truncated_dicts.append(
-                                                    {
-                                                        **sd,
-                                                        "state": cache.state,
-                                                        "meta_state": cache.meta_state,
-                                                    }
-                                                )
-                                                continue
-                                            except Exception:
+                            if cache_key_override is not None:
+                                store_tokens = list(cache_key_override)
+                            else:
+                                # Strip generation prompt tokens from cache key.
+                                # Original gen_prompt_len prefix cache fix by Jinho Jang
+                                # (eric@jangq.ai) — vMLX. This solved 100% cache miss for
+                                # all thinking models (Nemotron, Qwen3, DeepSeek-R1, Mistral 4).
+                                # Chat templates append assistant role tokens at the end
+                                # (e.g., <|im_start|>assistant\n<think>\n) which always
+                                # differ on subsequent turns. Including them in the block
+                                # hash causes 100% cache misses in multi-turn conversations.
+                                gen_prompt_len = getattr(request, "_gen_prompt_len", 0)
+                                if gen_prompt_len > 0 and gen_prompt_len < len(
+                                    prompt_tokens
+                                ):
+                                    prompt_tokens = prompt_tokens[:-gen_prompt_len]
+                                    # Also truncate KV cache data to match shortened key.
+                                    # Without this, KV has more tokens than the key,
+                                    # causing duplicate KV entries on cache hit → <unk> flood.
+                                    # cache_data is extracted state dicts (not raw objects),
+                                    # so truncate the tensors within each dict directly.
+                                    target = len(prompt_tokens) - 1  # N-1 for re-feed
+                                    if target > 0:
+                                        truncated_dicts = []
+                                        trunc_ok = True
+                                        for sd in cache_data:
+                                            if not isinstance(sd, dict):
                                                 trunc_ok = False
                                                 break
-                                        if (
-                                            state is None
-                                            or cls_name == "CacheList"
-                                        ):
-                                            # CacheList/skip: pass through
-                                            truncated_dicts.append(sd)
-                                            continue
-                                        if isinstance(state, tuple) and len(state) == 2:
-                                            keys, values = state
-                                            if (
-                                                hasattr(keys, "shape")
-                                                and len(keys.shape) >= 3
-                                            ):
-                                                seq_dim = (
-                                                    2 if len(keys.shape) == 4 else 1
-                                                )
-                                                safe = min(target, keys.shape[seq_dim])
-                                                if safe > 0:
-                                                    if len(keys.shape) == 4:
-                                                        keys = keys[:, :, :safe, :]
-                                                        values = values[:, :, :safe, :]
-                                                    else:
-                                                        keys = keys[:, :safe, :]
-                                                        values = values[:, :safe, :]
-                                                    new_meta = _rebuild_meta_state_after_truncation(
-                                                        cls_name,
-                                                        sd.get("meta_state", ()),
-                                                        safe,
+                                            state = sd.get("state")
+                                            cls_name = sd.get("class_name", "")
+                                            if self._is_dsv4_cache_class_name(cls_name) and state is not None:
+                                                try:
+                                                    from jang_tools.dsv4.mlx_model import (
+                                                        DeepseekV4Cache,
                                                     )
-                                                    if new_meta is None:
-                                                        # RotatingKVCache with wrapped
-                                                        # buffer: cannot safely truncate.
-                                                        # Skip this store entirely.
+
+                                                    cache = DeepseekV4Cache(
+                                                        sliding_window=int(
+                                                            sd.get("sliding_window")
+                                                            or 128
+                                                        ),
+                                                        compress_ratio=sd.get(
+                                                            "compress_ratio"
+                                                        ),
+                                                    )
+                                                    cache.state = state
+                                                    try:
+                                                        cache.meta_state = sd.get(
+                                                            "meta_state", ()
+                                                        )
+                                                    except Exception:
+                                                        pass
+                                                    current_len = int(
+                                                        getattr(cache, "offset", 0) or 0
+                                                    )
+                                                    to_trim = max(0, current_len - target)
+                                                    # SAFETY: gen_prompt_len stripping
+                                                    # also calls cache.trim() on a
+                                                    # reconstructed DeepseekV4Cache. The
+                                                    # same SWA RotatingKVCache wrap
+                                                    # constraint applies here: if the
+                                                    # original prefill exceeded
+                                                    # sliding_window, the SWA buffer has
+                                                    # wrapped and cannot be safely
+                                                    # rewound. Refuse the trim and skip
+                                                    # this cache (caller falls through
+                                                    # to fresh prefill on next-turn).
+                                                    # Symmetric with Fix 1 guard.
+                                                    local = getattr(cache, "local", None)
+                                                    _swa = int(
+                                                        getattr(local, "max_size", 128) or 128
+                                                    )
+                                                    if to_trim > 0 and current_len > _swa:
+                                                        logger.info(
+                                                            f"DSV4 gen_prompt_len strip "
+                                                            f"skipped: current_len="
+                                                            f"{current_len}, target="
+                                                            f"{target}, sliding_window="
+                                                            f"{_swa} → SWA wrapped, "
+                                                            f"trim unsafe."
+                                                        )
                                                         trunc_ok = False
                                                         break
+                                                    if to_trim:
+                                                        cache.trim(to_trim)
                                                     truncated_dicts.append(
                                                         {
                                                             **sd,
-                                                            "state": (keys, values),
-                                                            "meta_state": new_meta,
+                                                            "state": cache.state,
+                                                            "meta_state": cache.meta_state,
                                                         }
                                                     )
                                                     continue
-                                            elif (
-                                                isinstance(keys, (tuple, list))
-                                                and len(keys) >= 1
+                                                except Exception:
+                                                    trunc_ok = False
+                                                    break
+                                            if (
+                                                state is None
+                                                or cls_name == "CacheList"
                                             ):
-                                                # QuantizedKVCache: tuple of (data, scales, zeros)
-                                                first_k = keys[0]
-                                                if hasattr(first_k, "shape"):
-                                                    safe = min(
-                                                        target, first_k.shape[-2]
+                                                # CacheList/skip: pass through
+                                                truncated_dicts.append(sd)
+                                                continue
+                                            if isinstance(state, tuple) and len(state) == 2:
+                                                keys, values = state
+                                                if (
+                                                    hasattr(keys, "shape")
+                                                    and len(keys.shape) >= 3
+                                                ):
+                                                    seq_dim = (
+                                                        2 if len(keys.shape) == 4 else 1
                                                     )
+                                                    safe = min(target, keys.shape[seq_dim])
                                                     if safe > 0:
-                                                        keys = tuple(
-                                                            t[..., :safe, :]
-                                                            for t in keys
-                                                        )
-                                                        values = tuple(
-                                                            t[..., :safe, :]
-                                                            for t in values
-                                                        )
+                                                        if len(keys.shape) == 4:
+                                                            keys = keys[:, :, :safe, :]
+                                                            values = values[:, :, :safe, :]
+                                                        else:
+                                                            keys = keys[:, :safe, :]
+                                                            values = values[:, :safe, :]
                                                         new_meta = _rebuild_meta_state_after_truncation(
                                                             cls_name,
                                                             sd.get("meta_state", ()),
                                                             safe,
                                                         )
                                                         if new_meta is None:
+                                                            # RotatingKVCache with wrapped
+                                                            # buffer: cannot safely truncate.
+                                                            # Skip this store entirely.
                                                             trunc_ok = False
                                                             break
                                                         truncated_dicts.append(
@@ -4628,15 +4773,54 @@ class Scheduler:
                                                             }
                                                         )
                                                         continue
-                                        # Unknown format: pass through
-                                        truncated_dicts.append(sd)
-                                    if trunc_ok and truncated_dicts:
-                                        cache_data = truncated_dicts
-                            # Paged prefix cache entries must be keyed by the
-                            # same token count represented by cache_data:
-                            # prompt_len - 1. The generator re-feeds the last
-                            # prompt token on hit to obtain first-token logits.
-                            #
+                                                elif (
+                                                    isinstance(keys, (tuple, list))
+                                                    and len(keys) >= 1
+                                                ):
+                                                    # QuantizedKVCache: tuple of (data, scales, zeros)
+                                                    first_k = keys[0]
+                                                    if hasattr(first_k, "shape"):
+                                                        safe = min(
+                                                            target, first_k.shape[-2]
+                                                        )
+                                                        if safe > 0:
+                                                            keys = tuple(
+                                                                t[..., :safe, :]
+                                                                for t in keys
+                                                            )
+                                                            values = tuple(
+                                                                t[..., :safe, :]
+                                                                for t in values
+                                                            )
+                                                            new_meta = _rebuild_meta_state_after_truncation(
+                                                                cls_name,
+                                                                sd.get("meta_state", ()),
+                                                                safe,
+                                                            )
+                                                            if new_meta is None:
+                                                                trunc_ok = False
+                                                                break
+                                                            truncated_dicts.append(
+                                                                {
+                                                                    **sd,
+                                                                    "state": (keys, values),
+                                                                    "meta_state": new_meta,
+                                                                }
+                                                            )
+                                                            continue
+                                            # Unknown format: pass through
+                                            truncated_dicts.append(sd)
+                                        if trunc_ok and truncated_dicts:
+                                            cache_data = truncated_dicts
+                                # Paged prefix cache entries must be keyed by the
+                                # same token count represented by cache_data:
+                                # prompt_len - 1. The generator re-feeds the last
+                                # prompt token on hit to obtain first-token logits.
+                                store_tokens = (
+                                    prompt_tokens[:-1]
+                                    if len(prompt_tokens) > 1
+                                    else prompt_tokens
+                                )
                             # Previously this path stored a truncated N-1
                             # cache under a full-N token hash. Exact hits then
                             # reported zero remaining tokens; DSV4BatchGenerator
@@ -4644,11 +4828,6 @@ class Scheduler:
                             # token and returned an empty/stop response. This
                             # is especially visible with block disk L2 because
                             # full-key stale blocks survive process restarts.
-                            store_tokens = (
-                                prompt_tokens[:-1]
-                                if len(prompt_tokens) > 1
-                                else prompt_tokens
-                            )
                             self.block_aware_cache.store_cache(
                                 request_id,
                                 store_tokens,
@@ -5632,6 +5811,7 @@ class Scheduler:
         _has_waiting = bool(getattr(self, "waiting", []))
         if (
             self._is_hybrid
+            and not self._uses_zaya_cache
             and self.config.enable_prefix_cache
             and not self.running
             and not _has_waiting

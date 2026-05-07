@@ -77,12 +77,13 @@ ROWS: list[ModelRow] = [
         label="ZAYA1-8B JANGTQ2 CCA",
         path="/Users/eric/jang/models/Zyphra/ZAYA1-8B-JANGTQ2",
         family="zaya",
-        expect_reasoning=True,
+        expect_reasoning=False,
         expect_tool_parser="zaya_xml",
         cache_profile="zaya_cca",
         notes=[
             "ZAYA CCA cache has KV + conv_state + prev_hs. Prefix/paged/L2 "
-            "and runtime TQ-KV must stay disabled until typed CCA restore is proven."
+            "run only under VMLX_ZAYA_ENABLE_TYPED_CCA_CACHE=1 until the "
+            "server/API live gates pass. Runtime TQ-KV stays disabled."
         ],
     ),
     ModelRow(
@@ -90,7 +91,7 @@ ROWS: list[ModelRow] = [
         label="ZAYA1-8B MXFP4 CCA",
         path="/Users/eric/jang/models/Zyphra/ZAYA1-8B-MXFP4",
         family="zaya",
-        expect_reasoning=True,
+        expect_reasoning=False,
         expect_tool_parser="zaya_xml",
         cache_profile="zaya_cca",
         notes=[
@@ -103,7 +104,7 @@ ROWS: list[ModelRow] = [
         label="ZAYA1-8B JANGTQ4 CCA",
         path="/Users/eric/jang/models/Zyphra/ZAYA1-8B-JANGTQ4",
         family="zaya",
-        expect_reasoning=True,
+        expect_reasoning=False,
         expect_tool_parser="zaya_xml",
         cache_profile="zaya_cca",
         notes=[
@@ -752,13 +753,68 @@ def cache_exact_hit_required(row: ModelRow) -> bool:
     """Whether this row must prove prefix/paged/L2 cache reuse live.
 
     ZAYA CCA has standard KV plus path-dependent ``conv_state`` and
-    ``prev_hs``. The current production contract intentionally disables
-    prefix/paged/L2 and runtime TurboQuant-KV until a typed CCA serializer can
-    restore all three state families at the same prompt boundary. Treating that
-    row as a generic exact-hit cache failure hides the real API/model failures
-    and creates false positives in the audit.
+    ``prev_hs``. The source now has a typed ``zaya_cca_v1`` serializer, so
+    ZAYA rows must prove exact prefix/L2 reuse under the explicit live-gate env
+    before the default CLI safeguard can be flipped.
     """
-    return row.cache_profile != "zaya_cca"
+    return True
+
+
+def cache_exact_hit_probe(row: ModelRow) -> dict[str, Any]:
+    """Return the prompt and visible-content assertion for cache reuse."""
+
+    if row.family == "deepseek_v4":
+        return {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Cache audit exact-hit check. What is 17 plus 28? "
+                        "Think briefly, then answer with the final number."
+                    ),
+                }
+            ],
+            "thinking": True,
+            "max_tokens": 512,
+            "expected": "45",
+            "temperature": 0.0,
+            "min_count": 1,
+        }
+    if row.cache_profile == "zaya_cca":
+        return {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Cache audit exact-hit check. In the phrase "
+                        "'blue blue blue blue', which color word repeats? "
+                        "Reply with the single word only."
+                    ),
+                }
+            ],
+            "thinking": False,
+            "max_tokens": 64,
+            "expected": "blue",
+            "temperature": 0.0,
+            "min_count": 1,
+            "strict_short_answer": True,
+        }
+    return {
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Cache audit exact-hit check. Reply exactly: blue blue blue blue."
+                ),
+            }
+        ],
+        "thinking": False,
+        "max_tokens": 512,
+        "expected": "blue",
+        "temperature": 0.1,
+        "min_count": 3,
+        "strict_short_answer": False,
+    }
 
 
 def has_duplicate_block(text: str, min_len: int = 80) -> bool:
@@ -1119,6 +1175,12 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
     if os.environ.get("VMLINUX_AUDIT_KILL_EXISTING") == "1":
         subprocess.run(["pkill", "-9", "-f", "vmlx_engine.cli"], capture_output=True)
         time.sleep(2)
+    child_env = os.environ.copy()
+    if row.cache_profile == "zaya_cca":
+        child_env["VMLX_ZAYA_ENABLE_TYPED_CCA_CACHE"] = "1"
+        child_env["VMLX_DISABLE_TQ_KV"] = "1"
+        child_env.pop("VMLX_FORCE_TQ_AUTO", None)
+
     with log.open("w") as lf:
         lf.write("# " + " ".join(cmd) + "\n\n")
         lf.flush()
@@ -1127,7 +1189,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
             cwd=str(ROOT),
             stdout=lf,
             stderr=subprocess.STDOUT,
-            env=os.environ.copy(),
+            env=child_env,
         )
     result["pid"] = proc.pid
     result["log"] = str(log)
@@ -1236,16 +1298,21 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
             if code == 200 and isinstance(stats0, dict)
             else {}
         )
+        _native0 = (
+            stats0.get("native_cache", {})
+            if code == 200 and isinstance(stats0, dict)
+            else {}
+        )
         check(
-            "zaya_cca_unsafe_cache_tiers_disabled",
-            "ZAYA/CCA cache contract detected" in log_text
-            and "prefix cache is disabled" in log_text
+            "zaya_cca_typed_cache_live_gate_enabled",
+            "ZAYA/CCA typed cache live gate enabled" in log_text
+            and "ZAYA/CCA typed paged prefix cache enabled" in log_text
             and not bool(_kvq0.get("enabled"))
             and not bool(_tq0.get("enabled")),
             {
                 "reason": (
-                    "ZAYA CCA restore must not use generic prefix/paged/L2/TQ-KV "
-                    "until KV + conv_state + prev_hs are serialized together"
+                    "ZAYA CCA live gate must use zaya_cca_v1 typed "
+                    "prefix/paged/L2 while generic TurboQuant KV stays off"
                 ),
                 "log_evidence": [
                     line
@@ -1254,6 +1321,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
                 ][-8:],
                 "kv_cache_quantization": _kvq0,
                 "turboquant_kv_cache": _tq0,
+                "native_cache": _native0,
                 "cache_stats_keys": sorted(stats0.keys()) if isinstance(stats0, dict) else [],
             },
         )
@@ -1344,6 +1412,50 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         ),
         {"code": code, "caps": caps},
     )
+    native_caps = caps.get("cache", {}).get("native") if isinstance(caps, dict) else {}
+    if row.cache_profile == "zaya_cca":
+        check(
+            "zaya_native_cache_capabilities",
+            isinstance(native_caps, dict)
+            and native_caps.get("family") == "zaya"
+            and native_caps.get("schema") == "zaya_cca_v1"
+            and native_caps.get("cache_type") == "typed_cca"
+            and native_caps.get("generic_turboquant_kv", {}).get("enabled") is False,
+            {"native_cache": native_caps},
+        )
+    elif row.cache_profile == "dsv4_composite":
+        check(
+            "dsv4_native_cache_capabilities",
+            isinstance(native_caps, dict)
+            and native_caps.get("family") == "deepseek_v4"
+            and native_caps.get("schema") == "deepseek_v4_v7"
+            and native_caps.get("cache_type") == "native_composite"
+            and native_caps.get("generic_turboquant_kv", {}).get("enabled") is False,
+            {"native_cache": native_caps},
+        )
+    elif row.cache_profile == "hybrid_ssm":
+        check(
+            "hybrid_native_cache_capabilities",
+            isinstance(native_caps, dict)
+            and native_caps.get("cache_type") == "hybrid_ssm_typed"
+            and native_caps.get("generic_turboquant_kv", {}).get("enabled") is False,
+            {"native_cache": native_caps},
+        )
+
+    if row.cache_profile in {"zaya_cca", "dsv4_composite", "hybrid_ssm"}:
+        log_text_for_layout = log.read_text(errors="ignore")
+        check(
+            "runtime_cache_layout_logged",
+            "Runtime cache layout:" in log_text_for_layout,
+            {
+                "matching_lines": [
+                    line
+                    for line in log_text_for_layout.splitlines()
+                    if "Runtime cache layout:" in line
+                ][-3:],
+            },
+        )
+
     history: list[dict[str, Any]] = []
     basic_messages = [
         {
@@ -1874,35 +1986,16 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
     if cache_exact_hit_required(row):
         # Cache exact-hit coherence. Multi-turn memory is covered by the chat
         # recall checks above; this check isolates cache mechanics with a prompt
-        # that stops cleanly and produces >3 tokens so the scheduler does not
-        # skip cache donation as a short single-token benchmark response.
-        if row.family == "deepseek_v4":
-            cache_messages = [
-                {
-                    "role": "user",
-                    "content": (
-                        "Cache audit exact-hit check. What is 17 plus 28? "
-                        "Think briefly, then answer with the final number."
-                    ),
-                }
-            ]
-            cache_thinking = True
-            cache_max_tokens = 512
-            cache_expected = "45"
-            cache_temperature = 0.0
-        else:
-            cache_messages = [
-                {
-                    "role": "user",
-                    "content": (
-                        "Cache audit exact-hit check. Reply exactly: blue blue blue blue."
-                    ),
-                }
-            ]
-            cache_thinking = False
-            cache_max_tokens = 512
-            cache_expected = "blue"
-            cache_temperature = 0.1
+        # that stops cleanly. Per-family specs avoid treating stylistic
+        # noncompliance as a cache-stack failure.
+        cache_probe = cache_exact_hit_probe(row)
+        cache_messages = cache_probe["messages"]
+        cache_thinking = bool(cache_probe["thinking"])
+        cache_max_tokens = int(cache_probe["max_tokens"])
+        cache_expected = str(cache_probe["expected"])
+        cache_temperature = float(cache_probe["temperature"])
+        cache_min_count = int(cache_probe["min_count"])
+        cache_strict_short = bool(cache_probe.get("strict_short_answer", False))
         r_cache = chat_probe(
             "cache_exact_hit_first",
             cache_messages,
@@ -1953,8 +2046,22 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
                 )
                 or (
                     row.family != "deepseek_v4"
-                    and c_cache.lower().count(cache_expected) >= 3
-                    and c_cache_repeat.lower().count(cache_expected) >= 3
+                    and (
+                        (
+                            cache_strict_short
+                            and normalize_short_answer(c_cache).lower()
+                                == cache_expected
+                            and normalize_short_answer(c_cache_repeat).lower()
+                                == cache_expected
+                        )
+                        or (
+                            not cache_strict_short
+                            and c_cache.lower().count(cache_expected)
+                                >= cache_min_count
+                            and c_cache_repeat.lower().count(cache_expected)
+                                >= cache_min_count
+                        )
+                    )
                 )
             )
             and not has_duplicate_block(
