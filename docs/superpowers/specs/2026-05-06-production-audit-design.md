@@ -280,25 +280,17 @@ Before claiming production-ready:
 - [ ] No new test failures vs `94b16d22` baseline (854 passed, 48 skipped, 1 pre-existing).
 - [ ] Living audit doc has explicit live-source verification per arch + per fix.
 
-## 14. Open scoping decisions for user
+## 14. Scoping decisions — recorded
 
-These are decisions the user needs to make before execution starts. Each defaults to a value that is safe to proceed under.
+User directive 2026-05-06: "do all real properly build making sure all wiring is thought through."
 
-1. **ZAYA runtime port (§8.1) — in-session or deferred?**
-   - Default: **deferred** (fail-fast remains, tracked as `docs/AUDIT-ZAYA-CCA-RUNTIME.md` with full design).
-   - Alternative: **in-session** (1–3 days; replaces fail-fast with real runtime).
-2. **Hybrid TurboQuant codec (§8.2) — in-session or deferred?**
-   - Default: **deferred** (auto-disable remains, tracked as `docs/AUDIT-HYBRID-TQ-CODEC.md` with full design).
-   - Alternative: **in-session** (2–4 days; covers Ling, Qwen 3.6 hybrid, Nemotron Omni hybrid).
-3. **Mistral-Medium-3.5** — mount drive or skip from matrix?
-   - Default: **skip** (drive not mounted; matrix is 8 archs instead of 9).
-   - Alternative: **mount** `EricsLLMDrive` and include.
-4. **Empty `<think></think>` injection (§8.3)** — if regression found, restore as blanket inject or per-bundle template fix?
-   - Default: **per-bundle template fix** (the right place is `chat_template.jinja`, not engine code).
-   - Alternative: **restore blanket inject** (faster but is the original guard pattern).
-5. **Order of attack** — depth-first per arch, or breadth-first per fix area?
-   - Default: **breadth-first by §8 area** (8.3 verify → 8.4 fix → 8.5 async re-derive → 8.2 hybrid codec if in-session → 8.1 ZAYA if in-session). Each item touches multiple archs.
-   - Alternative: **depth-first per arch** (DSV4 fully done → Ling fully done → …). Prone to repeat work since fixes are cross-arch.
+| # | Decision | Resolved | Notes |
+|---|---|---|---|
+| 1 | ZAYA runtime port (§8.1) | **In-session** | Real `mlx_lm.models.zaya` (or `vmlx_engine/runtime/zaya.py`) port. Replaces fail-fast. ~1500 LOC + tests. |
+| 2 | Hybrid TurboQuant codec (§8.2) | **In-session** | `HybridTurboQuantCache` covering KV + SSM end-to-end. Replaces auto-disable. ~1000 LOC + tests. |
+| 3 | Mistral-Medium-3.5 (drive mount) | **Deferred** unless user mounts `EricsLLMDrive` | Matrix runs on 8 archs; drive mount adds 9th. |
+| 4 | `<think></think>` injection (§8.3) | **Per-bundle chat-template fix** if regression found | No blanket re-add; the engine is not the right place. |
+| 5 | Order of attack | **Breadth-first by §8 area** | 8.3 → 8.4 → 8.5 → 8.2 → 8.1 → §9 → §7 → §10. Cross-arch design first, per-arch verification second. |
 
 ## 15. Risks
 
@@ -307,18 +299,139 @@ These are decisions the user needs to make before execution starts. Each default
 - **Drive remount.** If `EricsLLMDrive` is mounted mid-session, Mistral 3.5 enters scope and the matrix grows.
 - **Memory pressure.** Multi-turn long-output tests (1k+ tokens) plus image attachments can push Metal active memory near the M5 Max ceiling. We watch `mx.metal.get_active_memory()` per turn and fail fast if approaching limits.
 
-## 16. Sequencing (default — assumes ZAYA + hybrid codec deferred)
+## 16. Sequencing — full in-session plan
 
-1. **Setup:** confirm scope decisions (§14); write per-topic deep-dive doc stubs.
-2. **§8.3 (verify):** per-arch chat-template render with `enable_thinking=False`. Record matrix in `docs/AUDIT-THINKING-TEMPLATE-RENDER.md`. Decide restore-injection or template-fix.
-3. **§8.4 (fix):** Qwen3.5/3.6 affine-JANG VLM divergence root-cause + fix.
-4. **§8.5 (fix):** SSM async re-derive for thinking models.
-5. **§9 (test):** API surface parity harness, 4 surfaces × 3 archs.
-6. **§7 (test):** per-arch matrix run for all 8 archs (excluding Mistral 3.5 by default).
-7. **§10 (verify):** Electron panel Chat + Server tab probes.
-8. **Release-readiness review** against §13.
-9. **Sign-off and (separately) build the signed DMG** if user approves a release cut.
+1. **Setup:** write per-topic deep-dive doc stubs (one per §8 sub-section); ensure repo-local `.venv` is current; ensure `mlx-lm` and `mlx-vlm` versions match `panel/bundled-python`.
+2. **§8.3 (verify, ~2 hours):** per-arch chat-template render with `enable_thinking=False`. Record matrix in `docs/AUDIT-THINKING-TEMPLATE-RENDER.md`. For any arch that fails to honor `enable_thinking=False`, file a chat-template fix in the bundle's `chat_template.jinja` (or `model_configs.py` if templated).
+3. **§8.4 (fix, ~2 days):** Qwen3.5/3.6 affine-JANG VLM divergence root-cause + fix. Restore image attach for affine-JANG bundles. Pin with regression test.
+4. **§8.5 (fix, ~2 days):** SSM async re-derive for thinking models (capture-during-prefill preferred over post-gen async). Pin with regression test.
+5. **§8.2 (build, ~3 days):** `HybridTurboQuantCache` design + implementation + integration with prefix/paged/L2; replace auto-disable branches in `cli.py` + `scheduler.py`. Pin with regression test on Ling, Qwen 3.6 hybrid, Nemotron Omni.
+6. **§8.1 (build, ~3 days):** ZAYA Python runtime (CCA + Mamba + ZAYA MoE + EDA + MoD) + loader integration + cache contract; replace fail-fast in `jang_loader.py`. Pin with multi-turn coherence test on ZAYA1-8B-MXFP4.
+7. **§9 (test, ~1 day):** API surface parity harness, 4 surfaces × 3 archs. All assertions pass.
+8. **§7 (test, ~2 days):** per-arch matrix for all 8 archs (parallel where Metal active memory allows).
+9. **§10 (verify, ~1 day):** Electron panel Chat + Server tab probes. Multi-turn coherence + cache hit + reasoning toggle.
+10. **Release-readiness review** against §13.
+11. **Sign-off and (separately) build the signed DMG** only on explicit user request — no auto-release per memory rule.
+
+Estimated total: **~14 days of focused work**. Will be split across multiple Claude sessions; each session ends at a clean commit + status-board update.
+
+## 17. Cross-module wiring — integration design
+
+This section maps every fix and feature in §8 to its concrete touch points across the layered system. Wiring must be designed before code lands so cross-cutting concerns (cache key parity across surfaces, multi-turn coherence with thinking, RAM ceiling under SSM warm pass) don't become afterthoughts.
+
+The system layers, in order from request entry to compute:
+
+```
+Electron Panel (Chat tab / Server tab)
+  ↓ IPC + HTTP
+panel/src/main/api-gateway.ts  (gateway: Ollama, Anthropic, OpenAI translation)
+  ↓ HTTP
+vmlx_engine/server.py  (FastAPI: routes, envelopes, reasoning extract, /v1/cache/stats, /health)
+  ↓ direct call
+vmlx_engine/api/*.py  (per-protocol message-list builders, tool dispatch, streaming wrappers)
+  ↓ direct call
+vmlx_engine/engine/{batched,simple}.py  (generation lifecycle, prompt render, sampling)
+  ↓ direct call
+vmlx_engine/scheduler.py  (cache routing, prefix/paged/L2 dispatch, hybrid handling)
+  ↓ direct call
+model class (mlx_lm.models.* / mlx_vlm.models.* / new vmlx_engine/runtime/*)
+  ↓ direct call
+cache layer (KVCache / RotatingKVCache / TurboQuantKVCache / per-arch composites)
+  ↓ direct call
+mx (Metal) compute
+```
+
+For each §8 fix, the wiring is:
+
+### 17.1 ZAYA runtime (§8.1)
+
+| Layer | Touch | What changes |
+|---|---|---|
+| Model class | `vmlx_engine/runtime/zaya.py` (new) — or upstream `mlx_lm/models/zaya.py` if patchable | `ZayaModel`, `ZayaCCAAttention`, `ZayaMambaBlock`, `ZayaMoE`. `make_cache()` returns per-layer `[CCACache(KV+conv_state) | MambaCache(prev_hs)]`. |
+| Cache | `vmlx_engine/cache/zaya_cache.py` (new) | `CCACache.update(keys, values, conv_input)` shifts conv state; `MambaCache.update(prev_hs)` replaces SSM state; both expose `trim()`, `to_disk()`, `from_disk()` for L2 round-trip. |
+| Loader | `vmlx_engine/utils/jang_loader.py` | Replace `_ensure_zaya_runtime_supported` fail-fast with import of new `vmlx_engine.runtime.zaya` plus a `jang_tools.load_jangtq_zaya` route for JANGTQ ZAYA bundles. MXFP4 bundles use stock weight load + new model class. |
+| Scheduler | `vmlx_engine/scheduler.py` | Detect `family_name == "zaya"`. ZAYA is hybrid but not bailing-style; cache contract is KV+conv_state+prev_hs. `_is_hybrid` returns true; introduce `_uses_zaya_cache` flag for ZAYA-specific paged/L2 handling (must serialize all three components per layer). |
+| CLI | `vmlx_engine/cli.py` | Remove ZAYA-disable block. Cache contract honored end-to-end → prefix, paged, L2, TQ-KV all functional. |
+| Server | `vmlx_engine/server.py` | `/v1/cache/stats` reports ZAYA-specific cache state (KV bytes, conv-state bytes, prev-hs bytes per layer). |
+| Tests | `tests/test_zaya_runtime.py` (new) | Load + single-turn + multi-turn + reasoning-on (qwen3 parser) + tool (zaya_xml) + L2 round-trip + cache stats. |
+| Doc | `docs/AUDIT-ZAYA-CCA-RUNTIME.md` (new) | Architecture diagram, layer-type map, cache contract, parity with Zyphra reference. |
+
+### 17.2 Hybrid TurboQuant codec (§8.2)
+
+| Layer | Touch | What changes |
+|---|---|---|
+| Cache | `vmlx_engine/cache/hybrid_tq_cache.py` (new) | `HybridTurboQuantCache` wraps `(TurboQuantKVCache, SSMStateCache)` per layer. `SSMStateCache` shares codec parity with TQ-KV (default-bits=3, critical-bits=4, group_size=32). |
+| Cache | `vmlx_engine/cache/ssm_state_cache.py` (new) | TurboQuant codec applied to SSM state tensors (Mamba state, GLA recurrent state). Critical-layer protection (first/last 3 SSM layers). |
+| Loader | `vmlx_engine/utils/jang_loader.py` | `_patch_turboquant_make_cache` detects hybrid via `cache_type=="hybrid"` AND not MLA, returns `HybridTurboQuantCache` per layer. |
+| Cache | `vmlx_engine/prefix_cache.py` + `vmlx_engine/paged_cache.py` + `vmlx_engine/l2_disk_cache.py` | Store/restore extends to both KV and SSM components. Cache key derivation unchanged (token-based). Block size accounts for SSM state size. |
+| Scheduler | `vmlx_engine/scheduler.py` | Remove `_is_hybrid && !_uses_dsv4_cache` auto-disable branch; replace with assertion that `make_cache()` returned `HybridTurboQuantCache` when `kv_cache_quantization != "none"`. |
+| CLI | `vmlx_engine/cli.py` | Remove generic `cache_type==hybrid` auto-disable branch. |
+| Server | `vmlx_engine/server.py` | `/v1/cache/stats` reports SSM-state quant separately from KV quant. |
+| Tests | `tests/test_hybrid_tq_codec.py` (new) | Round-trip tensor codec (encode → decode within tolerance); Ling + Qwen 3.6 hybrid + Nemotron Omni multi-turn coherence with TQ on. |
+| Doc | `docs/AUDIT-HYBRID-TQ-CODEC.md` (new) | Codec spec, critical-layer policy, integration with prefix/paged/L2, soak results. |
+
+### 17.3 Empty `<think></think>` injection (§8.3)
+
+| Layer | Touch | What changes |
+|---|---|---|
+| Verify | `tests/test_thinking_template_render.py` (new) | Per arch + `enable_thinking=False`: render template, check `<think>` presence, run engine, assert no thinking tokens leak. |
+| Per-bundle | bundle `chat_template.jinja` files | If a bundle's template fails the test, fix the template. Bundles live on `~/.lmstudio/models/` or `~/jang/models/`; the user owns these — we propose patches and let user re-deploy bundles. |
+| Engine | `vmlx_engine/engine/{batched,simple}.py` | No code change unless verification finds a regression that demands engine-side handling. If it does, the fix is `model_configs.py`-driven (per-family policy) not a blanket inject. |
+| Doc | `docs/AUDIT-THINKING-TEMPLATE-RENDER.md` (new) | Per-arch verification matrix, regression evidence, template patches. |
+
+### 17.4 Qwen3.5/3.6 affine-JANG VLM divergence (§8.4)
+
+| Layer | Touch | What changes |
+|---|---|---|
+| Investigate | `vmlx_engine/utils/jang_loader.py:_load_jang_v2` and `_load_jang_v2_vlm` | Diff loader paths; identify per-projection bit override, embedding tie, vision-tower RoPE override, and `layer_types` interpretation. |
+| Fix | `vmlx_engine/utils/jang_loader.py:_load_jang_v2_vlm` | Apply the missing/divergent step (likely `embed_tokens` bit-pack overlap) so text-only and image paths produce byte-equal hidden state on text-only prompts. |
+| Loader | `vmlx_engine/utils/jang_loader.py` | Remove the affine-JANG VLM → text-only fallback; restore native multimodal path. |
+| API | `vmlx_engine/api/utils.py:is_mllm_model` | Remove the affine-JANG → False short-circuit. |
+| Tests | `tests/test_qwen_affine_jang_vlm.py` (new) | Image attach (red square) for `Qwen3.6-27B-JANG_4M-CRACK`; assert coherent text-only multi-turn AND coherent image response. |
+| Doc | `docs/AUDIT-QWEN-AFFINE-JANG-VLM.md` (new) | Divergence analysis, fix description, regression test description. |
+
+### 17.5 SSM async re-derive (§8.5)
+
+| Layer | Touch | What changes |
+|---|---|---|
+| Engine | `vmlx_engine/engine/{batched,simple}.py:_prefill_for_clean_ssm` | Wire the existing function. Capture-during-prefill: snapshot SSM state at the boundary between user-content tokens and generation-prompt tokens. |
+| Cache | `vmlx_engine/ssm_companion_cache.py` (extend) | Accept "clean" SSM state for storage; turn-1 store of clean state for turn-2+ reuse. |
+| Scheduler | `vmlx_engine/scheduler.py` | At cache restore for thinking models: prefer clean SSM state from companion cache over post-gen state from prefix cache. |
+| API | unchanged | SSM warm pass is invisible to API. |
+| Tests | `tests/test_ssm_async_rederive.py` (new) | Multi-turn thinking model; turn-2 SSM companion hit; throughput regression < 5% on first turn. |
+| Doc | `docs/AUDIT-SSM-ASYNC-REDERIVE.md` (new) | Capture-during-prefill design, throughput delta, evidence. |
+
+### 17.6 API surface parity (§9)
+
+| Layer | Touch | What changes |
+|---|---|---|
+| Verify | `tests/test_api_surface_parity.py` (new) | Run 4-surface × 3-arch parity harness with fixed seed, deterministic decoding. |
+| Server | `vmlx_engine/server.py` (audit, fix if found) | Each surface route's prompt-render path must produce identical token list for identical input — no surface-specific mutation. |
+| Translation | `vmlx_engine/api/{anthropic,ollama}.py` | Audit envelope translators for input mutations; fix any that diverge. |
+| Cache key | `vmlx_engine/scheduler.py` | Cache-key derivation already token-based — verify no path computes key from envelope-side data. |
+| Doc | `docs/AUDIT-API-SURFACE-PARITY.md` (new) | Parity test matrix, divergence cases, fixes. |
+
+### 17.7 Per-arch matrix (§7) and UI verification (§10)
+
+These are test-level, not new code, except for:
+
+| Layer | Touch | What changes |
+|---|---|---|
+| Test runner | `tests/test_live_per_arch_matrix.py` (new) | Spawn server per arch, run §7 invariants, emit per-arch JSON status + Markdown. |
+| Panel test | `tests/panel/test_chat_multiturn.spec.ts` (new, in `panel/`) | Playwright E2E for Chat tab multi-turn + cache stats panel. |
+| Doc | `docs/SESSION_2026_05_06_PYTHON_ENGINE_APP_AUDIT.md` (extend) | Living per-arch status board updated as runs complete. |
+
+### 17.8 Cross-cutting invariants
+
+These hold across all fixes and must not regress:
+
+1. **Cache key derivation is token-based and surface-agnostic.** Token list computed by `tokenizer.apply_chat_template` (or per-protocol equivalent) is the only input to the cache key. No envelope-side fields enter the key. Tested by §9 parity harness.
+2. **Cache state per-arch is composable.** Adding ZAYA's `(KV, conv_state, prev_hs)` and the hybrid TurboQuant codec's `(TQ-KV, SSM-state)` does not change the prefix/paged/L2 store/restore API contract; new state is plumbed through as opaque payload. Tested by L2 round-trip per arch.
+3. **Engine reasoning extraction is one-shot.** The reasoning extractor in `server.py` runs once on full content (non-streaming) or via state machine (streaming). Empty `<think></think>` blocks are stripped at extraction (already implemented at server.py:1081). Engine-side prompt mutation is a last resort, never blanket.
+4. **TurboQuant KV detection walks nested MLLM `language_model`.** `_turboquant_kv_cache_status` (extracted in 94b16d22) is the single source of truth; `/health` and `/v1/cache/stats` consume the same helper. Tested.
+5. **Loader path produces a model whose `make_cache()` is correct for its arch.** The patcher in `jang_loader._patch_turboquant_make_cache` is the *only* place that mutates `make_cache`; no scheduler-side or engine-side runtime mutation. ZAYA and hybrid TQ codec are integrated here, not at runtime.
+6. **No surface adds prompt mutation that doesn't apply to all surfaces.** If `/v1/chat/completions` strips trailing `<think>` from history, `/v1/responses` and `/v1/messages` and `/api/chat` must do the same. Tested by §9 parity harness.
 
 ---
 
-**Approval gate:** before execution starts, user reviews this spec and answers the 5 questions in §14.
+**Approval gate:** before execution starts, user reviews this spec including the §14 recorded decisions and the §17 wiring. Reply with edits or "go" to proceed to writing-plans skill.
