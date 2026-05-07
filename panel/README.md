@@ -209,7 +209,7 @@ Both APIs support: streaming, tool calls, reasoning extraction, usage tracking, 
 
 ## Requirements
 
-- macOS 26+ (Tahoe) — Apple Silicon required (MLX Metal shaders require Metal 4.0)
+- macOS 14.5+ (Sonoma) — Apple Silicon required. Older Sonoma builds lack libc++/Metal runtime symbols required by the bundled MLX wheel.
 - Node.js 18+
 - vMLX Engine installed (auto-installed on first launch, or manually via `uv tool install vmlx-engine`)
 - MLX-format models (configurable scan directories, defaults: `~/.lmstudio/models/`, `~/.cache/huggingface/hub/`)

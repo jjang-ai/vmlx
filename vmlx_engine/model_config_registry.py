@@ -38,6 +38,7 @@ class ModelConfig:
 
     # Cache configuration
     cache_type: str = "kv"  # "kv" | "mamba" | "hybrid" | "rotating_kv"
+    cache_subtype: Optional[str] = None  # e.g. "zaya_cca", "deepseek_v4_composite"
 
     # Tokenizer overrides
     eos_tokens: Optional[List[str]] = None
@@ -126,7 +127,8 @@ class ModelConfigRegistry:
               "supports_thinking": true,
               "family":            "qwen3_5_moe | minimax_m2 | glm5 | nemotron_h | mistral4 | gemma4",
               "modality":          "text | vision",
-              "cache_type":        "kv | hybrid | mla"
+              "cache_type":        "kv | hybrid | mla",
+              "cache_subtype":     "optional architecture-specific cache contract"
             }
 
         When present, this is authoritative — return a ModelConfig built from
@@ -216,6 +218,7 @@ class ModelConfigRegistry:
             tp = caps.get("tool_parser")
             tin = caps.get("think_in_template")
             ct = caps.get("cache_type")
+            cst = caps.get("cache_subtype") or jcfg.get("cache_subtype")
             mod = caps.get("modality")
             if rp is not None:
                 updates["reasoning_parser"] = rp if rp != "none" else None
@@ -225,6 +228,8 @@ class ModelConfigRegistry:
                 updates["think_in_template"] = tin
             if ct:
                 updates["cache_type"] = ct
+            if cst:
+                updates["cache_subtype"] = str(cst)
             if mod == "vision" or mod == "omni":
                 # `omni` covers Nemotron-Omni (text+image+audio+video) — the
                 # dispatch logic at request time decides between text-only LLM
@@ -274,7 +279,7 @@ class ModelConfigRegistry:
                     f"Model config: detection_source=jang_stamped family={_stamped.family_name} "
                     f"reasoning_parser={_stamped.reasoning_parser} tool_parser={_stamped.tool_parser} "
                     f"think_in_template={_stamped.think_in_template} cache_type={_stamped.cache_type} "
-                    f"is_mllm={_stamped.is_mllm}"
+                    f"cache_subtype={_stamped.cache_subtype} is_mllm={_stamped.is_mllm}"
                 )
                 self._match_cache[model_name] = _stamped
                 return _stamped

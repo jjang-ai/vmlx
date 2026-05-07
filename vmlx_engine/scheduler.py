@@ -368,6 +368,36 @@ class Scheduler:
                     f"{self.config.kv_cache_quantization} when applicable."
                 )
 
+        _hybrid_kvq_env = os.environ.get("VMLX_ALLOW_HYBRID_KV_QUANT")
+        _allow_hybrid_kvq = _hybrid_kvq_env in ("1", "true", "True", "yes", "on")
+        if (
+            self._is_hybrid
+            and not self._uses_dsv4_cache
+            and self.config.kv_cache_quantization != "none"
+            and not _allow_hybrid_kvq
+        ):
+            logger.info(
+                "Hybrid SSM cache model detected — disabling generic KV cache "
+                "quantization (was: %s). Hybrid models have cumulative SSM state "
+                "in addition to attention KV; q4/q8 KV-only quantization is not "
+                "production-safe for this cache contract. Set "
+                "VMLX_ALLOW_HYBRID_KV_QUANT=1 only for explicit bisects.",
+                self.config.kv_cache_quantization,
+            )
+            self.config.kv_cache_quantization = "none"
+        elif (
+            self._is_hybrid
+            and not self._uses_dsv4_cache
+            and self.config.kv_cache_quantization != "none"
+            and _allow_hybrid_kvq
+        ):
+            logger.warning(
+                "Hybrid SSM model + KV cache quantization='%s' requested via "
+                "VMLX_ALLOW_HYBRID_KV_QUANT=1. This is a diagnostic override; "
+                "watch full output for loops or token drift.",
+                self.config.kv_cache_quantization,
+            )
+
         # Mixed-attention models (Gemma 4 = sliding + full) require preserving
         # RotatingKVCache metadata through truncation, paged blocks, and L2
         # restore. The old blanket prefix-cache bypass hid that path entirely;

@@ -2145,9 +2145,159 @@ class TestStartupCompatibilityGuards:
     def test_bundled_python_requires_mflux_for_image_models(self):
         bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
         verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
-        assert '"mflux>=0.16.0"' in bundle_script
+        assert 'MFLUX_VERSION="0.17.5"' in bundle_script
+        assert '"mflux==$MFLUX_VERSION"' in bundle_script
         assert '("mflux", "mflux image runtime"' in verify_script
         assert '"mflux.models.common.config.model_config"' in verify_script
+
+    def test_bundle_forces_sonoma_mlx_wheels_on_tahoe_build_hosts(self):
+        """The release bundle must not inherit the builder host's macOS wheel tag."""
+        bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
+        assert 'MLX_VERSION="0.31.2"' in bundle_script
+        assert 'MLX_LM_VERSION="0.31.3"' in bundle_script
+        assert 'MLX_VLM_VERSION="0.4.4"' in bundle_script
+        assert 'MLX_WHEEL_PLATFORM="${VMLX_BUNDLE_MLX_PLATFORM:-macosx_14_0_arm64}"' in bundle_script
+        assert '--platform "$MLX_WHEEL_PLATFORM"' in bundle_script
+        assert '"mlx==$MLX_VERSION"' in bundle_script
+        assert '"mlx-metal==$MLX_VERSION"' in bundle_script
+
+    def test_turboquant_disable_env_is_honored_by_jang_loader(self):
+        """Explicit/off-family cache choices must stop loader-level live TQ-KV."""
+        loader_source = Path("./vmlx_engine/utils/jang_loader.py").read_text()
+        cli_source = Path("./vmlx_engine/cli.py").read_text()
+
+        assert 'environ.get("VMLX_DISABLE_TQ_KV")' in loader_source
+        assert "TurboQuant KV skipped" in loader_source
+        assert 'os.environ["VMLX_DISABLE_TQ_KV"] = "1"' in cli_source
+        assert "VMLINUX_DISABLE_TQ_KV" not in cli_source
+
+    def test_hybrid_ssm_auto_mode_skips_kv_quant_codecs(self):
+        """Hybrid SSM auto mode must not use KV-only quant codecs."""
+        cli_source = Path("./vmlx_engine/cli.py").read_text()
+        scheduler_source = Path("./vmlx_engine/scheduler.py").read_text()
+
+        assert 'getattr(_mc, "cache_type", None) == "hybrid"' in cli_source
+        assert "Hybrid SSM cache model detected" in cli_source
+        assert "os.environ.pop(\"VMLX_FORCE_TQ_AUTO\", None)" in cli_source
+        assert 'args.kv_cache_quantization = "none"' in cli_source
+
+        assert "VMLX_ALLOW_HYBRID_KV_QUANT" in scheduler_source
+        assert "disabling generic KV cache" in scheduler_source
+        assert 'self.config.kv_cache_quantization = "none"' in scheduler_source
+
+    def test_vmlx_env_prefix_is_canonical_for_ssm_cache_budget(self):
+        """New cache env knobs should use VMLX_, with typo fallback only."""
+        cli_source = Path("./vmlx_engine/cli.py").read_text()
+        assert "def _env_int(" in cli_source
+        assert "os.environ.get(name)" in cli_source
+        assert '"VMLINUX_SSM_STATE_CACHE_MB"' in cli_source
+        assert 'default=_env_int("VMLX_SSM_STATE_CACHE_MB", 512, "VMLINUX_SSM_STATE_CACHE_MB")' in cli_source
+
+
+class TestZayaCCACachePolicy:
+    """ZAYA/CCA must not fall through generic hybrid cache paths."""
+
+    def _write_zaya_fixture(self, tmp_path, *, weight_format="mxtq"):
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "zaya",
+            "weight_format": weight_format,
+            "quantization": {
+                "bits": 8,
+                "group_size": 32,
+                "mxtq_bits": {
+                    "routed_expert": 2,
+                    "attention": 8,
+                    "router": 16,
+                    "embed_tokens": 8,
+                    "lm_head": 8,
+                    "cca_conv": 16,
+                    "norms_residual": 16,
+                },
+            },
+        }))
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "version": 2,
+            "weight_format": weight_format,
+            "cache_subtype": "zaya_cca",
+            "source_model": {
+                "name": "ZAYA1-8B",
+                "architecture": "zaya",
+            },
+            "capabilities": {
+                "reasoning_parser": "qwen3",
+                "tool_parser": "zaya_xml",
+                "think_in_template": True,
+                "supports_tools": True,
+                "supports_thinking": True,
+                "family": "zaya",
+                "modality": "text",
+                "cache_type": "hybrid",
+            },
+        }))
+        return tmp_path
+
+    def test_registry_preserves_zaya_cache_subtype(self, tmp_path):
+        from vmlx_engine.model_config_registry import get_model_config_registry
+
+        model_dir = self._write_zaya_fixture(tmp_path)
+        registry = get_model_config_registry()
+        registry.clear_cache()
+
+        cfg = registry.lookup(str(model_dir))
+
+        assert cfg.family_name == "zaya"
+        assert cfg.cache_type == "hybrid"
+        assert cfg.cache_subtype == "zaya_cca"
+        assert cfg.tool_parser == "zaya_xml"
+        assert cfg.reasoning_parser == "qwen3"
+
+    def test_cli_disables_prefix_paged_l2_and_tq_for_zaya_cca(self):
+        source = Path("./vmlx_engine/cli.py").read_text()
+
+        assert 'getattr(_mc, "cache_subtype", None) == "zaya_cca"' in source
+        assert 'args.enable_prefix_cache = False' in source
+        assert 'args.use_paged_cache = False' in source
+        assert 'args.enable_block_disk_cache = False' in source
+        assert 'args.kv_cache_quantization = "none"' in source
+        assert "full CCA state restore" in source
+        assert "conv_state + prev_hs" in source
+
+    def test_jang_loader_refuses_zaya_without_runtime(self, tmp_path):
+        from vmlx_engine.utils.jang_loader import load_jang_model
+
+        model_dir = self._write_zaya_fixture(tmp_path)
+
+        with pytest.raises(RuntimeError, match="ZAYA-aware runtime"):
+            load_jang_model(model_dir, skip_eval=True)
+
+    def test_local_zaya_bundles_carry_explicit_cca_contract(self):
+        model_dirs = [
+            Path("/Users/eric/jang/models/Zyphra/ZAYA1-8B-JANGTQ2"),
+            Path("/Users/eric/jang/models/Zyphra/ZAYA1-8B-JANGTQ4"),
+            Path("/Users/eric/jang/models/Zyphra/ZAYA1-8B-MXFP4"),
+        ]
+        existing = [p for p in model_dirs if p.exists()]
+        if not existing:
+            pytest.skip("local ZAYA bundles are not present on this machine")
+
+        for model_dir in existing:
+            cfg = json.loads((model_dir / "config.json").read_text())
+            jcfg = json.loads((model_dir / "jang_config.json").read_text())
+            caps = jcfg.get("capabilities", {})
+
+            assert cfg.get("model_type") == "zaya"
+            assert jcfg.get("cache_subtype") == "zaya_cca"
+            assert caps.get("family") == "zaya"
+            assert caps.get("cache_type") == "hybrid"
+            assert caps.get("tool_parser") == "zaya_xml"
+            assert caps.get("reasoning_parser") == "qwen3"
+            assert cfg.get("zaya_expert_layout") == "split_switch_mlp"
+
+            if jcfg.get("weight_format") == "mxtq":
+                bits = jcfg.get("mxtq_bits", {})
+                assert bits.get("cca_conv") == 16
+                assert bits.get("router") == 16
+                assert (model_dir / "jangtq_runtime.safetensors").is_file()
 
 
 class TestV5PortUniqueMigration:
@@ -2310,6 +2460,23 @@ class TestV6MinimumSystemVersion:
             f"blocks users on macOS Sequoia (15) and earlier"
         )
 
+    def test_minimum_version_matches_mlx_runtime_floor(self):
+        """Packaging must not claim support below the bundled MLX runtime floor."""
+        root = os.path.join(os.path.dirname(__file__), '..')
+        pkg_path = os.path.join(root, 'panel', 'package.json')
+        with open(pkg_path) as f:
+            pkg = json.load(f)
+        min_ver = pkg.get("build", {}).get("mac", {}).get("minimumSystemVersion", "")
+        assert min_ver == "14.5.0", (
+            "Bundled MLX wheels require macOS 14.5+; advertising or allowing "
+            f"{min_ver} reopens mlxstudio#90/#104 metallib/libc++ failures."
+        )
+
+        for rel in ("panel/README.md", "panel/SETUP.md"):
+            text = open(os.path.join(root, rel), encoding="utf-8").read()
+            assert "macOS 14.5+" in text
+            assert "macOS 26+" not in text
+
 
 class TestV6MapHFModel:
     """mapHFModel must handle missing lastModified and author from HF list API."""
@@ -2429,3 +2596,89 @@ class TestHybridSSMEnvNames:
 
         assert "VMLX_DISABLE_SSM_PREFIX_RESUME" in source
         assert "VMLINUX_DISABLE_SSM_PREFIX_RESUME" not in source
+
+
+class TestJangVLMFallbacks:
+    """JANG VLM loaders must not silently drop working image support."""
+
+    def _write_qwen_hybrid_fixture(self, tmp_path, *, weight_format=None):
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "qwen3_5",
+            "text_config": {
+                "model_type": "qwen3_5_text",
+                "layer_types": ["linear_attention", "full_attention"],
+            },
+            "vision_config": {},
+        }))
+        jang = {
+            "format": "jang" if weight_format is None else weight_format,
+            "architecture": {
+                "has_vision": True,
+                "has_ssm": True,
+                "type": "hybrid_ssm_dense",
+            },
+        }
+        if weight_format is not None:
+            jang["weight_format"] = weight_format
+        (tmp_path / "jang_config.json").write_text(json.dumps(jang))
+        return tmp_path
+
+    def test_qwen_hybrid_jangtq_vlm_stays_on_native_vlm_loader(self):
+        source = Path("vmlx_engine/utils/jang_loader.py").read_text()
+
+        assert "VMLINUX_FORCE_VLM_LOADER" not in source
+        assert "JANGTQ/MXTQ Qwen VLM remains" in source
+        assert "native multimodal fast path" in source
+
+    def test_text_only_vlm_fallbacks_mark_vision_unavailable(self):
+        source = Path("vmlx_engine/utils/jang_loader.py").read_text()
+        mistral_fallback = source[
+            source.index('config.get("model_type") == "mistral3"'):
+            source.index("# Qwen3.5/3.6-VL hybrid SSM bundles", source.index('config.get("model_type") == "mistral3"'))
+        ]
+
+        assert 'globals()["_LAST_LOAD_VLM_FALLBACK"] = True' in mistral_fallback
+        assert 'globals()["_LAST_LOAD_VLM_FALLBACK"] = False' in source
+
+    def test_affine_qwen_hybrid_jang_routes_text_only(self, tmp_path):
+        from vmlx_engine.api import utils
+
+        model_dir = self._write_qwen_hybrid_fixture(tmp_path)
+        utils._IS_MLLM_CACHE.clear()
+
+        assert utils.is_mllm_model(str(model_dir)) is False
+
+    def test_mxtq_qwen_hybrid_jang_routes_multimodal(self, tmp_path):
+        from vmlx_engine.api import utils
+
+        model_dir = self._write_qwen_hybrid_fixture(tmp_path, weight_format="mxtq")
+        utils._IS_MLLM_CACHE.clear()
+
+        assert utils.is_mllm_model(str(model_dir)) is True
+
+
+class TestTurboQuantKVTelemetry:
+    """Cache telemetry must agree for nested MLLM language models."""
+
+    def test_detects_nested_mllm_turboquant_make_cache(self):
+        from vmlx_engine.server import _turboquant_kv_cache_status
+
+        def _turboquant_make_cache():
+            return []
+
+        class _LanguageModel:
+            make_cache = staticmethod(_turboquant_make_cache)
+
+        class _Model:
+            language_model = _LanguageModel()
+
+        class _Wrapper:
+            model = _Model()
+
+        class _Engine:
+            _model = _Wrapper()
+
+        status = _turboquant_kv_cache_status(_Engine())
+
+        assert status["enabled"] is True
+        assert status["default_bits"] == 3

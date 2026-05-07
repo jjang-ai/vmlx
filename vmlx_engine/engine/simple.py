@@ -455,8 +455,6 @@ class SimpleEngine(BaseEngine):
                             after_think = prompt[last_think + 7:]
                             if "</think>" not in after_think:
                                 prompt = prompt[:last_think + 7] + "</think>\n"
-                        elif "<think>" not in prompt:
-                            prompt = prompt.rstrip() + "\n<think>\n</think>\n"
                 else:
                     prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
                     prompt += "\nassistant:"
@@ -768,8 +766,6 @@ class SimpleEngine(BaseEngine):
                     after_think = prompt[last_think + 7:]
                     if "</think>" not in after_think:
                         prompt = prompt[:last_think + 7] + "</think>\n"
-                elif "<think>" not in prompt:
-                    prompt = prompt.rstrip() + "\n<think>\n</think>\n"
         else:
             prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
             prompt += "\nassistant:"

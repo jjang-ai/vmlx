@@ -1153,6 +1153,7 @@ def _template_completes_thinking(tokenizer, model_name: str) -> bool:
 # Tool calling configuration
 _enable_auto_tool_choice: bool = False
 _tool_call_parser: str | None = None  # Parser name: auto, mistral, qwen, llama, hermes
+_tool_call_parser_disabled_explicitly: bool = False
 
 # reasoning_effort → token budget mapping (mirrors OpenAI o-series behavior).
 # DSV4-Flash adds a "max" effort tier beyond OpenAI's low/medium/high
@@ -2129,6 +2130,9 @@ def _detect_native_tool_support() -> bool:
     Returns:
         True if native format should be preserved
     """
+    if _tool_call_parser_disabled_explicitly:
+        return False
+
     # Determine active parser: CLI-configured or auto-detected from model config
     active_parser = _tool_call_parser
     if not active_parser:
@@ -2866,17 +2870,60 @@ async def ollama_root_head():
     return Response(status_code=200)
 
 
+def _diagnostic_attr(obj, name, default=None):
+    """getattr that avoids manufacturing unittest.mock child objects."""
+    if obj is None:
+        return default
+    if type(obj).__module__ == "unittest.mock" and name not in vars(obj):
+        return default
+    return getattr(obj, name, default)
+
+
+def _turboquant_kv_cache_status(engine=None, scheduler=None) -> dict:
+    """Detect live TurboQuant KV cache patching across LLM and MLLM engines."""
+    tq_active = bool(getattr(scheduler, "_tq_active", False)) if scheduler else False
+
+    def _check_make_cache(obj):
+        mc = getattr(obj, "make_cache", None)
+        return mc is not None and getattr(mc, "__name__", "") in (
+            "_tq_make_cache",
+            "_turboquant_make_cache",
+        )
+
+    if not tq_active and engine is not None:
+        # Walk the candidate chain and probe each level + .language_model.
+        _seen = set()
+        _stack = []
+        for _attr in ("_model", "model"):
+            _v = _diagnostic_attr(engine, _attr)
+            if _v is not None:
+                _stack.append(_v)
+        while _stack:
+            _v = _stack.pop()
+            if id(_v) in _seen:
+                continue
+            _seen.add(id(_v))
+            if _check_make_cache(_v):
+                tq_active = True
+                break
+            for _next_attr in ("model", "language_model"):
+                _nxt = _diagnostic_attr(_v, _next_attr)
+                if _nxt is not None and id(_nxt) not in _seen:
+                    _stack.append(_nxt)
+
+    if tq_active:
+        return {
+            "enabled": True,
+            "default_bits": 3,
+            "critical_bits": 4,
+            "critical_layers": "first 3 + last 3",
+        }
+    return {"enabled": False}
+
+
 @app.get("/health")
 async def health():
     """Health check endpoint."""
-    def _diagnostic_attr(obj, name, default=None):
-        """getattr that avoids manufacturing unittest.mock child objects."""
-        if obj is None:
-            return default
-        if type(obj).__module__ == "unittest.mock" and name not in vars(obj):
-            return default
-        return getattr(obj, name, default)
-
     mcp_info = None
     if _mcp_manager is not None:
         connected = sum(
@@ -3043,53 +3090,8 @@ async def health():
     except Exception:
         pass
 
-    # TurboQuant KV cache status — works for SimpleEngine AND BatchedEngine,
-    # for plain MLX, JANG, JANGTQ, and MLLM/VLM models.
-    # Detection: walk into the engine and find an object whose .make_cache is
-    # one of the TQ patcher names. Patch sites:
-    #   - LLM:  _engine._model.model.make_cache  (tokenizer._apply_turboquant_to_model)
-    #   - MLLM: _engine._model.model.language_model.make_cache  (models/mllm.py)
-    #   - JANG/JANGTQ: same shape, patched by jang_loader._patch_turboquant_make_cache
-    #   - BatchedEngine: model is reachable via _engine.model
     if _engine is not None:
-        _tq_active = False
-
-        def _check_make_cache(obj):
-            mc = getattr(obj, "make_cache", None)
-            return mc is not None and getattr(mc, "__name__", "") in (
-                "_tq_make_cache",
-                "_turboquant_make_cache",
-            )
-
-        # Walk the candidate chain and probe each level + .language_model
-        _seen = set()
-        _stack = []
-        for _attr in ("_model", "model"):
-            _v = _diagnostic_attr(_engine, _attr)
-            if _v is not None:
-                _stack.append(_v)
-        while _stack:
-            _v = _stack.pop()
-            if id(_v) in _seen:
-                continue
-            _seen.add(id(_v))
-            if _check_make_cache(_v):
-                _tq_active = True
-                break
-            for _next_attr in ("model", "language_model"):
-                _nxt = _diagnostic_attr(_v, _next_attr)
-                if _nxt is not None and id(_nxt) not in _seen:
-                    _stack.append(_nxt)
-
-        if _tq_active:
-            result["turboquant_kv_cache"] = {
-                "enabled": True,
-                "default_bits": 3,
-                "critical_bits": 4,
-                "critical_layers": "first 3 + last 3",
-            }
-        else:
-            result["turboquant_kv_cache"] = {"enabled": False}
+        result["turboquant_kv_cache"] = _turboquant_kv_cache_status(_engine)
 
     return result
 
@@ -3406,19 +3408,13 @@ async def cache_stats():
                 "group_size": scheduler._kv_cache_group_size,
             }
 
-        # TurboQuant KV cache status (separate path from generic kv_cache_quantization).
-        # _tq_active is True when the model's make_cache returns TurboQuantKVCache.
-        # Applies to JANG/JANGTQ via jang_loader._patch_turboquant_make_cache, AND
-        # to plain MLX models via tokenizer._apply_turboquant_to_model.
-        if getattr(scheduler, "_tq_active", False):
-            result["turboquant_kv_cache"] = {
-                "enabled": True,
-                "default_bits": 3,
-                "critical_bits": 4,
-                "critical_layers": "first 3 + last 3",
-            }
-        else:
-            result["turboquant_kv_cache"] = {"enabled": False}
+        # TurboQuant KV cache status (separate path from generic
+        # kv_cache_quantization). MLLMScheduler does not own `_tq_active`; the
+        # patched make_cache lives under the loaded VLM language_model, so use
+        # the same recursive detector as /health.
+        result["turboquant_kv_cache"] = _turboquant_kv_cache_status(
+            _engine, scheduler
+        )
 
     # Disk cache (L2) stats — prompt-level
     if scheduler and getattr(scheduler, "disk_cache", None) is not None:
@@ -4853,10 +4849,9 @@ async def ollama_show(fastapi_request: Request):
     _tp = globals().get("_tool_parser")
     capabilities.append("tools")  # permissive default — most models support tools
 
-    # Vision — on when engine is MLLM mode AND the loader didn't fall
-    # back to text-only (e.g. Qwen3.5/3.6-VL hybrid SSM bundles route
-    # through the text path because the mlx_vlm Qwen3_5GatedDeltaNet is
-    # broken; image input is unavailable in that mode).
+    # Vision — on when engine is MLLM mode AND the loader did not explicitly
+    # fall back to a text-only runtime (for example Mistral 4 before mlx_vlm
+    # ships a matching VLM class).
     try:
         _eng = globals().get("_engine")
         if _eng is not None and getattr(_eng, "is_mllm", False):
