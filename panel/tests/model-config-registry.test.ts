@@ -24,6 +24,29 @@ afterEach(() => {
 })
 
 describe('detectModelConfigFromDir JANG multimodal detection', () => {
+  it('detects ZAYA as tools-only CCA hybrid without reasoning parser', () => {
+    const dir = makeModelDir(
+      { model_type: 'zaya' },
+      {
+        cache_subtype: 'zaya_cca',
+        capabilities: {
+          family: 'zaya',
+          tool_parser: 'zaya_xml',
+          reasoning_parser: 'qwen3',
+          supports_thinking: true,
+        },
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('zaya')
+    expect(detected.cacheType).toBe('hybrid')
+    expect(detected.usePagedCache).toBe(false)
+    expect(detected.toolParser).toBe('zaya_xml')
+    expect(detected.reasoningParser).toBeUndefined()
+  })
+
   it('keeps JANG VLM enabled from capabilities.modality=vision when architecture.has_vision is absent', () => {
     const dir = makeModelDir(
       { model_type: 'qwen3_5', vision_config: { hidden_size: 1024 } },

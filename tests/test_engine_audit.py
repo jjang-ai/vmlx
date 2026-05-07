@@ -2299,6 +2299,8 @@ class TestZayaCCACachePolicy:
                 "architecture": "zaya",
             },
             "capabilities": {
+                # Simulates older local ZAYA bundles that were stamped too
+                # optimistically before live gates proved thinking unsafe.
                 "reasoning_parser": "qwen3",
                 "tool_parser": "zaya_xml",
                 "think_in_template": True,
@@ -2324,7 +2326,29 @@ class TestZayaCCACachePolicy:
         assert cfg.cache_type == "hybrid"
         assert cfg.cache_subtype == "zaya_cca"
         assert cfg.tool_parser == "zaya_xml"
-        assert cfg.reasoning_parser == "qwen3"
+        assert cfg.reasoning_parser is None
+        assert cfg.think_in_template is False
+        assert cfg.supports_thinking is False
+
+    def test_zaya_auto_thinking_disabled_even_with_stale_stamp(self, tmp_path):
+        from vmlx_engine import server
+
+        model_dir = self._write_zaya_fixture(tmp_path)
+        old_default = server._default_enable_thinking
+        server._default_enable_thinking = None
+        try:
+            resolved = server._resolve_enable_thinking(
+                request_value=None,
+                ct_kwargs={},
+                tools_present=False,
+                model_key=str(model_dir),
+                engine=None,
+                auto_detect=True,
+            )
+        finally:
+            server._default_enable_thinking = old_default
+
+        assert resolved is False
 
     def test_cli_disables_prefix_paged_l2_and_tq_for_zaya_cca(self):
         source = Path("./vmlx_engine/cli.py").read_text()
@@ -2363,6 +2387,8 @@ class TestZayaCCACachePolicy:
         assert zaya.Model.__name__ == "Model"
 
     def test_local_zaya_bundles_carry_explicit_cca_contract(self):
+        from vmlx_engine.model_config_registry import get_model_config_registry
+
         model_dirs = [
             Path("/Users/eric/jang/models/Zyphra/ZAYA1-8B-JANGTQ2"),
             Path("/Users/eric/jang/models/Zyphra/ZAYA1-8B-JANGTQ4"),
@@ -2382,8 +2408,16 @@ class TestZayaCCACachePolicy:
             assert caps.get("family") == "zaya"
             assert caps.get("cache_type") == "hybrid"
             assert caps.get("tool_parser") == "zaya_xml"
-            assert caps.get("reasoning_parser") == "qwen3"
             assert cfg.get("zaya_expert_layout") == "split_switch_mlp"
+
+            registry = get_model_config_registry()
+            registry.clear_cache()
+            rcfg = registry.lookup(str(model_dir))
+            assert rcfg.family_name == "zaya"
+            assert rcfg.tool_parser == "zaya_xml"
+            assert rcfg.reasoning_parser is None
+            assert rcfg.think_in_template is False
+            assert rcfg.supports_thinking is False
 
             if jcfg.get("weight_format") == "mxtq":
                 bits = jcfg.get("mxtq_bits", {})

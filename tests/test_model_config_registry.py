@@ -449,6 +449,16 @@ class TestModelConfigs:
         assert config.family_name == "unknown"
         assert config.cache_type == "kv"
 
+    def test_zaya_config(self, registry):
+        config = self._lookup(registry, "Zyphra/ZAYA1-8B", "zaya")
+        assert config.family_name == "zaya"
+        assert config.cache_type == "hybrid"
+        assert config.cache_subtype == "zaya_cca"
+        assert config.tool_parser == "zaya_xml"
+        assert config.reasoning_parser is None
+        assert config.think_in_template is False
+        assert config.supports_thinking is False
+
     # GLM family
     def test_glm4_moe_config(self, registry):
         config = self._lookup(registry, "THUDM/GLM-4-Flash", "glm4_moe")
