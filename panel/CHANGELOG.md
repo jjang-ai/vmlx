@@ -11,6 +11,14 @@
   stale `chat_template_kwargs.enable_thinking=false` for Auto sessions, fixing
   the class of UI-created requests that made reasoning-capable models answer as
   if reasoning were disabled.
+- **Cached reasoning settings reset once on upgrade**: old local SQLite rows
+  can keep forcing reasoning On/Off even after the UI default is fixed. v1.5.25
+  resets legacy chat overrides, starred profile `enableThinking` fields, and
+  per-model `reasoning_mode` values back to Auto one time.
+- **Ollama gateway parity**: the desktop API gateway now forwards `think`,
+  `enable_thinking`, `reasoning_effort`, `chat_template_kwargs`,
+  `cache_salt`, and `skip_prefix_cache` consistently. `/api/generate` uses the
+  chat-template path by default and raw completions only for `raw:true`.
 - **Bundled Python verification now gates image runtime imports**:
   `mflux`, `mlx_vlm`, `jang_tools`, TurboQuant kernels, and vMLX loader shims
   are checked during `npm run build` before Electron packaging proceeds.
@@ -18,6 +26,9 @@
 ### Verified
 - Panel request-builder, reasoning-display, and audit-fix tests passed with the
   Auto/Off/On reasoning matrix.
+- Panel Ollama gateway tests passed for image parts, JSON/schema format,
+  reasoning/thinking deltas, thinking kwargs, cache bypass, version probes, and
+  templated `/api/generate`.
 - Bundled Python build imported `vmlx_engine 1.5.25`, `jang_tools 2.5.26`,
   `mflux`, `mlx_lm`, and `mlx_vlm` successfully before packaging.
 
