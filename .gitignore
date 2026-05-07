@@ -125,6 +125,7 @@ productionapp/*.dmg
 # Old development artifacts (removed from main)
 examples/
 PLANS/
+!docs/superpowers/plans/
 productionapp/
 BENCHMARK_RESULTS.md
 FIXES_SUMMARY.md
