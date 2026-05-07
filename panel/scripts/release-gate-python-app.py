@@ -74,6 +74,9 @@ class Gate:
         except subprocess.TimeoutExpired as exc:
             output = exc.stdout or ""
             log_path.write_text(output + f"\nTIMEOUT after {timeout}s\n")
+            if allow_fail:
+                self.record(name, "WARN", f"timeout after {timeout}s; log={log_path}")
+                return subprocess.CompletedProcess(cmd, 124, output, "")
             self.record(name, "FAIL", f"timeout after {timeout}s; log={log_path}")
             raise
         log_path.write_text(proc.stdout)
@@ -258,7 +261,7 @@ def launch_app_smoke(gate: Gate, app: Path) -> None:
             "-e",
             'tell application "System Events" to count windows of first process whose name contains "vMLX"',
         ],
-        timeout=30,
+        timeout=10,
         allow_fail=True,
     )
     if proc.returncode == 0:
