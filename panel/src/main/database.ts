@@ -506,6 +506,70 @@ class DatabaseManager {
         );
       }
 
+      // v1.5.25 reasoning Auto recovery:
+      // The previous UI defaulted new chats to explicit enable_thinking=false.
+      // That value was then persisted in three places: per-chat overrides,
+      // starred chat profiles, and per-model settings. Fixing only the request
+      // builder is not enough for upgraded users because their local SQLite
+      // state can keep forcing the engine into the wrong reasoning/template rail.
+      //
+      // Run once, reset saved reasoning On/Off back to Auto, and mark the
+      // migration complete. Users who intentionally want On/Off can set it
+      // again after upgrade; the marker prevents future launches from undoing
+      // that explicit post-upgrade choice.
+      const reasoningResetKey = "migration_reset_reasoning_auto_1_5_25";
+      const reasoningResetDone = this.db
+        .prepare("SELECT value FROM settings WHERE key = ?")
+        .get(reasoningResetKey) as { value: string } | undefined;
+      if (!reasoningResetDone) {
+        const affectedOverrides = this.db
+          .prepare(
+            "SELECT COUNT(*) as cnt FROM chat_overrides WHERE enable_thinking IS NOT NULL",
+          )
+          .get() as { cnt: number };
+        if (affectedOverrides.cnt > 0) {
+          this.db.exec("UPDATE chat_overrides SET enable_thinking = NULL");
+          console.log(
+            `[DB] v1.5.25 reset ${affectedOverrides.cnt} chat enable_thinking overrides to Auto`,
+          );
+        }
+
+        const profiles = this.db
+          .prepare("SELECT id, overrides_json FROM chat_profiles")
+          .all() as { id: string; overrides_json: string }[];
+        const updateProfile = this.db.prepare(
+          "UPDATE chat_profiles SET overrides_json = ?, updated_at = ? WHERE id = ?",
+        );
+        let profileCount = 0;
+        for (const profile of profiles) {
+          try {
+            const parsed = JSON.parse(profile.overrides_json || "{}");
+            if (
+              parsed &&
+              Object.prototype.hasOwnProperty.call(parsed, "enableThinking")
+            ) {
+              delete parsed.enableThinking;
+              updateProfile.run(JSON.stringify(parsed), Date.now(), profile.id);
+              profileCount += 1;
+            }
+          } catch {
+            // Leave malformed profile JSON untouched; normal profile loading
+            // already handles parse failures without crashing.
+          }
+        }
+        if (profileCount > 0) {
+          console.log(
+            `[DB] v1.5.25 reset enableThinking in ${profileCount} chat profile(s) to Auto`,
+          );
+        }
+
+        this.db
+          .prepare(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+          )
+          .run(reasoningResetKey, String(Date.now()));
+      }
+
       // Clean up orphan benchmarks from deleted sessions
       this.db.exec(
         "DELETE FROM benchmarks WHERE session_id NOT IN (SELECT id FROM sessions)",
@@ -662,6 +726,32 @@ class DatabaseManager {
         reasoning_mode TEXT DEFAULT 'auto'
       )
     `);
+
+      const modelReasoningResetKey =
+        "migration_reset_model_reasoning_auto_1_5_25";
+      const modelReasoningResetDone = this.db
+        .prepare("SELECT value FROM settings WHERE key = ?")
+        .get(modelReasoningResetKey) as { value: string } | undefined;
+      if (!modelReasoningResetDone) {
+        const affectedModelSettings = this.db
+          .prepare(
+            "SELECT COUNT(*) as cnt FROM model_settings WHERE COALESCE(reasoning_mode, 'auto') <> 'auto'",
+          )
+          .get() as { cnt: number };
+        if (affectedModelSettings.cnt > 0) {
+          this.db.exec(
+            "UPDATE model_settings SET reasoning_mode = 'auto' WHERE COALESCE(reasoning_mode, 'auto') <> 'auto'",
+          );
+          console.log(
+            `[DB] v1.5.25 reset ${affectedModelSettings.cnt} model reasoning_mode setting(s) to Auto`,
+          );
+        }
+        this.db
+          .prepare(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+          )
+          .run(modelReasoningResetKey, String(Date.now()));
+      }
 
       // Image editing schema migrations
       const imgGenCols = this.db.pragma("table_info(image_generations)") as {

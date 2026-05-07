@@ -5074,6 +5074,15 @@ async def ollama_chat(fastapi_request: Request):
     if _et is not None:
         chat_kwargs["enable_thinking"] = _et
 
+    # Keep Ollama streaming parity with /v1/chat/completions. The non-streaming
+    # Ollama path delegates to create_chat_completion(), but streaming builds
+    # chat_kwargs locally. Without this, fields accepted by the adapter
+    # (reasoning_effort/chat_template_kwargs) reach ChatCompletionRequest but
+    # are silently dropped before the engine sees the template kwargs.
+    if chat_req.reasoning_effort is not None:
+        chat_kwargs["reasoning_effort"] = chat_req.reasoning_effort
+        _ollama_ct_kwargs.setdefault("reasoning_effort", chat_req.reasoning_effort)
+
     # DSV4 three-mode mapping mirrored onto the Ollama adapter path so
     # clients that speak the Ollama wire format land on the right
     # thinking_mode/reasoning_effort pair for DSV4 bundles too.
@@ -5136,10 +5145,12 @@ async def ollama_chat(fastapi_request: Request):
             _ollama_ct_kwargs["reasoning_effort"] = _stable_effort_o
         else:
             _ollama_ct_kwargs.pop("reasoning_effort", None)
-        # Forward the resolved chat_template_kwargs so DSV4 encoder sees them.
-        _extra_o = {k: v for k, v in _ollama_ct_kwargs.items() if k != "enable_thinking"}
-        if _extra_o:
-            chat_kwargs["chat_template_kwargs"] = _extra_o
+    # Forward resolved template kwargs for every family, not only DSV4. This
+    # covers Mistral/GPT-OSS reasoning_effort, Qwen thinking_budget, and any
+    # model-specific kwargs accepted by the tokenizer template.
+    _extra_o = {k: v for k, v in _ollama_ct_kwargs.items() if k != "enable_thinking"}
+    if _extra_o:
+        chat_kwargs["chat_template_kwargs"] = _extra_o
 
     # Pass tools to engine so batched.py knows not to inject <think></think>
     # when tool calling is active (model needs to think to decide on tools)

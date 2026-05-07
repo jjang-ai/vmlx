@@ -853,8 +853,23 @@ export class ApiGateway extends EventEmitter {
     // Node gateway previously only handled truthy, silently dropping `think: false`
     // so Copilot/Ollama clients that request thinking-OFF were ignored and the
     // model kept reasoning. Matches vmlx_engine/api/ollama_adapter.py line 48.
-    if (parsed.think !== undefined && parsed.think !== null)
+    if (parsed.think !== undefined && parsed.think !== null) {
       openaiBody.enable_thinking = Boolean(parsed.think);
+    } else if (
+      parsed.enable_thinking !== undefined &&
+      parsed.enable_thinking !== null
+    ) {
+      openaiBody.enable_thinking = Boolean(parsed.enable_thinking);
+    }
+    if (parsed.reasoning_effort != null)
+      openaiBody.reasoning_effort = parsed.reasoning_effort;
+    if (
+      parsed.chat_template_kwargs &&
+      typeof parsed.chat_template_kwargs === "object" &&
+      !Array.isArray(parsed.chat_template_kwargs)
+    ) {
+      openaiBody.chat_template_kwargs = parsed.chat_template_kwargs;
+    }
     const responseFormat = this.ollamaResponseFormat(parsed.format);
     if (responseFormat) openaiBody.response_format = responseFormat;
 
@@ -1109,11 +1124,24 @@ export class ApiGateway extends EventEmitter {
 
     const opts = parsed.options || {};
     const isStreaming = parsed.stream !== false;
-    const openaiBody: any = {
-      model: parsed.model || session.modelName,
-      prompt: parsed.prompt || "",
-      stream: isStreaming,
-    };
+    const useRawCompletion = parsed.raw === true;
+    const openaiBody: any = useRawCompletion
+      ? {
+          model: parsed.model || session.modelName,
+          prompt: parsed.prompt || "",
+          stream: isStreaming,
+        }
+      : {
+          model: parsed.model || session.modelName,
+          messages: [
+            ...(typeof parsed.system === "string" && parsed.system
+              ? [{ role: "system", content: parsed.system }]
+              : []),
+            { role: "user", content: parsed.prompt || "" },
+          ],
+          stream: isStreaming,
+          stream_options: { include_usage: true },
+        };
     if (opts.num_predict != null) openaiBody.max_tokens = opts.num_predict;
     if (opts.temperature != null) openaiBody.temperature = opts.temperature;
     if (opts.top_p != null) openaiBody.top_p = opts.top_p;
@@ -1124,15 +1152,35 @@ export class ApiGateway extends EventEmitter {
     if (parsed.cache_salt != null) openaiBody.cache_salt = parsed.cache_salt;
     if (parsed.skip_prefix_cache != null)
       openaiBody.skip_prefix_cache = parsed.skip_prefix_cache;
+    if (parsed.think !== undefined && parsed.think !== null) {
+      openaiBody.enable_thinking = Boolean(parsed.think);
+    } else if (
+      parsed.enable_thinking !== undefined &&
+      parsed.enable_thinking !== null
+    ) {
+      openaiBody.enable_thinking = Boolean(parsed.enable_thinking);
+    }
+    if (parsed.reasoning_effort != null)
+      openaiBody.reasoning_effort = parsed.reasoning_effort;
+    if (
+      parsed.chat_template_kwargs &&
+      typeof parsed.chat_template_kwargs === "object" &&
+      !Array.isArray(parsed.chat_template_kwargs)
+    ) {
+      openaiBody.chat_template_kwargs = parsed.chat_template_kwargs;
+    }
     const responseFormat = this.ollamaResponseFormat(parsed.format);
     if (responseFormat) openaiBody.response_format = responseFormat;
 
     const modelForResponse = parsed.model || session.modelName;
+    const backendPath = useRawCompletion
+      ? "/v1/completions"
+      : "/v1/chat/completions";
 
     const proxyOpts = {
       hostname: session.host,
       port: session.port,
-      path: "/v1/completions",
+      path: backendPath,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       timeout: PROXY_TIMEOUT_MS,
@@ -1148,12 +1196,22 @@ export class ApiGateway extends EventEmitter {
         proxyRes.on("end", () => {
           try {
             const openai = JSON.parse(data);
+            const choice = openai.choices?.[0];
+            const text = useRawCompletion
+              ? choice?.text || ""
+              : choice?.message?.content || "";
+            const thinking = useRawCompletion
+              ? undefined
+              : choice?.message?.reasoning_content || choice?.message?.reasoning;
             this.sendJson(res, 200, {
               model: modelForResponse,
               created_at: new Date().toISOString(),
-              response: openai.choices?.[0]?.text || "",
+              response: text,
+              ...(thinking ? { thinking } : {}),
               done: true,
-              done_reason: openai.choices?.[0]?.finish_reason || "stop",
+              done_reason: choice?.finish_reason || "stop",
+              eval_count: openai.usage?.completion_tokens || 0,
+              prompt_eval_count: openai.usage?.prompt_tokens || 0,
             });
           } catch (_) {
             this.sendJson(res, 502, {
@@ -1195,14 +1253,21 @@ export class ApiGateway extends EventEmitter {
 
             try {
               const chunk = JSON.parse(payload);
-              const text = chunk.choices?.[0]?.text || "";
-              const finishReason = chunk.choices?.[0]?.finish_reason;
+              const choice = chunk.choices?.[0];
+              const text = useRawCompletion
+                ? choice?.text || ""
+                : choice?.delta?.content || "";
+              const thinking = useRawCompletion
+                ? ""
+                : choice?.delta?.reasoning_content || choice?.delta?.reasoning || "";
+              const finishReason = choice?.finish_reason;
               const done = finishReason != null;
 
               const ollamaChunk: any = {
                 model: modelForResponse,
                 created_at: new Date().toISOString(),
                 response: text,
+                ...(thinking ? { thinking } : {}),
                 done,
               };
               if (done) {

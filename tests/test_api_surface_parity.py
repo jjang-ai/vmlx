@@ -303,10 +303,23 @@ def test_parity_ollama_think_maps_to_enable_thinking():
     converted_omit = ollama_chat_to_openai(
         {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
     )
+    converted_extension = ollama_chat_to_openai(
+        {"model": "test", "messages": [{"role": "user", "content": "hi"}], "enable_thinking": False}
+    )
+    converted_precedence = ollama_chat_to_openai(
+        {
+            "model": "test",
+            "messages": [{"role": "user", "content": "hi"}],
+            "think": True,
+            "enable_thinking": False,
+        }
+    )
 
     assert converted_off.get("enable_thinking") is False
     assert converted_on.get("enable_thinking") is True
     assert "enable_thinking" not in converted_omit
+    assert converted_extension.get("enable_thinking") is False
+    assert converted_precedence.get("enable_thinking") is True
 
 
 def test_parity_anthropic_thinking_default_off():
