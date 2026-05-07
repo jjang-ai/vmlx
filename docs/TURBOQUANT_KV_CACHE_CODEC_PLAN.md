@@ -64,6 +64,22 @@ Quoting the contract verbatim:
 
 ## Status
 
+### 2026-05-07 DSV4/ZAYA correction
+
+This document's generic TurboQuant KV plan does **not** mean every model family
+should receive generic TQ-KV by default.
+
+- DeepSeek-V4 Flash uses a native heterogeneous cache: SWA state plus CSA/HCA
+  compressed entries plus incomplete-tail state/recompute. Its production path
+  must keep generic TurboQuant KV disabled and expose the native DSV4 pool
+  compression status separately in `/health` and `/v1/cache/stats`.
+- ZAYA uses CCA state (`KVCache` plus `conv_state`/`prev_hs`). Its
+  prefix/paged/L2/runtime TQ-KV tiers stay disabled until a typed CCA restore
+  record exists and live restore gates pass.
+- Default-on generic TQ-KV remains scoped to compatible plain-KV families with
+  live encode/decode/cache-hit proof. Hybrid families require typed partial
+  codecs, not a generic wrapper.
+
 | # | Item | Status |
 |---|---|---|
 | 1 | Typed records per family (`kv`, `rotating_kv`, `quantized_kv`, `deepseek_v4`, `cumulative`, `cache_list`) | EXISTS (today). Add `turboquant_kv` tag in this design. |
@@ -126,10 +142,15 @@ DSV4 has **mixed cache families per layer**:
 - 28 layers: `DeepseekV4Cache` (SWA local + CSA pool + HSA pool)
 - 10 layers: routing/MTP (excluded from prefix cache)
 
-For each `DeepseekV4Cache` layer:
-- SWA local (RotatingKVCache) → encode as `turboquant_kv` (safe path)
-- CSA pool buffers (compressed latents) → keep native (`deepseek_v4` tag, untouched)
-- HSA pool buffers (hash routing) → keep native (`deepseek_v4` tag, untouched)
+Current production policy for each `DeepseekV4Cache` layer:
+- SWA local (RotatingKVCache) -> native DSV4 state or native DSV4 pool codec.
+- CSA pool buffers (compressed latents) -> keep native (`deepseek_v4` tag).
+- HCA pool buffers (heavily compressed latents; older local notes sometimes
+  say `HSA`) -> keep native (`deepseek_v4` tag).
+
+Do not wrap DSV4 in the generic `turboquant_kv` record unless a later
+DSV4-specific codec proves that it can preserve the official heterogeneous
+cache contract, including incomplete-tail recomputation/checkpoint policy.
 
 This matches Codex's item #3 exactly.
 
