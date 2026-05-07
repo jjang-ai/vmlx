@@ -56,6 +56,7 @@ import uuid
 from collections import OrderedDict, defaultdict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any
 
 import uvicorn
@@ -445,6 +446,18 @@ def _dsv4_split_reasoning_from_token_ids(
     return reasoning, content
 
 
+def _output_token_ids_for_reasoning(output: Any) -> list[int] | None:
+    """Return cumulative generated token IDs from any engine output shape."""
+    for attr in ("output_token_ids", "tokens"):
+        token_ids = getattr(output, attr, None)
+        if token_ids:
+            try:
+                return [int(t) for t in token_ids]
+            except Exception:
+                return None
+    return None
+
+
 _jang_sampling_defaults_cache: dict[str, dict] = {}
 _generation_defaults_cache: dict[str, dict] = {}
 
@@ -724,6 +737,51 @@ def _resolve_max_tokens(request_value: int | None, model_name: str = "") -> int:
         if v is not None and v > 0:
             return int(v)
     return _default_max_tokens
+
+
+@dataclass(frozen=True)
+class _DSV4ThinkingDecision:
+    enable_thinking: bool
+    reasoning_effort_allowed: bool
+    reason: str
+
+
+def _resolve_dsv4_thinking_policy(
+    *,
+    requested_enable_thinking: bool | None,
+    tools_present: bool,
+    tool_choice: Any,
+) -> _DSV4ThinkingDecision:
+    """Resolve DSV4's public thinking toggle to the currently safe rail.
+
+    Live V3 F32-control DSV4 probes show the explicit thinking prompt can
+    generate answer-like text without ever emitting the ``</think>`` close
+    token on 200+ token prompts, which leaves Responses/streaming clients with
+    reasoning-only output and no visible answer. Keep the direct rail as the
+    production default until a long-context thinking-close gate passes.
+    """
+    if tools_present and tool_choice != "none":
+        return _DSV4ThinkingDecision(
+            enable_thinking=False,
+            reasoning_effort_allowed=False,
+            reason="tool_call_direct_rail",
+        )
+    allow_thinking = os.environ.get("VMLX_DSV4_ALLOW_THINKING", "0").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if allow_thinking:
+        return _DSV4ThinkingDecision(
+            enable_thinking=bool(requested_enable_thinking),
+            reasoning_effort_allowed=bool(requested_enable_thinking),
+            reason="env_opt_in",
+        )
+    return _DSV4ThinkingDecision(
+        enable_thinking=False,
+        reasoning_effort_allowed=False,
+        reason="dsv4_thinking_rail_unstable",
+    )
 
 
 def _normalize_dsv4_reasoning_effort(effort: str | None) -> str | None:
@@ -4146,12 +4204,18 @@ async def model_capabilities(model_id: str) -> dict:
         if supports_thinking_explicit is not None
         else bool(reasoning_parser or think_in_template)
     )
+    dsv4_raw_thinking_enabled = (
+        family == "deepseek_v4"
+        and os.environ.get("VMLX_DSV4_ALLOW_THINKING", "0").lower()
+        in {"1", "true", "yes"}
+    )
 
     if family == "deepseek_v4":
-        # DSV4 standard chat + thinking are supported. The standalone JANG
-        # reference runtime still degenerates on reasoning_effort="max" for
-        # this bundle, so do not advertise Max as a stable UI mode.
-        supported_modes = ["instruct", "reasoning"]
+        # DSV4's raw thinking rail currently fails the long-context close-token
+        # gate on local F32-control V3 bundles. Keep production UI on direct
+        # mode unless an advanced tester explicitly opts in with the env var.
+        supports_thinking = dsv4_raw_thinking_enabled
+        supported_modes = ["instruct", "reasoning"] if supports_thinking else ["instruct"]
         reasoning_efforts = []
     elif supports_thinking:
         supported_modes = ["instruct", "reasoning"]
@@ -4217,7 +4281,9 @@ async def model_capabilities(model_id: str) -> dict:
         "reasoning_parser": reasoning_parser,
         "think_in_template": think_in_template,
         "supported_modes": supported_modes,
-        "experimental_modes": ["max"] if family == "deepseek_v4" else [],
+        "experimental_modes": (
+            ["raw-thinking"] if family == "deepseek_v4" and not supports_thinking else []
+        ),
         "reasoning_efforts": reasoning_efforts,
         "modalities": modalities,
         "cache": {
@@ -4437,52 +4503,23 @@ async def create_anthropic_message(
         )
         _ct_kwargs.pop("thinking_mode", None)
 
-        # DSV4 reasoning toggle propagation.
-        #
-        # The DSV4-Flash bundle's chat-mode (enable_thinking=False) emits
-        # training-data-contaminated output: deterministic looping
-        # ("Birth Birth Birth..." attractor verified live), polite-
-        # assistant boilerplate, mixed-language annotation leakage. This
-        # is the bundle, not the runtime — coercing the API mode does
-        # not "fix" the bundle, it routes around the broken path.
-        #
-        # Force enable_thinking=True regardless of caller value, UNLESS
-        # the env override `VMLX_DSV4_ALLOW_CHAT=1` is set (advanced
-        # users benchmarking chat-mode against the runtime trace must
-        # opt in deliberately). This matches v1.5.6's `is not True`
-        # semantics and ensures all 3 reasoning modes (auto / on / max)
-        # produce coherent output via the verified thinking path.
-        _allow_dsv4_chat = os.environ.get(
-            "VMLX_DSV4_ALLOW_CHAT", "0"
-        ).lower() in {"1", "true", "yes"}
-        _dsv4_tools_need_direct_rail = bool(getattr(chat_req, "tools", None))
-        if chat_req.enable_thinking is False and (
-            _allow_dsv4_chat or _dsv4_tools_need_direct_rail
+        _dsv4_thinking = _resolve_dsv4_thinking_policy(
+            requested_enable_thinking=chat_req.enable_thinking,
+            tools_present=bool(getattr(chat_req, "tools", None)),
+            tool_choice=getattr(chat_req, "tool_choice", None),
+        )
+        if (
+            not _dsv4_thinking.enable_thinking
+            and (chat_req.enable_thinking is True or _cur_effort)
         ):
-            if _allow_dsv4_chat:
-                logger.warning(
-                    "DSV4: VMLX_DSV4_ALLOW_CHAT=1 — honoring explicit "
-                    "enable_thinking=False. Output may loop or hallucinate "
-                    "(chat-mode bundle is training-data-contaminated)."
-                )
-            else:
-                logger.info(
-                    "DSV4: honoring enable_thinking=False for tool call "
-                    "request so DSML is emitted outside the reasoning rail."
-                )
-            _msg_kwargs["enable_thinking"] = False
-            _ct_kwargs["enable_thinking"] = False
-        else:
-            if chat_req.enable_thinking is not True:
-                logger.info(
-                    "DSV4: forcing enable_thinking=True (chat-mode bundle "
-                    "is training-data-contaminated; thinking-mode is the "
-                    "only verified-coherent path). Override with "
-                    "VMLX_DSV4_ALLOW_CHAT=1 if you accept the risk."
-                )
-                chat_req.enable_thinking = True
-            _msg_kwargs["enable_thinking"] = True
-            _ct_kwargs["enable_thinking"] = True
+            logger.info(
+                "DSV4: using direct rail because %s; set "
+                "VMLX_DSV4_ALLOW_THINKING=1 to opt into the raw thinking rail.",
+                _dsv4_thinking.reason,
+            )
+        chat_req.enable_thinking = _dsv4_thinking.enable_thinking
+        _msg_kwargs["enable_thinking"] = _dsv4_thinking.enable_thinking
+        _ct_kwargs["enable_thinking"] = _dsv4_thinking.enable_thinking
         _set_resolved_repetition_penalty(
             _msg_kwargs,
             chat_req.repetition_penalty,
@@ -4494,7 +4531,11 @@ async def create_anthropic_message(
         # closing </think>, even with 4096 output tokens. The public
         # capability surface therefore does not advertise max for DSV4;
         # normalize stale/advanced clients onto the verified rail too.
-        _stable_effort = _normalize_dsv4_reasoning_effort(_cur_effort)
+        _stable_effort = (
+            _normalize_dsv4_reasoning_effort(_cur_effort)
+            if _dsv4_thinking.reasoning_effort_allowed
+            else None
+        )
         if _stable_effort:
             if _cur_effort == "max":
                 logger.info(
@@ -5233,35 +5274,34 @@ async def ollama_chat(fastapi_request: Request):
             or _ollama_ct_kwargs.get("reasoning_effort")
         )
         _ollama_ct_kwargs.pop("thinking_mode", None)
-        # DSV4 reasoning toggle on Ollama path. See chat-completions
-        # block for the full rationale (chat-mode bundle is training-
-        # data-contaminated; force-flip unless VMLX_DSV4_ALLOW_CHAT=1).
-        _allow_dsv4_chat_o = os.environ.get(
-            "VMLX_DSV4_ALLOW_CHAT", "0"
-        ).lower() in {"1", "true", "yes"}
-        if chat_req.enable_thinking is False and _allow_dsv4_chat_o:
-            logger.warning(
-                "DSV4 (Ollama): VMLX_DSV4_ALLOW_CHAT=1 — honoring "
-                "explicit enable_thinking=False. Output may loop."
+        _dsv4_thinking_o = _resolve_dsv4_thinking_policy(
+            requested_enable_thinking=chat_req.enable_thinking,
+            tools_present=bool(getattr(chat_req, "tools", None)),
+            tool_choice=getattr(chat_req, "tool_choice", None),
+        )
+        if (
+            not _dsv4_thinking_o.enable_thinking
+            and (chat_req.enable_thinking is True or _cur_effort_o)
+        ):
+            logger.info(
+                "DSV4 (Ollama): using direct rail because %s; set "
+                "VMLX_DSV4_ALLOW_THINKING=1 to opt into the raw thinking rail.",
+                _dsv4_thinking_o.reason,
             )
-            chat_kwargs["enable_thinking"] = False
-            _ollama_ct_kwargs["enable_thinking"] = False
-        else:
-            if chat_req.enable_thinking is not True:
-                logger.info(
-                    "DSV4 (Ollama): forcing enable_thinking=True "
-                    "(chat-mode bundle is training-data-contaminated)"
-                )
-                chat_req.enable_thinking = True
-            chat_kwargs["enable_thinking"] = True
-            _ollama_ct_kwargs["enable_thinking"] = True
+        chat_req.enable_thinking = _dsv4_thinking_o.enable_thinking
+        chat_kwargs["enable_thinking"] = _dsv4_thinking_o.enable_thinking
+        _ollama_ct_kwargs["enable_thinking"] = _dsv4_thinking_o.enable_thinking
         _set_resolved_repetition_penalty(
             chat_kwargs,
             chat_req.repetition_penalty,
             chat_req.model,
             enable_thinking=chat_kwargs.get("enable_thinking"),
         )
-        _stable_effort_o = _normalize_dsv4_reasoning_effort(_cur_effort_o)
+        _stable_effort_o = (
+            _normalize_dsv4_reasoning_effort(_cur_effort_o)
+            if _dsv4_thinking_o.reasoning_effort_allowed
+            else None
+        )
         if _stable_effort_o:
             if _cur_effort_o == "max":
                 logger.info(
@@ -7019,48 +7059,34 @@ async def create_chat_completion(
         # Strip stale fields from any prior path so the final kwargs are clean.
         _ct_kwargs.pop("thinking_mode", None)
 
-        # DSV4 reasoning toggle on /v1/responses path. See chat-
-        # completions block for the full rationale (chat-mode bundle is
-        # training-data-contaminated; force-flip unless
-        # VMLX_DSV4_ALLOW_CHAT=1).
-        _allow_dsv4_chat_r = os.environ.get(
-            "VMLX_DSV4_ALLOW_CHAT", "0"
-        ).lower() in {"1", "true", "yes"}
-        _dsv4_resp_direct_rail = bool(getattr(request, "tools", None)) or (
-            getattr(request, "tool_choice", None) == "none"
+        _dsv4_thinking = _resolve_dsv4_thinking_policy(
+            requested_enable_thinking=request.enable_thinking,
+            tools_present=bool(getattr(request, "tools", None)),
+            tool_choice=getattr(request, "tool_choice", None),
         )
-        if request.enable_thinking is False and (
-            _allow_dsv4_chat_r or _dsv4_resp_direct_rail
+        if (
+            not _dsv4_thinking.enable_thinking
+            and (request.enable_thinking is True or _cur_effort)
         ):
-            if _allow_dsv4_chat_r:
-                logger.warning(
-                    "DSV4 (Responses): VMLX_DSV4_ALLOW_CHAT=1 — honoring "
-                    "explicit enable_thinking=False. Output may loop."
-                )
-            else:
-                logger.info(
-                    "DSV4 (Responses): honoring enable_thinking=False for "
-                    "tool/tool-result request so visible text or DSML is "
-                    "emitted outside the reasoning rail."
-                )
-            chat_kwargs["enable_thinking"] = False
-            _ct_kwargs["enable_thinking"] = False
-        else:
-            if request.enable_thinking is not True:
-                logger.info(
-                    "DSV4 (Responses): forcing enable_thinking=True "
-                    "(chat-mode bundle is training-data-contaminated)"
-                )
-                request.enable_thinking = True
-            chat_kwargs["enable_thinking"] = True
-            _ct_kwargs["enable_thinking"] = True
+            logger.info(
+                "DSV4: using direct rail because %s; set "
+                "VMLX_DSV4_ALLOW_THINKING=1 to opt into the raw thinking rail.",
+                _dsv4_thinking.reason,
+            )
+        request.enable_thinking = _dsv4_thinking.enable_thinking
+        chat_kwargs["enable_thinking"] = _dsv4_thinking.enable_thinking
+        _ct_kwargs["enable_thinking"] = _dsv4_thinking.enable_thinking
         _set_resolved_repetition_penalty(
             chat_kwargs,
             request.repetition_penalty,
             request.model,
             enable_thinking=chat_kwargs.get("enable_thinking"),
         )
-        _stable_effort = _normalize_dsv4_reasoning_effort(_cur_effort)
+        _stable_effort = (
+            _normalize_dsv4_reasoning_effort(_cur_effort)
+            if _dsv4_thinking.reasoning_effort_allowed
+            else None
+        )
         if _stable_effort:
             if _cur_effort == "max":
                 logger.info(
@@ -7295,7 +7321,7 @@ async def create_chat_completion(
         reasoning_text, remaining_text = request_parser.extract_reasoning(_raw_for_parse)
         if _is_dsv4:
             token_reasoning, token_content = _dsv4_split_reasoning_from_token_ids(
-                getattr(output, "tokens", None),
+                _output_token_ids_for_reasoning(output),
                 engine.tokenizer,
             )
             if token_content:
@@ -8087,40 +8113,27 @@ async def create_response(
     # effort hint. Symptom: "testing" framing replays into long-context
     # turns, model collapses to fragment loops.
     if _is_dsv4_resp_msgs:
-        # (a) Force enable_thinking=True unless VMLX_DSV4_ALLOW_CHAT=1.
-        #     Chat-mode bundle is training-data-contaminated; thinking-mode
-        #     is the only verified-coherent path.
-        _allow_dsv4_chat_resp = os.environ.get(
-            "VMLX_DSV4_ALLOW_CHAT", "0"
-        ).lower() in {"1", "true", "yes"}
-        _dsv4_resp_direct_rail = bool(getattr(request, "tools", None)) or (
-            getattr(request, "tool_choice", None) == "none"
+        _dsv4_thinking_resp = _resolve_dsv4_thinking_policy(
+            requested_enable_thinking=request.enable_thinking,
+            tools_present=bool(getattr(request, "tools", None)),
+            tool_choice=getattr(request, "tool_choice", None),
         )
-        if request.enable_thinking is False and (
-            _allow_dsv4_chat_resp or _dsv4_resp_direct_rail
+        if (
+            not _dsv4_thinking_resp.enable_thinking
+            and (
+                request.enable_thinking is True
+                or getattr(request, "reasoning_effort", None)
+                or _ct_kwargs.get("reasoning_effort")
+            )
         ):
-            if _allow_dsv4_chat_resp:
-                logger.warning(
-                    "DSV4 (/v1/responses): VMLX_DSV4_ALLOW_CHAT=1 — honoring "
-                    "explicit enable_thinking=False. Output may loop."
-                )
-            else:
-                logger.info(
-                    "DSV4 (/v1/responses): honoring enable_thinking=False "
-                    "for tool/tool-result request so visible text or DSML is "
-                    "emitted outside the reasoning rail."
-                )
-            chat_kwargs["enable_thinking"] = False
-            _ct_kwargs["enable_thinking"] = False
-        else:
-            if request.enable_thinking is not True:
-                logger.info(
-                    "DSV4 (/v1/responses): forcing enable_thinking=True "
-                    "(chat-mode bundle is training-data-contaminated)"
-                )
-                request.enable_thinking = True
-            chat_kwargs["enable_thinking"] = True
-            _ct_kwargs["enable_thinking"] = True
+            logger.info(
+                "DSV4 (/v1/responses): using direct rail because %s; set "
+                "VMLX_DSV4_ALLOW_THINKING=1 to opt into the raw thinking rail.",
+                _dsv4_thinking_resp.reason,
+            )
+        request.enable_thinking = _dsv4_thinking_resp.enable_thinking
+        chat_kwargs["enable_thinking"] = _dsv4_thinking_resp.enable_thinking
+        _ct_kwargs["enable_thinking"] = _dsv4_thinking_resp.enable_thinking
         _set_resolved_repetition_penalty(
             chat_kwargs,
             request.repetition_penalty,
@@ -8139,7 +8152,11 @@ async def create_response(
             or _ct_kwargs.get("reasoning_effort")
         )
         _ct_kwargs.pop("thinking_mode", None)
-        _stable_resp_effort = _normalize_dsv4_reasoning_effort(_cur_resp_effort)
+        _stable_resp_effort = (
+            _normalize_dsv4_reasoning_effort(_cur_resp_effort)
+            if _dsv4_thinking_resp.reasoning_effort_allowed
+            else None
+        )
         if _stable_resp_effort:
             if _cur_resp_effort == "max":
                 logger.info(
@@ -8482,7 +8499,7 @@ async def create_response(
             )
         if _is_dsv4_resp_msgs:
             token_reasoning, token_content = _dsv4_split_reasoning_from_token_ids(
-                getattr(output, "tokens", None),
+                _output_token_ids_for_reasoning(output),
                 engine.tokenizer,
             )
             if token_content:

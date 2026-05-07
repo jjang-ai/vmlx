@@ -120,6 +120,71 @@ def test_dsv4_token_id_split_ignores_unclosed_reasoning():
     ) == (None, None)
 
 
+def test_dsv4_token_split_reads_batched_output_token_ids():
+    """BatchedEngine returns RequestOutput.output_token_ids, not .tokens."""
+    from types import SimpleNamespace
+
+    from vmlx_engine import server
+
+    output = SimpleNamespace(output_token_ids=[128821, 11, 128822, 21])
+
+    assert server._output_token_ids_for_reasoning(output) == [
+        128821,
+        11,
+        128822,
+        21,
+    ]
+
+
+def test_dsv4_thinking_policy_defaults_to_direct_rail(monkeypatch):
+    """DSV4 thinking rail is opt-in until long-context close-token gates pass."""
+    from vmlx_engine import server
+
+    monkeypatch.delenv("VMLX_DSV4_ALLOW_THINKING", raising=False)
+
+    decision = server._resolve_dsv4_thinking_policy(
+        requested_enable_thinking=True,
+        tools_present=False,
+        tool_choice=None,
+    )
+
+    assert decision.enable_thinking is False
+    assert decision.reasoning_effort_allowed is False
+    assert decision.reason == "dsv4_thinking_rail_unstable"
+
+
+def test_dsv4_thinking_policy_can_be_explicitly_opted_in(monkeypatch):
+    from vmlx_engine import server
+
+    monkeypatch.setenv("VMLX_DSV4_ALLOW_THINKING", "1")
+
+    decision = server._resolve_dsv4_thinking_policy(
+        requested_enable_thinking=True,
+        tools_present=False,
+        tool_choice=None,
+    )
+
+    assert decision.enable_thinking is True
+    assert decision.reasoning_effort_allowed is True
+    assert decision.reason == "env_opt_in"
+
+
+def test_dsv4_thinking_policy_keeps_tool_calls_on_direct_rail(monkeypatch):
+    from vmlx_engine import server
+
+    monkeypatch.setenv("VMLX_DSV4_ALLOW_THINKING", "1")
+
+    decision = server._resolve_dsv4_thinking_policy(
+        requested_enable_thinking=True,
+        tools_present=True,
+        tool_choice="auto",
+    )
+
+    assert decision.enable_thinking is False
+    assert decision.reasoning_effort_allowed is False
+    assert decision.reason == "tool_call_direct_rail"
+
+
 def test_dsv4_bundle_defaults_override_stale_ui_defaults(tmp_path, monkeypatch):
     """Old chats saved generic 0.7/1.0/1.1 values as explicit request
     overrides. For DSV4 those are not real user intent; they are stale UI
