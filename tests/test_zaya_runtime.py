@@ -57,6 +57,37 @@ def test_zaya_cca_cache_carries_kv_conv_and_prev_hidden_state():
     ]
 
 
+def test_zaya_cca_cache_chunked_prefill_matches_single_shot_logits():
+    """CCA state must advance with the sequence, not only the KV cache.
+
+    ZAYA attention owns standard K/V plus path-dependent convolution and
+    previous-hidden-state caches. This pins the minimal correctness contract
+    for batching/chunked prefill: splitting a prompt at a chunk boundary must
+    produce the same logits for the continued segment as single-shot prefill.
+    """
+
+    mx.random.seed(7)
+    model = Model(_small_args())
+    ids = mx.array([[1, 2, 3, 4]], dtype=mx.int32)
+
+    full_cache = model.make_cache()
+    full = model(ids, cache=full_cache)
+    mx.eval(full)
+
+    chunked_cache = model.make_cache()
+    first = model(ids[:, :2], cache=chunked_cache)
+    mx.eval(first)
+    second = model(ids[:, 2:], cache=chunked_cache)
+    mx.eval(second)
+
+    diff = mx.max(
+        mx.abs(full[:, 2:, :].astype(mx.float32) - second.astype(mx.float32))
+    )
+    assert diff.item() == 0.0
+    assert full_cache[0][0].offset == 4
+    assert chunked_cache[0][0].offset == 4
+
+
 def test_local_zaya_mxfp4_loads_strictly_when_present():
     model_dir = Path("/Users/eric/jang/models/Zyphra/ZAYA1-8B-MXFP4")
     if not model_dir.exists():
