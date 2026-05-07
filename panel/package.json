@@ -90,6 +90,9 @@
       "entitlementsInherit": "build/entitlements.mac.plist",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
+      "signIgnore": [
+        "\\.safetensors$"
+      ],
       "notarize": {
         "teamId": "55KGF2S5AY"
       },
