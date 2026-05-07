@@ -35,6 +35,19 @@ Status terms used below:
 Nothing in this pass is release verified. Do not close issues from source tests
 alone.
 
+### GitHub Comment Audit
+
+Live comment counts were refreshed with `gh issue list` on 2026-05-07. Issues
+with source fixes or source-level test evidence now have an owner comment, or
+are explicitly marked as pending push/package when the fix is local-only.
+
+| Bucket | Issues | Comment state |
+|---|---|---|
+| Source-fixed/source-tested and commented | vmlx #147, #146, #145, #144, #139, #138, #137, #132, #131, #120, #119; mlxstudio #107, #106, #104, #103, #101, #100, #95, #90, #31 | Commented. Do not close until release/live verification criteria are met. |
+| Local-only fix, comment says pending push/package | vmlx #137 | Commented after local commit `df761341`; leave open until pushed/packaged. |
+| Not fixed; no public fix claim should be made yet | vmlx #142, #141, #136, #134, #124, #123, #98, #88, #86, #79, #44; mlxstudio #89 | No code/test evidence sufficient for a fix comment. |
+| Support/product/Swift/out-of-Python-scope | vmlx #143, #133, #121, #122, #125, #126, #127, #135, #37, #57, #60, #74, #76, #78, #100; mlxstudio #102, #105, #61, #67, #68, #75, #91, #99 | May need responses, but not Python engine fix claims from this branch. |
+
 ### jjang-ai/vmlx
 
 | Issue | Status in source | Remaining blocker |
