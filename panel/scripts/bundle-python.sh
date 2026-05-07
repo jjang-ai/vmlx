@@ -118,7 +118,7 @@ if [ -f "$JANG_LOCAL/pyproject.toml" ]; then
   "$PYTHON" -m pip install --no-deps "$JANG_LOCAL"
 else
   echo "    local jang-tools missing, falling back to PyPI"
-  "$PYTHON" -m pip install --no-deps "jang>=2.5.26"
+  "$PYTHON" -m pip install --no-deps "jang>=2.5.27"
 fi
 
 # Clean up to reduce size

@@ -776,7 +776,7 @@ class TestModelConfigComprehensiveChecks:
     VALID_TOOL_PARSERS = {
         None, "qwen", "llama", "mistral", "deepseek", "hermes",
         "granite", "glm47", "step3p5", "nemotron", "minimax", "kimi",
-        "dsml",
+        "dsml", "zaya_xml",
         # Gemma family: commit 3294a2da added `gemma3` for Google's
         # documented ``` ```tool_code\\nname(k=v)\\n``` ``` format, and
         # `gemma3n` for Gemma 3n (same parser, separate registry entry).
