@@ -359,6 +359,64 @@ class ZayaMoE(nn.Module):
         return y, router_hidden_states_next
 
 
+class ZayaNoStateCache:
+    """Merge/extract-safe placeholder for ZAYA MoE layers.
+
+    Odd ZAYA layers are top-1 MoE blocks and do not own recurrent state.  A
+    generic ``ArraysCache`` with empty slots looks tempting, but mlx-lm's
+    ``BatchGenerator`` later slices every cache slot in ``extract()`` when a
+    request finishes.  Slicing ``None`` turns the no-state layer into a runtime
+    crash.  This object makes the no-state contract explicit while preserving
+    the small cache API surface used by batching.
+    """
+
+    @property
+    def state(self):
+        return ()
+
+    @state.setter
+    def state(self, _value):
+        return None
+
+    @property
+    def nbytes(self):
+        return 0
+
+    def filter(self, _batch_indices):
+        return None
+
+    def extract(self, _idx: int):
+        return type(self)()
+
+    def prepare(self, **_kwargs):
+        return None
+
+    def finalize(self):
+        return None
+
+    def advance(self, _n: int):
+        return None
+
+    def extend(self, _other):
+        return None
+
+    def empty(self):
+        return True
+
+    def size(self):
+        return 0
+
+    def is_trimmable(self):
+        return False
+
+    def trim(self, _n: int):
+        return 0
+
+    @classmethod
+    def merge(cls, _caches):
+        return cls()
+
+
 class ZayaLayer(nn.Module):
     def __init__(self, args: ModelArgs, layer_idx: int):
         super().__init__()
@@ -439,10 +497,7 @@ class ZayaModel(nn.Module):
             if i % 2 == 0:
                 caches.append(CacheList(KVCache(), ArraysCache(2)))
             else:
-                # mlx-lm's BatchGenerator expects one mergeable cache object
-                # per layer. ZAYA MoE layers do not have time-state, but a
-                # placeholder ArraysCache keeps continuous batching compatible.
-                caches.append(ArraysCache(1))
+                caches.append(ZayaNoStateCache())
         return caches
 
 

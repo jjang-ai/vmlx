@@ -8,12 +8,86 @@ Converts HuggingFace models to quantized MLX format with:
 """
 
 import argparse
+import json
 import logging
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 logger = logging.getLogger("vmlx_engine")
+
+
+def _is_zaya_model_dir(model_path: str | Path) -> bool:
+    """Return True for Zyphra/ZAYA source or converted bundles.
+
+    Stock ``mlx_lm.convert`` and the generic JANG converter do not know how to
+    split ZAYA's fused experts or preserve its CCA cache contract.  Detect this
+    from metadata before either path attempts a generic load.
+    """
+    cfg_path = Path(model_path) / "config.json"
+    if not cfg_path.is_file():
+        return False
+    try:
+        cfg = json.loads(cfg_path.read_text())
+    except Exception:
+        return False
+    if str(cfg.get("model_type", "")).lower() == "zaya":
+        return True
+    archs = cfg.get("architectures") or []
+    return any(str(a).lower() == "zayaforcausallm" for a in archs)
+
+
+def _zaya_jangtq_profile(profile: str, target_bits: int) -> str:
+    """Map vMLX/JANG profile names to the ZAYA converter profile namespace."""
+    p = (profile or "").upper()
+    if p.startswith("JANGTQ"):
+        return p
+    return f"JANGTQ{int(target_bits)}"
+
+
+def _run_zaya_converter_subprocess(
+    *,
+    source: str | Path,
+    output: str | Path,
+    module: str,
+    extra_args: list[str],
+) -> None:
+    cmd = [
+        sys.executable,
+        "-m",
+        module,
+        str(source),
+        str(output),
+        *extra_args,
+    ]
+    subprocess.run(cmd, check=True)
+
+
+def _finish_zaya_conversion(output_dir: Path, *, skip_verify: bool) -> None:
+    output_files = list(output_dir.glob("*.safetensors"))
+    output_size = sum(f.stat().st_size for f in output_files) / (1024**3)
+    print(f"  Disk size: {output_size:.1f} GB ({len(output_files)} files)")
+    print(f"  Output: {output_dir.resolve()}")
+
+    if not skip_verify:
+        print()
+        print("Running ZAYA verification smoke test...")
+        success, message = _jang_smoke_test(str(output_dir))
+        if success:
+            print(f"  PASS: {message}")
+        else:
+            print(f"  WARN: {message}")
+            print("  The model converted but needs live verification before release.")
+            print(f"  Run 'vmlx-engine doctor {output_dir}' for diagnostics.")
+    else:
+        print()
+        print("Verification skipped. To verify later:")
+        print(f"  vmlx-engine doctor {output_dir}")
+
+    print()
+    print("Load with:")
+    print(f"  vmlx-engine serve {output_dir}")
 
 
 def convert_command(args: argparse.Namespace) -> None:
@@ -122,15 +196,32 @@ def convert_command(args: argparse.Namespace) -> None:
     start_time = time.time()
 
     try:
-        _run_conversion(
-            hf_path=model_path,
-            mlx_path=str(output_dir),
-            q_bits=args.bits,
-            q_group_size=args.group_size,
-            q_mode=args.mode if args.mode != "default" else None,
-            dtype=args.dtype,
-            trust_remote_code=args.trust_remote_code,
-        )
+        if _is_zaya_model_dir(model_path):
+            print(
+                "ZAYA detected — routing through jang_tools.convert_zaya_mxfp4 "
+                "to preserve CCA state metadata and pre-stack split MoE experts."
+            )
+            _run_zaya_converter_subprocess(
+                source=model_path,
+                output=output_dir,
+                module="jang_tools.convert_zaya_mxfp4",
+                extra_args=[
+                    "--bits",
+                    str(args.bits),
+                    "--group-size",
+                    str(args.group_size),
+                ],
+            )
+        else:
+            _run_conversion(
+                hf_path=model_path,
+                mlx_path=str(output_dir),
+                q_bits=args.bits,
+                q_group_size=args.group_size,
+                q_mode=args.mode if args.mode != "default" else None,
+                dtype=args.dtype,
+                trust_remote_code=args.trust_remote_code,
+            )
     except Exception as e:
         elapsed = time.time() - start_time
         print(f"\nError: Conversion failed after {elapsed:.1f}s: {e}")
@@ -146,6 +237,10 @@ def convert_command(args: argparse.Namespace) -> None:
 
     elapsed = time.time() - start_time
     print(f"\nConversion completed in {elapsed:.1f}s")
+
+    if _is_zaya_model_dir(model_path):
+        _finish_zaya_conversion(output_dir, skip_verify=args.skip_verify)
+        return
 
     # Show output size
     output_files = list(output_dir.glob("*.safetensors"))
@@ -567,6 +662,40 @@ def _jang_convert_command(args: argparse.Namespace) -> None:
         raise
     except Exception as _pf_e:
         logger.debug(f"Pre-flight checks raised: {_pf_e}")
+
+    if _is_zaya_model_dir(model_path):
+        start_time = time.time()
+        zaya_profile = _zaya_jangtq_profile(profile, comp)
+        print(
+            "ZAYA detected — routing through jang_tools.convert_zaya_jangtq "
+            "to split fused experts, row-pack TQ weights, and stamp "
+            "cache_subtype=zaya_cca."
+        )
+        print(f"  ZAYA profile: {zaya_profile}")
+        try:
+            _run_zaya_converter_subprocess(
+                source=model_path,
+                output=output_dir,
+                module="jang_tools.convert_zaya_jangtq",
+                extra_args=[
+                    zaya_profile,
+                    "--group-size",
+                    str(args.group_size),
+                ],
+            )
+        except subprocess.CalledProcessError as e:
+            elapsed = time.time() - start_time
+            print(
+                f"\nError: ZAYA JANGTQ conversion failed after {elapsed:.1f}s: "
+                f"exit code {e.returncode}"
+            )
+            sys.exit(e.returncode or 1)
+
+        elapsed = time.time() - start_time
+        print(f"\nZAYA JANGTQ conversion completed in {elapsed:.1f}s")
+        print(f"  Profile: {zaya_profile}")
+        _finish_zaya_conversion(output_dir, skip_verify=args.skip_verify)
+        return
 
     # ──────────────────────────────────────────────────────────────────
     # mlxstudio#74: error visibility hardening. The previous handler
