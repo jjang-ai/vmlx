@@ -68,6 +68,22 @@ def test_ollama_native_think_beats_enable_thinking_extension():
     assert req["enable_thinking"] is True
 
 
+def test_ollama_chat_drops_reasoning_effort_when_thinking_off():
+    from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
+
+    req = ollama_chat_to_openai(
+        {
+            "model": "qwen",
+            "messages": [{"role": "user", "content": "hi"}],
+            "think": False,
+            "reasoning_effort": "max",
+        }
+    )
+
+    assert req["enable_thinking"] is False
+    assert "reasoning_effort" not in req
+
+
 def test_ollama_generate_chat_accepts_enable_thinking_extension():
     from vmlx_engine.api.ollama_adapter import ollama_generate_to_openai_chat
 
@@ -76,6 +92,22 @@ def test_ollama_generate_chat_accepts_enable_thinking_extension():
     )
 
     assert req["enable_thinking"] is False
+
+
+def test_ollama_generate_chat_drops_reasoning_effort_when_template_kwargs_disable_thinking():
+    from vmlx_engine.api.ollama_adapter import ollama_generate_to_openai_chat
+
+    req = ollama_generate_to_openai_chat(
+        {
+            "model": "qwen",
+            "prompt": "hi",
+            "reasoning_effort": "high",
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+    )
+
+    assert req["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "reasoning_effort" not in req
 
 
 def test_ollama_generate_raw_keeps_completion_request_shape():

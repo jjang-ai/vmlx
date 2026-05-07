@@ -34,6 +34,8 @@ describe("Ollama gateway parity contracts", () => {
   it("forwards thinking kwargs through app gateway Ollama routes", () => {
     expect(source).toContain("parsed.enable_thinking");
     expect(source).toContain("openaiBody.enable_thinking = Boolean(parsed.think)");
+    expect(source).toContain("private shouldForwardOllamaReasoningEffort");
+    expect(source).toContain("openaiBody?.enable_thinking === false");
     expect(source).toContain("openaiBody.reasoning_effort = parsed.reasoning_effort");
     expect(source).toContain("openaiBody.chat_template_kwargs = parsed.chat_template_kwargs");
   });
