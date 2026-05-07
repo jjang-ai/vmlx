@@ -7,6 +7,7 @@ content.
 
 from tests.cross_matrix.run_production_family_audit import (
     ROWS,
+    cache_exact_hit_probe,
     cache_exact_hit_required,
     extract_anthropic_text_and_stop,
     extract_ollama_visible_text_and_stop,
@@ -102,13 +103,24 @@ def test_zaya_static_audit_exposes_cache_subtype_when_local_bundle_exists():
     assert static["registry"]["cache_subtype"] == "zaya_cca"
 
 
-def test_zaya_cca_rows_do_not_run_generic_exact_hit_cache_probe():
+def test_zaya_cca_rows_require_typed_exact_hit_cache_probe():
     rows = {row.id: row for row in ROWS}
 
-    assert not cache_exact_hit_required(rows["zaya_jangtq2"])
-    assert not cache_exact_hit_required(rows["zaya_jangtq4"])
-    assert not cache_exact_hit_required(rows["zaya_mxfp4"])
+    assert cache_exact_hit_required(rows["zaya_jangtq2"])
+    assert cache_exact_hit_required(rows["zaya_jangtq4"])
+    assert cache_exact_hit_required(rows["zaya_mxfp4"])
     assert cache_exact_hit_required(rows["dsv4_tq"])
+
+
+def test_zaya_cache_probe_checks_cache_not_repeated_style_compliance():
+    rows = {row.id: row for row in ROWS}
+    probe = cache_exact_hit_probe(rows["zaya_mxfp4"])
+
+    assert probe["expected"] == "blue"
+    assert probe["min_count"] == 1
+    assert probe["strict_short_answer"] is True
+    assert probe["thinking"] is False
+    assert "which color word repeats" in probe["messages"][0]["content"]
 
 
 def test_loop_score_catches_no_space_cjk_and_emoji_repetition():

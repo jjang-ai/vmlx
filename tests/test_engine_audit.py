@@ -18,6 +18,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -2235,7 +2236,7 @@ class TestStartupCompatibilityGuards:
                 return ["native"] * 32
 
         model = FakeModel()
-        monkeypatch.delenv("VMLX_DISABLE_TQ_KV", raising=False)
+        os.environ.pop("VMLX_DISABLE_TQ_KV", None)
         monkeypatch.delenv("VMLX_ALLOW_HYBRID_KV_QUANT", raising=False)
 
         _apply_turboquant_to_model(model, str(tmp_path))
@@ -2358,14 +2359,96 @@ class TestZayaCCACachePolicy:
         assert 'args.use_paged_cache = False' in source
         assert 'args.enable_block_disk_cache = False' in source
         assert 'args.kv_cache_quantization = "none"' in source
+        assert "VMLX_ZAYA_ENABLE_TYPED_CCA_CACHE" in source
         assert "typed CCA restore" in source
         assert "full-model prefix/paged/L2 replay gates" in source
         assert "conv_state + prev_hs" in source
         assert "server._tool_call_parser or args.tool_call_parser" in source
 
         scheduler_source = Path("./vmlx_engine/scheduler.py").read_text()
+        assert "self._uses_zaya_cache" in scheduler_source
         assert 'self._model_type_for_runtime == "zaya"' in scheduler_source
+        assert "ZAYA/CCA typed paged prefix cache enabled" in scheduler_source
         assert "ZAYA/CCA cache contract detected but prefix cache is disabled" in scheduler_source
+        assert "and not self._uses_zaya_cache" in scheduler_source
+
+    def test_zaya_cli_policy_default_disables_prefix_paged_l2_and_tq(
+        self, monkeypatch
+    ):
+        from vmlx_engine.cli import _apply_zaya_cca_cache_policy
+
+        monkeypatch.delenv("VMLX_ZAYA_ENABLE_TYPED_CCA_CACHE", raising=False)
+        monkeypatch.setenv("VMLX_FORCE_TQ_AUTO", "1")
+        args = SimpleNamespace(
+            enable_prefix_cache=True,
+            use_paged_cache=True,
+            enable_block_disk_cache=True,
+            kv_cache_quantization="q4",
+        )
+
+        gate, changed = _apply_zaya_cca_cache_policy(args, MagicMock())
+
+        assert gate is False
+        assert changed == ("prefix", "paged", "L2 disk", "kv_quant=q4")
+        assert args.enable_prefix_cache is False
+        assert args.use_paged_cache is False
+        assert args.enable_block_disk_cache is False
+        assert args.kv_cache_quantization == "none"
+        assert args.kv_cache_quantization_explicit is True
+        assert os.environ["VMLX_DISABLE_TQ_KV"] == "1"
+        assert "VMLX_FORCE_TQ_AUTO" not in os.environ
+        os.environ.pop("VMLX_DISABLE_TQ_KV", None)
+
+    def test_zaya_cli_policy_live_gate_keeps_prefix_paged_l2_but_forces_tq_off(
+        self, monkeypatch
+    ):
+        from vmlx_engine.cli import _apply_zaya_cca_cache_policy
+
+        monkeypatch.setenv("VMLX_ZAYA_ENABLE_TYPED_CCA_CACHE", "1")
+        monkeypatch.setenv("VMLX_FORCE_TQ_AUTO", "1")
+        args = SimpleNamespace(
+            enable_prefix_cache=True,
+            use_paged_cache=True,
+            enable_block_disk_cache=True,
+            kv_cache_quantization="q8",
+        )
+
+        gate, changed = _apply_zaya_cca_cache_policy(args, MagicMock())
+
+        assert gate is True
+        assert changed == ("kv_quant=q8",)
+        assert args.enable_prefix_cache is True
+        assert args.use_paged_cache is True
+        assert args.enable_block_disk_cache is True
+        assert args.kv_cache_quantization == "none"
+        assert args.kv_cache_quantization_explicit is True
+        assert os.environ["VMLX_DISABLE_TQ_KV"] == "1"
+        assert "VMLX_FORCE_TQ_AUTO" not in os.environ
+        os.environ.pop("VMLX_DISABLE_TQ_KV", None)
+
+    def test_zaya_cli_policy_live_gate_upgrades_prefix_only_to_paged(
+        self, monkeypatch
+    ):
+        from vmlx_engine.cli import _apply_zaya_cca_cache_policy
+
+        monkeypatch.setenv("VMLX_ZAYA_ENABLE_TYPED_CCA_CACHE", "1")
+        args = SimpleNamespace(
+            enable_prefix_cache=True,
+            use_paged_cache=False,
+            enable_block_disk_cache=False,
+            kv_cache_quantization="none",
+        )
+
+        gate, changed = _apply_zaya_cca_cache_policy(args, MagicMock())
+
+        assert gate is True
+        assert changed == ("paged=required_for_zaya_cca",)
+        assert args.enable_prefix_cache is True
+        assert args.use_paged_cache is True
+        assert args.enable_block_disk_cache is False
+        assert args.kv_cache_quantization == "none"
+        assert args.kv_cache_quantization_explicit is True
+        os.environ.pop("VMLX_DISABLE_TQ_KV", None)
 
     def test_ollama_streaming_suppresses_duplicate_done_chunks(self):
         source = Path("./vmlx_engine/server.py").read_text()
@@ -2977,3 +3060,50 @@ class TestTurboQuantKVTelemetry:
         assert status["generic_turboquant_kv"]["enabled"] is False
         assert status["paged"] is True
         assert status["block_disk_l2"] is True
+
+    def test_native_cache_status_reports_hybrid_ssm(self):
+        from types import SimpleNamespace
+        from vmlx_engine.server import _native_cache_status
+
+        scheduler = SimpleNamespace(
+            _model_type_for_runtime="bailing_hybrid",
+            _is_hybrid=True,
+            _uses_dsv4_cache=False,
+            _uses_zaya_cache=False,
+            _hybrid_kv_positions=[7, 15, 23, 31],
+            _ssm_state_cache=SimpleNamespace(_store={"a": object()}),
+            block_aware_cache=object(),
+            paged_cache_manager=SimpleNamespace(_disk_store=object()),
+        )
+
+        status = _native_cache_status(scheduler)
+
+        assert status["schema"] == "hybrid_ssm_v1"
+        assert status["cache_type"] == "hybrid_ssm_typed"
+        assert status["generic_turboquant_kv"]["enabled"] is False
+        assert status["ssm_entries"] == 1
+        assert status["kv_layer_indices"] == [7, 15, 23, 31]
+
+    def test_native_cache_status_reports_hybrid_tq_override(self, monkeypatch):
+        from types import SimpleNamespace
+        from vmlx_engine.server import _native_cache_status
+
+        scheduler = SimpleNamespace(
+            config=SimpleNamespace(kv_cache_quantization="q4"),
+            _model_type_for_runtime="bailing_hybrid",
+            _is_hybrid=True,
+            _uses_dsv4_cache=False,
+            _uses_zaya_cache=False,
+            _hybrid_kv_positions=[],
+            _ssm_state_cache=SimpleNamespace(_store={}),
+            block_aware_cache=object(),
+            paged_cache_manager=SimpleNamespace(_disk_store=None),
+        )
+        monkeypatch.setenv("VMLX_ALLOW_HYBRID_KV_QUANT", "1")
+
+        status = _native_cache_status(scheduler)
+
+        assert status["generic_turboquant_kv"] == {
+            "enabled": True,
+            "reason": "hybrid_ssm_state_override",
+        }

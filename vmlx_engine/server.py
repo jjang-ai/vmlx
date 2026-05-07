@@ -3030,7 +3030,11 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
             "block_disk_l2": bool(block_disk_store is not None),
         }
 
-    if family_name == "zaya" or cache_subtype == "zaya_cca":
+    if (
+        family_name == "zaya"
+        or cache_subtype == "zaya_cca"
+        or getattr(scheduler, "_uses_zaya_cache", False)
+    ):
         return {
             "family": "zaya",
             "schema": "zaya_cca_v1",
@@ -3045,6 +3049,49 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
             "prefix": bool(block_aware_cache is not None),
             "paged": bool(block_aware_cache is not None and paged_cache_manager is not None),
             "block_disk_l2": bool(block_disk_store is not None),
+        }
+
+    if (
+        getattr(scheduler, "_is_hybrid", False)
+        and not getattr(scheduler, "_uses_dsv4_cache", False)
+        and not getattr(scheduler, "_uses_zaya_cache", False)
+    ):
+        ssm_cache = getattr(scheduler, "_ssm_state_cache", None)
+        ssm_entries = None
+        try:
+            ssm_entries = len(getattr(ssm_cache, "_store", {}) or {})
+        except Exception:
+            pass
+        hybrid_tq_override = str(
+            os.environ.get("VMLX_ALLOW_HYBRID_KV_QUANT", "")
+        ).lower() in ("1", "true", "yes", "on")
+        hybrid_tq_enabled = bool(
+            hybrid_tq_override
+            and getattr(getattr(scheduler, "config", None), "kv_cache_quantization", "none")
+            != "none"
+        )
+        return {
+            "family": family_name or scheduler_family or "hybrid",
+            "schema": "hybrid_ssm_v1",
+            "cache_type": "hybrid_ssm_typed",
+            "components": [
+                "attention_kv",
+                "ssm_companion_state",
+                "async_rederive",
+            ],
+            "generic_turboquant_kv": {
+                "enabled": hybrid_tq_enabled,
+                "reason": (
+                    "hybrid_ssm_state_override"
+                    if hybrid_tq_enabled
+                    else "hybrid_ssm_state"
+                ),
+            },
+            "prefix": bool(block_aware_cache is not None),
+            "paged": bool(block_aware_cache is not None and paged_cache_manager is not None),
+            "block_disk_l2": bool(block_disk_store is not None),
+            "ssm_entries": ssm_entries,
+            "kv_layer_indices": list(getattr(scheduler, "_hybrid_kv_positions", []) or []),
         }
 
     return {}
