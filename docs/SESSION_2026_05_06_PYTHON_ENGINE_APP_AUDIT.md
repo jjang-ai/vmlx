@@ -415,20 +415,82 @@ Audit doc: `docs/AUDIT-THINKING-TEMPLATE-RENDER.md`
 Plan: `docs/superpowers/plans/2026-05-06-thinking-template-render-audit.md`
 Tests: `tests/test_thinking_template_render.py`, `tests/fixtures/thinking_template_models.py`
 
-Verdict (Layer 1, tokenizer-only render): all 8 audited archs honor
-`enable_thinking=False` at the chat-template layer. The 94b16d22 engine-side
-`<think></think>` inject removal is safe to keep removed.
+Verdict (Layer 1, tokenizer-only render): audited local bundles honor
+`enable_thinking=False` at the chat-template layer when rendered with the same
+normalized kwargs as the engine. The blanket engine-side empty-pair append
+removed in 94b16d22 is safe to keep removed, but Simple/Batched still retain a
+narrow fallback that closes an already-open trailing `<think>` when thinking is
+explicitly disabled and tools are absent. Treat that as compatibility debt, not
+as a model-template fix.
 
 Fix landed:
 
-- **Kimi-K2.6-Small-JANGTQ** chat template was checking only the `thinking`
-  variable, not `enable_thinking`. Pre-94b16d22 the engine inject masked
-  the regression. Patched the bundle's `chat_template.jinja` at two sites
-  to OR `(thinking is false) or (enable_thinking is false)`. Backup at
-  `chat_template.jinja.pre-audit-2026-05-06`. Re-verify PASS. Distribution
-  via HF mirror re-upload + future jang_tools conversion script bake-in.
+- Added a shared source-level chat-template kwarg normalizer that mirrors the
+  resolved `enable_thinking` value to both `enable_thinking` and `thinking` for
+  normal tokenizer templates. This handles templates that use the alias without
+  requiring local bundle edits. Processor/VLM paths keep the stricter
+  `enable_thinking`-only shape.
 
 Layer-2 (live engine) deferred to a follow-up cycle for the three
 `think_in_template=False` at-risk archs (Ling-2.6, Nemotron-Omni,
 Gemma-4) — Layer 1 confirms template correctness; Layer 2 catches the
 narrow case where the model auto-thinks despite a coherent prompt.
+
+## §8.6 Post-Claude Source Truth Pass (2026-05-06)
+
+Purpose: verify the 10 local audit commits on top of `94b16d22` and correct
+claims that were not source-level fixes.
+
+Findings:
+
+- The local stack was docs/tests only until this pass. No runtime Kimi source
+  fix had actually landed despite the commit summary claiming a Kimi template
+  patch.
+- Kimi live/runtime work is deferred per user direction. The source-level
+  compatibility fix that did land is model-agnostic: normal tokenizer template
+  rendering now mirrors resolved `enable_thinking` to both `enable_thinking`
+  and `thinking`. This covers templates that use the alias without requiring a
+  local bundle mutation.
+- The prior wording that the engine-side `<think></think>` injection was fully
+  removed was too broad. The blanket empty-pair append is removed; the narrow
+  close-unclosed-`<think>` fallback remains in Simple/Batched when thinking is
+  explicitly off and tools are absent. Track this as compatibility debt.
+
+JANG docs re-read for current compatibility assumptions:
+
+- `/Users/eric/jang/jang-tools/examples/dsv4_flash/README.md`
+- `/Users/eric/jang/jang-tools/examples/dsv4_flash/04_long_context.py`
+- `/Users/eric/jang/jang-tools/examples/zaya/ATTENTION_ARCHITECTURE.md`
+- `/Users/eric/jang/jang-tools/examples/zaya/README.md`
+- `/Users/eric/jang/jang-tools/examples/laguna/README.md`
+- `/Users/eric/jang/jang-tools/examples/nemotron_omni/README.md`
+- `/Users/eric/jang/docs/plans/2026-03-24-turboquant-integration.md`
+
+Compatibility conclusions from that re-read:
+
+- DSV4 has native SWA+CSA/HSA composite cache state. `DSV4_POOL_QUANT` is a
+  DSV4-native compressed-pool codec, not generic TurboQuant KV. Generic
+  q4/q8 KV/TQ-KV must stay forced off for DSV4. Tests pin both scheduler and
+  CLI behavior.
+- ZAYA CCA has standard KV plus `conv_state` and `prev_hs`. Prefix/paged/L2
+  replay is not complete unless all three state families are restored at the
+  same prefix boundary. Current Python policy remains fail-fast plus cache
+  disablement until a real ZAYA runtime lands.
+- Hybrid SSM async re-derive remains source-wired for prompt-only companion
+  state and must be live-tested separately on Ling/Bailing/Nemotron before any
+  release claim says the full matrix is production-verified.
+
+Verification in this pass:
+
+- `.venv/bin/python -m pytest -q tests/test_chat_template_kwargs.py tests/test_thinking_template_render.py tests/test_api_surface_parity.py`
+  → `28 passed, 6 deselected`.
+- `.venv/bin/python -m pytest -q tests/test_engine_audit.py tests/test_vl_video_regression.py tests/test_dsv4_paged_cache.py tests/test_cache_bypass.py tests/test_mcp_security.py tests/test_image_api.py tests/test_chat_template_kwargs.py tests/test_thinking_template_render.py tests/test_api_surface_parity.py`
+  → `882 passed, 48 skipped, 6 deselected`.
+- `.venv/bin/python -m pytest -q`
+  → `2837 passed, 70 skipped, 92 deselected, 2 xpassed`.
+
+GitHub issue state was re-queried with `gh issue list` for both
+`jjang-ai/vmlx` and `jjang-ai/mlxstudio`. The map above remains the release
+truth: several issue classes are fixed in source, but none should be closed
+solely from source tests until a clean signed app/PyPI release is installed and
+the reporter-facing path is reproduced.

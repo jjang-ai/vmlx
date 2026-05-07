@@ -658,7 +658,7 @@ Use the verdicts from Task 4 Step 2 and classifications from Task 5 Step 2. Subs
 
 **Spec:** `/Users/eric/mlx/vllm-mlx/docs/superpowers/specs/2026-05-06-production-audit-design.md` §8.3, §17.3
 **Plan:** `/Users/eric/mlx/vllm-mlx/docs/superpowers/plans/2026-05-06-thinking-template-render-audit.md`
-**Trigger:** Codex commit `94b16d22` removed the empty `<think></think>` inject from `vmlx_engine/engine/{batched,simple}.py` (4 sites). This audit verifies whether the removal regresses `enable_thinking=False` honor for thinking-default models whose chat templates do not natively emit a closed empty `<think></think>` block.
+**Trigger:** Codex commit `94b16d22` removed the blanket empty `<think></think>` append from `vmlx_engine/engine/{batched,simple}.py`. This audit verifies whether that removal regresses `enable_thinking=False` honor for thinking-default models whose chat templates do not natively emit a closed empty `<think></think>` block. Simple/Batched still have a narrow close-unclosed-`<think>` fallback; the audit should identify template behavior before that fallback masks it.
 
 ## Methodology
 
@@ -793,7 +793,7 @@ Verdict: <SAFE-TO-KEEP-REMOVED | PATCHES-APPLIED | BLOCKED>.
 - Bundle template patches applied: <list of archs and bundle paths>
 - `vmlx_engine/model_configs.py` `think_in_template` flag updated for: <list of families> (or "no changes").
 
-Engine-side `<think></think>` inject removal in `94b16d22` is now confirmed by live evidence to be either honored by per-bundle templates natively or by the per-bundle patches recorded in `docs/AUDIT-THINKING-TEMPLATE-RENDER.md`.
+The blanket engine-side `<think></think>` append removed in `94b16d22` is now confirmed by the recorded evidence to be either honored by templates natively or handled by source-level template-kwarg normalization. The remaining close-unclosed-`<think>` fallback is tracked separately as compatibility debt.
 ```
 
 Substitute the actual results from Tasks 4–9.

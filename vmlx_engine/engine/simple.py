@@ -13,6 +13,7 @@ from typing import Any
 
 from ..api.tool_calling import check_and_inject_fallback_tools, convert_tools_for_template
 from ..api.utils import clean_output_text, is_mllm_model
+from ..utils.chat_template_kwargs import build_chat_template_kwargs
 from .base import BaseEngine, GenerationOutput
 
 logger = logging.getLogger(__name__)
@@ -399,27 +400,16 @@ class SimpleEngine(BaseEngine):
                                 except (json.JSONDecodeError, TypeError):
                                     fn["arguments"] = {}
 
-                    tpl_kwargs = {
-                        "tokenize": False,
-                        "add_generation_prompt": not skip_gen_prompt,
-                    }
-                    if thinking_enabled is not None:
-                        tpl_kwargs["enable_thinking"] = thinking_enabled
+                    tpl_kwargs = build_chat_template_kwargs(
+                        enable_thinking=thinking_enabled,
+                        extra=extra_ct_kwargs,
+                        tokenize=False,
+                        add_generation_prompt=not skip_gen_prompt,
+                    )
                     if template_tools:
                         tpl_kwargs["tools"] = template_tools
                     if reasoning_effort:
                         tpl_kwargs["reasoning_effort"] = reasoning_effort
-                    if extra_ct_kwargs:
-                        # Strip reserved keys (Concern #14): tokenize and
-                        # add_generation_prompt are managed by us. A client passing
-                        # tokenize=True via chat_template_kwargs would change the
-                        # return type from str to list[int] and break downstream
-                        # code that expects a string.
-                        _safe_extra = {
-                            k: v for k, v in extra_ct_kwargs.items()
-                            if k not in ("tokenize", "add_generation_prompt")
-                        }
-                        tpl_kwargs.update(_safe_extra)
 
                     try:
                         prompt = tokenizer.apply_chat_template(messages, **tpl_kwargs)
@@ -701,27 +691,16 @@ class SimpleEngine(BaseEngine):
             # Use enable_thinking and reasoning_effort popped at function entry
             # skip_gen_prompt: when prompt_suffix provides the full assistant prefix
             # (e.g. Harmony analysis channel), don't let the template add its own
-            template_kwargs = {
-                "tokenize": False,
-                "add_generation_prompt": not skip_gen_prompt,
-            }
-            if thinking_enabled is not None:
-                template_kwargs["enable_thinking"] = thinking_enabled
+            template_kwargs = build_chat_template_kwargs(
+                enable_thinking=thinking_enabled,
+                extra=extra_ct_kwargs,
+                tokenize=False,
+                add_generation_prompt=not skip_gen_prompt,
+            )
             if template_tools:
                 template_kwargs["tools"] = template_tools
             if reasoning_effort:
                 template_kwargs["reasoning_effort"] = reasoning_effort
-            # Merge extra chat_template_kwargs (e.g. thinking_budget).
-            # Strip reserved keys (Concern #14): tokenize and
-            # add_generation_prompt are managed by us; a client passing them
-            # via chat_template_kwargs would change return type / silently
-            # break downstream code.
-            if extra_ct_kwargs:
-                _safe_extra = {
-                    k: v for k, v in extra_ct_kwargs.items()
-                    if k not in ("tokenize", "add_generation_prompt")
-                }
-                template_kwargs.update(_safe_extra)
 
             try:
                 prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
