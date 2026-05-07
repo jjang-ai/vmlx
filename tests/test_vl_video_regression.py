@@ -8784,8 +8784,26 @@ class TestReasoningParserWiring:
             Path("vmlx_engine/engine/simple.py"),
         ]:
             src = path.read_text()
-            assert 'prompt = prompt[:last_think + 7] + "</think>\\n"' in src
+            assert "ensure_thinking_off_sentinel(" in src
             assert 'prompt.rstrip() + "\\n<think>\\n</think>\\n"' not in src
+
+        from vmlx_engine.utils.chat_template_kwargs import ensure_thinking_off_sentinel
+
+        ling_prompt = "detailed thinking off\n<assistant>\n"
+        assert (
+            ensure_thinking_off_sentinel(ling_prompt, family_name="bailing_hybrid")
+            == ling_prompt
+        )
+
+        open_think_prompt = "<|im_start|>assistant\n<think>\n"
+        assert ensure_thinking_off_sentinel(
+            open_think_prompt, family_name="qwen3_5"
+        ).endswith("<think>\n</think>\n\n")
+
+        minimax_prompt = "]~b]ai\n"
+        assert ensure_thinking_off_sentinel(
+            minimax_prompt, family_name="minimax"
+        ).endswith("<think>\n</think>\n\n")
 
     def test_interleaved_think_and_tool_call(self):
         """Critical: when a model emits both <think>...</think> AND

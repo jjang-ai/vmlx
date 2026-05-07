@@ -110,6 +110,95 @@ def test_zaya_moe_no_state_cache_extracts_and_merges_cleanly():
     )
 
 
+def test_zaya_scheduler_extract_preserves_all_layer_slots():
+    """ZAYA typed restore must keep the 80-layer CCA/MoE schedule aligned.
+
+    Even layers carry CacheList(KVCache, ArraysCache) CCA state. Odd layers
+    carry no recurrent state, but they still occupy a layer slot. Dropping those
+    placeholders would reconstruct a 40-layer cache for an 80-layer model.
+    """
+
+    model = Model(_small_args())
+    cache = model.make_cache()
+    out = model(mx.array([[1, 2, 3]], dtype=mx.int32), cache=cache)
+    mx.eval(out)
+
+    from vmlx_engine.scheduler import Scheduler
+
+    scheduler = Scheduler.__new__(Scheduler)
+    scheduler.model = model
+    extracted = scheduler._extract_cache_states(cache)
+
+    assert len(extracted) == 4
+    assert [row["class_name"] for row in extracted] == [
+        "CacheList",
+        "ZayaNoStateCache",
+        "CacheList",
+        "ZayaNoStateCache",
+    ]
+    assert extracted[1]["no_state"] is True
+    assert extracted[3]["no_state"] is True
+
+
+def test_zaya_no_state_cache_round_trips_through_block_disk_serializer():
+    from vmlx_engine.block_disk_store import _deserialize_block, _serialize_block
+
+    tensors, _dtype, num_layers = _serialize_block(
+        [("no_state", "ZayaNoStateCache")]
+    )
+    restored = _deserialize_block(dict(tensors), _dtype)
+
+    assert num_layers == 1
+    assert restored == [("no_state", "ZayaNoStateCache")]
+
+
+def test_zaya_prompt_cache_restore_preserves_cca_and_no_state_slots():
+    """Prefix/L2 prerequisite: restore KV + CCA state + MoE placeholders.
+
+    This is still a local contract test, not a release claim that ZAYA prefix
+    cache is enabled. It proves the core typed pieces can reconstruct a full
+    cache list and continue generation identically from that restored boundary.
+    """
+
+    mx.random.seed(11)
+    model = Model(_small_args())
+    ids = mx.array([[1, 2, 3, 4]], dtype=mx.int32)
+
+    cold_cache = model.make_cache()
+    cold_logits = model(ids, cache=cold_cache)
+    mx.eval(cold_logits)
+
+    from vmlx_engine.paged_cache import PagedCacheManager
+    from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+    from vmlx_engine.scheduler import Scheduler
+
+    scheduler = Scheduler.__new__(Scheduler)
+    scheduler.model = model
+    extracted = scheduler._extract_cache_states(cold_cache)
+
+    prefix = BlockAwarePrefixCache(
+        model=model,
+        paged_cache_manager=PagedCacheManager(block_size=8, max_blocks=8),
+    )
+    table = prefix.store_cache("zaya-restore", [1, 2, 3, 4], extracted)
+    restored_cache = prefix.reconstruct_cache(table)
+
+    assert restored_cache is not None
+    assert len(restored_cache) == 4
+    assert type(restored_cache[0]).__name__ == "CacheList"
+    assert isinstance(restored_cache[1], ZayaNoStateCache)
+    assert type(restored_cache[2]).__name__ == "CacheList"
+    assert isinstance(restored_cache[3], ZayaNoStateCache)
+
+    next_ids = mx.array([[5]], dtype=mx.int32)
+    cold_next = model(next_ids, cache=cold_cache)
+    restored_next = model(next_ids, cache=restored_cache)
+    mx.eval(cold_next, restored_next)
+
+    diff = mx.max(mx.abs(cold_next.astype(mx.float32) - restored_next.astype(mx.float32)))
+    assert diff.item() == 0.0
+
+
 def test_zaya_batch_generator_finishes_with_moe_no_state_cache():
     """Finished ZAYA generations must be able to return prompt_cache.
 

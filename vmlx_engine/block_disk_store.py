@@ -762,6 +762,7 @@ def _serialize_block(
       layer_{i}_max_size, layer_{i}_keep          — rotating kv params
       layer_{i}_cumulative_{j}                    — cumulative state arrays
       layer_{i}_dsv4_state_{j}                    — DSV4 nested state arrays
+      layer_{i}_no_state                           — explicit no-state layer
 
     Returns:
         (tensor_dict, dtype_string, num_layers_with_data)
@@ -838,6 +839,11 @@ def _serialize_block(
                     }
                     sub_count += 1
             meta.setdefault(str(i), {})["sub_count"] = len(sub_slices)
+
+        elif tag == "no_state":
+            _, class_name = layer_data
+            tensors[f"layer_{i}_no_state"] = mx.array([1], dtype=mx.int8)
+            meta[str(i)] = {"class_name": class_name}
 
         elif tag == "cumulative":
             _, state_list, layer_meta, class_name = layer_data
@@ -1039,6 +1045,10 @@ def _deserialize_block(
                 else:
                     sub_slices.append(("skip",))
             cache_data.append(("cache_list", sub_slices))
+
+        elif layer_type == "no_state":
+            layer_meta_dict = meta.get(str(i), {})
+            cache_data.append(("no_state", layer_meta_dict.get("class_name", "")))
 
         elif layer_type == "cumulative":
             layer_meta_dict = meta.get(str(i), {})

@@ -2668,6 +2668,17 @@ class Scheduler:
                         )
                     else:
                         failed += 1
+                elif type(layer_cache).__name__ == "ZayaNoStateCache":
+                    cls_name = type(layer_cache).__name__
+                    class_counts[cls_name] = class_counts.get(cls_name, 0) + 1
+                    extracted.append(
+                        {
+                            "state": (),
+                            "meta_state": (),
+                            "class_name": cls_name,
+                            "no_state": True,
+                        }
+                    )
                 # MambaCache/ArraysCache: cumulative state (SSM layers in hybrid models).
                 # Cannot be sliced by token position, but CAN be stored as cumulative
                 # state in the last block.  _extract_block_tensor_slice() tags these as

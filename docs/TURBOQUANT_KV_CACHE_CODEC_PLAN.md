@@ -80,9 +80,29 @@ should receive generic TQ-KV by default.
   live encode/decode/cache-hit proof. Hybrid families require typed partial
   codecs, not a generic wrapper.
 
+### 2026-05-07 ZAYA typed-restore prerequisite
+
+ZAYA remains cache-disabled by default, but the first typed-restore prerequisite
+is now implemented in source:
+
+- ZAYA odd MoE layers are extracted and serialized as explicit `no_state`
+  records so restore keeps the full 80-layer CCA/MoE schedule aligned.
+- `cache_list` restore reconstructs standard KV plus CCA cumulative
+  `ArraysCache` substate without aliasing the original live cache.
+- Cumulative state trees are copied on store and restore; an in-memory prefix
+  hit cannot borrow mutable `conv_state`/`prev_hs` leaves from the request that
+  created the block.
+- Local contract coverage now proves prompt snapshot -> restore -> continuation
+  logits for the small ZAYA runtime, plus validator/prefix/block-disk and
+  hybrid/DSV4/SSM cache suites.
+
+This is not a production enablement of ZAYA prefix/paged/L2. The remaining
+release gate is live full-model ZAYA cache-hit, L2-restart, multi-turn, and
+tool-row coverage with a typed `zaya_cca` schema and health stats.
+
 | # | Item | Status |
 |---|---|---|
-| 1 | Typed records per family (`kv`, `rotating_kv`, `quantized_kv`, `deepseek_v4`, `cumulative`, `cache_list`) | EXISTS (today). Add `turboquant_kv` tag in this design. |
+| 1 | Typed records per family (`kv`, `rotating_kv`, `quantized_kv`, `deepseek_v4`, `cumulative`, `cache_list`, `no_state`) | EXISTS (today). Add `turboquant_kv` and future `zaya_cca` tags in this design. |
 | 2 | DSV4 N-1 clean prompt-boundary snapshot | EXISTS (`scheduler.py` "DSV4 prefix cache store using clean prompt-boundary snapshot"). Add validator on the snapshot itself. |
 | 3 | DSV4 composite: SWA quantize, CSA/HSA native, terminal-only restore | EXISTS partially. CSA/HSA stay native today. Pending markers rejected at fetch (`prefix_cache.py:1172`). |
 | 4 | Restore-path validation, no-hundreds-of-GB allocation | **DONE in this commit (CR4).** |
