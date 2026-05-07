@@ -286,7 +286,7 @@ _FALLBACK_TOP_P = 0.9
 # Per-family entries are (temperature, top_p, repetition_penalty); None
 # fields fall through to the generic _FALLBACK_*.
 _FAMILY_FALLBACK_DEFAULTS: dict[str, tuple[float | None, float | None, float | None]] = {
-    # DSV4-Flash safety floor.
+    # DSV4-Flash bundle fallback.
     #
     # Three independent loop sources converge on DSV4-Flash and any one
     # of them is enough to produce a deterministic attractor at the
@@ -306,10 +306,11 @@ _FAMILY_FALLBACK_DEFAULTS: dict[str, tuple[float | None, float | None, float | N
     #     within a single turn (no cache reuse, no chat mode) — most
     #     visible on short-query prompts. Defended here.
     #
-    # 1.15 was the validated value from v1.5.8 (44c571a6). Production
-    # users keep it; benchmark users override per-request to 1.05 to
-    # match the 91% MMLU baseline. ~3pp MMLU trade-off documented.
-    "deepseek_v4": (0.6, 0.95, 1.15),
+    # The DSV4 converter documents the mode split: thinking rail must stay
+    # neutral (`repetition_penalty_thinking=1.0`) or the model can fail to
+    # close </think>. Chat/direct rail uses the bundle's chat default when
+    # jang_config is present.
+    "deepseek_v4": (0.6, 0.95, 1.0),
 
     # MiniMax-M2.7 safety floor.
     #
@@ -395,24 +396,6 @@ def _strip_think_for_tool_parse(text: str) -> str:
                 _, _, stripped = text.partition(end_tag)
                 break
     return stripped.strip()
-
-
-def _dsv4_visible_content_fallback(
-    content: str | None,
-    reasoning: str | None,
-    *,
-    is_dsv4: bool,
-    suppress_reasoning: bool,
-) -> str | None:
-    """Surface DSV4 reasoning-only non-stream completions as visible text."""
-    if (
-        is_dsv4
-        and not suppress_reasoning
-        and not (content or "").strip()
-        and (reasoning or "").strip()
-    ):
-        return reasoning
-    return content
 
 
 def _dsv4_split_reasoning_from_token_ids(
@@ -567,19 +550,36 @@ def _jang_chat_default_mode(bundle_path: str) -> str | None:
         return None
 
 
-def _bundle_repetition_penalty_keys(bundle_path: str) -> tuple[str, ...]:
+def _bundle_repetition_penalty_keys(
+    bundle_path: str,
+    *,
+    enable_thinking: bool | None = None,
+) -> tuple[str, ...]:
     """Mode-aware lookup order for `_bundle_sampling_default`.
 
     Bundles split `repetition_penalty_thinking` vs `_chat` because the
-    right value differs by reasoning mode. DSV4 bundles may omit
-    ``chat.reasoning.default_mode`` even though their audited default is the
-    thinking rail; in that case prefer the thinking penalty over generic UI
-    launch defaults.
+    right value differs by reasoning mode. DSV4 is special because the API
+    layer force-routes the default user path through the thinking rail even
+    when the bundle metadata says ``default_mode="chat"``; using the chat
+    penalty there is wrong, and forcing a higher generic floor prevents the
+    model from closing ``</think>`` on long prompts.
     """
+    family = _model_family_for_defaults(bundle_path)
+    if family == "deepseek_v4":
+        if enable_thinking is False:
+            return (
+                "repetition_penalty_chat",
+                "repetition_penalty",
+                "repetition_penalty_thinking",
+            )
+        return (
+            "repetition_penalty_thinking",
+            "repetition_penalty",
+            "repetition_penalty_chat",
+        )
+
     mode = _jang_chat_default_mode(bundle_path)
-    if mode == "thinking" or (
-        mode is None and _model_family_for_defaults(bundle_path) == "deepseek_v4"
-    ):
+    if mode == "thinking":
         return (
             "repetition_penalty_thinking",
             "repetition_penalty_chat",
@@ -726,7 +726,26 @@ def _resolve_max_tokens(request_value: int | None, model_name: str = "") -> int:
     return _default_max_tokens
 
 
-def _resolve_repetition_penalty(request_value: float | None, model_name: str = "") -> float | None:
+def _normalize_dsv4_reasoning_effort(effort: str | None) -> str | None:
+    """Map public effort names onto the stable DSV4 encoder rail.
+
+    DSV4's bundled ``reasoning_effort="max"`` template asks for an unbounded
+    deliberation trace and live-probes length-cap without emitting
+    ``</think>``. The capabilities endpoint therefore does not advertise Max
+    for this family. If a client still sends max/medium/high/low, keep thinking
+    enabled but use the stable standard-thinking rail.
+    """
+    if effort in ("low", "medium", "high", "max"):
+        return "high"
+    return None
+
+
+def _resolve_repetition_penalty(
+    request_value: float | None,
+    model_name: str = "",
+    *,
+    enable_thinking: bool | None = None,
+) -> float | None:
     """Resolve repetition penalty: request > [DSV4 bundle override] >
     CLI default > jang_config bundle default > family fallback > None.
 
@@ -735,35 +754,15 @@ def _resolve_repetition_penalty(request_value: float | None, model_name: str = "
     implicit 1.0 (no penalty). When a value is returned, the caller should
     include it in chat_kwargs.
 
-    Special-case for DeepSeek V4 family: bundle-declared chat defaults win
-    over generic CLI/UI defaults. Current DSV4 Flash JANGTQ bundles use a
-    higher thinking penalty than chat to avoid duplicate/paraphrase reasoning
-    loops. Per-request non-default values still override everything.
-
-    DSV4 SAFETY FLOOR (2026-05-05): bundles in the wild ship
-    repetition_penalty_thinking=1.0 and repetition_penalty_chat=1.05 which
-    are both confirmed to produce degenerate repetition loops on long-form
-    prompts (live user reports of "(the project (the project ...",
-    "response\\nresponse\\n...", and "birth, birth, birth, birth..." loops).
-    v1.5.8-followup explicitly bumped family fallback to 1.15 with this
-    exact wording: "Bumping rep_penalty to 1.15 short-circuits the loop in
-    300-400 tokens. Trade-off: ~3 pp MMLU on the standard 200-Q evaluation;
-    users running benchmarks can override per-request with
-    `repetition_penalty: 1.05`." A later commit removed the bandaid on a
-    theory that the scheduler.py:768 cache cumulative-state fix was the
-    only root cause. That theory was wrong — loops returned in production.
-    1.10 was tested live 2026-05-05 and STILL produced "birth, birth..."
-    loops on max-thinking DSV4 prompts. 1.15 is the empirically validated
-    threshold from v1.5.8-followup; restore it. Per-request override
-    (including benchmark-style 1.05) bypasses the floor entirely.
+    Special-case for DeepSeek V4 family: bundle-declared mode-specific chat
+    defaults win over generic CLI/UI defaults. Current DSV4 Flash metadata
+    deliberately splits ``repetition_penalty_thinking=1.0`` from
+    ``repetition_penalty_chat=1.05``; the converter documents that values
+    above 1.0 on the thinking rail make the model fail to close ``</think>``.
     """
-    # Previously this function early-returned the
-    # request_value (or stale-default-replacement) without ever hitting
-    # the safety floor below. Stale UI defaults like 1.0 from the panel
-    # would resolve to bundle's 1.0 and ship to the engine, bypassing the
-    # DSV4/MiniMax 1.15 floor. Now: collect `resolved`, then run the
-    # floor enforcement at the end for ALL paths except genuine non-stale
-    # explicit overrides.
+    # Resolve first, then apply the MiniMax/Ling floor at the end. DSV4 is
+    # intentionally excluded from that floor because its thinking rail has a
+    # stricter bundle-declared neutral penalty requirement.
     _bundle_path = _model_path or model_name
     resolved: float | None = None
     is_explicit_override = False  # retained for diagnostics; floors are mandatory
@@ -775,7 +774,10 @@ def _resolve_repetition_penalty(request_value: float | None, model_name: str = "
         ):
             # Stale UI default — replace with bundle value (still goes
             # through the floor below).
-            for _key in _bundle_repetition_penalty_keys(model_name):
+            for _key in _bundle_repetition_penalty_keys(
+                model_name,
+                enable_thinking=enable_thinking,
+            ):
                 _v = _bundle_sampling_default(model_name, _key)
                 if _v is not None:
                     resolved = _v
@@ -792,7 +794,10 @@ def _resolve_repetition_penalty(request_value: float | None, model_name: str = "
     else:
         # DSV4-only: bundle calibrated value wins over CLI default.
         if _bundle_overrides_generic_cli_defaults(model_name):
-            for _key in _bundle_repetition_penalty_keys(_bundle_path):
+            for _key in _bundle_repetition_penalty_keys(
+                _bundle_path,
+                enable_thinking=enable_thinking,
+            ):
                 _v = _bundle_sampling_default(_bundle_path, _key)
                 if _v is not None:
                     resolved = _v
@@ -800,7 +805,10 @@ def _resolve_repetition_penalty(request_value: float | None, model_name: str = "
         if resolved is None and _default_repetition_penalty is not None:
             resolved = _default_repetition_penalty
         if resolved is None:
-            for _key in _bundle_repetition_penalty_keys(_bundle_path):
+            for _key in _bundle_repetition_penalty_keys(
+                _bundle_path,
+                enable_thinking=enable_thinking,
+            ):
                 _v = _bundle_sampling_default(_bundle_path, _key)
                 if _v is not None:
                     resolved = _v
@@ -811,29 +819,11 @@ def _resolve_repetition_penalty(request_value: float | None, model_name: str = "
 
     # MIN-floor enforcement for safety-critical families.
     #
-    # DSV4 + MiniMax bundles ship `repetition_penalty=1.0` (thinking) or
-    # 1.05 (chat) in jang_config. Both are confirmed to produce
-    # degenerate repetition loops on long-form prompts (live user
-    # reports 2026-05-05: VC-fund Project Plan request → "Plan and
-    # Plan and Plan ... ( ( ( ( ( ( (" attractor at ~1000 chars of
-    # thinking; "birth, birth, birth..."; "(the project (the
-    # project..."; "response\\nresponse..."). Bundle calibration wins
-    # over family fallback in the precedence chain above, so simply
-    # listing 1.15 in `_FAMILY_FALLBACK_DEFAULTS` is not enough — the
-    # bundle's 1.0 wins.
-    #
-    # Apply a hard MIN-floor for these families. This intentionally applies
-    # to request values too: the panel frequently sends persisted generic
-    # defaults (1.0/1.05/1.10) as if they were explicit user choices, and
-    # letting those bypass the floor reintroduces the exact Ling/DSV4/MiniMax
-    # loop failures this resolver exists to prevent.
-    #
-    # Trade-off: ~3pp MMLU on benchmark-style probes. Override per-
-    # request with `repetition_penalty=1.05` or run with
-    # `--default-repetition-penalty=1.05` only when you know your
-    # prompts won't trigger the long-context attractor. This MIN-floor
-    # protects the default user path.
-    _SAFETY_FLOORS = {"deepseek_v4": 1.15, "minimax_m2": 1.15, "ling": 1.15}
+    # MiniMax and Ling still need a floor for known model-level rumination
+    # loops. DSV4 does NOT: its own bundle stamp says the thinking rail must
+    # stay neutral, and live matrix rows fail when a generic 1.15 floor is
+    # forced onto thinking mode.
+    _SAFETY_FLOORS = {"minimax_m2": 1.15, "ling": 1.15}
     _family = _model_family_for_defaults(_bundle_path or model_name)
     _floor = _SAFETY_FLOORS.get(_family)
     if (
@@ -842,13 +832,38 @@ def _resolve_repetition_penalty(request_value: float | None, model_name: str = "
         and resolved < _floor
     ):
         logger.info(
-            f"DSV4/MiniMax/Ling safety floor applied: rep_penalty="
+            f"MiniMax/Ling safety floor applied: rep_penalty="
             f"{resolved} raised to family floor {_floor} "
             f"(family={_family}, explicit_request={is_explicit_override})."
         )
         resolved = _floor
 
     return resolved
+
+
+def _set_resolved_repetition_penalty(
+    target: dict,
+    request_value: float | None,
+    model_name: str = "",
+    *,
+    enable_thinking: bool | None = None,
+) -> None:
+    """Write the final repetition penalty into generation kwargs.
+
+    Some families, notably DSV4, have mode-specific bundle defaults. API
+    handlers initially build generic kwargs before family routing is finalized,
+    so DSV4 blocks call this again after the final enable_thinking rail is
+    known.
+    """
+    _rp = _resolve_repetition_penalty(
+        request_value,
+        model_name,
+        enable_thinking=enable_thinking,
+    )
+    if _rp is not None:
+        target["repetition_penalty"] = _rp
+    else:
+        target.pop("repetition_penalty", None)
 
 
 def _compute_bypass_prefix_cache(request_obj) -> bool:
@@ -4342,20 +4357,25 @@ async def create_anthropic_message(
                 chat_req.enable_thinking = True
             _msg_kwargs["enable_thinking"] = True
             _ct_kwargs["enable_thinking"] = True
-        # Pass valid effort levels through to the DSV4 encoder. The
-        # encoder's strict contract is `reasoning_effort in {None, "high",
-        # "max"}`. Previously this code stripped EVERYTHING that wasn't
-        # "max" — so panel's "Reasoning" middle button (which sends
-        # thinking_mode="reasoning" → reasoning_effort="medium") had its
-        # effort hint dropped entirely, leaving the model in default
-        # plain-thinking mode with no budget/close discipline. Fix:
-        # normalize "low"/"medium"/"high" to "high" (the encoder's only
-        # non-max option) so the effort hint actually reaches the
-        # template.
-        if _cur_effort == "max":
-            _ct_kwargs["reasoning_effort"] = "max"
-        elif _cur_effort in ("low", "medium", "high"):
-            _ct_kwargs["reasoning_effort"] = "high"
+        _set_resolved_repetition_penalty(
+            _msg_kwargs,
+            chat_req.repetition_penalty,
+            chat_req.model,
+            enable_thinking=_msg_kwargs.get("enable_thinking"),
+        )
+        # Pass only the stable DSV4 effort rail through to the encoder.
+        # Live probes show the bundle's raw max rail length-caps without
+        # closing </think>, even with 4096 output tokens. The public
+        # capability surface therefore does not advertise max for DSV4;
+        # normalize stale/advanced clients onto the verified rail too.
+        _stable_effort = _normalize_dsv4_reasoning_effort(_cur_effort)
+        if _stable_effort:
+            if _cur_effort == "max":
+                logger.info(
+                    "DSV4: reasoning_effort=max requested; using stable "
+                    "standard-thinking rail."
+                )
+            _ct_kwargs["reasoning_effort"] = _stable_effort
         else:
             _ct_kwargs.pop("reasoning_effort", None)
 
@@ -5100,10 +5120,20 @@ async def ollama_chat(fastapi_request: Request):
                 chat_req.enable_thinking = True
             chat_kwargs["enable_thinking"] = True
             _ollama_ct_kwargs["enable_thinking"] = True
-        if _cur_effort_o == "max":
-            _ollama_ct_kwargs["reasoning_effort"] = "max"
-        elif _cur_effort_o in ("low", "medium", "high"):
-            _ollama_ct_kwargs["reasoning_effort"] = "high"
+        _set_resolved_repetition_penalty(
+            chat_kwargs,
+            chat_req.repetition_penalty,
+            chat_req.model,
+            enable_thinking=chat_kwargs.get("enable_thinking"),
+        )
+        _stable_effort_o = _normalize_dsv4_reasoning_effort(_cur_effort_o)
+        if _stable_effort_o:
+            if _cur_effort_o == "max":
+                logger.info(
+                    "DSV4 (Ollama): reasoning_effort=max requested; "
+                    "using stable standard-thinking rail."
+                )
+            _ollama_ct_kwargs["reasoning_effort"] = _stable_effort_o
         else:
             _ollama_ct_kwargs.pop("reasoning_effort", None)
         # Forward the resolved chat_template_kwargs so DSV4 encoder sees them.
@@ -6887,10 +6917,20 @@ async def create_chat_completion(
                 request.enable_thinking = True
             chat_kwargs["enable_thinking"] = True
             _ct_kwargs["enable_thinking"] = True
-        if _cur_effort == "max":
-            _ct_kwargs["reasoning_effort"] = "max"
-        elif _cur_effort in ("low", "medium", "high"):
-            _ct_kwargs["reasoning_effort"] = "high"
+        _set_resolved_repetition_penalty(
+            chat_kwargs,
+            request.repetition_penalty,
+            request.model,
+            enable_thinking=chat_kwargs.get("enable_thinking"),
+        )
+        _stable_effort = _normalize_dsv4_reasoning_effort(_cur_effort)
+        if _stable_effort:
+            if _cur_effort == "max":
+                logger.info(
+                    "DSV4: reasoning_effort=max requested; using stable "
+                    "standard-thinking rail."
+                )
+            _ct_kwargs["reasoning_effort"] = _stable_effort
         else:
             _ct_kwargs.pop("reasoning_effort", None)
 
@@ -7144,12 +7184,6 @@ async def create_chat_completion(
             if not content_for_parsing and reasoning_text:
                 content_for_parsing = reasoning_text
             reasoning_text = None
-        content_for_parsing = _dsv4_visible_content_fallback(
-            content_for_parsing,
-            reasoning_text,
-            is_dsv4=_is_dsv4,
-            suppress_reasoning=_suppress,
-        )
 
         # Post-parse cleaning: the parser operates on raw_text which carries
         # special markers (Gemma 4 `<|channel>`/`<channel|>`/`<turn|>`, Qwen
@@ -7950,6 +7984,12 @@ async def create_response(
                 request.enable_thinking = True
             chat_kwargs["enable_thinking"] = True
             _ct_kwargs["enable_thinking"] = True
+        _set_resolved_repetition_penalty(
+            chat_kwargs,
+            request.repetition_penalty,
+            request.model,
+            enable_thinking=chat_kwargs.get("enable_thinking"),
+        )
 
         # (b) reasoning_effort handling — DSV4 encoder only injects the
         #     REASONING_EFFORT_MAX template at index 0 when effort=='max'.
@@ -7962,10 +8002,14 @@ async def create_response(
             or _ct_kwargs.get("reasoning_effort")
         )
         _ct_kwargs.pop("thinking_mode", None)
-        if _cur_resp_effort == "max":
-            _ct_kwargs["reasoning_effort"] = "max"
-        elif _cur_resp_effort in ("low", "medium", "high"):
-            _ct_kwargs["reasoning_effort"] = "high"
+        _stable_resp_effort = _normalize_dsv4_reasoning_effort(_cur_resp_effort)
+        if _stable_resp_effort:
+            if _cur_resp_effort == "max":
+                logger.info(
+                    "DSV4 (/v1/responses): reasoning_effort=max requested; "
+                    "using stable standard-thinking rail."
+                )
+            _ct_kwargs["reasoning_effort"] = _stable_resp_effort
         else:
             _ct_kwargs.pop("reasoning_effort", None)
 
@@ -8332,12 +8376,6 @@ async def create_response(
             if not content_for_parsing and reasoning_text:
                 content_for_parsing = reasoning_text
             reasoning_text = None
-        content_for_parsing = _dsv4_visible_content_fallback(
-            content_for_parsing,
-            reasoning_text,
-            is_dsv4=_is_dsv4_resp_msgs,
-            suppress_reasoning=_suppress,
-        )
 
         # Post-parse cleaning — matches the chat_completions path so content
         # emitted by /v1/responses is stripped of residual `<channel|>`,

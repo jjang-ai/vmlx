@@ -456,8 +456,9 @@ class TestServerForwarding:
         """DSV4 bundles carry calibrated sampling defaults.
 
         The panel can still launch with generic --default-repetition-penalty
-        1.10. For DSV4 only, the bundle's 1.15 thinking penalty must win or
-        the model can fall into duplicate/paraphrase reasoning loops.
+        1.10. For DSV4 only, the bundle's thinking penalty must win because
+        the DSV4 converter documents that thinking mode fails to close
+        `</think>` when a higher generic floor is forced.
         """
         from vmlx_engine import server
 
@@ -469,7 +470,7 @@ class TestServerForwarding:
                 {
                     "chat": {
                         "sampling_defaults": {
-                            "repetition_penalty_thinking": 1.15,
+                            "repetition_penalty_thinking": 1.0,
                             "repetition_penalty_chat": 1.05,
                         }
                     }
@@ -481,7 +482,7 @@ class TestServerForwarding:
         monkeypatch.setattr(server, "_default_repetition_penalty", 1.10)
         server._jang_sampling_defaults_cache.clear()
 
-        assert server._resolve_repetition_penalty(None, str(tmp_path)) == 1.15
+        assert server._resolve_repetition_penalty(None, str(tmp_path)) == 1.0
 
     def test_dsv4_paged_block_disk_cache_is_not_force_disabled(self):
         """DSV4 paged cache must use the dedicated composite-state path.

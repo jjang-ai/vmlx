@@ -49,6 +49,31 @@ def test_responses_reasoning_alias_and_thinking_mode():
     assert nested.reasoning_effort == "high"
 
 
+def test_dsv4_max_effort_normalizes_to_stable_rail():
+    """DSV4's raw max rail is not production-safe.
+
+    Public request models can still carry reasoning_effort="max" for generic
+    API compatibility, but DSV4 routing must normalize it before the encoder
+    gets called.
+    """
+    from vmlx_engine import server
+    from vmlx_engine.loaders import dsv4_chat_encoder
+
+    assert server._normalize_dsv4_reasoning_effort("low") == "high"
+    assert server._normalize_dsv4_reasoning_effort("medium") == "high"
+    assert server._normalize_dsv4_reasoning_effort("high") == "high"
+    assert server._normalize_dsv4_reasoning_effort("max") == "high"
+    assert server._normalize_dsv4_reasoning_effort(None) is None
+    assert dsv4_chat_encoder._resolve_mode_and_effort(True, "max") == (
+        "thinking",
+        "high",
+    )
+    assert dsv4_chat_encoder._resolve_mode_and_effort(None, "max") == (
+        "thinking",
+        "high",
+    )
+
+
 def test_invalid_thinking_mode_rejected():
     from vmlx_engine.api.models import ChatCompletionRequest
 
@@ -58,42 +83,6 @@ def test_invalid_thinking_mode_rejected():
             messages=[{"role": "user", "content": "hi"}],
             thinking_mode="slider-72",
         )
-
-
-def test_dsv4_reasoning_only_nonstream_falls_back_to_visible_content():
-    from vmlx_engine import server
-
-    text = server._dsv4_visible_content_fallback(
-        "",
-        "Project plan draft",
-        is_dsv4=True,
-        suppress_reasoning=False,
-    )
-
-    assert text == "Project plan draft"
-
-
-def test_dsv4_reasoning_only_fallback_respects_suppression_and_family():
-    from vmlx_engine import server
-
-    assert server._dsv4_visible_content_fallback(
-        "",
-        "hidden",
-        is_dsv4=True,
-        suppress_reasoning=True,
-    ) == ""
-    assert server._dsv4_visible_content_fallback(
-        "",
-        "hidden",
-        is_dsv4=False,
-        suppress_reasoning=False,
-    ) == ""
-    assert server._dsv4_visible_content_fallback(
-        "visible",
-        "hidden",
-        is_dsv4=True,
-        suppress_reasoning=False,
-    ) == "visible"
 
 
 def test_dsv4_token_id_split_uses_close_marker_boundary():
@@ -145,7 +134,8 @@ def test_dsv4_bundle_defaults_override_stale_ui_defaults(tmp_path, monkeypatch):
                 "temperature": 0.6,
                 "top_p": 0.95,
                 "max_new_tokens": 4096,
-                "repetition_penalty_thinking": 1.15,
+                "repetition_penalty_thinking": 1.0,
+                "repetition_penalty_chat": 1.05,
             }
         }
     }))
@@ -160,14 +150,14 @@ def test_dsv4_bundle_defaults_override_stale_ui_defaults(tmp_path, monkeypatch):
 
     assert server._resolve_temperature(0.7) == 0.6
     assert server._resolve_top_p(1.0) == 0.95
-    assert server._resolve_repetition_penalty(1.10) == 1.15
+    assert server._resolve_repetition_penalty(1.10, enable_thinking=True) == 1.0
     assert server._resolve_max_tokens(None) == 4096
 
     # Non-generic explicit values are preserved.
     assert server._resolve_temperature(0.2) == 0.2
     assert server._resolve_top_p(0.8) == 0.8
     assert server._resolve_repetition_penalty(1.25) == 1.25
-    assert server._resolve_repetition_penalty(1.05) == 1.15
+    assert server._resolve_repetition_penalty(1.05, enable_thinking=True) == 1.0
 
 
 def test_ling_stamped_bailing_family_gets_ling_safety_floor(tmp_path, monkeypatch):
