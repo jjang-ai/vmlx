@@ -82,6 +82,77 @@ def _warn_unknown_prepare_kwarg(name: str) -> None:
     )
 
 
+def _safe_finalize_prompt_cache_entry(cache) -> None:
+    """Finalize a batched prompt cache entry, tolerating unused KV slots.
+
+    mlx-lm's ``BatchKVCache`` and ``BatchRotatingKVCache`` finalize paths assume
+    that ``update_and_fetch`` has allocated ``keys``/``values`` whenever right
+    padding was prepared. Hybrid models can violate that assumption after a
+    recovery/reschedule cycle or when a cache list contains structural slots
+    that are not written by the current forward path. In that empty case there
+    is no tensor to roll; clearing the pending padding metadata is the correct
+    finalized empty state.
+    """
+    if cache is None:
+        return
+
+    # CacheList-like wrappers: finalize sub-caches independently.
+    sub_caches = getattr(cache, "caches", None)
+    if sub_caches is not None:
+        for sub_cache in sub_caches:
+            _safe_finalize_prompt_cache_entry(sub_cache)
+        return
+
+    if getattr(cache, "keys", None) is None and type(cache).__name__ in (
+        "BatchKVCache",
+        "BatchRotatingKVCache",
+    ):
+        if hasattr(cache, "_right_padding"):
+            cache._right_padding = None
+        if hasattr(cache, "_lengths"):
+            cache._lengths = None
+        return
+
+    finalize = getattr(cache, "finalize", None)
+    if callable(finalize):
+        finalize()
+
+
+def _patch_empty_batch_kv_extract() -> None:
+    """Backport empty-cache ``extract`` handling for mlx-lm batch caches."""
+    try:
+        from mlx_lm.models.cache import (
+            BatchKVCache,
+            BatchRotatingKVCache,
+            KVCache,
+            RotatingKVCache,
+        )
+    except Exception:
+        return
+
+    if not getattr(BatchKVCache.extract, "_vmlx_empty_extract_patched", False):
+        _orig_kv_extract = BatchKVCache.extract
+
+        def _kv_extract_empty_safe(self, idx):
+            if getattr(self, "keys", None) is None:
+                return KVCache()
+            return _orig_kv_extract(self, idx)
+
+        _kv_extract_empty_safe._vmlx_empty_extract_patched = True
+        BatchKVCache.extract = _kv_extract_empty_safe
+
+    if not getattr(BatchRotatingKVCache.extract, "_vmlx_empty_extract_patched", False):
+        _orig_rot_extract = BatchRotatingKVCache.extract
+
+        def _rot_extract_empty_safe(self, idx):
+            if getattr(self, "keys", None) is None:
+                return RotatingKVCache(self.max_size)
+            return _orig_rot_extract(self, idx)
+
+        _rot_extract_empty_safe._vmlx_empty_extract_patched = True
+        BatchRotatingKVCache.extract = _rot_extract_empty_safe
+
+
 class BatchMambaCache(MambaCache):
     """
     Batch-aware MambaCache for continuous batching.
@@ -559,6 +630,7 @@ def ensure_mamba_support():
         return
     with _patch_lock:
         if not _patched:
+            _patch_empty_batch_kv_extract()
             patch_mlx_lm_for_mamba()
             _patch_prompt_cache_sync()
             _patch_generation_step_sync()
@@ -794,7 +866,7 @@ def _patch_prompt_cache_sync():
                 tokens_arr = tokens_arr[:, n_to_process:]
             if max_padding > 0:
                 for c in self.prompt_cache:
-                    c.finalize()
+                    _safe_finalize_prompt_cache_entry(c)
                 if hasattr(mx, "synchronize"):
                     mx.synchronize()
                 if hasattr(mx, "clear_cache"):

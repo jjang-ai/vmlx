@@ -493,10 +493,16 @@ class Scheduler:
             except Exception as _e:
                 logger.warning(f"Failed to init hybrid SSM cache layout: {_e}")
         elif self._is_hybrid and not self._uses_dsv4_cache:
-            logger.info(
-                "Hybrid SSM cache detected but prefix cache is disabled; "
-                "SSM companion lookup/store/re-derive is disabled for this run"
-            )
+            if self._model_type_for_runtime == "zaya":
+                logger.info(
+                    "ZAYA/CCA cache contract detected but prefix cache is disabled; "
+                    "CCA prompt-state lookup/store/re-derive is disabled for this run"
+                )
+            else:
+                logger.info(
+                    "Hybrid SSM cache detected but prefix cache is disabled; "
+                    "SSM companion lookup/store/re-derive is disabled for this run"
+                )
 
         # Prompt lookup decoding — measurement state (Phase 1)
         # Maps request_id -> (draft_tokens, expected_start_output_idx, hit_count)
@@ -1668,6 +1674,18 @@ class Scheduler:
         """
         return self._actual_tokenizer.decode(token_ids)
 
+    @staticmethod
+    def _encode_prompt_text(tokenizer: Any, prompt: str, add_special_tokens: Optional[bool]) -> List[int]:
+        """Encode a scheduler prompt with optional explicit special-token mode."""
+        if add_special_tokens is None:
+            return tokenizer.encode(prompt)
+        try:
+            return tokenizer.encode(prompt, add_special_tokens=add_special_tokens)
+        except TypeError:
+            # Some processor/tokenizer shims do not expose the HF kwarg. Fall
+            # back to their native encode path rather than rejecting the request.
+            return tokenizer.encode(prompt)
+
     def _get_detokenizer(self, request_id: str) -> Any:
         """Get or create a streaming detokenizer for a request."""
         if request_id not in self._detokenizer_pool:
@@ -2076,7 +2094,7 @@ class Scheduler:
             prefill_step_size=self.config.prefill_step_size,
         )
 
-    def _ensure_batch_generator(self, sampling_params: SamplingParams) -> None:
+    def _ensure_batch_generator(self, sampling_params: SamplingParams) -> bool:
         """Ensure BatchGenerator exists with compatible settings."""
         sampler_params = (
             sampling_params.temperature,
@@ -2085,6 +2103,7 @@ class Scheduler:
             sampling_params.top_k,
             sampling_params.repetition_penalty,
         )
+        cleared_cache = False
 
         # Create new generator if needed or if sampling params changed
         if (
@@ -2124,27 +2143,36 @@ class Scheduler:
                     sampler_params[3],
                     sampler_params[4],
                 )
-                return
+                return False
 
             # Clear all prefix caches when BatchGenerator changes —
             # BatchKVCache objects and block tables are tied to their generator instance
             if self.batch_generator is not None:
                 if self.block_aware_cache is not None:
-                    logger.debug("Clearing paged cache: BatchGenerator being recreated")
-                    self.block_aware_cache.clear()
-                if self.memory_aware_cache is not None:
+                    # Block-aware paged cache stores extracted per-layer state
+                    # and reconstructs fresh cache objects on the scheduler
+                    # worker. It is not sampler-bound, so preserve it across
+                    # BatchGenerator recreation; clearing here creates stale
+                    # hit bookkeeping and destroys legitimate prefix reuse.
+                    logger.debug(
+                        "Preserving paged cache across BatchGenerator recreation"
+                    )
+                elif self.memory_aware_cache is not None:
                     logger.debug(
                         "Clearing memory-aware cache: BatchGenerator being recreated"
                     )
                     self.memory_aware_cache.clear()
+                    cleared_cache = True
                 elif self.prefix_cache is not None:
                     logger.debug(
                         "Clearing prefix cache: BatchGenerator being recreated"
                     )
                     self.prefix_cache.clear()
+                    cleared_cache = True
 
             self.batch_generator = self._create_batch_generator(sampling_params)
             self._current_sampler_params = sampler_params
+        return cleared_cache
 
     def _validate_cache(self, cache: Any) -> bool:
         """
@@ -2758,15 +2786,22 @@ class Scheduler:
         # Tokenize if needed
         if request.prompt_token_ids is None:
             if isinstance(request.prompt, str):
+                add_special_tokens = getattr(request, "_encode_add_special_tokens", None)
                 # Handle both tokenizers and processors (for MLLM models)
                 if hasattr(self.tokenizer, "encode"):
-                    request.prompt_token_ids = self.tokenizer.encode(request.prompt)
+                    request.prompt_token_ids = self._encode_prompt_text(
+                        self.tokenizer,
+                        request.prompt,
+                        add_special_tokens,
+                    )
                 elif hasattr(self.tokenizer, "tokenizer") and hasattr(
                     self.tokenizer.tokenizer, "encode"
                 ):
                     # Processor wraps tokenizer (e.g., Qwen3VLProcessor)
-                    request.prompt_token_ids = self.tokenizer.tokenizer.encode(
-                        request.prompt
+                    request.prompt_token_ids = self._encode_prompt_text(
+                        self.tokenizer.tokenizer,
+                        request.prompt,
+                        add_special_tokens,
                     )
                 else:
                     raise AttributeError(
@@ -3397,12 +3432,31 @@ class Scheduler:
             request = self.waiting.popleft()
 
             # Ensure we have a batch generator
-            self._ensure_batch_generator(request.sampling_params)
+            _cache_cleared = self._ensure_batch_generator(request.sampling_params)
 
             if self.batch_generator is None:
                 # Put back and try again later
                 self.waiting.appendleft(request)
                 break
+
+            if _cache_cleared and (
+                request.prompt_cache is not None
+                or getattr(request, "_paged_block_table_needs_worker_reconstruct", False)
+            ):
+                logger.info(
+                    "Request %s: prefix cache hit invalidated by BatchGenerator "
+                    "recreation; falling back to full prefill",
+                    request.request_id,
+                )
+                request.prompt_cache = None
+                request.block_table = None
+                request.cached_tokens = 0
+                request.shared_prefix_blocks = 0
+                request.remaining_tokens = request.prompt_token_ids
+                request._cache_detail = None
+                request._paged_block_table_needs_worker_reconstruct = False
+                request._hybrid_prompt_cache_needs_worker_ssm = False
+                request._prompt_cache_needs_worker_dequant = False
 
             # Track first-schedule time for TTFT (only set once per request)
             if not hasattr(request, "_schedule_time"):
@@ -5424,7 +5478,7 @@ class Scheduler:
                     is_pattern_match = self._is_cache_corruption_error(e)
                     is_gen_type_error = isinstance(e, (IndexError, TypeError))
                     is_cache_error = is_pattern_match or is_gen_type_error
-                    if is_gen_type_error and not is_pattern_match:
+                    if is_gen_type_error:
                         logger.warning(
                             f"Treating {type(e).__name__} as potential cache error "
                             f"(may indicate a real bug): {e}",

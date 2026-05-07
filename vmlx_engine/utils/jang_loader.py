@@ -142,21 +142,24 @@ def _is_zaya_bundle(path: Path, jang_cfg: dict | None = None) -> bool:
 
 
 def _ensure_zaya_runtime_supported(path: Path, jang_cfg: dict) -> None:
-    """Fail fast until a real ZAYA/CCA runtime is available.
+    """Register the local ZAYA/CCA runtime when a ZAYA bundle is detected.
 
     ZAYA is not a stock mlx-lm model: even-numbered layers use CCA attention
     with standard KV plus CCA inner state (conv_state + prev_hs), and odd
-    layers use top-1 ZAYA MoE. Loading it through a generic JANG path would
-    either fail obscurely or, worse, run with an incomplete cache contract.
+    layers use top-1 ZAYA MoE. The runtime lives in vmlx_engine.models.zaya and
+    is registered under mlx_lm.models.zaya so stock mlx-lm and jang_tools
+    loaders resolve the same model class.
     """
     if not _is_zaya_bundle(path, jang_cfg):
         return
 
     try:
-        import mlx_lm.models.zaya  # noqa: F401
+        from ..models.zaya import register_mlx_lm_zaya
+
+        register_mlx_lm_zaya()
         return
-    except Exception:
-        pass
+    except Exception as local_err:
+        logger.debug("local ZAYA runtime registration failed: %s", local_err)
 
     try:
         import jang_tools.zaya  # noqa: F401

@@ -139,6 +139,60 @@ def ollama_generate_to_openai(body: dict) -> dict:
     return req
 
 
+def ollama_generate_to_openai_chat(body: dict) -> dict:
+    """Convert Ollama /api/generate to chat-completions for templated models.
+
+    Ollama's generate endpoint applies the model template by default. `raw:
+    true` is the opt-out. vMLX previously always routed /api/generate through
+    raw completions, which breaks instruction-tuned/chat-template families.
+    """
+    opts = body.get("options", {})
+    messages: list[dict[str, Any]] = []
+    system = body.get("system")
+    if isinstance(system, str) and system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": body.get("prompt", "") or ""})
+
+    req: dict[str, Any] = {
+        "model": body.get("model", "default"),
+        "messages": messages,
+        "stream": body.get("stream", True),
+        "stream_options": {"include_usage": True},
+    }
+    if opts.get("num_predict") is not None:
+        req["max_tokens"] = opts["num_predict"]
+    if opts.get("temperature") is not None:
+        req["temperature"] = opts["temperature"]
+    if opts.get("top_p") is not None:
+        req["top_p"] = opts["top_p"]
+    if opts.get("top_k") is not None:
+        req["top_k"] = opts["top_k"]
+    if opts.get("stop"):
+        req["stop"] = opts["stop"]
+    if opts.get("repeat_penalty") is not None:
+        req["repetition_penalty"] = opts["repeat_penalty"]
+    if body.get("think") is not None:
+        req["enable_thinking"] = body["think"]
+    if body.get("reasoning_effort") is not None:
+        req["reasoning_effort"] = body["reasoning_effort"]
+    if isinstance(body.get("chat_template_kwargs"), dict):
+        req["chat_template_kwargs"] = body["chat_template_kwargs"]
+
+    _fmt = body.get("format")
+    if _fmt == "json":
+        req["response_format"] = {"type": "json_object"}
+    elif isinstance(_fmt, dict):
+        req["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "ollama_schema",
+                "strict": False,
+                "schema": _fmt,
+            },
+        }
+    return req
+
+
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
 
@@ -200,6 +254,29 @@ def openai_chat_response_to_ollama(openai_resp: dict, model: str) -> dict:
         "eval_count": usage.get("completion_tokens", 0),
         "prompt_eval_count": usage.get("prompt_tokens", 0),
     }
+
+
+def openai_chat_response_to_ollama_generate(openai_resp: dict, model: str) -> dict:
+    """Convert non-streaming chat-completions response to /api/generate shape."""
+    choices = openai_resp.get("choices", [])
+    usage = openai_resp.get("usage", {})
+    msg = choices[0].get("message", {}) if choices else {}
+    content = msg.get("content") or ""
+    reasoning = msg.get("reasoning_content") or msg.get("reasoning")
+    finish_reason = choices[0].get("finish_reason", "stop") if choices else "stop"
+    result: dict[str, Any] = {
+        "model": model,
+        "created_at": _now_iso(),
+        "response": content,
+        "done": True,
+        "done_reason": finish_reason or "stop",
+        "total_duration": 0,
+        "eval_count": usage.get("completion_tokens", 0),
+        "prompt_eval_count": usage.get("prompt_tokens", 0),
+    }
+    if reasoning:
+        result["thinking"] = reasoning
+    return result
 
 
 def openai_chat_chunk_to_ollama_ndjson(sse_line: str, model: str) -> str | None:
@@ -302,6 +379,36 @@ def openai_chat_chunk_to_ollama_ndjson(sse_line: str, model: str) -> str | None:
         if usage:
             result["eval_count"] = usage.get("completion_tokens", 0)
             result["prompt_eval_count"] = usage.get("prompt_tokens", 0)
+    return json.dumps(result) + "\n"
+
+
+def openai_chat_chunk_to_ollama_generate_ndjson(
+    sse_line: str, model: str
+) -> str | None:
+    """Convert chat-completions SSE into Ollama /api/generate NDJSON."""
+    chat_line = openai_chat_chunk_to_ollama_ndjson(sse_line, model)
+    if not chat_line:
+        return None
+    try:
+        chat_obj = json.loads(chat_line)
+    except json.JSONDecodeError:
+        return None
+
+    message = chat_obj.get("message") or {}
+    result: dict[str, Any] = {
+        "model": chat_obj.get("model", model),
+        "created_at": chat_obj.get("created_at", _now_iso()),
+        "response": message.get("content", ""),
+        "done": bool(chat_obj.get("done", False)),
+    }
+    if message.get("thinking"):
+        result["thinking"] = message["thinking"]
+    if result["done"]:
+        result["done_reason"] = chat_obj.get("done_reason", "stop")
+        if "eval_count" in chat_obj:
+            result["eval_count"] = chat_obj.get("eval_count", 0)
+        if "prompt_eval_count" in chat_obj:
+            result["prompt_eval_count"] = chat_obj.get("prompt_eval_count", 0)
     return json.dumps(result) + "\n"
 
 

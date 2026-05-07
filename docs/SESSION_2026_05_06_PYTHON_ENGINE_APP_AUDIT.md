@@ -74,12 +74,13 @@ are explicitly marked as pending push/package when the fix is local-only.
 | Source-fixed/source-tested and commented | vmlx #147, #146, #145, #144, #141, #139, #138, #137, #132, #131, #124, #120, #119; mlxstudio #107, #106, #104, #103, #101, #100, #95, #90, #31 | Commented. Do not close until release/live verification criteria are met. |
 | Local-only fix, comment says pending push/package | vmlx #141, #137, #124 | Commented after local commits; leave open until pushed/packaged. |
 | Not fixed; no public fix claim should be made yet | vmlx #142, #136, #134, #123, #98, #88, #86, #79, #44; mlxstudio #89 | No code/test evidence sufficient for a fix comment. |
-| Support/product/Swift/out-of-Python-scope | vmlx #143, #133, #121, #122, #125, #126, #127, #135, #37, #57, #60, #74, #76, #78, #100; mlxstudio #102, #105, #61, #67, #68, #75, #91, #99 | May need responses, but not Python engine fix claims from this branch. |
+| Support/product/Swift/out-of-Python-scope | vmlx #148, #143, #133, #121, #122, #125, #126, #127, #135, #37, #57, #60, #74, #76, #78, #100; mlxstudio #102, #105, #61, #67, #68, #75, #91, #99 | May need responses, but not Python engine fix claims from this branch. |
 
 ### jjang-ai/vmlx
 
 | Issue | Status in source | Remaining blocker |
 |---|---|---|
+| #148 Swift v2 custom-path freeze | Swift v2 app issue. | Out of Python/Electron session scope; do not claim a Python fix. |
 | #147 Ollama version probe | Source has `GET/HEAD /` and `/api/version` gateway support. Panel tests passed. | Needs signed app release/live install verification. |
 | #146 mflux missing | Source bundle installs and verifies `mflux 0.17.5`; repo-local bundle has it. | Installed app is stale and missing `mflux`; rebuild/reinstall required. |
 | #145 image input `TokenizerWrapper` not callable | Source fixed and live-source verified on Qwen3.6-35B-A3B-JANGTQ-CRACK for `/v1/chat/completions` image_url and `/v1/responses` input_image. | Needs signed app release verification. Affine-JANG Qwen hybrid is now text-only by default and rejects media with a clear 400. |
@@ -158,11 +159,12 @@ are explicitly marked as pending push/package when the fix is local-only.
 - mlxstudio #90/#104/#101 and vmlx #120: bundle script now forces
   `macosx_14_0_arm64` MLX wheels and package floor is `14.5.0`, avoiding the
   Tahoe `macosx_26_0` metallib-on-Sequoia class.
-- Ling/Bailing JANGTQ2 loop: live-source verified after fixes. Root cause was
-  server prompt mutation plus hybrid cache codec mismatch. The final bundle
-  uses the canonical 92-token Ling prompt, disables live TQ-KV/generic q4 for
-  hybrid SSM auto mode, and hits hybrid paged cache with 28 SSM companion
-  layers restored.
+- Ling/Bailing JANGTQ2 loop/corruption class: cache/runtime causes from the
+  previous eye-spam failure are fixed in source, but the latest stricter live
+  artifact does **not** clear JANGTQ2 CRACK as production quality. It stops
+  cleanly and does not loop, but the Russian long prompt returns a weak
+  125-character plan. Treat hybrid cache reuse as fixed; keep JANGTQ2 CRACK
+  output quality open.
 - Qwen3.6 JANGTQ VLM image path: live-source verified on
   `/Users/eric/models/dealign.ai/Qwen3.6-35B-A3B-JANGTQ-CRACK`; native
   `jang_tools.load_jangtq_vlm` returns `Red square` for both OpenAI chat
@@ -196,6 +198,11 @@ Latest regression runs:
   `859 passed, 6 deselected`.
 - Panel:
   `1595 passed`; typecheck passed.
+- Focused follow-up after telemetry harness + hybrid cache fixes:
+  `13 passed` across `TestMambaCacheCompat` and startup/cache guard tests.
+- Broader scheduler/cache/API/reasoning/media regression slice after these
+  changes:
+  `903 passed, 48 skipped, 6 deselected`.
 
 ### Live-Source Artifacts Already Present
 
@@ -203,15 +210,17 @@ Local artifacts under `/tmp/vmlx_family_audit` show these latest statuses:
 
 | Model family | Latest artifact | Status | Notes |
 |---|---|---|---|
-| Gemma 4 CRACK | `live_gemma4_crack_after_cache_fixes.json` | PASS | Cache repeat, APIs, tool path, mixed-attention cache passed. |
-| Laguna | `live_laguna_after_cache_fixes.json` | PASS | Basic APIs/cache passed; performance/quality still needs separate benchmark scrutiny. |
-| Ling JANGTQ | `live_ling_flash_tq_after_current_fixes.json` | PASS | Non-CRACK Ling row passed. |
-| Ling JANGTQ2 CRACK | final live smoke in this session | PASS for loop class | Previous artifact still failed; final rebuilt bundle smoke and cache-on repeat passed. |
-| MiniMax M2.7 | `live_minimax_m27_*_after_cache_fixes.json` | PASS | Uniform, Small, and JANGTQ_K rows passed. |
-| Nemotron Omni | `live_nemotron_omni_tq2_after_parser_fix.json`, `live_nemotron_omni_tq4_after_parser_fix.json` | PASS | Uses native `jang_tools.nemotron_omni` path, not missing mlx-vlm module. |
-| Qwen3.6 dense JANG/MXFP4 | `live_qwen36_dense_*_after_cache_fixes.json` | PASS | Text/API/cache rows passed. Some reasoning-only responses length-capped into reasoning, so long-form UI quality still needs manual read. |
-| Qwen3.6 MoE CRACK | `live_qwen36_moe_crack_after_cache_fixes.json` | PASS | Text/API/cache row passed; this does not cover the user's Qwen3.6-27B-JANG_4L Metal timeout screenshot. |
-| DSV4 Flash | `live_dsv4_current_main.json` | FAIL | Most checks passed, including long-context full-output and native composite cache, but one cache-repeat coherence checker failed. Do not close DSV4 from this artifact alone. |
+| Gemma 4 CRACK | `live_gemma4_crack_after_cache_fixes.json` | PASS in prior pass | Cache repeat, APIs, tool path, mixed-attention cache passed. Not rerun in the telemetry follow-up below. |
+| Laguna | `live_laguna_tq_strict_tool_after_cache_fixes.json` | PASS | OpenAI chat, Responses tool call, Anthropic, Ollama, paged/L2 cache hit-store-restore passed with telemetry. Speed remains a separate performance blocker. |
+| Ling MXFP4 CRACK | `live_ling_flash_mxfp4_crack_after_tq_zombie_fix.json` | PASS | Higher-bit control row passed; cache/runtime is healthy, output has minor mixed-language fragments but no loop. |
+| Ling JANGTQ | `live_ling_flash_tq_after_tq_zombie_fix.json` | PASS | Non-CRACK Ling row passed strict cache/API checks; long Russian output is short but not looping. |
+| Ling JANGTQ2 CRACK | `live_ling_flash_tq2_crack_after_tq_zombie_fix.json` | FAIL quality | Hybrid cache reuse passed, but the long Russian prompt returned only 125 chars/13 words. Do not mark production quality. |
+| MiniMax M2.7 JANGTQ_K | `live_minimax_m27_tq_k_strict_after_cache_fixes.json` | PASS | Mixed gate/up/down bits, reasoning separation, exact multi-turn recall, Responses tools, and L2 hit path passed. Memory pressure is high. |
+| MiniMax M2.7 Small | `live_minimax_m27_small_tq_strict_after_cache_fixes.json` | PASS | Exact multi-turn recall and L2 hit path passed with lower RAM pressure. |
+| Nemotron Omni | `live_nemotron_omni_tq2_after_parser_fix.json`, `live_nemotron_omni_tq4_after_parser_fix.json` | PASS in prior pass | Uses native `jang_tools.nemotron_omni` path, not missing mlx-vlm module. Not rerun in telemetry follow-up. |
+| Qwen3.6 27B JANG_4M CRACK | `live_qwen36_dense_jang_after_cache_fixes.json` | FAIL strict reasoning budget | Cache/runtime passed; thinking-on with 220-token cap stayed inside reasoning and produced no visible content. Separate bisect with 800 tokens answers `Blue`. |
+| Qwen3.6 Russian long prompt | `/tmp/vmlx_qwen_russian_game_prompt.json` | PASS on local 4M bundle | The Russian Three.js prompt produced coherent Russian/HTML instead of token salad. This does not clear the user's exact JANG_4L Metal-timeout report. |
+| DSV4 Flash | `live_dsv4_current_main.json` | stale FAIL | Not rerun because the model is being re-downloaded. Next DSV4 pass must use native SWA/CSA/HSA cache and read full long-context output to completion. |
 
 ### Still Not Cleared
 
@@ -225,6 +234,9 @@ Local artifacts under `/tmp/vmlx_family_audit` show these latest statuses:
 - vmlx #144 repeated-prompt RAM growth on 32GB M1 Max. Source bounds the SSM
   companion cache and Gemma live-source artifact passed a short cache check,
   but no 15-20 prompt constrained-memory soak has been run.
+- Ling JANGTQ2 CRACK long-prompt quality. The latest strict live artifact
+  proves the cache stack does not loop, but the generated answer is still too
+  weak to call production-ready.
 - vmlx #142 `g4-31b-jang-4m-crack` crash. No exact model reproduction yet.
 - vmlx #119 / DSV4. Needs clean retest after the new DSV4 download, with full
   long-context output read to the end and cache repeat tested with a better
@@ -636,3 +648,101 @@ GitHub issue state was re-queried with `gh issue list` for both
 truth: several issue classes are fixed in source, but none should be closed
 solely from source tests until a clean signed app/PyPI release is installed and
 the reporter-facing path is reproduced.
+
+## §8.7 Live Telemetry Follow-Up (2026-05-07)
+
+Purpose: make the cache/runtime claims measurable. The cross-family live audit
+now captures request artifacts plus process RSS, system RAM, `/health`, MLX
+active/peak memory, `/v1/cache/stats`, block-disk directory size, request
+latency, token usage, and cache hit details around every major probe.
+
+Source fixes verified by focused tests:
+
+- Hybrid SSM batch-cache empty slots: patched prompt-cache finalize and
+  `BatchKVCache`/`BatchRotatingKVCache.extract()` so unused KV slots do not
+  crash prompt-cache extraction after recovery or padded scheduling.
+- Generic TurboQuant zombie path: `_apply_turboquant_to_model()` now honors
+  `VMLINUX_DISABLE_TQ_KV`, uses `model.make_cache()` instead of
+  `len(model.layers)`, and skips hybrid SSM live TQ-KV unless
+  `VMLINUX_ALLOW_HYBRID_KV_QUANT=1`.
+- Hybrid CLI policy: when registry auto-detects `cache_type="hybrid"`, it
+  forces `--kv-cache-quantization none` and marks the setting explicit so
+  BatchedEngine does not later turn generic TQ-KV back on.
+- Sampler-change paged-cache path: preserving block-aware paged cache across
+  BatchGenerator recreation fixes the stale "paged hit then Block not found"
+  failure. Direct memory/prefix caches are still invalidated when cleared.
+
+Focused regression command:
+
+```sh
+.venv/bin/python -m py_compile tests/cross_matrix/run_production_family_audit.py \
+  vmlx_engine/scheduler.py vmlx_engine/utils/mamba_cache.py \
+  vmlx_engine/utils/tokenizer.py vmlx_engine/cli.py vmlx_engine/model_configs.py \
+  tests/test_audio.py tests/test_engine_audit.py
+
+.venv/bin/python -m pytest -q \
+  tests/test_audio.py::TestMambaCacheCompat \
+  tests/test_engine_audit.py::TestStartupCompatibilityGuards::test_turboquant_disable_env_is_honored_by_jang_loader \
+  tests/test_engine_audit.py::TestStartupCompatibilityGuards::test_hybrid_ssm_auto_mode_skips_kv_quant_codecs \
+  tests/test_engine_audit.py::TestStartupCompatibilityGuards::test_generic_turboquant_patcher_honors_disable_env \
+  tests/test_engine_audit.py::TestStartupCompatibilityGuards::test_generic_turboquant_patcher_skips_hybrid_ssm \
+  tests/test_engine_audit.py::TestStartupCompatibilityGuards::test_sampler_recreation_invalidates_pending_prefix_hits
+```
+
+Result: `13 passed`.
+
+Broader follow-up:
+
+```sh
+.venv/bin/python -m pytest -q tests/test_engine_audit.py \
+  tests/test_dsv4_paged_cache.py tests/test_cache_bypass.py \
+  tests/test_reasoning_modes.py tests/test_responses_history.py \
+  tests/test_api_surface_parity.py tests/test_chat_template_kwargs.py \
+  tests/test_thinking_template_render.py tests/test_mcp_security.py \
+  tests/test_image_api.py tests/test_vl_video_regression.py
+```
+
+Result: `903 passed, 48 skipped, 6 deselected`.
+
+Live telemetry artifacts:
+
+| Row | Artifact | Verdict | Cache/resource evidence |
+|---|---|---|---|
+| Ling MXFP4 CRACK | `/tmp/vmlx_family_audit/live_ling_flash_mxfp4_crack_after_tq_zombie_fix.json` | PASS | Hybrid SSM native cache; repeat hit `cached_tokens=26`; scheduler `cache_hits=2`, `tokens_saved=26`; L2 `disk_hits=2`, `disk_writes=9`; SSM companion `392MB`; RSS `47.5GB`, MLX peak `65.1GB`, system available `33.5GB`. |
+| Ling JANGTQ2 CRACK | `/tmp/vmlx_family_audit/live_ling_flash_tq2_crack_after_tq_zombie_fix.json` | FAIL quality | Cache path passed with the same hybrid SSM/L2 shape (`cache_hits=2`, `tokens_saved=26`, SSM `392MB`), but Russian long prompt returned only `125` chars / `13` words. |
+| Ling JANGTQ | `/tmp/vmlx_family_audit/live_ling_flash_tq_after_tq_zombie_fix.json` | PASS | Hybrid SSM native cache; repeat hit `cached_tokens=26`; L2 `disk_hits=2`, `disk_writes=9`; SSM `392MB`; RSS `29.5GB`, MLX peak `30.2GB`. |
+| MiniMax M2.7 JANGTQ_K | `/tmp/vmlx_family_audit/live_minimax_m27_tq_k_strict_after_cache_fixes.json` | PASS | Mixed-bit gate/up/down path loaded; exact `noted`/`blue`; reasoning separated; tool call structured; cache `tokens_saved=46`; L2 `disk_hits=1`, `disk_writes=13`; RSS `35.6GB`, MLX peak `78.1GB`, system available `23.9GB`. |
+| MiniMax M2.7 Small | `/tmp/vmlx_family_audit/live_minimax_m27_small_tq_strict_after_cache_fixes.json` | PASS | Exact `noted`/`blue`; cache `tokens_saved=46`; L2 `disk_hits=1`, `disk_writes=13`; RSS `5.2GB`, MLX peak `40.4GB`, system available `60.1GB`. |
+| Laguna JANGTQ | `/tmp/vmlx_family_audit/live_laguna_tq_strict_tool_after_cache_fixes.json` | PASS | Responses auto tool call emitted structured `list_directory`; cache `tokens_saved=61`; L2 `disk_hits=1`, `disk_writes=13`; RSS `10.0GB`, MLX peak `11.1GB`. Health reports q4 KV cache quantization, but live `turboquant_kv_cache.enabled=false`; this is storage-boundary `QuantizedKVCache`, not live TurboQuantKVCache. |
+| Qwen3.6 27B JANG_4M CRACK | `/tmp/vmlx_family_audit/live_qwen36_dense_jang_after_cache_fixes.json` | FAIL strict reasoning budget | Hybrid SSM cache path worked: `cache_hits=2`, `tokens_saved=18`, L2 `disk_hits=2`, `disk_writes=10`, SSM companion about `440MB` in memory and `1.03GB` on disk. The 220-token thinking-on recall probe length-capped inside reasoning with empty visible content. |
+
+Qwen follow-up:
+
+- `/tmp/vmlx_qwen_bisect_results.json`: thinking-off recall answers `blue`
+  immediately; thinking-on recall with `max_tokens=800` answers `Blue` and
+  stops. The strict audit failure is a reasoning-budget/template behavior, not
+  cache corruption.
+- `/tmp/vmlx_qwen_russian_game_prompt.json`: on the available
+  `Qwen3.6-27B-JANG_4M-CRACK` bundle, the user's Russian Three.js game prompt
+  produced coherent Russian/HTML output (`2490` chars under a `900` token
+  cap), not the token-salad/Metal-timeout output from the user's exact
+  `JANG_4L` screenshot. The exact 4L model remains open.
+- `/tmp/vmlx_qwen_sampler_fix2.log`: after the sampler-change cache fix,
+  temperature changes preserve paged hybrid hits twice:
+  `hybrid paged HIT — 43 tokens (KV + 48 SSM layers)`. No `Block not found`
+  or reconstruction failure appears.
+
+Production interpretation:
+
+- Hybrid SSM cache reuse is now behaving as an owned feature for the tested
+  Ling/Qwen rows: KV blocks are paged/L2-stored, SSM companion state is
+  restored at the same prefix boundary, and generic live TQ-KV is disabled by
+  default for correctness.
+- MiniMax and Laguna pass the strict API/cache behavior checks, but MiniMax
+  large mixed-bit runs close to memory pressure and Laguna still needs a
+  dedicated speed benchmark before a performance claim.
+- Qwen3.6 JANG_4M does not reproduce the exact JANG_4L Metal-timeout issue.
+  Keep the GitHub issue open until the exact model path is available and tested.
+- DSV4 is not cleared in this pass. When the model is available, verify native
+  SWA/CSA/HSA composite cache, DSV4 pool compression, prefix/paged/L2 hits, no
+  generic TurboQuant KV, and read full long-context output to completion.

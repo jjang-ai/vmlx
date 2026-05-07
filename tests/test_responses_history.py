@@ -65,6 +65,37 @@ def test_responses_output_history_converter_accepts_pydantic_and_dict_items():
     ]
 
 
+def test_responses_object_exposes_output_text_convenience_field():
+    from vmlx_engine.api.models import (
+        ResponsesFunctionCall,
+        ResponsesObject,
+        ResponsesOutputMessage,
+        ResponsesOutputText,
+        ResponsesUsage,
+    )
+
+    response = ResponsesObject(
+        model="unit-test",
+        output=[
+            ResponsesOutputMessage(
+                role="assistant",
+                content=[ResponsesOutputText(type="reasoning", text="hidden")],
+            ),
+            ResponsesOutputMessage(
+                role="assistant",
+                content=[ResponsesOutputText(type="output_text", text="Paris")],
+            ),
+            ResponsesFunctionCall(name="lookup", arguments="{}"),
+        ],
+        usage=ResponsesUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+    )
+
+    dumped = response.model_dump()
+
+    assert response.output_text == "Paris"
+    assert dumped["output_text"] == "Paris"
+
+
 def test_dsv4_responses_tool_choice_none_does_not_synthesize_tools():
     """Historical tool schemas must not override explicit tool_choice=none."""
     import inspect
@@ -107,6 +138,7 @@ async def test_responses_streaming_stores_history_for_previous_response_id():
     completed = _sse_payloads(events, "response.completed")
     assert completed, "stream must emit response.completed"
     response_id = completed[-1]["response"]["id"]
+    assert completed[-1]["response"]["output_text"] == "stored answer"
 
     history = server._responses_get_history(response_id)
 

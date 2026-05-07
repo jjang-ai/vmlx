@@ -324,6 +324,7 @@ class EngineCore:
         num_messages: int = 1,
         segment_boundaries: Optional[List[Any]] = None,
         bypass_prefix_cache: bool = False,
+        encode_add_special_tokens: Optional[bool] = None,
     ) -> str:
         """
         Add a request for processing.
@@ -383,6 +384,16 @@ class EngineCore:
         # API request carried cache_salt or skip_prefix_cache=true.
         if bypass_prefix_cache:
             request._bypass_prefix_cache = True
+
+        # Chat templates already include every control token they need
+        # (BOS, role markers, generation prompt, think delimiters). Some
+        # tokenizers, notably ZAYA's GemmaTokenizerFast, append EOS when
+        # encode() is called with default add_special_tokens=True; that
+        # places an end-of-turn token after the assistant prefix and makes
+        # generation stop immediately. Leave None as the legacy raw-completion
+        # behavior; templated chat paths pass False explicitly.
+        if encode_add_special_tokens is not None:
+            request._encode_add_special_tokens = bool(encode_add_special_tokens)
 
         # Setup output collector with stream_interval from config
         self._output_collectors[request_id] = RequestOutputCollector(aggregate=True)

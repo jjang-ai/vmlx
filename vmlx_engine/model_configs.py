@@ -142,17 +142,11 @@ def register_all(registry=None):
     #       types with mixed RotatingKVCache + KVCache, or
     #   (b) keep this row as cache_type="kv" and rely on each layer's
     #       per-layer cache class assignment via `model.make_cache()`.
-    # `LagunaForCausalLM` from jang-tools currently exposes NEITHER a
-    # vmlx-compatible `make_cache()` NOR the standard
-    # `__call__(input_ids, mask=None, cache=None) -> logits` shape — its
-    # forward returns `(logits, new_caches)` and uses tuple-of-tuples
-    # internally (standalone inference design). vmlx engine integration
-    # therefore needs a thin adapter that wraps LagunaForCausalLM with
-    # the mlx_lm.Model contract; until that adapter lands the engine
-    # path will fail at the scheduler's first cache-allocation call.
-    # `vmlx_engine/loaders/load_laguna.py` returns the LagunaForCausalLM
-    # instance correctly; running it through the OpenAI-compat server
-    # path is what's not yet wired. Tracking gap.
+    # `vmlx_engine/loaders/laguna.py` now provides the thin adapter needed
+    # by the OpenAI-compatible scheduler path, including standard make_cache
+    # and __call__(input_ids, mask=None, cache=None) semantics. Keep this row
+    # as cache_type="kv": every layer is attention-backed, but layer-local
+    # cache classes still need to preserve full-vs-SWA differences.
     #
     # Tokenizer: poolside-flavored (vocab 100352). DESPITE the README
     # claim that Laguna ships "Qwen2-flavored" tokens, the bundle's

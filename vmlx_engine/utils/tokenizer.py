@@ -9,6 +9,7 @@ directly from tokenizer.json.
 
 import json
 import logging
+import os
 from pathlib import Path
 
 from .chat_templates import DEFAULT_CHATML_TEMPLATE, NEMOTRON_CHAT_TEMPLATE
@@ -26,6 +27,12 @@ def _apply_turboquant_to_model(model, model_path: str):
     Safe to call on any model: if jang_tools.turboquant is not installed or
     the model doesn't have .layers, it silently returns without changes.
     """
+    if os.environ.get("VMLX_DISABLE_TQ_KV") in ("1", "true", "TRUE", "yes", "on"):
+        logger.info(
+            "  TurboQuant skipped: VMLX_DISABLE_TQ_KV=1; using native model cache"
+        )
+        return
+
     try:
         from jang_tools.turboquant.config import TurboQuantConfig, make_turboquant_cache
     except ImportError:
@@ -46,8 +53,6 @@ def _apply_turboquant_to_model(model, model_path: str):
         return
 
     try:
-        n_layers = len(model.layers)
-
         # Read config.json for head dimensions and layer types
         config_path = Path(model_path) / "config.json"
         if not config_path.exists():
@@ -55,9 +60,41 @@ def _apply_turboquant_to_model(model, model_path: str):
         config = json.loads(config_path.read_text())
         text_cfg = config.get("text_config", config)
 
+        # Use the model's native cache contract, not len(model.layers).
+        # Ling/Bailing appends MTP heads to model.layers but normal generation
+        # intentionally skips them. Counting layers here creates an unused KV
+        # slot that remains empty and breaks BatchGenerator.extract_cache().
+        native_cache_types = []
+        try:
+            native_cache = model.make_cache()
+            n_layers = len(native_cache)
+            native_cache_types = [type(c).__name__ for c in native_cache]
+            del native_cache
+        except Exception:
+            n_layers = len(model.layers)
+
         layer_types, key_dim, val_dim = _detect_turboquant_layer_types(
             text_cfg, n_layers, root_cfg=config
         )
+        if len(layer_types) != n_layers and native_cache_types:
+            layer_types = [
+                "ssm" if t in ("ArraysCache", "MambaCache", "BatchMambaCache")
+                else "attention"
+                for t in native_cache_types
+            ]
+
+        if "ssm" in layer_types and os.environ.get("VMLX_ALLOW_HYBRID_KV_QUANT") not in (
+            "1",
+            "true",
+            "TRUE",
+            "yes",
+            "on",
+        ):
+            logger.info(
+                "  TurboQuant skipped: hybrid SSM cache detected; native KV+SSM "
+                "state is required until the typed hybrid TQ cache codec lands"
+            )
+            return
 
         # Default TQ config
         tq_config = TurboQuantConfig(
@@ -776,6 +813,31 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
             _cfg_arch = _json_arch.loads(_cfg_path_arch.read_text())
             _mt_arch = _cfg_arch.get("model_type")
             _tc_mt_arch = (_cfg_arch.get("text_config") or {}).get("model_type")
+            if _mt_arch == "zaya" or _tc_mt_arch == "zaya":
+                _jcfg_path_arch = Path(local_model_path) / "jang_config.json"
+                _zaya_wf = None
+                if _jcfg_path_arch.exists():
+                    try:
+                        _zaya_wf = _json_arch.loads(
+                            _jcfg_path_arch.read_text()
+                        ).get("weight_format")
+                    except Exception:
+                        _zaya_wf = None
+                if _zaya_wf in {"mxtq", "jang", "jjqf", "mxq"}:
+                    logger.info(
+                        "ZAYA JANG-codec bundle detected — deferring to "
+                        "load_jang_model for native JANGTQ/TurboQuant binding"
+                    )
+                else:
+                    logger.info(
+                        "ZAYA BF16/MXFP4 bundle detected (early route) — "
+                        "load_zaya_model"
+                    )
+                    from ..loaders.load_zaya import load_zaya_model
+
+                    _m, _t = load_zaya_model(local_model_path)
+                    _inject_chat_template_if_missing(_t, local_model_path)
+                    return _m, _t
             if _mt_arch == "laguna" or _tc_mt_arch == "laguna":
                 logger.info(
                     "Laguna bundle detected (early route) — load_laguna_model"

@@ -616,8 +616,8 @@ class BatchedEngine(BaseEngine):
             else:
                 return 0
 
-            tokens_with = enc(prompt_with_gen)
-            tokens_without = enc(prompt_without_gen)
+            tokens_with = self._encode_rendered_prompt(enc, prompt_with_gen)
+            tokens_without = self._encode_rendered_prompt(enc, prompt_without_gen)
             gen_len = len(tokens_with) - len(tokens_without)
             if gen_len > 0:
                 logger.debug(f"Gen prompt len: {gen_len} tokens")
@@ -625,6 +625,14 @@ class BatchedEngine(BaseEngine):
         except Exception as e:
             logger.debug(f"Failed to compute gen_prompt_len: {e}")
             return 0
+
+    @staticmethod
+    def _encode_rendered_prompt(enc, prompt: str) -> list[int]:
+        """Encode an already-rendered chat template without adding BOS/EOS."""
+        try:
+            return enc(prompt, add_special_tokens=False)
+        except TypeError:
+            return enc(prompt)
 
     def _compute_segment_boundaries(
         self,
@@ -687,7 +695,7 @@ class BatchedEngine(BaseEngine):
                         extra_template_kwargs=extra_template_kwargs,
                         skip_generation_prompt=True,
                     )
-                    cur_count = len(enc(rendered))
+                    cur_count = len(self._encode_rendered_prompt(enc, rendered))
                 except Exception:
                     # Re-rendering can fail for partial histories on some
                     # templates (e.g. assistant-prefix-only). Skip this
@@ -965,6 +973,7 @@ class BatchedEngine(BaseEngine):
 
         gen_prompt_len = kwargs.pop("gen_prompt_len", 0)
         segment_boundaries = kwargs.pop("segment_boundaries", None)
+        encode_add_special_tokens = kwargs.pop("encode_add_special_tokens", None)
 
         sampling_params = SamplingParams(
             max_tokens=max_tokens,
@@ -983,6 +992,7 @@ class BatchedEngine(BaseEngine):
             num_messages=kwargs.get("num_messages", 1),
             segment_boundaries=segment_boundaries,
             bypass_prefix_cache=bypass_prefix_cache,
+            encode_add_special_tokens=encode_add_special_tokens,
         )
 
         raw = output.output_text
@@ -1073,6 +1083,7 @@ class BatchedEngine(BaseEngine):
 
         gen_prompt_len = kwargs.pop("gen_prompt_len", 0)
         segment_boundaries = kwargs.pop("segment_boundaries", None)
+        encode_add_special_tokens = kwargs.pop("encode_add_special_tokens", None)
 
         sampling_params = SamplingParams(
             max_tokens=max_tokens,
@@ -1092,6 +1103,7 @@ class BatchedEngine(BaseEngine):
             num_messages=kwargs.get("num_messages", 1),
             segment_boundaries=segment_boundaries,
             bypass_prefix_cache=bypass_prefix_cache,
+            encode_add_special_tokens=encode_add_special_tokens,
         )
 
         async for output in self._engine.stream_outputs(request_id):
@@ -1212,6 +1224,7 @@ class BatchedEngine(BaseEngine):
             images=all_images if all_images else None,
             videos=all_videos if all_videos else None,
             gen_prompt_len=gen_prompt_len,
+            encode_add_special_tokens=False,
             **kwargs,
         )
 
@@ -1318,6 +1331,7 @@ class BatchedEngine(BaseEngine):
             videos=all_videos if all_videos else None,
             request_id=request_id,
             gen_prompt_len=gen_prompt_len,
+            encode_add_special_tokens=False,
             **kwargs,
         ):
             yield output
