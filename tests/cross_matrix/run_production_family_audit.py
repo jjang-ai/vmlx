@@ -890,6 +890,103 @@ def post_chat(
     }
 
 
+def stream_chat_probe(
+    base: str,
+    model: str,
+    messages: list[dict[str, Any]],
+    *,
+    thinking: bool | None,
+    max_tokens: int = 512,
+    chunks_to_read: int = 4,
+    timeout: int = 90,
+) -> dict[str, Any]:
+    """Open a Chat Completions SSE stream and close it after real chunks.
+
+    The production gate needs at least source-level proof that streaming
+    transports emit parseable SSE and that an early client disconnect does not
+    leave an orphan generation. The caller verifies scheduler quiescence after
+    this function returns.
+    """
+    body: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": 0.2,
+        "top_p": 0.95,
+        "stream": True,
+    }
+    if thinking is not None:
+        body["enable_thinking"] = thinking
+        body["chat_template_kwargs"] = {"enable_thinking": thinking}
+
+    req = urllib.request.Request(
+        f"{base}/v1/chat/completions",
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+    )
+    req.add_header("Content-Type", "application/json")
+    t0 = time.perf_counter()
+    chunks: list[dict[str, Any]] = []
+    raw_lines: list[str] = []
+    done = False
+    status = 0
+    error: str | None = None
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            status = r.status
+            for raw in r:
+                line = raw.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                raw_lines.append(line)
+                if line.startswith(":"):
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                data = line[len("data:") :].strip()
+                if data == "[DONE]":
+                    done = True
+                    break
+                try:
+                    payload = json.loads(data)
+                except Exception:
+                    payload = {"_raw": data}
+                chunks.append(payload)
+                if len(chunks) >= chunks_to_read:
+                    break
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+
+    visible = ""
+    reasoning = ""
+    for payload in chunks:
+        try:
+            delta = payload.get("choices", [{}])[0].get("delta", {})
+            visible += str(delta.get("content") or "")
+            reasoning += str(
+                delta.get("reasoning_content")
+                or delta.get("reasoning")
+                or delta.get("thinking")
+                or ""
+            )
+        except Exception:
+            continue
+
+    return {
+        "status": status,
+        "request": body,
+        "elapsed_sec": round(time.perf_counter() - t0, 3),
+        "chunks_read": len(chunks),
+        "done": done,
+        "visible_chars": len(visible),
+        "reasoning_chars": len(reasoning),
+        "visible_head": visible[:240],
+        "reasoning_head": reasoning[:240],
+        "raw_lines_head": raw_lines[:12],
+        "error": error,
+    }
+
+
 def reasoning_recall_max_tokens(row: ModelRow) -> int:
     """Generation cap for the live thinking-on recall probe.
 
@@ -1664,6 +1761,73 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
             "done_reason": ollama_stop,
             "body": ollama,
             "elapsed_sec": ollama_elapsed,
+        },
+    )
+
+    snapshot("before_chat_stream_disconnect")
+    stream_probe = stream_chat_probe(
+        base,
+        model,
+        [
+            {
+                "role": "user",
+                "content": (
+                    "Stream audit. Count from one to forty in words, separated "
+                    "by commas. Keep going until forty."
+                ),
+            }
+        ],
+        thinking=False,
+        max_tokens=260,
+        chunks_to_read=5,
+        timeout=120,
+    )
+    stream_artifact = write_probe_output(
+        row.id,
+        "chat_stream_disconnect",
+        stream_probe,
+    )
+    result["requests"].append(
+        {
+            "name": "chat_stream_disconnect",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "code": stream_probe["status"],
+            "elapsed_sec": stream_probe["elapsed_sec"],
+            "usage": None,
+            "artifact": stream_artifact,
+        }
+    )
+    quiet_stats = None
+    for _ in range(20):
+        time.sleep(0.5)
+        code_q, quiet_stats = http_json("GET", f"{base}/v1/cache/stats", timeout=10)
+        sched_q = (
+            quiet_stats.get("scheduler_stats", {})
+            if code_q == 200 and isinstance(quiet_stats, dict)
+            else {}
+        )
+        if int(sched_q.get("num_running") or 0) == 0 and int(sched_q.get("num_waiting") or 0) == 0:
+            break
+    snapshot("after_chat_stream_disconnect")
+    sched_quiet = quiet_stats.get("scheduler_stats", {}) if isinstance(quiet_stats, dict) else {}
+    stream_had_text = (
+        int(stream_probe.get("visible_chars") or 0) > 0
+        or int(stream_probe.get("reasoning_chars") or 0) > 0
+    )
+    check(
+        "chat_stream_disconnect_or_done",
+        stream_probe["status"] == 200
+        and stream_probe["error"] is None
+        and int(stream_probe["chunks_read"]) > 0
+        and (stream_had_text or bool(stream_probe["done"]))
+        and int(sched_quiet.get("num_running") or 0) == 0
+        and int(sched_quiet.get("num_waiting") or 0) == 0,
+        {
+            "stream_probe": stream_probe,
+            "artifact": stream_artifact,
+            "post_disconnect_scheduler": sched_quiet,
+            "post_disconnect_cache_stats": quiet_stats,
         },
     )
 

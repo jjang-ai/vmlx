@@ -6888,6 +6888,14 @@ class TestTurboQuantCacheInterop:
         assert "SSM re-derive failed" in src
         assert "blocking_runtime_log_findings_absent" in src
 
+    def test_family_audit_has_stream_disconnect_gate(self):
+        """Live matrix must exercise source streaming and orphan cleanup."""
+        src = Path("tests/cross_matrix/run_production_family_audit.py").read_text()
+        assert "def stream_chat_probe" in src
+        assert '"chat_stream_disconnect_or_done"' in src
+        assert '"num_running"' in src and '"num_waiting"' in src
+        assert "chunks_read" in src
+
     def test_turboquant_kv_cache_importable(self):
         """TurboQuantKVCache must be importable — it's the cache class
         that wraps KV tensors when jang_config.capabilities.turboquant
