@@ -22,6 +22,10 @@
 - **Bundled Python verification now gates image runtime imports**:
   `mflux`, `mlx_vlm`, `jang_tools`, TurboQuant kernels, and vMLX loader shims
   are checked during `npm run build` before Electron packaging proceeds.
+- **ZAYA Auto is tools-only, not reasoning-on**: the panel detector now maps
+  `model_type=zaya` to the CCA hybrid tool-capable row without a reasoning
+  parser. This keeps saved Auto sessions from reopening the ZAYA template's
+  reasoning branch before the Python runtime has a passing reasoning gate.
 
 ### Verified
 - Panel request-builder, reasoning-display, and audit-fix tests passed with the
@@ -31,6 +35,9 @@
   templated `/api/generate`.
 - Bundled Python build imported `vmlx_engine 1.5.25`, `jang_tools 2.5.26`,
   `mflux`, `mlx_lm`, and `mlx_vlm` successfully before packaging.
+- Packaged app ZAYA gates passed in both Auto and explicit thinking-off modes,
+  including OpenAI Chat, Responses, Anthropic, Ollama, multi-turn recall,
+  cache/memory stats, and JIT soft sleep/wake.
 
 ## v1.3.0 — 2026-03-20 — Hybrid SSM Cache, Nemotron, Reasoning Fixes
 

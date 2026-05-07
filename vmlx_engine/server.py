@@ -1023,6 +1023,8 @@ def _resolve_enable_thinking(
             _mc = get_model_config_registry().lookup(model_key)
         except Exception:
             return None
+        if getattr(_mc, "supports_thinking", None) is False:
+            return False
         _enable = bool(_mc.think_in_template)
         if not _enable and _mc.reasoning_parser:
             _enable = True
@@ -4021,7 +4023,12 @@ async def model_capabilities(model_id: str) -> dict:
         modalities = ["text", "vision", "video"]
     else:
         modalities = ["text"]
-    supports_thinking = bool(reasoning_parser or think_in_template)
+    supports_thinking_explicit = getattr(cfg, "supports_thinking", None) if cfg is not None else None
+    supports_thinking = (
+        bool(supports_thinking_explicit)
+        if supports_thinking_explicit is not None
+        else bool(reasoning_parser or think_in_template)
+    )
 
     if family == "deepseek_v4":
         # DSV4 standard chat + thinking are supported. The standalone JANG

@@ -30,6 +30,12 @@ All notable changes to vMLX Engine will be documented in this file.
   `chat_template_kwargs` extensions. Gateway `/api/generate` now follows
   Ollama semantics: chat-template route by default, raw completions only when
   `raw:true`.
+- **ZAYA reasoning Auto now follows the production capability contract**:
+  ZAYA/CCA is tools-capable but not yet reasoning-capable in the Python runtime
+  gates. The engine and panel now treat stale `supports_thinking=true` bundle
+  stamps as incompatible for ZAYA, avoid auto-installing a Qwen3 reasoning
+  parser, and resolve Auto to `enable_thinking=false` so visible content is not
+  lost inside an unfinished reasoning block.
 
 ### Verified
 - ZAYA CLI conversion live-verified for JANGTQ4 and MXFP4 from the local
@@ -37,6 +43,12 @@ All notable changes to vMLX Engine will be documented in this file.
   `vmlx serve` and passed OpenAI Chat, Responses, Anthropic Messages, Ollama
   chat, and multi-turn recall smoke tests. TurboQuant KV stayed disabled for the
   CCA cache topology.
+- Rebuilt packaged app live-gated ZAYA JANGTQ4 in both Reasoning Auto and
+  explicit thinking-off modes. Both gates passed OpenAI Chat, Responses,
+  Anthropic, Ollama, multi-turn recall, cache-stat/memory observation, and JIT
+  soft sleep/wake. Evidence lives under
+  `docs/internal/release-gates/20260507_114150/` and
+  `docs/internal/release-gates/20260507_114229/`.
 - Qwen3.6 reasoning Auto live-verified with the desktop request shape: Auto,
   explicit Off, and explicit On all produced visible final content; reasoning
   was present only for Auto/On, and prefix/paged/block-disk cache stats were

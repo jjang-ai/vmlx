@@ -79,6 +79,11 @@ function registerFamily(familyName: string, config: Omit<ModelConfig, 'familyNam
   CONFIG_BY_FAMILY.set(familyName, config)
 }
 
+// ZAYA / Zyphra: CCA attention + top-1 MoE. Tools are native XML, but
+// reasoning is intentionally not advertised until ZAYA thinking passes live
+// Chat/Responses/Anthropic/Ollama gates; Auto must stay visible-answer-first.
+registerFamily('zaya', { cacheType: 'hybrid', toolParser: 'zaya_xml', usePagedCache: false, enableAutoToolChoice: true, description: 'ZAYA CCA hybrid MoE', priority: 3 })
+
 // Qwen
 // Qwen 3.5 dense and MoE share model_types with VL variants — VL detection
 // relies on config.json vision_config, not the family's isMultimodal flag.
@@ -216,6 +221,7 @@ registerFamily('rwkv', { cacheType: 'mamba', usePagedCache: true, description: '
  */
 const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   // ── Qwen family ──
+  'zaya': 'zaya',
   'qwen3_5': 'qwen3.5',
   'qwen3_5_moe': 'qwen3.5-moe',
   'qwen3_5_moe_text': 'qwen3.5-moe', // Qwen3.6-35B-A3B inner text_config model_type

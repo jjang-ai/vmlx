@@ -85,6 +85,28 @@ def register_all(registry=None):
             registry.register(config)
             existing.add(config.family_name)
 
+    # ZAYA (Zyphra) — alternating CCA attention + top-1 MoE.
+    #
+    # The shipped template can emit Qwen-style <think> blocks, but live Python
+    # gates only pass with thinking explicitly off: Auto/short-budget requests
+    # can finish inside reasoning and return empty visible content. Keep the
+    # parser disabled and expose tools only until a ZAYA reasoning gate passes
+    # across OpenAI Chat, Responses, Anthropic, and Ollama.
+    _register(
+        ModelConfig(
+            family_name="zaya",
+            model_types=["zaya"],
+            cache_type="hybrid",
+            cache_subtype="zaya_cca",
+            tool_parser="zaya_xml",
+            reasoning_parser=None,
+            think_in_template=False,
+            supports_thinking=False,
+            supports_native_tools=True,
+            priority=3,
+        )
+    )
+
     # ── Qwen family ──
 
     # Note: qwen3_5 / qwen3_5_moe model_types are shared between text and VL variants.

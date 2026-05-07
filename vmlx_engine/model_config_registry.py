@@ -56,6 +56,10 @@ class ModelConfig:
     # Reasoning
     reasoning_parser: Optional[str] = None
     think_in_template: bool = False  # True if chat template injects <think> in assistant prefix
+    # None means derive support from reasoning_parser/think_in_template.
+    # False is an explicit family/runtime compatibility verdict: do not let
+    # stale JANG stamps or tokenizer probes auto-enable thinking.
+    supports_thinking: Optional[bool] = None
 
     # Multimodal
     is_mllm: bool = False
@@ -211,20 +215,36 @@ class ModelConfigRegistry:
                     priority=0,
                 )
 
-            # Override with stamped values (the stamp wins over registry defaults)
+            # Override with stamped values. For most families, the converter
+            # stamp wins because it describes the emitted artifact. Families
+            # with an explicit runtime verdict (`supports_thinking=False`)
+            # keep that verdict even if older local bundles were stamped too
+            # optimistically; otherwise Auto can open a reasoning rail and
+            # return reasoning-only/empty visible content.
             from dataclasses import replace
             updates: Dict[str, Any] = {}
             rp = caps.get("reasoning_parser")
             tp = caps.get("tool_parser")
             tin = caps.get("think_in_template")
+            sth = caps.get("supports_thinking")
             ct = caps.get("cache_type")
             cst = caps.get("cache_subtype") or jcfg.get("cache_subtype")
             mod = caps.get("modality")
-            if rp is not None:
+            base_supports_thinking = getattr(base, "supports_thinking", None)
+            if base_supports_thinking is False:
+                updates["reasoning_parser"] = None
+                updates["think_in_template"] = False
+                updates["supports_thinking"] = False
+            elif isinstance(sth, bool):
+                updates["supports_thinking"] = sth
+                if not sth:
+                    updates["reasoning_parser"] = None
+                    updates["think_in_template"] = False
+            if base_supports_thinking is not False and rp is not None:
                 updates["reasoning_parser"] = rp if rp != "none" else None
             if tp is not None:
                 updates["tool_parser"] = tp if tp != "none" else None
-            if isinstance(tin, bool):
+            if base_supports_thinking is not False and isinstance(tin, bool):
                 updates["think_in_template"] = tin
             if ct:
                 updates["cache_type"] = ct
