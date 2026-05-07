@@ -802,6 +802,57 @@ def text_quality_summary(text: str) -> dict[str, Any]:
     }
 
 
+def blocking_runtime_log_findings(row: ModelRow, log_text: str) -> list[dict[str, str]]:
+    """Return runtime log findings that make a live row fail.
+
+    Coherent visible text is not enough for production proof. Cache and topology
+    rows must also have clean logs: a hybrid SSM row with a failed clean
+    re-derive, for example, means the prefix/L2 proof is incomplete even if the
+    model answered the tiny prompt correctly.
+    """
+    patterns: list[tuple[str, re.Pattern[str]]] = [
+        (
+            "metal_malloc_oversize",
+            re.compile(r"\[metal::malloc\].*greater than the maximum allowed", re.I),
+        ),
+        (
+            "metal_command_timeout",
+            re.compile(r"Command buffer execution failed|kIOGPUCommandBufferCallbackErrorTimeout", re.I),
+        ),
+        ("python_traceback", re.compile(r"^Traceback \(most recent call last\):", re.M)),
+        ("engine_error", re.compile(r"\[Engine error:", re.I)),
+    ]
+    if row.cache_profile == "hybrid_ssm":
+        patterns.extend(
+            [
+                (
+                    "hybrid_ssm_clean_prefill_failed",
+                    re.compile(r"MLLM clean SSM prefill failed|SSM re-derive failed", re.I),
+                ),
+                (
+                    "hybrid_ssm_contaminated_hit_rejected",
+                    re.compile(r"SSM companion .*is_complete=False.*rejecting hit", re.I),
+                ),
+            ]
+        )
+    if row.family == "deepseek_v4":
+        patterns.append(
+            (
+                "dsv4_incomplete_composite_restore",
+                re.compile(r"Ignoring DSV4 paged prefix hit.*no terminal deepseek_v4 composite state", re.I),
+            )
+        )
+
+    findings: list[dict[str, str]] = []
+    lines = log_text.splitlines()
+    for name, pattern in patterns:
+        for line in lines:
+            if pattern.search(line):
+                findings.append({"name": name, "line": line[-1000:]})
+                break
+    return findings
+
+
 def write_probe_output(row_id: str, name: str, payload: dict[str, Any]) -> str:
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"{row_id}_{name}")
     path = OUT_DIR / f"{safe}_{int(time.time())}.json"
@@ -1735,6 +1786,20 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         )
 
     snapshot("before_shutdown")
+    final_log_text = log.read_text(errors="ignore")
+    runtime_findings = blocking_runtime_log_findings(row, final_log_text)
+    check(
+        "blocking_runtime_log_findings_absent",
+        not runtime_findings,
+        {
+            "findings": runtime_findings,
+            "log": str(log),
+            "reason": (
+                "Live output must not hide topology/cache/runtime failures in "
+                "the server log."
+            ),
+        },
+    )
 
     failures = [c for c in result["checks"] if not c["ok"]]
     result["status"] = "PASS" if not failures else "FAIL"
