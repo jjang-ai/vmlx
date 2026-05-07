@@ -204,28 +204,42 @@ def _live_generate(
     enable_thinking: bool,
     max_tokens: int = 128,
 ) -> str:
-    """Load the model via SimpleEngine and produce up to max_tokens of text."""
+    """Load the model via SimpleEngine and produce up to max_tokens of text.
+
+    SimpleEngine's `generate` takes a pre-rendered `prompt: str` and is
+    async. We render the chat template here (mirrors what the engine
+    request handler does) and run the async call via asyncio.run.
+    """
+    import asyncio
+
     from vmlx_engine.engine.simple import SimpleEngine
 
-    eng = SimpleEngine()
-    eng.load_model(str(model.model_path), is_mllm=False)
-    try:
-        out = eng.generate(
-            messages=[
-                {"role": "user", "content": model.sample_user_message}
-            ],
-            max_tokens=max_tokens,
-            temperature=0.0,
-            enable_thinking=enable_thinking,
-        )
-    finally:
+    rendered = _render_with_tokenizer(model, enable_thinking=enable_thinking)
+
+    async def _run() -> str:
+        eng = SimpleEngine(model_name=str(model.model_path))
+        await eng.start()
         try:
-            eng.unload()
-        except Exception:
-            logger.warning(
-                "unload failed for %s", model.arch_name, exc_info=True
+            output = await eng.generate(
+                prompt=rendered,
+                max_tokens=max_tokens,
+                temperature=0.0,
+                top_p=1.0,
+                enable_thinking=enable_thinking,
             )
-    return out if isinstance(out, str) else str(out)
+        finally:
+            try:
+                await eng.stop()
+            except Exception:
+                logger.warning(
+                    "stop failed for %s", model.arch_name, exc_info=True
+                )
+        # GenerationOutput exposes both `text` (cleaned) and `raw_text`
+        # (pre-clean). For reasoning detection we want the raw form so
+        # `<think>...</think>` tags survive clean_output_text.
+        return getattr(output, "raw_text", None) or getattr(output, "text", "")
+
+    return asyncio.run(_run())
 
 
 def _output_contains_thinking(output: str) -> bool:
