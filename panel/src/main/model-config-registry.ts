@@ -264,8 +264,8 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   // ── Ling / Bailing family (inclusionAI / Ant Group) ──
   // Hybrid MLA + Lightning-Attn-2 (linear attention). Engine-side
   // model_configs.py registers `bailing_hybrid`/`bailing_moe_v2_5`
-  // as family `bailing_hybrid` with cache_type=hybrid, deepseek_r1
-  // reasoning, deepseek tool parser. See research/LING-RUNTIME-ARCHITECTURE.md.
+  // under canonical family `ling` with cache_type=hybrid, deepseek_r1
+  // reasoning, and deepseek tool parser. See research/LING-RUNTIME-ARCHITECTURE.md.
   'bailing_hybrid': 'ling',
   'bailing_moe_v2_5': 'ling',
   'bailing_moe_linear': 'ling',
