@@ -43,7 +43,10 @@ from __future__ import annotations
 
 import logging as _logging
 import os
+import json
+import re
 import sys
+from pathlib import Path
 from typing import Any, Tuple
 
 _log = _logging.getLogger(__name__)
@@ -56,6 +59,135 @@ _INSTANT_LOAD_SCHEMA = 1
 _INSTANT_LOAD_RUNTIME_PATCH = "dsv4-prefill-mask-v1-switchglu-marker-v2-mla-bitfix-v1"
 _SIDECAR_FILENAME = "jangtq_stacked.safetensors"
 _SIDECAR_MANIFEST = "jangtq_stacked.json"
+
+_DSV4_CRITICAL_CONTROL_RE = re.compile(
+    r"^(hc_head_(?:fn|base|scale)|"
+    r"layers\.\d+\.hc_(?:attn|ffn)_(?:fn|base|scale)|"
+    r"layers\.\d+\.attn\.attn_sink|"
+    r"layers\.\d+\.ffn\.gate\.bias)$"
+)
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        if path.is_file():
+            return json.loads(path.read_text())
+    except Exception:
+        pass
+    return {}
+
+
+def _is_dsv4_bundle(model_path: str | Path) -> bool:
+    cfg = _read_json(Path(model_path) / "config.json")
+    return cfg.get("model_type") == "deepseek_v4"
+
+
+def _dsv4_weight_map(model_path: str | Path) -> dict[str, str]:
+    """Return tensor-key -> safetensors filename for a DSV4 bundle."""
+    bundle = Path(model_path)
+    index_path = bundle / "model.safetensors.index.json"
+    if index_path.is_file():
+        data = _read_json(index_path)
+        weight_map = data.get("weight_map")
+        if isinstance(weight_map, dict):
+            return {str(k): str(v) for k, v in weight_map.items()}
+
+    weight_map: dict[str, str] = {}
+    try:
+        from safetensors import safe_open
+    except Exception:
+        return weight_map
+    for sf in sorted(bundle.glob("*.safetensors")):
+        try:
+            with safe_open(str(sf), framework="numpy") as handle:
+                for key in handle.keys():
+                    weight_map[key] = sf.name
+        except Exception:
+            continue
+    return weight_map
+
+
+def _audit_dsv4_control_tensor_dtypes(model_path: str | Path) -> dict[str, Any]:
+    """Header-only audit for DSV4 control tensors that must stay F32.
+
+    DSV4's mHC/Sinkhorn/router/sink control tensors are small but quality
+    critical. The JANG DSV4 fix kit documents that F16 copies of these tensors
+    produce exactly the observed failure mode: short prompts can pass, while
+    longer generations drift into multilingual/repetitive output. Header-only
+    validation lets the app reject such bundles before loading 70+ GB of model
+    weights and before users mistake a broken package for a cache/runtime bug.
+    """
+    bundle = Path(model_path)
+    report: dict[str, Any] = {
+        "checked": False,
+        "critical_count": 0,
+        "non_f32_count": 0,
+        "non_f32_examples": [],
+        "error": None,
+    }
+    if not _is_dsv4_bundle(bundle):
+        return report
+
+    weight_map = _dsv4_weight_map(bundle)
+    critical_keys = sorted(k for k in weight_map if _DSV4_CRITICAL_CONTROL_RE.match(k))
+    report["checked"] = True
+    report["critical_count"] = len(critical_keys)
+    if not critical_keys:
+        report["error"] = "No DSV4 critical control tensors found in safetensors index."
+        return report
+
+    try:
+        from safetensors import safe_open
+    except Exception as exc:
+        report["error"] = f"safetensors unavailable: {type(exc).__name__}: {exc}"
+        return report
+
+    handles: dict[str, Any] = {}
+    try:
+        for key in critical_keys:
+            filename = weight_map[key]
+            handle = handles.get(filename)
+            if handle is None:
+                handle = safe_open(str(bundle / filename), framework="numpy")
+                handle.__enter__()
+                handles[filename] = handle
+            dtype = handle.get_slice(key).get_dtype()
+            if dtype != "F32":
+                report["non_f32_count"] += 1
+                if len(report["non_f32_examples"]) < 12:
+                    report["non_f32_examples"].append({"key": key, "dtype": dtype})
+    except Exception as exc:
+        report["error"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        for handle in handles.values():
+            handle.__exit__(None, None, None)
+    return report
+
+
+def _validate_dsv4_control_tensors(model_path: str | Path) -> None:
+    """Raise a clear load-time error for known-bad DSV4 bundles."""
+    report = _audit_dsv4_control_tensor_dtypes(model_path)
+    if not report.get("checked"):
+        return
+    if report.get("error"):
+        raise RuntimeError(
+            "DSV4 bundle integrity audit failed before load: "
+            f"{report['error']}. Rebuild or re-download the DSV4 JANGTQ bundle."
+        )
+    bad = int(report.get("non_f32_count") or 0)
+    if bad:
+        examples = ", ".join(
+            f"{item['key']}={item['dtype']}"
+            for item in report.get("non_f32_examples", [])[:6]
+        )
+        raise RuntimeError(
+            "DSV4 bundle is known-bad: "
+            f"{bad}/{report.get('critical_count')} critical control tensors "
+            "are not F32. DSV4 mHC/Sinkhorn/router/sink tensors must retain "
+            "source precision; F16 copies cause long-context drift, language "
+            "salad, and repetition loops. Rebuild with the DSV4 safe converter "
+            f"or use a corrected bundle. Examples: {examples}"
+        )
 
 
 def _install_dsv4_prefill_patch() -> None:
@@ -855,6 +987,8 @@ def load_jangtq_dsv4_model(model_path: str, *, skip_params_eval: bool = True) ->
             "Reinstall vMLX from the latest DMG — the bundled Python is out
             of date".
     """
+    _validate_dsv4_control_tensors(model_path)
+
     # DSV4_LONG_CTX=1 is the only supported runtime mode. The upstream JANG
     # prefill shape bug for prompts > sliding_window is patched in this
     # process by ``_install_dsv4_prefill_patch()`` (called below). Pool
