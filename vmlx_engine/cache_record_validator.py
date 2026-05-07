@@ -295,7 +295,7 @@ def validate_cache_record(
             is a tuple whose first element is a tag string (``"kv"``,
             ``"quantized_kv"``, ``"rotating_kv"``, ``"cumulative"``,
             ``"deepseek_v4"``, ``"deepseek_v4_pending"``, ``"cache_list"``,
-            ``"skip"``).
+            ``"no_state"``, ``"skip"``).
         expected_num_layers: If not None, ``len(cache_data)`` must match.
         source: Tag for logging (e.g. ``"L2-disk"``, ``"reconstruct"``).
 
@@ -328,7 +328,7 @@ def validate_cache_record(
 
         tag = entry[0]
 
-        if tag in ("skip", "deepseek_v4_pending"):
+        if tag in ("skip", "deepseek_v4_pending", "no_state"):
             continue
 
         if tag == "kv":

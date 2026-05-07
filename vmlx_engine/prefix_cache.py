@@ -709,6 +709,21 @@ def _to_numpy_tree(obj):
     return obj
 
 
+def _copy_mlx_tree(obj):
+    """Materialize independent MLX-array copies in a nested cache state tree."""
+    if obj is None or not HAS_MLX:
+        return obj
+    if hasattr(obj, "shape") and hasattr(obj, "dtype"):
+        copied = obj * 1
+        mx.eval(copied)
+        return copied
+    if isinstance(obj, tuple):
+        return tuple(_copy_mlx_tree(x) for x in obj)
+    if isinstance(obj, list):
+        return [_copy_mlx_tree(x) for x in obj]
+    return obj
+
+
 def _dsv4_cache_meta(layer_state: Dict[str, Any]) -> Dict[str, Any]:
     meta: Dict[str, Any] = {}
     cr = layer_state.get("compress_ratio")
@@ -774,6 +789,10 @@ def _numpy_block_slice(
                     cls,
                     _dsv4_cache_meta(layer_state),
                 ))
+            continue
+
+        if cls == "ZayaNoStateCache" or layer_state.get("no_state"):
+            block_slices.append(("no_state", cls or "ZayaNoStateCache"))
             continue
 
         # CacheList (MoE): not yet supported in numpy path
@@ -1906,6 +1925,10 @@ class BlockAwarePrefixCache:
                     ))
                 continue
 
+            if class_name == "ZayaNoStateCache" or layer_state.get("no_state"):
+                block_slices.append(("no_state", class_name or "ZayaNoStateCache"))
+                continue
+
             # CacheList (MoE models): extract slices from each sub-cache
             if class_name == "CacheList" and "sub_caches" in layer_state:
                 sub_slices = []
@@ -1952,7 +1975,12 @@ class BlockAwarePrefixCache:
                     else:
                         if is_last_block:
                             meta = sub.get("meta_state", "")
-                            sub_slices.append(("cumulative", sub_state, meta, sub_cls))
+                            sub_slices.append((
+                                "cumulative",
+                                _copy_mlx_tree(sub_state),
+                                meta,
+                                sub_cls,
+                            ))
                         else:
                             sub_slices.append(("skip",))
                 block_slices.append(("cache_list", sub_slices))
@@ -2056,7 +2084,12 @@ class BlockAwarePrefixCache:
                 # Only store in the last block (it encompasses all prior tokens)
                 if is_last_block and state is not None:
                     meta = layer_state.get("meta_state", "")
-                    block_slices.append(("cumulative", state, meta, class_name))
+                    block_slices.append((
+                        "cumulative",
+                        _copy_mlx_tree(state),
+                        meta,
+                        class_name,
+                    ))
                 else:
                     block_slices.append(("skip",))
 
@@ -2425,6 +2458,8 @@ class BlockAwarePrefixCache:
                         best_dsv4 = entry  # Last DSV4 composite state wins
                     elif tag == "deepseek_v4_pending":
                         pass
+                    elif tag == "no_state":
+                        best_cumulative = entry
                     elif tag == "cache_list":
                         cache_list_entries.append(entry[1])  # list of sub-slices
                     # "skip" entries are ignored
@@ -2636,8 +2671,35 @@ class BlockAwarePrefixCache:
                     cumulative_count += 1
 
                 elif best_cumulative is not None:
+                    if best_cumulative[0] == "no_state":
+                        class_name = (
+                            best_cumulative[1]
+                            if len(best_cumulative) > 1
+                            else "ZayaNoStateCache"
+                        )
+                        if class_name == "ZayaNoStateCache":
+                            try:
+                                from vmlx_engine.models.zaya import ZayaNoStateCache
+
+                                cache = ZayaNoStateCache()
+                            except Exception as e:
+                                logger.warning(
+                                    f"Cannot reconstruct ZayaNoStateCache layer "
+                                    f"{layer_idx}: {e}"
+                                )
+                                return None
+                            reconstructed_caches.append(cache)
+                            reconstructed_indices.add(layer_idx)
+                            continue
+                        logger.warning(
+                            f"Cannot reconstruct no_state layer {layer_idx}: "
+                            f"unknown class {class_name}"
+                        )
+                        return None
+
                     # Cumulative cache (MambaCache/ArraysCache): restore full state
                     _, state, meta, class_name = best_cumulative
+                    state = _copy_mlx_tree(state)
 
                     # Try class-specific restoration.
                     # ArraysCache.from_state() rejects meta_state (it has no offset),
@@ -2768,12 +2830,26 @@ class BlockAwarePrefixCache:
                                     return None
 
                             sc = KVCache()
+                            offset = ck.shape[seq_axis]
+                            step = int(getattr(sc, "step", 0) or 0)
+                            if step > 0 and offset > 0 and offset % step:
+                                padded_len = ((offset + step - 1) // step) * step
+                                pad = padded_len - offset
+                                if pad > 0:
+                                    pad_shape = list(ck.shape)
+                                    pad_shape[seq_axis] = pad
+                                    k_pad = mx.zeros(tuple(pad_shape), ck.dtype)
+                                    v_pad = mx.zeros(tuple(pad_shape), cv.dtype)
+                                    ck = mx.concatenate([ck, k_pad], axis=seq_axis)
+                                    cv = mx.concatenate([cv, v_pad], axis=seq_axis)
+                                    mx.eval(ck, cv)
                             sc.keys = ck
                             sc.values = cv
-                            sc.offset = ck.shape[seq_axis]
+                            sc.offset = offset
                             sub_caches_rebuilt.append(sc)
                         elif sub_cumulative is not None:
                             _, sstate, smeta, scls = sub_cumulative
+                            sstate = _copy_mlx_tree(sstate)
                             try:
                                 import mlx_lm.models.cache as cache_mod
                                 scls_obj = getattr(cache_mod, scls, None)
