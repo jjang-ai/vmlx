@@ -550,3 +550,65 @@ gate has been removed; PLD now fires at all temperatures.
    batch_size > 1. This is unmeasured and should be verified before relying
    on PLD in high-concurrency deployments. The warning is documented in the
    `_try_speculative_decode` docstring.
+
+---
+
+## Hybrid partial-accept replay (vmlx#134)
+
+### Problem
+
+On hybrid SSM/ATT models (e.g. 48 GatedDeltaNet + 16 full-attention layers) case (b)
+of the rollback logic previously wasted accepted drafts. When `0 < num_accept < K`
+(partial reject), the code restored both caches to position N and emitted only 1
+correction token — discarding the `num_accept` tokens the model had already validated.
+
+The root cause: `ArraysCache` state cannot be arbitrarily trimmed, so both caches must
+rewind to a consistent checkpoint. Before this fix that checkpoint was always N (zero,
+pre-verify), even when some drafts were accepted.
+
+### Solution
+
+`Scheduler._replay_ssm_forward()` is a new staticmethod that:
+
+1. Restores all `ArraysCache` layers to the saved pre-verify snapshot (position N).
+2. Rewinds all trimmable `KVCache` layers to `pre_verify_offset` (N) via numpy roundtrip.
+3. Runs one model forward pass on `accepted_tokens` (shape `[1, num_accept]`), advancing
+   both caches to `N + num_accept` as a side-effect.
+4. Returns `True` on success, `False` on any exception (with best-effort cache restore).
+
+When replay succeeds, case (b1) emits `drafts[:num_accept] + [bonus_token]` — the same
+output as the full-accept path but for a shorter accepted prefix.
+
+When replay fails or is disabled, case (b2) falls back to the original correction-only
+path (1 token emitted).
+
+### Expected gain
+
+On hybrid models with K=2 and a 50% partial-accept rate, the replay path turns
+single-token correction rounds into two-token rounds, roughly doubling effective
+throughput on those rounds. Combined with PR #26's baseline PLD gain (+4–7%), the
+expected net improvement is **+5–10%** on top of existing PLD on hybrid models.
+
+### Configuration
+
+| Control | Default | Effect |
+|---------|---------|--------|
+| `VMLX_DISABLE_PLD_REPLAY=1` | OFF (replay enabled) | Disables replay, falls back to b2 path |
+| `config.pld_replay_enabled` | `True` | Python-level toggle (overrides env var) |
+
+### Telemetry
+
+`/health` now includes a `pld_ssm_replay` field when the scheduler has replay counters:
+
+```json
+{
+  "pld_ssm_replay": {
+    "enabled": true,
+    "attempts": 142,
+    "emitted": 421,
+    "failures": 0
+  }
+}
+```
+
+`[PLD:3b1f]` summary lines include `replay=emitted/attempts fail=N` when replay is active.
