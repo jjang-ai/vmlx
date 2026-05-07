@@ -2192,6 +2192,26 @@ async def health():
             "speculative_decoding", spec_info
         )
 
+    # Batched speculative decoding telemetry (issue #135)
+    if _engine and hasattr(_engine, "batch_generator"):
+        bg = _engine.batch_generator
+        if bg is not None:
+            try:
+                from .speculative import should_use_speculative_batched
+                if result.get("speculative_decoding") is None:
+                    result["speculative_decoding"] = {}
+                if isinstance(result.get("speculative_decoding"), dict):
+                    result["speculative_decoding"]["batched"] = {
+                        "enabled": should_use_speculative_batched(
+                            is_mllm=getattr(_engine, "is_mllm", False)
+                        ),
+                        "steps": getattr(bg, "_spec_batched_steps", 0),
+                        "tokens_emitted": getattr(bg, "_spec_batched_tokens", 0),
+                        "acceptance_rate": getattr(bg, "_spec_batched_acceptance_ema", 0.0),
+                    }
+            except Exception:
+                pass
+
     # PLD SSM replay telemetry (issue #134)
     _pld_scheduler = None
     if _engine:

@@ -4220,6 +4220,19 @@ class Scheduler:
         is unmeasured. PLD is safe and correct at any concurrency level but
         may hurt aggregate throughput when multiple requests are in flight.
         """
+        # Draft-spec (issue #135) subsumes PLD when both are configured.
+        # Batched spec handles draft token generation and verify in _step_speculative();
+        # running PLD on top would double-process the same request.
+        from .speculative import is_speculative_enabled
+        if is_speculative_enabled() and not getattr(self, "is_mllm", False):
+            if not getattr(self, "_pld_precedence_logged", False):
+                logger.info(
+                    "[PLD] disabled — --speculative-model is set; "
+                    "using draft-model spec instead (VMLX_ENABLE_BATCHED_SPEC=1)"
+                )
+                self._pld_precedence_logged = True
+            return []
+
         import mlx.core as mx
         import numpy as _np
 

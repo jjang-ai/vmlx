@@ -592,6 +592,14 @@ def serve_command(args):
     # Load speculative decoding draft model if configured
     spec_model = getattr(args, 'speculative_model', None)
     if spec_model:
+        # Wire --speculative-batched / --no-speculative-batched to env var
+        if getattr(args, 'speculative_batched', False):
+            import os as _cli_os
+            _cli_os.environ.setdefault("VMLX_ENABLE_BATCHED_SPEC", "1")
+        elif getattr(args, 'no_speculative_batched', False):
+            import os as _cli_os
+            _cli_os.environ["VMLX_ENABLE_BATCHED_SPEC"] = "0"
+
         from .speculative import SpeculativeConfig, load_draft_model
         spec_config = SpeculativeConfig(
             model=spec_model,
@@ -602,12 +610,19 @@ def serve_command(args):
 
         # Warn about incompatible combinations
         if getattr(args, 'continuous_batching', False):
-            print(
-                "  ⚠️  WARNING: Speculative decoding is incompatible with --continuous-batching.")
-            print(
-                "     The draft model will only be used in SimpleEngine (non-batched) mode.")
-            print(
-                "     BatchedEngine requests will use standard (non-speculative) generation.")
+            import os as _cli_os
+            if _cli_os.getenv("VMLX_ENABLE_BATCHED_SPEC", "0") == "1":
+                print(
+                    "  Batched speculative decoding ENABLED (VMLX_ENABLE_BATCHED_SPEC=1).")
+                print(
+                    "     Draft model will be used in per-seq draft + batched verify mode.")
+            else:
+                print(
+                    "  ⚠️  WARNING: Speculative decoding is not yet active under --continuous-batching.")
+                print(
+                    "     Add --speculative-batched or VMLX_ENABLE_BATCHED_SPEC=1 to enable (issue #135).")
+                print(
+                    "     BatchedEngine requests will use standard (non-speculative) generation.")
 
         # Check if target model is MLLM
         from .api.utils import is_mllm_model
@@ -1683,6 +1698,21 @@ Examples:
         help="Number of tokens the draft model proposes per speculative decoding step. "
              "Higher values = more potential speedup but lower acceptance rate. "
              "Typical sweet spot is 2-5. (default: 3)",
+    )
+    serve_parser.add_argument(
+        "--speculative-batched",
+        action="store_true",
+        default=False,
+        help="Enable batched speculative decoding under continuous batching (issue #135). "
+             "Equivalent to setting VMLX_ENABLE_BATCHED_SPEC=1. Requires --speculative-model. "
+             "Default OFF in v1.5.x; will be default ON in v1.6.0.",
+    )
+    serve_parser.add_argument(
+        "--no-speculative-batched",
+        action="store_true",
+        default=False,
+        help="Explicitly disable batched speculative decoding "
+             "(equivalent to VMLX_ENABLE_BATCHED_SPEC=0).",
     )
 
     # Prompt Lookup Decoding (PLD)
