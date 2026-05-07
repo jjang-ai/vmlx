@@ -786,8 +786,6 @@ class BatchedEngine(BaseEngine):
                             after = prompt[last_think + 7:]
                             if "</think>" not in after:
                                 prompt = prompt[:last_think + 7] + "</think>\n"
-                        elif "<think>" not in prompt:
-                            prompt = prompt.rstrip() + "\n<think>\n</think>\n"
                 return prompt
             except Exception as e:
                 logger.warning(f"Failed to apply MLLM chat template: {e}")
@@ -895,8 +893,6 @@ class BatchedEngine(BaseEngine):
                     after_think = prompt[last_think + 7:]
                     if "</think>" not in after_think:
                         prompt = prompt[:last_think + 7] + "</think>\n"
-                elif "<think>" not in prompt:
-                    prompt = prompt.rstrip() + "\n<think>\n</think>\n"
             return prompt
         else:
             prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)

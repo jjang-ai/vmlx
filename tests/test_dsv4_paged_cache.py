@@ -339,7 +339,7 @@ def test_dsv4_serve_path_forces_generic_kv_quantization_off():
 
     assert 'args.kv_cache_quantization = "none"' in src
     assert "DSV4-Flash native SWA+CSA/HSA cache owns cache" in src
-    assert 'os.environ["VMLINUX_DISABLE_TQ_KV"] = "1"' in src
+    assert 'os.environ["VMLX_DISABLE_TQ_KV"] = "1"' in src
 
 
 def test_dsv4_cached_prefix_kickoff_avoids_cross_thread_mx_eval():

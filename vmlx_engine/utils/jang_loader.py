@@ -115,6 +115,64 @@ def _safe_source_model_name(jang_cfg: dict) -> str:
     return "unknown"
 
 
+def _read_hf_config(path: Path) -> dict:
+    try:
+        cfg_path = path / "config.json"
+        if cfg_path.is_file():
+            return json.loads(cfg_path.read_text())
+    except Exception:
+        pass
+    return {}
+
+
+def _is_zaya_bundle(path: Path, jang_cfg: dict | None = None) -> bool:
+    """Return True for Zyphra/ZAYA bundles without loading weights."""
+    cfg = _read_hf_config(path)
+    if str(cfg.get("model_type", "")).lower() == "zaya":
+        return True
+    if str((jang_cfg or {}).get("cache_subtype", "")).lower() == "zaya_cca":
+        return True
+    caps = (jang_cfg or {}).get("capabilities")
+    if isinstance(caps, dict) and str(caps.get("family", "")).lower() == "zaya":
+        return True
+    source = (jang_cfg or {}).get("source_model")
+    if isinstance(source, dict) and str(source.get("architecture", "")).lower() == "zaya":
+        return True
+    return False
+
+
+def _ensure_zaya_runtime_supported(path: Path, jang_cfg: dict) -> None:
+    """Fail fast until a real ZAYA/CCA runtime is available.
+
+    ZAYA is not a stock mlx-lm model: even-numbered layers use CCA attention
+    with standard KV plus CCA inner state (conv_state + prev_hs), and odd
+    layers use top-1 ZAYA MoE. Loading it through a generic JANG path would
+    either fail obscurely or, worse, run with an incomplete cache contract.
+    """
+    if not _is_zaya_bundle(path, jang_cfg):
+        return
+
+    try:
+        import mlx_lm.models.zaya  # noqa: F401
+        return
+    except Exception:
+        pass
+
+    try:
+        import jang_tools.zaya  # noqa: F401
+        return
+    except Exception as err:
+        raise RuntimeError(
+            "ZAYA model_type=zaya requires a ZAYA-aware runtime. The runtime "
+            "must implement CCA attention state (KV plus conv_state and "
+            "prev_hs), top-1 ZAYA MoE, and cache restore tests before prefix, "
+            "paged, L2 disk, or TurboQuant KV cache can be claimed safe. "
+            "The current Python engine has no ZAYA runtime module; refusing "
+            f"to load {path} through a generic JANG path. Original import "
+            f"error: {err}"
+        ) from err
+
+
 def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
     """Patch model.make_cache() to return TurboQuantKVCache for JANG models with TQ enabled.
 
@@ -126,6 +184,16 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
         jang_cfg: Parsed jang_config.json dict
         model_config: Parsed config.json dict (or text_config for VLM)
     """
+    import os as _os_tq
+
+    if _os_tq.environ.get("VMLX_DISABLE_TQ_KV") in ("1", "true", "TRUE", "yes", "on"):
+        logger.info(
+            "  TurboQuant KV skipped: VMLX_DISABLE_TQ_KV=1; using native model cache "
+            "plus scheduler-level q4/q8 storage only when explicitly requested "
+            "and compatible."
+        )
+        return
+
     # MLA models (DeepSeek V2/V3, GLM-5.1, Mistral 4) use CacheList(KVCache, KVCache)
     # per layer. TQ replaces this with flat TurboQuantKVCache which breaks the
     # CacheList structure → BatchGenerator's _make_cache fails → "not subscriptable"
@@ -147,7 +215,6 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
         # use it directly; older JANG/JANGTQ bundles get conservative defaults.
         # Explicit `--kv-cache-quantization ...` sets VMLX_DISABLE_TQ_KV=1
         # before load if the user wants generic q4/q8 storage without live TQ.
-        import os as _os_tq
         if _os_tq.environ.get("VMLX_FORCE_TQ_AUTO") == "1":
             _tq_cfg = {
                 "enabled": True,
@@ -570,6 +637,8 @@ def _load_jang_v2(
         load_model as _load_model_skeleton,
         load_tokenizer,
     )
+
+    _ensure_zaya_runtime_supported(path, jang_cfg)
 
     start = time.perf_counter()
     config = load_config(path)
@@ -1360,6 +1429,9 @@ def _load_jang_v2_vlm(
     filter_expert_keys: bool = False,
 ):
     """Load a JANG v2 Vision-Language model via mmap — instant."""
+    globals()["_LAST_LOAD_VLM_FALLBACK"] = False
+    _ensure_zaya_runtime_supported(path, jang_cfg)
+
     import mlx.nn as nn
     from mlx_vlm.utils import (
         get_model_and_args,
@@ -1417,39 +1489,41 @@ def _load_jang_v2_vlm(
             "  Mistral 4 VLM not supported by mlx_vlm (no mistral4 VLM class); "
             "falling back to text-only load. Vision input will be ignored."
         )
+        globals()["_LAST_LOAD_VLM_FALLBACK"] = True
         return _load_jang_v2(path, jang_cfg, skip_eval=skip_eval, filter_expert_keys=filter_expert_keys)
 
-    # 2026-05-02: Qwen3.5/3.6-VL hybrid SSM (qwen3_5 wrapper / qwen3_5_text
-    # inner with linear_attention layers) loaded via mlx_vlm's _load_jang_v2_vlm
-    # produces incoherent garbage logits even after pre-fix bits + per-module
-    # quant overrides. Same bundle loaded via _load_jang_v2 (text path with
-    # Generalized LM-strip) produces coherent output. Reproduced live on
-    # Qwen3.6-27B-JANG_4M-CRACK with /v1/chat/completions garbage matching
-    # user screenshot. Until the deep VLM-loader divergence is identified,
-    # fall back to the text path for these bundles. mlx_vlm processor will
-    # still build for image preprocessing but text-only chat works correctly.
-    # Detection: hybrid_ssm_dense + qwen3_5 family markers.
+    # Qwen3.5/3.6-VL hybrid SSM bundles must stay on the real VLM path.
+    # A temporary 2026-05-02 text-only fallback masked an older VLM-loader
+    # quality issue, but it returned a tokenizer wrapper instead of a VLM
+    # processor. Any image request then failed with:
+    #   TokenizerWrapper is not callable and does not expose a callable .process
+    # Current native JANGTQ/MXTQ VLM loading preserves image support and was
+    # live verified on Qwen3.6-35B-A3B-JANGTQ-CRACK for both /v1/chat/completions
+    # image_url and /v1/responses input_image.
+    #
+    # Affine-JANG Qwen hybrid VLM remains different: the mlx_vlm wrapper path
+    # corrupts both text-only and image prompts, while the text loader is
+    # coherent. Normal auto-detection routes those bundles to text-only in
+    # api.utils.is_mllm_model(); this fallback is a defense for explicit
+    # --is-mllm / force_mllm launches.
     _is_qwen35_vl_hybrid = (
         config.get("model_type") in ("qwen3_5", "qwen3_5_moe", "qwen3_vl", "qwen3_vl_moe")
         and isinstance(_tc.get("layer_types"), (list, tuple))
         and any(t == "linear_attention" for t in _tc.get("layer_types", []))
     )
-    if _is_qwen35_vl_hybrid:
+    _is_mxtq_bundle = (
+        jang_cfg.get("weight_format") == "mxtq"
+        or jang_cfg.get("format") == "mxtq"
+    )
+    if _is_qwen35_vl_hybrid and not _is_mxtq_bundle:
         logger.warning(
-            "  Qwen3.5/3.6-VL hybrid SSM detected — falling back to text-only "
-            "load (VLM-loader produces garbage on hybrid SSM bundles, "
-            "mlxstudio#95-class regression on Qwen3.6-27B-JANG_4M-CRACK). "
-            "Image input will be unavailable until deep VLM-loader fix lands. "
-            "Override: VMLX_FORCE_VLM_LOADER=1 to skip this fallback."
+            "  Qwen3.5/3.6 affine-JANG hybrid VLM detected — using text-only "
+            "JANG loader for correctness. The VLM wrapper path produced corrupt "
+            "output on Qwen3.6-27B-JANG_4M-CRACK; JANGTQ/MXTQ Qwen VLM remains "
+            "on the native multimodal fast path."
         )
-        import os as _os_qfb
-        if _os_qfb.environ.get("VMLX_FORCE_VLM_LOADER") != "1":
-            # Module-level fallback marker so /api/show + UI capability lists
-            # can drop `vision` — claiming vision when image input is
-            # unavailable would mislead clients (Copilot, Continue, etc.)
-            # gating their model picker on the capabilities list.
-            globals()["_LAST_LOAD_VLM_FALLBACK"] = True
-            return _load_jang_v2(path, jang_cfg, skip_eval=skip_eval, filter_expert_keys=filter_expert_keys)
+        globals()["_LAST_LOAD_VLM_FALLBACK"] = True
+        return _load_jang_v2(path, jang_cfg, skip_eval=skip_eval, filter_expert_keys=filter_expert_keys)
 
     # Kimi K2.6 (model_type="kimi_k25") — route through
     # jang_tools.load_jangtq_kimi_vlm so the kimi_k25 → kimi_vl remap is
@@ -2236,6 +2310,7 @@ def load_jang_vlm_model(
         raise FileNotFoundError(f"No JANG config found in {path}")
 
     jang_cfg = json.loads(config_path.read_text())
+    _ensure_zaya_runtime_supported(path, jang_cfg)
     # JANGTQ writer emits {"version": 2, "weight_format": "mxtq", ...} and
     # omits the legacy `format` field entirely. Accept that shape in addition
     # to the {"format": "jang"|"jjqf"|"mxq"} legacy envelope. Mirrors the text
@@ -2291,6 +2366,7 @@ def load_jang_model(
         raise FileNotFoundError(f"No JANG config found in {path}")
 
     jang_cfg = json.loads(config_path.read_text())
+    _ensure_zaya_runtime_supported(path, jang_cfg)
     # JANGTQ writer emits {"version": 2, "weight_format": "mxtq", ...} and
     # omits the legacy `format` field entirely. Accept that shape in addition
     # to the {"format": "jang"|"jjqf"|"mxq"} legacy envelope.

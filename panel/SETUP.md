@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- macOS 26+ (Tahoe) — Apple Silicon required (MLX Metal shaders require Metal 4.0)
+- macOS 14.5+ (Sonoma) — Apple Silicon required. Older Sonoma builds lack libc++/Metal runtime symbols required by the bundled MLX wheel.
 - Node.js 18+
 - vMLX Engine (auto-installed on first launch, or install manually)
 

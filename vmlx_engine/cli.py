@@ -18,6 +18,18 @@ import os
 import sys
 
 
+def _env_int(name: str, default: int, legacy_name: str | None = None) -> int:
+    value = os.environ.get(name)
+    if value is None and legacy_name:
+        value = os.environ.get(legacy_name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
 def serve_command(args):
     """Start the OpenAI-compatible server."""
     import logging
@@ -128,6 +140,8 @@ def serve_command(args):
         _is_image = True
 
     # Configure tool calling
+    _user_disabled_tool_parser = getattr(args, "tool_call_parser", None) == "none"
+    server._tool_call_parser_disabled_explicitly = _user_disabled_tool_parser
     if args.enable_auto_tool_choice and args.tool_call_parser and args.tool_call_parser != "none":
         server._enable_auto_tool_choice = True
         # "auto" → resolved below by model_config_registry auto-apply (lines 86-108)
@@ -187,10 +201,11 @@ def serve_command(args):
         # Store full kwargs for forwarding to chat templates
         server._default_chat_template_kwargs = ct_kwargs
 
-    # Configure reasoning parser (strictly explicit; "auto" and "none"
-    # fall through to registry/template auto-detection further down).
+    # Configure reasoning parser. "auto" allows registry/template detection
+    # further down; "none" is a hard opt-out and must survive registry lookup.
     parser_name = getattr(args, 'reasoning_parser', None)
     _user_requested_auto = parser_name == "auto"
+    _user_disabled_reasoning_parser = parser_name == "none"
     if parser_name in ("auto", "none", None) or not parser_name:
         parser_name = None
 
@@ -243,7 +258,7 @@ def serve_command(args):
                 _old_kvq = args.kv_cache_quantization
                 args.kv_cache_quantization = "none"
                 args.kv_cache_quantization_explicit = True
-                os.environ["VMLINUX_DISABLE_TQ_KV"] = "1"
+                os.environ["VMLX_DISABLE_TQ_KV"] = "1"
                 os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
                 logger.info(
                     "DSV4-Flash native SWA+CSA/HSA cache owns cache "
@@ -264,14 +279,73 @@ def serve_command(args):
                 f"DSV4_POOL_QUANT={_dsv4_pool_quant}. Upstream prefill shape bug patched in-process "
                 "by load_jangtq_dsv4."
             )
+        elif (
+            _mc.family_name == "zaya"
+            or getattr(_mc, "cache_subtype", None) == "zaya_cca"
+        ):
+            # ZAYA/CCA is hybrid, but not the same cache contract as
+            # Bailing/Ling/Qwen SSM. Official ZAYA runtime notes disable
+            # prefix caching until CCA conv_state + prev_hs are included in
+            # the prompt-boundary payload and exact restore tests pass.
+            _changed = []
+            if getattr(args, "enable_prefix_cache", True):
+                args.enable_prefix_cache = False
+                _changed.append("prefix")
+            if getattr(args, "use_paged_cache", False):
+                args.use_paged_cache = False
+                _changed.append("paged")
+            if getattr(args, "enable_block_disk_cache", False):
+                args.enable_block_disk_cache = False
+                _changed.append("L2 disk")
+            if getattr(args, "kv_cache_quantization", "none") != "none":
+                _changed.append(f"kv_quant={args.kv_cache_quantization}")
+            args.kv_cache_quantization = "none"
+            args.kv_cache_quantization_explicit = True
+            os.environ["VMLX_DISABLE_TQ_KV"] = "1"
+            os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
+            logger.warning(
+                "ZAYA/CCA cache contract detected — disabling %s until the "
+                "Python runtime implements full CCA state restore (standard KV "
+                "+ conv_state + prev_hs) and passes prefix/paged/L2 replay "
+                "tests.",
+                ", ".join(_changed) if _changed else "prefix/paged/L2/TQ-KV",
+            )
+        elif (
+            getattr(_mc, "cache_type", None) == "hybrid"
+            and not getattr(args, "kv_cache_quantization_explicit", False)
+        ):
+            # Hybrid SSM models carry cumulative non-KV state in addition to
+            # attention KV. Live TurboQuantKVCache currently compresses only
+            # positional KV slots; Ling/Bailing JANGTQ2 live tests showed
+            # deterministic generated-token loops with auto TQ-KV enabled,
+            # while the same prompt was coherent with unquantized native cache.
+            # Do not patch or quantize the model's cache contract until the
+            # hybrid TQ codec covers KV + SSM state end to end.
+            _old_kvq = args.kv_cache_quantization
+            args.kv_cache_quantization = "none"
+            os.environ["VMLX_DISABLE_TQ_KV"] = "1"
+            os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
+            logger.info(
+                "Hybrid SSM cache model detected — disabling live TurboQuant KV "
+                "and generic KV quantization for correctness (was: %s).",
+                _old_kvq,
+            )
         if _mc.family_name != "unknown":
             # Auto-apply tool parser
-            if not server._tool_call_parser and _mc.tool_parser:
+            if (
+                not _user_disabled_tool_parser
+                and not server._tool_call_parser
+                and _mc.tool_parser
+            ):
                 server._tool_call_parser = _mc.tool_parser
                 server._enable_auto_tool_choice = True
                 logger.info(f"Auto-configured tool parser from registry: {_mc.tool_parser}")
             # Auto-apply reasoning parser
-            if not server._reasoning_parser and _mc.reasoning_parser:
+            if (
+                not _user_disabled_reasoning_parser
+                and not server._reasoning_parser
+                and _mc.reasoning_parser
+            ):
                 try:
                     from .reasoning import get_parser
                     _rp_cls = get_parser(_mc.reasoning_parser)
@@ -451,6 +525,8 @@ def serve_command(args):
         if _is_thinking_model:
             _thinking_suffix = "  [thinking model detected]"
         print(f"  Reasoning: ENABLED (parser: {parser_display}){_thinking_suffix}")
+    elif getattr(args, 'reasoning_parser', None) == "none":
+        print("  Reasoning: DISABLED (--reasoning-parser none)")
     elif getattr(args, 'reasoning_parser', None):
         print(f"  Reasoning: requested '{args.reasoning_parser}' but no parser matched")
     elif _is_thinking_model and _thinking_off:
@@ -1480,7 +1556,7 @@ Examples:
     serve_parser.add_argument(
         "--ssm-state-cache-mb",
         type=int,
-        default=int(os.environ.get("VMLINUX_SSM_STATE_CACHE_MB", "512")),
+        default=_env_int("VMLX_SSM_STATE_CACHE_MB", 512, "VMLINUX_SSM_STATE_CACHE_MB"),
         help="Approximate memory budget in MB for hybrid SSM companion states. "
              "Entries above the budget are skipped; older entries are evicted "
              "when the total exceeds it. (default: 512)",
@@ -2009,7 +2085,7 @@ Examples:
     bench_parser.add_argument(
         "--ssm-state-cache-mb",
         type=int,
-        default=int(os.environ.get("VMLINUX_SSM_STATE_CACHE_MB", "512")),
+        default=_env_int("VMLX_SSM_STATE_CACHE_MB", 512, "VMLINUX_SSM_STATE_CACHE_MB"),
         help="Approximate memory budget in MB for hybrid SSM companion states (default: 512)",
     )
     # Paged cache options (experimental)

@@ -8705,6 +8705,46 @@ class TestReasoningParserWiring:
         assert "server._reasoning_parser = None" in src, (
             "--reasoning-parser none must explicitly disable the parser"
         )
+        assert "_user_disabled_reasoning_parser" in src
+        assert "not _user_disabled_reasoning_parser" in src, (
+            "--reasoning-parser none must not be overwritten by registry auto-detection"
+        )
+
+    def test_none_tool_parser_survives_registry_auto_detection(self):
+        """--tool-call-parser none must not be overwritten by family defaults."""
+        from vmlx_engine import cli
+        import inspect
+        src = inspect.getsource(cli)
+        assert "_user_disabled_tool_parser" in src
+        assert "server._tool_call_parser_disabled_explicitly = _user_disabled_tool_parser" in src
+        assert "not _user_disabled_tool_parser" in src, (
+            "--tool-call-parser none must not be overwritten by registry auto-detection"
+        )
+        assert "server._enable_auto_tool_choice = False" in src
+        assert "server._tool_call_parser = None" in src
+
+        from vmlx_engine import server as srv
+        server_src = inspect.getsource(srv)
+        assert "_tool_call_parser_disabled_explicitly" in server_src
+        assert "if _tool_call_parser_disabled_explicitly" in server_src
+
+    def test_thinking_off_does_not_synthesize_think_tags(self):
+        """Thinking-off may close an open <think>, but must not invent one.
+
+        Ling/Bailing templates render their own `detailed thinking off`
+        directive and do not use literal <think> tags. Appending a synthetic
+        `<think></think>` suffix changed the prompt by 5 tokens and made
+        Ling JANGTQ2 loop on code prompts.
+        """
+        from pathlib import Path
+
+        for path in [
+            Path("vmlx_engine/engine/batched.py"),
+            Path("vmlx_engine/engine/simple.py"),
+        ]:
+            src = path.read_text()
+            assert 'prompt = prompt[:last_think + 7] + "</think>\\n"' in src
+            assert 'prompt.rstrip() + "\\n<think>\\n</think>\\n"' not in src
 
     def test_interleaved_think_and_tool_call(self):
         """Critical: when a model emits both <think>...</think> AND

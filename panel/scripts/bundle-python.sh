@@ -36,9 +36,35 @@ echo "==> Upgrading pip..."
 
 # Install ALL dependencies (lean: no gradio, no dev tools, no pytz)
 # Uses opencv-python-headless instead of opencv-python (no GUI deps, smaller)
+#
+# Build reproducibility note:
+# On macOS Tahoe, pip prefers MLX wheels tagged macosx_26_0_arm64. Shipping
+# that wheel in a DMG whose Info.plist allows Sonoma/Sequoia reopens the
+# mlxstudio#104 "Metal language version 4.0 unsupported" crash. The same MLX
+# release publishes macosx_14_0_arm64 wheels, so force those for the bundle.
+MLX_VERSION="0.31.2"
+MLX_LM_VERSION="0.31.3"
+MLX_VLM_VERSION="0.4.4"
+MFLUX_VERSION="0.17.5"
+MLX_WHEEL_PLATFORM="${VMLX_BUNDLE_MLX_PLATFORM:-macosx_14_0_arm64}"
+WHEELHOUSE="$BUNDLE_DIR/wheelhouse"
+mkdir -p "$WHEELHOUSE"
+echo "==> Installing MLX $MLX_VERSION wheels for $MLX_WHEEL_PLATFORM..."
+"$PYTHON" -m pip download --only-binary=:all: --no-deps \
+  --dest "$WHEELHOUSE" \
+  --platform "$MLX_WHEEL_PLATFORM" \
+  --implementation cp --python-version 312 --abi cp312 \
+  "mlx==$MLX_VERSION"
+"$PYTHON" -m pip download --only-binary=:all: --no-deps \
+  --dest "$WHEELHOUSE" \
+  --platform "$MLX_WHEEL_PLATFORM" \
+  --implementation py --python-version 312 --abi none \
+  "mlx-metal==$MLX_VERSION"
+"$PYTHON" -m pip install "$WHEELHOUSE"/mlx-"$MLX_VERSION"-*.whl "$WHEELHOUSE"/mlx_metal-"$MLX_VERSION"-*.whl
+
 echo "==> Installing dependencies..."
 "$PYTHON" -m pip install \
-  "mlx>=0.29.0" "mlx-lm>=0.31.2" "mlx-vlm>=0.4.3" \
+  "mlx==$MLX_VERSION" "mlx-lm==$MLX_LM_VERSION" "mlx-vlm==$MLX_VLM_VERSION" \
   "transformers>=4.40.0" "tokenizers>=0.19.0" "huggingface-hub>=0.23.0" \
   "numpy>=1.24.0" "pillow>=10.0.0" \
   "opencv-python-headless>=4.8.0" \
@@ -48,7 +74,7 @@ echo "==> Installing dependencies..."
   "requests>=2.28.0" "tabulate>=0.9.0" "mlx-embeddings>=0.0.5" \
   "tiktoken>=0.7.0" \
   "soundfile>=0.12" \
-  "mflux>=0.16.0" \
+  "mflux==$MFLUX_VERSION" \
   "timm>=1.0.20"  # Kimi K2.6 tokenizer + Nemotron-Omni audio (soundfile) + Omni RADIO ViT (timm)
 
 # Install mlx-audio for STT/TTS (--no-deps: it pins exact mlx-lm/transformers versions
@@ -95,11 +121,6 @@ else
   "$PYTHON" -m pip install --no-deps "jang>=2.5.26"
 fi
 
-# Verify it works
-echo "==> Verifying installation..."
-"$PYTHON" -c "import vmlx_engine; print(f'vmlx_engine {vmlx_engine.__version__} imported OK')"
-"$PYTHON" -m vmlx_engine.cli --help > /dev/null 2>&1 && echo "CLI OK"
-
 # Clean up to reduce size
 echo "==> Cleaning up..."
 SITE="$BUNDLE_DIR/python/lib/python3.12/site-packages"
@@ -145,6 +166,7 @@ find "$SITE" -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
 # Verified working at bundle time: see verify-bundled-python.sh soundfile gate.
 rm -rf "$SITE/setuptools" 2>/dev/null || true          # build tool, not needed at runtime (~4.2 MB)
 rm -rf "$SITE/setuptools"*.dist-info 2>/dev/null || true
+rm -rf "$WHEELHOUSE" 2>/dev/null || true
 
 # Keep pip intact (needed for engine auto-update at runtime via python3 -m pip)
 # NOTE: Do NOT remove pip/_vendor/* — pip 26+ requires cachecontrol, pygments,
@@ -379,6 +401,13 @@ else:
 
 echo "==> Patches applied."
 
+# Verify imports only after dependency patches are baked in. Importing
+# vmlx_engine/CLI earlier can trigger runtime patch checks against a half-built
+# bundle and produce false "patched source not found" diagnostics.
+echo "==> Verifying installation..."
+"$PYTHON" -c "import vmlx_engine; print(f'vmlx_engine {vmlx_engine.__version__} imported OK')"
+"$PYTHON" -m vmlx_engine.cli --help > /dev/null 2>&1 && echo "CLI OK"
+
 # ====================================================================
 # Critical: Verify the Python shared library exists (prevents broken bundles)
 # The bundled Python MUST include libpython3.12.dylib for the app to work.
@@ -454,7 +483,7 @@ for SCRIPT in "$BUNDLE_DIR/python/bin/"*; do
 done
 echo "  rewrote $SHEBANG_FIXED shebangs to $INSTALL_SHEBANG"
 # Sanity check — no script should still reference the source path
-LEAKED=$(grep -lF "$SOURCE_PYTHON" "$BUNDLE_DIR/python/bin/"* 2>/dev/null | head -3)
+LEAKED=$(grep -lF "$SOURCE_PYTHON" "$BUNDLE_DIR/python/bin/"* 2>/dev/null | head -3 || true)
 if [ -n "$LEAKED" ]; then
   echo "ERROR: source path still in shebangs after rewrite:"
   echo "$LEAKED"
