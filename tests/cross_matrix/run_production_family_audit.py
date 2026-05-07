@@ -493,6 +493,21 @@ def static_audit(row: ModelRow) -> dict[str, Any]:
     if not row.live_supported and row.unsupported_reason:
         issues.append(row.unsupported_reason)
     if row.family == "deepseek_v4":
+        try:
+            from vmlx_engine.loaders.load_jangtq_dsv4 import (
+                _audit_dsv4_control_tensor_dtypes,
+            )
+
+            dsv4_control = _audit_dsv4_control_tensor_dtypes(model_dir)
+            if dsv4_control.get("non_f32_count"):
+                issues.append(
+                    "DSV4 critical control tensors are not F32 "
+                    f"({dsv4_control.get('non_f32_count')}/"
+                    f"{dsv4_control.get('critical_count')}); rebuild/re-download "
+                    "required before live quality claims"
+                )
+        except Exception as exc:
+            issues.append(f"DSV4 critical control tensor audit failed: {exc}")
         if jang.get("weight_format") == "mxtq":
             bits = jang.get("mxtq_bits", {})
             if bits.get("routed_expert") not in (2, 4, 8):
