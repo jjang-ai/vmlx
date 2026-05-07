@@ -27,13 +27,41 @@ the repo-local source bundle is already corrected.
 Status terms used below:
 
 - **source fixed** means code and repo-local tests cover the bug class.
-- **live-source verified** means a local model/API run from source or
-  repo-local bundled Python passed.
+- **live-source verified** means the relevant real local model was loaded from
+  source or repo-local bundled Python and passed a function-specific live
+  matrix. The matrix must include multi-turn continuity when the feature is a
+  chat/runtime/cache feature; full decoded output must be read to completion;
+  streaming and non-streaming paths must be checked when the bug is streaming
+  related; reasoning on/off/effort modes must be checked when the family uses
+  reasoning; and cache claims must include prefix/paged/L2 hit-store-restore
+  counters plus RAM/Metal/process telemetry.
 - **release verified** means a clean signed/notarized DMG or PyPI package was
   installed and the reporter path was reproduced there.
 
 Nothing in this pass is release verified. Do not close issues from source tests
 alone.
+
+### Live Verification Gate
+
+Source tests are necessary but no longer sufficient for production claims.
+Every future runtime/cache/model fix must produce a live artifact with:
+
+- exact model path, git commit, command line, environment overrides, and server
+  log path;
+- protocol coverage appropriate to the bug: OpenAI chat, Responses,
+  Anthropic, Ollama, streaming/non-streaming, tools, VL/audio payloads;
+- reasoning coverage for reasoning families: off/on/effort or equivalent
+  family modes, with reasoning and final content checked separately;
+- multi-turn prompts that require prior-turn recall, not just a single easy
+  prompt;
+- cache telemetry before/after: prefix/paged hit counts, tokens saved, block
+  disk/L2 writes and hits, cache bypass/salt behavior, and native-vs-TQ cache
+  policy from logs/stats;
+- resource telemetry: process RSS, system memory, MLX active/peak memory when
+  exposed, TTFT, tok/s, prefill speed, prompt/completion tokens, and whether
+  memory returns after request/server stop;
+- full output capture with loop/garbage checks. A test that only checks HTTP
+  200 or a short prefix is not sufficient.
 
 ### GitHub Comment Audit
 
