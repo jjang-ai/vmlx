@@ -137,6 +137,24 @@ def request_json(method: str, url: str, body: dict[str, Any] | None = None, time
     return json.loads(payload) if payload else {}
 
 
+def write_json_log(gate: Gate, name: str, value: Any) -> Path:
+    path = gate.log_dir / f"{slug(name)}.json"
+    path.write_text(json.dumps(value, indent=2, ensure_ascii=False))
+    return path
+
+
+def apply_thinking(payload: dict[str, Any], mode: str) -> dict[str, Any]:
+    if mode == "auto":
+        return payload
+    enabled = mode == "on"
+    payload = dict(payload)
+    payload["enable_thinking"] = enabled
+    kwargs = dict(payload.get("chat_template_kwargs") or {})
+    kwargs["enable_thinking"] = enabled
+    payload["chat_template_kwargs"] = kwargs
+    return payload
+
+
 def wait_health(base_url: str, timeout: int = 240) -> dict[str, Any]:
     deadline = time.time() + timeout
     last_error: Exception | None = None
@@ -270,7 +288,7 @@ def launch_app_smoke(gate: Gate, app: Path) -> None:
         gate.record("GUI open smoke verdict", "FAIL", "no vMLX process found")
 
 
-def live_engine_gate(gate: Gate, app: Path, model: str, port: int, skip_sleep_wake: bool) -> None:
+def live_engine_gate(gate: Gate, app: Path, model: str, port: int, skip_sleep_wake: bool, thinking: str) -> None:
     py = packaged_python(app) if app.exists() else Path(sys.executable)
     if not Path(model).exists() and "/" not in model:
         gate.record("live model path", "FAIL", model)
@@ -312,19 +330,20 @@ def live_engine_gate(gate: Gate, app: Path, model: str, port: int, skip_sleep_wa
         chat = request_json(
             "POST",
             f"{base}/v1/chat/completions",
-            {
+            apply_thinking({
                 "model": "local",
                 "messages": [{"role": "user", "content": "Answer with exactly: Paris"}],
                 "temperature": 0,
                 "max_tokens": 64,
-            },
+            }, thinking),
         )
+        write_json_log(gate, "OpenAI chat response", chat)
         assert_visible_text("OpenAI chat visible output", chat, gate)
 
         mt = request_json(
             "POST",
             f"{base}/v1/chat/completions",
-            {
+            apply_thinking({
                 "model": "local",
                 "messages": [
                     {"role": "user", "content": "Remember this word: teal. Reply OK."},
@@ -333,8 +352,9 @@ def live_engine_gate(gate: Gate, app: Path, model: str, port: int, skip_sleep_wa
                 ],
                 "temperature": 0,
                 "max_tokens": 96,
-            },
+            }, thinking),
         )
+        write_json_log(gate, "OpenAI multi turn response", mt)
         text = assert_visible_text("OpenAI multi-turn recall", mt, gate)
         if "teal" not in text.lower():
             gate.record("OpenAI multi-turn recall exact", "FAIL", text[:180])
@@ -344,13 +364,14 @@ def live_engine_gate(gate: Gate, app: Path, model: str, port: int, skip_sleep_wa
         responses = request_json(
             "POST",
             f"{base}/v1/responses",
-            {
+            apply_thinking({
                 "model": "local",
                 "input": "Answer with exactly: 4",
                 "temperature": 0,
                 "max_output_tokens": 128,
-            },
+            }, thinking),
         )
+        write_json_log(gate, "Responses API response", responses)
         assert_visible_text("Responses visible output", responses, gate)
 
         anthropic = request_json(
@@ -362,21 +383,30 @@ def live_engine_gate(gate: Gate, app: Path, model: str, port: int, skip_sleep_wa
                 "messages": [{"role": "user", "content": "Answer with exactly: blue"}],
             },
         )
+        write_json_log(gate, "Anthropic response", anthropic)
         assert_visible_text("Anthropic visible output", anthropic, gate)
 
+        ollama_body = {
+            "model": "local",
+            "messages": [{"role": "user", "content": "Answer with exactly: green"}],
+            "stream": False,
+            "options": {"temperature": 0, "num_predict": 96},
+        }
+        if thinking != "auto":
+            # Native Ollama field. The server also accepts enable_thinking as
+            # a vMLX extension, but the release gate should exercise the real
+            # public Ollama contract.
+            ollama_body["think"] = thinking == "on"
         ollama = request_json(
             "POST",
             f"{base}/api/chat",
-            {
-                "model": "local",
-                "messages": [{"role": "user", "content": "Answer with exactly: green"}],
-                "stream": False,
-                "options": {"temperature": 0, "num_predict": 96},
-            },
+            ollama_body,
         )
+        write_json_log(gate, "Ollama response", ollama)
         assert_visible_text("Ollama visible output", ollama, gate)
 
         stats = request_json("GET", f"{base}/v1/cache/stats")
+        write_json_log(gate, "Cache stats after API matrix", stats)
         gate.record("cache stats after API matrix", "PASS", json.dumps(stats)[:600])
 
         if not skip_sleep_wake:
@@ -385,14 +415,15 @@ def live_engine_gate(gate: Gate, app: Path, model: str, port: int, skip_sleep_wa
             wake_resp = request_json(
                 "POST",
                 f"{base}/v1/chat/completions",
-                {
+                apply_thinking({
                     "model": "local",
                     "messages": [{"role": "user", "content": "After wake, answer with exactly: awake"}],
                     "temperature": 0,
                     "max_tokens": 96,
-                },
+                }, thinking),
                 timeout=240,
             )
+            write_json_log(gate, "JIT soft wake response", wake_resp)
             assert_visible_text("JIT soft-wake inference", wake_resp, gate)
     finally:
         proc.send_signal(signal.SIGTERM)
@@ -411,6 +442,7 @@ def main() -> int:
     parser.add_argument("--skip-app", action="store_true", help="Skip packaged app signature/import checks")
     parser.add_argument("--skip-gui", action="store_true", help="Skip opening the GUI app")
     parser.add_argument("--skip-sleep-wake", action="store_true", help="Skip /admin/soft-sleep + JIT wake")
+    parser.add_argument("--thinking", choices=["auto", "off", "on"], default="auto", help="Per-request thinking mode for live API checks")
     args = parser.parse_args()
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -422,7 +454,7 @@ def main() -> int:
         if not args.skip_gui and not args.skip_app:
             launch_app_smoke(gate, app)
         if args.model:
-            live_engine_gate(gate, app, args.model, args.port, args.skip_sleep_wake)
+            live_engine_gate(gate, app, args.model, args.port, args.skip_sleep_wake, args.thinking)
     except Exception as exc:  # noqa: BLE001
         gate.record("release gate exception", "FAIL", repr(exc))
     summary = gate.write_summary(args)

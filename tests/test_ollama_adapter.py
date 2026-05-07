@@ -39,6 +39,45 @@ def test_ollama_generate_default_uses_chat_template_request_shape():
     assert req["response_format"] == {"type": "json_object"}
 
 
+def test_ollama_chat_accepts_enable_thinking_extension():
+    from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
+
+    req = ollama_chat_to_openai(
+        {
+            "model": "zaya",
+            "messages": [{"role": "user", "content": "hi"}],
+            "enable_thinking": False,
+        }
+    )
+
+    assert req["enable_thinking"] is False
+
+
+def test_ollama_native_think_beats_enable_thinking_extension():
+    from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
+
+    req = ollama_chat_to_openai(
+        {
+            "model": "zaya",
+            "messages": [{"role": "user", "content": "hi"}],
+            "think": True,
+            "enable_thinking": False,
+        }
+    )
+
+    assert req["enable_thinking"] is True
+
+
+def test_ollama_generate_chat_accepts_enable_thinking_extension():
+    from vmlx_engine.api.ollama_adapter import ollama_generate_to_openai_chat
+
+    req = ollama_generate_to_openai_chat(
+        {"model": "zaya", "prompt": "hi", "enable_thinking": False}
+    )
+
+    assert req["enable_thinking"] is False
+
+
 def test_ollama_generate_raw_keeps_completion_request_shape():
     from vmlx_engine.api.ollama_adapter import ollama_generate_to_openai
 

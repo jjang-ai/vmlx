@@ -31,6 +31,21 @@ describe("Ollama gateway parity contracts", () => {
     expect(source).toContain("message.thinking");
   });
 
+  it("forwards thinking kwargs through app gateway Ollama routes", () => {
+    expect(source).toContain("parsed.enable_thinking");
+    expect(source).toContain("openaiBody.enable_thinking = Boolean(parsed.think)");
+    expect(source).toContain("openaiBody.reasoning_effort = parsed.reasoning_effort");
+    expect(source).toContain("openaiBody.chat_template_kwargs = parsed.chat_template_kwargs");
+  });
+
+  it("routes Ollama generate through chat templates unless raw=true", () => {
+    expect(source).toContain("const useRawCompletion = parsed.raw === true");
+    expect(source).toContain("prompt: parsed.prompt || \"\"");
+    expect(source).toContain("messages: [");
+    expect(source).toContain('path: backendPath');
+    expect(source).toContain('choice?.message?.content || ""');
+  });
+
   it("forwards cache bypass controls through chat and generate routes", () => {
     const cacheSaltForwards =
       source.match(/openaiBody\.cache_salt = parsed\.cache_salt/g) || [];

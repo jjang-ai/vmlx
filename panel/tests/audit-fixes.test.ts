@@ -347,6 +347,54 @@ describe('enableThinking tri-state', () => {
     expect(shouldResetStaleEnableThinkingDefault(null)).toBe(false)
   })
 
+  function migrateLegacyReasoningState(state: {
+    marker?: string
+    chatEnableThinking: Array<0 | 1 | null>
+    profiles: Array<Record<string, unknown>>
+    modelReasoningModes: string[]
+  }) {
+    if (state.marker) return state
+    return {
+      marker: 'set',
+      chatEnableThinking: state.chatEnableThinking.map(() => null),
+      profiles: state.profiles.map((profile) => {
+        const next = { ...profile }
+        delete next.enableThinking
+        return next
+      }),
+      modelReasoningModes: state.modelReasoningModes.map(() => 'auto'),
+    }
+  }
+
+  it('v1.5.25 one-time migration clears cached reasoning choices that can poison upgraded users', () => {
+    const migrated = migrateLegacyReasoningState({
+      chatEnableThinking: [0, 1, null],
+      profiles: [
+        { temperature: 0.6, enableThinking: false },
+        { builtinToolsEnabled: true, enableThinking: true },
+      ],
+      modelReasoningModes: ['off', 'on', 'auto'],
+    })
+    expect(migrated.chatEnableThinking).toEqual([null, null, null])
+    expect(migrated.profiles).toEqual([
+      { temperature: 0.6 },
+      { builtinToolsEnabled: true },
+    ])
+    expect(migrated.modelReasoningModes).toEqual(['auto', 'auto', 'auto'])
+  })
+
+  it('v1.5.25 migration marker prevents resetting explicit post-upgrade choices repeatedly', () => {
+    const migrated = migrateLegacyReasoningState({
+      marker: 'set',
+      chatEnableThinking: [0],
+      profiles: [{ enableThinking: false }],
+      modelReasoningModes: ['off'],
+    })
+    expect(migrated.chatEnableThinking).toEqual([0])
+    expect(migrated.profiles).toEqual([{ enableThinking: false }])
+    expect(migrated.modelReasoningModes).toEqual(['off'])
+  })
+
   function normalizeReasoningMode(mode: unknown): 'auto' | 'on' | 'off' {
     const m = String(mode ?? 'auto').toLowerCase()
     if (m === 'on' || m === 'always' || m === 'true' || m === 'reasoning') return 'on'
