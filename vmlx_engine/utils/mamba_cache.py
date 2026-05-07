@@ -513,6 +513,8 @@ def patch_mlx_lm_for_mamba():
         """
 
         def to_batch_cache(c):
+            if type(c).__name__ == "ZayaNoStateCache":
+                return type(c)()
             if _is_kv_like(c):
                 return BatchKVCache(left_padding)
             elif _QuantizedKVCache is not None and isinstance(c, _QuantizedKVCache):
@@ -643,6 +645,8 @@ def patch_mlx_lm_for_mamba():
                     )[0]
                     merged_subs.append(sub_merged)
                 cache = CacheList(*merged_subs)
+            elif type(layer_cache).__name__ == "ZayaNoStateCache":
+                cache = type(layer_cache).merge([c[i] for c in caches])
             elif type(layer_cache).__name__ in (
                 "DeepseekV4Cache", "PoolQuantizedV4Cache"
             ):

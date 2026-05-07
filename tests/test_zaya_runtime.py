@@ -4,7 +4,12 @@ from pathlib import Path
 import mlx.core as mx
 import pytest
 
-from vmlx_engine.models.zaya import Model, ModelArgs, register_mlx_lm_zaya
+from vmlx_engine.models.zaya import (
+    Model,
+    ModelArgs,
+    ZayaNoStateCache,
+    register_mlx_lm_zaya,
+)
 
 
 def _small_args():
@@ -86,6 +91,68 @@ def test_zaya_cca_cache_chunked_prefill_matches_single_shot_logits():
     assert diff.item() == 0.0
     assert full_cache[0][0].offset == 4
     assert chunked_cache[0][0].offset == 4
+
+
+def test_zaya_moe_no_state_cache_extracts_and_merges_cleanly():
+    cache = ZayaNoStateCache()
+
+    assert cache.state == ()
+    assert cache.extract(0).state == ()
+    cache.filter([0])
+    cache.prepare(lengths=[1])
+    cache.finalize()
+    cache.advance(1)
+    cache.extend(ZayaNoStateCache())
+    assert cache.empty()
+    assert cache.nbytes == 0
+    assert type(ZayaNoStateCache.merge([cache, ZayaNoStateCache()])).__name__ == (
+        "ZayaNoStateCache"
+    )
+
+
+def test_zaya_batch_generator_finishes_with_moe_no_state_cache():
+    """Finished ZAYA generations must be able to return prompt_cache.
+
+    mlx-lm slices each layer cache in GenerationBatch.extract_cache() when a
+    request reaches max_tokens/stop.  Odd ZAYA MoE layers have no state, so the
+    placeholder cache must be extract-safe rather than an ArraysCache full of
+    None slots.
+    """
+
+    from mlx_lm.generate import BatchGenerator
+    from mlx_lm.sample_utils import make_sampler
+
+    mx.random.seed(9)
+    model = Model(_small_args())
+    generator = BatchGenerator(
+        model=model,
+        max_tokens=1,
+        stop_tokens=[[0]],
+        sampler=make_sampler(temp=0.0),
+        completion_batch_size=1,
+        prefill_batch_size=1,
+        prefill_step_size=4,
+    )
+    (uid,) = generator.insert([[1, 2, 3]], max_tokens=[1])
+    responses = []
+    for _ in range(4):
+        prompt_responses, generation_responses = generator.next()
+        responses.extend(prompt_responses)
+        responses.extend(generation_responses)
+        if any(
+            getattr(r, "uid", None) == uid and getattr(r, "finish_reason", None)
+            for r in responses
+        ):
+            break
+
+    finished = [
+        r
+        for r in responses
+        if getattr(r, "uid", None) == uid and getattr(r, "finish_reason", None)
+    ]
+    assert finished, "ZAYA request did not finish in the expected one token"
+    assert finished[0].prompt_cache is not None
+    assert isinstance(finished[0].prompt_cache[1], ZayaNoStateCache)
 
 
 def test_local_zaya_mxfp4_loads_strictly_when_present():
