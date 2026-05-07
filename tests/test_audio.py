@@ -357,6 +357,64 @@ class TestMambaCacheCompat:
         assert merged.cache[0].shape == (2, 4, 8)
         assert merged._batch_size == 2
 
+    def test_empty_batch_kv_finalize_clears_padding(self):
+        """Hybrid batch recovery may finalize an empty padded KV slot."""
+        from mlx_lm.models.cache import BatchKVCache
+        from vmlx_engine.utils.mamba_cache import _safe_finalize_prompt_cache_entry
+
+        cache = BatchKVCache([0, 0])
+        cache.prepare(lengths=[8, 5], right_padding=[0, 3])
+
+        _safe_finalize_prompt_cache_entry(cache)
+
+        assert cache.keys is None
+        assert cache.values is None
+        assert cache._right_padding is None
+
+    def test_empty_batch_rotating_finalize_clears_lengths(self):
+        """Sliding-window batch cache has the same empty-finalize hazard."""
+        from mlx_lm.models.cache import BatchRotatingKVCache
+        from vmlx_engine.utils.mamba_cache import _safe_finalize_prompt_cache_entry
+
+        cache = BatchRotatingKVCache(max_size=64, left_padding=[0, 0])
+        cache.prepare(lengths=[8, 5], right_padding=[0, 3])
+
+        _safe_finalize_prompt_cache_entry(cache)
+
+        assert cache.keys is None
+        assert cache.values is None
+        assert cache._lengths is None
+
+    def test_empty_batch_kv_extract_returns_empty_cache(self):
+        """GenerationBatch.extract_cache must survive empty hybrid KV slots."""
+        from mlx_lm.models.cache import BatchKVCache, KVCache
+        from vmlx_engine.utils.mamba_cache import ensure_mamba_support
+
+        ensure_mamba_support()
+        cache = BatchKVCache([0, 0])
+
+        extracted = cache.extract(0)
+
+        assert isinstance(extracted, KVCache)
+        assert extracted.keys is None
+        assert extracted.values is None
+        assert extracted.offset == 0
+
+    def test_empty_batch_rotating_extract_returns_empty_cache(self):
+        """Sliding-window batch extract has the same empty-slot hazard."""
+        from mlx_lm.models.cache import BatchRotatingKVCache, RotatingKVCache
+        from vmlx_engine.utils.mamba_cache import ensure_mamba_support
+
+        ensure_mamba_support()
+        cache = BatchRotatingKVCache(max_size=64, left_padding=[0, 0])
+
+        extracted = cache.extract(0)
+
+        assert isinstance(extracted, RotatingKVCache)
+        assert extracted.keys is None
+        assert extracted.values is None
+        assert extracted.offset == 0
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

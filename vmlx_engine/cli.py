@@ -323,6 +323,7 @@ def serve_command(args):
             # hybrid TQ codec covers KV + SSM state end to end.
             _old_kvq = args.kv_cache_quantization
             args.kv_cache_quantization = "none"
+            args.kv_cache_quantization_explicit = True
             os.environ["VMLX_DISABLE_TQ_KV"] = "1"
             os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
             logger.info(
@@ -516,7 +517,8 @@ def serve_command(args):
         print("  Rate limiting: DISABLED - Use --rate-limit to enable")
     print(f"  Request timeout: {args.timeout}s")
     if args.enable_auto_tool_choice:
-        print(f"  Tool calling: ENABLED (parser: {args.tool_call_parser})")
+        _effective_tool_parser = server._tool_call_parser or args.tool_call_parser
+        print(f"  Tool calling: ENABLED (parser: {_effective_tool_parser})")
     else:
         print("  Tool calling: Use --enable-auto-tool-choice to enable")
     if server._reasoning_parser:

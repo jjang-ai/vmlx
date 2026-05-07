@@ -20,6 +20,7 @@ Available parsers:
 - step3p5/stepfun: StepFun Step-3.5 models (XML parameter format)
 - glm47/glm4: GLM-4.7 and GLM-4.7-Flash models
 - minimax/minimax_m2: MiniMax M2/M2.5 models (XML invoke/parameter format)
+- zaya_xml/zaya/zyphra: ZAYA/Zyphra XML tool-call format
 
 Usage:
     from vmlx_engine.tool_parsers import ToolParserManager
@@ -62,6 +63,7 @@ from .glm47_tool_parser import Glm47ToolParser
 from .minimax_tool_parser import MiniMaxToolParser
 from .gemma4_tool_parser import Gemma4ToolParser
 from .gemma3_tool_parser import Gemma3ToolParser
+from .zaya_tool_parser import ZayaToolParser
 
 __all__ = [
     # Base classes
@@ -85,4 +87,5 @@ __all__ = [
     "MiniMaxToolParser",
     "Gemma4ToolParser",
     "Gemma3ToolParser",
+    "ZayaToolParser",
 ]

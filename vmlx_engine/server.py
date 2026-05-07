@@ -5106,6 +5106,7 @@ async def ollama_chat(fastapi_request: Request):
     # the adapter's final done-chunk output before yielding it.
     async def ndjson_stream():
         buffered_tcs: list[dict] = []  # ollama-shape {function:{name,arguments}}
+        done_sent = False
         async for sse_line in stream_chat_completion(
             engine, messages, chat_req, fastapi_request=fastapi_request, **chat_kwargs
         ):
@@ -5176,6 +5177,14 @@ async def ollama_chat(fastapi_request: Request):
                         buffered_tcs = []
                 except (json.JSONDecodeError, TypeError):
                     pass
+            try:
+                _ndjson_done_obj = json.loads(ndjson)
+                if _ndjson_done_obj.get("done") is True:
+                    if done_sent:
+                        continue
+                    done_sent = True
+            except (json.JSONDecodeError, TypeError):
+                pass
             yield ndjson
 
     return _SR(ndjson_stream(), media_type="application/x-ndjson")
@@ -5190,12 +5199,66 @@ async def ollama_chat(fastapi_request: Request):
     ],
 )
 async def ollama_generate(fastapi_request: Request):
-    """Ollama-compatible generate — translates to /v1/completions internally."""
+    """Ollama-compatible generate.
+
+    Ollama applies the model template by default and uses raw completion only
+    when `raw: true` is requested. Keep that distinction so instruct/chat
+    bundles do not receive untemplated prompts.
+    """
     body = await fastapi_request.json()
     model_name = body.get("model", _resolve_model_name())
     is_streaming = body.get("stream", True)
+    raw_mode = bool(body.get("raw"))
 
-    from .api.ollama_adapter import ollama_generate_to_openai
+    from .api.ollama_adapter import (
+        ollama_generate_to_openai,
+        ollama_generate_to_openai_chat,
+        openai_chat_response_to_ollama_generate,
+        openai_chat_chunk_to_ollama_generate_ndjson,
+    )
+
+    if not raw_mode:
+        openai_chat_req = ollama_generate_to_openai_chat(body)
+        from .api.models import ChatCompletionRequest
+
+        chat_req = ChatCompletionRequest(**openai_chat_req)
+        if not is_streaming:
+            result = await create_chat_completion(chat_req, fastapi_request)
+            if hasattr(result, "model_dump"):
+                result_dict = result.model_dump(exclude_none=True)
+            elif hasattr(result, "body"):
+                try:
+                    result_dict = json.loads(result.body)
+                except (json.JSONDecodeError, TypeError):
+                    result_dict = {"choices": []}
+            else:
+                result_dict = dict(result)
+            return openai_chat_response_to_ollama_generate(result_dict, model_name)
+
+        from starlette.responses import StreamingResponse as _SR
+
+        streaming_response = await create_chat_completion(chat_req, fastapi_request)
+
+        async def templated_ndjson_stream():
+            done_sent = False
+            async for sse_line in streaming_response.body_iterator:
+                if isinstance(sse_line, bytes):
+                    sse_line = sse_line.decode("utf-8", "replace")
+                ndjson = openai_chat_chunk_to_ollama_generate_ndjson(
+                    sse_line, model_name
+                )
+                if ndjson:
+                    try:
+                        _ndjson_obj = json.loads(ndjson)
+                        if _ndjson_obj.get("done") is True:
+                            if done_sent:
+                                continue
+                            done_sent = True
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    yield ndjson
+
+        return _SR(templated_ndjson_stream(), media_type="application/x-ndjson")
 
     openai_req = ollama_generate_to_openai(body)
 
@@ -5240,9 +5303,18 @@ async def ollama_generate(fastapi_request: Request):
     prompts = [comp_req.prompt] if isinstance(comp_req.prompt, str) else comp_req.prompt
 
     async def ndjson_stream():
+        done_sent = False
         async for sse_line in stream_completions_multi(engine, prompts, comp_req):
             ndjson = openai_completion_chunk_to_ollama_ndjson(sse_line, model_name)
             if ndjson:
+                try:
+                    _ndjson_obj = json.loads(ndjson)
+                    if _ndjson_obj.get("done") is True:
+                        if done_sent:
+                            continue
+                        done_sent = True
+                except (json.JSONDecodeError, TypeError):
+                    pass
                 yield ndjson
 
     return _SR(ndjson_stream(), media_type="application/x-ndjson")
@@ -10152,6 +10224,7 @@ async def stream_responses_api(
         "created_at": created_at,
         "status": _resp_status,
         "model": request.model,
+        "output_text": display_text,
         "output": all_output_items,
         **_resp_extra,
         "usage": {

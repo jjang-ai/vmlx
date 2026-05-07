@@ -857,6 +857,19 @@ class ResponsesObject(BaseModel):
     previous_response_id: str | None = None
     error: dict | None = None
 
+    @computed_field
+    @property
+    def output_text(self) -> str | None:
+        """Convenience concatenation of visible Responses output text."""
+        chunks: list[str] = []
+        for item in self.output:
+            if not isinstance(item, ResponsesOutputMessage):
+                continue
+            for part in item.content:
+                if part.type in ("output_text", "text") and part.text:
+                    chunks.append(part.text)
+        return "".join(chunks) if chunks else None
+
 
 # =============================================================================
 # Streaming (for SSE responses)

@@ -2164,10 +2164,13 @@ class TestStartupCompatibilityGuards:
     def test_turboquant_disable_env_is_honored_by_jang_loader(self):
         """Explicit/off-family cache choices must stop loader-level live TQ-KV."""
         loader_source = Path("./vmlx_engine/utils/jang_loader.py").read_text()
+        tokenizer_source = Path("./vmlx_engine/utils/tokenizer.py").read_text()
         cli_source = Path("./vmlx_engine/cli.py").read_text()
 
         assert 'environ.get("VMLX_DISABLE_TQ_KV")' in loader_source
         assert "TurboQuant KV skipped" in loader_source
+        assert 'os.environ.get("VMLX_DISABLE_TQ_KV")' in tokenizer_source
+        assert "TurboQuant skipped: VMLX_DISABLE_TQ_KV=1" in tokenizer_source
         assert 'os.environ["VMLX_DISABLE_TQ_KV"] = "1"' in cli_source
         assert "VMLINUX_DISABLE_TQ_KV" not in cli_source
 
@@ -2175,15 +2178,69 @@ class TestStartupCompatibilityGuards:
         """Hybrid SSM auto mode must not use KV-only quant codecs."""
         cli_source = Path("./vmlx_engine/cli.py").read_text()
         scheduler_source = Path("./vmlx_engine/scheduler.py").read_text()
+        tokenizer_source = Path("./vmlx_engine/utils/tokenizer.py").read_text()
 
         assert 'getattr(_mc, "cache_type", None) == "hybrid"' in cli_source
         assert "Hybrid SSM cache model detected" in cli_source
         assert "os.environ.pop(\"VMLX_FORCE_TQ_AUTO\", None)" in cli_source
         assert 'args.kv_cache_quantization = "none"' in cli_source
+        hybrid_idx = cli_source.index('getattr(_mc, "cache_type", None) == "hybrid"')
+        hybrid_block = cli_source[hybrid_idx : cli_source.index("if _mc.family_name !=", hybrid_idx)]
+        assert "args.kv_cache_quantization_explicit = True" in hybrid_block
 
         assert "VMLX_ALLOW_HYBRID_KV_QUANT" in scheduler_source
         assert "disabling generic KV cache" in scheduler_source
         assert 'self.config.kv_cache_quantization = "none"' in scheduler_source
+        assert "TurboQuant skipped: hybrid SSM cache detected" in tokenizer_source
+        assert "model.make_cache()" in tokenizer_source
+
+    def test_generic_turboquant_patcher_honors_disable_env(self, tmp_path, monkeypatch):
+        """The non-JANG fallback TQ hook must not bypass VMLX_DISABLE_TQ_KV."""
+        from vmlx_engine.utils.tokenizer import _apply_turboquant_to_model
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "llama",
+            "num_hidden_layers": 1,
+            "head_dim": 128,
+        }))
+
+        class FakeModel:
+            layers = [object()]
+
+            def make_cache(self):
+                return ["native"]
+
+        model = FakeModel()
+        monkeypatch.setenv("VMLX_DISABLE_TQ_KV", "1")
+
+        _apply_turboquant_to_model(model, str(tmp_path))
+
+        assert model.make_cache() == ["native"]
+
+    def test_generic_turboquant_patcher_skips_hybrid_ssm(self, tmp_path, monkeypatch):
+        """Ling/Bailing hybrid must keep its native KV+SSM cache contract."""
+        from vmlx_engine.utils.tokenizer import _apply_turboquant_to_model
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "bailing_hybrid",
+            "num_hidden_layers": 32,
+            "layer_group_size": 8,
+            "head_dim": 128,
+        }))
+
+        class FakeModel:
+            layers = [object()] * 33
+
+            def make_cache(self):
+                return ["native"] * 32
+
+        model = FakeModel()
+        monkeypatch.delenv("VMLX_DISABLE_TQ_KV", raising=False)
+        monkeypatch.delenv("VMLX_ALLOW_HYBRID_KV_QUANT", raising=False)
+
+        _apply_turboquant_to_model(model, str(tmp_path))
+
+        assert model.make_cache() == ["native"] * 32
 
     def test_vmlx_env_prefix_is_canonical_for_ssm_cache_budget(self):
         """New cache env knobs should use VMLX_, with typo fallback only."""
@@ -2192,6 +2249,24 @@ class TestStartupCompatibilityGuards:
         assert "os.environ.get(name)" in cli_source
         assert '"VMLINUX_SSM_STATE_CACHE_MB"' in cli_source
         assert 'default=_env_int("VMLX_SSM_STATE_CACHE_MB", 512, "VMLINUX_SSM_STATE_CACHE_MB")' in cli_source
+
+    def test_sampler_recreation_invalidates_pending_prefix_hits(self):
+        """A sampler change must not leave requests pointing at cleared paged blocks."""
+        import inspect
+        from vmlx_engine.scheduler import Scheduler
+
+        ensure_source = inspect.getsource(Scheduler._ensure_batch_generator)
+        schedule_source = inspect.getsource(Scheduler._schedule_waiting)
+
+        assert "cleared_cache = False" in ensure_source
+        assert "return cleared_cache" in ensure_source
+        assert "Preserving paged cache across BatchGenerator recreation" in ensure_source
+        assert "self.block_aware_cache.clear()" not in ensure_source
+        assert "_cache_cleared = self._ensure_batch_generator" in schedule_source
+        assert "prefix cache hit invalidated by BatchGenerator" in schedule_source
+        assert "request._paged_block_table_needs_worker_reconstruct = False" in schedule_source
+        assert "request._hybrid_prompt_cache_needs_worker_ssm = False" in schedule_source
+        assert "request.remaining_tokens = request.prompt_token_ids" in schedule_source
 
 
 class TestZayaCCACachePolicy:
@@ -2261,14 +2336,31 @@ class TestZayaCCACachePolicy:
         assert 'args.kv_cache_quantization = "none"' in source
         assert "full CCA state restore" in source
         assert "conv_state + prev_hs" in source
+        assert "server._tool_call_parser or args.tool_call_parser" in source
 
-    def test_jang_loader_refuses_zaya_without_runtime(self, tmp_path):
-        from vmlx_engine.utils.jang_loader import load_jang_model
+        scheduler_source = Path("./vmlx_engine/scheduler.py").read_text()
+        assert 'self._model_type_for_runtime == "zaya"' in scheduler_source
+        assert "ZAYA/CCA cache contract detected but prefix cache is disabled" in scheduler_source
+
+    def test_ollama_streaming_suppresses_duplicate_done_chunks(self):
+        source = Path("./vmlx_engine/server.py").read_text()
+
+        assert "done_sent = False" in source
+        assert "if done_sent:" in source
+        assert "done_sent = True" in source
+        assert "openai_chat_chunk_to_ollama_generate_ndjson" in source
+
+    def test_jang_loader_registers_zaya_runtime(self, tmp_path):
+        from vmlx_engine.utils.jang_loader import _ensure_zaya_runtime_supported
 
         model_dir = self._write_zaya_fixture(tmp_path)
+        jcfg = json.loads((model_dir / "jang_config.json").read_text())
 
-        with pytest.raises(RuntimeError, match="ZAYA-aware runtime"):
-            load_jang_model(model_dir, skip_eval=True)
+        _ensure_zaya_runtime_supported(model_dir, jcfg)
+
+        import mlx_lm.models.zaya as zaya
+
+        assert zaya.Model.__name__ == "Model"
 
     def test_local_zaya_bundles_carry_explicit_cca_contract(self):
         model_dirs = [
