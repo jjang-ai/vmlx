@@ -260,6 +260,38 @@ class TestInspectModel:
         assert info.quant_group_size == 64
         assert info.quant_mode == "affine"
 
+    def test_null_quant_bits_are_treated_as_full_precision(self, tmp_path):
+        from vmlx_engine.utils.model_inspector import (
+            estimate_conversion_memory_gb,
+            format_model_info,
+            inspect_model,
+        )
+
+        config = {
+            "architectures": ["DeepseekV4ForCausalLM"],
+            "model_type": "deepseek_v4",
+            "hidden_size": 4096,
+            "num_hidden_layers": 43,
+            "num_attention_heads": 32,
+            "vocab_size": 129280,
+            "intermediate_size": 11008,
+            "n_routed_experts": 256,
+            "num_experts_per_tok": 6,
+            "quantization": {
+                "bits": None,
+                "group_size": None,
+                "mode": None,
+            },
+        }
+        model_dir = _make_model_dir(tmp_path, config)
+        info = inspect_model(model_dir)
+
+        assert info.is_quantized is False
+        assert info.quant_bits is None
+        assert estimate_conversion_memory_gb(info, 4) > 0
+        assert "Quantization: None (full precision)" in format_model_info(info)
+        assert "None-bit" not in format_model_info(info)
+
     def test_moe_model(self, tmp_path):
         from vmlx_engine.utils.model_inspector import inspect_model
 
