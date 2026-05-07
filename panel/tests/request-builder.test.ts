@@ -30,11 +30,19 @@ function buildRequestBody(
     overrides: ChatOverrides | undefined,
     isRemote: boolean,
     sessionHasReasoningParser: boolean,
-    tools?: any[]
+    tools?: any[],
+    detectedFamily?: string
 ): Record<string, any> {
     const stopSequences = overrides?.stopSequences
         ? overrides.stopSequences.split(',').map(s => s.trim()).filter(Boolean)
         : undefined
+    const shouldForwardReasoningEffort =
+        !!overrides?.reasoningEffort &&
+        overrides.enableThinking !== false &&
+        (sessionHasReasoningParser || detectedFamily === 'deepseek-v4')
+    const outputBudget = detectedFamily === 'deepseek-v4' && overrides?.enableThinking !== false
+        ? Math.max(overrides?.maxTokens ?? 0, 4096)
+        : overrides?.maxTokens
 
     if (wireApi === 'responses') {
         const systemMessages = requestMessages.filter(m => m.role === 'system')
@@ -46,7 +54,7 @@ function buildRequestBody(
             instructions,
             temperature: overrides?.temperature ?? 0.7,
             top_p: overrides?.topP ?? 0.9,
-            max_output_tokens: overrides?.maxTokens ?? 4096,
+            max_output_tokens: outputBudget ?? 4096,
             stream: true,
             stream_options: { include_usage: true }
         }
@@ -68,7 +76,7 @@ function buildRequestBody(
             obj.enable_thinking = sessionHasReasoningParser
         }
         if (!isRemote && obj.enable_thinking !== undefined) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
-        if (overrides?.reasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
+        if (shouldForwardReasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
         return obj
     } else {
         const obj: Record<string, any> = {
@@ -76,7 +84,7 @@ function buildRequestBody(
             messages: requestMessages,
             temperature: overrides?.temperature ?? 0.7,
             top_p: overrides?.topP ?? 0.9,
-            max_tokens: overrides?.maxTokens ?? 4096,
+            max_tokens: outputBudget ?? 4096,
             stream: true,
             stream_options: { include_usage: true }
         }
@@ -93,7 +101,7 @@ function buildRequestBody(
             obj.enable_thinking = sessionHasReasoningParser
         }
         if (!isRemote && obj.enable_thinking !== undefined) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
-        if (overrides?.reasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
+        if (shouldForwardReasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
         return obj
     }
 }
@@ -164,8 +172,30 @@ describe('buildRequestBody — Chat Completions API', () => {
     })
 
     it('forwards reasoning_effort', () => {
-        const body = buildRequestBody('completions', 'gpt-4', messages, { reasoningEffort: 'high' }, false, false)
+        const body = buildRequestBody('completions', 'gpt-4', messages, { reasoningEffort: 'high' }, false, true)
         expect(body.reasoning_effort).toBe('high')
+    })
+
+    it('suppresses stale reasoning_effort when the model has no reasoning parser', () => {
+        const body = buildRequestBody('completions', 'plain-model', messages, { reasoningEffort: 'max' }, false, false)
+        expect(body.reasoning_effort).toBeUndefined()
+    })
+
+    it('suppresses reasoning_effort when thinking is explicitly off', () => {
+        const body = buildRequestBody('completions', 'qwen', messages, { enableThinking: false, reasoningEffort: 'high' }, false, true)
+        expect(body.enable_thinking).toBe(false)
+        expect(body.reasoning_effort).toBeUndefined()
+    })
+
+    it('floors DSV4 thinking max_tokens so stale tiny caps do not strand output in reasoning', () => {
+        const body = buildRequestBody('completions', 'dsv4', messages, { maxTokens: 128, reasoningEffort: 'max' }, false, true, undefined, 'deepseek-v4')
+        expect(body.max_tokens).toBe(4096)
+        expect(body.reasoning_effort).toBe('max')
+    })
+
+    it('does not floor DSV4 max_tokens when thinking is explicitly off', () => {
+        const body = buildRequestBody('completions', 'dsv4', messages, { enableThinking: false, maxTokens: 128 }, false, true, undefined, 'deepseek-v4')
+        expect(body.max_tokens).toBe(128)
     })
 })
 
@@ -231,6 +261,17 @@ describe('buildRequestBody — Responses API', () => {
     it('EXCLUDES chat_template_kwargs for remote', () => {
         const body = buildRequestBody('responses', 'gpt-4', messages, undefined, true, false)
         expect(body.chat_template_kwargs).toBeUndefined()
+    })
+
+    it('floors DSV4 Responses max_output_tokens for Auto/On thinking', () => {
+        const body = buildRequestBody('responses', 'dsv4', messages, { maxTokens: 300 }, false, true, undefined, 'deepseek-v4')
+        expect(body.max_output_tokens).toBe(4096)
+    })
+
+    it('suppresses stale Responses reasoning_effort when thinking is explicitly off', () => {
+        const body = buildRequestBody('responses', 'dsv4', messages, { enableThinking: false, reasoningEffort: 'max', maxTokens: 300 }, false, true, undefined, 'deepseek-v4')
+        expect(body.max_output_tokens).toBe(300)
+        expect(body.reasoning_effort).toBeUndefined()
     })
 })
 

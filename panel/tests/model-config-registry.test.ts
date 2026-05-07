@@ -47,6 +47,34 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.reasoningParser).toBeUndefined()
   })
 
+  it('detects Ling/Bailing hybrid with parser and hybrid cache defaults', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'bailing_hybrid',
+        num_hidden_layers: 32,
+        layer_group_size: 8,
+      },
+      {
+        capabilities: {
+          family: 'bailing_hybrid',
+          tool_parser: 'deepseek',
+          reasoning_parser: 'deepseek_r1',
+          cache_type: 'hybrid',
+          modality: 'text',
+        },
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('ling')
+    expect(detected.cacheType).toBe('hybrid')
+    expect(detected.usePagedCache).toBe(true)
+    expect(detected.toolParser).toBe('deepseek')
+    expect(detected.reasoningParser).toBe('deepseek_r1')
+    expect(detected.isMultimodal).toBe(false)
+  })
+
   it('keeps JANG VLM enabled from capabilities.modality=vision when architecture.has_vision is absent', () => {
     const dir = makeModelDir(
       { model_type: 'qwen3_5', vision_config: { hidden_size: 1024 } },

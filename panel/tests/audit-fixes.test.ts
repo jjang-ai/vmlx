@@ -349,33 +349,40 @@ describe('enableThinking tri-state', () => {
 
   function migrateLegacyReasoningState(state: {
     marker?: string
+    effortMarker?: string
     chatEnableThinking: Array<0 | 1 | null>
+    chatReasoningEffort: Array<string | null>
     profiles: Array<Record<string, unknown>>
     modelReasoningModes: string[]
   }) {
-    if (state.marker) return state
+    if (state.marker && state.effortMarker) return state
     return {
-      marker: 'set',
-      chatEnableThinking: state.chatEnableThinking.map(() => null),
+      marker: state.marker || 'set',
+      effortMarker: state.effortMarker || 'set',
+      chatEnableThinking: state.marker ? state.chatEnableThinking : state.chatEnableThinking.map(() => null),
+      chatReasoningEffort: state.effortMarker ? state.chatReasoningEffort : state.chatReasoningEffort.map(() => null),
       profiles: state.profiles.map((profile) => {
         const next = { ...profile }
-        delete next.enableThinking
+        if (!state.marker) delete next.enableThinking
+        if (!state.effortMarker) delete next.reasoningEffort
         return next
       }),
-      modelReasoningModes: state.modelReasoningModes.map(() => 'auto'),
+      modelReasoningModes: state.marker ? state.modelReasoningModes : state.modelReasoningModes.map(() => 'auto'),
     }
   }
 
   it('v1.5.25 one-time migration clears cached reasoning choices that can poison upgraded users', () => {
     const migrated = migrateLegacyReasoningState({
       chatEnableThinking: [0, 1, null],
+      chatReasoningEffort: ['max', 'high', null],
       profiles: [
-        { temperature: 0.6, enableThinking: false },
-        { builtinToolsEnabled: true, enableThinking: true },
+        { temperature: 0.6, enableThinking: false, reasoningEffort: 'max' },
+        { builtinToolsEnabled: true, enableThinking: true, reasoningEffort: 'high' },
       ],
       modelReasoningModes: ['off', 'on', 'auto'],
     })
     expect(migrated.chatEnableThinking).toEqual([null, null, null])
+    expect(migrated.chatReasoningEffort).toEqual([null, null, null])
     expect(migrated.profiles).toEqual([
       { temperature: 0.6 },
       { builtinToolsEnabled: true },
@@ -383,15 +390,18 @@ describe('enableThinking tri-state', () => {
     expect(migrated.modelReasoningModes).toEqual(['auto', 'auto', 'auto'])
   })
 
-  it('v1.5.25 migration marker prevents resetting explicit post-upgrade choices repeatedly', () => {
+  it('reasoning migration markers prevent resetting explicit post-upgrade choices repeatedly', () => {
     const migrated = migrateLegacyReasoningState({
       marker: 'set',
+      effortMarker: 'set',
       chatEnableThinking: [0],
-      profiles: [{ enableThinking: false }],
+      chatReasoningEffort: ['max'],
+      profiles: [{ enableThinking: false, reasoningEffort: 'max' }],
       modelReasoningModes: ['off'],
     })
     expect(migrated.chatEnableThinking).toEqual([0])
-    expect(migrated.profiles).toEqual([{ enableThinking: false }])
+    expect(migrated.chatReasoningEffort).toEqual(['max'])
+    expect(migrated.profiles).toEqual([{ enableThinking: false, reasoningEffort: 'max' }])
     expect(migrated.modelReasoningModes).toEqual(['off'])
   })
 

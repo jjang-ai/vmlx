@@ -12,6 +12,7 @@ from tests.cross_matrix.run_production_family_audit import (
     extract_ollama_visible_text_and_stop,
     is_non_length_stop,
     normalize_short_answer,
+    simple_loop_score,
     static_audit,
 )
 
@@ -108,3 +109,10 @@ def test_zaya_cca_rows_do_not_run_generic_exact_hit_cache_probe():
     assert not cache_exact_hit_required(rows["zaya_jangtq4"])
     assert not cache_exact_hit_required(rows["zaya_mxfp4"])
     assert cache_exact_hit_required(rows["dsv4_tq"])
+
+
+def test_loop_score_catches_no_space_cjk_and_emoji_repetition():
+    assert simple_loop_score("音苷苷和音诺族的对策" * 80) >= 0.25
+    assert simple_loop_score("👀" * 200) >= 0.25
+    assert simple_loop_score("state " * 80) >= 0.25
+    assert simple_loop_score("Paris is the capital of France.") < 0.25

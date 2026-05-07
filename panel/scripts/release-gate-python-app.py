@@ -202,10 +202,40 @@ def assert_visible_text(label: str, resp: Any, gate: Gate) -> str:
 def obvious_loop(text: str) -> bool:
     words = [w.strip(".,;:!?()[]{}\"'").lower() for w in text.split()]
     words = [w for w in words if w]
-    if len(words) < 32:
+    if len(words) >= 32:
+        unique_ratio = len(set(words[-64:])) / min(len(words), 64)
+        if unique_ratio < 0.18:
+            return True
+
+    # No-space token loops (CJK strings, emoji runs, repeated byte-pair
+    # fragments) do not show up as many whitespace-delimited words. Check the
+    # tail for dominant character or short character n-gram repetition so the
+    # gate catches the exact "eyes forever" / Chinese phrase spam failures.
+    compact = "".join(ch for ch in text if not ch.isspace())
+    if len(compact) < 48:
         return False
-    unique_ratio = len(set(words[-64:])) / min(len(words), 64)
-    return unique_ratio < 0.18
+    tail = compact[-512:]
+    dominant_char_ratio = max(tail.count(ch) for ch in set(tail)) / len(tail)
+    if dominant_char_ratio > 0.35:
+        return True
+    for period in range(2, min(64, len(tail) // 3) + 1):
+        pattern = tail[:period]
+        if len(set(pattern)) < 2:
+            continue
+        expected = (pattern * ((len(tail) // period) + 1))[: len(tail)]
+        matches = sum(1 for a, b in zip(tail, expected) if a == b)
+        if matches / len(tail) > 0.88:
+            return True
+    for n in (2, 3, 4, 6, 8, 12):
+        if len(tail) < n * 12:
+            continue
+        grams = [tail[i : i + n] for i in range(0, len(tail) - n + 1)]
+        counts: dict[str, int] = {}
+        for gram in grams:
+            counts[gram] = counts.get(gram, 0) + 1
+        if max(counts.values()) / max(1, len(grams)) > 0.18:
+            return True
+    return False
 
 
 def version_from_pyproject() -> str:

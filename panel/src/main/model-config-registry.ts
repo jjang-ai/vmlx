@@ -163,6 +163,12 @@ registerFamily('functionary', { cacheType: 'kv', toolParser: 'functionary', enab
 // MiniMax
 registerFamily('minimax', { cacheType: 'kv', toolParser: 'minimax', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'MiniMax', priority: 20 })
 
+// Ling / Bailing hybrid: MLA softmax layers plus linear-attention/SSM-style
+// companion state. Keep the panel registry aligned with Python
+// model_configs.py so old or fresh Ling sessions do not fall through to
+// `unknown` and lose parser/cache defaults before launch.
+registerFamily('ling', { cacheType: 'hybrid', toolParser: 'deepseek', reasoningParser: 'deepseek_r1', usePagedCache: true, enableAutoToolChoice: true, description: 'Ling / Bailing hybrid', priority: 20 })
+
 // StepFun
 registerFamily('step-vl', { cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'StepFun Step-1V Vision-Language', priority: 3 })
 registerFamily('step-3.5-flash', { cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'StepFun Step-3.5-Flash (MoE)', priority: 5 })
