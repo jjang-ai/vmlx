@@ -227,3 +227,5 @@ async def test_capabilities_reports_loaded_scheduler_cache(monkeypatch):
     assert caps["cache"]["type"] == "paged"
     assert caps["cache"]["paged"] is True
     assert caps["cache"]["block_disk_l2"] is True
+    assert caps["cache"]["native"]["family"] == "deepseek_v4"
+    assert caps["cache"]["native"]["generic_turboquant_kv"]["enabled"] is False

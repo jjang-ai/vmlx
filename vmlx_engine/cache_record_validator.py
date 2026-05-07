@@ -295,7 +295,7 @@ def validate_cache_record(
             is a tuple whose first element is a tag string (``"kv"``,
             ``"quantized_kv"``, ``"rotating_kv"``, ``"cumulative"``,
             ``"deepseek_v4"``, ``"deepseek_v4_pending"``, ``"cache_list"``,
-            ``"no_state"``, ``"skip"``).
+            ``"zaya_cca"``, ``"no_state"``, ``"skip"``).
         expected_num_layers: If not None, ``len(cache_data)`` must match.
         source: Tag for logging (e.g. ``"L2-disk"``, ``"reconstruct"``).
 
@@ -495,6 +495,48 @@ def validate_cache_record(
             if not sub_ok:
                 return False, f"layer {i} cache_list: {sub_reason}", total_bytes
             total_bytes += sub_bytes
+
+        elif tag == "zaya_cca":
+            # ("zaya_cca", kv_entry, cca_state, cca_meta, cache_meta)
+            if len(entry) < 3:
+                return False, (
+                    f"layer {i} 'zaya_cca': len={len(entry)} < 3"
+                ), total_bytes
+            kv_entry = entry[1]
+            if isinstance(kv_entry, (tuple, list)) and kv_entry and kv_entry[0] != "skip":
+                sub_ok, sub_reason, sub_bytes = validate_cache_record(
+                    [tuple(kv_entry)],
+                    expected_num_layers=None,
+                    source=f"{source}/zaya_cca_kv[{i}]",
+                )
+                if not sub_ok:
+                    return False, f"layer {i} zaya_cca KV: {sub_reason}", total_bytes
+                total_bytes += sub_bytes
+            cca_state = entry[2]
+            if cca_state is not None:
+                tensors = list(_walk_tensors(cca_state))
+                if len(tensors) < 2:
+                    return False, (
+                        f"layer {i} 'zaya_cca': terminal CCA state "
+                        f"has {len(tensors)} tensor(s), expected conv_state and prev_hs"
+                    ), total_bytes
+                for j, t in enumerate(tensors):
+                    ok, nb, reason = _validate_tensor(
+                        t, label=f"zaya_cca_state[{j}]", layer_idx=i
+                    )
+                    if not ok:
+                        return False, reason, total_bytes
+                    total_bytes += nb
+                if len(tensors[0].shape) != 3:
+                    return False, (
+                        f"layer {i} 'zaya_cca'.conv_state rank "
+                        f"{len(tensors[0].shape)} != 3"
+                    ), total_bytes
+                if len(tensors[1].shape) != 3:
+                    return False, (
+                        f"layer {i} 'zaya_cca'.prev_hs rank "
+                        f"{len(tensors[1].shape)} != 3"
+                    ), total_bytes
 
         else:
             # Unknown tag — treat as malformed rather than silently accept.

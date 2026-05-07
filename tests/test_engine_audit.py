@@ -2358,7 +2358,8 @@ class TestZayaCCACachePolicy:
         assert 'args.use_paged_cache = False' in source
         assert 'args.enable_block_disk_cache = False' in source
         assert 'args.kv_cache_quantization = "none"' in source
-        assert "full CCA state restore" in source
+        assert "typed CCA restore" in source
+        assert "full-model prefix/paged/L2 replay gates" in source
         assert "conv_state + prev_hs" in source
         assert "server._tool_call_parser or args.tool_call_parser" in source
 
@@ -2930,3 +2931,49 @@ class TestTurboQuantKVTelemetry:
 
         assert status["enabled"] is True
         assert status["default_bits"] == 3
+
+    def test_native_cache_status_reports_dsv4_separately_from_tq_kv(self, monkeypatch):
+        from types import SimpleNamespace
+        from vmlx_engine.server import _native_cache_status
+
+        scheduler = SimpleNamespace(
+            _uses_dsv4_cache=True,
+            block_aware_cache=object(),
+            paged_cache_manager=SimpleNamespace(_disk_store=object()),
+        )
+        monkeypatch.setenv("DSV4_POOL_QUANT", "1")
+
+        status = _native_cache_status(scheduler)
+
+        assert status["family"] == "deepseek_v4"
+        assert status["schema"] == "deepseek_v4_v7"
+        assert status["cache_type"] == "native_composite"
+        assert "swa_local" in status["components"]
+        assert "csa_compressed_pool" in status["components"]
+        assert "hca_compressed_pool" in status["components"]
+        assert status["generic_turboquant_kv"]["enabled"] is False
+        assert status["pool_quant"]["enabled"] is True
+        assert status["paged"] is True
+        assert status["block_disk_l2"] is True
+
+    def test_native_cache_status_reports_zaya_typed_cca(self):
+        from types import SimpleNamespace
+        from vmlx_engine.server import _native_cache_status
+
+        scheduler = SimpleNamespace(
+            _model_type_for_runtime="zaya",
+            block_aware_cache=object(),
+            paged_cache_manager=SimpleNamespace(_disk_store=object()),
+        )
+
+        status = _native_cache_status(scheduler)
+
+        assert status["family"] == "zaya"
+        assert status["schema"] == "zaya_cca_v1"
+        assert status["cache_type"] == "typed_cca"
+        assert "standard_kv" in status["components"]
+        assert "cca_conv_state" in status["components"]
+        assert "cca_prev_hidden" in status["components"]
+        assert status["generic_turboquant_kv"]["enabled"] is False
+        assert status["paged"] is True
+        assert status["block_disk_l2"] is True

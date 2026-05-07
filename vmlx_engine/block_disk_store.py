@@ -31,6 +31,8 @@ Supported cache_data tuple types (from prefix_cache.py):
 - ("deepseek_v4_pending", class_name, cache_meta) — non-terminal DSV4
   marker so paged/L2 chain hashes remain materialized without duplicating
   full CSA/HSA pool state in every block
+- ("zaya_cca", kv_entry, cca_state, cca_meta, cache_meta) — ZAYA CCA
+  typed cache: standard KV pages plus terminal conv_state/prev_hs
 - ("skip",) — placeholder for cumulative layers in non-last blocks
 """
 
@@ -762,6 +764,7 @@ def _serialize_block(
       layer_{i}_max_size, layer_{i}_keep          — rotating kv params
       layer_{i}_cumulative_{j}                    — cumulative state arrays
       layer_{i}_dsv4_state_{j}                    — DSV4 nested state arrays
+      layer_{i}_zaya_cca_state_{j}                 — ZAYA CCA nested state arrays
       layer_{i}_no_state                           — explicit no-state layer
 
     Returns:
@@ -839,6 +842,41 @@ def _serialize_block(
                     }
                     sub_count += 1
             meta.setdefault(str(i), {})["sub_count"] = len(sub_slices)
+
+        elif tag == "zaya_cca":
+            _, kv_entry, cca_state, cca_meta, cache_meta = layer_data
+            layer_meta = {
+                "cache_meta": _json_safe(cache_meta),
+                "cca_meta": _json_safe(cca_meta),
+                "terminal": cca_state is not None,
+            }
+            if isinstance(kv_entry, (tuple, list)) and kv_entry:
+                kv_tag = kv_entry[0]
+                layer_meta["kv_tag"] = kv_tag
+                if kv_tag == "kv":
+                    _, zk, zv = kv_entry
+                    tensors[f"layer_{i}_zaya_keys"] = zk
+                    tensors[f"layer_{i}_zaya_values"] = zv
+                    if hasattr(zk, "dtype"):
+                        meta.setdefault("__orig_dtypes__", {})[f"{i}_zaya_kv"] = str(zk.dtype)
+                elif kv_tag == "quantized_kv":
+                    _, zkt, zvt, zmeta = kv_entry
+                    tensors[f"layer_{i}_zaya_keys_data"] = zkt[0]
+                    tensors[f"layer_{i}_zaya_keys_scales"] = zkt[1]
+                    tensors[f"layer_{i}_zaya_keys_zeros"] = zkt[2]
+                    tensors[f"layer_{i}_zaya_values_data"] = zvt[0]
+                    tensors[f"layer_{i}_zaya_values_scales"] = zvt[1]
+                    tensors[f"layer_{i}_zaya_values_zeros"] = zvt[2]
+                    layer_meta["quant_meta"] = _json_safe(zmeta)
+            if cca_state is not None:
+                counter = [0]
+                layer_meta["cca_state_tree"] = _pack_tree(
+                    cca_state,
+                    tensors,
+                    f"layer_{i}_zaya_cca_state",
+                    counter,
+                )
+            meta[str(i)] = layer_meta
 
         elif tag == "no_state":
             _, class_name = layer_data
@@ -1045,6 +1083,56 @@ def _deserialize_block(
                 else:
                     sub_slices.append(("skip",))
             cache_data.append(("cache_list", sub_slices))
+
+        elif layer_type == "zaya_cca":
+            layer_meta_dict = meta.get(str(i), {})
+            kv_tag = layer_meta_dict.get("kv_tag", "skip")
+            if kv_tag == "kv":
+                zk = data.get(f"layer_{i}_zaya_keys")
+                zv = data.get(f"layer_{i}_zaya_values")
+                if zk is not None and zv is not None:
+                    orig_dt = orig_dtypes.get(f"{i}_zaya_kv")
+                    if HAS_MLX and orig_dt and orig_dt != str(zk.dtype):
+                        target = getattr(mx, orig_dt.replace("mlx.core.", ""), None)
+                        if target is not None:
+                            zk = zk.astype(target)
+                            zv = zv.astype(target)
+                    kv_entry = ("kv", zk, zv)
+                else:
+                    kv_entry = ("skip",)
+            elif kv_tag == "quantized_kv":
+                try:
+                    zkt = (
+                        data[f"layer_{i}_zaya_keys_data"],
+                        data[f"layer_{i}_zaya_keys_scales"],
+                        data[f"layer_{i}_zaya_keys_zeros"],
+                    )
+                    zvt = (
+                        data[f"layer_{i}_zaya_values_data"],
+                        data[f"layer_{i}_zaya_values_scales"],
+                        data[f"layer_{i}_zaya_values_zeros"],
+                    )
+                    kv_entry = (
+                        "quantized_kv",
+                        zkt,
+                        zvt,
+                        layer_meta_dict.get("quant_meta", ()),
+                    )
+                except KeyError:
+                    kv_entry = ("skip",)
+            else:
+                kv_entry = ("skip",)
+            cca_state = _unpack_tree(
+                layer_meta_dict.get("cca_state_tree"),
+                data,
+            ) if layer_meta_dict.get("terminal") else None
+            cache_data.append((
+                "zaya_cca",
+                kv_entry,
+                cca_state,
+                layer_meta_dict.get("cca_meta", ""),
+                layer_meta_dict.get("cache_meta", {}),
+            ))
 
         elif layer_type == "no_state":
             layer_meta_dict = meta.get(str(i), {})
