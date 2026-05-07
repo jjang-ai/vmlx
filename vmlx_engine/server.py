@@ -1579,7 +1579,22 @@ def _apply_jit_compilation():
             _pre_compile_backup_vlm = inner_transformer  # for rollback
             try:
                 compiled = mx.compile(inner_transformer)
+                # Issue #153: mx.compile returns a gc_func that strips
+                # nn.Module attributes.  LanguageModel.layers is a property
+                # that delegates to self.model.layers — after replacement it
+                # raises AttributeError because gc_func has no .layers.
+                # Preserve the original layer list and patch the property so
+                # make_cache() and mllm_batch_generator cache-sizing still
+                # work.
+                _jit_original_layers = list(inner_transformer.layers)
                 language_model.model = compiled
+                _LMCls = type(language_model)
+                if isinstance(getattr(_LMCls, "layers", None), property):
+                    _LMCls.layers = property(lambda self: _jit_original_layers)
+                    logger.debug(
+                        "JIT: Patched LanguageModel.layers property to use "
+                        "pre-compile layer list"
+                    )
                 replaced = language_model.model is compiled
             except Exception as _vlm_jit_err:
                 logger.warning(f"JIT: VLM language_model compile failed, running without JIT: {_vlm_jit_err}")
