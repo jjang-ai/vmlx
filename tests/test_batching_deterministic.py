@@ -455,5 +455,37 @@ class TestEdgeCases:
                         break
 
 
+# ---------------------------------------------------------------------------
+# Batched speculative decoding placeholders (issue #135)
+# These tests require a live model + VMLX_ENABLE_BATCHED_SPEC=1.
+# Marked skip until hardware validation is complete in v1.5.x soak period.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skip(
+    reason="Batched spec requires VMLX_ENABLE_BATCHED_SPEC=1 + live model (issue #135)"
+)
+@pytest.mark.parametrize("num_draft_tokens", [1, 2, 3])
+def test_batched_spec_deterministic_at_temp_zero(num_draft_tokens):
+    """Batched spec at temperature=0 must produce byte-identical output to non-spec.
+
+    TODO(#135): Implement once _step_speculative() accept/reject logic is complete.
+    For now this is a documented placeholder — run manually with:
+        VMLX_ENABLE_BATCHED_SPEC=1 pytest -k test_batched_spec_deterministic_at_temp_zero
+    """
+    pass
+
+
+@pytest.mark.skip(
+    reason="Batched spec requires VMLX_ENABLE_BATCHED_SPEC=1 + live model (issue #135)"
+)
+def test_batched_spec_health_telemetry():
+    """After batched spec runs, /health must report speculative.batched.steps > 0.
+
+    TODO(#135): Implement once server integration is verified on hardware.
+    """
+    pass
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
