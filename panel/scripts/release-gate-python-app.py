@@ -267,25 +267,63 @@ def launch_app_smoke(gate: Gate, app: Path) -> None:
     if not app.exists():
         gate.record("GUI open smoke", "FAIL", f"missing app {app}")
         return
-    gate.run("GUI open app", ["open", "-n", str(app)], timeout=60)
-    time.sleep(6)
-    proc = gate.run("GUI process present", ["pgrep", "-fl", f"{app}/Contents/MacOS/vMLX"], timeout=30, allow_fail=True)
-    if proc.returncode != 0:
-        proc = gate.run("GUI process present fallback", ["pgrep", "-fl", "vMLX"], timeout=30, allow_fail=True)
-    gate.run(
-        "GUI window count",
-        [
-            "osascript",
-            "-e",
-            'tell application "System Events" to count windows of first process whose name contains "vMLX"',
-        ],
-        timeout=10,
-        allow_fail=True,
-    )
-    if proc.returncode == 0:
-        gate.record("GUI open smoke verdict", "PASS", "process started")
-    else:
-        gate.record("GUI open smoke verdict", "FAIL", "no vMLX process found")
+    exe = app / "Contents" / "MacOS" / "vMLX"
+    if not exe.exists():
+        gate.record("GUI open smoke", "FAIL", f"missing executable {exe}")
+        return
+
+    # Do not use `open`: the packaged dev app and installed app intentionally
+    # share the production bundle id, so LaunchServices can activate
+    # /Applications/vMLX.app and produce a false pass. Direct-launch the exact
+    # executable with isolated user data instead.
+    user_data = gate.log_dir / "gui-user-data"
+    log_path = gate.log_dir / "gui_direct_launch.log"
+    shutil.rmtree(user_data, ignore_errors=True)
+    started = time.time()
+    with log_path.open("w") as fp:
+        proc = subprocess.Popen(
+            [str(exe), f"--user-data-dir={user_data}"],
+            cwd=str(ROOT),
+            stdout=fp,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
+    try:
+        time.sleep(8)
+        if proc.poll() is not None:
+            gate.record(
+                "GUI direct launch",
+                "FAIL",
+                f"exit={proc.returncode}; log={log_path}",
+            )
+            return
+        gate.record(
+            "GUI direct launch",
+            "PASS",
+            f"pid={proc.pid}; {time.time() - started:.1f}s; log={log_path}",
+        )
+        exact = gate.run(
+            "GUI process exact path",
+            ["pgrep", "-fl", str(exe)],
+            timeout=30,
+            allow_fail=True,
+        )
+        if exact.returncode == 0:
+            gate.record("GUI open smoke verdict", "PASS", "repo-local executable is running")
+        else:
+            gate.record("GUI open smoke verdict", "FAIL", "repo-local executable not found")
+    finally:
+        if proc.poll() is None:
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+                proc.wait(timeout=10)
+            except Exception:  # noqa: BLE001
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except Exception:  # noqa: BLE001
+                    pass
+        shutil.rmtree(user_data, ignore_errors=True)
 
 
 def live_engine_gate(gate: Gate, app: Path, model: str, port: int, skip_sleep_wake: bool, thinking: str) -> None:
