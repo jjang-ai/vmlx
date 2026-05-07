@@ -63,6 +63,26 @@ Every future runtime/cache/model fix must produce a live artifact with:
 - full output capture with loop/garbage checks. A test that only checks HTTP
   200 or a short prefix is not sufficient.
 
+### Strict Matrix Correction — 2026-05-07
+
+The live family audit runner previously used a loose substring check for the
+Anthropic and Ollama exact-answer probes. That could mark a row passing when
+the expected token appeared only inside reasoning/thinking JSON while visible
+content was empty or the request ended by `length`/`max_tokens`.
+
+The runner now extracts only visible Anthropic text blocks and Ollama
+`message.content`, normalizes that visible content, and rejects `length` /
+`max_tokens` finishes for exact-answer probes. Existing artifacts must be read
+under this stricter rule. In particular:
+
+- MiniMax-M2.7-JANGTQ_K's saved Anthropic row is not a semantic pass; it
+  length-capped in reasoning-like visible text before emitting the requested
+  exact answer.
+- Qwen3.6-27B-JANG_4M's saved Ollama row is not a semantic pass; the requested
+  token appeared in `message.thinking` while `message.content` was empty.
+- Cache-hit rows in those same artifacts can still be useful for cache
+  telemetry, but they do not prove full protocol parity.
+
 ### GitHub Comment Audit
 
 Live comment counts were refreshed with `gh issue list` on 2026-05-07. Issues
