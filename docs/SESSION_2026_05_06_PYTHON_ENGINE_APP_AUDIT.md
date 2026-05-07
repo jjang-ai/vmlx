@@ -207,8 +207,10 @@ are explicitly marked as pending push/package when the fix is local-only.
   image, and Responses input_image. TurboQuant KV telemetry is now shared
   between `/health` and `/v1/cache/stats` for nested MLLM language models.
 - ZAYA/CCA: source now preserves `cache_subtype=zaya_cca`, disables unsafe
-  prefix/paged/L2/TQ-KV paths for that subtype, and refuses generic JANG loads
-  until a real ZAYA runtime implements CCA state restore.
+  prefix/paged/L2/TQ-KV paths for that subtype, and loads through the local CCA
+  runtime. Current strict live status is split by bundle: MXFP4 passes the
+  text/API/cache contract; JANGTQ2 fails basic instruction quality; JANGTQ4
+  fails the Responses structured tool-call row.
 
 Latest regression runs:
 
@@ -314,8 +316,9 @@ Local artifacts under `/tmp/vmlx_family_audit` show these latest statuses:
     models so `/health` and `/v1/cache/stats` report the same live-cache state.
 14. Added ZAYA/CCA cache-subtype tracking and compatibility policy. ZAYA is not
     allowed to fall through generic hybrid prefix/paged/L2/TQ-KV cache paths.
-15. Added a fail-fast ZAYA loader error until `mlx_lm.models.zaya` or a
-    `jang_tools.zaya` runtime exists and supports CCA `conv_state`/`prev_hs`.
+15. Added the local ZAYA CCA runtime and JANG registration path. The old
+    fail-fast wording is superseded: ZAYA now loads, but only MXFP4 passes the
+    current strict text/API/cache matrix.
 
 This addresses the compatibility confusion behind mlxstudio #90/#104: the app
 must not advertise or allow a runtime below the bundled MLX wheel's real floor.
@@ -496,13 +499,28 @@ Source policy now enforces that note:
 - `ModelConfig.cache_subtype` preserves `zaya_cca` from `jang_config.json`.
 - CLI disables prefix cache, paged cache, L2 block disk cache, and TQ-KV for
   `family=zaya` / `cache_subtype=zaya_cca`.
-- `load_jang_model()` and `load_jang_vlm_model()` refuse ZAYA through the
-  generic JANG path until a ZAYA-aware runtime module exists.
+- `load_jang_model()` registers the local `vmlx_engine.models.zaya` runtime so
+  JANGTQ/MXTQ ZAYA bundles hydrate through the ZAYA-aware CCA model class
+  instead of a generic JANG path.
+- `load_zaya_model()` handles BF16/MXFP4/affine ZAYA bundles through the same
+  local CCA runtime.
 - Local ZAYA bundle checks are in `tests/test_engine_audit.py` and passed.
-- Repo-local bundled Python smoke confirmed:
-  `family zaya cache_type hybrid cache_subtype zaya_cca tool zaya_xml
-  reasoning qwen3`, followed by the expected fail-fast
-  `ZAYA model_type=zaya requires a ZAYA-aware runtime`.
+
+Current strict live ZAYA status:
+
+- Artifact:
+  `/tmp/vmlx_family_audit/live_zaya_three_rows_current.json`
+- `ZAYA1-8B-MXFP4`: PASS for current text/API/cache contract.
+- `ZAYA1-8B-JANGTQ2`: FAIL. It passes contract/cache disablement, but basic
+  chat returns the prompt paraphrase instead of `noted`, thinking-on recall
+  length-caps inside reasoning with empty visible content, and Responses history
+  continuation is weak.
+- `ZAYA1-8B-JANGTQ4`: FAIL one row. Basic chat/recall/API factual probes pass,
+  but Responses auto tool choice emits XML-like/list text instead of a parsed
+  `function_call`.
+- For all ZAYA rows, generic prefix/paged/L2/TQ-KV cache is correctly N/A/off
+  until typed CCA prompt-state restore serializes standard KV plus
+  `conv_state` plus `prev_hs`.
 
 ## Cross-Check Matrix To Keep Honest
 
@@ -562,8 +580,10 @@ Known blockers not cleared by this pass:
   model is being re-downloaded. DSV4 cache verification must explicitly confirm
   native SWA/CSA/HSA composite cache handling and no generic TurboQuant KV
   override.
-- ZAYA/CCA remains import-verified only; runtime cache reuse must stay disabled
-  until CCA `conv_state`/`prev_hs` serialization and restore are implemented.
+- ZAYA/CCA no longer remains import-only. MXFP4 is strict-live passing for the
+  current text/API/cache-disabled contract. JANGTQ2/JANGTQ4 are not cleared.
+  Runtime cache reuse must stay disabled until CCA `conv_state`/`prev_hs`
+  serialization and restore are implemented.
 
 ## §8.3 Empty `<think></think>` Injection — Layer-1 Verified (2026-05-06)
 
@@ -735,6 +755,9 @@ Live telemetry artifacts:
 | MiniMax M2.7 Small | `/tmp/vmlx_family_audit/live_minimax_m27_small_tq_strict_after_cache_fixes.json` | PASS | Exact `noted`/`blue`; cache `tokens_saved=46`; L2 `disk_hits=1`, `disk_writes=13`; RSS `5.2GB`, MLX peak `40.4GB`, system available `60.1GB`. |
 | Laguna JANGTQ | `/tmp/vmlx_family_audit/live_laguna_tq_strict_tool_after_cache_fixes.json` | PASS | Responses auto tool call emitted structured `list_directory`; cache `tokens_saved=61`; L2 `disk_hits=1`, `disk_writes=13`; RSS `10.0GB`, MLX peak `11.1GB`. Health reports q4 KV cache quantization, but live `turboquant_kv_cache.enabled=false`; this is storage-boundary `QuantizedKVCache`, not live TurboQuantKVCache. |
 | Qwen3.6 27B JANG_4M CRACK | `/tmp/vmlx_family_audit/live_qwen36_dense_jang_after_cache_fixes.json` | FAIL strict reasoning budget | Hybrid SSM cache path worked: `cache_hits=2`, `tokens_saved=18`, L2 `disk_hits=2`, `disk_writes=10`, SSM companion about `440MB` in memory and `1.03GB` on disk. The 220-token thinking-on recall probe length-capped inside reasoning with empty visible content. |
+| ZAYA MXFP4 | `/tmp/vmlx_family_audit/live_zaya_three_rows_current.json` | PASS | CCA unsafe cache tiers disabled (`kv_cache_quantization.bits=0`, `turboquant_kv_cache.enabled=false`); generic exact-hit cache row marked N/A; OpenAI chat, Responses history/tool, Anthropic, Ollama `think:false`, and multi-turn recall passed. |
+| ZAYA JANGTQ2 | `/tmp/vmlx_family_audit/live_zaya_three_rows_current.json` | FAIL quality | Contract/cache disablement passed; basic chat echoed/paraphrased the prompt instead of `noted`, thinking-on recall length-capped inside reasoning, and Responses history continuation was weak. |
+| ZAYA JANGTQ4 | `/tmp/vmlx_family_audit/live_zaya_three_rows_current.json` | FAIL tool-call row | Contract/cache disablement and factual API probes passed; Responses auto tool choice returned XML/list text instead of a structured function call. |
 
 Qwen follow-up:
 

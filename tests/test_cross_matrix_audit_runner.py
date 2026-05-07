@@ -6,10 +6,13 @@ content.
 """
 
 from tests.cross_matrix.run_production_family_audit import (
+    ROWS,
+    cache_exact_hit_required,
     extract_anthropic_text_and_stop,
     extract_ollama_visible_text_and_stop,
     is_non_length_stop,
     normalize_short_answer,
+    static_audit,
 )
 
 
@@ -71,3 +74,37 @@ def test_ollama_exact_probe_reads_visible_content():
 
     assert normalize_short_answer(text).lower() == "ollama-ok"
     assert is_non_length_stop(stop)
+
+
+def test_short_answer_normalizer_accepts_terminal_punctuation_only():
+    assert normalize_short_answer("Paris.").lower() == "paris"
+    assert normalize_short_answer('"Paris!"').lower() == "paris"
+    assert normalize_short_answer("Paris. Explanation").lower() != "paris"
+
+
+def test_zaya_rows_are_present_and_marked_cca():
+    rows = {row.id: row for row in ROWS}
+
+    assert rows["zaya_jangtq2"].cache_profile == "zaya_cca"
+    assert rows["zaya_jangtq4"].cache_profile == "zaya_cca"
+    assert rows["zaya_mxfp4"].cache_profile == "zaya_cca"
+
+
+def test_zaya_static_audit_exposes_cache_subtype_when_local_bundle_exists():
+    row = next(row for row in ROWS if row.id == "zaya_jangtq2")
+    static = static_audit(row)
+
+    if not static["exists"]:
+        return
+    assert static["family_expected"] == "zaya"
+    assert static["jang"]["cache_subtype"] == "zaya_cca"
+    assert static["registry"]["cache_subtype"] == "zaya_cca"
+
+
+def test_zaya_cca_rows_do_not_run_generic_exact_hit_cache_probe():
+    rows = {row.id: row for row in ROWS}
+
+    assert not cache_exact_hit_required(rows["zaya_jangtq2"])
+    assert not cache_exact_hit_required(rows["zaya_jangtq4"])
+    assert not cache_exact_hit_required(rows["zaya_mxfp4"])
+    assert cache_exact_hit_required(rows["dsv4_tq"])
