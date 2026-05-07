@@ -43,15 +43,39 @@ alone.
 | #146 mflux missing | Source bundle installs and verifies `mflux 0.17.5`; repo-local bundle has it. | Installed app is stale and missing `mflux`; rebuild/reinstall required. |
 | #145 image input `TokenizerWrapper` not callable | Source fixed and live-source verified on Qwen3.6-35B-A3B-JANGTQ-CRACK for `/v1/chat/completions` image_url and `/v1/responses` input_image. | Needs signed app release verification. Affine-JANG Qwen hybrid is now text-only by default and rejects media with a clear 400. |
 | #144 RAM growth / hidden SSM companion | Source gates SSM companion by prefix-cache enablement and bounds companion cache. Gemma-4-26B image soak stayed flat over 12 salted requests. | Exact 32GB/g4-31b reporter profile pending. |
+| #143 JANGTQ conversion access | Not a runtime bug. | Product/support response; no engine fix required unless docs/tool packaging changes. |
 | #142 g4-31b crash | Related to Gemma/JANG loading and cache/memory safety. Source has current validators, but exact model not reproduced in this pass. | Needs live load with reporter model. |
+| #141 DSV4-Flash conversion tools fail | Related to converter/JANG tooling, not just runtime. | Needs reproduction in `/Users/eric/jang`; do not close from engine tests. |
 | #139 VLM no stream in worker thread | Source fixed and live-source verified on Gemma-4-26B image streaming; no `No Stream(gpu)` error, coherent streamed output. | Needs signed app release verification. |
 | #138 `--kv-cache-quantization` overridden by TurboQuant | Source tests confirm explicit q4/q8/none is respected; DSV4 uses native SWA/CSA/HSA cache and hybrid SSM disables generic KV/TQ-KV by default. | Needs packaged CLI check. |
+| #137 prompt_lookup.py stale docs | Documentation issue. | Pending doc cleanup; not release-blocking for runtime. |
+| #136 PFlash speculative prefill | Feature request. | Backlog; no source fix claimed. |
+| #135 draft-model speculative under batching | Feature request/perf. | Backlog; no source fix claimed. |
+| #134 PLD on hybrid SSM | Feature/perf proposal. | Backlog; overlaps SSM checkpoint/replay work but not a current bug fix. |
 | #133 Swift directory picker | Swift issue, not Python/Electron session scope. |
 | #132 Gemma 4 AWQ `.model` AttributeError | Fixed in local `jang` source and installed `jang 2.5.26`. | PyPI/release confirmation if publishing. |
 | #131 MCP headers / streamable HTTP | Source accepts headers and streamable HTTP. MCP tests passed. | Live remote MCP token test pending. |
+| #127 logprobs/top_logprobs | Feature/API parity request. | Needs separate implementation and tests. |
+| #126 M1 Max shutdowns | Hardware/thermal/memory safety report. | Needs reporter repro profile and memory/Metal limits; not cleared. |
+| #125 flash-moe | Feature/compat request. | Backlog; current source protects incompatible JANGTQ+Smelt/Flash-MoE paths. |
+| #124 wrong font with Cyrillic | Panel UI bug. | Needs UI font/render check; not addressed here. |
+| #123 how to run model | Support/docs issue. | Needs docs/response, not engine fix. |
+| #122 upgrade question | Support issue. | Needs response. |
 | #121 macOS 26 ad-hoc NSOpenPanel | Swift/ad-hoc signing issue, not Python/Electron source. |
 | #120 nanobind/metallib Sequoia | Source bundle now forces macOS 14 MLX wheels and package floor is 14.5. | Needs clean installed-app test on macOS 15.x/14.5+. |
 | #119 DeepSeek-V4-Flash | Source has DSV4 registration/cache/runtime tests and native-cache policy. | Retest after fresh model download. Full long-context output must be read to the end; DSV4 should use SWA/CSA/HSA native compression, not generic TurboQuant KV. |
+| #100 image generation optimization | Feature/perf request. | Backlog; mflux packaging fix is separate. |
+| #98 Agoragentic listing | Product/listing item. | No engine work. |
+| #88 RotorQuant support | Quantization feature request. | Backlog; no source fix claimed. |
+| #86 multi-user isolation/security | Feature/security architecture. | Backlog; current local app auth/rate-limit warnings remain. |
+| #79 Z-image support/catalog | Image feature request. | Backlog. |
+| #78 recommended code harness | Support/docs issue. | Needs response/docs. |
+| #76 DFlash support | Feature request related to DSV4/DFlash. | Current DSV4 runtime policy is separate; do not close. |
+| #74 auto-evict/API gateway unload | Feature request. | Backlog; sleep/wake/JIT matrix still pending. |
+| #60 asymmetric KV cache | Feature/cache research. | Backlog; no source fix claimed. |
+| #57 remove models | UI/support issue. | Needs panel flow review. |
+| #44 speculative decoding + continuous batching + MLLM | Feature/perf request. | Backlog; not part of this pass. |
+| #37 roadmap/benchmarks | Product/docs request. | Needs response/release notes. |
 
 ### jjang-ai/mlxstudio
 
@@ -62,12 +86,19 @@ alone.
 | #105 Qwen3.6 Swift crash | Exact Swift crash is out of Python scope, but Python reproduced the same Qwen3.6 affine-JANG corruption class. Source now routes affine-JANG Qwen hybrid text-only and keeps JANGTQ/MXTQ Qwen VLM native. |
 | #104 default metallib language version | Source now blocks packaging/support below macOS 14.5 and docs no longer claim macOS 26+. | Need clean app install on macOS 15.x to verify actionable error/no crash. |
 | #103 mflux missing | Same as vmlx #146. Source bundle OK; installed app stale. |
+| #102 Swift v2 install question | Support/Swift issue. | Out of Python/Electron runtime scope. |
 | #101 duplicate MLX/nanobind | Source has startup duplicate-MLX detector. | Clean install verification pending. |
 | #100 reasoning enable | Source has reasoning-mode contracts across OpenAI/Anthropic/Ollama paths. | Live model/protocol matrix pending. |
+| #99 DeepSeek-V4-Flash BOS loop | Same DSV4 correctness family as vmlx #119. | Retest after fresh DSV4 download; full output must be read to completion. |
 | #95 MiniMax JANGTQ missing `jang_tools` | Source hard-depends on PyPI `jang`; bundled verifier imports `jang_tools`. Installed app has `jang 2.5.26`. |
 | #91 old broken `!` / stream thread | Old release packaging issue plus VLM stream class. Source tests passed for relevant paths. |
 | #90 libc++ symbol on macOS 14.4 | Source now sets package floor to macOS 14.5 and CLI explains the runtime floor. |
 | #89 remote desktop client | Feature request; not a correctness blocker. |
+| #75 ModelScope mirror | Feature request. | Backlog. |
+| #68 generic bug | Needs issue-body triage. | Not mapped yet without reproduction details. |
+| #67 LoRA hotswap | Feature request. | Backlog. |
+| #61 image gallery delete/copy | UI feature request. | Backlog. |
+| #31 MCP HTTP/SSE/java command | Partially overlaps vmlx #131. | Header/streamable HTTP source tests passed; Java command support needs separate verification. |
 
 ## Current Issue Triage
 
@@ -148,10 +179,12 @@ Local artifacts under `/tmp/vmlx_family_audit` show these latest statuses:
   long-context output read to the end and cache repeat tested with a better
   prompt than `blue blue blue blue`.
 - mlxstudio #105 / user Qwen3.6-27B-JANG_4L Metal GPU timeout. This is not
-  fixed by the Python changes until the exact local model path is loaded and
-  the warmup/generation path is reproduced. It may be a Swift crash in the
-  issue body, but the user's screenshot/log also shows Python output quality
-  failures for Qwen; keep it open.
+  fully cleared until the exact local model path is loaded and the
+  warmup/generation path is reproduced. The closest available affine-JANG
+  Qwen3.6-27B-JANG_4M corruption class is covered in source now, including the
+  forced-MLLM/panel `--is-mllm` route that could previously wrap a text-only
+  fallback in the MLLM scheduler. Keep the exact 4L issue open until live
+  model verification.
 - Installed app packaging. Source bundle is fixed, but `/Applications/vMLX.app`
   still lacks `mflux`, proving release/install is stale.
 
@@ -188,11 +221,17 @@ Local artifacts under `/tmp/vmlx_family_audit` show these latest statuses:
 11. Added a separate affine-JANG Qwen hybrid policy: text-only for correctness,
     explicit 400 on media payloads, and no misleading `vision` capability in
     `/api/show`.
-12. Added shared TurboQuant KV telemetry detection for nested MLLM language
+12. Closed the forced-MLLM hole for affine-JANG Qwen hybrid VLM bundles:
+    `is_mllm_model(..., force_mllm=True)` now still returns `False`, and the
+    Electron panel no longer marks those bundles multimodal from
+    `architecture.has_vision=true`. MXTQ/JANGTQ Qwen VLM remains multimodal.
+    Regression tests now execute the affine fallback and prove MXTQ reaches the
+    native VLM branch instead of only grepping comments.
+13. Added shared TurboQuant KV telemetry detection for nested MLLM language
     models so `/health` and `/v1/cache/stats` report the same live-cache state.
-13. Added ZAYA/CCA cache-subtype tracking and compatibility policy. ZAYA is not
+14. Added ZAYA/CCA cache-subtype tracking and compatibility policy. ZAYA is not
     allowed to fall through generic hybrid prefix/paged/L2/TQ-KV cache paths.
-14. Added a fail-fast ZAYA loader error until `mlx_lm.models.zaya` or a
+15. Added a fail-fast ZAYA loader error until `mlx_lm.models.zaya` or a
     `jang_tools.zaya` runtime exists and supports CCA `conv_state`/`prev_hs`.
 
 This addresses the compatibility confusion behind mlxstudio #90/#104: the app
@@ -325,6 +364,11 @@ Live Qwen3.6 affine-JANG hybrid check:
 - Direct text JANG loader produced coherent Russian planning/code content.
 - Auto server startup now logs the text-only correctness policy and loads
   `mllm=False`.
+- A later audit found one remaining forced path: the panel could still pass
+  `--is-mllm` from JANG `architecture.has_vision=true`, and Python
+  `force_mllm=True` returned before the affine-Qwen text-only policy. Source now
+  overrides that forced path, and panel detection mirrors it so the MLLM
+  scheduler is not constructed around a text-only fallback.
 - The same long Russian prompt is coherent through the server.
 - Media requests return HTTP 400 with a clear text-only-runtime message.
 - `/api/show` no longer advertises `vision`.
@@ -376,6 +420,35 @@ Source policy now enforces that note:
   `family zaya cache_type hybrid cache_subtype zaya_cca tool zaya_xml
   reasoning qwen3`, followed by the expected fail-fast
   `ZAYA model_type=zaya requires a ZAYA-aware runtime`.
+
+## Cross-Check Matrix To Keep Honest
+
+Every future "fixed" claim needs an explicit row for these dimensions:
+
+- **Loader/runtime:** generic JANG v1/v2, JANGTQ/MXTQ native, affine-JANG,
+  MXFP4, codebook VQ, CRACK variants, stacked/pre-stacked expert tensors,
+  sidecar fast-load, safetensors header validation, and exact dependency
+  versions in repo-local bundle and installed app.
+- **Quant math:** Hadamard signs keyed by input width, codebook bit width,
+  `dp_bits` for down projection, matmul shape repair, SwitchGLU fused path,
+  per-expert 2D/3D stack handling, and explicit opt-out behavior for
+  incompatible Smelt/Flash-MoE/TurboQuant combinations.
+- **Cache contract:** standard KV, TurboQuant KV, DSV4 SWA+CSA/HSA native
+  composite cache, hybrid SSM KV+companion state, ZAYA CCA KV+`conv_state`+
+  `prev_hs`, prefix/paged/L2 disk store/fetch, block-key schema version,
+  restart survival, `cache_salt`, `skip_prefix_cache`, and media-aware cache
+  keys.
+- **API surfaces:** OpenAI chat/completions/responses, Anthropic messages,
+  Ollama chat/generate/version/tags, streaming/non-streaming, tool calls,
+  `tool_choice`, reasoning on/off/max, `reasoning_effort`, normalized template
+  kwargs, and Responses history/tool-output replay.
+- **Panel/session:** model auto-detect, stale saved settings, session auto-start,
+  forced MLLM, smelt/VLM mutual exclusion, chat UI streaming merge, stop/cancel,
+  sleep/wake/JIT, app signing/notarization, and installed bundle parity.
+
+Passing source tests is not enough for a release: each reporter-facing issue
+needs source test + installed app test + exact model/API reproduction when the
+model is locally available.
 
 ## Next Verification Required Before Release
 
@@ -488,6 +561,24 @@ Verification in this pass:
   → `882 passed, 48 skipped, 6 deselected`.
 - `.venv/bin/python -m pytest -q`
   → `2837 passed, 70 skipped, 92 deselected, 2 xpassed`.
+- Qwen forced-MLLM/panel routing follow-up:
+  `.venv/bin/python -m pytest -q tests/test_engine_audit.py::TestJangVLMFallbacks tests/test_dsv4_paged_cache.py::test_dsv4_serve_path_forces_generic_kv_quantization_off tests/test_chat_template_kwargs.py`
+  → `11 passed`.
+- Panel routing follow-up:
+  `npm test -- --run tests/model-config-registry.test.ts tests/comprehensive-audit.test.ts`
+  → `361 passed`.
+- Panel typecheck follow-up:
+  `npm run typecheck`
+  → passed.
+- Broader Python source regression after Qwen routing patch:
+  `.venv/bin/python -m pytest -q tests/test_engine_audit.py tests/test_vl_video_regression.py tests/test_dsv4_paged_cache.py tests/test_cache_bypass.py tests/test_mcp_security.py tests/test_image_api.py tests/test_chat_template_kwargs.py tests/test_thinking_template_render.py tests/test_api_surface_parity.py tests/test_reasoning_modes.py tests/test_responses_history.py`
+  → `897 passed, 48 skipped, 6 deselected`.
+- Full default Python suite after Qwen routing patch:
+  `.venv/bin/python -m pytest -q`
+  → `2840 passed, 70 skipped, 92 deselected, 2 xpassed`.
+- Full panel suite after Qwen routing patch:
+  `npm test -- --run`
+  → `1597 passed`.
 
 GitHub issue state was re-queried with `gh issue list` for both
 `jjang-ai/vmlx` and `jjang-ai/mlxstudio`. The map above remains the release

@@ -366,12 +366,45 @@ function configToDetected(family: string, config: Omit<ModelConfig, 'pattern' | 
   }
 }
 
+function isAffineJangQwenHybridVlm(jangCfg: any, parsedConfig: any): boolean {
+  const textConfig = parsedConfig?.text_config ?? {}
+  const modelType = textConfig?.model_type ?? parsedConfig?.model_type
+  const layerTypes = Array.isArray(textConfig?.layer_types) ? textConfig.layer_types : []
+  const isQwenHybrid =
+    ['qwen3_5', 'qwen3_5_text', 'qwen3_5_moe', 'qwen3_vl', 'qwen3_vl_moe'].includes(modelType) &&
+    layerTypes.some((t: unknown) => t === 'linear_attention')
+  if (!isQwenHybrid) return false
+
+  const isMxtq = jangCfg?.weight_format === 'mxtq' || jangCfg?.format === 'mxtq'
+  if (isMxtq) return false
+
+  const modality =
+    jangCfg?.capabilities?.modality ??
+    jangCfg?.modality ??
+    parsedConfig?._jang_modality
+  const hasVision =
+    jangCfg?.has_vision === true ||
+    jangCfg?.architecture?.has_vision === true ||
+    'vision_config' in parsedConfig ||
+    (typeof modality === 'string' && !['text', 'embedding', 'rerank'].includes(modality))
+
+  return hasVision
+}
+
 function resolveJangMultimodal(jangCfg: any, parsedConfig: any): boolean {
   const hasVisionConfig = 'vision_config' in parsedConfig
   const modality =
     jangCfg?.capabilities?.modality ??
     jangCfg?.modality ??
     parsedConfig?._jang_modality
+
+  // Affine-JANG Qwen3.5/3.6 hybrid VLM bundles keep vision metadata, but the
+  // Python engine intentionally routes them text-only because the mlx_vlm
+  // wrapper corrupts text/image prompts. Do not pass --is-mllm from the panel;
+  // JANGTQ/MXTQ Qwen VLM remains multimodal via the native jang_tools path.
+  if (isAffineJangQwenHybridVlm(jangCfg, parsedConfig)) {
+    return false
+  }
 
   // Explicit converter stamps are authoritative. A JANG bundle may keep a
   // vision_config in config.json even when the emitted artifact is text-only.

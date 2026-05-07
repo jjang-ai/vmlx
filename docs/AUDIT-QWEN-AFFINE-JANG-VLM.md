@@ -17,6 +17,11 @@
 - Loaded via `_load_jang_v2` (text path) → coherent output (live verified previously).
 - Loaded via `_load_jang_v2_vlm` (VLM path) → corrupt output for both text-only and image inputs.
 - The 94b16d22 fallback in `vmlx_engine/utils/jang_loader.py:1518–1526` routes affine-JANG Qwen hybrid VLM bundles to `_load_jang_v2` (text-only) and the symptom is masked.
+- A later wiring audit found one additional failure path: Electron could mark
+  the same affine-JANG bundle multimodal from `jang_config.architecture.has_vision=true`
+  and pass `--is-mllm`; Python then honored `force_mllm=True` before reaching
+  the Qwen text-only policy. Source now overrides forced MLLM for this exact
+  affine-JANG class and panel detection mirrors the same policy.
 
 ## Root cause
 
@@ -75,7 +80,12 @@ Confirmed not yet performed (requires loading the bundle via both paths and comp
 
 ## Decision for this audit cycle
 
-- The fallback at `_load_jang_v2_vlm:1518–1526` and the `is_mllm_model` short-circuit in `vmlx_engine/api/utils.py:319–353` **stay in place for now** with a clear pointer to this audit doc and a follow-up issue.
+- The fallback at `_load_jang_v2_vlm:1518–1526`, the `is_mllm_model` short-circuit, and the panel-side `resolveJangMultimodal` override **stay in place for now** with a clear pointer to this audit doc and a follow-up issue.
+- Regression coverage now pins all three routing layers:
+  `is_mllm_model(..., force_mllm=True)` returns `False` for affine-JANG Qwen
+  hybrid, `_load_jang_v2_vlm` delegates affine-JANG to `_load_jang_v2`, and
+  panel detection does not pass `--is-mllm` for affine-JANG while keeping
+  MXTQ/JANGTQ Qwen VLM multimodal.
 - Real fix path (1) is queued for the next cycle.
 - The fallback is no longer "guard hiding a mystery"; it is a documented stopgap with a known root cause and a fix path.
 
@@ -84,4 +94,6 @@ Confirmed not yet performed (requires loading the bundle via both paths and comp
 - Implement fix path (1): patch `mlx_vlm.qwen3_5.language.Qwen3_5RotaryEmbedding` for text-only short-circuit.
 - Layer-1 hidden-state diff verification on `Qwen3.6-27B-JANG_4M-CRACK`.
 - Re-test image attach + text-only multi-turn after fix lands.
-- Remove the fallback in `_load_jang_v2_vlm:1518–1526` and the `is_mllm_model` short-circuit in `api/utils.py:319–353`.
+- Remove the fallback in `_load_jang_v2_vlm:1518–1526`, the `is_mllm_model`
+  short-circuit, and the panel detection override after a real MRoPE/loader fix
+  lands.
