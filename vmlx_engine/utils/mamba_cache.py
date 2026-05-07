@@ -119,7 +119,7 @@ def _safe_finalize_prompt_cache_entry(cache) -> None:
 
 
 def _patch_empty_batch_kv_extract() -> None:
-    """Backport empty-cache ``extract`` handling for mlx-lm batch caches."""
+    """Backport/cache API fixes needed by mlx-lm batch scheduling."""
     try:
         from mlx_lm.models.cache import (
             BatchKVCache,
@@ -151,6 +151,51 @@ def _patch_empty_batch_kv_extract() -> None:
 
         _rot_extract_empty_safe._vmlx_empty_extract_patched = True
         BatchRotatingKVCache.extract = _rot_extract_empty_safe
+
+    def _single_batch_filter(self, batch_indices) -> None:
+        keep = list(batch_indices) if isinstance(batch_indices, (list, tuple)) else []
+        if keep != [0]:
+            raise NotImplementedError(
+                f"{type(self).__name__}.filter() only supports the single-sequence "
+                "fast path. Multi-sequence batching must use BatchKVCache."
+            )
+
+    def _single_batch_extract(self, idx: int):
+        if idx != 0:
+            raise IndexError(
+                f"{type(self).__name__}.extract({idx}) is invalid for the "
+                "single-sequence fast path"
+            )
+        return self
+
+    def _single_batch_prepare(self, *args, **kwargs) -> None:
+        right_padding = kwargs.get("right_padding")
+        if right_padding is not None and any(int(x) != 0 for x in right_padding):
+            raise NotImplementedError(
+                f"{type(self).__name__}.prepare() cannot right-pad the "
+                "single-sequence fast path"
+            )
+
+    def _single_batch_finalize(self) -> None:
+        return None
+
+    extra_single_batch_classes = []
+    try:
+        from jang_tools.turboquant.cache import TurboQuantKVCache
+
+        extra_single_batch_classes.append(TurboQuantKVCache)
+    except Exception:
+        pass
+
+    for _cls in (KVCache, RotatingKVCache, *extra_single_batch_classes):
+        if not hasattr(_cls, "filter"):
+            _cls.filter = _single_batch_filter
+        if not hasattr(_cls, "extract"):
+            _cls.extract = _single_batch_extract
+        if not hasattr(_cls, "prepare"):
+            _cls.prepare = _single_batch_prepare
+        if not hasattr(_cls, "finalize"):
+            _cls.finalize = _single_batch_finalize
 
 
 class BatchMambaCache(MambaCache):
@@ -530,6 +575,16 @@ def patch_mlx_lm_for_mamba():
         """
         if not caches or not caches[0]:
             return []
+        if len(caches) == 1:
+            # Single-sequence scheduling does not need batch cache conversion.
+            # Converting KVCache -> BatchKVCache is not numerically neutral for
+            # Bailing/Ling hybrid bundles: the first greedy token for the
+            # Russian Three.js prompt changes from "Вот" to " Организации".
+            # Keep native cache objects for max_num_seqs=1 and rely on the
+            # single-batch filter/extract/prepare methods above for the small
+            # BatchGenerator API surface that still gets called during split /
+            # finish handling.
+            return list(caches[0])
         batch_cache = []
         for i in range(len(caches[0])):
             layer_cache = caches[0][i]

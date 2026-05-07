@@ -23,7 +23,7 @@ import traceback
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from mlx_lm.generate import BatchGenerator, generation_stream
 from mlx_lm.sample_utils import make_sampler
@@ -2021,7 +2021,15 @@ class Scheduler:
             top_k=sampling_params.top_k,
         )
 
-        # Build logits processors (e.g., repetition penalty)
+        # Build logits processors (e.g., repetition penalty).
+        #
+        # These are only installed globally on the DSV4 custom generator below.
+        # mlx_lm.BatchGenerator applies global processors to the entire prompt
+        # context, while mlx_lm.generate_step applies repetition penalty from
+        # the final prompt token onward. For normal batched models we install
+        # per-request wrappers in _schedule_waiting() so continuous batching
+        # matches generate_step and does not suppress useful prompt vocabulary
+        # on long non-English/code prompts.
         logits_processors = None
         if (
             sampling_params.repetition_penalty
@@ -2088,11 +2096,70 @@ class Scheduler:
             max_tokens=sampling_params.max_tokens,
             stop_tokens=stop_tokens,
             sampler=sampler,
-            logits_processors=logits_processors,
+            logits_processors=None,
             prefill_batch_size=self.config.prefill_batch_size,
             completion_batch_size=self.config.completion_batch_size,
             prefill_step_size=self.config.prefill_step_size,
         )
+
+    @staticmethod
+    def _wrap_generated_only_logits_processor(
+        processor: Callable[[Any, Any], Any],
+        skip_prefix_tokens: int,
+    ) -> Callable[[Any, Any], Any]:
+        """Trim prefill-only prompt tokens before applying a logits processor.
+
+        mlx_lm.generate_step evaluates repetition penalty against the final
+        prompt token plus generated tokens. BatchGenerator's TokenBuffer includes
+        every prompt token by default. Keeping the prompt-wide context changes
+        greedy output for prompt-heavy tasks (Ling/Bailing Russian Three.js
+        prompt: first token becomes "Организации" instead of "Вот"). This
+        wrapper preserves generated-only semantics while still letting
+        BatchGenerator own prefill/decode scheduling.
+        """
+
+        skip = max(int(skip_prefix_tokens or 0), 0)
+
+        def _wrapped(tokens: Any, logits: Any) -> Any:
+            if skip <= 0:
+                return processor(tokens, logits)
+            try:
+                # Preserve at least one token. generate_step includes the last
+                # prompt token in the first processor context, then appends
+                # generated tokens on later steps.
+                n = len(tokens)
+                trim = min(skip, max(n - 1, 0))
+                if trim > 0:
+                    tokens = tokens[trim:]
+            except Exception:
+                pass
+            return processor(tokens, logits)
+
+        return _wrapped
+
+    def _request_logits_processors(
+        self,
+        request: Request,
+        tokens_to_process: List[int],
+    ) -> Optional[List[Callable[[Any, Any], Any]]]:
+        """Build BatchGenerator processors with generate_step-compatible context."""
+
+        rep = request.sampling_params.repetition_penalty
+        if not rep or rep == 1.0:
+            return None
+
+        from mlx_lm.sample_utils import make_logits_processors
+
+        rep_context_size = 512 if self._long_repetition_context else 20
+        processors = make_logits_processors(
+            repetition_penalty=rep,
+            repetition_context_size=rep_context_size,
+        )
+        skip_prefix_tokens = max(len(tokens_to_process) - 1, 0)
+        return [
+            self._wrap_generated_only_logits_processor(p, skip_prefix_tokens)
+            for p in processors
+        ]
 
     def _ensure_batch_generator(self, sampling_params: SamplingParams) -> bool:
         """Ensure BatchGenerator exists with compatible settings."""
@@ -3614,6 +3681,14 @@ class Scheduler:
                         # normal prefill paths use the same logits-processor
                         # context instead of only the re-fed tail token.
                         insert_kwargs["all_tokens"] = [request.prompt_token_ids]
+                    else:
+                        request_processors = self._request_logits_processors(
+                            request, list(tokens_to_process)
+                        )
+                        if request_processors is not None:
+                            insert_kwargs["logits_processors"] = [
+                                request_processors
+                            ]
                     uids = self.batch_generator.insert(
                         [tokens_to_process],
                         max_tokens=[request.sampling_params.max_tokens],
@@ -3638,6 +3713,14 @@ class Scheduler:
                             == "DSV4BatchGenerator"
                         ):
                             insert_kwargs["all_tokens"] = [request.prompt_token_ids]
+                        else:
+                            request_processors = self._request_logits_processors(
+                                request, list(tokens_to_process)
+                            )
+                            if request_processors is not None:
+                                insert_kwargs["logits_processors"] = [
+                                    request_processors
+                                ]
                         uids = self.batch_generator.insert(
                             [tokens_to_process],
                             max_tokens=[request.sampling_params.max_tokens],
