@@ -638,6 +638,7 @@ export class SessionManager extends EventEmitter {
         const freshConfig = detectModelConfigFromDir(config.modelPath)
         if (freshConfig) {
           const oldFamily = config.toolCallParser
+          const oldReasoningParser = config.reasoningParser
           // Update auto-detected fields only if user hasn't explicitly overridden them
           // Use === checks, not falsy — '' means "None/disabled" (explicit user choice)
           if (config.toolCallParser === undefined || config.toolCallParser === 'auto') {
@@ -645,6 +646,22 @@ export class SessionManager extends EventEmitter {
           }
           if (config.reasoningParser === undefined || config.reasoningParser === 'auto') {
             config.reasoningParser = freshConfig.reasoningParser || 'auto'
+          }
+          // v1.5.25 ZAYA recovery: early ZAYA builds were misdetected as Qwen
+          // reasoning models and persisted `toolCallParser=qwen` /
+          // `reasoningParser=qwen3` in session configs. Those stale values look
+          // like user overrides on the next launch, so the generic "preserve
+          // explicit overrides" rule keeps poisoning the runtime even after
+          // registry detection is fixed. ZAYA's current contract is explicit:
+          // native XML tools, no reasoning parser. Preserve only explicit
+          // "None" (`''`) choices.
+          if (freshConfig.family === 'zaya') {
+            if (config.toolCallParser !== '') {
+              config.toolCallParser = freshConfig.toolParser || 'auto'
+            }
+            if (config.reasoningParser !== '') {
+              config.reasoningParser = 'auto'
+            }
           }
           // Refresh multimodal detection from disk. A detected VLM must win
           // over stale saved `isMultimodal=false` from older sessions; otherwise
@@ -659,6 +676,9 @@ export class SessionManager extends EventEmitter {
           // Log if model type changed
           if (oldFamily && oldFamily !== 'auto' && freshConfig.toolParser && oldFamily !== freshConfig.toolParser) {
             this.pushLog(sessionId, `[INFO] Model config re-detected from disk (was: ${oldFamily}, now: ${freshConfig.toolParser})`)
+          }
+          if (oldReasoningParser && oldReasoningParser !== 'auto' && freshConfig.family === 'zaya' && oldReasoningParser !== config.reasoningParser) {
+            this.pushLog(sessionId, `[INFO] ZAYA reasoning parser reset from stale ${oldReasoningParser} to auto (no reasoning parser)`)
           }
           // Update DB with refreshed config
           db.updateSession(sessionId, { config: JSON.stringify(config) })

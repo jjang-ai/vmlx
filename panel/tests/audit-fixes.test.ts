@@ -395,6 +395,44 @@ describe('enableThinking tri-state', () => {
     expect(migrated.modelReasoningModes).toEqual(['off'])
   })
 
+  function refreshZayaDetectedParsers(
+    config: { toolCallParser?: string; reasoningParser?: string },
+    freshConfig: { family: string; toolParser?: string; reasoningParser?: string },
+  ) {
+    const next = { ...config }
+    if (next.toolCallParser === undefined || next.toolCallParser === 'auto') {
+      next.toolCallParser = freshConfig.toolParser || 'auto'
+    }
+    if (next.reasoningParser === undefined || next.reasoningParser === 'auto') {
+      next.reasoningParser = freshConfig.reasoningParser || 'auto'
+    }
+    if (freshConfig.family === 'zaya') {
+      if (next.toolCallParser !== '') next.toolCallParser = freshConfig.toolParser || 'auto'
+      if (next.reasoningParser !== '') next.reasoningParser = 'auto'
+    }
+    return next
+  }
+
+  it('ZAYA redetect clears stale Qwen parser values from upgraded session configs', () => {
+    const refreshed = refreshZayaDetectedParsers(
+      { toolCallParser: 'qwen', reasoningParser: 'qwen3' },
+      { family: 'zaya', toolParser: 'zaya_xml' },
+    )
+
+    expect(refreshed.toolCallParser).toBe('zaya_xml')
+    expect(refreshed.reasoningParser).toBe('auto')
+  })
+
+  it('ZAYA redetect preserves explicit parser None choices', () => {
+    const refreshed = refreshZayaDetectedParsers(
+      { toolCallParser: '', reasoningParser: '' },
+      { family: 'zaya', toolParser: 'zaya_xml' },
+    )
+
+    expect(refreshed.toolCallParser).toBe('')
+    expect(refreshed.reasoningParser).toBe('')
+  })
+
   function normalizeReasoningMode(mode: unknown): 'auto' | 'on' | 'off' {
     const m = String(mode ?? 'auto').toLowerCase()
     if (m === 'on' || m === 'always' || m === 'true' || m === 'reasoning') return 'on'
