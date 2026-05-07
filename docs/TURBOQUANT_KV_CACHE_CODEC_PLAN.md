@@ -102,10 +102,13 @@ record instead of treating ZAYA as a generic `CacheList`:
 - Local contract coverage now proves prompt snapshot -> restore -> continuation
   logits for the small ZAYA runtime, plus validator/prefix/block-disk and
   hybrid/DSV4/SSM cache suites.
+- A direct full-bundle ZAYA MXFP4 probe also passed: 80-layer prompt-boundary
+  typed prefix restore had continuation-logit `maxdiff=0.0`, and a fresh L2
+  disk restore hit (`disk_hits=1`) with continuation-logit `maxdiff=0.0`.
 
 This is not a production sign-off for all ZAYA bundles. The remaining release
-gate is live full-model ZAYA cache-hit, L2-restart, multi-turn, and tool-row
-coverage with `zaya_cca_v1` visible in health/cache stats.
+gate is server/API full-model ZAYA cache-hit, L2-restart, multi-turn, and
+tool-row coverage with `zaya_cca_v1` visible in health/cache stats.
 
 | # | Item | Status |
 |---|---|---|
