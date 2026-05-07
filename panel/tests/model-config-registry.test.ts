@@ -51,6 +51,38 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detectModelConfigFromDir(dir).isMultimodal).toBe(true)
   })
 
+  it('keeps affine-JANG Qwen hybrid VLM text-only so the panel does not pass --is-mllm', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'qwen3_5',
+        text_config: {
+          model_type: 'qwen3_5_text',
+          layer_types: ['linear_attention', 'full_attention'],
+        },
+        vision_config: { hidden_size: 1024 },
+      },
+      { format: 'jang', architecture: { has_vision: true } },
+    )
+
+    expect(detectModelConfigFromDir(dir).isMultimodal).toBe(false)
+  })
+
+  it('keeps MXTQ/JANGTQ Qwen hybrid VLM multimodal', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'qwen3_5_moe',
+        text_config: {
+          model_type: 'qwen3_5_moe',
+          layer_types: ['linear_attention', 'full_attention'],
+        },
+        vision_config: { hidden_size: 1024 },
+      },
+      { weight_format: 'mxtq', architecture: { has_vision: true } },
+    )
+
+    expect(detectModelConfigFromDir(dir).isMultimodal).toBe(true)
+  })
+
   it('does not classify text_config-only MoE models as VLMs', () => {
     const dir = makeModelDir(
       { model_type: 'qwen3_5_moe', text_config: { hidden_size: 3072 } },

@@ -2648,6 +2648,14 @@ class TestJangVLMFallbacks:
 
         assert utils.is_mllm_model(str(model_dir)) is False
 
+    def test_affine_qwen_hybrid_jang_overrides_forced_mllm(self, tmp_path):
+        from vmlx_engine.api import utils
+
+        model_dir = self._write_qwen_hybrid_fixture(tmp_path)
+        utils._IS_MLLM_CACHE.clear()
+
+        assert utils.is_mllm_model(str(model_dir), force_mllm=True) is False
+
     def test_mxtq_qwen_hybrid_jang_routes_multimodal(self, tmp_path):
         from vmlx_engine.api import utils
 
@@ -2655,6 +2663,61 @@ class TestJangVLMFallbacks:
         utils._IS_MLLM_CACHE.clear()
 
         assert utils.is_mllm_model(str(model_dir)) is True
+
+    def test_qwen_vlm_loader_affine_delegates_to_text_loader(self, tmp_path, monkeypatch):
+        """The loader fallback must execute, not just exist in comments."""
+        from vmlx_engine.utils import jang_loader
+        import mlx_vlm.utils as vlm_utils
+
+        model_dir = self._write_qwen_hybrid_fixture(tmp_path)
+        config = json.loads((model_dir / "config.json").read_text())
+        jang_cfg = json.loads((model_dir / "jang_config.json").read_text())
+
+        monkeypatch.setattr(vlm_utils, "load_config", lambda path: dict(config))
+        monkeypatch.setattr(
+            vlm_utils,
+            "get_model_and_args",
+            lambda *, config: pytest.fail("affine Qwen hybrid must not reach native VLM load"),
+        )
+
+        def _fake_text_loader(path, cfg, **kwargs):
+            return "text-model", "text-tokenizer"
+
+        monkeypatch.setattr(jang_loader, "_load_jang_v2", _fake_text_loader)
+
+        assert jang_loader._load_jang_v2_vlm(model_dir, jang_cfg) == (
+            "text-model",
+            "text-tokenizer",
+        )
+        assert jang_loader._LAST_LOAD_VLM_FALLBACK is True
+
+    def test_qwen_vlm_loader_mxtq_stays_native_vlm(self, tmp_path, monkeypatch):
+        """JANGTQ/MXTQ Qwen VLM must not be caught by the affine fallback."""
+        from vmlx_engine.utils import jang_loader
+        import mlx_vlm.utils as vlm_utils
+
+        class NativeVlmReached(RuntimeError):
+            pass
+
+        model_dir = self._write_qwen_hybrid_fixture(tmp_path, weight_format="mxtq")
+        config = json.loads((model_dir / "config.json").read_text())
+        jang_cfg = json.loads((model_dir / "jang_config.json").read_text())
+
+        monkeypatch.setattr(vlm_utils, "load_config", lambda path: dict(config))
+        monkeypatch.setattr(
+            vlm_utils,
+            "get_model_and_args",
+            lambda *, config: (_ for _ in ()).throw(NativeVlmReached()),
+        )
+        monkeypatch.setattr(
+            jang_loader,
+            "_load_jang_v2",
+            lambda *args, **kwargs: pytest.fail("MXTQ Qwen VLM must not use text fallback"),
+        )
+
+        with pytest.raises(NativeVlmReached):
+            jang_loader._load_jang_v2_vlm(model_dir, jang_cfg)
+        assert jang_loader._LAST_LOAD_VLM_FALLBACK is False
 
 
 class TestTurboQuantKVTelemetry:
