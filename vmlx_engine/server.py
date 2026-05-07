@@ -3041,6 +3041,21 @@ async def health():
             "speculative_decoding", spec_info
         )
 
+    # PLD SSM replay telemetry (issue #134)
+    _pld_scheduler = None
+    if _engine:
+        if hasattr(_engine, "_engine") and _engine._engine:
+            _pld_scheduler = getattr(_engine._engine.engine, "scheduler", None)
+        elif hasattr(_engine, "_mllm_scheduler") and _engine._mllm_scheduler:
+            _pld_scheduler = _engine._mllm_scheduler
+    if _pld_scheduler is not None and hasattr(_pld_scheduler, "_pld_replay_enabled"):
+        result["pld_ssm_replay"] = {
+            "enabled": getattr(_pld_scheduler, "_pld_replay_enabled", False),
+            "attempts": getattr(_pld_scheduler, "_pld_replay_attempts", 0),
+            "emitted": getattr(_pld_scheduler, "_pld_replay_emitted", 0),
+            "failures": getattr(_pld_scheduler, "_pld_replay_failures", 0),
+        }
+
     # Smelt mode: report partial expert loading status
     if _smelt_enabled:
         result["smelt"] = {
