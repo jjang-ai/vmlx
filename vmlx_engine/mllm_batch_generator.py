@@ -3398,6 +3398,18 @@ class MLLMBatchGenerator:
                 from mlx_lm.models.cache import KVCache
                 fresh_cache = [KVCache() for _ in range(len(self.language_model.layers))]
             input_ids = mx.array([tokens])
+            # Qwen3.5/3.6 hybrid language models keep mRoPE bookkeeping on the
+            # module object. A clean prompt-only SSM re-derive must behave like a
+            # new request, otherwise a prior cache-hit tail can leave an
+            # 8-token `_position_ids` cache and the prompt-only 18-token prefill
+            # fails in attention with broadcast_shapes. The normal request
+            # prefill path already clears these attributes before each request;
+            # mirror that contract here for the idle re-derive path.
+            _saved_pos_state = {}
+            for _attr in ("_rope_deltas", "_position_ids"):
+                if hasattr(self.language_model, _attr):
+                    _saved_pos_state[_attr] = getattr(self.language_model, _attr)
+                    setattr(self.language_model, _attr, None)
             _ = self.language_model(input_ids, cache=fresh_cache)
             materialize: List[Any] = []
             for c in fresh_cache:
@@ -3423,6 +3435,12 @@ class MLLMBatchGenerator:
         except Exception as ex:
             logger.warning(f"MLLM clean SSM prefill failed (non-fatal): {ex}")
             return None
+        finally:
+            for _attr, _value in locals().get("_saved_pos_state", {}).items():
+                try:
+                    setattr(self.language_model, _attr, _value)
+                except Exception:
+                    pass
 
     def run_idle_rederive(self) -> bool:
         """Process one SSM rederive task from the queue (scheduler idle tick).

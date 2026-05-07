@@ -1009,6 +1009,24 @@ class TestIssueGuards:
         # Non-fatal: still catches + logs at WARNING level.
         assert "non-fatal" in src
 
+    def test_clean_ssm_rederive_resets_qwen_sticky_rope_state(self):
+        """Hybrid Qwen clean SSM re-derive must be a fresh prompt-only pass.
+
+        mlx-vlm Qwen3.5/3.6 language modules cache `_position_ids` and
+        `_rope_deltas` on the module object. The normal MLLM prefill path clears
+        those per request. The idle clean-SSM path must mirror that or a prior
+        short cache-hit tail can leave stale position ids and make the rederive
+        fail with broadcast_shapes instead of proving the SSM companion state.
+        """
+        import inspect
+        import vmlx_engine.mllm_batch_generator as _m
+
+        src = inspect.getsource(_m.MLLMBatchGenerator._prefill_for_clean_ssm)
+        assert '"_rope_deltas", "_position_ids"' in src
+        assert "_saved_pos_state" in src
+        assert "setattr(self.language_model, _attr, None)" in src
+        assert "finally:" in src and "setattr(self.language_model, _attr, _value)" in src
+
 
 class TestMLLMPrefixCacheFixed:
     """Ralph iter 11 — MLLMPrefixCacheManager FIXED.
@@ -6855,6 +6873,20 @@ class TestTurboQuantCacheInterop:
         # SSM companion cache path
         from vmlx_engine.utils import ssm_companion_cache as ssm
         assert hasattr(ssm, "SSMCompanionCache"), "SSMCompanionCache class missing"
+
+    def test_family_audit_fails_hidden_ssm_rederive_warnings(self):
+        """The production matrix must fail hidden hybrid SSM rederive errors.
+
+        A row with coherent short visible text is still not production-proof if
+        the server log says the clean SSM prefill/rederive path failed. That
+        exact false positive happened on Qwen3.6 hybrid; pin the runner so it
+        cannot pass from output quality alone.
+        """
+        src = Path("tests/cross_matrix/run_production_family_audit.py").read_text()
+        assert "blocking_runtime_log_findings" in src
+        assert "MLLM clean SSM prefill failed" in src
+        assert "SSM re-derive failed" in src
+        assert "blocking_runtime_log_findings_absent" in src
 
     def test_turboquant_kv_cache_importable(self):
         """TurboQuantKVCache must be importable — it's the cache class
