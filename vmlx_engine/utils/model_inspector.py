@@ -318,8 +318,13 @@ def inspect_model(model_path: str) -> ModelInfo:
 
     # Quantization
     quant_config = config.get("quantization", config.get("quantization_config", {}))
-    is_quantized = bool(quant_config)
     quant_bits = quant_config.get("bits") if quant_config else None
+    if quant_bits is None and quant_config:
+        if quant_config.get("load_in_4bit") is True:
+            quant_bits = 4
+        elif quant_config.get("load_in_8bit") is True:
+            quant_bits = 8
+    is_quantized = bool(quant_config and quant_bits is not None)
     quant_group_size = quant_config.get("group_size") if quant_config else None
     quant_mode = quant_config.get("mode") if quant_config else None
 
@@ -594,7 +599,7 @@ def estimate_conversion_memory_gb(info: ModelInfo, target_bits: int) -> float:
         Estimated peak memory during conversion in GB
     """
     # Source is loaded lazily but quantization materializes weights
-    source_bits = info.quant_bits if info.is_quantized else 16
+    source_bits = info.quant_bits if info.is_quantized and info.quant_bits else 16
     source_gb = info.param_count_billions * source_bits / 8
     target_gb = info.param_count_billions * target_bits / 8
 

@@ -43,9 +43,9 @@ are explicitly marked as pending push/package when the fix is local-only.
 
 | Bucket | Issues | Comment state |
 |---|---|---|
-| Source-fixed/source-tested and commented | vmlx #147, #146, #145, #144, #139, #138, #137, #132, #131, #124, #120, #119; mlxstudio #107, #106, #104, #103, #101, #100, #95, #90, #31 | Commented. Do not close until release/live verification criteria are met. |
-| Local-only fix, comment says pending push/package | vmlx #137, #124 | Commented after local commits; leave open until pushed/packaged. |
-| Not fixed; no public fix claim should be made yet | vmlx #142, #141, #136, #134, #123, #98, #88, #86, #79, #44; mlxstudio #89 | No code/test evidence sufficient for a fix comment. |
+| Source-fixed/source-tested and commented | vmlx #147, #146, #145, #144, #141, #139, #138, #137, #132, #131, #124, #120, #119; mlxstudio #107, #106, #104, #103, #101, #100, #95, #90, #31 | Commented. Do not close until release/live verification criteria are met. |
+| Local-only fix, comment says pending push/package | vmlx #141, #137, #124 | Commented after local commits; leave open until pushed/packaged. |
+| Not fixed; no public fix claim should be made yet | vmlx #142, #136, #134, #123, #98, #88, #86, #79, #44; mlxstudio #89 | No code/test evidence sufficient for a fix comment. |
 | Support/product/Swift/out-of-Python-scope | vmlx #143, #133, #121, #122, #125, #126, #127, #135, #37, #57, #60, #74, #76, #78, #100; mlxstudio #102, #105, #61, #67, #68, #75, #91, #99 | May need responses, but not Python engine fix claims from this branch. |
 
 ### jjang-ai/vmlx
@@ -58,7 +58,7 @@ are explicitly marked as pending push/package when the fix is local-only.
 | #144 RAM growth / hidden SSM companion | Source gates SSM companion by prefix-cache enablement and bounds companion cache. Gemma-4-26B image soak stayed flat over 12 salted requests. | Exact 32GB/g4-31b reporter profile pending. |
 | #143 JANGTQ conversion access | Not a runtime bug. | Product/support response; no engine fix required unless docs/tool packaging changes. |
 | #142 g4-31b crash | Related to Gemma/JANG loading and cache/memory safety. Source has current validators, but exact model not reproduced in this pass. | Needs live load with reporter model. |
-| #141 DSV4-Flash conversion tools fail | Related to converter/JANG tooling, not just runtime. | Needs reproduction in `/Users/eric/jang`; do not close from engine tests. |
+| #141 DSV4-Flash conversion tools fail | Fixed locally from reporter stack traces: MLX conversion no longer crashes on `quantization.bits=None`; JANG converter now shrinks tiny DSV4 matrices to MLX-compatible group sizes instead of falling into the bad RTN fallback reshape. | Needs push/package and ideally a real DSV4 conversion smoke before close. |
 | #139 VLM no stream in worker thread | Source fixed and live-source verified on Gemma-4-26B image streaming; no `No Stream(gpu)` error, coherent streamed output. | Needs signed app release verification. |
 | #138 `--kv-cache-quantization` overridden by TurboQuant | Source tests confirm explicit q4/q8/none is respected; DSV4 uses native SWA/CSA/HSA cache and hybrid SSM disables generic KV/TQ-KV by default. | Needs packaged CLI check. |
 | #137 prompt_lookup.py stale docs | Fixed locally: `prompt_lookup.py` now describes scheduler-owned PLD verification/reinsert/cache restore instead of "Phase 2 future"; regression test added; issue commented with verification. | Push/package pending. Not release-blocking for runtime. |
@@ -148,6 +148,11 @@ are explicitly marked as pending push/package when the fix is local-only.
   prompt renders correctly. Python single-node scheduler already uses
   `NaiveStreamingDetokenizer`; this pass fixed the distributed generate loop so
   it no longer calls `tokenizer.decode([next_tok_id])` per token.
+- vmlx #141 DSV4 conversion crash: source preflight now treats null/unknown
+  quantization bits as full precision instead of multiplying by `None`; JANG
+  converter now chooses the largest supported MLX group size that divides each
+  tensor's input dimension, so tiny matrices like `(4, 32)` use group_size=32
+  instead of failing at 128 and then reshaping incompatible fallback scales.
 - Gemma-4-26B VLM path: live-source verified non-streaming image, streaming
   image, and Responses input_image. TurboQuant KV telemetry is now shared
   between `/health` and `/v1/cache/stats` for nested MLLM language models.
