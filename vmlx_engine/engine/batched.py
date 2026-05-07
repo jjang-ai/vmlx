@@ -20,6 +20,7 @@ from typing import Any
 from ..api.tool_calling import check_and_inject_fallback_tools, convert_tools_for_template
 from ..api.utils import clean_output_text, extract_multimodal_content, is_mllm_model
 from ..model_config_registry import get_model_config_registry
+from ..utils.chat_template_kwargs import build_chat_template_kwargs
 from .base import BaseEngine, GenerationOutput
 
 logger = logging.getLogger(__name__)
@@ -761,15 +762,13 @@ class BatchedEngine(BaseEngine):
                 # Apply template with enable_thinking via the processor directly.
                 # mlx_vlm's get_chat_template doesn't forward enable_thinking,
                 # causing thinking models to always use thinking-OFF format.
-                tpl_kwargs = {
-                    "tokenize": False,
-                    "add_generation_prompt": True,
-                }
-                if enable_thinking is not None:
-                    tpl_kwargs["enable_thinking"] = enable_thinking
-                # Merge extra chat_template_kwargs (e.g. thinking_budget, reasoning_effort)
-                if extra_template_kwargs:
-                    tpl_kwargs.update(extra_template_kwargs)
+                tpl_kwargs = build_chat_template_kwargs(
+                    enable_thinking=enable_thinking,
+                    extra=extra_template_kwargs,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    include_thinking_alias=False,
+                )
                 try:
                     prompt = self._processor.apply_chat_template(
                         built_messages, **tpl_kwargs
@@ -805,23 +804,14 @@ class BatchedEngine(BaseEngine):
                         except (json.JSONDecodeError, TypeError):
                             fn["arguments"] = {}
 
-            template_kwargs = {
-                "tokenize": False,
-                "add_generation_prompt": not skip_generation_prompt,
-            }
-            if enable_thinking is not None:
-                template_kwargs["enable_thinking"] = enable_thinking
+            template_kwargs = build_chat_template_kwargs(
+                enable_thinking=enable_thinking,
+                extra=extra_template_kwargs,
+                tokenize=False,
+                add_generation_prompt=not skip_generation_prompt,
+            )
             if tools:
                 template_kwargs["tools"] = tools
-            # Merge extra chat_template_kwargs (e.g. thinking_budget).
-            # Strip reserved keys (Concern #14): tokenize and
-            # add_generation_prompt are managed by us; client overrides change
-            # the return type and break downstream code.
-            if extra_template_kwargs:
-                template_kwargs.update({
-                    k: v for k, v in extra_template_kwargs.items()
-                    if k not in ("tokenize", "add_generation_prompt")
-                })
 
             prompt = None
             try:

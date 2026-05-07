@@ -11,12 +11,12 @@ Each ThinkingTemplateModel describes one local bundle the audit can probe:
                                an empty <think></think> at the prompt tail.
 - sample_user_message: Plain user content used as the test prompt.
 
-The 94b16d22 commit removed the engine-side empty <think></think> inject from
-vmlx_engine/engine/{batched,simple}.py (4 sites). The audit verifies that
-removal does not regress enable_thinking=False honor for any arch — and if it
-does, the fix is a per-bundle chat_template.jinja patch, not engine-side
-re-inject (per spec §8.3, §17.3, working principle "no guards or
-monkeypatches").
+The 94b16d22 commit removed the blanket engine-side empty <think></think>
+append. Simple/Batched still retain a narrow fallback that closes an already
+open trailing <think> when thinking is explicitly disabled and tools are absent.
+The audit verifies template behavior before that fallback, using the same
+normalized kwargs as the engine, so real bundle/template issues do not get
+masked by prompt post-processing.
 """
 
 from __future__ import annotations

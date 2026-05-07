@@ -26,6 +26,7 @@ from tests.fixtures.thinking_template_models import (
     SANITY_MODELS,
     ThinkingTemplateModel,
 )
+from vmlx_engine.utils.chat_template_kwargs import build_chat_template_kwargs
 
 
 logger = logging.getLogger(__name__)
@@ -60,13 +61,13 @@ def _render_with_tokenizer(
         str(model.model_path), trust_remote_code=True
     )
     messages = [{"role": "user", "content": model.sample_user_message}]
+    tpl_kwargs = build_chat_template_kwargs(
+        enable_thinking=enable_thinking,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
     try:
-        rendered = tok.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-            enable_thinking=enable_thinking,
-        )
+        rendered = tok.apply_chat_template(messages, **tpl_kwargs)
         return rendered if isinstance(rendered, str) else str(rendered)
     except ValueError as exc:
         if "chat_template" in str(exc) and model.family == "deepseek_v4":
