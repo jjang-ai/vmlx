@@ -18,6 +18,22 @@ import { getAuthHeaders } from "./utils";
 // Default connection config (fallback values)
 const DEFAULT_PORT = 8000;
 
+function normalizeReasoningMode(mode: unknown): "auto" | "on" | "off" {
+  const m = String(mode ?? "auto").toLowerCase();
+  if (m === "on" || m === "always" || m === "true" || m === "reasoning")
+    return "on";
+  if (m === "off" || m === "never" || m === "false" || m === "instruct")
+    return "off";
+  return "auto";
+}
+
+function enableThinkingFromReasoningMode(mode: unknown): boolean | undefined {
+  const normalized = normalizeReasoningMode(mode);
+  if (normalized === "on") return true;
+  if (normalized === "off") return false;
+  return undefined;
+}
+
 /**
  * SSE-streaming fetch using Node.js http/https directly.
  * Electron 28's global fetch() uses Chromium's net module which buffers
@@ -441,11 +457,12 @@ export function registerChatHandlers(
           const genDefaults = (await readGenerationDefaults(modelPath)) || {};
           const modelSettings = db.getModelSettings(modelPath) || {};
 
-          // Default reasoning OFF — most users don't need it and it
-          // confuses new users. Models that explicitly set reasoning_mode
-          // in their model settings will override this.
-          let enableThinking: boolean = false;
-          if (modelSettings.reasoning_mode === "on") enableThinking = true;
+          // Default to Auto. Reasoning-capable models such as Qwen/MiniMax
+          // should be able to think on first message without users editing a
+          // hidden server flag; explicit per-model On/Off still wins.
+          const enableThinking = enableThinkingFromReasoningMode(
+            modelSettings.reasoning_mode,
+          );
 
           // Sensible defaults: many models ship with temperature=1.0 in
           // generation_config.json which is too creative for most users and
@@ -465,7 +482,7 @@ export function registerChatHandlers(
             repeatPenalty:
               genDefaults.repeatPenalty ?? 1.1, // mild anti-loop default
             maxTokens: modelSettings.max_tokens ?? genDefaults.maxNewTokens,
-            enableThinking: enableThinking,
+            enableThinking,
           });
           console.log(
             `[CHAT] Applied global model settings / generation defaults for ${chat.id}`,
@@ -3428,12 +3445,12 @@ export function registerChatHandlers(
           existingModelConfig.max_tokens = sanitized.maxTokens;
           syncNeeded = true;
         }
-        if (sanitized.enableThinking !== undefined) {
+        if (Object.prototype.hasOwnProperty.call(sanitized, "enableThinking")) {
           const reasoningMode =
             sanitized.enableThinking === true
-              ? "always"
+              ? "on"
               : sanitized.enableThinking === false
-                ? "never"
+                ? "off"
                 : "auto";
           if (reasoningMode !== existingModelConfig.reasoning_mode) {
             existingModelConfig.reasoning_mode = reasoningMode;

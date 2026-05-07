@@ -404,7 +404,7 @@ class DatabaseManager {
       }
       if (!overrideColumns.find((c) => c.name === "enable_thinking")) {
         this.db.exec(
-          "ALTER TABLE chat_overrides ADD COLUMN enable_thinking INTEGER DEFAULT 0",
+          "ALTER TABLE chat_overrides ADD COLUMN enable_thinking INTEGER",
         );
       }
       if (!overrideColumns.find((c) => c.name === "hide_tool_status")) {
@@ -463,27 +463,30 @@ class DatabaseManager {
         );
       }
 
-      // Fix: older migration used DEFAULT 1 for enable_thinking, corrupting existing
-      // chat overrides to thinking=ON instead of Auto (NULL). Check the column default
-      // in the schema and reset if it's still 1.
+      // Fix: older migrations used DEFAULT 1 and later DEFAULT 0 for
+      // enable_thinking, corrupting existing chat overrides to explicit
+      // thinking ON/OFF instead of Auto (NULL). There is no reliable marker
+      // that distinguishes the accidental default from a user click, so
+      // restore Auto; users who need forced On/Off can set it again.
       const tableInfo = this.db.pragma("table_info(chat_overrides)") as {
         name: string;
         dflt_value: string | null;
       }[];
       const etCol = tableInfo.find((c) => c.name === "enable_thinking");
-      if (etCol && etCol.dflt_value === "1") {
-        // Only run UPDATE if there are actually rows with enable_thinking = 1
+      if (etCol && (etCol.dflt_value === "1" || etCol.dflt_value === "0")) {
+        const staleValue = etCol.dflt_value === "1" ? 1 : 0;
+        // Only run UPDATE if there are actually rows with the stale default.
         const affected = this.db
           .prepare(
-            "SELECT COUNT(*) as cnt FROM chat_overrides WHERE enable_thinking = 1",
+            "SELECT COUNT(*) as cnt FROM chat_overrides WHERE enable_thinking = ?",
           )
-          .get() as { cnt: number };
+          .get(staleValue) as { cnt: number };
         if (affected.cnt > 0) {
-          this.db.exec(
-            "UPDATE chat_overrides SET enable_thinking = NULL WHERE enable_thinking = 1",
-          );
+          this.db
+            .prepare("UPDATE chat_overrides SET enable_thinking = NULL WHERE enable_thinking = ?")
+            .run(staleValue);
           console.log(
-            `[DB] Fixed enable_thinking DEFAULT 1 → reset ${affected.cnt} affected rows to NULL (Auto)`,
+            `[DB] Fixed enable_thinking DEFAULT ${staleValue} → reset ${affected.cnt} affected rows to NULL (Auto)`,
           );
         }
       }

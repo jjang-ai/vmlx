@@ -62,8 +62,12 @@ function buildRequestBody(
                 parameters: t.function.parameters
             }))
         }
-        obj.enable_thinking = overrides?.enableThinking ?? sessionHasReasoningParser
-        if (!isRemote) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
+        if (overrides?.enableThinking !== undefined) {
+            obj.enable_thinking = overrides.enableThinking
+        } else if (isRemote) {
+            obj.enable_thinking = sessionHasReasoningParser
+        }
+        if (!isRemote && obj.enable_thinking !== undefined) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
         if (overrides?.reasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
         return obj
     } else {
@@ -83,8 +87,12 @@ function buildRequestBody(
         if (tools) {
             obj.tools = tools
         }
-        obj.enable_thinking = overrides?.enableThinking ?? sessionHasReasoningParser
-        if (!isRemote) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
+        if (overrides?.enableThinking !== undefined) {
+            obj.enable_thinking = overrides.enableThinking
+        } else if (isRemote) {
+            obj.enable_thinking = sessionHasReasoningParser
+        }
+        if (!isRemote && obj.enable_thinking !== undefined) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
         if (overrides?.reasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
         return obj
     }
@@ -164,9 +172,16 @@ describe('buildRequestBody — Chat Completions API', () => {
 describe('buildRequestBody — Remote vs Local gating', () => {
     const messages = [{ role: 'user', content: 'Hello' }]
 
-    it('includes chat_template_kwargs for local sessions', () => {
+    it('omits enable_thinking and chat_template_kwargs for local Auto sessions', () => {
         const body = buildRequestBody('completions', 'model', messages, undefined, false, false)
-        expect(body.chat_template_kwargs).toEqual({ enable_thinking: false })
+        expect(body.enable_thinking).toBeUndefined()
+        expect(body.chat_template_kwargs).toBeUndefined()
+    })
+
+    it('includes chat_template_kwargs for explicit local thinking override', () => {
+        const body = buildRequestBody('completions', 'model', messages, { enableThinking: true }, false, false)
+        expect(body.enable_thinking).toBe(true)
+        expect(body.chat_template_kwargs).toEqual({ enable_thinking: true })
     })
 
     it('EXCLUDES chat_template_kwargs for remote sessions', () => {
