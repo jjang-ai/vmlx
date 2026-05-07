@@ -779,18 +779,41 @@ def has_duplicate_block(text: str, min_len: int = 80) -> bool:
 
 def simple_loop_score(text: str) -> float:
     words = re.findall(r"[\w']+", text.lower())
-    if len(words) < 20:
-        return 0.0
     worst = 0
-    for n in (1, 2, 3):
-        grams = [" ".join(words[i : i + n]) for i in range(0, len(words) - n + 1)]
-        if not grams:
+    if len(words) >= 20:
+        for n in (1, 2, 3):
+            grams = [" ".join(words[i : i + n]) for i in range(0, len(words) - n + 1)]
+            if not grams:
+                continue
+            counts: dict[str, int] = {}
+            for gram in grams:
+                counts[gram] = counts.get(gram, 0) + 1
+            worst = max(worst, max(counts.values()))
+        word_score = worst / max(1, len(words))
+    else:
+        word_score = 0.0
+
+    compact = "".join(ch for ch in text if not ch.isspace())
+    if len(compact) < 48:
+        return word_score
+    tail = compact[-512:]
+    char_score = max(tail.count(ch) for ch in set(tail)) / len(tail)
+    for period in range(2, min(64, len(tail) // 3) + 1):
+        pattern = tail[:period]
+        if len(set(pattern)) < 2:
             continue
+        expected = (pattern * ((len(tail) // period) + 1))[: len(tail)]
+        matches = sum(1 for a, b in zip(tail, expected) if a == b)
+        char_score = max(char_score, matches / len(tail))
+    for n in (2, 3, 4, 6, 8, 12):
+        if len(tail) < n * 12:
+            continue
+        grams = [tail[i : i + n] for i in range(0, len(tail) - n + 1)]
         counts: dict[str, int] = {}
         for gram in grams:
             counts[gram] = counts.get(gram, 0) + 1
-        worst = max(worst, max(counts.values()))
-    return worst / max(1, len(words))
+        char_score = max(char_score, max(counts.values()) / max(1, len(grams)))
+    return max(word_score, char_score)
 
 
 def normalize_short_answer(text: str) -> str:

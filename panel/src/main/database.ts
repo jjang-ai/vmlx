@@ -570,6 +570,66 @@ class DatabaseManager {
           .run(reasoningResetKey, String(Date.now()));
       }
 
+      // v1.5.26 stale reasoning_effort recovery:
+      // The Auto migration above intentionally reset the on/off rail, but old
+      // profiles and sibling-chat inheritance could still carry max/high
+      // reasoning_effort into fresh chats. That is enough to reproduce the
+      // DSV4 "all reasoning, no visible content" failure even after the engine
+      // fix, so clear effort once on upgrade and let post-upgrade user choices
+      // persist normally.
+      const effortResetKey = "migration_reset_reasoning_effort_1_5_26";
+      const effortResetDone = this.db
+        .prepare("SELECT value FROM settings WHERE key = ?")
+        .get(effortResetKey) as { value: string } | undefined;
+      if (!effortResetDone) {
+        const affectedEffortOverrides = this.db
+          .prepare(
+            "SELECT COUNT(*) as cnt FROM chat_overrides WHERE reasoning_effort IS NOT NULL AND reasoning_effort <> ''",
+          )
+          .get() as { cnt: number };
+        if (affectedEffortOverrides.cnt > 0) {
+          this.db.exec("UPDATE chat_overrides SET reasoning_effort = NULL");
+          console.log(
+            `[DB] v1.5.26 reset ${affectedEffortOverrides.cnt} chat reasoning_effort override(s) to Auto`,
+          );
+        }
+
+        const profiles = this.db
+          .prepare("SELECT id, overrides_json FROM chat_profiles")
+          .all() as { id: string; overrides_json: string }[];
+        const updateProfile = this.db.prepare(
+          "UPDATE chat_profiles SET overrides_json = ?, updated_at = ? WHERE id = ?",
+        );
+        let effortProfileCount = 0;
+        for (const profile of profiles) {
+          try {
+            const parsed = JSON.parse(profile.overrides_json || "{}");
+            if (
+              parsed &&
+              Object.prototype.hasOwnProperty.call(parsed, "reasoningEffort")
+            ) {
+              delete parsed.reasoningEffort;
+              updateProfile.run(JSON.stringify(parsed), Date.now(), profile.id);
+              effortProfileCount += 1;
+            }
+          } catch {
+            // Keep malformed profile JSON untouched; profile loading is already
+            // best-effort and should not block startup migrations.
+          }
+        }
+        if (effortProfileCount > 0) {
+          console.log(
+            `[DB] v1.5.26 reset reasoningEffort in ${effortProfileCount} chat profile(s) to Auto`,
+          );
+        }
+
+        this.db
+          .prepare(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+          )
+          .run(effortResetKey, String(Date.now()));
+      }
+
       // Clean up orphan benchmarks from deleted sessions
       this.db.exec(
         "DELETE FROM benchmarks WHERE session_id NOT IN (SELECT id FROM sessions)",

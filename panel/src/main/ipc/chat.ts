@@ -34,6 +34,32 @@ function enableThinkingFromReasoningMode(mode: unknown): boolean | undefined {
   return undefined;
 }
 
+function shouldForwardReasoningEffort(
+  reasoningEffort: unknown,
+  enableThinking: unknown,
+  sessionHasReasoningParser: boolean,
+  detectedFamily?: string,
+): reasoningEffort is string {
+  if (typeof reasoningEffort !== "string" || !reasoningEffort) return false;
+  if (enableThinking === false) return false;
+  return sessionHasReasoningParser || detectedFamily === "deepseek-v4";
+}
+
+function dsv4OutputBudget(
+  maxTokens: unknown,
+  enableThinking: unknown,
+  detectedFamily?: string,
+): number | undefined {
+  const parsed =
+    typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0
+      ? Math.floor(maxTokens)
+      : undefined;
+  if (detectedFamily === "deepseek-v4" && enableThinking !== false) {
+    return Math.max(parsed ?? 0, 4096);
+  }
+  return parsed;
+}
+
 /**
  * SSE-streaming fetch using Node.js http/https directly.
  * Electron 28's global fetch() uses Chromium's net module which buffers
@@ -713,6 +739,7 @@ export function registerChatHandlers(
       let sessionHasReasoningParser = false;
       let isHarmonyModel = false;
       let chatIsMultimodal = false;
+      let chatDetectedFamily: string | undefined;
       // VLM video sampling (Qwen 3.6, Qwen3.5-VL, etc.) — forwarded as
       // video_fps / video_max_frames on the request body when present.
       // Default undefined = engine default (2.0 fps, 8 max frames).
@@ -761,6 +788,7 @@ export function registerChatHandlers(
             }
             // Check if model has a reasoning parser (for enable_thinking default)
             const detected = detectModelConfigFromDir(chat.modelPath);
+            chatDetectedFamily = detected.family;
             const smeltActive = !!sessionConfig.smelt;
             chatIsMultimodal =
               smeltActive
@@ -1362,6 +1390,11 @@ export function registerChatHandlers(
 
         // Build request body — shared between initial request and tool follow-ups
         const buildRequestBody = (): Record<string, any> => {
+          const resolvedOutputBudget = dsv4OutputBudget(
+            overrides?.maxTokens,
+            overrides?.enableThinking,
+            chatDetectedFamily,
+          );
           if (useResponsesApi) {
             const systemMessages = requestMessages.filter(
               (m: any) => m.role === "system",
@@ -1384,8 +1417,8 @@ export function registerChatHandlers(
                 ? { temperature: overrides.temperature }
                 : {}),
               ...(overrides?.topP != null ? { top_p: overrides.topP } : {}),
-              ...(overrides?.maxTokens
-                ? { max_output_tokens: overrides.maxTokens }
+              ...(resolvedOutputBudget
+                ? { max_output_tokens: resolvedOutputBudget }
                 : {}),
               stream: true,
               stream_options: { include_usage: true },
@@ -1420,7 +1453,14 @@ export function registerChatHandlers(
               obj.chat_template_kwargs = {
                 enable_thinking: obj.enable_thinking,
               };
-            if (overrides?.reasoningEffort)
+            if (
+              shouldForwardReasoningEffort(
+                overrides?.reasoningEffort,
+                obj.enable_thinking,
+                sessionHasReasoningParser,
+                chatDetectedFamily,
+              )
+            )
               obj.reasoning_effort = overrides.reasoningEffort;
             if (!isRemote) {
               if (obj.enable_thinking === false) obj.thinking_mode = "instruct";
@@ -1449,9 +1489,7 @@ export function registerChatHandlers(
                 ? { temperature: overrides.temperature }
                 : {}),
               ...(overrides?.topP != null ? { top_p: overrides.topP } : {}),
-              ...(overrides?.maxTokens
-                ? { max_tokens: overrides.maxTokens }
-                : {}),
+              ...(resolvedOutputBudget ? { max_tokens: resolvedOutputBudget } : {}),
               stream: true,
               stream_options: { include_usage: true },
             };
@@ -1496,7 +1534,15 @@ export function registerChatHandlers(
               obj.chat_template_kwargs = {
                 enable_thinking: obj.enable_thinking,
               };
-            if (overrides?.reasoningEffort && !isStrictApi)
+            if (
+              !isStrictApi &&
+              shouldForwardReasoningEffort(
+                overrides?.reasoningEffort,
+                obj.enable_thinking,
+                sessionHasReasoningParser,
+                chatDetectedFamily,
+              )
+            )
               obj.reasoning_effort = overrides.reasoningEffort;
             if (!isRemote) {
               if (obj.enable_thinking === false) obj.thinking_mode = "instruct";
