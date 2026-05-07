@@ -2987,6 +2987,69 @@ def _turboquant_kv_cache_status(engine=None, scheduler=None) -> dict:
     return {"enabled": False}
 
 
+def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None) -> dict:
+    """Report architecture-native cache contracts separately from generic TQ-KV."""
+    if scheduler is None:
+        return {}
+
+    scheduler_family = str(getattr(scheduler, "_model_type_for_runtime", "") or "")
+    family_name = family or scheduler_family
+    cache_subtype = getattr(cfg, "cache_subtype", None) if cfg is not None else None
+    block_aware_cache = getattr(scheduler, "block_aware_cache", None)
+    paged_cache_manager = getattr(scheduler, "paged_cache_manager", None)
+    block_disk_store = (
+        getattr(paged_cache_manager, "_disk_store", None)
+        if paged_cache_manager is not None
+        else None
+    )
+
+    if getattr(scheduler, "_uses_dsv4_cache", False) or family_name == "deepseek_v4":
+        pool_quant_enabled = str(os.environ.get("DSV4_POOL_QUANT", "0")).lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        return {
+            "family": "deepseek_v4",
+            "schema": "deepseek_v4_v7",
+            "cache_type": "native_composite",
+            "components": [
+                "swa_local",
+                "csa_compressed_pool",
+                "hca_compressed_pool",
+                "incomplete_tail_state",
+            ],
+            "generic_turboquant_kv": {"enabled": False, "reason": "native_dsv4_composite"},
+            "pool_quant": {
+                "enabled": pool_quant_enabled,
+                "env": os.environ.get("DSV4_POOL_QUANT", "0"),
+            },
+            "prefix": bool(block_aware_cache is not None),
+            "paged": bool(block_aware_cache is not None and paged_cache_manager is not None),
+            "block_disk_l2": bool(block_disk_store is not None),
+        }
+
+    if family_name == "zaya" or cache_subtype == "zaya_cca":
+        return {
+            "family": "zaya",
+            "schema": "zaya_cca_v1",
+            "cache_type": "typed_cca",
+            "components": [
+                "standard_kv",
+                "cca_conv_state",
+                "cca_prev_hidden",
+                "moe_no_state_slots",
+            ],
+            "generic_turboquant_kv": {"enabled": False, "reason": "cca_state_is_path_dependent"},
+            "prefix": bool(block_aware_cache is not None),
+            "paged": bool(block_aware_cache is not None and paged_cache_manager is not None),
+            "block_disk_l2": bool(block_disk_store is not None),
+        }
+
+    return {}
+
+
 @app.get("/health")
 async def health():
     """Health check endpoint."""
@@ -3158,6 +3221,10 @@ async def health():
 
     if _engine is not None:
         result["turboquant_kv_cache"] = _turboquant_kv_cache_status(_engine)
+        scheduler = _get_scheduler()
+        native_cache = _native_cache_status(scheduler)
+        if native_cache:
+            result["native_cache"] = native_cache
 
     return result
 
@@ -3481,6 +3548,9 @@ async def cache_stats():
         result["turboquant_kv_cache"] = _turboquant_kv_cache_status(
             _engine, scheduler
         )
+        native_cache = _native_cache_status(scheduler)
+        if native_cache:
+            result["native_cache"] = native_cache
 
     # Disk cache (L2) stats — prompt-level
     if scheduler and getattr(scheduler, "disk_cache", None) is not None:
@@ -4087,6 +4157,7 @@ async def model_capabilities(model_id: str) -> dict:
         and paged_cache_enabled
         and getattr(scheduler, "_uses_dsv4_cache", False)
     )
+    native_cache = _native_cache_status(scheduler, family=family, cfg=cfg)
 
     return {
         "id": model_id,
@@ -4108,6 +4179,7 @@ async def model_capabilities(model_id: str) -> dict:
             "paged": paged_cache_enabled,
             "block_disk_l2": block_disk_store is not None,
             "dsv4_composite_state": dsv4_composite_state,
+            "native": native_cache or None,
         },
         "sampling_defaults": sampling_defaults,
     }

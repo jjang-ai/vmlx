@@ -724,6 +724,25 @@ def _copy_mlx_tree(obj):
     return obj
 
 
+def _is_zaya_cca_cache_list_state(layer_state: Dict[str, Any]) -> bool:
+    """Return True for ZAYA's CacheList(KVCache, ArraysCache) CCA layer."""
+    if layer_state.get("class_name") != "CacheList":
+        return False
+    subs = layer_state.get("sub_caches")
+    if not isinstance(subs, (list, tuple)) or len(subs) < 2:
+        return False
+    first = subs[0] if isinstance(subs[0], dict) else {}
+    second = subs[1] if isinstance(subs[1], dict) else {}
+    first_cls = str(first.get("class_name", ""))
+    second_cls = str(second.get("class_name", ""))
+    if first_cls not in {"KVCache", "QuantizedKVCache"}:
+        return False
+    if second_cls != "ArraysCache":
+        return False
+    second_state = second.get("state")
+    return isinstance(second_state, (list, tuple)) and len(second_state) >= 2
+
+
 def _dsv4_cache_meta(layer_state: Dict[str, Any]) -> Dict[str, Any]:
     meta: Dict[str, Any] = {}
     cr = layer_state.get("compress_ratio")
@@ -793,6 +812,58 @@ def _numpy_block_slice(
 
         if cls == "ZayaNoStateCache" or layer_state.get("no_state"):
             block_slices.append(("no_state", cls or "ZayaNoStateCache"))
+            continue
+
+        if _is_zaya_cca_cache_list_state(layer_state):
+            zsrc = np_sources.get(idx) if isinstance(np_sources, dict) else None
+            if not isinstance(zsrc, dict) or zsrc.get("type") != "zaya_cca":
+                block_slices.append(("skip",))
+                continue
+
+            np_k, np_v, orig_dtype = zsrc["kv"]
+            ndim = np_k.ndim
+            seq_dim = 2 if ndim == 4 else (1 if ndim == 3 else -1)
+            if seq_dim < 0:
+                block_slices.append(("skip",))
+                continue
+            seq_len = np_k.shape[seq_dim]
+            actual_end = min(end_idx, seq_len)
+            if start_idx >= actual_end:
+                kv_entry = ("skip",)
+            elif ndim == 4:
+                ks = mx.array(np_k[:, :, start_idx:actual_end, :])
+                vs = mx.array(np_v[:, :, start_idx:actual_end, :])
+                if ks.dtype != orig_dtype:
+                    ks = ks.astype(orig_dtype)
+                    vs = vs.astype(orig_dtype)
+                kv_entry = ("kv", ks, vs)
+            else:
+                ks = mx.array(np_k[:, start_idx:actual_end, :])
+                vs = mx.array(np_v[:, start_idx:actual_end, :])
+                if ks.dtype != orig_dtype:
+                    ks = ks.astype(orig_dtype)
+                    vs = vs.astype(orig_dtype)
+                kv_entry = ("kv", ks, vs)
+
+            cca_state = zsrc.get("cca_state") if is_last_block else None
+            if cca_state is not None:
+                def _to_mx_tree(x):
+                    if x is None:
+                        return None
+                    if isinstance(x, tuple):
+                        return tuple(_to_mx_tree(v) for v in x)
+                    if isinstance(x, list):
+                        return [_to_mx_tree(v) for v in x]
+                    return mx.array(x)
+
+                cca_state = _to_mx_tree(cca_state)
+            block_slices.append((
+                "zaya_cca",
+                kv_entry,
+                cca_state,
+                zsrc.get("cca_meta", ""),
+                zsrc.get("cache_meta", {}),
+            ))
             continue
 
         # CacheList (MoE): not yet supported in numpy path
@@ -871,6 +942,15 @@ def _block_needs_cumulative_update(cache_data) -> bool:
             has_skip = True
         elif tag in ("cumulative", "deepseek_v4"):
             has_cumulative = True
+        elif tag == "zaya_cca":
+            # Non-terminal ZAYA blocks carry KV pages only. The exact CCA
+            # conv_state/prev_hs payload lives on the terminal prompt block.
+            # Reusing a non-terminal block as the final block would restore
+            # standard KV without the path-dependent CCA state.
+            if len(entry) > 2 and entry[2] is not None:
+                has_cumulative = True
+            else:
+                has_skip = True
         elif tag == "cache_list" and len(entry) > 1:
             # Recurse into CacheList sub-slices for MoE hybrid models
             for sub in entry[1]:
@@ -1251,6 +1331,23 @@ class BlockAwarePrefixCache:
                 self._misses += 1
                 return None, tokens
 
+            if self._zaya_l2_chain_missing_terminal_state(cached_blocks):
+                _reject_table = BlockTable(
+                    request_id=request_id,
+                    block_ids=[cb.block_id for cb in cached_blocks],
+                    num_tokens=sum(getattr(cb, "token_count", 0) for cb in cached_blocks),
+                )
+                self.paged_cache.release_request_refs(_reject_table)
+                logger.warning(
+                    "Ignoring ZAYA paged prefix hit for %s: restored blocks "
+                    "contain typed zaya_cca KV pages but no terminal CCA "
+                    "conv_state/prev_hs payload. ZAYA CCA state is "
+                    "path-dependent, so this prefix must re-prefill cleanly.",
+                    request_id,
+                )
+                self._misses += 1
+                return None, tokens
+
             # get_computed_blocks() holds request refs for each returned
             # block via touch(); the prefix-index path below uses
             # increment_ref directly because it starts from block IDs.
@@ -1282,6 +1379,14 @@ class BlockAwarePrefixCache:
                     "Ignoring DSV4 prefix-index hit for %s: matched blocks "
                     "contain DeepseekV4Cache pending markers but no terminal "
                     "deepseek_v4 composite state.",
+                    request_id,
+                )
+                self._misses += 1
+                return None, tokens
+            if self._zaya_l2_chain_missing_terminal_state(matched_blocks):
+                logger.warning(
+                    "Ignoring ZAYA prefix-index hit for %s: matched blocks "
+                    "contain zaya_cca KV pages but no terminal CCA state.",
                     request_id,
                 )
                 self._misses += 1
@@ -1336,6 +1441,22 @@ class BlockAwarePrefixCache:
                 elif tag == "deepseek_v4":
                     saw_terminal = True
         return saw_pending and not saw_terminal
+
+    @staticmethod
+    def _zaya_l2_chain_missing_terminal_state(cached_blocks: List[Any]) -> bool:
+        """True when a ZAYA hit has KV pages but lacks terminal CCA state."""
+        saw_zaya = False
+        saw_terminal = False
+        for block in cached_blocks or []:
+            for entry in getattr(block, "cache_data", None) or []:
+                if not isinstance(entry, (tuple, list)) or not entry:
+                    continue
+                if entry[0] != "zaya_cca":
+                    continue
+                saw_zaya = True
+                if len(entry) > 2 and entry[2] is not None:
+                    saw_terminal = True
+        return saw_zaya and not saw_terminal
 
     def store_cache(
         self,
@@ -1449,10 +1570,41 @@ class BlockAwarePrefixCache:
             # covered — a bare mx.synchronize() handles both.
             mx.synchronize()
             for idx, layer_state in enumerate(cache_data):
+                cls = layer_state.get("class_name", "")
+                if _is_zaya_cca_cache_list_state(layer_state):
+                    try:
+                        subs = layer_state["sub_caches"]
+                        kv_state = subs[0].get("state")
+                        keys, values = kv_state
+                        if isinstance(keys, (tuple, list)):
+                            # Keep generic quantized CacheList on the MLX
+                            # path for now. ZAYA runtime TQ-KV needs its own
+                            # typed partial codec before disk writes use it.
+                            continue
+                        k_np, v_np = keys, values
+                        if hasattr(k_np, "dtype") and "bfloat16" in str(k_np.dtype):
+                            k_np = k_np.astype(mx.float32)
+                            v_np = v_np.astype(mx.float32)
+                        cca_state = subs[1].get("state")
+                        cca_np = _to_numpy_tree(cca_state)
+                        np_sources[idx] = {
+                            "type": "zaya_cca",
+                            "kv": (np.array(k_np), np.array(v_np), keys.dtype),
+                            "cca_state": cca_np,
+                            "cca_meta": subs[1].get("meta_state", ""),
+                            "cache_meta": {
+                                "schema": "zaya_cca_v1",
+                                "cca_class_name": subs[1].get(
+                                    "class_name", "ArraysCache"
+                                ),
+                            },
+                        }
+                    except Exception as _npe:
+                        logger.debug(f"np_sources skip ZAYA layer {idx}: {_npe}")
+                    continue
                 state = layer_state.get("state")
                 if state is None:
                     continue
-                cls = layer_state.get("class_name", "")
                 if self._is_positional_cache(state, cls):
                     try:
                         keys, values = state
@@ -1927,6 +2079,64 @@ class BlockAwarePrefixCache:
 
             if class_name == "ZayaNoStateCache" or layer_state.get("no_state"):
                 block_slices.append(("no_state", class_name or "ZayaNoStateCache"))
+                continue
+
+            if _is_zaya_cca_cache_list_state(layer_state):
+                subs = layer_state["sub_caches"]
+                kv_sub = subs[0]
+                state_sub = subs[1]
+                kv_entry = ("skip",)
+                try:
+                    keys, values = kv_sub.get("state")
+                    if isinstance(keys, (tuple, list)):
+                        first_k = keys[0]
+                        seq_len = first_k.shape[-2]
+                        actual_end = min(end_idx, seq_len)
+                        if start_idx < actual_end:
+                            keys_slice = tuple(
+                                t[..., start_idx:actual_end, :] for t in keys
+                            )
+                            values_slice = tuple(
+                                t[..., start_idx:actual_end, :] for t in values
+                            )
+                            kv_entry = (
+                                "quantized_kv",
+                                keys_slice,
+                                values_slice,
+                                kv_sub.get("meta_state", ()),
+                            )
+                    else:
+                        ndim = len(keys.shape)
+                        seq_dim = 2 if ndim == 4 else (1 if ndim == 3 else -1)
+                        if seq_dim >= 0:
+                            seq_len = keys.shape[seq_dim]
+                            actual_end = min(end_idx, seq_len)
+                            if start_idx < actual_end:
+                                if ndim == 4:
+                                    ks = keys[:, :, start_idx:actual_end, :]
+                                    vs = values[:, :, start_idx:actual_end, :]
+                                else:
+                                    ks = keys[:, start_idx:actual_end, :]
+                                    vs = values[:, start_idx:actual_end, :]
+                                kv_entry = ("kv", ks, vs)
+                except Exception:
+                    kv_entry = ("skip",)
+
+                cca_state = (
+                    _copy_mlx_tree(state_sub.get("state"))
+                    if is_last_block
+                    else None
+                )
+                block_slices.append((
+                    "zaya_cca",
+                    kv_entry,
+                    cca_state,
+                    state_sub.get("meta_state", ""),
+                    {
+                        "schema": "zaya_cca_v1",
+                        "cca_class_name": state_sub.get("class_name", "ArraysCache"),
+                    },
+                ))
                 continue
 
             # CacheList (MoE models): extract slices from each sub-cache
@@ -2434,6 +2644,7 @@ class BlockAwarePrefixCache:
                 quantized_meta = None
 
                 cache_list_entries = []  # sub-slice lists from CacheList blocks
+                zaya_cca_entries = []
 
                 for entry in layer_entries:
                     if not isinstance(entry, (tuple, list)):
@@ -2460,11 +2671,151 @@ class BlockAwarePrefixCache:
                         pass
                     elif tag == "no_state":
                         best_cumulative = entry
+                    elif tag == "zaya_cca":
+                        zaya_cca_entries.append(entry)
                     elif tag == "cache_list":
                         cache_list_entries.append(entry[1])  # list of sub-slices
                     # "skip" entries are ignored
 
-                if quantized_kv_slices_keys:
+                if zaya_cca_entries:
+                    sub_kv_keys = []
+                    sub_kv_vals = []
+                    sub_qkv_keys = []
+                    sub_qkv_vals = []
+                    sub_qkv_meta = None
+                    terminal_cca_state = None
+                    terminal_cca_meta = ""
+                    terminal_cache_meta = {}
+                    for zentry in zaya_cca_entries:
+                        if len(zentry) < 2:
+                            continue
+                        kv_entry = zentry[1]
+                        if isinstance(kv_entry, (tuple, list)) and kv_entry:
+                            if kv_entry[0] == "kv":
+                                sub_kv_keys.append(kv_entry[1])
+                                sub_kv_vals.append(kv_entry[2])
+                            elif kv_entry[0] == "quantized_kv":
+                                sub_qkv_keys.append(kv_entry[1])
+                                sub_qkv_vals.append(kv_entry[2])
+                                if len(kv_entry) > 3 and sub_qkv_meta is None:
+                                    sub_qkv_meta = kv_entry[3]
+                        if len(zentry) > 2 and zentry[2] is not None:
+                            terminal_cca_state = _copy_mlx_tree(zentry[2])
+                            terminal_cca_meta = zentry[3] if len(zentry) > 3 else ""
+                            terminal_cache_meta = (
+                                zentry[4]
+                                if len(zentry) > 4 and isinstance(zentry[4], dict)
+                                else {}
+                            )
+
+                    if terminal_cca_state is None:
+                        logger.warning(
+                            "Cannot reconstruct ZAYA CCA layer %s: typed "
+                            "prefix chain has KV pages but no terminal "
+                            "conv_state/prev_hs payload",
+                            layer_idx,
+                        )
+                        return None
+
+                    try:
+                        from mlx_lm.models.cache import CacheList as CLCache
+                    except ImportError:
+                        logger.warning("Cannot reconstruct ZAYA CCA CacheList: import failed")
+                        return None
+
+                    if sub_qkv_keys:
+                        n_comp = len(sub_qkv_keys[0])
+                        ck = tuple(
+                            mx.concatenate([s[c] for s in sub_qkv_keys], axis=-2)
+                            for c in range(n_comp)
+                        )
+                        cv = tuple(
+                            mx.concatenate([s[c] for s in sub_qkv_vals], axis=-2)
+                            for c in range(n_comp)
+                        )
+                        mx.eval(*ck, *cv)
+                        try:
+                            from mlx_lm.models.cache import QuantizedKVCache as QKVCache
+                            g_size, q_bits = 64, 8
+                            if sub_qkv_meta and len(sub_qkv_meta) >= 3:
+                                try:
+                                    _, g_size, q_bits = map(int, sub_qkv_meta[:3])
+                                except (ValueError, TypeError):
+                                    pass
+                            kv_cache = QKVCache(group_size=g_size, bits=q_bits)
+                            kv_cache.keys = ck
+                            kv_cache.values = cv
+                            kv_cache.offset = ck[0].shape[-2]
+                        except ImportError:
+                            logger.warning("Cannot reconstruct ZAYA quantized KV sub-cache")
+                            return None
+                    elif sub_kv_keys:
+                        ndim = len(sub_kv_keys[0].shape)
+                        seq_axis = 1 if ndim == 3 else 2
+                        ck = mx.concatenate(sub_kv_keys, axis=seq_axis)
+                        cv = mx.concatenate(sub_kv_vals, axis=seq_axis)
+                        mx.eval(ck, cv)
+                        if ndim == 4:
+                            allowed_kv = self._get_allowed_n_kv_heads()
+                            if allowed_kv and ck.shape[1] not in allowed_kv:
+                                logger.warning(
+                                    f"ZAYA CCA layer {layer_idx} KV head mismatch: "
+                                    f"got {ck.shape[1]}, expected one of "
+                                    f"{sorted(allowed_kv)}"
+                                )
+                                return None
+                        kv_cache = KVCache()
+                        offset = ck.shape[seq_axis]
+                        step = int(getattr(kv_cache, "step", 0) or 0)
+                        if step > 0 and offset > 0 and offset % step:
+                            padded_len = ((offset + step - 1) // step) * step
+                            pad = padded_len - offset
+                            if pad > 0:
+                                pad_shape = list(ck.shape)
+                                pad_shape[seq_axis] = pad
+                                ck = mx.concatenate(
+                                    [ck, mx.zeros(tuple(pad_shape), ck.dtype)],
+                                    axis=seq_axis,
+                                )
+                                cv = mx.concatenate(
+                                    [cv, mx.zeros(tuple(pad_shape), cv.dtype)],
+                                    axis=seq_axis,
+                                )
+                                mx.eval(ck, cv)
+                        kv_cache.keys = ck
+                        kv_cache.values = cv
+                        kv_cache.offset = offset
+                    else:
+                        logger.warning(
+                            "Cannot reconstruct ZAYA CCA layer %s: no standard KV pages",
+                            layer_idx,
+                        )
+                        return None
+
+                    try:
+                        from mlx_lm.models.cache import ArraysCache
+                        cca_cache = ArraysCache.from_state(terminal_cca_state, None)
+                    except Exception:
+                        try:
+                            from vmlx_engine.utils.mamba_cache import ArraysCache
+                            cca_cache = ArraysCache.from_state(terminal_cca_state, None)
+                        except Exception as e:
+                            logger.warning(
+                                f"Cannot reconstruct ZAYA CCA ArraysCache layer "
+                                f"{layer_idx}: {e}"
+                            )
+                            return None
+                    try:
+                        cca_cache.meta_state = terminal_cca_meta
+                    except Exception:
+                        pass
+                    cl = CLCache.__new__(CLCache)
+                    cl.caches = (kv_cache, cca_cache)
+                    reconstructed_caches.append(cl)
+                    reconstructed_indices.add(layer_idx)
+                    cumulative_count += 1
+
+                elif quantized_kv_slices_keys:
                     # QuantizedKVCache: concatenate each component of the tuple
                     # Each entry is a tuple of 3 arrays (data, scales, zeros)
                     num_components = len(quantized_kv_slices_keys[0])

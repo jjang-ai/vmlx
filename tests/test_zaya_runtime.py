@@ -1,4 +1,5 @@
 import json
+import tempfile
 from pathlib import Path
 
 import mlx.core as mx
@@ -181,6 +182,15 @@ def test_zaya_prompt_cache_restore_preserves_cca_and_no_state_slots():
         paged_cache_manager=PagedCacheManager(block_size=8, max_blocks=8),
     )
     table = prefix.store_cache("zaya-restore", [1, 2, 3, 4], extracted)
+    block = prefix.paged_cache.allocated_blocks[table.block_ids[0]]
+    assert [entry[0] for entry in block.cache_data] == [
+        "zaya_cca",
+        "no_state",
+        "zaya_cca",
+        "no_state",
+    ]
+    assert block.cache_data[0][1][0] == "kv"
+    assert block.cache_data[0][2] is not None
     restored_cache = prefix.reconstruct_cache(table)
 
     assert restored_cache is not None
@@ -197,6 +207,120 @@ def test_zaya_prompt_cache_restore_preserves_cca_and_no_state_slots():
 
     diff = mx.max(mx.abs(cold_next.astype(mx.float32) - restored_next.astype(mx.float32)))
     assert diff.item() == 0.0
+
+
+def test_zaya_typed_cca_block_disk_round_trip_continues_identically():
+    mx.random.seed(13)
+    model = Model(_small_args())
+    ids = mx.array([[1, 2, 3, 4]], dtype=mx.int32)
+
+    cold_cache = model.make_cache()
+    mx.eval(model(ids, cache=cold_cache))
+
+    from vmlx_engine.block_disk_store import _deserialize_block, _serialize_block
+    from vmlx_engine.paged_cache import PagedCacheManager
+    from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+    from vmlx_engine.scheduler import Scheduler
+
+    scheduler = Scheduler.__new__(Scheduler)
+    scheduler.model = model
+    extracted = scheduler._extract_cache_states(cold_cache)
+
+    prefix = BlockAwarePrefixCache(
+        model=model,
+        paged_cache_manager=PagedCacheManager(block_size=8, max_blocks=8),
+    )
+    table = prefix.store_cache("zaya-disk-roundtrip", [1, 2, 3, 4], extracted)
+    block = prefix.paged_cache.allocated_blocks[table.block_ids[0]]
+
+    tensors, dtype, num_layers = _serialize_block(block.cache_data)
+    restored_block_data = _deserialize_block(dict(tensors), dtype)
+
+    assert num_layers == 4
+    assert [entry[0] for entry in restored_block_data] == [
+        "zaya_cca",
+        "no_state",
+        "zaya_cca",
+        "no_state",
+    ]
+    assert restored_block_data[0][2] is not None
+
+    block.cache_data = restored_block_data
+    restored_cache = prefix.reconstruct_cache(table)
+    assert restored_cache is not None
+
+    next_ids = mx.array([[5]], dtype=mx.int32)
+    cold_next = model(next_ids, cache=cold_cache)
+    restored_next = model(next_ids, cache=restored_cache)
+    mx.eval(cold_next, restored_next)
+    diff = mx.max(mx.abs(cold_next.astype(mx.float32) - restored_next.astype(mx.float32)))
+    assert diff.item() == 0.0
+
+
+def test_zaya_typed_cca_l2_disk_hit_restores_full_cache():
+    mx.random.seed(17)
+    model = Model(_small_args())
+    ids = [1, 2, 3, 4]
+    ids_arr = mx.array([ids], dtype=mx.int32)
+
+    cold_cache = model.make_cache()
+    mx.eval(model(ids_arr, cache=cold_cache))
+
+    from vmlx_engine.block_disk_store import BlockDiskStore
+    from vmlx_engine.paged_cache import PagedCacheManager
+    from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+    from vmlx_engine.scheduler import Scheduler
+
+    scheduler = Scheduler.__new__(Scheduler)
+    scheduler.model = model
+    extracted = scheduler._extract_cache_states(cold_cache)
+
+    tmpdir = tempfile.mkdtemp(prefix="vmlx_zaya_l2_")
+    store = BlockDiskStore(tmpdir, max_size_gb=0.1, expected_num_layers=4)
+    try:
+        prefix = BlockAwarePrefixCache(
+            model=model,
+            paged_cache_manager=PagedCacheManager(
+                block_size=8,
+                max_blocks=8,
+                disk_store=store,
+            ),
+        )
+        prefix.store_cache("zaya-l2-store", ids, extracted)
+        store.shutdown()
+    finally:
+        try:
+            store.shutdown()
+        except Exception:
+            pass
+
+    store2 = BlockDiskStore(tmpdir, max_size_gb=0.1, expected_num_layers=4)
+    try:
+        prefix2 = BlockAwarePrefixCache(
+            model=model,
+            paged_cache_manager=PagedCacheManager(
+                block_size=8,
+                max_blocks=8,
+                disk_store=store2,
+            ),
+        )
+        table, remaining = prefix2.fetch_cache("zaya-l2-hit", ids)
+
+        assert table is not None
+        assert remaining == []
+        assert prefix2.paged_cache.stats.disk_hits >= 1
+
+        restored_cache = prefix2.reconstruct_cache(table)
+        assert restored_cache is not None
+
+        next_ids = mx.array([[5]], dtype=mx.int32)
+        cold_next = model(next_ids, cache=cold_cache)
+        restored_next = model(next_ids, cache=restored_cache)
+        mx.eval(cold_next, restored_next)
+        diff = mx.max(mx.abs(cold_next.astype(mx.float32) - restored_next.astype(mx.float32)))
+        assert diff.item() == 0.0
+    finally:
+        store2.shutdown()
 
 
 def test_zaya_batch_generator_finishes_with_moe_no_state_cache():

@@ -284,9 +284,9 @@ def serve_command(args):
             or getattr(_mc, "cache_subtype", None) == "zaya_cca"
         ):
             # ZAYA/CCA is hybrid, but not the same cache contract as
-            # Bailing/Ling/Qwen SSM. Official ZAYA runtime notes disable
-            # prefix caching until CCA conv_state + prev_hs are included in
-            # the prompt-boundary payload and exact restore tests pass.
+            # Bailing/Ling/Qwen SSM. Source has typed zaya_cca restore for
+            # KV + conv_state + prev_hs; default CLI still keeps these tiers
+            # off until full-model live cache-hit/L2-restart gates pass.
             _changed = []
             if getattr(args, "enable_prefix_cache", True):
                 args.enable_prefix_cache = False
@@ -305,9 +305,8 @@ def serve_command(args):
             os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
             logger.warning(
                 "ZAYA/CCA cache contract detected — disabling %s until the "
-                "Python runtime implements full CCA state restore (standard KV "
-                "+ conv_state + prev_hs) and passes prefix/paged/L2 replay "
-                "tests.",
+                "Python runtime's typed CCA restore (standard KV + conv_state "
+                "+ prev_hs) passes full-model prefix/paged/L2 replay gates.",
                 ", ".join(_changed) if _changed else "prefix/paged/L2/TQ-KV",
             )
         elif (
