@@ -337,6 +337,42 @@ describe('enableThinking tri-state', () => {
     expect(fromDb(null)).toBe(undefined)
   })
 
+  function shouldResetStaleEnableThinkingDefault(defaultValue: string | null): boolean {
+    return defaultValue === '0' || defaultValue === '1'
+  }
+
+  it('legacy DEFAULT 0/1 enable_thinking schema is reset back to Auto', () => {
+    expect(shouldResetStaleEnableThinkingDefault('0')).toBe(true)
+    expect(shouldResetStaleEnableThinkingDefault('1')).toBe(true)
+    expect(shouldResetStaleEnableThinkingDefault(null)).toBe(false)
+  })
+
+  function normalizeReasoningMode(mode: unknown): 'auto' | 'on' | 'off' {
+    const m = String(mode ?? 'auto').toLowerCase()
+    if (m === 'on' || m === 'always' || m === 'true' || m === 'reasoning') return 'on'
+    if (m === 'off' || m === 'never' || m === 'false' || m === 'instruct') return 'off'
+    return 'auto'
+  }
+
+  function enableThinkingFromReasoningMode(mode: unknown): boolean | undefined {
+    const normalized = normalizeReasoningMode(mode)
+    if (normalized === 'on') return true
+    if (normalized === 'off') return false
+    return undefined
+  }
+
+  it('model reasoning_mode auto leaves enableThinking undefined', () => {
+    expect(enableThinkingFromReasoningMode('auto')).toBeUndefined()
+    expect(enableThinkingFromReasoningMode(undefined)).toBeUndefined()
+  })
+
+  it('normalizes legacy always/never model reasoning values', () => {
+    expect(enableThinkingFromReasoningMode('always')).toBe(true)
+    expect(enableThinkingFromReasoningMode('on')).toBe(true)
+    expect(enableThinkingFromReasoningMode('never')).toBe(false)
+    expect(enableThinkingFromReasoningMode('off')).toBe(false)
+  })
+
   // Verify the request body logic from chat.ts:722-726
   function buildThinkingRequestField(
     enableThinking: boolean | undefined,
@@ -345,7 +381,7 @@ describe('enableThinking tri-state', () => {
   ): boolean | undefined {
     if (enableThinking !== undefined) return enableThinking
     if (isRemote) return sessionHasReasoningParser
-    return undefined // local auto-detects
+    return undefined // local engine auto-detects
   }
 
   it('explicit On sent to local', () => {

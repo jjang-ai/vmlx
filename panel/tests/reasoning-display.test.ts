@@ -1041,18 +1041,22 @@ describe('Wire format — enable_thinking in request body', () => {
             model: 'test-model',
             stream: true
         }
-        obj.enable_thinking = overrides?.enableThinking ?? sessionHasReasoningParser
-        if (!isRemote) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
+        if (overrides?.enableThinking !== undefined) {
+            obj.enable_thinking = overrides.enableThinking
+        } else if (isRemote) {
+            obj.enable_thinking = sessionHasReasoningParser
+        }
+        if (!isRemote && obj.enable_thinking !== undefined) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
         if (overrides?.reasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
         if (wireApi === 'responses') obj.max_output_tokens = 4096
         else obj.max_tokens = 4096
         return obj
     }
 
-    it('Completions: Auto + qwen3 parser → enable_thinking=true, chat_template_kwargs', () => {
+    it('Completions: local Auto omits enable_thinking so engine auto-detects', () => {
         const body = buildRequestBody('completions', undefined, false, true)
-        expect(body.enable_thinking).toBe(true)
-        expect(body.chat_template_kwargs).toEqual({ enable_thinking: true })
+        expect(body.enable_thinking).toBeUndefined()
+        expect(body.chat_template_kwargs).toBeUndefined()
     })
 
     it('Completions: Explicit Off → enable_thinking=false', () => {
@@ -1067,9 +1071,9 @@ describe('Wire format — enable_thinking in request body', () => {
         expect(body.chat_template_kwargs).toBeUndefined()
     })
 
-    it('Responses: Auto + parser → enable_thinking=true', () => {
+    it('Responses: local Auto omits enable_thinking so engine auto-detects', () => {
         const body = buildRequestBody('responses', undefined, false, true)
-        expect(body.enable_thinking).toBe(true)
+        expect(body.enable_thinking).toBeUndefined()
         expect(body.max_output_tokens).toBe(4096)
     })
 
@@ -1546,4 +1550,3 @@ describe('GPT-OSS / Harmony — client-side behavior', () => {
         expect(emitState.reasoningDoneEmitted).toBe(true)
     })
 })
-

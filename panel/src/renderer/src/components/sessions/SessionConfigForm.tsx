@@ -132,7 +132,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   defaultTemperature: 70,
   defaultTopP: 95,
   defaultRepetitionPenalty: 110,
-  defaultEnableThinking: false,
+  defaultEnableThinking: undefined,
   embeddingModel: '',
   additionalArgs: '',
   enableJit: false,

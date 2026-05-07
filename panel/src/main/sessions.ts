@@ -43,6 +43,13 @@ interface BundleStartupDefaults {
   source?: 'generation_config' | 'jang_config'
 }
 
+function normalizeReasoningMode(mode: unknown): 'auto' | 'on' | 'off' {
+  const m = String(mode ?? 'auto').toLowerCase()
+  if (m === 'on' || m === 'always' || m === 'true' || m === 'reasoning') return 'on'
+  if (m === 'off' || m === 'never' || m === 'false' || m === 'instruct') return 'off'
+  return 'auto'
+}
+
 function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
   if (!modelPath) return {}
   const out: BundleStartupDefaults = {}
@@ -568,10 +575,15 @@ export class SessionManager extends EventEmitter {
     config.port = session.port
     applyBundleStartupDefaults(config, config.modelPath)
 
-    // Apply model_settings.reasoning_mode as server-level default for external API clients
+    // Apply model_settings.reasoning_mode as server-level default for external API clients.
+    // Auto must not serialize as false: local/API requests should then fall
+    // through to model-family detection instead of forcing Qwen/MiniMax/etc.
+    // into instruct mode.
     const modelSettings = db.getModelSettings(session.modelPath)
-    if (modelSettings?.reasoning_mode === 'on') config.defaultEnableThinking = true
-    else if (modelSettings?.reasoning_mode === 'off') config.defaultEnableThinking = false
+    const reasoningMode = normalizeReasoningMode(modelSettings?.reasoning_mode)
+    if (reasoningMode === 'on') config.defaultEnableThinking = true
+    else if (reasoningMode === 'off') config.defaultEnableThinking = false
+    else delete config.defaultEnableThinking
 
     const engineResult = this.findEnginePath()
     if (!engineResult) throw new Error('vmlx-engine not found. Please install it first.')
