@@ -1124,8 +1124,10 @@ def _template_always_thinks(tokenizer, model_name: str) -> bool:
         # ignore the flag and the model will reason regardless).
         after_user = rendered.rsplit("__test__", 1)[-1]
         has_think = "<think>" in after_user
-        # Strip <think></think> (empty closed block) — that's a proper "no think" signal
-        cleaned = after_user.replace("<think></think>", "")
+        # Strip empty closed think blocks such as <think></think> and
+        # <think>\n</think>\n\n. Those are proper "no thinking" sentinels,
+        # not evidence that the template ignores enable_thinking=False.
+        cleaned = re.sub(r"<think>\s*</think>", "", after_user)
         result = "<think>" in cleaned  # still has an unclosed <think>?
         if result:
             logger.info(

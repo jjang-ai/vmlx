@@ -282,6 +282,42 @@ class TestTemplateAlwaysThinks:
         assert "__test__" in source
         assert "<think>" in source
 
+    def test_closed_empty_think_block_with_whitespace_is_not_always_thinking(self):
+        """ZAYA emits <think>\\n</think>\\n\\n for thinking-off prompts.
+
+        That is a valid closed sentinel. The detector must not classify it as
+        an always-thinking template, otherwise streaming keeps the reasoning
+        parser in the wrong mode for explicit enable_thinking=False requests.
+        """
+
+        import vmlx_engine.server as server_mod
+
+        class Tokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                assert kwargs["enable_thinking"] is False
+                return (
+                    "<bos><|im_start|>user\n__test__<|im_end|>\n"
+                    "<|im_start|>assistant\n<think>\n</think>\n\n"
+                )
+
+        server_mod._template_always_thinks_cache.clear()
+
+        assert server_mod._template_always_thinks(Tokenizer(), "Zyphra/ZAYA") is False
+
+    def test_unclosed_think_block_is_always_thinking(self):
+        import vmlx_engine.server as server_mod
+
+        class Tokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                return (
+                    "<bos><|im_start|>user\n__test__<|im_end|>\n"
+                    "<|im_start|>assistant\n<think>\n"
+                )
+
+        server_mod._template_always_thinks_cache.clear()
+
+        assert server_mod._template_always_thinks(Tokenizer(), "always-think-model") is True
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Section 3: SSE Fix — empty delta guard
