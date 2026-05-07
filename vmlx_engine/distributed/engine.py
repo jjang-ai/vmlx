@@ -227,6 +227,7 @@ class DistributedEngine(BaseEngine):
 
             generated_tokens: list[int] = []
             generated_text = ""
+            detokenizer = _make_streaming_detokenizer(tokenizer)
             eos_token_ids = _get_eos_token_id(tokenizer)
             stop_sequences = stop or []
 
@@ -246,7 +247,7 @@ class DistributedEngine(BaseEngine):
                 next_token = _sample(logits[:, -1, :], temperature, top_p)
                 next_tok_id = int(next_token.item())
                 generated_tokens.append(next_tok_id)
-                token_text = tokenizer.decode([next_tok_id])
+                token_text = _add_streaming_token(detokenizer, next_tok_id)
                 generated_text += token_text
 
                 yield GenerationOutput(
@@ -280,7 +281,7 @@ class DistributedEngine(BaseEngine):
                     next_token = _sample(logits[:, -1, :], temperature, top_p)
                     next_tok_id = int(next_token.item())
                     generated_tokens.append(next_tok_id)
-                    token_text = tokenizer.decode([next_tok_id])
+                    token_text = _add_streaming_token(detokenizer, next_tok_id)
                     generated_text += token_text
 
                     yield GenerationOutput(
@@ -298,9 +299,13 @@ class DistributedEngine(BaseEngine):
                 elif len(generated_tokens) >= max_tokens:
                     finish_reason = "length"
 
+                final_text = _finalize_streaming_detokenizer(detokenizer)
+                if final_text:
+                    generated_text += final_text
+
                 yield GenerationOutput(
                     text=generated_text,
-                    new_text="",
+                    new_text=final_text,
                     tokens=generated_tokens,
                     prompt_tokens=prompt_tokens,
                     completion_tokens=len(generated_tokens),
@@ -375,6 +380,29 @@ def _sample(logits: mx.array, temperature: float, top_p: float) -> mx.array:
 
     probs = mx.softmax(logits, axis=-1)
     return mx.random.categorical(mx.log(probs + 1e-10))
+
+
+def _make_streaming_detokenizer(tokenizer):
+    """Create a detokenizer that is safe for multi-byte UTF-8 streaming."""
+    from mlx_lm.tokenizer_utils import NaiveStreamingDetokenizer
+
+    detok = NaiveStreamingDetokenizer(tokenizer)
+    detok.reset()
+    return detok
+
+
+def _add_streaming_token(detokenizer, token: int) -> str:
+    """Append one token and return only the newly decoded text."""
+    text_before = detokenizer.text
+    detokenizer.add_token(token)
+    return detokenizer.text[len(text_before) :]
+
+
+def _finalize_streaming_detokenizer(detokenizer) -> str:
+    """Flush buffered trailing bytes and return the final decoded segment."""
+    text_before = detokenizer.text
+    detokenizer.finalize()
+    return detokenizer.text[len(text_before) :]
 
 
 def _get_eos_token_id(tokenizer) -> set:
