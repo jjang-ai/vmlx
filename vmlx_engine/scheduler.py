@@ -3949,6 +3949,7 @@ class Scheduler:
                             raw_cache = response.prompt_cache
 
                         if raw_cache:
+                            request._extracted_cache_from_prompt_snapshot = False
                             # For paged cache, extract actual tensor states
                             # This allows cache to survive BatchGenerator recreation
                             if self.block_aware_cache is not None:
@@ -4048,6 +4049,9 @@ class Scheduler:
                                                 )
                                         if extracted_cache:
                                             request._extracted_cache = extracted_cache
+                                            request._extracted_cache_from_prompt_snapshot = (
+                                                snapshot_cache is not None
+                                            )
                                             logger.info(
                                                 f"Extracted {len(extracted_cache)} "
                                                 f"layer states for request "
@@ -4128,6 +4132,7 @@ class Scheduler:
                 request is not None
                 and self._uses_dsv4_cache
                 and request.status == RequestStatus.FINISHED_LENGTH_CAPPED
+                and not getattr(request, "_extracted_cache_from_prompt_snapshot", False)
             ):
                 # DSV4 DeepseekV4Cache includes CSA/HSA pool state in addition
                 # to local SWA KV. After a length-capped decode, the live cache
@@ -4136,7 +4141,9 @@ class Scheduler:
                 # compressor/indexer pool state is also at the prompt boundary,
                 # and live exact-repeat tests showed those stores can produce
                 # immediate stop on cache hit. Do not let capped generations
-                # donate prefix blocks; clean stop requests still store normally.
+                # donate prefix blocks. Clean prompt-boundary snapshots captured
+                # before decode are exempt because they are already at N-1 and do
+                # not include generated-token SWA/CSA/HSA drift.
                 _skip_cache_store = True
             # No DSV4-specific short-prompt skip. Other families store paged
             # cache at any prompt length and rely on the standard LRU

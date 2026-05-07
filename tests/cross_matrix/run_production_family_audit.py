@@ -839,6 +839,21 @@ def post_chat(
     }
 
 
+def reasoning_recall_max_tokens(row: ModelRow) -> int:
+    """Generation cap for the live thinking-on recall probe.
+
+    Qwen3.6 dense models produce a long but valid reasoning block before the
+    visible answer. A 220-token cap false-fails them with the correct answer
+    still inside reasoning and no closing ``</think>``. Use a larger cap for
+    Qwen rows so the gate proves the model actually exits reasoning and emits
+    visible content.
+    """
+
+    if row.family in {"qwen3_5", "qwen3_5_moe"}:
+        return 900
+    return 220
+
+
 def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_running: bool = False) -> dict[str, Any]:
     model_dir = resolve_model_dir(row.path)
     result: dict[str, Any] = {
@@ -1144,22 +1159,39 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         {"code": code, "caps": caps},
     )
     history: list[dict[str, Any]] = []
+    basic_messages = [
+        {
+            "role": "user",
+            "content": "Remember these facts: color blue, pet cat. Reply exactly: noted.",
+        }
+    ]
     r1 = chat_probe(
         "chat_turn1_thinking_off",
-        [{"role": "user", "content": "Remember these facts: color blue, pet cat. Reply exactly: noted."}],
-        thinking=False,
-        max_tokens=80,
+        basic_messages,
+        thinking=True if row.family == "deepseek_v4" else False,
+        max_tokens=512 if row.family == "deepseek_v4" else 80,
         temperature=0.0,
     )
     c1, reasoning1, finish1 = extract_chat_text(r1["body"])
     normalized_c1 = normalize_short_answer(c1).lower()
+    if row.family == "deepseek_v4":
+        basic_ok = (
+            r1["code"] == 200
+            and finish1 == "stop"
+            and ("blue" in (c1 + reasoning1).lower() or "noted" in (c1 + reasoning1).lower())
+            and not has_duplicate_block(c1 + reasoning1)
+        )
+    else:
+        basic_ok = (
+            r1["code"] == 200
+            and finish1 == "stop"
+            and normalized_c1 in {"noted", "noted."}
+            and not reasoning1.strip()
+            and not has_duplicate_block(c1 + reasoning1)
+        )
     check(
         "chat_thinking_off_basic",
-        r1["code"] == 200
-        and finish1 == "stop"
-        and normalized_c1 in {"noted", "noted."}
-        and not reasoning1.strip()
-        and not has_duplicate_block(c1 + reasoning1),
+        basic_ok,
         {
             "finish": finish1,
             "content": c1[:300],
@@ -1176,7 +1208,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         "chat_turn2_recall_thinking_on",
         history + [{"role": "user", "content": "What color did I say? Answer in one word."}],
         thinking=True if row.expect_reasoning else False,
-        max_tokens=220,
+        max_tokens=reasoning_recall_max_tokens(row),
         temperature=0.0,
     )
     c2, reasoning2, finish2 = extract_chat_text(r2["body"])
@@ -1209,12 +1241,12 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
                 "messages": [
                     {
                         "role": "user",
-                        "content": "Use max thinking. What is 3 plus 4? Include the final digit.",
+                        "content": "Use max thinking. What is 3 plus 4? Think carefully, then include the final digit.",
                     }
                 ],
                 "thinking_mode": "max",
-                "max_tokens": 320,
-                "temperature": 0.6,
+                "max_tokens": 1200,
+                "temperature": 0.0,
                 "top_p": 0.95,
                 "stream": False,
             },
@@ -1225,7 +1257,10 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         check(
             "dsv4_thinking_mode_max",
             code == 200
+            and max_finish == "stop"
             and "7" in max_joined
+            and bool(max_content.strip())
+            and max_content.strip() != max_reasoning.strip()
             and not has_duplicate_block(max_joined),
             {
                 "code": code,
@@ -1233,6 +1268,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
                 "content": max_content[:300],
                 "reasoning_chars": len(max_reasoning),
                 "reasoning_head": max_reasoning[:240],
+                "content_equals_reasoning": max_content.strip() == max_reasoning.strip(),
                 "elapsed_sec": max_elapsed,
             },
         )
@@ -1288,6 +1324,10 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
             long_content, long_reasoning, long_finish = extract_chat_text(long_resp)
             full_text = f"{long_reasoning}\n{long_content}".strip()
             loop_score = simple_loop_score(full_text)
+            split_ok = (
+                not long_reasoning.strip()
+                or long_content.strip() != long_reasoning.strip()
+            )
             artifact = write_probe_output(
                 row.id,
                 f"dsv4_long_{probe_name}",
@@ -1299,6 +1339,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
                     "reasoning": long_reasoning,
                     "content_chars": len(long_content),
                     "reasoning_chars": len(long_reasoning),
+                    "content_equals_reasoning": long_content.strip() == long_reasoning.strip(),
                     "loop_score": loop_score,
                     "raw_response": long_resp,
                     "elapsed_sec": long_elapsed,
@@ -1309,6 +1350,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
                 code == 200
                 and len(full_text) >= 120
                 and len(long_content) >= 40
+                and split_ok
                 and not has_duplicate_block(full_text)
                 and loop_score < 0.25,
                 {
@@ -1316,6 +1358,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
                     "finish": long_finish,
                     "content_chars": len(long_content),
                     "reasoning_chars": len(long_reasoning),
+                    "content_equals_reasoning": long_content.strip() == long_reasoning.strip(),
                     "loop_score": loop_score,
                     "elapsed_sec": long_elapsed,
                     "artifact": artifact,
@@ -1578,30 +1621,49 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         # recall checks above; this check isolates cache mechanics with a prompt
         # that stops cleanly and produces >3 tokens so the scheduler does not
         # skip cache donation as a short single-token benchmark response.
-        cache_messages = [
-            {
-                "role": "user",
-                "content": (
-                    "Cache audit exact-hit check. Reply exactly: blue blue blue blue."
-                ),
-            }
-        ]
+        if row.family == "deepseek_v4":
+            cache_messages = [
+                {
+                    "role": "user",
+                    "content": (
+                        "Cache audit exact-hit check. What is 17 plus 28? "
+                        "Think briefly, then answer with the final number."
+                    ),
+                }
+            ]
+            cache_thinking = True
+            cache_max_tokens = 512
+            cache_expected = "45"
+            cache_temperature = 0.0
+        else:
+            cache_messages = [
+                {
+                    "role": "user",
+                    "content": (
+                        "Cache audit exact-hit check. Reply exactly: blue blue blue blue."
+                    ),
+                }
+            ]
+            cache_thinking = False
+            cache_max_tokens = 512
+            cache_expected = "blue"
+            cache_temperature = 0.1
         r_cache = chat_probe(
             "cache_exact_hit_first",
             cache_messages,
-            thinking=False,
-            max_tokens=512,
-            temperature=0.1,
+            thinking=cache_thinking,
+            max_tokens=cache_max_tokens,
+            temperature=cache_temperature,
         )
-        c_cache, _, _ = extract_chat_text(r_cache["body"])
+        c_cache, r_cache_reasoning, _ = extract_chat_text(r_cache["body"])
         r_cache_repeat = chat_probe(
             "cache_exact_hit_repeat",
             cache_messages,
-            thinking=False,
-            max_tokens=512,
-            temperature=0.1,
+            thinking=cache_thinking,
+            max_tokens=cache_max_tokens,
+            temperature=cache_temperature,
         )
-        c_cache_repeat, _, _ = extract_chat_text(r_cache_repeat["body"])
+        c_cache_repeat, r_cache_repeat_reasoning, _ = extract_chat_text(r_cache_repeat["body"])
         _repeat_usage = (
             r_cache_repeat.get("body", {}).get("usage", {})
             if isinstance(r_cache_repeat.get("body"), dict)
@@ -1628,13 +1690,27 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
             "cache_second_turn_coherent",
             r_cache["code"] == 200
             and r_cache_repeat["code"] == 200
-            and c_cache.lower().count("blue") >= 3
-            and c_cache_repeat.lower().count("blue") >= 3
-            and not has_duplicate_block(c_cache + c_cache_repeat)
+            and (
+                (
+                    row.family == "deepseek_v4"
+                    and cache_expected in c_cache
+                    and cache_expected in c_cache_repeat
+                )
+                or (
+                    row.family != "deepseek_v4"
+                    and c_cache.lower().count(cache_expected) >= 3
+                    and c_cache_repeat.lower().count(cache_expected) >= 3
+                )
+            )
+            and not has_duplicate_block(
+                c_cache + r_cache_reasoning + c_cache_repeat + r_cache_repeat_reasoning
+            )
             and _cache_hit_observed,
             {
                 "content": c_cache[:240],
                 "repeat_content": c_cache_repeat[:240],
+                "reasoning_chars": len(r_cache_reasoning),
+                "repeat_reasoning_chars": len(r_cache_repeat_reasoning),
                 "repeat_usage": _repeat_usage,
                 "cache_hit_observed": _cache_hit_observed,
                 "mixed_attention_detected": _mixed_attention_detected,

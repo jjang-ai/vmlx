@@ -415,6 +415,53 @@ def _dsv4_visible_content_fallback(
     return content
 
 
+def _dsv4_split_reasoning_from_token_ids(
+    token_ids: list[int] | tuple[int, ...] | None,
+    tokenizer: Any,
+) -> tuple[str | None, str | None]:
+    """Split DSV4 output on the real ``</think>`` token id.
+
+    DSV4 marks reasoning with dedicated special token IDs. The MLX streaming
+    detokenizer can drop those markers from text, leaving non-stream parsers
+    unable to distinguish "unclosed reasoning" from "reasoning closed, now
+    visible answer". When cumulative output token IDs are available, use the
+    token boundary as source of truth.
+    """
+    if not token_ids:
+        return None, None
+    ids = [int(t) for t in token_ids]
+    think_close = 128822
+    if think_close not in ids:
+        return None, None
+    think_open = 128821
+    structural = {1, 128803, 128804, think_open, think_close}
+    close_idx = ids.index(think_close)
+
+    def decode(part: list[int]) -> str:
+        clean_ids = [t for t in part if t not in structural]
+        if not clean_ids:
+            return ""
+        decode_fn = getattr(tokenizer, "decode", None)
+        if decode_fn is None and hasattr(tokenizer, "tokenizer"):
+            decode_fn = getattr(tokenizer.tokenizer, "decode", None)
+        if decode_fn is None:
+            return ""
+        try:
+            text = decode_fn(clean_ids, skip_special_tokens=True)
+        except TypeError:
+            try:
+                text = decode_fn(clean_ids)
+            except Exception:
+                return ""
+        except Exception:
+            return ""
+        return clean_output_text(str(text or ""))
+
+    reasoning = decode(ids[:close_idx]).strip() or None
+    content = decode(ids[close_idx + 1:]).strip() or None
+    return reasoning, content
+
+
 _jang_sampling_defaults_cache: dict[str, dict] = {}
 _generation_defaults_cache: dict[str, dict] = {}
 
@@ -7067,6 +7114,14 @@ async def create_chat_completion(
         # special tokens that clean_output_text strips for display.
         _raw_for_parse = getattr(output, "raw_text", "") or output.text
         reasoning_text, remaining_text = request_parser.extract_reasoning(_raw_for_parse)
+        if _is_dsv4:
+            token_reasoning, token_content = _dsv4_split_reasoning_from_token_ids(
+                getattr(output, "tokens", None),
+                engine.tokenizer,
+            )
+            if token_content:
+                reasoning_text = token_reasoning
+                remaining_text = token_content
         if remaining_text is not None:
             content_for_parsing = remaining_text
         elif reasoning_text is not None:
@@ -8242,6 +8297,19 @@ async def create_response(
                 f"{len(reasoning_text or '')}, remaining_len="
                 f"{len(remaining_text or '')}"
             )
+        if _is_dsv4_resp_msgs:
+            token_reasoning, token_content = _dsv4_split_reasoning_from_token_ids(
+                getattr(output, "tokens", None),
+                engine.tokenizer,
+            )
+            if token_content:
+                reasoning_text = token_reasoning
+                remaining_text = token_content
+                logger.info(
+                    "DSV4 (/v1/responses) token split: reasoning_len=%s, content_len=%s",
+                    len(reasoning_text or ""),
+                    len(remaining_text or ""),
+                )
         if remaining_text is not None:
             content_for_parsing = remaining_text
         elif reasoning_text is not None:
