@@ -2598,6 +2598,22 @@ class TestHybridSSMEnvNames:
         assert "VMLINUX_DISABLE_SSM_PREFIX_RESUME" not in source
 
 
+class TestPromptLookupDocumentation:
+    """vmlx#137: PLD docs must match the scheduler's real implementation."""
+
+    def test_prompt_lookup_docstring_no_longer_claims_phase2_is_blocked(self):
+        import vmlx_engine.prompt_lookup as prompt_lookup
+
+        doc = prompt_lookup.__doc__ or ""
+
+        assert "Phase 2 (future)" not in doc
+        assert "Blocked today by" not in doc
+        assert "blocked by mlx-lm" not in doc.lower()
+        assert "Scheduler integration owns runtime acceleration" in doc
+        assert "_try_pld_speculative_decode" in doc
+        assert "Hybrid SSM/attention models need family-aware" in doc
+
+
 class TestJangVLMFallbacks:
     """JANG VLM loaders must not silently drop working image support."""
 
