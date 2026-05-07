@@ -19,6 +19,17 @@ All notable changes to vMLX Engine will be documented in this file.
   The local request builder omits `enable_thinking` and
   `chat_template_kwargs.enable_thinking` in Auto mode so model-family registry
   detection can choose the correct template behavior.
+- **Cached reasoning-state recovery**: upgraded users with old SQLite
+  `chat_overrides`, starred profiles, or per-model `reasoning_mode` rows no
+  longer keep poisoning new requests with explicit thinking On/Off. A one-time
+  migration resets those legacy choices back to Auto; post-upgrade user changes
+  are preserved.
+- **Ollama parity through both server and desktop gateway**: direct Python
+  `/api/chat`/`/api/generate` and the Electron API gateway now accept native
+  `think` plus the vMLX `enable_thinking`, `reasoning_effort`, and
+  `chat_template_kwargs` extensions. Gateway `/api/generate` now follows
+  Ollama semantics: chat-template route by default, raw completions only when
+  `raw:true`.
 
 ### Verified
 - ZAYA CLI conversion live-verified for JANGTQ4 and MXFP4 from the local
@@ -30,6 +41,9 @@ All notable changes to vMLX Engine will be documented in this file.
   explicit Off, and explicit On all produced visible final content; reasoning
   was present only for Auto/On, and prefix/paged/block-disk cache stats were
   observed on the same session.
+- Targeted parity tests passed for the direct Python Ollama adapter, API
+  surface translations, Electron Ollama gateway, panel request builder,
+  reasoning display, and cached-state migration.
 
 ## [1.5.6] - 2026-05-02
 
