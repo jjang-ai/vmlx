@@ -2,6 +2,35 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.5.25] - 2026-05-07
+
+### Fixed
+- **ZAYA JANGTQ/MXFP4 conversion routing**: `vmlx convert --jang-profile ...`
+  now detects `model_type=zaya` and routes through the ZAYA JANGTQ converter,
+  including generic `JANG_*` profile aliases such as `JANG_4L -> JANGTQ4`.
+  `vmlx convert --bits 4` routes ZAYA through the MXFP4 converter instead of
+  the generic affine path.
+- **ZAYA no-state MoE layers**: odd ZAYA layers do not carry CCA state. The
+  runtime now uses an explicit no-state cache object for those layers instead of
+  `ArraysCache(1)`, preventing post-generation cache extraction from slicing
+  `None`.
+- **Desktop reasoning Auto default**: new and migrated sessions now preserve
+  Auto reasoning as `NULL`/omitted instead of forcing `enable_thinking=false`.
+  The local request builder omits `enable_thinking` and
+  `chat_template_kwargs.enable_thinking` in Auto mode so model-family registry
+  detection can choose the correct template behavior.
+
+### Verified
+- ZAYA CLI conversion live-verified for JANGTQ4 and MXFP4 from the local
+  `Zyphra/ZAYA1-8B` source bundle. The JANGTQ4 output loaded through
+  `vmlx serve` and passed OpenAI Chat, Responses, Anthropic Messages, Ollama
+  chat, and multi-turn recall smoke tests. TurboQuant KV stayed disabled for the
+  CCA cache topology.
+- Qwen3.6 reasoning Auto live-verified with the desktop request shape: Auto,
+  explicit Off, and explicit On all produced visible final content; reasoning
+  was present only for Auto/On, and prefix/paged/block-disk cache stats were
+  observed on the same session.
+
 ## [1.5.6] - 2026-05-02
 
 ### Fixed (DSV4-Flash 14/14 — final)

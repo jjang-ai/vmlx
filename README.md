@@ -154,7 +154,7 @@ vMLX runs any MLX model. Point it at a HuggingFace repo or local path and go.
 
 | Type | Models |
 |------|--------|
-| **Text LLMs** | Qwen 2/2.5/3/3.5/3.6, Llama 3/3.1/3.2/3.3/4, Mistral/Mixtral, **Mistral-Medium-3.5** (ministral3), Mistral-Small-4, Gemma 3/4, Phi-4, DeepSeek V2/V3/V4, GLM-4/5, MiniMax M2.5/M2.7, Nemotron, **Laguna** (poolside), Kimi K2.5/K2.6, StepFun, and any mlx-lm model |
+| **Text LLMs** | Qwen 2/2.5/3/3.5/3.6, Llama 3/3.1/3.2/3.3/4, Mistral/Mixtral, **Mistral-Medium-3.5** (ministral3), Mistral-Small-4, Gemma 3/4, Phi-4, DeepSeek V2/V3/V4, GLM-4/5, MiniMax M2.5/M2.7, Nemotron, **Laguna** (poolside), **ZAYA** (CCA + MoE), Kimi K2.5/K2.6, StepFun, and any mlx-lm model |
 | **Vision LLMs** | Qwen-VL, Qwen3.5-VL / Qwen3.6-VL, Pixtral, InternVL, LLaVA, Gemma 3n / 4-VL, Mistral-Medium-3.5 (PIXTRAL) |
 | **Multimodal Omni** | **Nemotron-3-Nano-Omni** (text + image + audio + video) — Parakeet audio encoder + RADIO ViT vision tower; routed via OmniMultimodalDispatcher across `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, `/api/chat` |
 | **MoE Models** | Qwen 3.5/3.6 MoE (A3B/A10B), Mixtral, DeepSeek V2/V3/V4, MiniMax M2.5/M2.7, Llama 4, Laguna (256 routed experts top-8) |

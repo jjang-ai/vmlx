@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.5.25 — 2026-05-07 — Reasoning Auto, ZAYA, Bundled Runtime Fixes
+
+### Fixed
+- **Reasoning Auto no longer forces thinking off**: new sessions and migrated
+  database rows preserve Auto as `NULL`, and local request building omits
+  `enable_thinking` in Auto mode so the Python engine can apply model-family
+  reasoning defaults.
+- **Responses/Chat parity for reasoning models**: the panel now avoids sending
+  stale `chat_template_kwargs.enable_thinking=false` for Auto sessions, fixing
+  the class of UI-created requests that made reasoning-capable models answer as
+  if reasoning were disabled.
+- **Bundled Python verification now gates image runtime imports**:
+  `mflux`, `mlx_vlm`, `jang_tools`, TurboQuant kernels, and vMLX loader shims
+  are checked during `npm run build` before Electron packaging proceeds.
+
+### Verified
+- Panel request-builder, reasoning-display, and audit-fix tests passed with the
+  Auto/Off/On reasoning matrix.
+- Bundled Python build imported `vmlx_engine 1.5.25`, `jang_tools 2.5.26`,
+  `mflux`, `mlx_lm`, and `mlx_vlm` successfully before packaging.
+
 ## v1.3.0 — 2026-03-20 — Hybrid SSM Cache, Nemotron, Reasoning Fixes
 
 ### Critical Bug Fixes
