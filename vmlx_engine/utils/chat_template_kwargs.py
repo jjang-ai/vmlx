@@ -59,3 +59,42 @@ def build_chat_template_kwargs(
         kwargs["thinking"] = bool(kwargs["enable_thinking"])
 
     return kwargs
+
+
+def ensure_thinking_off_sentinel(
+    prompt: str,
+    *,
+    family_name: str | None = None,
+    model_name: str | None = None,
+    tools_present: bool = False,
+) -> str:
+    """Finish the prompt-side no-thinking contract for families that need it.
+
+    Some R1-style templates suppress thinking by omitting the opening
+    ``<think>`` tag when ``enable_thinking=False``. MiniMax-M2.7 still treats
+    that bare assistant prefix as permission to open a visible reasoning block
+    on exact-answer prompts. The stable prompt contract is an explicit empty
+    thought sentinel: ``<think>\n</think>\n\n``.
+
+    Do not add it for tool requests: tool selection often needs the model's
+    planning rail, and existing server paths suppress reasoning in the stream
+    instead of suppressing tool decisions in the prompt.
+    """
+
+    if tools_present:
+        return prompt
+
+    last_open = prompt.rfind("<think>")
+    if last_open >= 0:
+        after_open = prompt[last_open + len("<think>") :]
+        if "</think>" not in after_open:
+            return prompt[: last_open + len("<think>")] + "\n</think>\n\n"
+        return prompt
+
+    fam = (family_name or "").lower()
+    name = (model_name or "").lower()
+    needs_empty_think = fam == "minimax" or "minimax" in name
+    if not needs_empty_think:
+        return prompt
+
+    return prompt.rstrip() + "\n<think>\n</think>\n\n"

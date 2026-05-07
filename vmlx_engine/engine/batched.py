@@ -20,7 +20,10 @@ from typing import Any
 from ..api.tool_calling import check_and_inject_fallback_tools, convert_tools_for_template
 from ..api.utils import clean_output_text, extract_multimodal_content, is_mllm_model
 from ..model_config_registry import get_model_config_registry
-from ..utils.chat_template_kwargs import build_chat_template_kwargs
+from ..utils.chat_template_kwargs import (
+    build_chat_template_kwargs,
+    ensure_thinking_off_sentinel,
+)
 from .base import BaseEngine, GenerationOutput
 
 logger = logging.getLogger(__name__)
@@ -119,6 +122,12 @@ class BatchedEngine(BaseEngine):
     def model_name(self) -> str:
         """Get the model name."""
         return self._model_name
+
+    def _model_family_name(self) -> str | None:
+        try:
+            return get_model_config_registry().lookup(self._model_name).family_name
+        except Exception:
+            return None
 
     @property
     def is_mllm(self) -> bool:
@@ -886,11 +895,12 @@ class BatchedEngine(BaseEngine):
             # instead of calling the tool. Server-side reasoning suppression
             # (heartbeats) handles the UX when tools are active.
             if enable_thinking is False and not tools:
-                last_think = prompt.rfind("<think>")
-                if last_think >= 0:
-                    after_think = prompt[last_think + 7:]
-                    if "</think>" not in after_think:
-                        prompt = prompt[:last_think + 7] + "</think>\n"
+                prompt = ensure_thinking_off_sentinel(
+                    prompt,
+                    family_name=self._model_family_name(),
+                    model_name=self._model_name,
+                    tools_present=bool(tools),
+                )
             return prompt
         else:
             prompt = "\n".join(f"{m['role']}: {m['content']}" for m in messages)

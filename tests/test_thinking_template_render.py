@@ -26,7 +26,10 @@ from tests.fixtures.thinking_template_models import (
     SANITY_MODELS,
     ThinkingTemplateModel,
 )
-from vmlx_engine.utils.chat_template_kwargs import build_chat_template_kwargs
+from vmlx_engine.utils.chat_template_kwargs import (
+    build_chat_template_kwargs,
+    ensure_thinking_off_sentinel,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -191,6 +194,52 @@ def test_template_renders_nonempty_when_enabled(
     assert rendered.strip(), (
         f"{model.arch_name}: chat template returned empty prompt with "
         f"enable_thinking=True"
+    )
+
+
+def test_minimax_thinking_off_adds_empty_thought_sentinel():
+    """MiniMax-M2 direct rail needs an explicit closed empty thought.
+
+    The native template's ``enable_thinking=False`` branch ends at the
+    assistant marker. Live MiniMax-M2.7-JANGTQ_K then opens a visible
+    ``<think>`` block on exact-answer prompts. The engine post-render contract
+    appends ``<think>\n</think>`` for MiniMax only, matching the prompt variant
+    that live-tested cleanly.
+    """
+    rendered = "]~b]ai\n"
+    fixed = ensure_thinking_off_sentinel(
+        rendered,
+        family_name="minimax",
+        model_name="MiniMax-M2.7-JANGTQ_K",
+    )
+
+    assert fixed.endswith("<think>\n</think>\n\n")
+    assert _has_empty_think_pair(fixed)
+
+
+def test_thinking_off_sentinel_closes_open_thought_with_stable_shape():
+    prompt = "]~b]ai\n<think>\n"
+
+    fixed = ensure_thinking_off_sentinel(prompt, family_name="minimax")
+
+    assert fixed.endswith("<think>\n</think>\n\n")
+    assert _has_empty_think_pair(fixed)
+
+
+def test_thinking_off_sentinel_does_not_touch_other_families_or_tools():
+    prompt = "<|im_start|>assistant\n"
+
+    assert (
+        ensure_thinking_off_sentinel(prompt, family_name="qwen3_5")
+        == prompt
+    )
+    assert (
+        ensure_thinking_off_sentinel(
+            prompt,
+            family_name="minimax",
+            tools_present=True,
+        )
+        == prompt
     )
 
 

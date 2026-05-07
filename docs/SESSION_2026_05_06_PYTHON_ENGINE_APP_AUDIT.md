@@ -792,3 +792,51 @@ Production interpretation:
 - DSV4 is not cleared in this pass. When the model is available, verify native
   SWA/CSA/HSA composite cache, DSV4 pool compression, prefix/paged/L2 hits, no
   generic TurboQuant KV, and read full long-context output to completion.
+
+## §8.8 MiniMax Thinking-Off Prompt Contract (2026-05-07)
+
+Live MiniMax API parity exposed a prompt-contract bug, not a mixed-bit kernel
+bug. `MiniMax-M2.7-JANGTQ_K` passed OpenAI chat thinking-off/reasoning/tool/cache
+rows, but failed Anthropic and Ollama exact-answer probes by emitting visible
+analysis text before `Paris`.
+
+Raw prompt bisection on `/v1/completions` showed the cause:
+
+- Native JANGTQ_K thinking-off template ends at `]~b]ai\n` with no think
+  sentinel. The model opens `<think>...` itself and emits visible reasoning.
+- Adding `]~b]ai\n<think>\n</think>\n\n` makes the same prompt return exactly
+  `Paris` in two output tokens.
+- `MiniMax-M2.7-Small-JANGTQ` already emits an open `<think>\n` in the
+  thinking-off prompt, but the engine was closing it as `<think></think>\n`.
+  That no-newline sentinel is also unstable. The stable close shape is
+  `<think>\n</think>\n\n`.
+
+Source change:
+
+- `vmlx_engine/utils/chat_template_kwargs.py` now owns
+  `ensure_thinking_off_sentinel()`.
+- `BatchedEngine` and `SimpleEngine` both call it after chat-template render
+  and fallback tool injection when `enable_thinking=False` and no tools are
+  present.
+- Tool requests are deliberately excluded because tool selection may need the
+  planning rail; server-side reasoning suppression handles UX for tool flows.
+
+Focused tests:
+
+```sh
+.venv/bin/python -m pytest -q \
+  tests/test_thinking_template_render.py::test_minimax_thinking_off_adds_empty_thought_sentinel \
+  tests/test_thinking_template_render.py::test_thinking_off_sentinel_closes_open_thought_with_stable_shape \
+  tests/test_thinking_template_render.py::test_thinking_off_sentinel_does_not_touch_other_families_or_tools \
+  tests/test_api_surface_parity.py tests/test_ollama_adapter.py \
+  tests/test_tool_format.py::TestFallbackToolPromptFormat
+```
+
+Result: `32 passed`.
+
+Live verification:
+
+| Row | Artifact | Verdict | Evidence |
+|---|---|---|---|
+| MiniMax M2.7 JANGTQ_K | `/tmp/vmlx_family_audit/live_minimax_both_after_stable_think_sentinel.json` | PASS | OpenAI chat, Responses history/tool, Anthropic, Ollama, mixed-bit gate/up/down load, paged/L2 cache coherence all passed. Anthropic exact answer returned `Paris`; Ollama exact answer returned `Paris`; cache `tokens_saved=98`, L2 `disk_hits=2`, `disk_writes=13`, TurboQuant KV active for plain KV layers. |
+| MiniMax M2.7 Small JANGTQ | `/tmp/vmlx_family_audit/live_minimax_both_after_stable_think_sentinel.json` | PASS | Regression check for templates that already emit open `<think>` in thinking-off. Anthropic and Ollama exact answers both returned `Paris`; cache `tokens_saved=98`, L2 `disk_hits=2`, `disk_writes=13`, TurboQuant KV active. |
