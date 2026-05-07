@@ -171,6 +171,7 @@ docs/internal/
 # Internal regression audit + notes (not committed)
 NO-REGRESSION-CHECKLIST.md
 AUDIT-*.md
+!docs/AUDIT-*.md
 HANDOFF-*.md
 TEST-MATRIX-*.md
 BENCHMARK-*.md

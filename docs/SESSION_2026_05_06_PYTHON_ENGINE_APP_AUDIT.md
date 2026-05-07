@@ -408,3 +408,27 @@ Known blockers not cleared by this pass:
   override.
 - ZAYA/CCA remains import-verified only; runtime cache reuse must stay disabled
   until CCA `conv_state`/`prev_hs` serialization and restore are implemented.
+
+## §8.3 Empty `<think></think>` Injection — Layer-1 Verified (2026-05-06)
+
+Audit doc: `docs/AUDIT-THINKING-TEMPLATE-RENDER.md`
+Plan: `docs/superpowers/plans/2026-05-06-thinking-template-render-audit.md`
+Tests: `tests/test_thinking_template_render.py`, `tests/fixtures/thinking_template_models.py`
+
+Verdict (Layer 1, tokenizer-only render): all 8 audited archs honor
+`enable_thinking=False` at the chat-template layer. The 94b16d22 engine-side
+`<think></think>` inject removal is safe to keep removed.
+
+Fix landed:
+
+- **Kimi-K2.6-Small-JANGTQ** chat template was checking only the `thinking`
+  variable, not `enable_thinking`. Pre-94b16d22 the engine inject masked
+  the regression. Patched the bundle's `chat_template.jinja` at two sites
+  to OR `(thinking is false) or (enable_thinking is false)`. Backup at
+  `chat_template.jinja.pre-audit-2026-05-06`. Re-verify PASS. Distribution
+  via HF mirror re-upload + future jang_tools conversion script bake-in.
+
+Layer-2 (live engine) deferred to a follow-up cycle for the three
+`think_in_template=False` at-risk archs (Ling-2.6, Nemotron-Omni,
+Gemma-4) — Layer 1 confirms template correctness; Layer 2 catches the
+narrow case where the model auto-thinks despite a coherent prompt.
