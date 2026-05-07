@@ -22,9 +22,9 @@ Three reasoning modes (research/DSV4-RUNTIME-ARCHITECTURE.md §4):
   |    effort="high" |  "high"             |                     |
   +------------------+---------------------+---------------------+
   |  reasoning_      |  thinking_mode=     |  extra system hint  |
-  |    effort="max"  |  "thinking" +       |  for deeper chains  |
+  |    effort="max"  |  "thinking" +       |  normalized to the  |
   |                  |  reasoning_effort=  |                     |
-  |                  |  "max"              |                     |
+  |                  |  "high"             |  stable rail        |
   +------------------+---------------------+---------------------+
 
 Multi-turn: ``drop_earlier_reasoning=True`` (default) — DSV4 encoder
@@ -203,16 +203,18 @@ def _resolve_mode_and_effort(
       - enable_thinking True + reasoning_effort in (None, "low", "medium",
         "high") → "thinking" mode with reasoning_effort="high" (DSV4
         only distinguishes high vs max below/above).
-      - reasoning_effort == "max" → "thinking" mode with max effort,
-        regardless of enable_thinking (max implies thinking on).
+      - reasoning_effort == "max" → "thinking" mode on the stable high
+        effort rail. Live engine probes showed the raw DSV4 max rail can
+        length-cap without closing </think>, so server capabilities do not
+        advertise max for this family.
 
     Returns (thinking_mode, reasoning_effort). ``reasoning_effort`` is
-    always one of ``{None, "high", "max"}`` — safe for direct passthrough
-    to the encoder.
+    always one of ``{None, "high"}`` for production use — safe for direct
+    passthrough to the encoder.
     """
-    # Explicit max wins even if enable_thinking wasn't set.
+    # Explicit max implies thinking, but normalizes to the stable rail.
     if reasoning_effort == "max":
-        return "thinking", "max"
+        return "thinking", "high"
 
     if enable_thinking is False:
         return "chat", None

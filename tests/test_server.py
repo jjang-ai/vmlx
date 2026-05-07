@@ -780,14 +780,13 @@ def pytest_addoption(parser):
     )
 
 
-class TestDSV4RepetitionPenaltyFloor:
-    """DSV4 family safety floor — bundle calibrations as low as 1.0 (thinking)
-    and 1.05 (chat) are confirmed live-broken on long prompts (degenerate
-    "(the project (the project ..." and "response\\nresponse..." loops).
+class TestDSV4RepetitionPenaltyDefaults:
+    """DSV4 uses bundle-declared mode-specific repetition penalties.
 
-    The engine MUST clamp server-resolved rep_penalty to >= 1.15 for any
-    deepseek_v4 model. Panel/UI default values often arrive as request fields,
-    so low request values must not bypass the floor.
+    The DSV4 converter documents that thinking mode must remain neutral
+    (`repetition_penalty_thinking=1.0`) because higher penalties make the model
+    fail to close `</think>`. The old generic 1.15 floor is a regression for
+    the forced-thinking default path.
     """
 
     def _set_dsv4_path(self, monkeypatch, tmp_path, sampling_defaults):
@@ -806,36 +805,58 @@ class TestDSV4RepetitionPenaltyFloor:
         monkeypatch.setattr(srv, "_default_repetition_penalty", None)
         return srv
 
-    def test_floor_clamps_thinking_1_0_to_1_10(self, monkeypatch, tmp_path):
+    def test_thinking_mode_keeps_bundle_neutral_penalty(self, monkeypatch, tmp_path):
         srv = self._set_dsv4_path(monkeypatch, tmp_path, {
             "repetition_penalty_thinking": 1.0,
             "repetition_penalty_chat": 1.05,
             "repetition_penalty": 1.0,
         })
-        # No request override; resolver should clamp
-        result = srv._resolve_repetition_penalty(None, str(tmp_path))
-        assert result >= 1.15, (
-            f"DSV4 thinking-mode floor missing: resolver returned {result}, "
-            f"expected >= 1.15 (v1.5.8-followup empirical loop-break threshold). Bundles ship 1.0 (no penalty) and produce "
-            f"degenerate repetition loops on long prompts.")
+        result = srv._resolve_repetition_penalty(
+            None,
+            str(tmp_path),
+            enable_thinking=True,
+        )
+        assert result == 1.0
 
-    def test_floor_clamps_chat_1_05_to_1_10(self, monkeypatch, tmp_path):
+    def test_chat_mode_uses_bundle_chat_penalty(self, monkeypatch, tmp_path):
         srv = self._set_dsv4_path(monkeypatch, tmp_path, {
             "repetition_penalty_chat": 1.05,
             "repetition_penalty_thinking": 1.0,
         })
-        result = srv._resolve_repetition_penalty(None, str(tmp_path))
-        assert result >= 1.15, (
-            f"DSV4 chat-mode floor missing: resolver returned {result}, "
-            f"expected >= 1.15")
+        result = srv._resolve_repetition_penalty(
+            None,
+            str(tmp_path),
+            enable_thinking=False,
+        )
+        assert result == 1.05
 
-    def test_low_per_request_value_is_still_floored(self, monkeypatch, tmp_path):
+    def test_generation_kwargs_recomputed_after_mode_resolution(self, monkeypatch, tmp_path):
         srv = self._set_dsv4_path(monkeypatch, tmp_path, {
             "repetition_penalty_chat": 1.05,
+            "repetition_penalty_thinking": 1.0,
         })
-        result = srv._resolve_repetition_penalty(1.05, str(tmp_path))
-        assert result == 1.15, (
-            f"Low request rep_penalty must not bypass DSV4 floor: got {result}")
+        kwargs = {"repetition_penalty": 1.0}
+
+        srv._set_resolved_repetition_penalty(
+            kwargs,
+            None,
+            str(tmp_path),
+            enable_thinking=False,
+        )
+
+        assert kwargs["repetition_penalty"] == 1.05
+
+    def test_stale_low_per_request_value_resolves_to_thinking_bundle_default(self, monkeypatch, tmp_path):
+        srv = self._set_dsv4_path(monkeypatch, tmp_path, {
+            "repetition_penalty_thinking": 1.0,
+            "repetition_penalty_chat": 1.05,
+        })
+        result = srv._resolve_repetition_penalty(
+            1.05,
+            str(tmp_path),
+            enable_thinking=True,
+        )
+        assert result == 1.0
 
     def test_floor_does_not_affect_non_dsv4_families(self, monkeypatch, tmp_path):
         import json
