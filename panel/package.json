@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "./scripts/bundle-python.sh && ./scripts/verify-bundled-python.sh && electron-vite build",
+    "release:gate": "./scripts/release-gate-python-app.py",
     "verify-bundled": "./scripts/verify-bundled-python.sh",
     "preview": "electron-vite preview",
     "test": "vitest run",
