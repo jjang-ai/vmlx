@@ -117,6 +117,64 @@ class TestJitToggle:
         # If vmlx#83 rollback had fired, this would instead be inner_model.
         assert model_wrapper.model is compiled_fn
 
+    def test_jit_vlm_compiled_proxy_preserves_language_layers(self):
+        """VLM JIT must not replace the inner transformer with a bare gc_func.
+
+        mlx_vlm LanguageModel.layers delegates to ``self.model.layers``.
+        A bare mx.compile result has no module attributes, so make_cache()
+        crashes after JIT. The object installed at language_model.model must
+        stay callable while preserving attributes from the original module.
+        """
+        from vmlx_engine import server
+
+        class InnerTransformer:
+            def __init__(self):
+                self.layers = ["l0", "l1"]
+                self.config = {"family": "fake-vlm"}
+
+            def __call__(self, *args, **kwargs):
+                return args[0]
+
+        class LanguageModel:
+            def __init__(self):
+                self.model = InnerTransformer()
+
+            @property
+            def layers(self):
+                return self.model.layers
+
+            def __call__(self, *args, **kwargs):
+                return self.model(*args, **kwargs)
+
+        class VlmWrapper:
+            def __init__(self):
+                self.language_model = LanguageModel()
+
+            def make_cache(self):
+                return None
+
+        vlm_wrapper = VlmWrapper()
+        original_inner = vlm_wrapper.language_model.model
+
+        mock_engine = MagicMock()
+        mock_engine._model = vlm_wrapper
+        mock_engine.is_mllm = True
+        mock_engine._is_mllm = True
+
+        compiled_fn = MagicMock(side_effect=lambda *args, **kwargs: args[0])
+
+        with patch.object(server, "_engine", mock_engine), \
+             patch.object(mx, "compile", return_value=compiled_fn) as mock_compile:
+            server._apply_jit_compilation()
+
+        installed = vlm_wrapper.language_model.model
+        assert installed is not original_inner
+        assert installed is not compiled_fn, "do not install bare gc_func on VLM inner model"
+        assert installed.layers == ["l0", "l1"]
+        assert installed.config == {"family": "fake-vlm"}
+        assert vlm_wrapper.language_model.layers == ["l0", "l1"]
+        mock_compile.assert_called_once_with(original_inner)
+
     def test_jit_skips_when_model_not_callable(self):
         """When inner model is not callable, should log warning and skip."""
         from vmlx_engine import server

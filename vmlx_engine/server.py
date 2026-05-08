@@ -1546,6 +1546,20 @@ _model_type: str = "text"  # "text" or "image" — auto-detected from model dire
 _image_quantize: int | None = None  # Image model quantization bits (set by cli.py)
 
 
+class _CompiledModuleProxy:
+    """Callable mx.compile proxy that preserves original module attributes."""
+
+    def __init__(self, original, compiled):
+        self._original = original
+        self._compiled = compiled
+
+    def __call__(self, *args, **kwargs):
+        return self._compiled(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._original, name)
+
+
 def _apply_jit_compilation():
     """Apply mx.compile to the model forward pass for JIT-optimized inference.
 
@@ -1643,8 +1657,9 @@ def _apply_jit_compilation():
             _pre_compile_backup_vlm = inner_transformer  # for rollback
             try:
                 compiled = mx.compile(inner_transformer)
-                language_model.model = compiled
-                replaced = language_model.model is compiled
+                compiled_proxy = _CompiledModuleProxy(inner_transformer, compiled)
+                language_model.model = compiled_proxy
+                replaced = language_model.model is compiled_proxy
             except Exception as _vlm_jit_err:
                 logger.warning(f"JIT: VLM language_model compile failed, running without JIT: {_vlm_jit_err}")
                 return
