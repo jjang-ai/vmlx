@@ -1849,7 +1849,17 @@ class BlockAwarePrefixCache:
                     np_sources=np_sources if np_sources else None,
                 )
                 if block_kv_data:
-                    if _paged_frugal:
+                    # DSV4 is not a normal per-block KV payload. Non-terminal
+                    # blocks carry only cheap pending markers plus the plain
+                    # SWA-only front-layer KV slices, while the terminal block
+                    # carries the full SWA+CSA/HSA composite state required for
+                    # reconstruction. If frugal mode drops those in-RAM records,
+                    # an immediate same-process repeat can hit the block table
+                    # before the async L2 write is readable and reconstruct as
+                    # None. Keep DSV4 block records resident; L2 still gets the
+                    # write-through copy for restart restore.
+                    keep_in_ram = has_dsv4_cache_data
+                    if _paged_frugal and not keep_in_ram:
                         # Disk has it — skip the in-RAM duplicate. L1 lookup
                         # will fall through to L2 disk + _promote_from_disk
                         # which lazily re-creates cache_data on hit.
