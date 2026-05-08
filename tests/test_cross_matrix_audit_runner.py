@@ -9,6 +9,7 @@ from tests.cross_matrix.run_production_family_audit import (
     ROWS,
     cache_exact_hit_probe,
     cache_exact_hit_required,
+    capability_endpoint_contract_ok,
     extract_anthropic_text_and_stop,
     extract_ollama_visible_text_and_stop,
     is_non_length_stop,
@@ -110,6 +111,42 @@ def test_zaya_cca_rows_require_typed_exact_hit_cache_probe():
     assert cache_exact_hit_required(rows["zaya_jangtq4"])
     assert cache_exact_hit_required(rows["zaya_mxfp4"])
     assert cache_exact_hit_required(rows["dsv4_tq"])
+
+
+def test_dsv4_row_points_at_current_corrected_f32_mixed_bundle():
+    rows = {row.id: row for row in ROWS}
+
+    assert rows["dsv4_tq"].path.endswith("DeepSeek-V4-Flash-JANGTQ-V3-F32-MIXED")
+
+
+def test_dsv4_capability_contract_uses_native_cache_not_experimental_mode():
+    rows = {row.id: row for row in ROWS}
+    dsv4 = rows["dsv4_tq"]
+
+    caps = {
+        "supports_thinking": True,
+        "supported_modes": ["instruct", "reasoning"],
+        "experimental_modes": [],
+        "reasoning_efforts": ["low", "medium", "high", "max"],
+        "cache": {
+            "native": {
+                "family": "deepseek_v4",
+                "schema": "deepseek_v4_v7",
+                "cache_type": "native_composite",
+                "generic_turboquant_kv": {"enabled": False},
+            }
+        },
+    }
+    assert capability_endpoint_contract_ok(dsv4, caps)
+
+    stale_caps = {
+        "supports_thinking": False,
+        "supported_modes": ["instruct"],
+        "experimental_modes": ["raw-thinking"],
+        "reasoning_efforts": [],
+        "cache": {"dsv4_composite_state": True},
+    }
+    assert not capability_endpoint_contract_ok(dsv4, stale_caps)
 
 
 def test_zaya_cache_probe_checks_cache_not_repeated_style_compliance():
