@@ -107,6 +107,59 @@ def test_dsv4_responses_tool_choice_none_does_not_synthesize_tools():
     assert "_synthesize_tools_from_message_tool_calls(messages)" in src
 
 
+def test_responses_previous_history_keeps_instructions_as_leading_system():
+    from vmlx_engine.server import (
+        _normalize_leading_system_messages,
+        _responses_input_to_messages,
+    )
+
+    previous_messages = [
+        {"role": "system", "content": "base instructions"},
+        {"role": "user", "content": "first turn"},
+        {"role": "assistant", "content": "first answer"},
+    ]
+    current_messages = _responses_input_to_messages(
+        "second turn",
+        instructions="new response instructions",
+        preserve_multimodal=False,
+    )
+
+    normalized = _normalize_leading_system_messages(
+        previous_messages + current_messages
+    )
+
+    assert [m["role"] for m in normalized] == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert normalized[0]["content"] == (
+        "base instructions\n\nnew response instructions"
+    )
+    assert normalized[-1] == {"role": "user", "content": "second turn"}
+
+
+def test_normalize_leading_system_messages_moves_mid_conversation_system():
+    from vmlx_engine.server import _normalize_leading_system_messages
+
+    normalized = _normalize_leading_system_messages(
+        [
+            {"role": "user", "content": "hello"},
+            {"role": "developer", "content": "developer policy"},
+            {"role": "assistant", "content": "hi"},
+            {"role": "system", "content": "json only"},
+        ]
+    )
+
+    assert [m["role"] for m in normalized] == ["system", "user", "assistant"]
+    assert normalized[0]["content"] == "developer policy\n\njson only"
+    assert normalized[1:] == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi"},
+    ]
+
+
 @pytest.mark.asyncio
 async def test_responses_streaming_stores_history_for_previous_response_id():
     from vmlx_engine.api.models import ResponsesRequest

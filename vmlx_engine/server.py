@@ -6936,6 +6936,7 @@ async def create_chat_completion(
         if json_instruction:
             # Inject JSON instruction into messages
             messages = _inject_json_instruction(messages, json_instruction)
+    messages = _normalize_leading_system_messages(messages)
 
     # When thinking is explicitly disabled, strip <think> blocks from prior assistant
     # messages in the conversation history. Without this, the model sees prior thinking
@@ -7555,6 +7556,47 @@ def _extract_text_from_content(content) -> str:
     return str(content) if content else ""
 
 
+def _normalize_leading_system_messages(messages: list[dict]) -> list[dict]:
+    """Merge all system/developer messages into one leading system message.
+
+    Some tokenizer templates, including Qwen-family templates, reject a system
+    message anywhere after the first user/assistant/tool turn. Responses
+    follow-ups can create that shape when previous_response_id history is
+    prepended before a new request with instructions. Treat system/developer
+    content as global instructions and keep non-system turns in order.
+    """
+    if not messages:
+        return messages
+
+    system_template: dict | None = None
+    system_parts: list[str] = []
+    non_system: list[dict] = []
+
+    for msg in messages:
+        role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+        if role in ("system", "developer"):
+            if system_template is None:
+                system_template = dict(msg) if isinstance(msg, dict) else {
+                    "role": "system",
+                    "content": getattr(msg, "content", ""),
+                }
+            text = _extract_text_from_content(
+                msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
+            ).strip()
+            if text:
+                system_parts.append(text)
+            continue
+        non_system.append(msg)
+
+    if system_template is None:
+        return list(messages)
+
+    merged_system = dict(system_template)
+    merged_system["role"] = "system"
+    merged_system["content"] = "\n\n".join(system_parts)
+    return [merged_system] + non_system
+
+
 def _responses_input_to_messages(
     input_data: str | list,
     instructions: str | None = None,
@@ -8032,6 +8074,7 @@ async def create_response(
         json_instruction = build_json_system_prompt(text_dict)
         if json_instruction:
             messages = _inject_json_instruction(messages, json_instruction)
+    messages = _normalize_leading_system_messages(messages)
 
     # Strip <think> blocks from history when thinking is OFF (same as Chat Completions path)
     _ct_kwargs = _merge_ct_kwargs(request.chat_template_kwargs)
