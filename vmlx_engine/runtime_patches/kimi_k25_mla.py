@@ -11,28 +11,23 @@ token and produces repetition loops after ~14 tokens on quantized
 bundles (see GLM-5.1 / DSV3.2 history in
 ``research/VMLX-RUNTIME-FIXES.md``).
 
-Three install modes, in order of preference:
+Two patch locations, in order of preference:
 
 1. **vMLX release build** — ``panel/scripts/bundle-python.sh`` edits
    ``panel/bundled-python/.../mlx_lm/models/deepseek_v3.py`` in place
    BEFORE signing the DMG. No runtime patch needed for shipped users.
 
-2. **Import-time monkey-patch (this module's default)** — call
-   :func:`install` from a bootstrap script. Idempotent: if the source
-   file already contains the patch marker we no-op.
-
-3. **File patch for a user-managed ``mlx_lm``** — :func:`install_file`
+2. **File patch for a user-managed ``mlx_lm``** — :func:`install_file`
    copies ``research/deepseek_v3_patched.py`` (shipped in jang_tools'
    docs tree) over the target file with a timestamped backup. Refuses
-   to touch any file under a ``vmlx/`` path (mirroring
-   ``jang_tools.kimi_prune.runtime_patch``) so it never corrupts a
-   bundled install — that's mode 1's job.
+   to touch files inside a packaged ``vMLX.app/Contents`` bundle so it
+   never corrupts a signed app — that's mode 1's job.
 
 ``install_file`` is a thin re-export of
 ``jang_tools.kimi_prune.runtime_patch.apply`` so the refusal guard and
-backup contract stay in one place. ``install`` is net-new: it verifies
-the patch is live at runtime and attempts a monkey-patch only when the
-file-edit path would be rejected.
+backup contract stay in one place. ``install`` verifies the patch is
+live at runtime and attempts the user-managed file patch only outside a
+packaged app bundle.
 """
 
 from __future__ import annotations
@@ -134,16 +129,15 @@ def _locate_target() -> Optional[Path]:
 def _is_vmlx_bundle(path: Path) -> bool:
     """Does this file live inside a vMLX-shipped Python bundle?
 
-    Matches ``/vmlx/…``, ``/vmlx-…``, and ``vMLX.app/Contents/`` paths.
-    Used to refuse file patches on shipped artifacts (the build-time
-    step handles those).
+    Only packaged ``vMLX.app/Contents`` paths count as shipped artifacts.
+    User-managed uv/pipx installs often live under directories literally
+    named ``vmlx`` and must not be mistaken for signed app bundles.
     """
-    s = str(path).lower()
-    return (
-        "/vmlx/" in s
-        or "/vmlx-" in s
-        or "vmlx.app/" in s
-    )
+    parts = [part.lower() for part in path.parts]
+    for idx, part in enumerate(parts):
+        if part == "vmlx.app" and idx + 1 < len(parts):
+            return parts[idx + 1] == "contents"
+    return False
 
 
 def main(argv: Optional[list] = None) -> int:
