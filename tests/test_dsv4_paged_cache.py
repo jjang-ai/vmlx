@@ -112,6 +112,42 @@ def test_dsv4_block_disk_serialization_round_trips_nested_state():
     assert indexer_state[2].shape == (1, 2, 512)
 
 
+def test_dsv4_numpy_disk_slice_keeps_composite_layers_when_only_two_kv_sources():
+    import numpy as np
+
+    from vmlx_engine.prefix_cache import _numpy_block_slice
+
+    keys = mx.ones((1, 1, 7, 8), dtype=mx.float16)
+    values = mx.ones((1, 1, 7, 8), dtype=mx.float16) * 2
+    kv_state = {
+        "state": (keys, values),
+        "class_name": "KVCache",
+        "meta_state": (7,),
+    }
+    dsv4_state = _state_dict(_make_dsv4_state_cache())
+    cache_data = [kv_state, kv_state] + [dsv4_state for _ in range(41)]
+    np_sources = {
+        0: (np.array(keys), np.array(values), keys.dtype),
+        1: (np.array(keys), np.array(values), keys.dtype),
+    }
+
+    non_terminal = _numpy_block_slice(
+        cache_data, np_sources, 0, 4, is_last_block=False
+    )
+    terminal = _numpy_block_slice(
+        cache_data, np_sources, 4, 7, is_last_block=True
+    )
+
+    assert non_terminal is not None
+    assert terminal is not None
+    assert len(non_terminal) == 43
+    assert len(terminal) == 43
+    assert sum(1 for entry in non_terminal if entry[0] == "kv") == 2
+    assert sum(1 for entry in non_terminal if entry[0] == "deepseek_v4_pending") == 41
+    assert sum(1 for entry in terminal if entry[0] == "kv") == 2
+    assert sum(1 for entry in terminal if entry[0] == "deepseek_v4") == 41
+
+
 def test_dsv4_pending_marker_round_trips_for_l2_chain_blocks():
     from vmlx_engine.block_disk_store import _deserialize_block, _serialize_block
 

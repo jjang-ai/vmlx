@@ -1885,11 +1885,31 @@ class BlockAwarePrefixCache:
                             local_start, local_end, is_last,
                         )
                         if np_block:
-                            # Count non-skip entries
-                            _kv_count = sum(1 for e in np_block if e[0] == "kv")
+                            # Count non-skip entries. DSV4 intentionally logs
+                            # only two plain KV layers plus native composite
+                            # markers/state for the remaining layers; showing
+                            # those tags keeps support logs from looking like
+                            # the CSA/HSA cache was dropped.
+                            _tag_counts = {}
+                            for _entry in np_block:
+                                if not isinstance(_entry, (tuple, list)) or not _entry:
+                                    continue
+                                _tag = _entry[0]
+                                if _tag == "skip":
+                                    continue
+                                _tag_counts[_tag] = _tag_counts.get(_tag, 0) + 1
+                            _kv_count = _tag_counts.get("kv", 0)
+                            _extra_tags = ", ".join(
+                                f"{_tag}={_count}"
+                                for _tag, _count in sorted(_tag_counts.items())
+                                if _tag != "kv"
+                            )
+                            _layer_summary = f"{_kv_count} kv layers"
+                            if _extra_tags:
+                                _layer_summary += f", {_extra_tags}"
                             logger.info(
                                 f"Block disk: queuing write for block {block.block_id} "
-                                f"({_kv_count} kv layers, {len(block_tokens)} tokens)"
+                                f"({_layer_summary}, {len(block_tokens)} tokens)"
                             )
                             pending_disk_writes.append(
                                 (block_chain_hash, np_block, len(block_tokens))
