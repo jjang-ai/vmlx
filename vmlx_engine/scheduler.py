@@ -1675,14 +1675,29 @@ class Scheduler:
 
             fresh_cache = self.model.make_cache()
 
-            # Process in chunks to avoid Metal GPU timeout on long prompts
-            chunk_size = 2048
+            # Process in chunks to avoid Metal GPU timeout on generic/hybrid
+            # prompts. DSV4 is the exception: its CSA/HSA compressor/indexer
+            # pools are path-sensitive, and earlier live probes showed chunked
+            # prefill can corrupt the composite state. Re-derive DSV4 prompt
+            # cache in one shot, matching DSV4BatchGenerator's production
+            # prefill rail.
+            chunk_size = len(prompt_tokens) if self._uses_dsv4_cache else 2048
             for start in range(0, len(prompt_tokens), chunk_size):
                 chunk = prompt_tokens[start : start + chunk_size]
                 input_ids = mx.array([chunk])
                 _ = self.model(input_ids, cache=fresh_cache)
                 # Materialize after each chunk to prevent massive lazy graph
                 eval_args = []
+                def _collect_tree_arrays(obj):
+                    if obj is None:
+                        return
+                    if isinstance(obj, (tuple, list)):
+                        for item in obj:
+                            _collect_tree_arrays(item)
+                        return
+                    if hasattr(obj, "shape"):
+                        eval_args.append(obj)
+
                 def _collect_cache_arrays(cache_obj):
                     if cache_obj is None:
                         return
@@ -1691,6 +1706,11 @@ class Scheduler:
                     ):
                         for sub_cache in cache_obj.caches:
                             _collect_cache_arrays(sub_cache)
+                        return
+                    if Scheduler._is_dsv4_cache_object(cache_obj) and hasattr(
+                        cache_obj, "state"
+                    ):
+                        _collect_tree_arrays(cache_obj.state)
                         return
                     if hasattr(cache_obj, "keys") and cache_obj.keys is not None:
                         # QuantizedKVCache: keys/values are tuples of arrays
@@ -4185,6 +4205,53 @@ class Scheduler:
                                             f"truncation needed."
                                         )
                                         cache_for_extract = snapshot_cache
+                                    elif self._uses_dsv4_cache:
+                                        # DSV4 cache-hit kickoff responses can
+                                        # arrive without a generator-captured
+                                        # prompt snapshot. The live cache has
+                                        # then processed the remaining prompt
+                                        # tail plus generated tokens, so
+                                        # trimming it would rewind SWA without
+                                        # proving CSA/HSA pool correctness.
+                                        # Re-derive the exact N-1 cache-key
+                                        # state instead.
+                                        dsv4_prompt_tokens = list(
+                                            request.prompt_token_ids
+                                        )
+                                        _gpl_d = (
+                                            getattr(request, "_gen_prompt_len", 0)
+                                            or 0
+                                        )
+                                        if 0 < _gpl_d < len(dsv4_prompt_tokens):
+                                            dsv4_prompt_tokens = dsv4_prompt_tokens[
+                                                :-_gpl_d
+                                            ]
+                                        dsv4_key_tokens = (
+                                            dsv4_prompt_tokens[:-1]
+                                            if len(dsv4_prompt_tokens) > 1
+                                            else []
+                                        )
+                                        if dsv4_key_tokens:
+                                            logger.info(
+                                                "DSV4 prefix cache store using "
+                                                "clean prompt-boundary re-prefill "
+                                                "(%d cache-key tokens from %d "
+                                                "prompt tokens).",
+                                                len(dsv4_key_tokens),
+                                                len(dsv4_prompt_tokens),
+                                            )
+                                            cache_for_extract = (
+                                                self._prefill_for_prompt_only_cache(
+                                                    dsv4_key_tokens
+                                                )
+                                            )
+                                            if cache_for_extract is not None:
+                                                request._extracted_cache_key_tokens = (
+                                                    list(dsv4_key_tokens)
+                                                )
+                                                request._extracted_cache_from_prompt_snapshot = True
+                                        else:
+                                            cache_for_extract = None
                                     elif self._uses_zaya_cache:
                                         # ZAYA CCA cache is path-dependent:
                                         # CacheList(KVCache, ArraysCache)

@@ -205,6 +205,40 @@ def test_dsv4_paged_reconstruct_returns_deepseek_cache_not_ssm_partial():
     assert rebuilt[0].state[1][2].shape == (1, 2, 512)
 
 
+def test_dsv4_frugal_store_keeps_terminal_composite_block_in_ram(monkeypatch):
+    """Immediate same-process DSV4 hits must not depend on async L2 visibility.
+
+    DSV4 non-terminal blocks are only pending markers. The terminal block is
+    the one that carries the full SWA+CSA/HSA composite state. If frugal mode
+    skips that terminal in-RAM mirror, an immediate repeat can find the block
+    table but reconstruct None until the async block-disk write becomes visible.
+    """
+    from vmlx_engine.paged_cache import PagedCacheManager
+    from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+    class _DummyDisk:
+        def write_block_async(self, *_args, **_kwargs):
+            return None
+
+    monkeypatch.delenv("VMLINUX_PAGED_FRUGAL", raising=False)
+    paged = PagedCacheManager(block_size=4, max_blocks=8, disk_store=_DummyDisk())
+    pc = BlockAwarePrefixCache(model=None, paged_cache_manager=paged)
+
+    c = _make_dsv4_state_cache()
+    table = pc.store_cache(
+        "dsv4-frugal-terminal",
+        [11, 12, 13, 14, 15, 16, 17],
+        [_state_dict(c)],
+    )
+
+    assert table is not None
+    for block_id in table.block_ids:
+        assert paged.allocated_blocks[block_id].cache_data is not None
+    terminal_block = paged.allocated_blocks[table.block_ids[-1]]
+    assert terminal_block.cache_data[0][0] == "deepseek_v4"
+    assert pc.reconstruct_cache(table) is not None
+
+
 def test_dsv4_store_does_not_reuse_legacy_content_hash_for_repeated_blocks():
     from vmlx_engine.paged_cache import PagedCacheManager
     from vmlx_engine.prefix_cache import BlockAwarePrefixCache
@@ -564,6 +598,56 @@ def test_dsv4_length_capped_clean_snapshot_is_cacheable():
         'and not getattr(request, "_extracted_cache_from_prompt_snapshot", False)'
         in src
     )
+
+
+def test_dsv4_cache_hit_store_rederives_prompt_boundary_when_snapshot_missing():
+    """DSV4 cache-hit kickoff responses may not carry a generator snapshot.
+
+    On a paged-prefix hit, DSV4BatchGenerator starts from a restored cache and
+    processes only the remaining tail. That path can finish with
+    prompt_cache_snapshot=None, but the live DeepseekV4Cache is then
+    post-decode-contaminated and must not be trimmed. Scheduler must re-prefill
+    the N-1 cache-key tokens, mirroring the ZAYA CCA path.
+    """
+    import inspect
+    from vmlx_engine import scheduler
+
+    src = inspect.getsource(scheduler.Scheduler._process_batch_responses)
+
+    assert "DSV4 prefix cache store using" in src
+    assert "clean prompt-boundary re-prefill" in src
+    assert "dsv4_key_tokens" in src
+    assert "_prefill_for_prompt_only_cache" in src
+    helper_src = inspect.getsource(scheduler.Scheduler._prefill_for_prompt_only_cache)
+    assert "chunk_size = len(prompt_tokens) if self._uses_dsv4_cache else 2048" in helper_src
+
+
+def test_dsv4_prompt_only_prefill_collects_composite_state_without_values_attr():
+    """DeepseekV4Cache has `.keys` but no top-level `.values` property.
+
+    The prompt-only re-derive path must collect the nested composite state tree
+    instead of treating DSV4 cache objects as plain KVCache instances. Otherwise
+    cache-hit turns decode correctly but cannot donate the extended prefix.
+    """
+    from types import SimpleNamespace
+
+    from vmlx_engine.scheduler import Scheduler
+
+    class _Model:
+        def make_cache(self):
+            return [_make_dsv4_state_cache()]
+
+        def __call__(self, input_ids, cache=None):
+            return SimpleNamespace(logits=input_ids)
+
+    scheduler = Scheduler.__new__(Scheduler)
+    scheduler.model = _Model()
+    scheduler._uses_dsv4_cache = True
+
+    cache = scheduler._prefill_for_prompt_only_cache([1, 2, 3])
+
+    assert cache is not None
+    assert type(cache[0]).__name__ == "DeepseekV4Cache"
 
 
 def test_dsv4_unsafe_override_in_cache_scope_key():
