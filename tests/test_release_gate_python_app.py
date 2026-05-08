@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -90,3 +91,54 @@ def test_electron_builder_runs_bundled_python_gate_before_packaging():
     assert "electron-vite" in hook_src
     assert "VMLX_BEFORE_PACK_SKIP_VITE" in hook_src
     assert "require.main === module" in hook_src
+
+
+def test_electron_builder_before_pack_hook_runs_verifier_in_direct_smoke(tmp_path):
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    verifier = scripts / "verify-bundled-python.sh"
+    verifier.write_text("#!/usr/bin/env bash\nset -euo pipefail\necho ok > \"$PWD/verify-ran\"\n")
+    verifier.chmod(0o755)
+
+    env = dict(os.environ)
+    env["VMLX_BEFORE_PACK_SKIP_VITE"] = "1"
+    proc = subprocess.run(
+        ["node", str(Path("panel/scripts/electron-builder-before-pack.cjs").resolve())],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "verify-ran").read_text() == "ok\n"
+    assert "skipped electron-vite build" in proc.stdout
+
+
+def test_electron_builder_before_pack_hook_rejects_skip_vite_in_pack_context(tmp_path):
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    verifier = scripts / "verify-bundled-python.sh"
+    verifier.write_text("#!/usr/bin/env bash\nset -euo pipefail\necho ok > \"$PWD/verify-ran\"\n")
+    verifier.chmod(0o755)
+
+    hook_path = Path("panel/scripts/electron-builder-before-pack.cjs").resolve()
+    js = (
+        "process.env.VMLX_BEFORE_PACK_SKIP_VITE = '1';"
+        f"const hook = require({json.dumps(str(hook_path))});"
+        f"hook({{packager: {{projectDir: {json.dumps(str(tmp_path))}}}}})"
+        ".then(() => process.exit(0))"
+        ".catch((err) => { console.error(err.message); process.exit(3); });"
+    )
+    proc = subprocess.run(
+        ["node", "-e", js],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 3
+    assert (tmp_path / "verify-ran").read_text() == "ok\n"
+    assert "only allowed for direct hook smoke tests" in proc.stderr

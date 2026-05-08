@@ -17,7 +17,8 @@ function run(cmd, args, cwd) {
 }
 
 async function beforePack(context) {
-  const panelDir = context && context.packager && context.packager.projectDir
+  const isElectronBuilderPack = !!(context && context.packager && context.packager.projectDir)
+  const panelDir = isElectronBuilderPack
     ? context.packager.projectDir
     : process.cwd()
 
@@ -29,6 +30,9 @@ async function beforePack(context) {
   run('bash', [verifyScript], panelDir)
 
   if (process.env.VMLX_BEFORE_PACK_SKIP_VITE === '1') {
+    if (isElectronBuilderPack) {
+      throw new Error('VMLX_BEFORE_PACK_SKIP_VITE is only allowed for direct hook smoke tests, not electron-builder packaging')
+    }
     console.log('VMLX_BEFORE_PACK_SKIP_VITE=1: skipped electron-vite build')
     return
   }
