@@ -1928,6 +1928,8 @@ async def check_metal_working_set_pressure(request: Request):
             f"({pct:.0f}% of {max_ws / (1024**3):.1f}GB cap) — "
             f"rejecting to prevent command-buffer OOM. This model may "
             f"be too large for this Mac's unified memory budget. "
+            f"This percentage is Metal memory occupancy, not a model-card "
+            f"accuracy or MMLU score. "
             f"Retry after the GPU catches up, reduce concurrent load, "
             f"or try a smaller model / smaller quant. Tune via "
             f"VMLX_METAL_WS_REJECT_PCT (default 85), "

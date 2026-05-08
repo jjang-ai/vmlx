@@ -249,6 +249,40 @@ def packaged_python(app: Path) -> Path:
     return app / "Contents" / "Resources" / "bundled-python" / "python" / "bin" / "python3"
 
 
+def _last_nonempty_stdout_line(output: str) -> str:
+    for line in reversed((output or "").splitlines()):
+        line = line.strip()
+        if line:
+            return line
+    return ""
+
+
+def check_packaged_bundled_import_version(
+    gate: Gate,
+    py: Path,
+    expected_version: str,
+    app_version: str,
+) -> None:
+    proc = gate.run(
+        "packaged bundled imports",
+        [
+            str(py),
+            "-B",
+            "-s",
+            "-c",
+            "import vmlx_engine, mflux, mlx_lm, mlx_vlm, jang_tools; print(vmlx_engine.__version__)",
+        ],
+        timeout=180,
+    )
+    bundled_version = _last_nonempty_stdout_line(proc.stdout)
+    status = "PASS" if bundled_version == expected_version else "FAIL"
+    gate.record(
+        "packaged bundled version",
+        status,
+        f"app={app_version}, bundled={bundled_version or '<none>'}, expected={expected_version}",
+    )
+
+
 def check_static(gate: Gate, app: Path, skip_app: bool) -> None:
     version = version_from_pyproject()
     panel_pkg = json.loads((PANEL / "package.json").read_text())
@@ -276,21 +310,12 @@ def check_static(gate: Gate, app: Path, skip_app: bool) -> None:
     gate.record("packaged app exists", "PASS", str(app))
     info = app / "Contents" / "Info.plist"
     plist = plistlib.loads(info.read_bytes())
-    gate.record("packaged app version", "PASS" if plist.get("CFBundleShortVersionString") == version else "FAIL", str(plist.get("CFBundleShortVersionString")))
+    app_version = str(plist.get("CFBundleShortVersionString"))
+    gate.record("packaged app version", "PASS" if app_version == version else "FAIL", app_version)
+    py = packaged_python(app)
+    check_packaged_bundled_import_version(gate, py, version, app_version)
     gate.run("codesign strict verify", ["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(app)], timeout=180, allow_fail=False)
     gate.run("spctl assessment", ["spctl", "--assess", "--type", "execute", "--verbose=4", str(app)], timeout=120, allow_fail=True)
-    py = packaged_python(app)
-    gate.run(
-        "packaged bundled imports",
-        [
-            str(py),
-            "-B",
-            "-s",
-            "-c",
-            "import vmlx_engine, mflux, mlx_lm, mlx_vlm, jang_tools; print(vmlx_engine.__version__)",
-        ],
-        timeout=180,
-    )
 
 
 def launch_app_smoke(gate: Gate, app: Path) -> None:

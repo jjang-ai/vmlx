@@ -290,3 +290,60 @@ class TestNemotronLatentMoePatch:
         from vmlx_engine.utils.nemotron_latent_moe import needs_latent_moe_patch
 
         assert needs_latent_moe_patch("/nonexistent/path") is False
+
+    def test_nemotron_load_sanitizes_stale_moegate_quantization(self):
+        """Fine-grained converted configs must not send MoEGate to nn.quantize."""
+        from vmlx_engine.utils.tokenizer import (
+            _sanitize_nemotron_quantization_config_for_load,
+        )
+
+        config = {
+            "model_type": "nemotron_h",
+            "quantization": {
+                "group_size": 64,
+                "bits": 4,
+                "backbone.layers.0.mixer.gate": {"group_size": 64, "bits": 4},
+                "backbone.layers.0.mixer.gate.weight": {
+                    "group_size": 64,
+                    "bits": 4,
+                },
+                "backbone.layers.0.mixer.switch_mlp.fc1": {
+                    "group_size": 64,
+                    "bits": 4,
+                },
+            },
+            "quantization_config": {
+                "backbone.layers.0.mixer.gate": {"group_size": 64, "bits": 4},
+                "backbone.layers.0.mixer.switch_mlp.fc1": {
+                    "group_size": 64,
+                    "bits": 4,
+                },
+            },
+        }
+
+        sanitized, removed = _sanitize_nemotron_quantization_config_for_load(config)
+
+        assert sanitized is not None
+        assert removed == [
+            "backbone.layers.0.mixer.gate",
+            "backbone.layers.0.mixer.gate.weight",
+        ]
+        assert "backbone.layers.0.mixer.gate" not in sanitized["quantization"]
+        assert "backbone.layers.0.mixer.gate.weight" not in sanitized["quantization"]
+        assert "backbone.layers.0.mixer.switch_mlp.fc1" in sanitized["quantization"]
+        assert "backbone.layers.0.mixer.gate" not in sanitized["quantization_config"]
+
+    def test_nemotron_load_keeps_coarse_quantization_unchanged(self):
+        from vmlx_engine.utils.tokenizer import (
+            _sanitize_nemotron_quantization_config_for_load,
+        )
+
+        config = {
+            "model_type": "nemotron_h",
+            "quantization": {"group_size": 64, "bits": 4},
+        }
+
+        sanitized, removed = _sanitize_nemotron_quantization_config_for_load(config)
+
+        assert sanitized is None
+        assert removed == []

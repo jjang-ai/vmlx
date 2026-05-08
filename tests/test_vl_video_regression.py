@@ -4217,6 +4217,7 @@ class TestMlxstudio78MetalWorkingSetGuard:
         assert excinfo.value.status_code == 503
         assert "Retry-After" in (excinfo.value.headers or {})
         assert "working set" in str(excinfo.value.detail).lower()
+        assert "not a model-card accuracy or MMLU score" in str(excinfo.value.detail)
 
     def test_pressure_below_threshold_passes(self):
         """50% active + 85% threshold → no raise."""
@@ -4329,6 +4330,7 @@ class TestMlxstudio78MetalWorkingSetGuard:
                 asyncio.run(check_metal_working_set_pressure(MagicMock()))
             assert e.value.status_code == 503
             assert e.value.headers.get("Retry-After") == "5"
+            assert "not a model-card accuracy or MMLU score" in str(e.value.detail)
 
     def test_guard_allows_low_pressure(self):
         import asyncio

@@ -1,4 +1,5 @@
 import importlib.util
+import subprocess
 from pathlib import Path
 
 
@@ -30,3 +31,49 @@ def test_release_gate_loop_detector_catches_emoji_loop():
 def test_release_gate_loop_detector_allows_short_clean_answer():
     gate = _load_gate_module()
     assert not gate.obvious_loop("Paris is the capital of France.")
+
+
+class _FakeGate:
+    def __init__(self, stdout: str):
+        self.stdout = stdout
+        self.records = []
+        self.run_cmd = None
+
+    def run(self, name, cmd, **kwargs):
+        self.run_cmd = cmd
+        self.records.append((name, "RUN", kwargs))
+        return subprocess.CompletedProcess(cmd, 0, self.stdout, "")
+
+    def record(self, name, status, detail=""):
+        self.records.append((name, status, detail))
+
+
+def test_packaged_bundled_version_parity_passes_when_import_version_matches():
+    gate_module = _load_gate_module()
+    gate = _FakeGate("import ok\n1.5.25\n")
+
+    gate_module.check_packaged_bundled_import_version(
+        gate, Path("/app/python3"), "1.5.25", "1.5.25"
+    )
+
+    assert gate.records[-1] == (
+        "packaged bundled version",
+        "PASS",
+        "app=1.5.25, bundled=1.5.25, expected=1.5.25",
+    )
+    assert "mflux" in " ".join(gate.run_cmd)
+
+
+def test_packaged_bundled_version_parity_fails_on_stale_bundled_engine():
+    gate_module = _load_gate_module()
+    gate = _FakeGate("1.5.23\n")
+
+    gate_module.check_packaged_bundled_import_version(
+        gate, Path("/app/python3"), "1.5.25", "1.5.25"
+    )
+
+    assert gate.records[-1] == (
+        "packaged bundled version",
+        "FAIL",
+        "app=1.5.25, bundled=1.5.23, expected=1.5.25",
+    )

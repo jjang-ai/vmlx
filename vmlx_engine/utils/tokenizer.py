@@ -17,6 +17,59 @@ from .chat_templates import DEFAULT_CHATML_TEMPLATE, NEMOTRON_CHAT_TEMPLATE
 logger = logging.getLogger(__name__)
 
 
+_NEMOTRON_QUANT_ROOT_KEYS = frozenset({"group_size", "bits", "mode"})
+
+
+def _sanitize_nemotron_quantization_config_for_load(config: dict) -> tuple[dict | None, list[str]]:
+    """Return a load-model config override with non-quantizable Nemotron gates removed.
+
+    ``mlx_lm.utils.load_model`` handles coarse ``{"group_size": ..., "bits": ...}``
+    Nemotron-H quantization correctly, but fine-grained configs from older
+    converted bundles can include entries for ``*.gate``. ``MoEGate`` is an
+    ``nn.Module`` with a floating routing matrix, not a quantizable Linear, so
+    those entries make upstream call ``nn.quantize`` on a module that has no
+    ``to_quantized`` method and startup fails before weights are loaded.
+    """
+    if str(config.get("model_type", "")).lower() != "nemotron_h":
+        return None, []
+
+    quantization = config.get("quantization")
+    if not isinstance(quantization, dict):
+        return None, []
+
+    removed: list[str] = []
+    sanitized_quantization: dict = {}
+    changed = False
+
+    for key, value in quantization.items():
+        if key in _NEMOTRON_QUANT_ROOT_KEYS:
+            sanitized_quantization[key] = value
+            continue
+        parts = key.split(".")
+        # load_model's class_predicate receives module paths, not tensor paths.
+        # Catch both module entries ("...mixer.gate") and stale tensor-style
+        # entries ("...mixer.gate.weight").
+        is_gate_module = parts[-1] == "gate"
+        is_gate_tensor = len(parts) >= 2 and parts[-2] == "gate"
+        if is_gate_module or is_gate_tensor:
+            removed.append(key)
+            changed = True
+            continue
+        sanitized_quantization[key] = value
+
+    if not changed:
+        return None, []
+
+    override = dict(config)
+    override["quantization"] = sanitized_quantization
+    if isinstance(config.get("quantization_config"), dict):
+        qcfg = dict(config["quantization_config"])
+        for key in removed:
+            qcfg.pop(key, None)
+        override["quantization_config"] = qcfg
+    return override, removed
+
+
 def _apply_turboquant_to_model(model, model_path: str):
     """Apply TurboQuant KV cache compression to any MLX model.
 
@@ -1032,17 +1085,33 @@ def _load_with_tokenizer_fallback(model_name: str, lazy: bool = False):
     # were supposed to be dropped at convert-time but the MXFP4 converter
     # left them in place).
     _load_strict = True
+    _model_config_override = None
     try:
         cfg_path = Path(model_path) / "config.json"
         if cfg_path.is_file():
             _cfg = json.loads(cfg_path.read_text())
             if _cfg.get("model_type") == "nemotron_h":
                 _load_strict = False
+                _model_config_override, _removed_gate_quant = (
+                    _sanitize_nemotron_quantization_config_for_load(_cfg)
+                )
+                if _removed_gate_quant:
+                    logger.info(
+                        "Nemotron-H load: removed %d stale MoEGate quantization "
+                        "entr%s before mlx_lm.load_model",
+                        len(_removed_gate_quant),
+                        "y" if len(_removed_gate_quant) == 1 else "ies",
+                    )
     except Exception:
         pass
 
     # Load model
-    model, _ = load_model(model_path, lazy=lazy, strict=_load_strict)
+    model, _ = load_model(
+        model_path,
+        lazy=lazy,
+        strict=_load_strict,
+        model_config=_model_config_override,
+    )
 
     # Try to load tokenizer from tokenizer.json directly
     tokenizer_json = model_path / "tokenizer.json"
