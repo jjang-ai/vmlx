@@ -136,46 +136,83 @@ def test_dsv4_token_split_reads_batched_output_token_ids():
     ]
 
 
-def test_dsv4_thinking_policy_defaults_to_direct_rail(monkeypatch):
-    """DSV4 thinking rail is opt-in until long-context close-token gates pass."""
+def test_dsv4_thinking_policy_defaults_to_direct_rail_when_not_requested(monkeypatch):
+    """DSV4 stays on direct rail only when the request did not ask to think."""
     from vmlx_engine import server
 
-    monkeypatch.delenv("VMLX_DSV4_ALLOW_THINKING", raising=False)
+    monkeypatch.delenv("VMLX_DSV4_FORCE_DIRECT_RAIL", raising=False)
 
     decision = server._resolve_dsv4_thinking_policy(
-        requested_enable_thinking=True,
+        requested_enable_thinking=None,
+        effort_requested=False,
         tools_present=False,
         tool_choice=None,
     )
 
     assert decision.enable_thinking is False
     assert decision.reasoning_effort_allowed is False
-    assert decision.reason == "dsv4_thinking_rail_unstable"
+    assert decision.reason == "thinking_not_requested"
 
 
-def test_dsv4_thinking_policy_can_be_explicitly_opted_in(monkeypatch):
+def test_dsv4_thinking_policy_honors_requested_thinking(monkeypatch):
     from vmlx_engine import server
 
-    monkeypatch.setenv("VMLX_DSV4_ALLOW_THINKING", "1")
+    monkeypatch.delenv("VMLX_DSV4_FORCE_DIRECT_RAIL", raising=False)
 
     decision = server._resolve_dsv4_thinking_policy(
         requested_enable_thinking=True,
+        effort_requested=False,
         tools_present=False,
         tool_choice=None,
     )
 
     assert decision.enable_thinking is True
     assert decision.reasoning_effort_allowed is True
-    assert decision.reason == "env_opt_in"
+    assert decision.reason == "requested_thinking"
+
+
+def test_dsv4_thinking_policy_debug_force_direct(monkeypatch):
+    from vmlx_engine import server
+
+    monkeypatch.setenv("VMLX_DSV4_FORCE_DIRECT_RAIL", "1")
+
+    decision = server._resolve_dsv4_thinking_policy(
+        requested_enable_thinking=True,
+        effort_requested=True,
+        tools_present=False,
+        tool_choice=None,
+    )
+
+    assert decision.enable_thinking is False
+    assert decision.reasoning_effort_allowed is False
+    assert decision.reason == "env_force_direct"
+
+
+def test_dsv4_thinking_policy_reasoning_effort_implies_thinking(monkeypatch):
+    from vmlx_engine import server
+
+    monkeypatch.delenv("VMLX_DSV4_FORCE_DIRECT_RAIL", raising=False)
+
+    decision = server._resolve_dsv4_thinking_policy(
+        requested_enable_thinking=None,
+        effort_requested=True,
+        tools_present=False,
+        tool_choice=None,
+    )
+
+    assert decision.enable_thinking is True
+    assert decision.reasoning_effort_allowed is True
+    assert decision.reason == "requested_thinking"
 
 
 def test_dsv4_thinking_policy_keeps_tool_calls_on_direct_rail(monkeypatch):
     from vmlx_engine import server
 
-    monkeypatch.setenv("VMLX_DSV4_ALLOW_THINKING", "1")
+    monkeypatch.delenv("VMLX_DSV4_FORCE_DIRECT_RAIL", raising=False)
 
     decision = server._resolve_dsv4_thinking_policy(
         requested_enable_thinking=True,
+        effort_requested=True,
         tools_present=True,
         tool_choice="auto",
     )

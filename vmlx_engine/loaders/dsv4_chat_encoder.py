@@ -205,8 +205,8 @@ def _resolve_mode_and_effort(
         only distinguishes high vs max below/above).
       - reasoning_effort == "max" → "thinking" mode on the stable high
         effort rail. Live engine probes showed the raw DSV4 max rail can
-        length-cap without closing </think>, so server capabilities do not
-        advertise max for this family.
+        length-cap without closing </think>; server capabilities still accept
+        max for API parity, but the runtime normalizes it here.
 
     Returns (thinking_mode, reasoning_effort). ``reasoning_effort`` is
     always one of ``{None, "high"}`` for production use — safe for direct
