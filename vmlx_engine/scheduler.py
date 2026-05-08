@@ -4339,7 +4339,6 @@ class Scheduler:
                                         # objects are unchanged (extract already ran).
                                         if (
                                             self.disk_cache is not None
-                                            and not self._is_hybrid
                                         ):
                                             try:
                                                 from .mllm_batch_generator import (
