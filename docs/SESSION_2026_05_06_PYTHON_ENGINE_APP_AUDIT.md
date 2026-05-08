@@ -893,3 +893,26 @@ Current production interpretation:
   proven chat/instruct path for prompts where thinking mode stays unclosed.
 - The audit harness now fails DSV4 rows when `content` is just a duplicate of
   `reasoning_content`, so future green rows cannot hide this failure mode.
+
+Late 2026-05-07 update:
+
+- The prior direct-rail default was removed. DSV4 now honors requested
+  `enable_thinking` / `reasoning_effort`; `VMLX_DSV4_FORCE_DIRECT_RAIL=1`
+  remains only an explicit diagnostic escape hatch.
+- Missing `</think>` is handled in `DSV4BatchGenerator` by emitting the close
+  token from the live SWA+CSA/HSA composite cache and continuing generation.
+  Do not re-prefill `prompt + generated reasoning` as a finalizer; that path
+  caused large Metal allocations on long prompts.
+- DSV4 role stops are pinned in the generator (`[1, 128803, 128804]`) and the
+  loader now hard-fails if any routed TurboQuant SwitchGLU module is missing
+  DSV4 limited-SwiGLU `swiglu_limit=10`.
+- Corrected `/Users/eric/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-V3-F32-MIXED`
+  passes F32-control, native-cache, short reasoning, and L2 restore gates, but
+  still fails manual full-tail review on long VC/code prompts, including
+  `temperature=0` direct probes. The remaining blocker is numeric/runtime or
+  routed-bit quality, not API parsing, sampling, cache serialization, or the
+  finalizer.
+- The cross-family runner now rejects the stale DSV4 capability shape
+  (`experimental_modes=["raw-thinking"]`) and requires the current native cache
+  contract: `supports_thinking=true`, public `max` accepted, and
+  `cache.native.schema=deepseek_v4_v7` with generic TurboQuant KV disabled.

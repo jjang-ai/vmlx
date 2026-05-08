@@ -520,10 +520,11 @@ def register_all(registry=None):
     # jang_tools.dsv4.mlx_model (~1128 LOC) and is registered into mlx_lm
     # via jang_tools.dsv4.mlx_register at load time. Not VLM.
     #
-    # Three reasoning modes per research/DSV4-RUNTIME-ARCHITECTURE.md §4:
+    # Public reasoning modes per research/DSV4-RUNTIME-ARCHITECTURE.md §4:
     #   - chat          (instruct, thinking suppressed via trailing </think>)
     #   - thinking      (reasoning_effort=high)
-    #   - thinking max  (reasoning_effort=max, extra system hint)
+    #   - thinking max  (accepted for API/UI parity, normalized to high in the
+    #                    vMLX DSV4 encoder path until raw-max long-output gates pass)
     # Multi-turn: jang_config.chat.reasoning.drop_earlier_reasoning=true →
     # strip prior <think>...</think> blocks from history when building next
     # prompt. Our deepseek_r1 reasoning parser handles the <think> tags;

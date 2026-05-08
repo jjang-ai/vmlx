@@ -114,14 +114,16 @@ ROWS: list[ModelRow] = [
     ),
     ModelRow(
         id="dsv4_tq",
-        label="DeepSeek-V4-Flash JANGTQ",
-        path="/Volumes/EricsLLMDrive/jangq-ai/DeepSeek-V4-Flash-JANGTQ",
+        label="DeepSeek-V4-Flash JANGTQ V3-F32-MIXED",
+        path="/Users/eric/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-V3-F32-MIXED",
         family="deepseek_v4",
         expect_reasoning=True,
         expect_tool_parser="dsml",
         cache_profile="dsv4_composite",
         slow=True,
         notes=[
+            "Current corrected local DSV4 artifact: F32 critical controls, "
+            "V3 mixed routed bits, prestacked JANGTQ sidecar.",
             "DSV4 SWA+CSA/HSA heterogenous cache; paged/block L2 must use "
             "deepseek_v4_v7 composite-state serialization, not generic KV blocks"
         ],
@@ -747,6 +749,32 @@ def extract_ollama_visible_text_and_stop(resp: Any) -> tuple[str, str]:
 def is_non_length_stop(stop: str) -> bool:
     stop = (stop or "").strip().lower()
     return stop not in {"length", "max_tokens"}
+
+
+def capability_endpoint_contract_ok(row: ModelRow, caps: Any) -> bool:
+    """Validate the live capability surface against the row contract."""
+    if not isinstance(caps, dict):
+        return False
+    supported_modes = caps.get("supported_modes", [])
+    expected_modes = ["instruct"]
+    if row.expect_reasoning:
+        expected_modes.append("reasoning")
+    if not all(mode in supported_modes for mode in expected_modes):
+        return False
+
+    if row.family != "deepseek_v4":
+        return True
+
+    native = caps.get("cache", {}).get("native")
+    return (
+        caps.get("supports_thinking") is True
+        and "max" in (caps.get("reasoning_efforts") or [])
+        and isinstance(native, dict)
+        and native.get("family") == "deepseek_v4"
+        and native.get("schema") == "deepseek_v4_v7"
+        and native.get("cache_type") == "native_composite"
+        and native.get("generic_turboquant_kv", {}).get("enabled") is False
+    )
 
 
 def cache_exact_hit_required(row: ModelRow) -> bool:
@@ -1390,29 +1418,12 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         f"/v1/models/{cap_model}/capabilities",
         timeout=20,
     )
-    supported_modes = (
-        caps.get("supported_modes", []) if code == 200 and isinstance(caps, dict) else []
-    )
-    experimental_modes = (
-        caps.get("experimental_modes", []) if code == 200 and isinstance(caps, dict) else []
-    )
-    expected_modes = ["instruct"]
-    if row.expect_reasoning:
-        expected_modes.append("reasoning")
+    native_caps = caps.get("cache", {}).get("native") if isinstance(caps, dict) else {}
     check(
         "model_capabilities_endpoint",
-        code == 200
-        and all(mode in supported_modes for mode in expected_modes)
-        and (
-            row.family != "deepseek_v4"
-            or (
-                "max" in experimental_modes
-                and caps.get("cache", {}).get("dsv4_composite_state") is True
-            )
-        ),
+        code == 200 and capability_endpoint_contract_ok(row, caps),
         {"code": code, "caps": caps},
     )
-    native_caps = caps.get("cache", {}).get("native") if isinstance(caps, dict) else {}
     if row.cache_profile == "zaya_cca":
         check(
             "zaya_native_cache_capabilities",
