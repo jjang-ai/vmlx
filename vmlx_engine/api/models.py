@@ -14,6 +14,14 @@ import uuid
 
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
+
+_NO_REASONING_EFFORTS = {"none", "off", "false", "disabled", "disable", "0"}
+
+
+def _is_no_reasoning_effort(value: str | None) -> bool:
+    return isinstance(value, str) and value.strip().lower() in _NO_REASONING_EFFORTS
+
+
 # =============================================================================
 # Content Types (for multimodal messages)
 # =============================================================================
@@ -230,18 +238,28 @@ class ChatCompletionRequest(BaseModel):
     @model_validator(mode="after")
     def _normalize_reasoning_alias(self):
         # If caller sent `reasoning: {"effort": "..."}` and didn't set
-        # `reasoning_effort`, lift the effort up so downstream code (which
-        # reads request.reasoning_effort) sees it. Also accept Anthropic-
-        # style `reasoning: {"type": "enabled", "budget_tokens": N}` —
-        # treat any non-None reasoning object as enable_thinking=True
-        # when no explicit reasoning_effort is provided.
+        # `reasoning_effort`, lift real effort names up so downstream code
+        # sees them. Treat explicit no-reasoning aliases (`none`, `off`, ...)
+        # as direct-rail requests; otherwise an OpenAI Responses payload like
+        # `reasoning: {"effort": "none"}` is misread as "reasoning object
+        # exists, enable thinking".
+        #
+        # Anthropic-style `reasoning: {"type": "enabled", "budget_tokens": N}`
+        # still opts into thinking when no explicit effort is present.
         if self.reasoning is not None and self.reasoning_effort is None:
             eff = self.reasoning.get("effort")
-            if isinstance(eff, str) and eff:
+            if _is_no_reasoning_effort(eff):
+                if self.enable_thinking is None:
+                    self.enable_thinking = False
+            elif isinstance(eff, str) and eff:
                 self.reasoning_effort = eff
             elif self.enable_thinking is None:
                 # No effort but reasoning object present → opt-in to thinking
                 self.enable_thinking = True
+        if _is_no_reasoning_effort(self.reasoning_effort):
+            self.reasoning_effort = None
+            if self.enable_thinking is None:
+                self.enable_thinking = False
         if self.thinking_mode is not None:
             mode = self.thinking_mode.strip().lower().replace("-", "_").replace(" ", "_")
             if mode in ("instruct", "instruction", "chat", "off", "none", "false"):
@@ -742,10 +760,17 @@ class ResponsesRequest(BaseModel):
     def _normalize_reasoning_alias(self):
         if self.reasoning is not None and self.reasoning_effort is None:
             eff = self.reasoning.get("effort")
-            if isinstance(eff, str) and eff:
+            if _is_no_reasoning_effort(eff):
+                if self.enable_thinking is None:
+                    self.enable_thinking = False
+            elif isinstance(eff, str) and eff:
                 self.reasoning_effort = eff
             elif self.enable_thinking is None:
                 self.enable_thinking = True
+        if _is_no_reasoning_effort(self.reasoning_effort):
+            self.reasoning_effort = None
+            if self.enable_thinking is None:
+                self.enable_thinking = False
         if self.thinking_mode is not None:
             mode = self.thinking_mode.strip().lower().replace("-", "_").replace(" ", "_")
             if mode in ("instruct", "instruction", "chat", "off", "none", "false"):

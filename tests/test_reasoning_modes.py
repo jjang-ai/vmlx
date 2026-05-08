@@ -49,6 +49,22 @@ def test_responses_reasoning_alias_and_thinking_mode():
     assert nested.reasoning_effort == "high"
 
 
+def test_reasoning_effort_none_disables_thinking_for_chat_and_responses():
+    from vmlx_engine.api.models import ChatCompletionRequest, ResponsesRequest
+
+    chat = ChatCompletionRequest(
+        model="m",
+        messages=[{"role": "user", "content": "hi"}],
+        reasoning_effort="none",
+    )
+    assert chat.enable_thinking is False
+    assert chat.reasoning_effort is None
+
+    responses = ResponsesRequest(model="m", input="hi", reasoning={"effort": "none"})
+    assert responses.enable_thinking is False
+    assert responses.reasoning_effort is None
+
+
 def test_dsv4_max_effort_normalizes_to_stable_rail():
     """DSV4's raw max rail is not production-safe.
 
@@ -220,6 +236,31 @@ def test_dsv4_thinking_policy_keeps_tool_calls_on_direct_rail(monkeypatch):
     assert decision.enable_thinking is False
     assert decision.reasoning_effort_allowed is False
     assert decision.reason == "tool_call_direct_rail"
+
+
+def test_dsv4_thinking_policy_explicit_false_stays_direct(monkeypatch):
+    """Caller passing enable_thinking=False explicitly must NOT be force-flipped.
+
+    The earlier (now-removed) behaviour force-set thinking unless the caller
+    sent ``is True``; the current policy honours an explicit False the same as
+    a missing value. Without this regression pin, a return to the old
+    ``is not True`` semantics would silently re-enable thinking on instruct
+    requests.
+    """
+    from vmlx_engine import server
+
+    monkeypatch.delenv("VMLX_DSV4_FORCE_DIRECT_RAIL", raising=False)
+
+    decision = server._resolve_dsv4_thinking_policy(
+        requested_enable_thinking=False,
+        effort_requested=False,
+        tools_present=False,
+        tool_choice=None,
+    )
+
+    assert decision.enable_thinking is False
+    assert decision.reasoning_effort_allowed is False
+    assert decision.reason == "thinking_not_requested"
 
 
 def test_dsv4_bundle_defaults_override_stale_ui_defaults(tmp_path, monkeypatch):

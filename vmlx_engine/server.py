@@ -8100,13 +8100,11 @@ async def create_response(
             _ct_kwargs["reasoning_effort"] = "none"
 
 
-    # DSV4 force-thinking + reasoning_effort handling — REAL /v1/responses
-    # path. This is the actual route panel uses;
-    # the DSV4 block earlier in this same function (~7430) only sets the
-    # default system prompt. Without this block, panel sends through
-    # /v1/responses → DSV4 chat-mode contamination + bare-thinking with no
-    # effort hint. Symptom: "testing" framing replays into long-context
-    # turns, model collapses to fragment loops.
+    # DSV4 rail-policy + reasoning_effort handling — REAL /v1/responses path.
+    # This is the actual route the panel uses; the earlier DSV4 block in this
+    # function only sets the default system prompt. Without this block,
+    # /v1/responses would skip the same direct/reasoning policy used by chat
+    # completions and could drift back into stale bare-thinking behavior.
     if _is_dsv4_resp_msgs:
         _dsv4_thinking_resp = _resolve_dsv4_thinking_policy(
             requested_enable_thinking=request.enable_thinking,
