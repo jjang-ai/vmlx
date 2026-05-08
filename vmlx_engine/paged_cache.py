@@ -1191,6 +1191,42 @@ class PagedCacheManager:
 
             return released
 
+    def release_last_K_blocks_from_seq(self, request_id: str, K_blocks: int) -> int:
+        """Release the trailing K blocks for a request.
+
+        Used by batched speculative decoding to free blocks allocated for
+        rejected draft tokens when they crossed a block boundary.
+
+        Returns: number of blocks actually released.
+        """
+        table = self.request_tables.get(request_id)
+        if table is None or K_blocks <= 0:
+            return 0
+
+        with self._lock:
+            to_release_ids = table.block_ids[-K_blocks:]
+            released = 0
+            for block_id in to_release_ids:
+                block = self.allocated_blocks.get(block_id)
+                if block is None or block.is_null:
+                    continue
+                if block.ref_count <= 0:
+                    logger.warning(
+                        "release_last_K_blocks_from_seq: block %d has ref_count=%d; skipping",
+                        block_id, block.ref_count,
+                    )
+                    continue
+                block.ref_count -= 1
+                if block.ref_count == 0:
+                    if block.prev_free_block is None and block.next_free_block is None:
+                        self.free_block_queue.append(block)
+                        self.stats.allocated_blocks = max(0, self.stats.allocated_blocks - 1)
+                        self.stats.free_blocks += 1
+                    released += 1
+            # Trim the block table tail
+            table.block_ids = table.block_ids[:-K_blocks]
+            return released
+
     def add_block_to_table(
         self,
         table: BlockTable,

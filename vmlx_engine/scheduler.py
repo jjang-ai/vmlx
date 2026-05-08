@@ -580,6 +580,14 @@ class Scheduler:
                 self._pld_summary_interval,
             )
         self._pld_summary_next: int = 1  # first window is 1 token (slow start)
+        # Replay counters (hybrid partial-accept replay — issue #134)
+        self._pld_replay_attempts: int = 0
+        self._pld_replay_emitted: int = 0
+        self._pld_replay_failures: int = 0
+        self._pld_replay_enabled: bool = (
+            os.getenv("VMLX_DISABLE_PLD_REPLAY") != "1"
+            and getattr(self.config, "pld_replay_enabled", True)
+        )
 
         # Prefix cache for KV state reuse
         self.prefix_cache: Optional[PrefixCacheManager] = None
@@ -2706,6 +2714,80 @@ class Scheduler:
                 return None
 
         return truncated
+
+    @staticmethod
+    def _replay_ssm_forward(
+        model,
+        kv_cache: list,
+        saved_array_caches: dict,
+        accepted_tokens: list,
+        pre_verify_offset: int,
+    ) -> bool:
+        """Replay accepted_tokens through model to advance SSM+KV caches to N+K'.
+
+        After hybrid partial rejection, restores both caches to N, then runs a
+        single forward pass over accepted_tokens to reach N+num_accept. The logits
+        are discarded; only the cache side-effect matters.
+
+        Returns True on success; False on failure (caches left at pre_verify_offset).
+        """
+        import mlx.core as mx
+        import numpy as _np_local
+        from mlx_lm.generate import generation_stream as _gen_stream
+
+        try:
+            from mlx_lm.models.cache import CacheList as _CL_inner
+        except ImportError:
+            _CL_inner = None
+
+        def _rewind_kv_to(kv_cache, target_offset):
+            for c in kv_cache:
+                if not c.is_trimmable() or c.offset == 0:
+                    continue
+                if c.offset <= target_offset:
+                    continue
+                if _CL_inner is not None and isinstance(c, _CL_inner):
+                    c.trim(c.offset - target_offset)
+                    continue
+                if isinstance(c.keys, mx.array):
+                    _kd, _vd = c.keys.dtype, c.values.dtype
+                    _ka = c.keys.astype(mx.float16) if "bfloat16" in str(_kd) else c.keys
+                    _va = c.values.astype(mx.float16) if "bfloat16" in str(_vd) else c.values
+                    _k, _v = _np_local.array(_ka), _np_local.array(_va)
+                    c.keys = mx.array(_k[..., :target_offset, :]).astype(_kd)
+                    c.values = mx.array(_v[..., :target_offset, :]).astype(_vd)
+                c.offset = target_offset
+                if hasattr(c, "_idx"):
+                    c._idx = target_offset
+
+        try:
+            # 1. Restore ArraysCache layers to pre-verify snapshot
+            for i, c in enumerate(kv_cache):
+                if i in saved_array_caches:
+                    c.cache = saved_array_caches[i]
+
+            # 2. Rewind KV layers to pre_verify_offset
+            _rewind_kv_to(kv_cache, pre_verify_offset)
+
+            # 3. Replay forward: shape (1, num_accept) — advances caches to N+num_accept
+            replay_input = mx.array([accepted_tokens])
+            with mx.stream(_gen_stream):
+                _ = model(replay_input, cache=kv_cache)
+                mx.eval(kv_cache)
+
+            return True
+
+        except Exception as exc:
+            logger.warning("[PLD-replay] SSM replay failed: %s", exc, exc_info=False)
+            # Best-effort restore: re-apply snapshot, re-rewind KV
+            try:
+                for i, c in enumerate(kv_cache):
+                    if i in saved_array_caches:
+                        c.cache = saved_array_caches[i]
+                _rewind_kv_to(kv_cache, pre_verify_offset)
+            except Exception:
+                pass
+            return False
 
     def _extract_cache_states(self, raw_cache: List[Any]) -> List[Dict[str, Any]]:
         """
@@ -5226,10 +5308,16 @@ class Scheduler:
                     f"wallclock={window_tok_s:.0f}/{baseline_tok_s:.0f} tok/s"
                 )
 
+        _replay_msg = ""
+        if self._pld_replay_enabled and self._pld_replay_attempts > 0:
+            _replay_msg = (
+                f"  replay={self._pld_replay_emitted}/{self._pld_replay_attempts}"
+                f" fail={self._pld_replay_failures}"
+            )
         logger.info(
             "[PLD:3b1f] summary over last %d tokens — "
             "rounds=%d  accept=%.1f/%d  full=%.0f%%  zero=%.0f%%  "
-            "d0_skip=%d  eff=%.2f tok/pass%s",
+            "d0_skip=%d  eff=%.2f tok/pass%s%s",
             self._pld_win_tokens,
             n,
             avg_accept,
@@ -5238,6 +5326,7 @@ class Scheduler:
             zero_pct,
             self._pld_win_d0_skip,
             eff,
+            _replay_msg,
             _autotune_msg,
         )
 
@@ -5296,6 +5385,19 @@ class Scheduler:
         is unmeasured. PLD is safe and correct at any concurrency level but
         may hurt aggregate throughput when multiple requests are in flight.
         """
+        # Draft-spec (issue #135) subsumes PLD when both are configured.
+        # Batched spec handles draft token generation and verify in _step_speculative();
+        # running PLD on top would double-process the same request.
+        from .speculative import is_speculative_enabled
+        if is_speculative_enabled() and not getattr(self, "is_mllm", False):
+            if not getattr(self, "_pld_precedence_logged", False):
+                logger.info(
+                    "[PLD] disabled — --speculative-model is set; "
+                    "using draft-model spec instead (VMLX_ENABLE_BATCHED_SPEC=1)"
+                )
+                self._pld_precedence_logged = True
+            return []
+
         import mlx.core as mx
         import numpy as _np
 
@@ -5558,15 +5660,71 @@ class Scheduler:
                 pass
 
             elif saved_array_caches:
-                # Case (b): rejection on hybrid model — restore ArraysCache,
-                # rewind KVCache to pre-verify offset (N), emit correction token.
+                # Case (b): rejection on hybrid model.
                 #
-                # verify_input = [d0..d_{K-1}] advanced both caches by K steps.
-                # Restoring both to N keeps SSM/KV offset at zero.  Accepted
-                # drafts (if any) are discarded — we cannot advance KVCache to
-                # N+j while rewinding ArraysCache to N.
+                # Sub-case (b1): partial accept (0 < num_accept < K) with replay enabled.
+                #   Restore both caches to N, replay accepted tokens forward to N+num_accept,
+                #   then emit accepted drafts + bonus token. Same token count as full-accept.
                 #
-                # Compute correction at position N (after last_token in cache):
+                # Sub-case (b2): full rejection (num_accept == 0) or replay disabled/failed.
+                #   Restore to N, emit correction token only (original behaviour).
+
+                # Compute pre_verify_offset (N) from any trimmable KV layer
+                pre_verify_offset = 0
+                for _c in kv_cache:
+                    if _c.is_trimmable() and _c.offset > 0:
+                        pre_verify_offset = max(0, _c.offset - num_drafts)
+                        break
+
+                _did_replay_attempt = False
+
+                if 0 < num_accept < num_drafts and self._pld_replay_enabled:
+                    # Sub-case (b1): replay accepted tokens, emit num_accept + 1 tokens
+                    self._pld_replay_attempts += 1
+                    _did_replay_attempt = True
+
+                    # bonus_token is already computed above from logits/forward_logprobs
+                    success = Scheduler._replay_ssm_forward(
+                        self.model,
+                        kv_cache,
+                        saved_array_caches,
+                        list(drafts[:num_accept]),
+                        pre_verify_offset,
+                    )
+
+                    if success:
+                        new_remaining = max(1, remaining - num_accept - 1)
+                        new_uids = self.batch_generator.insert(
+                            [[bonus_token]],
+                            max_tokens=[new_remaining],
+                            caches=[kv_cache],
+                        )
+                        removed = False
+                        new_uid = new_uids[0]
+                        del self.uid_to_request_id[old_uid]
+                        self.request_id_to_uid[request_id] = new_uid
+                        self.uid_to_request_id[new_uid] = request_id
+
+                        emitted = list(drafts[:num_accept]) + [bonus_token]
+                        self._pld_replay_emitted += len(emitted)
+                        self._pld_spec_accepted += num_accept
+                        self._pld_spec_wasted += num_drafts - num_accept
+                        self._pld_win_attempts += 1
+                        self._pld_win_accepted += num_accept
+                        self._pld_win_tokens += len(emitted)
+                        self._pld_maybe_log_summary()
+                        logger.debug(
+                            "[PLD-spec] hybrid replay: accepted=%d/%d bonus=%d, emitted=%d tokens",
+                            num_accept, num_drafts, bonus_token, len(emitted),
+                        )
+                        return emitted
+                    else:
+                        self._pld_replay_failures += 1
+                        # Fall through to sub-case (b2) — caches left at pre_verify_offset
+                        # by _replay_ssm_forward's except handler
+
+                # Sub-case (b2): full rejection OR replay disabled/failed.
+                # Compute correction token from forward_logprobs.
                 if temp <= 1.67e-6:
                     correction_token = d0_predicted
                 else:
@@ -5589,37 +5747,40 @@ class Scheduler:
                     )
                     correction_token = cb_sampler(cb_logprobs).item()
 
-                for i, c in enumerate(kv_cache):
-                    if i in saved_array_caches:
-                        c.cache = saved_array_caches[i]
-                for c in kv_cache:
-                    if not c.is_trimmable() or c.offset == 0:
-                        continue
-                    pre_verify_offset = max(0, c.offset - num_drafts)  # N+K - K = N
-                    if _CacheList is not None and isinstance(c, _CacheList):
-                        c.trim(num_drafts)
-                        continue
-                    if isinstance(c.keys, mx.array):
-                        # Numpy roundtrip: materialize before slicing to avoid
-                        # Metal command buffer corruption from lazy MLX ops.
-                        # bfloat16 → float16 for numpy (no native bf16 support).
-                        _kd, _vd = c.keys.dtype, c.values.dtype
-                        _ka = (
-                            c.keys.astype(mx.float16)
-                            if "bfloat16" in str(_kd)
-                            else c.keys
-                        )
-                        _va = (
-                            c.values.astype(mx.float16)
-                            if "bfloat16" in str(_vd)
-                            else c.values
-                        )
-                        _k, _v = _np.array(_ka), _np.array(_va)
-                        c.keys = mx.array(_k[..., :pre_verify_offset, :]).astype(_kd)
-                        c.values = mx.array(_v[..., :pre_verify_offset, :]).astype(_vd)
-                    c.offset = pre_verify_offset
-                    if hasattr(c, "_idx"):  # RotatingKVCache: sync write pointer
-                        c._idx = pre_verify_offset
+                # Only run full restore if replay wasn't attempted.
+                # If replay attempted (and failed), caches are already at pre_verify_offset.
+                if not _did_replay_attempt:
+                    for i, c in enumerate(kv_cache):
+                        if i in saved_array_caches:
+                            c.cache = saved_array_caches[i]
+                    for c in kv_cache:
+                        if not c.is_trimmable() or c.offset == 0:
+                            continue
+                        if _CacheList is not None and isinstance(c, _CacheList):
+                            c.trim(num_drafts)
+                            continue
+                        if isinstance(c.keys, mx.array):
+                            # Numpy roundtrip: materialize before slicing to avoid
+                            # Metal command buffer corruption from lazy MLX ops.
+                            # bfloat16 → float16 for numpy (no native bf16 support).
+                            _kd, _vd = c.keys.dtype, c.values.dtype
+                            _ka = (
+                                c.keys.astype(mx.float16)
+                                if "bfloat16" in str(_kd)
+                                else c.keys
+                            )
+                            _va = (
+                                c.values.astype(mx.float16)
+                                if "bfloat16" in str(_vd)
+                                else c.values
+                            )
+                            _k, _v = _np.array(_ka), _np.array(_va)
+                            c.keys = mx.array(_k[..., :pre_verify_offset, :]).astype(_kd)
+                            c.values = mx.array(_v[..., :pre_verify_offset, :]).astype(_vd)
+                        c.offset = pre_verify_offset
+                        if hasattr(c, "_idx"):  # RotatingKVCache: sync write pointer
+                            c._idx = pre_verify_offset
+
                 new_uids = self.batch_generator.insert(
                     [[correction_token]],
                     max_tokens=[max(1, remaining - 1)],

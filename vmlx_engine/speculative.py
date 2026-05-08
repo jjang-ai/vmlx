@@ -19,6 +19,7 @@ Usage:
 """
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -172,6 +173,8 @@ def should_use_speculative(is_batched: bool = False, is_mllm: bool = False) -> b
     - LLM models (not MLLM/VLM)
     - Non-Mamba/SSM models
 
+    For batched (continuous batching) mode, use should_use_speculative_batched() instead.
+
     Args:
         is_batched: Whether using continuous batching (BatchedEngine)
         is_mllm: Whether the model is multimodal
@@ -182,12 +185,31 @@ def should_use_speculative(is_batched: bool = False, is_mllm: bool = False) -> b
     if not is_speculative_enabled():
         return False
     if is_batched:
-        logger.debug("Speculative decoding disabled: incompatible with continuous batching")
+        # Batched spec is handled separately via should_use_speculative_batched()
         return False
     if is_mllm:
         logger.debug("Speculative decoding disabled: incompatible with multimodal models")
         return False
     return True
+
+
+def should_use_speculative_batched(is_mllm: bool = False) -> bool:
+    """Check if batched speculative decoding should be used under continuous batching.
+
+    Requires VMLX_ENABLE_BATCHED_SPEC=1 (default OFF in v1.5.x).
+    Will flip to default ON in v1.6.0 after soak period.
+
+    Args:
+        is_mllm: Whether the model is multimodal (excluded from batched spec)
+
+    Returns:
+        True if batched speculative decoding should be active
+    """
+    if not is_speculative_enabled():
+        return False
+    if is_mllm:
+        return False
+    return os.getenv("VMLX_ENABLE_BATCHED_SPEC", "0") == "1"
 
 
 def get_num_draft_tokens() -> int:

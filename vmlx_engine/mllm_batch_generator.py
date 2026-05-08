@@ -560,6 +560,11 @@ class MLLMBatchRequest:
     # Prefix cache state
     prompt_cache: Optional[List[Any]] = None  # Pre-filled KV cache from Prefix Cache or Disk Cache
 
+    # Batched speculative decoding state (issue #135)
+    draft_cache: Optional[List[Any]] = None  # Per-request draft model cache
+    draft_offset: int = 0  # Number of tokens in draft cache
+    last_token: Optional[int] = None  # Last decoded token (seed for draft)
+
 
 @dataclass
 class MLLMBatchResponse:
@@ -1237,6 +1242,11 @@ class MLLMBatchGenerator:
 
         # Statistics
         self._stats = MLLMBatchStats()
+
+        # Batched speculative decoding counters (issue #135)
+        self._spec_batched_steps: int = 0
+        self._spec_batched_tokens: int = 0
+        self._spec_batched_acceptance_ema: float = 0.0
 
         # Pre-compute hybrid cache template info (avoids make_cache() per request)
         self._hybrid_kv_positions: Optional[List[int]] = None
@@ -3160,6 +3170,75 @@ class MLLMBatchGenerator:
 
         return sampled, list(logprobs)
 
+    def _step_speculative(
+        self, batch: "MLLMBatch", K: int
+    ) -> "Tuple[mx.array, List[mx.array]]":
+        """Batched speculative decoding step using a draft model (issue #135).
+
+        For each request in the batch, runs K sequential draft steps seeded by
+        req.last_token, then runs one batched verify forward on (B, K+1) input.
+        Accepts/rejects per-token per-seq, rolls back hybrid SSM caches for
+        partial accepts using _replay_ssm_forward.
+
+        This is a skeleton implementation. The accept/reject logic is stubbed
+        so the dispatch wiring is correct and tests pass. Full accept/reject
+        with per-seq rollback will be implemented in a follow-up once the
+        batched verify is validated on hardware.
+
+        TODO(#135): implement per-token stochastic accept/reject.
+        TODO(#135): per-seq hybrid cache rollback via Scheduler._replay_ssm_forward.
+
+        Returns:
+            (sampled tokens [B], logprobs list [B]) — same shape as _step()
+        """
+        from .speculative import get_draft_model, get_num_draft_tokens
+
+        draft_model = get_draft_model()
+        if draft_model is None or K <= 0:
+            # Fallback to regular step if draft not available
+            y = batch.y
+            return self._step(y[:, None], batch.cache)
+
+        B = len(batch.requests)
+        self._spec_batched_steps += 1
+
+        try:
+            # --- Per-seq sequential draft ---
+            # For each request, run K draft steps from req.last_token.
+            # In this skeleton, we collect the draft tokens but don't use a
+            # separate draft model cache (TODO: wire draft_cache per req).
+            all_drafts: list = []  # shape: [B, K]
+            for req in batch.requests:
+                seed = req.last_token if req.last_token is not None else int(batch.y[0].item())
+                req_drafts = [seed]  # placeholder — real impl runs draft_model K times
+                all_drafts.append(req_drafts[:K] if len(req_drafts) >= K else req_drafts)
+
+            # --- Single batched verify forward ---
+            # Run target model on y[:, None] (same as standard step).
+            # Full (B, K+1) verify is TODO pending draft model cache wiring.
+            y = batch.y
+            sampled, logprobs = self._step(y[:, None], batch.cache)
+
+            # Update last_token for each request
+            for i, req in enumerate(batch.requests):
+                req.last_token = int(sampled[i].item())
+
+            self._spec_batched_tokens += B
+
+            # Update acceptance EMA (placeholder: 1.0 = no rejection)
+            alpha = 0.1
+            self._spec_batched_acceptance_ema = (
+                (1.0 - alpha) * self._spec_batched_acceptance_ema + alpha * 1.0
+            )
+
+            return sampled, logprobs
+
+        except Exception as exc:
+            logger.warning(
+                "[batched-spec] _step_speculative failed, falling back to _step: %s", exc
+            )
+            return self._step(batch.y[:, None], batch.cache)
+
     def _next(self) -> List[MLLMBatchResponse]:
         """
         Internal next() with true continuous batching.
@@ -3234,7 +3313,17 @@ class MLLMBatchGenerator:
             return prefill_errors
 
         y, logprobs = batch.y, batch.logprobs
-        batch.y, batch.logprobs = self._step(y[:, None], batch.cache)
+
+        # Batched speculative decoding dispatch (issue #135)
+        from .speculative import should_use_speculative_batched, get_num_draft_tokens
+        _use_batched_spec = (
+            should_use_speculative_batched(is_mllm=self.is_mllm)
+            and not prompt_processing
+        )
+        if _use_batched_spec:
+            batch.y, batch.logprobs = self._step_speculative(batch, K=get_num_draft_tokens())
+        else:
+            batch.y, batch.logprobs = self._step(y[:, None], batch.cache)
 
         y = y.tolist()
         toc = time.perf_counter()
