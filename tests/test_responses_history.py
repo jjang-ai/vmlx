@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 from types import SimpleNamespace
 
 import pytest
@@ -158,6 +159,57 @@ def test_normalize_leading_system_messages_moves_mid_conversation_system():
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "hi"},
     ]
+
+
+def test_responses_history_json_instruction_stays_in_leading_system():
+    from vmlx_engine.server import (
+        _inject_json_instruction,
+        _normalize_leading_system_messages,
+        _responses_input_to_messages,
+    )
+
+    previous_messages = [
+        {"role": "system", "content": "base instructions"},
+        {"role": "user", "content": "first turn"},
+        {"role": "assistant", "content": "first answer"},
+    ]
+    current_messages = _responses_input_to_messages(
+        "second turn",
+        instructions="new response instructions",
+        preserve_multimodal=False,
+    )
+    messages = _inject_json_instruction(
+        previous_messages + current_messages,
+        "Return valid JSON only.",
+    )
+    normalized = _normalize_leading_system_messages(messages)
+
+    assert [m["role"] for m in normalized] == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert normalized[0]["content"] == (
+        "base instructions\n\nReturn valid JSON only.\n\n"
+        "new response instructions"
+    )
+
+
+def test_responses_and_chat_call_sites_normalize_before_template_rendering():
+    from vmlx_engine import server
+
+    responses_src = inspect.getsource(server.create_response)
+    chat_src = inspect.getsource(server.create_chat_completion)
+
+    assert "messages = _normalize_leading_system_messages(messages)" in responses_src
+    assert "messages = _normalize_leading_system_messages(messages)" in chat_src
+    assert responses_src.index(
+        "messages = _normalize_leading_system_messages(messages)"
+    ) > responses_src.index("_inject_json_instruction(messages, json_instruction)")
+    assert chat_src.index(
+        "messages = _normalize_leading_system_messages(messages)"
+    ) > chat_src.index("_inject_json_instruction(messages, json_instruction)")
 
 
 @pytest.mark.asyncio

@@ -143,6 +143,9 @@ class TestJitToggle:
             def layers(self):
                 return self.model.layers
 
+            def make_cache(self):
+                return list(self.layers)
+
             def __call__(self, *args, **kwargs):
                 return self.model(*args, **kwargs)
 
@@ -173,7 +176,54 @@ class TestJitToggle:
         assert installed.layers == ["l0", "l1"]
         assert installed.config == {"family": "fake-vlm"}
         assert vlm_wrapper.language_model.layers == ["l0", "l1"]
+        assert vlm_wrapper.language_model.make_cache() == ["l0", "l1"]
         mock_compile.assert_called_once_with(original_inner)
+
+    def test_jit_vlm_warmup_failure_rolls_back_proxy(self):
+        """VLM warmup failures must restore the original transformer."""
+        from vmlx_engine import server
+
+        class InnerTransformer:
+            layers = ["l0"]
+
+            def __call__(self, *args, **kwargs):
+                return args[0]
+
+        class LanguageModel:
+            def __init__(self):
+                self.model = InnerTransformer()
+
+            @property
+            def layers(self):
+                return self.model.layers
+
+            def __call__(self, *args, **kwargs):
+                return self.model(*args, **kwargs)
+
+        class VlmWrapper:
+            def __init__(self):
+                self.language_model = LanguageModel()
+
+            def make_cache(self):
+                return None
+
+        class BrokenCompiled:
+            def __call__(self, *args, **kwargs):
+                raise RuntimeError("compile warmup failed")
+
+        vlm_wrapper = VlmWrapper()
+        original_inner = vlm_wrapper.language_model.model
+
+        mock_engine = MagicMock()
+        mock_engine._model = vlm_wrapper
+        mock_engine.is_mllm = True
+        mock_engine._is_mllm = True
+
+        with patch.object(server, "_engine", mock_engine), \
+             patch.object(mx, "compile", return_value=BrokenCompiled()):
+            server._apply_jit_compilation()
+
+        assert vlm_wrapper.language_model.model is original_inner
 
     def test_jit_skips_when_model_not_callable(self):
         """When inner model is not callable, should log warning and skip."""
