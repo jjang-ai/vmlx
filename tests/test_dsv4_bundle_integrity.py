@@ -48,6 +48,25 @@ def test_dsv4_control_tensor_validator_does_not_slug_reject_corrected_name(tmp_p
     _validate_dsv4_control_tensors(bundle)
 
 
+def test_dsv4_control_tensor_validator_suppresses_legacy_hint_for_v3_name(tmp_path):
+    from vmlx_engine.loaders.load_jangtq_dsv4 import (
+        _validate_dsv4_control_tensors,
+    )
+
+    bundle = _write_bundle(
+        tmp_path / "DeepSeek-V4-Flash-JANGTQ-V3-F32-MIXED",
+        dtype=np.float16,
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        _validate_dsv4_control_tensors(bundle)
+
+    msg = str(exc.value)
+    assert "critical control tensors are not F32" in msg
+    assert "hc_head_fn=F16" in msg
+    assert "retracted" not in msg
+
+
 def test_dsv4_control_tensor_validator_rejects_f16(tmp_path):
     from vmlx_engine.loaders.load_jangtq_dsv4 import (
         _validate_dsv4_control_tensors,
