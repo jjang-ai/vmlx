@@ -146,6 +146,36 @@ def test_dsv4_numpy_disk_slice_keeps_composite_layers_when_only_two_kv_sources()
     assert sum(1 for entry in non_terminal if entry[0] == "deepseek_v4_pending") == 41
     assert sum(1 for entry in terminal if entry[0] == "kv") == 2
     assert sum(1 for entry in terminal if entry[0] == "deepseek_v4") == 41
+    local_state, compressor_state, indexer_state = terminal[2][1]
+    assert len(local_state) == 2
+    assert len(compressor_state) == 3
+    assert len(indexer_state) == 3
+    assert compressor_state[2].shape == (1, 2, 512)
+    assert indexer_state[2].shape == (1, 2, 512)
+
+
+def test_dsv4_block_disk_log_summarizes_native_composite_tags(caplog):
+    from vmlx_engine.paged_cache import PagedCacheManager
+    from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+    class _DummyDisk:
+        def write_block_async(self, *_args, **_kwargs):
+            return None
+
+    caplog.set_level("INFO", logger="vmlx_engine.prefix_cache")
+    paged = PagedCacheManager(block_size=4, max_blocks=8, disk_store=_DummyDisk())
+    pc = BlockAwarePrefixCache(model=None, paged_cache_manager=paged)
+    c = _make_dsv4_state_cache()
+
+    pc.store_cache(
+        "dsv4-log-summary",
+        [11, 12, 13, 14, 15, 16, 17],
+        [_state_dict(c)],
+    )
+
+    messages = [rec.getMessage() for rec in caplog.records]
+    assert any("deepseek_v4_pending=1" in msg for msg in messages)
+    assert any("deepseek_v4=1" in msg for msg in messages)
 
 
 def test_dsv4_pending_marker_round_trips_for_l2_chain_blocks():

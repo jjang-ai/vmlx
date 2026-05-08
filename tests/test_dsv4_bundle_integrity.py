@@ -6,6 +6,7 @@ from safetensors.numpy import save_file
 
 
 def _write_bundle(tmp_path, *, model_type="deepseek_v4", dtype=np.float32):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "config.json").write_text(json.dumps({"model_type": model_type}))
     save_file(
         {
@@ -15,6 +16,36 @@ def _write_bundle(tmp_path, *, model_type="deepseek_v4", dtype=np.float32):
         str(tmp_path / "model.safetensors"),
     )
     return tmp_path
+
+
+def test_dsv4_control_tensor_validator_names_retracted_legacy_slug(tmp_path):
+    from vmlx_engine.loaders.load_jangtq_dsv4 import (
+        _validate_dsv4_control_tensors,
+    )
+
+    bundle = _write_bundle(tmp_path / "DeepSeek-V4-Flash-JANGTQ", dtype=np.float16)
+
+    with pytest.raises(RuntimeError) as exc:
+        _validate_dsv4_control_tensors(bundle)
+
+    msg = str(exc.value)
+    assert "retracted" in msg
+    assert "DeepSeek-V4-Flash-JANGTQ" in msg
+    assert "V3-F32" in msg
+    assert "hc_head_fn=F16" in msg
+
+
+def test_dsv4_control_tensor_validator_does_not_slug_reject_corrected_name(tmp_path):
+    from vmlx_engine.loaders.load_jangtq_dsv4 import (
+        _validate_dsv4_control_tensors,
+    )
+
+    bundle = _write_bundle(
+        tmp_path / "DeepSeek-V4-Flash-JANGTQ-V3-F32-MIXED",
+        dtype=np.float32,
+    )
+
+    _validate_dsv4_control_tensors(bundle)
 
 
 def test_dsv4_control_tensor_validator_rejects_f16(tmp_path):

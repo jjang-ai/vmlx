@@ -164,6 +164,29 @@ def _audit_dsv4_control_tensor_dtypes(model_path: str | Path) -> dict[str, Any]:
     return report
 
 
+def _legacy_dsv4_slug_hint(model_path: str | Path) -> str:
+    """Return a clearer hint when the proven-bad bundle is the retracted slug."""
+    bundle = Path(model_path)
+    haystack = " ".join(
+        [
+            str(bundle),
+            str(_read_json(bundle / "config.json").get("_name_or_path", "")),
+            str(_read_json(bundle / "jang_config.json").get("source_model", "")),
+        ]
+    )
+    if (
+        "DeepSeek-V4-Flash-JANGTQ" in haystack
+        and "V3-F32" not in haystack
+        and "V3_F32" not in haystack
+    ):
+        return (
+            " The legacy JANGQ-AI/DeepSeek-V4-Flash-JANGTQ bundle was "
+            "retracted after F16 critical-control tensors were found; "
+            "download a corrected V3-F32 / V3-F32-MIXED DSV4 bundle instead."
+        )
+    return ""
+
+
 def _validate_dsv4_control_tensors(model_path: str | Path) -> None:
     """Raise a clear load-time error for known-bad DSV4 bundles."""
     report = _audit_dsv4_control_tensor_dtypes(model_path)
@@ -186,7 +209,8 @@ def _validate_dsv4_control_tensors(model_path: str | Path) -> None:
             "are not F32. DSV4 mHC/Sinkhorn/router/sink tensors must retain "
             "source precision; F16 copies cause long-context drift, language "
             "salad, and repetition loops. Rebuild with the DSV4 safe converter "
-            f"or use a corrected bundle. Examples: {examples}"
+            f"or use a corrected bundle.{_legacy_dsv4_slug_hint(model_path)} "
+            f"Examples: {examples}"
         )
 
 
