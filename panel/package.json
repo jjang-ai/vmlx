@@ -80,6 +80,7 @@
     "appId": "net.vmlx.app",
     "productName": "vMLX",
     "copyright": "Copyright 2026 JANGQ AI. All rights reserved.",
+    "beforePack": "scripts/electron-builder-before-pack.cjs",
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "resources/icon.png",

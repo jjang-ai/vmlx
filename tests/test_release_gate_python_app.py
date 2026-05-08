@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import subprocess
 from pathlib import Path
 
@@ -77,3 +78,15 @@ def test_packaged_bundled_version_parity_fails_on_stale_bundled_engine():
         "FAIL",
         "app=1.5.25, bundled=1.5.23, expected=1.5.25",
     )
+
+
+def test_electron_builder_runs_bundled_python_gate_before_packaging():
+    pkg = json.loads(Path("panel/package.json").read_text())
+    hook = pkg["build"].get("beforePack")
+    assert hook == "scripts/electron-builder-before-pack.cjs"
+
+    hook_src = Path("panel/scripts/electron-builder-before-pack.cjs").read_text()
+    assert "verify-bundled-python.sh" in hook_src
+    assert "electron-vite" in hook_src
+    assert "VMLX_BEFORE_PACK_SKIP_VITE" in hook_src
+    assert "require.main === module" in hook_src
