@@ -2032,6 +2032,58 @@ class TestDSV4FastLoadSwitchGLUScope:
         assert "make_gather_tq_decode_per_row(out_f, in_f, dp_bits, k)" in source
         assert "cache_key = (in_f, out_f, bits, dp_bits, k, limit_milli)" in source
 
+    def test_dsv4_switchglu_contract_audit_requires_limited_swiglu(self):
+        import inspect
+        from vmlx_engine.loaders.load_jangtq_dsv4 import _audit_dsv4_switchglu_contract
+
+        source = inspect.getsource(_audit_dsv4_switchglu_contract)
+        assert "swiglu_limit" in source
+        assert "10.0" in source
+        assert "zero TurboQuant SwitchGLU" in source
+        assert "swiglu_limit=10 missing" in source
+
+    def test_dsv4_switchglu_contract_audit_rejects_missing_limit(self, monkeypatch):
+        import sys
+        import types
+        import pytest
+        from vmlx_engine.loaders.load_jangtq_dsv4 import _audit_dsv4_switchglu_contract
+
+        class TurboQuantSwitchLinear:
+            pass
+
+        class SwitchGLU:
+            pass
+
+        tq_mod = types.ModuleType("jang_tools.turboquant.tq_kernel")
+        tq_mod.TurboQuantSwitchLinear = TurboQuantSwitchLinear
+        switch_mod = types.ModuleType("mlx_lm.models.switch_layers")
+        switch_mod.SwitchGLU = SwitchGLU
+        monkeypatch.setitem(sys.modules, "jang_tools.turboquant.tq_kernel", tq_mod)
+        monkeypatch.setitem(sys.modules, "mlx_lm.models.switch_layers", switch_mod)
+
+        class _Activation:
+            def __init__(self, limit):
+                self.swiglu_limit = limit
+
+        class _Switch(SwitchGLU):
+            def __init__(self, limit):
+                self.gate_proj = TurboQuantSwitchLinear()
+                self.up_proj = TurboQuantSwitchLinear()
+                self.down_proj = TurboQuantSwitchLinear()
+                self.activation = _Activation(limit)
+
+        class _Model:
+            def __init__(self, module):
+                self.module = module
+
+            def named_modules(self):
+                return [("layers.0.mlp.switch_mlp", self.module)]
+
+        _audit_dsv4_switchglu_contract(_Model(_Switch(10.0)))
+
+        with pytest.raises(RuntimeError, match="swiglu_limit=10 missing"):
+            _audit_dsv4_switchglu_contract(_Model(_Switch(0.0)))
+
 
 class TestDSV4SidecarManifestRuntimePatch:
     """DSV4 sidecars must be invalidated when runtime patches change."""

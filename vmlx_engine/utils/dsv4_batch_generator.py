@@ -39,6 +39,8 @@ logger = logging.getLogger(__name__)
 THINK_OPEN_ID = 128821
 THINK_CLOSE_ID = 128822
 DSV4_EOS_ID = 1
+DSV4_USER_ID = 128803
+DSV4_ASSISTANT_ID = 128804
 
 
 @dataclass
@@ -55,6 +57,9 @@ class _Request:
     matcher_state: Any = None
     finish_reason: Optional[str] = None
     prompt_processed: bool = False
+    forced_think_close: bool = False
+    forced_think_close_at: Optional[int] = None
+    finalizer_max_tokens: Optional[int] = None
     # Clean prompt-boundary cache snapshot, captured immediately after
     # prefill completes and BEFORE decode advances the live cache. Used
     # by scheduler to populate prefix cache / L2 disk store with state
@@ -127,8 +132,15 @@ class DSV4BatchGenerator:
                 else:
                     # Multi-token stop sequence — store as tuple
                     self.stop_tokens.add(tuple(seq))
+        # DSV4 has learned role-boundary tokens. If a registry/config path
+        # forgets them, generation can continue into fake user/assistant turns.
+        self.stop_tokens.update({DSV4_USER_ID, DSV4_ASSISTANT_ID})
+        _log_stop_tokens = sorted(
+            self.stop_tokens,
+            key=lambda item: (isinstance(item, tuple), repr(item)),
+        )
         logger.info(
-            f"DSV4Gen: stop_tokens at construction = {sorted(self.stop_tokens)} "
+            f"DSV4Gen: stop_tokens at construction = {_log_stop_tokens} "
             f"(DSV4_EOS_ID={DSV4_EOS_ID} always-checked separately)"
         )
         # DSV4 prefill defaults to SINGLE-SHOT.
@@ -559,6 +571,78 @@ class DSV4BatchGenerator:
         """
         return list(req.context_tokens) + list(req.out_tokens)
 
+    @staticmethod
+    def _prompt_starts_in_think(req: _Request) -> bool:
+        """Return True when DSV4's prompt leaves generation inside <think>.
+
+        Direct/instruct rail ends the assistant prefix with </think>, while the
+        thinking rail ends with <think>. This check is token-based so it follows
+        the canonical DSV4 encoder instead of string-rendering assumptions.
+        """
+        try:
+            last_open = len(req.prompt_tokens) - 1 - req.prompt_tokens[::-1].index(THINK_OPEN_ID)
+        except ValueError:
+            last_open = -1
+        try:
+            last_close = len(req.prompt_tokens) - 1 - req.prompt_tokens[::-1].index(THINK_CLOSE_ID)
+        except ValueError:
+            last_close = -1
+        return last_open > last_close
+
+    def _finalizer_budget(self) -> int:
+        try:
+            return max(1, int(os.environ.get("VMLX_DSV4_FINALIZER_TOKENS", "512")))
+        except (TypeError, ValueError):
+            return 512
+
+    def _effective_max_tokens(self, req: _Request) -> int:
+        if req.finalizer_max_tokens is not None:
+            return req.finalizer_max_tokens
+        return req.max_tokens
+
+    def _maybe_force_think_close(
+        self,
+        req: _Request,
+        token_id: int,
+    ) -> tuple[int, Optional[str]]:
+        """Inject </think> before DSV4 stops inside implicit thinking.
+
+        Earlier engine-level finalization re-prefilled ``prompt + reasoning`` to
+        continue after a missing close tag. On long prompts that duplicates the
+        DSV4 composite prefill and can OOM. This generator-level path keeps the
+        live SWA+CSA/HSA cache, emits the structural close token as the next
+        output token, then lets the model continue normally for a bounded
+        visible-answer budget.
+        """
+        if req.forced_think_close or not self._prompt_starts_in_think(req):
+            return token_id, None
+        if THINK_CLOSE_ID in req.out_tokens:
+            return token_id, None
+        would_stop = token_id == DSV4_EOS_ID or token_id in self.stop_tokens
+        would_length = len(req.out_tokens) + 1 >= req.max_tokens
+        if not would_stop and not would_length:
+            return token_id, None
+
+        req.forced_think_close = True
+        req.forced_think_close_at = len(req.out_tokens)
+        req.finalizer_max_tokens = len(req.out_tokens) + 1 + self._finalizer_budget()
+        logger.info(
+            "DSV4Gen: forcing </think> at generated token %d before %s; "
+            "continuing from live composite cache for up to %d extra tokens.",
+            len(req.out_tokens),
+            "stop" if would_stop else "length",
+            req.finalizer_max_tokens - (len(req.out_tokens) + 1),
+        )
+        return THINK_CLOSE_ID, None
+
+    def _update_finish_reason_after_token(self, req: _Request, token_id: int) -> None:
+        if token_id == DSV4_EOS_ID or token_id in self.stop_tokens:
+            req.finish_reason = "stop"
+        elif len(req.out_tokens) >= self._effective_max_tokens(req):
+            req.finish_reason = "length"
+        else:
+            req.finish_reason = None
+
     def remove(self, uids, return_prompt_caches: bool = False):
         out = {}
         keep = []
@@ -665,13 +749,13 @@ class DSV4BatchGenerator:
                     )
                     self._sync()
                     tok_id = self._sampled_token_id(sampled)
+                    tok_id, forced_finish = self._maybe_force_think_close(r, tok_id)
                     r.out_tokens.append(tok_id)
                     r.prompt_processed = True
-                    # Check stop
-                    if tok_id == DSV4_EOS_ID or tok_id in self.stop_tokens:
-                        r.finish_reason = "stop"
-                    elif len(r.out_tokens) >= r.max_tokens:
-                        r.finish_reason = "length"
+                    if forced_finish is not None:
+                        r.finish_reason = forced_finish
+                    else:
+                        self._update_finish_reason_after_token(r, tok_id)
                     prompt_resps.append(_Response(
                         uid=r.uid, token=tok_id, logprobs=logprobs,
                         finish_reason=r.finish_reason,
@@ -699,12 +783,13 @@ class DSV4BatchGenerator:
                     )
                     self._sync()
                     tok_id = self._sampled_token_id(sampled)
+                    tok_id, forced_finish = self._maybe_force_think_close(r, tok_id)
                     r.out_tokens.append(tok_id)
                     r.prompt_processed = True
-                    if tok_id == DSV4_EOS_ID or tok_id in self.stop_tokens:
-                        r.finish_reason = "stop"
-                    elif len(r.out_tokens) >= r.max_tokens:
-                        r.finish_reason = "length"
+                    if forced_finish is not None:
+                        r.finish_reason = forced_finish
+                    else:
+                        self._update_finish_reason_after_token(r, tok_id)
                     prompt_resps.append(_Response(
                         uid=r.uid, token=tok_id, logprobs=logprobs,
                         finish_reason=r.finish_reason,
@@ -729,11 +814,12 @@ class DSV4BatchGenerator:
                     )
                     self._sync()
                     tok_id = self._sampled_token_id(sampled)
+                    tok_id, forced_finish = self._maybe_force_think_close(r, tok_id)
                     r.out_tokens.append(tok_id)
-                    if tok_id == DSV4_EOS_ID or tok_id in self.stop_tokens:
-                        r.finish_reason = "stop"
-                    elif len(r.out_tokens) >= r.max_tokens:
-                        r.finish_reason = "length"
+                    if forced_finish is not None:
+                        r.finish_reason = forced_finish
+                    else:
+                        self._update_finish_reason_after_token(r, tok_id)
                     gen_resps.append(_Response(
                         uid=r.uid, token=tok_id, logprobs=logprobs,
                         finish_reason=r.finish_reason,

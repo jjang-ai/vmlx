@@ -749,16 +749,17 @@ class _DSV4ThinkingDecision:
 def _resolve_dsv4_thinking_policy(
     *,
     requested_enable_thinking: bool | None,
+    effort_requested: bool = False,
     tools_present: bool,
     tool_choice: Any,
 ) -> _DSV4ThinkingDecision:
     """Resolve DSV4's public thinking toggle to the currently safe rail.
 
-    Live V3 F32-control DSV4 probes show the explicit thinking prompt can
-    generate answer-like text without ever emitting the ``</think>`` close
-    token on 200+ token prompts, which leaves Responses/streaming clients with
-    reasoning-only output and no visible answer. Keep the direct rail as the
-    production default until a long-context thinking-close gate passes.
+    DSV4 direct/chat rail is visible but can fail reasoning-dependent tasks.
+    The thinking rail is the correct rail when the caller asks for thinking or
+    sends a reasoning_effort. Long DSV4 thinking output can still stop before
+    ``</think>``; DSV4BatchGenerator owns the live-cache continuation finalizer
+    for that case.
     """
     if tools_present and tool_choice != "none":
         return _DSV4ThinkingDecision(
@@ -766,32 +767,37 @@ def _resolve_dsv4_thinking_policy(
             reasoning_effort_allowed=False,
             reason="tool_call_direct_rail",
         )
-    allow_thinking = os.environ.get("VMLX_DSV4_ALLOW_THINKING", "0").lower() in {
+    force_direct = os.environ.get("VMLX_DSV4_FORCE_DIRECT_RAIL", "0").lower() in {
         "1",
         "true",
         "yes",
     }
-    if allow_thinking:
+    if force_direct:
         return _DSV4ThinkingDecision(
-            enable_thinking=bool(requested_enable_thinking),
-            reasoning_effort_allowed=bool(requested_enable_thinking),
-            reason="env_opt_in",
+            enable_thinking=False,
+            reasoning_effort_allowed=False,
+            reason="env_force_direct",
+        )
+    if requested_enable_thinking is True or effort_requested:
+        return _DSV4ThinkingDecision(
+            enable_thinking=True,
+            reasoning_effort_allowed=True,
+            reason="requested_thinking",
         )
     return _DSV4ThinkingDecision(
         enable_thinking=False,
         reasoning_effort_allowed=False,
-        reason="dsv4_thinking_rail_unstable",
+        reason="thinking_not_requested",
     )
 
 
 def _normalize_dsv4_reasoning_effort(effort: str | None) -> str | None:
     """Map public effort names onto the stable DSV4 encoder rail.
 
-    DSV4's bundled ``reasoning_effort="max"`` template asks for an unbounded
-    deliberation trace and live-probes length-cap without emitting
-    ``</think>``. The capabilities endpoint therefore does not advertise Max
-    for this family. If a client still sends max/medium/high/low, keep thinking
-    enabled but use the stable standard-thinking rail.
+    DSV4's bundled raw ``reasoning_effort="max"`` template asks for an
+    unbounded deliberation trace and live-probes length-cap without emitting
+    ``</think>``. The public API still accepts/advertises max for parity, but
+    the runtime normalizes max/medium/low onto the stable standard-thinking rail.
     """
     if effort in ("low", "medium", "high", "max"):
         return "high"
@@ -4204,19 +4210,10 @@ async def model_capabilities(model_id: str) -> dict:
         if supports_thinking_explicit is not None
         else bool(reasoning_parser or think_in_template)
     )
-    dsv4_raw_thinking_enabled = (
-        family == "deepseek_v4"
-        and os.environ.get("VMLX_DSV4_ALLOW_THINKING", "0").lower()
-        in {"1", "true", "yes"}
-    )
-
     if family == "deepseek_v4":
-        # DSV4's raw thinking rail currently fails the long-context close-token
-        # gate on local F32-control V3 bundles. Keep production UI on direct
-        # mode unless an advanced tester explicitly opts in with the env var.
-        supports_thinking = dsv4_raw_thinking_enabled
-        supported_modes = ["instruct", "reasoning"] if supports_thinking else ["instruct"]
-        reasoning_efforts = []
+        supports_thinking = True
+        supported_modes = ["instruct", "reasoning"]
+        reasoning_efforts = ["low", "medium", "high", "max"]
     elif supports_thinking:
         supported_modes = ["instruct", "reasoning"]
         if reasoning_parser in ("openai_gptoss", "mistral"):
@@ -4281,9 +4278,7 @@ async def model_capabilities(model_id: str) -> dict:
         "reasoning_parser": reasoning_parser,
         "think_in_template": think_in_template,
         "supported_modes": supported_modes,
-        "experimental_modes": (
-            ["raw-thinking"] if family == "deepseek_v4" and not supports_thinking else []
-        ),
+        "experimental_modes": [],
         "reasoning_efforts": reasoning_efforts,
         "modalities": modalities,
         "cache": {
@@ -4505,6 +4500,7 @@ async def create_anthropic_message(
 
         _dsv4_thinking = _resolve_dsv4_thinking_policy(
             requested_enable_thinking=chat_req.enable_thinking,
+            effort_requested=bool(_cur_effort),
             tools_present=bool(getattr(chat_req, "tools", None)),
             tool_choice=getattr(chat_req, "tool_choice", None),
         )
@@ -4513,8 +4509,7 @@ async def create_anthropic_message(
             and (chat_req.enable_thinking is True or _cur_effort)
         ):
             logger.info(
-                "DSV4: using direct rail because %s; set "
-                "VMLX_DSV4_ALLOW_THINKING=1 to opt into the raw thinking rail.",
+                "DSV4: using direct rail because %s.",
                 _dsv4_thinking.reason,
             )
         chat_req.enable_thinking = _dsv4_thinking.enable_thinking
@@ -4529,8 +4524,8 @@ async def create_anthropic_message(
         # Pass only the stable DSV4 effort rail through to the encoder.
         # Live probes show the bundle's raw max rail length-caps without
         # closing </think>, even with 4096 output tokens. The public
-        # capability surface therefore does not advertise max for DSV4;
-        # normalize stale/advanced clients onto the verified rail too.
+        # capability surface accepts max for parity, but runtime normalizes
+        # stale/advanced clients onto the verified rail too.
         _stable_effort = (
             _normalize_dsv4_reasoning_effort(_cur_effort)
             if _dsv4_thinking.reasoning_effort_allowed
@@ -5276,6 +5271,7 @@ async def ollama_chat(fastapi_request: Request):
         _ollama_ct_kwargs.pop("thinking_mode", None)
         _dsv4_thinking_o = _resolve_dsv4_thinking_policy(
             requested_enable_thinking=chat_req.enable_thinking,
+            effort_requested=bool(_cur_effort_o),
             tools_present=bool(getattr(chat_req, "tools", None)),
             tool_choice=getattr(chat_req, "tool_choice", None),
         )
@@ -5284,8 +5280,7 @@ async def ollama_chat(fastapi_request: Request):
             and (chat_req.enable_thinking is True or _cur_effort_o)
         ):
             logger.info(
-                "DSV4 (Ollama): using direct rail because %s; set "
-                "VMLX_DSV4_ALLOW_THINKING=1 to opt into the raw thinking rail.",
+                "DSV4 (Ollama): using direct rail because %s.",
                 _dsv4_thinking_o.reason,
             )
         chat_req.enable_thinking = _dsv4_thinking_o.enable_thinking
@@ -7061,6 +7056,7 @@ async def create_chat_completion(
 
         _dsv4_thinking = _resolve_dsv4_thinking_policy(
             requested_enable_thinking=request.enable_thinking,
+            effort_requested=bool(_cur_effort),
             tools_present=bool(getattr(request, "tools", None)),
             tool_choice=getattr(request, "tool_choice", None),
         )
@@ -7069,8 +7065,7 @@ async def create_chat_completion(
             and (request.enable_thinking is True or _cur_effort)
         ):
             logger.info(
-                "DSV4: using direct rail because %s; set "
-                "VMLX_DSV4_ALLOW_THINKING=1 to opt into the raw thinking rail.",
+                "DSV4: using direct rail because %s.",
                 _dsv4_thinking.reason,
             )
         request.enable_thinking = _dsv4_thinking.enable_thinking
@@ -8115,6 +8110,10 @@ async def create_response(
     if _is_dsv4_resp_msgs:
         _dsv4_thinking_resp = _resolve_dsv4_thinking_policy(
             requested_enable_thinking=request.enable_thinking,
+            effort_requested=bool(
+                getattr(request, "reasoning_effort", None)
+                or _ct_kwargs.get("reasoning_effort")
+            ),
             tools_present=bool(getattr(request, "tools", None)),
             tool_choice=getattr(request, "tool_choice", None),
         )
@@ -8127,8 +8126,7 @@ async def create_response(
             )
         ):
             logger.info(
-                "DSV4 (/v1/responses): using direct rail because %s; set "
-                "VMLX_DSV4_ALLOW_THINKING=1 to opt into the raw thinking rail.",
+                "DSV4 (/v1/responses): using direct rail because %s.",
                 _dsv4_thinking_resp.reason,
             )
         request.enable_thinking = _dsv4_thinking_resp.enable_thinking

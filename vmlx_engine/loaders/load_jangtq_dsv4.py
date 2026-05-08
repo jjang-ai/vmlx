@@ -960,6 +960,58 @@ def _configure_dsv4_pool_quant_default() -> str:
     return os.environ["DSV4_POOL_QUANT"]
 
 
+def _audit_dsv4_switchglu_contract(model) -> None:
+    """Fail loudly if DSV4 routed experts lost limited-SwiGLU semantics."""
+    try:
+        from jang_tools.turboquant.tq_kernel import TurboQuantSwitchLinear
+        from mlx_lm.models.switch_layers import SwitchGLU
+    except Exception as exc:
+        raise RuntimeError(
+            "DSV4 routed-expert contract audit could not import SwitchGLU/TurboQuant "
+            f"classes: {exc}"
+        ) from exc
+
+    tq_switchglus = []
+    bad_limit = []
+    for name, module in model.named_modules():
+        if not isinstance(module, SwitchGLU):
+            continue
+        gate_proj = getattr(module, "gate_proj", None)
+        up_proj = getattr(module, "up_proj", None)
+        down_proj = getattr(module, "down_proj", None)
+        if not (
+            isinstance(gate_proj, TurboQuantSwitchLinear)
+            and isinstance(up_proj, TurboQuantSwitchLinear)
+            and isinstance(down_proj, TurboQuantSwitchLinear)
+        ):
+            continue
+        tq_switchglus.append(name)
+        activation = getattr(module, "activation", None)
+        swiglu_limit = float(getattr(activation, "swiglu_limit", 0.0) or 0.0)
+        if abs(swiglu_limit - 10.0) > 1e-6:
+            bad_limit.append((name, swiglu_limit))
+
+    if not tq_switchglus:
+        raise RuntimeError(
+            "DSV4 routed-expert contract audit found zero TurboQuant SwitchGLU "
+            "modules. A DSV4 JANGTQ bundle must hydrate prestacked routed experts "
+            "before inference."
+        )
+    if bad_limit:
+        sample = ", ".join(f"{name}={limit:g}" for name, limit in bad_limit[:5])
+        raise RuntimeError(
+            "DSV4 routed-expert contract audit failed: limited-SwiGLU "
+            f"swiglu_limit=10 missing on {len(bad_limit)}/{len(tq_switchglus)} "
+            f"TurboQuant SwitchGLU modules ({sample}). Rebuild the bundle or "
+            "update jang_tools so DSV4 uses silu(min(gate,10))*clip(up,-10,10)."
+        )
+    _log.info(
+        "DSV4 routed-expert contract: %d TurboQuant SwitchGLU modules have "
+        "limited-SwiGLU swiglu_limit=10.",
+        len(tq_switchglus),
+    )
+
+
 def load_jangtq_dsv4_model(model_path: str, *, skip_params_eval: bool = True) -> Tuple[Any, Any]:
     """Load a DeepSeek V4 JANGTQ bundle.
 
@@ -1013,6 +1065,7 @@ def load_jangtq_dsv4_model(model_path: str, *, skip_params_eval: bool = True) ->
     _install_dsv4_instant_load_patch()
 
     model, tokenizer = load_jangtq_model(model_path, skip_params_eval=skip_params_eval)
+    _audit_dsv4_switchglu_contract(model)
 
     # 2026-05-03 (F17): install canonical-encoder shim on
     # tokenizer.apply_chat_template. The bundle ships a Jinja chat_template
