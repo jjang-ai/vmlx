@@ -438,3 +438,75 @@ class TestBailingHybridFlatSwitchMlpRepair:
         }
         out = model.sanitize(weights_in)
         assert out['model.layers.1.mlp.switch_mlp.gate_proj.weight'].shape == (4, 16, 8)
+
+    def test_sanitize_restores_dwq_split_mla_kv_b_proj(self):
+        """mlx-community Ling DWQ ships split embed_q/unembed_out tensors while
+        the runtime model expects kv_b_proj. Sanitizer must rebuild kv_b_proj
+        and consume the split keys instead of relying on strict=False.
+        """
+        import mlx.core as mx
+        from mlx_lm.models.bailing_hybrid import Model, ModelArgs
+
+        args = ModelArgs(
+            model_type='bailing_hybrid', hidden_size=128, intermediate_size=256,
+            moe_intermediate_size=16, num_experts=4, num_shared_experts=1,
+            num_attention_heads=2, num_experts_per_tok=2, num_hidden_layers=2,
+            num_key_value_heads=2, rms_norm_eps=1e-6, rope_theta=10000.0,
+            vocab_size=128, first_k_dense_replace=1, layer_group_size=2,
+            group_norm_size=1, max_position_embeddings=512, q_lora_rank=64,
+            qk_rope_head_dim=8, qk_nope_head_dim=64, v_head_dim=64,
+            kv_lora_rank=64, num_nextn_predict_layers=0, n_group=1,
+            topk_group=1, score_function='sigmoid', use_qk_norm=False,
+        )
+        model = Model(args)
+        embed_q = mx.quantize(mx.ones((2, 64, 64), dtype=mx.float16), group_size=64, bits=4)
+        unembed = mx.quantize(mx.ones((2, 64, 64), dtype=mx.float16) * 2, group_size=64, bits=4)
+        weights_in = {
+            'model.layers.1.attention.embed_q.weight': embed_q[0],
+            'model.layers.1.attention.embed_q.scales': embed_q[1],
+            'model.layers.1.attention.embed_q.biases': embed_q[2],
+            'model.layers.1.attention.unembed_out.weight': unembed[0],
+            'model.layers.1.attention.unembed_out.scales': unembed[1],
+            'model.layers.1.attention.unembed_out.biases': unembed[2],
+        }
+        out = model.sanitize(weights_in)
+
+        assert not any('.embed_q.' in k or '.unembed_out.' in k for k in out)
+        assert out['model.layers.1.attention.kv_b_proj.weight'].shape == (256, 8)
+        assert out['model.layers.1.attention.kv_b_proj.scales'].shape == (256, 1)
+        assert out['model.layers.1.attention.kv_b_proj.biases'].shape == (256, 1)
+        restored = mx.dequantize(
+            out['model.layers.1.attention.kv_b_proj.weight'],
+            out['model.layers.1.attention.kv_b_proj.scales'],
+            out['model.layers.1.attention.kv_b_proj.biases'],
+            64,
+            4,
+        ).reshape(2, 128, 64)
+        assert float(mx.mean(restored[:, :64, :]).item()) == 1.0
+        assert float(mx.mean(restored[:, 64:, :]).item()) == 2.0
+
+    def test_sanitize_trims_absent_mtp_layer_before_strict_load(self):
+        """The mlx-community DWQ config advertises an MTP layer while its index
+        ships no model.layers.{num_hidden_layers} tensors. Standard generation
+        skips MTP, so sanitizer removes the absent tail modules before strict
+        weight loading.
+        """
+        from mlx_lm.models.bailing_hybrid import Model, ModelArgs
+
+        args = ModelArgs(
+            model_type='bailing_hybrid', hidden_size=64, intermediate_size=128,
+            moe_intermediate_size=16, num_experts=4, num_shared_experts=1,
+            num_attention_heads=4, num_experts_per_tok=2, num_hidden_layers=2,
+            num_key_value_heads=4, rms_norm_eps=1e-6, rope_theta=10000.0,
+            vocab_size=128, first_k_dense_replace=1, layer_group_size=2,
+            group_norm_size=1, max_position_embeddings=512, q_lora_rank=32,
+            qk_rope_head_dim=8, qk_nope_head_dim=8, v_head_dim=8,
+            kv_lora_rank=16, num_nextn_predict_layers=1, n_group=1,
+            topk_group=1, score_function='sigmoid', use_qk_norm=False,
+        )
+        model = Model(args)
+        assert len(model.model.layers) == 3
+        out = model.sanitize({})
+        assert out == {}
+        assert len(model.model.layers) == 2
+        assert model.args.num_nextn_predict_layers == 0

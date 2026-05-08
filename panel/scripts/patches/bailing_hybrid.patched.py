@@ -712,6 +712,111 @@ class Model(nn.Module):
                     in_per_row = flat // out_dim
                     weights[key] = arr.reshape(n_exp, out_dim, in_per_row)
 
+        # mlx-community/Ling-2.6-flash-mlx-4bit-DWQ shipped four MLA layers
+        # with split `embed_q` / `unembed_out` quantized weights, but the
+        # runtime model consumes the source-shaped `kv_b_proj`. Rebuild the
+        # quantized `kv_b_proj` exactly at load time instead of loosening strict
+        # loading. This avoids loading those attention layers with random
+        # `kv_b_proj` weights after a superficial strict=False workaround.
+        for l in range(n_total):
+            prefix = f"model.layers.{l}.attention"
+            kv_base = f"{prefix}.kv_b_proj"
+            embed_base = f"{prefix}.embed_q"
+            unembed_base = f"{prefix}.unembed_out"
+            if f"{kv_base}.weight" in weights:
+                continue
+            if (
+                f"{embed_base}.weight" not in weights
+                or f"{embed_base}.scales" not in weights
+                or f"{unembed_base}.weight" not in weights
+                or f"{unembed_base}.scales" not in weights
+            ):
+                continue
+
+            def _dequant_split(base, expected_cols):
+                qw = weights.pop(f"{base}.weight")
+                scales = weights.pop(f"{base}.scales")
+                biases = weights.pop(f"{base}.biases", mx.zeros_like(scales))
+                if qw.ndim != 3 or scales.ndim != 3:
+                    raise ValueError(
+                        f"Expected split MLA quantized tensor {base} to be rank-3; "
+                        f"got weight={qw.shape}, scales={scales.shape}"
+                    )
+                bits = None
+                # MLX affine quantization packs power-of-two widths here. Do
+                # not infer 3/6-bit from floor-divided widths; those need an
+                # explicit artifact contract before this compatibility path
+                # should accept them.
+                for candidate in (8, 4, 2):
+                    if qw.shape[-1] * (32 // candidate) == expected_cols:
+                        bits = candidate
+                        break
+                if bits is None:
+                    raise ValueError(
+                        f"Cannot infer bit width for split MLA tensor {base}: "
+                        f"packed_cols={qw.shape[-1]}, expected_cols={expected_cols}"
+                    )
+                if scales.shape[-1] <= 0 or expected_cols % scales.shape[-1] != 0:
+                    raise ValueError(
+                        f"Cannot infer group size for split MLA tensor {base}: "
+                        f"scales={scales.shape}, expected_cols={expected_cols}"
+                    )
+                group_size = expected_cols // scales.shape[-1]
+                return mx.dequantize(qw, scales, biases, group_size, bits), group_size, bits
+
+            embed, embed_group, embed_bits = _dequant_split(
+                embed_base, self.args.qk_nope_head_dim
+            )
+            unembed, unembed_group, unembed_bits = _dequant_split(
+                unembed_base, self.args.kv_lora_rank
+            )
+            if embed_bits != unembed_bits:
+                raise ValueError(
+                    f"Split MLA bit-width mismatch at {prefix}: "
+                    f"embed_q={embed_bits}, unembed_out={unembed_bits}"
+                )
+            if embed_group != unembed_group:
+                raise ValueError(
+                    f"Split MLA group-size mismatch at {prefix}: "
+                    f"embed_q={embed_group}, unembed_out={unembed_group}"
+                )
+            # Converter split convention:
+            #   kv_b_proj -> (heads, qk_nope + v_head, kv_lora_rank)
+            #   embed_q   -> (heads, kv_lora_rank, qk_nope)
+            #   unembed   -> (heads, v_head, kv_lora_rank)
+            # Reverse it, then quantize back to the module's expected affine
+            # `kv_b_proj` triplet.
+            kv = mx.concatenate(
+                [embed.swapaxes(-1, -2), unembed],
+                axis=1,
+            ).reshape(
+                self.args.num_attention_heads
+                * (self.args.qk_nope_head_dim + self.args.v_head_dim),
+                self.args.kv_lora_rank,
+            )
+            q_w, q_s, q_b = mx.quantize(
+                kv.astype(mx.float16), group_size=unembed_group, bits=unembed_bits
+            )
+            weights[f"{kv_base}.weight"] = q_w
+            weights[f"{kv_base}.scales"] = q_s
+            weights[f"{kv_base}.biases"] = q_b
+
+        # Some mlx-community DWQ Ling bundles advertise one MTP layer in
+        # config.json but ship no `model.layers.{num_hidden_layers}` tensors.
+        # Standard generation skips MTP entirely in this runtime; trim the
+        # absent tail modules before strict load so the base model stays strict.
+        if self.args.num_nextn_predict_layers:
+            mtp_start = self.args.num_hidden_layers
+            has_any_mtp_weight = any(
+                k.startswith(f"model.layers.{i}.")
+                for i in range(mtp_start, mtp_start + self.args.num_nextn_predict_layers)
+                for k in weights
+            )
+            if not has_any_mtp_weight:
+                self.model.layers = self.model.layers[: self.args.num_hidden_layers]
+                self.args.num_nextn_predict_layers = 0
+                self.model.args.num_nextn_predict_layers = 0
+
         return weights
 
     @property
