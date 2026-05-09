@@ -98,12 +98,36 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
   const kvQuant = stats?.kv_cache_quantization
   const nativeCache = stats?.native_cache
   const turboQuantKv = stats?.turboquant_kv_cache
+  const cacheTotals = stats?.cache_totals
 
   return (
     <div className="space-y-4">
       {error && (
         <div className="text-xs text-destructive bg-destructive/10 px-3 py-2 rounded">
           {error}
+        </div>
+      )}
+
+      {cacheTotals && (
+        <div>
+          <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Cache Totals</h4>
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            {cacheTotals.ram_tokens_cached != null && (
+              <StatCard label="RAM Cached Tokens" value={(cacheTotals.ram_tokens_cached || 0).toLocaleString()} />
+            )}
+            {cacheTotals.l2_tokens_on_disk != null && (
+              <StatCard label="L2 Tokens on Disk" value={(cacheTotals.l2_tokens_on_disk || 0).toLocaleString()} />
+            )}
+            {cacheTotals.l2_prompt_tokens_on_disk != null && (
+              <StatCard label="Prompt L2 Tokens" value={(cacheTotals.l2_prompt_tokens_on_disk || 0).toLocaleString()} />
+            )}
+            {cacheTotals.l2_block_tokens_on_disk != null && (
+              <StatCard label="Block L2 Tokens" value={(cacheTotals.l2_block_tokens_on_disk || 0).toLocaleString()} />
+            )}
+            {cacheTotals.ssm_tokens_on_disk != null && cacheTotals.ssm_tokens_on_disk > 0 && (
+              <StatCard label="SSM L2 Tokens" value={(cacheTotals.ssm_tokens_on_disk || 0).toLocaleString()} />
+            )}
+          </div>
         </div>
       )}
 
@@ -241,7 +265,19 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
             {schedulerStats.cache_reuse_skip_tokens != null && schedulerStats.cache_reuse_skip_tokens > 0 && (
               <StatCard label="Skipped Hit Tokens" value={(schedulerStats.cache_reuse_skip_tokens || 0).toLocaleString()} />
             )}
+            {schedulerStats.cache_reuse_partial_downgrades != null && (
+              <StatCard label="Partial Reuse" value={String(schedulerStats.cache_reuse_partial_downgrades || 0)} />
+            )}
+            {schedulerStats.cache_reuse_partial_tokens != null && schedulerStats.cache_reuse_partial_tokens > 0 && (
+              <StatCard label="Partial Hit Tokens" value={(schedulerStats.cache_reuse_partial_tokens || 0).toLocaleString()} />
+            )}
           </div>
+          {schedulerStats.last_cache_reuse_partial && (
+            <div className="mt-2 text-xs bg-accent/10 border border-accent/30 text-foreground px-3 py-2 rounded">
+              Cache reuse was memory-fit: used {(schedulerStats.last_cache_reuse_partial.used_cached_tokens ?? 0).toLocaleString()} of {(schedulerStats.last_cache_reuse_partial.original_cached_tokens ?? 0).toLocaleString()} cached tokens,
+              prefilling {(schedulerStats.last_cache_reuse_partial.tail_tokens ?? 0).toLocaleString()} tail tokens.
+            </div>
+          )}
           {schedulerStats.last_cache_reuse_skip && (
             <div className="mt-2 text-xs bg-warning/10 border border-warning/30 text-warning-foreground px-3 py-2 rounded">
               Cache reuse skipped: needed {schedulerStats.last_cache_reuse_skip.needed_mb ?? '?'} MB,

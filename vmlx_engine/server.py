@@ -3632,6 +3632,15 @@ async def health():
                 "cache_reuse_skip_tokens", 0
             ),
             "last_cache_reuse_skip": scheduler_stats.get("last_cache_reuse_skip"),
+            "cache_reuse_partial_downgrades": scheduler_stats.get(
+                "cache_reuse_partial_downgrades", 0
+            ),
+            "cache_reuse_partial_tokens": scheduler_stats.get(
+                "cache_reuse_partial_tokens", 0
+            ),
+            "last_cache_reuse_partial": scheduler_stats.get(
+                "last_cache_reuse_partial"
+            ),
         }
         cache_snapshot = _cache_telemetry_snapshot(scheduler)
         if cache_snapshot:
@@ -4008,6 +4017,13 @@ async def cache_stats():
             "cache_reuse_skips": stats.get("cache_reuse_skips", 0),
             "cache_reuse_skip_tokens": stats.get("cache_reuse_skip_tokens", 0),
             "last_cache_reuse_skip": stats.get("last_cache_reuse_skip"),
+            "cache_reuse_partial_downgrades": stats.get(
+                "cache_reuse_partial_downgrades", 0
+            ),
+            "cache_reuse_partial_tokens": stats.get(
+                "cache_reuse_partial_tokens", 0
+            ),
+            "last_cache_reuse_partial": stats.get("last_cache_reuse_partial"),
         }
         # KV cache quantization info
         if hasattr(scheduler, "_kv_cache_bits"):

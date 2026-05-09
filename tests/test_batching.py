@@ -21,6 +21,7 @@ from vmlx_engine.scheduler import (
     SchedulerConfig,
     SchedulingPolicy,
 )
+from vmlx_engine.paged_cache import BlockTable
 
 
 class TestRequest:
@@ -334,7 +335,264 @@ class TestSchedulerBasic:
         assert stats["num_running"] == 0
         assert stats["cache_reuse_skips"] == 0
         assert stats["cache_reuse_skip_tokens"] == 0
+        assert stats["cache_reuse_partial_downgrades"] == 0
+        assert stats["cache_reuse_partial_tokens"] == 0
         assert stats["last_cache_reuse_skip"] is None
+        assert stats["last_cache_reuse_partial"] is None
+
+    def test_memory_pressure_partially_reuses_paged_cache(
+        self, mock_model, mock_tokenizer, monkeypatch
+    ):
+        """Large L2/paged hits should shrink to fit instead of full-prefilling."""
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        scheduler._validate_cache = lambda cache: True
+
+        original = BlockTable(
+            request_id="req-partial",
+            block_ids=[1, 2, 3, 4],
+            num_tokens=256,
+        )
+        trimmed = BlockTable(
+            request_id="req-partial",
+            block_ids=[1, 2],
+            num_tokens=128,
+        )
+
+        class _BlockAwareCache:
+            block_size = 64
+
+            def __init__(self):
+                self.trim_calls = []
+
+            def trim_block_table(self, request_id, target_tokens):
+                self.trim_calls.append((request_id, target_tokens))
+                return trimmed
+
+            def reconstruct_cache(self, block_table):
+                assert block_table is trimmed
+                return ["small-cache"]
+
+            def get_stats(self):
+                return {}
+
+        cache = _BlockAwareCache()
+        scheduler.block_aware_cache = cache
+        request = Request(
+            request_id="req-partial",
+            prompt="x",
+            sampling_params=SamplingParams(),
+        )
+        request.prompt_token_ids = list(range(320))
+        request.block_table = original
+        request.cached_tokens = 256
+        request.remaining_tokens = request.prompt_token_ids[256:]
+        request.shared_prefix_blocks = 4
+
+        cache_to_use, tokens_to_process = scheduler._shrink_paged_cache_for_memory(
+            request=request,
+            cache_to_use=["large-cache"],
+            cache_bytes=1_000,
+            available_bytes=1_100,
+            multiplier=2.0,
+            budget_fraction=1.0,
+        )
+
+        assert cache_to_use == ["small-cache"]
+        assert tokens_to_process == request.prompt_token_ids[128:]
+        assert request.block_table is trimmed
+        assert request.cached_tokens == 128
+        assert request.shared_prefix_blocks == 2
+        assert request.prompt_cache == ["small-cache"]
+        assert cache.trim_calls == [("req-partial", 128)]
+
+        stats = scheduler.get_stats()
+        assert stats["cache_reuse_partial_downgrades"] == 1
+        assert stats["cache_reuse_partial_tokens"] == 128
+        assert stats["last_cache_reuse_partial"]["original_cached_tokens"] == 256
+        assert stats["last_cache_reuse_partial"]["used_cached_tokens"] == 128
+        assert stats["last_cache_reuse_partial"]["tail_tokens"] == 192
+
+    def test_memory_pressure_partial_reuse_preserves_generation_prompt_suffix(
+        self, mock_model, mock_tokenizer
+    ):
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        scheduler._validate_cache = lambda cache: True
+
+        trimmed = BlockTable("req-gpl", [1], 64)
+
+        class _BlockAwareCache:
+            block_size = 64
+
+            def trim_block_table(self, request_id, target_tokens):
+                return trimmed
+
+            def reconstruct_cache(self, block_table):
+                return ["small-cache"]
+
+        scheduler.block_aware_cache = _BlockAwareCache()
+        request = Request("req-gpl", "x", SamplingParams())
+        request.prompt_token_ids = list(range(130))
+        request.block_table = BlockTable("req-gpl", [1, 2], 120)
+        request.cached_tokens = 120
+        request.remaining_tokens = request.prompt_token_ids[120:]
+        request._gen_prompt_len = 10
+
+        cache_to_use, tokens_to_process = scheduler._shrink_paged_cache_for_memory(
+            request=request,
+            cache_to_use=["large-cache"],
+            cache_bytes=1_000,
+            available_bytes=1_200,
+            multiplier=2.0,
+            budget_fraction=1.0,
+        )
+
+        assert cache_to_use == ["small-cache"]
+        assert tokens_to_process == request.prompt_token_ids[64:]
+        assert request.remaining_tokens == request.prompt_token_ids[64:]
+
+    def test_memory_pressure_does_not_trim_path_dependent_native_caches(
+        self, mock_model, mock_tokenizer
+    ):
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        scheduler._uses_dsv4_cache = True
+        scheduler.block_aware_cache = MagicMock()
+        request = Request("req-hybrid", "x", SamplingParams())
+        request.prompt_token_ids = list(range(256))
+        request.block_table = BlockTable("req-hybrid", [1, 2, 3, 4], 256)
+        request.cached_tokens = 256
+
+        cache_to_use, tokens_to_process = scheduler._shrink_paged_cache_for_memory(
+            request=request,
+            cache_to_use=["hybrid-cache"],
+            cache_bytes=1_000,
+            available_bytes=600,
+            multiplier=2.0,
+        )
+
+        assert cache_to_use is None
+        assert tokens_to_process is None
+        assert request._cache_reuse_contract == "deepseek_v4_composite"
+        assert request._cache_reuse_partial_unavailable_reason == (
+            "native_path_dependent_cache"
+        )
+        scheduler.block_aware_cache.trim_block_table.assert_not_called()
+
+    def test_memory_pressure_partially_reuses_hybrid_ssm_with_aligned_checkpoint(
+        self, mock_model, mock_tokenizer
+    ):
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        scheduler._is_hybrid = True
+        scheduler._uses_dsv4_cache = False
+        scheduler._uses_zaya_cache = False
+        scheduler._validate_cache = lambda cache: True
+
+        trimmed = BlockTable("req-hybrid", [1, 2], 128)
+
+        class _BlockAwareCache:
+            block_size = 64
+
+            def trim_block_table(self, request_id, target_tokens):
+                assert target_tokens == 128
+                return trimmed
+
+            def reconstruct_cache(self, block_table):
+                assert block_table is trimmed
+                return ["kv-only"]
+
+            def get_stats(self):
+                return {}
+
+        class _SSMCache:
+            def fetch_longest_prefix(self, token_ids, max_len):
+                assert max_len == 128
+                return (128, ["ssm"], True)
+
+        scheduler.block_aware_cache = _BlockAwareCache()
+        scheduler._ssm_state_cache = _SSMCache()
+        scheduler._finalize_hybrid_paged_cache_on_worker = (
+            lambda request, reconstructed: ["kv+ssm"]
+        )
+        request = Request("req-hybrid", "x", SamplingParams())
+        request.prompt_token_ids = list(range(320))
+        request.block_table = BlockTable("req-hybrid", [1, 2, 3, 4], 256)
+        request.cached_tokens = 256
+        request.remaining_tokens = request.prompt_token_ids[256:]
+        request._hybrid_ssm_fetch_tokens = list(range(300))
+
+        cache_to_use, tokens_to_process = scheduler._shrink_paged_cache_for_memory(
+            request=request,
+            cache_to_use=["large-hybrid-cache"],
+            cache_bytes=1_000,
+            available_bytes=1_100,
+            multiplier=2.0,
+            budget_fraction=1.0,
+        )
+
+        assert cache_to_use == ["kv+ssm"]
+        assert tokens_to_process == request.prompt_token_ids[128:]
+        assert request.cached_tokens == 128
+        assert request.shared_prefix_blocks == 2
+        assert request.prompt_cache == ["kv+ssm"]
+        assert scheduler.get_stats()["last_cache_reuse_partial"]["cache_contract"] == (
+            "hybrid_ssm"
+        )
+
+    def test_hybrid_ssm_checkpoint_alignment_falls_back_to_exact_aligned_state(
+        self, mock_model, mock_tokenizer
+    ):
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        request = Request("req-align", "x", SamplingParams())
+        request.prompt_token_ids = list(range(256))
+        request._hybrid_ssm_fetch_tokens = list(range(256))
+
+        class _SSMCache:
+            def fetch_longest_prefix(self, token_ids, max_len):
+                if max_len >= 150:
+                    return (150, ["ssm@150"], True)
+                return None
+
+            def fetch(self, token_ids, num_tokens):
+                assert num_tokens == 128
+                return (["ssm@128"], True)
+
+        scheduler._ssm_state_cache = _SSMCache()
+
+        hit = scheduler._fetch_block_aligned_ssm_checkpoint(
+            request,
+            max_len=192,
+            block_size=64,
+        )
+
+        assert hit == (128, ["ssm@128"])
+
+    def test_hybrid_ssm_checkpoint_alignment_rejects_misaligned_state_without_exact(
+        self, mock_model, mock_tokenizer
+    ):
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        request = Request("req-misaligned", "x", SamplingParams())
+        request.prompt_token_ids = list(range(256))
+
+        class _SSMCache:
+            def fetch_longest_prefix(self, token_ids, max_len):
+                if max_len >= 150:
+                    return (150, ["ssm@150"], True)
+                return None
+
+            def fetch(self, token_ids, num_tokens):
+                return None
+
+        scheduler._ssm_state_cache = _SSMCache()
+
+        hit = scheduler._fetch_block_aligned_ssm_checkpoint(
+            request,
+            max_len=192,
+            block_size=64,
+        )
+
+        assert hit is None
+        assert request._cache_reuse_partial_unavailable_reason == (
+            "no_block_aligned_ssm_checkpoint"
+        )
 
     def test_reset(self, mock_model, mock_tokenizer):
         """Test resetting scheduler."""

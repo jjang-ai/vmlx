@@ -3234,6 +3234,14 @@ class TestTurboQuantKVTelemetry:
                         "needed_mb": 41618.0,
                         "available_mb": 13330.0,
                     },
+                    "cache_reuse_partial_downgrades": 1,
+                    "cache_reuse_partial_tokens": 2048,
+                    "last_cache_reuse_partial": {
+                        "reason": "insufficient_memory_for_full_cache_merge",
+                        "used_cached_tokens": 2048,
+                        "original_cached_tokens": 8192,
+                        "tail_tokens": 6144,
+                    },
                 }
 
         monkeypatch.setattr(server, "_engine", _Engine())
@@ -3249,6 +3257,9 @@ class TestTurboQuantKVTelemetry:
         )
         assert scheduler_stats["last_cache_reuse_skip"]["needed_mb"] == 41618.0
         assert scheduler_stats["last_cache_reuse_skip"]["available_mb"] == 13330.0
+        assert scheduler_stats["cache_reuse_partial_downgrades"] == 1
+        assert scheduler_stats["cache_reuse_partial_tokens"] == 2048
+        assert scheduler_stats["last_cache_reuse_partial"]["used_cached_tokens"] == 2048
 
     @pytest.mark.asyncio
     async def test_cache_stats_projects_ssm_companion_disk_state(self, monkeypatch):
@@ -3313,6 +3324,12 @@ class TestTurboQuantKVTelemetry:
                         "needed_mb": 41618.0,
                         "available_mb": 13330.0,
                     },
+                    "cache_reuse_partial_downgrades": 3,
+                    "cache_reuse_partial_tokens": 12000,
+                    "last_cache_reuse_partial": {
+                        "reason": "insufficient_memory_for_full_cache_merge",
+                        "used_cached_tokens": 4096,
+                    },
                 }
 
         monkeypatch.setattr(server, "_engine", _Engine())
@@ -3332,6 +3349,9 @@ class TestTurboQuantKVTelemetry:
         assert scheduler["last_cache_reuse_skip"]["reason"] == (
             "insufficient_memory_for_cache_merge"
         )
+        assert scheduler["cache_reuse_partial_downgrades"] == 3
+        assert scheduler["cache_reuse_partial_tokens"] == 12000
+        assert scheduler["last_cache_reuse_partial"]["used_cached_tokens"] == 4096
 
     @pytest.mark.asyncio
     async def test_health_endpoint_projects_cache_telemetry_snapshot(
@@ -3387,6 +3407,9 @@ class TestTurboQuantKVTelemetry:
                     "cache_reuse_skips": 0,
                     "cache_reuse_skip_tokens": 0,
                     "last_cache_reuse_skip": None,
+                    "cache_reuse_partial_downgrades": 0,
+                    "cache_reuse_partial_tokens": 0,
+                    "last_cache_reuse_partial": None,
                 }
 
         monkeypatch.setattr(server, "_engine", _Engine())
@@ -3417,13 +3440,19 @@ class TestTurboQuantKVTelemetry:
             "cache_reuse_skips",
             "cache_reuse_skip_tokens",
             "last_cache_reuse_skip",
+            "cache_reuse_partial_downgrades",
+            "cache_reuse_partial_tokens",
+            "last_cache_reuse_partial",
         ):
             assert marker in scheduler_source
             assert marker in server_source
 
         assert "insufficient_memory_for_cache_merge" in scheduler_source
+        assert "insufficient_memory_for_full_cache_merge" in scheduler_source
         assert "Cache Reuse Skips" in cache_panel_source
+        assert "Partial Reuse" in cache_panel_source
         assert "last_cache_reuse_skip" in cache_panel_source
+        assert "last_cache_reuse_partial" in cache_panel_source
         assert "needed_mb" in cache_panel_source
         assert "available_mb" in cache_panel_source
 
@@ -3433,6 +3462,26 @@ class TestTurboQuantKVTelemetry:
         ).read_text()
 
         assert "Tokens on Disk" in cache_panel_source
+        assert "Cache Totals" in cache_panel_source
+        assert "RAM Cached Tokens" in cache_panel_source
+        assert "L2 Tokens on Disk" in cache_panel_source
+        assert "SSM L2 Tokens" in cache_panel_source
+
+    def test_panel_defaults_are_speed_oriented_and_labels_match_values(self):
+        session_form_source = Path(
+            "./panel/src/renderer/src/components/sessions/SessionConfigForm.tsx"
+        ).read_text()
+        cache_panel_source = Path(
+            "./panel/src/renderer/src/components/sessions/CachePanel.tsx"
+        ).read_text()
+        sessions_source = Path("./panel/src/main/sessions.ts").read_text()
+
+        assert "maxNumSeqs: 64" in session_form_source
+        assert "enableJit: true" in session_form_source
+        assert 'unlimitedLabel="Default (64)"' in session_form_source
+        assert 'unlimitedLabel="Default (1024)"' in session_form_source
+        assert 'unlimitedLabel="Default (2048)"' in session_form_source
+        assert "defaults to 5" not in sessions_source
         assert "total_tokens_on_disk" in cache_panel_source
         assert "health.cache" in Path(
             "./panel/src/renderer/src/components/sessions/PerformancePanel.tsx"

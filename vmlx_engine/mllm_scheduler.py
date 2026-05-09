@@ -898,8 +898,22 @@ class MLLMScheduler:
     def _detect_turboquant_make_cache(self) -> bool:
         """Detect JANG TurboQuant KV patches on VLM wrappers or language models."""
 
+        def _is_mock_object(obj: Any) -> bool:
+            return type(obj).__module__ == "unittest.mock"
+
+        def _safe_attr(obj: Any, name: str) -> Any:
+            if obj is None:
+                return None
+            # unittest.mock fabricates arbitrary attributes on access. A blind
+            # wrapper walk over `.model.language_model.model...` never
+            # terminates and can hang tests or proxy-heavy integrations. Only
+            # use attributes explicitly assigned on mocks.
+            if _is_mock_object(obj):
+                return getattr(obj, "__dict__", {}).get(name)
+            return getattr(obj, name, None)
+
         def _is_tq_make_cache(obj: Any) -> bool:
-            make_cache = getattr(obj, "make_cache", None)
+            make_cache = _safe_attr(obj, "make_cache")
             return make_cache is not None and getattr(make_cache, "__name__", "") in (
                 "_tq_make_cache",
                 "_turboquant_make_cache",
@@ -915,8 +929,8 @@ class MLLMScheduler:
             if _is_tq_make_cache(obj):
                 return True
             for attr in ("model", "language_model"):
-                nxt = getattr(obj, attr, None)
-                if nxt is not None and id(nxt) not in seen:
+                nxt = _safe_attr(obj, attr)
+                if nxt is not None and nxt is not obj and id(nxt) not in seen:
                     stack.append(nxt)
         return False
 

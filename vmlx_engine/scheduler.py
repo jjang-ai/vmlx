@@ -991,6 +991,9 @@ class Scheduler:
         self._cache_reuse_skips = 0
         self._cache_reuse_skip_tokens = 0
         self._last_cache_reuse_skip: Optional[Dict[str, Any]] = None
+        self._cache_reuse_partial_downgrades = 0
+        self._cache_reuse_partial_tokens = 0
+        self._last_cache_reuse_partial: Optional[Dict[str, Any]] = None
 
         # Periodic Metal memory cache cleanup timer.
         # During sustained multi-request traffic, self.running is never empty
@@ -2416,6 +2419,486 @@ class Scheduler:
             return True
 
     @staticmethod
+    def _cache_reuse_budget_fraction() -> float:
+        """Fraction of currently available RAM allowed for cache merge scratch."""
+        raw = os.environ.get("VMLX_CACHE_REUSE_BUDGET_FRACTION", "0.85")
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = 0.85
+        return max(0.10, min(0.95, value))
+
+    def _remaining_tokens_after_cached_prefix(
+        self,
+        request: Request,
+        cached_tokens: int,
+    ) -> List[int]:
+        """Return the prefill tail after reusing a possibly-shrunk prefix.
+
+        `add_request()` strips generation-prompt suffix tokens from the cache
+        lookup key, then appends the suffix back to the remaining prefill tail.
+        Memory-pressure shrinking must preserve that contract or thinking /
+        assistant rail suffixes can be accidentally dropped on partial reuse.
+        """
+        prompt_tokens = list(request.prompt_token_ids or [])
+        if not prompt_tokens:
+            return []
+        cached_tokens = max(0, int(cached_tokens or 0))
+        gen_prompt_len = int(getattr(request, "_gen_prompt_len", 0) or 0)
+        if 0 < gen_prompt_len < len(prompt_tokens):
+            fetch_tokens = prompt_tokens[:-gen_prompt_len]
+            suffix = prompt_tokens[-gen_prompt_len:]
+            cached_tokens = min(cached_tokens, len(fetch_tokens))
+            return list(fetch_tokens[cached_tokens:]) + list(suffix)
+        cached_tokens = min(cached_tokens, len(prompt_tokens))
+        return list(prompt_tokens[cached_tokens:])
+
+    def _release_unusable_paged_hit(self, request: Request) -> None:
+        """Drop refs for a fetched paged-cache hit that will not be inserted."""
+        block_table = getattr(request, "block_table", None)
+        if block_table is not None and self.block_aware_cache is not None:
+            try:
+                paged_cache = getattr(self.block_aware_cache, "paged_cache", None)
+                if paged_cache is not None and hasattr(
+                    paged_cache, "release_request_refs"
+                ):
+                    paged_cache.release_request_refs(block_table)
+                if hasattr(self.block_aware_cache, "detach_request"):
+                    self.block_aware_cache.detach_request(request.request_id)
+            except Exception as exc:
+                logger.debug(
+                    "Request %s: failed to release unused paged-cache refs: %s",
+                    request.request_id,
+                    exc,
+                )
+        request.block_table = None
+        request.shared_prefix_blocks = 0
+
+    def _cache_reuse_contract(self) -> str:
+        """Name the active prompt-cache state contract for telemetry/policy."""
+        if self._uses_dsv4_cache:
+            return "deepseek_v4_composite"
+        if self._uses_zaya_cache:
+            return "zaya_cca"
+        if self._is_hybrid:
+            return "hybrid_ssm"
+        try:
+            if self._model_has_mixed_attention(self.model):
+                return "mixed_swa_kv"
+        except Exception:
+            pass
+        if self._tq_active:
+            return "turboquant_kv"
+        return "plain_kv"
+
+    def _memory_fit_target_cached_tokens(
+        self,
+        *,
+        original_cached_tokens: int,
+        cache_bytes: int,
+        available_bytes: int,
+        multiplier: float,
+        block_size: int,
+        budget_fraction: Optional[float] = None,
+    ) -> int:
+        """Compute a block-aligned cached-token target that fits memory budget."""
+        if (
+            original_cached_tokens <= 0
+            or cache_bytes <= 0
+            or available_bytes <= 0
+            or multiplier <= 0
+            or block_size <= 0
+        ):
+            return 0
+        if budget_fraction is None:
+            budget_fraction = self._cache_reuse_budget_fraction()
+        budget_fraction = max(0.10, min(0.95, float(budget_fraction)))
+        bytes_per_token = max(float(cache_bytes) / float(original_cached_tokens), 1.0)
+        cache_budget_bytes = float(available_bytes) * budget_fraction / float(
+            multiplier
+        )
+        target_tokens = int(cache_budget_bytes / bytes_per_token)
+        target_tokens = min(target_tokens, original_cached_tokens - 1)
+        target_tokens = (target_tokens // block_size) * block_size
+        return target_tokens if target_tokens >= block_size else 0
+
+    def _hybrid_ssm_fetch_tokens(self, request: Request) -> List[int]:
+        """Return the token key used for hybrid SSM companion cache lookups."""
+        explicit = getattr(request, "_hybrid_ssm_fetch_tokens", None)
+        if explicit is not None:
+            return list(explicit)
+        prompt_tokens = list(request.prompt_token_ids or [])
+        gen_prompt_len = int(getattr(request, "_gen_prompt_len", 0) or 0)
+        if 0 < gen_prompt_len < len(prompt_tokens):
+            return prompt_tokens[:-gen_prompt_len]
+        return prompt_tokens
+
+    def _fetch_block_aligned_ssm_checkpoint(
+        self,
+        request: Request,
+        *,
+        max_len: int,
+        block_size: int,
+    ) -> Optional[Tuple[int, List[Any]]]:
+        """Find a hybrid SSM checkpoint aligned to paged-KV block trimming.
+
+        KV block tables can only be trimmed to whole blocks. SSM state is
+        cumulative, so pairing KV@128 with SSM@150 would corrupt the next
+        forward pass. This helper accepts only checkpoints whose token length
+        equals the block-aligned KV length, or an exact SSM checkpoint at that
+        aligned length.
+        """
+        if (
+            self._ssm_state_cache is None
+            or max_len <= 0
+            or block_size <= 0
+        ):
+            request._cache_reuse_partial_unavailable_reason = "ssm_checkpoint_unavailable"
+            return None
+        fetch_longest = getattr(self._ssm_state_cache, "fetch_longest_prefix", None)
+        fetch_exact = getattr(self._ssm_state_cache, "fetch", None)
+        if fetch_longest is None:
+            request._cache_reuse_partial_unavailable_reason = "ssm_longest_prefix_unavailable"
+            return None
+
+        ssm_tokens = self._hybrid_ssm_fetch_tokens(request)
+        search_len = (int(max_len) // block_size) * block_size
+        while search_len >= block_size:
+            hit = fetch_longest(ssm_tokens, search_len)
+            if hit is None:
+                request._cache_reuse_partial_unavailable_reason = (
+                    "no_block_aligned_ssm_checkpoint"
+                )
+                return None
+            checkpoint_len, states, is_complete = hit
+            checkpoint_len = int(checkpoint_len or 0)
+            if checkpoint_len > search_len:
+                request._cache_reuse_partial_unavailable_reason = (
+                    "invalid_ssm_checkpoint_length"
+                )
+                return None
+            aligned_len = (checkpoint_len // block_size) * block_size
+            if checkpoint_len <= 0 or aligned_len <= 0:
+                request._cache_reuse_partial_unavailable_reason = (
+                    "invalid_ssm_checkpoint_length"
+                )
+                return None
+            if is_complete and checkpoint_len == aligned_len:
+                return checkpoint_len, states
+            if fetch_exact is not None and aligned_len > 0:
+                exact = fetch_exact(ssm_tokens, aligned_len)
+                if exact is not None:
+                    exact_states, exact_complete = exact
+                    if exact_complete:
+                        return aligned_len, exact_states
+            search_len = aligned_len - block_size
+        request._cache_reuse_partial_unavailable_reason = (
+            "no_block_aligned_ssm_checkpoint"
+        )
+        return None
+
+    def _record_cache_reuse_partial(
+        self,
+        *,
+        request: Request,
+        cache_to_use: Any,
+        cache_bytes: int,
+        available_bytes: int,
+        multiplier: float,
+        budget_fraction: float,
+        original_cached_tokens: int,
+        used_cached_tokens: int,
+        remaining_tokens: List[int],
+        cache_contract: str,
+    ) -> None:
+        self._cache_reuse_partial_downgrades += 1
+        self._cache_reuse_partial_tokens += used_cached_tokens
+        self._last_cache_reuse_partial = {
+            "request_id": request.request_id,
+            "reason": "insufficient_memory_for_full_cache_merge",
+            "cache_contract": cache_contract,
+            "original_needed_mb": round((cache_bytes * multiplier) / 1048576, 1),
+            "available_mb": round(available_bytes / 1048576, 1),
+            "original_cache_mb": round(cache_bytes / 1048576, 1),
+            "multiplier": multiplier,
+            "budget_fraction": budget_fraction,
+            "kv_cache_bits": getattr(self, "_kv_cache_bits", 0),
+            "original_cached_tokens": original_cached_tokens,
+            "used_cached_tokens": used_cached_tokens,
+            "dropped_cached_tokens": original_cached_tokens - used_cached_tokens,
+            "tail_tokens": len(remaining_tokens),
+            "prompt_tokens": len(request.prompt_token_ids or []),
+            "cache_type": type(cache_to_use).__name__,
+        }
+
+    def _shrink_hybrid_ssm_paged_cache_for_memory(
+        self,
+        *,
+        request: Request,
+        cache_to_use: Any,
+        cache_bytes: int,
+        available_bytes: int,
+        multiplier: float,
+        budget_fraction: float,
+        original_cached_tokens: int,
+        target_tokens: int,
+        block_size: int,
+    ) -> Tuple[Optional[Any], Optional[List[int]]]:
+        """Memory-fit reuse for hybrid SSM cache with KV/SSM alignment."""
+        checkpoint = self._fetch_block_aligned_ssm_checkpoint(
+            request,
+            max_len=target_tokens,
+            block_size=block_size,
+        )
+        if checkpoint is None:
+            if not hasattr(request, "_cache_reuse_partial_unavailable_reason"):
+                request._cache_reuse_partial_unavailable_reason = (
+                    "no_block_aligned_ssm_checkpoint"
+                )
+            return None, None
+        checkpoint_len, _states = checkpoint
+        trimmed_table = self.block_aware_cache.trim_block_table(
+            request.request_id,
+            checkpoint_len,
+        )
+        if trimmed_table is None or not getattr(trimmed_table, "block_ids", None):
+            request._cache_reuse_partial_unavailable_reason = "kv_trim_failed"
+            return None, None
+        used_cached_tokens = int(getattr(trimmed_table, "num_tokens", 0) or 0)
+        if used_cached_tokens != checkpoint_len:
+            logger.warning(
+                "Request %s: hybrid memory-fit cache rejected because KV trim "
+                "(%s tokens) did not match SSM checkpoint (%s tokens)",
+                request.request_id,
+                used_cached_tokens,
+                checkpoint_len,
+            )
+            request._cache_reuse_partial_unavailable_reason = (
+                "kv_ssm_checkpoint_misaligned"
+            )
+            return None, None
+        try:
+            reconstructed = self.block_aware_cache.reconstruct_cache(trimmed_table)
+        except Exception as exc:
+            logger.warning(
+                "Request %s: failed to reconstruct hybrid memory-fit KV cache "
+                "(target %s/%s tokens): %s",
+                request.request_id,
+                used_cached_tokens,
+                original_cached_tokens,
+                exc,
+            )
+            request._cache_reuse_partial_unavailable_reason = "kv_reconstruct_failed"
+            return None, None
+        if reconstructed is not None and getattr(self, "_kv_cache_bits", 0):
+            reconstructed = self._dequantize_cache_for_use(reconstructed)
+        if reconstructed is None:
+            request._cache_reuse_partial_unavailable_reason = "kv_dequant_failed"
+            return None, None
+
+        request.block_table = trimmed_table
+        request.cached_tokens = used_cached_tokens
+        request.shared_prefix_blocks = len(getattr(trimmed_table, "block_ids", []) or [])
+        request.remaining_tokens = self._remaining_tokens_after_cached_prefix(
+            request,
+            used_cached_tokens,
+        )
+        finalized = self._finalize_hybrid_paged_cache_on_worker(
+            request,
+            reconstructed,
+        )
+        if finalized is None or not self._validate_cache(finalized):
+            request._cache_reuse_partial_unavailable_reason = "hybrid_finalize_failed"
+            return None, None
+        request.prompt_cache = finalized
+        remaining_tokens = request.remaining_tokens or []
+        if len(remaining_tokens) == 0 and request.prompt_token_ids:
+            remaining_tokens = list(request.prompt_token_ids[-1:])
+            request.remaining_tokens = remaining_tokens
+        self._record_cache_reuse_partial(
+            request=request,
+            cache_to_use=cache_to_use,
+            cache_bytes=cache_bytes,
+            available_bytes=available_bytes,
+            multiplier=multiplier,
+            budget_fraction=budget_fraction,
+            original_cached_tokens=original_cached_tokens,
+            used_cached_tokens=used_cached_tokens,
+            remaining_tokens=remaining_tokens,
+            cache_contract="hybrid_ssm",
+        )
+        logger.warning(
+            "Request %s: hybrid SSM cache reuse memory-fit to %s/%s tokens; "
+            "prefilling %s tail tokens",
+            request.request_id,
+            used_cached_tokens,
+            original_cached_tokens,
+            len(remaining_tokens),
+        )
+        return finalized, remaining_tokens
+
+    def _shrink_paged_cache_for_memory(
+        self,
+        *,
+        request: Request,
+        cache_to_use: Any,
+        cache_bytes: int,
+        available_bytes: int,
+        multiplier: float,
+        budget_fraction: Optional[float] = None,
+    ) -> Tuple[Optional[Any], Optional[List[int]]]:
+        """Shrink a paged-cache hit so cache reuse survives memory pressure.
+
+        The old behavior was all-or-nothing: if a full cached-prefix merge
+        needed more temporary memory than was currently available, the scheduler
+        discarded the entire hit and prefetched the full prompt again. That is
+        catastrophic for long multi-turn chats. For ordinary positional KV/TQ
+        cache we can safely keep a block-aligned prefix, release the trailing
+        request refs, and prefill only the tail.
+
+        Native path-dependent caches are never silently treated as plain KV.
+        Hybrid SSM takes the companion-cache checkpoint path below; DSV4
+        composite and ZAYA CCA remain explicit no-generic-shrink contracts.
+        """
+        if (
+            self.block_aware_cache is None
+            or getattr(request, "block_table", None) is None
+            or not getattr(request.block_table, "block_ids", None)
+        ):
+            request._cache_reuse_contract = self._cache_reuse_contract()
+            request._cache_reuse_partial_unavailable_reason = (
+                "non_paged_cache_no_block_table"
+            )
+            return None, None
+        cache_contract = self._cache_reuse_contract()
+        request._cache_reuse_contract = cache_contract
+        request._cache_reuse_partial_unavailable_reason = None
+        if cache_contract in ("deepseek_v4_composite", "zaya_cca"):
+            request._cache_reuse_partial_unavailable_reason = (
+                "native_path_dependent_cache"
+            )
+            return None, None
+
+        original_cached_tokens = int(getattr(request, "cached_tokens", 0) or 0)
+        if original_cached_tokens <= 0 or cache_bytes <= 0 or available_bytes <= 0:
+            return None, None
+        if multiplier <= 0:
+            return None, None
+
+        block_size = int(getattr(self.block_aware_cache, "block_size", 0) or 0)
+        if block_size <= 0:
+            return None, None
+
+        if budget_fraction is None:
+            budget_fraction = self._cache_reuse_budget_fraction()
+        budget_fraction = max(0.10, min(0.95, float(budget_fraction)))
+
+        target_tokens = self._memory_fit_target_cached_tokens(
+            original_cached_tokens=original_cached_tokens,
+            cache_bytes=cache_bytes,
+            available_bytes=available_bytes,
+            multiplier=multiplier,
+            block_size=block_size,
+            budget_fraction=budget_fraction,
+        )
+        if target_tokens <= 0:
+            request._cache_reuse_partial_unavailable_reason = (
+                "memory_budget_below_one_block"
+            )
+            return None, None
+
+        if cache_contract == "hybrid_ssm":
+            return self._shrink_hybrid_ssm_paged_cache_for_memory(
+                request=request,
+                cache_to_use=cache_to_use,
+                cache_bytes=cache_bytes,
+                available_bytes=available_bytes,
+                multiplier=multiplier,
+                budget_fraction=budget_fraction,
+                original_cached_tokens=original_cached_tokens,
+                target_tokens=target_tokens,
+                block_size=block_size,
+            )
+
+        trimmed_table = self.block_aware_cache.trim_block_table(
+            request.request_id,
+            target_tokens,
+        )
+        if trimmed_table is None or not getattr(trimmed_table, "block_ids", None):
+            request._cache_reuse_partial_unavailable_reason = "kv_trim_failed"
+            return None, None
+
+        used_cached_tokens = int(getattr(trimmed_table, "num_tokens", 0) or 0)
+        if used_cached_tokens <= 0 or used_cached_tokens >= original_cached_tokens:
+            request._cache_reuse_partial_unavailable_reason = (
+                "kv_trim_did_not_reduce_cache"
+            )
+            return None, None
+
+        try:
+            trimmed_cache = self.block_aware_cache.reconstruct_cache(trimmed_table)
+        except Exception as exc:
+            logger.warning(
+                "Request %s: failed to reconstruct memory-fit partial cache "
+                "(target %s/%s tokens): %s",
+                request.request_id,
+                used_cached_tokens,
+                original_cached_tokens,
+                exc,
+            )
+            request._cache_reuse_partial_unavailable_reason = "kv_reconstruct_failed"
+            return None, None
+
+        if not self._validate_cache(trimmed_cache):
+            logger.warning(
+                "Request %s: memory-fit partial cache failed validation "
+                "(target %s/%s tokens)",
+                request.request_id,
+                used_cached_tokens,
+                original_cached_tokens,
+            )
+            request._cache_reuse_partial_unavailable_reason = "kv_validate_failed"
+            return None, None
+
+        remaining_tokens = self._remaining_tokens_after_cached_prefix(
+            request,
+            used_cached_tokens,
+        )
+        if len(remaining_tokens) == 0 and request.prompt_token_ids:
+            remaining_tokens = list(request.prompt_token_ids[-1:])
+
+        request.block_table = trimmed_table
+        request.cached_tokens = used_cached_tokens
+        request.shared_prefix_blocks = len(getattr(trimmed_table, "block_ids", []) or [])
+        request.remaining_tokens = remaining_tokens
+        request.prompt_cache = trimmed_cache
+
+        self._record_cache_reuse_partial(
+            request=request,
+            cache_to_use=cache_to_use,
+            cache_bytes=cache_bytes,
+            available_bytes=available_bytes,
+            multiplier=multiplier,
+            budget_fraction=budget_fraction,
+            original_cached_tokens=original_cached_tokens,
+            used_cached_tokens=used_cached_tokens,
+            remaining_tokens=remaining_tokens,
+            cache_contract=cache_contract,
+        )
+        logger.warning(
+            "Request %s: full cache reuse needs %.0fMB but only %.0fMB is "
+            "available; using partial prefix cache %s/%s tokens and prefilling "
+            "%s tail tokens instead of falling back to a full prefill",
+            request.request_id,
+            (cache_bytes * multiplier) / 1048576,
+            available_bytes / 1048576,
+            used_cached_tokens,
+            original_cached_tokens,
+            len(remaining_tokens),
+        )
+        return trimmed_cache, remaining_tokens
+
+    @staticmethod
     def _validate_single_cache(layer_cache: Any) -> bool:
         """Validate a single cache layer object."""
         try:
@@ -3540,28 +4023,27 @@ class Scheduler:
                 "yes",
                 "on",
             )
-            fetch_longest = getattr(self._ssm_state_cache, "fetch_longest_prefix", None)
             missed_ck = None
-            if not resume_disabled and fetch_longest is not None:
+            block_size = int(getattr(self.block_aware_cache, "block_size", 0) or 0)
+            if not resume_disabled and block_size > 0:
                 try:
-                    missed_ck = fetch_longest(ssm_tokens, fetch_num)
+                    missed_ck = self._fetch_block_aligned_ssm_checkpoint(
+                        request,
+                        max_len=fetch_num,
+                        block_size=block_size,
+                    )
                 except Exception:
                     missed_ck = None
             if missed_ck is not None:
-                ck_len, ck_states, ck_complete = missed_ck
-                if not ck_complete:
-                    logger.info(
-                        f"Request {request.request_id}: vmlx#91 RESUME skipped — "
-                        f"checkpoint at {ck_len} has is_complete=False "
-                        "(gpl-contaminated), full prefill"
-                    )
-                    missed_ck = None
-                    ck_states = None
-            if missed_ck is not None:
+                ck_len, ck_states = missed_ck
                 trimmed = self.block_aware_cache.trim_block_table(
                     request.request_id, ck_len
                 )
-                if trimmed is not None and trimmed.num_tokens > 0:
+                if (
+                    trimmed is not None
+                    and trimmed.num_tokens > 0
+                    and trimmed.num_tokens == ck_len
+                ):
                     rereconstructed = self.block_aware_cache.reconstruct_cache(trimmed)
                     if rereconstructed is not None and getattr(self, "_kv_cache_bits", 0):
                         rereconstructed = self._dequantize_cache_for_use(
@@ -3574,15 +4056,24 @@ class Scheduler:
                         request.shared_prefix_blocks = len(trimmed.block_ids)
                         reconstructed = rereconstructed
                         ssm_states = ck_states
-                        request.remaining_tokens = list(
-                            (request.prompt_token_ids or [])[trimmed.num_tokens:]
+                        request.remaining_tokens = self._remaining_tokens_after_cached_prefix(
+                            request,
+                            trimmed.num_tokens,
                         )
                         logger.info(
                             f"Request {request.request_id}: vmlx#91 RESUME — "
                             f"trimmed KV to {trimmed.num_tokens} tokens "
-                            f"(block-aligned from SSM checkpoint at {ck_len}), "
+                            f"(block-aligned with SSM checkpoint), "
                             f"prefill tail: {len(request.remaining_tokens)} tokens"
                         )
+                elif trimmed is not None:
+                    logger.info(
+                        "Request %s: vmlx#91 RESUME skipped — KV trim (%s) "
+                        "did not match SSM checkpoint (%s)",
+                        request.request_id,
+                        getattr(trimmed, "num_tokens", 0),
+                        ck_len,
+                    )
 
         if not ssm_states:
             logger.info(
@@ -3762,6 +4253,7 @@ class Scheduler:
                         f"Request {request.request_id}: worker-side DSV4 cache "
                         f"dequantization failed, treating as cache miss"
                     )
+                    self._release_unusable_paged_hit(request)
                     request.prompt_cache = None
                     request.cached_tokens = 0
                     request.remaining_tokens = request.prompt_token_ids
@@ -3792,6 +4284,7 @@ class Scheduler:
                         f"Request {request.request_id}: invalid cache, "
                         f"proceeding without cache"
                     )
+                    self._release_unusable_paged_hit(request)
                     cache_to_use = None
                     request.prompt_cache = None
                     request.cached_tokens = 0
@@ -3820,35 +4313,68 @@ class Scheduler:
                             multiplier = 2.0
                         needed = cache_bytes * multiplier
                         if needed > avail:
-                            cached_tokens = int(getattr(request, "cached_tokens", 0) or 0)
-                            remaining_tokens = len(
-                                getattr(request, "remaining_tokens", []) or []
+                            (
+                                partial_cache,
+                                partial_tokens_to_process,
+                            ) = self._shrink_paged_cache_for_memory(
+                                request=request,
+                                cache_to_use=cache_to_use,
+                                cache_bytes=cache_bytes,
+                                available_bytes=avail,
+                                multiplier=multiplier,
                             )
-                            self._cache_reuse_skips += 1
-                            self._cache_reuse_skip_tokens += cached_tokens
-                            self._last_cache_reuse_skip = {
-                                "request_id": request.request_id,
-                                "reason": "insufficient_memory_for_cache_merge",
-                                "needed_mb": round(needed / 1048576, 1),
-                                "available_mb": round(avail / 1048576, 1),
-                                "cache_mb": round(cache_bytes / 1048576, 1),
-                                "multiplier": multiplier,
-                                "kv_cache_bits": kv_bits,
-                                "cached_tokens": cached_tokens,
-                                "remaining_tokens": remaining_tokens,
-                                "prompt_tokens": len(request.prompt_token_ids or []),
-                                "cache_type": type(cache_to_use).__name__,
-                            }
-                            logger.warning(
-                                f"Request {request.request_id}: skipping cache reuse "
-                                f"(need {needed / 1048576:.0f}MB, "
-                                f"available {avail / 1048576:.0f}MB)"
-                            )
-                            cache_to_use = None
-                            request.prompt_cache = None
-                            request.cached_tokens = 0
-                            request.remaining_tokens = request.prompt_token_ids
-                            tokens_to_process = request.prompt_token_ids
+                            if partial_cache is not None:
+                                cache_to_use = partial_cache
+                                tokens_to_process = partial_tokens_to_process or (
+                                    request.remaining_tokens
+                                    if request.remaining_tokens is not None
+                                    else request.prompt_token_ids
+                                )
+                                if len(tokens_to_process) == 0:
+                                    tokens_to_process = request.prompt_token_ids[-1:]
+                            else:
+                                cached_tokens = int(getattr(request, "cached_tokens", 0) or 0)
+                                remaining_tokens = len(
+                                    getattr(request, "remaining_tokens", []) or []
+                                )
+                                self._cache_reuse_skips += 1
+                                self._cache_reuse_skip_tokens += cached_tokens
+                                self._last_cache_reuse_skip = {
+                                    "request_id": request.request_id,
+                                    "reason": "insufficient_memory_for_cache_merge",
+                                    "needed_mb": round(needed / 1048576, 1),
+                                    "available_mb": round(avail / 1048576, 1),
+                                    "cache_mb": round(cache_bytes / 1048576, 1),
+                                    "multiplier": multiplier,
+                                    "kv_cache_bits": kv_bits,
+                                    "cached_tokens": cached_tokens,
+                                    "remaining_tokens": remaining_tokens,
+                                    "prompt_tokens": len(request.prompt_token_ids or []),
+                                    "cache_type": type(cache_to_use).__name__,
+                                    "cache_contract": getattr(
+                                        request,
+                                        "_cache_reuse_contract",
+                                        self._cache_reuse_contract(),
+                                    ),
+                                    "partial_reuse_available": False,
+                                    "partial_reuse_unavailable_reason": getattr(
+                                        request,
+                                        "_cache_reuse_partial_unavailable_reason",
+                                        None,
+                                    ),
+                                }
+                                logger.warning(
+                                    f"Request {request.request_id}: skipping cache reuse "
+                                    f"(need {needed / 1048576:.0f}MB, "
+                                    f"available {avail / 1048576:.0f}MB, "
+                                    f"cached {cached_tokens} tokens)"
+                                )
+                                self._release_unusable_paged_hit(request)
+                                cache_to_use = None
+                                request.prompt_cache = None
+                                request.cached_tokens = 0
+                                request.remaining_tokens = request.prompt_token_ids
+                                tokens_to_process = request.prompt_token_ids
                     except ImportError:
                         pass  # psutil is a required dep but handle gracefully
                     except Exception as e:
@@ -5998,6 +6524,9 @@ class Scheduler:
             "cache_reuse_skips": self._cache_reuse_skips,
             "cache_reuse_skip_tokens": self._cache_reuse_skip_tokens,
             "last_cache_reuse_skip": self._last_cache_reuse_skip,
+            "cache_reuse_partial_downgrades": self._cache_reuse_partial_downgrades,
+            "cache_reuse_partial_tokens": self._cache_reuse_partial_tokens,
+            "last_cache_reuse_partial": self._last_cache_reuse_partial,
         }
         # Include cache stats
         if self.block_aware_cache is not None:

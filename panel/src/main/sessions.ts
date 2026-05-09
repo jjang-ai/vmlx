@@ -1907,7 +1907,7 @@ export class SessionManager extends EventEmitter {
 
     // Auto-detect tool/reasoning/cache behavior from config.json. This must
     // happen before concurrency flags because DSV4's custom generator is
-    // single-batch even though the generic session profile defaults to 5.
+    // single-batch even though the generic session profile defaults higher.
     const detected = detectModelConfigFromDir(config.modelPath)
 
     // Concurrent processing

@@ -84,7 +84,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   apiKey: '',
   rateLimit: 0,
   timeout: 300,
-  maxNumSeqs: 5,
+  maxNumSeqs: 64,
   // Throughput-optimized defaults (1.3.99) — bumped from 512/1024/512 to
   // saturate the prefill+decode pipeline on M-series with 64+ GB RAM. On
   // low-memory hardware the panel's auto-tune still falls through to the
@@ -135,7 +135,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   defaultEnableThinking: undefined,
   embeddingModel: '',
   additionalArgs: '',
-  enableJit: false,
+  enableJit: true,
   logLevel: 'INFO',
   corsOrigins: '*',
   maxContextLength: 0,
@@ -158,8 +158,8 @@ export const CASUAL_CONFIG: SessionConfig = {
   ...DEFAULT_CONFIG,
   host: '127.0.0.1',         // Local-only (safer for beginners)
   maxNumSeqs: 1,              // Single user (saves memory from batch overhead)
-  prefillBatchSize: 8,        // Low-memory defaults (override DEFAULT_CONFIG's 512)
-  completionBatchSize: 32,    // Low-memory defaults (override DEFAULT_CONFIG's 512)
+  prefillBatchSize: 8,        // Low-memory defaults (override DEFAULT_CONFIG's 1024)
+  completionBatchSize: 32,    // Low-memory defaults (override DEFAULT_CONFIG's 1024)
   cacheMemoryPercent: 15,     // 15% vs 30% — more headroom for model weights
   maxCacheBlocks: 500,        // Fewer paged blocks (half)
   prefixCacheSize: 50,        // Fewer cached prefixes
@@ -310,7 +310,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           defaultValue={DEFAULT_CONFIG.maxNumSeqs}
           allowUnlimited
           unlimitedValue={0}
-          unlimitedLabel="Default (5)"
+          unlimitedLabel="Default (64)"
         />
         <SliderField
           label="Prefill Batch Size"
@@ -320,10 +320,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           min={1}
           max={4096}
           step={64}
-          defaultValue={512}
+          defaultValue={DEFAULT_CONFIG.prefillBatchSize}
           allowUnlimited
           unlimitedValue={0}
-          unlimitedLabel="Default (512)"
+          unlimitedLabel="Default (1024)"
         />
         <SliderField
           label="Prefill Step Size"
@@ -333,10 +333,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           min={64}
           max={8192}
           step={64}
-          defaultValue={1024}
+          defaultValue={DEFAULT_CONFIG.prefillStepSize}
           allowUnlimited
           unlimitedValue={0}
-          unlimitedLabel="Default (1024)"
+          unlimitedLabel="Default (2048)"
         />
         <SliderField
           label="Completion Batch Size"
@@ -346,10 +346,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           min={1}
           max={4096}
           step={64}
-          defaultValue={512}
+          defaultValue={DEFAULT_CONFIG.completionBatchSize}
           allowUnlimited
           unlimitedValue={0}
-          unlimitedLabel="Default (512)"
+          unlimitedLabel="Default (1024)"
         />
         <CheckField
           label="Smelt Mode"
