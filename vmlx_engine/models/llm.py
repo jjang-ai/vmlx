@@ -19,6 +19,7 @@ class GenerationOutput:
 
     text: str
     tokens: list[int]
+    logprobs: list[dict] | None = None
     finish_reason: str | None = None
 
 
@@ -295,7 +296,8 @@ class MLXLanguageModel:
         if not self._loaded:
             self.load()
 
-        from mlx_lm import generate
+        want_logprobs = bool(kwargs.pop("logprobs", False))
+        top_logprobs = int(kwargs.pop("top_logprobs", 0) or 0)
 
         # Create sampler with all sampling parameters
         sampler = self._create_sampler(temperature, top_p, min_p=min_p, top_k=top_k)
@@ -321,11 +323,15 @@ class MLXLanguageModel:
         except ImportError:
             pass
 
-        if draft_model_arg is not None:
-            # mlx_lm.generate() doesn't accept draft_model, so we use
-            # stream_generate with speculative decoding and collect all output
+        if draft_model_arg is not None or want_logprobs:
+            # mlx_lm.generate() doesn't accept draft_model and does not expose
+            # per-token logprobs. Use stream_generate when either feature is
+            # requested, then collect the chunks.
             from mlx_lm import stream_generate as sg
+            from ..logprobs import format_token_logprobs_for_output
 
+            output_tokens: list[int] = []
+            output_logprobs: list[dict] = []
             output_text = ""
             for resp in sg(
                 self.model,
@@ -339,8 +345,21 @@ class MLXLanguageModel:
             ):
                 # Each resp.text is a new segment from the streaming detokenizer
                 output_text += resp.text
+                token_id = int(getattr(resp, "token", -1))
+                if token_id >= 0:
+                    output_tokens.append(token_id)
+                if want_logprobs:
+                    lp = format_token_logprobs_for_output(
+                        token_id,
+                        getattr(resp, "logprobs", None),
+                        top_logprobs,
+                    )
+                    if lp is not None:
+                        output_logprobs.append(lp)
         else:
             # Standard non-speculative generation
+            from mlx_lm import generate
+
             output_text = generate(
                 self.model,
                 self.tokenizer,
@@ -350,26 +369,35 @@ class MLXLanguageModel:
                 logits_processors=logits_processors,
                 verbose=False,
             )
+            output_tokens = []
+            output_logprobs = []
 
         # Truncate at first stop sequence (mlx_lm.generate doesn't support stop natively)
         # Note: output_text is generated tokens only (no prompt echo)
         finish_reason = "length"
+        stop_truncated = False
         if stop and output_text:
             for stop_seq in stop:
                 idx = output_text.find(stop_seq)
                 if idx != -1:
                     output_text = output_text[:idx]
                     finish_reason = "stop"
+                    stop_truncated = True
                     break
 
         # Tokenize after truncation to get accurate token count
-        tokens = self.tokenizer.encode(output_text)
+        tokens = self.tokenizer.encode(output_text) if stop_truncated else (
+            output_tokens or self.tokenizer.encode(output_text)
+        )
+        if stop_truncated and output_logprobs:
+            output_logprobs = output_logprobs[:len(tokens)]
         if finish_reason != "stop":
             finish_reason = "length" if len(tokens) >= max_tokens else "stop"
 
         return GenerationOutput(
             text=output_text,
             tokens=tokens,
+            logprobs=output_logprobs if want_logprobs else None,
             finish_reason=finish_reason,
         )
 

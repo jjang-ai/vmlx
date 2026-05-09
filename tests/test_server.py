@@ -583,6 +583,420 @@ class TestRequestTimeoutField:
         assert request_with_timeout.timeout == 120.0
 
 
+class TestOpenAILogprobsFormatting:
+    """Server-side token decoding must produce OpenAI-compatible logprob shapes."""
+
+    class _Tokenizer:
+        def decode(self, token_ids):
+            mapping = {
+                10: " hello",
+                11: "world",
+                12: "é",
+            }
+            return "".join(mapping[i] for i in token_ids)
+
+    def test_completion_logprobs_preserve_tokens_offsets_and_top_entries(self):
+        from vmlx_engine.server import _format_completion_logprobs
+
+        raw = [
+            {
+                "token_id": 10,
+                "logprob": -0.1,
+                "top_logprobs": [(10, -0.1), (11, -2.0)],
+            },
+            {
+                "token_id": 12,
+                "logprob": -0.2,
+                "top_logprobs": [(12, -0.2)],
+            },
+        ]
+
+        formatted = _format_completion_logprobs(raw, self._Tokenizer())
+
+        assert formatted == {
+            "tokens": [" hello", "é"],
+            "token_logprobs": [-0.1, -0.2],
+            "top_logprobs": [
+                {" hello": -0.1, "world": -2.0},
+                {"é": -0.2},
+            ],
+            "text_offset": [0, 6],
+        }
+
+    def test_chat_logprobs_include_utf8_bytes(self):
+        from vmlx_engine.server import _format_chat_logprobs
+
+        formatted = _format_chat_logprobs(
+            [
+                {
+                    "token_id": 12,
+                    "logprob": -0.2,
+                    "top_logprobs": [(12, -0.2), (11, -1.5)],
+                }
+            ],
+            self._Tokenizer(),
+        )
+
+        assert formatted == {
+            "content": [
+                {
+                    "token": "é",
+                    "logprob": -0.2,
+                    "bytes": [195, 169],
+                    "top_logprobs": [
+                        {"token": "é", "logprob": -0.2, "bytes": [195, 169]},
+                        {
+                            "token": "world",
+                            "logprob": -1.5,
+                            "bytes": [119, 111, 114, 108, 100],
+                        },
+                    ],
+                }
+            ]
+        }
+
+    @pytest.mark.asyncio
+    async def test_completion_endpoint_passes_logprobs_to_text_engine(self, monkeypatch):
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import CompletionRequest
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            is_mllm = False
+            preserve_native_tool_format = False
+            tokenizer = self._Tokenizer()
+
+            def __init__(self):
+                self.kwargs = None
+
+            async def generate(self, **kwargs):
+                self.kwargs = kwargs
+                return GenerationOutput(
+                    text=" hello",
+                    tokens=[10],
+                    prompt_tokens=2,
+                    completion_tokens=1,
+                    logprobs=[
+                        {
+                            "token_id": 10,
+                            "logprob": -0.1,
+                            "top_logprobs": [(10, -0.1), (11, -2.0)],
+                        }
+                    ],
+                    finish_reason="stop",
+                )
+
+        engine = _Engine()
+        monkeypatch.setattr(server, "_engine", engine)
+        monkeypatch.setattr(server, "_served_model_name", "loaded-model")
+        monkeypatch.setattr(server, "_model_name", "loaded-model")
+
+        response = await server.create_completion(
+            CompletionRequest(
+                model="loaded-model",
+                prompt="hi",
+                max_tokens=1,
+                logprobs=2,
+            )
+        )
+
+        assert engine.kwargs["logprobs"] is True
+        assert engine.kwargs["top_logprobs"] == 2
+        assert response.choices[0].logprobs == {
+            "tokens": [" hello"],
+            "token_logprobs": [-0.1],
+            "top_logprobs": [{" hello": -0.1, "world": -2.0}],
+            "text_offset": [0],
+        }
+
+    @pytest.mark.asyncio
+    async def test_chat_endpoint_passes_logprobs_to_text_engine(self, monkeypatch):
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            is_mllm = False
+            tokenizer = self._Tokenizer()
+            preserve_native_tool_format = False
+
+            def __init__(self):
+                self.kwargs = None
+
+            async def chat(self, *, messages, **kwargs):
+                self.kwargs = kwargs
+                return GenerationOutput(
+                    text="é",
+                    tokens=[12],
+                    prompt_tokens=3,
+                    completion_tokens=1,
+                    logprobs=[
+                        {
+                            "token_id": 12,
+                            "logprob": -0.2,
+                            "top_logprobs": [(12, -0.2), (11, -1.5)],
+                        }
+                    ],
+                    finish_reason="stop",
+                )
+
+        engine = _Engine()
+        monkeypatch.setattr(server, "_engine", engine)
+        monkeypatch.setattr(server, "_served_model_name", "loaded-model")
+        monkeypatch.setattr(server, "_model_name", "loaded-model")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_type", "llm")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+
+        response = await server.create_chat_completion(
+            ChatCompletionRequest(
+                model="loaded-model",
+                messages=[Message(role="user", content="hi")],
+                max_tokens=1,
+                logprobs=True,
+                top_logprobs=2,
+            ),
+            fastapi_request=None,
+        )
+
+        assert engine.kwargs["logprobs"] is True
+        assert engine.kwargs["top_logprobs"] == 2
+        assert response.choices[0].logprobs == {
+            "content": [
+                {
+                    "token": "é",
+                    "logprob": -0.2,
+                    "bytes": [195, 169],
+                    "top_logprobs": [
+                        {"token": "é", "logprob": -0.2, "bytes": [195, 169]},
+                        {
+                            "token": "world",
+                            "logprob": -1.5,
+                            "bytes": [119, 111, 114, 108, 100],
+                        },
+                    ],
+                }
+            ]
+        }
+
+    @pytest.mark.parametrize(
+        "endpoint, stream, is_mllm, expected",
+        [
+            ("Completions", False, True, "text-only LLM"),
+            ("Chat Completions", False, True, "text-only LLM"),
+            ("Completions", True, True, "multimodal/VLM logprobs"),
+            ("Chat Completions", True, True, "multimodal/VLM logprobs"),
+        ],
+    )
+    def test_logprobs_rejects_unimplemented_surfaces(
+        self, endpoint, stream, is_mllm, expected
+    ):
+        from fastapi import HTTPException
+        from vmlx_engine.server import _reject_unsupported_logprobs_request
+
+        with pytest.raises(HTTPException) as exc:
+            _reject_unsupported_logprobs_request(
+                endpoint=endpoint,
+                requested=True,
+                stream=stream,
+                is_mllm=is_mllm,
+            )
+
+        assert exc.value.status_code == 400
+        assert expected in exc.value.detail
+
+    def test_logprobs_allows_text_streaming(self):
+        from vmlx_engine.server import _reject_unsupported_logprobs_request
+
+        _reject_unsupported_logprobs_request(
+            endpoint="Chat Completions",
+            requested=True,
+            stream=True,
+            is_mllm=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_completion_endpoint_rejects_mllm_logprobs(self, monkeypatch):
+        import vmlx_engine.server as server
+        from fastapi import HTTPException
+        from vmlx_engine.api.models import CompletionRequest
+
+        class _Engine:
+            is_mllm = True
+
+        monkeypatch.setattr(server, "_engine", _Engine())
+        monkeypatch.setattr(server, "_served_model_name", "vl-model")
+        monkeypatch.setattr(server, "_model_name", "vl-model")
+
+        with pytest.raises(HTTPException) as exc:
+            await server.create_completion(
+                CompletionRequest(model="vl-model", prompt="hi", logprobs=1)
+            )
+
+        assert exc.value.status_code == 400
+        assert "multimodal/VLM logprobs" in exc.value.detail
+
+    @pytest.mark.asyncio
+    async def test_chat_endpoint_rejects_mllm_logprobs_before_generation(self, monkeypatch):
+        import vmlx_engine.server as server
+        from fastapi import HTTPException
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+
+        class _Engine:
+            is_mllm = True
+
+            async def chat(self, **kwargs):  # pragma: no cover - must not run
+                raise AssertionError("chat should not be called")
+
+        monkeypatch.setattr(server, "_engine", _Engine())
+        monkeypatch.setattr(server, "_served_model_name", "vl-model")
+        monkeypatch.setattr(server, "_model_name", "vl-model")
+        monkeypatch.setattr(server, "_model_path", None)
+
+        with pytest.raises(HTTPException) as exc:
+            await server.create_chat_completion(
+                ChatCompletionRequest(
+                    model="vl-model",
+                    messages=[Message(role="user", content="hi")],
+                    logprobs=True,
+                ),
+                fastapi_request=None,
+            )
+
+        assert exc.value.status_code == 400
+        assert "multimodal/VLM logprobs" in exc.value.detail
+
+    def test_streaming_chunk_choice_can_carry_logprobs(self):
+        from vmlx_engine.api.models import ChatCompletionChunkChoice
+
+        assert "logprobs" in ChatCompletionChunkChoice.model_fields
+
+    @pytest.mark.asyncio
+    async def test_streaming_completion_emits_delta_logprobs(self, monkeypatch):
+        import json
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import CompletionRequest
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            tokenizer = self._Tokenizer()
+
+            def __init__(self):
+                self.kwargs = None
+
+            async def stream_generate(self, **kwargs):
+                self.kwargs = kwargs
+                yield GenerationOutput(
+                    text=" hello",
+                    new_text=" hello",
+                    tokens=[10],
+                    prompt_tokens=2,
+                    completion_tokens=1,
+                    finished=False,
+                    logprobs=[
+                        {
+                            "token_id": 10,
+                            "logprob": -0.1,
+                            "top_logprobs": [(10, -0.1)],
+                        }
+                    ],
+                )
+
+        engine = _Engine()
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+
+        chunks = []
+        request = CompletionRequest(
+            model="loaded-model",
+            prompt="hi",
+            stream=True,
+            logprobs=1,
+        )
+        async for line in server.stream_completions_multi(engine, ["hi"], request):
+            if line.startswith("data: ") and line.strip() != "data: [DONE]":
+                chunks.append(json.loads(line.removeprefix("data: ")))
+
+        assert engine.kwargs["logprobs"] is True
+        assert engine.kwargs["top_logprobs"] == 1
+        assert chunks[0]["choices"][0]["logprobs"] == {
+            "tokens": [" hello"],
+            "token_logprobs": [-0.1],
+            "top_logprobs": [{" hello": -0.1}],
+            "text_offset": [0],
+        }
+
+    @pytest.mark.asyncio
+    async def test_streaming_chat_emits_delta_logprobs(self, monkeypatch):
+        import json
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            tokenizer = self._Tokenizer()
+
+            async def stream_chat(self, *, messages, **kwargs):
+                yield GenerationOutput(
+                    text="é",
+                    new_text="é",
+                    tokens=[12],
+                    prompt_tokens=3,
+                    completion_tokens=1,
+                    finished=False,
+                    logprobs=[
+                        {
+                            "token_id": 12,
+                            "logprob": -0.2,
+                            "top_logprobs": [(12, -0.2)],
+                        }
+                    ],
+                )
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "loaded-model")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+
+        request = ChatCompletionRequest(
+            model="loaded-model",
+            messages=[Message(role="user", content="hi")],
+            stream=True,
+            logprobs=True,
+            top_logprobs=1,
+        )
+        chunks = []
+        async for line in server.stream_chat_completion(
+            _Engine(),
+            [m.model_dump(exclude_none=True) for m in request.messages],
+            request,
+            fastapi_request=None,
+            logprobs=True,
+            top_logprobs=1,
+        ):
+            if line.startswith("data: ") and line.strip() != "data: [DONE]":
+                chunks.append(json.loads(line.removeprefix("data: ")))
+
+        content_chunks = [
+            c for c in chunks
+            if c["choices"] and c["choices"][0]["delta"].get("content")
+        ]
+        assert content_chunks[0]["choices"][0]["logprobs"] == {
+            "content": [
+                {
+                    "token": "é",
+                    "logprob": -0.2,
+                    "bytes": [195, 169],
+                    "top_logprobs": [
+                        {"token": "é", "logprob": -0.2, "bytes": [195, 169]}
+                    ],
+                }
+            ]
+        }
+
+
 class TestAPIKeyVerification:
     """Test API key verification with timing attack prevention."""
 

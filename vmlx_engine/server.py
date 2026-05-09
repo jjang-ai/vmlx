@@ -121,6 +121,10 @@ from .api.utils import (
     is_mllm_model,  # noqa: F401
 )
 from .engine import BaseEngine, BatchedEngine, GenerationOutput, SimpleEngine
+from .logprobs import (
+    format_chat_logprobs as _format_chat_logprobs,
+    format_completion_logprobs as _format_completion_logprobs,
+)
 from .reasoning.gptoss_parser import GptOssReasoningParser
 from .tool_parsers import ToolParserManager
 
@@ -3244,6 +3248,27 @@ def _get_responses_usage(output: GenerationOutput) -> "ResponsesUsage":
         if cached > 0
         else None,
     )
+
+
+def _reject_unsupported_logprobs_request(
+    *,
+    endpoint: str,
+    requested: bool,
+    stream: bool = False,
+    is_mllm: bool = False,
+) -> None:
+    """Reject logprobs only on surfaces that cannot return truthful token data."""
+    if not requested:
+        return
+    if is_mllm:
+        mode = "streaming " if stream else ""
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{endpoint} {mode}logprobs currently require text-only LLM "
+                "requests; multimodal/VLM logprobs are not implemented."
+            ),
+        )
 
 
 @app.get("/")
@@ -7381,6 +7406,12 @@ async def list_voices(model: str = "kokoro"):
 async def create_completion(request: CompletionRequest):
     """Create a text completion."""
     engine = get_engine()
+    _reject_unsupported_logprobs_request(
+        endpoint="Completions",
+        requested=request.logprobs is not None,
+        stream=bool(request.stream),
+        is_mllm=bool(getattr(engine, "is_mllm", False)),
+    )
 
     # Normalize model name (consistent with chat/responses endpoints)
     resolved_name = _resolve_model_name()
@@ -7420,6 +7451,9 @@ async def create_completion(request: CompletionRequest):
                 gen_kwargs["repetition_penalty"] = _rp
             if _compute_bypass_prefix_cache(request):
                 gen_kwargs["_bypass_prefix_cache"] = True
+            if request.logprobs is not None:
+                gen_kwargs["logprobs"] = True
+                gen_kwargs["top_logprobs"] = request.logprobs
             output = await asyncio.wait_for(
                 engine.generate(**gen_kwargs),
                 timeout=timeout,
@@ -7439,6 +7473,12 @@ async def create_completion(request: CompletionRequest):
             CompletionChoice(
                 index=i,
                 text=output.text,
+                logprobs=_format_completion_logprobs(
+                    getattr(output, "logprobs", None),
+                    engine.tokenizer,
+                )
+                if request.logprobs is not None
+                else None,
                 finish_reason=output.finish_reason,
             )
         )
@@ -7543,6 +7583,15 @@ async def create_chat_completion(
             )
     # Normalize response model field to the resolved name
     request.model = resolved_name
+
+    if request.logprobs:
+        _logprobs_engine = get_engine()
+        _reject_unsupported_logprobs_request(
+            endpoint="Chat Completions",
+            requested=True,
+            stream=request.stream,
+            is_mllm=bool(getattr(_logprobs_engine, "is_mllm", False)),
+        )
 
     # Nemotron-3-Nano-Omni multimodal dispatch (Stage-1 PyTorch+MLX bridge).
     # If the loaded bundle is a nemotron_h Omni bundle (has config_omni.json
@@ -7781,6 +7830,9 @@ async def create_chat_completion(
         chat_kwargs["repetition_penalty"] = _rp
     if _compute_bypass_prefix_cache(request):
         chat_kwargs["_bypass_prefix_cache"] = True
+    if request.logprobs:
+        chat_kwargs["logprobs"] = True
+        chat_kwargs["top_logprobs"] = request.top_logprobs or 0
 
     # Pass enable_thinking to engine
     # Priority: top-level field > chat_template_kwargs > server default > auto-detect
@@ -8248,6 +8300,12 @@ async def create_chat_completion(
                     reasoning=reasoning_text,
                     tool_calls=tool_calls,
                 ),
+                logprobs=_format_chat_logprobs(
+                    getattr(output, "logprobs", None),
+                    engine.tokenizer,
+                )
+                if request.logprobs
+                else None,
                 finish_reason=finish_reason,
             )
         ],
@@ -9787,26 +9845,37 @@ async def stream_completions_multi(
                 gen_kwargs["repetition_penalty"] = _rp
             if _compute_bypass_prefix_cache(request):
                 gen_kwargs["_bypass_prefix_cache"] = True
+            if request.logprobs is not None:
+                gen_kwargs["logprobs"] = True
+                gen_kwargs["top_logprobs"] = request.logprobs
+            stream_logprob_offset = 0
             async for output in _stream_with_keepalive(
                 engine.stream_generate(**gen_kwargs), total_timeout=_stream_timeout
             ):
                 if output is None:
                     yield ": keep-alive\n\n"
                     continue
+                raw_logprobs = getattr(output, "logprobs", None) or []
+                choice = {
+                    "index": prompt_index,
+                    "text": output.new_text,
+                    "finish_reason": output.finish_reason
+                    if output.finished
+                    else None,
+                }
+                if request.logprobs is not None:
+                    delta_logprobs = raw_logprobs[stream_logprob_offset:]
+                    stream_logprob_offset = len(raw_logprobs)
+                    choice["logprobs"] = _format_completion_logprobs(
+                        delta_logprobs,
+                        engine.tokenizer,
+                    )
                 data = {
                     "id": response_id,
                     "object": "text_completion",
                     "created": created,
                     "model": request.model,
-                    "choices": [
-                        {
-                            "index": prompt_index,
-                            "text": output.new_text,
-                            "finish_reason": output.finish_reason
-                            if output.finished
-                            else None,
-                        }
-                    ],
+                    "choices": [choice],
                 }
                 if output.finished:
                     data["usage"] = get_usage(output).model_dump(exclude_none=True)
@@ -10045,6 +10114,7 @@ async def stream_chat_completion(
     completion_tokens = 0
     cached_tokens = 0
     last_output = None
+    stream_logprob_offset = 0
 
     # Use per-request timeout if provided, otherwise server default
     _stream_timeout = (
@@ -10079,6 +10149,15 @@ async def stream_chat_completion(
                 completion_tokens = output.completion_tokens
             if hasattr(output, "cached_tokens") and output.cached_tokens:
                 cached_tokens = output.cached_tokens
+            chunk_logprobs = None
+            if request.logprobs:
+                raw_logprobs = getattr(output, "logprobs", None) or []
+                delta_logprobs = raw_logprobs[stream_logprob_offset:]
+                stream_logprob_offset = len(raw_logprobs)
+                chunk_logprobs = _format_chat_logprobs(
+                    delta_logprobs,
+                    engine.tokenizer,
+                )
 
             # Always accumulate full text (needed for both reasoning and tool call parsing)
             accumulated_text += delta_text if delta_text else ""
@@ -10256,6 +10335,7 @@ async def stream_chat_completion(
                                 content=emit_content,
                                 reasoning=emit_reasoning,
                             ),
+                            logprobs=chunk_logprobs,
                             finish_reason=output.finish_reason
                             if output.finished
                             else None,
@@ -10315,6 +10395,7 @@ async def stream_chat_completion(
                             delta=ChatCompletionChunkDelta(
                                 content=content if content else None
                             ),
+                            logprobs=chunk_logprobs,
                             finish_reason=output.finish_reason
                             if output.finished
                             else None,

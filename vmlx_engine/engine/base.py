@@ -23,6 +23,9 @@ class GenerationOutput:
     completion_tokens: int = 0
     cached_tokens: int = 0
     cache_detail: str = ""  # e.g. "paged", "paged+ssm", "prefix", "disk", "+tq"
+    # Per-token logprobs when explicitly requested by OpenAI-compatible
+    # logprobs fields. None keeps the default fast path allocation-free.
+    logprobs: list[dict] | None = None
     finish_reason: str | None = "stop"
     # For streaming
     new_text: str = ""

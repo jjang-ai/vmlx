@@ -201,6 +201,8 @@ class TestSamplingParams:
             top_k=50,
             min_p=0.1,
             repetition_penalty=1.2,
+            logprobs=True,
+            top_logprobs=5,
         )
         assert sp.max_tokens == 100
         assert sp.temperature == 0.8
@@ -208,6 +210,8 @@ class TestSamplingParams:
         assert sp.top_k == 50
         assert sp.min_p == 0.1
         assert sp.repetition_penalty == 1.2
+        assert sp.logprobs is True
+        assert sp.top_logprobs == 5
 
     def test_sampling_params_defaults(self):
         from vmlx_engine.request import SamplingParams
@@ -217,6 +221,8 @@ class TestSamplingParams:
         assert sp.top_k == 0
         assert sp.min_p == 0.0
         assert sp.repetition_penalty == 1.0
+        assert sp.logprobs is False
+        assert sp.top_logprobs == 0
 
 
 class TestMLLMBatchRequestSampling:
@@ -2258,8 +2264,9 @@ class TestGenerationBatchFastNoLogprobs:
         func_start = source.find("def _patch_generation_step_sync")
         assert func_start >= 0
         func_body = source[func_start: source.find("\ndef ", func_start + 10)]
-        assert "vMLX does not expose" in func_body
-        assert "self._next_logprobs = [None] * len(self.uids)" in func_body
+        assert "requested_logprobs" in func_body
+        assert "_should_capture_generation_logprobs" in func_body
+        assert "logprobs[i] if requested_logprobs[i] else None" in func_body
         assert "mx.eval(inputs, self._current_logprobs)" not in func_body
         assert "mx.async_eval(self._next_tokens, self._next_logprobs" not in func_body
 
@@ -3085,6 +3092,65 @@ class TestMLLMMlaDetection:
         scheduler.model = _Model()
 
         assert scheduler._detect_mla() is False
+
+
+class TestMLLMNKvHeadsWrapperParity:
+    """MLLMScheduler._detect_n_kv_heads must walk text_config + inner wrappers.
+
+    Symmetric to ``Scheduler._detect_mla`` and ``PrefixCache._get_n_kv_heads``.
+    Earlier version only inspected ``language_model.{args,config}`` directly —
+    Kimi K2.6 VLM (mlx_vlm wrapper around DeepseekV3 backbone) exposes the
+    MLA config via ``language_model.config.text_config.kv_lora_rank``. Without
+    the text_config fallback, MLA H=1 collapse never fires for VLM-wrapped
+    MLA models and cache slicing in ``_normalize_gqa_state`` mismatches.
+    """
+
+    def test_kimi_vlm_text_config_kv_lora_rank_collapses_to_one_head(self):
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+
+        class _TextCfg:
+            model_type = "kimi_k25"
+            kv_lora_rank = 512
+            num_attention_heads = 64
+            num_key_value_heads = 8
+
+        class _Cfg:
+            text_config = _TextCfg()
+
+        class _LM:
+            config = _Cfg()
+
+        class _Model:
+            language_model = _LM()
+
+        sched = MLLMScheduler.__new__(MLLMScheduler)
+        sched.model = _Model()
+        assert sched._detect_n_kv_heads() == 1
+
+    def test_bailing_hybrid_via_text_config_keeps_full_kv_heads(self):
+        """Ling/Bailing stores expanded KV — must NOT collapse to H=1."""
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+
+        class _TextCfg:
+            model_type = "bailing_hybrid"
+            kv_lora_rank = 512
+            num_attention_heads = 32
+            num_key_value_heads = 32
+
+        class _Cfg:
+            text_config = _TextCfg()
+
+        class _LM:
+            config = _Cfg()
+
+        class _Model:
+            language_model = _LM()
+
+        sched = MLLMScheduler.__new__(MLLMScheduler)
+        sched.model = _Model()
+        # Must keep full per-head KV count (32), not collapse to H=1
+        # which would slice valid (1,32,T,D) cache to (1,1,T,D).
+        assert sched._detect_n_kv_heads() == 32
 
 
 class TestLLMMlaDetectionWrapperParity:

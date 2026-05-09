@@ -57,6 +57,22 @@ logger = logging.getLogger(__name__)
 
 # TurboQuantKVCache class name for isinstance-free detection.
 _TQ_CLASS_NAME = "TurboQuantKVCache"
+_GENERATION_LOGPROBS_KEYS: set[tuple[int, int]] = set()
+
+
+def register_generation_logprobs(model, uid: int) -> None:
+    """Mark one mlx-lm BatchGenerator UID as needing logprobs capture."""
+    _GENERATION_LOGPROBS_KEYS.add((id(model), int(uid)))
+
+
+def unregister_generation_logprobs(model, uid: int) -> None:
+    """Remove a logprobs capture mark for a BatchGenerator UID."""
+    _GENERATION_LOGPROBS_KEYS.discard((id(model), int(uid)))
+
+
+def _should_capture_generation_logprobs(model, uids: list[int]) -> list[bool]:
+    model_id = id(model)
+    return [(model_id, int(uid)) in _GENERATION_LOGPROBS_KEYS for uid in uids]
 
 
 def _is_kv_like(c) -> bool:
@@ -806,11 +822,12 @@ def _patch_generation_step_sync():
                     processed_logits.append(sample_logits)
                 logits = mx.concatenate(processed_logits, axis=0)
             # mlx-lm's stock GenerationBatch stores and materializes a full
-            # vocab-sized logprob vector every token. vMLX does not expose
-            # logprobs on the text BatchGenerator path, and PLD speculative
-            # verification is gated to MLLMBatchGenerator only. Keep logprobs
-            # as a transient GPU value for samplers that need normalized
-            # probabilities, but do not store/eval it per token.
+            # vocab-sized logprob vector every token. Keep the default vMLX
+            # path allocation-free, but preserve the vector for UIDs whose
+            # OpenAI request explicitly asked for logprobs. The scheduler
+            # consumes those vectors on this same worker step and converts
+            # them to small Python top-k records before anything crosses
+            # thread boundaries.
             logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
             if any(self.samplers):
                 all_samples = []
@@ -822,7 +839,13 @@ def _patch_generation_step_sync():
             else:
                 sampled = self.fallback_sampler(logprobs)
             self._next_tokens = sampled
-            self._next_logprobs = [None] * len(self.uids)
+            requested_logprobs = _should_capture_generation_logprobs(
+                self.model, self.uids
+            )
+            self._next_logprobs = [
+                logprobs[i] if requested_logprobs[i] else None
+                for i in range(len(self.uids))
+            ]
             # Drain on active stream first.
             if hasattr(mx, "synchronize"):
                 mx.synchronize()

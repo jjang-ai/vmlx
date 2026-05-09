@@ -1317,27 +1317,80 @@ class MLLMScheduler:
             return self._n_kv_heads_cached
         n_kv = 0
         try:
-            # VLM models wrap the LM — get the language_model's config
-            lm = self.model.language_model if hasattr(self.model, 'language_model') else self.model
-            for cfg_source in ('args', 'config'):
-                cfg = getattr(lm, cfg_source, None)
-                if cfg is None:
-                    continue
-                # MLA models store compressed KV latents with H=1.
-                # Check kv_lora_rank before num_key_value_heads.
-                kv_lora_rank = getattr(cfg, 'kv_lora_rank', 0)
-                if kv_lora_rank and kv_lora_rank > 0:
-                    n_kv = 1
-                    break
-                n_kv = (
-                    getattr(cfg, 'num_key_value_heads', 0)
-                    or getattr(cfg, 'num_kv_heads', 0)
-                )
+            # VLM wrappers may expose MLA config via language_model.config.text_config
+            # (Kimi K2.6 around DeepseekV3, glm_moe_dsa around deepseek_v32).
+            # Walk the same model + language_model + inner .model candidates and
+            # the same args/config/text_config attrs as Scheduler._detect_mla
+            # and PrefixCache._get_n_kv_heads. Carve out Ling/Bailing whose MLA
+            # runtime stores expanded per-head KV (do not collapse to H=1).
+            candidates = [self.model]
+            lm = getattr(self.model, 'language_model', None)
+            if lm is not None and lm not in candidates:
+                candidates.append(lm)
+            for obj in list(candidates):
+                inner = getattr(obj, 'model', None)
+                if inner is not None and inner not in candidates:
+                    candidates.append(inner)
+
+            # PASS 1: MLA detection (H=1 collapse) with bailing carve-out.
+            for obj in candidates:
+                for attr in ('args', 'config', 'text_config'):
+                    cfg = getattr(obj, attr, None)
+                    if cfg is None:
+                        continue
+                    model_type = str(getattr(cfg, 'model_type', '') or '').lower()
+                    if not model_type:
+                        tc = getattr(cfg, 'text_config', None)
+                        if tc is not None:
+                            model_type = str(getattr(tc, 'model_type', '') or '').lower()
+                    kv_lora_rank = getattr(cfg, 'kv_lora_rank', 0)
+                    if not kv_lora_rank:
+                        tc = getattr(cfg, 'text_config', None)
+                        if tc is not None:
+                            kv_lora_rank = getattr(tc, 'kv_lora_rank', 0)
+                    if kv_lora_rank and kv_lora_rank > 0:
+                        if model_type in ('bailing_hybrid', 'bailing_moe_v2_5'):
+                            # Ling/Bailing keeps full per-head KV.
+                            n_kv = int(getattr(cfg, 'num_attention_heads', 0) or 0)
+                            if not n_kv:
+                                tc = getattr(cfg, 'text_config', None)
+                                if tc is not None:
+                                    n_kv = int(getattr(tc, 'num_attention_heads', 0) or 0)
+                        else:
+                            n_kv = 1
+                        break
                 if n_kv:
                     break
-                n_kv = getattr(cfg, 'num_attention_heads', 0)
-                if n_kv:
-                    break
+
+            # PASS 2: standard num_key_value_heads / num_kv_heads / num_attention_heads.
+            if not n_kv:
+                for obj in candidates:
+                    for attr in ('args', 'config', 'text_config'):
+                        cfg = getattr(obj, attr, None)
+                        if cfg is None:
+                            continue
+                        n_kv = (
+                            getattr(cfg, 'num_key_value_heads', 0)
+                            or getattr(cfg, 'num_kv_heads', 0)
+                        )
+                        if not n_kv:
+                            tc = getattr(cfg, 'text_config', None)
+                            if tc is not None:
+                                n_kv = (
+                                    getattr(tc, 'num_key_value_heads', 0)
+                                    or getattr(tc, 'num_kv_heads', 0)
+                                )
+                        if n_kv:
+                            break
+                        n_kv = getattr(cfg, 'num_attention_heads', 0)
+                        if not n_kv:
+                            tc = getattr(cfg, 'text_config', None)
+                            if tc is not None:
+                                n_kv = getattr(tc, 'num_attention_heads', 0)
+                        if n_kv:
+                            break
+                    if n_kv:
+                        break
         except Exception:
             pass
         if not isinstance(n_kv, int):

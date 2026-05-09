@@ -148,6 +148,7 @@ class RequestOutputCollector:
             new_text=merged_new_text,
             output_token_ids=new.output_token_ids,  # Use latest cumulative
             output_text=new.output_text,  # Use latest cumulative
+            logprobs=new.logprobs,
             finished=new.finished,
             finish_reason=new.finish_reason,
             prompt_tokens=new.prompt_tokens,

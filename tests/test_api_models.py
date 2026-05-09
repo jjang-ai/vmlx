@@ -387,6 +387,57 @@ class TestTextCompletion:
         assert len(resp.choices) == 1
 
 
+class TestLogprobsRequestModels:
+    """OpenAI logprobs request fields must be accepted and bounded."""
+
+    def test_chat_logprobs_and_top_logprobs_are_accepted(self):
+        req = ChatCompletionRequest(
+            model="test",
+            messages=[Message(role="user", content="hi")],
+            logprobs=True,
+            top_logprobs=7,
+        )
+        assert req.logprobs is True
+        assert req.top_logprobs == 7
+
+    def test_chat_top_logprobs_auto_enables_logprobs(self):
+        req = ChatCompletionRequest(
+            model="test",
+            messages=[Message(role="user", content="hi")],
+            top_logprobs=3,
+        )
+        assert req.logprobs is True
+        assert req.top_logprobs == 3
+
+    def test_chat_top_logprobs_rejects_explicit_logprobs_false(self):
+        with pytest.raises(ValueError):
+            ChatCompletionRequest(
+                model="test",
+                messages=[Message(role="user", content="hi")],
+                logprobs=False,
+                top_logprobs=3,
+            )
+
+    @pytest.mark.parametrize("value", [-1, 21])
+    def test_chat_top_logprobs_is_capped_to_openai_limit(self, value):
+        with pytest.raises(ValueError):
+            ChatCompletionRequest(
+                model="test",
+                messages=[Message(role="user", content="hi")],
+                logprobs=True,
+                top_logprobs=value,
+            )
+
+    def test_completion_logprobs_count_is_accepted(self):
+        req = CompletionRequest(model="test", prompt="hi", logprobs=20)
+        assert req.logprobs == 20
+
+    @pytest.mark.parametrize("value", [-1, 21])
+    def test_completion_logprobs_count_is_capped(self, value):
+        with pytest.raises(ValueError):
+            CompletionRequest(model="test", prompt="hi", logprobs=value)
+
+
 class TestModelsEndpoint:
     """Tests for models list models."""
 

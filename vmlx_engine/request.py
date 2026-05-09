@@ -60,6 +60,8 @@ class SamplingParams:
     repetition_penalty: float = 1.0
     stop: Optional[List[str]] = None
     stop_token_ids: Optional[List[int]] = None
+    logprobs: bool = False
+    top_logprobs: int = 0
 
     def __post_init__(self):
         if self.stop is None:
@@ -102,6 +104,7 @@ class Request:
     status: RequestStatus = RequestStatus.WAITING
     num_computed_tokens: int = 0
     output_token_ids: List[int] = field(default_factory=list)
+    output_logprobs: List[dict] = field(default_factory=list)
     output_text: str = ""
 
     # For BatchGenerator integration
@@ -229,6 +232,7 @@ class RequestOutput:
     # Cumulative output
     output_token_ids: List[int] = field(default_factory=list)
     output_text: str = ""
+    logprobs: Optional[List[dict]] = None
     # Status
     finished: bool = False
     finish_reason: Optional[str] = None

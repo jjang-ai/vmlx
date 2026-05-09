@@ -988,6 +988,7 @@ class BatchedEngine(BaseEngine):
                 text=clean_output_text(output.output_text),
                 raw_text=output.output_text,
                 tokens=list(getattr(output, "output_token_ids", []) or []),
+                logprobs=getattr(output, "logprobs", None),
                 prompt_tokens=output.prompt_tokens,
                 completion_tokens=output.completion_tokens,
                 cached_tokens=getattr(output, "cached_tokens", 0),
@@ -1010,6 +1011,8 @@ class BatchedEngine(BaseEngine):
             min_p=kwargs.get("min_p", 0.0),
             repetition_penalty=kwargs.get("repetition_penalty", 1.0),
             stop=stop or [],
+            logprobs=bool(kwargs.get("logprobs", False)),
+            top_logprobs=int(kwargs.get("top_logprobs", 0) or 0),
         )
 
         output = await self._engine.generate(
@@ -1030,6 +1033,7 @@ class BatchedEngine(BaseEngine):
             text=text,
             raw_text=raw,
             tokens=list(getattr(output, "output_token_ids", []) or []),
+            logprobs=getattr(output, "logprobs", None),
             prompt_tokens=output.prompt_tokens,
             completion_tokens=output.completion_tokens,
             cached_tokens=getattr(output, "cached_tokens", 0),
@@ -1124,6 +1128,8 @@ class BatchedEngine(BaseEngine):
             min_p=kwargs.get("min_p", 0.0),
             repetition_penalty=kwargs.get("repetition_penalty", 1.0),
             stop=stop or [],
+            logprobs=bool(kwargs.get("logprobs", False)),
+            top_logprobs=int(kwargs.get("top_logprobs", 0) or 0),
         )
 
         request_id = await self._engine.add_request(
@@ -1142,6 +1148,7 @@ class BatchedEngine(BaseEngine):
 
             yield GenerationOutput(
                 text=text,
+                logprobs=getattr(output, "logprobs", None),
                 new_text=output.new_text,
                 prompt_tokens=output.prompt_tokens,
                 completion_tokens=output.completion_tokens,

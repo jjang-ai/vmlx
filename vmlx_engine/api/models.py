@@ -185,6 +185,10 @@ class ChatCompletionRequest(BaseModel):
     repetition_penalty: float | None = None  # Repetition penalty (1.0 = disabled)
     frequency_penalty: float | None = None  # Accepted for API compat (not implemented)
     presence_penalty: float | None = None  # Accepted for API compat (not implemented)
+    # OpenAI-compatible per-token logprobs. Chat uses a boolean switch plus
+    # optional top_logprobs count (0-20).
+    logprobs: bool | None = None
+    top_logprobs: int | None = None
     # Tool calling
     tools: list[ToolDefinition] | None = None
     tool_choice: str | dict | None = None  # "auto", "none", or specific tool
@@ -289,6 +293,12 @@ class ChatCompletionRequest(BaseModel):
                 raise ValueError(
                     "thinking_mode must be one of: instruct, reasoning, max"
                 )
+        if self.top_logprobs is not None and self.logprobs is False:
+            raise ValueError("top_logprobs requires logprobs=true")
+        if self.top_logprobs is not None and self.logprobs is None:
+            # OpenAI clients often send only top_logprobs. Treat that as a
+            # request for logprobs instead of silently dropping it.
+            self.logprobs = True
         return self
 
     @field_validator("temperature")
@@ -317,6 +327,13 @@ class ChatCompletionRequest(BaseModel):
     def validate_top_k(cls, v):
         if v is not None and v < 0:
             raise ValueError("top_k must be >= 0")
+        return v
+
+    @field_validator("top_logprobs")
+    @classmethod
+    def validate_top_logprobs(cls, v):
+        if v is not None and (v < 0 or v > 20):
+            raise ValueError("top_logprobs must be between 0 and 20")
         return v
 
     @field_validator("min_p")
@@ -378,6 +395,7 @@ class ChatCompletionChoice(BaseModel):
 
     index: int = 0
     message: AssistantMessage
+    logprobs: dict | None = None
     finish_reason: str | None = "stop"
 
 
@@ -427,6 +445,10 @@ class CompletionRequest(BaseModel):
     top_k: int | None = None
     min_p: float | None = None
     repetition_penalty: float | None = None
+    # Legacy OpenAI Completions logprobs count. None disables logprobs;
+    # 0 returns sampled token logprobs without alternate top tokens; 1-20
+    # returns that many top alternatives per generated token.
+    logprobs: int | None = None
     # Request timeout in seconds (None = use server default)
     timeout: float | None = None
     # Cache bypass (see ChatCompletionRequest.cache_salt for semantics).
@@ -475,6 +497,13 @@ class CompletionRequest(BaseModel):
             raise ValueError("repetition_penalty must be > 0")
         return v
 
+    @field_validator("logprobs")
+    @classmethod
+    def validate_logprobs(cls, v):
+        if v is not None and (v < 0 or v > 20):
+            raise ValueError("logprobs must be between 0 and 20")
+        return v
+
     @field_validator("stop")
     @classmethod
     def normalize_stop(cls, v):
@@ -488,6 +517,7 @@ class CompletionChoice(BaseModel):
 
     index: int = 0
     text: str
+    logprobs: dict | None = None
     finish_reason: str | None = "stop"
 
 
@@ -941,6 +971,7 @@ class ChatCompletionChunkChoice(BaseModel):
 
     index: int = 0
     delta: ChatCompletionChunkDelta
+    logprobs: dict | None = None
     finish_reason: str | None = None
 
 

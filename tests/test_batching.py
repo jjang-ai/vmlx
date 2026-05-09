@@ -193,6 +193,42 @@ class TestRequestOutput:
         assert usage["total_tokens"] == 12
 
 
+class TestSchedulerLogprobs:
+    """Opt-in logprobs must be extracted on the scheduler worker, not faked later."""
+
+    def test_format_token_logprobs_includes_sampled_token_and_top_k(self):
+        import mlx.core as mx
+
+        from vmlx_engine.scheduler import _format_token_logprobs_for_output
+
+        logprobs = mx.array([-4.0, -0.3, -1.2, -0.7])
+        formatted = _format_token_logprobs_for_output(
+            token_id=2,
+            logprobs=logprobs,
+            top_k=2,
+        )
+
+        assert formatted["token_id"] == 2
+        assert formatted["logprob"] == pytest.approx(-1.2)
+        assert formatted["top_logprobs"] == [
+            (1, pytest.approx(-0.3)),
+            (3, pytest.approx(-0.7)),
+        ]
+
+    def test_format_token_logprobs_none_keeps_default_fast_path_empty(self):
+        from vmlx_engine.scheduler import _format_token_logprobs_for_output
+
+        assert _format_token_logprobs_for_output(2, None, 5) is None
+
+    def test_format_token_logprobs_rejects_invalid_token_id(self):
+        import mlx.core as mx
+
+        from vmlx_engine.scheduler import _format_token_logprobs_for_output
+
+        logprobs = mx.array([-4.0, -0.3, -1.2, -0.7])
+        assert _format_token_logprobs_for_output(-1, logprobs, 2) is None
+
+
 class TestSchedulerConfig:
     """Tests for SchedulerConfig."""
 

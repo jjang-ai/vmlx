@@ -41,7 +41,12 @@ from .prompt_lookup import NgramIndex, find_draft_tokens, pld_stats
 from .request import Request, RequestOutput, RequestStatus, SamplingParams
 from .mllm_batch_generator import HybridSSMStateCache, _fix_hybrid_cache
 from .state_machine import SequenceStateMachine, make_state_machine
-from .utils.mamba_cache import ensure_mamba_support
+from .logprobs import format_token_logprobs_for_output as _format_token_logprobs_for_output
+from .utils.mamba_cache import (
+    ensure_mamba_support,
+    register_generation_logprobs,
+    unregister_generation_logprobs,
+)
 from .utils.ssm_companion_disk_store import SSMCompanionDiskStore
 
 logger = logging.getLogger(__name__)
@@ -4304,6 +4309,7 @@ class Scheduler:
         for request_id in aborts:
             uid = self.request_id_to_uid.pop(request_id, None)
             if uid is not None:
+                unregister_generation_logprobs(self.model, uid)
                 if self.batch_generator is not None:
                     try:
                         self.batch_generator.remove([uid])
@@ -4830,6 +4836,8 @@ class Scheduler:
                 self.request_id_to_uid[request.request_id] = uid
                 self.uid_to_request_id[uid] = request.request_id
                 request.batch_uid = uid
+                if request.sampling_params.logprobs:
+                    register_generation_logprobs(self.model, uid)
                 request.status = RequestStatus.RUNNING
                 self.running[request.request_id] = request
                 scheduled.append(request)
@@ -4959,6 +4967,7 @@ class Scheduler:
             if (
                 self._pld_spec_enabled
                 and self._pld_auto_enabled
+                and not request.sampling_params.logprobs
                 and response.finish_reason is None
                 and self.batch_generator is not None
             ):
@@ -5046,6 +5055,15 @@ class Scheduler:
                 new_text = ""
 
             # Create output — include cache_detail and base token + any accepted spec tokens
+            if request.sampling_params.logprobs:
+                token_logprobs = _format_token_logprobs_for_output(
+                    response.token,
+                    getattr(response, "logprobs", None),
+                    request.sampling_params.top_logprobs,
+                )
+                if token_logprobs is not None:
+                    request.output_logprobs.append(token_logprobs)
+
             _detail = getattr(request, "_cache_detail", "")
             # Annotate TQ if active (skip if already annotated, e.g. "disk+tq")
             if _detail and getattr(self, "_tq_active", False) and "+tq" not in _detail:
@@ -5059,6 +5077,11 @@ class Scheduler:
                 completion_tokens=request.num_output_tokens,
                 cached_tokens=request.cached_tokens,
                 cache_detail=_detail,
+                logprobs=(
+                    list(request.output_logprobs)
+                    if request.sampling_params.logprobs
+                    else None
+                ),
             )
 
             # Determine effective finish reason (string stop or spec stop override)
@@ -6005,6 +6028,7 @@ class Scheduler:
             # Remove UID mappings
             if request_id in self.request_id_to_uid:
                 uid = self.request_id_to_uid[request_id]
+                unregister_generation_logprobs(self.model, uid)
                 if uid in self.uid_to_request_id:
                     del self.uid_to_request_id[uid]
                 del self.request_id_to_uid[request_id]

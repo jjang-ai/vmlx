@@ -185,6 +185,7 @@ class SimpleEngine(BaseEngine):
                 text=text,
                 raw_text=raw_text,
                 tokens=getattr(output, "tokens", []),
+                logprobs=getattr(output, "logprobs", None),
                 prompt_tokens=getattr(output, "prompt_tokens", 0),
                 completion_tokens=getattr(
                     output, "completion_tokens", len(getattr(output, "tokens", []))
@@ -493,6 +494,7 @@ class SimpleEngine(BaseEngine):
                     text=text,
                     raw_text=raw_text,
                     tokens=getattr(output, "tokens", []),
+                    logprobs=getattr(output, "logprobs", None),
                     prompt_tokens=_prompt_tokens,
                     completion_tokens=getattr(
                         output, "completion_tokens", len(getattr(output, "tokens", []))

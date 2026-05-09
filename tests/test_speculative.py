@@ -542,6 +542,44 @@ class TestLLMDraftModelWiring(unittest.TestCase):
 
         self.assertNotIn("draft_model", captured_kwargs)
 
+    @patch("vmlx_engine.speculative.is_speculative_enabled", return_value=False)
+    def test_generate_logprobs_string_stop_trims_tokens_and_logprobs(self, mock_enabled):
+        """String stops must not return logprobs for text hidden past the stop."""
+        import mlx.core as mx
+
+        def fake_stream_generate(model, tokenizer, **kwargs):
+            for token, text in [(1, "Hello"), (2, "STOP"), (3, "hidden")]:
+                resp = MagicMock()
+                resp.text = text
+                resp.token = token
+                resp.logprobs = mx.array([-9.0, -0.1, -0.2, -0.3])
+                yield resp
+
+        class _Tokenizer:
+            def encode(self, text):
+                return [1] if text == "Hello" else [1, 2, 3]
+
+        with patch("mlx_lm.stream_generate", side_effect=fake_stream_generate):
+            from vmlx_engine.models.llm import MLXLanguageModel
+            model = MLXLanguageModel.__new__(MLXLanguageModel)
+            model.model = MagicMock()
+            model.tokenizer = _Tokenizer()
+            model._loaded = True
+            model._create_sampler = MagicMock(return_value=MagicMock())
+
+            output = model.generate(
+                prompt="Test",
+                max_tokens=10,
+                stop=["STOP"],
+                logprobs=True,
+                top_logprobs=0,
+            )
+
+        self.assertEqual(output.text, "Hello")
+        self.assertEqual(output.tokens, [1])
+        self.assertEqual(len(output.logprobs), 1)
+        self.assertEqual(output.logprobs[0]["token_id"], 1)
+
 
 # ---------------------------------------------------------------------------
 # 10. mlx-lm API integration
