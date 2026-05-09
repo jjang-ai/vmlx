@@ -512,6 +512,33 @@ class TestModelConfigs:
         )
         assert config.cache_type == "hybrid"
 
+    def test_falcon_h1_config(self, registry):
+        """Falcon H1 is hybrid SSM+attention (CacheList[ArraysCache, KVCache])."""
+        config = self._lookup(registry, "tiiuae/Falcon-H1-7B", "falcon_h1")
+        assert config.family_name != "unknown", (
+            "falcon_h1 missing from registry — would default to cache_type=kv "
+            "and silently lose SSM state across requests"
+        )
+        assert config.cache_type == "hybrid"
+
+    def test_rwkv7_config(self, registry):
+        """RWKV-7 is pure SSM (ArraysCache, no KV)."""
+        config = self._lookup(registry, "RWKV/rwkv-7-world-1b5", "rwkv7")
+        assert config.family_name != "unknown", (
+            "rwkv7 missing — RWKV-7 is pure SSM and needs cache_type=mamba"
+        )
+        assert config.cache_type == "mamba"
+
+    def test_deepseek_v32_config(self, registry):
+        """DeepSeek V3.2 is MLA (kv_lora_rank=512); needs MLA family routing."""
+        config = self._lookup(registry, "deepseek-ai/DeepSeek-V3.2-Base", "deepseek_v32")
+        assert config.family_name != "unknown", (
+            "deepseek_v32 missing from registry — would default cache=kv "
+            "(but kv_lora_rank check still catches MLA in scheduler)"
+        )
+        # deepseek family uses cache_type=kv (MLA H=1 is enforced at runtime
+        # via _detect_mla, not via cache_type override).
+
     # Unknown model
     def test_unknown_model(self, registry):
         config = self._lookup(registry, "completely-unknown-model-xyz", "totally_unknown_type")

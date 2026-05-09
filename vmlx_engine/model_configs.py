@@ -457,7 +457,11 @@ def register_all(registry=None):
     _register(
         ModelConfig(
             family_name="deepseek",
-            model_types=["deepseek_v2", "deepseek_v3", "deepseek2", "deepseek"],
+            # deepseek_v32 is DSv3.2 (kv_lora_rank=512, MLA family).
+            # MLA H=1 collapse is enforced at runtime via Scheduler._detect_mla
+            # (reads kv_lora_rank), so cache_type stays "kv" — same as
+            # deepseek_v3 — and the scheduler does the right thing.
+            model_types=["deepseek_v2", "deepseek_v3", "deepseek_v32", "deepseek2", "deepseek"],
             cache_type="kv",
             tool_parser="deepseek",
             reasoning_parser="deepseek_r1",
@@ -1155,6 +1159,17 @@ def register_all(registry=None):
         )
     )
 
+    # Falcon H1 — hybrid SSM+attention via CacheList(ArraysCache, KVCache).
+    # Different cache contract from pure falcon_mamba; needs hybrid routing.
+    _register(
+        ModelConfig(
+            family_name="falcon_h1",
+            model_types=["falcon_h1"],
+            cache_type="hybrid",
+            priority=5,
+        )
+    )
+
     _register(
         ModelConfig(
             family_name="mamba",
@@ -1167,7 +1182,9 @@ def register_all(registry=None):
     _register(
         ModelConfig(
             family_name="rwkv",
-            model_types=["rwkv", "rwkv5", "rwkv6"],
+            # rwkv7 added — pure SSM (ArraysCache only, no KV); same cache
+            # contract as rwkv5/6.
+            model_types=["rwkv", "rwkv5", "rwkv6", "rwkv7"],
             cache_type="mamba",
             priority=30,
         )

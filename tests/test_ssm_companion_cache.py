@@ -529,6 +529,8 @@ def test_is_hybrid_ssm_config_detects_newer_hybrid_families_by_model_type_alone(
     assert is_hybrid_ssm_config({"model_type": "nemotron_h_v2"}) is True
     assert is_hybrid_ssm_config({"model_type": "granitemoehybrid"}) is True
     assert is_hybrid_ssm_config({"model_type": "lfm2_moe"}) is True
+    # Falcon H1 (mlx_lm/falcon_h1.py uses CacheList[ArraysCache, KVCache])
+    assert is_hybrid_ssm_config({"model_type": "falcon_h1"}) is True
 
 
 def test_is_hybrid_ssm_config_normalizes_model_type_case():
