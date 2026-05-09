@@ -38,7 +38,7 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current)
     }
-  }, [endpoint.host, endpoint.port, sessionStatus])
+  }, [endpoint.host, endpoint.port, sessionStatus, sessionId])
 
   const handleFetchEntries = async () => {
     setLoading(true)
@@ -124,9 +124,12 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
             {cacheTotals.l2_block_tokens_on_disk != null && (
               <StatCard label="Block L2 Tokens" value={(cacheTotals.l2_block_tokens_on_disk || 0).toLocaleString()} />
             )}
-            {cacheTotals.ssm_tokens_on_disk != null && cacheTotals.ssm_tokens_on_disk > 0 && (
-              <StatCard label="SSM L2 Tokens" value={(cacheTotals.ssm_tokens_on_disk || 0).toLocaleString()} />
-            )}
+            {(() => {
+              const ssmL2Tokens = cacheTotals.l2_ssm_tokens_on_disk ?? cacheTotals.ssm_tokens_on_disk
+              return ssmL2Tokens != null && ssmL2Tokens > 0 ? (
+                <StatCard label="SSM L2 Tokens" value={(ssmL2Tokens || 0).toLocaleString()} />
+              ) : null
+            })()}
           </div>
         </div>
       )}

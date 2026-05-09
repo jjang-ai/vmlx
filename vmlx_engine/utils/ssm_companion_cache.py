@@ -657,16 +657,19 @@ def _declares_hybrid_ssm_layer_types(config: dict) -> bool:
         value = config.get(key)
         values = value if isinstance(value, list) else [value]
         for item in values:
-            if str(item) in _HYBRID_LAYER_TYPE_MARKERS:
+            if str(item).lower() in _HYBRID_LAYER_TYPE_MARKERS:
                 return True
     return False
 
 
 def is_hybrid_ssm_config(config: dict) -> bool:
     """Return True if *config* describes a hybrid SSM+attention model."""
+    if not isinstance(config, dict):
+        return False
     if "hybrid_override_pattern" in config:
         return True
-    if config.get("model_type") in _HYBRID_MODEL_TYPES:
+    model_type = str(config.get("model_type") or "").lower()
+    if model_type in _HYBRID_MODEL_TYPES:
         return True
     if _declares_hybrid_ssm_layer_types(config):
         return True

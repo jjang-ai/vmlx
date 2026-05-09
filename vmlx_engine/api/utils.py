@@ -209,12 +209,12 @@ def _is_affine_jang_qwen_hybrid_vlm(local_path: str) -> bool:
         jang_cfg = json.loads(open(jang_path).read())
         hf_cfg = json.loads(open(cfg_path).read())
         tc = hf_cfg.get("text_config") or {}
-        mt = tc.get("model_type") or hf_cfg.get("model_type")
+        mt = str(tc.get("model_type") or hf_cfg.get("model_type") or "").lower()
         layer_types = tc.get("layer_types") or []
         if not (
             mt in _QWEN_HYBRID_VLM_MODEL_TYPES
             and isinstance(layer_types, list)
-            and any(t == "linear_attention" for t in layer_types)
+            and any(str(t).lower() == "linear_attention" for t in layer_types)
         ):
             return False
 

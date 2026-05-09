@@ -662,6 +662,21 @@ class TestMixedAttentionRotatingCacheSupport:
 
         assert Scheduler._model_has_mixed_attention(_Model()) is True
 
+    def test_mixed_attention_helpers_normalize_layer_type_case(self):
+        """Sidecar/config writers must not silently drop Gemma-style SWA
+        detection just because layer_types are cased differently."""
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.scheduler import Scheduler
+
+        class _Args:
+            layer_types = ["SLIDING_ATTENTION", "FULL_ATTENTION"]
+
+        class _Model:
+            args = _Args()
+
+        assert Scheduler._model_has_mixed_attention(_Model()) is True
+        assert MLLMScheduler._model_has_mixed_attention(object(), _Model()) is True
+
 
 # ---------------------------------------------------------------------------
 # RotatingKVCache meta_state truncation: keep + max_size must NOT be lost

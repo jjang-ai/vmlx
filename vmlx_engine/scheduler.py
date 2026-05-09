@@ -646,31 +646,13 @@ class Scheduler:
         # MLA models (DeepSeek V3, Mistral 4) store compressed KV latents — quantizing
         # these destroys quality. Auto-disable for MLA, same as MLLM scheduler.
         # Original MLA cache integration by Jinho Jang (eric@jangq.ai) — vMLX/mlxstudio.
-        _is_mla = False
-        try:
-            _model_args = getattr(self.model, "args", None)
-            _model_type = str(
-                getattr(_model_args, "model_type", "")
-                if _model_args is not None
-                else ""
-            ).lower()
-            if (
-                _model_args
-                and getattr(_model_args, "kv_lora_rank", 0) > 0
-                and _model_type not in ("bailing_hybrid", "bailing_moe_v2_5")
-            ):
-                _is_mla = True
-            elif _model_args and getattr(_model_args, "model_type", "") == "mistral4":
-                _is_mla = True
-            # DeepSeek V4-Flash / V4-Pro: MLA with head_dim=512 (single latent
-            # KV head, broadcast to all 64 q heads). Stored KV is already a
-            # compressed latent — quantizing again destroys decode quality
-            # and doesn't save much (1 KV head × head_dim=512). Force-off
-            # same as DeepSeek V3 / Mistral 4.
-            elif _model_args and getattr(_model_args, "model_type", "") == "deepseek_v4":
-                _is_mla = True
-        except Exception:
-            pass
+        # Symmetric with MLLMScheduler._detect_mla — walks model +
+        # language_model + inner .model wrappers, inspects args/config/
+        # text_config + _raw_config, so wrapped models (Kimi K2.6 mlx_vlm
+        # around DeepseekV3, glm_moe_dsa inheriting deepseek_v32, mistral4
+        # text wrappers) are caught the same way the LLM scheduler's other
+        # cache-record validator already does.
+        _is_mla = self._detect_mla()
         # User opt-in override for non-DSV4 MLA auto-disable. DeepSeek V3 /
         # Mistral 4 stash compressed latents in KV — quantizing them again
         # is double-lossy and harms quality. DSV4 is stricter: its native
@@ -1024,8 +1006,8 @@ class Scheduler:
         for cfg in candidates:
             layer_types = getattr(cfg, 'layer_types', None)
             if layer_types and isinstance(layer_types, (list, tuple)):
-                kinds = set(layer_types)
-                if len(kinds) >= 2 and any('sliding' in str(k) for k in kinds):
+                kinds = {str(k).lower() for k in layer_types}
+                if len(kinds) >= 2 and any('sliding' in k for k in kinds):
                     return True
         return False
 
@@ -1154,6 +1136,102 @@ class Scheduler:
                 if _ln:
                     return int(_ln)
         return None
+
+    def _detect_mla(self) -> bool:
+        """Detect Multi-head Latent Attention (compressed-latent KV).
+
+        Mirrors ``MLLMScheduler._detect_mla`` so the LLM scheduler's KV-cache
+        quantization gate catches wrapped MLA models (Kimi K2.6 mlx_vlm
+        wrapper around DeepseekV3, glm_moe_dsa inheriting deepseek_v32,
+        mistral4 text wrappers, deepseek_v4 / DSV4 backbones). The earlier
+        inline check only inspected ``self.model.args`` — wrappers expose
+        the relevant config via ``language_model.config.text_config`` and
+        were silently treated as non-MLA, leaving generic q4/q8 prefix-cache
+        quantization on top of an already compressed latent.
+        """
+
+        def _cfg_model_type(cfg: Any) -> str:
+            if cfg is None:
+                return ""
+            if isinstance(cfg, dict):
+                mt = cfg.get("model_type") or ""
+                if not mt and isinstance(cfg.get("text_config"), dict):
+                    mt = cfg["text_config"].get("model_type") or ""
+                return str(mt).lower()
+            mt = getattr(cfg, "model_type", "") or ""
+            if not mt:
+                tc = getattr(cfg, "text_config", None)
+                mt = getattr(tc, "model_type", "") if tc is not None else ""
+            return str(mt or "").lower()
+
+        def _cfg_kv_lora_rank(cfg: Any) -> int:
+            if cfg is None:
+                return 0
+            vals = []
+            if isinstance(cfg, dict):
+                vals.append(cfg.get("kv_lora_rank", 0))
+                tc = cfg.get("text_config")
+                if isinstance(tc, dict):
+                    vals.append(tc.get("kv_lora_rank", 0))
+            else:
+                vals.append(getattr(cfg, "kv_lora_rank", 0))
+                tc = getattr(cfg, "text_config", None)
+                if tc is not None:
+                    vals.append(getattr(tc, "kv_lora_rank", 0))
+                raw = getattr(cfg, "_raw_config", None)
+                if isinstance(raw, dict):
+                    vals.append(raw.get("kv_lora_rank", 0))
+                    tc = raw.get("text_config")
+                    if isinstance(tc, dict):
+                        vals.append(tc.get("kv_lora_rank", 0))
+            for val in vals:
+                try:
+                    iv = int(val or 0)
+                except (TypeError, ValueError):
+                    iv = 0
+                if iv > 0:
+                    return iv
+            return 0
+
+        try:
+            candidates = [self.model]
+            lm = getattr(self.model, "language_model", None)
+            if lm is not None and lm not in candidates:
+                candidates.append(lm)
+            for obj in list(candidates):
+                inner = getattr(obj, "model", None)
+                if inner is not None and inner not in candidates:
+                    candidates.append(inner)
+
+            cfgs: list[Any] = []
+            for obj in candidates:
+                for attr in ("args", "config", "text_config"):
+                    cfg = getattr(obj, attr, None)
+                    if cfg is None:
+                        continue
+                    cfgs.append(cfg)
+                    raw = getattr(cfg, "_raw_config", None)
+                    if isinstance(raw, dict):
+                        cfgs.append(raw)
+                    tc = getattr(cfg, "text_config", None)
+                    if tc is not None:
+                        cfgs.append(tc)
+                    if isinstance(cfg, dict) and isinstance(cfg.get("text_config"), dict):
+                        cfgs.append(cfg["text_config"])
+
+            for cfg in cfgs:
+                model_type = _cfg_model_type(cfg)
+                if model_type in ("bailing_hybrid", "bailing_moe_v2_5"):
+                    # Ling/Bailing's runtime stores full per-head KV, not H=1
+                    # compressed MLA latents. Keep normal KV/TQ cache support.
+                    continue
+                if _cfg_kv_lora_rank(cfg) > 0:
+                    return True
+                if model_type in ("mistral4", "deepseek_v4"):
+                    return True
+        except Exception:
+            pass
+        return False
 
     def _detect_head_dim(self) -> Optional[int]:
         """Detect the model's KV head dimension from model config."""

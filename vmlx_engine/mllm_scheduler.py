@@ -1301,8 +1301,8 @@ class MLLMScheduler:
         for cfg in candidates:
             layer_types = getattr(cfg, 'layer_types', None)
             if layer_types and isinstance(layer_types, (list, tuple)):
-                kinds = set(layer_types)
-                if len(kinds) >= 2 and any('sliding' in str(k) for k in kinds):
+                kinds = {str(k).lower() for k in layer_types}
+                if len(kinds) >= 2 and any('sliding' in k for k in kinds):
                     return True
         return False
 

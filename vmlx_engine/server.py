@@ -3874,6 +3874,7 @@ def _cache_telemetry_snapshot(scheduler: Any | None = None) -> dict[str, Any]:
             ),
             "l2_prompt_tokens_on_disk": disk_tokens,
             "l2_block_tokens_on_disk": block_tokens,
+            "l2_ssm_tokens_on_disk": ssm_tokens,
             "ssm_tokens_on_disk": ssm_tokens,
             "l2_tokens_on_disk": l2_store_sum,
             "l2_tokens_on_disk_store_sum": l2_store_sum,

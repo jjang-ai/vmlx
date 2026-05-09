@@ -97,6 +97,7 @@ interface HealthData {
       ram_tokens_cached?: number
       l2_prompt_tokens_on_disk?: number
       l2_block_tokens_on_disk?: number
+      l2_ssm_tokens_on_disk?: number
       ssm_tokens_on_disk?: number
       l2_tokens_on_disk?: number
       l2_tokens_on_disk_store_sum?: number

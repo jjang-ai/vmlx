@@ -509,6 +509,13 @@ def test_is_hybrid_ssm_config_detects_known_model_type():
     assert is_hybrid_ssm_config({"model_type": "llama"}) is False
 
 
+def test_is_hybrid_ssm_config_normalizes_model_type_case():
+    from vmlx_engine.utils.ssm_companion_cache import is_hybrid_ssm_config
+
+    assert is_hybrid_ssm_config({"model_type": "Bailing_Hybrid"}) is True
+    assert is_hybrid_ssm_config({"model_type": "QWEN3_NEXT"}) is True
+
+
 def test_is_hybrid_ssm_config_detects_linear_attention_layer_types():
     from vmlx_engine.utils.ssm_companion_cache import is_hybrid_ssm_config
 
@@ -523,6 +530,17 @@ def test_is_hybrid_ssm_config_detects_linear_attention_layer_types():
         "text_config": {
             "model_type": "qwen3_5_moe_text",
             "layer_types": ["linear_attention", "full_attention"],
+        },
+    }) is True
+
+
+def test_is_hybrid_ssm_config_normalizes_layer_type_case():
+    from vmlx_engine.utils.ssm_companion_cache import is_hybrid_ssm_config
+
+    assert is_hybrid_ssm_config({
+        "model_type": "qwen3_5",
+        "text_config": {
+            "layer_types": ["LINEAR_ATTENTION", "FULL_ATTENTION"],
         },
     }) is True
 
@@ -545,6 +563,13 @@ def test_is_hybrid_ssm_config_handles_text_config_nesting():
     # VLM wrapper with hybrid text config
     cfg = {"text_config": {"hybrid_override_pattern": "M*ME"}}
     assert is_hybrid_ssm_config(cfg) is True
+
+
+def test_is_hybrid_ssm_config_non_dict_returns_false():
+    from vmlx_engine.utils.ssm_companion_cache import is_hybrid_ssm_config
+
+    assert is_hybrid_ssm_config(None) is False
+    assert is_hybrid_ssm_config(["linear_attention"]) is False
 
 
 def test_is_hybrid_ssm_model_polymorphic_dispatch():

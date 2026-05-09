@@ -94,12 +94,25 @@ def _config_declares_linear_attention(config: Any) -> bool:
         for key in ("layer_types", "layer_type"):
             value = container.get(key)
             if isinstance(value, str):
-                if value == "linear_attention":
+                if value.lower() == "linear_attention":
                     return True
             elif isinstance(value, list):
-                if any(str(item) == "linear_attention" for item in value):
+                if any(str(item).lower() == "linear_attention" for item in value):
                     return True
     return False
+
+
+def _with_linear_attention_cache_override(
+    config: ModelConfig,
+    model_config: dict[str, Any],
+) -> ModelConfig:
+    if (
+        config.family_name in {"qwen3_5", "qwen3_5_moe"}
+        and config.cache_type == "kv"
+        and _config_declares_linear_attention(model_config)
+    ):
+        return replace(config, cache_type="hybrid")
+    return config
 
 
 class ModelConfigRegistry:
@@ -399,18 +412,22 @@ class ModelConfigRegistry:
                 if text_model_type and text_model_type != model_type:
                     for config in self._configs:
                         if text_model_type in config.model_types and config.priority > 0:
+                            config = _with_linear_attention_cache_override(
+                                config,
+                                model_config,
+                            )
                             logger.info(f"Model config: matched text_config.model_type='{text_model_type}' (wrapper='{model_type}') → {config.family_name}")
                             self._match_cache[model_name] = config
                             return config
 
                 for config in self._configs:
                     if model_type in config.model_types:
-                        if (
-                            config.family_name in {"qwen3_5", "qwen3_5_moe"}
-                            and config.cache_type == "kv"
-                            and _config_declares_linear_attention(model_config)
-                        ):
-                            config = replace(config, cache_type="hybrid")
+                        next_config = _with_linear_attention_cache_override(
+                            config,
+                            model_config,
+                        )
+                        if next_config.cache_type != config.cache_type:
+                            config = next_config
                             logger.info(
                                 "Model config: qwen3_5 linear_attention layers detected "
                                 "from config.json; using hybrid cache"

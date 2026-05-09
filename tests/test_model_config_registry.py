@@ -6,6 +6,7 @@ Since unit tests cannot read from disk/HuggingFace, we mock mlx_lm.utils.load_co
 to return the expected model_type for each test.
 """
 
+import json
 from unittest.mock import patch
 
 import pytest
@@ -568,6 +569,32 @@ class TestModelConfigs:
             config = registry.lookup("Qwen3.6-27B-MXFP4-CRACK")
 
         assert config.family_name == "qwen3_5"
+        assert config.cache_type == "hybrid"
+        assert config.reasoning_parser == "qwen3"
+
+    def test_qwen3_5_moe_text_linear_attention_uses_hybrid_cache(self, registry, tmp_path):
+        """Qwen3.6 MoE wrappers match text_config.model_type first; that path
+        must still preserve the hybrid cache override."""
+
+        config_json = {
+            "model_type": "qwen3_5_moe",
+            "text_config": {
+                "model_type": "qwen3_5_moe_text",
+                "layer_types": [
+                    "LINEAR_ATTENTION",
+                    "FULL_ATTENTION",
+                ],
+            },
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config_json))
+
+        def _load_config(path):
+            return dict(config_json)
+
+        with patch("vmlx_engine.model_config_registry.load_config", _load_config):
+            config = registry.lookup(str(tmp_path))
+
+        assert config.family_name == "qwen3_5_moe"
         assert config.cache_type == "hybrid"
         assert config.reasoning_parser == "qwen3"
 

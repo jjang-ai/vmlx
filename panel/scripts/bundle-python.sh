@@ -114,7 +114,7 @@ echo "==> Installing vmlx-engine + jang_tools (local source)..."
 VMLX_LOCAL="$(cd "$(dirname "$0")/../.." && pwd)"
 if [ -f "$VMLX_LOCAL/pyproject.toml" ] && [ -d "$VMLX_LOCAL/vmlx_engine" ]; then
   echo "    using local vmlx at $VMLX_LOCAL"
-  "$PYTHON" -m pip install --no-deps "$VMLX_LOCAL"
+  "$PYTHON" -m pip install --force-reinstall --no-deps "$VMLX_LOCAL"
 else
   echo "    local vmlx missing, falling back to PyPI"
   "$PYTHON" -m pip install --no-deps "vmlx>=1.5.24"
@@ -122,7 +122,7 @@ fi
 JANG_LOCAL="$HOME/jang/jang-tools"
 if [ -f "$JANG_LOCAL/pyproject.toml" ]; then
   echo "    using local jang-tools at $JANG_LOCAL"
-  "$PYTHON" -m pip install --no-deps "$JANG_LOCAL"
+  "$PYTHON" -m pip install --force-reinstall --no-deps "$JANG_LOCAL"
 else
   echo "    local jang-tools missing, falling back to PyPI"
   "$PYTHON" -m pip install --no-deps "jang>=2.5.27"

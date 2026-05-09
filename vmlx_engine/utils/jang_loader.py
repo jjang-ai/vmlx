@@ -1538,9 +1538,9 @@ def _load_jang_v2_vlm(
     # api.utils.is_mllm_model(); this fallback is a defense for explicit
     # --is-mllm / force_mllm launches.
     _is_qwen35_vl_hybrid = (
-        config.get("model_type") in ("qwen3_5", "qwen3_5_moe", "qwen3_vl", "qwen3_vl_moe")
+        str(config.get("model_type") or "").lower() in ("qwen3_5", "qwen3_5_moe", "qwen3_vl", "qwen3_vl_moe")
         and isinstance(_tc.get("layer_types"), (list, tuple))
-        and any(t == "linear_attention" for t in _tc.get("layer_types", []))
+        and any(str(t).lower() == "linear_attention" for t in _tc.get("layer_types", []))
     )
     _is_mxtq_bundle = (
         jang_cfg.get("weight_format") == "mxtq"

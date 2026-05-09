@@ -2320,6 +2320,16 @@ class TestStartupCompatibilityGuards:
         assert '("mflux", "mflux image runtime"' in verify_script
         assert '"mflux.models.common.config.model_config"' in verify_script
 
+    def test_bundled_python_local_source_installs_force_reinstall(self):
+        bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
+        local_install_block = bundle_script[
+            bundle_script.index('echo "==> Installing vmlx-engine + jang_tools')
+            : bundle_script.index("# Clean up to reduce size")
+        ]
+
+        assert '"$PYTHON" -m pip install --force-reinstall --no-deps "$VMLX_LOCAL"' in local_install_block
+        assert '"$PYTHON" -m pip install --force-reinstall --no-deps "$JANG_LOCAL"' in local_install_block
+
     def test_bundled_python_console_scripts_are_relocatable(self):
         bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
         verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
@@ -3077,6 +3087,92 @@ class TestMLLMMlaDetection:
         assert scheduler._detect_mla() is False
 
 
+class TestLLMMlaDetectionWrapperParity:
+    """LLM scheduler MLA detection must match MLLMScheduler._detect_mla traversal.
+
+    Site 1 (Scheduler.__init__ KV-quant gate) historically only inspected
+    ``self.model.args``. Wrapped models (Kimi K2.6 mlx_vlm wrapper around
+    DeepseekV3, glm_moe_dsa inheriting deepseek_v32) expose MLA config via
+    ``self.model.language_model.config.text_config`` — the inline check missed
+    them and KV-cache quantization stayed enabled, double-quantizing already
+    compressed latents.
+    """
+
+    def test_detects_kimi_style_wrapper_via_text_config(self):
+        from vmlx_engine.scheduler import Scheduler
+
+        class _TextCfg:
+            model_type = "kimi_k25"
+            kv_lora_rank = 512
+
+        class _Cfg:
+            text_config = _TextCfg()
+
+        class _LM:
+            config = _Cfg()
+
+        class _Model:
+            language_model = _LM()
+
+        scheduler = Scheduler.__new__(Scheduler)
+        scheduler.model = _Model()
+
+        assert scheduler._detect_mla() is True
+
+    def test_detects_deepseek_v3_inner_model_args(self):
+        from vmlx_engine.scheduler import Scheduler
+
+        class _Args:
+            model_type = "deepseek_v3"
+            kv_lora_rank = 512
+
+        class _Inner:
+            args = _Args()
+
+        class _Model:
+            model = _Inner()
+
+        scheduler = Scheduler.__new__(Scheduler)
+        scheduler.model = _Model()
+
+        assert scheduler._detect_mla() is True
+
+    def test_bailing_hybrid_via_wrapper_is_not_mla(self):
+        from vmlx_engine.scheduler import Scheduler
+
+        class _Args:
+            model_type = "bailing_hybrid"
+            kv_lora_rank = 512
+
+        class _LM:
+            args = _Args()
+
+        class _Model:
+            language_model = _LM()
+
+        scheduler = Scheduler.__new__(Scheduler)
+        scheduler.model = _Model()
+
+        assert scheduler._detect_mla() is False
+
+    def test_mistral4_detected_via_wrapper(self):
+        from vmlx_engine.scheduler import Scheduler
+
+        class _Args:
+            model_type = "mistral4"
+
+        class _LM:
+            args = _Args()
+
+        class _Model:
+            language_model = _LM()
+
+        scheduler = Scheduler.__new__(Scheduler)
+        scheduler.model = _Model()
+
+        assert scheduler._detect_mla() is True
+
+
 class TestHybridSSMEnvNames:
     """Hybrid SSM resume controls must use the documented VMLX_* names."""
 
@@ -3149,12 +3245,19 @@ class TestDistributedStreamingUnicode:
 class TestJangVLMFallbacks:
     """JANG VLM loaders must not silently drop working image support."""
 
-    def _write_qwen_hybrid_fixture(self, tmp_path, *, weight_format=None):
+    def _write_qwen_hybrid_fixture(
+        self,
+        tmp_path,
+        *,
+        weight_format=None,
+        text_model_type="qwen3_5_text",
+        layer_types=None,
+    ):
         (tmp_path / "config.json").write_text(json.dumps({
             "model_type": "qwen3_5",
             "text_config": {
-                "model_type": "qwen3_5_text",
-                "layer_types": ["linear_attention", "full_attention"],
+                "model_type": text_model_type,
+                "layer_types": layer_types or ["linear_attention", "full_attention"],
             },
             "vision_config": {},
         }))
@@ -3196,6 +3299,18 @@ class TestJangVLMFallbacks:
 
         assert utils.is_mllm_model(str(model_dir)) is False
 
+    def test_affine_qwen_hybrid_detection_normalizes_config_case(self, tmp_path):
+        from vmlx_engine.api import utils
+
+        model_dir = self._write_qwen_hybrid_fixture(
+            tmp_path,
+            text_model_type="QWEN3_5_TEXT",
+            layer_types=["LINEAR_ATTENTION", "FULL_ATTENTION"],
+        )
+        utils._IS_MLLM_CACHE.clear()
+
+        assert utils.is_mllm_model(str(model_dir)) is False
+
     def test_affine_qwen_hybrid_jang_overrides_forced_mllm(self, tmp_path):
         from vmlx_engine.api import utils
 
@@ -3218,6 +3333,42 @@ class TestJangVLMFallbacks:
         import mlx_vlm.utils as vlm_utils
 
         model_dir = self._write_qwen_hybrid_fixture(tmp_path)
+        config = json.loads((model_dir / "config.json").read_text())
+        jang_cfg = json.loads((model_dir / "jang_config.json").read_text())
+
+        monkeypatch.setattr(vlm_utils, "load_config", lambda path: dict(config))
+        monkeypatch.setattr(
+            vlm_utils,
+            "get_model_and_args",
+            lambda *, config: pytest.fail("affine Qwen hybrid must not reach native VLM load"),
+        )
+
+        def _fake_text_loader(path, cfg, **kwargs):
+            return "text-model", "text-tokenizer"
+
+        monkeypatch.setattr(jang_loader, "_load_jang_v2", _fake_text_loader)
+
+        assert jang_loader._load_jang_v2_vlm(model_dir, jang_cfg) == (
+            "text-model",
+            "text-tokenizer",
+        )
+        assert jang_loader._LAST_LOAD_VLM_FALLBACK is True
+
+    def test_qwen_vlm_loader_affine_fallback_normalizes_config_case(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """The defensive loader fallback must match the same normalized Qwen
+        hybrid predicate as is_mllm_model()."""
+        from vmlx_engine.utils import jang_loader
+        import mlx_vlm.utils as vlm_utils
+
+        model_dir = self._write_qwen_hybrid_fixture(
+            tmp_path,
+            text_model_type="QWEN3_5_TEXT",
+            layer_types=["LINEAR_ATTENTION", "FULL_ATTENTION"],
+        )
         config = json.loads((model_dir / "config.json").read_text())
         jang_cfg = json.loads((model_dir / "jang_config.json").read_text())
 
@@ -3695,9 +3846,27 @@ class TestTurboQuantKVTelemetry:
         class _PagedManager:
             _disk_store = _BlockDisk()
 
+        class _SSMDisk:
+            def stats(self):
+                return {
+                    "entries": 3,
+                    "total_tokens_on_disk": 128,
+                    "total_cached_tokens": 128,
+                    "hits": 4,
+                    "misses": 2,
+                }
+
+        class _SSMCache:
+            size = 1
+            max_entries = 8
+            disk_enabled = True
+            disk_directory = "/tmp/vmlx-test/ssm_companion"
+            _disk = _SSMDisk()
+
         class _Scheduler:
             disk_cache = _DiskCache()
             paged_cache_manager = _PagedManager()
+            _ssm_state_cache = _SSMCache()
 
             def get_stats(self):
                 return {
@@ -3724,9 +3893,13 @@ class TestTurboQuantKVTelemetry:
         assert cache["scheduler_cache"]["total_tokens_cached"] == 640
         assert cache["disk_cache"]["total_tokens_on_disk"] == 384
         assert cache["block_disk_cache"]["total_tokens_on_disk"] == 256
+        assert cache["ssm_companion"]["disk"]["total_tokens_on_disk"] == 128
         assert cache["totals"]["ram_tokens_cached"] == 640
-        assert cache["totals"]["l2_tokens_on_disk"] == 640
-        assert cache["totals"]["l2_tokens_on_disk_store_sum"] == 640
+        assert cache["totals"]["l2_prompt_tokens_on_disk"] == 384
+        assert cache["totals"]["l2_block_tokens_on_disk"] == 256
+        assert cache["totals"]["l2_ssm_tokens_on_disk"] == 128
+        assert cache["totals"]["l2_tokens_on_disk"] == 768
+        assert cache["totals"]["l2_tokens_on_disk_store_sum"] == 768
         assert "may_overlap" in cache["totals"]["l2_tokens_on_disk_note"]
 
     def test_cache_stats_surfaces_cache_reuse_skip_telemetry(self):
