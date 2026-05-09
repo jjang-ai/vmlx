@@ -630,10 +630,21 @@ _HYBRID_MODEL_TYPES = frozenset({
     # this list: they have dedicated typed cache contracts and must not route
     # through the generic SSM companion path.
     "nemotron_h",
+    "nemotron_h_v2",
     "qwen3_next",
     "bailing_hybrid",
     "bailing_moe_v2_5",
     "jamba",
+    # IBM Granite MoE Hybrid (mlx_lm/granitemoehybrid.py) — explicit
+    # ArraysCache+KVCache mix; layer_types declares "mamba"+"attention" so
+    # the marker fallback usually fires, but pin the model_type so the
+    # companion still engages on configs that only carry model_type.
+    "granitemoehybrid",
+    # Liquid AI LFM2 MoE (mlx_lm/lfm2_moe.py) — hybrid Conv1d-SSM +
+    # attention. layer_types use "full_attention" / "conv" strings that
+    # do NOT match _HYBRID_LAYER_TYPE_MARKERS, so model_type is the only
+    # reliable detection path here.
+    "lfm2_moe",
 })
 
 _HYBRID_LAYER_TYPE_MARKERS = frozenset({

@@ -509,6 +509,28 @@ def test_is_hybrid_ssm_config_detects_known_model_type():
     assert is_hybrid_ssm_config({"model_type": "llama"}) is False
 
 
+def test_is_hybrid_ssm_config_detects_newer_hybrid_families_by_model_type_alone():
+    """Catalog parity with server.py:3537 hybrid_conv_families.
+
+    nemotron_h_v2, granitemoehybrid, lfm2_moe are recognized by
+    server.py's hybrid-conv compat warning (they declare grouped
+    Conv1d in SSM blocks) but were missing from
+    ``_HYBRID_MODEL_TYPES``. For granitemoehybrid the
+    ``layer_types`` fallback usually fires (mlx_lm declares
+    ``"mamba"`` in layer_types), but for lfm2_moe the layer_types
+    use ``"full_attention"`` / ``"conv"`` strings that do not match
+    the existing ``_HYBRID_LAYER_TYPE_MARKERS``, so the SSM
+    companion never engaged on a config that only carries
+    ``model_type``. Without companion engagement these models
+    silently lose L1 prefix-cache reuse.
+    """
+    from vmlx_engine.utils.ssm_companion_cache import is_hybrid_ssm_config
+
+    assert is_hybrid_ssm_config({"model_type": "nemotron_h_v2"}) is True
+    assert is_hybrid_ssm_config({"model_type": "granitemoehybrid"}) is True
+    assert is_hybrid_ssm_config({"model_type": "lfm2_moe"}) is True
+
+
 def test_is_hybrid_ssm_config_normalizes_model_type_case():
     from vmlx_engine.utils.ssm_companion_cache import is_hybrid_ssm_config
 
