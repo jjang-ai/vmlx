@@ -14,6 +14,10 @@
 </p>
 
 <p align="center">
+  <em>Looking for a native Swift macOS app or Swift inference engine? See <a href="https://osaurus.ai">osaurus.ai</a>.</em>
+</p>
+
+<p align="center">
   <a href="https://pypi.org/project/vmlx/"><img src="https://img.shields.io/pypi/v/vmlx?color=%234B8BBE&label=PyPI&logo=python&logoColor=white" alt="PyPI" /></a>
   <a href="https://github.com/jjang-ai/vmlx/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-green?logo=apache" alt="License" /></a>
   <a href="https://github.com/jjang-ai/vmlx"><img src="https://img.shields.io/github/stars/jjang-ai/vmlx?style=social" alt="Stars" /></a>
