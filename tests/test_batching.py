@@ -588,6 +588,97 @@ class TestSchedulerBasic:
         assert partial["used_cache_mb"] == 64.0
         assert partial["cache_type"] == "_SmallCache"
 
+    def test_cache_merge_multiplier_uses_actual_cache_format_not_global_q4_flag(
+        self, mock_model, mock_tokenizer
+    ):
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        scheduler._kv_cache_bits = 4
+
+        class KVCache:
+            pass
+
+        class QuantizedKVCache:
+            bits = 4
+
+        full_precision_cache = [KVCache()]
+        quantized_cache = [QuantizedKVCache()]
+
+        assert scheduler._cache_reuse_cache_format(full_precision_cache) == (
+            "full_precision_kv"
+        )
+        assert scheduler._cache_merge_memory_multiplier(full_precision_cache) == 2.0
+        assert scheduler._cache_reuse_cache_format(quantized_cache) == (
+            "quantized_kv"
+        )
+        assert scheduler._cache_merge_memory_multiplier(quantized_cache) == 5.0
+
+    def test_schedule_keeps_dequantized_cache_hit_when_q4_storage_flag_would_overbudget(
+        self, mock_model, mock_tokenizer, monkeypatch
+    ):
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        scheduler._kv_cache_bits = 4
+        scheduler._validate_cache = lambda cache: True
+
+        class KVCache:
+            pass
+
+        prompt_cache = [KVCache()]
+
+        class _BatchGenerator:
+            def __init__(self):
+                self.inserted_caches = None
+                self.inserted_tokens = None
+                self.stop_tokens = set()
+
+            def insert(self, tokens, max_tokens, caches=None, **_kwargs):
+                self.inserted_tokens = tokens
+                self.inserted_caches = caches
+                return [42]
+
+        sampling = SamplingParams(max_tokens=4)
+        request = Request("req-q4-dequant-fit", "x", sampling)
+        request.prompt_token_ids = list(range(1000))
+        request.num_prompt_tokens = len(request.prompt_token_ids)
+        request.prompt_cache = prompt_cache
+        request.cached_tokens = 999
+        request.remaining_tokens = [999]
+
+        scheduler.batch_generator = _BatchGenerator()
+        scheduler._current_sampler_params = (
+            sampling.temperature,
+            sampling.top_p,
+            sampling.min_p,
+            sampling.top_k,
+            sampling.repetition_penalty,
+        )
+        scheduler.waiting.append(request)
+        scheduler.requests[request.request_id] = request
+
+        import types
+        import vmlx_engine.memory_cache as memory_cache
+        import psutil
+
+        mb = 1024 * 1024
+        monkeypatch.setattr(
+            memory_cache,
+            "estimate_kv_cache_memory",
+            lambda _cache: 300 * mb,
+        )
+        monkeypatch.setattr(
+            psutil,
+            "virtual_memory",
+            lambda: types.SimpleNamespace(available=800 * mb),
+        )
+
+        scheduled = scheduler._schedule_waiting()
+
+        assert scheduled == [request]
+        assert scheduler.batch_generator.inserted_caches == [prompt_cache]
+        assert scheduler.batch_generator.inserted_tokens == [[999]]
+        stats = scheduler.get_stats()
+        assert stats["cache_reuse_skips"] == 0
+        assert stats["cache_hit_tokens"] == 999
+
     def test_memory_pressure_partial_reuse_preserves_generation_prompt_suffix(
         self, mock_model, mock_tokenizer
     ):
@@ -756,9 +847,10 @@ class TestSchedulerBasic:
         assert skip["partial_reuse_unavailable_reason"] == (
             "no_block_aligned_ssm_checkpoint"
         )
+        assert skip["cache_format"] == "unknown"
         assert (
             "cached 512 tokens, contract=hybrid_ssm, "
-            "partial_reason=no_block_aligned_ssm_checkpoint"
+            "format=unknown, partial_reason=no_block_aligned_ssm_checkpoint"
         ) in caplog.text
         assert "full-prefilling 1000 prompt tokens" in caplog.text
 

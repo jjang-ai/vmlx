@@ -154,6 +154,14 @@ class TestEstimateKvCacheMemory:
         layer = MockKVCache(1000, 1000)
         assert estimate_kv_cache_memory([layer]) == 2000
 
+    def test_compressed_turboquant_cache_uses_nbytes_when_keys_are_cleared(self):
+        class TurboQuantKVCache:
+            keys = None
+            values = None
+            nbytes = 4096
+
+        assert estimate_kv_cache_memory([TurboQuantKVCache()]) == 4096
+
     def test_cache_with_state_property(self):
         layer = MockStateCache(500, 500)
         assert estimate_kv_cache_memory([layer]) == 1000

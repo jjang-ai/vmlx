@@ -292,6 +292,9 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
               Cache reuse was memory-fit: used {(schedulerStats.last_cache_reuse_partial.used_cached_tokens ?? 0).toLocaleString()} of {(schedulerStats.last_cache_reuse_partial.original_cached_tokens ?? 0).toLocaleString()} cached tokens,
               estimated merge {schedulerStats.last_cache_reuse_partial.used_needed_mb ?? '?'} MB within {schedulerStats.last_cache_reuse_partial.budget_mb ?? schedulerStats.last_cache_reuse_partial.available_mb ?? '?'} MB budgeted,
               prefilling {(schedulerStats.last_cache_reuse_partial.tail_tokens ?? 0).toLocaleString()} tail tokens.
+              {schedulerStats.last_cache_reuse_partial.cache_format && (
+                <> Format {schedulerStats.last_cache_reuse_partial.cache_format}.</>
+              )}
             </div>
           )}
           {schedulerStats.cache_hit_tokens_by_detail && Object.keys(schedulerStats.cache_hit_tokens_by_detail).length > 0 && (
@@ -322,6 +325,9 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
               full-prefilling {(schedulerStats.last_cache_reuse_skip.full_prefill_tokens ?? schedulerStats.last_cache_reuse_skip.prompt_tokens ?? 0).toLocaleString()} tokens.
               {schedulerStats.last_cache_reuse_skip.cache_contract && (
                 <> Contract {schedulerStats.last_cache_reuse_skip.cache_contract}.</>
+              )}
+              {schedulerStats.last_cache_reuse_skip.cache_format && (
+                <> Format {schedulerStats.last_cache_reuse_skip.cache_format}.</>
               )}
               {schedulerStats.last_cache_reuse_skip.partial_reuse_unavailable_reason && (
                 <> Partial reason: {schedulerStats.last_cache_reuse_skip.partial_reuse_unavailable_reason}.</>

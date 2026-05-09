@@ -3704,6 +3704,7 @@ class TestTurboQuantKVTelemetry:
                         "dropped_cached_tokens": 512,
                         "full_prefill_tokens": 4096,
                         "cache_contract": "hybrid_ssm",
+                        "cache_format": "full_precision_kv+state_cache",
                         "partial_reuse_unavailable_reason": (
                             "no_block_aligned_ssm_checkpoint"
                         ),
@@ -3715,6 +3716,7 @@ class TestTurboQuantKVTelemetry:
                         "used_cached_tokens": 2048,
                         "original_cached_tokens": 8192,
                         "tail_tokens": 6144,
+                        "cache_format": "full_precision_kv",
                     },
                 }
 
@@ -3742,12 +3744,18 @@ class TestTurboQuantKVTelemetry:
         assert scheduler_stats["last_cache_reuse_skip"]["dropped_cached_tokens"] == 512
         assert scheduler_stats["last_cache_reuse_skip"]["full_prefill_tokens"] == 4096
         assert scheduler_stats["last_cache_reuse_skip"]["cache_contract"] == "hybrid_ssm"
+        assert scheduler_stats["last_cache_reuse_skip"]["cache_format"] == (
+            "full_precision_kv+state_cache"
+        )
         assert scheduler_stats["last_cache_reuse_skip"][
             "partial_reuse_unavailable_reason"
         ] == "no_block_aligned_ssm_checkpoint"
         assert scheduler_stats["cache_reuse_partial_downgrades"] == 1
         assert scheduler_stats["cache_reuse_partial_tokens"] == 2048
         assert scheduler_stats["last_cache_reuse_partial"]["used_cached_tokens"] == 2048
+        assert scheduler_stats["last_cache_reuse_partial"]["cache_format"] == (
+            "full_precision_kv"
+        )
 
     @pytest.mark.asyncio
     async def test_cache_stats_projects_ssm_companion_disk_state(self, monkeypatch):
@@ -4032,6 +4040,7 @@ class TestTurboQuantKVTelemetry:
         assert "dropped_cached_tokens" in cache_panel_source
         assert "full_prefill_tokens" in cache_panel_source
         assert "partial_reuse_unavailable_reason" in cache_panel_source
+        assert "cache_format" in cache_panel_source
         assert "Partial Reuse" in performance_panel_source
         assert "Cache Hit Tokens" in performance_panel_source
         assert "last_cache_reuse_partial" in performance_panel_source
@@ -4042,6 +4051,7 @@ class TestTurboQuantKVTelemetry:
         assert "dropped_cached_tokens" in performance_panel_source
         assert "full_prefill_tokens" in performance_panel_source
         assert "partial_reuse_unavailable_reason" in performance_panel_source
+        assert "cache_format" in performance_panel_source
 
     def test_cache_stats_surface_displays_l2_token_totals(self):
         cache_panel_source = Path(

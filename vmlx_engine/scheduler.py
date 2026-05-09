@@ -2641,6 +2641,126 @@ class Scheduler:
         target_tokens = (target_tokens // block_size) * block_size
         return target_tokens if target_tokens >= block_size else 0
 
+    def _cache_reuse_cache_format(self, cache: Any) -> str:
+        """Describe the actual cache object used for memory-fit accounting."""
+
+        flags: set[str] = set()
+
+        def _visit(obj: Any) -> None:
+            if obj is None:
+                return
+            if isinstance(obj, dict):
+                for value in obj.values():
+                    _visit(value)
+                return
+            if isinstance(obj, (list, tuple)):
+                for item in obj:
+                    _visit(item)
+                return
+
+            cls_name = type(obj).__name__
+            if cls_name == "QuantizedKVCache":
+                flags.add("quantized_kv")
+                return
+            if cls_name == "TurboQuantKVCache":
+                flags.add("turboquant_kv")
+                return
+            if self._is_dsv4_cache_object(obj):
+                local = getattr(obj, "local", None)
+                if type(local).__name__ == "QuantizedKVCache":
+                    flags.add("dsv4_quantized_local")
+                else:
+                    flags.add("dsv4_composite")
+                return
+
+            caches = getattr(obj, "caches", None)
+            if isinstance(caches, (list, tuple)):
+                for item in caches:
+                    _visit(item)
+                return
+
+            if cls_name in ("KVCache", "RotatingKVCache", "BatchKVCache") or (
+                hasattr(obj, "keys") and hasattr(obj, "values")
+            ):
+                flags.add("full_precision_kv")
+            elif cls_name in ("MambaCache", "ArraysCache"):
+                flags.add("state_cache")
+
+        _visit(cache)
+        if not flags:
+            return "unknown"
+        if len(flags) == 1:
+            return next(iter(flags))
+        order = (
+            "turboquant_kv",
+            "quantized_kv",
+            "dsv4_quantized_local",
+            "dsv4_composite",
+            "full_precision_kv",
+            "state_cache",
+        )
+        return "+".join(flag for flag in order if flag in flags)
+
+    def _cache_reuse_quant_bits(self, cache: Any) -> int:
+        """Return the smallest quantized-KV bit width present in a cache tree."""
+
+        bits_seen: list[int] = []
+
+        def _maybe_bits(obj: Any) -> None:
+            if obj is None:
+                return
+            if isinstance(obj, dict):
+                for value in obj.values():
+                    _maybe_bits(value)
+                return
+            if isinstance(obj, (list, tuple)):
+                for item in obj:
+                    _maybe_bits(item)
+                return
+
+            cls_name = type(obj).__name__
+            if cls_name == "QuantizedKVCache":
+                raw_bits = getattr(obj, "bits", None) or getattr(
+                    self,
+                    "_kv_cache_bits",
+                    0,
+                )
+                try:
+                    raw_bits = int(raw_bits or 0)
+                except (TypeError, ValueError):
+                    raw_bits = 0
+                if raw_bits > 0:
+                    bits_seen.append(raw_bits)
+                return
+
+            if self._is_dsv4_cache_object(obj):
+                _maybe_bits(getattr(obj, "local", None))
+                return
+
+            caches = getattr(obj, "caches", None)
+            if isinstance(caches, (list, tuple)):
+                for item in caches:
+                    _maybe_bits(item)
+
+        _maybe_bits(cache)
+        return min(bits_seen) if bits_seen else 0
+
+    def _cache_merge_memory_multiplier(self, cache: Any) -> float:
+        """Scratch-memory multiplier for merging this specific cache object.
+
+        A global q4/q8 setting is not enough here: some fetch paths already
+        dequantize a hit before the memory-fit check. Charging those full
+        precision caches as q4/q8 makes the scheduler drop valid long-prefix
+        hits and full-prefill large prompts.
+        """
+
+        quant_bits = self._cache_reuse_quant_bits(cache)
+        if quant_bits and quant_bits <= 4:
+            return 5.0
+        if quant_bits and quant_bits <= 8:
+            return 3.0
+        return 2.0
+
     def _hybrid_ssm_fetch_tokens(self, request: Request) -> List[int]:
         """Return the token key used for hybrid SSM companion cache lookups."""
         explicit = getattr(request, "_hybrid_ssm_fetch_tokens", None)
@@ -2743,6 +2863,7 @@ class Scheduler:
             "request_id": request.request_id,
             "reason": "insufficient_memory_for_full_cache_merge",
             "cache_contract": cache_contract,
+            "cache_format": self._cache_reuse_cache_format(cache_to_use),
             "original_needed_mb": round((cache_bytes * multiplier) / 1048576, 1),
             "budget_mb": round(budget_bytes / 1048576, 1),
             "available_mb": round(available_bytes / 1048576, 1),
@@ -2813,20 +2934,22 @@ class Scheduler:
             "prompt_tokens": prompt_tokens,
             "cache_type": type(cache_to_use).__name__,
             "cache_contract": cache_contract,
+            "cache_format": self._cache_reuse_cache_format(cache_to_use),
             "partial_reuse_available": False,
             "partial_reuse_unavailable_reason": partial_reason,
         }
         logger.warning(
             "Request %s: skipping cache reuse after partial-reuse attempt "
             "failed (need %.0fMB, budget %.0fMB, available %.0fMB, cached "
-            "%s tokens, contract=%s, partial_reason=%s); full-prefilling %s "
-            "prompt tokens",
+            "%s tokens, contract=%s, format=%s, partial_reason=%s); "
+            "full-prefilling %s prompt tokens",
             request.request_id,
             float(needed_bytes) / 1048576,
             float(merge_budget_bytes) / 1048576,
             float(available_bytes) / 1048576,
             cached_tokens,
             cache_contract,
+            self._cache_reuse_cache_format(cache_to_use),
             partial_reason or "unknown",
             prompt_tokens,
         )
@@ -4701,17 +4824,11 @@ class Scheduler:
                         import psutil
 
                         avail = psutil.virtual_memory().available
-                        # Memory amplification during dequantize + merge:
-                        # - q4: quantized + full precision coexist = ~5x quantized size
-                        # - q8: quantized + full precision coexist = ~3x quantized size
-                        # - No quant: merge overhead only = ~2x
-                        kv_bits = getattr(self, "_kv_cache_bits", 0)
-                        if kv_bits and kv_bits <= 4:
-                            multiplier = 5.0
-                        elif kv_bits and kv_bits <= 8:
-                            multiplier = 3.0
-                        else:
-                            multiplier = 2.0
+                        # Memory amplification during merge depends on the cache
+                        # object we are about to insert, not just the configured
+                        # q4/q8 storage mode. Some fetch paths already dequantize
+                        # before reaching this point.
+                        multiplier = self._cache_merge_memory_multiplier(cache_to_use)
                         needed = cache_bytes * multiplier
                         budget_fraction = self._cache_reuse_budget_fraction()
                         merge_budget = avail * budget_fraction

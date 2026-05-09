@@ -108,7 +108,13 @@ def estimate_kv_cache_memory(cache: list[Any]) -> int:
             keys_attr = layer_cache.keys
             values_attr = layer_cache.values
             if keys_attr is None:
-                pass  # Empty cache
+                # Empty KVCache layers have keys=None and no resident buffers.
+                # Compressed TurboQuantKVCache layers also clear keys/values
+                # after packing, but expose their real resident footprint via
+                # nbytes. Count that or cache budgets under-report TQ hits as 0.
+                nbytes = getattr(layer_cache, "nbytes", None)
+                if isinstance(nbytes, (int, float)) and nbytes > 0:
+                    total_bytes += int(nbytes)
             elif isinstance(keys_attr, tuple):
                 # QuantizedKVCache: keys/values are tuples of (data, scales, zeros)
                 for arr in keys_attr:

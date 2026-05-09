@@ -45,6 +45,7 @@ interface HealthData {
       full_prefill_tokens?: number
       prompt_tokens?: number
       cache_contract?: string
+      cache_format?: string
       partial_reuse_unavailable_reason?: string
     } | null
     cache_reuse_partial_downgrades?: number
@@ -63,6 +64,7 @@ interface HealthData {
       dropped_cached_tokens?: number
       tail_tokens?: number
       cache_contract?: string
+      cache_format?: string
     } | null
   }
   cache?: {
@@ -417,6 +419,9 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
               Cache reuse was memory-fit: used {(health.scheduler.last_cache_reuse_partial.used_cached_tokens ?? 0).toLocaleString()} of {(health.scheduler.last_cache_reuse_partial.original_cached_tokens ?? 0).toLocaleString()} cached tokens,
               estimated merge {health.scheduler.last_cache_reuse_partial.used_needed_mb ?? '?'} MB within {health.scheduler.last_cache_reuse_partial.budget_mb ?? health.scheduler.last_cache_reuse_partial.available_mb ?? '?'} MB budgeted,
               prefilling {(health.scheduler.last_cache_reuse_partial.tail_tokens ?? 0).toLocaleString()} tail tokens.
+              {health.scheduler.last_cache_reuse_partial.cache_format && (
+                <> Format {health.scheduler.last_cache_reuse_partial.cache_format}.</>
+              )}
             </div>
           )}
           {health.scheduler.last_hybrid_kv_without_ssm && (
@@ -437,6 +442,9 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
               full-prefilling {(health.scheduler.last_cache_reuse_skip.full_prefill_tokens ?? health.scheduler.last_cache_reuse_skip.prompt_tokens ?? 0).toLocaleString()} tokens.
               {health.scheduler.last_cache_reuse_skip.cache_contract && (
                 <> Contract {health.scheduler.last_cache_reuse_skip.cache_contract}.</>
+              )}
+              {health.scheduler.last_cache_reuse_skip.cache_format && (
+                <> Format {health.scheduler.last_cache_reuse_skip.cache_format}.</>
               )}
               {health.scheduler.last_cache_reuse_skip.partial_reuse_unavailable_reason && (
                 <> Partial reason: {health.scheduler.last_cache_reuse_skip.partial_reuse_unavailable_reason}.</>
