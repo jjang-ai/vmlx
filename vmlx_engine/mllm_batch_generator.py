@@ -2129,10 +2129,30 @@ class MLLMBatchGenerator:
         _OOM_GUARD_BYTES = 8 * 1024 * 1024 * 1024
         _n_heads_guess = 32
         try:
-            cfg = getattr(self.language_model, "config", None) or getattr(self.language_model, "args", None)
-            _h = getattr(cfg, "num_attention_heads", None) if cfg is not None else None
-            if isinstance(_h, int) and _h > 0:
-                _n_heads_guess = _h
+            # Walk wrappers (model + inner.model) × (args, config, text_config)
+            # so VLM wrappers and Mistral4-style nested text_config are caught.
+            # Without traversal, Kimi K2.6 / glm_moe_dsa style wrappers fell
+            # back to the 32-head default and the chunking decision was made
+            # against the wrong attention shape.
+            _candidates = [self.language_model]
+            _inner = getattr(self.language_model, "model", None)
+            if _inner is not None and _inner is not self.language_model:
+                _candidates.append(_inner)
+            for _obj in _candidates:
+                for _attr in ("args", "config", "text_config"):
+                    _cfg = getattr(_obj, _attr, None)
+                    if _cfg is None:
+                        continue
+                    _h = getattr(_cfg, "num_attention_heads", None)
+                    if not _h:
+                        _tc = getattr(_cfg, "text_config", None)
+                        if _tc is not None:
+                            _h = getattr(_tc, "num_attention_heads", None)
+                    if isinstance(_h, int) and _h > 0:
+                        _n_heads_guess = _h
+                        break
+                if _n_heads_guess != 32:
+                    break
         except Exception:
             pass
         _predicted_attn_bytes = _n_heads_guess * seq_len * seq_len * 2

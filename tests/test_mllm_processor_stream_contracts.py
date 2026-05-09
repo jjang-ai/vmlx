@@ -128,6 +128,37 @@ class TestProcessorRoutingDecision:
         )
 
 
+class TestHybridOomGuardWrapperTraversal:
+    """OOM-guard num_attention_heads detection must walk VLM wrappers.
+
+    The hybrid auto-chunk decision in MLLMBatchGenerator predicts attention
+    matmul bytes as ``n_heads * seq_len^2 * 2`` and chunks if above 8 GB.
+    For VLM-wrapped models (Kimi K2.6, Mistral 4 wrappers, glm_moe_dsa),
+    ``language_model.config`` / ``.args`` may not expose
+    ``num_attention_heads`` directly — the wrapper exposes it via
+    ``text_config`` or via an inner ``.model`` candidate. The earlier
+    inline check fell back to the 32-head default and made the chunking
+    decision against the wrong attention shape.
+    """
+
+    def test_walks_text_config_for_wrapped_attention_head_count(self):
+        """Source pin: the OOM-guard helper inspects text_config and inner.model."""
+        from pathlib import Path
+
+        source = Path("./vmlx_engine/mllm_batch_generator.py").read_text()
+        # The new traversal block must be present (cites text_config + inner.model).
+        assert '"text_config"' in source
+        # Wrapper traversal walks model + inner.model
+        idx = source.index("_OOM_GUARD_BYTES")
+        guard_window = source[idx : idx + 2000]
+        assert 'getattr(self.language_model, "model"' in guard_window, (
+            "OOM guard no longer walks language_model.model wrapper — "
+            "Kimi-style wrappers will fall back to 32-head default"
+        )
+        # text_config fallback inside the loop
+        assert "_tc = getattr(_cfg, \"text_config\"" in guard_window
+
+
 def test_simple_mllm_stream_generate_runs_inside_stream_context():
     source = Path("./vmlx_engine/models/mllm.py").read_text()
     stream_generate_idx = source.index("def stream_generate(")
