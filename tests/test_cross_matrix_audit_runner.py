@@ -6,6 +6,7 @@ content.
 """
 
 from tests.cross_matrix.run_production_family_audit import (
+    ModelRow,
     ROWS,
     audit_child_env_for_row,
     cache_exact_hit_probe,
@@ -142,6 +143,43 @@ def test_dsv4_static_audit_exposes_actual_bit_plan_when_local_bundle_exists():
     assert bit_plan["metadata_matches_actual"] is True
     assert bit_plan["sidecar"]["missing_keys"] == []
     assert bit_plan["issues"] == []
+
+
+def test_dsv4_static_audit_accepts_canonical_encoder_metadata(tmp_path):
+    (tmp_path / "config.json").write_text(
+        '{"model_type":"deepseek_v4","quantization":{"mxtq_bits":{"routed_expert":2}}}'
+    )
+    (tmp_path / "jang_config.json").write_text(
+        """
+        {
+          "model_family": "deepseek_v4",
+          "weight_format": "mxtq",
+          "chat": {
+            "encoder": "encoding_dsv4",
+            "encoder_fn": "encode_messages",
+            "reasoning": {"supported": true, "parser": "deepseek_r1"},
+            "tool_calling": {"supported": true, "parser": "dsml"},
+            "sampling_defaults": {"repetition_penalty_thinking": 1.0}
+          }
+        }
+        """
+    )
+    row = ModelRow(
+        id="dsv4_tmp",
+        label="tmp dsv4",
+        path=str(tmp_path),
+        family="deepseek_v4",
+        expect_reasoning=True,
+        expect_tool_parser="dsml",
+        cache_profile="dsv4_composite",
+    )
+
+    static = static_audit(row)
+
+    assert (
+        "DSV4 missing chat template file/config; canonical encoder shim still required"
+        not in static["issues"]
+    )
 
 
 def test_dsv4_capability_contract_uses_native_cache_not_experimental_mode():

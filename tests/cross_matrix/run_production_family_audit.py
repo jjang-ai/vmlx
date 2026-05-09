@@ -524,7 +524,15 @@ def static_audit(row: ModelRow) -> dict[str, Any]:
                 issues.append("DSV4 missing chat.sampling_defaults.repetition_penalty_thinking")
         if "<｜Assistant｜>" not in str(registry.get("eos_tokens")):
             issues.append("DSV4 bundle EOS config does not list Assistant marker; engine registry must add it")
-        if not tok_cfg.get("chat_template") and not chat_template_file.is_file():
+        has_canonical_dsv4_encoder = (
+            chat.get("encoder") == "encoding_dsv4"
+            and bool(chat.get("encoder_fn"))
+        )
+        if (
+            not has_canonical_dsv4_encoder
+            and not tok_cfg.get("chat_template")
+            and not chat_template_file.is_file()
+        ):
             issues.append("DSV4 missing chat template file/config; canonical encoder shim still required")
     has_reasoning_surface = bool(
         reasoning.get("supported")
