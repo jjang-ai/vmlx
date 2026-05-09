@@ -480,6 +480,38 @@ class TestModelConfigs:
         config = self._lookup(registry, "NousResearch/Hermes-3-8B", "hermes")
         assert config.tool_parser == "hermes"
 
+    # Newer hybrid SSM/Mamba families — vmlx#cache-matrix audit 2026-05-09
+    # These were silently falling through to _DEFAULT_CONFIG (family=unknown,
+    # cache=kv, tool/reasoning parser=None), which meant:
+    #   - cache_type=kv defaulted, instead of "hybrid" → wrong scheduler routing
+    #   - no auto tool_parser / reasoning_parser configuration on startup
+    # Symmetric with ssm_companion_cache._HYBRID_MODEL_TYPES expansion.
+    def test_nemotron_h_v2_config(self, registry):
+        config = self._lookup(registry, "nvidia/Nemotron-H2-56B-Instruct", "nemotron_h_v2")
+        assert config.family_name in ("nemotron_h", "nemotron_h_v2"), (
+            f"nemotron_h_v2 fell through to {config.family_name} — registry is "
+            "missing the newer Nemotron-H v2 model_type alias"
+        )
+        assert config.cache_type == "hybrid"
+
+    def test_granitemoehybrid_config(self, registry):
+        config = self._lookup(registry, "ibm-granite/granite-4.0-tiny-base", "granitemoehybrid")
+        assert config.family_name in ("granite", "granitemoehybrid"), (
+            f"granitemoehybrid fell through to {config.family_name} — registry "
+            "missing the IBM Granite MoE Hybrid model_type"
+        )
+        assert config.cache_type == "hybrid"
+        assert config.tool_parser == "granite"
+
+    def test_lfm2_moe_config(self, registry):
+        config = self._lookup(registry, "LiquidAI/LFM2-MoE-8B-A1B", "lfm2_moe")
+        assert config.family_name != "unknown", (
+            "lfm2_moe fell through to unknown — registry missing Liquid AI "
+            "LFM2 MoE entry. Without this, no auto tool_parser configures and "
+            "cache_type defaults to kv (wrong — LFM2-MoE is hybrid SSM+attention)"
+        )
+        assert config.cache_type == "hybrid"
+
     # Unknown model
     def test_unknown_model(self, registry):
         config = self._lookup(registry, "completely-unknown-model-xyz", "totally_unknown_type")

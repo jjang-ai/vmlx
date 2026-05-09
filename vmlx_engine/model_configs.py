@@ -919,7 +919,9 @@ def register_all(registry=None):
     _register(
         ModelConfig(
             family_name="nemotron_h",
-            model_types=["nemotron_h"],
+            # nemotron_h_v2 is the newer NVIDIA Nemotron-H v2 model_type
+            # alias; same hybrid SSM+attention architecture as nemotron_h.
+            model_types=["nemotron_h", "nemotron_h_v2"],
             cache_type="hybrid",
             eos_tokens=["<|im_end|>"],
             tool_parser="nemotron",
@@ -950,6 +952,30 @@ def register_all(registry=None):
             cache_type="kv",
             tool_parser="granite",
             priority=20,
+        )
+    )
+
+    # IBM Granite MoE Hybrid (granite-4.0 family) — Mamba+attention layers,
+    # uses ArraysCache+KVCache. Different cache_type from plain granite.
+    _register(
+        ModelConfig(
+            family_name="granitemoehybrid",
+            model_types=["granitemoehybrid"],
+            cache_type="hybrid",
+            tool_parser="granite",
+            priority=10,
+        )
+    )
+
+    # Liquid AI LFM2 (Conv1d-SSM + attention hybrid). LFM2-MoE is the MoE
+    # variant. Both fall to hybrid cache. No model-specific tool parser
+    # contract today; users opt in to a parser explicitly if needed.
+    _register(
+        ModelConfig(
+            family_name="lfm2",
+            model_types=["lfm2", "lfm2_moe"],
+            cache_type="hybrid",
+            priority=10,
         )
     )
 
