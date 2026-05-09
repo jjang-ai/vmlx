@@ -18,7 +18,7 @@ Usage:
 import logging
 import re
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -80,6 +80,26 @@ _DEFAULT_CONFIG = ModelConfig(
     description="Default configuration for unknown models",
     priority=999,
 )
+
+
+def _config_declares_linear_attention(config: Any) -> bool:
+    """Return True when config metadata declares hybrid linear-attention layers."""
+    if not isinstance(config, dict):
+        return False
+    containers = [config]
+    text_config = config.get("text_config")
+    if isinstance(text_config, dict):
+        containers.append(text_config)
+    for container in containers:
+        for key in ("layer_types", "layer_type"):
+            value = container.get(key)
+            if isinstance(value, str):
+                if value == "linear_attention":
+                    return True
+            elif isinstance(value, list):
+                if any(str(item) == "linear_attention" for item in value):
+                    return True
+    return False
 
 
 class ModelConfigRegistry:
@@ -305,6 +325,8 @@ class ModelConfigRegistry:
                 return _stamped
 
             model_type = None
+            model_config: dict[str, Any] = {}
+            has_media_config = False
             try:
                 global load_config
                 if load_config is None:
@@ -313,6 +335,10 @@ class ModelConfigRegistry:
                 from pathlib import Path
                 model_config = load_config(Path(resolved_path))
                 model_type = model_config.get("model_type", "").lower()
+                has_media_config = any(
+                    bool(model_config.get(k))
+                    for k in ("vision_config", "audio_config", "video_config")
+                )
             except Exception as e:
                 logger.warning(f"Could not load config.json for {model_name} to check model_type: {e}")
 
@@ -327,6 +353,10 @@ class ModelConfigRegistry:
                     if cfg_path.exists():
                         raw = json.loads(cfg_path.read_text())
                         text_model_type = raw.get("text_config", {}).get("model_type", "").lower()
+                        has_media_config = has_media_config or any(
+                            bool(raw.get(k))
+                            for k in ("vision_config", "audio_config", "video_config")
+                        )
                 except Exception:
                     pass
 
@@ -347,6 +377,22 @@ class ModelConfigRegistry:
                             self._match_cache[model_name] = config
                             return config
 
+                # Some VLM wrappers use a text-only inner `text_config`
+                # model_type (Gemma 4: outer gemma4 + inner gemma4_text).
+                # If the top-level type is itself a registered multimodal
+                # family and config.json has media config, keep the wrapper
+                # family so image/audio/video routing and architecture hints
+                # remain active.
+                if has_media_config:
+                    for config in self._configs:
+                        if model_type in config.model_types and config.is_mllm:
+                            logger.info(
+                                f"Model config: matched multimodal wrapper model_type='{model_type}' "
+                                f"with media config → {config.family_name}"
+                            )
+                            self._match_cache[model_name] = config
+                            return config
+
                 # VLM wrappers: prefer text_config.model_type (higher priority inner model)
                 # e.g., mistral3 wrapper with mistral4 text model → use mistral4 config
                 # Original text_config disambiguation by Jinho Jang (eric@jangq.ai) — vMLX.
@@ -359,6 +405,16 @@ class ModelConfigRegistry:
 
                 for config in self._configs:
                     if model_type in config.model_types:
+                        if (
+                            config.family_name in {"qwen3_5", "qwen3_5_moe"}
+                            and config.cache_type == "kv"
+                            and _config_declares_linear_attention(model_config)
+                        ):
+                            config = replace(config, cache_type="hybrid")
+                            logger.info(
+                                "Model config: qwen3_5 linear_attention layers detected "
+                                "from config.json; using hybrid cache"
+                            )
                         self._match_cache[model_name] = config
                         return config
 

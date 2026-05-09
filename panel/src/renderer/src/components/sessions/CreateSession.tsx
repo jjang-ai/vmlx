@@ -28,6 +28,8 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
   const [modelFilter, setModelFilter] = useState('')
   const [config, setConfig] = useState<SessionConfig>(DEFAULT_CONFIG)
   const [detectedCacheType, setDetectedCacheType] = useState<string | undefined>()
+  const [detectedFamily, setDetectedFamily] = useState<string | undefined>()
+  const [detectedIsTurboQuant, setDetectedIsTurboQuant] = useState<boolean>(false)
   const [detectedMaxContext, setDetectedMaxContext] = useState<number | undefined>()
   const [launching, setLaunching] = useState(false)
   const [launchError, setLaunchError] = useState<string | null>(null)
@@ -68,6 +70,9 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
     })
     if (detected?.cacheType) setDetectedCacheType(detected.cacheType)
     else setDetectedCacheType('kv')
+    if (detected?.family && detected.family !== 'unknown') setDetectedFamily(detected.family)
+    else setDetectedFamily(undefined)
+    setDetectedIsTurboQuant(!!detected?.isTurboQuant)
     if (detected?.maxContextLength) setDetectedMaxContext(detected.maxContextLength)
   }
 
@@ -154,12 +159,20 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
         if (detected && detected.family !== 'unknown') {
           base.enableAutoToolChoice = detected.enableAutoToolChoice
           base.usePagedCache = detected.usePagedCache
+          setDetectedFamily(detected.family)
+          setDetectedIsTurboQuant(!!detected.isTurboQuant)
+        } else {
+          setDetectedFamily(undefined)
+          setDetectedIsTurboQuant(false)
         }
         if (gen?.temperature != null) base.defaultTemperature = Math.round(gen.temperature * 100)
         if (gen?.topP != null) base.defaultTopP = Math.round(gen.topP * 100)
         if (gen?.repeatPenalty != null) base.defaultRepetitionPenalty = Math.round(gen.repeatPenalty * 100)
         if (gen?.maxNewTokens != null) base.maxTokens = gen.maxNewTokens
-      } catch (_) { }
+      } catch (_) {
+        setDetectedFamily(undefined)
+        setDetectedIsTurboQuant(false)
+      }
     }
     setConfig(base)
   }
@@ -537,6 +550,9 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
                               try {
                                 const det = await window.api.models.detectConfig(model.path) as any
                                 if (det?.cacheType) setDetectedCacheType(det.cacheType)
+                                if (det?.family && det.family !== 'unknown') setDetectedFamily(det.family)
+                                else setDetectedFamily(undefined)
+                                setDetectedIsTurboQuant(!!det?.isTurboQuant)
                                 if (det?.maxContextLength) setDetectedMaxContext(det.maxContextLength)
                               } catch (_) { }
                               // Auto-detect image model
@@ -768,7 +784,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
             </p>
           </div>
         ) : (
-          <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedCacheType} detectedMaxContext={detectedMaxContext} />
+          <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedCacheType} detectedFamily={detectedFamily} detectedIsTurboQuant={detectedIsTurboQuant} detectedMaxContext={detectedMaxContext} />
         )}
 
         {/* Launch */}

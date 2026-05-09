@@ -3,7 +3,7 @@
  * and that no settings are hardcoded. Tests use buildCommandPreview() which mirrors
  * the actual buildArgs() logic in sessions.ts exactly.
  *
- * Coverage: all 43 SessionConfig fields, context size detection, parser resolution,
+ * Coverage: SessionConfig fields, context size detection, parser resolution,
  * VLM mode, cache feature gating, batching parameters, speculative decoding,
  * generation defaults, and embedding model.
  */
@@ -19,10 +19,12 @@ interface SessionConfig {
     timeout: number
     maxNumSeqs: number
     prefillBatchSize: number
+    prefillStepSize: number
     completionBatchSize: number
     continuousBatching: boolean
     enablePrefixCache: boolean
     prefixCacheSize: number
+    prefixCacheMaxBytes: number
     cacheMemoryMb: number
     cacheMemoryPercent: number
     cacheTtlMinutes: number
@@ -32,6 +34,7 @@ interface SessionConfig {
     maxCacheBlocks: number
     kvCacheQuantization: string
     kvCacheGroupSize: number
+    omniBackend: 'stage1' | 'stage2'
     enableDiskCache: boolean
     diskCacheMaxGb: number
     diskCacheDir: string
@@ -48,8 +51,16 @@ interface SessionConfig {
     servedModelName: string
     speculativeModel: string
     numDraftTokens: number
+    smelt: boolean
+    smeltExperts: number
+    flashMoe: boolean
+    flashMoeSlotBank: number
+    flashMoePrefetch: 'none' | 'temporal'
+    flashMoeIoSplit: number
     defaultTemperature: number
     defaultTopP: number
+    defaultRepetitionPenalty: number
+    defaultEnableThinking?: boolean
     embeddingModel: string
     additionalArgs: string
     enableJit: boolean
@@ -59,19 +70,21 @@ interface SessionConfig {
 }
 
 const DEFAULT_CONFIG: SessionConfig = {
-    host: '0.0.0.0',
+    host: '127.0.0.1',
     port: 8000,
     apiKey: '',
     rateLimit: 0,
     timeout: 300,
-    maxNumSeqs: 256,
-    prefillBatchSize: 512,
-    completionBatchSize: 512,
+    maxNumSeqs: 64,
+    prefillBatchSize: 1024,
+    prefillStepSize: 2048,
+    completionBatchSize: 1024,
     continuousBatching: true,
     enablePrefixCache: true,
     prefixCacheSize: 100,
+    prefixCacheMaxBytes: 0,
     cacheMemoryMb: 0,
-    cacheMemoryPercent: 30,
+    cacheMemoryPercent: 20,
     cacheTtlMinutes: 0,
     noMemoryAwareCache: false,
     usePagedCache: true,
@@ -79,10 +92,11 @@ const DEFAULT_CONFIG: SessionConfig = {
     maxCacheBlocks: 1000,
     kvCacheQuantization: 'auto',
     kvCacheGroupSize: 64,
-    enableDiskCache: false,
+    omniBackend: 'stage1',
+    enableDiskCache: true,
     diskCacheMaxGb: 10,
     diskCacheDir: '',
-    enableBlockDiskCache: false,
+    enableBlockDiskCache: true,
     blockDiskCacheMaxGb: 10,
     blockDiskCacheDir: '',
     streamInterval: 1,
@@ -95,11 +109,19 @@ const DEFAULT_CONFIG: SessionConfig = {
     servedModelName: '',
     speculativeModel: '',
     numDraftTokens: 3,
-    defaultTemperature: 0,
-    defaultTopP: 0,
+    smelt: false,
+    smeltExperts: 50,
+    flashMoe: false,
+    flashMoeSlotBank: 256,
+    flashMoePrefetch: 'none',
+    flashMoeIoSplit: 4,
+    defaultTemperature: 70,
+    defaultTopP: 95,
+    defaultRepetitionPenalty: 110,
+    defaultEnableThinking: undefined,
     embeddingModel: '',
     additionalArgs: '',
-    enableJit: false,
+    enableJit: true,
     logLevel: 'INFO',
     corsOrigins: '*',
     maxContextLength: 0
@@ -115,6 +137,8 @@ type DetectedConfig = {
     usePagedCache?: boolean
     enableAutoToolChoice?: boolean
     cacheType?: string
+    family?: string
+    isTurboQuant?: boolean
 } | null
 
 function buildCommandPreview(
@@ -124,6 +148,8 @@ function buildCommandPreview(
 ): string {
     const parts = ['vmlx-engine serve', modelPath]
     const isVLM = !!detected?.isMultimodal || config.isMultimodal === true
+    const dsv4Active = detected?.family === 'deepseek-v4'
+    const turboQuantActive = !!detected?.isTurboQuant
 
     parts.push('--host', config.host)
     parts.push('--port', config.port.toString())
@@ -132,8 +158,10 @@ function buildCommandPreview(
     if (config.apiKey) parts.push('# VLLM_API_KEY=*** (env var)')
     if (config.rateLimit && config.rateLimit > 0) parts.push('--rate-limit', config.rateLimit.toString())
 
-    if (config.maxNumSeqs && config.maxNumSeqs > 0) parts.push('--max-num-seqs', config.maxNumSeqs.toString())
+    const effectiveMaxNumSeqs = dsv4Active ? 1 : config.maxNumSeqs
+    if (effectiveMaxNumSeqs && effectiveMaxNumSeqs > 0) parts.push('--max-num-seqs', effectiveMaxNumSeqs.toString())
     if (config.prefillBatchSize && config.prefillBatchSize > 0) parts.push('--prefill-batch-size', config.prefillBatchSize.toString())
+    if (config.prefillStepSize && config.prefillStepSize > 0) parts.push('--prefill-step-size', config.prefillStepSize.toString())
     if (config.completionBatchSize && config.completionBatchSize > 0) parts.push('--completion-batch-size', config.completionBatchSize.toString())
 
     if (isVLM) parts.push('--is-mllm')
@@ -164,6 +192,7 @@ function buildCommandPreview(
         if (config.noMemoryAwareCache) {
             parts.push('--no-memory-aware-cache')
             if (config.prefixCacheSize && config.prefixCacheSize > 0) parts.push('--prefix-cache-size', config.prefixCacheSize.toString())
+            if (config.prefixCacheMaxBytes && config.prefixCacheMaxBytes > 0) parts.push('--prefix-cache-max-bytes', config.prefixCacheMaxBytes.toString())
         } else {
             if (config.cacheMemoryMb && config.cacheMemoryMb > 0) parts.push('--cache-memory-mb', config.cacheMemoryMb.toString())
             if (config.cacheMemoryPercent && config.cacheMemoryPercent > 0) parts.push('--cache-memory-percent', (config.cacheMemoryPercent / 100).toString())
@@ -233,12 +262,22 @@ function buildCommandPreview(
     if (config.defaultTopP && config.defaultTopP > 0) {
         parts.push('--default-top-p', (config.defaultTopP / 100).toFixed(2))
     }
+    if (config.defaultRepetitionPenalty && config.defaultRepetitionPenalty > 0) {
+        parts.push('--default-repetition-penalty', (config.defaultRepetitionPenalty / 100).toFixed(2))
+    }
 
     // Embedding model
     if (config.embeddingModel) parts.push('--embedding-model', config.embeddingModel)
 
+    if (config.defaultEnableThinking === true) parts.push('--default-enable-thinking', 'true')
+    else if (config.defaultEnableThinking === false) parts.push('--default-enable-thinking', 'false')
+
     // JIT compilation
-    if (config.enableJit) parts.push('--enable-jit')
+    if (config.enableJit && !dsv4Active && !turboQuantActive) parts.push('--enable-jit')
+
+    if (config.omniBackend && config.omniBackend !== 'stage1') {
+        parts.push('--omni-backend', config.omniBackend)
+    }
 
     // Logging
     if (config.logLevel && config.logLevel !== 'INFO') parts.push('--log-level', config.logLevel)
@@ -328,6 +367,11 @@ describe('Concurrent Processing', () => {
     it('sets prefill-batch-size from config', () => {
         const out = preview({ prefillBatchSize: 256 })
         expect(getFlagValue(out, '--prefill-batch-size')).toBe('256')
+    })
+
+    it('sets prefill-step-size from config', () => {
+        const out = preview({ prefillStepSize: 1536 })
+        expect(getFlagValue(out, '--prefill-step-size')).toBe('1536')
     })
 
     it('sets completion-batch-size from config', () => {
@@ -815,6 +859,17 @@ describe('Generation Defaults', () => {
         const out = preview({ defaultTopP: 100 })
         expect(getFlagValue(out, '--default-top-p')).toBe('1.00')
     })
+
+    it('sets default repetition penalty from ×100 integer', () => {
+        const out = preview({ defaultRepetitionPenalty: 110 })
+        expect(getFlagValue(out, '--default-repetition-penalty')).toBe('1.10')
+    })
+
+    it('sets server default thinking override only when explicit', () => {
+        expect(hasFlag(preview({ defaultEnableThinking: undefined }), '--default-enable-thinking')).toBe(false)
+        expect(getFlagValue(preview({ defaultEnableThinking: true }), '--default-enable-thinking')).toBe('true')
+        expect(getFlagValue(preview({ defaultEnableThinking: false }), '--default-enable-thinking')).toBe('false')
+    })
 })
 
 describe('Embedding Model', () => {
@@ -919,13 +974,28 @@ describe('No Hardcoded Values', () => {
 })
 
 describe('Default IP and New Settings', () => {
-    it('default host is 0.0.0.0', () => {
-        expect(DEFAULT_CONFIG.host).toBe('0.0.0.0')
+    it('default host is local-only 127.0.0.1', () => {
+        expect(DEFAULT_CONFIG.host).toBe('127.0.0.1')
     })
 
-    it('default host produces --host 0.0.0.0 in CLI output', () => {
+    it('default host produces --host 127.0.0.1 in CLI output', () => {
         const out = preview()
-        expect(getFlagValue(out, '--host')).toBe('0.0.0.0')
+        expect(getFlagValue(out, '--host')).toBe('127.0.0.1')
+    })
+
+    it('current startup defaults emit optimized batching, sampling, cache, and JIT flags', () => {
+        const out = preview()
+
+        expect(getFlagValue(out, '--max-num-seqs')).toBe('64')
+        expect(getFlagValue(out, '--prefill-batch-size')).toBe('1024')
+        expect(getFlagValue(out, '--prefill-step-size')).toBe('2048')
+        expect(getFlagValue(out, '--completion-batch-size')).toBe('1024')
+        expect(getFlagValue(out, '--cache-memory-percent')).toBe('0.2')
+        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(true)
+        expect(getFlagValue(out, '--default-temperature')).toBe('0.70')
+        expect(getFlagValue(out, '--default-top-p')).toBe('0.95')
+        expect(getFlagValue(out, '--default-repetition-penalty')).toBe('1.10')
+        expect(hasFlag(out, '--enable-jit')).toBe(true)
     })
 
     it('logLevel INFO (default) does not emit --log-level flag', () => {
@@ -958,12 +1028,16 @@ describe('Default IP and New Settings', () => {
         expect(DEFAULT_CONFIG.logLevel).toBe('INFO')
         expect(DEFAULT_CONFIG.corsOrigins).toBe('*')
         expect(DEFAULT_CONFIG.maxContextLength).toBe(0)
-        expect(DEFAULT_CONFIG.enableJit).toBe(false)
+        expect(DEFAULT_CONFIG.enableJit).toBe(true)
+        expect(DEFAULT_CONFIG.defaultTemperature).toBe(70)
+        expect(DEFAULT_CONFIG.defaultTopP).toBe(95)
+        expect(DEFAULT_CONFIG.defaultRepetitionPenalty).toBe(110)
+        expect(DEFAULT_CONFIG.omniBackend).toBe('stage1')
     })
 })
 
 describe('JIT Toggle', () => {
-    it('enableJit false (default) does not emit --enable-jit flag', () => {
+    it('enableJit false does not emit --enable-jit flag', () => {
         const out = preview({ enableJit: false })
         expect(hasFlag(out, '--enable-jit')).toBe(false)
     })
@@ -971,6 +1045,68 @@ describe('JIT Toggle', () => {
     it('enableJit true emits --enable-jit flag', () => {
         const out = preview({ enableJit: true })
         expect(hasFlag(out, '--enable-jit')).toBe(true)
+    })
+
+    it('deepseek-v4 detection suppresses --enable-jit even when saved config requests it', () => {
+        const out = preview(
+            { enableJit: true, maxNumSeqs: 64 },
+            { family: 'deepseek-v4' },
+        )
+
+        expect(hasFlag(out, '--enable-jit')).toBe(false)
+        expect(getFlagValue(out, '--max-num-seqs')).toBe('1')
+    })
+
+    it('TurboQuant/JANGTQ detection suppresses --enable-jit because engine skips mx.compile', () => {
+        const out = preview(
+            { enableJit: true },
+            { family: 'minimax', isTurboQuant: true },
+        )
+
+        expect(hasFlag(out, '--enable-jit')).toBe(false)
+    })
+
+    it('settings form surfaces DeepSeek-V4 JIT as effectively disabled', () => {
+        const fs = require('fs')
+        const form = fs.readFileSync(
+            'src/renderer/src/components/sessions/SessionConfigForm.tsx',
+            'utf-8',
+        )
+        const settings = fs.readFileSync(
+            'src/renderer/src/components/sessions/SessionSettings.tsx',
+            'utf-8',
+        )
+        const create = fs.readFileSync(
+            'src/renderer/src/components/sessions/CreateSession.tsx',
+            'utf-8',
+        )
+        const drawer = fs.readFileSync(
+            'src/renderer/src/components/sessions/ServerSettingsDrawer.tsx',
+            'utf-8',
+        )
+
+        expect(form).toContain('detectedFamily')
+        expect(form).toContain('DeepSeek-V4 native composite cache')
+        expect(settings).toContain('detectedFamily={detectedConfig?.family}')
+        expect(create).toContain('detectedFamily={detectedFamily}')
+        expect(drawer).toContain('detectedFamily={detectedFamily}')
+    })
+
+    it('settings form surfaces TurboQuant/JANGTQ JIT as effectively disabled', () => {
+        const fs = require('fs')
+        const form = fs.readFileSync(
+            'src/renderer/src/components/sessions/SessionConfigForm.tsx',
+            'utf-8',
+        )
+        const sessions = fs.readFileSync('src/main/sessions.ts', 'utf-8')
+        const registry = fs.readFileSync('src/main/model-config-registry.ts', 'utf-8')
+
+        expect(registry).toContain('isTurboQuant')
+        expect(registry).toContain("weight_format === 'mxtq'")
+        expect(form).toContain('detectedIsTurboQuant')
+        expect(form).toContain('TurboQuant KV')
+        expect(sessions).toContain('turboQuantActive')
+        expect(sessions).toContain('TurboQuantKVCache uses custom cache objects')
     })
 
     it('enableJit does not affect other flags', () => {
@@ -1025,7 +1161,7 @@ describe('Feature Interaction', () => {
         expect(hasFlag(out, '--continuous-batching')).toBe(true)
     })
 
-    it('prefillBatchSize 0 omits flag (uses backend default 8)', () => {
+    it('prefillBatchSize 0 omits flag (uses backend default 1024)', () => {
         const out = preview({ prefillBatchSize: 0, enablePrefixCache: true })
         expect(hasFlag(out, '--prefill-batch-size')).toBe(false)
     })
@@ -1078,14 +1214,14 @@ describe('Feature Interaction', () => {
         expect(getFlagValue(out, '--served-model-name')).toBe('my-model')
     })
 
-    it('all new features disabled by default (zero values / empty strings)', () => {
+    it('optional model-specific features remain disabled by default', () => {
         const out = preview()
         expect(hasFlag(out, '--speculative-model')).toBe(false)
         expect(hasFlag(out, '--num-draft-tokens')).toBe(false)
-        expect(hasFlag(out, '--default-temperature')).toBe(false)
-        expect(hasFlag(out, '--default-top-p')).toBe(false)
         expect(hasFlag(out, '--embedding-model')).toBe(false)
         expect(hasFlag(out, '--served-model-name')).toBe(false)
+        expect(hasFlag(out, '--default-enable-thinking')).toBe(false)
+        expect(hasFlag(out, '--omni-backend')).toBe(false)
     })
 
     it('tool parser emitted without auto-tool-choice (matches buildArgs)', () => {
@@ -1147,9 +1283,9 @@ describe('Feature Interaction', () => {
         expect(launchSource).toContain('--prefix-cache-max-bytes')
     })
 
-    it('cacheMemoryPercent default 30 emits 0.3', () => {
-        const out = preview({ cacheMemoryPercent: 30 })
-        expect(getFlagValue(out, '--cache-memory-percent')).toBe('0.3')
+    it('cacheMemoryPercent default 20 emits 0.2', () => {
+        const out = preview({ cacheMemoryPercent: 20 })
+        expect(getFlagValue(out, '--cache-memory-percent')).toBe('0.2')
     })
 
     it('defaultTopP minimum boundary 1 emits 0.01', () => {
@@ -1330,18 +1466,19 @@ describe('Settings → CLI Round-Trip Completeness', () => {
     // All SessionConfig keys (from the interface defined at the top of this file)
     const ALL_CONFIG_KEYS: (keyof SessionConfig)[] = [
         'host', 'port', 'apiKey', 'rateLimit', 'timeout',
-        'maxNumSeqs', 'prefillBatchSize', 'completionBatchSize',
-        'continuousBatching', 'enablePrefixCache', 'prefixCacheSize',
+        'maxNumSeqs', 'prefillBatchSize', 'prefillStepSize', 'completionBatchSize',
+        'continuousBatching', 'enablePrefixCache', 'prefixCacheSize', 'prefixCacheMaxBytes',
         'cacheMemoryMb', 'cacheMemoryPercent', 'cacheTtlMinutes', 'noMemoryAwareCache',
         'usePagedCache', 'pagedCacheBlockSize', 'maxCacheBlocks',
-        'kvCacheQuantization', 'kvCacheGroupSize',
+        'kvCacheQuantization', 'kvCacheGroupSize', 'omniBackend',
         'enableDiskCache', 'diskCacheMaxGb', 'diskCacheDir',
         'enableBlockDiskCache', 'blockDiskCacheMaxGb', 'blockDiskCacheDir',
         'streamInterval', 'maxTokens',
         'mcpConfig', 'enableAutoToolChoice', 'toolCallParser', 'reasoningParser',
         'isMultimodal', 'servedModelName',
         'speculativeModel', 'numDraftTokens',
-        'defaultTemperature', 'defaultTopP',
+        'smelt', 'smeltExperts', 'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
+        'defaultTemperature', 'defaultTopP', 'defaultRepetitionPenalty', 'defaultEnableThinking',
         'embeddingModel', 'additionalArgs',
         'enableJit', 'logLevel', 'corsOrigins', 'maxContextLength',
     ]
@@ -1373,14 +1510,11 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized).not.toContain('--rate-limit')     // rateLimit is 0
         expect(normalized).not.toContain('--is-mllm')        // isMultimodal is undefined/false
         expect(normalized).not.toContain('--disable-prefix-cache')  // prefix cache is on by default
-        expect(normalized).not.toContain('--enable-disk-cache')     // disk cache is off
+        expect(normalized).not.toContain('--enable-disk-cache')     // paged cache uses block L2, not legacy prompt L2
         expect(normalized).not.toContain('--speculative-model')     // no speculative model
-        expect(normalized).not.toContain('--default-temperature')   // 0 means server default
-        expect(normalized).not.toContain('--default-top-p')         // 0 means server default
         expect(normalized).not.toContain('--embedding-model')       // empty
         expect(normalized).not.toContain('--log-level')             // INFO is default (not emitted)
         expect(normalized).not.toContain('--allowed-origins')       // * is default (not emitted)
-        expect(normalized).not.toContain('--enable-jit')            // off by default
         expect(normalized).not.toContain('--max-context-length')    // reserved, never emitted
 
         // Defaults SHOULD produce these flags:
@@ -1390,6 +1524,11 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized).toContain('--max-tokens')
         expect(normalized).toContain('--continuous-batching')
         expect(normalized).toContain('--use-paged-cache')
+        expect(normalized).toContain('--enable-block-disk-cache')
+        expect(normalized).toContain('--default-temperature')
+        expect(normalized).toContain('--default-top-p')
+        expect(normalized).toContain('--default-repetition-penalty')
+        expect(normalized).toContain('--enable-jit')
     })
 
     it('mutual exclusion: disk cache NOT emitted when paged cache is active', () => {

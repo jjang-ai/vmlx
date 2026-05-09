@@ -27,10 +27,10 @@ Supported cache_data tuple types (from prefix_cache.py):
 - ("rotating_kv", keys_slice, values_slice, max_size, keep) — RotatingKVCache
 - ("cumulative", state_list, meta, class_name) — MambaCache/ArraysCache
 - ("deepseek_v4", state_tree, meta, class_name, cache_meta) — DSV4
-  composite cache (SWA local + CSA/HSA compressor/indexer pools)
+  composite cache (SWA local + CSA/HCA compressor/indexer pools)
 - ("deepseek_v4_pending", class_name, cache_meta) — non-terminal DSV4
   marker so paged/L2 chain hashes remain materialized without duplicating
-  full CSA/HSA pool state in every block
+  full CSA/HCA pool state in every block
 - ("zaya_cca", kv_entry, cca_state, cca_meta, cache_meta) — ZAYA CCA
   typed cache: standard KV pages plus terminal conv_state/prev_hs
 - ("skip",) — placeholder for cumulative layers in non-last blocks

@@ -461,14 +461,61 @@ class TestVLMPrefixCacheImageGuard:
     """Tests for VLM prefix cache image collision prevention."""
 
     def test_skip_prefix_cache_when_images_present(self):
-        """Prefix cache fetch should be skipped when request has pixel_values."""
+        """Prefix cache fetch should be skipped when request has pixel_values.
+
+        Codex's N-1 fix slice (2026-05-09) factored prefill/encode out of
+        `_process_prompts` into smaller helpers. The has_images guard now
+        lives inside `_run_vision_encoding_inner`.
+        """
         from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
         import inspect
 
-        source = inspect.getsource(MLLMBatchGenerator._process_prompts)
-        # Must check has_images before fetching from prefix cache
+        source = inspect.getsource(MLLMBatchGenerator._run_vision_encoding_inner)
+        # Must gate prefix-cache / chunked-prefill paths on has_images
         assert "has_images" in source
         assert "not has_images" in source
+
+    def test_media_placeholder_helper_covers_image_video_audio_ids(self):
+        """All configured media placeholder ids should be treated as cache-unsafe."""
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        class Config:
+            image_token_index = 101
+            video_token_id = 202
+            audio_token_id = 303
+
+        generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+        generator.model = type("Model", (), {"config": Config()})()
+        generator.language_model = type("LM", (), {"config": None})()
+
+        assert generator._media_placeholder_token_ids() == {101, 202, 303}
+        assert generator._tokens_contain_media_placeholders([1, 2, 101]) is True
+        assert generator._tokens_contain_media_placeholders([1, 202, 3]) is True
+        assert generator._tokens_contain_media_placeholders([303]) is True
+        assert generator._tokens_contain_media_placeholders([1, 2, 3]) is False
+
+    def test_mllm_prefix_cache_store_skips_media_token_only_keys(self):
+        """Store path must not persist media-affected KV under token-only keys.
+
+        Codex's N-1 fix slice (2026-05-09) factored the media-cache-context
+        check out of `_cleanup_finished` into a dedicated helper
+        `_mllm_request_has_media_cache_context`. The store path still consults
+        it before writing under a token-only prefix key.
+        """
+        import inspect
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+
+        helper_source = inspect.getsource(
+            MLLMScheduler._mllm_request_has_media_cache_context
+        )
+        # Helper must consult the media-placeholder detector
+        assert "_tokens_contain_media_placeholders" in helper_source
+
+        # The cleanup path must call the helper before storing under a
+        # token-only key (legacy/memory-aware cache). Inspect _cleanup_finished
+        # for the call site.
+        cleanup_source = inspect.getsource(MLLMScheduler._cleanup_finished)
+        assert "_mllm_request_has_media_cache_context" in cleanup_source
 
 
 class TestSSMStateCacheKeyAlignment:

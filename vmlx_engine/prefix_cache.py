@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # keys so the last prompt token is always re-fed on cache hit. Older block
 # disk entries were indexed under full-N keys and can replay unrelated text
 # after restart, so every family must use a fresh namespace, not just DSV4.
-# 2026-05-05 v3 bump: scheduler.py:1964 DSV4 SWA+CSA+HSA truncation guard
+# 2026-05-05 v3 bump: scheduler.py:1964 DSV4 SWA+CSA+HCA truncation guard
 # now refuses to store post-generation DeepseekV4Cache when current_len >
 # target_len. Old block-disk entries (v2) were stored without the guard
 # and contain post-generation rotated/cumulative state that decodes
@@ -129,12 +129,12 @@ def compute_model_cache_key(
 
     # DSV4 cache correctness depends on runtime cache shape. Keep these in
     # the model key so L1/L2 prefix cache entries never cross between SWA-only
-    # and tri-mode SWA+CSA/HSA, or between different DSV4 composite-cache
+    # and tri-mode SWA+CSA/HCA, or between different DSV4 composite-cache
     # schema versions.
     if any(p == "model_type=deepseek_v4" for p in parts):
         parts.append(f"dsv4_long_ctx={os.environ.get('DSV4_LONG_CTX', '0')}")
         parts.append(f"dsv4_pool_quant={os.environ.get('DSV4_POOL_QUANT', '')}")
-        # v5: DSV4 runtime uses PR #1195 flat-pool CSA/HSA masks plus
+        # v5: DSV4 runtime uses PR #1195 flat-pool CSA/HCA masks plus
         # chunked prefill. Bump the schema so old blocks captured by the
         # pre-v5 L*topk expansion path can never replay into the fixed
         # runtime.
@@ -1282,7 +1282,7 @@ class BlockAwarePrefixCache:
         # can restore the full 64-token blocks but miss the terminal partial
         # block (e.g. full prompt remaining=41 while stored N-1 terminal=40).
         # For DSV4 that terminal partial carries the only deepseek_v4 composite
-        # CSA/HSA state; accepting the shorter hit yields "2 layers, expected
+        # CSA/HCA state; accepting the shorter hit yields "2 layers, expected
         # 43" or a forced full prefill. Prefer whichever lookup restores more
         # cached tokens, and release request refs from the loser.
         if len(tokens) > 1:
@@ -1350,7 +1350,7 @@ class BlockAwarePrefixCache:
                     "Ignoring DSV4 paged prefix hit for %s: restored blocks "
                     "contain DeepseekV4Cache pending markers but no terminal "
                     "deepseek_v4 composite state. A non-terminal DSV4 block "
-                    "only carries SWA/local fragments; CSA/HSA pool state "
+                    "only carries SWA/local fragments; CSA/HCA pool state "
                     "lives in the terminal block, so using this prefix would "
                     "reconstruct an incomplete cache.",
                     request_id,
@@ -1448,7 +1448,7 @@ class BlockAwarePrefixCache:
         """True when an L2 hit restored only non-terminal DSV4 blocks.
 
         DSV4 block L2 intentionally writes cheap ``deepseek_v4_pending``
-        markers for non-terminal blocks and stores the full SWA+CSA/HSA
+        markers for non-terminal blocks and stores the full SWA+CSA/HCA
         composite state only on the terminal block. A chain hit that stops
         before that terminal block is not a usable prefix cache: rebuilding it
         yields a few SWA layers and misses every DeepseekV4Cache layer.
@@ -1793,7 +1793,7 @@ class BlockAwarePrefixCache:
             # Tensor KV state must NEVER use this content-only fallback.
             # Repeated 64-token chunks have identical text but different hidden
             # state because real KV values depend on the full prefix. DSV4 made
-            # this obvious through CSA/HSA state, but the same invariant applies
+            # this obvious through CSA/HCA state, but the same invariant applies
             # to ordinary attention, RoPE, hybrid SSM companions, and TQ-KV.
             # Chain hashes above already cover the safe exact-prefix case.
             existing_block = None
@@ -1874,7 +1874,7 @@ class BlockAwarePrefixCache:
                     # DSV4 is not a normal per-block KV payload. Non-terminal
                     # blocks carry only cheap pending markers plus the plain
                     # SWA-only front-layer KV slices, while the terminal block
-                    # carries the full SWA+CSA/HSA composite state required for
+                    # carries the full SWA+CSA/HCA composite state required for
                     # reconstruction. If frugal mode drops those in-RAM records,
                     # an immediate same-process repeat can hit the block table
                     # before the async L2 write is readable and reconstruct as
@@ -1911,7 +1911,7 @@ class BlockAwarePrefixCache:
                             # only two plain KV layers plus native composite
                             # markers/state for the remaining layers; showing
                             # those tags keeps support logs from looking like
-                            # the CSA/HSA cache was dropped.
+                            # the CSA/HCA cache was dropped.
                             _tag_counts = {}
                             for _entry in np_block:
                                 if not isinstance(_entry, (tuple, list)) or not _entry:
@@ -2497,6 +2497,76 @@ class BlockAwarePrefixCache:
         )
         return block_table
 
+    @staticmethod
+    def _block_has_terminal_state(block: Any, tag: str) -> bool:
+        """Return True if a block carries a terminal path-dependent payload."""
+        for entry in getattr(block, "cache_data", None) or []:
+            if not isinstance(entry, (tuple, list)) or not entry:
+                continue
+            if entry[0] != tag:
+                continue
+            if tag == "zaya_cca":
+                return len(entry) > 2 and entry[2] is not None
+            return True
+        return False
+
+    def trim_block_table_to_terminal_state(
+        self,
+        request_id: str,
+        target_tokens: int,
+        tag: str,
+    ) -> Optional["BlockTable"]:
+        """Shrink a block table only to a native terminal-state checkpoint.
+
+        Path-dependent cache families cannot use plain block-aligned KV
+        trimming: a non-terminal DSV4/ZAYA block carries only partial state.
+        This helper scans the request's prefix blocks and keeps the longest
+        prefix at or below ``target_tokens`` whose last block contains the
+        family-specific terminal payload (for example ``deepseek_v4``).
+        """
+        block_table = self.paged_cache.get_block_table(request_id)
+        if block_table is None or not block_table.block_ids or target_tokens <= 0:
+            return None
+
+        best_index: Optional[int] = None
+        best_tokens = 0
+        running_tokens = 0
+        for idx, block_id in enumerate(block_table.block_ids):
+            block = self.paged_cache.allocated_blocks.get(block_id)
+            if block is None:
+                return None
+            running_tokens += int(getattr(block, "token_count", 0) or 0)
+            if running_tokens > target_tokens:
+                break
+            if self._block_has_terminal_state(block, tag):
+                best_index = idx
+                best_tokens = running_tokens
+
+        if best_index is None or best_tokens <= 0:
+            return None
+
+        kept_count = best_index + 1
+        if kept_count == len(block_table.block_ids):
+            block_table.num_tokens = best_tokens
+            return block_table
+
+        to_release = block_table.block_ids[kept_count:]
+        for block_id in to_release:
+            self.paged_cache.decrement_ref(block_id)
+
+        block_table.block_ids = block_table.block_ids[:kept_count]
+        block_table.num_tokens = best_tokens
+        logger.debug(
+            "Trimmed path-dependent block_table for %s to terminal %s "
+            "checkpoint: %d blocks, %d tokens; released %d trailing blocks",
+            request_id,
+            tag,
+            kept_count,
+            best_tokens,
+            len(to_release),
+        )
+        return block_table
+
     def release_low_priority(self, n_entries: int = 1) -> int:
         """
         Release up to n_entries from the lowest-priority non-empty bucket
@@ -3025,7 +3095,7 @@ class BlockAwarePrefixCache:
                         )
                         local_quant_meta = cache_meta.get("local_quant_meta")
                         if local_quant_meta:
-                            # DSV4 q4/q8 storage keeps CSA/HSA pool buffers
+                            # DSV4 q4/q8 storage keeps CSA/HCA pool buffers
                             # native but stores local SWA KV as QuantizedKVCache.
                             # Rebuild that composite explicitly; assigning this
                             # state through DeepseekV4Cache.state would feed a

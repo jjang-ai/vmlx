@@ -16,6 +16,7 @@ Test Cases:
 import base64
 import os
 import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -235,13 +236,24 @@ class TestMLLMSchedulerConfig:
 
         config = MLLMSchedulerConfig()
 
-        assert config.max_num_seqs == 16
-        # prefill_batch_size set equal to max_num_seqs to avoid batch extend issues
-        assert config.prefill_batch_size == 16
-        assert config.completion_batch_size == 16
+        assert config.max_num_seqs == 64
+        assert config.prefill_batch_size == 1024
+        assert config.prefill_step_size == 2048
+        assert config.completion_batch_size == 1024
         assert config.enable_vision_cache is True
-        # Default lowered 100 → 16 to match max_num_seqs sizing.
+        # Vision embedding cache remains conservative; text batch sizing is separate.
         assert config.vision_cache_size == 16
+
+    def test_batched_engine_mllm_fallback_uses_scheduler_defaults(self):
+        """Programmatic MLLM startup must not keep stale low-batch fallbacks."""
+        source = Path("vmlx_engine/engine/batched.py").read_text()
+
+        assert "default_scheduler = SchedulerConfig()" in source
+        assert '"prefill_batch_size",\n            default_scheduler.prefill_batch_size' in source
+        assert '"completion_batch_size",\n            default_scheduler.completion_batch_size' in source
+        assert '"prefill_step_size",\n                default_scheduler.prefill_step_size' in source
+        assert '"prefill_batch_size", 4' not in source
+        assert '"completion_batch_size", 16' not in source
 
     def test_custom_config(self):
         """Test custom configuration."""

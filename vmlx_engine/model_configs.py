@@ -591,10 +591,10 @@ def register_all(registry=None):
     # Cache type "hybrid" — engine builds KVCache slots for the MLA
     # layers and ArraysCache(size=1) for the linear-attn layers. The
     # `<role>SYSTEM</role>...<|role_end|>` chat template hardcodes
-    # `detailed thinking off` and only flips on when the user's actual
-    # system message contains the literal string `detailed thinking on`.
-    # `think_in_template=True` so the deepseek_r1 reasoning parser can
-    # detect the template-opened `<think>` block without re-injection.
+    # `detailed thinking off`. Do not advertise Ling as a default-reasoning
+    # family: stale bundle capability stamps have claimed deepseek_r1 support,
+    # but Auto must keep visible-answer-first behavior unless a future live
+    # gate proves a proper Ling reasoning rail.
     # MTP layer (`model.layers.32`) is loaded but skipped in standard
     # generation; spec-decode wiring is a future pass. Tool format is
     # DeepSeek-style.
@@ -616,17 +616,9 @@ def register_all(registry=None):
             cache_type="hybrid",
             eos_tokens=["<|role_end|>", "<|endoftext|>"],
             tool_parser="deepseek",
-            reasoning_parser="deepseek_r1",
-            # think_in_template=False (default): Ling's chat template does NOT
-            # auto-inject `<think>` — it defaults to a hardcoded system
-            # `detailed thinking off`, and only opens `<think>` when the user
-            # supplies `detailed thinking on` in their system message. The
-            # deepseek_r1 reasoning parser detects `<think>...</think>`
-            # blocks dynamically; with think_in_template=True (DSV4-style),
-            # the parser assumes the response opens inside a think block and
-            # routes ALL output to `reasoning_content`, leaving `content`
-            # null — which is the symptom Ling exhibits with thinking-off.
+            reasoning_parser=None,
             think_in_template=False,
+            supports_thinking=False,
             priority=20,
         )
     )

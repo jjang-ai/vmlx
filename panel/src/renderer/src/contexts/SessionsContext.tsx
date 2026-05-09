@@ -19,6 +19,7 @@ export interface LoadProgress {
   modelBytes?: number
   lazyResident?: boolean
   residentMb?: number
+  residentPercent?: number
   peakMb?: number
   cacheMb?: number
 }
@@ -100,6 +101,7 @@ export function SessionsProvider({ children }: { children: React.ReactNode }) {
             ...(data.modelBytes != null ? { modelBytes: data.modelBytes } : {}),
             ...(data.lazyResident != null ? { lazyResident: data.lazyResident } : {}),
             ...(data.residentMb != null ? { residentMb: data.residentMb } : {}),
+            ...(data.residentPercent != null ? { residentPercent: data.residentPercent } : {}),
             ...(data.peakMb != null ? { peakMb: data.peakMb } : {}),
             ...(data.cacheMb != null ? { cacheMb: data.cacheMb } : {}),
           })

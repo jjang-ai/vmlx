@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>The native macOS desktop app for local AI inference on Apple Silicon</strong>
+  <strong>Native macOS app for the vMLX inference server on Apple Silicon</strong>
 </p>
 
 <p align="center">
@@ -15,7 +15,7 @@
 
 ---
 
-MLX Studio is a full-featured desktop application for running large language models, vision models, and image generation locally on your Mac. Built on [vMLX Engine](https://github.com/jjang-ai/vmlx) and Apple's [MLX](https://github.com/ml-explore/mlx) framework, it delivers GPU-accelerated inference with zero cloud dependencies.
+MLX Studio is a full-featured macOS app that wraps the [vMLX inference server](https://github.com/jjang-ai/vmlx) — large language models, vision models, and image generation served via an OpenAI-compatible HTTP API on Apple Silicon. Built on Apple's [MLX](https://github.com/ml-explore/mlx) framework for GPU-accelerated inference, self-hosted on the user's machine.
 
 ## Screenshots
 
@@ -54,10 +54,10 @@ All releases are signed and notarized by Apple for Gatekeeper compatibility.
 - **Reasoning** -- Native support for thinking/reasoning models (DeepSeek-R1, QwQ, GLM-Z1)
 - **Tool Calling** -- Function calling with structured output for agent workflows
 - **Image Generation** -- Text-to-image with MLX-powered diffusion models
-- **Text-to-Speech** -- Local TTS via Kokoro with multiple voices
-- **Speech-to-Text** -- Whisper-based transcription, fully on-device
-- **OpenAI-Compatible API** -- Drop-in replacement server on `localhost` for any client
-- **Menu Bar Mode** -- Runs quietly in the tray; always one click away
+- **Text-to-Speech** -- TTS via Kokoro with multiple voices
+- **Speech-to-Text** -- Whisper-based transcription
+- **OpenAI-Compatible API** -- HTTP server on `localhost` for any compatible client
+- **Menu Bar Mode** -- Runs in the tray for quick access
 - **Developer Tools** -- Model inspection, conversion, quantization, and diagnostics
 - **Session Management** -- Save, restore, and organize conversations with SQLite persistence
 - **JANG Quantization** -- First-class support for [JANG mixed-precision quantization](https://github.com/jjang-ai/vmlx) formats
@@ -81,7 +81,7 @@ All releases are signed and notarized by Apple for Gatekeeper compatibility.
 
 ## What's Included
 
-MLX Studio bundles everything needed to run local AI:
+MLX Studio bundles everything needed to run the inference server:
 
 | Mode | Description |
 |---|---|

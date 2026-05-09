@@ -192,7 +192,7 @@ ROWS = [
     dict(
         id="X12",
         label="gemma-4-e2b-it-4bit + paged+L2 (stock)",
-        path="/Users/example/osaurus_models/finished/gemma-4-e2b-it-4bit",
+        path="/Users/example/models/gemma-4-e2b-it-4bit",
         is_vl=False,
         backend="paged_blockdisk",
         kv_quant="none",
@@ -201,7 +201,7 @@ ROWS = [
     dict(
         id="X13",
         label="gemma-4-e2b-it-4bit + NO CACHE (stock MLX, no TQ)",
-        path="/Users/example/osaurus_models/finished/gemma-4-e2b-it-4bit",
+        path="/Users/example/models/gemma-4-e2b-it-4bit",
         is_vl=False,
         backend="none",
         kv_quant="none",

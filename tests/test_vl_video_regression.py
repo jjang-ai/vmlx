@@ -6430,7 +6430,7 @@ class TestTurboQuantDefaultAndSpeed:
 
     Cache codecs are stricter than weight decode: standard-KV JANGTQ can use
     live TurboQuant KV / stored q4 when compatible, DSV4 uses its native
-    SWA+CSA/HSA compression, and hybrid SSM auto mode disables live TQ-KV until
+    SWA+CSA/HCA compression, and hybrid SSM auto mode disables live TQ-KV until
     a typed codec covers both positional KV and companion SSM state.
 
     Live-verified iter 6 against Qwen3.6-35B-A3B-JANGTQ2 from

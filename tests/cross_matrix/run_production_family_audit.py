@@ -124,7 +124,7 @@ ROWS: list[ModelRow] = [
         notes=[
             "Current corrected local DSV4 artifact: F32 critical controls, "
             "V3 mixed routed bits, prestacked JANGTQ sidecar.",
-            "DSV4 SWA+CSA/HSA heterogenous cache; paged/block L2 must use "
+            "DSV4 SWA+CSA/HCA heterogenous cache; paged/block L2 must use "
             "deepseek_v4_v7 composite-state serialization, not generic KV blocks"
         ],
     ),
@@ -221,7 +221,7 @@ ROWS: list[ModelRow] = [
         label="Ling-2.6-flash JANGTQ",
         path="/Users/example/models/JANGQ/Ling-2.6-flash-JANGTQ",
         family="bailing_hybrid",
-        expect_reasoning=True,
+        expect_reasoning=False,
         cache_profile="hybrid_ssm",
         slow=True,
         notes=[
@@ -234,7 +234,7 @@ ROWS: list[ModelRow] = [
         label="Ling-2.6-flash JANGTQ2 CRACK",
         path="/Users/example/models/dealign.ai/Ling-2.6-flash-JANGTQ2-CRACK",
         family="bailing_hybrid",
-        expect_reasoning=True,
+        expect_reasoning=False,
         cache_profile="hybrid_ssm",
         slow=True,
     ),
@@ -243,7 +243,7 @@ ROWS: list[ModelRow] = [
         label="Ling-2.6-flash MXFP4 CRACK",
         path="/Users/example/models/dealign.ai/Ling-2.6-flash-MXFP4-CRACK",
         family="bailing_hybrid",
-        expect_reasoning=True,
+        expect_reasoning=False,
         cache_profile="hybrid_ssm",
         slow=True,
         notes=[
@@ -285,7 +285,7 @@ ROWS: list[ModelRow] = [
     ModelRow(
         id="mistral_medium35_mxfp4",
         label="Mistral-Medium-3.5-128B MXFP4",
-        path="/Volumes/ModelDrive/jangq-ai/OsaurusAI/Mistral-Medium-3.5-128B-mxfp4",
+        path="/Volumes/ModelDrive/jangq-ai/Mistral-Medium-3.5-128B-mxfp4",
         family="mistral3",
         kind="vl",
         expect_reasoning=False,
@@ -757,6 +757,52 @@ def is_non_length_stop(stop: str) -> bool:
     return stop not in {"length", "max_tokens"}
 
 
+def dsv4_long_context_full_output_ok(
+    *,
+    code: int,
+    finish: str,
+    full_text: str,
+    content: str,
+    split_ok: bool,
+    loop_score: float,
+) -> bool:
+    """Return whether a DSV4 long-output row is production-coherent.
+
+    DSV4 long rows are full-tail gates, not smoke tests. A length-capped
+    response can have enough characters and a low loop score while still being
+    visibly unfinished or stuck inside planning. Require a non-length stop so
+    the row cannot pass until the model/runtime reaches its own stop condition.
+    """
+    return (
+        code == 200
+        and is_non_length_stop(finish)
+        and len(full_text) >= 120
+        and len(content) >= 40
+        and split_ok
+        and not has_duplicate_block(full_text)
+        and loop_score < 0.25
+    )
+
+
+def dsv4_thinking_mode_max_ok(
+    *,
+    code: int,
+    finish: str,
+    content: str,
+    reasoning: str,
+) -> bool:
+    """Return whether DSV4 ``thinking_mode=max`` visibly answered the probe."""
+    normalized_content = normalize_short_answer(content).lower()
+    return (
+        code == 200
+        and finish == "stop"
+        and normalized_content == "7"
+        and bool(content.strip())
+        and content.strip() != reasoning.strip()
+        and not has_duplicate_block(f"{content}\n{reasoning}".lower())
+    )
+
+
 def capability_endpoint_contract_ok(row: ModelRow, caps: Any) -> bool:
     """Validate the live capability surface against the row contract."""
     if not isinstance(caps, dict):
@@ -849,6 +895,24 @@ def cache_exact_hit_probe(row: ModelRow) -> dict[str, Any]:
         "min_count": 3,
         "strict_short_answer": False,
     }
+
+
+def audit_child_env_for_row(
+    row: ModelRow,
+    base_env: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Return subprocess environment overrides for a live audit row."""
+    child_env = dict(os.environ if base_env is None else base_env)
+    if row.cache_profile == "zaya_cca":
+        child_env["VMLX_ZAYA_ENABLE_TYPED_CCA_CACHE"] = "1"
+        child_env["VMLX_DISABLE_TQ_KV"] = "1"
+        child_env.pop("VMLX_FORCE_TQ_AUTO", None)
+    if row.family == "deepseek_v4":
+        # Proof rows must measure DSV4 runtime/cache behavior, not the
+        # generator's repetition-blocking logit warp. Product defaults stay in
+        # the generator; this only affects the audit subprocess.
+        child_env["VMLX_DSV4_HARD_REP_BLOCK"] = "0"
+    return child_env
 
 
 def has_duplicate_block(text: str, min_len: int = 80) -> bool:
@@ -1209,11 +1273,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
     if os.environ.get("VMLINUX_AUDIT_KILL_EXISTING") == "1":
         subprocess.run(["pkill", "-9", "-f", "vmlx_engine.cli"], capture_output=True)
         time.sleep(2)
-    child_env = os.environ.copy()
-    if row.cache_profile == "zaya_cca":
-        child_env["VMLX_ZAYA_ENABLE_TYPED_CCA_CACHE"] = "1"
-        child_env["VMLX_DISABLE_TQ_KV"] = "1"
-        child_env.pop("VMLX_FORCE_TQ_AUTO", None)
+    child_env = audit_child_env_for_row(row)
 
     with log.open("w") as lf:
         lf.write("# " + " ".join(cmd) + "\n\n")
@@ -1571,16 +1631,17 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         max_joined = (max_content + "\n" + max_reasoning).lower()
         check(
             "dsv4_thinking_mode_max",
-            code == 200
-            and max_finish == "stop"
-            and "7" in max_joined
-            and bool(max_content.strip())
-            and max_content.strip() != max_reasoning.strip()
-            and not has_duplicate_block(max_joined),
+            dsv4_thinking_mode_max_ok(
+                code=code,
+                finish=max_finish,
+                content=max_content,
+                reasoning=max_reasoning,
+            ),
             {
                 "code": code,
                 "finish": max_finish,
                 "content": max_content[:300],
+                "normalized_content": normalize_short_answer(max_content).lower(),
                 "reasoning_chars": len(max_reasoning),
                 "reasoning_head": max_reasoning[:240],
                 "content_equals_reasoning": max_content.strip() == max_reasoning.strip(),
@@ -1662,12 +1723,14 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
             )
             check(
                 f"dsv4_long_context_full_output_{probe_name}",
-                code == 200
-                and len(full_text) >= 120
-                and len(long_content) >= 40
-                and split_ok
-                and not has_duplicate_block(full_text)
-                and loop_score < 0.25,
+                dsv4_long_context_full_output_ok(
+                    code=code,
+                    finish=long_finish,
+                    full_text=full_text,
+                    content=long_content,
+                    split_ok=split_ok,
+                    loop_score=loop_score,
+                ),
                 {
                     "code": code,
                     "finish": long_finish,

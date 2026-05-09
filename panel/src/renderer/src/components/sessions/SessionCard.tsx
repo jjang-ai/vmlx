@@ -53,6 +53,14 @@ function formatModelBytes(bytes?: number): string | null {
   return `${(bytes / 1e9).toFixed(1)} GB`;
 }
 
+function formatResidentLoad(progress?: { residentMb?: number; modelBytes?: number; residentPercent?: number }): string | null {
+  if (!progress?.residentMb || progress.residentMb <= 0) return null;
+  const resident = `${(progress.residentMb / 1024).toFixed(1)} GB`;
+  const total = formatModelBytes(progress.modelBytes);
+  const pct = progress.residentPercent != null ? ` (${progress.residentPercent.toFixed(1)}%)` : '';
+  return total ? `${resident} / ${total}${pct}` : `${resident}${pct}`;
+}
+
 export function SessionCard({
   session,
   onOpen,
@@ -87,6 +95,7 @@ export function SessionCard({
   const [loadingElapsed, setLoadingElapsed] = useState(0);
   const { loadProgress } = useSessionsContext();
   const progress = loadProgress.get(session.id);
+  const residentLoad = formatResidentLoad(progress);
 
   // Elapsed time counter when model is loading
   useEffect(() => {
@@ -193,6 +202,11 @@ export function SessionCard({
                 <p className="text-[10px] text-muted-foreground/80">
                   Model files: {formatModelBytes(progress.modelBytes)}
                   {progress.lazyResident ? ' mapped; resident memory updates after runtime health is ready' : ''}
+                </p>
+              )}
+              {residentLoad && (
+                <p className="text-[10px] text-muted-foreground/80">
+                  Resident RAM: {residentLoad}
                 </p>
               )}
             </div>

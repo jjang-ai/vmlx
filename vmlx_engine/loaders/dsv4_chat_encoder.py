@@ -22,9 +22,9 @@ Three reasoning modes (research/DSV4-RUNTIME-ARCHITECTURE.md §4):
   |    effort="high" |  "high"             |                     |
   +------------------+---------------------+---------------------+
   |  reasoning_      |  thinking_mode=     |  extra system hint  |
-  |    effort="max"  |  "thinking" +       |  normalized to the  |
-  |                  |  reasoning_effort=  |                     |
-  |                  |  "high"             |  stable rail        |
+  |    effort="max"  |  "thinking" +       |  only when raw-max  |
+  |                  |  reasoning_effort=  |  opt-in env is set; |
+  |                  |  "max" or "high"    |  otherwise high     |
   +------------------+---------------------+---------------------+
 
 Multi-turn: ``drop_earlier_reasoning=True`` (default) — DSV4 encoder
@@ -43,7 +43,7 @@ Tool calls are DSML format (``vmlx_engine/tool_parsers/dsml_tool_parser.py``
 Long-context mode (``DSV4_LONG_CTX``):
 
   * ``1`` is the supported runtime mode. ``Model.make_cache()`` returns
-    ``DeepseekV4Cache`` on ``compress_ratio>0`` layers (CSA/HSA + SWA
+    ``DeepseekV4Cache`` on ``compress_ratio>0`` layers (CSA/HCA + SWA
     composite) and plain ``KVCache`` on local-only layers.
   * Paged prefix cache uses a dedicated ``deepseek_v4`` block record with
     ``deepseek_v4_v7`` metadata; v7 keys DSV4 prompt cache blocks at N-1
@@ -203,17 +203,17 @@ def _resolve_mode_and_effort(
       - enable_thinking True + reasoning_effort in (None, "low", "medium",
         "high") → "thinking" mode with reasoning_effort="high" (DSV4
         only distinguishes high vs max below/above).
-      - reasoning_effort == "max" → "thinking" mode on the stable high
-        effort rail. Live engine probes showed the raw DSV4 max rail can
-        length-cap without closing </think>; server capabilities still accept
-        max for API parity, but the runtime normalizes it here.
+      - reasoning_effort == "max" → "thinking" mode. By default this still
+        uses the stable high rail. When ``VMLX_DSV4_RAW_MAX=1`` is set, the
+        genuine raw-max rail is passed through for users who accept the risk.
 
     Returns (thinking_mode, reasoning_effort). ``reasoning_effort`` is
-    always one of ``{None, "high"}`` for production use — safe for direct
-    passthrough to the encoder.
+    always one of ``{None, "high", "max"}`` — safe for direct passthrough to
+    the encoder.
     """
-    # Explicit max implies thinking, but normalizes to the stable rail.
     if reasoning_effort == "max":
+        if os.environ.get("VMLX_DSV4_RAW_MAX", "0").lower() in {"1", "true", "yes"}:
+            return "thinking", "max"
         return "thinking", "high"
 
     if enable_thinking is False:

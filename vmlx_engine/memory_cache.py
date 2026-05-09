@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 # Constants
 _BYTES_PER_MB = 1024 * 1024
-_DEFAULT_MEMORY_PERCENT = 0.30  # 30% of available RAM
+_DEFAULT_MEMORY_PERCENT = 0.20  # 20% of available RAM
 _MIN_MEMORY_BYTES = 100 * _BYTES_PER_MB  # Minimum 100MB
 _MAX_ENTRIES_FALLBACK = 50  # Fallback if memory detection fails
 _PRESSURE_CHECK_INTERVAL = 60.0  # Seconds between memory pressure checks

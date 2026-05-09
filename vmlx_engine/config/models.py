@@ -138,7 +138,7 @@ class PagedCacheConfig(BaseModel):
 
     enabled: bool = False
     block_size: int = 64
-    max_blocks: int = 10000
+    max_blocks: int = 1000
     memory_limit_mb: Optional[int] = None
 
 
@@ -203,9 +203,9 @@ class SamplingConfig(BaseModel):
 class InferenceConfig(BaseModel):
     """Inference engine configuration."""
 
-    max_concurrent_requests: int = 256
-    prefill_batch_size: int = 8
-    completion_batch_size: int = 32
+    max_concurrent_requests: int = 64
+    prefill_batch_size: int = 1024
+    completion_batch_size: int = 1024
     max_tokens_per_step: int = 8192
     sampling: SamplingConfig = Field(default_factory=SamplingConfig)
     max_tokens: int = 4096

@@ -74,6 +74,36 @@ class TestJitToggle:
             # Should not raise — graceful fallback
             server._apply_jit_compilation()
 
+    def test_jit_skips_dsv4_native_composite_cache(self):
+        """DSV4 owns a path-dependent native SWA+CSA/HCA cache; JIT must not trace it.
+
+        The panel should suppress --enable-jit for DSV4, but the server must
+        also defend against stale saved sessions, CLI users, and API callers
+        that enable JIT programmatically.
+        """
+        from vmlx_engine import server
+
+        inner_model = MagicMock()
+        inner_model.__call__ = MagicMock()
+
+        model_wrapper = MagicMock()
+        model_wrapper.model = inner_model
+
+        scheduler = MagicMock()
+        scheduler._uses_dsv4_cache = True
+
+        mock_engine = MagicMock()
+        mock_engine._model = model_wrapper
+        mock_engine.is_mllm = False
+        mock_engine._is_mllm = False
+
+        with patch.object(server, "_engine", mock_engine), \
+             patch.object(server, "_get_scheduler", return_value=scheduler), \
+             patch.object(mx, "compile") as mock_compile:
+            server._apply_jit_compilation()
+
+        mock_compile.assert_not_called()
+
     def test_jit_verifies_replacement(self):
         """After compile (LLM path), the compiled object replaces model.model.
         MLLM path replaces language_model.model instead — tested separately.

@@ -8,7 +8,7 @@ memory:
 
   # KV Cache settings
   kv_cache:
-    quantization: "turboquant"  # "none", "q4", "q8", "turboquant"
+    quantization: "q4"           # "none", "q4", "q8"; JANG TurboQuant KV is bundle auto-detected
     memory_limit_mb: null        # null = auto (use remaining budget)
     turboquant:
       default_key_bits: 3
@@ -37,7 +37,7 @@ memory:
   paged_cache:
     enabled: false
     block_size: 64                     # Tokens per block
-    max_blocks: 10000
+    max_blocks: 1000
     memory_limit_mb: null
 
   # Disk cache (L2 persistence)
@@ -83,9 +83,9 @@ hybrid:
 
 # Inference settings
 inference:
-  max_concurrent_requests: 256
-  prefill_batch_size: 8
-  completion_batch_size: 32
+  max_concurrent_requests: 64
+  prefill_batch_size: 1024
+  completion_batch_size: 1024
   max_tokens_per_step: 8192
   max_tokens: 4096
   stop_tokens: []                    # Override EOS tokens

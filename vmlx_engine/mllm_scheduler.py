@@ -183,13 +183,13 @@ class MLLMSchedulerConfig:
     """
 
     # Maximum concurrent MLLM requests in the batch
-    max_num_seqs: int = 16
+    max_num_seqs: int = 64
     # Prefill batch size (all queued requests are prefilled together)
-    prefill_batch_size: int = 16
+    prefill_batch_size: int = 1024
     # Completion batch size
-    completion_batch_size: int = 16
+    completion_batch_size: int = 1024
     # Prefill step size for chunked prefill
-    prefill_step_size: int = 1024
+    prefill_step_size: int = 2048
     # Enable vision embedding cache
     enable_vision_cache: bool = True
     # Maximum cache entries
@@ -734,6 +734,9 @@ class MLLMScheduler:
         self.num_requests_processed = 0
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
+        self._cache_hit_requests = 0
+        self._cache_hit_tokens = 0
+        self._cache_hit_tokens_by_detail: Dict[str, int] = {}
 
         # Periodic Metal memory cache cleanup timer (matches LLM scheduler).
         # During sustained MLLM traffic, self.running is never empty so
@@ -796,6 +799,36 @@ class MLLMScheduler:
             if not non_kv:
                 return False
             return True
+        except Exception:
+            return False
+
+    def _mllm_request_has_media_cache_context(
+        self,
+        request: Any,
+        token_ids: Optional[List[int]] = None,
+    ) -> bool:
+        """Return True when a VLM request must not use token-only caches.
+
+        Image/video embeddings are path-dependent. A token-only prefix key is
+        safe for text-only follow-up turns, but not for requests that carry
+        media inputs or media placeholder tokens. Keep this helper shared by
+        every MLLM cache store path so paged, memory-aware, legacy, and disk L2
+        cannot drift into different safety policies.
+        """
+        if request is None:
+            return False
+        if getattr(request, "images", None) or getattr(request, "videos", None):
+            return True
+        if not token_ids:
+            return False
+        try:
+            contains_placeholders = (
+                self.batch_generator is not None
+                and self.batch_generator._tokens_contain_media_placeholders(
+                    list(token_ids)
+                )
+            )
+            return bool(contains_placeholders)
         except Exception:
             return False
 
@@ -1960,6 +1993,7 @@ class MLLMScheduler:
                 prompt_tokens=request.num_prompt_tokens,
                 completion_tokens=request.num_output_tokens,
                 cached_tokens=getattr(response, 'cached_tokens', 0),
+                cache_detail=getattr(response, 'cache_detail', "") or "",
             )
 
             # Determine effective finish reason (string stop overrides)
@@ -2016,6 +2050,7 @@ class MLLMScheduler:
                 self.total_prompt_tokens += request.num_prompt_tokens
                 self.total_completion_tokens += request.num_output_tokens
                 self.num_requests_processed += 1
+                self._record_cache_hit(response, request)
 
                 logger.debug(
                     f"Request {request_id} finished: {finish_reason}, "
@@ -2026,6 +2061,34 @@ class MLLMScheduler:
             outputs.append(output)
 
         return outputs, finished_ids
+
+    def _record_cache_hit(self, response: MLLMBatchResponse, request: MLLMRequest) -> None:
+        """Aggregate per-request cache hits for /v1/cache/stats and /health.
+
+        MLLM responses already expose cached_tokens in per-request API usage.
+        Keep scheduler-level telemetry in sync so the panel and release gates
+        do not report "0 cached tokens" while the response usage proves a hit.
+        """
+        if getattr(request, "_cache_hit_recorded", False):
+            return
+        try:
+            cached_tokens = int(getattr(response, "cached_tokens", 0) or 0)
+        except Exception:
+            cached_tokens = 0
+        if cached_tokens <= 0:
+            request._cache_hit_recorded = True
+            return
+        detail = str(
+            getattr(response, "cache_detail", "")
+            or getattr(request, "_cache_detail", "")
+            or "unknown"
+        )
+        self._cache_hit_requests += 1
+        self._cache_hit_tokens += cached_tokens
+        self._cache_hit_tokens_by_detail[detail] = (
+            self._cache_hit_tokens_by_detail.get(detail, 0) + cached_tokens
+        )
+        request._cache_hit_recorded = True
 
     def _cleanup_finished(self, finished_ids: Set[str]) -> None:
         """Clean up finished requests and store KV cache for future prefix reuse.
@@ -2079,6 +2142,19 @@ class MLLMScheduler:
                     try:
                         token_list = getattr(request, "_extracted_tokens", [])
                         if token_list:
+                            if self._mllm_request_has_media_cache_context(
+                                request, token_list
+                            ):
+                                logger.info(
+                                    "Skipping VLM prefix cache store for %s: "
+                                    "prompt contains media context/placeholders; "
+                                    "media embeddings are path-dependent and "
+                                    "must not be saved under a token-only "
+                                    "prefix key",
+                                    request_id,
+                                )
+                                request._extracted_cache = None
+                                continue
                             raw = request._extracted_cache
                             cache_blocks = raw() if callable(raw) else raw
                             if cache_blocks is None:
@@ -2158,6 +2234,18 @@ class MLLMScheduler:
                     try:
                         prompt_tokens = list(request._extracted_tokens)
                         prompt_len = len(prompt_tokens)
+                        if self._mllm_request_has_media_cache_context(
+                            request, prompt_tokens
+                        ):
+                            logger.info(
+                                "Skipping VLM memory-aware cache store for %s: "
+                                "prompt contains media context/placeholders; "
+                                "media embeddings are path-dependent and "
+                                "must not be saved under a token-only "
+                                "prefix key",
+                                request_id,
+                            )
+                            continue
                         raw_cache = request._extracted_cache
                         if callable(raw_cache):
                             raw_cache = raw_cache()
@@ -2167,6 +2255,11 @@ class MLLMScheduler:
                                 cache_to_store,
                                 source=f"mllm-memory-store:{request_id}",
                             ):
+                                cache_key_tokens = (
+                                    prompt_tokens[:prompt_len - 1]
+                                    if prompt_len > 1
+                                    else list(prompt_tokens)
+                                )
                                 # L2: persist to disk (skip hybrid — SSM can't be reconstructed on fetch)
                                 if self.disk_cache is not None and not self._is_hybrid:
                                     try:
@@ -2186,11 +2279,12 @@ class MLLMScheduler:
                                         cache_to_store = None
                                 if cache_to_store is None:
                                     continue
-                                stored = self.memory_aware_cache.store(prompt_tokens, cache_to_store)
+                                stored = self.memory_aware_cache.store(cache_key_tokens, cache_to_store)
                                 if stored:
                                     logger.info(
                                         f"VLM stored memory-aware cache for {request_id} "
-                                        f"({prompt_len} prompt tokens)"
+                                        f"({len(cache_key_tokens)} cache-key tokens from "
+                                        f"{prompt_len} prompt tokens)"
                                     )
                     except Exception as e:
                         logger.warning(f"VLM memory-aware cache store failed for {request_id}: {e}")
@@ -2208,6 +2302,18 @@ class MLLMScheduler:
                     try:
                         prompt_tokens = list(request._extracted_tokens)
                         prompt_len = len(prompt_tokens)
+                        if self._mllm_request_has_media_cache_context(
+                            request, prompt_tokens
+                        ):
+                            logger.info(
+                                "Skipping VLM legacy prefix cache store for %s: "
+                                "prompt contains media context/placeholders; "
+                                "media embeddings are path-dependent and "
+                                "must not be saved under a token-only "
+                                "prefix key",
+                                request_id,
+                            )
+                            continue
                         raw_cache = request._extracted_cache
                         if callable(raw_cache):
                             raw_cache = raw_cache()
@@ -2217,6 +2323,11 @@ class MLLMScheduler:
                                 cache_to_store,
                                 source=f"mllm-prefix-store:{request_id}",
                             ):
+                                cache_key_tokens = (
+                                    prompt_tokens[:prompt_len - 1]
+                                    if prompt_len > 1
+                                    else list(prompt_tokens)
+                                )
                                 if self.disk_cache is not None and not self._is_hybrid:
                                     try:
                                         self.disk_cache.store(prompt_tokens, cache_to_store)
@@ -2235,10 +2346,11 @@ class MLLMScheduler:
                                         cache_to_store = None
                                 if cache_to_store is None:
                                     continue
-                                self.prefix_cache.store_cache(prompt_tokens, cache_to_store)
+                                self.prefix_cache.store_cache(cache_key_tokens, cache_to_store)
                                 logger.debug(
                                     f"VLM stored legacy prefix cache for {request_id} "
-                                    f"({prompt_len} prompt tokens)"
+                                    f"({len(cache_key_tokens)} cache-key tokens from "
+                                    f"{prompt_len} prompt tokens)"
                                 )
                     except Exception as e:
                         logger.debug(f"VLM prefix cache store failed for {request_id}: {e}")
@@ -2782,6 +2894,9 @@ class MLLMScheduler:
                 "num_requests_processed": self.num_requests_processed,
                 "total_prompt_tokens": self.total_prompt_tokens,
                 "total_completion_tokens": self.total_completion_tokens,
+                "cache_hit_requests": self._cache_hit_requests,
+                "cache_hit_tokens": self._cache_hit_tokens,
+                "cache_hit_tokens_by_detail": dict(self._cache_hit_tokens_by_detail),
             }
 
             if self.batch_generator is not None:

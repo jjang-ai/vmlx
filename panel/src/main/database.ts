@@ -66,6 +66,7 @@ export interface Message {
   timestamp: number;
   tokens?: number;
   metricsJson?: string; // JSON-serialized MessageMetrics
+  warningsJson?: string; // JSON-serialized non-content response warnings
   toolCallsJson?: string; // UI-display tool-status array (collectedToolStatuses)
   // OpenAI-format tool_calls for replay through chat templates:
   // `[{id, type:"function", function:{name, arguments}}, ...]`. Distinct
@@ -237,6 +238,7 @@ class DatabaseManager {
         content TEXT NOT NULL,
         timestamp INTEGER NOT NULL,
         tokens INTEGER,
+        warnings_json TEXT,
         FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
       );
 
@@ -349,6 +351,9 @@ class DatabaseManager {
       }[];
       if (!msgColumns.find((c) => c.name === "metrics_json")) {
         this.db.exec("ALTER TABLE messages ADD COLUMN metrics_json TEXT");
+      }
+      if (!msgColumns.find((c) => c.name === "warnings_json")) {
+        this.db.exec("ALTER TABLE messages ADD COLUMN warnings_json TEXT");
       }
       if (!msgColumns.find((c) => c.name === "tool_calls_json")) {
         this.db.exec("ALTER TABLE messages ADD COLUMN tool_calls_json TEXT");
@@ -1201,10 +1206,10 @@ class DatabaseManager {
       const stmt = this.db.prepare(`
         INSERT OR REPLACE INTO messages (
           id, chat_id, role, content, timestamp, tokens,
-          metrics_json, tool_calls_json, reasoning_content,
+          metrics_json, warnings_json, tool_calls_json, reasoning_content,
           tool_calls_oai_json, tool_call_id, tool_results_oai_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       stmt.run(
         message.id,
@@ -1214,6 +1219,7 @@ class DatabaseManager {
         message.timestamp,
         message.tokens,
         message.metricsJson,
+        message.warningsJson,
         message.toolCallsJson,
         message.reasoningContent,
         message.toolCallsOaiJson,
@@ -1265,6 +1271,7 @@ class DatabaseManager {
       timestamp: row.timestamp,
       tokens: row.tokens,
       metricsJson: row.metrics_json,
+      warningsJson: row.warnings_json,
       toolCallsJson: row.tool_calls_json,
       reasoningContent: row.reasoning_content,
       toolCallsOaiJson: row.tool_calls_oai_json,

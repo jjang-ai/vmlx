@@ -3,7 +3,7 @@ import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
 import DOMPurify from 'dompurify'
 import { useState, useMemo, useCallback, useRef, useEffect, memo } from 'react'
-import { Copy, Check, User, Sparkles, RefreshCw, Pencil } from 'lucide-react'
+import { AlertTriangle, Copy, Check, User, Sparkles, RefreshCw, Pencil } from 'lucide-react'
 import { ReasoningBox } from './ReasoningBox'
 import { ToolCallStatus } from './ToolCallStatus'
 import { InlineToolCall, InlineToolGroup } from './InlineToolCall'
@@ -25,6 +25,7 @@ interface MessageBubbleProps {
   reasoningContent?: string
   reasoningDone?: boolean
   toolStatuses?: any[]
+  warnings?: string[]
   sessionId?: string
   sessionEndpoint?: { host: string; port: number }
   isLastAssistant?: boolean
@@ -141,7 +142,7 @@ function useTypewriter(fullContent: string, isStreaming: boolean): string {
   return displayed
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, isStreaming, metrics, reasoningContent, reasoningDone, toolStatuses, sessionId, sessionEndpoint, isLastAssistant, onRegenerate, onEdit }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, isStreaming, metrics, reasoningContent, reasoningDone, toolStatuses, warnings, sessionId, sessionEndpoint, isLastAssistant, onRegenerate, onEdit }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false)
   const [zoomedImage, setZoomedImage] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
@@ -451,6 +452,21 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
         <div className="text-sm">
           {renderInlineContent()}
         </div>
+
+        {/* Non-content response warnings from the engine/API */}
+        {warnings && warnings.length > 0 && (
+          <div className="mt-3 space-y-1.5">
+            {warnings.map((warning, index) => (
+              <div
+                key={`${index}-${warning}`}
+                className="flex gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning-foreground/90"
+              >
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-warning" />
+                <span className="whitespace-pre-wrap break-words">{warning}</span>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Legacy tool call display */}
         {toolStatuses && toolStatuses.length > 0 &&

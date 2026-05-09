@@ -301,7 +301,7 @@ _FAMILY_FALLBACK_DEFAULTS: dict[str, tuple[float | None, float | None, float | N
     #     compressor/indexer pool buffers carry output-side state
     #     across turns; defended at scheduler.py:768 by routing DSV4
     #     through the hybrid cumulative-state path with rejected-
-    #     post-output-snapshot semantics, plus the SWA+CSA+HSA cache
+    #     post-output-snapshot semantics, plus the SWA+CSA+HCA cache
     #     truncation guard at scheduler.py:1964 (refuse store when
     #     RotatingKVCache has wrapped).
     # (3) Self-reinforcing token attractors at low temperature even
@@ -802,16 +802,66 @@ def _resolve_dsv4_thinking_policy(
     )
 
 
+def _dsv4_raw_max_enabled() -> bool:
+    """Return True iff the user has opted in to DSV4's genuine raw-max
+    reasoning_effort template via env. Off by default for safety.
+
+    See `docs/internal/AUDIT_dsv4_flash_long_form_max_thinking_2026_05_09.md`
+    for context. Combined with the bumped default finalizer budget (2048
+    visible tokens after forced `</think>`), opt-in raw-max produces coherent
+    long-form output where high alone may truncate.
+    """
+    return os.environ.get("VMLX_DSV4_RAW_MAX", "0").lower() in {"1", "true", "yes"}
+
+
+def _dsv4_max_compat_warning() -> str | None:
+    """Emit a capability-side compat warning when max is silently downgraded.
+
+    Honest API: when the runtime would downgrade `reasoning_effort=max` to
+    `high`, surface that fact in `/v1/models/{id}/capabilities`. When the
+    user has opted into raw-max via `VMLX_DSV4_RAW_MAX=1`, no warning needed.
+    """
+    if _dsv4_raw_max_enabled():
+        return None
+    return (
+        "DSV4 reasoning_effort=max is downgraded to high by default for "
+        "stability (raw max can fail to emit </think>). To opt into the "
+        "genuine max rail, set VMLX_DSV4_RAW_MAX=1; combine with "
+        "VMLX_DSV4_FINALIZER_TOKENS for a larger visible-answer budget."
+    )
+
+
 def _normalize_dsv4_reasoning_effort(effort: str | None) -> str | None:
     """Map public effort names onto the stable DSV4 encoder rail.
 
     DSV4's bundled raw ``reasoning_effort="max"`` template asks for an
     unbounded deliberation trace and live-probes length-cap without emitting
-    ``</think>``. The public API still accepts/advertises max for parity, but
-    the runtime normalizes max/medium/low onto the stable standard-thinking rail.
+    ``</think>``. By default the runtime normalizes max/medium/low onto the
+    stable standard-thinking rail (`high`).
+
+    Users who want the genuine max template can opt in via
+    ``VMLX_DSV4_RAW_MAX=1`` — combined with `VMLX_DSV4_FINALIZER_TOKENS`
+    they can tune the trade-off between deliberation depth and visible
+    answer length.
     """
+    if effort == "max" and _dsv4_raw_max_enabled():
+        return "max"
     if effort in ("low", "medium", "high", "max"):
         return "high"
+    return None
+
+
+def _dsv4_reasoning_effort_route_label(
+    requested_effort: str | None,
+    normalized_effort: str | None,
+) -> str | None:
+    """Classify DSV4 max-effort routing for honest logs."""
+    if requested_effort != "max":
+        return None
+    if normalized_effort == "max":
+        return "raw_max"
+    if normalized_effort == "high":
+        return "downgraded"
     return None
 
 
@@ -957,7 +1007,7 @@ def _compute_bypass_prefix_cache(request_obj) -> bool:
     DELETE /v1/cache between runs instead.
 
     DSV4 note: DSV4 is not bypassed here. Its paged cache path stores a
-    dedicated ``deepseek_v4`` composite block record (local SWA plus CSA/HSA
+    dedicated ``deepseek_v4`` composite block record (local SWA plus CSA/HCA
     compressor/indexer pool state) and block disk L2 round-trips that nested
     state. Only explicit request fields bypass it.
     """
@@ -1057,6 +1107,33 @@ def _reject_unsupported_multimodal(endpoint: str) -> None:
             "text-only request. This guard prevents silent media drop."
         ),
     )
+
+
+def _grouped_conv1d_layout_error_detail(exc: Exception) -> str | None:
+    """Return an actionable message for escaped grouped Conv1d layout errors."""
+    msg = str(exc)
+    if (
+        "Given groups=" not in msg
+        or "weights of shape" not in msg
+        or "input channels" not in msg
+    ):
+        return None
+    return (
+        "Grouped Conv1d layout mismatch in a hybrid SSM/Mamba model. "
+        "This usually means the bundle was converted by an older JANG build "
+        "that wrote Conv1d weights in HF layout instead of MLX layout. vMLX "
+        "now applies runtime grouped-Conv1d layout backstops for JANG/JANGTQ "
+        "load paths; if this error still appears, re-convert with a newer "
+        "jang build and include config.json, jang_config.json, and the full "
+        f"original error in the report. Original error: {msg}"
+    )
+
+
+def _generation_error_detail(exc: Exception, *, prefix: str = "Generation failed") -> str:
+    detail = _grouped_conv1d_layout_error_detail(exc)
+    if detail:
+        return detail
+    return f"{prefix}: {type(exc).__name__}: {exc}"
 
 
 def _resolve_enable_thinking(
@@ -1613,6 +1690,18 @@ def _apply_jit_compilation():
             "is unsafe."
         )
         return
+
+    try:
+        _jit_scheduler = _get_scheduler()
+        if getattr(_jit_scheduler, "_uses_dsv4_cache", False) is True:
+            logger.info(
+                "JIT: Skipping mx.compile — DeepSeek-V4 native composite cache "
+                "(SWA+CSA/HCA) is active. The cache state is path-dependent and "
+                "must stay on the uncompiled scheduler path."
+            )
+            return
+    except Exception as _dsv4_jit_check_err:
+        logger.debug(f"JIT: DSV4-cache presence check failed ({_dsv4_jit_check_err}) — proceeding")
 
     # GH issue #66: TurboQuantKVCache is a custom non-MLX class. mx.compile()
     # rejects any function arg that isn't an mx.array / int / float / str / None,
@@ -2289,6 +2378,134 @@ def _suppress_tool_parsing_when_no_tools(
             ),
         )
     return True
+
+
+async def _await_chat_with_disconnect_abort(
+    engine: Any,
+    *,
+    messages: list[dict[str, Any]],
+    chat_kwargs: dict[str, Any],
+    timeout: float,
+    fastapi_request: Request | None,
+    request_id: str,
+    endpoint: str,
+    poll_interval: float = 0.25,
+):
+    """Await non-streaming engine.chat while aborting scheduler work on disconnect.
+
+    Streaming handlers poll `Request.is_disconnected()` inside their token loop.
+    Non-streaming handlers used to await `engine.chat()` directly, so a closed
+    HTTP client could leave a long prompt/generation running in the scheduler
+    with no consumer. Pass the public response id through as the scheduler
+    request id and abort it if the client disappears or the timeout fires.
+    """
+    task = asyncio.create_task(
+        engine.chat(messages=messages, request_id=request_id, **chat_kwargs)
+    )
+    started = time.perf_counter()
+
+    # Active receive-channel drain. `Request.is_disconnected()` is a lazy
+    # zero-timeout poll of receive — it can miss `http.disconnect` events
+    # in non-streaming flows where nothing else reads from receive (live
+    # observed by codex 2026-05-09: client TCP close + read-timeout left
+    # scheduler num_running=1 for >19s). Spawn a parallel task that
+    # actively awaits receive() so the disconnect event is delivered to us
+    # promptly, and signal it to the polling loop.
+    disconnect_event = asyncio.Event()
+    drain_task: asyncio.Task | None = None
+    if fastapi_request is not None and hasattr(fastapi_request, "receive"):
+        async def _drain_receive() -> None:
+            try:
+                while not disconnect_event.is_set():
+                    msg = await fastapi_request.receive()
+                    if not isinstance(msg, dict):
+                        continue
+                    if msg.get("type") == "http.disconnect":
+                        disconnect_event.set()
+                        return
+            except (asyncio.CancelledError, RuntimeError, Exception):
+                # Receive may raise after the channel is closed; treat the
+                # exception as a disconnect signal too (the connection is
+                # gone either way).
+                disconnect_event.set()
+        drain_task = asyncio.create_task(_drain_receive())
+
+    async def _abort(reason: str) -> None:
+        logger.info("%s: aborting request %s (%s)", endpoint, request_id, reason)
+        try:
+            await engine.abort_request(request_id)
+        except Exception as exc:
+            logger.warning(
+                "%s: abort_request(%s) failed after %s: %s",
+                endpoint,
+                request_id,
+                reason,
+                exc,
+            )
+
+    def _stop_drain() -> None:
+        if drain_task is not None and not drain_task.done():
+            drain_task.cancel()
+
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=max(poll_interval, 0.001))
+            if task in done:
+                _stop_drain()
+                try:
+                    return task.result()
+                except RuntimeError as exc:
+                    if f"No collector for request {request_id}" in str(exc):
+                        raise HTTPException(
+                            status_code=499,
+                            detail="Request cancelled",
+                        ) from exc
+                    raise
+
+            # Active drain caught http.disconnect — abort immediately.
+            if disconnect_event.is_set():
+                _stop_drain()
+                await _abort("client disconnected (receive-drain)")
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                raise HTTPException(status_code=499, detail="Client disconnected")
+
+            # If the active receive-drain is available, it owns the ASGI
+            # receive channel. Starlette's is_disconnected() also calls
+            # receive(), so polling both paths can create two concurrent
+            # readers on servers that do not guarantee receive reentrancy.
+            if fastapi_request is not None and drain_task is None:
+                try:
+                    disconnected = await fastapi_request.is_disconnected()
+                except Exception:
+                    disconnected = False
+                if disconnected:
+                    _stop_drain()
+                    await _abort("client disconnected")
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                    raise HTTPException(status_code=499, detail="Client disconnected")
+
+            if timeout is not None and (time.perf_counter() - started) >= timeout:
+                _stop_drain()
+                await _abort(f"timeout after {timeout:.1f}s")
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                raise asyncio.TimeoutError
+    except asyncio.CancelledError:
+        _stop_drain()
+        await _abort("handler cancelled")
+        task.cancel()
+        raise
 
 
 def _detect_native_tool_support() -> bool:
@@ -3070,6 +3287,28 @@ def _read_bundle_json(bundle_path: str | None, filename: str) -> dict:
         return {}
 
 
+def _bundle_has_prestacked_jangtq(bundle_path: str | None) -> bool:
+    """Detect bundles that already store routed JANGTQ experts pre-stacked."""
+    if not bundle_path:
+        return False
+    try:
+        from pathlib import Path
+
+        index_path = Path(bundle_path) / "model.safetensors.index.json"
+        if not index_path.is_file():
+            return False
+        index = json.loads(index_path.read_text())
+        weight_map = index.get("weight_map") if isinstance(index, dict) else None
+        if not isinstance(weight_map, dict):
+            return False
+        return any(
+            ".switch_mlp." in str(key) and ".tq_packed" in str(key)
+            for key in weight_map
+        )
+    except Exception:
+        return False
+
+
 def _model_quantization_status(bundle_path: str | None) -> dict:
     """Describe the loaded weight codec from bundle metadata without guessing.
 
@@ -3101,9 +3340,36 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
         or q_jang.get("mxtq_bits")
         or q_jang.get("bits_default")
     )
-    routed_expert_bits = (
+    routed_expert_bits_raw = (
         mxtq_bits.get("routed_expert") if isinstance(mxtq_bits, dict) else mxtq_bits
     )
+    routed_expert_bits = None
+    routed_expert_bits_by_projection = None
+    routed_expert_bits_label = None
+    if isinstance(routed_expert_bits_raw, dict):
+        order = ("gate_proj", "up_proj", "down_proj")
+        routed_expert_bits_by_projection = {
+            key: int(routed_expert_bits_raw[key])
+            for key in order
+            if key in routed_expert_bits_raw
+        }
+        for key, value in routed_expert_bits_raw.items():
+            if key not in routed_expert_bits_by_projection:
+                routed_expert_bits_by_projection[str(key)] = int(value)
+        short = {
+            "gate_proj": "gate",
+            "up_proj": "up",
+            "down_proj": "down",
+        }
+        routed_expert_bits_label = (
+            "/".join(
+                f"{short.get(key, key)}={value}"
+                for key, value in routed_expert_bits_by_projection.items()
+            )
+            + "-bit"
+        )
+    elif routed_expert_bits_raw is not None:
+        routed_expert_bits = int(routed_expert_bits_raw)
     target_bits = q_jang.get("target_bits") or routed_expert_bits or q_cfg.get("bits")
     actual_bits = q_jang.get("actual_bits")
 
@@ -3113,9 +3379,11 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
         root = Path(bundle_path) if bundle_path else None
         has_jangtq_sidecar = bool(root and (root / "jangtq_runtime.safetensors").is_file())
         has_jang_config = bool(root and (root / "jang_config.json").is_file())
+        has_prestacked_bundle = _bundle_has_prestacked_jangtq(bundle_path)
     except Exception:
         has_jangtq_sidecar = False
         has_jang_config = False
+        has_prestacked_bundle = False
 
     normalized_format = str(weight_format or "").lower()
     normalized_backend = str(backend or "").lower()
@@ -3128,6 +3396,40 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
     else:
         codec = "full_precision_or_unknown"
 
+    model_types = {
+        str(cfg.get("model_type") or "").lower(),
+        str(
+            cfg.get("text_config", {}).get("model_type")
+            if isinstance(cfg.get("text_config"), dict)
+            else ""
+        ).lower(),
+    }
+    hybrid_conv_families = {
+        "qwen3_next",
+        "qwen3_5",
+        "qwen3_5_moe",
+        "nemotron_h",
+        "nemotron_h_v2",
+        "mamba",
+        "mamba2",
+        "codestral_mamba",
+        "bailing_hybrid",
+        "bailing_moe_v2_5",
+        "granitemoehybrid",
+        "lfm2_moe",
+    }
+    compat_warnings = []
+    if (
+        has_jang_config
+        and model_types.intersection(hybrid_conv_families)
+        and q_jang.get("passthrough_tensor_count") is None
+    ):
+        compat_warnings.append(
+            "Hybrid SSM/Mamba bundle does not report fp16 state passthrough "
+            "metadata; vMLX applies a runtime grouped-Conv1d layout backstop, "
+            "but direct mlx_lm users should re-convert with a newer jang build."
+        )
+
     result = {
         "codec": codec,
         "weight_format": weight_format,
@@ -3136,13 +3438,19 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
         "mxtq_bits": mxtq_bits if not isinstance(mxtq_bits, dict) else None,
         "mxtq_bits_by_role": mxtq_bits if isinstance(mxtq_bits, dict) else None,
         "routed_expert_bits": routed_expert_bits,
+        "routed_expert_bits_by_projection": routed_expert_bits_by_projection,
+        "routed_expert_bits_label": routed_expert_bits_label,
         "target_bits": target_bits,
         "actual_bits": actual_bits,
         "config_bits": q_cfg.get("bits"),
         "group_size": q_cfg.get("group_size") or q_jang.get("group_size"),
+        "passthrough_bit_widths_used": q_jang.get("passthrough_bit_widths_used"),
+        "passthrough_tensor_count": q_jang.get("passthrough_tensor_count"),
+        "compat_warnings": compat_warnings or None,
         "sidecar": {
             "jang_config": has_jang_config,
             "jangtq_runtime": has_jangtq_sidecar,
+            "prestacked_bundle": has_prestacked_bundle,
         },
     }
     return {k: v for k, v in result.items() if v is not None}
@@ -3151,10 +3459,20 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
 def _mlx_metal_na_status() -> dict:
     """Return cached MLX metallib NA symbol availability for this process."""
     try:
+        import importlib
         import mlx
         from pathlib import Path
 
-        metallib = Path(mlx.__file__).resolve().parent / "lib" / "mlx.metallib"
+        mlx_file = getattr(mlx, "__file__", None)
+        if mlx_file:
+            mlx_dir = Path(mlx_file).resolve().parent
+        else:
+            # `mlx` can be a namespace package with `__file__ == None`; the
+            # compiled extension path lives on `mlx.core.__file__`.
+            mlx_core = importlib.import_module("mlx.core")
+            mlx_dir = Path(getattr(mlx_core, "__file__")).resolve().parent
+
+        metallib = mlx_dir / "lib" / "mlx.metallib"
         key = str(metallib)
         if key in _metal_na_status_cache:
             return dict(_metal_na_status_cache[key])
@@ -3408,6 +3726,29 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
             "kv_layer_indices": list(getattr(scheduler, "_hybrid_kv_positions", []) or []),
         }
 
+    if (
+        getattr(scheduler, "_mixed_attention_cache_model", False)
+        or cache_subtype == "mixed_swa_kv"
+    ):
+        tq_enabled = bool(getattr(scheduler, "_tq_active", False))
+        return {
+            "family": family_name or scheduler_family or "mixed_attention",
+            "schema": "mixed_swa_kv_v1",
+            "cache_type": "mixed_swa_kv",
+            "components": [
+                "full_attention_kv",
+                "sliding_window_kv",
+                "rotating_window_metadata",
+            ],
+            "generic_turboquant_kv": {
+                "enabled": tq_enabled,
+                "reason": "live_tq_kv" if tq_enabled else "not_active",
+            },
+            "prefix": bool(block_aware_cache is not None),
+            "paged": bool(block_aware_cache is not None and paged_cache_manager is not None),
+            "block_disk_l2": bool(block_disk_store is not None),
+        }
+
     return {}
 
 
@@ -3424,6 +3765,29 @@ def _stat_int(stats: dict[str, Any] | None, *keys: str) -> int:
         except (TypeError, ValueError):
             continue
     return 0
+
+
+def _kv_cache_quantization_status(scheduler: Any | None) -> dict[str, Any] | None:
+    """Return a truthful stored-KV quantization status block.
+
+    The scheduler keeps ``_kv_cache_bits=0`` when stored-cache quantization is
+    inactive. Exposing that raw integer makes the UI render a bogus "0-bit"
+    cache codec, so both /health and /v1/cache/stats normalize through this
+    helper.
+    """
+    if scheduler is None or not hasattr(scheduler, "_kv_cache_bits"):
+        return None
+    try:
+        bits = int(getattr(scheduler, "_kv_cache_bits", 0) or 0)
+    except (TypeError, ValueError):
+        bits = 0
+    if bits <= 0:
+        return {"enabled": False}
+    return {
+        "enabled": True,
+        "bits": bits,
+        "group_size": getattr(scheduler, "_kv_cache_group_size", 64),
+    }
 
 
 def _ssm_companion_snapshot(scheduler: Any) -> dict[str, Any] | None:
@@ -3573,18 +3937,8 @@ async def health():
     except Exception:
         pass
 
-    # Include KV cache quantization status for diagnostics
-    kv_quant_info = None
-    if scheduler:
-        kv_bits = getattr(scheduler, "_kv_cache_bits", 0)
-        if kv_bits:
-            kv_quant_info = {
-                "enabled": True,
-                "bits": kv_bits,
-                "group_size": getattr(scheduler, "_kv_cache_group_size", 64),
-            }
-        else:
-            kv_quant_info = {"enabled": False}
+    # Include stored-KV cache quantization status for diagnostics.
+    kv_quant_info = _kv_cache_quantization_status(scheduler)
 
     # Include speculative decoding status
     spec_info = None
@@ -3637,6 +3991,20 @@ async def health():
             "num_waiting": scheduler_stats.get("num_waiting", 0),
             "num_running": scheduler_stats.get("num_running", 0),
             "ewma_ttft_seconds": scheduler_stats.get("ewma_ttft_seconds", 0),
+            "cache_hit_requests": scheduler_stats.get("cache_hit_requests", 0),
+            "cache_hit_tokens": scheduler_stats.get("cache_hit_tokens", 0),
+            "cache_hit_tokens_by_detail": scheduler_stats.get(
+                "cache_hit_tokens_by_detail", {}
+            ),
+            "hybrid_kv_without_ssm_hits": (
+                scheduler_stats.get("batch_generator", {}) or {}
+            ).get("hybrid_kv_without_ssm_hits", 0),
+            "hybrid_kv_without_ssm_tokens": (
+                scheduler_stats.get("batch_generator", {}) or {}
+            ).get("hybrid_kv_without_ssm_tokens", 0),
+            "last_hybrid_kv_without_ssm": (
+                scheduler_stats.get("batch_generator", {}) or {}
+            ).get("last_hybrid_kv_without_ssm"),
             "cache_reuse_skips": scheduler_stats.get("cache_reuse_skips", 0),
             "cache_reuse_skip_tokens": scheduler_stats.get(
                 "cache_reuse_skip_tokens", 0
@@ -4024,6 +4392,18 @@ async def cache_stats():
             "total_prompt_tokens": stats.get("total_prompt_tokens", 0),
             "total_completion_tokens": stats.get("total_completion_tokens", 0),
             "ewma_ttft_seconds": stats.get("ewma_ttft_seconds", 0),
+            "cache_hit_requests": stats.get("cache_hit_requests", 0),
+            "cache_hit_tokens": stats.get("cache_hit_tokens", 0),
+            "cache_hit_tokens_by_detail": stats.get("cache_hit_tokens_by_detail", {}),
+            "hybrid_kv_without_ssm_hits": (
+                stats.get("batch_generator", {}) or {}
+            ).get("hybrid_kv_without_ssm_hits", 0),
+            "hybrid_kv_without_ssm_tokens": (
+                stats.get("batch_generator", {}) or {}
+            ).get("hybrid_kv_without_ssm_tokens", 0),
+            "last_hybrid_kv_without_ssm": (
+                stats.get("batch_generator", {}) or {}
+            ).get("last_hybrid_kv_without_ssm"),
             "cache_reuse_skips": stats.get("cache_reuse_skips", 0),
             "cache_reuse_skip_tokens": stats.get("cache_reuse_skip_tokens", 0),
             "last_cache_reuse_skip": stats.get("last_cache_reuse_skip"),
@@ -4035,12 +4415,11 @@ async def cache_stats():
             ),
             "last_cache_reuse_partial": stats.get("last_cache_reuse_partial"),
         }
-        # KV cache quantization info
-        if hasattr(scheduler, "_kv_cache_bits"):
-            result["kv_cache_quantization"] = {
-                "bits": scheduler._kv_cache_bits,
-                "group_size": scheduler._kv_cache_group_size,
-            }
+        # Stored-KV cache quantization info. Normalize disabled state so the
+        # panel never renders raw bits=0 as a fake "0-bit" codec.
+        kv_quant = _kv_cache_quantization_status(scheduler)
+        if kv_quant:
+            result["kv_cache_quantization"] = kv_quant
 
         # TurboQuant KV cache status (separate path from generic
         # kv_cache_quantization). Use the same recursive detector as /health
@@ -4644,11 +5023,21 @@ async def model_capabilities(model_id: str) -> dict:
     quantization_status = _model_quantization_status(bundle_path)
     acceleration_status = _model_acceleration_status(bundle_path)
 
+    # Append family-specific runtime compat warnings on top of the
+    # quantization-derived ones. DSV4: surface the max-thinking downgrade
+    # so the API isn't silently lying about advertised reasoning_efforts.
+    _capability_compat_warnings = list(quantization_status.get("compat_warnings", []))
+    if family == "deepseek_v4":
+        _dsv4_warning = _dsv4_max_compat_warning()
+        if _dsv4_warning:
+            _capability_compat_warnings.append(_dsv4_warning)
+
     return {
         "id": model_id,
         "loaded_model": _resolve_model_name(),
         "model_path": _model_path,
         "family": family,
+        "compat_warnings": _capability_compat_warnings,
         "supports_tools": bool(tool_parser),
         "tool_parser": tool_parser,
         "supports_thinking": supports_thinking,
@@ -4901,18 +5290,25 @@ async def create_anthropic_message(
             chat_req.model,
             enable_thinking=_msg_kwargs.get("enable_thinking"),
         )
-        # Pass only the stable DSV4 effort rail through to the encoder.
-        # Live probes show the bundle's raw max rail length-caps without
-        # closing </think>, even with 4096 output tokens. The public
-        # capability surface accepts max for parity, but runtime normalizes
-        # stale/advanced clients onto the verified rail too.
+        # Pass DSV4's effort rail through after applying the raw-max opt-in
+        # policy. By default max still downgrades to high; with
+        # VMLX_DSV4_RAW_MAX=1 it reaches the bundle encoder as "max".
         _stable_effort = (
             _normalize_dsv4_reasoning_effort(_cur_effort)
             if _dsv4_thinking.reasoning_effort_allowed
             else None
         )
         if _stable_effort:
-            if _cur_effort == "max":
+            _effort_route = _dsv4_reasoning_effort_route_label(
+                _cur_effort,
+                _stable_effort,
+            )
+            if _effort_route == "raw_max":
+                logger.info(
+                    "DSV4: reasoning_effort=max requested; raw-max opt-in "
+                    "enabled, passing max to encoder."
+                )
+            elif _effort_route == "downgraded":
                 logger.info(
                     "DSV4: reasoning_effort=max requested; using stable "
                     "standard-thinking rail."
@@ -5689,7 +6085,16 @@ async def ollama_chat(fastapi_request: Request):
             else None
         )
         if _stable_effort_o:
-            if _cur_effort_o == "max":
+            _effort_route_o = _dsv4_reasoning_effort_route_label(
+                _cur_effort_o,
+                _stable_effort_o,
+            )
+            if _effort_route_o == "raw_max":
+                logger.info(
+                    "DSV4 (Ollama): reasoning_effort=max requested; "
+                    "raw-max opt-in enabled, passing max to encoder."
+                )
+            elif _effort_route_o == "downgraded":
                 logger.info(
                     "DSV4 (Ollama): reasoning_effort=max requested; "
                     "using stable standard-thinking rail."
@@ -7490,7 +7895,16 @@ async def create_chat_completion(
             else None
         )
         if _stable_effort:
-            if _cur_effort == "max":
+            _effort_route = _dsv4_reasoning_effort_route_label(
+                _cur_effort,
+                _stable_effort,
+            )
+            if _effort_route == "raw_max":
+                logger.info(
+                    "DSV4: reasoning_effort=max requested; raw-max opt-in "
+                    "enabled, passing max to encoder."
+                )
+            elif _effort_route == "downgraded":
                 logger.info(
                     "DSV4: reasoning_effort=max requested; using stable "
                     "standard-thinking rail."
@@ -7635,23 +8049,34 @@ async def create_chat_completion(
     # Non-streaming response with timing and timeout
     start_time = time.perf_counter()
     timeout = request.timeout if request.timeout is not None else _default_timeout
+    response_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
 
     try:
-        output = await asyncio.wait_for(
-            engine.chat(messages=messages, **chat_kwargs), timeout=timeout
+        output = await _await_chat_with_disconnect_abort(
+            engine,
+            messages=messages,
+            chat_kwargs=chat_kwargs,
+            timeout=timeout,
+            fastapi_request=fastapi_request,
+            request_id=response_id,
+            endpoint="Chat Completions",
         )
     except asyncio.TimeoutError:
         raise HTTPException(
             status_code=504, detail=f"Request timed out after {timeout:.1f} seconds"
         )
     except ValueError as e:
+        conv1d_detail = _grouped_conv1d_layout_error_detail(e)
+        if conv1d_detail:
+            logger.error("Chat completion failed with grouped Conv1d layout error: %s", e)
+            raise HTTPException(status_code=503, detail=conv1d_detail)
         logger.warning(f"Chat completion rejected: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Chat completion failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Generation failed: {type(e).__name__}: {e}",
+            detail=_generation_error_detail(e),
         )
 
     elapsed = time.perf_counter() - start_time
@@ -7813,6 +8238,7 @@ async def create_chat_completion(
     finish_reason = "tool_calls" if tool_calls else output.finish_reason
 
     response = ChatCompletionResponse(
+        id=response_id,
         model=request.model,
         choices=[
             ChatCompletionChoice(
@@ -7852,6 +8278,10 @@ async def create_chat_completion(
 _RESPONSES_HISTORY_MAX = int(os.environ.get("VMLX_RESPONSES_HISTORY_MAX", "512"))
 _responses_history: "OrderedDict[str, list[dict]]" = OrderedDict()
 _responses_history_lock = threading.Lock()
+# Marker set: response_ids whose stored output was reasoning-only (no visible
+# text, no tool calls). Used to surface a non-fatal `warnings` field on chained
+# responses. Evicted in lockstep with `_responses_history` capacity enforcement.
+_responses_was_reasoning_only: set[str] = set()
 
 
 def _clone_response_messages(messages: list[dict]) -> list[dict]:
@@ -7862,60 +8292,214 @@ def _clone_response_messages(messages: list[dict]) -> list[dict]:
         return [dict(m) for m in messages if isinstance(m, dict)]
 
 
+_RESPONSES_VISIBLE_PART_TYPES = {"output_text", "text"}
+_RESPONSES_REASONING_ITEM_TYPES = {"reasoning", "reasoning_summary"}
+_RESPONSES_REASONING_PART_TYPES = {
+    "reasoning",
+    "reasoning_text",
+    "reasoning_summary_text",
+    "summary_text",
+}
+
+
+def _responses_field(obj, name, default=None):
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
+def _responses_part_text(part) -> str:
+    text = _responses_field(part, "text")
+    if text is None:
+        text = _responses_field(part, "content")
+    return text if isinstance(text, str) else ""
+
+
+def _responses_output_has_reasoning(output_items: list) -> bool:
+    for item in output_items or []:
+        item_type = _responses_field(item, "type")
+        if item_type in _RESPONSES_REASONING_ITEM_TYPES:
+            return True
+        for part in _responses_field(item, "content", []) or []:
+            if _responses_field(part, "type") in _RESPONSES_REASONING_PART_TYPES:
+                return True
+    return False
+
+
+def _responses_output_has_visible_or_tool(output_items: list) -> bool:
+    for item in output_items or []:
+        item_type = _responses_field(item, "type")
+        if item_type == "function_call":
+            return True
+        if item_type in _RESPONSES_VISIBLE_PART_TYPES and _responses_part_text(item):
+            return True
+        for part in _responses_field(item, "content", []) or []:
+            if (
+                _responses_field(part, "type") in _RESPONSES_VISIBLE_PART_TYPES
+                and _responses_part_text(part)
+            ):
+                return True
+    return False
+
+
+def _responses_output_is_reasoning_only(output_items: list) -> bool:
+    return _responses_output_has_reasoning(
+        output_items
+    ) and not _responses_output_has_visible_or_tool(output_items)
+
+
 def _responses_output_to_assistant_messages(output_items: list) -> list[dict]:
     """Convert a Responses output array back to chat-history assistant turns."""
     assistant_messages: list[dict] = []
     content_parts: list[str] = []
-
-    def _field(obj, name, default=None):
-        if isinstance(obj, dict):
-            return obj.get(name, default)
-        return getattr(obj, name, default)
+    tool_calls: list[dict] = []
+    saw_reasoning = False
 
     for item in output_items or []:
-        item_type = _field(item, "type")
-        if item_type == "reasoning":
+        item_type = _responses_field(item, "type")
+        if item_type in _RESPONSES_REASONING_ITEM_TYPES:
             # Reasoning is display metadata, not replayable chat content.
+            saw_reasoning = True
             continue
         if item_type == "function_call":
-            name = _field(item, "name", "")
-            arguments = _field(item, "arguments", "{}")
-            call_id = _field(item, "call_id") or f"call_{uuid.uuid4().hex[:8]}"
-            assistant_messages.append(
+            name = _responses_field(item, "name", "")
+            arguments = _responses_field(item, "arguments", "{}")
+            call_id = _responses_field(item, "call_id") or f"call_{uuid.uuid4().hex[:8]}"
+            tool_calls.append(
                 {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "id": call_id,
-                            "type": "function",
-                            "function": {"name": name, "arguments": arguments},
-                        }
-                    ],
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": name, "arguments": arguments},
                 }
             )
             continue
-        content = _field(item, "content") or []
+        content = _responses_field(item, "content") or []
         for part in content:
-            ptype = _field(part, "type")
-            text = _field(part, "text")
-            if ptype in ("output_text", "text") and text:
+            ptype = _responses_field(part, "type")
+            text = _responses_part_text(part)
+            if ptype in _RESPONSES_VISIBLE_PART_TYPES and text:
                 content_parts.append(text)
-    if content_parts:
+            elif ptype in _RESPONSES_REASONING_PART_TYPES:
+                saw_reasoning = True
+    if tool_calls:
+        # A Responses turn can contain visible assistant text and function_call
+        # items. Store them on the same assistant turn so the next
+        # function_call_output remains adjacent to assistant.tool_calls for
+        # strict native chat templates.
+        assistant_messages.append(
+            {
+                "role": "assistant",
+                "content": "\n".join(content_parts) if content_parts else "",
+                "tool_calls": tool_calls,
+            }
+        )
+    elif content_parts:
         assistant_messages.append(
             {"role": "assistant", "content": "\n".join(content_parts)}
         )
+    elif saw_reasoning and not assistant_messages:
+        # Reasoning-only output (no visible text, no tool calls): inject an
+        # empty-content assistant placeholder so `previous_response_id` chains
+        # preserve the user→assistant→user template anchor and cache prefix
+        # alignment. Without this, chained turns lose all record that turn N
+        # happened and cache reuse drops because the next turn's prefill prompt
+        # has no overlap with prior assistant tokens.
+        # See docs/internal/AUDIT_responses_reasoning_history_alignment_2026_05_09.md
+        assistant_messages.append({"role": "assistant", "content": ""})
     return assistant_messages
 
 
-def _responses_store_history(response_id: str, messages: list[dict]) -> None:
+def _responses_store_history(
+    response_id: str,
+    messages: list[dict],
+    *,
+    reasoning_only: bool = False,
+) -> None:
+    """Persist a Responses history slot keyed by response_id.
+
+    Args:
+        response_id: identifier returned in `ResponsesObject.id`.
+        messages: the chat-history messages to store (input + replayed
+            assistant turns from `_responses_output_to_assistant_messages`).
+        reasoning_only: True when the response produced ONLY reasoning items
+            (no visible text, no tool calls). Tracked in
+            `_responses_was_reasoning_only` so chained turns can surface a
+            warning to the client. See
+            `docs/internal/AUDIT_responses_reasoning_history_alignment_2026_05_09.md`.
+    """
     if not response_id:
         return
     with _responses_history_lock:
         _responses_history[response_id] = _clone_response_messages(messages)
         _responses_history.move_to_end(response_id)
+        if reasoning_only:
+            _responses_was_reasoning_only.add(response_id)
+        else:
+            _responses_was_reasoning_only.discard(response_id)
+        # Capacity enforcement — also evict the matching reasoning-only
+        # marker so the marker set never references a freed slot (would
+        # otherwise give stale-warning false positives if a future
+        # response_id collides via uuid prefix).
         while len(_responses_history) > _RESPONSES_HISTORY_MAX:
-            _responses_history.popitem(last=False)
+            evicted_id, _ = _responses_history.popitem(last=False)
+            _responses_was_reasoning_only.discard(evicted_id)
+
+
+def _chain_warnings_for_previous_response_id(
+    previous_response_id: str | None,
+) -> list[str] | None:
+    """Return chain-warnings list when `previous_response_id` references a
+    reasoning-only predecessor, else None.
+
+    Used when constructing a new ResponsesObject for a chained turn so the
+    client can surface coherence/cache-prefix risk without breaking the API
+    contract. Always returns None for missing/unknown ids.
+    """
+    if not previous_response_id:
+        return None
+    with _responses_history_lock:
+        if previous_response_id not in _responses_history:
+            # The normal store path evicts marker+history in lockstep. Keep
+            # the read side defensive too, so tests/admin cleanup paths that
+            # clear history directly cannot leave a stale warning behind.
+            _responses_was_reasoning_only.discard(previous_response_id)
+            return None
+        if previous_response_id not in _responses_was_reasoning_only:
+            return None
+    return [
+        "previous_response_id chained a response that produced reasoning only "
+        "(no visible message, no tool calls). Chat continuity may be impaired "
+        "and prefix-cache reuse may be lower than expected. Consider raising "
+        "max_output_tokens or sending enable_thinking=false on the prior turn."
+    ]
+
+
+def _current_response_warnings_for_reasoning_only(
+    reasoning_only: bool,
+) -> list[str] | None:
+    if not reasoning_only:
+        return None
+    return [
+        "This response produced reasoning only (no visible message, no tool "
+        "calls). The reasoning was preserved separately, but the visible answer "
+        "is empty. Consider raising max_output_tokens or sending "
+        "enable_thinking=false for the final synthesis turn."
+    ]
+
+
+def _merge_responses_warnings(*warning_lists: list[str] | None) -> list[str] | None:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for warnings in warning_lists:
+        for warning in warnings or []:
+            if not isinstance(warning, str):
+                continue
+            text = warning.strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            merged.append(text)
+    return merged or None
 
 
 def _responses_get_history(response_id: str | None) -> list[dict]:
@@ -7959,6 +8543,7 @@ def _normalize_leading_system_messages(messages: list[dict]) -> list[dict]:
 
     system_template: dict | None = None
     system_parts: list[str] = []
+    seen_system_parts: set[str] = set()
     non_system: list[dict] = []
 
     for msg in messages:
@@ -7972,8 +8557,9 @@ def _normalize_leading_system_messages(messages: list[dict]) -> list[dict]:
             text = _extract_text_from_content(
                 msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
             ).strip()
-            if text:
+            if text and text not in seen_system_parts:
                 system_parts.append(text)
+                seen_system_parts.add(text)
             continue
         non_system.append(msg)
 
@@ -8604,7 +9190,16 @@ async def create_response(
             else None
         )
         if _stable_resp_effort:
-            if _cur_resp_effort == "max":
+            _effort_route_resp = _dsv4_reasoning_effort_route_label(
+                _cur_resp_effort,
+                _stable_resp_effort,
+            )
+            if _effort_route_resp == "raw_max":
+                logger.info(
+                    "DSV4 (/v1/responses): reasoning_effort=max requested; "
+                    "raw-max opt-in enabled, passing max to encoder."
+                )
+            elif _effort_route_resp == "downgraded":
                 logger.info(
                     "DSV4 (/v1/responses): reasoning_effort=max requested; "
                     "using stable standard-thinking rail."
@@ -8840,10 +9435,17 @@ async def create_response(
     # Non-streaming response
     start_time = time.perf_counter()
     timeout = request.timeout if request.timeout is not None else _default_timeout
+    response_id = f"resp_{uuid.uuid4().hex[:12]}"
 
     try:
-        output = await asyncio.wait_for(
-            engine.chat(messages=messages, **chat_kwargs), timeout=timeout
+        output = await _await_chat_with_disconnect_abort(
+            engine,
+            messages=messages,
+            chat_kwargs=chat_kwargs,
+            timeout=timeout,
+            fastapi_request=fastapi_request,
+            request_id=response_id,
+            endpoint="Responses API",
         )
     except asyncio.TimeoutError:
         raise HTTPException(
@@ -9083,15 +9685,27 @@ async def create_response(
                 fc_kwargs["call_id"] = tc_call_id
             output_items.append(ResponsesFunctionCall(**fc_kwargs))
 
+    # Detect reasoning-only output: any reasoning items present, no visible
+    # message text, no tool/function calls. Empty streaming-style message
+    # shells do not count as visible output. Tracked so chained turns surface
+    # a warning. See docs/internal/AUDIT_responses_reasoning_history_alignment_2026_05_09.md.
+    _reasoning_only = _responses_output_is_reasoning_only(output_items)
+
     response_obj = ResponsesObject(
+        id=response_id,
         model=request.model,
         output=output_items,
         usage=_get_responses_usage(output),
         previous_response_id=request.previous_response_id,
+        warnings=_merge_responses_warnings(
+            _chain_warnings_for_previous_response_id(request.previous_response_id),
+            _current_response_warnings_for_reasoning_only(_reasoning_only),
+        ),
     )
     _responses_store_history(
         response_obj.id,
         messages + _responses_output_to_assistant_messages(output_items),
+        reasoning_only=_reasoning_only,
     )
     return response_obj
 
@@ -9723,7 +10337,9 @@ async def stream_chat_completion(
             "id": response_id,
             "object": "chat.completion.chunk",
             "error": {
-                "message": f"Stream generation failed: {e}",
+                "message": _generation_error_detail(
+                    e, prefix="Stream generation failed"
+                ),
                 "type": "server_error",
                 "code": "internal_error",
             },
@@ -10941,6 +11557,29 @@ async def stream_responses_api(
     _resp_extra: dict = {}
     if _resp_status == "incomplete":
         _resp_extra["incomplete_details"] = {"reason": "max_output_tokens"}
+    if accumulated_reasoning and not suppress_reasoning:
+        all_output_items.append(
+            {
+                "id": f"rs_{uuid.uuid4().hex[:12]}",
+                "type": "reasoning",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "reasoning", "text": accumulated_reasoning}],
+            }
+        )
+
+    # Reasoning-only detection mirrors the non-stream path. Empty streaming
+    # output_text shells do not count as visible output.
+    # See docs/internal/AUDIT_responses_reasoning_history_alignment_2026_05_09.md.
+    _stream_reasoning_only = _responses_output_is_reasoning_only(all_output_items)
+    _stream_chain_warnings = _chain_warnings_for_previous_response_id(
+        getattr(request, "previous_response_id", None)
+    )
+    _stream_warnings = _merge_responses_warnings(
+        _stream_chain_warnings,
+        _current_response_warnings_for_reasoning_only(_stream_reasoning_only),
+    )
+
     completed_response = {
         "id": response_id,
         "object": "response",
@@ -10950,6 +11589,7 @@ async def stream_responses_api(
         "output_text": display_text,
         "output": all_output_items,
         **_resp_extra,
+        **({"warnings": _stream_warnings} if _stream_warnings else {}),
         "usage": {
             "input_tokens": prompt_tokens,
             "output_tokens": completion_tokens,
@@ -10964,6 +11604,7 @@ async def stream_responses_api(
     _responses_store_history(
         response_id,
         messages + _responses_output_to_assistant_messages(all_output_items),
+        reasoning_only=_stream_reasoning_only,
     )
     yield _sse(
         "response.completed",

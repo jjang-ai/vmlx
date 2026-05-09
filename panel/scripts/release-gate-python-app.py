@@ -335,11 +335,14 @@ BUNDLED_SOURCE_HASH_PATHS = (
     "api/anthropic_adapter.py",
     "api/ollama_adapter.py",
     "block_disk_store.py",
+    "cli.py",
     "disk_cache.py",
     "engine/batched.py",
     "loaders/load_jangtq_dsv4.py",
     "mllm_batch_generator.py",
     "mllm_scheduler.py",
+    "model_configs.py",
+    "model_config_registry.py",
     "omni_multimodal.py",
     "paged_cache.py",
     "prefix_cache.py",
@@ -349,6 +352,8 @@ BUNDLED_SOURCE_HASH_PATHS = (
 )
 
 JANG_TOOLS_SOURCE_HASH_PATHS = (
+    "convert.py",
+    "loader.py",
     "load_jangtq.py",
     "load_jangtq_kimi_vlm.py",
     "kimi_prune/generate_vl.py",

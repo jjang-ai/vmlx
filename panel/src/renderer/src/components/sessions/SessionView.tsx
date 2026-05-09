@@ -601,9 +601,18 @@ function formatModelBytes(bytes?: number): string | null {
   return `${(bytes / 1e9).toFixed(1)} GB`
 }
 
+function formatResidentLoad(progress?: { residentMb?: number; modelBytes?: number; residentPercent?: number }): string | null {
+  if (!progress?.residentMb || progress.residentMb <= 0) return null
+  const resident = `${(progress.residentMb / 1024).toFixed(1)} GB`
+  const total = formatModelBytes(progress.modelBytes)
+  const pct = progress.residentPercent != null ? ` (${progress.residentPercent.toFixed(1)}%)` : ''
+  return total ? `${resident} / ${total}${pct}` : `${resident}${pct}`
+}
+
 function SessionViewLoadBar({ sessionId }: { sessionId: string }) {
   const { loadProgress } = useSessionsContext()
   const progress = loadProgress.get(sessionId)
+  const residentLoad = formatResidentLoad(progress)
   return (
     <div className="px-4 py-1.5 border-b border-border bg-card/30 flex-shrink-0">
       <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
@@ -619,6 +628,11 @@ function SessionViewLoadBar({ sessionId }: { sessionId: string }) {
         <p className="text-[10px] text-muted-foreground/80 mt-0.5">
           Model files: {formatModelBytes(progress?.modelBytes)}
           {progress?.lazyResident ? ' mapped; resident memory updates after runtime health is ready' : ''}
+        </p>
+      )}
+      {residentLoad && (
+        <p className="text-[10px] text-muted-foreground/80 mt-0.5">
+          Resident RAM: {residentLoad}
         </p>
       )}
     </div>

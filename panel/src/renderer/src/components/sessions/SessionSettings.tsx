@@ -29,7 +29,7 @@ interface SessionSettingsProps {
 function buildCommandPreview(
   modelPath: string,
   config: SessionConfig,
-  detected?: { toolParser?: string; reasoningParser?: string; isMultimodal?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; cacheType?: string; family?: string } | null
+  detected?: { toolParser?: string; reasoningParser?: string; isMultimodal?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; cacheType?: string; family?: string } | null
 ): string {
   const parts = ['vmlx-engine serve', modelPath]
   const smeltActive = !!(config as any).smelt
@@ -38,6 +38,13 @@ function buildCommandPreview(
       : config.isMultimodal === true ? true
         : config.isMultimodal === false ? false
           : false
+  const requestedDistributed = !!(config as any).distributedEnabled
+  const requestedFlashMoe = !!(config as any).flashMoe
+  const dsv4Active = detected?.family === 'deepseek-v4'
+  const turboQuantActive = !!detected?.isTurboQuant
+  const effectiveDistributed = requestedDistributed
+  const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed
+  const effectiveEnableJit = !!config.enableJit && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !turboQuantActive
 
   // Server settings
   parts.push('--host', config.host)
@@ -48,7 +55,7 @@ function buildCommandPreview(
   if (config.rateLimit && config.rateLimit > 0) parts.push('--rate-limit', config.rateLimit.toString())
 
   // Concurrent processing
-  const effectiveMaxNumSeqs = detected?.family === 'deepseek-v4' ? 1 : config.maxNumSeqs
+  const effectiveMaxNumSeqs = dsv4Active ? 1 : config.maxNumSeqs
   if (effectiveMaxNumSeqs && effectiveMaxNumSeqs > 0) parts.push('--max-num-seqs', effectiveMaxNumSeqs.toString())
   if (config.prefillBatchSize && config.prefillBatchSize > 0) parts.push('--prefill-batch-size', config.prefillBatchSize.toString())
   if (config.prefillStepSize && config.prefillStepSize > 0) parts.push('--prefill-step-size', config.prefillStepSize.toString())
@@ -152,7 +159,7 @@ function buildCommandPreview(
   }
 
   // Flash MoE (SSD expert streaming)
-  if ((config as any).flashMoe) {
+  if (effectiveFlashMoe) {
     parts.push('--flash-moe')
     const slotBank = (config as any).flashMoeSlotBank
     if (typeof slotBank === 'number' && slotBank > 0) {
@@ -169,7 +176,7 @@ function buildCommandPreview(
   }
 
   // Distributed compute
-  if ((config as any).distributedEnabled) {
+  if (effectiveDistributed) {
     parts.push('--distributed')
     const mode = (config as any).distributedMode || 'pipeline'
     if (mode !== 'pipeline') {
@@ -208,7 +215,7 @@ function buildCommandPreview(
   if (config.defaultEnableThinking === true) parts.push('--default-enable-thinking', 'true')
   else if (config.defaultEnableThinking === false) parts.push('--default-enable-thinking', 'false')
 
-  if (config.enableJit) parts.push('--enable-jit')
+  if (effectiveEnableJit) parts.push('--enable-jit')
 
   if ((config as any).omniBackend && (config as any).omniBackend !== 'stage1') {
     parts.push('--omni-backend', (config as any).omniBackend)
@@ -247,7 +254,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
   const [restarting, setRestarting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [showPreview, setShowPreview] = useState(false)
-  const [detectedConfig, setDetectedConfig] = useState<{ toolParser?: string; reasoningParser?: string; cacheType?: string; isMultimodal?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; family?: string } | null>(null)
+  const [detectedConfig, setDetectedConfig] = useState<{ toolParser?: string; reasoningParser?: string; cacheType?: string; isMultimodal?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; family?: string } | null>(null)
 
   useEffect(() => {
     const load = async () => {
@@ -460,7 +467,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         )}
 
         {/* Config Form */}
-        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedConfig?.cacheType} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} sessionId={sessionId} />
+        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedConfig?.cacheType} detectedFamily={detectedConfig?.family} detectedIsTurboQuant={detectedConfig?.isTurboQuant} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} sessionId={sessionId} />
 
         {/* Command Preview */}
         <div className="mt-4">

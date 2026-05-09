@@ -259,6 +259,18 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
             )}
             <StatCard label="Prompt Tokens" value={(schedulerStats.total_prompt_tokens || 0).toLocaleString()} />
             <StatCard label="Completion Tokens" value={(schedulerStats.total_completion_tokens || 0).toLocaleString()} />
+            {schedulerStats.cache_hit_tokens != null && (
+              <StatCard label="Cache Hit Tokens" value={(schedulerStats.cache_hit_tokens || 0).toLocaleString()} />
+            )}
+            {schedulerStats.cache_hit_requests != null && (
+              <StatCard label="Cache Hit Requests" value={(schedulerStats.cache_hit_requests || 0).toLocaleString()} />
+            )}
+            {schedulerStats.hybrid_kv_without_ssm_hits != null && (
+              <StatCard label="Hybrid KV-Only Misses" value={(schedulerStats.hybrid_kv_without_ssm_hits || 0).toLocaleString()} />
+            )}
+            {schedulerStats.hybrid_kv_without_ssm_tokens != null && schedulerStats.hybrid_kv_without_ssm_tokens > 0 && (
+              <StatCard label="KV-Only Tokens" value={(schedulerStats.hybrid_kv_without_ssm_tokens || 0).toLocaleString()} />
+            )}
             {schedulerStats.cache_reuse_skips != null && (
               <StatCard label="Cache Reuse Skips" value={String(schedulerStats.cache_reuse_skips || 0)} />
             )}
@@ -275,15 +287,42 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
           {schedulerStats.last_cache_reuse_partial && (
             <div className="mt-2 text-xs bg-accent/10 border border-accent/30 text-foreground px-3 py-2 rounded">
               Cache reuse was memory-fit: used {(schedulerStats.last_cache_reuse_partial.used_cached_tokens ?? 0).toLocaleString()} of {(schedulerStats.last_cache_reuse_partial.original_cached_tokens ?? 0).toLocaleString()} cached tokens,
+              estimated merge {schedulerStats.last_cache_reuse_partial.used_needed_mb ?? '?'} MB within {schedulerStats.last_cache_reuse_partial.budget_mb ?? schedulerStats.last_cache_reuse_partial.available_mb ?? '?'} MB budgeted,
               prefilling {(schedulerStats.last_cache_reuse_partial.tail_tokens ?? 0).toLocaleString()} tail tokens.
+            </div>
+          )}
+          {schedulerStats.cache_hit_tokens_by_detail && Object.keys(schedulerStats.cache_hit_tokens_by_detail).length > 0 && (
+            <div className="mt-2">
+              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Hit Tokens by Detail</div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                {Object.entries(schedulerStats.cache_hit_tokens_by_detail).map(([detail, tokens]: [string, any]) => (
+                  <StatCard key={detail} label={detail} value={(Number(tokens) || 0).toLocaleString()} />
+                ))}
+              </div>
+            </div>
+          )}
+          {schedulerStats.last_hybrid_kv_without_ssm && (
+            <div className="mt-2 text-xs bg-warning/10 border border-warning/30 text-warning-foreground px-3 py-2 rounded">
+              Hybrid cache full-prefilled: KV had {(schedulerStats.last_hybrid_kv_without_ssm.cached_tokens ?? 0).toLocaleString()} reusable tokens,
+              but no matching SSM companion state ({schedulerStats.last_hybrid_kv_without_ssm.reason || 'missing_ssm'}).
+              {schedulerStats.last_hybrid_kv_without_ssm.checkpoint_tokens != null && (
+                <> Checkpoint {(schedulerStats.last_hybrid_kv_without_ssm.checkpoint_tokens ?? 0).toLocaleString()} tokens.</>
+              )}
             </div>
           )}
           {schedulerStats.last_cache_reuse_skip && (
             <div className="mt-2 text-xs bg-warning/10 border border-warning/30 text-warning-foreground px-3 py-2 rounded">
-              Cache reuse skipped: needed {schedulerStats.last_cache_reuse_skip.needed_mb ?? '?'} MB,
+              Cache reuse skipped after partial reuse failed: needed {schedulerStats.last_cache_reuse_skip.needed_mb ?? '?'} MB,
               budget {schedulerStats.last_cache_reuse_skip.budget_mb ?? schedulerStats.last_cache_reuse_skip.available_mb ?? '?'} MB,
               available {schedulerStats.last_cache_reuse_skip.available_mb ?? '?'} MB,
-              cached {(schedulerStats.last_cache_reuse_skip.cached_tokens ?? 0).toLocaleString()} tokens.
+              dropped {(schedulerStats.last_cache_reuse_skip.dropped_cached_tokens ?? schedulerStats.last_cache_reuse_skip.cached_tokens ?? 0).toLocaleString()} cached tokens,
+              full-prefilling {(schedulerStats.last_cache_reuse_skip.full_prefill_tokens ?? schedulerStats.last_cache_reuse_skip.prompt_tokens ?? 0).toLocaleString()} tokens.
+              {schedulerStats.last_cache_reuse_skip.cache_contract && (
+                <> Contract {schedulerStats.last_cache_reuse_skip.cache_contract}.</>
+              )}
+              {schedulerStats.last_cache_reuse_skip.partial_reuse_unavailable_reason && (
+                <> Partial reason: {schedulerStats.last_cache_reuse_skip.partial_reuse_unavailable_reason}.</>
+              )}
             </div>
           )}
         </div>
@@ -331,7 +370,11 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
             {kvQuant && (
               <StatCard
                 label="Stored KV Quant"
-                value={`${kvQuant.bits}-bit / group ${kvQuant.group_size}`}
+                value={
+                  kvQuant?.enabled
+                    ? `${kvQuant.bits}-bit / group ${kvQuant.group_size}`
+                    : 'disabled'
+                }
               />
             )}
             {nativeCache?.components?.length > 0 && (

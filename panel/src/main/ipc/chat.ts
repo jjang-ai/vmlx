@@ -14,6 +14,7 @@ import { executeBuiltinTool } from "../tools/executor";
 import { readGenerationDefaults } from "./models";
 import { detectModelConfigFromDir } from "../model-config-registry";
 import { getAuthHeaders } from "./utils";
+import { extractResponsesWarnings } from "../../shared/responsesWarnings";
 
 // Default connection config (fallback values)
 const DEFAULT_PORT = 8000;
@@ -1296,6 +1297,7 @@ export function registerChatHandlers(
       // (thinkingTimer removed — "Thinking silently" indicator disabled)
       let fullContent = "";
       let reasoningContent = "";
+      let responseWarnings: string[] | null = null;
       // Accumulates content across tool iterations so abort during tool execution can recover
       // earlier content that would otherwise be lost when fullContent is reset between iterations
       let allGeneratedContent = "";
@@ -2060,10 +2062,27 @@ export function registerChatHandlers(
                 throw new Error(`Server error: ${errDetail}`);
               }
 
+              if (currentEventType === "response.warning") {
+                const eventWarnings = extractResponsesWarnings(parsed);
+                if (eventWarnings) {
+                  responseWarnings = Array.from(
+                    new Set([...(responseWarnings || []), ...eventWarnings]),
+                  );
+                }
+              }
+
               // Final usage from response.completed event
               // Server wraps in { response: { usage: { input_tokens, output_tokens } } }
               const respUsage = parsed.response?.usage || parsed.usage;
               if (currentEventType === "response.completed") {
+                const completedWarnings = extractResponsesWarnings(
+                  parsed.response || parsed,
+                );
+                if (completedWarnings) {
+                  responseWarnings = Array.from(
+                    new Set([...(responseWarnings || []), ...completedWarnings]),
+                  );
+                }
                 // Track status for truncation detection
                 const respStatus = parsed.response?.status;
                 if (respStatus === "incomplete") lastFinishReason = "length";
@@ -3010,6 +3029,13 @@ export function registerChatHandlers(
         if (reasoningContent) {
           assistantMessage.reasoningContent = reasoningContent;
         }
+        const finalResponseWarnings = responseWarnings as string[] | null;
+        if (finalResponseWarnings && finalResponseWarnings.length > 0) {
+          assistantMessage.warningsJson = JSON.stringify(finalResponseWarnings);
+          console.warn(
+            `[CHAT] Responses warning(s): ${finalResponseWarnings.join(" | ")}`,
+          );
+        }
 
         // 2026-05-03: persist model-visible tool context separately from
         // the UI-display tool_calls_json. Without this, history replay drops
@@ -3125,6 +3151,7 @@ export function registerChatHandlers(
               messageId: assistantMessage.id,
               content: fullContent,
               reasoningContent: reasoningContent || undefined,
+              warnings: finalResponseWarnings || undefined,
               finishReason: lastFinishReason,
               metrics: {
                 tokenCount: totalTokenCount,

@@ -65,8 +65,8 @@ def install() -> bool:
     """Ensure the fp32-SDPA MLA fix is live in the current process.
 
     Returns ``True`` if the patch is active (either already present in
-    the bundled file or newly monkey-patched into the class), ``False``
-    if install was not possible (``mlx_lm`` not importable, etc).
+    the bundled file or applied through the user-managed file patch),
+    ``False`` if install was not possible (``mlx_lm`` not importable, etc).
 
     Idempotent — safe to call from every bootstrap, every process.
     """

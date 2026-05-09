@@ -175,6 +175,7 @@ class SSMCompanionCache:
         # shared prefix family; different families with the same length
         # live under different prefix_hashes.  vmlx#91.
         self._length_index: Dict[int, Dict[str, str]] = {}
+        self.last_prefix_lookup: Optional[Dict[str, Any]] = None
 
     @property
     def size(self) -> int:
@@ -475,6 +476,12 @@ class SSMCompanionCache:
         applies — callers get independent buffers, never shared refs.
         """
         if max_len <= 0:
+            self.last_prefix_lookup = {
+                "max_len": int(max_len or 0),
+                "candidate_lengths": [],
+                "matched": False,
+                "reason": "non_positive_max_len",
+            }
             return None
         # Scan lengths in descending order so we find the longest match
         # first.  Typical cache sizes are small (<=20 entries), so the
@@ -484,6 +491,13 @@ class SSMCompanionCache:
             reverse=True,
         )
         if not candidate_lengths:
+            self.last_prefix_lookup = {
+                "max_len": int(max_len),
+                "candidate_lengths": [],
+                "matched": False,
+                "reason": "no_candidate_lengths",
+                "store_size": len(self._store),
+            }
             return None
         # Compute the prefix_hash for each candidate length against the
         # query's own tokens and compare. First match wins.
@@ -498,7 +512,21 @@ class SSMCompanionCache:
                 # deepcopy failed — treat as miss per existing contract
                 continue
             states, is_complete = result
+            self.last_prefix_lookup = {
+                "max_len": int(max_len),
+                "candidate_lengths": [int(n) for n in candidate_lengths[:20]],
+                "matched": True,
+                "checkpoint_tokens": int(n),
+                "is_complete": bool(is_complete),
+            }
             return (n, states, is_complete)
+        self.last_prefix_lookup = {
+            "max_len": int(max_len),
+            "candidate_lengths": [int(n) for n in candidate_lengths[:20]],
+            "matched": False,
+            "reason": "prefix_hash_mismatch",
+            "store_size": len(self._store),
+        }
         return None
 
     def clear(self) -> None:

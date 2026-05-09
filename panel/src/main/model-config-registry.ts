@@ -69,6 +69,7 @@ export interface DetectedConfig {
   usePagedCache: boolean
   enableAutoToolChoice: boolean
   isMultimodal: boolean
+  isTurboQuant?: boolean
   description: string
   maxContextLength?: number
 }
@@ -164,10 +165,10 @@ registerFamily('functionary', { cacheType: 'kv', toolParser: 'functionary', enab
 registerFamily('minimax', { cacheType: 'kv', toolParser: 'minimax', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'MiniMax', priority: 20 })
 
 // Ling / Bailing hybrid: MLA softmax layers plus linear-attention/SSM-style
-// companion state. Keep the panel registry aligned with Python
-// model_configs.py so old or fresh Ling sessions do not fall through to
-// `unknown` and lose parser/cache defaults before launch.
-registerFamily('ling', { cacheType: 'hybrid', toolParser: 'deepseek', reasoningParser: 'deepseek_r1', usePagedCache: true, enableAutoToolChoice: true, description: 'Ling / Bailing hybrid', priority: 20 })
+// companion state. Keep reasoning absent here: Ling is not a default-reasoning
+// family, and stale bundle stamps must not make the panel send enable_thinking
+// on first launch.
+registerFamily('ling', { cacheType: 'hybrid', toolParser: 'deepseek', usePagedCache: true, enableAutoToolChoice: true, description: 'Ling / Bailing hybrid', priority: 20 })
 
 // StepFun
 registerFamily('step-vl', { cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'StepFun Step-1V Vision-Language', priority: 3 })
@@ -264,8 +265,8 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   // ── Ling / Bailing family (inclusionAI / Ant Group) ──
   // Hybrid MLA + Lightning-Attn-2 (linear attention). Engine-side
   // model_configs.py registers `bailing_hybrid`/`bailing_moe_v2_5`
-  // under canonical family `ling` with cache_type=hybrid, deepseek_r1
-  // reasoning, and deepseek tool parser. See research/LING-RUNTIME-ARCHITECTURE.md.
+  // under canonical family `ling` with cache_type=hybrid, no reasoning
+  // parser, and deepseek tool parser. See research/LING-RUNTIME-ARCHITECTURE.md.
   'bailing_hybrid': 'ling',
   'bailing_moe_v2_5': 'ling',
   'bailing_moe_linear': 'ling',
@@ -365,6 +366,18 @@ const DEFAULT_CONFIG: DetectedConfig = {
   description: 'Unknown model'
 }
 
+function configMarksTurboQuant(config: any): boolean {
+  const candidates = [
+    config?.weight_format,
+    config?.format,
+    config?.quantization?.weight_format,
+    config?.quantization?.format,
+  ]
+  return candidates.some(value =>
+    typeof value === 'string' && value.toLowerCase() === 'mxtq'
+  )
+}
+
 function configToDetected(family: string, config: Omit<ModelConfig, 'pattern' | 'familyName'>): DetectedConfig {
   return {
     family: family,
@@ -383,16 +396,19 @@ function applyJangCapabilities(
   jangCfg: any,
 ): DetectedConfig {
   const caps = jangCfg?.capabilities
-  if (!caps || typeof caps !== 'object') return detected
-
   const next = { ...detected }
+  if (jangCfg?.weight_format === 'mxtq' || jangCfg?.format === 'mxtq') {
+    next.isTurboQuant = true
+  }
+  if (!caps || typeof caps !== 'object') return next
+
   if (typeof caps.tool_parser === 'string') {
     next.toolParser = caps.tool_parser === 'none' ? undefined : caps.tool_parser
     if (next.toolParser && caps.supports_tools !== false) {
       next.enableAutoToolChoice = true
     }
   }
-  if (caps.supports_thinking === false || next.family === 'zaya') {
+  if (caps.supports_thinking === false || next.family === 'zaya' || next.family === 'ling') {
     next.reasoningParser = undefined
   } else if (typeof caps.reasoning_parser === 'string') {
     next.reasoningParser =
@@ -509,12 +525,15 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
         }
 
         const config = CONFIG_BY_FAMILY.get(familyName)
-        if (config) {
-          let detected = configToDetected(familyName, config)
-          detected.maxContextLength = maxContextLength
-          // JANG model detection: read jang_config.json for VLM
-          const jangConfigPath = join(modelPath, 'jang_config.json')
-          if (existsSync(jangConfigPath)) {
+          if (config) {
+            let detected = configToDetected(familyName, config)
+            detected.maxContextLength = maxContextLength
+            if (configMarksTurboQuant(parsed)) {
+              detected.isTurboQuant = true
+            }
+            // JANG model detection: read jang_config.json for VLM
+            const jangConfigPath = join(modelPath, 'jang_config.json')
+            if (existsSync(jangConfigPath)) {
             try {
               const jangCfg = JSON.parse(readFileSync(jangConfigPath, 'utf-8'))
               detected = applyJangCapabilities(detected, jangCfg)
@@ -534,6 +553,7 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
       // Even if model_type isn't recognized, still return context length + VLM detection
       const fallback = { ...DEFAULT_CONFIG }
       if (maxContextLength) fallback.maxContextLength = maxContextLength
+      if (configMarksTurboQuant(parsed)) fallback.isTurboQuant = true
       if ('vision_config' in parsed) {
         fallback.isMultimodal = true
       }

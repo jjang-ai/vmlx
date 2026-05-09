@@ -6,22 +6,11 @@
   </picture>
 </p>
 
-<h3 align="center">Local AI Engine for Apple Silicon</h3>
+<h3 align="center">MLX Inference Server for Apple Silicon</h3>
 
 <p align="center">
-  Run LLMs, VLMs, and image generation models entirely on your Mac.<br>
-  OpenAI + Anthropic + Ollama compatible API. No cloud. No API keys. No data leaving your machine.
-</p>
-
-<p align="center">
-  <a href="https://github.com/jjang-ai/vmlx/releases?q=tag%3Av2&expanded=true">
-    <img src="https://img.shields.io/badge/%E2%AC%87%EF%B8%8F_Get_vMLX_v2_(Swift)-Recommended-orange?style=for-the-badge&logo=swift&logoColor=white" alt="Get vMLX v2 Swift" height="36">
-  </a>
-</p>
-
-<p align="center">
-  <b>vMLX v2 (Swift) is the recommended desktop app.</b> Native Swift + Metal, 50–95 t/s on M-series. Pure SwiftUI, zero PyTorch in the hot path.<br>
-  This Python repo (<code>main</code> branch) keeps shipping for users who run the engine standalone via <code>pip install vmlx</code> or who want the legacy Electron panel.
+  Self-hosted inference server for LLMs, VLMs, and image generation on Apple Silicon.<br>
+  OpenAI + Anthropic + Ollama compatible HTTP API. Self-hosted; no third-party API keys required.
 </p>
 
 <p align="center">
@@ -99,7 +88,7 @@ vmlx serve mlx-community/Qwen3-8B-4bit
 
 > **Note:** On macOS 14+, bare `pip install` fails with "externally-managed-environment". Use `uv`, `pipx`, or a venv.
 
-Your local AI server is now running at `http://0.0.0.0:8000` with an OpenAI + Anthropic compatible API. Works with any model from [mlx-community](https://huggingface.co/mlx-community) -- thousands of models ready to go.
+The vMLX inference server is now running at `http://0.0.0.0:8000` with an OpenAI + Anthropic compatible API. Works with any model from [mlx-community](https://huggingface.co/mlx-community) -- thousands of models ready to go.
 
 ### Or download the desktop app
 

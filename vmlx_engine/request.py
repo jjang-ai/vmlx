@@ -236,7 +236,7 @@ class RequestOutput:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cached_tokens: int = 0
-    cache_detail: str = ""  # e.g. "paged", "paged+ssm(23)", "memory", "prefix", "disk"
+    cache_detail: str = ""  # e.g. "paged", "paged+ssm", "paged+disk", "disk"
 
     @property
     def usage(self) -> Dict[str, int]:

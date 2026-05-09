@@ -238,7 +238,7 @@ def _validate_rotating_meta(meta: Any, *, label: str) -> Tuple[bool, str]:
     # multi-token prefill path (_update_concat) can leave both offset and _idx
     # larger than max_size until decode starts rotating in place. This is valid
     # for DSV4 prompt-boundary snapshots where local SWA may carry the full
-    # prompt while CSA/HSA pools carry compressed global context. Bound it by
+    # prompt while CSA/HCA pools carry compressed global context. Bound it by
     # the hard cache-offset cap instead of sliding-window max_size.
     ok, idx, reason = _validate_int_range(
         seq[3], label=f"{label}.idx", lo=0, hi=MAX_CACHE_OFFSET

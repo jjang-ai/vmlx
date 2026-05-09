@@ -1087,7 +1087,7 @@ def _configure_dsv4_pool_quant_default() -> str:
 
     Older JANG builds used a peer ``PoolQuantizedV4Cache`` class that failed
     DeepseekV4Cache isinstance gates. Current JANG subclasses DeepseekV4Cache,
-    which is the correct SWA+CSA/HSA-compatible path and should be the default.
+    which is the correct SWA+CSA/HCA-compatible path and should be the default.
     Preserve an explicit user env override.
     """
     os.environ["DSV4_LONG_CTX"] = "1"

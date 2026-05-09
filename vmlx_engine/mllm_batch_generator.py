@@ -60,7 +60,10 @@ computation for SSM layers even if you have the KV cache.
 
 ``HybridSSMStateCache``:
   - Companion LRU cache (max 50 entries) storing SSM layer states
-  - Keyed by hash(tuple(token_ids[:prompt_len]))
+  - Keyed by hash(tuple(token_ids[:prompt_len])) for text-only prefixes
+  - Media placeholder prefixes are not stored under token-only keys; image,
+    video, and audio embeddings are path-dependent and need a media-aware cache
+    key before reuse can be safe
   - Stored after prefill (before cache merge destroys per-request state)
   - Deep-copies SSM arrays with mx.contiguous() for safety
   - Enables groundbreaking full prefix skip for hybrid VLMs
@@ -111,6 +114,25 @@ import mlx.nn as nn
 from .vision_embedding_cache import VisionEmbeddingCache
 
 logger = logging.getLogger(__name__)
+
+
+def _prefix_hit_tail_and_cached_tokens(
+    *,
+    token_list: List[int],
+    remaining: List[int],
+    gen_prompt_suffix: List[int],
+) -> Tuple[List[int], int]:
+    """Return prefill tail + cached-token count for an N-1 VLM prefix hit."""
+    key_tokens = list(token_list or [])
+    cache_remaining = list(remaining or [])
+    suffix = list(gen_prompt_suffix or [])
+    if suffix and not cache_remaining and key_tokens:
+        cache_remaining = [key_tokens[-1]]
+    if not cache_remaining and key_tokens:
+        cached_tokens = max(len(key_tokens) - 1, 0)
+    else:
+        cached_tokens = max(len(key_tokens) - len(cache_remaining), 0)
+    return cache_remaining + suffix, cached_tokens
 
 
 def _cache_offset_for_position_ids(cache: Optional[List[Any]], language_model: Any) -> int:
@@ -641,6 +663,7 @@ class MLLMBatchResponse:
     prompt_cache: Optional[Callable[[], List[Any]]] = None  # Cache extraction function
     prompt_token_ids: Optional[List[int]] = None  # Original tokenized prompt for prefix key
     cached_tokens: int = 0  # Number of prompt tokens served from cache
+    cache_detail: str = ""  # e.g. "paged+ssm", "paged+ssm+disk", "disk"
     # Generation-prefix tokens captured from the untruncated prompt tail
     # (e.g. [<|im_start|>, assistant, \n, <think>, \n] for Qwen 3.6 thinking-on).
     # Thinking models occasionally re-emit these as their first output tokens
@@ -798,6 +821,9 @@ class MLLMBatchStats:
         self.vision_encoding_time: float = 0
         self.num_images_processed: int = 0
         self.peak_memory: float = 0
+        self.hybrid_kv_without_ssm_hits: int = 0
+        self.hybrid_kv_without_ssm_tokens: int = 0
+        self.last_hybrid_kv_without_ssm: Optional[Dict[str, Any]] = None
 
     @property
     def prompt_tps(self) -> float:
@@ -822,6 +848,9 @@ class MLLMBatchStats:
             "vision_encoding_time": self.vision_encoding_time,
             "num_images_processed": self.num_images_processed,
             "peak_memory": self.peak_memory,
+            "hybrid_kv_without_ssm_hits": self.hybrid_kv_without_ssm_hits,
+            "hybrid_kv_without_ssm_tokens": self.hybrid_kv_without_ssm_tokens,
+            "last_hybrid_kv_without_ssm": self.last_hybrid_kv_without_ssm,
         }
 
 
@@ -1860,6 +1889,73 @@ class MLLMBatchGenerator:
             return block_boundary
         return 0
 
+    def _media_placeholder_token_ids(self) -> set[int]:
+        """Return configured media placeholder token ids for the loaded VLM.
+
+        Different mlx-vlm families name these differently. Qwen-style configs
+        commonly use ``image_token_index`` while Gemma/Nemotron-family configs
+        may expose image/video/audio ids separately. Treat all discovered ids
+        as path-dependent media placeholders for prefix-cache safety.
+        """
+        ids: set[int] = set()
+
+        def _visit(obj: Any) -> None:
+            if obj is None:
+                return
+            if isinstance(obj, dict):
+                getter = obj.get
+                nested = obj.get("text_config")
+            else:
+                getter = lambda key, default=None: getattr(obj, key, default)
+                nested = getattr(obj, "text_config", None)
+            for name in (
+                "image_token_index",
+                "image_token_id",
+                "video_token_index",
+                "video_token_id",
+                "audio_token_index",
+                "audio_token_id",
+            ):
+                value = getter(name, None)
+                if isinstance(value, int) and value >= 0:
+                    ids.add(value)
+            if nested is not None and nested is not obj:
+                _visit(nested)
+
+        _visit(getattr(self.model, "config", None))
+        _visit(getattr(self.language_model, "config", None))
+        return ids
+
+    def _tokens_contain_media_placeholders(self, token_ids: List[int]) -> bool:
+        media_ids = self._media_placeholder_token_ids()
+        return bool(media_ids and any(t in media_ids for t in token_ids or []))
+
+    def _request_has_media_cache_context(
+        self,
+        request: "MLLMBatchRequest",
+        token_ids: Optional[List[int]] = None,
+    ) -> bool:
+        """Return True when token-only prefix caches are unsafe for request.
+
+        Media embeddings depend on the image/video payload, not just the text
+        token ids. If a request carries media inputs, processed pixel values, or
+        media placeholder token ids, every token-only cache tier must be skipped.
+        Text-only follow-up turns remain cacheable.
+        """
+        if getattr(request, "images", None) or getattr(request, "videos", None):
+            return True
+        if getattr(request, "pixel_values", None) is not None:
+            return True
+        if token_ids is None and getattr(request, "input_ids", None) is not None:
+            try:
+                arr = request.input_ids
+                token_ids = arr.tolist() if arr.ndim == 1 else arr[0].tolist()
+            except Exception:
+                token_ids = None
+        return bool(
+            token_ids and self._tokens_contain_media_placeholders(list(token_ids))
+        )
+
     def _run_vision_encoding(self, request: MLLMBatchRequest, cache: Optional[List[Any]] = None) -> mx.array:
         """
         Run the initial VLM forward pass to encode vision and get first logits.
@@ -2313,7 +2409,7 @@ class MLLMBatchGenerator:
                 self._prefix_cache_enabled
                 and self.block_aware_cache is not None
                 and req.prompt_cache is None
-                and not has_images
+                and not self._request_has_media_cache_context(req)
                 and not _mllm_bypass
             ):
                 if req.input_ids is not None:
@@ -2334,7 +2430,40 @@ class MLLMBatchGenerator:
                         else:
                             token_list = _full_token_list
                             _gpl_suffix = []
+                        _paged_disk_hits_before = 0
+                        try:
+                            _paged_disk_hits_before = int(
+                                getattr(
+                                    getattr(
+                                        self.block_aware_cache.paged_cache,
+                                        "stats",
+                                        None,
+                                    ),
+                                    "disk_hits",
+                                    0,
+                                )
+                                or 0
+                            )
+                        except Exception:
+                            _paged_disk_hits_before = 0
                         block_table, remaining = self.block_aware_cache.fetch_cache(req.request_id, token_list)
+                        _paged_disk_hit = False
+                        try:
+                            _paged_disk_hits_after = int(
+                                getattr(
+                                    getattr(
+                                        self.block_aware_cache.paged_cache,
+                                        "stats",
+                                        None,
+                                    ),
+                                    "disk_hits",
+                                    0,
+                                )
+                                or 0
+                            )
+                            _paged_disk_hit = _paged_disk_hits_after > _paged_disk_hits_before
+                        except Exception:
+                            _paged_disk_hit = False
                         if block_table is not None:
                                 # Hybrid models (SSM + attention, e.g. Qwen3.5-VL):
                                 # Prefix cache stores only KVCache (attention) layers.
@@ -2407,6 +2536,27 @@ class MLLMBatchGenerator:
                                                 # — state reflects more tokens than the
                                                 # stored key. Reject to avoid the same
                                                 # <think></think> loop seen on direct hits.
+                                                self._stats.hybrid_kv_without_ssm_hits += 1
+                                                self._stats.hybrid_kv_without_ssm_tokens += int(
+                                                    getattr(block_table, "num_tokens", 0) or 0
+                                                )
+                                                self._stats.last_hybrid_kv_without_ssm = {
+                                                    "request_id": req.request_id,
+                                                    "cached_tokens": int(
+                                                        getattr(block_table, "num_tokens", 0) or 0
+                                                    ),
+                                                    "reason": "checkpoint_incomplete",
+                                                    "checkpoint_tokens": int(_ck_len or 0),
+                                                }
+                                                _lookup = getattr(
+                                                    self._ssm_state_cache,
+                                                    "last_prefix_lookup",
+                                                    None,
+                                                )
+                                                if isinstance(_lookup, dict):
+                                                    self._stats.last_hybrid_kv_without_ssm[
+                                                        "ssm_prefix_lookup"
+                                                    ] = dict(_lookup)
                                                 logger.info(
                                                     f"vmlx#91 RESUME skipped for {req.request_id}: "
                                                     f"checkpoint at {_ck_len} has is_complete=False "
@@ -2435,6 +2585,27 @@ class MLLMBatchGenerator:
                                             else:
                                                 # Trim returned None (e.g. checkpoint below
                                                 # one block) — fall back to full prefill.
+                                                self._stats.hybrid_kv_without_ssm_hits += 1
+                                                self._stats.hybrid_kv_without_ssm_tokens += int(
+                                                    getattr(block_table, "num_tokens", 0) or 0
+                                                )
+                                                self._stats.last_hybrid_kv_without_ssm = {
+                                                    "request_id": req.request_id,
+                                                    "cached_tokens": int(
+                                                        getattr(block_table, "num_tokens", 0) or 0
+                                                    ),
+                                                    "reason": "checkpoint_below_one_block",
+                                                    "checkpoint_tokens": int(_ck_len or 0),
+                                                }
+                                                _lookup = getattr(
+                                                    self._ssm_state_cache,
+                                                    "last_prefix_lookup",
+                                                    None,
+                                                )
+                                                if isinstance(_lookup, dict):
+                                                    self._stats.last_hybrid_kv_without_ssm[
+                                                        "ssm_prefix_lookup"
+                                                    ] = dict(_lookup)
                                                 logger.info(
                                                     f"vmlx#91 RESUME skipped for {req.request_id}: "
                                                     f"checkpoint at {_ck_len} below one block — "
@@ -2443,8 +2614,35 @@ class MLLMBatchGenerator:
                                                 self.block_aware_cache.release_cache(req.request_id)
                                                 continue
                                         else:
+                                            self._stats.hybrid_kv_without_ssm_hits += 1
+                                            self._stats.hybrid_kv_without_ssm_tokens += int(
+                                                getattr(block_table, "num_tokens", 0) or 0
+                                            )
+                                            self._stats.last_hybrid_kv_without_ssm = {
+                                                "request_id": req.request_id,
+                                                "cached_tokens": int(
+                                                    getattr(block_table, "num_tokens", 0) or 0
+                                                ),
+                                                "reason": (
+                                                    "ssm_prefix_resume_disabled"
+                                                    if not _enable_resume
+                                                    else "no_ssm_companion_state"
+                                                ),
+                                            }
+                                            _lookup = getattr(
+                                                self._ssm_state_cache,
+                                                "last_prefix_lookup",
+                                                None,
+                                            )
+                                            if isinstance(_lookup, dict):
+                                                self._stats.last_hybrid_kv_without_ssm[
+                                                    "ssm_prefix_lookup"
+                                                ] = dict(_lookup)
                                             if _missed_ck is not None:
                                                 _ck_len, _, _ = _missed_ck
+                                                self._stats.last_hybrid_kv_without_ssm[
+                                                    "checkpoint_tokens"
+                                                ] = int(_ck_len or 0)
                                                 logger.info(
                                                     f"VLM prefix cache MISS for {req.request_id}: "
                                                     f"{block_table.num_tokens} KV blocks found but "
@@ -2501,6 +2699,9 @@ class MLLMBatchGenerator:
                                     # TQ recompress safe: blocks now store original float16
                                     req.prompt_cache = full_cache
                                     req._cached_tokens = block_table.num_tokens
+                                    req._cache_detail = (
+                                        "paged+ssm+disk" if _paged_disk_hit else "paged+ssm"
+                                    )
                                     # Re-attach the gen-prompt suffix: fetch key was
                                     # gpl-stripped but the model MUST see the template
                                     # suffix (<|im_start|>assistant\n<think>\n) to enter
@@ -2536,6 +2737,9 @@ class MLLMBatchGenerator:
                                     # Pure attention VLM: TQ recompress safe (original float16)
                                     req.prompt_cache = reconstructed
                                     req._cached_tokens = block_table.num_tokens
+                                    req._cache_detail = (
+                                        "paged+disk" if _paged_disk_hit else "paged"
+                                    )
                                     # Re-attach gen-prompt suffix (see hybrid branch above
                                     # for full rationale — same correctness requirement
                                     # for attention-only thinking VLMs).
@@ -2544,15 +2748,13 @@ class MLLMBatchGenerator:
                                         # Check if remaining tokens contain image placeholders.
                                         # If so, we'd need partial pixel_values which is complex —
                                         # fall back to full prefill instead.
-                                        model_config = getattr(self.model, "config", None)
-                                        img_token_id = (
-                                            getattr(model_config, "image_token_index", None)
-                                            if model_config else None
+                                        has_images = self._tokens_contain_media_placeholders(
+                                            _full_remaining
                                         )
-                                        has_images = img_token_id is not None and img_token_id in _full_remaining
                                         if has_images:
                                             req.prompt_cache = None
                                             req._cached_tokens = 0  # reset — full prefill needed
+                                            req._cache_detail = None
                                             logger.info(
                                                 f"VLM prefix cache HIT for {req.request_id}: "
                                                 f"{block_table.num_tokens} cached tokens, "
@@ -2588,6 +2790,7 @@ class MLLMBatchGenerator:
                 self._prefix_cache_enabled
                 and (self.memory_aware_cache is not None or self.prefix_cache is not None)
                 and req.prompt_cache is None
+                and not self._request_has_media_cache_context(req)
                 and not _mllm_bypass
             ):
                 if req.input_ids is not None:
@@ -2631,15 +2834,18 @@ class MLLMBatchGenerator:
                                     )
                                 else:
                                     req.prompt_cache = cache
-                                    num_cached = len(token_list) - len(remaining)
-                                    _full_remaining = (remaining or []) + list(_gpl_suffix)
+                                    (
+                                        _full_remaining,
+                                        num_cached,
+                                    ) = _prefix_hit_tail_and_cached_tokens(
+                                        token_list=token_list,
+                                        remaining=remaining or [],
+                                        gen_prompt_suffix=list(_gpl_suffix),
+                                    )
                                     if _full_remaining:
-                                        model_config = getattr(self.model, "config", None)
-                                        img_token_id = (
-                                            getattr(model_config, "image_token_index", None)
-                                            if model_config else None
+                                        has_images = self._tokens_contain_media_placeholders(
+                                            _full_remaining
                                         )
-                                        has_images = img_token_id is not None and img_token_id in _full_remaining
                                         if has_images:
                                             req.prompt_cache = None
                                             logger.info(
@@ -2648,6 +2854,7 @@ class MLLMBatchGenerator:
                                             )
                                         else:
                                             req._cached_tokens = num_cached
+                                            req._cache_detail = "memory" if self.memory_aware_cache is not None else "prefix"
                                             req.input_ids = mx.array([_full_remaining])
                                             req.pixel_values = None
                                             req.attention_mask = None
@@ -2659,14 +2866,15 @@ class MLLMBatchGenerator:
                                                 f"(incl. {len(_gpl_suffix)}-token gen-prompt suffix)"
                                             )
                                     else:
-                                        req._cached_tokens = len(token_list)
+                                        req._cached_tokens = num_cached
+                                        req._cache_detail = "memory" if self.memory_aware_cache is not None else "prefix"
                                         req.input_ids = mx.array([_full_token_list[-1:]])
                                         req.pixel_values = None
                                         req.attention_mask = None
                                         req.image_grid_thw = None
                                         logger.info(
                                             f"VLM cache FULL HIT for {req.request_id}: "
-                                            f"{len(token_list)} cached tokens"
+                                            f"{num_cached} cached tokens"
                                         )
                     except Exception as e:
                         logger.warning(f"Failed to fetch VLM cache for {req.request_id}: {e}")
@@ -2678,6 +2886,7 @@ class MLLMBatchGenerator:
                 self._prefix_cache_enabled
                 and req.prompt_cache is None
                 and self.disk_cache is not None
+                and not self._request_has_media_cache_context(req)
                 and not _mllm_bypass
             ):
                 if req.input_ids is not None:
@@ -2695,12 +2904,9 @@ class MLLMBatchGenerator:
                         if disk_result is not None:
                             if not self._is_hybrid:
                                 # Check for image tokens in remaining suffix
-                                model_config = getattr(self.model, "config", None)
-                                img_token_id = (
-                                    getattr(model_config, "image_token_index", None)
-                                    if model_config else None
+                                has_images = self._tokens_contain_media_placeholders(
+                                    token_list
                                 )
-                                has_images = img_token_id is not None and img_token_id in token_list
                                 if has_images:
                                     logger.info(
                                         f"VLM disk cache (L2) HIT for {req.request_id}: "
@@ -2719,13 +2925,20 @@ class MLLMBatchGenerator:
                                         pass
                                     else:
                                         req.prompt_cache = disk_result
-                                        req._cached_tokens = len(token_list)
+                                        (
+                                            _tail,
+                                            num_cached,
+                                        ) = _prefix_hit_tail_and_cached_tokens(
+                                            token_list=token_list,
+                                            remaining=[],
+                                            gen_prompt_suffix=list(_gpl_suffix),
+                                        )
+                                        req._cached_tokens = num_cached
                                         # Disk cache is exact-match on the gpl-stripped
                                         # prefix. Feed gpl suffix + last stripped token
                                         # so the model sees <|im_start|>assistant\n<think>\n
                                         # before sampling.
-                                        _tail = _full_token_list[-(1 + len(_gpl_suffix)):] if _gpl_suffix else _full_token_list[-1:]
-                                        req.input_ids = mx.array([_tail])
+                                        req.input_ids = mx.array([_tail or _full_token_list[-1:]])
                                         req.pixel_values = None
                                         req.attention_mask = None
                                         req.image_grid_thw = None
@@ -2738,7 +2951,7 @@ class MLLMBatchGenerator:
                                         req._cache_detail = "disk+tq" if _tq_disk else "disk"
                                         logger.info(
                                             f"VLM disk cache (L2) HIT for {req.request_id}: "
-                                            f"{len(token_list)} cached tokens"
+                                            f"{num_cached} cached tokens"
                                             f"{' (TQ-native)' if _tq_disk else ''}"
                                         )
                     except Exception as e:
@@ -2935,12 +3148,11 @@ class MLLMBatchGenerator:
                 # token list.  (Fixes alternating miss/hit pattern — #45)
                 if self._is_hybrid and self._ssm_companion_enabled:
                     # Guard: skip SSM capture+rederive on tokens containing
-                    # image placeholder IDs. Rederive's text-only forward
-                    # pass would produce wrong state at vision positions,
-                    # corrupting text-only follow-up resume.
-                    _img_id = getattr(getattr(self.model, "config", None), "image_token_index", None)
+                    # image/video context. Rederive's text-only forward pass
+                    # would produce wrong state at vision positions, corrupting
+                    # text-only follow-up resume.
                     _tp = getattr(req, '_original_token_ids', None) or input_ids_list[i]
-                    if _img_id is not None and _img_id in _tp:
+                    if self._request_has_media_cache_context(req, _tp):
                         continue
                     # vmlx#109: if capture-during-prefill already snapshotted
                     # a clean SSM state at the gpl boundary, store it now
@@ -3488,6 +3700,7 @@ class MLLMBatchGenerator:
                             else [])
                     ),
                     cached_tokens=getattr(req, '_cached_tokens', 0),
+                    cache_detail=getattr(req, '_cache_detail', "") or "",
                     gen_prefix_tokens=getattr(req, '_gen_prefix_tokens', None),
                 )
             )

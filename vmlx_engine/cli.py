@@ -293,7 +293,7 @@ def serve_command(args):
         from .model_config_registry import get_model_config_registry
         _mc = get_model_config_registry().lookup(args.model)
         # DSV4-Flash auto-config. DSV4_LONG_CTX=1 is the only supported
-        # runtime mode (tri-mode SWA+CSA/HSA). Pool quant is enabled by
+        # runtime mode (tri-mode SWA+CSA/HCA). Pool quant is enabled by
         # default only when the installed JANG runtime's PoolQuantizedV4Cache
         # subclasses DeepseekV4Cache; explicit DSV4_POOL_QUANT env overrides
         # are preserved for debug/bisect.
@@ -315,10 +315,10 @@ def serve_command(args):
                 os.environ["VMLX_DISABLE_TQ_KV"] = "1"
                 os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
                 logger.info(
-                    "DSV4-Flash native SWA+CSA/HSA cache owns cache "
+                    "DSV4-Flash native SWA+CSA/HCA cache owns cache "
                     "compression; forcing generic --kv-cache-quantization "
                     "%s -> none. DSV4_POOL_QUANT=%s controls the "
-                    "DeepseekV4Cache-compatible CSA/HSA pool codec.",
+                    "DeepseekV4Cache-compatible CSA/HCA pool codec.",
                     _old_kvq,
                     _dsv4_pool_quant,
                 )
@@ -329,7 +329,7 @@ def serve_command(args):
             # installed by load_jangtq_dsv4. Short prompts (<512 tokens)
             # stores composite prompt-boundary state with N-1 prompt keys.
             logger.info(
-                "DSV4-Flash detected — DSV4_LONG_CTX=1 (tri-mode SWA+CSA/HSA), "
+                "DSV4-Flash detected — DSV4_LONG_CTX=1 (tri-mode SWA+CSA/HCA), "
                 f"DSV4_POOL_QUANT={_dsv4_pool_quant}. Upstream prefill shape bug patched in-process "
                 "by load_jangtq_dsv4."
             )
@@ -695,7 +695,7 @@ def serve_command(args):
 
     if _is_dsv4_model and getattr(args, 'continuous_batching', False):
         # DSV4BatchGenerator is a custom single-batch path because each request
-        # owns a heterogeneous SWA + CSA/HSA cache object. Letting panel/default
+        # owns a heterogeneous SWA + CSA/HCA cache object. Letting panel/default
         # sessions start with max_num_seqs > 1 works until a second request is
         # admitted, then fails mid-session. Clamp at CLI entry so direct CLI and
         # panel launches share the same production-safe behavior.
@@ -1491,10 +1491,10 @@ Examples:
              "(default: 64)",
     )
     serve_parser.add_argument(
-        "--prefill-batch-size", type=int, default=8,
+        "--prefill-batch-size", type=int, default=1024,
         help="How many new prompts to process at once during the 'prefill' phase "
              "(reading the input). Higher = faster throughput but more memory spikes. "
-             "Requires --continuous-batching. (default: 8)",
+             "Requires --continuous-batching. (default: 1024)",
     )
     serve_parser.add_argument(
         "--prefill-step-size", type=int, default=2048,
@@ -1504,10 +1504,10 @@ Examples:
              "crashes. Requires --continuous-batching. (default: 2048)",
     )
     serve_parser.add_argument(
-        "--completion-batch-size", type=int, default=32,
+        "--completion-batch-size", type=int, default=1024,
         help="How many responses to generate tokens for simultaneously during the 'decode' phase. "
              "Higher = more throughput for concurrent requests but more memory. "
-             "Requires --continuous-batching. (default: 32)",
+             "Requires --continuous-batching. (default: 1024)",
     )
     serve_parser.add_argument(
         "--enable-prefix-cache",
@@ -1552,15 +1552,15 @@ Examples:
         default=None,
         help="Fixed memory budget for prefix cache in megabytes. When set, cached prompts "
              "are evicted based on actual memory usage rather than entry count. "
-             "Example: --cache-memory-mb 4096 for 4GB. Default: auto-detect (~30%% of available RAM).",
+             "Example: --cache-memory-mb 4096 for 4GB. Default: auto-detect (~20%% of available RAM).",
     )
     serve_parser.add_argument(
         "--cache-memory-percent",
         type=float,
-        default=0.30,
+        default=0.20,
         help="Fraction of available unified memory to use for prefix cache when auto-detecting. "
-             "Only used when --cache-memory-mb is not set. Value is a decimal: 0.30 = 30%%. "
-             "Example: 0.50 for half of RAM. (default: 0.30)",
+             "Only used when --cache-memory-mb is not set. Value is a decimal: 0.20 = 20%%. "
+             "Example: 0.50 for half of RAM. (default: 0.20)",
     )
     serve_parser.add_argument(
         "--no-memory-aware-cache",
@@ -2087,13 +2087,13 @@ Examples:
         "--cache-memory-mb",
         type=int,
         default=None,
-        help="Cache memory limit in MB (default: auto-detect ~30%% of RAM)",
+        help="Cache memory limit in MB (default: auto-detect ~20%% of RAM)",
     )
     bench_parser.add_argument(
         "--cache-memory-percent",
         type=float,
-        default=0.30,
-        help="Fraction of available RAM for cache if auto-detecting (default: 0.30)",
+        default=0.20,
+        help="Fraction of available RAM for cache if auto-detecting (default: 0.20)",
     )
     bench_parser.add_argument(
         "--no-memory-aware-cache",

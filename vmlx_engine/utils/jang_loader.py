@@ -33,6 +33,33 @@ JANG_CONFIG_FILENAMES = [
 JANG_FORMAT_VALUES = ["jang", "jjqf", "mxq"]
 
 
+def _sanitize_grouped_conv1d_layout(weights: dict) -> dict:
+    """Force leftover grouped Conv1d weights into MLX layout.
+
+    Upstream model.sanitize() can return successfully while leaving
+    dense/non-expert converted conv1d tensors in HF layout `(out, 1, kernel)`.
+    MLX Conv1d expects `(out, kernel, 1)`, so run this idempotently after any
+    model-specific sanitize path. This is family-agnostic for Qwen3-Next,
+    Nemotron-H/Mamba2, and other grouped-conv hybrid blocks.
+    """
+    fixed = None
+    for key, value in weights.items():
+        if (
+            "conv1d.weight" in key
+            and getattr(value, "ndim", None) == 3
+            and value.shape[-1] != 1
+        ):
+            if fixed is None:
+                fixed = dict(weights)
+            fixed[key] = mx.transpose(value, axes=(0, 2, 1))
+    return weights if fixed is None else fixed
+
+
+def _sanitize_qwen3_next_conv1d_layout(weights: dict) -> dict:
+    """Backward-compatible alias for older tests and callers."""
+    return _sanitize_grouped_conv1d_layout(weights)
+
+
 def _set_wired_limit_for_model(weight_files):
     """Raise MLX wired memory limit to fit model + headroom.
 
@@ -1239,6 +1266,7 @@ def _load_jang_v2(
             weights = g4_remapped
         if hasattr(model, "sanitize"):
             weights = model.sanitize(weights)
+        weights = _sanitize_qwen3_next_conv1d_layout(weights)
         # MoE gate dequant + optional Nemotron fc rename
         if _needs_gate_dequant:
             renamed = {}
@@ -1939,6 +1967,7 @@ def _load_jang_v2_vlm(
                     v = v + 1.0
                 fixed[k] = v
             shard_weights = fixed
+        shard_weights = _sanitize_qwen3_next_conv1d_layout(shard_weights)
 
         # Apply vision/language sanitizers (may not exist for all model classes)
         try:
@@ -2491,6 +2520,7 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
                 shard_weights = mx.load(sf)
                 if hasattr(model, "sanitize"):
                     shard_weights = model.sanitize(shard_weights)
+                shard_weights = _sanitize_qwen3_next_conv1d_layout(shard_weights)
                 _pre_fix_bits_from_shard(model, shard_weights, block_size)
                 model.load_weights(list(shard_weights.items()), strict=False)
                 del shard_weights
@@ -2499,6 +2529,7 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
             weights = result
             if hasattr(model, "sanitize"):
                 weights = model.sanitize(weights)
+            weights = _sanitize_qwen3_next_conv1d_layout(weights)
             _pre_fix_bits_from_shard(model, weights, block_size)
             model.load_weights(list(weights.items()), strict=False)
             del weights
@@ -2627,6 +2658,7 @@ def _load_jang_v1_vlm(
             shard_weights = mx.load(sf)
             if hasattr(model, "sanitize"):
                 shard_weights = model.sanitize(shard_weights)
+            shard_weights = _sanitize_qwen3_next_conv1d_layout(shard_weights)
             shard_weights = sanitize_weights(
                 model_class.VisionModel, shard_weights, model_config.vision_config
             )

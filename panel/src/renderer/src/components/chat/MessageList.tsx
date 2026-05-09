@@ -21,6 +21,8 @@ interface Message {
   timestamp: number
   tokens?: number
   metrics?: MessageMetrics
+  warnings?: string[]
+  warningsJson?: string
 }
 
 interface MessageListProps {
@@ -123,6 +125,7 @@ export function MessageList({ messages, streamingMessageId, currentMetrics, reas
               reasoningContent={reasoningMap?.[message.id]}
               reasoningDone={reasoningDoneMap?.[message.id] ?? false}
               toolStatuses={hideToolStatus ? undefined : toolStatusMap?.[message.id]}
+              warnings={message.warnings}
               sessionId={sessionId}
               sessionEndpoint={sessionEndpoint}
               isLastAssistant={idx === lastAssistantIdx}

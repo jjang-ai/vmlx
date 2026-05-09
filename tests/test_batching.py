@@ -110,6 +110,30 @@ class TestRequest:
         assert req1 < req3
 
 
+class TestPrefixHitTailAccounting:
+    """Prefix hits store N-1 KV state, so exact hits still need a kickoff token."""
+
+    def test_exact_hit_with_generation_suffix_refeeds_last_prompt_token(self):
+        remaining, cached_tokens = Scheduler._prefix_hit_tail_and_cached_tokens(
+            fetch_tokens=[10, 11, 12, 13],
+            remaining=[],
+            gen_prompt_suffix=[90, 91],
+        )
+
+        assert remaining == [13, 90, 91]
+        assert cached_tokens == 3
+
+    def test_exact_hit_without_suffix_counts_n_minus_one_cached_tokens(self):
+        remaining, cached_tokens = Scheduler._prefix_hit_tail_and_cached_tokens(
+            fetch_tokens=[10, 11, 12, 13],
+            remaining=[],
+            gen_prompt_suffix=[],
+        )
+
+        assert remaining == []
+        assert cached_tokens == 3
+
+
 class TestSamplingParams:
     """Tests for SamplingParams."""
 
@@ -176,10 +200,10 @@ class TestSchedulerConfig:
         """Test default scheduler config."""
         config = SchedulerConfig()
 
-        assert config.max_num_seqs == 256
+        assert config.max_num_seqs == 64
         assert config.policy == SchedulingPolicy.FCFS
-        assert config.prefill_batch_size == 8
-        assert config.completion_batch_size == 32
+        assert config.prefill_batch_size == 1024
+        assert config.completion_batch_size == 1024
 
     def test_custom_config(self):
         """Test custom scheduler config."""
@@ -268,6 +292,63 @@ class TestSchedulerBasic:
         assert scheduler.get_num_waiting() == 1
         assert scheduler.has_requests()
         assert scheduler.get_request("test-1") is not None
+
+    def test_memory_cache_exact_hit_with_generation_suffix_refeeds_last_key_token(
+        self, mock_model, mock_tokenizer
+    ):
+        """Memory L1 payloads are N-1, even when the key is an exact hit."""
+
+        class _MemoryCache:
+            def fetch(self, tokens):
+                assert tokens == [10, 11, 12]
+                return ["cache"], []
+
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        scheduler.block_aware_cache = None
+        scheduler.memory_aware_cache = _MemoryCache()
+        scheduler.prefix_cache = None
+        scheduler.disk_cache = None
+
+        request = Request("req-memory-exact", "x", SamplingParams())
+        request.prompt_token_ids = [10, 11, 12, 90, 91]
+        request.num_prompt_tokens = len(request.prompt_token_ids)
+        request._gen_prompt_len = 2
+
+        scheduler.add_request(request)
+
+        assert request.prompt_cache == ["cache"]
+        assert request.cached_tokens == 2
+        assert request.remaining_tokens == [12, 90, 91]
+
+    def test_prompt_disk_l2_exact_hit_with_generation_suffix_refeeds_last_key_token(
+        self, mock_model, mock_tokenizer
+    ):
+        """Prompt L2 stores full lookup keys but N-1 KV payloads."""
+
+        class _DiskCache:
+            _last_fetch_tq_native = False
+            _last_fetch_cache_type = "assistant"
+
+            def fetch(self, tokens):
+                assert tokens == [10, 11, 12]
+                return ["disk-cache"]
+
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        scheduler.block_aware_cache = None
+        scheduler.memory_aware_cache = None
+        scheduler.prefix_cache = None
+        scheduler.disk_cache = _DiskCache()
+
+        request = Request("req-disk-exact", "x", SamplingParams())
+        request.prompt_token_ids = [10, 11, 12, 90, 91]
+        request.num_prompt_tokens = len(request.prompt_token_ids)
+        request._gen_prompt_len = 2
+
+        scheduler.add_request(request)
+
+        assert request.prompt_cache == ["disk-cache"]
+        assert request.cached_tokens == 2
+        assert request.remaining_tokens == [12, 90, 91]
 
     def test_add_duplicate_request(self, mock_model, mock_tokenizer):
         """Test adding duplicate request raises error."""
@@ -412,6 +493,65 @@ class TestSchedulerBasic:
         assert stats["last_cache_reuse_partial"]["used_cached_tokens"] == 128
         assert stats["last_cache_reuse_partial"]["tail_tokens"] == 192
 
+    def test_memory_pressure_partial_reuse_records_effective_budget_and_final_cache(
+        self, mock_model, mock_tokenizer
+    ):
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        scheduler._validate_cache = lambda cache: True
+
+        class _LargeCache:
+            pass
+
+        class _SmallCache:
+            pass
+
+        small_cache = _SmallCache()
+        trimmed = BlockTable(
+            request_id="req-partial-budget",
+            block_ids=[1],
+            num_tokens=64,
+        )
+
+        class _BlockAwareCache:
+            block_size = 64
+
+            def trim_block_table(self, request_id, target_tokens):
+                return trimmed
+
+            def reconstruct_cache(self, block_table):
+                return small_cache
+
+            def get_stats(self):
+                return {}
+
+        scheduler.block_aware_cache = _BlockAwareCache()
+        request = Request(
+            request_id="req-partial-budget",
+            prompt="x",
+            sampling_params=SamplingParams(),
+        )
+        request.prompt_token_ids = list(range(256))
+        request.block_table = BlockTable("req-partial-budget", [1, 2, 3, 4], 256)
+        request.cached_tokens = 256
+        request.remaining_tokens = request.prompt_token_ids[256:]
+
+        cache_to_use, _tokens_to_process = scheduler._shrink_paged_cache_for_memory(
+            request=request,
+            cache_to_use=_LargeCache(),
+            cache_bytes=256 * 1024 * 1024,
+            available_bytes=256 * 1024 * 1024,
+            multiplier=2.0,
+            budget_fraction=0.5,
+        )
+
+        assert cache_to_use is small_cache
+        partial = scheduler.get_stats()["last_cache_reuse_partial"]
+        assert partial["original_needed_mb"] == 512.0
+        assert partial["budget_mb"] == 128.0
+        assert partial["used_needed_mb"] == 128.0
+        assert partial["used_cache_mb"] == 64.0
+        assert partial["cache_type"] == "_SmallCache"
+
     def test_memory_pressure_partial_reuse_preserves_generation_prompt_suffix(
         self, mock_model, mock_tokenizer
     ):
@@ -450,20 +590,85 @@ class TestSchedulerBasic:
         assert tokens_to_process == request.prompt_token_ids[64:]
         assert request.remaining_tokens == request.prompt_token_ids[64:]
 
-    def test_memory_pressure_does_not_trim_path_dependent_native_caches(
+    def test_memory_pressure_reuses_shorter_dsv4_terminal_composite_prefix(
         self, mock_model, mock_tokenizer
     ):
         scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
         scheduler._uses_dsv4_cache = True
-        scheduler.block_aware_cache = MagicMock()
-        request = Request("req-hybrid", "x", SamplingParams())
+        scheduler._validate_cache = lambda cache: True
+
+        trimmed = BlockTable("req-dsv4", [1, 2], 128)
+
+        class _BlockAwareCache:
+            block_size = 64
+
+            def __init__(self):
+                self.trim_calls = []
+
+            def trim_block_table_to_terminal_state(self, request_id, target_tokens, tag):
+                self.trim_calls.append((request_id, target_tokens, tag))
+                return trimmed
+
+            def reconstruct_cache(self, block_table):
+                assert block_table is trimmed
+                return ["dsv4-composite-cache"]
+
+            def get_stats(self):
+                return {}
+
+        cache = _BlockAwareCache()
+        scheduler.block_aware_cache = cache
+        request = Request("req-dsv4", "x", SamplingParams())
+        request.prompt_token_ids = list(range(320))
+        request.block_table = BlockTable("req-dsv4", [1, 2, 3, 4], 256)
+        request.cached_tokens = 256
+        request.remaining_tokens = request.prompt_token_ids[256:]
+
+        cache_to_use, tokens_to_process = scheduler._shrink_paged_cache_for_memory(
+            request=request,
+            cache_to_use=["large-dsv4-cache"],
+            cache_bytes=1_000,
+            available_bytes=1_100,
+            multiplier=2.0,
+            budget_fraction=1.0,
+        )
+
+        assert cache.trim_calls == [("req-dsv4", 128, "deepseek_v4")]
+        assert cache_to_use == ["dsv4-composite-cache"]
+        assert tokens_to_process == request.prompt_token_ids[128:]
+        assert request.block_table is trimmed
+        assert request.cached_tokens == 128
+        assert request.shared_prefix_blocks == 2
+        assert request.prompt_cache == ["dsv4-composite-cache"]
+        assert request._cache_reuse_contract == "deepseek_v4_composite"
+        assert scheduler.get_stats()["last_cache_reuse_partial"]["cache_contract"] == (
+            "deepseek_v4_composite"
+        )
+
+    def test_memory_pressure_refuses_dsv4_partial_without_terminal_composite(
+        self, mock_model, mock_tokenizer
+    ):
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        scheduler._uses_dsv4_cache = True
+
+        class _BlockAwareCache:
+            block_size = 64
+
+            def trim_block_table_to_terminal_state(self, request_id, target_tokens, tag):
+                return None
+
+            def trim_block_table(self, request_id, target_tokens):
+                raise AssertionError("DSV4 must not use plain KV block trimming")
+
+        scheduler.block_aware_cache = _BlockAwareCache()
+        request = Request("req-dsv4-miss", "x", SamplingParams())
         request.prompt_token_ids = list(range(256))
-        request.block_table = BlockTable("req-hybrid", [1, 2, 3, 4], 256)
+        request.block_table = BlockTable("req-dsv4-miss", [1, 2, 3, 4], 256)
         request.cached_tokens = 256
 
         cache_to_use, tokens_to_process = scheduler._shrink_paged_cache_for_memory(
             request=request,
-            cache_to_use=["hybrid-cache"],
+            cache_to_use=["unsafe-dsv4-cache"],
             cache_bytes=1_000,
             available_bytes=600,
             multiplier=2.0,
@@ -473,9 +678,47 @@ class TestSchedulerBasic:
         assert tokens_to_process is None
         assert request._cache_reuse_contract == "deepseek_v4_composite"
         assert request._cache_reuse_partial_unavailable_reason == (
-            "native_path_dependent_cache"
+            "no_terminal_path_dependent_checkpoint"
         )
-        scheduler.block_aware_cache.trim_block_table.assert_not_called()
+
+    def test_cache_reuse_skip_records_partial_reason_and_full_prefill_action(
+        self, mock_model, mock_tokenizer
+    ):
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        request = Request("req-skip", "x", SamplingParams())
+        request.prompt_token_ids = list(range(1000))
+        request.cached_tokens = 512
+        request.remaining_tokens = list(range(512, 1000))
+        request._cache_reuse_contract = "hybrid_ssm"
+        request._cache_reuse_partial_unavailable_reason = (
+            "no_block_aligned_ssm_checkpoint"
+        )
+
+        scheduler._record_cache_reuse_skip(
+            request=request,
+            cache_to_use=["kv-cache"],
+            cache_bytes=512 * 1024 * 1024,
+            available_bytes=256 * 1024 * 1024,
+            needed_bytes=1024 * 1024 * 1024,
+            merge_budget_bytes=128 * 1024 * 1024,
+            multiplier=2.0,
+            budget_fraction=0.5,
+        )
+
+        stats = scheduler.get_stats()
+        assert stats["cache_reuse_skips"] == 1
+        assert stats["cache_reuse_skip_tokens"] == 512
+        skip = stats["last_cache_reuse_skip"]
+        assert skip["action"] == "full_prefill"
+        assert skip["cache_contract"] == "hybrid_ssm"
+        assert skip["cached_tokens"] == 512
+        assert skip["dropped_cached_tokens"] == 512
+        assert skip["remaining_tokens"] == 488
+        assert skip["full_prefill_tokens"] == 1000
+        assert skip["partial_reuse_available"] is False
+        assert skip["partial_reuse_unavailable_reason"] == (
+            "no_block_aligned_ssm_checkpoint"
+        )
 
     def test_memory_pressure_partially_reuses_hybrid_ssm_with_aligned_checkpoint(
         self, mock_model, mock_tokenizer
@@ -536,6 +779,75 @@ class TestSchedulerBasic:
         assert scheduler.get_stats()["last_cache_reuse_partial"]["cache_contract"] == (
             "hybrid_ssm"
         )
+
+    def test_prompt_disk_l2_hit_backfills_paged_cache_for_partial_reuse(
+        self, mock_model, mock_tokenizer
+    ):
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        scheduler._extract_cache_states = lambda cache: ["state-dict"]
+
+        class _DiskCache:
+            _last_fetch_tq_native = True
+            _last_fetch_cache_type = "assistant"
+
+            def __init__(self):
+                self.fetch_tokens = None
+
+            def fetch(self, tokens):
+                self.fetch_tokens = list(tokens)
+                return ["disk-cache"]
+
+        class _PagedCache:
+            def __init__(self):
+                self.released = []
+                self.detached = []
+
+            def release_request_refs(self, block_table):
+                self.released.append(block_table)
+
+            def detach_request(self, request_id):
+                self.detached.append(request_id)
+
+        class _BlockAwareCache:
+            def __init__(self):
+                self.fetch_calls = []
+                self.store_calls = []
+                self.paged_cache = _PagedCache()
+                self._request_tables = {}
+
+            def fetch_cache(self, request_id, tokens):
+                self.fetch_calls.append((request_id, list(tokens)))
+                return None, list(tokens)
+
+            def store_cache(self, request_id, tokens, cache_data, cache_type="assistant"):
+                self.store_calls.append(
+                    (request_id, list(tokens), list(cache_data), cache_type)
+                )
+                return BlockTable(request_id=request_id, block_ids=[1, 2], num_tokens=len(tokens))
+
+            def get_stats(self):
+                return {}
+
+        disk = _DiskCache()
+        block_cache = _BlockAwareCache()
+        scheduler.disk_cache = disk
+        scheduler.block_aware_cache = block_cache
+
+        request = Request("req-disk-l2", "x", SamplingParams())
+        request.prompt_token_ids = list(range(257))
+
+        scheduler.add_request(request)
+
+        assert disk.fetch_tokens == request.prompt_token_ids
+        assert block_cache.store_calls == [
+            ("req-disk-l2", request.prompt_token_ids[:-1], ["state-dict"], "assistant")
+        ]
+        assert request.prompt_cache is None
+        assert request.block_table is not None
+        assert request.cached_tokens == 256
+        assert request.remaining_tokens == [256]
+        assert request._paged_block_table_needs_worker_reconstruct is True
+        assert request._cache_detail == "paged+disk+tq"
 
     def test_hybrid_ssm_checkpoint_alignment_falls_back_to_exact_aligned_state(
         self, mock_model, mock_tokenizer
@@ -636,7 +948,7 @@ class TestSchedulerCacheResilience:
         return MagicMock()
 
     def test_memory_aware_cache_init(self, mock_model, mock_tokenizer):
-        """Memory-aware cache is initialized with 30% default."""
+        """Memory-aware cache is initialized with the scheduler default budget."""
         scheduler = Scheduler(
             model=mock_model,
             tokenizer=mock_tokenizer,
@@ -790,6 +1102,60 @@ class TestSchedulerCacheResilience:
         assert "hits" in stats
         assert "current_memory_mb" in stats
         assert "max_memory_mb" in stats
+
+    def test_scheduler_records_successful_cache_hit_tokens_by_detail(
+        self, mock_model, mock_tokenizer
+    ):
+        """Successful scheduled cache hits must be visible in scheduler stats."""
+        scheduler = Scheduler(
+            model=mock_model,
+            tokenizer=mock_tokenizer,
+            config=SchedulerConfig(max_num_seqs=2),
+        )
+
+        class _BatchGenerator:
+            stop_tokens = set()
+
+            def insert(self, tokens, max_tokens, caches=None, **kwargs):
+                self.last_insert = {
+                    "tokens": tokens,
+                    "max_tokens": max_tokens,
+                    "caches": caches,
+                    "kwargs": kwargs,
+                }
+                return [101]
+
+        request = Request(
+            request_id="cache-hit-1",
+            prompt="cache hit",
+            prompt_token_ids=list(range(20)),
+            sampling_params=SamplingParams(max_tokens=4),
+        )
+        request.num_prompt_tokens = 20
+        scheduler.requests[request.request_id] = request
+        scheduler.waiting.append(request)
+        scheduler.batch_generator = _BatchGenerator()
+        params = request.sampling_params
+        scheduler._current_sampler_params = (
+            params.temperature,
+            params.top_p,
+            params.min_p,
+            params.top_k,
+            params.repetition_penalty,
+        )
+        scheduler._validate_cache = lambda cache: True
+        request.prompt_cache = [object()]
+        request.cached_tokens = 12
+        request.remaining_tokens = request.prompt_token_ids[12:]
+        request._cache_detail = "paged+dsv4"
+
+        scheduled = scheduler._schedule_waiting()
+
+        assert [r.request_id for r in scheduled] == ["cache-hit-1"]
+        stats = scheduler.get_stats()
+        assert stats["cache_hit_requests"] == 1
+        assert stats["cache_hit_tokens"] == 12
+        assert stats["cache_hit_tokens_by_detail"] == {"paged+dsv4": 12}
 
 
 # Integration tests require actual MLX model

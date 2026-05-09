@@ -47,7 +47,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.reasoningParser).toBeUndefined()
   })
 
-  it('detects Ling/Bailing hybrid with parser and hybrid cache defaults', () => {
+  it('detects Ling/Bailing hybrid with tools and hybrid cache defaults but no reasoning parser', () => {
     const dir = makeModelDir(
       {
         model_type: 'bailing_hybrid',
@@ -71,8 +71,25 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.cacheType).toBe('hybrid')
     expect(detected.usePagedCache).toBe(true)
     expect(detected.toolParser).toBe('deepseek')
-    expect(detected.reasoningParser).toBe('deepseek_r1')
+    expect(detected.reasoningParser).toBeUndefined()
     expect(detected.isMultimodal).toBe(false)
+  })
+
+  it('keeps Gemma 4 VLM wrapper multimodal instead of demoting to gemma4-text', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'gemma4',
+        text_config: { model_type: 'gemma4_text' },
+        vision_config: { hidden_size: 1152 },
+      },
+      {},
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+    expect(detected.family).toBe('gemma4')
+    expect(detected.reasoningParser).toBe('gemma4')
+    expect(detected.toolParser).toBe('gemma4')
+    expect(detected.isMultimodal).toBe(true)
   })
 
   it('keeps JANG VLM enabled from capabilities.modality=vision when architecture.has_vision is absent', () => {
@@ -131,7 +148,32 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
       { weight_format: 'mxtq', architecture: { has_vision: true } },
     )
 
-    expect(detectModelConfigFromDir(dir).isMultimodal).toBe(true)
+    const detected = detectModelConfigFromDir(dir)
+    expect(detected.isMultimodal).toBe(true)
+    expect(detected.isTurboQuant).toBe(true)
+  })
+
+  it('detects TurboQuant from config.json weight_format when jang_config is absent', () => {
+    const dir = makeModelDir({
+      model_type: 'minimax_m2',
+      weight_format: 'mxtq',
+    })
+
+    const detected = detectModelConfigFromDir(dir)
+    expect(detected.family).toBe('minimax')
+    expect(detected.isTurboQuant).toBe(true)
+  })
+
+  it('detects TurboQuant from config.json quantization when jang_config is malformed', () => {
+    const dir = makeModelDir({
+      model_type: 'qwen3_5_moe',
+      quantization: { weight_format: 'mxtq' },
+    })
+    writeFileSync(join(dir, 'jang_config.json'), '{not-json')
+
+    const detected = detectModelConfigFromDir(dir)
+    expect(detected.family).toBe('qwen3.5-moe')
+    expect(detected.isTurboQuant).toBe(true)
   })
 
   it('uses JANG capabilities cache and parser stamps for Qwen3.6 hybrid bundles', () => {
@@ -165,6 +207,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.reasoningParser).toBe('qwen3')
     expect(detected.enableAutoToolChoice).toBe(true)
     expect(detected.isMultimodal).toBe(true)
+    expect(detected.isTurboQuant).toBe(true)
   })
 
   it('does not classify text_config-only MoE models as VLMs', () => {

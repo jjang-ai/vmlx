@@ -64,7 +64,7 @@ class _Request:
     # prefill completes and BEFORE decode advances the live cache. Used
     # by scheduler to populate prefix cache / L2 disk store with state
     # that has no output-side contamination — solves the SWA wrap +
-    # CSA/HSA pool-drift problem without sacrificing cache hit rate.
+    # CSA/HCA pool-drift problem without sacrificing cache hit rate.
     prompt_snapshot: Optional[List[Any]] = None
 
 
@@ -226,7 +226,7 @@ class DSV4BatchGenerator:
         Captures a clean snapshot of `DeepseekV4Cache` (or any other cache
         class in the list) IMMEDIATELY after prefill, before decode starts
         advancing the live cache. This snapshot represents the prompt-only
-        state — no SWA wrap, no CSA/HSA pool drift from output tokens, no
+        state — no SWA wrap, no CSA/HCA pool drift from output tokens, no
         cumulative contamination.
 
         Used by scheduler to populate prefix cache + L2 disk store. The
@@ -590,10 +590,18 @@ class DSV4BatchGenerator:
         return last_open > last_close
 
     def _finalizer_budget(self) -> int:
+        """Visible-answer budget after forced ``</think>`` injection.
+
+        Default bumped from 512 -> 2048 (2026-05-09) so long-form thinking
+        turns can still emit substantive visible content even when the model
+        spent most of its output budget reasoning. Tunable via
+        ``VMLX_DSV4_FINALIZER_TOKENS``. See
+        ``docs/internal/AUDIT_dsv4_flash_long_form_max_thinking_2026_05_09.md``.
+        """
         try:
-            return max(1, int(os.environ.get("VMLX_DSV4_FINALIZER_TOKENS", "512")))
+            return max(1, int(os.environ.get("VMLX_DSV4_FINALIZER_TOKENS", "2048")))
         except (TypeError, ValueError):
-            return 512
+            return 2048
 
     def _effective_max_tokens(self, req: _Request) -> int:
         if req.finalizer_max_tokens is not None:
@@ -610,7 +618,7 @@ class DSV4BatchGenerator:
         Earlier engine-level finalization re-prefilled ``prompt + reasoning`` to
         continue after a missing close tag. On long prompts that duplicates the
         DSV4 composite prefill and can OOM. This generator-level path keeps the
-        live SWA+CSA/HSA cache, emits the structural close token as the next
+        live SWA+CSA/HCA cache, emits the structural close token as the next
         output token, then lets the model continue normally for a bounded
         visible-answer budget.
         """
@@ -696,7 +704,7 @@ class DSV4BatchGenerator:
             with mx.stream(self._stream):
                 if r.cache is None:
                     # Prefill — chunked through one DeepseekV4Cache instance.
-                    # This preserves SWA+CSA/HSA state while bounding transient
+                    # This preserves SWA+CSA/HCA state while bounding transient
                     # MLX allocations for long prompts.
                     r.cache = self._make_new_cache()
                     if not r.prompt_tokens:

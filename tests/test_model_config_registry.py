@@ -193,6 +193,42 @@ class TestModelConfigRegistry:
         with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("qwen3")):
             assert empty_registry.is_mllm("Qwen3-8B") is False
 
+    def test_gemma4_wrapper_with_vision_prefers_top_level_vlm_family(self, empty_registry, tmp_path):
+        """Do not demote Gemma 4 VLM wrappers to gemma4_text via text_config."""
+        import json
+
+        gemma4 = ModelConfig(
+            family_name="gemma4",
+            model_types=["gemma4"],
+            is_mllm=True,
+            architecture_hints={"inject_pixel_values": True},
+            priority=5,
+        )
+        gemma4_text = ModelConfig(
+            family_name="gemma4_text",
+            model_types=["gemma4_text"],
+            is_mllm=False,
+            priority=4,
+        )
+        empty_registry.register(gemma4)
+        empty_registry.register(gemma4_text)
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "gemma4",
+            "text_config": {"model_type": "gemma4_text"},
+            "vision_config": {"model_type": "siglip_vision_model"},
+        }))
+
+        def _load_config(path):
+            return json.loads((path / "config.json").read_text())
+
+        with patch("vmlx_engine.model_config_registry.load_config", _load_config):
+            result = empty_registry.lookup(str(tmp_path))
+
+        assert result.family_name == "gemma4"
+        assert result.is_mllm is True
+        assert result.architecture_hints.get("inject_pixel_values") is True
+
     def test_tool_parser(self, empty_registry):
         config = ModelConfig(
             family_name="mistral",
@@ -508,6 +544,32 @@ class TestModelConfigs:
         assert config.reasoning_parser == "qwen3"
         assert config.think_in_template is True
         assert config.eos_tokens == ["<|im_end|>"]
+
+    def test_qwen3_5_linear_attention_config_uses_hybrid_cache(self, registry):
+        """Qwen3.6 dense MXFP4 has no JANG stamp but text_config.layer_types
+        declares linear_attention/full_attention. Registry must not report
+        plain KV cache for that architecture."""
+
+        def _load_config(path):
+            return {
+                "model_type": "qwen3_5",
+                "text_config": {
+                    "model_type": "qwen3_5_text",
+                    "layer_types": [
+                        "linear_attention",
+                        "linear_attention",
+                        "linear_attention",
+                        "full_attention",
+                    ],
+                },
+            }
+
+        with patch("vmlx_engine.model_config_registry.load_config", _load_config):
+            config = registry.lookup("Qwen3.6-27B-MXFP4-CRACK")
+
+        assert config.family_name == "qwen3_5"
+        assert config.cache_type == "hybrid"
+        assert config.reasoning_parser == "qwen3"
 
     def test_qwen3_5_moe_config(self, registry):
         """qwen3_5_moe is shared between text and VL. Registry is_mllm=False."""

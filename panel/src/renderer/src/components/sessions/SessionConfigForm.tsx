@@ -174,6 +174,10 @@ interface SessionConfigFormProps {
   onReset?: () => void
   /** Detected model cache type ('kv', 'mamba', etc.) for feature gating */
   detectedCacheType?: string
+  /** Detected model family for feature gating where cache type alone is ambiguous */
+  detectedFamily?: string
+  /** True for JANGTQ/MXTQ models whose live TurboQuant KV cache cannot be mx.compile traced */
+  detectedIsTurboQuant?: boolean
   /** Detected model max context length from config.json (max_position_embeddings) */
   detectedMaxContext?: number
   /** Model type — image models show minimal settings */
@@ -184,7 +188,7 @@ interface SessionConfigFormProps {
   sessionId?: string
 }
 
-export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedMaxContext, modelType, imageMode, sessionId }: SessionConfigFormProps) {
+export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedFamily, detectedIsTurboQuant, detectedMaxContext, modelType, imageMode, sessionId }: SessionConfigFormProps) {
   const { t } = useTranslation()
   const isImage = modelType === 'image'
   const isImageEdit = isImage && (imageMode === 'edit' || config.imageMode === 'edit')
@@ -207,6 +211,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const smeltActive = !!config.smelt
   const flashMoeActive = !!config.flashMoe
   const distributedActive = !!config.distributedEnabled
+  const dsv4Active = detectedFamily === 'deepseek-v4'
+  const turboQuantActive = !!detectedIsTurboQuant
   const batchingOff = !config.continuousBatching
   const effectivelyNoBatching = batchingOff
   const prefixOff = !config.enablePrefixCache
@@ -768,12 +774,12 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <PerformanceHint text="Controls how tokens stream to you and the max response length. For chat, keep stream interval at 1. Max tokens limits how long a single reply can be." />
         {/* JIT is not available for image models (mflux uses its own GPU pipeline). */}
         <Field label="JIT Compile (mx.compile)" tooltip="Enable Metal kernel fusion via mx.compile on the model forward pass. This optimizes GPU operations for faster inference after a one-time warmup on the first request. May not work with all models — falls back gracefully if compilation fails. Requires restart.">
-          <label className={`flex items-center gap-2 ${flashMoeActive ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
+          <label className={`flex items-center gap-2 ${flashMoeActive || distributedActive || dsv4Active || turboQuantActive ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
             <input
               type="checkbox"
-              checked={!!config.enableJit && !flashMoeActive}
+              checked={!!config.enableJit && !flashMoeActive && !distributedActive && !dsv4Active && !turboQuantActive}
               onChange={e => onChange('enableJit', e.target.checked)}
-              disabled={flashMoeActive}
+              disabled={flashMoeActive || distributedActive || dsv4Active || turboQuantActive}
               className="rounded border-input"
             />
             <span className="text-xs text-muted-foreground">
@@ -781,8 +787,14 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             </span>
           </label>
         </Field>
-        {flashMoeActive && (
-          <IncompatWarning text="JIT is disabled while Flash MoE is on. Flash MoE's on-demand expert loading is incompatible with mx.compile tracing." />
+        {(flashMoeActive || distributedActive || dsv4Active || turboQuantActive) && (
+          <IncompatWarning text={dsv4Active
+            ? "JIT is disabled for DeepSeek-V4 native composite cache. DSV4 uses path-dependent SWA+CSA/HCA state that must stay on the uncompiled scheduler path."
+            : turboQuantActive
+            ? "JIT is disabled for JANGTQ/TurboQuant KV. The live cache uses custom TurboQuant objects that mx.compile cannot trace; the engine keeps this path uncompiled."
+            : flashMoeActive
+            ? "JIT is disabled while Flash MoE is on. Flash MoE's on-demand expert loading is incompatible with mx.compile tracing."
+            : "JIT is disabled while distributed mode is on. Distributed orchestration cannot safely compile the local coordinator graph."} />
         )}
 
         <SliderField
@@ -985,8 +997,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           checked={!!config.distributedEnabled}
           onChange={v => {
             onChange('distributedEnabled', v)
-            // Mutual exclusion: disable Flash MoE if enabling distributed
+            // Mutual exclusion: disable Flash MoE and JIT if enabling distributed
             if (v && flashMoeActive) onChange('flashMoe', false)
+            if (v && config.enableJit) onChange('enableJit', false)
           }}
           disabled={flashMoeActive}
         />

@@ -7,9 +7,12 @@ content.
 
 from tests.cross_matrix.run_production_family_audit import (
     ROWS,
+    audit_child_env_for_row,
     cache_exact_hit_probe,
     cache_exact_hit_required,
     capability_endpoint_contract_ok,
+    dsv4_thinking_mode_max_ok,
+    dsv4_long_context_full_output_ok,
     extract_anthropic_text_and_stop,
     extract_ollama_visible_text_and_stop,
     is_non_length_stop,
@@ -91,6 +94,14 @@ def test_zaya_rows_are_present_and_marked_cca():
     assert rows["zaya_jangtq2"].cache_profile == "zaya_cca"
     assert rows["zaya_jangtq4"].cache_profile == "zaya_cca"
     assert rows["zaya_mxfp4"].cache_profile == "zaya_cca"
+
+
+def test_ling_rows_do_not_expect_reasoning():
+    rows = {row.id: row for row in ROWS}
+
+    assert rows["ling_flash_tq"].expect_reasoning is False
+    assert rows["ling_flash_tq2_crack"].expect_reasoning is False
+    assert rows["ling_flash_mxfp4_crack"].expect_reasoning is False
 
 
 def test_zaya_static_audit_exposes_cache_subtype_when_local_bundle_exists():
@@ -179,3 +190,54 @@ def test_loop_score_catches_no_space_cjk_and_emoji_repetition():
     assert simple_loop_score("👀" * 200) >= 0.25
     assert simple_loop_score("state " * 80) >= 0.25
     assert simple_loop_score("Paris is the capital of France.") < 0.25
+
+
+def test_dsv4_long_output_requires_stop_not_length_cap():
+    complete_answer = (
+        "Visible answer with a complete useful paragraph. "
+        "It has enough substance to meet the long-row threshold, reaches an "
+        "actual stop condition, and does not rely on a length cap."
+    )
+    assert dsv4_long_context_full_output_ok(
+        code=200,
+        finish="stop",
+        full_text=f"Reasoning summary.\n{complete_answer}",
+        content=complete_answer,
+        split_ok=True,
+        loop_score=0.0,
+    )
+
+    assert not dsv4_long_context_full_output_ok(
+        code=200,
+        finish="length",
+        full_text=f"Reasoning summary.\n{complete_answer}",
+        content=complete_answer,
+        split_ok=True,
+        loop_score=0.0,
+    )
+
+
+def test_dsv4_max_mode_requires_visible_exact_answer_not_reasoning_mention():
+    assert dsv4_thinking_mode_max_ok(
+        code=200,
+        finish="stop",
+        content="7",
+        reasoning="3 plus 4 equals 7.",
+    )
+
+    assert not dsv4_thinking_mode_max_ok(
+        code=200,
+        finish="stop",
+        content="I should calculate it.",
+        reasoning="3 plus 4 equals 7, so final answer should be 7.",
+    )
+
+
+def test_dsv4_live_gate_disables_hard_repetition_block_for_proof_rows():
+    rows = {row.id: row for row in ROWS}
+    env = audit_child_env_for_row(
+        rows["dsv4_tq"],
+        {"VMLX_DSV4_HARD_REP_BLOCK": "1"},
+    )
+
+    assert env["VMLX_DSV4_HARD_REP_BLOCK"] == "0"

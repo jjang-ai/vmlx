@@ -138,14 +138,14 @@ class SchedulerConfig:
     """Configuration for the scheduler."""
 
     # Maximum number of concurrent requests in the batch
-    max_num_seqs: int = 256
+    max_num_seqs: int = 64
     # Maximum tokens to process per step (for prefill chunking)
     max_num_batched_tokens: int = 8192
     # Scheduling policy
     policy: SchedulingPolicy = SchedulingPolicy.FCFS
     # BatchGenerator settings
-    prefill_batch_size: int = 8
-    completion_batch_size: int = 32
+    prefill_batch_size: int = 1024
+    completion_batch_size: int = 1024
     prefill_step_size: int = 2048
 
     # Prefix cache settings
@@ -161,8 +161,8 @@ class SchedulerConfig:
 
     # Memory-aware cache settings (recommended for large models)
     use_memory_aware_cache: bool = True  # Use memory-based eviction
-    cache_memory_mb: Optional[int] = None  # None = auto-detect (30% of available RAM)
-    cache_memory_percent: float = 0.30  # Fraction of available RAM if auto-detecting
+    cache_memory_mb: Optional[int] = None  # None = auto-detect (20% of available RAM)
+    cache_memory_percent: float = 0.20  # Fraction of available RAM if auto-detecting
     cache_ttl_minutes: float = 0  # Cache entry TTL in minutes (0 = no expiration)
 
     # Paged cache settings (experimental - for memory efficiency)
@@ -674,7 +674,7 @@ class Scheduler:
         # User opt-in override for non-DSV4 MLA auto-disable. DeepSeek V3 /
         # Mistral 4 stash compressed latents in KV — quantizing them again
         # is double-lossy and harms quality. DSV4 is stricter: its native
-        # DeepseekV4Cache already owns the heterogeneous SWA + CSA/HSA cache
+        # DeepseekV4Cache already owns the heterogeneous SWA + CSA/HCA cache
         # compression contract (optionally PoolQuantizedV4Cache for compressed
         # pools), so generic q4/q8 prefix-cache quantization is always forced
         # off for DSV4.
@@ -688,8 +688,8 @@ class Scheduler:
             logger.info(
                 "DSV4 composite cache detected — forcing generic KV cache "
                 "quantization off (was: %s). DSV4 uses native "
-                "DeepseekV4Cache SWA + CSA/HSA state; optional "
-                "DSV4_POOL_QUANT compresses the CSA/HSA pools without "
+                "DeepseekV4Cache SWA + CSA/HCA state; optional "
+                "DSV4_POOL_QUANT compresses the CSA/HCA pools without "
                 "replacing the composite cache with QuantizedKVCache.",
                 self.config.kv_cache_quantization,
             )
@@ -735,7 +735,7 @@ class Scheduler:
         if self._uses_dsv4_cache and self.config.use_paged_cache:
             logger.info(
                 "DSV4 DeepseekV4Cache-aware paged prefix cache enabled — "
-                "terminal blocks store full SWA+CSA/HSA composite state and "
+                "terminal blocks store full SWA+CSA/HCA composite state and "
                 "block disk L2 uses deepseek_v4_v7 nested-state serialization "
                 "with N-1 prompt-token keys."
             )
@@ -988,6 +988,9 @@ class Scheduler:
         self.num_requests_processed = 0
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
+        self._cache_hit_requests = 0
+        self._cache_hit_tokens = 0
+        self._cache_hit_tokens_by_detail: Dict[str, int] = {}
         self._cache_reuse_skips = 0
         self._cache_reuse_skip_tokens = 0
         self._last_cache_reuse_skip: Optional[Dict[str, Any]] = None
@@ -1245,6 +1248,12 @@ class Scheduler:
                         n_kv = getattr(cfg, "num_key_value_heads", 0) or getattr(
                             cfg, "num_kv_heads", 0
                         )
+                        if not n_kv:
+                            tc = getattr(cfg, "text_config", None)
+                            if tc is not None:
+                                n_kv = getattr(tc, "num_key_value_heads", 0) or getattr(
+                                    tc, "num_kv_heads", 0
+                                )
                         if n_kv:
                             break
                     if n_kv:
@@ -1455,7 +1464,7 @@ class Scheduler:
                     result.append(layer_cache)
             elif self._is_dsv4_cache_object(layer_cache):
                 # DSV4's cache is not a plain KV payload. DeepseekV4Cache
-                # combines SWA local RotatingKVCache with cumulative CSA/HSA
+                # combines SWA local RotatingKVCache with cumulative CSA/HCA
                 # compressed-pool state, and PoolQuantizedV4Cache already
                 # owns the only supported DSV4-native pool compression. Do not
                 # wrap any component in generic QuantizedKVCache for prefix,
@@ -1703,7 +1712,7 @@ class Scheduler:
             fresh_cache = self.model.make_cache()
 
             # Process in chunks to avoid Metal GPU timeout on generic/hybrid
-            # prompts. DSV4 is the exception: its CSA/HSA compressor/indexer
+            # prompts. DSV4 is the exception: its CSA/HCA compressor/indexer
             # pools are path-sensitive, and earlier live probes showed chunked
             # prefill can corrupt the composite state. Re-derive DSV4 prompt
             # cache in one shot, matching DSV4BatchGenerator's production
@@ -2428,6 +2437,33 @@ class Scheduler:
             value = 0.85
         return max(0.10, min(0.95, value))
 
+    @staticmethod
+    def _prefix_hit_tail_and_cached_tokens(
+        *,
+        fetch_tokens: List[int],
+        remaining: List[int],
+        gen_prompt_suffix: List[int],
+    ) -> Tuple[List[int], int]:
+        """Return prefill tail + cached-token count for an N-1 prefix hit.
+
+        Prefix-cache payloads store KV state through ``len(fetch_tokens) - 1``.
+        On an exact key hit the cache layer may report ``remaining=[]`` because
+        its key matched the full stripped prompt, but the scheduler must still
+        re-feed the last stripped prompt token before any generation-prompt
+        suffix. Otherwise thinking/chat-template suffixes get processed without
+        the final user token in cache context.
+        """
+        key_tokens = list(fetch_tokens or [])
+        cache_remaining = list(remaining or [])
+        suffix = list(gen_prompt_suffix or [])
+        if suffix and not cache_remaining and key_tokens:
+            cache_remaining = [key_tokens[-1]]
+        if not cache_remaining and key_tokens:
+            cached_tokens = max(len(key_tokens) - 1, 0)
+        else:
+            cached_tokens = max(len(key_tokens) - len(cache_remaining), 0)
+        return cache_remaining + suffix, cached_tokens
+
     def _remaining_tokens_after_cached_prefix(
         self,
         request: Request,
@@ -2611,6 +2647,13 @@ class Scheduler:
         remaining_tokens: List[int],
         cache_contract: str,
     ) -> None:
+        budget_bytes = float(available_bytes) * float(budget_fraction)
+        if original_cached_tokens > 0 and cache_bytes > 0:
+            used_cache_bytes = float(cache_bytes) * (
+                float(used_cached_tokens) / float(original_cached_tokens)
+            )
+        else:
+            used_cache_bytes = 0.0
         self._cache_reuse_partial_downgrades += 1
         self._cache_reuse_partial_tokens += used_cached_tokens
         self._last_cache_reuse_partial = {
@@ -2618,8 +2661,11 @@ class Scheduler:
             "reason": "insufficient_memory_for_full_cache_merge",
             "cache_contract": cache_contract,
             "original_needed_mb": round((cache_bytes * multiplier) / 1048576, 1),
+            "budget_mb": round(budget_bytes / 1048576, 1),
             "available_mb": round(available_bytes / 1048576, 1),
             "original_cache_mb": round(cache_bytes / 1048576, 1),
+            "used_cache_mb": round(used_cache_bytes / 1048576, 1),
+            "used_needed_mb": round((used_cache_bytes * multiplier) / 1048576, 1),
             "multiplier": multiplier,
             "budget_fraction": budget_fraction,
             "kv_cache_bits": getattr(self, "_kv_cache_bits", 0),
@@ -2630,6 +2676,92 @@ class Scheduler:
             "prompt_tokens": len(request.prompt_token_ids or []),
             "cache_type": type(cache_to_use).__name__,
         }
+
+    def _record_cache_reuse_skip(
+        self,
+        *,
+        request: Request,
+        cache_to_use: Any,
+        cache_bytes: int,
+        available_bytes: int,
+        needed_bytes: float,
+        merge_budget_bytes: float,
+        multiplier: float,
+        budget_fraction: float,
+    ) -> None:
+        """Record an all-or-nothing cache-reuse fallback with enough context.
+
+        This path should be rare: `_shrink_paged_cache_for_memory()` gets the
+        first chance to keep a safe block-aligned prefix. When it cannot, the
+        user-facing record must say why partial reuse was unavailable and how
+        much prompt will be fully prefetched, otherwise a 10-minute TTFT looks
+        like a generic cache miss instead of a specific cache-contract failure.
+        """
+        cached_tokens = int(getattr(request, "cached_tokens", 0) or 0)
+        remaining_tokens = len(getattr(request, "remaining_tokens", []) or [])
+        prompt_tokens = len(request.prompt_token_ids or [])
+        partial_reason = getattr(
+            request,
+            "_cache_reuse_partial_unavailable_reason",
+            None,
+        )
+        cache_contract = getattr(
+            request,
+            "_cache_reuse_contract",
+            self._cache_reuse_contract(),
+        )
+        self._cache_reuse_skips += 1
+        self._cache_reuse_skip_tokens += cached_tokens
+        self._last_cache_reuse_skip = {
+            "request_id": request.request_id,
+            "reason": "insufficient_memory_for_cache_merge",
+            "action": "full_prefill",
+            "needed_mb": round(float(needed_bytes) / 1048576, 1),
+            "budget_mb": round(float(merge_budget_bytes) / 1048576, 1),
+            "available_mb": round(float(available_bytes) / 1048576, 1),
+            "cache_mb": round(float(cache_bytes) / 1048576, 1),
+            "multiplier": multiplier,
+            "budget_fraction": budget_fraction,
+            "kv_cache_bits": getattr(self, "_kv_cache_bits", 0),
+            "cached_tokens": cached_tokens,
+            "dropped_cached_tokens": cached_tokens,
+            "remaining_tokens": remaining_tokens,
+            "full_prefill_tokens": prompt_tokens,
+            "prompt_tokens": prompt_tokens,
+            "cache_type": type(cache_to_use).__name__,
+            "cache_contract": cache_contract,
+            "partial_reuse_available": False,
+            "partial_reuse_unavailable_reason": partial_reason,
+        }
+        logger.warning(
+            "Request %s: skipping cache reuse after partial-reuse attempt "
+            "failed (need %.0fMB, budget %.0fMB, available %.0fMB, cached "
+            "%s tokens, contract=%s, partial_reason=%s); full-prefilling %s "
+            "prompt tokens",
+            request.request_id,
+            float(needed_bytes) / 1048576,
+            float(merge_budget_bytes) / 1048576,
+            float(available_bytes) / 1048576,
+            cached_tokens,
+            cache_contract,
+            partial_reason or "unknown",
+            prompt_tokens,
+        )
+
+    def _record_scheduled_cache_hit(self, request: Request) -> None:
+        """Record cache-hit tokens after the request is admitted to generation."""
+        try:
+            cached_tokens = int(getattr(request, "cached_tokens", 0) or 0)
+        except (TypeError, ValueError):
+            cached_tokens = 0
+        if cached_tokens <= 0:
+            return
+        detail = str(getattr(request, "_cache_detail", "") or "unknown")
+        self._cache_hit_requests += 1
+        self._cache_hit_tokens += cached_tokens
+        self._cache_hit_tokens_by_detail[detail] = (
+            self._cache_hit_tokens_by_detail.get(detail, 0) + cached_tokens
+        )
 
     def _shrink_hybrid_ssm_paged_cache_for_memory(
         self,
@@ -2717,7 +2849,7 @@ class Scheduler:
             request.remaining_tokens = remaining_tokens
         self._record_cache_reuse_partial(
             request=request,
-            cache_to_use=cache_to_use,
+            cache_to_use=finalized,
             cache_bytes=cache_bytes,
             available_bytes=available_bytes,
             multiplier=multiplier,
@@ -2729,11 +2861,13 @@ class Scheduler:
         )
         logger.warning(
             "Request %s: hybrid SSM cache reuse memory-fit to %s/%s tokens; "
-            "prefilling %s tail tokens",
+            "prefilling %s tail tokens (budget %.0fMB, available %.0fMB)",
             request.request_id,
             used_cached_tokens,
             original_cached_tokens,
             len(remaining_tokens),
+            (available_bytes * budget_fraction) / 1048576,
+            available_bytes / 1048576,
         )
         return finalized, remaining_tokens
 
@@ -2773,11 +2907,6 @@ class Scheduler:
         cache_contract = self._cache_reuse_contract()
         request._cache_reuse_contract = cache_contract
         request._cache_reuse_partial_unavailable_reason = None
-        if cache_contract in ("deepseek_v4_composite", "zaya_cca"):
-            request._cache_reuse_partial_unavailable_reason = (
-                "native_path_dependent_cache"
-            )
-            return None, None
 
         original_cached_tokens = int(getattr(request, "cached_tokens", 0) or 0)
         if original_cached_tokens <= 0 or cache_bytes <= 0 or available_bytes <= 0:
@@ -2806,6 +2935,105 @@ class Scheduler:
                 "memory_budget_below_one_block"
             )
             return None, None
+
+        if cache_contract in ("deepseek_v4_composite", "zaya_cca"):
+            terminal_tag = (
+                "deepseek_v4"
+                if cache_contract == "deepseek_v4_composite"
+                else "zaya_cca"
+            )
+            trim_terminal = getattr(
+                self.block_aware_cache,
+                "trim_block_table_to_terminal_state",
+                None,
+            )
+            if not callable(trim_terminal):
+                request._cache_reuse_partial_unavailable_reason = (
+                    "no_terminal_path_dependent_checkpoint"
+                )
+                return None, None
+            trimmed_table = trim_terminal(
+                request.request_id,
+                target_tokens,
+                terminal_tag,
+            )
+            if trimmed_table is None or not getattr(trimmed_table, "block_ids", None):
+                request._cache_reuse_partial_unavailable_reason = (
+                    "no_terminal_path_dependent_checkpoint"
+                )
+                return None, None
+
+            used_cached_tokens = int(getattr(trimmed_table, "num_tokens", 0) or 0)
+            if used_cached_tokens <= 0 or used_cached_tokens >= original_cached_tokens:
+                request._cache_reuse_partial_unavailable_reason = (
+                    "terminal_trim_did_not_reduce_cache"
+                )
+                return None, None
+
+            try:
+                trimmed_cache = self.block_aware_cache.reconstruct_cache(trimmed_table)
+            except Exception as exc:
+                logger.warning(
+                    "Request %s: failed to reconstruct terminal memory-fit "
+                    "%s cache (target %s/%s tokens): %s",
+                    request.request_id,
+                    cache_contract,
+                    used_cached_tokens,
+                    original_cached_tokens,
+                    exc,
+                )
+                request._cache_reuse_partial_unavailable_reason = (
+                    "terminal_reconstruct_failed"
+                )
+                return None, None
+
+            if not self._validate_cache(trimmed_cache):
+                request._cache_reuse_partial_unavailable_reason = (
+                    "terminal_validate_failed"
+                )
+                return None, None
+
+            remaining_tokens = self._remaining_tokens_after_cached_prefix(
+                request,
+                used_cached_tokens,
+            )
+            if len(remaining_tokens) == 0 and request.prompt_token_ids:
+                remaining_tokens = list(request.prompt_token_ids[-1:])
+
+            request.block_table = trimmed_table
+            request.cached_tokens = used_cached_tokens
+            request.shared_prefix_blocks = len(
+                getattr(trimmed_table, "block_ids", []) or []
+            )
+            request.remaining_tokens = remaining_tokens
+            request.prompt_cache = trimmed_cache
+
+            self._record_cache_reuse_partial(
+                request=request,
+                cache_to_use=trimmed_cache,
+                cache_bytes=cache_bytes,
+                available_bytes=available_bytes,
+                multiplier=multiplier,
+                budget_fraction=budget_fraction,
+                original_cached_tokens=original_cached_tokens,
+                used_cached_tokens=used_cached_tokens,
+                remaining_tokens=remaining_tokens,
+                cache_contract=cache_contract,
+            )
+            logger.warning(
+                "Request %s: full %s cache reuse needs %.0fMB but only %.0fMB "
+                "is budgeted (%.0fMB available); using terminal-safe partial "
+                "prefix cache %s/%s tokens and prefilling %s tail tokens",
+                request.request_id,
+                cache_contract,
+                (cache_bytes * multiplier) / 1048576,
+                (available_bytes * budget_fraction) / 1048576,
+                available_bytes / 1048576,
+                used_cached_tokens,
+                original_cached_tokens,
+                len(remaining_tokens),
+            )
+            return trimmed_cache, remaining_tokens
 
         if cache_contract == "hybrid_ssm":
             return self._shrink_hybrid_ssm_paged_cache_for_memory(
@@ -2875,7 +3103,7 @@ class Scheduler:
 
         self._record_cache_reuse_partial(
             request=request,
-            cache_to_use=cache_to_use,
+            cache_to_use=trimmed_cache,
             cache_bytes=cache_bytes,
             available_bytes=available_bytes,
             multiplier=multiplier,
@@ -2887,10 +3115,12 @@ class Scheduler:
         )
         logger.warning(
             "Request %s: full cache reuse needs %.0fMB but only %.0fMB is "
-            "available; using partial prefix cache %s/%s tokens and prefilling "
-            "%s tail tokens instead of falling back to a full prefill",
+            "budgeted (%.0fMB available); using partial prefix cache %s/%s "
+            "tokens and prefilling %s tail tokens instead of falling back to "
+            "a full prefill",
             request.request_id,
             (cache_bytes * multiplier) / 1048576,
+            (available_bytes * budget_fraction) / 1048576,
             available_bytes / 1048576,
             used_cached_tokens,
             original_cached_tokens,
@@ -3005,7 +3235,7 @@ class Scheduler:
                     to_trim = max(0, current_len - target_len)
 
                     # SAFETY: DeepseekV4Cache is a composite of THREE
-                    # attention components (SWA + CSA + HSA), each with
+                    # attention components (SWA + CSA + HCA), each with
                     # its own rewind constraint. Trimming a post-
                     # generation live cache back to the prompt boundary
                     # is unsafe in all three:
@@ -3035,7 +3265,7 @@ class Scheduler:
                     #     computed from a window that may have included
                     #     output tokens — semantically wrong.
                     #
-                    # (3) HSA indexer pool — same cumulative behavior
+                    # (3) HCA/indexer pool — same cumulative behavior
                     #     and same trim approximation as CSA. Wrong
                     #     indexer state mis-routes attention sparsely
                     #     across output rather than prompt.
@@ -3059,11 +3289,11 @@ class Scheduler:
                             f"current_len={current_len}, "
                             f"target_len={target_len}, "
                             f"to_trim={to_trim} tokens. "
-                            f"DeepseekV4Cache (SWA+CSA+HSA composite) "
+                            f"DeepseekV4Cache (SWA+CSA+HCA composite) "
                             f"cannot be safely rewound from post-"
                             f"generation state — SWA RotatingKVCache "
                             f"wraps at offset>{sliding_window} and "
-                            f"CSA/HSA pool buffers are cumulative "
+                            f"CSA/HCA pool buffers are cumulative "
                             f"across the entire window. Returning None "
                             f"forces clean full prefill on next turn. "
                             f"Override: VMLX_DSV4_TRUST_TRIMMED_CACHE=1 "
@@ -3542,7 +3772,7 @@ class Scheduler:
                     "DeepSeek V4 Flash JANGTQ long-prefill guard: prompt has "
                     f"{len(request.prompt_token_ids)} tokens, max safe prefill is "
                     f"{_dsv4_max_prefill}. The Python DSV4 path uses chunked "
-                    "prefill for SWA+CSA/HSA cache state, but very large prompts "
+                    "prefill for SWA+CSA/HCA cache state, but very large prompts "
                     "still scale with accumulated compressor/indexer pool work. "
                     "Set DSV4_MAX_PREFILL_TOKENS=0 to disable this production "
                     "guard after validating the workload on this machine."
@@ -3575,10 +3805,36 @@ class Scheduler:
 
         if self.block_aware_cache is not None and not _bypass:
             # Use paged cache
+            request._paged_disk_hit = False
+            try:
+                _paged_disk_hits_before = int(
+                    getattr(
+                        getattr(self.block_aware_cache.paged_cache, "stats", None),
+                        "disk_hits",
+                        0,
+                    )
+                    or 0
+                )
+            except Exception:
+                _paged_disk_hits_before = 0
             block_table, remaining = self.block_aware_cache.fetch_cache(
                 request.request_id,
                 _fetch_tokens,
             )
+            try:
+                _paged_disk_hits_after = int(
+                    getattr(
+                        getattr(self.block_aware_cache.paged_cache, "stats", None),
+                        "disk_hits",
+                        0,
+                    )
+                    or 0
+                )
+                request._paged_disk_hit = (
+                    _paged_disk_hits_after > _paged_disk_hits_before
+                )
+            except Exception:
+                request._paged_disk_hit = False
             # Re-append gpl suffix to remaining so model sees template trailer.
             if _gpl_suffix_tokens:
                 remaining = list(remaining or []) + list(_gpl_suffix_tokens)
@@ -3608,7 +3864,11 @@ class Scheduler:
                 elif self._uses_zaya_cache:
                     request._cache_detail = "paged+zaya_cca"
                 else:
-                    request._cache_detail = "paged"
+                    request._cache_detail = (
+                        "paged+disk"
+                        if getattr(request, "_paged_disk_hit", False)
+                        else "paged"
+                    )
                 logger.info(
                     f"Request {request.request_id}: paged cache hit, "
                     f"{request.cached_tokens} tokens in "
@@ -3625,8 +3885,11 @@ class Scheduler:
         elif self.memory_aware_cache is not None and not _bypass:
             # Use memory-aware prefix cache (gpl-stripped fetch; suffix re-attached)
             cache, remaining = self.memory_aware_cache.fetch(_fetch_tokens)
-            if _gpl_suffix_tokens:
-                remaining = list(remaining or []) + list(_gpl_suffix_tokens)
+            remaining, cached_tokens = self._prefix_hit_tail_and_cached_tokens(
+                fetch_tokens=_fetch_tokens,
+                remaining=remaining or [],
+                gen_prompt_suffix=_gpl_suffix_tokens,
+            )
             if cache:
                 # Dequantize for BatchGenerator compatibility
                 if getattr(self, "_kv_cache_bits", 0):
@@ -3643,9 +3906,7 @@ class Scheduler:
                     )
                 else:
                     request.prompt_cache = cache
-                    request.cached_tokens = len(request.prompt_token_ids) - len(
-                        remaining
-                    )
+                    request.cached_tokens = cached_tokens
                     request.remaining_tokens = remaining
                     request._cache_detail = "memory"
                     logger.info(
@@ -3662,8 +3923,11 @@ class Scheduler:
         elif self.prefix_cache is not None and not _bypass:
             # Use legacy prefix cache (gpl-stripped fetch; suffix re-attached)
             cache, remaining = self.prefix_cache.fetch_cache(_fetch_tokens)
-            if _gpl_suffix_tokens:
-                remaining = list(remaining or []) + list(_gpl_suffix_tokens)
+            remaining, cached_tokens = self._prefix_hit_tail_and_cached_tokens(
+                fetch_tokens=_fetch_tokens,
+                remaining=remaining or [],
+                gen_prompt_suffix=_gpl_suffix_tokens,
+            )
             if cache:
                 # Dequantize for BatchGenerator compatibility
                 if getattr(self, "_kv_cache_bits", 0):
@@ -3680,9 +3944,7 @@ class Scheduler:
                     )
                 else:
                     request.prompt_cache = cache
-                    request.cached_tokens = len(request.prompt_token_ids) - len(
-                        remaining
-                    )
+                    request.cached_tokens = cached_tokens
                     request.remaining_tokens = remaining
                     request._cache_detail = "prefix"
                     logger.debug(
@@ -3711,6 +3973,9 @@ class Scheduler:
             _gpl = getattr(request, "_gen_prompt_len", 0) or 0
             if _gpl > 0 and _gpl < len(_disk_fetch_tokens):
                 _disk_fetch_tokens = _disk_fetch_tokens[:-_gpl]
+                _disk_suffix_tokens = list(request.prompt_token_ids[-_gpl:])
+            else:
+                _disk_suffix_tokens = []
             disk_cache = self.disk_cache.fetch(_disk_fetch_tokens)
             if disk_cache is not None:
                 # Disk cache stores full-precision N-1 tokens (last prompt token re-fed on hit)
@@ -3729,8 +3994,13 @@ class Scheduler:
                     )
                 else:
                     request.prompt_cache = disk_cache
-                    request.cached_tokens = len(request.prompt_token_ids) - 1
-                    request.remaining_tokens = request.prompt_token_ids[-1:]
+                    remaining, cached_tokens = self._prefix_hit_tail_and_cached_tokens(
+                        fetch_tokens=_disk_fetch_tokens,
+                        remaining=[],
+                        gen_prompt_suffix=_disk_suffix_tokens,
+                    )
+                    request.cached_tokens = cached_tokens
+                    request.remaining_tokens = remaining
                     # Annotate cache_detail: "disk+tq" for TQ-native 26x-compressed
                     # files, "disk" for standard float16 format.
                     _tq_disk = (
@@ -3756,30 +4026,67 @@ class Scheduler:
                         try:
                             extracted = self._extract_cache_states(l1_data)
                             if extracted:
-                                self.block_aware_cache.store_cache(
+                                # Prompt-level disk L2 stores the cache under the
+                                # full prompt key but the cache payload itself is
+                                # prompt_len - 1, because the last prompt token is
+                                # re-fed to obtain first-token logits. Mirror that
+                                # N-1 key when backfilling the block cache. Then
+                                # route the current request through the paged path
+                                # so memory pressure can shrink the hit instead of
+                                # discarding it and full-prefilling a huge prompt.
+                                _block_store_tokens = (
+                                    _disk_fetch_tokens[:-1]
+                                    if len(_disk_fetch_tokens) > 1
+                                    else list(_disk_fetch_tokens)
+                                )
+                                _block_table = self.block_aware_cache.store_cache(
                                     request.request_id,
-                                    list(request.prompt_token_ids),
+                                    _block_store_tokens,
                                     extracted,
                                     cache_type=_l1_type,
                                 )
-                                # Clean up request table entry. Release request refs so
-                                # blocks become "cached but free" (still hash-resident,
-                                # now reclaimable via LRU).
-                                _entry = self.block_aware_cache._request_tables.pop(
-                                    request.request_id, None
-                                )
-                                self.block_aware_cache.paged_cache.release_request_refs(
-                                    _entry.block_table if _entry else None
-                                )
-                                self.block_aware_cache.paged_cache.detach_request(
-                                    request.request_id
-                                )
+                                if _block_table is not None:
+                                    request.prompt_cache = None
+                                    request.block_table = _block_table
+                                    request.cached_tokens = int(
+                                        getattr(_block_table, "num_tokens", 0) or 0
+                                    )
+                                    request.shared_prefix_blocks = len(
+                                        getattr(_block_table, "block_ids", []) or []
+                                    )
+                                    request.remaining_tokens = (
+                                        self._remaining_tokens_after_cached_prefix(
+                                            request,
+                                            request.cached_tokens,
+                                        )
+                                    )
+                                    request._paged_block_table_needs_worker_reconstruct = True
+                                    request._cache_detail = (
+                                        "paged+disk+tq" if _tq_disk else "paged+disk"
+                                    )
+                                else:
+                                    # Clean up request table entry. Release request
+                                    # refs so blocks become cached-but-free.
+                                    _entry = self.block_aware_cache._request_tables.pop(
+                                        request.request_id, None
+                                    )
+                                    self.block_aware_cache.paged_cache.release_request_refs(
+                                        _entry.block_table if _entry else None
+                                    )
+                                    self.block_aware_cache.paged_cache.detach_request(
+                                        request.request_id
+                                    )
                         except Exception:
                             pass
                     elif self.memory_aware_cache is not None:
                         try:
+                            _l1_store_tokens = (
+                                _disk_fetch_tokens[:-1]
+                                if len(_disk_fetch_tokens) > 1
+                                else list(_disk_fetch_tokens)
+                            )
                             self.memory_aware_cache.store(
-                                request.prompt_token_ids,
+                                _l1_store_tokens,
                                 l1_data,
                                 cache_type=_l1_type,
                             )
@@ -3787,8 +4094,13 @@ class Scheduler:
                             pass
                     elif self.prefix_cache is not None:
                         try:
+                            _l1_store_tokens = (
+                                _disk_fetch_tokens[:-1]
+                                if len(_disk_fetch_tokens) > 1
+                                else list(_disk_fetch_tokens)
+                            )
                             self.prefix_cache.store_cache(
-                                list(request.prompt_token_ids),
+                                _l1_store_tokens,
                                 l1_data,
                                 cache_type=_l1_type,
                             )
@@ -4116,7 +4428,12 @@ class Scheduler:
                 full_cache[layer_i] = ssm_states[ssm_idx]
                 ssm_idx += 1
         request.prompt_cache = full_cache
-        request._cache_detail = f"paged+ssm({ssm_idx})"
+        request._cache_detail = (
+            "paged+ssm+disk"
+            if getattr(request, "_paged_disk_hit", False)
+            else "paged+ssm"
+        )
+        request._cache_detail_ssm_layers = ssm_idx
         logger.info(
             f"Request {request.request_id}: hybrid paged HIT — "
             f"{getattr(request.block_table, 'num_tokens', fetch_num)} tokens "
@@ -4336,44 +4653,15 @@ class Scheduler:
                                 if len(tokens_to_process) == 0:
                                     tokens_to_process = request.prompt_token_ids[-1:]
                             else:
-                                cached_tokens = int(getattr(request, "cached_tokens", 0) or 0)
-                                remaining_tokens = len(
-                                    getattr(request, "remaining_tokens", []) or []
-                                )
-                                self._cache_reuse_skips += 1
-                                self._cache_reuse_skip_tokens += cached_tokens
-                                self._last_cache_reuse_skip = {
-                                    "request_id": request.request_id,
-                                    "reason": "insufficient_memory_for_cache_merge",
-                                    "needed_mb": round(needed / 1048576, 1),
-                                    "budget_mb": round(merge_budget / 1048576, 1),
-                                    "available_mb": round(avail / 1048576, 1),
-                                    "cache_mb": round(cache_bytes / 1048576, 1),
-                                    "multiplier": multiplier,
-                                    "budget_fraction": budget_fraction,
-                                    "kv_cache_bits": kv_bits,
-                                    "cached_tokens": cached_tokens,
-                                    "remaining_tokens": remaining_tokens,
-                                    "prompt_tokens": len(request.prompt_token_ids or []),
-                                    "cache_type": type(cache_to_use).__name__,
-                                    "cache_contract": getattr(
-                                        request,
-                                        "_cache_reuse_contract",
-                                        self._cache_reuse_contract(),
-                                    ),
-                                    "partial_reuse_available": False,
-                                    "partial_reuse_unavailable_reason": getattr(
-                                        request,
-                                        "_cache_reuse_partial_unavailable_reason",
-                                        None,
-                                    ),
-                                }
-                                logger.warning(
-                                    f"Request {request.request_id}: skipping cache reuse "
-                                    f"(need {needed / 1048576:.0f}MB, "
-                                    f"budget {merge_budget / 1048576:.0f}MB, "
-                                    f"available {avail / 1048576:.0f}MB, "
-                                    f"cached {cached_tokens} tokens)"
+                                self._record_cache_reuse_skip(
+                                    request=request,
+                                    cache_to_use=cache_to_use,
+                                    cache_bytes=cache_bytes,
+                                    available_bytes=avail,
+                                    needed_bytes=needed,
+                                    merge_budget_bytes=merge_budget,
+                                    multiplier=multiplier,
+                                    budget_fraction=budget_fraction,
                                 )
                                 self._release_unusable_paged_hit(request)
                                 cache_to_use = None
@@ -4479,6 +4767,7 @@ class Scheduler:
                     request._added_stop_tokens = new_tokens
 
                 self.total_prompt_tokens += request.num_prompt_tokens
+                self._record_scheduled_cache_hit(request)
                 cache_info = (
                     f", {request.cached_tokens} cached"
                     if request.cached_tokens > 0
@@ -4739,7 +5028,7 @@ class Scheduler:
                         # decode mutates the live cache. That snapshot is
                         # the *correct* prompt-boundary state for prefix
                         # cache + L2 disk store, free of SWA wrap and
-                        # CSA/HSA pool drift. When present, prefer it
+                        # CSA/HCA pool drift. When present, prefer it
                         # over the live `prompt_cache` and skip the
                         # truncation guard entirely.
                         snapshot_cache = getattr(
@@ -4787,7 +5076,7 @@ class Scheduler:
                                         # then processed the remaining prompt
                                         # tail plus generated tokens, so
                                         # trimming it would rewind SWA without
-                                        # proving CSA/HSA pool correctness.
+                                        # proving CSA/HCA pool correctness.
                                         # Re-derive the exact N-1 cache-key
                                         # state instead.
                                         dsv4_prompt_tokens = list(
@@ -5043,7 +5332,7 @@ class Scheduler:
                 and request.status == RequestStatus.FINISHED_LENGTH_CAPPED
                 and not getattr(request, "_extracted_cache_from_prompt_snapshot", False)
             ):
-                # DSV4 DeepseekV4Cache includes CSA/HSA pool state in addition
+                # DSV4 DeepseekV4Cache includes CSA/HCA pool state in addition
                 # to local SWA KV. After a length-capped decode, the live cache
                 # has advanced through generated tokens. Trimming positional KV
                 # back to the prompt boundary is not enough to prove the
@@ -5052,7 +5341,7 @@ class Scheduler:
                 # immediate stop on cache hit. Do not let capped generations
                 # donate prefix blocks. Clean prompt-boundary snapshots captured
                 # before decode are exempt because they are already at N-1 and do
-                # not include generated-token SWA/CSA/HSA drift.
+                # not include generated-token SWA/CSA/HCA drift.
                 _skip_cache_store = True
             # No DSV4-specific short-prompt skip. Other families store paged
             # cache at any prompt length and rely on the standard LRU
@@ -5520,13 +5809,18 @@ class Scheduler:
                                     f"to prompt length (hybrid model), skipping store"
                                 )
                             else:
+                                cache_key_tokens = (
+                                    prompt_tokens[:-1]
+                                    if prompt_len > 1
+                                    else list(prompt_tokens)
+                                )
                                 # Quantize for storage efficiency
                                 if getattr(self, "_kv_cache_bits", 0):
                                     cache_to_store = self._quantize_cache_for_storage(
                                         cache_to_store
                                     )
                                 stored = self.memory_aware_cache.store(
-                                    prompt_tokens,
+                                    cache_key_tokens,
                                     cache_to_store,
                                     cache_type=self._pick_cache_type_for_request(
                                         request
@@ -5535,7 +5829,8 @@ class Scheduler:
                                 if stored:
                                     logger.info(
                                         f"Stored cache for request {request_id} "
-                                        f"({prompt_len} prompt tokens, "
+                                        f"({len(cache_key_tokens)} cache-key tokens "
+                                        f"from {prompt_len} prompt tokens, "
                                         f"KV truncated to {prompt_len - 1})"
                                     )
                                 else:
@@ -5573,6 +5868,11 @@ class Scheduler:
                                 request._extracted_cache, prompt_len
                             )
                             if cache_to_store is not None:
+                                cache_key_tokens = (
+                                    prompt_tokens[:-1]
+                                    if prompt_len > 1
+                                    else list(prompt_tokens)
+                                )
                                 # Quantize for storage efficiency
                                 if getattr(self, "_kv_cache_bits", 0):
                                     cache_to_store = self._quantize_cache_for_storage(
@@ -5587,12 +5887,13 @@ class Scheduler:
                                 # absent — zero regression for existing callers.
                                 self._store_cache_with_segments(
                                     request,
-                                    prompt_tokens,
+                                    cache_key_tokens,
                                     cache_to_store,
                                 )
                                 logger.debug(
                                     f"Stored cache for request {request_id} "
-                                    f"({prompt_len} prompt tokens, "
+                                    f"({len(cache_key_tokens)} cache-key tokens "
+                                    f"from {prompt_len} prompt tokens, "
                                     f"truncated from {prompt_len + len(request.output_token_ids)})"
                                 )
                                 # NOTE: Disk L2 store is handled by the paged
@@ -6527,6 +6828,9 @@ class Scheduler:
             "total_prompt_tokens": self.total_prompt_tokens,
             "total_completion_tokens": self.total_completion_tokens,
             "ewma_ttft_seconds": round(self._ewma_ttft, 3),
+            "cache_hit_requests": self._cache_hit_requests,
+            "cache_hit_tokens": self._cache_hit_tokens,
+            "cache_hit_tokens_by_detail": dict(self._cache_hit_tokens_by_detail),
             "cache_reuse_skips": self._cache_reuse_skips,
             "cache_reuse_skip_tokens": self._cache_reuse_skip_tokens,
             "last_cache_reuse_skip": self._last_cache_reuse_skip,

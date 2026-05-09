@@ -29,6 +29,8 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
   const [restarting, setRestarting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [detectedCacheType, setDetectedCacheType] = useState<string>('kv')
+  const [detectedFamily, setDetectedFamily] = useState<string | undefined>()
+  const [detectedIsTurboQuant, setDetectedIsTurboQuant] = useState<boolean>(false)
   const [detectedMaxContext, setDetectedMaxContext] = useState<number | undefined>()
   const restartingRef = useRef(false)
   restartingRef.current = restarting
@@ -48,6 +50,9 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
       window.api.models.detectConfig(session.modelPath)
         .then((det: any) => {
           if (det?.cacheType) setDetectedCacheType(det.cacheType)
+          if (det?.family && det.family !== 'unknown') setDetectedFamily(det.family)
+          else setDetectedFamily(undefined)
+          setDetectedIsTurboQuant(!!det?.isTurboQuant)
           if (det?.maxContextLength) setDetectedMaxContext(det.maxContextLength)
         })
         .catch((err) => console.error('Failed to detect model config:', err))
@@ -162,8 +167,16 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
         if (detected && detected.family !== 'unknown') {
           base.enableAutoToolChoice = detected.enableAutoToolChoice
           base.usePagedCache = detected.usePagedCache
+          setDetectedFamily(detected.family)
+          setDetectedIsTurboQuant(!!detected.isTurboQuant)
+        } else {
+          setDetectedFamily(undefined)
+          setDetectedIsTurboQuant(false)
         }
-      } catch (_) { }
+      } catch (_) {
+        setDetectedFamily(undefined)
+        setDetectedIsTurboQuant(false)
+      }
     }
     setConfig(base)
     setDirty(true)
@@ -217,7 +230,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
             />
           </div>
         ) : (
-          <SessionConfigForm config={config} onChange={handleChange} detectedCacheType={detectedCacheType} detectedMaxContext={detectedMaxContext} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} imageMode={(() => { try { return JSON.parse(session.config || '{}').imageMode } catch { return undefined } })()} sessionId={session.id} />
+          <SessionConfigForm config={config} onChange={handleChange} detectedCacheType={detectedCacheType} detectedFamily={detectedFamily} detectedIsTurboQuant={detectedIsTurboQuant} detectedMaxContext={detectedMaxContext} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} imageMode={(() => { try { return JSON.parse(session.config || '{}').imageMode } catch { return undefined } })()} sessionId={session.id} />
         )}
       </div>
 

@@ -20,7 +20,7 @@ Specifically:
    ``generic_turboquant_kv.enabled is False`` (per
    ``~/wiki/research/topics/path-dependent-cache-restore.md`` the composite
    cache IS the cache-size strategy; layering generic TQ-KV on top would
-   double-quantize the compressed CSA/HSA latents).
+   double-quantize the compressed CSA/HCA latents).
 """
 
 from __future__ import annotations

@@ -301,11 +301,14 @@ def test_packaged_bundled_hash_gate_covers_runtime_files_changed_for_release():
         "api/anthropic_adapter.py",
         "api/ollama_adapter.py",
         "block_disk_store.py",
+        "cli.py",
         "disk_cache.py",
         "engine/batched.py",
         "loaders/load_jangtq_dsv4.py",
         "mllm_batch_generator.py",
         "mllm_scheduler.py",
+        "model_configs.py",
+        "model_config_registry.py",
         "omni_multimodal.py",
         "paged_cache.py",
         "prefix_cache.py",
@@ -321,6 +324,8 @@ def test_packaged_bundled_hash_gate_covers_critical_jang_tools_files():
     gate_module = _load_gate_module()
 
     expected = {
+        "convert.py",
+        "loader.py",
         "load_jangtq.py",
         "load_jangtq_kimi_vlm.py",
         "kimi_prune/generate_vl.py",
@@ -375,6 +380,46 @@ def test_verify_bundled_python_blocks_removed_dsv4_force_flags():
     assert "VMLX_DSV4_ALLOW_CHAT" in verifier
     assert "VMLX_DSV4_ALLOW_THINKING" in verifier
     assert "RELEASE BLOCKED — bundled-python contains removed DSV4 env-var force-flips" in verifier
+
+
+def test_verify_bundled_python_hash_gate_covers_release_runtime_files():
+    verifier = Path("panel/scripts/verify-bundled-python.sh").read_text()
+
+    expected_engine_files = {
+        "server.py",
+        "api/anthropic_adapter.py",
+        "api/ollama_adapter.py",
+        "block_disk_store.py",
+        "cli.py",
+        "disk_cache.py",
+        "engine/batched.py",
+        "loaders/load_jangtq_dsv4.py",
+        "mllm_batch_generator.py",
+        "mllm_scheduler.py",
+        "model_configs.py",
+        "model_config_registry.py",
+        "omni_multimodal.py",
+        "paged_cache.py",
+        "prefix_cache.py",
+        "scheduler.py",
+        "utils/ssm_companion_cache.py",
+        "utils/ssm_companion_disk_store.py",
+    }
+    expected_jang_tools_files = {
+        "convert.py",
+        "loader.py",
+        "load_jangtq.py",
+        "load_jangtq_kimi_vlm.py",
+        "kimi_prune/generate_vl.py",
+        "kimi_prune/runtime_patch.py",
+        "turboquant/fused_gate_up_kernel.py",
+        "turboquant/gather_tq_kernel.py",
+        "turboquant/hadamard_kernel.py",
+        "turboquant/tq_kernel.py",
+    }
+
+    for rel in expected_engine_files | expected_jang_tools_files:
+        assert f'"{rel}"' in verifier
 
 
 def test_nemotron_omni_media_dependency_timm_is_packaged_and_verified():

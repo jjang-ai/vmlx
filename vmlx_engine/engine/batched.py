@@ -163,6 +163,7 @@ class BatchedEngine(BaseEngine):
         block disk store, and KV cache quantization settings.
         """
         from ..mllm_scheduler import MLLMScheduler, MLLMSchedulerConfig
+        from ..scheduler import SchedulerConfig
         from ..models.mllm import MLXMultimodalLM
 
         # Load the MLLM model on the SAME thread that will later run
@@ -189,22 +190,33 @@ class BatchedEngine(BaseEngine):
         self._processor = self._mllm_instance.processor
 
         # Create MLLM scheduler config with batch generator support
+        default_scheduler = SchedulerConfig()
         if self._scheduler_config and hasattr(self._scheduler_config, "max_num_seqs"):
             max_num_seqs = self._scheduler_config.max_num_seqs
         else:
-            max_num_seqs = 16  # Default for continuous batching
+            max_num_seqs = default_scheduler.max_num_seqs
 
         # Get batch sizes from config if available
-        prefill_batch_size = getattr(self._scheduler_config, "prefill_batch_size", 4)
+        prefill_batch_size = getattr(
+            self._scheduler_config,
+            "prefill_batch_size",
+            default_scheduler.prefill_batch_size,
+        )
         completion_batch_size = getattr(
-            self._scheduler_config, "completion_batch_size", 16
+            self._scheduler_config,
+            "completion_batch_size",
+            default_scheduler.completion_batch_size,
         )
 
         mllm_config = MLLMSchedulerConfig(
             max_num_seqs=max_num_seqs,
             prefill_batch_size=prefill_batch_size,
             completion_batch_size=completion_batch_size,
-            prefill_step_size=getattr(self._scheduler_config, "prefill_step_size", 1024),
+            prefill_step_size=getattr(
+                self._scheduler_config,
+                "prefill_step_size",
+                default_scheduler.prefill_step_size,
+            ),
             enable_vision_cache=True,
             vision_cache_size=16,
             # Propagate cache settings from user's SchedulerConfig
@@ -943,6 +955,7 @@ class BatchedEngine(BaseEngine):
         # leak downstream and attaches it to the internal Request object so
         # the scheduler can gate EVERY lookup and store site on it.
         bypass_prefix_cache = bool(kwargs.pop("_bypass_prefix_cache", False))
+        request_id = kwargs.pop("request_id", None)
 
         if self._is_mllm and self._mllm_scheduler:
             # Use MLLM scheduler for all requests (text-only and multimodal)
@@ -963,6 +976,7 @@ class BatchedEngine(BaseEngine):
                 num_messages=kwargs.get("num_messages", 1),
                 gen_prompt_len=kwargs.get("gen_prompt_len", 0),
                 bypass_prefix_cache=bypass_prefix_cache,
+                request_id=request_id,
             )
 
             # Preserve raw (pre-clean) output so reasoning parsers on the
@@ -977,6 +991,7 @@ class BatchedEngine(BaseEngine):
                 prompt_tokens=output.prompt_tokens,
                 completion_tokens=output.completion_tokens,
                 cached_tokens=getattr(output, "cached_tokens", 0),
+                cache_detail=getattr(output, "cache_detail", "") or "",
                 finish_reason=output.finish_reason,
             )
 
@@ -1000,6 +1015,7 @@ class BatchedEngine(BaseEngine):
         output = await self._engine.generate(
             prompt=prompt,
             sampling_params=sampling_params,
+            request_id=request_id,
             gen_prompt_len=gen_prompt_len,
             num_messages=kwargs.get("num_messages", 1),
             segment_boundaries=segment_boundaries,
@@ -1017,6 +1033,7 @@ class BatchedEngine(BaseEngine):
             prompt_tokens=output.prompt_tokens,
             completion_tokens=output.completion_tokens,
             cached_tokens=getattr(output, "cached_tokens", 0),
+            cache_detail=getattr(output, "cache_detail", "") or "",
             finish_reason=output.finish_reason,
         )
 
@@ -1086,6 +1103,7 @@ class BatchedEngine(BaseEngine):
                     prompt_tokens=output.prompt_tokens,
                     completion_tokens=output.completion_tokens,
                     cached_tokens=getattr(output, "cached_tokens", 0),
+                    cache_detail=getattr(output, "cache_detail", "") or "",
                     finished=output.finished,
                     finish_reason=output.finish_reason,
                 )
@@ -1128,6 +1146,7 @@ class BatchedEngine(BaseEngine):
                 prompt_tokens=output.prompt_tokens,
                 completion_tokens=output.completion_tokens,
                 cached_tokens=getattr(output, "cached_tokens", 0),
+                cache_detail=getattr(output, "cache_detail", "") or "",
                 finished=output.finished,
                 finish_reason=output.finish_reason,
             )

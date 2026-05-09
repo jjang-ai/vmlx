@@ -3797,5 +3797,16 @@ describe("Phase 6: Cache API Data Flow", () => {
       // fetchStats() has: if (sessionStatus !== 'running') return
       expect(source).toContain("sessionStatus !== 'running'");
     });
+
+    it("CachePanel does not render disabled KV quantization as 0-bit active quant", () => {
+      const fs = require("fs");
+      const source = fs.readFileSync(
+        "src/renderer/src/components/sessions/CachePanel.tsx",
+        "utf-8",
+      );
+
+      expect(source).toContain("kvQuant?.enabled");
+      expect(source).toContain("disabled");
+    });
   });
 });

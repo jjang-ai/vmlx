@@ -20,23 +20,43 @@ interface HealthData {
     num_waiting?: number
     num_running?: number
     ewma_ttft_seconds?: number
+    cache_hit_requests?: number
+    cache_hit_tokens?: number
+    cache_hit_tokens_by_detail?: Record<string, number>
+    hybrid_kv_without_ssm_hits?: number
+    hybrid_kv_without_ssm_tokens?: number
+    last_hybrid_kv_without_ssm?: {
+      reason?: string
+      cached_tokens?: number
+      checkpoint_tokens?: number
+    } | null
     cache_reuse_skips?: number
     cache_reuse_skip_tokens?: number
     last_cache_reuse_skip?: {
       reason?: string
+      action?: string
       needed_mb?: number
       budget_mb?: number
       available_mb?: number
       cache_mb?: number
       budget_fraction?: number
       cached_tokens?: number
+      dropped_cached_tokens?: number
+      full_prefill_tokens?: number
+      prompt_tokens?: number
+      cache_contract?: string
+      partial_reuse_unavailable_reason?: string
     } | null
     cache_reuse_partial_downgrades?: number
     cache_reuse_partial_tokens?: number
     last_cache_reuse_partial?: {
       reason?: string
       original_needed_mb?: number
+      budget_mb?: number
       available_mb?: number
+      original_cache_mb?: number
+      used_cache_mb?: number
+      used_needed_mb?: number
       budget_fraction?: number
       original_cached_tokens?: number
       used_cached_tokens?: number
@@ -118,12 +138,18 @@ interface HealthData {
     mxtq_bits?: number
     mxtq_bits_by_role?: Record<string, number>
     routed_expert_bits?: number
+    routed_expert_bits_by_projection?: Record<string, number>
+    routed_expert_bits_label?: string
     target_bits?: number
     actual_bits?: number
     config_bits?: number
+    passthrough_bit_widths_used?: number[]
+    passthrough_tensor_count?: number
+    compat_warnings?: string[]
     sidecar?: {
       jang_config?: boolean
       jangtq_runtime?: boolean
+      prestacked_bundle?: boolean
     }
   }
   acceleration?: {
@@ -209,11 +235,33 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
                 label="Weight Codec"
                 value={
                   health.quantization.codec === 'turboquant_codebook'
-                    ? `JANGTQ ${health.quantization.routed_expert_bits ?? health.quantization.mxtq_bits ?? health.quantization.actual_bits ?? health.quantization.target_bits ?? '-'}-bit`
+                    ? health.quantization.routed_expert_bits_label
+                      ? `JANGTQ ${health.quantization.routed_expert_bits_label}`
+                      : `JANGTQ ${health.quantization.routed_expert_bits ?? health.quantization.mxtq_bits ?? health.quantization.actual_bits ?? health.quantization.target_bits ?? '-'}-bit`
                     : health.quantization.codec
                 }
               />
             )}
+            {health.quantization?.codec === 'turboquant_codebook' && (
+              <InfoCard
+                label="JANGTQ Layout"
+                value={
+                  health.quantization.sidecar?.prestacked_bundle
+                    ? 'pre-stacked bundle'
+                    : health.quantization.sidecar?.jangtq_runtime
+                      ? 'runtime sidecar'
+                      : health.quantization.sidecar?.jang_config
+                        ? 'config only'
+                        : 'unknown'
+                }
+              />
+            )}
+            {health.quantization?.passthrough_tensor_count ? (
+              <InfoCard
+                label="F16 Passthrough"
+                value={`${health.quantization.passthrough_tensor_count} tensors (${(health.quantization.passthrough_bit_widths_used || []).join('/') || 16}-bit)`}
+              />
+            ) : null}
             {health.acceleration?.kernel_type && (
               <InfoCard
                 label="Metal NA"
@@ -263,6 +311,13 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
               />
             )}
           </div>
+          {health.quantization?.compat_warnings?.length ? (
+            <div className="mt-2 text-xs bg-warning/10 border border-warning/30 text-warning px-3 py-2 rounded space-y-1">
+              {health.quantization.compat_warnings.map((warning, index) => (
+                <div key={index}>{warning}</div>
+              ))}
+            </div>
+          ) : null}
         </div>
       )}
 
@@ -279,6 +334,30 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
               <InfoCard
                 label="TTFT EWMA"
                 value={`${Number(health.scheduler.ewma_ttft_seconds || 0).toFixed(3)} s`}
+              />
+            )}
+            {health.scheduler.cache_hit_tokens != null && (
+              <InfoCard
+                label="Cache Hit Tokens"
+                value={(health.scheduler.cache_hit_tokens || 0).toLocaleString()}
+              />
+            )}
+            {health.scheduler.cache_hit_requests != null && (
+              <InfoCard
+                label="Cache Hit Requests"
+                value={(health.scheduler.cache_hit_requests || 0).toLocaleString()}
+              />
+            )}
+            {health.scheduler.hybrid_kv_without_ssm_hits != null && (
+              <InfoCard
+                label="Hybrid KV-Only Misses"
+                value={(health.scheduler.hybrid_kv_without_ssm_hits || 0).toLocaleString()}
+              />
+            )}
+            {health.scheduler.hybrid_kv_without_ssm_tokens != null && health.scheduler.hybrid_kv_without_ssm_tokens > 0 && (
+              <InfoCard
+                label="KV-Only Tokens"
+                value={(health.scheduler.hybrid_kv_without_ssm_tokens || 0).toLocaleString()}
               />
             )}
             {health.scheduler.cache_reuse_skips != null && (
@@ -306,15 +385,32 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
           {health.scheduler.last_cache_reuse_partial && (
             <div className="mt-2 text-xs bg-accent/10 border border-accent/30 text-foreground px-3 py-2 rounded">
               Cache reuse was memory-fit: used {(health.scheduler.last_cache_reuse_partial.used_cached_tokens ?? 0).toLocaleString()} of {(health.scheduler.last_cache_reuse_partial.original_cached_tokens ?? 0).toLocaleString()} cached tokens,
+              estimated merge {health.scheduler.last_cache_reuse_partial.used_needed_mb ?? '?'} MB within {health.scheduler.last_cache_reuse_partial.budget_mb ?? health.scheduler.last_cache_reuse_partial.available_mb ?? '?'} MB budgeted,
               prefilling {(health.scheduler.last_cache_reuse_partial.tail_tokens ?? 0).toLocaleString()} tail tokens.
+            </div>
+          )}
+          {health.scheduler.last_hybrid_kv_without_ssm && (
+            <div className="mt-2 text-xs bg-warning/10 border border-warning/30 text-warning px-3 py-2 rounded">
+              Hybrid cache full-prefilled: KV had {(health.scheduler.last_hybrid_kv_without_ssm.cached_tokens ?? 0).toLocaleString()} reusable tokens,
+              but no matching SSM companion state ({health.scheduler.last_hybrid_kv_without_ssm.reason || 'missing_ssm'}).
+              {health.scheduler.last_hybrid_kv_without_ssm.checkpoint_tokens != null && (
+                <> Checkpoint {(health.scheduler.last_hybrid_kv_without_ssm.checkpoint_tokens ?? 0).toLocaleString()} tokens.</>
+              )}
             </div>
           )}
           {health.scheduler.last_cache_reuse_skip && (
             <div className="mt-2 text-xs bg-warning/10 border border-warning/30 text-warning px-3 py-2 rounded">
-              Cache reuse skipped: needed {health.scheduler.last_cache_reuse_skip.needed_mb ?? '?'} MB,
+              Cache reuse skipped after partial reuse failed: needed {health.scheduler.last_cache_reuse_skip.needed_mb ?? '?'} MB,
               budget {health.scheduler.last_cache_reuse_skip.budget_mb ?? health.scheduler.last_cache_reuse_skip.available_mb ?? '?'} MB,
               available {health.scheduler.last_cache_reuse_skip.available_mb ?? '?'} MB,
-              cached {(health.scheduler.last_cache_reuse_skip.cached_tokens ?? 0).toLocaleString()} tokens.
+              dropped {(health.scheduler.last_cache_reuse_skip.dropped_cached_tokens ?? health.scheduler.last_cache_reuse_skip.cached_tokens ?? 0).toLocaleString()} cached tokens,
+              full-prefilling {(health.scheduler.last_cache_reuse_skip.full_prefill_tokens ?? health.scheduler.last_cache_reuse_skip.prompt_tokens ?? 0).toLocaleString()} tokens.
+              {health.scheduler.last_cache_reuse_skip.cache_contract && (
+                <> Contract {health.scheduler.last_cache_reuse_skip.cache_contract}.</>
+              )}
+              {health.scheduler.last_cache_reuse_skip.partial_reuse_unavailable_reason && (
+                <> Partial reason: {health.scheduler.last_cache_reuse_skip.partial_reuse_unavailable_reason}.</>
+              )}
             </div>
           )}
         </div>

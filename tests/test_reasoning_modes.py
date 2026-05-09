@@ -65,7 +65,7 @@ def test_reasoning_effort_none_disables_thinking_for_chat_and_responses():
     assert responses.reasoning_effort is None
 
 
-def test_dsv4_max_effort_normalizes_to_stable_rail():
+def test_dsv4_max_effort_normalizes_to_stable_rail_by_default(monkeypatch):
     """DSV4's raw max rail is not production-safe.
 
     Public request models can still carry reasoning_effort="max" for generic
@@ -74,6 +74,8 @@ def test_dsv4_max_effort_normalizes_to_stable_rail():
     """
     from vmlx_engine import server
     from vmlx_engine.loaders import dsv4_chat_encoder
+
+    monkeypatch.delenv("VMLX_DSV4_RAW_MAX", raising=False)
 
     assert server._normalize_dsv4_reasoning_effort("low") == "high"
     assert server._normalize_dsv4_reasoning_effort("medium") == "high"
@@ -338,6 +340,67 @@ def test_ling_stamped_bailing_family_gets_ling_safety_floor(tmp_path, monkeypatc
     assert server._model_family_for_defaults() == "ling"
     assert server._resolve_repetition_penalty(None) == 1.15
     assert server._resolve_repetition_penalty(1.0) == 1.15
+
+
+def test_ling_does_not_default_to_reasoning_even_with_stale_capabilities(tmp_path, monkeypatch):
+    """Ling/Bailing is not a default-reasoning family.
+
+    Older local JANG bundles can stamp deepseek_r1 in jang_config capabilities,
+    but the runtime contract for Ling keeps chat/template output visible by
+    default. The base family verdict must override stale stamps so Auto does not
+    send the first turn down a reasoning-only rail.
+    """
+    import json
+    from vmlx_engine import server
+    import vmlx_engine.model_config_registry as mcr
+
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "bailing_hybrid"}))
+    (tmp_path / "jang_config.json").write_text(json.dumps({
+        "capabilities": {
+            "family": "bailing_hybrid",
+            "cache_type": "hybrid",
+            "tool_parser": "deepseek",
+            "reasoning_parser": "deepseek_r1",
+            "think_in_template": True,
+            "supports_thinking": True,
+            "modality": "text",
+        }
+    }))
+
+    mcr.ModelConfigRegistry._instance = None
+    mcr._configs_loaded = False
+    registry = mcr.get_model_config_registry()
+    registry.clear_cache()
+    monkeypatch.setattr(server, "_default_enable_thinking", None)
+
+    cfg = registry.lookup(str(tmp_path))
+    resolved = server._resolve_enable_thinking(
+        request_value=None,
+        ct_kwargs={},
+        tools_present=False,
+        model_key=str(tmp_path),
+        engine=None,
+        auto_detect=True,
+    )
+
+    assert cfg.family_name == "ling"
+    assert cfg.supports_thinking is False
+    assert cfg.reasoning_parser is None
+    assert cfg.think_in_template is False
+    assert resolved is False
+
+
+def test_panel_ling_registry_does_not_advertise_reasoning():
+    """Panel auto-detect must match engine Ling no-reasoning contract."""
+    from pathlib import Path
+
+    source = Path("./panel/src/main/model-config-registry.ts").read_text()
+    ling_line = next(line for line in source.splitlines() if "registerFamily('ling'" in line)
+
+    assert "cacheType: 'hybrid'" in ling_line
+    assert "toolParser: 'deepseek'" in ling_line
+    assert "reasoningParser" not in ling_line
+    assert "next.family === 'ling'" in source
 
 
 def test_minimax_m2_uses_stronger_reasoning_rumination_floor(tmp_path, monkeypatch):

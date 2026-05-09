@@ -9,6 +9,7 @@ import { join, basename } from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { db, Session } from './database'
 import { resolveImageModelFromDirectoryName } from '../shared/imageModels'
+import { dsv4EnvFromConfig } from '../shared/dsv4Env'
 
 export type { ServerConfig, DetectedProcess } from './server'
 import type { ServerConfig, DetectedProcess } from './server'
@@ -288,7 +289,85 @@ export class SessionManager extends EventEmitter {
 
   // Track last emitted progress per session to avoid duplicate events
   private loadProgressState = new Map<string, number>()
-  private loadProgressMeta = new Map<string, { modelBytes?: number; lazyResident?: boolean }>()
+  private loadProgressMeta = new Map<string, {
+    modelBytes?: number;
+    lazyResident?: boolean;
+    residentMb?: number;
+    residentPercent?: number;
+  }>()
+  private loadResidentTimers = new Map<string, ReturnType<typeof setInterval>>()
+
+  private stopLoadResidentMonitor(sessionId: string): void {
+    const timer = this.loadResidentTimers.get(sessionId)
+    if (timer) {
+      clearInterval(timer)
+      this.loadResidentTimers.delete(sessionId)
+    }
+  }
+
+  private readProcessGroupResidentBytes(pid: number): number {
+    const parseRssKb = (text: string): number =>
+      text
+        .split('\n')
+        .map(s => parseInt(s.trim(), 10))
+        .filter(n => Number.isFinite(n) && n > 0)
+        .reduce((sum, kb) => sum + kb, 0)
+
+    try {
+      const group = execFileSync('ps', ['-o', 'rss=', '-g', String(pid)], {
+        timeout: 1000,
+      }).toString()
+      const groupKb = parseRssKb(group)
+      if (groupKb > 0) return groupKb * 1024
+    } catch { /* fall back to root process RSS */ }
+
+    try {
+      const single = execFileSync('ps', ['-o', 'rss=', '-p', String(pid)], {
+        timeout: 1000,
+      }).toString()
+      return parseRssKb(single) * 1024
+    } catch {
+      return 0
+    }
+  }
+
+  private startLoadResidentMonitor(sessionId: string, pid: number, modelBytes: number): void {
+    this.stopLoadResidentMonitor(sessionId)
+    if (!pid || modelBytes <= 0) return
+
+    const tick = () => {
+      const session = db.getSession(sessionId)
+      if (!session || session.status !== 'loading') {
+        this.stopLoadResidentMonitor(sessionId)
+        return
+      }
+      const residentBytes = this.readProcessGroupResidentBytes(pid)
+      if (residentBytes <= 0) return
+
+      const residentPercent = Math.min(100, Math.max(0, (residentBytes / modelBytes) * 100))
+      const residentProgress = Math.min(90, Math.max(5, Math.round(25 + residentPercent * 0.60)))
+      const current = this.loadProgressState.get(sessionId) ?? 0
+      const progress = Math.max(current, residentProgress)
+      const meta = {
+        ...(this.loadProgressMeta.get(sessionId) || {}),
+        modelBytes,
+        lazyResident: true,
+        residentMb: Math.round((residentBytes / 1048576) * 10) / 10,
+        residentPercent: Math.round(residentPercent * 10) / 10,
+      }
+      this.loadProgressMeta.set(sessionId, meta)
+      this.loadProgressState.set(sessionId, progress)
+      this.emit('session:loadProgress', {
+        sessionId,
+        label: `Resident RAM ${formatGb(residentBytes)} / ${formatGb(modelBytes)} GB`,
+        progress,
+        ...meta,
+      })
+    }
+
+    tick()
+    this.loadResidentTimers.set(sessionId, setInterval(tick, 1000))
+  }
 
   /** Check a log line for loading progress and emit event if phase advanced */
   private checkLoadProgress(sessionId: string, text: string): void {
@@ -738,6 +817,7 @@ export class SessionManager extends EventEmitter {
     })
     this.loadProgressState.delete(sessionId) // Reset loading progress for fresh start
     this.loadProgressMeta.delete(sessionId)
+    this.stopLoadResidentMonitor(sessionId)
     if (modelFileBytes > 0) {
       const meta = { modelBytes: modelFileBytes, lazyResident: true }
       this.loadProgressMeta.set(sessionId, meta)
@@ -774,6 +854,13 @@ export class SessionManager extends EventEmitter {
     const hfToken = db.getSetting('hf_api_key')
     if (hfToken) {
       spawnEnv.HF_TOKEN = hfToken
+    }
+    // DSV4 Flash runtime knobs (raw-max opt-in + finalizer budget + force-direct).
+    // Helper validates inputs and emits only the env vars the engine reads.
+    // See docs/internal/AUDIT_dsv4_flash_long_form_max_thinking_2026_05_09.md.
+    const dsv4Env = dsv4EnvFromConfig(config as any)
+    for (const [key, value] of Object.entries(dsv4Env)) {
+      spawnEnv[key] = value
     }
     // NOTE: We previously set HF_HUB_OFFLINE=1 for image models to prevent mflux from
     // silently downloading multi-GB models. This was removed because it also blocks mflux
@@ -860,6 +947,7 @@ export class SessionManager extends EventEmitter {
     proc.stderr?.on('error', () => { })
 
     proc.on('exit', (code, signal) => {
+      this.stopLoadResidentMonitor(sessionId)
       const managed = this.processes.get(sessionId)
       const lastStderr = managed?.lastStderr
       const intentional = managed?.intentionalStop === true
@@ -908,16 +996,19 @@ export class SessionManager extends EventEmitter {
 
     if (proc.pid) {
       db.updateSession(sessionId, { pid: proc.pid })
+      this.startLoadResidentMonitor(sessionId, proc.pid, modelFileBytes)
     }
 
     // Wait for health endpoint — use session timeout (min 120s for large models)
     const startupTimeoutMs = Math.max((config.timeout || 300) * 1000, 120000)
     try {
       await this.waitForReady(session.host, session.port, startupTimeoutMs, sessionId)
+      this.stopLoadResidentMonitor(sessionId)
       db.updateSession(sessionId, { status: 'running' })
       this.touchSession(sessionId)  // Start idle timer from model-ready time
       this.emit('session:ready', { sessionId, port: session.port })
     } catch (err) {
+      this.stopLoadResidentMonitor(sessionId)
       db.updateSession(sessionId, { status: 'error' })
       this.emit('session:error', { sessionId, error: (err as Error).message })
       throw err
@@ -1635,7 +1726,14 @@ export class SessionManager extends EventEmitter {
       if (res.ok) {
         db.updateSession(sessionId, { status: 'loading', standbyDepth: null })
         this.loadProgressState.delete(sessionId)  // Reset progress for fresh wake
-        this.emit('session:loadProgress', { sessionId, label: 'Waking from sleep...', progress: 50 })
+        this.loadProgressMeta.delete(sessionId)
+        const modelFileBytes = estimateModelFileBytes(session.modelPath)
+        const meta = modelFileBytes > 0 ? { modelBytes: modelFileBytes, lazyResident: true } : {}
+        if (modelFileBytes > 0) this.loadProgressMeta.set(sessionId, meta)
+        this.emit('session:loadProgress', { sessionId, label: 'Waking from sleep...', progress: 50, ...meta })
+        if (session.pid && modelFileBytes > 0) {
+          this.startLoadResidentMonitor(sessionId, session.pid, modelFileBytes)
+        }
         this.emit('session:starting', { sessionId })
         this.pushLog(sessionId, '[Wake] Waking from sleep — reloading model...')
         // The global monitor will pick up the 'loading' status and wait for /health
@@ -2088,6 +2186,25 @@ export class SessionManager extends EventEmitter {
     // Tool integration (parsers and --enable-auto-tool-choice already pushed above)
     if (config.mcpConfig) args.push('--mcp-config', config.mcpConfig)
 
+    const requestedDistributed = !!(config as any).distributedEnabled
+    const requestedFlashMoe = !!(config as any).flashMoe
+    const dsv4Active = detected.family === 'deepseek-v4'
+    const turboQuantActive = !!(detected as any).isTurboQuant
+    const effectiveDistributed = requestedDistributed
+    const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed
+    const effectiveEnableJit = !!config.enableJit && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !turboQuantActive
+    if (requestedFlashMoe && !effectiveFlashMoe) {
+      console.warn('[SESSION] Ignoring stale Flash MoE flag because distributed mode is active')
+    }
+    if (config.enableJit && !effectiveEnableJit) {
+      const reason = dsv4Active
+        ? 'DeepSeek-V4 uses native SWA+CSA/HCA composite cache'
+        : turboQuantActive
+        ? 'TurboQuantKVCache uses custom cache objects that mx.compile cannot trace'
+        : 'Flash MoE or distributed mode is active'
+      console.warn(`[SESSION] Ignoring stale JIT flag because ${reason}`)
+    }
+
     // Smelt mode (partial expert loading)
     if ((config as any).smelt) {
       args.push('--smelt')
@@ -2100,7 +2217,7 @@ export class SessionManager extends EventEmitter {
     // Flash MoE (SSD expert streaming) — mutually exclusive with smelt/distributed/JIT.
     // Always pass the tunable values when Flash MoE is on so CLI reflects UI exactly
     // (no stale equality-with-default guard that drifts when DEFAULT_CONFIG changes).
-    if ((config as any).flashMoe) {
+    if (effectiveFlashMoe) {
       args.push('--flash-moe')
       const slotBank = (config as any).flashMoeSlotBank
       if (typeof slotBank === 'number' && slotBank > 0) {
@@ -2117,7 +2234,7 @@ export class SessionManager extends EventEmitter {
     }
 
     // Distributed compute
-    if ((config as any).distributedEnabled) {
+    if (effectiveDistributed) {
       args.push('--distributed')
       const mode = (config as any).distributedMode || 'pipeline'
       if (mode !== 'pipeline') {
@@ -2161,7 +2278,7 @@ export class SessionManager extends EventEmitter {
     else if (config.defaultEnableThinking === false) args.push('--default-enable-thinking', 'false')
 
     // JIT compilation
-    if (config.enableJit) args.push('--enable-jit')
+    if (effectiveEnableJit) args.push('--enable-jit')
 
     // Nemotron-Omni multimodal backend selector. Default stage1 (correct).
     // stage2 = native MLX RADIO + Parakeet, ~15-21x faster encoders + 82

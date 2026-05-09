@@ -19,6 +19,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from vmlx_engine.mllm_scheduler import MLLMSchedulerConfig, MLLMScheduler
+from vmlx_engine.mllm_batch_generator import (
+    _prefix_hit_tail_and_cached_tokens as _mllm_prefix_hit_tail_and_cached_tokens,
+)
 
 
 def test_mllm_scheduler_does_not_shadow_hashlib_in_init():
@@ -58,6 +61,30 @@ def test_mllm_scheduler_clamps_active_turboquant_kv_to_single_sequence():
     assert scheduler.config.max_num_seqs == 1
     assert scheduler.config.prefill_batch_size == 1
     assert scheduler.config.completion_batch_size == 1
+
+
+def test_mllm_exact_prefix_hit_with_generation_suffix_refeeds_last_prompt_token():
+    """VLM memory/legacy hits store N-1 KV, so suffix-only prefill is wrong."""
+
+    remaining, cached_tokens = _mllm_prefix_hit_tail_and_cached_tokens(
+        token_list=[10, 11, 12, 13],
+        remaining=[],
+        gen_prompt_suffix=[90, 91],
+    )
+
+    assert remaining == [13, 90, 91]
+    assert cached_tokens == 3
+
+
+def test_mllm_exact_prefix_hit_without_suffix_counts_n_minus_one_cached_tokens():
+    remaining, cached_tokens = _mllm_prefix_hit_tail_and_cached_tokens(
+        token_list=[10, 11, 12, 13],
+        remaining=[],
+        gen_prompt_suffix=[],
+    )
+
+    assert remaining == []
+    assert cached_tokens == 3
 
 
 # ============================================================
@@ -366,6 +393,33 @@ class TestHybridSSMStateCache:
         assert r3 is not None and r3[0] == ["state_3"]
         assert r5 is not None and r5[0] == ["state_5"]
 
+    def test_fetch_longest_prefix_records_match_and_miss_diagnostics(self):
+        from vmlx_engine.mllm_batch_generator import HybridSSMStateCache
+
+        cache = HybridSSMStateCache(max_entries=10)
+        cache.store([1, 2, 3, 4], 4, ["state_4"])
+
+        hit = cache.fetch_longest_prefix([1, 2, 3, 4, 99], 5)
+        assert hit is not None
+        assert hit[0] == 4
+        assert cache.last_prefix_lookup == {
+            "max_len": 5,
+            "candidate_lengths": [4],
+            "matched": True,
+            "checkpoint_tokens": 4,
+            "is_complete": True,
+        }
+
+        miss = cache.fetch_longest_prefix([9, 2, 3, 4], 4)
+        assert miss is None
+        assert cache.last_prefix_lookup == {
+            "max_len": 4,
+            "candidate_lengths": [4],
+            "matched": False,
+            "reason": "prefix_hash_mismatch",
+            "store_size": 1,
+        }
+
 
 # ============================================================
 # MLLMBatchGenerator cache params tests
@@ -597,6 +651,82 @@ class TestCleanupFinishedCacheStore:
         source = inspect.getsource(MLLMScheduler._cleanup_finished)
         assert "disk_cache" in source
 
+    def test_media_request_skips_memory_aware_token_only_store(self):
+        """Image/video VLM requests must not be stored under text-only keys."""
+
+        scheduler = MLLMScheduler.__new__(MLLMScheduler)
+        request = SimpleNamespace(
+            num_output_tokens=1,
+            _has_history=False,
+            _extracted_cache=lambda: ["live-cache"],
+            _extracted_tokens=[10, 11, 12, 13, 14],
+            _added_stop_tokens=set(),
+            images=["image-a.png"],
+            videos=None,
+        )
+
+        scheduler.running = {"req-media-memory": request}
+        scheduler.block_aware_cache = None
+        scheduler.memory_aware_cache = MagicMock()
+        scheduler.prefix_cache = None
+        scheduler.disk_cache = MagicMock()
+        scheduler._is_hybrid = False
+        scheduler._kv_cache_bits = 0
+        scheduler._truncate_hybrid_cache = MagicMock(return_value=["prompt-cache"])
+        scheduler._validate_cache = MagicMock(return_value=True)
+        scheduler.batch_generator = MagicMock()
+        scheduler.stop_tokens = set()
+        scheduler.request_id_to_uid = {}
+        scheduler.uid_to_request_id = {}
+        scheduler.paged_cache_manager = None
+        scheduler.requests = {"req-media-memory": request}
+        scheduler.finished_req_ids = set()
+        scheduler._cleanup_detokenizer = MagicMock()
+
+        scheduler._cleanup_finished({"req-media-memory"})
+
+        scheduler.disk_cache.store.assert_not_called()
+        scheduler.memory_aware_cache.store.assert_not_called()
+
+    def test_media_placeholder_skips_legacy_token_only_store(self):
+        """Text containing media placeholder ids must not populate legacy cache."""
+
+        scheduler = MLLMScheduler.__new__(MLLMScheduler)
+        request = SimpleNamespace(
+            num_output_tokens=1,
+            _has_history=False,
+            _extracted_cache=lambda: ["live-cache"],
+            _extracted_tokens=[10, 999, 12, 13, 14],
+            _added_stop_tokens=set(),
+            images=None,
+            videos=None,
+        )
+
+        scheduler.running = {"req-media-prefix": request}
+        scheduler.block_aware_cache = None
+        scheduler.memory_aware_cache = None
+        scheduler.prefix_cache = MagicMock()
+        scheduler.disk_cache = MagicMock()
+        scheduler._is_hybrid = False
+        scheduler._kv_cache_bits = 0
+        scheduler._truncate_hybrid_cache = MagicMock(return_value=["prompt-cache"])
+        scheduler._validate_cache = MagicMock(return_value=True)
+        scheduler.batch_generator = SimpleNamespace(
+            _tokens_contain_media_placeholders=lambda toks: 999 in toks
+        )
+        scheduler.stop_tokens = set()
+        scheduler.request_id_to_uid = {}
+        scheduler.uid_to_request_id = {}
+        scheduler.paged_cache_manager = None
+        scheduler.requests = {"req-media-prefix": request}
+        scheduler.finished_req_ids = set()
+        scheduler._cleanup_detokenizer = MagicMock()
+
+        scheduler._cleanup_finished({"req-media-prefix"})
+
+        scheduler.disk_cache.store.assert_not_called()
+        scheduler.prefix_cache.store_cache.assert_not_called()
+
     def test_short_single_turn_outputs_still_store_prompt_cache(self):
         """The first turn of a future chat can be a one-token answer.
 
@@ -643,6 +773,88 @@ class TestCleanupFinishedCacheStore:
             "req-1",
             [10, 11, 12, 13],
             ["state"],
+        )
+
+    def test_memory_aware_store_uses_n_minus_one_key_for_truncated_payload(self):
+        """Memory-aware VLM cache keys must match the N-1 KV payload length."""
+
+        scheduler = MLLMScheduler.__new__(MLLMScheduler)
+        request = SimpleNamespace(
+            num_output_tokens=1,
+            _has_history=False,
+            _extracted_cache=lambda: ["live-cache"],
+            _extracted_tokens=[10, 11, 12, 13, 14],
+            _added_stop_tokens=set(),
+        )
+
+        scheduler.running = {"req-memory": request}
+        scheduler.block_aware_cache = None
+        scheduler.memory_aware_cache = MagicMock()
+        scheduler.prefix_cache = None
+        scheduler.disk_cache = MagicMock()
+        scheduler._is_hybrid = False
+        scheduler._kv_cache_bits = 0
+        scheduler._truncate_hybrid_cache = MagicMock(return_value=["prompt-cache"])
+        scheduler._validate_cache = MagicMock(return_value=True)
+        scheduler.batch_generator = None
+        scheduler.stop_tokens = set()
+        scheduler.request_id_to_uid = {}
+        scheduler.uid_to_request_id = {}
+        scheduler.paged_cache_manager = None
+        scheduler.requests = {"req-memory": request}
+        scheduler.finished_req_ids = set()
+        scheduler._cleanup_detokenizer = MagicMock()
+
+        scheduler._cleanup_finished({"req-memory"})
+
+        scheduler.disk_cache.store.assert_called_once_with(
+            [10, 11, 12, 13, 14],
+            ["prompt-cache"],
+        )
+        scheduler.memory_aware_cache.store.assert_called_once_with(
+            [10, 11, 12, 13],
+            ["prompt-cache"],
+        )
+
+    def test_legacy_prefix_store_uses_n_minus_one_key_for_truncated_payload(self):
+        """Legacy VLM prefix keys must also be N-1 for exact-hit correctness."""
+
+        scheduler = MLLMScheduler.__new__(MLLMScheduler)
+        request = SimpleNamespace(
+            num_output_tokens=1,
+            _has_history=False,
+            _extracted_cache=lambda: ["live-cache"],
+            _extracted_tokens=[10, 11, 12, 13, 14],
+            _added_stop_tokens=set(),
+        )
+
+        scheduler.running = {"req-prefix": request}
+        scheduler.block_aware_cache = None
+        scheduler.memory_aware_cache = None
+        scheduler.prefix_cache = MagicMock()
+        scheduler.disk_cache = MagicMock()
+        scheduler._is_hybrid = False
+        scheduler._kv_cache_bits = 0
+        scheduler._truncate_hybrid_cache = MagicMock(return_value=["prompt-cache"])
+        scheduler._validate_cache = MagicMock(return_value=True)
+        scheduler.batch_generator = None
+        scheduler.stop_tokens = set()
+        scheduler.request_id_to_uid = {}
+        scheduler.uid_to_request_id = {}
+        scheduler.paged_cache_manager = None
+        scheduler.requests = {"req-prefix": request}
+        scheduler.finished_req_ids = set()
+        scheduler._cleanup_detokenizer = MagicMock()
+
+        scheduler._cleanup_finished({"req-prefix"})
+
+        scheduler.disk_cache.store.assert_called_once_with(
+            [10, 11, 12, 13, 14],
+            ["prompt-cache"],
+        )
+        scheduler.prefix_cache.store_cache.assert_called_once_with(
+            [10, 11, 12, 13],
+            ["prompt-cache"],
         )
 
     def test_uses_extracted_tokens_not_prompt_token_ids(self):

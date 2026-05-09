@@ -237,6 +237,49 @@ class TestPreFixBitsFromShard:
         assert model.layer.bits == 4
 
 
+class TestQwen3NextConv1dLayout:
+    """Qwen3-Next/GatedDeltaNet conv1d weights must load in MLX Conv1d layout."""
+
+    def test_transposes_hf_conv1d_layout_after_model_sanitize_returns(self):
+        import numpy as np
+        import mlx.core as mx
+        from vmlx_engine.utils.jang_loader import _sanitize_qwen3_next_conv1d_layout
+
+        key = "model.layers.0.linear_attn.conv1d.weight"
+        raw = mx.array(np.arange(8, dtype=np.float32).reshape(2, 1, 4))
+
+        fixed = _sanitize_qwen3_next_conv1d_layout({key: raw})
+
+        assert tuple(fixed[key].shape) == (2, 4, 1)
+        assert np.array(fixed[key])[1, 3, 0] == 7
+
+    def test_leaves_mlx_conv1d_layout_unchanged(self):
+        import numpy as np
+        import mlx.core as mx
+        from vmlx_engine.utils.jang_loader import _sanitize_qwen3_next_conv1d_layout
+
+        key = "model.layers.0.linear_attn.conv1d.weight"
+        raw = mx.array(np.arange(8, dtype=np.float32).reshape(2, 4, 1))
+
+        fixed = _sanitize_qwen3_next_conv1d_layout({key: raw})
+
+        assert tuple(fixed[key].shape) == (2, 4, 1)
+        assert np.array(fixed[key])[1, 3, 0] == 7
+
+    def test_grouped_conv1d_backstop_name_is_family_agnostic(self):
+        import numpy as np
+        import mlx.core as mx
+        from vmlx_engine.utils.jang_loader import _sanitize_grouped_conv1d_layout
+
+        key = "backbone.layers.0.mixer.conv1d.weight"
+        raw = mx.array(np.arange(8, dtype=np.float32).reshape(2, 1, 4))
+
+        fixed = _sanitize_grouped_conv1d_layout({key: raw})
+
+        assert tuple(fixed[key].shape) == (2, 4, 1)
+        assert np.array(fixed[key])[1, 3, 0] == 7
+
+
 class TestMCPConfigKeys:
     """Verify MCP config accepts both 'servers' and 'mcpServers' keys."""
 

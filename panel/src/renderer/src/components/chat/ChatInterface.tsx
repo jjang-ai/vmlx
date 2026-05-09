@@ -4,6 +4,7 @@ import { MessageList } from './MessageList'
 import { InputBox, MediaAttachment } from './InputBox'
 import { useToast } from '../Toast'
 import { useTranslation } from '../../i18n'
+import { extractResponsesWarnings } from '../../lib/responsesWarnings'
 
 interface MessageMetrics {
   tokenCount: number
@@ -26,6 +27,8 @@ interface Message {
   tokens?: number
   metrics?: MessageMetrics
   metricsJson?: string
+  warnings?: string[]
+  warningsJson?: string
   toolCallsJson?: string
   reasoningContent?: string
   reasoningDone?: boolean
@@ -34,12 +37,19 @@ interface Message {
 /** Hydrate metrics from DB metricsJson field */
 function hydrateMessages(msgs: Message[]): Message[] {
   return msgs.map(m => {
+    let hydrated: Message = m
     if (m.metricsJson && !m.metrics) {
       try {
-        return { ...m, metrics: JSON.parse(m.metricsJson) }
+        hydrated = { ...hydrated, metrics: JSON.parse(m.metricsJson) }
       } catch { /* ignore bad json */ }
     }
-    return m
+    if (m.warningsJson && !m.warnings) {
+      try {
+        const warnings = extractResponsesWarnings({ warnings: JSON.parse(m.warningsJson) })
+        if (warnings) hydrated = { ...hydrated, warnings }
+      } catch { /* ignore bad json */ }
+    }
+    return hydrated
   })
 }
 
@@ -201,6 +211,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
       if (data.chatId !== chatId) return
       // Append truncation warning if server indicated max_tokens was hit
       let finalContent = data.content || ''
+      const responseWarnings = extractResponsesWarnings({ warnings: data.warnings }) ?? undefined
       if (data.finishReason === 'length' && finalContent) {
         finalContent += '\n\n---\n*' + t('chat.interface.truncationNotice') + '*'
       }
@@ -210,7 +221,8 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
             ...m,
             content: finalContent || m.content,
             tokens: data.metrics?.tokenCount,
-            metrics: data.metrics
+            metrics: data.metrics,
+            warnings: responseWarnings ?? m.warnings
           }
           : m
       ))
@@ -374,6 +386,8 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
                 tokens: m.tokens,
                 metrics: m.metrics || streamedAssistant.metrics,
                 metricsJson: m.metricsJson,
+                warnings: m.warnings || streamedAssistant.warnings,
+                warningsJson: m.warningsJson,
                 toolCallsJson: m.toolCallsJson,
                 reasoningContent: m.reasoningContent
               }

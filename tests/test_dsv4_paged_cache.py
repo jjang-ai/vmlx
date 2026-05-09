@@ -275,7 +275,7 @@ def test_dsv4_frugal_store_keeps_terminal_composite_block_in_ram(monkeypatch):
     """Immediate same-process DSV4 hits must not depend on async L2 visibility.
 
     DSV4 non-terminal blocks are only pending markers. The terminal block is
-    the one that carries the full SWA+CSA/HSA composite state. If frugal mode
+    the one that carries the full SWA+CSA/HCA composite state. If frugal mode
     skips that terminal in-RAM mirror, an immediate repeat can find the block
     table but reconstruct None until the async block-disk write becomes visible.
     """
@@ -313,7 +313,7 @@ def test_dsv4_store_does_not_reuse_legacy_content_hash_for_repeated_blocks():
     c = _make_dsv4_state_cache()
     # Two identical 4-token chunks under different prefix history. Legacy
     # content-only hashes would collapse these onto one block, which is invalid
-    # for DSV4 because CSA/HSA pool state depends on the whole prefix.
+    # for DSV4 because CSA/HCA pool state depends on the whole prefix.
     tokens = [1, 2, 3, 4, 1, 2, 3, 4, 5, 6]
 
     table = pc.store_cache("dsv4-repeated", tokens, [_state_dict(c)])
@@ -357,10 +357,82 @@ def test_dsv4_fetch_prefers_n_minus_one_terminal_partial_after_restart():
     assert isinstance(rebuilt[0], DeepseekV4Cache)
 
 
+def test_dsv4_trim_block_table_to_terminal_state_keeps_safe_prefix_only():
+    """Memory-fit DSV4 reuse may shrink only to a terminal composite block.
+
+    A block carrying ``deepseek_v4_pending`` is not a usable final cache state:
+    it has SWA/front-layer pieces but not the CSA/HCA composite pools. A block
+    carrying ``deepseek_v4`` is a clean terminal checkpoint and can be reused as
+    the shortened cached prefix.
+    """
+    from vmlx_engine.paged_cache import BlockTable, PagedCacheManager
+    from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+    paged = PagedCacheManager(block_size=4, max_blocks=8)
+    pc = BlockAwarePrefixCache(model=None, paged_cache_manager=paged)
+    table = pc.store_cache(
+        "dsv4-terminal-trim",
+        [1, 2, 3, 4, 5, 6],
+        [_state_dict(_make_dsv4_state_cache())],
+    )
+    assert table is not None
+    assert len(table.block_ids) == 2
+
+    # Simulate a later cache hit that appended another pending block after the
+    # terminal checkpoint. The safe shrink target is the terminal checkpoint,
+    # not the later pending block.
+    trailing = paged.allocate_block()
+    assert trailing is not None
+    trailing.token_count = 4
+    trailing.cache_data = [("deepseek_v4_pending", "DeepseekV4Cache")]
+    trailing.ref_count = 1
+    paged.allocated_blocks[trailing.block_id] = trailing
+
+    live = BlockTable(
+        request_id="dsv4-live",
+        block_ids=[*table.block_ids, trailing.block_id],
+        num_tokens=10,
+    )
+    paged.request_tables["dsv4-live"] = live
+
+    trimmed = pc.trim_block_table_to_terminal_state(
+        "dsv4-live",
+        target_tokens=10,
+        tag="deepseek_v4",
+    )
+
+    assert trimmed is not None
+    assert trimmed.block_ids == table.block_ids
+    assert trimmed.num_tokens == 6
+    assert trailing.ref_count == 0
+
+
+def test_dsv4_trim_block_table_to_terminal_state_refuses_pending_only_prefix():
+    from vmlx_engine.paged_cache import PagedCacheManager
+    from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+    paged = PagedCacheManager(block_size=4, max_blocks=8)
+    pc = BlockAwarePrefixCache(model=None, paged_cache_manager=paged)
+    table = pc.store_cache(
+        "dsv4-pending-only-trim",
+        [1, 2, 3, 4, 5, 6],
+        [_state_dict(_make_dsv4_state_cache())],
+    )
+    assert table is not None
+
+    trimmed = pc.trim_block_table_to_terminal_state(
+        "dsv4-pending-only-trim",
+        target_tokens=4,
+        tag="deepseek_v4",
+    )
+
+    assert trimmed is None
+
+
 def test_dsv4_storage_quantization_is_forced_off_for_composite_cache():
     """DSV4 prefix/paged/L2 storage must keep the native composite cache.
 
-    DeepseekV4Cache already contains SWA local cache plus compressed CSA/HSA
+    DeepseekV4Cache already contains SWA local cache plus compressed CSA/HCA
     pools. The only DSV4-supported compression layer is the native
     PoolQuantizedV4Cache pool codec; generic QuantizedKVCache must not wrap
     the local SWA state at prefix/paged/L2 boundaries.
@@ -438,7 +510,7 @@ def test_dsv4_serve_path_forces_generic_kv_quantization_off():
     src = inspect.getsource(cli.serve_command)
 
     assert 'args.kv_cache_quantization = "none"' in src
-    assert "DSV4-Flash native SWA+CSA/HSA cache owns cache" in src
+    assert "DSV4-Flash native SWA+CSA/HCA cache owns cache" in src
     assert 'os.environ["VMLX_DISABLE_TQ_KV"] = "1"' in src
 
 
@@ -565,8 +637,35 @@ def test_bailing_mla_cache_uses_expanded_attention_heads():
     assert cache._get_allowed_n_kv_heads() == {32}
 
 
+def test_gemma4_nested_text_config_exposes_mixed_kv_head_counts():
+    """Gemma 4 VLM wrappers store SWA/full KV heads under config.text_config."""
+    from types import SimpleNamespace
+
+    from vmlx_engine.paged_cache import PagedCacheManager
+    from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+    from vmlx_engine.scheduler import Scheduler
+
+    text_cfg = SimpleNamespace(
+        model_type="gemma4_text",
+        num_key_value_heads=8,
+        num_global_key_value_heads=2,
+    )
+    model = SimpleNamespace(config=SimpleNamespace(model_type="gemma4", text_config=text_cfg))
+
+    scheduler = Scheduler.__new__(Scheduler)
+    scheduler.model = model
+    assert scheduler._detect_n_kv_heads() == 8
+
+    cache = BlockAwarePrefixCache(
+        model=model,
+        paged_cache_manager=PagedCacheManager(block_size=64, max_blocks=2),
+    )
+    assert cache._get_n_kv_heads() == 8
+    assert cache._get_allowed_n_kv_heads() == {2, 8}
+
+
 # ============================================================================
-# DSV4 SWA+CSA+HSA cache truncation guard (scheduler.py:1964) regression tests
+# DSV4 SWA+CSA+HCA cache truncation guard (scheduler.py:1964) regression tests
 # ============================================================================
 
 def _bootstrap_dsv4_cache_offset(c, offset_value):
@@ -580,7 +679,7 @@ def _bootstrap_dsv4_cache_offset(c, offset_value):
 
 
 def test_dsv4_truncation_refuses_post_generation_cache():
-    """Pin the SWA+CSA+HSA truncation guard.
+    """Pin the SWA+CSA+HCA truncation guard.
 
     `_truncate_cache_to_prompt_length` MUST return None for DSV4 when the
     live cache has advanced past the prompt boundary (current_len >
@@ -588,7 +687,7 @@ def test_dsv4_truncation_refuses_post_generation_cache():
     because:
       - SWA RotatingKVCache cannot be rewound after wrap (offset > max_size)
       - CSA pool buffers are cumulative across the entire window
-      - HSA indexer pool is cumulative; trim drops trailing rows but
+      - HCA/indexer pool is cumulative; trim drops trailing rows but
         boundary may not align with prompt/output split
 
     Regression target: scheduler.py:1964 DSV4 branch must `return None` when

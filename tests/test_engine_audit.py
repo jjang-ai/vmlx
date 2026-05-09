@@ -1701,7 +1701,7 @@ class TestV4bDiskCacheDequantFallthrough:
         # Find the disk cache section
         fetch_idx = source.find("disk_cache = self.disk_cache.fetch")
         assert fetch_idx != -1
-        after_fetch = source[fetch_idx:fetch_idx + 1200]
+        after_fetch = source[fetch_idx:fetch_idx + 2000]
         # The pattern: if dequant fails (disk_cache is None), must NOT set cached_tokens
         # Correct pattern: else branch gates all state mutations
         assert "else:" in after_fetch, (
@@ -1804,6 +1804,119 @@ class TestV4bToolChoiceRequired:
         assert "tool_calls_required" in source, (
             "Responses API streaming must emit error for tool_choice='required'"
         )
+
+
+class TestNonStreamingDisconnectAbort:
+    """Non-streaming API requests must abort scheduler work on disconnect."""
+
+    def test_helper_aborts_when_client_disconnects(self):
+        import asyncio
+        import pytest
+        from fastapi import HTTPException
+        from vmlx_engine.server import _await_chat_with_disconnect_abort
+
+        class FakeEngine:
+            def __init__(self):
+                self.aborted = None
+
+            async def chat(self, **kwargs):
+                await asyncio.sleep(10)
+
+            async def abort_request(self, request_id):
+                self.aborted = request_id
+                return True
+
+        class FakeRequest:
+            async def is_disconnected(self):
+                return True
+
+        async def run():
+            engine = FakeEngine()
+            with pytest.raises(HTTPException) as exc:
+                await _await_chat_with_disconnect_abort(
+                    engine,
+                    messages=[],
+                    chat_kwargs={},
+                    timeout=30,
+                    fastapi_request=FakeRequest(),
+                    request_id="resp_disconnect_test",
+                    endpoint="test",
+                    poll_interval=0.001,
+                )
+            assert exc.value.status_code == 499
+            assert engine.aborted == "resp_disconnect_test"
+
+        asyncio.run(run())
+
+    def test_helper_passes_public_request_id_to_engine_chat(self):
+        import asyncio
+        from vmlx_engine.server import _await_chat_with_disconnect_abort
+
+        class FakeOutput:
+            completion_tokens = 1
+
+        class FakeEngine:
+            def __init__(self):
+                self.kwargs = None
+
+            async def chat(self, **kwargs):
+                self.kwargs = kwargs
+                return FakeOutput()
+
+        class FakeRequest:
+            async def is_disconnected(self):
+                return False
+
+        async def run():
+            engine = FakeEngine()
+            output = await _await_chat_with_disconnect_abort(
+                engine,
+                messages=[{"role": "user", "content": "hi"}],
+                chat_kwargs={"max_tokens": 1},
+                timeout=30,
+                fastapi_request=FakeRequest(),
+                request_id="chatcmpl_public_id",
+                endpoint="test",
+                poll_interval=0.001,
+            )
+            assert output.completion_tokens == 1
+            assert engine.kwargs["request_id"] == "chatcmpl_public_id"
+            assert engine.kwargs["messages"] == [{"role": "user", "content": "hi"}]
+
+        asyncio.run(run())
+
+    def test_helper_treats_cancelled_collector_removal_as_client_cancel(self):
+        import asyncio
+        import pytest
+        from fastapi import HTTPException
+        from vmlx_engine.server import _await_chat_with_disconnect_abort
+
+        class FakeEngine:
+            async def chat(self, **kwargs):
+                raise RuntimeError("No collector for request resp_cancelled")
+
+            async def abort_request(self, request_id):
+                return False
+
+        class FakeRequest:
+            async def is_disconnected(self):
+                return False
+
+        async def run():
+            with pytest.raises(HTTPException) as exc:
+                await _await_chat_with_disconnect_abort(
+                    FakeEngine(),
+                    messages=[],
+                    chat_kwargs={},
+                    timeout=30,
+                    fastapi_request=FakeRequest(),
+                    request_id="resp_cancelled",
+                    endpoint="test",
+                    poll_interval=0.001,
+                )
+            assert exc.value.status_code == 499
+
+        asyncio.run(run())
 
 
 # ===========================================================================
@@ -3203,6 +3316,116 @@ class TestTurboQuantKVTelemetry:
         assert status["effective_prefill_batch_size"] == 1
         assert status["effective_completion_batch_size"] == 1
 
+    def test_mllm_scheduler_aggregates_cached_tokens_for_stats(self):
+        import threading
+        from types import SimpleNamespace
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+
+        scheduler = MLLMScheduler.__new__(MLLMScheduler)
+        scheduler._cache_hit_requests = 0
+        scheduler._cache_hit_tokens = 0
+        scheduler._cache_hit_tokens_by_detail = {}
+        scheduler._queue_lock = threading.RLock()
+        scheduler.waiting = []
+        scheduler.running = {}
+        scheduler.finished_req_ids = set()
+        scheduler.num_requests_processed = 1
+        scheduler.total_prompt_tokens = 35
+        scheduler.total_completion_tokens = 3
+        scheduler.batch_generator = None
+        scheduler.block_aware_cache = None
+        scheduler.paged_cache_manager = None
+        scheduler.memory_aware_cache = None
+        scheduler.prefix_cache = None
+        scheduler.disk_cache = None
+
+        request = SimpleNamespace(_cache_detail="request-legacy-detail")
+        response = SimpleNamespace(cached_tokens=34, cache_detail="paged+ssm+disk")
+
+        scheduler._record_cache_hit(response, request)
+        scheduler._record_cache_hit(response, request)
+        stats = scheduler.get_stats()
+
+        assert stats["cache_hit_requests"] == 1
+        assert stats["cache_hit_tokens"] == 34
+        assert stats["cache_hit_tokens_by_detail"] == {"paged+ssm+disk": 34}
+
+    def test_mllm_paged_cache_hits_have_source_detail_labels(self):
+        source = Path("./vmlx_engine/mllm_batch_generator.py").read_text()
+
+        assert "_paged_disk_hits_before" in source
+        assert "_paged_disk_hit" in source
+        assert "cache_detail: str = \"\"" in source
+        assert "cache_detail=getattr(req, '_cache_detail', \"\") or \"\"" in source
+        assert '"paged+ssm+disk" if _paged_disk_hit else "paged+ssm"' in source
+        assert '"paged+disk" if _paged_disk_hit else "paged"' in source
+
+    def test_llm_cache_detail_uses_canonical_plus_grammar(self):
+        source = Path("./vmlx_engine/scheduler.py").read_text()
+
+        assert '"paged+disk"' in source
+        assert '"paged+disk+tq"' in source
+        assert '"paged+ssm+disk"' in source
+        assert '"paged+ssm"' in source
+        assert "disk->paged" not in source
+        assert "disk+tq->paged" not in source
+        assert "paged+ssm(" not in source
+
+    def test_llm_hybrid_cache_detail_marks_ssm_disk_source(self, monkeypatch):
+        import vmlx_engine.scheduler as scheduler_mod
+
+        scheduler = scheduler_mod.Scheduler.__new__(scheduler_mod.Scheduler)
+        scheduler._is_hybrid = True
+        scheduler._uses_dsv4_cache = False
+        scheduler._uses_zaya_cache = False
+        scheduler._ssm_state_cache = SimpleNamespace(
+            fetch=lambda tokens, fetch_num: (["ssm-a", "ssm-b"], True)
+        )
+        scheduler.block_aware_cache = SimpleNamespace()
+        scheduler.model = SimpleNamespace()
+        scheduler._hybrid_kv_positions = [0]
+        scheduler._hybrid_num_layers = 3
+
+        monkeypatch.setattr(
+            scheduler_mod,
+            "_fix_hybrid_cache",
+            lambda reconstructed, model, kv_positions, num_model_layers: list(
+                reconstructed
+            ),
+        )
+
+        request = SimpleNamespace(
+            request_id="req-1",
+            block_table=SimpleNamespace(num_tokens=64),
+            prompt_token_ids=list(range(80)),
+            _hybrid_ssm_fetch_tokens=list(range(80)),
+            _paged_disk_hit=True,
+        )
+
+        full_cache = scheduler._finalize_hybrid_paged_cache_on_worker(
+            request,
+            ["kv", None, None],
+        )
+
+        assert full_cache == ["kv", "ssm-a", "ssm-b"]
+        assert request._cache_detail == "paged+ssm+disk"
+        assert request._cache_detail_ssm_layers == 2
+
+        request2 = SimpleNamespace(
+            request_id="req-2",
+            block_table=SimpleNamespace(num_tokens=64),
+            prompt_token_ids=list(range(80)),
+            _hybrid_ssm_fetch_tokens=list(range(80)),
+            _paged_disk_hit=False,
+        )
+
+        scheduler._finalize_hybrid_paged_cache_on_worker(
+            request2,
+            ["kv", None, None],
+        )
+
+        assert request2._cache_detail == "paged+ssm"
+
     @pytest.mark.asyncio
     async def test_cache_stats_endpoint_projects_cache_reuse_skip_telemetry(
         self, monkeypatch
@@ -3227,12 +3450,32 @@ class TestTurboQuantKVTelemetry:
                     "total_prompt_tokens": 1000,
                     "total_completion_tokens": 128,
                     "ewma_ttft_seconds": 9.25,
+                    "cache_hit_requests": 7,
+                    "cache_hit_tokens": 12345,
+                    "cache_hit_tokens_by_detail": {"paged+dsv4": 4096, "disk+tq": 8249},
+                    "batch_generator": {
+                        "hybrid_kv_without_ssm_hits": 3,
+                        "hybrid_kv_without_ssm_tokens": 2624,
+                        "last_hybrid_kv_without_ssm": {
+                            "reason": "no_ssm_companion_state",
+                            "cached_tokens": 1088,
+                        },
+                    },
                     "cache_reuse_skips": 1,
                     "cache_reuse_skip_tokens": 512,
                     "last_cache_reuse_skip": {
                         "reason": "insufficient_memory_for_cache_merge",
+                        "action": "full_prefill",
                         "needed_mb": 41618.0,
+                        "budget_mb": 11330.5,
                         "available_mb": 13330.0,
+                        "cached_tokens": 512,
+                        "dropped_cached_tokens": 512,
+                        "full_prefill_tokens": 4096,
+                        "cache_contract": "hybrid_ssm",
+                        "partial_reuse_unavailable_reason": (
+                            "no_block_aligned_ssm_checkpoint"
+                        ),
                     },
                     "cache_reuse_partial_downgrades": 1,
                     "cache_reuse_partial_tokens": 2048,
@@ -3250,13 +3493,27 @@ class TestTurboQuantKVTelemetry:
         payload = await server.cache_stats()
         scheduler_stats = payload["scheduler_stats"]
 
+        assert scheduler_stats["cache_hit_requests"] == 7
+        assert scheduler_stats["cache_hit_tokens"] == 12345
+        assert scheduler_stats["cache_hit_tokens_by_detail"]["paged+dsv4"] == 4096
+        assert scheduler_stats["cache_hit_tokens_by_detail"]["disk+tq"] == 8249
+        assert scheduler_stats["hybrid_kv_without_ssm_hits"] == 3
+        assert scheduler_stats["hybrid_kv_without_ssm_tokens"] == 2624
+        assert scheduler_stats["last_hybrid_kv_without_ssm"]["cached_tokens"] == 1088
         assert scheduler_stats["cache_reuse_skips"] == 1
         assert scheduler_stats["cache_reuse_skip_tokens"] == 512
         assert scheduler_stats["last_cache_reuse_skip"]["reason"] == (
             "insufficient_memory_for_cache_merge"
         )
         assert scheduler_stats["last_cache_reuse_skip"]["needed_mb"] == 41618.0
+        assert scheduler_stats["last_cache_reuse_skip"]["budget_mb"] == 11330.5
         assert scheduler_stats["last_cache_reuse_skip"]["available_mb"] == 13330.0
+        assert scheduler_stats["last_cache_reuse_skip"]["dropped_cached_tokens"] == 512
+        assert scheduler_stats["last_cache_reuse_skip"]["full_prefill_tokens"] == 4096
+        assert scheduler_stats["last_cache_reuse_skip"]["cache_contract"] == "hybrid_ssm"
+        assert scheduler_stats["last_cache_reuse_skip"][
+            "partial_reuse_unavailable_reason"
+        ] == "no_block_aligned_ssm_checkpoint"
         assert scheduler_stats["cache_reuse_partial_downgrades"] == 1
         assert scheduler_stats["cache_reuse_partial_tokens"] == 2048
         assert scheduler_stats["last_cache_reuse_partial"]["used_cached_tokens"] == 2048
@@ -3300,6 +3557,32 @@ class TestTurboQuantKVTelemetry:
         assert ssm["disk_directory"] == "/tmp/vmlx-test/ssm_companion"
 
     @pytest.mark.asyncio
+    async def test_cache_stats_reports_disabled_kv_quant_without_zero_bit_ui(self, monkeypatch):
+        import vmlx_engine.server as server
+
+        class _Engine:
+            is_mllm = False
+
+            def get_cache_stats(self):
+                return None
+
+        class _Scheduler:
+            _kv_cache_bits = 0
+            _kv_cache_group_size = 64
+            disk_cache = None
+            paged_cache_manager = None
+
+            def get_stats(self):
+                return {}
+
+        monkeypatch.setattr(server, "_engine", _Engine())
+        monkeypatch.setattr(server, "_get_scheduler", lambda: _Scheduler())
+
+        payload = await server.cache_stats()
+
+        assert payload["kv_cache_quantization"] == {"enabled": False}
+
+    @pytest.mark.asyncio
     async def test_health_endpoint_projects_scheduler_pressure_telemetry(
         self, monkeypatch
     ):
@@ -3317,6 +3600,17 @@ class TestTurboQuantKVTelemetry:
                     "num_waiting": 3,
                     "num_running": 1,
                     "ewma_ttft_seconds": 58.973,
+                    "cache_hit_requests": 5,
+                    "cache_hit_tokens": 8192,
+                    "cache_hit_tokens_by_detail": {"paged+ssm": 8192},
+                    "batch_generator": {
+                        "hybrid_kv_without_ssm_hits": 2,
+                        "hybrid_kv_without_ssm_tokens": 1536,
+                        "last_hybrid_kv_without_ssm": {
+                            "reason": "checkpoint_incomplete",
+                            "checkpoint_tokens": 512,
+                        },
+                    },
                     "cache_reuse_skips": 2,
                     "cache_reuse_skip_tokens": 4096,
                     "last_cache_reuse_skip": {
@@ -3344,6 +3638,12 @@ class TestTurboQuantKVTelemetry:
         assert scheduler["num_waiting"] == 3
         assert scheduler["num_running"] == 1
         assert scheduler["ewma_ttft_seconds"] == 58.973
+        assert scheduler["cache_hit_requests"] == 5
+        assert scheduler["cache_hit_tokens"] == 8192
+        assert scheduler["cache_hit_tokens_by_detail"]["paged+ssm"] == 8192
+        assert scheduler["hybrid_kv_without_ssm_hits"] == 2
+        assert scheduler["hybrid_kv_without_ssm_tokens"] == 1536
+        assert scheduler["last_hybrid_kv_without_ssm"]["checkpoint_tokens"] == 512
         assert scheduler["cache_reuse_skips"] == 2
         assert scheduler["cache_reuse_skip_tokens"] == 4096
         assert scheduler["last_cache_reuse_skip"]["reason"] == (
@@ -3443,6 +3743,9 @@ class TestTurboQuantKVTelemetry:
             "cache_reuse_skips",
             "cache_reuse_skip_tokens",
             "last_cache_reuse_skip",
+            "cache_hit_requests",
+            "cache_hit_tokens",
+            "cache_hit_tokens_by_detail",
             "cache_reuse_partial_downgrades",
             "cache_reuse_partial_tokens",
             "last_cache_reuse_partial",
@@ -3455,15 +3758,37 @@ class TestTurboQuantKVTelemetry:
         assert "merge_budget = avail * budget_fraction" in scheduler_source
         assert '"budget_mb"' in scheduler_source
         assert "Cache Reuse Skips" in cache_panel_source
+        assert "Cache Hit Tokens" in cache_panel_source
+        assert "Hit Tokens by Detail" in cache_panel_source
+        assert "hybrid_kv_without_ssm" in Path("./vmlx_engine/server.py").read_text()
+        assert "ssm_prefix_lookup" in Path("./vmlx_engine/mllm_batch_generator.py").read_text()
+        assert "Hybrid KV-Only Misses" in cache_panel_source
+        assert "KV-Only Tokens" in cache_panel_source
+        assert "last_hybrid_kv_without_ssm" in cache_panel_source
+        assert "Hybrid KV-Only Misses" in performance_panel_source
+        assert "last_hybrid_kv_without_ssm" in performance_panel_source
         assert "Partial Reuse" in cache_panel_source
         assert "last_cache_reuse_skip" in cache_panel_source
         assert "last_cache_reuse_partial" in cache_panel_source
+        assert "used_needed_mb" in cache_panel_source
+        assert "budgeted" in cache_panel_source
         assert "needed_mb" in cache_panel_source
         assert "budget_mb" in cache_panel_source
         assert "available_mb" in cache_panel_source
+        assert "partial reuse failed" in cache_panel_source
+        assert "dropped_cached_tokens" in cache_panel_source
+        assert "full_prefill_tokens" in cache_panel_source
+        assert "partial_reuse_unavailable_reason" in cache_panel_source
         assert "Partial Reuse" in performance_panel_source
+        assert "Cache Hit Tokens" in performance_panel_source
         assert "last_cache_reuse_partial" in performance_panel_source
+        assert "used_needed_mb" in performance_panel_source
+        assert "budgeted" in performance_panel_source
         assert "budget_mb" in performance_panel_source
+        assert "partial reuse failed" in performance_panel_source
+        assert "dropped_cached_tokens" in performance_panel_source
+        assert "full_prefill_tokens" in performance_panel_source
+        assert "partial_reuse_unavailable_reason" in performance_panel_source
 
     def test_cache_stats_surface_displays_l2_token_totals(self):
         cache_panel_source = Path(
@@ -3476,6 +3801,20 @@ class TestTurboQuantKVTelemetry:
         assert "L2 Tokens on Disk" in cache_panel_source
         assert "SSM L2 Tokens" in cache_panel_source
 
+    def test_performance_panel_displays_jangtq_sidecar_layout(self):
+        performance_panel_source = Path(
+            "./panel/src/renderer/src/components/sessions/PerformancePanel.tsx"
+        ).read_text()
+
+        assert "prestacked_bundle" in performance_panel_source
+        assert "JANGTQ Layout" in performance_panel_source
+        assert "runtime sidecar" in performance_panel_source
+        assert "F16 Passthrough" in performance_panel_source
+        assert "passthrough_bit_widths_used" in performance_panel_source
+        assert "routed_expert_bits_label" in performance_panel_source
+        assert "compat_warnings" in performance_panel_source
+        assert "grouped-Conv1d" in Path("./vmlx_engine/server.py").read_text()
+
     def test_panel_defaults_are_speed_oriented_and_labels_match_values(self):
         session_form_source = Path(
             "./panel/src/renderer/src/components/sessions/SessionConfigForm.tsx"
@@ -3483,19 +3822,38 @@ class TestTurboQuantKVTelemetry:
         cache_panel_source = Path(
             "./panel/src/renderer/src/components/sessions/CachePanel.tsx"
         ).read_text()
+        settings_flow_source = Path("./panel/tests/settings-flow.test.ts").read_text()
         sessions_source = Path("./panel/src/main/sessions.ts").read_text()
+        defaults_yaml = Path("./vmlx_engine/config/defaults.yaml").read_text()
+        config_models = Path("./vmlx_engine/config/models.py").read_text()
 
         assert "maxNumSeqs: 64" in session_form_source
+        assert "prefillBatchSize: 1024" in session_form_source
+        assert "completionBatchSize: 1024" in session_form_source
         assert "enableJit: true" in session_form_source
         assert "maxNumSeqs: 64" in sessions_source
+        assert "prefillBatchSize: 1024" in sessions_source
+        assert "completionBatchSize: 1024" in sessions_source
         assert 'unlimitedLabel="Default (64)"' in session_form_source
         assert 'unlimitedLabel="Default (1024)"' in session_form_source
         assert 'unlimitedLabel="Default (2048)"' in session_form_source
-        assert '"--max-num-seqs", type=int, default=64' in Path(
-            "./vmlx_engine/cli.py"
-        ).read_text()
+        cli_source = Path("./vmlx_engine/cli.py").read_text()
+        assert '"--max-num-seqs", type=int, default=64' in cli_source
+        assert '"--prefill-batch-size", type=int, default=1024' in cli_source
+        assert '"--completion-batch-size", type=int, default=1024' in cli_source
+        assert "max_concurrent_requests: 64" in defaults_yaml
+        assert "prefill_batch_size: 1024" in defaults_yaml
+        assert "completion_batch_size: 1024" in defaults_yaml
+        assert 'quantization: "q4"' in defaults_yaml
+        assert 'quantization: "turboquant"' not in defaults_yaml
+        assert "max_blocks: 1000" in defaults_yaml
+        assert "max_concurrent_requests: int = 64" in config_models
+        assert "prefill_batch_size: int = 1024" in config_models
+        assert "completion_batch_size: int = 1024" in config_models
+        assert "max_blocks: int = 1000" in config_models
         assert "defaults to 5" not in sessions_source
-        assert "default: 256" not in Path("./vmlx_engine/cli.py").read_text()
+        assert "default: 256" not in cli_source
+        assert "backend default 8" not in settings_flow_source
         assert "total_tokens_on_disk" in cache_panel_source
         assert "health.cache" in Path(
             "./panel/src/renderer/src/components/sessions/PerformancePanel.tsx"
@@ -3522,6 +3880,361 @@ class TestTurboQuantKVTelemetry:
             assert flag in preview_source
         assert "staleImageFlags" in sessions_source
         assert "staleImageFlags" in preview_source
+
+    def test_panel_startup_defaults_sanitize_incompatible_saved_modes(self):
+        sessions_source = Path("./panel/src/main/sessions.ts").read_text()
+        preview_source = Path(
+            "./panel/src/renderer/src/components/sessions/SessionSettings.tsx"
+        ).read_text()
+        form_source = Path(
+            "./panel/src/renderer/src/components/sessions/SessionConfigForm.tsx"
+        ).read_text()
+
+        for source in (sessions_source, preview_source):
+            assert "effectiveFlashMoe" in source
+            assert "effectiveDistributed" in source
+            assert "dsv4Active" in source
+            assert "effectiveEnableJit" in source
+            assert "if (effectiveFlashMoe)" in source
+            assert "if (effectiveDistributed)" in source
+            assert "if (effectiveEnableJit)" in source
+            assert "if (config.enableJit) args.push('--enable-jit')" not in source
+
+        assert "detectedFamily === 'deepseek-v4'" in form_source
+        # JIT incompat list expanded 2026-05-09 to include TurboQuant
+        # (engine skips mx.compile for TurboQuantKVCache; UI now matches).
+        assert (
+            "disabled={flashMoeActive || distributedActive || dsv4Active || turboQuantActive}"
+            in form_source
+        )
+        assert (
+            "checked={!!config.enableJit && !flashMoeActive && !distributedActive && !dsv4Active && !turboQuantActive}"
+            in form_source
+        )
+
+    def test_responses_long_context_tool_cache_gate_script_pins_artifacts(self):
+        gate_source = Path(
+            "./tests/cross_matrix/run_responses_long_tool_cache_gate.py"
+        ).read_text()
+
+        for marker in (
+            "/v1/responses",
+            "/v1/cache/stats",
+            "/health",
+            "previous_response_id",
+            "function_call_output",
+            "TOOL_DEFINITIONS",
+            "target_chars_per_turn",
+            "10000",
+            "SUMMARY.md",
+            "SUMMARY.json",
+            "tail_review",
+            "cached_tokens",
+            "scheduler_stats",
+            "visible_output_observed",
+            "final_turn_visible_output",
+            "final_turn_no_tools",
+            "final_turn_disable_thinking",
+            "final_turn_tools_disabled",
+            "final_turn_thinking_disabled",
+            "require_cache_each_turn_after_first",
+            "cache_reuse_each_turn_after_first",
+            "_cache_acceptance",
+            "_extract_warnings",
+            "tools_enabled",
+            "enable_thinking",
+            "overall_pass",
+            "result =",
+            "_tools_enabled_for_turn",
+            "resolve_tool_calls_in_turn",
+            "Tool results are provided. Produce a visible answer",
+            "require_tool_call_each_turn",
+            "tool_call_each_required_turn",
+            "_max_cached_tokens",
+            "request_round",
+            "response_round",
+            "tool_choice_mode",
+            "--tool-choice",
+            "resolution_tool_choice",
+            "--resolution-tool-choice",
+            "no_tool_markup_leak",
+            "_tool_markup_leak",
+            "require_tool_evidence",
+            "--require-tool-evidence",
+            "_tool_grounding",
+            "tool_grounded",
+            "tool_evidence_markers",
+        ):
+            assert marker in gate_source
+
+    def test_responses_long_context_tool_cache_gate_does_not_count_reasoning_as_visible(self):
+        import runpy
+
+        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
+        extract_output_text = gate["_extract_output_text"]
+        extract_reasoning = gate["_extract_reasoning"]
+
+        reasoning_only = {
+            "output": [
+                {
+                    "type": "reasoning",
+                    "content": [{"type": "reasoning", "text": "internal cache analysis"}],
+                }
+            ]
+        }
+        assert extract_output_text(reasoning_only) == ""
+        assert extract_reasoning(reasoning_only) == "internal cache analysis"
+
+        mixed_response = {
+            "output": [
+                {
+                    "type": "reasoning",
+                    "content": [{"type": "reasoning", "text": "hidden"}],
+                },
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "visible answer"}],
+                },
+            ]
+        }
+        assert extract_output_text(mixed_response) == "visible answer"
+
+    def test_responses_long_context_tool_cache_gate_can_require_cache_each_turn(self):
+        import runpy
+
+        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
+        cache_acceptance = gate["_cache_acceptance"]
+
+        seen, each = cache_acceptance(
+            [
+                {"cached_tokens": 0},
+                {"cached_tokens": 2895},
+                {"cached_tokens": 5562},
+            ],
+            require_cache_each_turn_after_first=True,
+        )
+        assert seen is True
+        assert each is True
+
+        seen, each = cache_acceptance(
+            [
+                {"cached_tokens": 0},
+                {"cached_tokens": 2895},
+                {"cached_tokens": 0},
+            ],
+            require_cache_each_turn_after_first=True,
+        )
+        assert seen is True
+        assert each is False
+
+        seen, each = cache_acceptance(
+            [
+                {"cached_tokens": 0},
+                {"cached_tokens": 2895},
+                {"cached_tokens": 0},
+            ],
+            require_cache_each_turn_after_first=False,
+        )
+        assert seen is True
+        assert each is True
+
+    def test_responses_long_context_tool_cache_gate_extracts_warnings(self):
+        import runpy
+
+        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
+        extract_warnings = gate["_extract_warnings"]
+
+        assert extract_warnings({"warnings": ["  current response warning  ", 42, ""]}) == [
+            "current response warning"
+        ]
+
+        assert extract_warnings(
+            {
+                "output": [
+                    {"type": "response.warning", "message": "stream warning"},
+                    {"type": "message", "content": []},
+                ]
+            }
+        ) == ["stream warning"]
+
+    def test_responses_long_context_tool_cache_gate_counts_cached_tokens_across_rounds(self):
+        import runpy
+
+        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
+        max_cached_tokens = gate["_max_cached_tokens"]
+
+        assert max_cached_tokens(
+            [
+                {"usage": {"input_tokens_details": {"cached_tokens": 0}}},
+                {"usage": {"input_tokens_details": {"cached_tokens": 8192}}},
+            ]
+        ) == 8192
+        assert max_cached_tokens([]) == 0
+
+    def test_responses_long_context_tool_cache_gate_tool_output_handles_bad_paths(self):
+        import runpy
+
+        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
+        tool_output = gate["_tool_output"]
+
+        out = tool_output(
+            Path("."),
+            {
+                "name": "inspect_symbol",
+                "call_id": "call_bad_path",
+                "arguments": '{"path":"does-not-exist.py","symbol":"Scheduler"}',
+            },
+        )
+        assert out["type"] == "function_call_output"
+        assert out["call_id"] == "call_bad_path"
+        assert "not a readable file" in out["output"]
+
+    def test_responses_long_context_tool_cache_gate_inspect_symbol_searches_directories(self):
+        import runpy
+
+        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
+        tool_output = gate["_tool_output"]
+
+        out = tool_output(
+            Path("."),
+            {
+                "name": "inspect_symbol",
+                "call_id": "call_dir_path",
+                "arguments": '{"path":"vmlx_engine","symbol":"PAGED_CACHE_SCHEMA_VERSION","context_lines":2}',
+            },
+        )
+        assert out["type"] == "function_call_output"
+        assert out["call_id"] == "call_dir_path"
+        assert "not a readable file" not in out["output"]
+        assert "PAGED_CACHE_SCHEMA_VERSION" in out["output"]
+        assert "vmlx_engine/" in out["output"]
+        assert "build/lib" not in out["output"]
+
+    def test_responses_long_context_tool_cache_gate_can_require_tool_each_turn(self):
+        import runpy
+
+        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
+        tool_acceptance = gate["_tool_acceptance"]
+
+        assert tool_acceptance(
+            [
+                {"tools_enabled": True, "function_calls": [{"name": "grep_repo"}]},
+                {"tools_enabled": True, "function_calls": [{"name": "grep_repo"}]},
+            ],
+            require_tool_call=True,
+            require_tool_call_each_turn=True,
+        ) == (True, True)
+        assert tool_acceptance(
+            [
+                {"tools_enabled": True, "function_calls": [{"name": "grep_repo"}]},
+                {"tools_enabled": True, "function_calls": []},
+            ],
+            require_tool_call=True,
+            require_tool_call_each_turn=True,
+        ) == (True, False)
+
+    def test_responses_long_context_tool_cache_gate_rejects_visible_tool_markup_leak(self):
+        import runpy
+
+        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
+        tool_markup_leak = gate["_tool_markup_leak"]
+
+        assert tool_markup_leak("plain visible answer") is False
+        assert tool_markup_leak("<minimax:tool_call><invoke name=\"grep_repo\">") is True
+        assert tool_markup_leak("<｜DSML｜invoke name=\"grep_repo\">") is True
+
+    def test_responses_long_context_tool_cache_gate_can_require_tool_evidence(self):
+        import runpy
+
+        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
+        tool_grounding = gate["_tool_grounding"]
+
+        tool_outputs = [
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": (
+                    "vmlx_engine/scheduler.py:2431: def _cache_reuse_budget_fraction():\n"
+                    "vmlx_engine/scheduler.py:2440: return max(0.10, min(0.95, value))"
+                ),
+            }
+        ]
+
+        grounded = tool_grounding(
+            "Risk is in budget sizing. TOOL_EVIDENCE: vmlx_engine/scheduler.py:2431",
+            tool_outputs,
+        )
+        assert grounded["grounded"] is True
+        assert grounded["marker"] == "vmlx_engine/scheduler.py:2431"
+
+        ungrounded = tool_grounding(
+            "Risk is in budget sizing, but no exact file line is cited.",
+            tool_outputs,
+        )
+        assert ungrounded["grounded"] is False
+        assert "vmlx_engine/scheduler.py:2431" in ungrounded["markers"]
+
+    def test_responses_long_context_tool_cache_gate_rejects_no_match_tool_evidence(self):
+        import runpy
+
+        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
+        tool_grounding = gate["_tool_grounding"]
+
+        no_match = [
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": "no matches",
+            }
+        ]
+
+        result = tool_grounding("TOOL_EVIDENCE: no matches", no_match)
+        assert result["grounded"] is False
+        assert result["markers"] == []
+        assert result["reason"] == "no_file_line_tool_evidence"
+
+    def test_responses_long_context_tool_cache_gate_resolution_tools_mode(self):
+        import runpy
+
+        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
+        resolution_tools_enabled = gate["_resolution_tools_enabled"]
+
+        assert resolution_tools_enabled("none") is False
+        assert resolution_tools_enabled("auto") is True
+        assert resolution_tools_enabled("required") is True
+
+    def test_responses_long_context_tool_cache_gate_can_disable_final_turn_tools(self):
+        import runpy
+
+        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
+        tools_enabled_for_turn = gate["_tools_enabled_for_turn"]
+
+        assert tools_enabled_for_turn(1, 3, True) is True
+        assert tools_enabled_for_turn(2, 3, True) is True
+        assert tools_enabled_for_turn(3, 3, True) is False
+        assert tools_enabled_for_turn(3, 3, False) is True
+
+    def test_responses_long_context_tool_cache_gate_can_disable_final_turn_thinking(self):
+        import runpy
+
+        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
+        enable_thinking_for_turn = gate["_enable_thinking_for_turn"]
+
+        assert enable_thinking_for_turn(1, 3, True, True) is True
+        assert enable_thinking_for_turn(2, 3, True, True) is True
+        assert enable_thinking_for_turn(3, 3, True, True) is False
+        assert enable_thinking_for_turn(3, 3, False, True) is False
+
+    def test_responses_long_context_tool_cache_gate_requires_real_tool_path(self):
+        import runpy
+
+        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
+        prompt = gate["_build_prompt"](Path("."), 1, 200)
+        instructions = gate["_instructions"]()
+
+        assert "must call exactly one provided tool" in prompt
+        assert "must call exactly one provided tool" in instructions
+        assert "When tools are not available, answer directly" in instructions
 
     def test_native_cache_status_reports_dsv4_separately_from_tq_kv(self, monkeypatch):
         from types import SimpleNamespace
@@ -3565,6 +4278,30 @@ class TestTurboQuantKVTelemetry:
         assert "standard_kv" in status["components"]
         assert "cca_conv_state" in status["components"]
         assert "cca_prev_hidden" in status["components"]
+        assert status["generic_turboquant_kv"]["enabled"] is False
+        assert status["paged"] is True
+        assert status["block_disk_l2"] is True
+
+    def test_native_cache_status_reports_mixed_swa_kv(self):
+        from types import SimpleNamespace
+        from vmlx_engine.server import _native_cache_status
+
+        scheduler = SimpleNamespace(
+            _model_type_for_runtime="gemma4",
+            _mixed_attention_cache_model=True,
+            _tq_active=False,
+            block_aware_cache=object(),
+            paged_cache_manager=SimpleNamespace(_disk_store=object()),
+        )
+
+        status = _native_cache_status(scheduler)
+
+        assert status["family"] == "gemma4"
+        assert status["schema"] == "mixed_swa_kv_v1"
+        assert status["cache_type"] == "mixed_swa_kv"
+        assert "sliding_window_kv" in status["components"]
+        assert "full_attention_kv" in status["components"]
+        assert "rotating_window_metadata" in status["components"]
         assert status["generic_turboquant_kv"]["enabled"] is False
         assert status["paged"] is True
         assert status["block_disk_l2"] is True
@@ -3644,6 +4381,29 @@ class TestTurboQuantKVTelemetry:
         assert status["profile"] == "JANGTQ2"
         assert status["sidecar"]["jangtq_runtime"] is True
 
+    def test_quantization_status_detects_prestacked_jangtq_bundle(self, tmp_path):
+        from vmlx_engine.server import _model_quantization_status
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "deepseek_v4",
+            "weight_format": "mxtq",
+            "mxtq_bits": 2,
+        }))
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "weight_format": "mxtq",
+            "mxtq_bits": {"routed_expert": 2},
+        }))
+        (tmp_path / "model.safetensors.index.json").write_text(json.dumps({
+            "weight_map": {
+                "model.layers.0.mlp.switch_mlp.gate_proj.tq_packed": "model-00001.safetensors",
+            }
+        }))
+
+        status = _model_quantization_status(str(tmp_path))
+
+        assert status["codec"] == "turboquant_codebook"
+        assert status["sidecar"]["prestacked_bundle"] is True
+
     def test_quantization_status_reads_jang_role_bit_plan(self, tmp_path):
         from vmlx_engine.server import _model_quantization_status
 
@@ -3674,6 +4434,97 @@ class TestTurboQuantKVTelemetry:
         assert status["routed_expert_bits"] == 2
         assert status["mxtq_bits_by_role"]["attention"] == 8
         assert status["target_bits"] == 2
+
+    def test_quantization_status_handles_jangtq_k_mixed_routed_bits(self, tmp_path):
+        from vmlx_engine.server import _model_quantization_status
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "weight_format": "mxtq",
+            "quantization": {"bits": 2, "group_size": 64},
+        }))
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "weight_format": "mxtq",
+            "mxtq_bits": {
+                "attention": 8,
+                "routed_expert": {
+                    "gate_proj": 2,
+                    "up_proj": 2,
+                    "down_proj": 4,
+                },
+            },
+        }))
+
+        status = _model_quantization_status(str(tmp_path))
+
+        assert status["codec"] == "turboquant_codebook"
+        assert "routed_expert_bits" not in status
+        assert status["routed_expert_bits_by_projection"] == {
+            "gate_proj": 2,
+            "up_proj": 2,
+            "down_proj": 4,
+        }
+        assert status["routed_expert_bits_label"] == "gate=2/up=2/down=4-bit"
+        assert status["target_bits"] == 2
+
+    def test_quantization_status_surfaces_jang_passthrough_bit_plan(self, tmp_path):
+        from vmlx_engine.server import _model_quantization_status
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "qwen3_next",
+            "quantization": {"bits": 2, "group_size": 64},
+        }))
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "weight_format": "jang",
+            "quantization": {
+                "method": "jang-importance",
+                "target_bits": 2,
+                "actual_bits": 2.2,
+                "bit_widths_used": [2, 4, 8],
+                "passthrough_bit_widths_used": [16],
+                "passthrough_tensor_count": 90,
+            },
+        }))
+
+        status = _model_quantization_status(str(tmp_path))
+
+        assert status["codec"] == "affine_quantized_matmul"
+        assert status["passthrough_bit_widths_used"] == [16]
+        assert status["passthrough_tensor_count"] == 90
+        assert "compat_warnings" not in status
+
+    def test_quantization_status_warns_when_hybrid_bundle_lacks_passthrough_metadata(self, tmp_path):
+        from vmlx_engine.server import _model_quantization_status
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "nemotron_h",
+            "quantization": {"bits": 2, "group_size": 64},
+        }))
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "weight_format": "jang",
+            "quantization": {
+                "method": "jang-importance",
+                "target_bits": 2,
+            },
+        }))
+
+        status = _model_quantization_status(str(tmp_path))
+
+        assert status["compat_warnings"]
+        assert "grouped-Conv1d layout backstop" in status["compat_warnings"][0]
+
+    def test_grouped_conv1d_native_error_gets_actionable_detail(self):
+        from vmlx_engine.server import _generation_error_detail
+
+        detail = _generation_error_detail(
+            ValueError(
+                "Given groups=8192 and weights of shape (8192,1,4), "
+                "expected to have 32768 input channels but got 8192 input channels instead."
+            )
+        )
+
+        assert "Grouped Conv1d layout mismatch" in detail
+        assert "re-convert with a newer jang build" in detail
+        assert "Original error:" in detail
 
     def test_acceleration_status_does_not_claim_metal_na_for_jangtq(self, monkeypatch, tmp_path):
         import vmlx_engine.server as server
@@ -3723,3 +4574,256 @@ class TestTurboQuantKVTelemetry:
         assert status["kernel_type"] == "affine_quantized_matmul"
         assert status["metal_na_capable"] is True
         assert status["metal_na_active_on_host"] is True
+
+    def test_mlx_metal_na_status_handles_namespace_mlx_package(self, monkeypatch, tmp_path):
+        """MLX can be a namespace package with mlx.__file__ == None.
+
+        The extension module path lives on mlx.core.__file__; NA telemetry must
+        use that fallback or the panel/API report "not available" even when the
+        installed metallib has NA symbols.
+        """
+        import sys
+        import types
+        import vmlx_engine.server as server
+
+        site = tmp_path / "site-packages"
+        metal = site / "mlx" / "lib" / "mlx.metallib"
+        metal.parent.mkdir(parents=True)
+        metal.write_bytes(b"prefix _nax_ NAXTile suffix")
+        core_so = site / "mlx" / "core.cpython-313-darwin.so"
+        core_so.write_bytes(b"fake")
+
+        monkeypatch.setitem(
+            sys.modules,
+            "mlx",
+            types.SimpleNamespace(__file__=None),
+        )
+        monkeypatch.setitem(
+            sys.modules,
+            "mlx.core",
+            types.SimpleNamespace(__file__=str(core_so)),
+        )
+        server._metal_na_status_cache.clear()
+
+        status = server._mlx_metal_na_status()
+
+        assert status["available"] is True
+        assert status["nax_symbols"] == 1
+        assert status["naxtile_symbols"] == 1
+
+
+class TestNonStreamingReceiveDrainDisconnect:
+    """Active receive-drain detects ASGI http.disconnect events that
+    `Request.is_disconnected()` may miss when nothing else reads from the
+    receive channel.
+
+    Live evidence (codex 2026-05-09 14:18): client TCP close + read-timeout
+    left scheduler num_running=1 because is_disconnected() polling didn't
+    surface the disconnect event in time. Active receive-drain catches it.
+    """
+
+    def test_helper_detects_http_disconnect_via_receive_channel(self):
+        import asyncio
+        import pytest
+        from fastapi import HTTPException
+        from vmlx_engine.server import _await_chat_with_disconnect_abort
+
+        class FakeEngine:
+            def __init__(self):
+                self.aborted = None
+
+            async def chat(self, **kwargs):
+                # Run forever until aborted
+                await asyncio.sleep(10)
+                return None
+
+            async def abort_request(self, request_id):
+                self.aborted = request_id
+                return True
+
+        class FakeRequest:
+            """ASGI receive channel that emits http.disconnect after a tick."""
+            def __init__(self):
+                self._sent = False
+
+            async def is_disconnected(self):
+                # Simulate Starlette's lazy poll missing the event because
+                # nothing is actively draining receive.
+                return False
+
+            async def receive(self):
+                # First call returns the disconnect event after a small delay
+                # so the helper's parallel drain task can catch it.
+                if not self._sent:
+                    self._sent = True
+                    await asyncio.sleep(0.01)
+                    return {"type": "http.disconnect"}
+                # Subsequent calls block forever (channel exhausted).
+                await asyncio.sleep(60)
+                return {}
+
+        async def run():
+            engine = FakeEngine()
+            req = FakeRequest()
+            with pytest.raises(HTTPException) as exc:
+                await _await_chat_with_disconnect_abort(
+                    engine,
+                    messages=[],
+                    chat_kwargs={},
+                    timeout=30,
+                    fastapi_request=req,
+                    request_id="resp_receive_drain_test",
+                    endpoint="test",
+                    poll_interval=0.05,
+                )
+            assert exc.value.status_code == 499
+            assert engine.aborted == "resp_receive_drain_test", (
+                "Engine must be aborted when receive-drain catches http.disconnect "
+                "even if is_disconnected() never returned True"
+            )
+
+        asyncio.run(run())
+
+    def test_helper_safe_when_request_has_no_receive_method(self):
+        """Backwards-compat: legacy callers may pass a fake request without
+        `.receive`. Helper must not crash; falls back to is_disconnected polling."""
+        import asyncio
+        from vmlx_engine.server import _await_chat_with_disconnect_abort
+
+        class FakeOutput:
+            completion_tokens = 1
+
+        class FakeEngine:
+            async def chat(self, **kwargs):
+                return FakeOutput()
+
+        class FakeRequest:
+            # NO `.receive` attribute
+            async def is_disconnected(self):
+                return False
+
+        async def run():
+            output = await _await_chat_with_disconnect_abort(
+                FakeEngine(),
+                messages=[],
+                chat_kwargs={},
+                timeout=10,
+                fastapi_request=FakeRequest(),
+                request_id="resp_no_receive",
+                endpoint="test",
+                poll_interval=0.01,
+            )
+            assert output.completion_tokens == 1
+
+        asyncio.run(run())
+
+    def test_helper_uses_single_receive_reader_when_drain_available(self):
+        """When `.receive` exists, the active drain owns ASGI disconnect reads.
+
+        Starlette's `Request.is_disconnected()` is implemented as a zero-timeout
+        call to the same receive function. Calling it while the drain task is
+        blocked in receive creates two readers on the ASGI receive channel, which
+        is not a safe contract for all servers.
+        """
+        import asyncio
+        from vmlx_engine.server import _await_chat_with_disconnect_abort
+
+        class FakeOutput:
+            completion_tokens = 1
+
+        class FakeEngine:
+            async def chat(self, **kwargs):
+                await asyncio.sleep(0.03)
+                return FakeOutput()
+
+        class FakeRequest:
+            def __init__(self):
+                self.is_disconnected_calls = 0
+
+            async def is_disconnected(self):
+                self.is_disconnected_calls += 1
+                return False
+
+            async def receive(self):
+                await asyncio.sleep(60)
+                return {}
+
+        async def run():
+            req = FakeRequest()
+            output = await _await_chat_with_disconnect_abort(
+                FakeEngine(),
+                messages=[],
+                chat_kwargs={},
+                timeout=10,
+                fastapi_request=req,
+                request_id="resp_single_receive_reader",
+                endpoint="test",
+                poll_interval=0.001,
+            )
+            assert output.completion_tokens == 1
+            assert req.is_disconnected_calls == 0
+
+        asyncio.run(run())
+
+
+class TestJitTurboQuantSymmetricGuard:
+    """Engine skips mx.compile for TurboQuantKVCache (GH issue #66) AND panel
+    suppresses --enable-jit when isTurboQuant. The two guards must stay
+    symmetric — if one drifts away, the other breaks user trust (UI says
+    JIT is disabled but engine still tries to compile, or vice versa).
+    """
+
+    def test_engine_jit_skip_for_turboquant_make_cache(self):
+        """Engine apply_jit_compilation must short-circuit when the active
+        model has the TurboQuant patched make_cache function name."""
+        import inspect
+        from pathlib import Path
+
+        source = Path("vmlx_engine/server.py").read_text()
+        # The skip block is identified by these load-bearing strings:
+        assert "_turboquant_make_cache" in source
+        assert "_tq_make_cache" in source
+        assert "JIT: Skipping mx.compile — TurboQuantKVCache is active" in source
+        # Make sure the early-return is wired in (return after detecting TQ name)
+        assert (
+            'if _make_cache_name in ("_turboquant_make_cache", "_tq_make_cache"):'
+            in source
+        )
+
+    def test_panel_session_launcher_suppresses_jit_for_turboquant(self):
+        """Panel launcher must compute effectiveEnableJit with turboQuantActive
+        gating; matches the engine's TQ-skip behavior."""
+        from pathlib import Path
+        sessions_source = Path("./panel/src/main/sessions.ts").read_text()
+
+        assert "turboQuantActive" in sessions_source
+        assert "(detected as any).isTurboQuant" in sessions_source
+        # effectiveEnableJit must include !turboQuantActive in the AND chain
+        assert "!turboQuantActive" in sessions_source
+
+    def test_panel_form_disables_jit_checkbox_for_turboquant(self):
+        """Panel JIT checkbox must be visually disabled + warned when
+        turboQuantActive is true. If this test fails, user sees a checkbox
+        they can tick that the engine will silently ignore."""
+        from pathlib import Path
+        form = Path(
+            "./panel/src/renderer/src/components/sessions/SessionConfigForm.tsx"
+        ).read_text()
+
+        assert "turboQuantActive" in form
+        assert "detectedIsTurboQuant" in form
+        # disabled prop covers turboQuantActive
+        assert (
+            "disabled={flashMoeActive || distributedActive || dsv4Active || turboQuantActive}"
+            in form
+        )
+
+    def test_detect_config_stamps_isTurboQuant_flag(self):
+        """detectModelConfigFromDir must set isTurboQuant when bundle is TQ.
+        Without this stamp, the panel guards above never fire."""
+        from pathlib import Path
+        registry = Path("./panel/src/main/model-config-registry.ts").read_text()
+
+        assert "isTurboQuant" in registry
+        # The stamp site sets next.isTurboQuant = true
+        assert "next.isTurboQuant = true" in registry

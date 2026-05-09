@@ -100,9 +100,9 @@ def load_mistral3_model(model_path: str | Path) -> Tuple[Any, Any]:
                     "runtime in vMLX. The bundle loads structurally but the "
                     "2-bit dense TurboQuant text decoder stalls on full prefill "
                     "and produces degenerate text. Use the validated MXFP4 "
-                    "bundle instead: "
-                    "/Volumes/ModelDrive/jangq-ai/OsaurusAI/"
-                    "Mistral-Medium-3.5-128B-mxfp4. To debug the unstable "
+                    "bundle instead "
+                    "(Mistral-Medium-3.5-128B-mxfp4 from your preferred "
+                    "local store). To debug the unstable "
                     "JANGTQ path anyway, set "
                     "VMLX_ALLOW_UNSTABLE_MISTRAL35_JANGTQ=1."
                 )

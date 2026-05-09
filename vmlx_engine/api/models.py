@@ -385,7 +385,7 @@ class PromptTokensDetails(BaseModel):
     """Breakdown of prompt token usage."""
 
     cached_tokens: int = 0
-    cache_detail: str | None = None  # e.g. "paged", "paged+ssm(23)+tq", "disk"
+    cache_detail: str | None = None  # e.g. "paged", "paged+ssm", "paged+disk", "disk"
 
 
 class Usage(BaseModel):
@@ -881,6 +881,12 @@ class ResponsesObject(BaseModel):
     usage: ResponsesUsage = Field(default_factory=ResponsesUsage)
     previous_response_id: str | None = None
     error: dict | None = None
+    # Non-fatal warnings surfaced to the client. Set when the response is
+    # technically valid but a chain/coherence/cache-prefix risk applies — e.g.,
+    # `previous_response_id` chained a prior response that produced reasoning
+    # only (no visible message, no tool calls). See
+    # docs/internal/AUDIT_responses_reasoning_history_alignment_2026_05_09.md.
+    warnings: list[str] | None = None
 
     @computed_field
     @property
