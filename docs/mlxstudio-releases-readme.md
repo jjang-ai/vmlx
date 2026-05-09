@@ -7,6 +7,10 @@
 </p>
 
 <p align="center">
+  <em>Looking for a native Swift macOS app or Swift inference engine? See <a href="https://osaurus.ai">osaurus.ai</a>.</em>
+</p>
+
+<p align="center">
   <a href="https://github.com/jjang-ai/mlxstudio/releases/latest"><img src="https://img.shields.io/github/v/release/jjang-ai/mlxstudio?style=flat-square&label=Latest%20Release&color=blue" alt="Latest Release"></a>
   <a href="https://github.com/jjang-ai/mlxstudio/releases"><img src="https://img.shields.io/github/downloads/jjang-ai/mlxstudio/total?style=flat-square&label=Downloads&color=green" alt="Downloads"></a>
   <img src="https://img.shields.io/badge/Platform-macOS%20ARM64-lightgrey?style=flat-square&logo=apple" alt="Platform">

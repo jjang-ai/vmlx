@@ -624,7 +624,42 @@ def is_hybrid_ssm_cache(prompt_cache) -> bool:
     return any(isinstance(layer, ArraysCache) for layer in prompt_cache)
 
 
-_HYBRID_MODEL_TYPES = frozenset({"nemotron_h", "qwen3_next"})
+_HYBRID_MODEL_TYPES = frozenset({
+    # Hybrid SSM / linear-attention families that produce ArraysCache-like
+    # cumulative state alongside normal attention KV. Keep DSV4/ZAYA out of
+    # this list: they have dedicated typed cache contracts and must not route
+    # through the generic SSM companion path.
+    "nemotron_h",
+    "qwen3_next",
+    "bailing_hybrid",
+    "bailing_moe_v2_5",
+    "jamba",
+})
+
+_HYBRID_LAYER_TYPE_MARKERS = frozenset({
+    "linear_attention",
+    "gated_linear_attention",
+    "mamba",
+    "mamba2",
+    "ssm",
+})
+
+
+def _declares_hybrid_ssm_layer_types(config: dict) -> bool:
+    """Return True for explicit SSM/linear-attention layer declarations.
+
+    Sliding-window attention is intentionally excluded. Gemma/Laguna-style
+    SWA+full-attention models use RotatingKVCache + KVCache, not cumulative
+    ArraysCache state, so they are handled by the mixed-SWA/KV cache path
+    rather than the SSM companion cache.
+    """
+    for key in ("layer_types", "layer_type", "layers_block_type"):
+        value = config.get(key)
+        values = value if isinstance(value, list) else [value]
+        for item in values:
+            if str(item) in _HYBRID_LAYER_TYPE_MARKERS:
+                return True
+    return False
 
 
 def is_hybrid_ssm_config(config: dict) -> bool:
@@ -632,6 +667,8 @@ def is_hybrid_ssm_config(config: dict) -> bool:
     if "hybrid_override_pattern" in config:
         return True
     if config.get("model_type") in _HYBRID_MODEL_TYPES:
+        return True
+    if _declares_hybrid_ssm_layer_types(config):
         return True
     text_cfg = config.get("text_config")
     if isinstance(text_cfg, dict):

@@ -503,7 +503,40 @@ def test_is_hybrid_ssm_config_detects_known_model_type():
 
     assert is_hybrid_ssm_config({"model_type": "nemotron_h"}) is True
     assert is_hybrid_ssm_config({"model_type": "qwen3_next"}) is True
+    assert is_hybrid_ssm_config({"model_type": "bailing_hybrid"}) is True
+    assert is_hybrid_ssm_config({"model_type": "bailing_moe_v2_5"}) is True
+    assert is_hybrid_ssm_config({"model_type": "jamba"}) is True
     assert is_hybrid_ssm_config({"model_type": "llama"}) is False
+
+
+def test_is_hybrid_ssm_config_detects_linear_attention_layer_types():
+    from vmlx_engine.utils.ssm_companion_cache import is_hybrid_ssm_config
+
+    assert is_hybrid_ssm_config({
+        "model_type": "qwen3_5",
+        "text_config": {
+            "layer_types": ["linear_attention", "full_attention"],
+        },
+    }) is True
+    assert is_hybrid_ssm_config({
+        "model_type": "qwen3_5_moe",
+        "text_config": {
+            "model_type": "qwen3_5_moe_text",
+            "layer_types": ["linear_attention", "full_attention"],
+        },
+    }) is True
+
+
+def test_is_hybrid_ssm_config_does_not_treat_swa_as_ssm():
+    from vmlx_engine.utils.ssm_companion_cache import is_hybrid_ssm_config
+
+    assert is_hybrid_ssm_config({
+        "model_type": "gemma4",
+        "text_config": {
+            "model_type": "gemma4_text",
+            "layer_types": ["sliding_attention", "full_attention"],
+        },
+    }) is False
 
 
 def test_is_hybrid_ssm_config_handles_text_config_nesting():
