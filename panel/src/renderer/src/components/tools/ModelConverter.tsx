@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { ArrowLeft, CheckCircle2, XCircle, Play, Settings2, FolderOpen } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, XCircle, Play, Settings2, FolderOpen, AlertTriangle } from 'lucide-react'
 import { useStreamingOperation } from './useStreamingOperation'
 import { LogViewer } from './LogViewer'
+import { getJangCompatWarning } from '../../lib/jangCompat'
 
 type QuantMode = 'mlx' | 'jang'
 type Preset = 'balanced' | 'quality' | 'compact' | 'custom' | string
@@ -57,6 +58,35 @@ export function ModelConverter({ initialModelPath, onBack, onServe, models = [] 
 
   const [success, setSuccess] = useState<boolean | null>(null)
   const [outputPath, setOutputPath] = useState<string | undefined>()
+  const [detectedModelType, setDetectedModelType] = useState<string | null>(null)
+
+  // Detect model_type from source bundle so we can warn about risky
+  // profile/family combos before the user starts a conversion. Pure-frontend
+  // helper at lib/jangCompat; no IPC inside the helper itself.
+  useEffect(() => {
+    let cancelled = false
+    if (!modelPath || !modelPath.startsWith('/')) {
+      setDetectedModelType(null)
+      return
+    }
+    const api = (window as any).api?.models
+    if (!api?.detectConfig) return
+    api.detectConfig(modelPath).then((cfg: { model_type?: string; family?: string } | null) => {
+      if (cancelled) return
+      setDetectedModelType(cfg?.model_type || cfg?.family || null)
+    }).catch(() => {
+      if (cancelled) return
+      setDetectedModelType(null)
+    })
+    return () => { cancelled = true }
+  }, [modelPath])
+
+  const jangCompatWarning = (() => {
+    if (quantMode !== 'jang') return null
+    if (!(preset in JANG_PRESETS)) return null
+    const profile = JANG_PRESETS[preset].profile
+    return getJangCompatWarning(detectedModelType, profile)
+  })()
 
   const { running, logLines, wasCancelled, start, cancel } = useStreamingOperation()
 
@@ -351,6 +381,21 @@ export function ModelConverter({ initialModelPath, onBack, onServe, models = [] 
               <option value="rtn">RTN (fast — lower quality)</option>
               <option value="mse-all">MSE everywhere (slow — maximum quality)</option>
             </select>
+          </div>
+        )}
+
+        {/* JANG hybrid compatibility warning */}
+        {jangCompatWarning && (
+          <div
+            role="alert"
+            data-testid="jang-compat-warning"
+            className="flex items-start gap-2 p-3 border border-amber-500/40 bg-amber-500/5 rounded-lg"
+          >
+            <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+            <div className="text-xs text-amber-200">
+              <p className="font-medium">Compatibility note for {detectedModelType}</p>
+              <p className="mt-0.5 opacity-90">{jangCompatWarning}</p>
+            </div>
           </div>
         )}
 
