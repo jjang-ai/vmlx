@@ -238,6 +238,17 @@ class DiskCacheManager:
         finally:
             self._pool.put(conn)
 
+    def _total_tokens(self) -> int:
+        """Get total prompt tokens represented by persistent L2 entries."""
+        conn = self._pool.get()
+        try:
+            result = conn.execute(
+                "SELECT COALESCE(SUM(num_tokens), 0) FROM cache_entries"
+            ).fetchone()[0]
+            return int(result)
+        finally:
+            self._pool.put(conn)
+
     def fetch(self, tokens: List[int]) -> Optional[List[Any]]:
         """
         Look up a cached KV state for the given token sequence.
@@ -967,10 +978,13 @@ class DiskCacheManager:
         operations used the 26x-compressed TQ format vs standard float16.
         """
         total_size = self._total_size()
+        total_tokens = self._total_tokens()
         count = self._count_entries()
         with self._stats_lock:
             result = {
                 "entries": count,
+                "total_tokens_on_disk": total_tokens,
+                "total_cached_tokens": total_tokens,
                 "total_size_mb": round(total_size / 1024 / 1024, 2),
                 "max_size_gb": round(
                     self.max_size_bytes / 1024 / 1024 / 1024, 2

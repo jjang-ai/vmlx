@@ -16,16 +16,110 @@ interface HealthData {
     peak_mb: number
     cache_mb: number
   }
+  scheduler?: {
+    num_waiting?: number
+    num_running?: number
+    ewma_ttft_seconds?: number
+    cache_reuse_skips?: number
+    cache_reuse_skip_tokens?: number
+    last_cache_reuse_skip?: {
+      reason?: string
+      needed_mb?: number
+      available_mb?: number
+      cached_tokens?: number
+    } | null
+  }
+  cache?: {
+    scheduler_cache?: {
+      total_tokens_cached?: number
+      tokens_saved?: number
+      allocated_blocks?: number
+    }
+    disk_cache?: {
+      entries?: number
+      total_tokens_on_disk?: number
+      hits?: number
+      misses?: number
+    }
+    block_disk_cache?: {
+      blocks_on_disk?: number
+      total_tokens_on_disk?: number
+      disk_hits?: number
+      disk_misses?: number
+    }
+    ssm_companion?: {
+      entries?: number
+      max_entries?: number
+      disk?: {
+        entries?: number
+        total_tokens_on_disk?: number
+        hits?: number
+        misses?: number
+      }
+    }
+    totals?: {
+      ram_tokens_cached?: number
+      l2_prompt_tokens_on_disk?: number
+      l2_block_tokens_on_disk?: number
+      ssm_tokens_on_disk?: number
+      l2_tokens_on_disk?: number
+      l2_tokens_on_disk_store_sum?: number
+      l2_tokens_on_disk_note?: string
+    }
+  }
   kv_cache_quantization?: {
     enabled: boolean
     bits?: number
     group_size?: number
+  }
+  turboquant_kv_cache?: {
+    enabled: boolean
+    single_sequence_only?: boolean
+    effective_max_num_seqs?: number
+    effective_prefill_batch_size?: number
+    effective_completion_batch_size?: number
+  }
+  native_cache?: {
+    family?: string
+    schema?: string
+    cache_type?: string
+    generic_turboquant_kv?: {
+      enabled?: boolean
+      reason?: string
+    }
   }
   quantization_format?: {
     type: string
     target_bits?: number
     actual_bits?: number
     block_size?: number
+  }
+  quantization?: {
+    codec?: string
+    weight_format?: string
+    backend?: string
+    profile?: string
+    mxtq_bits?: number
+    mxtq_bits_by_role?: Record<string, number>
+    routed_expert_bits?: number
+    target_bits?: number
+    actual_bits?: number
+    config_bits?: number
+    sidecar?: {
+      jang_config?: boolean
+      jangtq_runtime?: boolean
+    }
+  }
+  acceleration?: {
+    kernel_type?: string
+    metal_na_capable?: boolean
+    metal_na_active_on_host?: boolean
+    reason?: string
+    metal_na_symbols?: {
+      available?: boolean
+      nax_symbols?: number
+      naxtile_symbols?: number
+    }
   }
 }
 
@@ -94,8 +188,137 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
                 value={`${(health.quantization_format.type || 'JANG').toUpperCase()} ${health.quantization_format.actual_bits ?? health.quantization_format.target_bits}-bit`}
               />
             )}
+            {health.quantization?.codec && (
+              <InfoCard
+                label="Weight Codec"
+                value={
+                  health.quantization.codec === 'turboquant_codebook'
+                    ? `JANGTQ ${health.quantization.routed_expert_bits ?? health.quantization.mxtq_bits ?? health.quantization.actual_bits ?? health.quantization.target_bits ?? '-'}-bit`
+                    : health.quantization.codec
+                }
+              />
+            )}
+            {health.acceleration?.kernel_type && (
+              <InfoCard
+                label="Metal NA"
+                value={
+                  health.acceleration.metal_na_active_on_host
+                    ? 'active'
+                    : health.acceleration.kernel_type === 'turboquant_codebook'
+                      ? 'not used by JANGTQ'
+                      : health.acceleration.metal_na_capable
+                        ? 'unavailable'
+                        : 'not applicable'
+                }
+              />
+            )}
             {health.kv_cache_quantization?.enabled && (
               <InfoCard label="KV Quant" value={`${health.kv_cache_quantization.bits}-bit`} />
+            )}
+            {health.native_cache?.cache_type && (
+              <InfoCard label="Native Cache" value={health.native_cache.cache_type} />
+            )}
+            {health.turboquant_kv_cache && (
+              <InfoCard
+                label="TQ-KV"
+                value={
+                  health.turboquant_kv_cache.enabled
+                    ? health.turboquant_kv_cache.single_sequence_only
+                      ? 'enabled (single-seq)'
+                      : 'enabled'
+                    : 'disabled'
+                }
+              />
+            )}
+            {health.turboquant_kv_cache?.single_sequence_only && (
+              <InfoCard
+                label="TQ Batch"
+                value={`${health.turboquant_kv_cache.effective_max_num_seqs ?? 1} seq / prefill ${health.turboquant_kv_cache.effective_prefill_batch_size ?? 1} / decode ${health.turboquant_kv_cache.effective_completion_batch_size ?? 1}`}
+              />
+            )}
+            {health.native_cache?.generic_turboquant_kv && (
+              <InfoCard
+                label="Generic TQ-KV"
+                value={
+                  health.native_cache.generic_turboquant_kv.enabled
+                    ? 'enabled'
+                    : `off: ${health.native_cache.generic_turboquant_kv.reason || 'native'}`
+                }
+              />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Scheduler */}
+      {health?.scheduler && (
+        <div>
+          <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Scheduler</h4>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <InfoCard
+              label="Queue"
+              value={`${health.scheduler.num_running ?? 0} running / ${health.scheduler.num_waiting ?? 0} waiting`}
+            />
+            {health.scheduler.ewma_ttft_seconds != null && (
+              <InfoCard
+                label="TTFT EWMA"
+                value={`${Number(health.scheduler.ewma_ttft_seconds || 0).toFixed(3)} s`}
+              />
+            )}
+            {health.scheduler.cache_reuse_skips != null && (
+              <InfoCard label="Cache Skips" value={String(health.scheduler.cache_reuse_skips || 0)} />
+            )}
+            {health.scheduler.cache_reuse_skip_tokens != null && health.scheduler.cache_reuse_skip_tokens > 0 && (
+              <InfoCard
+                label="Skipped Tokens"
+                value={(health.scheduler.cache_reuse_skip_tokens || 0).toLocaleString()}
+              />
+            )}
+          </div>
+          {health.scheduler.last_cache_reuse_skip && (
+            <div className="mt-2 text-xs bg-warning/10 border border-warning/30 text-warning px-3 py-2 rounded">
+              Cache reuse skipped: needed {health.scheduler.last_cache_reuse_skip.needed_mb ?? '?'} MB,
+              available {health.scheduler.last_cache_reuse_skip.available_mb ?? '?'} MB,
+              cached {(health.scheduler.last_cache_reuse_skip.cached_tokens ?? 0).toLocaleString()} tokens.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Cache */}
+      {health?.cache && (
+        <div>
+          <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Cache</h4>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            {health.cache.totals?.ram_tokens_cached != null && (
+              <InfoCard
+                label="RAM Cached Tokens"
+                value={(health.cache.totals.ram_tokens_cached || 0).toLocaleString()}
+              />
+            )}
+            {(health.cache.totals?.l2_tokens_on_disk_store_sum ?? health.cache.totals?.l2_tokens_on_disk) != null && (
+              <InfoCard
+                label="L2 Token Entries"
+                value={`${(health.cache.totals?.l2_tokens_on_disk_store_sum ?? health.cache.totals?.l2_tokens_on_disk ?? 0).toLocaleString()} store-sum`}
+              />
+            )}
+            {health.cache.disk_cache?.entries != null && (
+              <InfoCard
+                label="Prompt L2"
+                value={`${health.cache.disk_cache.entries || 0} entries / ${(health.cache.disk_cache.total_tokens_on_disk || 0).toLocaleString()} tokens`}
+              />
+            )}
+            {health.cache.block_disk_cache?.blocks_on_disk != null && (
+              <InfoCard
+                label="Paged L2"
+                value={`${health.cache.block_disk_cache.blocks_on_disk || 0} blocks / ${(health.cache.block_disk_cache.total_tokens_on_disk || 0).toLocaleString()} tokens`}
+              />
+            )}
+            {health.cache.ssm_companion?.disk?.entries != null && (
+              <InfoCard
+                label="SSM L2"
+                value={`${health.cache.ssm_companion.disk.entries || 0} entries / ${(health.cache.ssm_companion.disk.total_tokens_on_disk || 0).toLocaleString()} tokens`}
+              />
             )}
           </div>
         </div>

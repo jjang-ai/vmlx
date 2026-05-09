@@ -166,17 +166,10 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
     #   2. req.thinking (Anthropic-native {type: enabled/disabled})
     #   3. req.chat_template_kwargs.enable_thinking (vMLX extension fallback)
     #
-    # Anthropic wire semantics: extended thinking is OPT-IN. When the client
-    # omits the `thinking` block AND sends no `enable_thinking`, Anthropic
-    # clients (and Claude Code / SDK) expect thinking OFF — i.e. the response
-    # should be a single text block with no `thinking` content. Without this
-    # explicit default-off, thinking-capable models like Qwen 3.6 / Gemma 4 /
-    # MiniMax emit a full reasoning block even for plain requests (observed
-    # 2026-04-21 leak audit — r=931/702/330/444 equal between thinking-on and
-    # thinking-absent across all 4 tested families). Default explicitly here
-    # instead of relying on the engine-wide default so we don't affect
-    # OpenAI /v1/chat/completions or Ollama /api/chat clients.
-    enable_thinking = False  # Anthropic-spec default when nothing specified
+    # vMLX policy: default reasoning ON for capable local models across API
+    # surfaces. Native Anthropic `thinking: {type:"disabled"}` and vMLX
+    # `enable_thinking:false` remain explicit opt-outs.
+    enable_thinking = True
     chat_template_kwargs = None
     _thinking_source_seen = False
     # Start with the client's chat_template_kwargs passthrough (lowest prio)
@@ -213,8 +206,8 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
     if req.enable_thinking is not None:
         enable_thinking = req.enable_thinking
         _thinking_source_seen = True
-    # If client asserted any thinking intent, honour it. Otherwise we stay at
-    # the Anthropic-spec default (False) set above.
+    # If client asserted any thinking intent, honour it. Otherwise the vMLX
+    # local API default stays reasoning-on.
     _ = _thinking_source_seen  # (retained for debuggability / future logging)
 
     return ChatCompletionRequest(

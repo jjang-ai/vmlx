@@ -16,6 +16,11 @@ export interface SessionSummary {
 export interface LoadProgress {
   label: string
   progress: number
+  modelBytes?: number
+  lazyResident?: boolean
+  residentMb?: number
+  peakMb?: number
+  cacheMb?: number
 }
 
 interface SessionsContextValue {
@@ -88,7 +93,16 @@ export function SessionsProvider({ children }: { children: React.ReactNode }) {
       ...(window.api.sessions.onLoadProgress ? [window.api.sessions.onLoadProgress((data: any) => {
         setLoadProgress(prev => {
           const next = new Map(prev)
-          next.set(data.sessionId, { label: data.label, progress: data.progress })
+          next.set(data.sessionId, {
+            ...(next.get(data.sessionId) || {}),
+            label: data.label,
+            progress: data.progress,
+            ...(data.modelBytes != null ? { modelBytes: data.modelBytes } : {}),
+            ...(data.lazyResident != null ? { lazyResident: data.lazyResident } : {}),
+            ...(data.residentMb != null ? { residentMb: data.residentMb } : {}),
+            ...(data.peakMb != null ? { peakMb: data.peakMb } : {}),
+            ...(data.cacheMb != null ? { cacheMb: data.cacheMb } : {}),
+          })
           return next
         })
       })] : []),

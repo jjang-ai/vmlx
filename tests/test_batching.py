@@ -223,6 +223,32 @@ class TestSchedulerBasic:
         assert scheduler.get_num_running() == 0
         assert not scheduler.has_requests()
 
+    def test_turboquant_live_cache_clamps_to_single_sequence(self, mock_tokenizer):
+        """TurboQuantKVCache does not implement mlx_lm multi-seq cache.extend()."""
+
+        class TurboQuantKVCache:
+            pass
+
+        class TQModel:
+            def __init__(self):
+                def _tq_make_cache():
+                    return [TurboQuantKVCache()]
+
+                self.make_cache = _tq_make_cache
+
+        cfg = SchedulerConfig(
+            max_num_seqs=4,
+            prefill_batch_size=4,
+            completion_batch_size=4,
+        )
+
+        scheduler = Scheduler(model=TQModel(), tokenizer=mock_tokenizer, config=cfg)
+
+        assert scheduler._tq_active
+        assert scheduler.config.max_num_seqs == 1
+        assert scheduler.config.prefill_batch_size == 1
+        assert scheduler.config.completion_batch_size == 1
+
     def test_add_request(self, mock_model, mock_tokenizer):
         """Test adding requests to scheduler."""
         scheduler = Scheduler(
@@ -306,6 +332,9 @@ class TestSchedulerBasic:
         assert "num_requests_processed" in stats
         assert stats["num_waiting"] == 0
         assert stats["num_running"] == 0
+        assert stats["cache_reuse_skips"] == 0
+        assert stats["cache_reuse_skip_tokens"] == 0
+        assert stats["last_cache_reuse_skip"] is None
 
     def test_reset(self, mock_model, mock_tokenizer):
         """Test resetting scheduler."""

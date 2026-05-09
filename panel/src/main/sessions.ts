@@ -130,21 +130,35 @@ export function connectHost(host: string): string {
   return host === '0.0.0.0' ? '127.0.0.1' : host
 }
 
-/** Estimate model memory usage from safetensors file sizes. Returns bytes or 0 if unknown. */
-function estimateModelMemory(modelPath: string): number {
+/** Estimate model file bytes from local model files. Returns 0 if unknown. */
+function estimateModelFileBytes(modelPath: string): number {
   try {
-    const files = readdirSync(modelPath)
+    const entries = readdirSync(modelPath, { withFileTypes: true })
     let totalBytes = 0
-    for (const file of files) {
-      if (file.endsWith('.safetensors')) {
-        totalBytes += statSync(join(modelPath, file)).size
+    for (const entry of entries) {
+      const fullPath = join(modelPath, entry.name)
+      if (entry.isDirectory()) {
+        totalBytes += estimateModelFileBytes(fullPath)
+      } else if (entry.isFile()) {
+        totalBytes += statSync(fullPath).size
       }
     }
-    // Model size on disk + ~30% overhead for KV cache, activations, framework
-    return Math.round(totalBytes * 1.3)
+    return totalBytes
   } catch (_) {
     return 0
   }
+}
+
+/** Estimate model memory usage from safetensors file sizes. Returns bytes or 0 if unknown. */
+function estimateModelMemory(modelPath: string): number {
+  const fileBytes = estimateModelFileBytes(modelPath)
+  if (fileBytes <= 0) return 0
+  // Model size on disk + ~30% overhead for KV cache, activations, framework
+  return Math.round(fileBytes * 1.3)
+}
+
+function formatGb(bytes: number): string {
+  return (bytes / 1e9).toFixed(1)
 }
 
 /**
@@ -239,7 +253,7 @@ export class SessionManager extends EventEmitter {
     { pattern: /Native tool format enabled/, label: 'Configuring tools...', progress: 14 },
     { pattern: /Default max tokens:/, label: 'Configuring limits...', progress: 16 },
     { pattern: /Uvicorn running on/, label: 'Server started, loading model...', progress: 20 },
-    { pattern: /Waiting for application startup/, label: 'Loading model into GPU...', progress: 22 },
+    { pattern: /Waiting for application startup/, label: 'Starting model runtime...', progress: 22 },
 
     // Phase 2: Actual model loading (25-85%)
     // For BatchedEngine these fire DURING lifespan() (after Uvicorn starts).
@@ -274,6 +288,7 @@ export class SessionManager extends EventEmitter {
 
   // Track last emitted progress per session to avoid duplicate events
   private loadProgressState = new Map<string, number>()
+  private loadProgressMeta = new Map<string, { modelBytes?: number; lazyResident?: boolean }>()
 
   /** Check a log line for loading progress and emit event if phase advanced */
   private checkLoadProgress(sessionId: string, text: string): void {
@@ -282,7 +297,12 @@ export class SessionManager extends EventEmitter {
         const current = this.loadProgressState.get(sessionId) ?? 0
         if (progress > current) {
           this.loadProgressState.set(sessionId, progress)
-          this.emit('session:loadProgress', { sessionId, label, progress })
+          this.emit('session:loadProgress', {
+            sessionId,
+            label,
+            progress,
+            ...(this.loadProgressMeta.get(sessionId) || {}),
+          })
         }
         break
       }
@@ -689,12 +709,13 @@ export class SessionManager extends EventEmitter {
     }
 
     // Memory estimation: warn if model is too large for available RAM
+    const modelFileBytes = estimateModelFileBytes(config.modelPath)
     const modelSizeBytes = estimateModelMemory(config.modelPath)
     if (modelSizeBytes > 0) {
       const availableBytes = freemem()
       const totalBytes = totalmem()
       const usagePercent = ((totalBytes - availableBytes) / totalBytes) * 100
-      const modelGB = (modelSizeBytes / 1e9).toFixed(1)
+      const modelGB = formatGb(modelSizeBytes)
       const availGB = (availableBytes / 1e9).toFixed(1)
       const totalGB = (totalBytes / 1e9).toFixed(0)
       console.log(`[SESSION] Model estimate: ~${modelGB} GB | RAM: ${availGB} GB free / ${totalGB} GB total (${usagePercent.toFixed(0)}% used)`)
@@ -716,6 +737,18 @@ export class SessionManager extends EventEmitter {
       lastStartedAt: Date.now()
     })
     this.loadProgressState.delete(sessionId) // Reset loading progress for fresh start
+    this.loadProgressMeta.delete(sessionId)
+    if (modelFileBytes > 0) {
+      const meta = { modelBytes: modelFileBytes, lazyResident: true }
+      this.loadProgressMeta.set(sessionId, meta)
+      this.loadProgressState.set(sessionId, 2)
+      this.emit('session:loadProgress', {
+        sessionId,
+        label: 'Scanning model files...',
+        progress: 2,
+        ...meta,
+      })
+    }
     this.emit('session:starting', { sessionId, modelPath: session.modelPath })
 
     const args = this.buildArgs(config)
@@ -1133,7 +1166,8 @@ export class SessionManager extends EventEmitter {
         const detected = detectModelConfigFromDir(proc.modelPath)
         // Defaults tuned for maximum speed out of the box.
         // Continuous batching + paged cache + prefix cache = best TTFT.
-        // Cache memory at 30% of available RAM for generous prefix reuse.
+        // Cache memory at 20% of available RAM for generous prefix reuse while
+        // keeping headroom for large model weights.
         // Stream interval 1 = lowest latency per-token delivery.
         // All users get production-grade inference settings on first launch.
         const defaultConfig: ServerConfig = {
@@ -1374,8 +1408,9 @@ export class SessionManager extends EventEmitter {
                 this.loadProgressState.set(session.id, 95)
                 this.emit('session:loadProgress', {
                   sessionId: session.id,
-                  label: 'Loading model into GPU...',
+                  label: 'Model runtime still loading...',
                   progress: 95,
+                  ...(this.loadProgressMeta.get(session.id) || {}),
                 })
               }
             }

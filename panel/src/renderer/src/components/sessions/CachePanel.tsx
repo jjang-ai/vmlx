@@ -96,6 +96,8 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
   const schedulerStats = stats?.scheduler_stats
   const diskCache = stats?.disk_cache
   const kvQuant = stats?.kv_cache_quantization
+  const nativeCache = stats?.native_cache
+  const turboQuantKv = stats?.turboquant_kv_cache
 
   return (
     <div className="space-y-4">
@@ -201,6 +203,18 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
                       value={`${ssm.nbytes_mb.toFixed(1)} MB`}
                     />
                   )}
+                  {ssm.disk?.total_tokens_on_disk != null && (
+                    <StatCard
+                      label="SSM Tokens on Disk"
+                      value={(ssm.disk.total_tokens_on_disk || 0).toLocaleString()}
+                    />
+                  )}
+                  {ssm.disk?.hits != null && (
+                    <StatCard
+                      label="SSM L2 Hits / Misses"
+                      value={`${ssm.disk.hits || 0} / ${ssm.disk.misses || 0}`}
+                    />
+                  )}
                 </>
               )
             })()}
@@ -215,16 +229,81 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
           <div className="grid grid-cols-2 gap-2 text-sm">
             <StatCard label="Requests" value={String(schedulerStats.num_requests_processed || 0)} />
             <StatCard label="Running" value={String(schedulerStats.num_running || 0)} />
+            <StatCard label="Waiting" value={String(schedulerStats.num_waiting || 0)} />
+            {schedulerStats.ewma_ttft_seconds != null && (
+              <StatCard label="TTFT EWMA" value={`${Number(schedulerStats.ewma_ttft_seconds || 0).toFixed(3)} s`} />
+            )}
             <StatCard label="Prompt Tokens" value={(schedulerStats.total_prompt_tokens || 0).toLocaleString()} />
             <StatCard label="Completion Tokens" value={(schedulerStats.total_completion_tokens || 0).toLocaleString()} />
+            {schedulerStats.cache_reuse_skips != null && (
+              <StatCard label="Cache Reuse Skips" value={String(schedulerStats.cache_reuse_skips || 0)} />
+            )}
+            {schedulerStats.cache_reuse_skip_tokens != null && schedulerStats.cache_reuse_skip_tokens > 0 && (
+              <StatCard label="Skipped Hit Tokens" value={(schedulerStats.cache_reuse_skip_tokens || 0).toLocaleString()} />
+            )}
           </div>
+          {schedulerStats.last_cache_reuse_skip && (
+            <div className="mt-2 text-xs bg-warning/10 border border-warning/30 text-warning-foreground px-3 py-2 rounded">
+              Cache reuse skipped: needed {schedulerStats.last_cache_reuse_skip.needed_mb ?? '?'} MB,
+              available {schedulerStats.last_cache_reuse_skip.available_mb ?? '?'} MB,
+              cached {(schedulerStats.last_cache_reuse_skip.cached_tokens ?? 0).toLocaleString()} tokens.
+            </div>
+          )}
         </div>
       )}
 
       {/* KV Quantization Info */}
-      {kvQuant && (
-        <div className="text-xs text-muted-foreground">
-          KV Cache: {kvQuant.bits}-bit quantization (group size {kvQuant.group_size})
+      {(kvQuant || turboQuantKv || nativeCache) && (
+        <div>
+          <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Cache Contract</h4>
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            {nativeCache?.cache_type && (
+              <StatCard label="Native Cache" value={nativeCache.cache_type} />
+            )}
+            {nativeCache?.schema && (
+              <StatCard label="Schema" value={nativeCache.schema} />
+            )}
+            {turboQuantKv && (
+              <StatCard
+                label="TurboQuant KV"
+                value={
+                  turboQuantKv.enabled
+                    ? turboQuantKv.single_sequence_only
+                      ? 'enabled (single-seq)'
+                      : 'enabled'
+                    : 'disabled'
+                }
+              />
+            )}
+            {turboQuantKv?.single_sequence_only && (
+              <StatCard
+                label="TQ Batch"
+                value={`${turboQuantKv.effective_max_num_seqs ?? 1} seq / prefill ${turboQuantKv.effective_prefill_batch_size ?? 1} / decode ${turboQuantKv.effective_completion_batch_size ?? 1}`}
+              />
+            )}
+            {nativeCache?.generic_turboquant_kv && (
+              <StatCard
+                label="Generic TQ-KV"
+                value={
+                  nativeCache.generic_turboquant_kv.enabled
+                    ? 'enabled'
+                    : `off (${nativeCache.generic_turboquant_kv.reason || 'native'})`
+                }
+              />
+            )}
+            {kvQuant && (
+              <StatCard
+                label="Stored KV Quant"
+                value={`${kvQuant.bits}-bit / group ${kvQuant.group_size}`}
+              />
+            )}
+            {nativeCache?.components?.length > 0 && (
+              <StatCard
+                label="Components"
+                value={nativeCache.components.join(', ')}
+              />
+            )}
+          </div>
         </div>
       )}
 
@@ -235,6 +314,7 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
           <div className="grid grid-cols-2 gap-2 text-sm">
             {diskCache.entries != null && <StatCard label="Entries" value={String(diskCache.entries)} />}
             {(diskCache.total_size_mb ?? diskCache.size_mb) != null && <StatCard label="Size" value={`${(diskCache.total_size_mb ?? diskCache.size_mb ?? 0).toFixed(1)} MB`} />}
+            {diskCache.total_tokens_on_disk != null && <StatCard label="Tokens on Disk" value={(diskCache.total_tokens_on_disk || 0).toLocaleString()} />}
             {diskCache.hit_rate != null && <StatCard label="Hit Rate" value={`${(diskCache.hit_rate * 100).toFixed(1)}%`} />}
             {diskCache.hits != null && <StatCard label="Hits / Misses" value={`${diskCache.hits} / ${diskCache.misses ?? 0}`} />}
             {diskCache.stores != null && <StatCard label="Stores" value={String(diskCache.stores)} />}
@@ -252,6 +332,7 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
           <div className="grid grid-cols-2 gap-2 text-sm">
             <StatCard label="Blocks on Disk" value={String(stats.block_disk_cache.blocks_on_disk ?? 0)} />
             <StatCard label="Disk Size" value={`${(stats.block_disk_cache.disk_size_gb ?? 0).toFixed(2)} GB`} />
+            {stats.block_disk_cache.total_tokens_on_disk != null && <StatCard label="Tokens on Disk" value={(stats.block_disk_cache.total_tokens_on_disk || 0).toLocaleString()} />}
             <StatCard label="Disk Hits / Misses" value={`${stats.block_disk_cache.disk_hits ?? 0} / ${stats.block_disk_cache.disk_misses ?? 0}`} />
             <StatCard label="Disk Writes" value={String(stats.block_disk_cache.disk_writes ?? 0)} />
             {(stats.block_disk_cache.disk_evictions ?? 0) > 0 && <StatCard label="Disk Evictions" value={String(stats.block_disk_cache.disk_evictions)} />}

@@ -134,6 +134,39 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detectModelConfigFromDir(dir).isMultimodal).toBe(true)
   })
 
+  it('uses JANG capabilities cache and parser stamps for Qwen3.6 hybrid bundles', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'qwen3_5_moe',
+        text_config: {
+          model_type: 'qwen3_5_moe_text',
+          layer_types: ['linear_attention', 'full_attention'],
+        },
+        vision_config: { hidden_size: 1024 },
+      },
+      {
+        weight_format: 'mxtq',
+        capabilities: {
+          family: 'qwen3_5_moe',
+          cache_type: 'hybrid',
+          modality: 'vision',
+          tool_parser: 'qwen',
+          reasoning_parser: 'qwen3',
+          supports_tools: true,
+        },
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+    expect(detected.family).toBe('qwen3.5-moe')
+    expect(detected.cacheType).toBe('hybrid')
+    expect(detected.usePagedCache).toBe(true)
+    expect(detected.toolParser).toBe('qwen')
+    expect(detected.reasoningParser).toBe('qwen3')
+    expect(detected.enableAutoToolChoice).toBe(true)
+    expect(detected.isMultimodal).toBe(true)
+  })
+
   it('does not classify text_config-only MoE models as VLMs', () => {
     const dir = makeModelDir(
       { model_type: 'qwen3_5_moe', text_config: { hidden_size: 3072 } },

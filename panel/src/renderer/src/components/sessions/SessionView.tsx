@@ -596,6 +596,11 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
 }
 
 /** Extracted component so useSessionsContext() is called from a proper hook scope */
+function formatModelBytes(bytes?: number): string | null {
+  if (!bytes || bytes <= 0) return null
+  return `${(bytes / 1e9).toFixed(1)} GB`
+}
+
 function SessionViewLoadBar({ sessionId }: { sessionId: string }) {
   const { loadProgress } = useSessionsContext()
   const progress = loadProgress.get(sessionId)
@@ -610,6 +615,12 @@ function SessionViewLoadBar({ sessionId }: { sessionId: string }) {
       <p className="text-[10px] text-muted-foreground mt-1">
         {progress?.label ?? 'Starting server...'} {progress ? `(${progress.progress}%)` : ''}
       </p>
+      {formatModelBytes(progress?.modelBytes) && (
+        <p className="text-[10px] text-muted-foreground/80 mt-0.5">
+          Model files: {formatModelBytes(progress?.modelBytes)}
+          {progress?.lazyResident ? ' mapped; resident memory updates after runtime health is ready' : ''}
+        </p>
+      )}
     </div>
   )
 }

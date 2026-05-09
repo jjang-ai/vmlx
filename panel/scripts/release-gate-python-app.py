@@ -11,6 +11,7 @@ local machine details in public release notes.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import plistlib
@@ -31,6 +32,14 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 PANEL = ROOT / "panel"
 INTERNAL = ROOT / "docs" / "internal" / "release-gates"
+CACHE_WARM_PAD_TERMS = tuple(f"cache-pad-{idx:03d}" for idx in range(96))
+CACHE_WARM_PROMPT = (
+    "Remember this cache probe word: cobalt. Reply with exactly: OK. "
+    "The following deterministic padding exists only to make the first warm "
+    "request cross paged-cache block thresholds on models with 64-token blocks; "
+    "ignore it when answering. "
+    + " ".join(CACHE_WARM_PAD_TERMS)
+)
 
 
 class Gate:
@@ -155,6 +164,18 @@ def apply_thinking(payload: dict[str, Any], mode: str) -> dict[str, Any]:
     return payload
 
 
+def apply_anthropic_thinking(payload: dict[str, Any], mode: str) -> dict[str, Any]:
+    """Apply the Anthropic-native thinking contract to release-gate probes."""
+    if mode == "auto":
+        return payload
+    payload = dict(payload)
+    if mode == "on":
+        payload["thinking"] = {"type": "enabled", "budget_tokens": 1024}
+    else:
+        payload["thinking"] = {"type": "disabled"}
+    return payload
+
+
 def wait_health(base_url: str, timeout: int = 240) -> dict[str, Any]:
     deadline = time.time() + timeout
     last_error: Exception | None = None
@@ -197,6 +218,21 @@ def assert_visible_text(label: str, resp: Any, gate: Gate) -> str:
         raise AssertionError(f"{label}: loop-like output")
     gate.record(label, "PASS", text[:180].replace("\n", " "))
     return text
+
+
+def cached_tokens_from_usage(resp: Any) -> int:
+    if not isinstance(resp, dict):
+        return 0
+    usage = resp.get("usage")
+    if not isinstance(usage, dict):
+        return 0
+    details = usage.get("prompt_tokens_details")
+    if not isinstance(details, dict):
+        return 0
+    try:
+        return int(details.get("cached_tokens") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def obvious_loop(text: str) -> bool:
@@ -272,6 +308,12 @@ def check_packaged_bundled_import_version(
             "-c",
             "import vmlx_engine, mflux, mlx_lm, mlx_vlm, jang_tools; print(vmlx_engine.__version__)",
         ],
+        cwd=gate.log_dir,
+        env={
+            "PYTHONPATH": "",
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        },
         timeout=180,
     )
     bundled_version = _last_nonempty_stdout_line(proc.stdout)
@@ -281,6 +323,241 @@ def check_packaged_bundled_import_version(
         status,
         f"app={app_version}, bundled={bundled_version or '<none>'}, expected={expected_version}",
     )
+
+
+REMOVED_ENV_VAR_FORCE_FLIPS = (
+    "VMLX_DSV4_ALLOW_CHAT",
+    "VMLX_DSV4_ALLOW_THINKING",
+)
+
+BUNDLED_SOURCE_HASH_PATHS = (
+    "server.py",
+    "api/anthropic_adapter.py",
+    "api/ollama_adapter.py",
+    "block_disk_store.py",
+    "disk_cache.py",
+    "engine/batched.py",
+    "loaders/load_jangtq_dsv4.py",
+    "mllm_batch_generator.py",
+    "mllm_scheduler.py",
+    "omni_multimodal.py",
+    "paged_cache.py",
+    "prefix_cache.py",
+    "scheduler.py",
+    "utils/ssm_companion_cache.py",
+    "utils/ssm_companion_disk_store.py",
+)
+
+JANG_TOOLS_SOURCE_HASH_PATHS = (
+    "load_jangtq.py",
+    "load_jangtq_kimi_vlm.py",
+    "kimi_prune/generate_vl.py",
+    "kimi_prune/runtime_patch.py",
+    "turboquant/fused_gate_up_kernel.py",
+    "turboquant/gather_tq_kernel.py",
+    "turboquant/hadamard_kernel.py",
+    "turboquant/tq_kernel.py",
+)
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def check_bundled_source_file_hashes(
+    gate: Gate,
+    engine_dir: Path,
+    *,
+    source_dir: Path | None = None,
+    rel_paths: tuple[str, ...] = BUNDLED_SOURCE_HASH_PATHS,
+) -> None:
+    """Compare critical bundled engine source files against this checkout."""
+    source_dir = source_dir or (ROOT / "vmlx_engine")
+    mismatches: list[str] = []
+    for rel in rel_paths:
+        src = source_dir / rel
+        bundled = engine_dir / rel
+        if not src.exists() or not bundled.exists():
+            missing = []
+            if not src.exists():
+                missing.append(f"source missing {src}")
+            if not bundled.exists():
+                missing.append(f"bundled missing {bundled}")
+            gate.record("bundled source content hash", "FAIL", "; ".join(missing))
+            return
+        src_hash = _sha256(src)
+        bundled_hash = _sha256(bundled)
+        if src_hash != bundled_hash:
+            mismatches.append(f"{rel}: source={src_hash[:12]} bundled={bundled_hash[:12]}")
+    if mismatches:
+        gate.record(
+            "bundled source content hash",
+            "FAIL",
+            ", ".join(mismatches),
+        )
+        return
+    gate.record("bundled source content hash", "PASS", ", ".join(rel_paths))
+
+
+def check_bundled_package_file_hashes(
+    gate: Gate,
+    package_name: str,
+    bundled_dir: Path,
+    source_dir: Path,
+    *,
+    rel_paths: tuple[str, ...],
+) -> None:
+    """Compare critical bundled package files against local release sources."""
+    if not source_dir.exists():
+        gate.record(
+            f"bundled {package_name} content hash",
+            "SKIP",
+            f"source package not present: {source_dir}",
+        )
+        return
+
+    mismatches: list[str] = []
+    for rel in rel_paths:
+        src = source_dir / rel
+        bundled = bundled_dir / rel
+        if not src.exists() or not bundled.exists():
+            missing = []
+            if not src.exists():
+                missing.append(f"source missing {src}")
+            if not bundled.exists():
+                missing.append(f"bundled missing {bundled}")
+            gate.record(f"bundled {package_name} content hash", "FAIL", "; ".join(missing))
+            return
+        src_hash = _sha256(src)
+        bundled_hash = _sha256(bundled)
+        if src_hash != bundled_hash:
+            mismatches.append(f"{rel}: source={src_hash[:12]} bundled={bundled_hash[:12]}")
+    if mismatches:
+        gate.record(
+            f"bundled {package_name} content hash",
+            "FAIL",
+            ", ".join(mismatches),
+        )
+        return
+    gate.record(f"bundled {package_name} content hash", "PASS", ", ".join(rel_paths))
+
+
+def check_no_removed_env_var_force_flips(gate: Gate, engine_dir: Path) -> None:
+    """Block stale bundled engines that still contain removed DSV4 force-flips."""
+    hits: list[str] = []
+    for path in sorted(engine_dir.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        try:
+            text = path.read_text(errors="replace")
+        except OSError as exc:
+            gate.record(
+                "bundled removed env-var gate",
+                "FAIL",
+                f"cannot read {path}: {exc}",
+            )
+            return
+        for forbidden in REMOVED_ENV_VAR_FORCE_FLIPS:
+            if forbidden in text:
+                rel = path.relative_to(engine_dir)
+                hits.append(f"{rel}:{forbidden}")
+    if hits:
+        head = ", ".join(hits[:8])
+        more = f" (+{len(hits) - 8} more)" if len(hits) > 8 else ""
+        gate.record(
+            "bundled removed env-var gate",
+            "FAIL",
+            f"{head}{more}",
+        )
+        return
+    gate.record("bundled removed env-var gate", "PASS", str(engine_dir))
+
+
+def packaged_engine_dir(gate: Gate, py: Path) -> Path | None:
+    proc = gate.run(
+        "packaged bundled engine path",
+        [
+            str(py),
+            "-B",
+            "-s",
+            "-c",
+            "import pathlib, vmlx_engine; print(pathlib.Path(vmlx_engine.__file__).resolve().parent)",
+        ],
+        cwd=gate.log_dir,
+        env={
+            "PYTHONPATH": "",
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        },
+        timeout=60,
+    )
+    value = _last_nonempty_stdout_line(proc.stdout)
+    if not value:
+        gate.record("packaged bundled engine path", "FAIL", "empty vmlx_engine path")
+        return None
+    return Path(value)
+
+
+def packaged_package_dir(gate: Gate, py: Path, module_name: str) -> Path | None:
+    proc = gate.run(
+        f"packaged bundled {module_name} path",
+        [
+            str(py),
+            "-B",
+            "-s",
+            "-c",
+            f"import pathlib, {module_name}; print(pathlib.Path({module_name}.__file__).resolve().parent)",
+        ],
+        cwd=gate.log_dir,
+        env={
+            "PYTHONPATH": "",
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        },
+        timeout=60,
+    )
+    value = _last_nonempty_stdout_line(proc.stdout)
+    if not value:
+        gate.record(f"packaged bundled {module_name} path", "FAIL", f"empty {module_name} path")
+        return None
+    return Path(value)
+
+
+def check_packaged_console_script_shebangs(gate: Gate, app: Path) -> None:
+    bin_dir = app / "Contents" / "Resources" / "bundled-python" / "python" / "bin"
+    if not bin_dir.is_dir():
+        gate.record("packaged console-script shebangs", "FAIL", f"missing {bin_dir}")
+        return
+
+    offenders: list[str] = []
+    for script in sorted(bin_dir.iterdir()):
+        if not script.is_file():
+            continue
+        try:
+            first = script.open("rb").readline(4096).decode("utf-8", "replace").strip()
+        except OSError:
+            continue
+        if not first.startswith("#!"):
+            continue
+        if (
+            "/Users/" in first
+            or "panel/bundled-python" in first
+            or "/Applications/vMLX.app" in first
+        ):
+            offenders.append(f"{script.name}: {first}")
+
+    if offenders:
+        gate.record(
+            "packaged console-script shebangs",
+            "FAIL",
+            "; ".join(offenders[:12]),
+        )
+        return
+    gate.record("packaged console-script shebangs", "PASS", str(bin_dir))
 
 
 def check_static(gate: Gate, app: Path, skip_app: bool) -> None:
@@ -314,6 +591,21 @@ def check_static(gate: Gate, app: Path, skip_app: bool) -> None:
     gate.record("packaged app version", "PASS" if app_version == version else "FAIL", app_version)
     py = packaged_python(app)
     check_packaged_bundled_import_version(gate, py, version, app_version)
+    engine_dir = packaged_engine_dir(gate, py)
+    if engine_dir is not None:
+        check_bundled_source_file_hashes(gate, engine_dir)
+        check_no_removed_env_var_force_flips(gate, engine_dir)
+    check_packaged_console_script_shebangs(gate, app)
+    jang_tools_dir = packaged_package_dir(gate, py, "jang_tools")
+    jang_tools_source = Path(os.environ.get("VMLINUX_JANG_TOOLS_SOURCE", str(Path.home() / "jang" / "jang-tools"))) / "jang_tools"
+    if jang_tools_dir is not None:
+        check_bundled_package_file_hashes(
+            gate,
+            "jang_tools",
+            jang_tools_dir,
+            jang_tools_source,
+            rel_paths=JANG_TOOLS_SOURCE_HASH_PATHS,
+        )
     gate.run("codesign strict verify", ["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(app)], timeout=180, allow_fail=False)
     gate.run("spctl assessment", ["spctl", "--assess", "--type", "execute", "--verbose=4", str(app)], timeout=120, allow_fail=True)
 
@@ -387,6 +679,8 @@ def live_engine_gate(gate: Gate, app: Path, model: str, port: int, skip_sleep_wa
         gate.record("live model path", "FAIL", model)
         return
     log = gate.log_dir / "live_engine_server.log"
+    prompt_cache_dir = gate.log_dir / "prompt-cache"
+    block_cache_dir = gate.log_dir / "block-cache"
     cmd = [
         str(py),
         "-B",
@@ -399,11 +693,17 @@ def live_engine_gate(gate: Gate, app: Path, model: str, port: int, skip_sleep_wa
         "127.0.0.1",
         "--port",
         str(port),
+        "--continuous-batching",
         "--max-num-seqs",
         "1",
         "--enable-prefix-cache",
         "--use-paged-cache",
+        "--enable-disk-cache",
+        "--disk-cache-dir",
+        str(gate.log_dir / "prompt-cache"),
         "--enable-block-disk-cache",
+        "--block-disk-cache-dir",
+        str(gate.log_dir / "block-cache"),
         "--block-disk-cache-max-gb",
         "1",
         "--default-temperature",
@@ -413,11 +713,27 @@ def live_engine_gate(gate: Gate, app: Path, model: str, port: int, skip_sleep_wa
         "--max-tokens",
         "512",
     ]
+    live_env = os.environ.copy()
+    live_env.update({
+        "PYTHONPATH": "",
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    })
+    prompt_cache_dir.mkdir(parents=True, exist_ok=True)
+    block_cache_dir.mkdir(parents=True, exist_ok=True)
     with log.open("w") as fp:
-        proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=fp, stderr=subprocess.STDOUT, text=True)
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(gate.log_dir),
+            env=live_env,
+            stdout=fp,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
     base = f"http://127.0.0.1:{port}"
     try:
         health = wait_health(base)
+        write_json_log(gate, "Live server health", health)
         gate.record("live server health", "PASS", json.dumps(health)[:240])
 
         chat = request_json(
@@ -454,6 +770,53 @@ def live_engine_gate(gate: Gate, app: Path, model: str, port: int, skip_sleep_wa
         else:
             gate.record("OpenAI multi-turn recall exact", "PASS", text[:180])
 
+        warm1_messages = [
+            {"role": "user", "content": CACHE_WARM_PROMPT},
+        ]
+        warm1 = request_json(
+            "POST",
+            f"{base}/v1/chat/completions",
+            apply_thinking({
+                "model": "local",
+                "messages": warm1_messages,
+                "temperature": 0,
+                "max_tokens": 32,
+            }, thinking),
+        )
+        write_json_log(gate, "OpenAI cache warm turn1 response", warm1)
+        warm1_text = assert_visible_text("OpenAI cache warm turn1", warm1, gate)
+
+        warm2_messages = [
+            *warm1_messages,
+            {"role": "assistant", "content": warm1_text},
+            {"role": "user", "content": "What cache probe word did I ask you to remember?"},
+        ]
+        warm2 = request_json(
+            "POST",
+            f"{base}/v1/chat/completions",
+            apply_thinking({
+                "model": "local",
+                "messages": warm2_messages,
+                "temperature": 0,
+                "max_tokens": 96,
+            }, thinking),
+        )
+        write_json_log(gate, "OpenAI cache warm turn2 response", warm2)
+        warm2_text = assert_visible_text("OpenAI cache warm turn2", warm2, gate)
+        if "cobalt" not in warm2_text.lower():
+            gate.record("OpenAI cache warm turn2 recall exact", "FAIL", warm2_text[:180])
+        else:
+            gate.record("OpenAI cache warm turn2 recall exact", "PASS", warm2_text[:180])
+        warm2_cached = cached_tokens_from_usage(warm2)
+        if warm2_cached <= 0:
+            gate.record(
+                "OpenAI cross-request cache hit",
+                "FAIL",
+                json.dumps(warm2.get("usage") if isinstance(warm2, dict) else warm2)[:240],
+            )
+            raise AssertionError("OpenAI cross-request cache hit: cached_tokens=0")
+        gate.record("OpenAI cross-request cache hit", "PASS", f"cached_tokens={warm2_cached}")
+
         responses = request_json(
             "POST",
             f"{base}/v1/responses",
@@ -470,11 +833,11 @@ def live_engine_gate(gate: Gate, app: Path, model: str, port: int, skip_sleep_wa
         anthropic = request_json(
             "POST",
             f"{base}/v1/messages",
-            {
+            apply_anthropic_thinking({
                 "model": "local",
                 "max_tokens": 96,
                 "messages": [{"role": "user", "content": "Answer with exactly: blue"}],
-            },
+            }, thinking),
         )
         write_json_log(gate, "Anthropic response", anthropic)
         assert_visible_text("Anthropic visible output", anthropic, gate)

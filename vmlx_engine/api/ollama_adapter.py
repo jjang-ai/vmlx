@@ -29,6 +29,25 @@ def _should_forward_reasoning_effort(body: dict, req: dict[str, Any]) -> bool:
     return body.get("reasoning_effort") is not None
 
 
+def _apply_ollama_thinking(body: dict, req: dict[str, Any]) -> None:
+    """Normalize Ollama thinking controls into vMLX's canonical field.
+
+    Omitted thinking controls default on for capable vMLX chat models. Native
+    Ollama ``think:false`` is an explicit opt-out and must not be overwritten
+    by that default.
+    """
+    if isinstance(body.get("think"), bool):
+        req["enable_thinking"] = body["think"]
+    elif body.get("enable_thinking") is not None:
+        req["enable_thinking"] = body["enable_thinking"]
+    elif isinstance(body.get("chat_template_kwargs"), dict) and (
+        body["chat_template_kwargs"].get("enable_thinking") is False
+    ):
+        return
+    else:
+        req["enable_thinking"] = True
+
+
 def ollama_chat_to_openai(body: dict) -> dict:
     """Convert Ollama /api/chat request to OpenAI /v1/chat/completions."""
     opts = body.get("options", {})
@@ -89,14 +108,7 @@ def ollama_chat_to_openai(body: dict) -> dict:
     # Forward tools if present (Ollama tool calling)
     if body.get("tools"):
         req["tools"] = body["tools"]
-    # Ollama 0.7+ supports think at top level: {"model": "...", "think": true}
-    # vMLX also accepts enable_thinking as an extension for clients that share
-    # request builders across OpenAI and Ollama surfaces. `think` wins when both
-    # are present because it is the native Ollama field.
-    if body.get("think") is not None:
-        req["enable_thinking"] = body["think"]
-    elif body.get("enable_thinking") is not None:
-        req["enable_thinking"] = body["enable_thinking"]
+    _apply_ollama_thinking(body, req)
     # vMLX extensions on Ollama-shaped bodies: clients that set reasoning_effort
     # (Mistral 4 / GPT-OSS: "none"/"low"/"medium"/"high") or supply custom
     # chat_template_kwargs must reach the parser. Without this passthrough,
@@ -186,10 +198,7 @@ def ollama_generate_to_openai_chat(body: dict) -> dict:
         req["stop"] = opts["stop"]
     if opts.get("repeat_penalty") is not None:
         req["repetition_penalty"] = opts["repeat_penalty"]
-    if body.get("think") is not None:
-        req["enable_thinking"] = body["think"]
-    elif body.get("enable_thinking") is not None:
-        req["enable_thinking"] = body["enable_thinking"]
+    _apply_ollama_thinking(body, req)
     if _should_forward_reasoning_effort(body, req):
         req["reasoning_effort"] = body["reasoning_effort"]
     if isinstance(body.get("chat_template_kwargs"), dict):

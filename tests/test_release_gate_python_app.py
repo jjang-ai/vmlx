@@ -40,9 +40,12 @@ class _FakeGate:
         self.stdout = stdout
         self.records = []
         self.run_cmd = None
+        self.log_dir = Path("/isolated-release-gate")
+        self.run_kwargs = None
 
     def run(self, name, cmd, **kwargs):
         self.run_cmd = cmd
+        self.run_kwargs = kwargs
         self.records.append((name, "RUN", kwargs))
         return subprocess.CompletedProcess(cmd, 0, self.stdout, "")
 
@@ -64,6 +67,143 @@ def test_packaged_bundled_version_parity_passes_when_import_version_matches():
         "app=1.5.25, bundled=1.5.25, expected=1.5.25",
     )
     assert "mflux" in " ".join(gate.run_cmd)
+    assert gate.run_kwargs["cwd"] == gate.log_dir
+    assert gate.run_kwargs["env"]["PYTHONPATH"] == ""
+    assert gate.run_kwargs["env"]["PYTHONNOUSERSITE"] == "1"
+
+
+def test_packaged_bundled_engine_path_uses_isolated_cwd():
+    gate_module = _load_gate_module()
+    gate = _FakeGate("/app/Contents/Resources/bundled-python/python/lib/python3.12/site-packages/vmlx_engine\n")
+
+    path = gate_module.packaged_engine_dir(gate, Path("/app/python3"))
+
+    assert path == Path("/app/Contents/Resources/bundled-python/python/lib/python3.12/site-packages/vmlx_engine")
+    assert gate.run_kwargs["cwd"] == gate.log_dir
+    assert gate.run_kwargs["env"]["PYTHONPATH"] == ""
+
+
+def test_live_engine_gate_uses_packaged_python_with_isolated_cwd():
+    src = Path("panel/scripts/release-gate-python-app.py").read_text()
+    assert 'cwd=str(gate.log_dir)' in src
+    assert '"PYTHONPATH": ""' in src
+    assert '"PYTHONNOUSERSITE": "1"' in src
+    assert '"-m",' in src and '"vmlx_engine.cli"' in src
+    assert '"--continuous-batching"' in src
+
+
+def test_live_engine_gate_uses_artifact_local_cache_dirs():
+    """Live gates must not pass because a default model cache was warm already."""
+    src = Path("panel/scripts/release-gate-python-app.py").read_text()
+
+    assert '"--disk-cache-dir"' in src
+    assert 'str(gate.log_dir / "prompt-cache")' in src
+    assert '"--block-disk-cache-dir"' in src
+    assert 'str(gate.log_dir / "block-cache")' in src
+
+
+def test_live_engine_gate_requires_real_cross_request_cache_hit():
+    src = Path("panel/scripts/release-gate-python-app.py").read_text()
+
+    assert "OpenAI cache warm turn1 response" in src
+    assert "OpenAI cache warm turn2 response" in src
+    assert "OpenAI cross-request cache hit" in src
+    assert "cached_tokens_from_usage" in src
+
+
+def test_live_engine_gate_cache_warm_prompt_crosses_paged_block_threshold():
+    gate_module = _load_gate_module()
+
+    assert len(gate_module.CACHE_WARM_PAD_TERMS) >= 96
+    assert "cache-pad-095" in gate_module.CACHE_WARM_PROMPT
+    assert "cobalt" in gate_module.CACHE_WARM_PROMPT
+
+
+def test_packaged_console_script_shebang_gate_rejects_dev_paths(tmp_path):
+    gate_module = _load_gate_module()
+    gate = _FakeGate("")
+    bin_dir = (
+        tmp_path
+        / "vMLX.app"
+        / "Contents"
+        / "Resources"
+        / "bundled-python"
+        / "python"
+        / "bin"
+    )
+    bin_dir.mkdir(parents=True)
+    script = bin_dir / "vmlx-engine"
+    script.write_text(
+        "#!/Users/example/mlx/vllm-mlx/panel/bundled-python/python/bin/python3\n"
+        "import sys\n"
+    )
+    script.chmod(0o755)
+
+    gate_module.check_packaged_console_script_shebangs(gate, tmp_path / "vMLX.app")
+
+    assert gate.records[-1][0] == "packaged console-script shebangs"
+    assert gate.records[-1][1] == "FAIL"
+    assert "vmlx-engine" in gate.records[-1][2]
+
+
+def test_packaged_console_script_shebang_gate_accepts_relocatable_trampoline(tmp_path):
+    gate_module = _load_gate_module()
+    gate = _FakeGate("")
+    bin_dir = (
+        tmp_path
+        / "vMLX.app"
+        / "Contents"
+        / "Resources"
+        / "bundled-python"
+        / "python"
+        / "bin"
+    )
+    bin_dir.mkdir(parents=True)
+    script = bin_dir / "vmlx-engine"
+    script.write_text(
+        "#!/bin/sh\n"
+        "'''exec' \"$(dirname \"$0\")/python3\" -B -s \"$0\" \"$@\"\n"
+        "' '''\n"
+        "import sys\n"
+    )
+    script.chmod(0o755)
+
+    gate_module.check_packaged_console_script_shebangs(gate, tmp_path / "vMLX.app")
+
+    assert gate.records[-1][0] == "packaged console-script shebangs"
+    assert gate.records[-1][1] == "PASS"
+
+
+def test_bundled_verifier_rejects_non_relocatable_console_shebangs():
+    verifier = Path("panel/scripts/verify-bundled-python.sh").read_text()
+
+    assert "check_console_script_shebangs" in verifier
+    assert "/Applications/vMLX.app" in verifier
+    assert "non-relocatable console-script shebangs" in verifier
+
+
+def test_release_gate_uses_anthropic_native_thinking_disable():
+    gate_module = _load_gate_module()
+
+    body = gate_module.apply_anthropic_thinking(
+        {"model": "local", "messages": [{"role": "user", "content": "hi"}]},
+        "off",
+    )
+
+    assert body["thinking"] == {"type": "disabled"}
+    assert "enable_thinking" not in body
+
+
+def test_release_gate_uses_anthropic_native_thinking_enable():
+    gate_module = _load_gate_module()
+
+    body = gate_module.apply_anthropic_thinking(
+        {"model": "local", "messages": [{"role": "user", "content": "hi"}]},
+        "on",
+    )
+
+    assert body["thinking"]["type"] == "enabled"
+    assert body["thinking"]["budget_tokens"] > 0
 
 
 def test_packaged_bundled_version_parity_fails_on_stale_bundled_engine():
@@ -81,6 +221,142 @@ def test_packaged_bundled_version_parity_fails_on_stale_bundled_engine():
     )
 
 
+def test_packaged_bundled_content_gate_rejects_removed_dsv4_force_flags(tmp_path):
+    gate_module = _load_gate_module()
+    gate = _FakeGate("")
+    engine_dir = tmp_path / "vmlx_engine"
+    engine_dir.mkdir()
+    (engine_dir / "server.py").write_text(
+        "os.environ.get('VMLX_DSV4_ALLOW_CHAT', '0')\n"
+    )
+
+    gate_module.check_no_removed_env_var_force_flips(gate, engine_dir)
+
+    assert gate.records[-1][0] == "bundled removed env-var gate"
+    assert gate.records[-1][1] == "FAIL"
+    assert "VMLX_DSV4_ALLOW_CHAT" in gate.records[-1][2]
+
+
+def test_packaged_bundled_content_gate_passes_clean_engine_tree(tmp_path):
+    gate_module = _load_gate_module()
+    gate = _FakeGate("")
+    engine_dir = tmp_path / "vmlx_engine"
+    engine_dir.mkdir()
+    (engine_dir / "server.py").write_text("DSV4_FORCE_DIRECT_RAIL = True\n")
+
+    gate_module.check_no_removed_env_var_force_flips(gate, engine_dir)
+
+    assert gate.records[-1] == (
+        "bundled removed env-var gate",
+        "PASS",
+        str(engine_dir),
+    )
+
+
+def test_packaged_bundled_server_hash_gate_fails_on_content_drift(tmp_path):
+    gate_module = _load_gate_module()
+    gate = _FakeGate("")
+    source_dir = tmp_path / "source" / "vmlx_engine"
+    bundled_dir = tmp_path / "bundled" / "vmlx_engine"
+    source_dir.mkdir(parents=True)
+    bundled_dir.mkdir(parents=True)
+    (source_dir / "server.py").write_text("CURRENT = True\n")
+    (bundled_dir / "server.py").write_text("STALE = True\n")
+
+    gate_module.check_bundled_source_file_hashes(
+        gate, bundled_dir, source_dir=source_dir, rel_paths=("server.py",)
+    )
+
+    assert gate.records[-1][0] == "bundled source content hash"
+    assert gate.records[-1][1] == "FAIL"
+    assert "server.py" in gate.records[-1][2]
+
+
+def test_packaged_bundled_server_hash_gate_passes_on_matching_content(tmp_path):
+    gate_module = _load_gate_module()
+    gate = _FakeGate("")
+    source_dir = tmp_path / "source" / "vmlx_engine"
+    bundled_dir = tmp_path / "bundled" / "vmlx_engine"
+    source_dir.mkdir(parents=True)
+    bundled_dir.mkdir(parents=True)
+    (source_dir / "server.py").write_text("CURRENT = True\n")
+    (bundled_dir / "server.py").write_text("CURRENT = True\n")
+
+    gate_module.check_bundled_source_file_hashes(
+        gate, bundled_dir, source_dir=source_dir, rel_paths=("server.py",)
+    )
+
+    assert gate.records[-1] == (
+        "bundled source content hash",
+        "PASS",
+        "server.py",
+    )
+
+
+def test_packaged_bundled_hash_gate_covers_runtime_files_changed_for_release():
+    gate_module = _load_gate_module()
+
+    expected = {
+        "server.py",
+        "api/anthropic_adapter.py",
+        "api/ollama_adapter.py",
+        "block_disk_store.py",
+        "disk_cache.py",
+        "engine/batched.py",
+        "loaders/load_jangtq_dsv4.py",
+        "mllm_batch_generator.py",
+        "mllm_scheduler.py",
+        "omni_multimodal.py",
+        "paged_cache.py",
+        "prefix_cache.py",
+        "scheduler.py",
+        "utils/ssm_companion_cache.py",
+        "utils/ssm_companion_disk_store.py",
+    }
+
+    assert expected.issubset(set(gate_module.BUNDLED_SOURCE_HASH_PATHS))
+
+
+def test_packaged_bundled_hash_gate_covers_critical_jang_tools_files():
+    gate_module = _load_gate_module()
+
+    expected = {
+        "load_jangtq.py",
+        "load_jangtq_kimi_vlm.py",
+        "kimi_prune/generate_vl.py",
+        "kimi_prune/runtime_patch.py",
+        "turboquant/fused_gate_up_kernel.py",
+        "turboquant/gather_tq_kernel.py",
+        "turboquant/hadamard_kernel.py",
+        "turboquant/tq_kernel.py",
+    }
+
+    assert expected.issubset(set(gate_module.JANG_TOOLS_SOURCE_HASH_PATHS))
+
+
+def test_packaged_bundled_package_hash_gate_fails_on_content_drift(tmp_path):
+    gate_module = _load_gate_module()
+    gate = _FakeGate("")
+    source_dir = tmp_path / "source" / "jang_tools"
+    bundled_dir = tmp_path / "bundled" / "jang_tools"
+    source_dir.mkdir(parents=True)
+    bundled_dir.mkdir(parents=True)
+    (source_dir / "load_jangtq.py").write_text("CURRENT = True\n")
+    (bundled_dir / "load_jangtq.py").write_text("STALE = True\n")
+
+    gate_module.check_bundled_package_file_hashes(
+        gate,
+        "jang_tools",
+        bundled_dir,
+        source_dir,
+        rel_paths=("load_jangtq.py",),
+    )
+
+    assert gate.records[-1][0] == "bundled jang_tools content hash"
+    assert gate.records[-1][1] == "FAIL"
+    assert "load_jangtq.py" in gate.records[-1][2]
+
+
 def test_electron_builder_runs_bundled_python_gate_before_packaging():
     pkg = json.loads(Path("panel/package.json").read_text())
     hook = pkg["build"].get("beforePack")
@@ -91,6 +367,30 @@ def test_electron_builder_runs_bundled_python_gate_before_packaging():
     assert "electron-vite" in hook_src
     assert "VMLX_BEFORE_PACK_SKIP_VITE" in hook_src
     assert "require.main === module" in hook_src
+
+
+def test_verify_bundled_python_blocks_removed_dsv4_force_flags():
+    verifier = Path("panel/scripts/verify-bundled-python.sh").read_text()
+
+    assert "VMLX_DSV4_ALLOW_CHAT" in verifier
+    assert "VMLX_DSV4_ALLOW_THINKING" in verifier
+    assert "RELEASE BLOCKED — bundled-python contains removed DSV4 env-var force-flips" in verifier
+
+
+def test_nemotron_omni_media_dependency_timm_is_packaged_and_verified():
+    pyproject = Path("pyproject.toml").read_text()
+    bundle_script = Path("panel/scripts/bundle-python.sh").read_text()
+    verifier = Path("panel/scripts/verify-bundled-python.sh").read_text()
+
+    assert '"timm>=1.0.20"' in pyproject
+    assert '"einops>=0.8.0"' in pyproject
+    assert '"librosa>=0.10.0"' in pyproject
+    assert '"timm>=1.0.20"' in bundle_script
+    assert '"einops>=0.8.0"' in bundle_script
+    assert 'librosa sounddevice miniaudio pyloudnorm numba' in bundle_script
+    assert '("timm", "timm vision backbone"' in verifier
+    assert '("einops", "einops tensor rearrange"' in verifier
+    assert '("librosa", "librosa audio features"' in verifier
 
 
 def test_electron_builder_before_pack_hook_runs_verifier_in_direct_smoke(tmp_path):

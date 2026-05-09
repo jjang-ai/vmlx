@@ -378,6 +378,38 @@ function configToDetected(family: string, config: Omit<ModelConfig, 'pattern' | 
   }
 }
 
+function applyJangCapabilities(
+  detected: DetectedConfig,
+  jangCfg: any,
+): DetectedConfig {
+  const caps = jangCfg?.capabilities
+  if (!caps || typeof caps !== 'object') return detected
+
+  const next = { ...detected }
+  if (typeof caps.tool_parser === 'string') {
+    next.toolParser = caps.tool_parser === 'none' ? undefined : caps.tool_parser
+    if (next.toolParser && caps.supports_tools !== false) {
+      next.enableAutoToolChoice = true
+    }
+  }
+  if (caps.supports_thinking === false || next.family === 'zaya') {
+    next.reasoningParser = undefined
+  } else if (typeof caps.reasoning_parser === 'string') {
+    next.reasoningParser =
+      caps.reasoning_parser === 'none' ? undefined : caps.reasoning_parser
+  }
+  if (typeof caps.cache_type === 'string') {
+    const cacheType = caps.cache_type
+    if (cacheType === 'kv' || cacheType === 'mamba' || cacheType === 'hybrid' || cacheType === 'rotating_kv') {
+      next.cacheType = cacheType
+      if (cacheType === 'mamba' || cacheType === 'hybrid') {
+        next.usePagedCache = true
+      }
+    }
+  }
+  return next
+}
+
 function isAffineJangQwenHybridVlm(jangCfg: any, parsedConfig: any): boolean {
   const textConfig = parsedConfig?.text_config ?? {}
   const modelType = textConfig?.model_type ?? parsedConfig?.model_type
@@ -478,13 +510,14 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
 
         const config = CONFIG_BY_FAMILY.get(familyName)
         if (config) {
-          const detected = configToDetected(familyName, config)
+          let detected = configToDetected(familyName, config)
           detected.maxContextLength = maxContextLength
           // JANG model detection: read jang_config.json for VLM
           const jangConfigPath = join(modelPath, 'jang_config.json')
           if (existsSync(jangConfigPath)) {
             try {
               const jangCfg = JSON.parse(readFileSync(jangConfigPath, 'utf-8'))
+              detected = applyJangCapabilities(detected, jangCfg)
               detected.isMultimodal = resolveJangMultimodal(jangCfg, parsed)
             } catch {
               if ('vision_config' in parsed) {

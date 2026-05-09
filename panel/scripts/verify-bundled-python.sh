@@ -36,6 +36,138 @@ if [ "$PKG_VERSION" != "$BUNDLED_VERSION" ]; then
 fi
 echo "  ok   bundled vmlx_engine version matches package.json ($PKG_VERSION)"
 
+# Version parity alone is not enough: a stale bundled-python can carry the
+# current __version__ string while still shipping old runtime code. Block the
+# removed DSV4 force-flip env vars explicitly so direct/off rails cannot be
+# silently flipped back on in a packaged build.
+BUNDLED_ENGINE_DIR="$(PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH= "$PY" -B -s -c 'import pathlib, vmlx_engine; print(pathlib.Path(vmlx_engine.__file__).resolve().parent)' 2>/dev/null || true)"
+if [ -z "$BUNDLED_ENGINE_DIR" ] || [ ! -d "$BUNDLED_ENGINE_DIR" ]; then
+  echo "❌ RELEASE BLOCKED — cannot locate bundled vmlx_engine package"
+  echo "   resolved path: ${BUNDLED_ENGINE_DIR:-<empty>}"
+  exit 1
+fi
+if grep -R -n --include='*.py' -E 'VMLX_DSV4_ALLOW_CHAT|VMLX_DSV4_ALLOW_THINKING' "$BUNDLED_ENGINE_DIR"; then
+  echo
+  echo "❌ RELEASE BLOCKED — bundled-python contains removed DSV4 env-var force-flips"
+  echo "   Forbidden flags: VMLX_DSV4_ALLOW_CHAT, VMLX_DSV4_ALLOW_THINKING"
+  echo "   Bundled package : $BUNDLED_ENGINE_DIR"
+  echo
+  echo "   Re-run ./scripts/bundle-python.sh from a clean source checkout."
+  exit 1
+fi
+echo "  ok   bundled vmlx_engine has no removed DSV4 env-var force-flips"
+
+check_console_script_shebangs() {
+  local bin_dir="$1"
+  local label="$2"
+  if [ ! -d "$bin_dir" ]; then
+    echo "❌ RELEASE BLOCKED — $label console-script dir missing: $bin_dir"
+    exit 1
+  fi
+  local leaks
+  leaks=$(
+    find "$bin_dir" -maxdepth 1 -type f -perm -111 -print 2>/dev/null \
+      | while read -r script; do
+          first_line="$(LC_ALL=C head -n 1 "$script" 2>/dev/null || true)"
+          if [[ "$first_line" == *"$PANEL/bundled-python"* ]] \
+            || [[ "$first_line" == *"/Users/"* ]] \
+            || [[ "$first_line" == *"/Applications/vMLX.app"* ]]; then
+            printf '%s: %s\n' "$script" "$first_line"
+          fi
+        done
+  )
+  if [ -n "$leaks" ]; then
+    echo "❌ RELEASE BLOCKED — $label has non-relocatable console-script shebangs"
+    echo "$leaks" | head -40
+    echo
+    echo "   Re-run ./scripts/bundle-python.sh, or rewrite the shebangs to the"
+    echo "   bundled sibling-python trampoline before packaging."
+    exit 1
+  fi
+  echo "  ok   $label console-script shebangs are relocatable"
+}
+
+check_console_script_shebangs "$PANEL/bundled-python/python/bin" "bundled-python"
+
+SOURCE_ENGINE_DIR="$PANEL/../vmlx_engine"
+HASH_GATED_ENGINE_FILES=(
+  "server.py"
+  "api/anthropic_adapter.py"
+  "api/ollama_adapter.py"
+  "block_disk_store.py"
+  "disk_cache.py"
+  "engine/batched.py"
+  "loaders/load_jangtq_dsv4.py"
+  "mllm_batch_generator.py"
+  "mllm_scheduler.py"
+  "omni_multimodal.py"
+  "paged_cache.py"
+  "prefix_cache.py"
+  "scheduler.py"
+  "utils/ssm_companion_cache.py"
+  "utils/ssm_companion_disk_store.py"
+)
+for rel in "${HASH_GATED_ENGINE_FILES[@]}"; do
+  if [ ! -f "$SOURCE_ENGINE_DIR/$rel" ] || [ ! -f "$BUNDLED_ENGINE_DIR/$rel" ]; then
+    echo "❌ RELEASE BLOCKED — cannot compare source and bundled vmlx_engine/$rel"
+    echo "   source : $SOURCE_ENGINE_DIR/$rel"
+    echo "   bundled: $BUNDLED_ENGINE_DIR/$rel"
+    exit 1
+  fi
+  SOURCE_SHA="$(shasum -a 256 "$SOURCE_ENGINE_DIR/$rel" | awk '{print $1}')"
+  BUNDLED_SHA="$(shasum -a 256 "$BUNDLED_ENGINE_DIR/$rel" | awk '{print $1}')"
+  if [ "$SOURCE_SHA" != "$BUNDLED_SHA" ]; then
+    echo "❌ RELEASE BLOCKED — bundled vmlx_engine/$rel content drift"
+    echo "   source sha256 : $SOURCE_SHA"
+    echo "   bundled sha256: $BUNDLED_SHA"
+    echo
+    echo "   Re-run ./scripts/bundle-python.sh from this checkout."
+    exit 1
+  fi
+done
+echo "  ok   bundled critical vmlx_engine files match source content"
+
+BUNDLED_JANG_TOOLS_DIR="$(PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH= "$PY" -B -s -c 'import pathlib, jang_tools; print(pathlib.Path(jang_tools.__file__).resolve().parent)' 2>/dev/null || true)"
+JANG_TOOLS_SOURCE_DIR="${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}/jang_tools"
+HASH_GATED_JANG_TOOLS_FILES=(
+  "load_jangtq.py"
+  "load_jangtq_kimi_vlm.py"
+  "kimi_prune/generate_vl.py"
+  "kimi_prune/runtime_patch.py"
+  "turboquant/fused_gate_up_kernel.py"
+  "turboquant/gather_tq_kernel.py"
+  "turboquant/hadamard_kernel.py"
+  "turboquant/tq_kernel.py"
+)
+if [ -z "$BUNDLED_JANG_TOOLS_DIR" ] || [ ! -d "$BUNDLED_JANG_TOOLS_DIR" ]; then
+  echo "❌ RELEASE BLOCKED — cannot locate bundled jang_tools package"
+  echo "   resolved path: ${BUNDLED_JANG_TOOLS_DIR:-<empty>}"
+  exit 1
+fi
+if [ ! -d "$JANG_TOOLS_SOURCE_DIR" ]; then
+  echo "⚠️  skipping jang_tools content hash parity; local source not present: $JANG_TOOLS_SOURCE_DIR"
+else
+  for rel in "${HASH_GATED_JANG_TOOLS_FILES[@]}"; do
+    if [ ! -f "$JANG_TOOLS_SOURCE_DIR/$rel" ] || [ ! -f "$BUNDLED_JANG_TOOLS_DIR/$rel" ]; then
+      echo "❌ RELEASE BLOCKED — cannot compare source and bundled jang_tools/$rel"
+      echo "   source : $JANG_TOOLS_SOURCE_DIR/$rel"
+      echo "   bundled: $BUNDLED_JANG_TOOLS_DIR/$rel"
+      exit 1
+    fi
+    SOURCE_SHA="$(shasum -a 256 "$JANG_TOOLS_SOURCE_DIR/$rel" | awk '{print $1}')"
+    BUNDLED_SHA="$(shasum -a 256 "$BUNDLED_JANG_TOOLS_DIR/$rel" | awk '{print $1}')"
+    if [ "$SOURCE_SHA" != "$BUNDLED_SHA" ]; then
+      echo "❌ RELEASE BLOCKED — bundled jang_tools/$rel content drift"
+      echo "   source sha256 : $SOURCE_SHA"
+      echo "   bundled sha256: $BUNDLED_SHA"
+      echo
+      echo "   Re-run ./scripts/bundle-python.sh from this checkout."
+      exit 1
+    fi
+  done
+  echo "  ok   bundled critical jang_tools files match source content"
+fi
+
 # Isolated imports — no user site, no PYTHONPATH leakage (same env as the
 # running engine). -s suppresses user site-packages the way sessions.ts does.
 PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH= "$PY" -B -s - <<'PYEOF'
@@ -52,6 +184,9 @@ REQUIRED = [
     ("mlx_vlm.models.qwen3_vl", "mlx-vlm qwen3_vl", "bundled mlx-vlm qwen3_vl missing"),
     ("mflux", "mflux image runtime", "bundled mflux package missing — Image tab and Server-tab image models will fail before ready"),
     ("mflux.models.common.config.model_config", "mflux ModelConfig", "mflux install incomplete — cannot resolve local image model configs"),
+    ("timm", "timm vision backbone", "bundled timm package missing — Nemotron-Omni image/video media dispatch will fail before generation"),
+    ("einops", "einops tensor rearrange", "bundled einops package missing — Nemotron-Omni vision remote code will fail before generation"),
+    ("librosa", "librosa audio features", "bundled librosa package missing — Nemotron-Omni session construction will fail before generation"),
     ("jang_tools", "jang-tools", "bundled jang-tools package missing"),
     ("jang_tools.load_jangtq", "jang_tools.load_jangtq", "JANGTQ fast-path loader missing from bundled jang-tools"),
     ("jang_tools.turboquant.tq_kernel", "jang_tools.turboquant.tq_kernel", "TQ Metal kernel runtime missing from bundled jang-tools"),

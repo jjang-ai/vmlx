@@ -16,7 +16,6 @@ def test_ollama_generate_default_uses_chat_template_request_shape():
             "prompt": "What is the capital of France?",
             "stream": False,
             "format": "json",
-            "think": False,
             "options": {
                 "num_predict": 16,
                 "temperature": 0,
@@ -35,7 +34,7 @@ def test_ollama_generate_default_uses_chat_template_request_shape():
     assert req["temperature"] == 0
     assert req["top_p"] == 1
     assert req["repetition_penalty"] == 1.1
-    assert req["enable_thinking"] is False
+    assert req["enable_thinking"] is True
     assert req["response_format"] == {"type": "json_object"}
 
 
@@ -68,7 +67,21 @@ def test_ollama_native_think_beats_enable_thinking_extension():
     assert req["enable_thinking"] is True
 
 
-def test_ollama_chat_drops_reasoning_effort_when_thinking_off():
+def test_ollama_native_think_false_disables_reasoning():
+    from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
+
+    req = ollama_chat_to_openai(
+        {
+            "model": "qwen",
+            "messages": [{"role": "user", "content": "hi"}],
+            "think": False,
+        }
+    )
+
+    assert req["enable_thinking"] is False
+
+
+def test_ollama_chat_drops_reasoning_effort_when_native_think_false():
     from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
 
     req = ollama_chat_to_openai(
@@ -82,6 +95,16 @@ def test_ollama_chat_drops_reasoning_effort_when_thinking_off():
 
     assert req["enable_thinking"] is False
     assert "reasoning_effort" not in req
+
+
+def test_ollama_generate_chat_native_think_false_disables_reasoning():
+    from vmlx_engine.api.ollama_adapter import ollama_generate_to_openai_chat
+
+    req = ollama_generate_to_openai_chat(
+        {"model": "qwen", "prompt": "hi", "think": False}
+    )
+
+    assert req["enable_thinking"] is False
 
 
 def test_ollama_generate_chat_accepts_enable_thinking_extension():

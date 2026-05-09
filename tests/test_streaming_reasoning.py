@@ -976,7 +976,7 @@ class TestOtherModelConfigs:
 
 
 class TestEmptyResponseSafeguard:
-    """Tests for zero-token stream detection and diagnostic emission."""
+    """Tests for zero-token stream detection without fake assistant content."""
 
     def test_chat_completions_zero_token_safeguard(self):
         """Chat completions must detect zero-token streams."""
@@ -988,18 +988,20 @@ class TestEmptyResponseSafeguard:
         assert "completion_tokens" in source
         assert "content_was_emitted" in source
         assert "accumulated_reasoning" in source
-        # And emits a diagnostic message
-        assert "Model produced no response" in source
+        # And finishes the stream without injecting diagnostic prose as content
+        assert "ChatCompletionChunkDelta()" in source
+        assert "Model produced no response" not in source
 
     def test_responses_api_empty_fallback_chain(self):
-        """Responses API must have fallback chain for empty responses."""
+        """Responses API must preserve empty output and emit a warning event."""
         import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_responses_api)
 
-        # Fallback chain: display_text → clean_output_text → diagnostic
+        # Fallback chain: display_text → clean_output_text → empty output + warning
         assert "display_text" in source
         assert "clean_output_text" in source
-        assert "Model produced no response" in source
+        assert "empty_model_response" in source
+        assert "Model produced no response" not in source
 
     def test_responses_api_reasoning_fallback(self):
         """Responses API should use accumulated_reasoning as fallback when no content."""
@@ -1583,4 +1585,4 @@ class TestImprovedZeroTokenSafeguard:
         )
         # Must check completion_tokens == 0, not just last_output is None
         assert "completion_tokens" in source
-        assert "Model produced no response" in source
+        assert "ChatCompletionChunkDelta()" in source

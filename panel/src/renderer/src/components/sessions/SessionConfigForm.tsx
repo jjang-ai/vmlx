@@ -151,7 +151,8 @@ export const DEFAULT_CONFIG: SessionConfig = {
 export const EXPERT_CONFIG = { ...DEFAULT_CONFIG }
 
 // Casual: safest optimized defaults for low-compute machines.
-// All optimizations ON (prefix cache, paged cache, KV quant, JIT, TQ).
+// Keep cache codec on Auto so model architecture decides: calibrated TQ-KV for
+// compatible plain KV rows, native typed cache for hybrid/DSV4/ZAYA rows.
 // Resource ceilings lowered to prevent OOM on 32-48GB machines with large models.
 export const CASUAL_CONFIG: SessionConfig = {
   ...DEFAULT_CONFIG,
@@ -162,7 +163,7 @@ export const CASUAL_CONFIG: SessionConfig = {
   cacheMemoryPercent: 15,     // 15% vs 30% — more headroom for model weights
   maxCacheBlocks: 500,        // Fewer paged blocks (half)
   prefixCacheSize: 50,        // Fewer cached prefixes
-  kvCacheQuantization: 'q4',  // More aggressive quant (q4 vs q8 — 2x smaller stored cache)
+  kvCacheQuantization: 'auto', // Do not pass explicit q4; that disables calibrated live TQ-KV.
   maxTokens: 8192,            // 8K vs 32K — prevents huge KV allocation
   enableJit: true,            // JIT on by default (includes warmup for cold-start OOM prevention)
 }
@@ -477,7 +478,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                 />
                 <SliderField
                   label="Cache Memory %"
-                  tooltip="Percentage of available system RAM to allocate for the prefix cache. Only used when Cache Memory Limit is set to 'Auto-detect'. Default 30% is a good balance — lower this for large models that leave little headroom (e.g. 10-15% for 120GB+ models on 256GB systems). Higher values cache more prefixes but risk memory pressure during long generations."
+                  tooltip="Percentage of available system RAM to allocate for the prefix cache. Only used when Cache Memory Limit is set to 'Auto-detect'. Default 20% is a balanced cache budget — lower this for large models that leave little headroom (e.g. 10-15% for 120GB+ models on 256GB systems). Higher values cache more prefixes but risk memory pressure during long generations."
                   value={config.cacheMemoryPercent}
                   onChange={v => onChange('cacheMemoryPercent', v)}
                   min={1}
@@ -589,7 +590,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               unlimitedValue={0}
               unlimitedLabel="Default (1000)"
             />
-            <CheckField label="Block Disk Cache (L2)" tooltip="Persist individual paged cache blocks to SSD. When a block is evicted from RAM, it's saved to disk and can be reloaded later without recomputation. Dramatically speeds up cache warm-up for repeated system prompts and common prefixes. Uses content-addressable storage with background writes so disk I/O doesn't block inference. For JANG models, TurboQuant 3-bit compressed data is stored natively (26x smaller files)." checked={config.enableBlockDiskCache} onChange={v => onChange('enableBlockDiskCache', v)} />
+            <CheckField label="Block Disk Cache (L2)" tooltip="Persist individual paged cache blocks to SSD. When a block is evicted from RAM, it's saved to disk and can be reloaded later without recomputation. Dramatically speeds up cache warm-up for repeated system prompts and common prefixes. Uses content-addressable storage with background writes so disk I/O doesn't block inference. Compatible runtimes store compressed blocks in their native codec; path-dependent architectures use typed cache records instead of generic TurboQuant." checked={config.enableBlockDiskCache} onChange={v => onChange('enableBlockDiskCache', v)} />
             {config.enableBlockDiskCache && (
               <>
                 <SliderField
@@ -626,27 +627,24 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* KV Cache Quantization — split into two clearly-distinct controls so
           users stop assuming the dropdown's "None" default means "no cache
-          compression at all". TurboQuant (3-bit live cache) is the engine
-          default for JANG models and runs orthogonally to the q4/q8 stored-
-          cache compression below. User report 2026-04-30: "if kv cache
-          setting is not set default in ui to turboquant" — fixed by adding
-          a status row that shows TurboQuant as ON (Default) above the
-          stored-cache dropdown so the live-cache compression isn't
-          invisible. */}
+          compression at all". Auto mode intentionally omits the CLI flag:
+          the engine can then use calibrated TurboQuant for compatible live
+          KV caches, or native typed cache contracts for path-dependent
+          architectures such as DSV4, ZAYA, and hybrid SSM. */}
       <Section title={t('sessions.config.kvCacheQuantization')} expanded={expandedSections.kvCacheQuant} onToggle={() => toggleSection('kvCacheQuant')} hidden={isImage}>
         {batchingOff && <IncompatWarning text="KV cache quantization requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
         {!batchingOff && prefixOff && <IncompatWarning text="KV cache quantization requires prefix cache. Enable 'Prefix Cache' above to use KV cache quantization." />}
-        {!effectivelyNoBatching && !prefixOff && isMambaCache && <PerformanceHint text="Hybrid model detected — cache quantization only compresses the attention layers. Non-attention layers (Mamba/GatedDeltaNet) are stored at full precision." />}
+        {!effectivelyNoBatching && !prefixOff && isMambaCache && <PerformanceHint text="Hybrid stateful cache detected — the engine keeps SSM/GLA state native and only uses cache codecs proven for that architecture. Generic TurboQuant KV is disabled unless a tested override exists." />}
 
-        {/* Live KV cache (TurboQuant) — automatic for compatible bundles. */}
+        {/* Live/native cache codec — automatic per architecture. */}
         <div className="block">
           <span className="text-xs font-medium text-muted-foreground">
-            Live KV Cache Compression
-            <Tooltip text="In Auto mode the engine uses TurboQuant for compatible live KV caches and q4 stored-prefix compression as the fallback for cache families that need a different restore codec, including DSV4 composite SWA/CSA/HSA." />
+            Live Cache Codec
+            <Tooltip text="Auto mode leaves the CLI flag unset so the engine can choose per architecture: calibrated TurboQuant for compatible plain KV/JANGTQ caches, native composite or typed caches for DSV4/ZAYA/hybrid SSM, and stored-prefix fallback only where that codec is valid." />
           </span>
           <div className="cfg-input flex items-center justify-between" style={{ background: 'var(--card)', cursor: 'default' }}>
-            <span>TurboQuant / stored-q4 auto</span>
-            <span className="text-xs px-2 py-0.5 rounded" style={{ background: 'var(--success-bg, rgba(34,197,94,0.15))', color: 'var(--success-fg, rgb(34,197,94))' }}>ON · Default</span>
+            <span>Engine-selected native cache</span>
+            <span className="text-xs px-2 py-0.5 rounded" style={{ background: 'var(--success-bg, rgba(34,197,94,0.15))', color: 'var(--success-fg, rgb(34,197,94))' }}>AUTO</span>
           </div>
         </div>
 
@@ -654,10 +652,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <div className="block">
           <span className="text-xs font-medium text-muted-foreground">
             Stored Cache Quantization
-            <Tooltip text="Controls how completed prompt states are stored in the prefix cache. Auto keeps the engine's production codec choice. None explicitly disables stored-cache quantization. q8/q4 force the generic stored-cache codec." />
+            <Tooltip text="Controls how completed prompt states are stored in the prefix cache. Auto keeps the engine's production codec choice. None explicitly disables stored-cache quantization. q8/q4 force the generic stored-cache codec and also disable calibrated live TurboQuant so the explicit choice is honored." />
           </span>
           <select value={config.kvCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching || prefixOff}>
-            <option value="auto">Auto (TurboQuant when compatible, q4 stored fallback)</option>
+            <option value="auto">Auto (engine-selected: native/TurboQuant + stored fallback)</option>
             <option value="none">{t('sessions.config.kvQuantNone')}</option>
             <option value="q8">q8 (8-bit, ~2x stored cache savings)</option>
             <option value="q4">q4 (4-bit, ~4x stored cache savings)</option>
@@ -684,7 +682,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {batchingOff && <IncompatWarning text="Disk cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
         {!effectivelyNoBatching && config.usePagedCache && <IncompatWarning text="Legacy disk cache is not compatible with paged cache. To use disk-based persistence with paged cache, use 'Block Disk Cache (L2)' in the Paged KV Cache section instead. To use this legacy disk cache, disable 'Use Paged KV Cache' first." />}
         {!batchingOff && prefixOff && <IncompatWarning text="Disk cache requires prefix cache. Enable 'Prefix Cache' above to use disk caching." />}
-        <CheckField label="Enable Disk Cache" tooltip="Persist prompt caches to disk for reuse across server restarts. Acts as L2 cache behind the in-memory prefix cache — when a prompt isn't found in memory, it's loaded from disk instead of recomputing. Dramatically speeds up repeated prompts (system prompts, common prefixes). For JANG models, TurboQuant 3-bit compressed data is stored natively (26x smaller files). Requires prefix cache to be enabled. Note: not compatible with paged cache (uses different storage format)." checked={config.enableDiskCache} onChange={v => onChange('enableDiskCache', v)} />
+        <CheckField label="Enable Disk Cache" tooltip="Persist prompt caches to disk for reuse across server restarts. Acts as L2 cache behind the in-memory prefix cache — when a prompt isn't found in memory, it's loaded from disk instead of recomputing. Dramatically speeds up repeated prompts (system prompts, common prefixes). Compatible runtimes store compressed cache data in their native format; path-dependent caches use typed restore records. Requires prefix cache to be enabled. Note: not compatible with paged cache (uses different storage format)." checked={config.enableDiskCache} onChange={v => onChange('enableDiskCache', v)} />
         {config.enableDiskCache && (
           <>
             <SliderField

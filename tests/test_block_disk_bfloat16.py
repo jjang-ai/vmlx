@@ -6,6 +6,8 @@ serialize -> disk -> deserialize round-trip correctly.
 import pytest
 import tempfile
 import shutil
+import sqlite3
+import time
 from pathlib import Path
 
 try:
@@ -152,3 +154,31 @@ class TestWriteBlockAsync:
         time.sleep(1.0)
         file_path = disk_store._hash_to_path(block_hash.hex())
         assert file_path.exists(), "Block file not written"
+
+    def test_stats_include_persistent_token_count(self, disk_store):
+        """Block L2 stats must report tokens persisted on disk, not only blocks."""
+        now = time.time()
+        conn = sqlite3.connect(str(disk_store._db_path))
+        try:
+            conn.execute(
+                "INSERT INTO blocks "
+                "(block_hash, file_name, num_tokens, num_layers, dtype, "
+                "file_size, created_at, last_accessed, access_count) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("block-a", "block-a.safetensors", 64, 2, "float16", 1024, now, now, 1),
+            )
+            conn.execute(
+                "INSERT INTO blocks "
+                "(block_hash, file_name, num_tokens, num_layers, dtype, "
+                "file_size, created_at, last_accessed, access_count) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("block-b", "block-b.safetensors", 32, 2, "float16", 512, now, now, 1),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        stats = disk_store.get_stats()
+
+        assert stats["total_tokens_on_disk"] == 96
+        assert stats["total_cached_tokens"] == 96

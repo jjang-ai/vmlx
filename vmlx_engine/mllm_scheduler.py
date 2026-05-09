@@ -141,6 +141,7 @@ KEY CLASSES
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import time
@@ -161,6 +162,7 @@ from .mllm_batch_generator import (
     MLLMBatchResponse,
 )
 from .request import RequestOutput, RequestStatus, SamplingParams
+from .utils.ssm_companion_disk_store import SSMCompanionDiskStore
 
 logger = logging.getLogger(__name__)
 
@@ -423,6 +425,11 @@ class MLLMScheduler:
         self.memory_aware_cache = None
         self.prefix_cache = None
         self.disk_cache = None
+        self._ssm_companion_disk_store = None
+        self._ssm_companion_model_key = ""
+        self._kv_cache_bits = 0
+        self._kv_cache_group_size = 64
+        self._tq_active = False
 
         # Detect hybrid models (mixed KVCache + MambaCache layers)
         lang_model = self.model.language_model if hasattr(self.model, "language_model") else self.model
@@ -475,7 +482,6 @@ class MLLMScheduler:
                 if self.config.enable_block_disk_cache:
                     cache_dir = self.config.block_disk_cache_dir
                     if cache_dir is None and self.config.model_path:
-                        import hashlib
                         # Include quant config and paged-cache schema in hash
                         # to prevent cross-config / stale L2 cache poisoning.
                         quant_tag = self.config.kv_cache_quantization or "none"
@@ -506,6 +512,43 @@ class MLLMScheduler:
                             f"VLM block disk cache enabled: dir={cache_dir}, "
                             f"max={self.config.block_disk_cache_max_gb}GB"
                         )
+                        if self._is_hybrid:
+                            try:
+                                try:
+                                    ssm_budget_gb = float(
+                                        os.environ.get(
+                                            "VMLX_SSM_DISK_CACHE_MAX_GB",
+                                            str(self.config.block_disk_cache_max_gb),
+                                        )
+                                    )
+                                    if ssm_budget_gb <= 0:
+                                        ssm_budget_gb = (
+                                            self.config.block_disk_cache_max_gb
+                                        )
+                                except ValueError:
+                                    ssm_budget_gb = self.config.block_disk_cache_max_gb
+                                self._ssm_companion_disk_store = (
+                                    SSMCompanionDiskStore(
+                                        directory=os.path.join(
+                                            cache_dir, "ssm_companion"
+                                        ),
+                                        budget_bytes=int(
+                                            ssm_budget_gb * (1024 ** 3)
+                                        ),
+                                    )
+                                )
+                                logger.info(
+                                    "VLM hybrid SSM companion L2 enabled: dir=%s, "
+                                    "max=%.3gGB",
+                                    self._ssm_companion_disk_store.directory,
+                                    ssm_budget_gb,
+                                )
+                            except Exception as ssm_e:
+                                logger.warning(
+                                    "VLM hybrid SSM companion L2 init failed; "
+                                    "continuing with in-memory SSM companion only: %s",
+                                    ssm_e,
+                                )
                     except Exception as e:
                         logger.error(
                             f"VLM block disk cache init failed at {cache_dir}: {e}. "
@@ -525,6 +568,31 @@ class MLLMScheduler:
                         model=lang_model,
                         paged_cache_manager=self.paged_cache_manager,
                     )
+                    if self._is_hybrid:
+                        effective_kv_bits = (
+                            4 if self.config.kv_cache_quantization == "q4"
+                            else 8 if self.config.kv_cache_quantization == "q8"
+                            else 0
+                        )
+                        try:
+                            from .prefix_cache import compute_model_cache_key
+
+                            model_key = compute_model_cache_key(
+                                lang_model,
+                                model_path=self.config.model_path,
+                                smelt_enabled=False,
+                                smelt_pct=0.0,
+                                tq_enabled=False,
+                                kv_quant_bits=effective_kv_bits,
+                            )
+                        except Exception:
+                            scope = (
+                                f"{self.config.model_path or ''}:"
+                                f"kv={self.config.kv_cache_quantization}:"
+                                f"block={self.config.paged_cache_block_size}"
+                            )
+                            model_key = hashlib.sha256(scope.encode()).hexdigest()
+                        self._ssm_companion_model_key = model_key
                     logger.info(
                         f"VLM Paged cache enabled: block_size={self.config.paged_cache_block_size}, "
                         f"max_blocks={self.config.max_cache_blocks}"
@@ -570,7 +638,6 @@ class MLLMScheduler:
 
         # Disk cache L2 (persistent across restarts, for non-paged paths)
         if self.config.enable_disk_cache and self.config.enable_prefix_cache:
-            import hashlib
             base_dir = self.config.disk_cache_dir or os.path.expanduser(
                 "~/.cache/vmlx-engine/prompt-cache"
             )
@@ -614,8 +681,6 @@ class MLLMScheduler:
         # KV cache quantization for prefix cache storage (2-4x memory reduction)
         # MLA models (Mistral 4, DeepSeek V2/V3) store compressed KV latents —
         # quantizing already-compressed representations destroys quality.
-        self._kv_cache_bits = 0
-        self._kv_cache_group_size = 64
         _is_mla = self._detect_mla()
         if _is_mla and self.config.kv_cache_quantization != "none":
             logger.info("KV cache quantization disabled: MLA model (compressed KV latents)")
@@ -633,6 +698,9 @@ class MLLMScheduler:
                     f"KV cache quantization '{self.config.kv_cache_quantization}' requested "
                     "but prefix cache is disabled — quantization has no effect without prefix cache"
                 )
+
+        self._tq_active = self._detect_turboquant_make_cache()
+        self._enforce_turboquant_single_sequence()
 
         # Get stop tokens from tokenizer
         self.stop_tokens = self._get_stop_tokens()
@@ -826,6 +894,56 @@ class MLLMScheduler:
         except Exception:
             pass
         return False
+
+    def _detect_turboquant_make_cache(self) -> bool:
+        """Detect JANG TurboQuant KV patches on VLM wrappers or language models."""
+
+        def _is_tq_make_cache(obj: Any) -> bool:
+            make_cache = getattr(obj, "make_cache", None)
+            return make_cache is not None and getattr(make_cache, "__name__", "") in (
+                "_tq_make_cache",
+                "_turboquant_make_cache",
+            )
+
+        seen = set()
+        stack = [self.model]
+        while stack:
+            obj = stack.pop()
+            if obj is None or id(obj) in seen:
+                continue
+            seen.add(id(obj))
+            if _is_tq_make_cache(obj):
+                return True
+            for attr in ("model", "language_model"):
+                nxt = getattr(obj, attr, None)
+                if nxt is not None and id(nxt) not in seen:
+                    stack.append(nxt)
+        return False
+
+    def _enforce_turboquant_single_sequence(self) -> None:
+        """Keep MLLM live batching honest for TurboQuantKVCache."""
+        if not self._tq_active:
+            return
+
+        changed = []
+        if self.config.max_num_seqs != 1:
+            changed.append(f"max_num_seqs {self.config.max_num_seqs}->1")
+            self.config.max_num_seqs = 1
+        if self.config.prefill_batch_size != 1:
+            changed.append(f"prefill_batch_size {self.config.prefill_batch_size}->1")
+            self.config.prefill_batch_size = 1
+        if self.config.completion_batch_size != 1:
+            changed.append(
+                f"completion_batch_size {self.config.completion_batch_size}->1"
+            )
+            self.config.completion_batch_size = 1
+        if changed:
+            logger.warning(
+                "VLM TurboQuantKVCache live decode is single-sequence only "
+                "(multi-seq merge calls cache.extend(), which TurboQuantKVCache "
+                "intentionally does not implement); overriding %s.",
+                ", ".join(changed),
+            )
 
     def _detect_head_dim(self) -> Optional[int]:
         """Detect the VLM language model's KV head dimension."""
@@ -1424,6 +1542,8 @@ class MLLMScheduler:
             kv_cache_group_size=self._kv_cache_group_size,
             ssm_state_cache_size=self.config.ssm_state_cache_size,
             ssm_state_cache_max_mb=self.config.ssm_state_cache_max_mb,
+            ssm_state_disk_store=self._ssm_companion_disk_store,
+            ssm_state_cache_model_key=self._ssm_companion_model_key,
             enable_prefix_cache=self.config.enable_prefix_cache,
         )
         self._current_sampler_params = new_params
@@ -1918,21 +2038,23 @@ class MLLMScheduler:
         for request_id in finished_ids:
             request = self.running.get(request_id)
 
-            # PHASE 2 OPTIMIZATION: Skip cache storage for short-output requests.
-            # For benchmark workloads (MMLU: 14k requests, 1-token answers), cache
-            # extraction + truncation + storage dominates per-request overhead.
-            # Single-turn requests with very short outputs will never benefit from
-            # prefix cache reuse, so skip entirely.
+            # Cacheability is decided by the prompt prefix, not by output
+            # length. A first chat turn can produce a one-token answer and
+            # still be the exact prefix needed by turn 2; skipping that store
+            # makes MLLM routes semantically coherent but forces full
+            # re-prefill and reports cached_tokens=0 on multi-turn chats.
+            # Benchmarks that legitimately need fresh execution use the
+            # explicit cache_salt / skip_prefix_cache bypass below.
             _output_len = getattr(request, 'num_output_tokens', 0) if request else 0
-            _skip_cache_store = _output_len > 0 and _output_len <= 3 and not getattr(request, '_has_history', False)
+            _skip_cache_store = False
             # Hard bypass from cache_salt / skip_prefix_cache — overrides
-            # the short-output heuristic and ALSO suppresses every store site.
+            # normal cache storage and suppresses every store site.
             if request is not None and getattr(request, '_bypass_prefix_cache', False):
                 _skip_cache_store = True
             if _skip_cache_store:
                 logger.debug(
                     f"Skipping cache store for {request_id}: "
-                    f"short output ({_output_len} tokens), likely single-turn"
+                    f"output_len={_output_len}, explicit prefix-cache bypass"
                 )
                 if request is not None:
                     request._extracted_cache = None

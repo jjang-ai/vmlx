@@ -1223,23 +1223,25 @@ class TestH3PrepareImagesTotalFailure:
 
 
 # ===========================================================================
-# H4 Regression: Fallback text skips JSON validation
+# H4 Regression: Empty output is not model text
 # ===========================================================================
 
 
-class TestH4FallbackTextSkipsJsonValidation:
-    """Test that fallback '[Model produced no response...]' doesn't trigger JSON validation."""
+class TestH4EmptyOutputIsNotAssistantText:
+    """Empty Responses output must stay empty instead of becoming fake model text."""
 
-    def test_responses_api_skips_validation_on_fallback(self):
-        """Responses API JSON validation must skip the fallback message."""
+    def test_responses_api_empty_output_skips_validation_without_placeholder(self):
+        """Responses API JSON validation should skip naturally on empty display_text."""
         import inspect
         from vmlx_engine.server import stream_responses_api
 
         source = inspect.getsource(stream_responses_api)
-        # Must define fallback message constant
-        assert "_FALLBACK_MSG" in source or "Model produced no response" in source
-        # Must check display_text != fallback before validating
-        assert "_FALLBACK_MSG" in source
+        assert "Model produced no response" not in source
+        assert "Model produced only internal reasoning" not in source
+        assert "_FALLBACK_MSG" not in source
+        assert "and display_text" in source
+        assert "empty_model_response" in source
+        assert "reasoning_only_no_content" in source
 
     def test_chat_completions_already_safe(self):
         """Chat completions uses content_was_emitted gate — already safe."""
@@ -1249,6 +1251,8 @@ class TestH4FallbackTextSkipsJsonValidation:
         source = inspect.getsource(stream_chat_completion)
         # Chat completions gates on content_was_emitted
         assert "content_was_emitted" in source
+        assert "Model produced only internal reasoning" not in source
+        assert "ChatCompletionChunkDelta()" in source
 
 
 # ===========================================================================
@@ -2203,6 +2207,60 @@ class TestStartupCompatibilityGuards:
         assert '("mflux", "mflux image runtime"' in verify_script
         assert '"mflux.models.common.config.model_config"' in verify_script
 
+    def test_bundled_python_console_scripts_are_relocatable(self):
+        bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
+        verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
+        release_gate = Path("./panel/scripts/release-gate-python-app.py").read_text()
+
+        assert "Rewriting console-script shebangs to relocatable bundled Python" in bundle_script
+        assert "\\$(dirname " in bundle_script
+        assert "/python3\\\" -B -s" in bundle_script
+        assert "check_console_script_shebangs" in verify_script
+        assert "check_packaged_console_script_shebangs" in release_gate
+        assert "/Applications/vMLX.app" in release_gate
+
+    def test_bundled_python_hash_gate_covers_runtime_files_changed_for_release(self):
+        verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
+        for rel in (
+            "server.py",
+            "api/anthropic_adapter.py",
+            "api/ollama_adapter.py",
+            "engine/batched.py",
+            "loaders/load_jangtq_dsv4.py",
+            "mllm_batch_generator.py",
+            "mllm_scheduler.py",
+            "omni_multimodal.py",
+            "prefix_cache.py",
+            "scheduler.py",
+        ):
+            assert f'"{rel}"' in verify_script
+
+    def test_bundled_python_hash_gate_covers_critical_jang_tools_files(self):
+        verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
+        for rel in (
+            "load_jangtq.py",
+            "load_jangtq_kimi_vlm.py",
+            "kimi_prune/generate_vl.py",
+            "kimi_prune/runtime_patch.py",
+            "turboquant/fused_gate_up_kernel.py",
+            "turboquant/gather_tq_kernel.py",
+            "turboquant/hadamard_kernel.py",
+            "turboquant/tq_kernel.py",
+        ):
+            assert f'"{rel}"' in verify_script
+
+    def test_embeddings_and_rerank_endpoints_have_memory_pressure_guards(self):
+        source = Path("./vmlx_engine/server.py").read_text()
+
+        assert '@app.post(\n    "/v1/embeddings",\n    dependencies=[\n        Depends(verify_api_key),\n        Depends(check_rate_limit),\n        Depends(check_memory_pressure),' in source
+        assert '@app.post(\n    "/v1/embeddings",\n    dependencies=[\n        Depends(verify_api_key),\n        Depends(check_rate_limit),\n        Depends(check_memory_pressure),\n        Depends(check_metal_working_set_pressure),' in source
+        assert '@app.post(\n    "/v1/rerank",\n    dependencies=[\n        Depends(verify_api_key),\n        Depends(check_rate_limit),\n        Depends(check_memory_pressure),' in source
+        assert '@app.post(\n    "/v1/rerank",\n    dependencies=[\n        Depends(verify_api_key),\n        Depends(check_rate_limit),\n        Depends(check_memory_pressure),\n        Depends(check_metal_working_set_pressure),' in source
+        assert '@app.post(\n    "/api/embeddings",\n    dependencies=[\n        Depends(verify_api_key),\n        Depends(check_memory_pressure),' in source
+        assert '@app.post(\n    "/api/embeddings",\n    dependencies=[\n        Depends(verify_api_key),\n        Depends(check_memory_pressure),\n        Depends(check_metal_working_set_pressure),' in source
+        assert '@app.post(\n    "/api/embed",\n    dependencies=[\n        Depends(verify_api_key),\n        Depends(check_memory_pressure),' in source
+        assert '@app.post(\n    "/api/embed",\n    dependencies=[\n        Depends(verify_api_key),\n        Depends(check_memory_pressure),\n        Depends(check_metal_working_set_pressure),' in source
+
     def test_bundle_forces_sonoma_mlx_wheels_on_tahoe_build_hosts(self):
         """The release bundle must not inherit the builder host's macOS wheel tag."""
         bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
@@ -2402,6 +2460,62 @@ class TestZayaCCACachePolicy:
             server._default_enable_thinking = old_default
 
         assert resolved is False
+
+    def test_server_default_false_does_not_override_reasoning_on_runtime_default(self):
+        from vmlx_engine import server
+
+        old_default = server._default_enable_thinking
+        server._default_enable_thinking = False
+        try:
+            resolved = server._resolve_enable_thinking(
+                request_value=None,
+                ct_kwargs={},
+                tools_present=False,
+                model_key="unknown-thinking-capable",
+                engine=None,
+                auto_detect=True,
+            )
+            explicit_off = server._resolve_enable_thinking(
+                request_value=False,
+                ct_kwargs={},
+                tools_present=False,
+                model_key="unknown-thinking-capable",
+                engine=None,
+                auto_detect=True,
+            )
+        finally:
+            server._default_enable_thinking = old_default
+
+        assert resolved is True
+        assert explicit_off is False
+
+    def test_gemma4_tools_still_auto_disable_thinking(self):
+        from vmlx_engine import server
+
+        old_default = server._default_enable_thinking
+        server._default_enable_thinking = None
+        try:
+            resolved = server._resolve_enable_thinking(
+                request_value=None,
+                ct_kwargs={},
+                tools_present=True,
+                model_key="gemma4",
+                engine=None,
+                auto_detect=True,
+            )
+            explicit_on = server._resolve_enable_thinking(
+                request_value=True,
+                ct_kwargs={},
+                tools_present=True,
+                model_key="gemma4",
+                engine=None,
+                auto_detect=True,
+            )
+        finally:
+            server._default_enable_thinking = old_default
+
+        assert resolved is False
+        assert explicit_on is True
 
     def test_cli_disables_prefix_paged_l2_and_tq_for_zaya_cca(self):
         source = Path("./vmlx_engine/cli.py").read_text()
@@ -3067,6 +3181,263 @@ class TestTurboQuantKVTelemetry:
         assert status["enabled"] is True
         assert status["default_bits"] == 3
 
+    def test_reports_turboquant_single_sequence_runtime_contract(self):
+        from types import SimpleNamespace
+        from vmlx_engine.server import _turboquant_kv_cache_status
+
+        scheduler = SimpleNamespace(
+            _tq_active=True,
+            config=SimpleNamespace(
+                max_num_seqs=1,
+                prefill_batch_size=1,
+                completion_batch_size=1,
+            ),
+        )
+
+        status = _turboquant_kv_cache_status(scheduler=scheduler)
+
+        assert status["enabled"] is True
+        assert status["single_sequence_only"] is True
+        assert status["single_sequence_reason"] == "cache_extend_not_supported"
+        assert status["effective_max_num_seqs"] == 1
+        assert status["effective_prefill_batch_size"] == 1
+        assert status["effective_completion_batch_size"] == 1
+
+    @pytest.mark.asyncio
+    async def test_cache_stats_endpoint_projects_cache_reuse_skip_telemetry(
+        self, monkeypatch
+    ):
+        import vmlx_engine.server as server
+
+        class _Engine:
+            is_mllm = False
+
+            def get_cache_stats(self):
+                return None
+
+        class _Scheduler:
+            disk_cache = None
+            paged_cache_manager = None
+
+            def get_stats(self):
+                return {
+                    "num_waiting": 2,
+                    "num_running": 1,
+                    "num_requests_processed": 4,
+                    "total_prompt_tokens": 1000,
+                    "total_completion_tokens": 128,
+                    "ewma_ttft_seconds": 9.25,
+                    "cache_reuse_skips": 1,
+                    "cache_reuse_skip_tokens": 512,
+                    "last_cache_reuse_skip": {
+                        "reason": "insufficient_memory_for_cache_merge",
+                        "needed_mb": 41618.0,
+                        "available_mb": 13330.0,
+                    },
+                }
+
+        monkeypatch.setattr(server, "_engine", _Engine())
+        monkeypatch.setattr(server, "_get_scheduler", lambda: _Scheduler())
+
+        payload = await server.cache_stats()
+        scheduler_stats = payload["scheduler_stats"]
+
+        assert scheduler_stats["cache_reuse_skips"] == 1
+        assert scheduler_stats["cache_reuse_skip_tokens"] == 512
+        assert scheduler_stats["last_cache_reuse_skip"]["reason"] == (
+            "insufficient_memory_for_cache_merge"
+        )
+        assert scheduler_stats["last_cache_reuse_skip"]["needed_mb"] == 41618.0
+        assert scheduler_stats["last_cache_reuse_skip"]["available_mb"] == 13330.0
+
+    @pytest.mark.asyncio
+    async def test_cache_stats_projects_ssm_companion_disk_state(self, monkeypatch):
+        import vmlx_engine.server as server
+
+        class _Engine:
+            is_mllm = True
+
+            def get_cache_stats(self):
+                return None
+
+        class _SSMCache:
+            size = 1
+            max_entries = 8
+            disk_enabled = True
+            disk_directory = "/tmp/vmlx-test/ssm_companion"
+
+        class _BatchGenerator:
+            _ssm_state_cache = _SSMCache()
+
+        class _Scheduler:
+            disk_cache = None
+            paged_cache_manager = None
+            batch_generator = _BatchGenerator()
+
+            def get_stats(self):
+                return {}
+
+        monkeypatch.setattr(server, "_engine", _Engine())
+        monkeypatch.setattr(server, "_get_scheduler", lambda: _Scheduler())
+
+        payload = await server.cache_stats()
+        ssm = payload["ssm_companion"]
+
+        assert ssm["entries"] == 1
+        assert ssm["max_entries"] == 8
+        assert ssm["disk_enabled"] is True
+        assert ssm["disk_directory"] == "/tmp/vmlx-test/ssm_companion"
+
+    @pytest.mark.asyncio
+    async def test_health_endpoint_projects_scheduler_pressure_telemetry(
+        self, monkeypatch
+    ):
+        import vmlx_engine.server as server
+
+        class _Engine:
+            is_mllm = False
+
+            def get_stats(self):
+                return {"engine_type": "batched"}
+
+        class _Scheduler:
+            def get_stats(self):
+                return {
+                    "num_waiting": 3,
+                    "num_running": 1,
+                    "ewma_ttft_seconds": 58.973,
+                    "cache_reuse_skips": 2,
+                    "cache_reuse_skip_tokens": 4096,
+                    "last_cache_reuse_skip": {
+                        "reason": "insufficient_memory_for_cache_merge",
+                        "needed_mb": 41618.0,
+                        "available_mb": 13330.0,
+                    },
+                }
+
+        monkeypatch.setattr(server, "_engine", _Engine())
+        monkeypatch.setattr(server, "_get_scheduler", lambda: _Scheduler())
+        monkeypatch.setattr(server, "_model_type", "llm")
+        monkeypatch.setattr(server, "_standby_state", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+
+        payload = await server.health()
+        scheduler = payload["scheduler"]
+
+        assert scheduler["num_waiting"] == 3
+        assert scheduler["num_running"] == 1
+        assert scheduler["ewma_ttft_seconds"] == 58.973
+        assert scheduler["cache_reuse_skips"] == 2
+        assert scheduler["cache_reuse_skip_tokens"] == 4096
+        assert scheduler["last_cache_reuse_skip"]["reason"] == (
+            "insufficient_memory_for_cache_merge"
+        )
+
+    @pytest.mark.asyncio
+    async def test_health_endpoint_projects_cache_telemetry_snapshot(
+        self, monkeypatch
+    ):
+        import vmlx_engine.server as server
+
+        class _Engine:
+            is_mllm = False
+
+            def get_stats(self):
+                return {"engine_type": "batched"}
+
+            def get_cache_stats(self):
+                return {
+                    "total_tokens_cached": 640,
+                    "tokens_saved": 1280,
+                    "allocated_blocks": 10,
+                }
+
+        class _DiskCache:
+            def stats(self):
+                return {
+                    "entries": 2,
+                    "total_tokens_on_disk": 384,
+                    "total_cached_tokens": 384,
+                    "hits": 3,
+                    "misses": 1,
+                }
+
+        class _BlockDisk:
+            def get_stats(self):
+                return {
+                    "blocks_on_disk": 6,
+                    "total_tokens_on_disk": 256,
+                    "total_cached_tokens": 256,
+                    "disk_hits": 2,
+                    "disk_misses": 1,
+                }
+
+        class _PagedManager:
+            _disk_store = _BlockDisk()
+
+        class _Scheduler:
+            disk_cache = _DiskCache()
+            paged_cache_manager = _PagedManager()
+
+            def get_stats(self):
+                return {
+                    "num_waiting": 0,
+                    "num_running": 0,
+                    "ewma_ttft_seconds": 0,
+                    "cache_reuse_skips": 0,
+                    "cache_reuse_skip_tokens": 0,
+                    "last_cache_reuse_skip": None,
+                }
+
+        monkeypatch.setattr(server, "_engine", _Engine())
+        monkeypatch.setattr(server, "_get_scheduler", lambda: _Scheduler())
+        monkeypatch.setattr(server, "_model_type", "llm")
+        monkeypatch.setattr(server, "_standby_state", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+
+        payload = await server.health()
+        cache = payload["cache"]
+
+        assert cache["scheduler_cache"]["total_tokens_cached"] == 640
+        assert cache["disk_cache"]["total_tokens_on_disk"] == 384
+        assert cache["block_disk_cache"]["total_tokens_on_disk"] == 256
+        assert cache["totals"]["ram_tokens_cached"] == 640
+        assert cache["totals"]["l2_tokens_on_disk"] == 640
+        assert cache["totals"]["l2_tokens_on_disk_store_sum"] == 640
+        assert "may_overlap" in cache["totals"]["l2_tokens_on_disk_note"]
+
+    def test_cache_stats_surfaces_cache_reuse_skip_telemetry(self):
+        scheduler_source = Path("./vmlx_engine/scheduler.py").read_text()
+        server_source = Path("./vmlx_engine/server.py").read_text()
+        cache_panel_source = Path(
+            "./panel/src/renderer/src/components/sessions/CachePanel.tsx"
+        ).read_text()
+
+        for marker in (
+            "cache_reuse_skips",
+            "cache_reuse_skip_tokens",
+            "last_cache_reuse_skip",
+        ):
+            assert marker in scheduler_source
+            assert marker in server_source
+
+        assert "insufficient_memory_for_cache_merge" in scheduler_source
+        assert "Cache Reuse Skips" in cache_panel_source
+        assert "last_cache_reuse_skip" in cache_panel_source
+        assert "needed_mb" in cache_panel_source
+        assert "available_mb" in cache_panel_source
+
+    def test_cache_stats_surface_displays_l2_token_totals(self):
+        cache_panel_source = Path(
+            "./panel/src/renderer/src/components/sessions/CachePanel.tsx"
+        ).read_text()
+
+        assert "Tokens on Disk" in cache_panel_source
+        assert "total_tokens_on_disk" in cache_panel_source
+        assert "health.cache" in Path(
+            "./panel/src/renderer/src/components/sessions/PerformancePanel.tsx"
+        ).read_text()
+
     def test_native_cache_status_reports_dsv4_separately_from_tq_kv(self, monkeypatch):
         from types import SimpleNamespace
         from vmlx_engine.server import _native_cache_status
@@ -3159,3 +3530,111 @@ class TestTurboQuantKVTelemetry:
             "enabled": True,
             "reason": "hybrid_ssm_state_override",
         }
+
+    def test_quantization_status_detects_jangtq_sidecar_and_bits(self, tmp_path):
+        from vmlx_engine.server import _model_quantization_status
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "qwen3_5_moe",
+            "weight_format": "mxtq",
+            "mxtq_bits": 2,
+            "quantization": {"bits": 2, "group_size": 64},
+        }))
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "quantization": {
+                "profile": "JANGTQ2",
+                "target_bits": 2,
+                "actual_bits": 2.0,
+                "quantization_backend": "turboquant",
+            }
+        }))
+        (tmp_path / "jangtq_runtime.safetensors").write_bytes(b"sidecar")
+
+        status = _model_quantization_status(str(tmp_path))
+
+        assert status["codec"] == "turboquant_codebook"
+        assert status["weight_format"] == "mxtq"
+        assert status["mxtq_bits"] == 2
+        assert status["routed_expert_bits"] == 2
+        assert status["profile"] == "JANGTQ2"
+        assert status["sidecar"]["jangtq_runtime"] is True
+
+    def test_quantization_status_reads_jang_role_bit_plan(self, tmp_path):
+        from vmlx_engine.server import _model_quantization_status
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "quantization": {"bits": 8, "group_size": 64},
+        }))
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "weight_format": "mxtq",
+            "mxtq_bits": {
+                "attention": 8,
+                "shared_expert": 8,
+                "routed_expert": 2,
+                "embed_tokens": 8,
+                "lm_head": 8,
+            },
+            "quantization": {
+                "method": "affine+mxtq",
+                "bits_default": 2,
+                "group_size": 64,
+            },
+        }))
+        (tmp_path / "jangtq_runtime.safetensors").write_bytes(b"sidecar")
+
+        status = _model_quantization_status(str(tmp_path))
+
+        assert status["codec"] == "turboquant_codebook"
+        assert status["weight_format"] == "mxtq"
+        assert status["routed_expert_bits"] == 2
+        assert status["mxtq_bits_by_role"]["attention"] == 8
+        assert status["target_bits"] == 2
+
+    def test_acceleration_status_does_not_claim_metal_na_for_jangtq(self, monkeypatch, tmp_path):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "weight_format": "mxtq",
+            "mxtq_bits": 2,
+        }))
+        (tmp_path / "jangtq_runtime.safetensors").write_bytes(b"sidecar")
+        monkeypatch.setattr(
+            server,
+            "_mlx_metal_na_status",
+            lambda: {"available": True, "nax_symbols": 3534, "naxtile_symbols": 786},
+        )
+        monkeypatch.setattr(
+            server,
+            "_host_supports_metal_na",
+            lambda: {"supported": True, "brand": "Apple M5 Max"},
+        )
+
+        status = server._model_acceleration_status(str(tmp_path))
+
+        assert status["kernel_type"] == "turboquant_codebook"
+        assert status["metal_na_capable"] is False
+        assert status["metal_na_active_on_host"] is False
+        assert status["reason"] == "turboquant_custom_kernels_do_not_use_mlx_na"
+
+    def test_acceleration_status_reports_affine_na_only_when_symbols_and_host_match(self, monkeypatch, tmp_path):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "quantization": {"bits": 4, "group_size": 64},
+        }))
+        monkeypatch.setattr(
+            server,
+            "_mlx_metal_na_status",
+            lambda: {"available": True, "nax_symbols": 3534, "naxtile_symbols": 786},
+        )
+        monkeypatch.setattr(
+            server,
+            "_host_supports_metal_na",
+            lambda: {"supported": True, "brand": "Apple M5 Max"},
+        )
+
+        status = server._model_acceleration_status(str(tmp_path))
+
+        assert status["kernel_type"] == "affine_quantized_matmul"
+        assert status["metal_na_capable"] is True
+        assert status["metal_na_active_on_host"] is True

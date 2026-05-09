@@ -504,7 +504,7 @@ class TestStatistics:
         assert usage["allocated_blocks"] == 26  # null block + 25
         assert usage["free_blocks"] == 74  # 99 - 25
         assert usage["utilization"] == 0.26  # 26/100
-        assert usage["total_tokens_cached"] == 0  # Not added via add_block_to_table
+        assert usage["total_tokens_cached"] == 25 * 64
 
     def test_reset_stats(self):
         """Test resetting statistics."""
@@ -617,6 +617,32 @@ class TestBlockAwarePrefixCache:
         # Should hit the prefix
         assert remaining == [999, 1000]
 
+    def test_fetch_prefers_exact_partial_prefix_over_shorter_block_hit(self):
+        """A cached terminal partial block must win over a shorter full-block hit.
+
+        Hybrid SSM models restore companion state by absolute prompt boundary.
+        If a 70-token prompt was cached as one full block plus a 6-token
+        terminal partial, then a later request with that prompt plus a long
+        tail must resume at 70, not at 64. Resuming at the shorter boundary
+        can force the model through a different warm pass and break recall
+        even though cached_tokens is non-zero.
+        """
+        from vmlx_engine.paged_cache import PagedCacheManager
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+        paged_manager = PagedCacheManager(block_size=64, max_blocks=100)
+        cache = BlockAwarePrefixCache(model=None, paged_cache_manager=paged_manager)
+
+        prefix_tokens = list(range(70))
+        long_tail = list(range(1000, 1070))
+        cache.store_cache("req-1", prefix_tokens, ["cache_data_1"])
+
+        block_table, remaining = cache.fetch_cache("req-2", prefix_tokens + long_tail)
+
+        assert block_table is not None
+        assert block_table.num_tokens == len(prefix_tokens)
+        assert remaining == long_tail
+
     def test_block_aware_fetch_ignores_context_free_legacy_block_hash(self):
         """Repeated block bytes under a different parent are not a prefix hit.
 
@@ -640,6 +666,33 @@ class TestBlockAwarePrefixCache:
 
         assert block_table is None
         assert remaining == [9, 9, 9, 9, 7]
+
+    def test_tensor_store_does_not_reuse_legacy_content_hash_for_repeated_blocks(self):
+        """Tensor KV blocks must be keyed by full prefix history, not bytes alone."""
+        import mlx.core as mx
+
+        from vmlx_engine.paged_cache import PagedCacheManager
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+        paged_manager = PagedCacheManager(block_size=4, max_blocks=100)
+        cache = BlockAwarePrefixCache(model=None, paged_cache_manager=paged_manager)
+
+        keys = mx.zeros((1, 1, 8, 1))
+        values = mx.ones((1, 1, 8, 1))
+        cache_data = [
+            {
+                "class_name": "KVCache",
+                "state": (keys, values),
+            }
+        ]
+        tokens = [1, 2, 3, 4, 1, 2, 3, 4]
+
+        block_table = cache.store_cache("req-repeated-tensor", tokens, cache_data)
+
+        assert block_table is not None
+        assert block_table.num_tokens == len(tokens)
+        assert len(block_table.block_ids) == 2
+        assert len(set(block_table.block_ids)) == 2
 
     def test_release_cache(self):
         """Test releasing cache."""

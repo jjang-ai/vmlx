@@ -5,7 +5,7 @@
  * 2. SSE delta parsing for reasoning_content field (server-side parser active)
  * 3. emitDelta state machine (reasoning→content transitions, reasoningDone events)
  * 4. enable_thinking derivation from session config / overrides
- * 5. Responses API reasoning events (response.reasoning.delta / response.reasoning.done)
+ * 5. Responses API reasoning events (standard response.reasoning_summary_text.* plus legacy fallback)
  * 6. MessageBubble rendering conditions (dedup guard, hide when content === reasoning)
  * 7. Tool iteration state resets
  * 8. All parser types: qwen3, deepseek_r1, openai_gptoss, none
@@ -645,7 +645,7 @@ describe('sessionHasReasoningParser resolution', () => {
 
 /**
  * Simulates Responses API SSE event parsing from chat.ts.
- * Handles response.reasoning.delta and response.reasoning.done events.
+ * Handles OpenAI standard reasoning summary events plus legacy vMLX events.
  */
 function parseResponsesApiEvent(
     eventType: string,
@@ -656,12 +656,19 @@ function parseResponsesApiEvent(
     let isReasoning = isReasoningState
     let reasoningDone = false
 
-    if (eventType === 'response.reasoning.delta' && parsed.delta) {
+    if (
+        (eventType === 'response.reasoning_summary_text.delta' ||
+            eventType === 'response.reasoning.delta') &&
+        parsed.delta
+    ) {
         emitted.push([parsed.delta, true])
         isReasoning = true
     }
 
-    if (eventType === 'response.reasoning.done') {
+    if (
+        eventType === 'response.reasoning_summary_text.done' ||
+        eventType === 'response.reasoning.done'
+    ) {
         if (isReasoning) {
             isReasoning = false
             reasoningDone = true
@@ -680,9 +687,9 @@ function parseResponsesApiEvent(
 }
 
 describe('Responses API — reasoning events', () => {
-    it('response.reasoning.delta emits reasoning', () => {
+    it('response.reasoning_summary_text.delta emits reasoning', () => {
         const { emitted, isReasoning } = parseResponsesApiEvent(
-            'response.reasoning.delta',
+            'response.reasoning_summary_text.delta',
             { delta: 'Thinking step 1' },
             false
         )
@@ -690,20 +697,30 @@ describe('Responses API — reasoning events', () => {
         expect(isReasoning).toBe(true)
     })
 
-    it('response.reasoning.done signals end of reasoning', () => {
+    it('response.reasoning_summary_text.done signals end of reasoning', () => {
         const { reasoningDone, isReasoning } = parseResponsesApiEvent(
-            'response.reasoning.done', {}, true
+            'response.reasoning_summary_text.done', {}, true
         )
         expect(reasoningDone).toBe(true)
         expect(isReasoning).toBe(false)
     })
 
-    it('response.reasoning.done when not in reasoning → no-op', () => {
+    it('response.reasoning_summary_text.done when not in reasoning → no-op', () => {
         const { reasoningDone, isReasoning } = parseResponsesApiEvent(
-            'response.reasoning.done', {}, false
+            'response.reasoning_summary_text.done', {}, false
         )
         expect(reasoningDone).toBe(false)
         expect(isReasoning).toBe(false)
+    })
+
+    it('legacy response.reasoning.delta still emits reasoning for older engines', () => {
+        const { emitted, isReasoning } = parseResponsesApiEvent(
+            'response.reasoning.delta',
+            { delta: 'Legacy thinking' },
+            false
+        )
+        expect(emitted).toEqual([['Legacy thinking', true]])
+        expect(isReasoning).toBe(true)
     })
 
     it('response.output_text.delta emits content', () => {
@@ -740,17 +757,17 @@ describe('Responses API — reasoning events', () => {
         let isReasoning = false
 
         // Reasoning phase
-        const r1 = parseResponsesApiEvent('response.reasoning.delta', { delta: 'Step 1. ' }, isReasoning)
+        const r1 = parseResponsesApiEvent('response.reasoning_summary_text.delta', { delta: 'Step 1. ' }, isReasoning)
         isReasoning = r1.isReasoning
         expect(r1.emitted).toEqual([['Step 1. ', true]])
         expect(isReasoning).toBe(true)
 
-        const r2 = parseResponsesApiEvent('response.reasoning.delta', { delta: 'Step 2.' }, isReasoning)
+        const r2 = parseResponsesApiEvent('response.reasoning_summary_text.delta', { delta: 'Step 2.' }, isReasoning)
         isReasoning = r2.isReasoning
         expect(r2.emitted).toEqual([['Step 2.', true]])
 
         // Reasoning done
-        const r3 = parseResponsesApiEvent('response.reasoning.done', {}, isReasoning)
+        const r3 = parseResponsesApiEvent('response.reasoning_summary_text.done', {}, isReasoning)
         isReasoning = r3.isReasoning
         expect(r3.reasoningDone).toBe(true)
         expect(isReasoning).toBe(false)

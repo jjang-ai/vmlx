@@ -179,6 +179,36 @@ class TestJitToggle:
         assert vlm_wrapper.language_model.make_cache() == ["l0", "l1"]
         mock_compile.assert_called_once_with(original_inner)
 
+    def test_jit_vlm_compiled_proxy_forwards_runtime_attribute_mutations(self):
+        """VLM JIT proxy must forward writes to the original module.
+
+        mlx_vlm wrappers can update model attributes during setup/warmup. If
+        writes stay on the proxy, rollback and delegated attributes diverge.
+        """
+        from vmlx_engine import server
+
+        class InnerTransformer:
+            def __init__(self):
+                self.layers = ["l0"]
+                self.runtime_flag = "cold"
+
+            def __call__(self, *args, **kwargs):
+                return args[0]
+
+        original = InnerTransformer()
+        proxy = server._CompiledModuleProxy(
+            original,
+            MagicMock(side_effect=lambda *args, **kwargs: args[0]),
+        )
+
+        proxy.runtime_flag = "warm"
+        proxy.new_runtime_attr = 42
+
+        assert original.runtime_flag == "warm"
+        assert original.new_runtime_attr == 42
+        assert proxy.runtime_flag == "warm"
+        assert proxy.new_runtime_attr == 42
+
     def test_jit_vlm_warmup_failure_rolls_back_proxy(self):
         """VLM warmup failures must restore the original transformer."""
         from vmlx_engine import server

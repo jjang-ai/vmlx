@@ -462,6 +462,81 @@ describe('KV Cache Quantization', () => {
         expect(getFlagValue(out, '--kv-cache-quantization')).toBe('none')
     })
 
+    it('panel copy does not claim TurboQuant is always on', () => {
+        const fs = require('fs')
+        const source = fs.readFileSync(
+            'src/renderer/src/components/sessions/SessionConfigForm.tsx',
+            'utf-8',
+        )
+
+        expect(source).toContain('Engine-selected native cache')
+        expect(source).toContain('Generic TurboQuant KV is disabled unless a tested override exists')
+        expect(source).not.toContain('ON · Default')
+        expect(source).not.toContain('TurboQuant only')
+    })
+
+    it('chat reasoning Auto copy matches the engine default-on policy', () => {
+        const fs = require('fs')
+        const locale = JSON.parse(
+            fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8'),
+        )
+        const help = locale.chat.settings.thinkingHelp
+
+        expect(help).toContain('local vMLX')
+        expect(help).toContain('default reasoning on')
+        expect(help).toContain('Off')
+        expect(help).not.toContain("others don't")
+    })
+
+    it('casual mode keeps cache codec on auto', () => {
+        const fs = require('fs')
+        const source = fs.readFileSync(
+            'src/renderer/src/components/sessions/SessionConfigForm.tsx',
+            'utf-8',
+        )
+        const casualStart = source.indexOf('export const CASUAL_CONFIG')
+        const casualEnd = source.indexOf('interface SessionConfigFormProps', casualStart)
+        const casualBlock = source.slice(casualStart, casualEnd)
+
+        expect(casualBlock).toContain("kvCacheQuantization: 'auto'")
+        expect(casualBlock).not.toContain("kvCacheQuantization: 'q4'")
+    })
+
+    it('cache panels surface native cache and TQ-KV status separately', () => {
+        const fs = require('fs')
+        const cachePanel = fs.readFileSync(
+            'src/renderer/src/components/sessions/CachePanel.tsx',
+            'utf-8',
+        )
+        const perfPanel = fs.readFileSync(
+            'src/renderer/src/components/sessions/PerformancePanel.tsx',
+            'utf-8',
+        )
+
+        expect(cachePanel).toContain('stats?.native_cache')
+        expect(cachePanel).toContain('stats?.turboquant_kv_cache')
+        expect(cachePanel).toContain('generic_turboquant_kv')
+        expect(cachePanel).toContain('single_sequence_only')
+        expect(cachePanel).toContain('effective_max_num_seqs')
+        expect(cachePanel).toContain('Cache Reuse Skips')
+        expect(cachePanel).toContain('last_cache_reuse_skip')
+        expect(cachePanel).toContain('needed_mb')
+        expect(cachePanel).toContain('available_mb')
+        expect(perfPanel).toContain('native_cache?:')
+        expect(perfPanel).toContain('turboquant_kv_cache?:')
+        expect(perfPanel).toContain('quantization?:')
+        expect(perfPanel).toContain('acceleration?:')
+        expect(perfPanel).toContain('Weight Codec')
+        expect(perfPanel).toContain('Metal NA')
+        expect(perfPanel).toContain('not used by JANGTQ')
+        expect(perfPanel).toContain('Generic TQ-KV')
+        expect(perfPanel).toContain('single_sequence_only')
+        expect(perfPanel).toContain('scheduler?:')
+        expect(perfPanel).toContain('Queue')
+        expect(perfPanel).toContain('TTFT EWMA')
+        expect(perfPanel).toContain('Cache Skips')
+    })
+
     it('sets custom group size', () => {
         const out = preview({ kvCacheQuantization: 'q8', kvCacheGroupSize: 32 })
         expect(getFlagValue(out, '--kv-cache-group-size')).toBe('32')
@@ -1058,6 +1133,18 @@ describe('Feature Interaction', () => {
         expect(hasFlag(out, '--cache-memory-mb')).toBe(false)
         expect(hasFlag(out, '--cache-memory-percent')).toBe(false)
         expect(hasFlag(out, '--cache-ttl-minutes')).toBe(false)
+    })
+
+    it('CLI preview includes prefixCacheMaxBytes like session launch args', () => {
+        const fs = require('fs')
+        const previewSource = fs.readFileSync(
+            'src/renderer/src/components/sessions/SessionSettings.tsx',
+            'utf-8',
+        )
+        const launchSource = fs.readFileSync('src/main/sessions.ts', 'utf-8')
+
+        expect(previewSource).toContain('--prefix-cache-max-bytes')
+        expect(launchSource).toContain('--prefix-cache-max-bytes')
     })
 
     it('cacheMemoryPercent default 30 emits 0.3', () => {

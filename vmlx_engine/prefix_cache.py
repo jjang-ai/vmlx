@@ -1311,6 +1311,33 @@ class BlockAwarePrefixCache:
                     )
                 except Exception:
                     pass
+
+        # get_computed_blocks() is intentionally block-chain-first. For prompts
+        # that extend a previously cached terminal partial block by more than
+        # one block, it can stop at the last full block and never consider the
+        # longer exact partial prefix. The prefix index stores those terminal
+        # partial boundaries, so compare before accepting the shorter hit.
+        best_match = self._find_best_prefix_match(tokens)
+        if cached_blocks and best_match and len(best_match[0]) > num_cached:
+            try:
+                self.paged_cache.release_request_refs(
+                    BlockTable(
+                        request_id=request_id,
+                        block_ids=[b.block_id for b in cached_blocks],
+                        num_tokens=num_cached,
+                    )
+                )
+            except Exception:
+                pass
+            logger.info(
+                "Prefix index exact-partial match for %s extends paged hit "
+                "from %d to %d tokens",
+                request_id,
+                num_cached,
+                len(best_match[0]),
+            )
+            cached_blocks = []
+            num_cached = 0
         if cached_blocks:
             if self._dsv4_l2_chain_missing_terminal_state(cached_blocks):
                 _reject_table = BlockTable(
@@ -1366,7 +1393,6 @@ class BlockAwarePrefixCache:
             return block_table, remaining
 
         # Try prefix index for longer matches
-        best_match = self._find_best_prefix_match(tokens)
         if best_match:
             matched_tokens, matched_block_ids = best_match
             matched_blocks = [
@@ -1754,7 +1780,6 @@ class BlockAwarePrefixCache:
             if reused:
                 block_table.block_ids.append(existing_block.block_id)
                 block_table.num_tokens += len(block_tokens)
-                self.paged_cache.stats.total_tokens_cached += len(block_tokens)
                 parent_hash = block_chain_hash
                 if disk_store is not None:
                     logger.debug(
@@ -1763,17 +1788,16 @@ class BlockAwarePrefixCache:
                     )
                 continue
 
-            # Also check legacy hash for blocks stored before chain hashing.
+            # Also check legacy hash for non-tensor blocks stored before chain hashing.
             #
-            # DSV4 must NEVER use this content-only fallback. Repeated 64-token
-            # chunks have identical text but different hidden state because
-            # DeepseekV4Cache carries CSA/HSA pool state keyed by the full
-            # prefix. Reusing a legacy-content block from an earlier position
-            # prevents the terminal ``deepseek_v4`` composite block from being
-            # written and later reconstructs only the SWA layers. Chain hashes
-            # above already cover the safe exact-prefix case.
+            # Tensor KV state must NEVER use this content-only fallback.
+            # Repeated 64-token chunks have identical text but different hidden
+            # state because real KV values depend on the full prefix. DSV4 made
+            # this obvious through CSA/HSA state, but the same invariant applies
+            # to ordinary attention, RoPE, hybrid SSM companions, and TQ-KV.
+            # Chain hashes above already cover the safe exact-prefix case.
             existing_block = None
-            if not has_dsv4_cache_data:
+            if not is_tensor_data:
                 # find_cached_block already holds _lock internally, but we need
                 # to do the ref bump under the same lock to avoid the same race.
                 with self.paged_cache._lock:
@@ -1808,7 +1832,6 @@ class BlockAwarePrefixCache:
             if existing_block:
                 block_table.block_ids.append(existing_block.block_id)
                 block_table.num_tokens += len(block_tokens)
-                self.paged_cache.stats.total_tokens_cached += len(block_tokens)
                 parent_hash = block_chain_hash
                 continue
 
@@ -1831,7 +1854,6 @@ class BlockAwarePrefixCache:
             block.token_count = len(block_tokens)
             block_table.block_ids.append(block.block_id)
             block_table.num_tokens += len(block_tokens)
-            self.paged_cache.stats.total_tokens_cached += len(block_tokens)
 
             # Set chain hash on the block (for L1 dedup and L2 disk addressing)
             block.block_hash = block_chain_hash
@@ -3336,6 +3358,29 @@ class BlockAwarePrefixCache:
                     else:
                         # Stale entry — remove it
                         del self._prefix_index[prefix_hash]
+
+        # _update_prefix_index() also records the terminal partial prefix for a
+        # cached request. A later request can have that exact partial prefix
+        # plus a long tail, so the block-aligned loop above will never probe
+        # its hash. Scan indexed entries by exact token-prefix equality and
+        # live block IDs only; this preserves chain-hash safety and avoids the
+        # legacy content-only block hash path.
+        for prefix_hash, (cached_tokens, block_ids) in list(self._prefix_index.items()):
+            cached_len = len(cached_tokens)
+            if cached_len <= best_len or cached_len > len(tokens):
+                continue
+            if tokens[:cached_len] != cached_tokens:
+                continue
+
+            valid = all(
+                bid in self.paged_cache.allocated_blocks
+                for bid in block_ids
+            )
+            if valid:
+                best_match = (cached_tokens, block_ids)
+                best_len = cached_len
+            else:
+                del self._prefix_index[prefix_hash]
 
         return best_match
 

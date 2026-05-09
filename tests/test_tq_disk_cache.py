@@ -22,6 +22,7 @@ Usage:
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 import threading
 import time
@@ -426,6 +427,38 @@ class TestDiskCacheManagerTQ:
             stats = mgr.stats()
             assert stats["tq_native_stores"] == 3
             assert stats["tq_native_hits"] == 1
+        finally:
+            mgr.shutdown()
+
+    def test_stats_include_persistent_token_count(self):
+        """stats() must expose how many prompt tokens are persisted in L2."""
+        mgr = self._make_manager()
+        try:
+            now = time.time()
+            conn = sqlite3.connect(mgr._db_path)
+            try:
+                conn.execute(
+                    "INSERT INTO cache_entries "
+                    "(token_hash, file_name, num_tokens, file_size, "
+                    "created_at, last_accessed, access_count, metadata, cache_type) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    ("tok40", "cache_tok40.safetensors", 40, 1000, now, now, 1, "{}", "system"),
+                )
+                conn.execute(
+                    "INSERT INTO cache_entries "
+                    "(token_hash, file_name, num_tokens, file_size, "
+                    "created_at, last_accessed, access_count, metadata, cache_type) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    ("tok60", "cache_tok60.safetensors", 60, 2000, now, now, 1, "{}", "assistant"),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            stats = mgr.stats()
+
+            assert stats["total_tokens_on_disk"] == 100
+            assert stats["total_cached_tokens"] == 100
         finally:
             mgr.shutdown()
 

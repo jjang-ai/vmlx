@@ -498,6 +498,7 @@ def static_audit(row: ModelRow) -> dict[str, Any]:
     if row.family == "deepseek_v4":
         try:
             from vmlx_engine.loaders.load_jangtq_dsv4 import (
+                _audit_dsv4_artifact_bit_plan,
                 _audit_dsv4_control_tensor_dtypes,
             )
 
@@ -509,8 +510,12 @@ def static_audit(row: ModelRow) -> dict[str, Any]:
                     f"{dsv4_control.get('critical_count')}); rebuild/re-download "
                     "required before live quality claims"
                 )
+            dsv4_bit_plan = _audit_dsv4_artifact_bit_plan(model_dir)
+            for issue in dsv4_bit_plan.get("issues") or []:
+                issues.append(f"DSV4 artifact bit-plan audit: {issue}")
         except Exception as exc:
-            issues.append(f"DSV4 critical control tensor audit failed: {exc}")
+            dsv4_bit_plan = {}
+            issues.append(f"DSV4 static artifact audit failed: {exc}")
         if jang.get("weight_format") == "mxtq":
             bits = jang.get("mxtq_bits", {})
             if bits.get("routed_expert") not in (2, 4, 8):
@@ -574,6 +579,7 @@ def static_audit(row: ModelRow) -> dict[str, Any]:
             "runtime": jang.get("runtime"),
         },
         "eos": eos,
+        "dsv4_artifact_bit_plan": dsv4_bit_plan if row.family == "deepseek_v4" else None,
         "registry": registry,
         "safetensors": safetensors_summary,
         "issues": issues,

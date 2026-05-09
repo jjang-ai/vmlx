@@ -160,6 +160,7 @@ _model_name_mismatch_warned: bool = (
 # silently substituted with zero operator visibility when the requested name
 # didn't match the loaded model — lowered log level hid the bug.
 _model_name_mismatch_seen: set[tuple[str, str]] = set()
+_metal_na_status_cache: dict[str, dict] = {}
 
 
 def _estimate_max_prompt_tokens() -> int:
@@ -333,12 +334,14 @@ _FAMILY_FALLBACK_DEFAULTS: dict[str, tuple[float | None, float | None, float | N
     #   rep=1.20 → loop_score=0.442 OK
     #   rep=1.30 → loop_score=0.346 LOOP (penalty fragments output)
     #
-    # 1.15 chosen as the floor — same as DSV4 — gives consistent
-    # behavior across families. Per-request override still wins.
+    # A later 2026-05-08 multi-turn temp-0 row showed 1.15 still loops
+    # inside reasoning before visible output. 1.20 closed the same row while
+    # preserving the intended visible answer. Per-request higher overrides
+    # still win.
     # Note: MiniMax JANGTQ_K (mixed-bit) is markedly less prone to
     # this issue (10/12 cells OK at default rep) so the floor is
     # defensive rather than load-bearing for the K variant.
-    "minimax_m2": (0.6, 0.95, 1.15),
+    "minimax_m2": (0.6, 0.95, 1.20),
     # Ling-2.6 production review item: a user reported the
     # Russian Three.js prompt looping into a 👀 token (47681 → ' \xed\x9f\xae')
     # on Ling-2.6-flash-JANGTQ2-CRACK at default rep_penalty (1.0). Floor
@@ -354,6 +357,12 @@ def _family_fallback_for(model_name: str = "") -> tuple[float | None, float | No
     `_model_path` (the actual loaded model directory, set at server startup)
     for the registry lookup since `model_name` from chat requests is typically
     a short alias that fails registry's config.json probe."""
+    normalized = _model_family_for_defaults(model_name)
+    if normalized:
+        configured = _FAMILY_FALLBACK_DEFAULTS.get(normalized)
+        if configured is not None:
+            return configured
+
     candidates: list[str] = []
     if model_name:
         candidates.append(model_name)
@@ -646,6 +655,8 @@ def _model_family_for_defaults(model_name: str = "") -> str:
                         _model_type = _text_cfg.get("model_type")
                 if _model_type == "deepseek_v4":
                     return "deepseek_v4"
+                if _model_type in {"minimax", "minimax_m2", "minimax_m2_5"}:
+                    return "minimax_m2"
         except Exception:
             pass
     try:
@@ -887,7 +898,7 @@ def _resolve_repetition_penalty(
     # loops. DSV4 does NOT: its own bundle stamp says the thinking rail must
     # stay neutral, and live matrix rows fail when a generic 1.15 floor is
     # forced onto thinking mode.
-    _SAFETY_FLOORS = {"minimax_m2": 1.15, "ling": 1.15}
+    _SAFETY_FLOORS = {"minimax_m2": 1.20, "ling": 1.15}
     _family = _model_family_for_defaults(_bundle_path or model_name)
     _floor = _SAFETY_FLOORS.get(_family)
     if (
@@ -1058,39 +1069,58 @@ def _resolve_enable_thinking(
 ) -> bool | None:
     """Resolve enable_thinking using the shared precedence chain.
 
-    Precedence: per-request > chat_template_kwargs > server default >
-    (auto-detect if requested, else Gemma4+tools → False, else None).
+    Precedence: per-request > chat_template_kwargs > incompatible family guard >
+    unsupported-family guard > server default true > model/template auto-detect
+    > true.
 
-    The Gemma 4 + tools branch is mlxstudio#71: Gemma 4 natively emits a
-    <|channel>thought block before every tool call which truncates under
-    small max_tokens budgets. When tools are present and nothing upstream
-    set a preference, default thinking OFF for Gemma 4 specifically.
+    Native API client defaults such as Ollama ``think:false`` must not force
+    reasoning off globally. vMLX defaults reasoning on for supported families
+    across API surfaces, while preserving explicit user opt-outs and hard
+    family contracts such as ZAYA's supports_thinking=False.
 
-    Returns None when no value should be passed to the engine (caller
-    omits enable_thinking from chat_kwargs — engine uses its own default).
+    Returns a concrete bool so every API surface reaches the same effective
+    thinking policy.
 
     auto_detect=True mirrors the OpenAI path which, after the three
     upstream layers miss, inspects registry.think_in_template,
     registry.reasoning_parser, and tokenizer.has_thinking to infer a
-    default. Anthropic/Ollama historically left this None.
+    default.
     """
     if request_value is not None:
         return request_value
     if "enable_thinking" in ct_kwargs:
         return bool(ct_kwargs["enable_thinking"])
-    if _default_enable_thinking is not None:
-        return _default_enable_thinking
+
+    _mc = None
+    try:
+        from .model_config_registry import get_model_config_registry
+        _mc = get_model_config_registry().lookup(model_key)
+    except Exception:
+        _mc = None
+    _family = getattr(_mc, "family_name", None) or getattr(_mc, "model_type", None)
+    if not _family or str(_family).lower() == "unknown":
+        _family = str(model_key or "")
+    _family_l = str(_family).lower()
+    if tools_present and _family_l in ("gemma4", "gemma4_text"):
+        # mlxstudio#71: Gemma 4 emits a native thought channel before tools and
+        # can truncate the actual tool call under small budgets. This is an
+        # architecture-specific incompatible row, so it stays off by default
+        # only when tools are present; explicit request/template values above
+        # still win.
+        return False
+    if _mc is not None and getattr(_mc, "supports_thinking", None) is False:
+        return False
+    if _default_enable_thinking is True:
+        return True
+    # vMLX's production default is reasoning-on for capable models. A stale
+    # server default false from older panel/profile state must not defeat that;
+    # explicit per-request/template false above still disables reasoning.
+    if _default_enable_thinking is False:
+        return True
 
     if auto_detect:
-        try:
-            from .model_config_registry import get_model_config_registry
-            _mc = get_model_config_registry().lookup(model_key)
-        except Exception:
-            return None
-        if getattr(_mc, "supports_thinking", None) is False:
-            return False
-        _enable = bool(_mc.think_in_template)
-        if not _enable and _mc.reasoning_parser:
+        _enable = bool(getattr(_mc, "think_in_template", False)) if _mc else False
+        if not _enable and _mc is not None and getattr(_mc, "reasoning_parser", None):
             _enable = True
         if not _enable and engine is not None:
             try:
@@ -1098,27 +1128,10 @@ def _resolve_enable_thinking(
                     _enable = True
             except Exception:
                 pass
-        if _enable and tools_present and _mc.family_name in ("gemma4", "gemma4_text"):
-            logger.info(
-                f"Request {model_key}: tools present + Gemma 4 — "
-                f"defaulting enable_thinking=False for fast tool calling "
-                f"(mlxstudio#71). Set enable_thinking=true to force thinking."
-            )
-            _enable = False
-        return _enable
+        if _enable:
+            return True
 
-    if tools_present:
-        try:
-            from .model_config_registry import get_model_config_registry
-            _mc = get_model_config_registry().lookup(model_key)
-            if _mc.family_name in ("gemma4", "gemma4_text"):
-                logger.info(
-                    f"Request {model_key}: tools + Gemma 4 → enable_thinking=False"
-                )
-                return False
-        except Exception:
-            pass
-    return None
+    return True
 
 
 # Global MCP manager
@@ -1550,14 +1563,20 @@ class _CompiledModuleProxy:
     """Callable mx.compile proxy that preserves original module attributes."""
 
     def __init__(self, original, compiled):
-        self._original = original
-        self._compiled = compiled
+        object.__setattr__(self, "_original", original)
+        object.__setattr__(self, "_compiled", compiled)
 
     def __call__(self, *args, **kwargs):
         return self._compiled(*args, **kwargs)
 
     def __getattr__(self, name):
         return getattr(self._original, name)
+
+    def __setattr__(self, name, value):
+        if name in {"_original", "_compiled"}:
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._original, name, value)
 
 
 def _apply_jit_compilation():
@@ -3026,6 +3045,194 @@ def _diagnostic_attr(obj, name, default=None):
     return getattr(obj, name, default)
 
 
+def _read_bundle_json(bundle_path: str | None, filename: str) -> dict:
+    if not bundle_path:
+        return {}
+    try:
+        from pathlib import Path
+
+        path = Path(bundle_path) / filename
+        if not path.is_file():
+            return {}
+        data = json.loads(path.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _model_quantization_status(bundle_path: str | None) -> dict:
+    """Describe the loaded weight codec from bundle metadata without guessing.
+
+    This is intentionally separate from live KV-cache quantization. Weight
+    quantization decides which matmul kernel family is used; TQ-KV decides how
+    prefix/cache tensors are stored.
+    """
+    cfg = _read_bundle_json(bundle_path, "config.json")
+    jang_cfg = _read_bundle_json(bundle_path, "jang_config.json")
+    q_cfg = cfg.get("quantization") if isinstance(cfg.get("quantization"), dict) else {}
+    q_jang = (
+        jang_cfg.get("quantization")
+        if isinstance(jang_cfg.get("quantization"), dict)
+        else {}
+    )
+
+    weight_format = (
+        cfg.get("weight_format")
+        or jang_cfg.get("weight_format")
+        or q_jang.get("format")
+        or q_jang.get("weight_format")
+        or q_cfg.get("format")
+    )
+    backend = q_jang.get("quantization_backend") or q_jang.get("backend")
+    profile = q_jang.get("profile")
+    mxtq_bits = (
+        cfg.get("mxtq_bits")
+        or jang_cfg.get("mxtq_bits")
+        or q_jang.get("mxtq_bits")
+        or q_jang.get("bits_default")
+    )
+    routed_expert_bits = (
+        mxtq_bits.get("routed_expert") if isinstance(mxtq_bits, dict) else mxtq_bits
+    )
+    target_bits = q_jang.get("target_bits") or routed_expert_bits or q_cfg.get("bits")
+    actual_bits = q_jang.get("actual_bits")
+
+    try:
+        from pathlib import Path
+
+        root = Path(bundle_path) if bundle_path else None
+        has_jangtq_sidecar = bool(root and (root / "jangtq_runtime.safetensors").is_file())
+        has_jang_config = bool(root and (root / "jang_config.json").is_file())
+    except Exception:
+        has_jangtq_sidecar = False
+        has_jang_config = False
+
+    normalized_format = str(weight_format or "").lower()
+    normalized_backend = str(backend or "").lower()
+    if normalized_format in ("mxtq", "jangtq") or has_jangtq_sidecar:
+        codec = "turboquant_codebook"
+    elif normalized_backend in ("mlx", "mlx_uniform", "affine"):
+        codec = "affine_quantized_matmul"
+    elif q_cfg or target_bits or actual_bits:
+        codec = "affine_quantized_matmul"
+    else:
+        codec = "full_precision_or_unknown"
+
+    result = {
+        "codec": codec,
+        "weight_format": weight_format,
+        "backend": backend,
+        "profile": profile,
+        "mxtq_bits": mxtq_bits if not isinstance(mxtq_bits, dict) else None,
+        "mxtq_bits_by_role": mxtq_bits if isinstance(mxtq_bits, dict) else None,
+        "routed_expert_bits": routed_expert_bits,
+        "target_bits": target_bits,
+        "actual_bits": actual_bits,
+        "config_bits": q_cfg.get("bits"),
+        "group_size": q_cfg.get("group_size") or q_jang.get("group_size"),
+        "sidecar": {
+            "jang_config": has_jang_config,
+            "jangtq_runtime": has_jangtq_sidecar,
+        },
+    }
+    return {k: v for k, v in result.items() if v is not None}
+
+
+def _mlx_metal_na_status() -> dict:
+    """Return cached MLX metallib NA symbol availability for this process."""
+    try:
+        import mlx
+        from pathlib import Path
+
+        metallib = Path(mlx.__file__).resolve().parent / "lib" / "mlx.metallib"
+        key = str(metallib)
+        if key in _metal_na_status_cache:
+            return dict(_metal_na_status_cache[key])
+        if not metallib.is_file():
+            status = {
+                "metallib": key,
+                "available": False,
+                "nax_symbols": 0,
+                "naxtile_symbols": 0,
+            }
+        else:
+            data = metallib.read_bytes()
+            nax = data.count(b"_nax_")
+            naxtile = data.count(b"NAXTile")
+            status = {
+                "metallib": key,
+                "available": bool(nax or naxtile),
+                "nax_symbols": nax,
+                "naxtile_symbols": naxtile,
+            }
+        _metal_na_status_cache[key] = dict(status)
+        return status
+    except Exception as exc:
+        return {
+            "available": False,
+            "nax_symbols": 0,
+            "naxtile_symbols": 0,
+            "error": type(exc).__name__,
+        }
+
+
+def _host_supports_metal_na() -> dict:
+    """Best-effort host check for Apple NA-capable GPU generations."""
+    if platform.system() != "Darwin":
+        return {"supported": False, "reason": "not_darwin"}
+    try:
+        proc = subprocess.run(
+            ["sysctl", "-n", "machdep.cpu.brand_string"],
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+            check=False,
+        )
+        brand = (proc.stdout or "").strip()
+    except Exception:
+        brand = ""
+    # Be conservative: report active only on known M5+ Apple Silicon names.
+    supported = bool(re.search(r"\bApple M([5-9]|\d{2,})\b", brand))
+    return {
+        "supported": supported,
+        "brand": brand or None,
+        "reason": None if supported else "host_not_known_na_capable",
+    }
+
+
+def _model_acceleration_status(bundle_path: str | None = None) -> dict:
+    quantization = _model_quantization_status(bundle_path or _model_path)
+    codec = quantization.get("codec")
+    na_status = _mlx_metal_na_status()
+    host = _host_supports_metal_na()
+
+    if codec == "turboquant_codebook":
+        kernel_type = "turboquant_codebook"
+        active = False
+        reason = "turboquant_custom_kernels_do_not_use_mlx_na"
+    elif codec == "affine_quantized_matmul":
+        kernel_type = "affine_quantized_matmul"
+        active = bool(na_status.get("available") and host.get("supported"))
+        reason = None if active else "mlx_na_symbols_or_host_support_unavailable"
+    else:
+        kernel_type = "full_precision_or_unknown"
+        active = False
+        reason = "not_affine_quantized_matmul"
+
+    return {
+        "kernel_type": kernel_type,
+        "metal_na_capable": kernel_type == "affine_quantized_matmul",
+        "metal_na_active_on_host": active,
+        "reason": reason,
+        "metal_na_symbols": {
+            "available": bool(na_status.get("available")),
+            "nax_symbols": na_status.get("nax_symbols", 0),
+            "naxtile_symbols": na_status.get("naxtile_symbols", 0),
+        },
+        "host": host,
+    }
+
+
 def _turboquant_kv_cache_status(engine=None, scheduler=None) -> dict:
     """Detect live TurboQuant KV cache patching across LLM and MLLM engines."""
     tq_active = bool(getattr(scheduler, "_tq_active", False)) if scheduler else False
@@ -3059,12 +3266,28 @@ def _turboquant_kv_cache_status(engine=None, scheduler=None) -> dict:
                     _stack.append(_nxt)
 
     if tq_active:
-        return {
+        status = {
             "enabled": True,
             "default_bits": 3,
             "critical_bits": 4,
             "critical_layers": "first 3 + last 3",
         }
+        cfg = getattr(scheduler, "config", None) if scheduler is not None else None
+        if cfg is not None:
+            status.update(
+                {
+                    "single_sequence_only": True,
+                    "single_sequence_reason": "cache_extend_not_supported",
+                    "effective_max_num_seqs": getattr(cfg, "max_num_seqs", None),
+                    "effective_prefill_batch_size": getattr(
+                        cfg, "prefill_batch_size", None
+                    ),
+                    "effective_completion_batch_size": getattr(
+                        cfg, "completion_batch_size", None
+                    ),
+                }
+            )
+        return status
     return {"enabled": False}
 
 
@@ -3178,6 +3401,113 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
     return {}
 
 
+def _stat_int(stats: dict[str, Any] | None, *keys: str) -> int:
+    """Return the first integer-like stat value for any key."""
+    if not isinstance(stats, dict):
+        return 0
+    for key in keys:
+        value = stats.get(key)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _ssm_companion_snapshot(scheduler: Any) -> dict[str, Any] | None:
+    """Collect SSM companion L1/L2 stats without assuming scheduler flavor."""
+    if scheduler is None:
+        return None
+    ssm_cache = getattr(scheduler, "_ssm_state_cache", None)
+    if ssm_cache is None:
+        batch_generator = getattr(scheduler, "batch_generator", None)
+        if batch_generator is not None:
+            ssm_cache = getattr(batch_generator, "_ssm_state_cache", None)
+    if ssm_cache is None:
+        return None
+
+    entries = getattr(ssm_cache, "size", None)
+    if entries is None:
+        entries = len(getattr(ssm_cache, "_store", {}) or {})
+    max_entries = getattr(ssm_cache, "max_entries", None)
+    if max_entries is None:
+        max_entries = getattr(ssm_cache, "_max_entries", 0)
+    nbytes = int(getattr(ssm_cache, "total_nbytes", 0) or 0)
+    snapshot: dict[str, Any] = {
+        "entries": int(entries or 0),
+        "max_entries": int(max_entries or 0),
+        "nbytes": nbytes,
+        "nbytes_mb": round(nbytes / (1024 * 1024), 2),
+        "disk_enabled": bool(getattr(ssm_cache, "disk_enabled", False)),
+        "disk_directory": getattr(ssm_cache, "disk_directory", None),
+    }
+    disk = getattr(ssm_cache, "_disk", None)
+    if disk is not None and hasattr(disk, "stats"):
+        try:
+            snapshot["disk"] = disk.stats()
+        except Exception as exc:
+            snapshot["disk"] = {"enabled": True, "error": str(exc)}
+    return snapshot
+
+
+def _cache_telemetry_snapshot(scheduler: Any | None = None) -> dict[str, Any]:
+    """Summarize effective cache state for /health and /v1/cache/stats."""
+    scheduler = scheduler if scheduler is not None else (_get_scheduler() if _engine else None)
+    result: dict[str, Any] = {}
+
+    scheduler_cache = None
+    if _engine is not None and hasattr(_engine, "get_cache_stats"):
+        try:
+            scheduler_cache = _engine.get_cache_stats()
+        except Exception:
+            scheduler_cache = None
+    if scheduler_cache:
+        result["scheduler_cache"] = scheduler_cache
+
+    disk_cache = getattr(scheduler, "disk_cache", None) if scheduler else None
+    if disk_cache is not None and hasattr(disk_cache, "stats"):
+        try:
+            result["disk_cache"] = disk_cache.stats()
+        except Exception as exc:
+            result["disk_cache"] = {"enabled": True, "error": str(exc)}
+
+    paged_mgr = getattr(scheduler, "paged_cache_manager", None) if scheduler else None
+    block_store = getattr(paged_mgr, "_disk_store", None) if paged_mgr else None
+    if block_store is not None and hasattr(block_store, "get_stats"):
+        try:
+            result["block_disk_cache"] = block_store.get_stats()
+        except Exception as exc:
+            result["block_disk_cache"] = {"enabled": True, "error": str(exc)}
+
+    ssm = _ssm_companion_snapshot(scheduler)
+    if ssm is not None:
+        result["ssm_companion"] = ssm
+
+    if result:
+        disk_tokens = _stat_int(result.get("disk_cache"), "total_tokens_on_disk", "total_cached_tokens")
+        block_tokens = _stat_int(result.get("block_disk_cache"), "total_tokens_on_disk", "total_cached_tokens")
+        ssm_disk = result.get("ssm_companion", {}).get("disk") if isinstance(result.get("ssm_companion"), dict) else None
+        ssm_tokens = _stat_int(ssm_disk, "total_tokens_on_disk", "total_cached_tokens")
+        l2_store_sum = disk_tokens + block_tokens + ssm_tokens
+        result["totals"] = {
+            "ram_tokens_cached": _stat_int(
+                scheduler_cache,
+                "total_tokens_cached",
+                "total_cached_tokens",
+                "tokens_cached",
+            ),
+            "l2_prompt_tokens_on_disk": disk_tokens,
+            "l2_block_tokens_on_disk": block_tokens,
+            "ssm_tokens_on_disk": ssm_tokens,
+            "l2_tokens_on_disk": l2_store_sum,
+            "l2_tokens_on_disk_store_sum": l2_store_sum,
+            "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap",
+        }
+    return result
+
+
 @app.get("/health")
 async def health():
     """Health check endpoint."""
@@ -3195,6 +3525,7 @@ async def health():
         }
 
     engine_stats = _engine.get_stats() if _engine else {}
+    scheduler = _get_scheduler() if _engine else None
 
     # Differentiate status: "healthy" when model is loaded, "no_model" otherwise
     # Image models don't use _engine — they use _image_gen
@@ -3234,26 +3565,16 @@ async def health():
 
     # Include KV cache quantization status for diagnostics
     kv_quant_info = None
-    if _engine:
-        # Check both LLM scheduler (via AsyncEngineCore) and MLLM scheduler
-        scheduler = None
-        inner_engine = _diagnostic_attr(_engine, "_engine")
-        mllm_scheduler = _diagnostic_attr(_engine, "_mllm_scheduler")
-        if inner_engine:
-            engine_core = _diagnostic_attr(inner_engine, "engine")
-            scheduler = _diagnostic_attr(engine_core, "scheduler")
-        elif mllm_scheduler:
-            scheduler = mllm_scheduler
-        if scheduler:
-            kv_bits = getattr(scheduler, "_kv_cache_bits", 0)
-            if kv_bits:
-                kv_quant_info = {
-                    "enabled": True,
-                    "bits": kv_bits,
-                    "group_size": getattr(scheduler, "_kv_cache_group_size", 64),
-                }
-            else:
-                kv_quant_info = {"enabled": False}
+    if scheduler:
+        kv_bits = getattr(scheduler, "_kv_cache_bits", 0)
+        if kv_bits:
+            kv_quant_info = {
+                "enabled": True,
+                "bits": kv_bits,
+                "group_size": getattr(scheduler, "_kv_cache_group_size", 64),
+            }
+        else:
+            kv_quant_info = {"enabled": False}
 
     # Include speculative decoding status
     spec_info = None
@@ -3297,6 +3618,24 @@ async def health():
         result["speculative_decoding"] = spec_info.get(
             "speculative_decoding", spec_info
         )
+    if scheduler:
+        try:
+            scheduler_stats = scheduler.get_stats()
+        except Exception:
+            scheduler_stats = {}
+        result["scheduler"] = {
+            "num_waiting": scheduler_stats.get("num_waiting", 0),
+            "num_running": scheduler_stats.get("num_running", 0),
+            "ewma_ttft_seconds": scheduler_stats.get("ewma_ttft_seconds", 0),
+            "cache_reuse_skips": scheduler_stats.get("cache_reuse_skips", 0),
+            "cache_reuse_skip_tokens": scheduler_stats.get(
+                "cache_reuse_skip_tokens", 0
+            ),
+            "last_cache_reuse_skip": scheduler_stats.get("last_cache_reuse_skip"),
+        }
+        cache_snapshot = _cache_telemetry_snapshot(scheduler)
+        if cache_snapshot:
+            result["cache"] = cache_snapshot
 
     # Smelt mode: report partial expert loading status
     if _smelt_enabled:
@@ -3329,6 +3668,9 @@ async def health():
     # JANG format: report cached quantization metadata (populated at load time)
     if _jang_metadata:
         result["quantization_format"] = _jang_metadata
+    if _model_path or _model_name:
+        result["quantization"] = _model_quantization_status(_model_path or _model_name)
+        result["acceleration"] = _model_acceleration_status(_model_path or _model_name)
 
     if _max_prompt_tokens > 0:
         result["max_prompt_tokens"] = _max_prompt_tokens
@@ -3348,8 +3690,10 @@ async def health():
         pass
 
     if _engine is not None:
-        result["turboquant_kv_cache"] = _turboquant_kv_cache_status(_engine)
         scheduler = _get_scheduler()
+        result["turboquant_kv_cache"] = _turboquant_kv_cache_status(
+            _engine, scheduler
+        )
         native_cache = _native_cache_status(scheduler)
         if native_cache:
             result["native_cache"] = native_cache
@@ -3661,6 +4005,9 @@ async def cache_stats():
             "total_prompt_tokens": stats.get("total_prompt_tokens", 0),
             "total_completion_tokens": stats.get("total_completion_tokens", 0),
             "ewma_ttft_seconds": stats.get("ewma_ttft_seconds", 0),
+            "cache_reuse_skips": stats.get("cache_reuse_skips", 0),
+            "cache_reuse_skip_tokens": stats.get("cache_reuse_skip_tokens", 0),
+            "last_cache_reuse_skip": stats.get("last_cache_reuse_skip"),
         }
         # KV cache quantization info
         if hasattr(scheduler, "_kv_cache_bits"):
@@ -3670,9 +4017,8 @@ async def cache_stats():
             }
 
         # TurboQuant KV cache status (separate path from generic
-        # kv_cache_quantization). MLLMScheduler does not own `_tq_active`; the
-        # patched make_cache lives under the loaded VLM language_model, so use
-        # the same recursive detector as /health.
+        # kv_cache_quantization). Use the same recursive detector as /health
+        # so source and packaged app expose the actual patched make_cache path.
         result["turboquant_kv_cache"] = _turboquant_kv_cache_status(
             _engine, scheduler
         )
@@ -3689,6 +4035,10 @@ async def cache_stats():
     block_store = getattr(paged_mgr, "_disk_store", None) if paged_mgr else None
     if block_store is not None and hasattr(block_store, "get_stats"):
         result["block_disk_cache"] = block_store.get_stats()
+
+    cache_snapshot = _cache_telemetry_snapshot(scheduler)
+    if cache_snapshot.get("totals"):
+        result["cache_totals"] = cache_snapshot["totals"]
 
     # MLLM-specific cache stats
     try:
@@ -3715,30 +4065,12 @@ async def cache_stats():
             if _tq_active:
                 result["turbo_quant"] = {"enabled": True}
 
-    # SSM companion cache stats (hybrid models only)
-    # LLM scheduler has _ssm_state_cache directly; MLLM has it on batch_generator
-    if scheduler:
-        _ssm_cache = getattr(scheduler, "_ssm_state_cache", None)
-        if _ssm_cache is None:
-            _bg = getattr(scheduler, "batch_generator", None)
-            if _bg is not None:
-                _ssm_cache = getattr(_bg, "_ssm_state_cache", None)
-        if _ssm_cache is not None:
-            # A3→A2-003 (audit 2026-04-08): use the public size /
-            # max_entries properties exposed by SSMCompanionCache
-            # (REQ-A3-001) instead of reaching into private attrs.
-            # Falls back to the legacy private-attr path for any
-            # back-compat aliases that don't expose the new properties.
-            _entries = getattr(_ssm_cache, "size", None)
-            if _entries is None:
-                _entries = len(getattr(_ssm_cache, "_store", {}) or {})
-            _max = getattr(_ssm_cache, "max_entries", None)
-            if _max is None:
-                _max = getattr(_ssm_cache, "_max_entries", 0)
-            result["ssm_companion"] = {
-                "entries": _entries,
-                "max_entries": _max,
-            }
+    # SSM companion cache stats (hybrid models only). Use the same helper as
+    # /health so the panel sees disk token totals and IO counters on both
+    # polling surfaces.
+    ssm_snapshot = cache_snapshot.get("ssm_companion")
+    if ssm_snapshot:
+        result["ssm_companion"] = ssm_snapshot
 
     # Metal GPU memory info
     try:
@@ -4283,6 +4615,8 @@ async def model_capabilities(model_id: str) -> dict:
         and getattr(scheduler, "_uses_dsv4_cache", False)
     )
     native_cache = _native_cache_status(scheduler, family=family, cfg=cfg)
+    quantization_status = _model_quantization_status(bundle_path)
+    acceleration_status = _model_acceleration_status(bundle_path)
 
     return {
         "id": model_id,
@@ -4306,6 +4640,8 @@ async def model_capabilities(model_id: str) -> dict:
             "dsv4_composite_state": dsv4_composite_state,
             "native": native_cache or None,
         },
+        "quantization": quantization_status,
+        "acceleration": acceleration_status,
         "sampling_defaults": sampling_defaults,
     }
 
@@ -4484,6 +4820,7 @@ async def create_anthropic_message(
     )
     if _et is not None:
         _msg_kwargs["enable_thinking"] = _et
+        chat_req.enable_thinking = _et
 
     # Auto-map enable_thinking → reasoning_effort for Mistral 4 (same as OpenAI path)
     if (
@@ -4751,7 +5088,12 @@ async def create_anthropic_message(
 
 @app.post(
     "/v1/embeddings",
-    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+    dependencies=[
+        Depends(verify_api_key),
+        Depends(check_rate_limit),
+        Depends(check_memory_pressure),
+        Depends(check_metal_working_set_pressure),
+    ],
 )
 async def create_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
     """
@@ -4904,7 +5246,12 @@ _reranker_lock: asyncio.Lock | None = (
 
 @app.post(
     "/v1/rerank",
-    dependencies=[Depends(verify_api_key), Depends(check_rate_limit)],
+    dependencies=[
+        Depends(verify_api_key),
+        Depends(check_rate_limit),
+        Depends(check_memory_pressure),
+        Depends(check_metal_working_set_pressure),
+    ],
 )
 async def create_rerank(request: Request):
     """
@@ -5252,6 +5599,7 @@ async def ollama_chat(fastapi_request: Request):
     )
     if _et is not None:
         chat_kwargs["enable_thinking"] = _et
+        chat_req.enable_thinking = _et
 
     # Keep Ollama streaming parity with /v1/chat/completions. The non-streaming
     # Ollama path delegates to create_chat_completion(), but streaming builds
@@ -5588,8 +5936,22 @@ async def ollama_generate(fastapi_request: Request):
     return _SR(ndjson_stream(), media_type="application/x-ndjson")
 
 
-@app.post("/api/embeddings", dependencies=[Depends(verify_api_key)])
-@app.post("/api/embed", dependencies=[Depends(verify_api_key)])
+@app.post(
+    "/api/embeddings",
+    dependencies=[
+        Depends(verify_api_key),
+        Depends(check_memory_pressure),
+        Depends(check_metal_working_set_pressure),
+    ],
+)
+@app.post(
+    "/api/embed",
+    dependencies=[
+        Depends(verify_api_key),
+        Depends(check_memory_pressure),
+        Depends(check_metal_working_set_pressure),
+    ],
+)
 async def ollama_embed(fastapi_request: Request):
     """Ollama-compatible embeddings."""
     body = await fastapi_request.json()
@@ -7000,6 +7362,7 @@ async def create_chat_completion(
     )
     if _et is not None:
         chat_kwargs["enable_thinking"] = _et
+        request.enable_thinking = _et
 
     # Pass reasoning_effort if provided (for GPT-OSS and models that support thinking levels).
     # Also map to thinking_budget (Qwen3) and max_tokens ceiling when not explicitly set.
@@ -8131,6 +8494,7 @@ async def create_response(
     )
     if _et is not None:
         chat_kwargs["enable_thinking"] = _et
+        request.enable_thinking = _et
 
     # Pass reasoning_effort if provided (for GPT-OSS and models that support thinking levels).
     # Also map to thinking_budget (Qwen3) and max_output_tokens ceiling when not explicitly set.
@@ -9606,18 +9970,15 @@ async def stream_chat_completion(
             diag_chunk = ChatCompletionChunk(
                 id=response_id, created=_created_ts, model=request.model,
                 choices=[ChatCompletionChunkChoice(
-                    delta=ChatCompletionChunkDelta(
-                        content="[Model produced only internal reasoning with no visible response. Try enabling thinking to see the reasoning, or rephrase your prompt.]",
-                    ),
+                    delta=ChatCompletionChunkDelta(),
                     finish_reason="stop",
                 )],
             )
             yield f"data: {_dump_sse_json(diag_chunk)}\n\n"
 
-    # Safeguard: if model generated zero tokens (empty stream), emit a diagnostic
-    # chunk so clients always get feedback instead of a silent empty response.
-    # Also catches the case where engine yielded an output with 0 completion tokens
-    # (e.g., immediate EOS) — last_output is set but nothing was emitted.
+    # Safeguard: if model generated zero tokens (empty stream), finish the stream
+    # without injecting diagnostic prose as assistant output. The warning belongs
+    # in logs/diagnostics, not in next-turn model history.
     _zero_tokens = (last_output is None) or (
         not content_was_emitted
         and not accumulated_reasoning
@@ -9631,9 +9992,7 @@ async def stream_chat_completion(
             model=request.model,
             choices=[
                 ChatCompletionChunkChoice(
-                    delta=ChatCompletionChunkDelta(
-                        content="[Model produced no response. Check server logs for details.]",
-                    ),
+                    delta=ChatCompletionChunkDelta(),
                     finish_reason="stop",
                 )
             ],
@@ -10027,15 +10386,16 @@ async def stream_responses_api(
                                 emit_reasoning = delta_msg.reasoning
                                 emit_content = delta_msg.content
 
-                            # Emit reasoning as custom event
+                            # Emit reasoning as OpenAI Responses reasoning-summary events.
                             if emit_reasoning:
                                 reasoning_was_streamed = True
                                 yield _sse(
-                                    "response.reasoning.delta",
+                                    "response.reasoning_summary_text.delta",
                                     {
-                                        "type": "response.reasoning.delta",
+                                        "type": "response.reasoning_summary_text.delta",
                                         "item_id": msg_id,
                                         "output_index": 0,
+                                        "summary_index": 0,
                                         "delta": emit_reasoning,
                                     },
                                 )
@@ -10151,15 +10511,16 @@ async def stream_responses_api(
         )
         return
 
-    # Emit reasoning done event if reasoning was produced (skip when suppressed)
+    # Emit reasoning summary done event if reasoning was produced (skip when suppressed)
     if accumulated_reasoning and not suppress_reasoning:
         yield _sse(
-            "response.reasoning.done",
+            "response.reasoning_summary_text.done",
             {
-                "type": "response.reasoning.done",
+                "type": "response.reasoning_summary_text.done",
                 "item_id": msg_id,
                 "output_index": 0,
-                "reasoning": accumulated_reasoning,
+                "summary_index": 0,
+                "text": accumulated_reasoning,
             },
         )
 
@@ -10396,18 +10757,28 @@ async def stream_responses_api(
                 display_text = clean_output_text(full_text) if full_text else ""
         if not display_text:
             # If reasoning was suppressed and model produced reasoning, the response
-            # is intentionally empty — don't show error fallback
+            # is intentionally empty. Report it as a diagnostic warning, not as
+            # assistant output that would pollute user-visible text/history.
             if suppress_reasoning and accumulated_reasoning:
-                display_text = "[Model produced only internal reasoning with no visible response. Try enabling thinking to see the reasoning, or rephrase your prompt.]"
+                display_text = ""
                 logger.info(
                     f"Request {response_id}: model produced only reasoning ({len(accumulated_reasoning)} chars) — suppressed per user setting"
+                )
+                yield _sse(
+                    "response.warning",
+                    {
+                        "type": "response.warning",
+                        "code": "reasoning_only_no_content",
+                        "message": (
+                            "The model produced only internal reasoning, and "
+                            "reasoning was suppressed for this request."
+                        ),
+                    },
                 )
             elif reasoning_was_streamed:
                 # Reasoning-only completion is now intentional (B1 fix).
                 # Empty display_text means the panel should render the
-                # reasoning_content that was already streamed. Don't emit
-                # the "[Model produced no response]" placeholder which
-                # would itself become visible content.
+                # reasoning_content that was already streamed.
                 display_text = ""
                 logger.info(
                     f"Request {response_id}: reasoning-only completion "
@@ -10415,11 +10786,21 @@ async def stream_responses_api(
                     f"empty output_text is correct; client renders reasoning_content"
                 )
             else:
-                display_text = (
-                    "[Model produced no response. Check server logs for details.]"
-                )
+                display_text = ""
                 logger.warning(
-                    f"Request {response_id}: empty response in Responses API"
+                    f"Request {response_id}: empty response in Responses API; "
+                    "leaving output_text empty instead of injecting a diagnostic assistant message"
+                )
+                yield _sse(
+                    "response.warning",
+                    {
+                        "type": "response.warning",
+                        "code": "empty_model_response",
+                        "message": (
+                            "The model produced no visible response. Check server logs "
+                            "for generation details."
+                        ),
+                    },
                 )
 
         yield _sse(
@@ -10485,11 +10866,9 @@ async def stream_responses_api(
         and _text_fmt.get("type") not in (None, "text")
     ):
         _rf_type = _text_fmt.get("type", "")
-        _FALLBACK_MSG = "[Model produced no response. Check server logs for details.]"
         if (
             _rf_type in ("json_schema", "json_object")
             and display_text
-            and display_text != _FALLBACK_MSG
         ):
             _, _pj, _valid, _err = parse_json_output(display_text, _text_fmt)
             if not _valid:

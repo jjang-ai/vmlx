@@ -48,6 +48,11 @@ function formatElapsed(secs: number): string {
   return `${m}m ${s}s`;
 }
 
+function formatModelBytes(bytes?: number): string | null {
+  if (!bytes || bytes <= 0) return null;
+  return `${(bytes / 1e9).toFixed(1)} GB`;
+}
+
 export function SessionCard({
   session,
   onOpen,
@@ -180,9 +185,17 @@ export function SessionCard({
             />
           </div>
           {progress && (
-            <p className="text-[10px] text-muted-foreground mt-1">
-              {progress.label} ({progress.progress}%)
-            </p>
+            <div className="mt-1 space-y-0.5">
+              <p className="text-[10px] text-muted-foreground">
+                {progress.label} ({progress.progress}%)
+              </p>
+              {formatModelBytes(progress.modelBytes) && (
+                <p className="text-[10px] text-muted-foreground/80">
+                  Model files: {formatModelBytes(progress.modelBytes)}
+                  {progress.lazyResident ? ' mapped; resident memory updates after runtime health is ready' : ''}
+                </p>
+              )}
+            </div>
           )}
         </div>
       )}

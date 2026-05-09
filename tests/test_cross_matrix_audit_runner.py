@@ -119,6 +119,20 @@ def test_dsv4_row_points_at_current_corrected_f32_mixed_bundle():
     assert rows["dsv4_tq"].path.endswith("DeepSeek-V4-Flash-JANGTQ-V3-F32-MIXED")
 
 
+def test_dsv4_static_audit_exposes_actual_bit_plan_when_local_bundle_exists():
+    rows = {row.id: row for row in ROWS}
+    static = static_audit(rows["dsv4_tq"])
+
+    if not static["exists"]:
+        return
+    bit_plan = static["dsv4_artifact_bit_plan"]
+    assert bit_plan["checked"] is True
+    assert bit_plan["routed_bit_counts"] == {"2": 38, "4": 5}
+    assert bit_plan["metadata_matches_actual"] is True
+    assert bit_plan["sidecar"]["missing_keys"] == []
+    assert bit_plan["issues"] == []
+
+
 def test_dsv4_capability_contract_uses_native_cache_not_experimental_mode():
     rows = {row.id: row for row in ROWS}
     dsv4 = rows["dsv4_tq"]

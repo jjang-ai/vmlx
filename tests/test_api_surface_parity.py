@@ -285,12 +285,12 @@ def test_parity_responses_input_text_join_convention():
     )
 
 
-def test_parity_ollama_think_maps_to_enable_thinking():
-    """Ollama 0.7+ `think: true|false` at the body root must translate to
-    OpenAI `enable_thinking` so the engine sees a uniform flag.
+def test_parity_ollama_think_omitted_defaults_on_but_false_opts_out():
+    """Omitted Ollama thinking controls default reasoning on.
 
-    This is a translator-level invariant; the actual flag honor is verified
-    by tests/test_thinking_template_render.py.
+    Native `think:false` is an explicit Ollama opt-out and must not be
+    force-flipped back on. That keeps direct Ollama clients aligned with the
+    Chat/Responses/Anthropic explicit-disable contract.
     """
     from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
 
@@ -317,16 +317,15 @@ def test_parity_ollama_think_maps_to_enable_thinking():
 
     assert converted_off.get("enable_thinking") is False
     assert converted_on.get("enable_thinking") is True
-    assert "enable_thinking" not in converted_omit
+    assert converted_omit.get("enable_thinking") is True
     assert converted_extension.get("enable_thinking") is False
     assert converted_precedence.get("enable_thinking") is True
 
 
-def test_parity_anthropic_thinking_default_off():
-    """Anthropic spec: extended thinking is OPT-IN. When the request omits
-    both `thinking` and `enable_thinking`, the translator must default to
-    enable_thinking=False (server.py:7220 cross-reference; anthropic_adapter
-    enforces this so SDK clients don't accidentally enable thinking).
+def test_parity_anthropic_thinking_defaults_on_for_vmlx_runtime():
+    """vMLX defaults local thinking-capable models to reasoning ON across API
+    surfaces. Native Anthropic `thinking: disabled` and explicit
+    `enable_thinking=False` remain the opt-out paths.
     """
     from vmlx_engine.api.anthropic_adapter import (
         AnthropicRequest,
@@ -341,7 +340,7 @@ def test_parity_anthropic_thinking_default_off():
     # Anthropic adapter sets enable_thinking on the chat request; check the
     # serialized form.
     dump = chat_req.model_dump(exclude_none=True)
-    assert dump.get("enable_thinking") is False, (
-        "Anthropic-spec thinking default should be OFF. "
+    assert dump.get("enable_thinking") is True, (
+        "vMLX local Anthropic-compatible default should be reasoning ON. "
         f"chat_req fields: {dump}"
     )

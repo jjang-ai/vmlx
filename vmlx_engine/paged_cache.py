@@ -701,9 +701,6 @@ class PagedCacheManager:
 
                 self.stats.allocated_blocks -= 1
                 self.stats.free_blocks += 1
-                self.stats.total_tokens_cached = max(
-                    0, self.stats.total_tokens_cached - block.token_count
-                )
 
                 return True
 
@@ -737,9 +734,6 @@ class PagedCacheManager:
                     to_free.append(block)
                     self.stats.allocated_blocks -= 1
                     self.stats.free_blocks += 1
-                    self.stats.total_tokens_cached = max(
-                        0, self.stats.total_tokens_cached - block.token_count
-                    )
 
             # Add to free queue (back = MRU, evicted last)
             self.free_block_queue.append_n(to_free)
@@ -1202,7 +1196,6 @@ class PagedCacheManager:
             table.block_ids.append(block.block_id)
             block.token_count = tokens_in_block
             table.num_tokens += tokens_in_block
-            self.stats.total_tokens_cached += tokens_in_block
 
     # =========================================================================
     # Prefix Sharing & COW
@@ -1399,6 +1392,18 @@ class PagedCacheManager:
                 1 for b in self.allocated_blocks.values() if b.ref_count > 1
             )
             self.stats.free_blocks = self.free_block_queue.num_free_blocks
+            # Token totals are derived from the live block table, not maintained
+            # incrementally, so reused/free/evicted block paths cannot drift.
+            self.stats.total_tokens_cached = sum(
+                max(0, int(getattr(b, "token_count", 0) or 0))
+                for b in self.allocated_blocks.values()
+                if not getattr(b, "is_null", False)
+                and (
+                    getattr(b, "ref_count", 0) > 0
+                    or getattr(b, "block_hash", None) is not None
+                    or getattr(b, "cache_data", None) is not None
+                )
+            )
             return self.stats
 
     def get_memory_usage(self) -> Dict[str, Any]:

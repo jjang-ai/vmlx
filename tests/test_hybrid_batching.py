@@ -283,16 +283,28 @@ class TestPagedCacheValidation:
 class TestSuppressReasoningInvariants:
     """Tests for reasoning suppression invariants across API paths."""
 
+    def test_responses_api_uses_standard_reasoning_summary_events(self):
+        """Responses API reasoning SSE must use OpenAI standard summary events."""
+        from vmlx_engine.server import stream_responses_api
+        import inspect
+
+        source = inspect.getsource(stream_responses_api)
+
+        assert "response.reasoning_summary_text.delta" in source
+        assert "response.reasoning_summary_text.done" in source
+        assert "response.reasoning.delta" not in source
+        assert "response.reasoning.done" not in source
+
     def test_responses_api_no_reasoning_done_when_suppressed(self):
-        """response.reasoning.done should NOT be emitted when suppress_reasoning=True."""
+        """reasoning done should NOT be emitted when suppress_reasoning=True."""
         from vmlx_engine.server import stream_responses_api
         import inspect
 
         source = inspect.getsource(stream_responses_api)
         # The guard: accumulated_reasoning and not suppress_reasoning
         assert "not suppress_reasoning" in source
-        # Find the reasoning.done emission
-        idx = source.index("response.reasoning.done")
+        # Find the reasoning summary done emission
+        idx = source.index("response.reasoning_summary_text.done")
         # Check that the guard appears before this emission in the same block
         block_start = source.rfind("if ", 0, idx)
         block_text = source[block_start:idx]
@@ -819,6 +831,56 @@ class TestPerfCacheTimeouts:
     survive heavy inference load.
     """
 
+
+class TestHybridSSMResumeRemaining:
+    """Regression coverage for hybrid SSM resume after a shorter checkpoint."""
+
+    def test_mllm_resume_recomputes_remaining_from_trimmed_checkpoint(self):
+        """After vmlx#91 trims KV to a shorter SSM checkpoint, MLLM must
+        re-feed tokens from that trimmed checkpoint, not from the longer
+        original paged hit. Otherwise the middle prompt span is skipped.
+        """
+        import inspect
+
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        source = inspect.getsource(MLLMBatchGenerator._process_prompts)
+        resume_idx = source.index("trim_block_table(")
+        hit_idx = source.index("VLM HYBRID cache HIT", resume_idx)
+        resume_window = source[resume_idx:hit_idx]
+
+        assert "remaining = token_list[trimmed.num_tokens:]" in resume_window, (
+            "MLLM vmlx#91 resume must recompute remaining tokens from the "
+            "trimmed KV checkpoint; using the pre-trim remaining skips the "
+            "prompt span between the shorter SSM checkpoint and the original "
+            "paged hit."
+        )
+        assert "_full_remaining = (remaining or []) + list(_gpl_suffix)" in resume_window, (
+            "The recomputed remaining tokens must be the value re-fed into "
+            "req.input_ids after reconstruction, not only diagnostic log text."
+        )
+        assert "req.input_ids = mx.array([_full_remaining])" in resume_window, (
+            "The vmlx#91 resume path must prefill the recomputed tail from the "
+            "trimmed SSM checkpoint."
+        )
+
+    def test_inline_ssm_capture_key_includes_cached_prefix_base(self):
+        """When capture runs after a cache hit, boundary_len is local to the
+        re-fed tail, but the companion key must be absolute over the full
+        prompt token list.
+        """
+        import inspect
+
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        source = inspect.getsource(
+            MLLMBatchGenerator._maybe_capture_clean_ssm_boundary
+        )
+
+        assert "base_len = int(getattr(request, \"_cached_tokens\", 0) or 0)" in source
+        assert "key_boundary = base_len + int(boundary_len)" in source
+        assert "all_tokens[:key_boundary]" in source
+
     def test_performance_timeout_sufficient(self):
         """Performance health check must use >= 30s timeout."""
         import re
@@ -968,30 +1030,28 @@ class TestReasoningDoneAtToolBoundary:
 
 
 class TestSuppressReasoningDiagnostic:
-    """Regression: suppress_reasoning + reasoning-only must not be silently empty."""
+    """Regression: suppressed reasoning-only output must stay out of assistant text."""
 
     def test_chat_completions_has_suppress_reasoning_diagnostic(self):
-        """Chat completions path must emit diagnostic when only reasoning produced."""
+        """Chat completions path must finish empty instead of injecting prose."""
         import inspect
         from vmlx_engine.server import stream_chat_completion
 
         source = inspect.getsource(stream_chat_completion)
         assert "suppress_reasoning and not content_was_emitted and accumulated_reasoning" in source, (
-            "Chat completions must detect reasoning-only + suppress and emit a diagnostic"
+            "Chat completions must detect reasoning-only + suppress"
         )
-        assert "only internal reasoning" in source, (
-            "Chat completions diagnostic must explain that reasoning was suppressed"
-        )
+        assert "Model produced only internal reasoning" not in source
+        assert "ChatCompletionChunkDelta()" in source
 
     def test_responses_api_has_suppress_reasoning_diagnostic(self):
-        """Responses API path must emit diagnostic when only reasoning produced."""
+        """Responses API path must warn out-of-band when only reasoning is suppressed."""
         import inspect
         from vmlx_engine.server import stream_responses_api
 
         source = inspect.getsource(stream_responses_api)
-        assert "only internal reasoning" in source, (
-            "Responses API must explain that reasoning was suppressed"
-        )
+        assert "reasoning_only_no_content" in source
+        assert "Model produced only internal reasoning" not in source
 
 
 class TestQwen3NextToolParser:

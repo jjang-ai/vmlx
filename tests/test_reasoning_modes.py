@@ -331,13 +331,42 @@ def test_ling_stamped_bailing_family_gets_ling_safety_floor(tmp_path, monkeypatc
     mcr.get_model_config_registry().clear_cache()
     monkeypatch.setattr(server, "_model_path", str(tmp_path))
     monkeypatch.setattr(server, "_model_name", "ling")
-    monkeypatch.setattr(server, "_default_repetition_penalty", 1.0)
+    monkeypatch.setattr(server, "_default_repetition_penalty", None)
     server._jang_sampling_defaults_cache.clear()
     server._generation_defaults_cache.clear()
 
     assert server._model_family_for_defaults() == "ling"
     assert server._resolve_repetition_penalty(None) == 1.15
     assert server._resolve_repetition_penalty(1.0) == 1.15
+
+
+def test_minimax_m2_uses_stronger_reasoning_rumination_floor(tmp_path, monkeypatch):
+    """MiniMax M2.7 needs a 1.20 floor to close temp-0 reasoning loops."""
+    import json
+    from vmlx_engine import server
+
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "minimax_m2"}))
+    (tmp_path / "jang_config.json").write_text(json.dumps({
+        "capabilities": {
+            "family": "minimax",
+            "cache_type": "kv",
+            "tool_parser": "minimax",
+            "reasoning_parser": "qwen3",
+            "think_in_template": True,
+            "modality": "text",
+        }
+    }))
+
+    monkeypatch.setattr(server, "_model_path", str(tmp_path))
+    monkeypatch.setattr(server, "_model_name", "minimax")
+    monkeypatch.setattr(server, "_default_repetition_penalty", None)
+    server._jang_sampling_defaults_cache.clear()
+    server._generation_defaults_cache.clear()
+
+    assert server._model_family_for_defaults() == "minimax_m2"
+    assert server._resolve_repetition_penalty(None, enable_thinking=True) == 1.20
+    assert server._resolve_repetition_penalty(1.15, enable_thinking=True) == 1.20
+    assert server._resolve_repetition_penalty(1.25, enable_thinking=True) == 1.25
 
 
 @pytest.mark.asyncio
@@ -363,6 +392,20 @@ async def test_capabilities_reports_loaded_scheduler_cache(monkeypatch):
     monkeypatch.setattr(server, "_engine", fake_engine)
     monkeypatch.setattr(server, "_model_path", "")
     monkeypatch.setattr(server, "_model_name", "")
+    monkeypatch.setattr(
+        server,
+        "_model_quantization_status",
+        lambda _path: {"codec": "turboquant_codebook", "mxtq_bits": 2},
+    )
+    monkeypatch.setattr(
+        server,
+        "_model_acceleration_status",
+        lambda _path: {
+            "kernel_type": "turboquant_codebook",
+            "metal_na_capable": False,
+            "metal_na_active_on_host": False,
+        },
+    )
 
     caps = await server.model_capabilities("loaded-model")
 
@@ -372,3 +415,6 @@ async def test_capabilities_reports_loaded_scheduler_cache(monkeypatch):
     assert caps["cache"]["block_disk_l2"] is True
     assert caps["cache"]["native"]["family"] == "deepseek_v4"
     assert caps["cache"]["native"]["generic_turboquant_kv"]["enabled"] is False
+    assert caps["quantization"]["codec"] == "turboquant_codebook"
+    assert caps["acceleration"]["kernel_type"] == "turboquant_codebook"
+    assert caps["acceleration"]["metal_na_active_on_host"] is False

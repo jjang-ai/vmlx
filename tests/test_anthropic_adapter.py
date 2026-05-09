@@ -250,16 +250,15 @@ class TestThinkingConversion:
         assert chat_req.enable_thinking is False
 
     def test_thinking_not_specified(self):
-        # Anthropic wire semantics: extended thinking is OPT-IN. When client
-        # sends neither `thinking` block nor `enable_thinking`, adapter must
-        # default to False so thinking-capable models don't leak a reasoning
-        # block into /v1/messages responses (leak audit 2026-04-21).
+        # vMLX's local Anthropic-compatible endpoint defaults reasoning on for
+        # capable models. Native thinking={type:disabled} and vMLX
+        # enable_thinking=False remain explicit opt-outs.
         req = AnthropicRequest(
             model="test-model",
             messages=[{"role": "user", "content": "Hi"}],
         )
         chat_req = to_chat_completion(req)
-        assert chat_req.enable_thinking is False
+        assert chat_req.enable_thinking is True
 
 
 # ─── Image / Multimodal Tests ────────────────────────────────────────

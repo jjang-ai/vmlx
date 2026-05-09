@@ -29,9 +29,9 @@ Runtime contract implemented by the underlying loader:
   plain ``KVCache`` on ``compress_ratio=0`` layers. ``DSV4_LONG_CTX=1``
   is forced. Upstream JANG has a prefill mask-vs-full_kv shape bug
   that crashes any prompt > sliding_window with broadcast errors;
-  this loader patches it in-process by replacing
-  ``DeepseekV4Attention.__call__`` with a copy that adds the missing
-  symmetric trim branch (see ``_install_dsv4_prefill_patch``).
+  this loader verifies the installed JANG attention path has the symmetric
+  mask-width fix and per-query compressed-pool mask. Older JANG builds now
+  fail loudly instead of being patched in-process.
 - ``swiglu_limit=10`` SwiGLU activation, fp32 lm_head matmul (4096
   contraction in bf16 drifts logits enough to flip arithmetic answers —
   see research/DSV-EXHAUSTIVE-VARIABLES-GUIDE.md).
@@ -164,6 +164,197 @@ def _audit_dsv4_control_tensor_dtypes(model_path: str | Path) -> dict[str, Any]:
     return report
 
 
+_DSV4_SWITCH_MLP_TQ_BITS_RE = re.compile(
+    r"^layers\.(\d+)\.mlp\.switch_mlp\."
+    r"(gate_proj|up_proj|down_proj)\.tq_bits$"
+)
+
+
+def _dsv4_nested_routed_bit_plan(config: dict, jang: dict) -> dict[str, int]:
+    """Return non-default routed layer bit overrides from DSV4 metadata."""
+    candidates: list[Any] = [
+        (((jang.get("quantization") or {}).get("routed_experts") or {}).get("bit_plan") or {}).get("routed_layer_bits"),
+        jang.get("routed_layer_bits"),
+        ((config.get("quantization") or {}).get("routed_expert_bit_plan") or {}).get("routed_layer_bits"),
+        config.get("routed_layer_bits"),
+    ]
+    for raw in candidates:
+        if not isinstance(raw, dict) or not raw:
+            continue
+        out: dict[str, int] = {}
+        for key, value in raw.items():
+            out[str(int(key))] = int(value)
+        return dict(sorted(out.items(), key=lambda item: int(item[0])))
+    return {}
+
+
+def _dsv4_routed_default_bits(config: dict, jang: dict) -> int:
+    """Return the role-default routed expert width from bundle metadata."""
+    for source in (jang, config):
+        bits = source.get("mxtq_bits")
+        if isinstance(bits, dict) and bits.get("routed_expert") is not None:
+            return int(bits["routed_expert"])
+        quant = source.get("quantization") or {}
+        qbits = quant.get("mxtq_bits")
+        if isinstance(qbits, dict) and qbits.get("routed_expert") is not None:
+            return int(qbits["routed_expert"])
+        routed = quant.get("routed_experts") or {}
+        if isinstance(routed, dict) and routed.get("bits") is not None:
+            return int(routed["bits"])
+        if quant.get("routed_expert_bits") is not None:
+            return int(quant["routed_expert_bits"])
+    return 2
+
+
+def _audit_dsv4_artifact_bit_plan(model_path: str | Path) -> dict[str, Any]:
+    """Header-only DSV4 JANGTQ bit-plan and sidecar audit.
+
+    The release gate must read actual ``switch_mlp.*.tq_bits`` tensors instead
+    of trusting the scalar profile name. This also checks that the
+    Swift/runtime sidecar has codebook and Hadamard-sign keys for every
+    observed routed TQ input width and bit width. It does not hydrate the model.
+    """
+    bundle = Path(model_path)
+    config = _read_json(bundle / "config.json")
+    jang = _read_json(bundle / "jang_config.json")
+    report: dict[str, Any] = {
+        "checked": False,
+        "routed_layer_bits": {},
+        "routed_bit_counts": {},
+        "metadata_routed_layer_bits": {},
+        "metadata_matches_actual": None,
+        "projection_mismatches": [],
+        "missing_projection_layers": [],
+        "sidecar": {
+            "present": False,
+            "required_keys": [],
+            "missing_keys": [],
+        },
+        "issues": [],
+    }
+    if config.get("model_type") != "deepseek_v4":
+        return report
+    report["checked"] = True
+
+    try:
+        from safetensors import safe_open
+    except Exception as exc:
+        report["issues"].append(f"safetensors unavailable: {type(exc).__name__}: {exc}")
+        return report
+
+    weight_map = _dsv4_weight_map(bundle)
+    seed = int(jang.get("mxtq_seed") or config.get("mxtq_seed") or 42)
+    by_layer: dict[str, dict[str, int]] = {}
+    required_sidecar_keys: set[str] = set()
+
+    def _read_scalar(key: str) -> int:
+        with safe_open(str(bundle / weight_map[key]), framework="numpy") as handle:
+            arr = handle.get_tensor(key)
+        return int(arr.reshape(-1)[0])
+
+    def _read_shape(key: str) -> tuple[int, ...] | None:
+        filename = weight_map.get(key)
+        if not filename:
+            return None
+        with safe_open(str(bundle / filename), framework="numpy") as handle:
+            return tuple(int(dim) for dim in handle.get_tensor(key).shape)
+
+    for key in sorted(weight_map):
+        match = _DSV4_SWITCH_MLP_TQ_BITS_RE.match(key)
+        if not match:
+            continue
+        layer, projection = match.groups()
+        try:
+            bits = _read_scalar(key)
+        except Exception as exc:
+            report["issues"].append(f"failed to read {key}: {type(exc).__name__}: {exc}")
+            continue
+        by_layer.setdefault(layer, {})[projection] = bits
+
+        packed_key = key[:-len(".tq_bits")] + ".tq_packed"
+        shape = _read_shape(packed_key)
+        if shape is not None and len(shape) >= 3 and bits > 0:
+            vals_per_u32 = max(1, 32 // bits)
+            in_features = int(shape[-1]) * vals_per_u32
+            required_sidecar_keys.add(f"codebook.{in_features}.{bits}")
+            required_sidecar_keys.add(f"signs.{in_features}.{seed}")
+
+    layer_bits: dict[str, int] = {}
+    expected_projections = {"gate_proj", "up_proj", "down_proj"}
+    for layer, projections in sorted(by_layer.items(), key=lambda item: int(item[0])):
+        missing = sorted(expected_projections - set(projections))
+        if missing:
+            report["missing_projection_layers"].append({
+                "layer": layer,
+                "missing": missing,
+            })
+            report["issues"].append(
+                f"layer {layer} missing routed tq_bits projections: {', '.join(missing)}"
+            )
+            continue
+        values = set(projections.values())
+        if len(values) != 1:
+            projection_report = dict(sorted(projections.items()))
+            report["projection_mismatches"].append({
+                "layer": layer,
+                "projections": projection_report,
+            })
+            report["issues"].append(
+                f"layer {layer} routed projections have mixed tq_bits: {projection_report}"
+            )
+            continue
+        layer_bits[layer] = next(iter(values))
+
+    report["routed_layer_bits"] = layer_bits
+    bit_counts: dict[str, int] = {}
+    for bits in layer_bits.values():
+        bit_counts[str(bits)] = bit_counts.get(str(bits), 0) + 1
+    report["routed_bit_counts"] = dict(sorted(bit_counts.items(), key=lambda item: int(item[0])))
+
+    default_bits = _dsv4_routed_default_bits(config, jang)
+    actual_overrides = {
+        layer: bits for layer, bits in layer_bits.items() if int(bits) != default_bits
+    }
+    metadata = _dsv4_nested_routed_bit_plan(config, jang)
+    report["metadata_routed_layer_bits"] = metadata
+    report["metadata_matches_actual"] = metadata == actual_overrides
+    if metadata and metadata != actual_overrides:
+        report["issues"].append(
+            f"metadata routed_layer_bits {metadata} does not match actual "
+            f"non-default tq_bits {actual_overrides}"
+        )
+
+    sidecar_path = bundle / "jangtq_runtime.safetensors"
+    required_sorted = sorted(required_sidecar_keys)
+    report["sidecar"]["present"] = sidecar_path.is_file()
+    report["sidecar"]["required_keys"] = required_sorted
+    if required_sorted:
+        if not sidecar_path.is_file():
+            report["sidecar"]["missing_keys"] = required_sorted
+            report["issues"].append(
+                "sidecar missing: jangtq_runtime.safetensors is required for "
+                f"{len(required_sorted)} observed routed TQ codebook/sign keys"
+            )
+        else:
+            try:
+                with safe_open(str(sidecar_path), framework="numpy") as handle:
+                    present = set(handle.keys())
+                missing_keys = [key for key in required_sorted if key not in present]
+                report["sidecar"]["missing_keys"] = missing_keys
+                if missing_keys:
+                    report["issues"].append(
+                        "sidecar missing required JANGTQ runtime keys: "
+                        + ", ".join(missing_keys)
+                    )
+            except Exception as exc:
+                report["sidecar"]["missing_keys"] = required_sorted
+                report["issues"].append(
+                    f"sidecar unreadable: {type(exc).__name__}: {exc}"
+                )
+
+    return report
+
+
 def _legacy_dsv4_slug_hint(model_path: str | Path) -> str:
     """Return a clearer hint when the proven-bad bundle is the retracted slug."""
     bundle = Path(model_path)
@@ -214,129 +405,59 @@ def _validate_dsv4_control_tensors(model_path: str | Path) -> None:
         )
 
 
-def _install_dsv4_prefill_patch() -> None:
-    """Patch the upstream JANG ``DeepseekV4Attention.__call__`` mask-trim
-    bug in-process.
+def _verify_dsv4_attention_contract() -> None:
+    """Verify the installed JANG DSV4 attention contract.
 
-    The installed ``jang_tools/dsv4/mlx_model.py`` (DeepseekV4Attention,
-    line ~882) only pads ``mask`` when ``full_kv.shape[2] > mask.shape[-1]``
-    and is missing the symmetric trim branch. Live-traced 2026-05-04 with
-    LONG_CTX=1: layer 0 has compress_ratio=0 so its cache is a plain
-    KVCache that grows monotonically with every token — the model-level
-    mask gets sized to ``layer0.offset``. Compress_ratio>0 layers wrap a
-    RotatingKVCache(max_size=sliding_window=128) so their post-update
-    ``full_kv`` caps at ``sliding_window + (pooled rows)``. Result: on any
-    prompt + decode step where total tokens > sliding_window, the
-    incoming mask shape ``(1, total_tokens)`` is wider than full_kv
-    ``(1, ~129)``, ``mx.broadcast_shapes`` rejects, the request returns
-    empty content. Patch wraps ``__call__`` to trim trailing-axis when
-    mask overruns full_kv (mirror of the existing pad branch). Idempotent.
+    Older ``jang_tools.dsv4.mlx_model.DeepseekV4Attention`` builds only padded
+    ``mask`` when ``full_kv.shape[2] > mask.shape[-1]`` and missed the
+    symmetric trim branch. A previous vMLX compatibility path monkeypatched
+    ``DeepseekV4Attention.__call__`` with a stale attention copy, but that copy
+    did not preserve JANG's per-query compressed-pool visibility
+    (``comp_mask & selected``). For DSV4 production we do not class-patch this
+    runtime path: the installed JANG must already provide the native
+    mask-width fix and compressed-pool semantics, or loading fails loudly.
     """
     global _PREFILL_PATCH_INSTALLED
     if _PREFILL_PATCH_INSTALLED:
         return
     try:
         from jang_tools.dsv4.mlx_model import DeepseekV4Attention
-        import mlx.core as mx
+        import inspect
     except Exception as e:
-        _log.warning("DSV4 prefill patch skipped (import failed: %s)", e)
-        return
+        raise RuntimeError(
+            "DSV4 installed jang_tools attention contract could not be "
+            f"verified because imports failed: {e}"
+        ) from e
 
-    from jang_tools.dsv4.mlx_model import (
-        DeepseekV4Cache,
-        _apply_partial_rope,
-        _get_q_norm_ones,
-        scaled_dot_product_attention,
-    )
+    try:
+        src = inspect.getsource(DeepseekV4Attention.__call__)
+    except Exception as e:
+        raise RuntimeError(
+            "DSV4 installed jang_tools attention contract could not be "
+            f"verified because source inspection failed: {e}"
+        ) from e
 
-    def _patched_call(self, x, mask=None, cache=None):  # noqa: D401
-        # Mirror of upstream DeepseekV4Attention.__call__ with a symmetric
-        # trim branch added before the existing pad branch. Other than the
-        # 4-line trim block this is a copy of the upstream forward; we
-        # match its behavior exactly to avoid drift.
-        B, L, _ = x.shape
-        local_cache = cache if isinstance(cache, DeepseekV4Cache) else cache
-        offset = local_cache.offset if local_cache is not None else 0
-
-        q_residual = self.q_norm(self.wq_a(x))
-        q = self.wq_b(q_residual).reshape(B, L, self.n_heads, self.head_dim)
-        q = mx.fast.rms_norm(
-            q,
-            weight=_get_q_norm_ones(self.head_dim, q.dtype),
-            eps=self.args.rms_norm_eps,
+    required = {
+        "symmetric_mask_trim": "if attn_mask.shape[-1] > full_kv.shape[2]",
+        "per_query_compressed_pool_mask": "comp_mask = comp_mask & selected",
+        "indexer_topk_threshold": "pooled.shape[1] > self.indexer.index_topk",
+    }
+    missing = [name for name, needle in required.items() if needle not in src]
+    if missing:
+        raise RuntimeError(
+            "DSV4 installed jang_tools is too old for production DSV4 runtime: "
+            "DeepseekV4Attention is missing "
+            + ", ".join(missing)
+            + ". Update/bundle a JANG build with the native DSV4 mask-width "
+            "and per-query compressed-pool attention fixes; vMLX no longer "
+            "monkeypatches this class at load time."
         )
-        q = q.transpose(0, 2, 1, 3)
 
-        kv = self.kv_norm(self.wkv(x)).reshape(B, L, 1, self.head_dim).transpose(0, 2, 1, 3)
-        q = _apply_partial_rope(q, self.rope, offset)
-        kv = _apply_partial_rope(kv, self.rope, offset)
-
-        if local_cache is not None:
-            kv, _ = local_cache.update_and_fetch(kv, kv)
-        full_kv = kv
-
-        if self.compress_ratio:
-            v4_cache = cache if isinstance(cache, DeepseekV4Cache) else None
-            if v4_cache is not None or L >= self.compress_ratio:
-                pooled = self.compressor(x, self.compress_rope, v4_cache, offset)
-                if hasattr(self, "indexer") and pooled.shape[1] > 0:
-                    topk = self.indexer(
-                        x, q_residual, self.compress_rope, self.rope,
-                        v4_cache, offset,
-                    )
-                    if topk is not None:
-                        expanded = mx.broadcast_to(
-                            pooled[:, None, None, :, :],
-                            (B, 1, L, pooled.shape[1], self.head_dim),
-                        )
-                        idx = topk[:, None, :, :, None]
-                        pooled = mx.take_along_axis(
-                            expanded,
-                            mx.broadcast_to(idx, idx.shape[:-1] + (self.head_dim,)),
-                            axis=3,
-                        ).reshape(B, 1, -1, self.head_dim)
-                    else:
-                        pooled = pooled[:, None]
-                else:
-                    pooled = pooled[:, None]
-                if pooled.shape[2] > 0:
-                    full_kv = mx.concatenate([full_kv, pooled], axis=2)
-
-        # vMLX additions: handle BOTH directions of the mask vs full_kv
-        # mismatch. Upstream only pads (full_kv > mask). When the model-
-        # level mask was sized to a layer whose cache grows monotonically
-        # (e.g. layer 0 with compress_ratio=0 → KVCache, offset = total
-        # tokens) but THIS layer wraps a RotatingKVCache(sliding_window)
-        # whose post-update size caps near ``sliding_window`` (+pooled
-        # rows), the upstream code feeds a too-wide mask straight into
-        # SDPA and `mx.broadcast_shapes` rejects it.
-        if mask is not None and hasattr(mask, "shape") and mask.shape:
-            if mask.shape[-1] > full_kv.shape[2]:
-                mask = mask[..., -full_kv.shape[2]:]
-            elif full_kv.shape[2] > mask.shape[-1]:
-                pad = mx.zeros(
-                    mask.shape[:-1] + (full_kv.shape[2] - mask.shape[-1],),
-                    dtype=mask.dtype,
-                )
-                mask = mx.concatenate([mask, pad], axis=-1)
-
-        out = scaled_dot_product_attention(
-            q, full_kv, full_kv,
-            cache=local_cache, scale=self.softmax_scale, mask=mask,
-            sinks=self.attn_sink.astype(q.dtype),
-        )
-        out = _apply_partial_rope(out, self.rope, offset, inverse=True)
-        out = out.transpose(0, 2, 1, 3).reshape(B, L, self.n_heads * self.head_dim)
-        out = self._grouped_output_projection(out)
-        return self.wo_b(out)
-
-    DeepseekV4Attention.__call__ = _patched_call
     _PREFILL_PATCH_INSTALLED = True
     _log.info(
-        "DSV4 prefill mask-trim patch installed on "
-        "jang_tools.dsv4.mlx_model.DeepseekV4Attention.__call__ "
-        "(symmetric to upstream pad branch; fixes broadcast_shapes for "
-        "prompts > sliding_window with mixed KVCache/DeepseekV4Cache layers)."
+        "DSV4 JANG attention contract verified: native mask-width fix and "
+        "per-query compressed-pool mask are present; no vMLX class patch "
+        "installed."
     )
 
 
@@ -1065,10 +1186,10 @@ def load_jangtq_dsv4_model(model_path: str, *, skip_params_eval: bool = True) ->
     """
     _validate_dsv4_control_tensors(model_path)
 
-    # DSV4_LONG_CTX=1 is the only supported runtime mode. The upstream JANG
-    # prefill shape bug for prompts > sliding_window is patched in this
-    # process by ``_install_dsv4_prefill_patch()`` (called below). Pool
-    # quant is enabled by default only when the installed JANG runtime's
+    # DSV4_LONG_CTX=1 is the only supported runtime mode. The installed JANG
+    # attention path must carry the native mask-width and per-query compressed
+    # pool fixes; vMLX verifies that contract below and does not patch the class.
+    # Pool quant is enabled by default only when the installed JANG runtime's
     # PoolQuantizedV4Cache subclasses DeepseekV4Cache.
     pool_quant = _configure_dsv4_pool_quant_default()
     _log.info("DSV4 runtime defaults: DSV4_LONG_CTX=1, DSV4_POOL_QUANT=%s", pool_quant)
@@ -1079,9 +1200,9 @@ def load_jangtq_dsv4_model(model_path: str, *, skip_params_eval: bool = True) ->
     from jang_tools.dsv4 import mlx_register  # noqa: F401
     from jang_tools.load_jangtq import load_jangtq_model
 
-    # Install the in-process patch for the upstream JANG prefill mask-trim
-    # bug BEFORE the model gets called for warmup/inference.
-    _install_dsv4_prefill_patch()
+    # Verify the native JANG DSV4 attention contract BEFORE the model gets
+    # called for warmup/inference.
+    _verify_dsv4_attention_contract()
 
     # Install the instant-load patch BEFORE the underlying loader runs so
     # the sidecar fast-path can short-circuit the 129-group streaming hydrate

@@ -145,6 +145,8 @@ class TestDiskCacheUnit:
         Actual field names in disk_cache.py stats():
         - entries (NOT count)
         - total_size_mb (NOT size_mb)
+        - total_tokens_on_disk
+        - total_cached_tokens
         - max_size_gb
         - hits
         - misses
@@ -161,6 +163,8 @@ class TestDiskCacheUnit:
             expected_keys = {
                 "entries",
                 "total_size_mb",
+                "total_tokens_on_disk",
+                "total_cached_tokens",
                 "max_size_gb",
                 "hits",
                 "misses",
@@ -173,6 +177,9 @@ class TestDiskCacheUnit:
             # Verify types
             assert isinstance(stats["entries"], int)
             assert isinstance(stats["total_size_mb"], (int, float))
+            assert isinstance(stats["total_tokens_on_disk"], int)
+            assert isinstance(stats["total_cached_tokens"], int)
+            assert stats["total_cached_tokens"] == stats["total_tokens_on_disk"]
             assert isinstance(stats["max_size_gb"], (int, float))
             assert isinstance(stats["hit_rate"], (int, float))
 

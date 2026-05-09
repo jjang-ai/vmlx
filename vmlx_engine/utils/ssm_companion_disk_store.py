@@ -130,6 +130,10 @@ class SSMCompanionDiskStore:
         self._dir = Path(directory) if directory else _default_dir()
         self._budget = int(budget_bytes) if budget_bytes else _budget_bytes()
         self._lock = threading.Lock()
+        self._stats_lock = threading.Lock()
+        self._stores = 0
+        self._hits = 0
+        self._misses = 0
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
@@ -448,6 +452,8 @@ class SSMCompanionDiskStore:
         with self._lock:
             ok = self._save_entry(key, states, is_complete, token_ids, num_tokens)
             if ok:
+                with self._stats_lock:
+                    self._stores += 1
                 self._enforce_budget()
             return ok
 
@@ -455,7 +461,13 @@ class SSMCompanionDiskStore:
         """Look up by key. Returns ``(states, is_complete)`` or ``None``."""
         # Read path holds the lock briefly only to align with budget
         # enforcement; actual decode is independent of the lock.
-        return self._load_entry(key)
+        entry = self._load_entry(key)
+        with self._stats_lock:
+            if entry is None:
+                self._misses += 1
+            else:
+                self._hits += 1
+        return entry
 
     def delete(self, key: str) -> None:
         if self._dir is None:
@@ -496,6 +508,7 @@ class SSMCompanionDiskStore:
             }
         entries = 0
         total = 0
+        total_tokens = 0
         try:
             for sub in self._dir.iterdir() if self._dir.exists() else []:
                 if not sub.is_dir():
@@ -512,18 +525,32 @@ class SSMCompanionDiskStore:
                     if side.exists():
                         try:
                             total += side.stat().st_size
+                            sidecar = json.loads(side.read_text())
+                            total_tokens += int(sidecar.get("num_tokens") or 0)
                         except OSError:
+                            pass
+                        except (TypeError, ValueError, json.JSONDecodeError):
                             pass
         except OSError:
             pass
+        with self._stats_lock:
+            stores = self._stores
+            hits = self._hits
+            misses = self._misses
         return {
             "enabled": True,
             "directory": str(self._dir),
             "entries": entries,
+            "total_tokens_on_disk": total_tokens,
+            "total_cached_tokens": total_tokens,
             "bytes": total,
             "bytes_mb": round(total / (1024 * 1024), 2),
             "budget_bytes": self._budget,
             "budget_gb": round(self._budget / (1024 ** 3), 3),
+            "stores": stores,
+            "hits": hits,
+            "misses": misses,
+            "hit_rate": round(hits / max(hits + misses, 1), 3),
         }
 
     def _enforce_budget(self) -> None:

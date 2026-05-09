@@ -85,6 +85,19 @@ dependencies = [
     # speed claims (84 tok/s decode, 15-21x faster encoders) are
     # reachable on a plain `pip install vmlx`. ~3 MB via cffi.
     "soundfile>=0.12.0",
+    # timm — REQUIRED for Nemotron-3-Nano-Omni media dispatch. The Stage-1
+    # PyTorch bridge loads the RADIO/ViT vision backbone through transformers
+    # remote code, which raises before generation if timm is missing. Live
+    # Nemotron image row on 2026-05-08 reproduced the failure from `uv run`
+    # even though the bundled Python script already installed timm.
+    "timm>=1.0.20",
+    # einops — REQUIRED by the same Nemotron-Omni remote vision modules.
+    # Without it the first image/video request fails after timm is present.
+    "einops>=0.8.0",
+    # librosa — REQUIRED during Nemotron-Omni session construction because the
+    # Parakeet audio feature extractor is initialized with the multimodal
+    # wrapper even when the first request is image-only.
+    "librosa>=0.10.0",
 ]
 
 [project.optional-dependencies]

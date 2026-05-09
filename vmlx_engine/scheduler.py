@@ -349,6 +349,27 @@ class Scheduler:
             model.make_cache, "__name__", ""
         ) in ("_tq_make_cache", "_turboquant_make_cache")
         self._log_runtime_cache_contract(model)
+        if self._tq_active:
+            changed = []
+            if self.config.max_num_seqs != 1:
+                changed.append(f"max_num_seqs {self.config.max_num_seqs}->1")
+                self.config.max_num_seqs = 1
+            if self.config.prefill_batch_size != 1:
+                changed.append(f"prefill_batch_size {self.config.prefill_batch_size}->1")
+                self.config.prefill_batch_size = 1
+            if self.config.completion_batch_size != 1:
+                changed.append(
+                    f"completion_batch_size {self.config.completion_batch_size}->1"
+                )
+                self.config.completion_batch_size = 1
+            if changed:
+                logger.warning(
+                    "TurboQuantKVCache live decode is single-sequence only "
+                    "(mlx_lm BatchGenerator multi-seq merge calls cache.extend(), "
+                    "which TurboQuantKVCache intentionally does not implement); "
+                    "overriding %s.",
+                    ", ".join(changed),
+                )
 
         # mlxstudio#138: surface the precedence when both knobs are set.
         # Without VMLX_DISABLE_TQ_KV, the loader's TQ patch wins because
@@ -967,6 +988,9 @@ class Scheduler:
         self.num_requests_processed = 0
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
+        self._cache_reuse_skips = 0
+        self._cache_reuse_skip_tokens = 0
+        self._last_cache_reuse_skip: Optional[Dict[str, Any]] = None
 
         # Periodic Metal memory cache cleanup timer.
         # During sustained multi-request traffic, self.running is never empty
@@ -3796,6 +3820,25 @@ class Scheduler:
                             multiplier = 2.0
                         needed = cache_bytes * multiplier
                         if needed > avail:
+                            cached_tokens = int(getattr(request, "cached_tokens", 0) or 0)
+                            remaining_tokens = len(
+                                getattr(request, "remaining_tokens", []) or []
+                            )
+                            self._cache_reuse_skips += 1
+                            self._cache_reuse_skip_tokens += cached_tokens
+                            self._last_cache_reuse_skip = {
+                                "request_id": request.request_id,
+                                "reason": "insufficient_memory_for_cache_merge",
+                                "needed_mb": round(needed / 1048576, 1),
+                                "available_mb": round(avail / 1048576, 1),
+                                "cache_mb": round(cache_bytes / 1048576, 1),
+                                "multiplier": multiplier,
+                                "kv_cache_bits": kv_bits,
+                                "cached_tokens": cached_tokens,
+                                "remaining_tokens": remaining_tokens,
+                                "prompt_tokens": len(request.prompt_token_ids or []),
+                                "cache_type": type(cache_to_use).__name__,
+                            }
                             logger.warning(
                                 f"Request {request.request_id}: skipping cache reuse "
                                 f"(need {needed / 1048576:.0f}MB, "
@@ -4512,12 +4555,12 @@ class Scheduler:
             # Store SSM layer states keyed by block-aligned prompt tokens
             # so future prefix cache hits can reconstruct full KV+SSM cache.
             #
-            # LIMITATION: For thinking models (gen_prompt_len > 0), SSM
-            # companion is SKIPPED. The extracted SSM state includes
-            # gen_prompt + output tokens, placing it at position
-            # P+gpl+output instead of P (the KV block boundary).
-            # Injecting this contaminated state causes garbled output.
-            # Future fix: async re-derive or capture-during-prefill.
+            # For thinking models (gen_prompt_len > 0), the extracted SSM
+            # state includes gen_prompt + output tokens, placing it at
+            # P+gpl+output instead of P (the KV block boundary). Injecting
+            # that contaminated state causes garbled output, so the branch
+            # below queues a clean prompt-only re-derive instead of storing
+            # post-generation state directly.
             if (
                 self._is_hybrid
                 and not self._uses_dsv4_cache
@@ -5952,6 +5995,9 @@ class Scheduler:
             "total_prompt_tokens": self.total_prompt_tokens,
             "total_completion_tokens": self.total_completion_tokens,
             "ewma_ttft_seconds": round(self._ewma_ttft, 3),
+            "cache_reuse_skips": self._cache_reuse_skips,
+            "cache_reuse_skip_tokens": self._cache_reuse_skip_tokens,
+            "last_cache_reuse_skip": self._last_cache_reuse_skip,
         }
         # Include cache stats
         if self.block_aware_cache is not None:

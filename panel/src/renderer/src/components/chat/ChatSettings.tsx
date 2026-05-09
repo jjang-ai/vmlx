@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { X, Save, Trash2, Star } from 'lucide-react'
+import { AlertTriangle, X, Save, Trash2, Star } from 'lucide-react'
 import { useToast } from '../Toast'
 import { useTranslation } from '../../i18n'
+import { buildChatSettingsCompatibilityWarnings } from './chatSettingsCompatibility'
 
 interface ChatProfile {
   id: string
@@ -68,6 +69,9 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   const [profileName, setProfileName] = useState('')
   const [showProfileSave, setShowProfileSave] = useState(false)
   const [detectedFamily, setDetectedFamily] = useState<string | undefined>(undefined)
+  const [detectedToolParser, setDetectedToolParser] = useState<string | undefined>(undefined)
+  const [savedChatModelPath, setSavedChatModelPath] = useState<string | undefined>(undefined)
+  const [messageCount, setMessageCount] = useState(0)
 
   const loadProfiles = useCallback(() => {
     window.api.chat.getProfiles().then((p: ChatProfile[]) => setProfiles(p))
@@ -76,6 +80,17 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   useEffect(() => {
     (async () => {
       const saved = await window.api.chat.getOverrides(chatId) as ChatOverrides | null
+      try {
+        const [chat, messages] = await Promise.all([
+          window.api.chat.get(chatId),
+          window.api.chat.getMessages(chatId),
+        ])
+        setSavedChatModelPath(chat?.modelPath)
+        setMessageCount(Array.isArray(messages) ? messages.length : 0)
+      } catch (_) {
+        setSavedChatModelPath(undefined)
+        setMessageCount(0)
+      }
       // Pull recommended defaults from the model's own generation_config.json
       // so the UI shows what the model author recommends — not hardcoded fallbacks
       // like 0.7 / 0.9 that have no relation to the loaded model. This is display-only
@@ -97,8 +112,10 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
         try {
           const detected = await window.api.models.detectConfig(session.modelPath)
           setDetectedFamily(detected?.family)
+          setDetectedToolParser(detected?.toolParser)
         } catch (_) {
           setDetectedFamily(undefined)
+          setDetectedToolParser(undefined)
         }
       }
       // Saved overrides win over model defaults for any field the user has explicitly set.
@@ -217,6 +234,14 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
 
   const shortModel = session.modelName || session.modelPath.split('/').pop() || session.modelPath
   const isImageModel = session.modelType === 'image'
+  const compatibilityWarnings = buildChatSettingsCompatibilityWarnings({
+    messageCount,
+    savedChatModelPath,
+    currentModelPath: session.modelPath,
+    overrides,
+    reasoningParser,
+    toolParser: detectedToolParser,
+  })
 
   return (
     <div className="w-80 h-full border-l border-border bg-card flex flex-col overflow-hidden">
@@ -291,6 +316,20 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
         </div>
 
         <div className="border-t border-border" />
+
+        {!isImageModel && compatibilityWarnings.length > 0 && (
+          <div className="rounded border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+              <div className="space-y-1.5">
+                <div className="font-medium">Review saved chat settings</div>
+                {compatibilityWarnings.map((warning) => (
+                  <p key={warning} className="leading-snug">{warning}</p>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {isImageModel && (
           <div>

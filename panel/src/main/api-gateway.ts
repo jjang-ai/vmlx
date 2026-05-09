@@ -785,6 +785,31 @@ export class ApiGateway extends EventEmitter {
     return true;
   }
 
+  private applyOllamaThinking(parsed: any, openaiBody: any): void {
+    // Omitted thinking controls default on for capable vMLX chat models.
+    // Native Ollama `think:false` is an explicit opt-out and must not be
+    // overwritten by that default.
+    if (typeof parsed?.think === "boolean") {
+      openaiBody.enable_thinking = parsed.think;
+    } else if (
+      parsed?.enable_thinking !== undefined &&
+      parsed?.enable_thinking !== null
+    ) {
+      openaiBody.enable_thinking = Boolean(parsed.enable_thinking);
+    } else {
+      const ct = parsed?.chat_template_kwargs;
+      if (
+        ct &&
+        typeof ct === "object" &&
+        !Array.isArray(ct) &&
+        ct.enable_thinking === false
+      ) {
+        return;
+      }
+      openaiBody.enable_thinking = true;
+    }
+  }
+
   private openAIToolCallsToOllama(
     toolCalls: any[] | undefined | null,
   ): any[] | undefined {
@@ -864,18 +889,7 @@ export class ApiGateway extends EventEmitter {
     if (parsed.cache_salt != null) openaiBody.cache_salt = parsed.cache_salt;
     if (parsed.skip_prefix_cache != null)
       openaiBody.skip_prefix_cache = parsed.skip_prefix_cache;
-    // Ollama `think` is tri-state: true=on, false=off, undefined=default.
-    // Node gateway previously only handled truthy, silently dropping `think: false`
-    // so Copilot/Ollama clients that request thinking-OFF were ignored and the
-    // model kept reasoning. Matches vmlx_engine/api/ollama_adapter.py line 48.
-    if (parsed.think !== undefined && parsed.think !== null) {
-      openaiBody.enable_thinking = Boolean(parsed.think);
-    } else if (
-      parsed.enable_thinking !== undefined &&
-      parsed.enable_thinking !== null
-    ) {
-      openaiBody.enable_thinking = Boolean(parsed.enable_thinking);
-    }
+    this.applyOllamaThinking(parsed, openaiBody);
     if (this.shouldForwardOllamaReasoningEffort(parsed, openaiBody))
       openaiBody.reasoning_effort = parsed.reasoning_effort;
     if (
@@ -1167,14 +1181,7 @@ export class ApiGateway extends EventEmitter {
     if (parsed.cache_salt != null) openaiBody.cache_salt = parsed.cache_salt;
     if (parsed.skip_prefix_cache != null)
       openaiBody.skip_prefix_cache = parsed.skip_prefix_cache;
-    if (parsed.think !== undefined && parsed.think !== null) {
-      openaiBody.enable_thinking = Boolean(parsed.think);
-    } else if (
-      parsed.enable_thinking !== undefined &&
-      parsed.enable_thinking !== null
-    ) {
-      openaiBody.enable_thinking = Boolean(parsed.enable_thinking);
-    }
+    if (!useRawCompletion) this.applyOllamaThinking(parsed, openaiBody);
     if (this.shouldForwardOllamaReasoningEffort(parsed, openaiBody))
       openaiBody.reasoning_effort = parsed.reasoning_effort;
     if (

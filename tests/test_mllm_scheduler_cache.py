@@ -15,8 +15,49 @@ Covers:
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 from dataclasses import fields
+from pathlib import Path
+from types import SimpleNamespace
 
 from vmlx_engine.mllm_scheduler import MLLMSchedulerConfig, MLLMScheduler
+
+
+def test_mllm_scheduler_does_not_shadow_hashlib_in_init():
+    """Regression: paged block-disk init uses hashlib before non-paged L2 setup."""
+    import inspect
+
+    source = inspect.getsource(MLLMScheduler.__init__)
+
+    assert "import hashlib" not in source
+    assert "hashlib.sha256" in source
+
+
+def test_mllm_scheduler_clamps_active_turboquant_kv_to_single_sequence():
+    """VLM TurboQuant KV must not advertise multi-seq batching it cannot run."""
+
+    def _turboquant_make_cache():
+        return []
+
+    class LanguageModel:
+        make_cache = staticmethod(_turboquant_make_cache)
+
+    class VLMModel:
+        language_model = LanguageModel()
+        config = object()
+
+    config = MLLMSchedulerConfig(
+        enable_prefix_cache=False,
+        kv_cache_quantization="none",
+        max_num_seqs=256,
+        prefill_batch_size=8,
+        completion_batch_size=32,
+    )
+
+    scheduler = MLLMScheduler(VLMModel(), processor=object(), config=config)
+
+    assert scheduler._tq_active is True
+    assert scheduler.config.max_num_seqs == 1
+    assert scheduler.config.prefill_batch_size == 1
+    assert scheduler.config.completion_batch_size == 1
 
 
 # ============================================================
@@ -190,6 +231,18 @@ class TestConfigForwarding:
                 f"Field '{field_name}' not forwarded in _start_mllm()"
             )
 
+    def test_batched_engine_logs_effective_mllm_batch_sizes_after_clamps(self):
+        """Startup log must not report requested batch sizes after scheduler clamps."""
+        from vmlx_engine.engine.batched import BatchedEngine
+        import inspect
+
+        source = inspect.getsource(BatchedEngine._start_mllm)
+
+        log_tail = source.split("MLLM Scheduler started with continuous batching:", 1)[1]
+        assert "self._mllm_scheduler.config.max_num_seqs" in log_tail
+        assert "self._mllm_scheduler.config.prefill_batch_size" in log_tail
+        assert "self._mllm_scheduler.config.completion_batch_size" in log_tail
+
 
 # ============================================================
 # HybridSSMStateCache tests
@@ -322,6 +375,36 @@ class TestHybridSSMStateCache:
 class TestBatchGeneratorCacheParams:
     """Test that MLLMBatchGenerator accepts all cache params."""
 
+    def test_absolute_text_position_ids_continue_from_cache_offset(self):
+        """Text-only cache-hit tails must use absolute mRoPE positions.
+
+        Qwen3.6 hybrid resumed a 627-token cached prefix, then passed only
+        the 30-token tail to the language model. With `_rope_deltas` reset,
+        mlx-vlm recomputed position_ids from tail length starting at zero.
+        That made cached prefill diverge from full prefill even though KV+SSM
+        cache state existed.
+        """
+        import mlx.core as mx
+        from vmlx_engine.mllm_batch_generator import _absolute_text_position_ids
+
+        class OffsetCache:
+            offset = 627
+
+        class InnerModel:
+            fa_idx = 0
+
+        language_model = SimpleNamespace(model=InnerModel())
+
+        pos = _absolute_text_position_ids(
+            mx.array([[11, 12, 13, 14]]),
+            [OffsetCache()],
+            language_model,
+        )
+
+        assert pos is not None
+        assert pos.shape == (3, 1, 4)
+        assert pos[0, 0].tolist() == [627, 628, 629, 630]
+
     def test_init_signature(self):
         """Verify constructor accepts all cache params."""
         import inspect
@@ -339,6 +422,32 @@ class TestBatchGeneratorCacheParams:
         ]
         for name in expected:
             assert name in param_names, f"Missing param: {name}"
+
+    def test_accepts_scheduler_owned_ssm_l2_store(self):
+        """Hybrid MLLM prefix hits are only real across restart when the
+        generator's SSM companion cache receives the scheduler-owned disk L2.
+
+        Qwen3.6 JANGTQ live proof showed a false-positive restart hit: paged
+        KV blocks restored from BlockDiskStore, but the companion SSM cache had
+        no disk store and forced a full prefill. Pin the constructor contract
+        that lets MLLMScheduler attach the matching SSM L2 namespace.
+        """
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        disk_store = MagicMock()
+        generator = MLLMBatchGenerator(
+            model=MagicMock(),
+            processor=MagicMock(),
+            paged_cache_manager=MagicMock(),
+            block_aware_cache=MagicMock(),
+            ssm_state_disk_store=disk_store,
+            ssm_state_cache_model_key="qwen36-test-key",
+        )
+
+        cache = generator._ssm_state_cache
+        assert cache is not None
+        assert cache.disk_enabled is True
+        assert cache.model_key == "qwen36-test-key"
 
 
 # ============================================================
@@ -423,6 +532,32 @@ class TestEnsureBatchGeneratorCacheClearing:
         assert has_inplace, "Must have in-place sampler update path"
 
 
+class TestHybridSSMBlockDiskWiring:
+    """Regression pins for hybrid SSM companion L2 on the MLLM path."""
+
+    def test_scheduler_creates_matching_ssm_companion_l2_for_block_disk(self):
+        """Block-disk cache for hybrid VLMs must include the companion SSM
+        disk store, not just paged KV blocks. Otherwise /v1/cache/stats can
+        report block hits while generation still pays full SSM prefill.
+        """
+        config = MLLMSchedulerConfig(
+            enable_prefix_cache=True,
+            use_paged_cache=True,
+            enable_block_disk_cache=True,
+            block_disk_cache_dir="/tmp/vmlx-test-block-cache",
+            block_disk_cache_max_gb=0.001,
+        )
+        source_init = Path("vmlx_engine/mllm_scheduler.py").read_text()
+        import inspect
+        source_ensure = inspect.getsource(MLLMScheduler._ensure_batch_generator)
+
+        assert "SSMCompanionDiskStore" in source_init
+        assert "_ssm_companion_disk_store" in source_init
+        assert "ssm_companion" in source_init
+        assert "ssm_state_disk_store" in source_ensure
+        assert config.enable_block_disk_cache is True
+
+
 # ============================================================
 # _cleanup_finished cache store paths
 # ============================================================
@@ -461,6 +596,54 @@ class TestCleanupFinishedCacheStore:
 
         source = inspect.getsource(MLLMScheduler._cleanup_finished)
         assert "disk_cache" in source
+
+    def test_short_single_turn_outputs_still_store_prompt_cache(self):
+        """The first turn of a future chat can be a one-token answer.
+
+        MLLM used to skip prefix-cache storage for <=3 output tokens when the
+        request had no history. That makes turn 2 semantically coherent because
+        history is still in the prompt, but it forces a full re-prefill and
+        reports cached_tokens=0 for Gemma/MiniMax/Nemotron-style MLLM routes.
+        Cacheability is a prompt property; benchmarks that need isolation must
+        use the explicit bypass flag.
+        """
+
+        scheduler = MLLMScheduler.__new__(MLLMScheduler)
+        request = SimpleNamespace(
+            num_output_tokens=1,
+            _has_history=False,
+            _extracted_cache=lambda: ["live-cache"],
+            _extracted_tokens=[10, 11, 12, 13, 14],
+            _added_stop_tokens=set(),
+        )
+
+        scheduler.running = {"req-1": request}
+        scheduler.block_aware_cache = MagicMock()
+        scheduler.block_aware_cache._request_tables = {}
+        scheduler.memory_aware_cache = None
+        scheduler.prefix_cache = None
+        scheduler.disk_cache = None
+        scheduler._is_hybrid = False
+        scheduler._kv_cache_bits = 0
+        scheduler._truncate_hybrid_cache = MagicMock(return_value=["prompt-cache"])
+        scheduler._validate_cache = MagicMock(return_value=True)
+        scheduler._extract_cache_states = MagicMock(return_value=["state"])
+        scheduler.batch_generator = None
+        scheduler.stop_tokens = set()
+        scheduler.request_id_to_uid = {}
+        scheduler.uid_to_request_id = {}
+        scheduler.paged_cache_manager = MagicMock()
+        scheduler.requests = {"req-1": request}
+        scheduler.finished_req_ids = set()
+        scheduler._cleanup_detokenizer = MagicMock()
+
+        scheduler._cleanup_finished({"req-1"})
+
+        scheduler.block_aware_cache.store_cache.assert_called_once_with(
+            "req-1",
+            [10, 11, 12, 13],
+            ["state"],
+        )
 
     def test_uses_extracted_tokens_not_prompt_token_ids(self):
         """Ensure memory-aware and legacy paths use _extracted_tokens."""
@@ -652,6 +835,37 @@ class TestProcessPromptsCacheFetch:
         source = inspect.getsource(MLLMBatchGenerator._process_prompts)
         assert "_ssm_state_cache.store" in source
         assert "Captured SSM state" in source
+
+    def test_hybrid_ssm_capture_stores_block_aligned_checkpoints(self):
+        """Hybrid paged cache hits are block-aligned, so the companion SSM
+        cache must store a matching block-aligned checkpoint in addition to the
+        full clean prompt boundary.
+        """
+        import inspect
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        run_source = inspect.getsource(MLLMBatchGenerator._run_vision_encoding_inner)
+        process_source = inspect.getsource(MLLMBatchGenerator._process_prompts)
+
+        assert "_ssm_block_aligned_boundary" in run_source
+        assert "_inline_ssm_checkpoints" in process_source
+        assert "for _inline_boundary, _inline_tokens, _inline_layers in" in process_source
+
+    def test_hybrid_ssm_inline_capture_materializes_snapshot_before_phase_b(self):
+        """Inline SSM checkpoints must not stay as lazy views of live cache.
+
+        Qwen3.6 hybrid cache hits reused an inline checkpoint captured before
+        the generation-prompt suffix, but the snapshot was not forced before
+        phase-B prefill continued mutating the live SSM cache. The next turn
+        then had cached_tokens>0 but answered from the previous instruction.
+        """
+        import inspect
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        source = inspect.getsource(MLLMBatchGenerator._maybe_capture_clean_ssm_boundary)
+
+        assert "_inline_materialize" in source
+        assert "mx.eval(*_inline_materialize)" in source
 
 
 # ============================================================

@@ -668,7 +668,8 @@ class BlockDiskStore:
         try:
             row = conn.execute(
                 "SELECT COUNT(*), COALESCE(SUM(file_size), 0), "
-                "COALESCE(SUM(access_count), 0) FROM blocks"
+                "COALESCE(SUM(access_count), 0), "
+                "COALESCE(SUM(num_tokens), 0) FROM blocks"
             ).fetchone()
         finally:
             conn.close()
@@ -678,6 +679,8 @@ class BlockDiskStore:
                 "disk_size_bytes": row[1],
                 "disk_size_gb": round(row[1] / 1024**3, 3),
                 "total_accesses": row[2],
+                "total_tokens_on_disk": int(row[3]),
+                "total_cached_tokens": int(row[3]),
                 "disk_hits": self.disk_hits,
                 "disk_misses": self.disk_misses,
                 "disk_writes": self.disk_writes,

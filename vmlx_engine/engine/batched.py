@@ -255,8 +255,9 @@ class BatchedEngine(BaseEngine):
 
         logger.info(
             f"MLLM Scheduler started with continuous batching: "
-            f"max_num_seqs={max_num_seqs}, prefill_batch={prefill_batch_size}, "
-            f"completion_batch={completion_batch_size}"
+            f"max_num_seqs={self._mllm_scheduler.config.max_num_seqs}, "
+            f"prefill_batch={self._mllm_scheduler.config.prefill_batch_size}, "
+            f"completion_batch={self._mllm_scheduler.config.completion_batch_size}"
         )
 
     async def _start_llm(self) -> None:

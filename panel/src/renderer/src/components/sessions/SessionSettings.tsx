@@ -79,6 +79,7 @@ function buildCommandPreview(
     if (config.noMemoryAwareCache) {
       parts.push('--no-memory-aware-cache')
       if (config.prefixCacheSize && config.prefixCacheSize > 0) parts.push('--prefix-cache-size', config.prefixCacheSize.toString())
+      if (config.prefixCacheMaxBytes && config.prefixCacheMaxBytes > 0) parts.push('--prefix-cache-max-bytes', config.prefixCacheMaxBytes.toString())
     } else {
       if (config.cacheMemoryMb && config.cacheMemoryMb > 0) parts.push('--cache-memory-mb', config.cacheMemoryMb.toString())
       if (config.cacheMemoryPercent && config.cacheMemoryPercent > 0) parts.push('--cache-memory-percent', (config.cacheMemoryPercent / 100).toString())

@@ -216,7 +216,7 @@ function createWindow(): void {
       db.setSetting('gateway_port', String(port))
       if (host) db.setSetting('gateway_host', host)
       await apiGateway.restart(port, host)
-      return { running: true, port, host: apiGateway.activeHost }
+      return { running: true, port: apiGateway.activePort, host: apiGateway.activeHost }
     })
 
     // Prompt templates

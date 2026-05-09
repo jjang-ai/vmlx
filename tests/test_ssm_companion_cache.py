@@ -651,3 +651,30 @@ def test_disk_store_round_trips_across_cache_instances(tmp_path):
         disk_store=disk3,
     )
     assert cache3.fetch(tokens, 4) is None
+
+
+def test_disk_store_stats_include_tokens_and_io_counters(tmp_path):
+    """Hybrid SSM L2 telemetry must expose persistent token and hit counts."""
+    from vmlx_engine.utils.ssm_companion_disk_store import SSMCompanionDiskStore
+
+    tokens = [10, 20, 30, 40]
+    disk = SSMCompanionDiskStore(directory=tmp_path, budget_bytes=32 * 1024 * 1024)
+    cache = SSMCompanionCache(
+        max_entries=2,
+        model_key="qwen36-hybrid|jangtq4|cache-schema-a",
+        disk_store=disk,
+    )
+    cache.store(tokens, 4, [_FakeSSMLayer(9.0, n_arrays=2)], is_complete=True)
+    key = cache._key(tokens, 4)
+
+    assert disk.fetch(key) is not None
+    assert disk.fetch("missing") is None
+
+    stats = disk.stats()
+
+    assert stats["entries"] == 1
+    assert stats["total_tokens_on_disk"] == 4
+    assert stats["total_cached_tokens"] == 4
+    assert stats["stores"] == 1
+    assert stats["hits"] == 1
+    assert stats["misses"] == 1

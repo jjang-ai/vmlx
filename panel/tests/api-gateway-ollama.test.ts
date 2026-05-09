@@ -33,7 +33,9 @@ describe("Ollama gateway parity contracts", () => {
 
   it("forwards thinking kwargs through app gateway Ollama routes", () => {
     expect(source).toContain("parsed.enable_thinking");
-    expect(source).toContain("openaiBody.enable_thinking = Boolean(parsed.think)");
+    expect(source).toContain("private applyOllamaThinking");
+    expect(source).toContain('typeof parsed?.think === "boolean"');
+    expect(source).toContain("openaiBody.enable_thinking = parsed.think");
     expect(source).toContain("private shouldForwardOllamaReasoningEffort");
     expect(source).toContain("openaiBody?.enable_thinking === false");
     expect(source).toContain("openaiBody.reasoning_effort = parsed.reasoning_effort");
@@ -65,6 +67,19 @@ describe("Ollama gateway parity contracts", () => {
     expect(source).toContain('version: "0.12.6"');
     expect(source).toContain('method === "HEAD"');
     expect(source).toContain('url === "/" || url === "/api/version"');
+  });
+
+  it("returns the actual active gateway port after restart", () => {
+    const mainSource = readFileSync(
+      resolve(process.cwd(), "src/main/index.ts"),
+      "utf8",
+    );
+    expect(mainSource).toContain(
+      "return { running: true, port: apiGateway.activePort, host: apiGateway.activeHost }",
+    );
+    expect(mainSource).not.toContain(
+      "return { running: true, port, host: apiGateway.activeHost }",
+    );
   });
 
   it("collapses OpenAI tool arguments back to Ollama object arguments", () => {

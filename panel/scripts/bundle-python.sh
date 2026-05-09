@@ -75,7 +75,8 @@ echo "==> Installing dependencies..."
   "tiktoken>=0.7.0" \
   "soundfile>=0.12" \
   "mflux==$MFLUX_VERSION" \
-  "timm>=1.0.20"  # Kimi K2.6 tokenizer + Nemotron-Omni audio (soundfile) + Omni RADIO ViT (timm)
+  "timm>=1.0.20" \
+  "einops>=0.8.0"  # Kimi K2.6 tokenizer + Nemotron-Omni RADIO/ViT deps
 
 # Install mlx-audio for STT/TTS (--no-deps: it pins exact mlx-lm/transformers versions
 # that conflict with ours — we already have all the real deps above)
@@ -459,37 +460,59 @@ else
 fi
 
 echo ""
-# Post-bundle: rewrite shebangs in console scripts to the install location.
+# Post-bundle: rewrite shebangs in console scripts to a relocatable sibling
+# Python trampoline.
 # pip bakes the source bundled-python path into shebangs (e.g.
 # `#!/Users/example/mlx/vllm-mlx/panel/bundled-python/python/bin/python3`),
-# which would ship to users and never resolve. Rewrite to the .app install
-# path so terminal users running `vmlx-serve` directly work.
+# which would ship to users and never resolve. Older builds rewrote to
+# `/Applications/vMLX.app/...`, but that breaks repo-local test apps and users
+# who run the app from another location. Keep every console script anchored to
+# its own `python/bin/python3` instead.
 #
-# Use env -S so the script entry points also run with -B -s. Without -B,
-# direct console-script use writes __pycache__ into the signed .app bundle
-# and invalidates the sealed Resources signature after first launch.
-echo "==> Rewriting console-script shebangs to install path..."
-INSTALL_PYTHON="/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
-INSTALL_SHEBANG="/usr/bin/env -S $INSTALL_PYTHON -B -s"
-SOURCE_PYTHON="$BUNDLE_DIR/python/bin/python3"
+# The shell/Python polyglot preserves `-B -s`; without `-B`, direct
+# console-script use writes __pycache__ into the signed .app bundle and
+# invalidates the sealed Resources signature after first launch.
+echo "==> Rewriting console-script shebangs to relocatable bundled Python..."
 SHEBANG_FIXED=0
 for SCRIPT in "$BUNDLE_DIR/python/bin/"*; do
-  if [ -f "$SCRIPT" ] && head -c 2 "$SCRIPT" 2>/dev/null | grep -q '^#!'; then
-    if head -1 "$SCRIPT" 2>/dev/null | grep -qF "$SOURCE_PYTHON"; then
-      sed -i '' "1s|^#!$SOURCE_PYTHON\$|#!$INSTALL_SHEBANG|" "$SCRIPT"
-      SHEBANG_FIXED=$((SHEBANG_FIXED + 1))
-    fi
+  if [ ! -f "$SCRIPT" ] || ! head -c 2 "$SCRIPT" 2>/dev/null | grep -q '^#!'; then
+    continue
+  fi
+  FIRST_LINE="$(LC_ALL=C head -n 1 "$SCRIPT" 2>/dev/null || true)"
+  if printf '%s\n' "$FIRST_LINE" | grep -Eq '^#!.*python[0-9.]*([[:space:]]|$)' \
+    && ! printf '%s\n' "$FIRST_LINE" | grep -Eq '^#!/bin/sh'; then
+    TMP_SCRIPT="$(mktemp "${SCRIPT}.XXXXXX")"
+    {
+      printf '%s\n' '#!/bin/sh'
+      printf '%s\n' "'''exec' \"\$(dirname \"\$0\")/python3\" -B -s \"\$0\" \"\$@\""
+      printf '%s\n' "' '''"
+      tail -n +2 "$SCRIPT"
+    } > "$TMP_SCRIPT"
+    chmod --reference="$SCRIPT" "$TMP_SCRIPT" 2>/dev/null || chmod +x "$TMP_SCRIPT"
+    mv "$TMP_SCRIPT" "$SCRIPT"
+    SHEBANG_FIXED=$((SHEBANG_FIXED + 1))
   fi
 done
-echo "  rewrote $SHEBANG_FIXED shebangs to $INSTALL_SHEBANG"
-# Sanity check — no script should still reference the source path
-LEAKED=$(grep -lF "$SOURCE_PYTHON" "$BUNDLE_DIR/python/bin/"* 2>/dev/null | head -3 || true)
+echo "  rewrote $SHEBANG_FIXED console-script shebangs"
+# Sanity check — no script shebang should still reference a dev or absolute app path.
+LEAKED=$(
+  find "$BUNDLE_DIR/python/bin" -maxdepth 1 -type f -perm -111 -print 2>/dev/null \
+    | while read -r SCRIPT; do
+        FIRST_LINE="$(LC_ALL=C head -n 1 "$SCRIPT" 2>/dev/null || true)"
+        if [[ "$FIRST_LINE" == *"$BUNDLE_DIR"* ]] \
+          || [[ "$FIRST_LINE" == *"/Users/"* ]] \
+          || [[ "$FIRST_LINE" == *"/Applications/vMLX.app"* ]]; then
+          printf '%s: %s\n' "$SCRIPT" "$FIRST_LINE"
+        fi
+      done \
+    | head -20
+)
 if [ -n "$LEAKED" ]; then
-  echo "ERROR: source path still in shebangs after rewrite:"
+  echo "ERROR: non-relocatable console-script shebangs after rewrite:"
   echo "$LEAKED"
   exit 1
 fi
-echo "  no source-path leaks (good)"
+echo "  console-script shebangs are relocatable (good)"
 
 echo ""
 echo "==> Bundle size:"

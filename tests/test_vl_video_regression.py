@@ -1618,13 +1618,11 @@ class TestToolsReasoningInteraction:
         """After iter 8 consolidation, Gemma4+tools auto-off lives in
         _resolve_enable_thinking — called from all 3 API paths. Verify
         both the branch exists and the helper is wired up."""
-        src = Path(
-            "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
-        ).read_text()
+        src = Path("vmlx_engine/server.py").read_text()
         import re as _re
         # Branch still exists (inside the helper now)
         branch = _re.search(
-            r'family_name\s+in\s+\(\s*["\']gemma4["\'],\s*["\']gemma4_text["\']\s*\)',
+            r'_family_l\s+in\s+\(\s*["\']gemma4["\'],\s*["\']gemma4_text["\']\s*\)',
             src,
         )
         assert branch is not None, (
@@ -6734,11 +6732,11 @@ class TestZombieCodeConsolidation:
             request_value=None, ct_kwargs={"enable_thinking": False},
             tools_present=False, model_key="x",
         ) is False
-        # None everywhere → None (engine uses its own default)
+        # None everywhere → reasoning-on vMLX API default
         assert _resolve_enable_thinking(
             request_value=None, ct_kwargs={},
             tools_present=False, model_key="x",
-        ) is None
+        ) is True
 
     def test_enable_thinking_duplicates_eliminated(self):
         """Guard: fail if server.py grows back the 4-way copy-pasted
@@ -6794,7 +6792,12 @@ class TestJangTqEncodeDecodeCorrectness:
       - MiniMax-M2.7-JANGTQ-CRACK (iter 7): 50.8 tok/s, coherent output
     """
 
-    _BASE = "/Users/example/.mlxstudio/models/MLXModels/dealignai"
+    _BASES = [
+        os.environ.get("VMLINUX_JANGTQ_MODEL_BASE"),
+        "/Users/example/models/dealign.ai",
+        "/Users/example/models/dealignai",
+        "/Users/example/.mlxstudio/models/MLXModels/dealignai",
+    ]
     _PROBES = [
         "Hello world",
         "The quick brown fox jumps over the lazy dog.",
@@ -6815,7 +6818,26 @@ class TestJangTqEncodeDecodeCorrectness:
         """Every JANGTQ tokenizer must round-trip on ASCII, CJK, chat
         markers, and code without producing 0xFFFD or byte-mangled text."""
         import os
-        path = os.path.join(self._BASE, model_dir)
+        path = None
+        for base in self._BASES:
+            if not base:
+                continue
+            candidate = os.path.join(base, model_dir)
+            if os.path.isdir(candidate):
+                path = candidate
+                break
+        if path is None and model_dir.endswith("JANGTQ2-CRACK"):
+            # Current local bundle names often omit the explicit routed-bit
+            # suffix for the production JANGTQ2 family.
+            for base in self._BASES:
+                if not base:
+                    continue
+                candidate = os.path.join(base, model_dir.replace("JANGTQ2-CRACK", "JANGTQ-CRACK"))
+                if os.path.isdir(candidate):
+                    path = candidate
+                    break
+        if path is None:
+            pytest.skip(f"{model_dir} not present")
         if not os.path.isdir(path):
             pytest.skip(f"{model_dir} not present")
         from transformers import AutoTokenizer
@@ -6836,14 +6858,17 @@ class TestJangTqEncodeDecodeCorrectness:
         one JANGTQ bundle is present so the parametrized suite above
         actually runs instead of silently skipping everything."""
         import os
-        if not os.path.isdir(self._BASE):
-            pytest.skip(f"{self._BASE} not present")
+        present_bases = [base for base in self._BASES if base and os.path.isdir(base)]
+        if not present_bases:
+            pytest.skip(f"No configured JANGTQ model bases present: {self._BASES}")
         jangtq_dirs = [
-            d for d in os.listdir(self._BASE)
+            os.path.join(base, d)
+            for base in present_bases
+            for d in os.listdir(base)
             if "JANGTQ" in d and "backup" not in d
         ]
         assert len(jangtq_dirs) >= 1, (
-            f"No JANGTQ models found in {self._BASE} — encode/decode "
+            f"No JANGTQ models found in {present_bases} — encode/decode "
             f"correctness audit cannot run."
         )
 
@@ -9773,19 +9798,14 @@ class TestFixCohesiveness:
 
 
 class TestAnthropicThinkingSpecDefault:
-    """2026-04-21 sweep discovered Anthropic /v1/messages emitted full reasoning
-    blocks across all 4 tested thinking-capable families (Qwen3.6/Gemma4/MiniMax/
-    Nemotron-Cascade) when client omitted `thinking` and `enable_thinking`.
-    That violates Anthropic's wire contract — extended thinking is OPT-IN.
-
-    Fix in anthropic_adapter.py:to_chat_completion: default enable_thinking=False
-    when client asserts no thinking intent. Isolated to the adapter so OpenAI
-    /v1/chat/completions and Ollama /api/chat paths keep their model-default
-    behavior."""
+    """vMLX's local Anthropic-compatible endpoint defaults reasoning-capable
+    models to thinking ON, matching the other API surfaces. Native
+    thinking={type:disabled} and explicit enable_thinking=False remain the
+    opt-out paths."""
 
     ADAPTER = "/tmp/vmlx-1.3.66-build/vmlx_engine/api/anthropic_adapter.py"
 
-    def test_anthropic_adapter_defaults_thinking_false_when_absent(self):
+    def test_anthropic_adapter_defaults_thinking_true_when_absent(self):
         from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
         req = AnthropicRequest(
             model="test",
@@ -9794,9 +9814,9 @@ class TestAnthropicThinkingSpecDefault:
         )
         # No req.thinking, no req.enable_thinking, no chat_template_kwargs
         chat = to_chat_completion(req)
-        assert chat.enable_thinking is False, (
-            "Anthropic adapter must default thinking OFF per Anthropic spec "
-            "when client sends no thinking intent"
+        assert chat.enable_thinking is True, (
+            "vMLX Anthropic-compatible adapter must default reasoning ON "
+            "when client sends no thinking opt-out"
         )
 
     def test_anthropic_adapter_honors_thinking_enabled(self):
@@ -9849,10 +9869,10 @@ class TestAnthropicThinkingSpecDefault:
 
     def test_adapter_source_documents_wire_default(self):
         src = Path(self.ADAPTER).read_text()
-        assert "Anthropic wire semantics: extended thinking is OPT-IN" in src, (
+        assert "vMLX policy: default reasoning ON" in src, (
             "fix must be self-documenting so future reviewer knows WHY"
         )
-        assert "enable_thinking = False  # Anthropic-spec default" in src
+        assert "enable_thinking = True" in src
 
 
 class TestGenPrefixEchoSuppression:

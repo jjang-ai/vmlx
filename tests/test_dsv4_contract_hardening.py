@@ -29,6 +29,8 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ENGINE_ROOT = REPO_ROOT / "vmlx_engine"
@@ -181,3 +183,142 @@ def test_dsv4_capability_runner_check_accepts_current_contract_only():
         "cache": {"dsv4_composite_state": True},
     }
     assert not capability_endpoint_contract_ok(dsv4, stale_caps)
+
+
+def test_dsv4_attention_contract_verifier_does_not_patch_current_jang():
+    """Current JANG already carries the native DSV4 attention contract.
+
+    vMLX must not replace ``DeepseekV4Attention.__call__`` in that case; a
+    hidden class-level patch changes the runtime being debugged and can mask
+    compressed-pool attention regressions.
+    """
+    from jang_tools.dsv4.mlx_model import DeepseekV4Attention
+    from vmlx_engine.loaders import load_jangtq_dsv4
+
+    original_call = DeepseekV4Attention.__call__
+    original_flag = load_jangtq_dsv4._PREFILL_PATCH_INSTALLED
+    try:
+        load_jangtq_dsv4._PREFILL_PATCH_INSTALLED = False
+        load_jangtq_dsv4._verify_dsv4_attention_contract()
+        assert DeepseekV4Attention.__call__ is original_call
+        assert load_jangtq_dsv4._PREFILL_PATCH_INSTALLED is True
+    finally:
+        DeepseekV4Attention.__call__ = original_call
+        load_jangtq_dsv4._PREFILL_PATCH_INSTALLED = original_flag
+
+
+def test_dsv4_loader_has_no_attention_monkeypatch_fallback():
+    """DSV4 production must fail loudly on stale JANG, not monkeypatch it.
+
+    The previous compatibility fallback copied a stale attention forward and
+    lost JANG's per-query compressed-pool mask semantics. Keep this source pin
+    so the fallback cannot quietly return.
+    """
+    source = (ENGINE_ROOT / "loaders" / "load_jangtq_dsv4.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "DeepseekV4Attention.__call__ = _patched_call" not in source
+    assert "def _patched_call(" not in source
+    assert "DSV4 installed jang_tools is too old" in source
+    assert "_install_dsv4_prefill_patch" not in source
+    assert "_verify_dsv4_attention_contract" in source
+
+
+_DSV4_ATTENTION_MARKERS = {
+    "symmetric_mask_trim": "if attn_mask.shape[-1] > full_kv.shape[2]",
+    "per_query_compressed_pool_mask": "comp_mask = comp_mask & selected",
+    "indexer_topk_threshold": "pooled.shape[1] > self.indexer.index_topk",
+}
+
+
+@pytest.mark.parametrize("missing_name", sorted(_DSV4_ATTENTION_MARKERS))
+def test_dsv4_attention_contract_verifier_rejects_each_missing_marker(
+    monkeypatch, missing_name
+):
+    """A stale JANG attention implementation must fail before inference."""
+    import inspect
+
+    from vmlx_engine.loaders import load_jangtq_dsv4
+
+    source = "\n".join(
+        needle
+        for name, needle in _DSV4_ATTENTION_MARKERS.items()
+        if name != missing_name
+    )
+    original_flag = load_jangtq_dsv4._PREFILL_PATCH_INSTALLED
+    try:
+        load_jangtq_dsv4._PREFILL_PATCH_INSTALLED = False
+        monkeypatch.setattr(inspect, "getsource", lambda _obj: source)
+        with pytest.raises(RuntimeError) as exc:
+            load_jangtq_dsv4._verify_dsv4_attention_contract()
+    finally:
+        load_jangtq_dsv4._PREFILL_PATCH_INSTALLED = original_flag
+
+    assert missing_name in str(exc.value)
+    assert "monkeypatches this class" in str(exc.value)
+
+
+def test_dsv4_attention_contract_verifier_rejects_uninspectable_source(monkeypatch):
+    """Packaged JANG must ship inspectable source or the loader fails loudly."""
+    import inspect
+
+    from vmlx_engine.loaders import load_jangtq_dsv4
+
+    original_flag = load_jangtq_dsv4._PREFILL_PATCH_INSTALLED
+    try:
+        load_jangtq_dsv4._PREFILL_PATCH_INSTALLED = False
+
+        def _raise(_obj):
+            raise OSError("no source")
+
+        monkeypatch.setattr(inspect, "getsource", _raise)
+        with pytest.raises(RuntimeError, match="source inspection failed"):
+            load_jangtq_dsv4._verify_dsv4_attention_contract()
+    finally:
+        load_jangtq_dsv4._PREFILL_PATCH_INSTALLED = original_flag
+
+
+def test_dsv4_attention_contract_verifier_is_idempotent(monkeypatch):
+    """After one successful verification, repeat calls must be no-ops."""
+    import inspect
+
+    from vmlx_engine.loaders import load_jangtq_dsv4
+
+    original_flag = load_jangtq_dsv4._PREFILL_PATCH_INSTALLED
+    try:
+        load_jangtq_dsv4._PREFILL_PATCH_INSTALLED = False
+        load_jangtq_dsv4._verify_dsv4_attention_contract()
+
+        def _raise(_obj):
+            raise AssertionError("getsource should not run on second call")
+
+        monkeypatch.setattr(inspect, "getsource", _raise)
+        load_jangtq_dsv4._verify_dsv4_attention_contract()
+    finally:
+        load_jangtq_dsv4._PREFILL_PATCH_INSTALLED = original_flag
+
+
+def test_bundled_jang_dsv4_attention_contract_markers_present():
+    """The bundled Python copy must not ship stale DSV4 attention code."""
+    bundled = (
+        REPO_ROOT
+        / "panel"
+        / "bundled-python"
+        / "python"
+        / "lib"
+        / "python3.12"
+        / "site-packages"
+        / "jang_tools"
+        / "dsv4"
+        / "mlx_model.py"
+    )
+    if not bundled.exists():
+        pytest.skip("bundled-python JANG copy not present in this checkout")
+
+    source = bundled.read_text(encoding="utf-8", errors="replace")
+    missing = [
+        name for name, needle in _DSV4_ATTENTION_MARKERS.items()
+        if needle not in source
+    ]
+    assert not missing

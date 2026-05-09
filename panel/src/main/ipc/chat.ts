@@ -1899,16 +1899,22 @@ export function registerChatHandlers(
                 }
               }
 
-              // Reasoning delta from response.reasoning.delta (custom event for thinking models)
+              // Reasoning delta from OpenAI Responses reasoning-summary events.
+              // Keep the legacy vMLX event accepted so older installed engines
+              // still display reasoning in the panel.
               if (
-                currentEventType === "response.reasoning.delta" &&
+                (currentEventType === "response.reasoning_summary_text.delta" ||
+                  currentEventType === "response.reasoning.delta") &&
                 parsed.delta
               ) {
                 emitDelta(parsed.delta, true);
               }
 
               // Reasoning done — triggers reasoningDone event in emitDelta (isReasoning=true→false transition)
-              if (currentEventType === "response.reasoning.done") {
+              if (
+                currentEventType === "response.reasoning_summary_text.done" ||
+                currentEventType === "response.reasoning.done"
+              ) {
                 // Force the reasoning→content transition so reasoningDone fires
                 if (isReasoning) {
                   isReasoning = false;
