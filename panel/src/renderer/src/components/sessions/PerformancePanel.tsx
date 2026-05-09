@@ -164,6 +164,16 @@ interface HealthData {
       naxtile_symbols?: number
     }
   }
+  mtp?: {
+    config_num_nextn_predict_layers?: number | null
+    jang_drop_mtp?: boolean | null
+    index_has_mtp_tensors?: boolean
+    artifact_available?: boolean
+    runtime_available?: boolean
+    runtime_reason?: string
+    status?: string
+    issues?: string[]
+  }
 }
 
 export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelProps) {
@@ -277,6 +287,18 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
                 }
               />
             )}
+            {health.mtp && health.mtp.status && health.mtp.status !== 'not_configured' && (
+              <InfoCard
+                label="MTP"
+                value={
+                  health.mtp.runtime_available
+                    ? 'active'
+                    : health.mtp.artifact_available
+                      ? 'weights present; runtime unwired'
+                      : health.mtp.status.replace(/_/g, ' ')
+                }
+              />
+            )}
             {health.kv_cache_quantization?.enabled && (
               <InfoCard label="KV Quant" value={`${health.kv_cache_quantization.bits}-bit`} />
             )}
@@ -316,6 +338,13 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
             <div className="mt-2 text-xs bg-warning/10 border border-warning/30 text-warning px-3 py-2 rounded space-y-1">
               {health.quantization.compat_warnings.map((warning, index) => (
                 <div key={index}>{warning}</div>
+              ))}
+            </div>
+          ) : null}
+          {health.mtp?.issues?.length ? (
+            <div className="mt-2 text-xs bg-warning/10 border border-warning/30 text-warning px-3 py-2 rounded space-y-1">
+              {health.mtp.issues.map((issue, index) => (
+                <div key={index}>{issue}</div>
               ))}
             </div>
           ) : null}

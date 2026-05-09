@@ -445,12 +445,20 @@ def summarize_safetensors(model_dir: Path, max_files: int = 9999) -> dict[str, A
     return summary
 
 
-def _index_has_tensor_prefix(model_dir: Path, prefix: str) -> bool:
+def _index_tensor_prefix_status(model_dir: Path, prefix: str) -> tuple[bool, str | None]:
     index = read_json(model_dir / "model.safetensors.index.json")
+    if "_read_error" in index:
+        return False, f"model.safetensors.index.json read failed: {index['_read_error']}"
     weight_map = index.get("weight_map") if isinstance(index, dict) else None
     if not isinstance(weight_map, dict):
-        return False
-    return any(str(key).startswith(prefix) for key in weight_map)
+        if (model_dir / "model.safetensors.index.json").is_file():
+            return False, "model.safetensors.index.json has no weight_map object"
+        return False, None
+    return any(str(key).startswith(prefix) for key in weight_map), None
+
+
+def _index_has_tensor_prefix(model_dir: Path, prefix: str) -> bool:
+    return _index_tensor_prefix_status(model_dir, prefix)[0]
 
 
 def _mtp_status(
@@ -460,28 +468,77 @@ def _mtp_status(
     safetensors_summary: dict[str, Any],
 ) -> dict[str, Any]:
     raw_layers = cfg.get("num_nextn_predict_layers")
+    invalid_config_layers = False
     try:
         config_layers = int(raw_layers) if raw_layers is not None else None
     except (TypeError, ValueError):
         config_layers = None
+        invalid_config_layers = True
 
     jang_drop_mtp = jang.get("drop_mtp")
-    index_has_mtp = _index_has_tensor_prefix(model_dir, "mtp.")
+    index_has_mtp, index_error = _index_tensor_prefix_status(model_dir, "mtp.")
     if not index_has_mtp:
         prefix_counts = safetensors_summary.get("key_prefix_counts")
         if isinstance(prefix_counts, dict):
             index_has_mtp = bool(prefix_counts.get("mtp"))
 
+    issues: list[str] = []
+    if index_error:
+        issues.append(index_error)
+    if invalid_config_layers:
+        issues.append(
+            "config.num_nextn_predict_layers is invalid; expected an integer"
+        )
+    if config_layers and config_layers > 0 and jang_drop_mtp is not True and not index_has_mtp:
+        issues.append(
+            "config expects MTP next-token prediction layers, but the bundle "
+            "index has no mtp.* tensors"
+        )
+    if config_layers in (None, 0) and jang_drop_mtp is not True and index_has_mtp:
+        issues.append(
+            "bundle indexes mtp.* tensors but config disables MTP runtime"
+        )
+    if jang_drop_mtp is True and config_layers not in (None, 0):
+        issues.append(
+            "jang_config.drop_mtp=true but config.num_nextn_predict_layers="
+            f"{config_layers}"
+        )
+    if jang_drop_mtp is True and index_has_mtp:
+        issues.append("jang_config.drop_mtp=true but bundle still indexes mtp.* tensors")
+
+    artifact_available = bool(
+        config_layers
+        and config_layers > 0
+        and jang_drop_mtp is not True
+        and index_has_mtp
+        and not issues
+    )
+    runtime_available = False
+    if issues:
+        status = "metadata_inconsistent"
+        runtime_reason = "metadata_inconsistent"
+    elif jang_drop_mtp is True:
+        status = "dropped"
+        runtime_reason = "jang_config.drop_mtp=true"
+    elif artifact_available:
+        status = "weights_present_runtime_unwired"
+        runtime_reason = "MTP weights are present, but vMLX MTP decode is not wired"
+    elif config_layers:
+        status = "configured_without_runtime"
+        runtime_reason = "config requests MTP but runtime requirements are incomplete"
+    else:
+        status = "not_configured"
+        runtime_reason = "config does not request MTP"
+
     return {
         "config_num_nextn_predict_layers": config_layers,
         "jang_drop_mtp": jang_drop_mtp,
         "index_has_mtp_tensors": index_has_mtp,
-        "runtime_available": bool(
-            config_layers
-            and config_layers > 0
-            and jang_drop_mtp is not True
-            and index_has_mtp
-        ),
+        "artifact_available": artifact_available,
+        "runtime_available": runtime_available,
+        "runtime_reason": runtime_reason,
+        "status": status,
+        "issues": issues,
     }
 
 
@@ -565,27 +622,8 @@ def static_audit(row: ModelRow) -> dict[str, Any]:
                 issues.append("DSV4 missing chat.sampling_defaults.repetition_penalty_thinking")
         if "<｜Assistant｜>" not in str(registry.get("eos_tokens")):
             issues.append("DSV4 bundle EOS config does not list Assistant marker; engine registry must add it")
-        if (
-            mtp["config_num_nextn_predict_layers"]
-            and mtp["config_num_nextn_predict_layers"] > 0
-            and mtp["jang_drop_mtp"] is not True
-            and not mtp["index_has_mtp_tensors"]
-        ):
-            issues.append(
-                "DSV4 MTP metadata inconsistent: config expects "
-                f"{mtp['config_num_nextn_predict_layers']} next-token prediction "
-                "layer(s), but the safetensors index has no mtp.* tensors"
-            )
-        if mtp["jang_drop_mtp"] is True and mtp["config_num_nextn_predict_layers"] not in (None, 0):
-            issues.append(
-                "DSV4 MTP metadata inconsistent: jang_config.drop_mtp=true but "
-                f"config.num_nextn_predict_layers={mtp['config_num_nextn_predict_layers']}"
-            )
-        if mtp["jang_drop_mtp"] is True and mtp["index_has_mtp_tensors"]:
-            issues.append(
-                "DSV4 MTP metadata inconsistent: jang_config.drop_mtp=true but "
-                "bundle still indexes mtp.* tensors"
-            )
+        for issue in mtp.get("issues") or []:
+            issues.append(f"DSV4 MTP metadata inconsistent: {issue}")
         has_canonical_dsv4_encoder = (
             chat.get("encoder") == "encoding_dsv4"
             and bool(chat.get("encoder_fn"))

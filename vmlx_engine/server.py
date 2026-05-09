@@ -3334,6 +3334,111 @@ def _bundle_has_prestacked_jangtq(bundle_path: str | None) -> bool:
         return False
 
 
+def _bundle_index_tensor_prefix_status(
+    bundle_path: str | None,
+    prefix: str,
+) -> tuple[bool, str | None]:
+    if not bundle_path:
+        return False, None
+    try:
+        from pathlib import Path
+
+        index_path = Path(bundle_path) / "model.safetensors.index.json"
+        if not index_path.is_file():
+            return False, None
+        index = json.loads(index_path.read_text())
+        weight_map = index.get("weight_map") if isinstance(index, dict) else None
+        if not isinstance(weight_map, dict):
+            return False, "model.safetensors.index.json has no weight_map object"
+        return any(str(key).startswith(prefix) for key in weight_map), None
+    except Exception as exc:
+        return False, f"model.safetensors.index.json read failed: {type(exc).__name__}: {exc}"
+
+
+def _bundle_index_has_tensor_prefix(bundle_path: str | None, prefix: str) -> bool:
+    return _bundle_index_tensor_prefix_status(bundle_path, prefix)[0]
+
+
+def _model_mtp_status(bundle_path: str | None) -> dict:
+    """Describe whether a bundle contains usable multi-token prediction heads."""
+    cfg = _read_bundle_json(bundle_path, "config.json")
+    jang_cfg = _read_bundle_json(bundle_path, "jang_config.json")
+    raw_layers = cfg.get("num_nextn_predict_layers")
+    invalid_config_layers = False
+    try:
+        config_layers = int(raw_layers) if raw_layers is not None else None
+    except (TypeError, ValueError):
+        config_layers = None
+        invalid_config_layers = True
+    drop_mtp = jang_cfg.get("drop_mtp")
+    has_mtp_tensors, index_error = _bundle_index_tensor_prefix_status(
+        bundle_path,
+        "mtp.",
+    )
+
+    issues: list[str] = []
+    if index_error:
+        issues.append(index_error)
+    if invalid_config_layers:
+        issues.append(
+            "config.num_nextn_predict_layers is invalid; expected an integer"
+        )
+    if config_layers and config_layers > 0 and drop_mtp is not True and not has_mtp_tensors:
+        issues.append(
+            "config expects MTP next-token prediction layers, but the bundle "
+            "index has no mtp.* tensors"
+        )
+    if config_layers in (None, 0) and drop_mtp is not True and has_mtp_tensors:
+        issues.append(
+            "bundle indexes mtp.* tensors but config disables MTP runtime"
+        )
+    if drop_mtp is True and config_layers not in (None, 0):
+        issues.append(
+            "jang_config.drop_mtp=true but config.num_nextn_predict_layers="
+            f"{config_layers}"
+        )
+    if drop_mtp is True and has_mtp_tensors:
+        issues.append("jang_config.drop_mtp=true but bundle still indexes mtp.* tensors")
+
+    artifact_available = bool(
+        config_layers
+        and config_layers > 0
+        and drop_mtp is not True
+        and has_mtp_tensors
+        and not issues
+    )
+    # vMLX does not yet have a verifier / accept-reject MTP decode path wired
+    # through the scheduler. Presence of mtp.* weights is an artifact fact, not
+    # proof that runtime acceleration is active.
+    runtime_available = False
+    if issues:
+        status = "metadata_inconsistent"
+        runtime_reason = "metadata_inconsistent"
+    elif drop_mtp is True:
+        status = "dropped"
+        runtime_reason = "jang_config.drop_mtp=true"
+    elif artifact_available:
+        status = "weights_present_runtime_unwired"
+        runtime_reason = "MTP weights are present, but vMLX MTP decode is not wired"
+    elif config_layers:
+        status = "configured_without_runtime"
+        runtime_reason = "config requests MTP but runtime requirements are incomplete"
+    else:
+        status = "not_configured"
+        runtime_reason = "config does not request MTP"
+
+    return {
+        "config_num_nextn_predict_layers": config_layers,
+        "jang_drop_mtp": drop_mtp,
+        "index_has_mtp_tensors": has_mtp_tensors,
+        "artifact_available": artifact_available,
+        "runtime_available": runtime_available,
+        "runtime_reason": runtime_reason,
+        "status": status,
+        "issues": issues,
+    }
+
+
 def _model_quantization_status(bundle_path: str | None) -> dict:
     """Describe the loaded weight codec from bundle metadata without guessing.
 
@@ -4082,8 +4187,10 @@ async def health():
     if _jang_metadata:
         result["quantization_format"] = _jang_metadata
     if _model_path or _model_name:
-        result["quantization"] = _model_quantization_status(_model_path or _model_name)
-        result["acceleration"] = _model_acceleration_status(_model_path or _model_name)
+        bundle_key = _model_path or _model_name
+        result["quantization"] = _model_quantization_status(bundle_key)
+        result["acceleration"] = _model_acceleration_status(bundle_key)
+        result["mtp"] = _model_mtp_status(bundle_key)
 
     if _max_prompt_tokens > 0:
         result["max_prompt_tokens"] = _max_prompt_tokens
@@ -5048,6 +5155,7 @@ async def model_capabilities(model_id: str) -> dict:
     native_cache = _native_cache_status(scheduler, family=family, cfg=cfg)
     quantization_status = _model_quantization_status(bundle_path)
     acceleration_status = _model_acceleration_status(bundle_path)
+    mtp_status = _model_mtp_status(bundle_path)
 
     # Append family-specific runtime compat warnings on top of the
     # quantization-derived ones. DSV4: surface the max-thinking downgrade
@@ -5083,6 +5191,7 @@ async def model_capabilities(model_id: str) -> dict:
         },
         "quantization": quantization_status,
         "acceleration": acceleration_status,
+        "mtp": mtp_status,
         "sampling_defaults": sampling_defaults,
     }
 

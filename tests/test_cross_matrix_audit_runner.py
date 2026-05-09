@@ -206,7 +206,11 @@ def test_dsv4_static_audit_reports_mtp_drop_contract(tmp_path):
         "config_num_nextn_predict_layers": 0,
         "jang_drop_mtp": True,
         "index_has_mtp_tensors": False,
+        "artifact_available": False,
         "runtime_available": False,
+        "runtime_reason": "jang_config.drop_mtp=true",
+        "status": "dropped",
+        "issues": [],
     }
     assert "DSV4 MTP metadata inconsistent" not in "\n".join(static["issues"])
 
@@ -232,6 +236,56 @@ def test_dsv4_static_audit_rejects_missing_mtp_weights_when_config_expects_them(
     static = static_audit(row)
 
     assert static["mtp"]["runtime_available"] is False
+    assert any("DSV4 MTP metadata inconsistent" in issue for issue in static["issues"])
+
+
+def test_dsv4_static_audit_does_not_claim_mtp_runtime_from_weights_only(tmp_path):
+    (tmp_path / "config.json").write_text(
+        '{"model_type":"deepseek_v4","num_nextn_predict_layers":1}'
+    )
+    (tmp_path / "jang_config.json").write_text(
+        '{"model_family":"deepseek_v4","weight_format":"mxtq","drop_mtp":false}'
+    )
+    (tmp_path / "model.safetensors.index.json").write_text(
+        '{"weight_map":{"mtp.0.layers.0.self_attn.q_proj.weight":"model.safetensors"}}'
+    )
+    row = ModelRow(
+        id="dsv4_tmp",
+        label="tmp dsv4",
+        path=str(tmp_path),
+        family="deepseek_v4",
+        cache_profile="dsv4_composite",
+    )
+
+    static = static_audit(row)
+
+    assert static["mtp"]["artifact_available"] is True
+    assert static["mtp"]["runtime_available"] is False
+    assert static["mtp"]["status"] == "weights_present_runtime_unwired"
+    assert "not wired" in static["mtp"]["runtime_reason"]
+
+
+def test_dsv4_static_audit_reports_malformed_mtp_index(tmp_path):
+    (tmp_path / "config.json").write_text(
+        '{"model_type":"deepseek_v4","num_nextn_predict_layers":0}'
+    )
+    (tmp_path / "jang_config.json").write_text(
+        '{"model_family":"deepseek_v4","weight_format":"mxtq","drop_mtp":false}'
+    )
+    (tmp_path / "model.safetensors.index.json").write_text("{")
+    row = ModelRow(
+        id="dsv4_tmp",
+        label="tmp dsv4",
+        path=str(tmp_path),
+        family="deepseek_v4",
+        cache_profile="dsv4_composite",
+    )
+
+    static = static_audit(row)
+
+    assert static["mtp"]["runtime_available"] is False
+    assert static["mtp"]["status"] == "metadata_inconsistent"
+    assert any("model.safetensors.index.json" in issue for issue in static["mtp"]["issues"])
     assert any("DSV4 MTP metadata inconsistent" in issue for issue in static["issues"])
 
 

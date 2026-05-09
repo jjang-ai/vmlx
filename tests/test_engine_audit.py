@@ -4814,6 +4814,168 @@ class TestTurboQuantKVTelemetry:
         assert status["metal_na_capable"] is True
         assert status["metal_na_active_on_host"] is True
 
+    def test_mtp_status_reports_dropped_dsv4_artifact(self, tmp_path):
+        from vmlx_engine.server import _model_mtp_status
+
+        (tmp_path / "config.json").write_text(
+            '{"model_type":"deepseek_v4","num_nextn_predict_layers":0}'
+        )
+        (tmp_path / "jang_config.json").write_text(
+            '{"weight_format":"mxtq","drop_mtp":true}'
+        )
+        (tmp_path / "model.safetensors.index.json").write_text(
+            '{"weight_map":{"model.embed.weight":"model-00001-of-00001.safetensors"}}'
+        )
+
+        assert _model_mtp_status(str(tmp_path)) == {
+            "config_num_nextn_predict_layers": 0,
+            "jang_drop_mtp": True,
+            "index_has_mtp_tensors": False,
+            "artifact_available": False,
+            "runtime_available": False,
+            "runtime_reason": "jang_config.drop_mtp=true",
+            "status": "dropped",
+            "issues": [],
+        }
+
+    def test_mtp_status_flags_missing_weights_when_config_expects_mtp(self, tmp_path):
+        from vmlx_engine.server import _model_mtp_status
+
+        (tmp_path / "config.json").write_text(
+            '{"model_type":"deepseek_v4","num_nextn_predict_layers":1}'
+        )
+        (tmp_path / "jang_config.json").write_text(
+            '{"weight_format":"mxtq","drop_mtp":false}'
+        )
+        (tmp_path / "model.safetensors.index.json").write_text(
+            '{"weight_map":{"model.embed.weight":"model-00001-of-00001.safetensors"}}'
+        )
+
+        status = _model_mtp_status(str(tmp_path))
+
+        assert status["runtime_available"] is False
+        assert status["status"] == "metadata_inconsistent"
+        assert any("config expects" in issue for issue in status["issues"])
+
+    def test_mtp_status_flags_indexed_mtp_when_config_disables_runtime(self, tmp_path):
+        from vmlx_engine.server import _model_mtp_status
+
+        (tmp_path / "config.json").write_text(
+            '{"model_type":"deepseek_v4","num_nextn_predict_layers":0}'
+        )
+        (tmp_path / "jang_config.json").write_text(
+            '{"weight_format":"mxtq","drop_mtp":false}'
+        )
+        (tmp_path / "model.safetensors.index.json").write_text(
+            '{"weight_map":{"mtp.0.layers.0.self_attn.q_proj.weight":"model.safetensors"}}'
+        )
+
+        status = _model_mtp_status(str(tmp_path))
+
+        assert status["runtime_available"] is False
+        assert status["status"] == "metadata_inconsistent"
+        assert any("config disables" in issue for issue in status["issues"])
+
+    def test_mtp_status_flags_invalid_config_layer_count(self, tmp_path):
+        from vmlx_engine.server import _model_mtp_status
+
+        (tmp_path / "config.json").write_text(
+            '{"model_type":"deepseek_v4","num_nextn_predict_layers":"one"}'
+        )
+        (tmp_path / "jang_config.json").write_text(
+            '{"weight_format":"mxtq","drop_mtp":false}'
+        )
+
+        status = _model_mtp_status(str(tmp_path))
+
+        assert status["runtime_available"] is False
+        assert status["status"] == "metadata_inconsistent"
+        assert any("invalid" in issue for issue in status["issues"])
+
+    def test_mtp_status_flags_malformed_index_metadata(self, tmp_path):
+        from vmlx_engine.server import _model_mtp_status
+
+        (tmp_path / "config.json").write_text(
+            '{"model_type":"deepseek_v4","num_nextn_predict_layers":0}'
+        )
+        (tmp_path / "jang_config.json").write_text(
+            '{"weight_format":"mxtq","drop_mtp":false}'
+        )
+        (tmp_path / "model.safetensors.index.json").write_text("{")
+
+        status = _model_mtp_status(str(tmp_path))
+
+        assert status["runtime_available"] is False
+        assert status["status"] == "metadata_inconsistent"
+        assert any("model.safetensors.index.json" in issue for issue in status["issues"])
+
+    def test_mtp_status_does_not_claim_runtime_for_weights_only_bundle(self, tmp_path):
+        from vmlx_engine.server import _model_mtp_status
+
+        (tmp_path / "config.json").write_text(
+            '{"model_type":"deepseek_v4","num_nextn_predict_layers":1}'
+        )
+        (tmp_path / "jang_config.json").write_text(
+            '{"weight_format":"mxtq","drop_mtp":false}'
+        )
+        (tmp_path / "model.safetensors.index.json").write_text(
+            '{"weight_map":{"mtp.0.layers.0.self_attn.q_proj.weight":"model.safetensors"}}'
+        )
+
+        status = _model_mtp_status(str(tmp_path))
+
+        assert status["artifact_available"] is True
+        assert status["runtime_available"] is False
+        assert status["status"] == "weights_present_runtime_unwired"
+        assert "not wired" in status["runtime_reason"]
+
+    @pytest.mark.asyncio
+    async def test_health_and_capabilities_surface_mtp_status(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            '{"model_type":"deepseek_v4","num_nextn_predict_layers":0}'
+        )
+        (tmp_path / "jang_config.json").write_text(
+            '{"weight_format":"mxtq","drop_mtp":true}'
+        )
+        (tmp_path / "model.safetensors.index.json").write_text(
+            '{"weight_map":{"model.embed.weight":"model-00001-of-00001.safetensors"}}'
+        )
+
+        class _Engine:
+            is_mllm = False
+
+            def get_stats(self):
+                return {"engine_type": "batched"}
+
+        class _Scheduler:
+            block_aware_cache = None
+            paged_cache_manager = None
+            memory_aware_cache = None
+            prefix_cache = None
+
+            def get_stats(self):
+                return {}
+
+        monkeypatch.setattr(server, "_engine", _Engine())
+        monkeypatch.setattr(server, "_get_scheduler", lambda: _Scheduler())
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "dsv4-test")
+        monkeypatch.setattr(server, "_model_type", "llm")
+        monkeypatch.setattr(server, "_standby_state", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+
+        health = await server.health()
+        capabilities = await server.model_capabilities("dsv4-test")
+
+        assert health["mtp"]["status"] == "dropped"
+        assert health["mtp"]["runtime_available"] is False
+        assert capabilities["mtp"]["status"] == "dropped"
+        assert capabilities["mtp"]["runtime_available"] is False
+
     def test_mlx_metal_na_status_handles_namespace_mlx_package(self, monkeypatch, tmp_path):
         """MLX can be a namespace package with mlx.__file__ == None.
 
