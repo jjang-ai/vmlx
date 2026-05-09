@@ -535,3 +535,66 @@ class TestHeadCountAgreement:
             f"Scheduler ({sched_n_kv}) and prefix cache ({pcache_n_kv}) "
             f"disagree on KV head count"
         )
+
+    def test_vlm_wrapped_mla_three_site_agreement(self):
+        """All three MLA-aware sites must agree on a Kimi-style VLM wrapper.
+
+        Wrapped MLA models exposed via ``language_model.config.text_config``
+        used to drift between three detection sites:
+
+          * ``Scheduler._detect_mla`` (KV-quant gate, fixed in ed8f4d62)
+          * ``MLLMScheduler._detect_n_kv_heads`` (GQA normalize, fixed in 11d6ecaa)
+          * ``BlockAwarePrefixCache._get_n_kv_heads`` (cache slice ground truth)
+
+        Drift between any two would silently mismatch cache shapes on a hit
+        for Kimi K2.6 / glm_moe_dsa style wrappers. This pin asserts all three
+        return ``1`` (compressed-latent H=1) on the same wrapped backbone so a
+        future refactor that touches only one site fails loudly here.
+        """
+        from vmlx_engine.scheduler import Scheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache, PagedCacheManager
+
+        class _TextCfg:
+            model_type = "kimi_k25"
+            kv_lora_rank = 512
+            num_attention_heads = 64
+            num_key_value_heads = 8
+
+        class _Cfg:
+            text_config = _TextCfg()
+
+        class _LM:
+            config = _Cfg()
+
+        class _Wrapper:
+            language_model = _LM()
+
+        sched = Scheduler.__new__(Scheduler)
+        sched.model = _Wrapper()
+        sched_is_mla = sched._detect_mla()
+
+        mllm = MLLMScheduler.__new__(MLLMScheduler)
+        mllm.model = _Wrapper()
+        mllm_n_kv = mllm._detect_n_kv_heads()
+
+        mgr = PagedCacheManager(block_size=64, max_blocks=100)
+        pcache = BlockAwarePrefixCache(model=_LM(), paged_cache_manager=mgr)
+        pcache_n_kv = pcache._get_n_kv_heads()
+
+        assert sched_is_mla is True, (
+            "Scheduler._detect_mla missed wrapped MLA backbone — KV-quant gate "
+            "would not auto-disable for Kimi-style VLM wrappers"
+        )
+        assert mllm_n_kv == 1, (
+            f"MLLMScheduler._detect_n_kv_heads returned {mllm_n_kv}, expected 1 "
+            "(MLA H=1 collapse) — VLM GQA normalizer would mismatch shape on "
+            "cache hit"
+        )
+        assert pcache_n_kv == 1, (
+            f"BlockAwarePrefixCache._get_n_kv_heads returned {pcache_n_kv}, "
+            "expected 1 — cache slice ground truth missed wrapper traversal"
+        )
+        assert mllm_n_kv == pcache_n_kv, (
+            "MLLMScheduler and prefix cache disagree on wrapped-MLA head count"
+        )
