@@ -1724,10 +1724,20 @@ def _apply_jit_compilation():
             # causing Metal OOM on memory-constrained machines (e.g. 122B on 48GB).
             # This is ALSO where a lazy-compile error first surfaces (vmlx#83).
             try:
-                warmup_cache = (
-                    model_obj.make_cache() if hasattr(model_obj, "make_cache") else None
-                )
                 lm = getattr(model_obj, "language_model", model_obj)
+                # VLM wrappers commonly expose cache construction on the
+                # language model, not the top-level multimodal wrapper. The
+                # warmup must use the same cache shape real generation will
+                # pass, otherwise mx.compile can appear healthy at startup
+                # and then fail every request on ArraysCache/MambaCache.
+                cache_owner = (
+                    model_obj
+                    if hasattr(model_obj, "make_cache")
+                    else lm
+                    if hasattr(lm, "make_cache")
+                    else None
+                )
+                warmup_cache = cache_owner.make_cache() if cache_owner is not None else None
                 warmup_input = mx.array([[0]])  # Single dummy token
                 if warmup_cache is not None:
                     lm(warmup_input, cache=warmup_cache)

@@ -255,6 +255,70 @@ class TestJitToggle:
 
         assert vlm_wrapper.language_model.model is original_inner
 
+    def test_jit_vlm_warmup_uses_language_model_cache(self):
+        """VLM JIT warmup must use the real language-model cache shape.
+
+        Qwen3.6 hybrid SSM VLMs expose ``make_cache`` on
+        ``language_model`` and pass an ArraysCache/MambaCache object during
+        prefill. A no-cache warmup lets mx.compile stay installed, but the
+        first real request then fails with "Function arguments must be trees
+        of arrays or constants". The startup warmup must catch that and
+        rollback before serving traffic.
+        """
+        from vmlx_engine import server
+
+        cache_obj = object()
+
+        class InnerTransformer:
+            layers = ["l0"]
+
+            def __call__(self, *args, **kwargs):
+                return args[0]
+
+        class LanguageModel:
+            def __init__(self):
+                self.model = InnerTransformer()
+
+            @property
+            def layers(self):
+                return self.model.layers
+
+            def make_cache(self):
+                return cache_obj
+
+            def __call__(self, *args, **kwargs):
+                return self.model(*args, **kwargs)
+
+        class VlmWrapper:
+            def __init__(self):
+                self.language_model = LanguageModel()
+
+        class BrokenOnCacheCompiled:
+            def __init__(self):
+                self.saw_cache = False
+
+            def __call__(self, *args, **kwargs):
+                if kwargs.get("cache") is cache_obj:
+                    self.saw_cache = True
+                    raise ValueError("received type mlx_lm.models.cache.ArraysCache")
+                return args[0]
+
+        vlm_wrapper = VlmWrapper()
+        original_inner = vlm_wrapper.language_model.model
+        compiled = BrokenOnCacheCompiled()
+
+        mock_engine = MagicMock()
+        mock_engine._model = vlm_wrapper
+        mock_engine.is_mllm = True
+        mock_engine._is_mllm = True
+
+        with patch.object(server, "_engine", mock_engine), \
+             patch.object(mx, "compile", return_value=compiled):
+            server._apply_jit_compilation()
+
+        assert compiled.saw_cache is True
+        assert vlm_wrapper.language_model.model is original_inner
+
     def test_jit_skips_when_model_not_callable(self):
         """When inner model is not callable, should log warning and skip."""
         from vmlx_engine import server
