@@ -4312,7 +4312,9 @@ class Scheduler:
                         else:
                             multiplier = 2.0
                         needed = cache_bytes * multiplier
-                        if needed > avail:
+                        budget_fraction = self._cache_reuse_budget_fraction()
+                        merge_budget = avail * budget_fraction
+                        if needed > merge_budget:
                             (
                                 partial_cache,
                                 partial_tokens_to_process,
@@ -4322,6 +4324,7 @@ class Scheduler:
                                 cache_bytes=cache_bytes,
                                 available_bytes=avail,
                                 multiplier=multiplier,
+                                budget_fraction=budget_fraction,
                             )
                             if partial_cache is not None:
                                 cache_to_use = partial_cache
@@ -4343,9 +4346,11 @@ class Scheduler:
                                     "request_id": request.request_id,
                                     "reason": "insufficient_memory_for_cache_merge",
                                     "needed_mb": round(needed / 1048576, 1),
+                                    "budget_mb": round(merge_budget / 1048576, 1),
                                     "available_mb": round(avail / 1048576, 1),
                                     "cache_mb": round(cache_bytes / 1048576, 1),
                                     "multiplier": multiplier,
+                                    "budget_fraction": budget_fraction,
                                     "kv_cache_bits": kv_bits,
                                     "cached_tokens": cached_tokens,
                                     "remaining_tokens": remaining_tokens,
@@ -4366,6 +4371,7 @@ class Scheduler:
                                 logger.warning(
                                     f"Request {request.request_id}: skipping cache reuse "
                                     f"(need {needed / 1048576:.0f}MB, "
+                                    f"budget {merge_budget / 1048576:.0f}MB, "
                                     f"available {avail / 1048576:.0f}MB, "
                                     f"cached {cached_tokens} tokens)"
                                 )

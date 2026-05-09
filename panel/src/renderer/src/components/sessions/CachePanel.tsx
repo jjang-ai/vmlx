@@ -281,6 +281,7 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
           {schedulerStats.last_cache_reuse_skip && (
             <div className="mt-2 text-xs bg-warning/10 border border-warning/30 text-warning-foreground px-3 py-2 rounded">
               Cache reuse skipped: needed {schedulerStats.last_cache_reuse_skip.needed_mb ?? '?'} MB,
+              budget {schedulerStats.last_cache_reuse_skip.budget_mb ?? schedulerStats.last_cache_reuse_skip.available_mb ?? '?'} MB,
               available {schedulerStats.last_cache_reuse_skip.available_mb ?? '?'} MB,
               cached {(schedulerStats.last_cache_reuse_skip.cached_tokens ?? 0).toLocaleString()} tokens.
             </div>

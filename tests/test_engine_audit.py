@@ -3449,11 +3449,14 @@ class TestTurboQuantKVTelemetry:
 
         assert "insufficient_memory_for_cache_merge" in scheduler_source
         assert "insufficient_memory_for_full_cache_merge" in scheduler_source
+        assert "merge_budget = avail * budget_fraction" in scheduler_source
+        assert '"budget_mb"' in scheduler_source
         assert "Cache Reuse Skips" in cache_panel_source
         assert "Partial Reuse" in cache_panel_source
         assert "last_cache_reuse_skip" in cache_panel_source
         assert "last_cache_reuse_partial" in cache_panel_source
         assert "needed_mb" in cache_panel_source
+        assert "budget_mb" in cache_panel_source
         assert "available_mb" in cache_panel_source
 
     def test_cache_stats_surface_displays_l2_token_totals(self):
