@@ -182,6 +182,59 @@ def test_dsv4_static_audit_accepts_canonical_encoder_metadata(tmp_path):
     )
 
 
+def test_dsv4_static_audit_reports_mtp_drop_contract(tmp_path):
+    (tmp_path / "config.json").write_text(
+        '{"model_type":"deepseek_v4","num_nextn_predict_layers":0}'
+    )
+    (tmp_path / "jang_config.json").write_text(
+        '{"model_family":"deepseek_v4","weight_format":"mxtq","drop_mtp":true}'
+    )
+    (tmp_path / "model.safetensors.index.json").write_text(
+        '{"weight_map":{"model.embed.weight":"model-00001-of-00001.safetensors"}}'
+    )
+    row = ModelRow(
+        id="dsv4_tmp",
+        label="tmp dsv4",
+        path=str(tmp_path),
+        family="deepseek_v4",
+        cache_profile="dsv4_composite",
+    )
+
+    static = static_audit(row)
+
+    assert static["mtp"] == {
+        "config_num_nextn_predict_layers": 0,
+        "jang_drop_mtp": True,
+        "index_has_mtp_tensors": False,
+        "runtime_available": False,
+    }
+    assert "DSV4 MTP metadata inconsistent" not in "\n".join(static["issues"])
+
+
+def test_dsv4_static_audit_rejects_missing_mtp_weights_when_config_expects_them(tmp_path):
+    (tmp_path / "config.json").write_text(
+        '{"model_type":"deepseek_v4","num_nextn_predict_layers":1}'
+    )
+    (tmp_path / "jang_config.json").write_text(
+        '{"model_family":"deepseek_v4","weight_format":"mxtq","drop_mtp":false}'
+    )
+    (tmp_path / "model.safetensors.index.json").write_text(
+        '{"weight_map":{"model.embed.weight":"model-00001-of-00001.safetensors"}}'
+    )
+    row = ModelRow(
+        id="dsv4_tmp",
+        label="tmp dsv4",
+        path=str(tmp_path),
+        family="deepseek_v4",
+        cache_profile="dsv4_composite",
+    )
+
+    static = static_audit(row)
+
+    assert static["mtp"]["runtime_available"] is False
+    assert any("DSV4 MTP metadata inconsistent" in issue for issue in static["issues"])
+
+
 def test_dsv4_capability_contract_uses_native_cache_not_experimental_mode():
     rows = {row.id: row for row in ROWS}
     dsv4 = rows["dsv4_tq"]

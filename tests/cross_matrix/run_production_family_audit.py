@@ -445,6 +445,46 @@ def summarize_safetensors(model_dir: Path, max_files: int = 9999) -> dict[str, A
     return summary
 
 
+def _index_has_tensor_prefix(model_dir: Path, prefix: str) -> bool:
+    index = read_json(model_dir / "model.safetensors.index.json")
+    weight_map = index.get("weight_map") if isinstance(index, dict) else None
+    if not isinstance(weight_map, dict):
+        return False
+    return any(str(key).startswith(prefix) for key in weight_map)
+
+
+def _mtp_status(
+    model_dir: Path,
+    cfg: dict[str, Any],
+    jang: dict[str, Any],
+    safetensors_summary: dict[str, Any],
+) -> dict[str, Any]:
+    raw_layers = cfg.get("num_nextn_predict_layers")
+    try:
+        config_layers = int(raw_layers) if raw_layers is not None else None
+    except (TypeError, ValueError):
+        config_layers = None
+
+    jang_drop_mtp = jang.get("drop_mtp")
+    index_has_mtp = _index_has_tensor_prefix(model_dir, "mtp.")
+    if not index_has_mtp:
+        prefix_counts = safetensors_summary.get("key_prefix_counts")
+        if isinstance(prefix_counts, dict):
+            index_has_mtp = bool(prefix_counts.get("mtp"))
+
+    return {
+        "config_num_nextn_predict_layers": config_layers,
+        "jang_drop_mtp": jang_drop_mtp,
+        "index_has_mtp_tensors": index_has_mtp,
+        "runtime_available": bool(
+            config_layers
+            and config_layers > 0
+            and jang_drop_mtp is not True
+            and index_has_mtp
+        ),
+    }
+
+
 def static_audit(row: ModelRow) -> dict[str, Any]:
     model_dir = resolve_model_dir(row.path)
     cfg = read_json(model_dir / "config.json")
@@ -480,6 +520,7 @@ def static_audit(row: ModelRow) -> dict[str, Any]:
     reasoning = chat.get("reasoning") if isinstance(chat.get("reasoning"), dict) else {}
     sampling = chat.get("sampling_defaults") if isinstance(chat.get("sampling_defaults"), dict) else {}
     safetensors_summary = summarize_safetensors(model_dir)
+    mtp = _mtp_status(model_dir, cfg, jang, safetensors_summary)
 
     eos = {
         "config": cfg.get("eos_token_id"),
@@ -524,6 +565,27 @@ def static_audit(row: ModelRow) -> dict[str, Any]:
                 issues.append("DSV4 missing chat.sampling_defaults.repetition_penalty_thinking")
         if "<｜Assistant｜>" not in str(registry.get("eos_tokens")):
             issues.append("DSV4 bundle EOS config does not list Assistant marker; engine registry must add it")
+        if (
+            mtp["config_num_nextn_predict_layers"]
+            and mtp["config_num_nextn_predict_layers"] > 0
+            and mtp["jang_drop_mtp"] is not True
+            and not mtp["index_has_mtp_tensors"]
+        ):
+            issues.append(
+                "DSV4 MTP metadata inconsistent: config expects "
+                f"{mtp['config_num_nextn_predict_layers']} next-token prediction "
+                "layer(s), but the safetensors index has no mtp.* tensors"
+            )
+        if mtp["jang_drop_mtp"] is True and mtp["config_num_nextn_predict_layers"] not in (None, 0):
+            issues.append(
+                "DSV4 MTP metadata inconsistent: jang_config.drop_mtp=true but "
+                f"config.num_nextn_predict_layers={mtp['config_num_nextn_predict_layers']}"
+            )
+        if mtp["jang_drop_mtp"] is True and mtp["index_has_mtp_tensors"]:
+            issues.append(
+                "DSV4 MTP metadata inconsistent: jang_config.drop_mtp=true but "
+                "bundle still indexes mtp.* tensors"
+            )
         has_canonical_dsv4_encoder = (
             chat.get("encoder") == "encoding_dsv4"
             and bool(chat.get("encoder_fn"))
@@ -563,6 +625,7 @@ def static_audit(row: ModelRow) -> dict[str, Any]:
             "hidden_size": cfg.get("hidden_size"),
             "num_attention_heads": cfg.get("num_attention_heads"),
             "num_key_value_heads": cfg.get("num_key_value_heads"),
+            "num_nextn_predict_layers": cfg.get("num_nextn_predict_layers"),
             "sliding_window": cfg.get("sliding_window"),
             "window_size": cfg.get("window_size"),
             "kv_lora_rank": cfg.get("kv_lora_rank"),
@@ -587,6 +650,7 @@ def static_audit(row: ModelRow) -> dict[str, Any]:
             "runtime": jang.get("runtime"),
         },
         "eos": eos,
+        "mtp": mtp,
         "dsv4_artifact_bit_plan": dsv4_bit_plan if row.family == "deepseek_v4" else None,
         "registry": registry,
         "safetensors": safetensors_summary,
