@@ -3481,10 +3481,15 @@ class TestTurboQuantKVTelemetry:
 
         assert "maxNumSeqs: 64" in session_form_source
         assert "enableJit: true" in session_form_source
+        assert "maxNumSeqs: 64" in sessions_source
         assert 'unlimitedLabel="Default (64)"' in session_form_source
         assert 'unlimitedLabel="Default (1024)"' in session_form_source
         assert 'unlimitedLabel="Default (2048)"' in session_form_source
+        assert '"--max-num-seqs", type=int, default=64' in Path(
+            "./vmlx_engine/cli.py"
+        ).read_text()
         assert "defaults to 5" not in sessions_source
+        assert "default: 256" not in Path("./vmlx_engine/cli.py").read_text()
         assert "total_tokens_on_disk" in cache_panel_source
         assert "health.cache" in Path(
             "./panel/src/renderer/src/components/sessions/PerformancePanel.tsx"

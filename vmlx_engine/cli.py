@@ -1485,10 +1485,10 @@ Examples:
         help="TCP port for the API server (default: 8000). Example: --port 8092",
     )
     serve_parser.add_argument(
-        "--max-num-seqs", type=int, default=256,
+        "--max-num-seqs", type=int, default=64,
         help="Maximum number of requests that can be processed simultaneously. Higher values "
              "use more memory but support more concurrent users. Requires --continuous-batching. "
-             "(default: 256)",
+             "(default: 64)",
     )
     serve_parser.add_argument(
         "--prefill-batch-size", type=int, default=8,

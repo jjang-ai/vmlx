@@ -1175,7 +1175,7 @@ export class SessionManager extends EventEmitter {
           host: '127.0.0.1',
           port: proc.port,
           timeout: 300,
-          maxNumSeqs: 256,
+          maxNumSeqs: 64,
           // Throughput-optimized defaults (1.3.99) — bumped from 512/1024/512
           // to saturate prefill+decode pipeline on M-series with 64+ GB RAM.
           prefillBatchSize: 1024,
