@@ -718,7 +718,7 @@ class TestSchedulerBasic:
         )
 
     def test_cache_reuse_skip_records_partial_reason_and_full_prefill_action(
-        self, mock_model, mock_tokenizer
+        self, mock_model, mock_tokenizer, caplog
     ):
         scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
         request = Request("req-skip", "x", SamplingParams())
@@ -730,6 +730,7 @@ class TestSchedulerBasic:
             "no_block_aligned_ssm_checkpoint"
         )
 
+        caplog.set_level("WARNING", logger="vmlx_engine.scheduler")
         scheduler._record_cache_reuse_skip(
             request=request,
             cache_to_use=["kv-cache"],
@@ -755,6 +756,11 @@ class TestSchedulerBasic:
         assert skip["partial_reuse_unavailable_reason"] == (
             "no_block_aligned_ssm_checkpoint"
         )
+        assert (
+            "cached 512 tokens, contract=hybrid_ssm, "
+            "partial_reason=no_block_aligned_ssm_checkpoint"
+        ) in caplog.text
+        assert "full-prefilling 1000 prompt tokens" in caplog.text
 
     def test_memory_pressure_partially_reuses_hybrid_ssm_with_aligned_checkpoint(
         self, mock_model, mock_tokenizer
