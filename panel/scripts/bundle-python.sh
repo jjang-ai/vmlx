@@ -78,6 +78,12 @@ echo "==> Installing dependencies..."
   "timm>=1.0.20" \
   "einops>=0.8.0"  # Kimi K2.6 tokenizer + Nemotron-Omni RADIO/ViT deps
 
+if [ ! -x "$PYTHON" ]; then
+  echo "ERROR: bundled Python executable disappeared after dependency install: $PYTHON" >&2
+  find "$BUNDLE_DIR/python/bin" -maxdepth 1 \( -name 'python*' -o -name 'pip*' \) -ls >&2 || true
+  exit 1
+fi
+
 # Install mlx-audio for STT/TTS (--no-deps: it pins exact mlx-lm/transformers versions
 # that conflict with ours — we already have all the real deps above)
 echo "==> Installing mlx-audio (STT/TTS)..."
@@ -366,7 +372,7 @@ fi
 # Fix 2: output_dtypes=[input_type, input_type] stores SSM state in bfloat16,
 #         causing precision loss. State must be float32.
 echo "  Patching mlx_lm/models/ssm.py (Mamba state fixes)..."
-python3 -c "
+"$PYTHON" -c "
 import os, glob
 base = '$BUNDLE_DIR/python/lib/python3.*/site-packages/mlx_lm/models/ssm.py'
 paths = glob.glob(base)
