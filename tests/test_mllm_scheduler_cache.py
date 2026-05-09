@@ -727,6 +727,55 @@ class TestCleanupFinishedCacheStore:
         scheduler.disk_cache.store.assert_not_called()
         scheduler.prefix_cache.store_cache.assert_not_called()
 
+    @pytest.mark.parametrize("cache_mode", ["paged", "memory", "legacy"])
+    def test_media_cache_store_skip_still_cleans_finished_request(self, cache_mode):
+        """Media cache-safety skip must not leave a phantom running request."""
+
+        scheduler = MLLMScheduler.__new__(MLLMScheduler)
+        request = SimpleNamespace(
+            num_output_tokens=1,
+            _has_history=False,
+            _extracted_cache=lambda: ["live-cache"],
+            _extracted_tokens=[10, 11, 12, 13, 14],
+            _added_stop_tokens=set(),
+            images=["image-a.png"],
+            videos=None,
+        )
+
+        scheduler.running = {"req-media-cleanup": request}
+        scheduler.block_aware_cache = MagicMock() if cache_mode == "paged" else None
+        if scheduler.block_aware_cache is not None:
+            scheduler.block_aware_cache._request_tables = {}
+        scheduler.memory_aware_cache = MagicMock() if cache_mode == "memory" else None
+        scheduler.prefix_cache = MagicMock() if cache_mode == "legacy" else None
+        scheduler.disk_cache = MagicMock()
+        scheduler._is_hybrid = False
+        scheduler._kv_cache_bits = 0
+        scheduler._truncate_hybrid_cache = MagicMock(return_value=["prompt-cache"])
+        scheduler._validate_cache = MagicMock(return_value=True)
+        scheduler._extract_cache_states = MagicMock(return_value=["state"])
+        scheduler.batch_generator = None
+        scheduler.stop_tokens = set()
+        scheduler.request_id_to_uid = {}
+        scheduler.uid_to_request_id = {}
+        scheduler.paged_cache_manager = MagicMock() if cache_mode == "paged" else None
+        scheduler.requests = {"req-media-cleanup": request}
+        scheduler.finished_req_ids = set()
+        scheduler._cleanup_detokenizer = MagicMock()
+
+        scheduler._cleanup_finished({"req-media-cleanup"})
+
+        if scheduler.block_aware_cache is not None:
+            scheduler.block_aware_cache.store_cache.assert_not_called()
+        if scheduler.memory_aware_cache is not None:
+            scheduler.memory_aware_cache.store.assert_not_called()
+        if scheduler.prefix_cache is not None:
+            scheduler.prefix_cache.store_cache.assert_not_called()
+        scheduler.disk_cache.store.assert_not_called()
+        assert "req-media-cleanup" not in scheduler.running
+        assert "req-media-cleanup" not in scheduler.requests
+        scheduler._cleanup_detokenizer.assert_called_once_with("req-media-cleanup")
+
     def test_short_single_turn_outputs_still_store_prompt_cache(self):
         """The first turn of a future chat can be a one-token answer.
 

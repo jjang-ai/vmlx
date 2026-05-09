@@ -2207,7 +2207,6 @@ class MLLMScheduler:
                                     request_id,
                                 )
                                 request._extracted_cache = None
-                                continue
                             raw = request._extracted_cache
                             cache_blocks = raw() if callable(raw) else raw
                             if cache_blocks is None:
@@ -2257,20 +2256,19 @@ class MLLMScheduler:
                                                 f"quantized live cache for {request_id}"
                                             )
                                             cache_blocks = None
-                                    if cache_blocks is None:
-                                        continue
-                                    cache_states = self._extract_cache_states(cache_blocks)
-                                    if cache_states:
-                                        self.block_aware_cache.store_cache(
-                                            request_id,
-                                            truncated_tokens,
-                                            cache_states,
-                                        )
-                                        logger.info(
-                                            f"VLM Scheduler stored paged Prefix Cache for "
-                                            f"{request_id}: {len(cache_states)} layers, "
-                                            f"truncated to {len(truncated_tokens)} tokens"
-                                        )
+                                    if cache_blocks is not None:
+                                        cache_states = self._extract_cache_states(cache_blocks)
+                                        if cache_states:
+                                            self.block_aware_cache.store_cache(
+                                                request_id,
+                                                truncated_tokens,
+                                                cache_states,
+                                            )
+                                            logger.info(
+                                                f"VLM Scheduler stored paged Prefix Cache for "
+                                                f"{request_id}: {len(cache_states)} layers, "
+                                                f"truncated to {len(truncated_tokens)} tokens"
+                                            )
                     except Exception as e:
                         logger.warning(f"Failed to store VLM paged cache for {request_id}: {e}", exc_info=True)
                     finally:
@@ -2298,7 +2296,7 @@ class MLLMScheduler:
                                 "prefix key",
                                 request_id,
                             )
-                            continue
+                            request._extracted_cache = None
                         raw_cache = request._extracted_cache
                         if callable(raw_cache):
                             raw_cache = raw_cache()
@@ -2330,15 +2328,14 @@ class MLLMScheduler:
                                             f"quantized live cache for {request_id}"
                                         )
                                         cache_to_store = None
-                                if cache_to_store is None:
-                                    continue
-                                stored = self.memory_aware_cache.store(cache_key_tokens, cache_to_store)
-                                if stored:
-                                    logger.info(
-                                        f"VLM stored memory-aware cache for {request_id} "
-                                        f"({len(cache_key_tokens)} cache-key tokens from "
-                                        f"{prompt_len} prompt tokens)"
-                                    )
+                                if cache_to_store is not None:
+                                    stored = self.memory_aware_cache.store(cache_key_tokens, cache_to_store)
+                                    if stored:
+                                        logger.info(
+                                            f"VLM stored memory-aware cache for {request_id} "
+                                            f"({len(cache_key_tokens)} cache-key tokens from "
+                                            f"{prompt_len} prompt tokens)"
+                                        )
                     except Exception as e:
                         logger.warning(f"VLM memory-aware cache store failed for {request_id}: {e}")
                     finally:
@@ -2366,7 +2363,7 @@ class MLLMScheduler:
                                 "prefix key",
                                 request_id,
                             )
-                            continue
+                            request._extracted_cache = None
                         raw_cache = request._extracted_cache
                         if callable(raw_cache):
                             raw_cache = raw_cache()
@@ -2397,14 +2394,13 @@ class MLLMScheduler:
                                             f"quantized live cache for {request_id}"
                                         )
                                         cache_to_store = None
-                                if cache_to_store is None:
-                                    continue
-                                self.prefix_cache.store_cache(cache_key_tokens, cache_to_store)
-                                logger.debug(
-                                    f"VLM stored legacy prefix cache for {request_id} "
-                                    f"({len(cache_key_tokens)} cache-key tokens from "
-                                    f"{prompt_len} prompt tokens)"
-                                )
+                                if cache_to_store is not None:
+                                    self.prefix_cache.store_cache(cache_key_tokens, cache_to_store)
+                                    logger.debug(
+                                        f"VLM stored legacy prefix cache for {request_id} "
+                                        f"({len(cache_key_tokens)} cache-key tokens from "
+                                        f"{prompt_len} prompt tokens)"
+                                    )
                     except Exception as e:
                         logger.debug(f"VLM prefix cache store failed for {request_id}: {e}")
                     finally:
