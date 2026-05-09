@@ -5536,10 +5536,12 @@ class Scheduler:
                         # `clean_cache` from `_prefill_for_prompt_only_cache`
                         # whose Metal buffers don't always release in time.
                         # Three guards added below close most of the gap:
-                        #   1. Skip enqueue for short prompts (< 64 tokens):
-                        #      they're unlikely to ever be re-requested with
-                        #      the exact same prefix, so storing them is pure
-                        #      memory waste.
+                        #   1. Skip enqueue only when the cache key is shorter
+                        #      than SSM_REDERIVE_MIN_TOKENS. That threshold is
+                        #      intentionally 1: short repeated prompts are
+                        #      still valid cache candidates, and an older
+                        #      64-token floor caused avoidable full-prefill
+                        #      repeats on mid-chat turns.
                         #   2. Skip enqueue if we've stored ≥ max_entries
                         #      worth of companions already — the LRU is
                         #      already saturated, the next eviction would
@@ -5551,7 +5553,7 @@ class Scheduler:
                             logger.debug(
                                 "SSM companion: skipping re-derive for "
                                 f"{request_id} (cache_key_len={companion_len} < "
-                                f"{SSM_REDERIVE_MIN_TOKENS} — prefix unlikely to be reused)"
+                                f"{SSM_REDERIVE_MIN_TOKENS})"
                             )
                         elif (
                             self._ssm_state_cache is not None

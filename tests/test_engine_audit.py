@@ -2308,6 +2308,20 @@ class TestHybridSSMCompanionCacheGating:
         generator_block = source[generator_idx : source.index("self._current_sampler_params", generator_idx)]
         assert "enable_prefix_cache=self.config.enable_prefix_cache" in generator_block
 
+    def test_llm_scheduler_hybrid_ssm_rederive_policy_is_not_stale(self):
+        source = Path("./vmlx_engine/scheduler.py").read_text()
+        store_idx = source.index("# Hybrid SSM companion state capture.")
+        store_block = source[store_idx : source.index("# Store cache for future reuse", store_idx)]
+
+        assert "SSM_REDERIVE_MIN_TOKENS = 1" in source
+        assert "< 64" not in store_block
+        assert "SSM_REDERIVE_MIN_TOKENS" in store_block
+        assert "gpl=0 (non-thinking) hybrid SSM path" in store_block
+        assert "DO NOT extract" in store_block
+        assert "post-output SSM layers" in store_block
+        assert "queued deferred" in store_block
+        assert "is_complete=False" in store_block
+
 
 class TestStartupCompatibilityGuards:
     def test_cli_checks_mlx_wheel_macos_tag_before_import(self):

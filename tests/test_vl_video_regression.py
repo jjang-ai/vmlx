@@ -2771,8 +2771,10 @@ class TestAsyncSSMRederiveReasoningHybrid:
     prefix hits → full re-prefill every turn.
 
     Current behavior (async re-derive queue):
-    1. On finalize with `gpl > 0`, scheduler appends (tokens, prompt_len,
-       request_id) to `_ssm_rederive_queue` (capped at 20 entries).
+    1. On finalize, scheduler appends (tokens, prompt_len, request_id) to
+       `_ssm_rederive_queue` for both thinking (`gpl > 0`) and non-thinking
+       hybrid SSM requests when the only available SSM state is post-output.
+       The queue is capped by `SSM_REDERIVE_QUEUE_CAP`.
     2. On the scheduler step, when `not self.running` (idle), the queue's
        head is popped and `_prefill_for_prompt_only_cache(tokens)` runs a
        clean prefill pass on JUST the prompt tokens. The resulting SSM
@@ -7953,21 +7955,21 @@ class TestSpeculativeDecodingContract:
 
 class TestAsyncSsmRederiveQueue:
     """iter 22 — pins the async SSM re-derive queue behavior from
-    scheduler.py. For thinking models (gen_prompt_len>0), post-gen
-    SSM state is contaminated by thinking/output tokens → storing it
-    causes garbled output on T2. The scheduler queues a deferred
-    re-derive (prompt-only prefill) that runs in idle time to
-    capture clean SSM state for the NEXT conversation.
+    scheduler.py. When the LLM cleanup path only has post-gen SSM
+    state, storing it directly can place the companion at the wrong
+    sequence boundary. The scheduler queues a deferred re-derive
+    (prompt-only prefill) that runs in idle time to capture clean SSM
+    state for the NEXT conversation.
 
     Three production invariants to pin:
-      1. Queue has a hard cap (20) so it doesn't grow unbounded
+      1. Queue has a hard cap (SSM_REDERIVE_QUEUE_CAP) so it doesn't grow unbounded
          under sustained load.
       2. FIFO eviction when cap hit (oldest drops first).
       3. One task drains per idle scheduler step (prevents GPU
          stalls that would starve active generation)."""
 
     def test_queue_cap_constant_present(self):
-        """Scheduler source must include the 20-entry cap so
+        """Scheduler source must include the centralized queue cap so
         unbounded growth is impossible. If this value changes, the
         memory behavior of the cache companion path changes with it."""
         from vmlx_engine import scheduler as sched
@@ -8016,21 +8018,30 @@ class TestAsyncSsmRederiveQueue:
             "otherwise drain and active generation contend for GPU"
         )
 
-    def test_deferred_rederive_only_for_thinking_models(self):
-        """gen_prompt_len>0 (thinking model) is the only case where
-        SSM state is contaminated; for non-thinking models we store
-        directly. Pin this branch in the scheduler."""
+    def test_deferred_rederive_covers_post_output_hybrid_ssm_paths(self):
+        """Post-output SSM state is never stored directly by the LLM scheduler.
+
+        Thinking requests (`gpl > 0`) and non-thinking requests (`gpl == 0`)
+        both queue a clean prompt-only rederive when the cleanup path only has
+        post-generation SSM state. Immediate storage is restricted to clean
+        boundary capture paths outside this LLM cleanup branch.
+        """
         from vmlx_engine import scheduler as sched
         import inspect
         src = inspect.getsource(sched)
-        # The gating check
+        store_idx = src.index("# Hybrid SSM companion state capture.")
+        store_block = src[store_idx : src.index("# Store cache for future reuse", store_idx)]
+
         assert "if _gpl > 0:" in src, (
-            "Scheduler must gate deferred re-derive on gen_prompt_len>0"
+            "Scheduler must keep an explicit thinking/gen_prompt_len branch"
         )
-        # Documented reason
+        assert "gpl=0 (non-thinking) hybrid SSM path" in store_block, (
+            "Non-thinking hybrid SSM cleanup must also avoid direct post-output storage"
+        )
+        assert "DO NOT extract" in store_block and "post-output SSM layers" in store_block
+        assert "queued deferred re-derive" in store_block
         assert "contaminated" in src.lower(), (
-            "Comment explaining why direct store is unsafe for thinking "
-            "models must remain (contamination rationale)"
+            "Comment explaining why direct store is unsafe must remain"
         )
 
 
