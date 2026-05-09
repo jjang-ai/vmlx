@@ -1108,9 +1108,139 @@ class TestProcessPromptsCacheFetch:
         run_source = inspect.getsource(MLLMBatchGenerator._run_vision_encoding_inner)
         process_source = inspect.getsource(MLLMBatchGenerator._process_prompts)
 
-        assert "_ssm_block_aligned_boundary" in run_source
+        assert "_ssm_capture_boundaries_for" in run_source
+        assert "_ssm_block_aligned_boundary" in inspect.getsource(
+            MLLMBatchGenerator._ssm_capture_boundaries_for
+        )
         assert "_inline_ssm_checkpoints" in process_source
         assert "for _inline_boundary, _inline_tokens, _inline_layers in" in process_source
+
+    def test_hybrid_ssm_kv_only_miss_marks_checkpoint_for_next_hit(self):
+        """A KV-only hybrid hit should teach the next prefill its missing boundary.
+
+        Long Responses/tool chains often share only a small paged prefix
+        (64/128/320 tokens). If the companion SSM cache only stores near the
+        full prompt boundary, every later KV hit remains unusable and TTFT
+        regresses to full prefill forever.
+        """
+        import inspect
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        run_source = inspect.getsource(MLLMBatchGenerator._run_vision_encoding_inner)
+        process_source = inspect.getsource(MLLMBatchGenerator._process_prompts)
+
+        assert "_mark_required_ssm_checkpoint" in process_source
+        assert "_ssm_capture_boundaries_for" in run_source
+        assert "_ssm_required_checkpoint_tokens" in inspect.getsource(
+            MLLMBatchGenerator._ssm_capture_boundaries_for
+        )
+
+    def test_hybrid_ssm_required_checkpoint_boundary_is_captured(self):
+        from types import SimpleNamespace
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+        generator._is_hybrid = True
+        generator.block_aware_cache = SimpleNamespace(block_size=64)
+        request = SimpleNamespace(_ssm_required_checkpoint_tokens=128)
+
+        boundaries = generator._ssm_capture_boundaries_for(
+            request,
+            seq_len=400,
+            has_images=False,
+            clean_boundary=300,
+        )
+
+        assert boundaries == [128, 256, 300]
+
+    def test_hybrid_ssm_required_checkpoint_boundary_converts_from_absolute_prefix(self):
+        from types import SimpleNamespace
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+        generator._is_hybrid = True
+        generator.block_aware_cache = SimpleNamespace(block_size=64)
+        request = SimpleNamespace(
+            _cached_tokens=64,
+            _ssm_required_checkpoint_tokens=320,
+        )
+
+        boundaries = generator._ssm_capture_boundaries_for(
+            request,
+            seq_len=400,
+            has_images=False,
+            clean_boundary=300,
+        )
+
+        assert boundaries == [256, 300]
+
+    def test_hybrid_ssm_required_checkpoint_ignored_for_media_or_invalid_hits(self):
+        from types import SimpleNamespace
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+        generator._is_hybrid = True
+        generator.block_aware_cache = SimpleNamespace(block_size=64)
+        request = SimpleNamespace(_ssm_required_checkpoint_tokens=400)
+
+        assert generator._ssm_capture_boundaries_for(
+            request,
+            seq_len=400,
+            has_images=False,
+            clean_boundary=300,
+        ) == [256, 300]
+        assert generator._ssm_capture_boundaries_for(
+            request,
+            seq_len=400,
+            has_images=True,
+            clean_boundary=300,
+        ) == []
+
+    def test_hybrid_ssm_required_checkpoint_respects_inline_capture_killswitch(self, monkeypatch):
+        from types import SimpleNamespace
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+        generator._is_hybrid = True
+        generator.block_aware_cache = SimpleNamespace(block_size=64)
+        request = SimpleNamespace(_ssm_required_checkpoint_tokens=128)
+
+        monkeypatch.setenv("VMLINUX_DISABLE_SSM_INLINE_CAPTURE", "1")
+
+        assert generator._ssm_capture_boundaries_for(
+            request,
+            seq_len=400,
+            has_images=False,
+            clean_boundary=300,
+        ) == []
+
+    def test_mark_required_ssm_checkpoint_records_absolute_boundary(self):
+        from types import SimpleNamespace
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+        request = SimpleNamespace(_cached_tokens=256)
+
+        generator._mark_required_ssm_checkpoint(request, 128)
+
+        assert request._ssm_required_checkpoint_tokens == 128
+        assert request._cached_tokens == 0
+
+    def test_mark_required_ssm_checkpoint_can_preserve_partial_resume(self):
+        from types import SimpleNamespace
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+        request = SimpleNamespace(_cached_tokens=64)
+
+        generator._mark_required_ssm_checkpoint(
+            request,
+            320,
+            reset_cached_tokens=False,
+        )
+
+        assert request._ssm_required_checkpoint_tokens == 320
+        assert request._cached_tokens == 64
 
     def test_hybrid_ssm_inline_capture_materializes_snapshot_before_phase_b(self):
         """Inline SSM checkpoints must not stay as lazy views of live cache.

@@ -1877,6 +1877,27 @@ class MLLMBatchGenerator:
             )
             return False
 
+    def _mark_required_ssm_checkpoint(
+        self,
+        request: "MLLMBatchRequest",
+        cached_tokens: int,
+        *,
+        reset_cached_tokens: bool = True,
+    ) -> None:
+        """Remember the KV-only hit boundary that needs a matching SSM state."""
+        try:
+            n = int(cached_tokens or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if n <= 0:
+            return
+        request._ssm_required_checkpoint_tokens = n  # type: ignore[attr-defined]
+        if reset_cached_tokens:
+            # The KV hit was unusable without SSM, so the following prefill
+            # starts from token 0. Keep inline checkpoint keys absolute over
+            # all_tokens.
+            request._cached_tokens = 0  # type: ignore[attr-defined]
+
     def _clean_ssm_boundary_for(
         self, request: "MLLMBatchRequest", seq_len: int, has_images: bool
     ) -> int:
@@ -1913,6 +1934,45 @@ class MLLMBatchGenerator:
         if boundary <= 0:
             return 0
         return boundary
+
+    def _ssm_capture_boundaries_for(
+        self,
+        request: "MLLMBatchRequest",
+        seq_len: int,
+        has_images: bool,
+        clean_boundary: int,
+    ) -> List[int]:
+        """Return clean SSM checkpoint boundaries to capture during prefill."""
+        if has_images or not self._is_hybrid:
+            return []
+        if os.environ.get("VMLINUX_DISABLE_SSM_INLINE_CAPTURE") in (
+            "1", "true", "True", "yes", "on"
+        ):
+            return []
+
+        boundaries: List[int] = []
+        try:
+            base_len = int(getattr(request, "_cached_tokens", 0) or 0)
+        except (TypeError, ValueError):
+            base_len = 0
+        try:
+            required = int(
+                getattr(request, "_ssm_required_checkpoint_tokens", 0) or 0
+            )
+        except (TypeError, ValueError):
+            required = 0
+        required_local = required - base_len
+        if 0 < required_local < seq_len:
+            boundaries.append(required_local)
+
+        if clean_boundary > 0:
+            block_boundary = self._ssm_block_aligned_boundary(clean_boundary)
+            if 0 < block_boundary < seq_len:
+                boundaries.append(block_boundary)
+            if clean_boundary < seq_len:
+                boundaries.append(clean_boundary)
+
+        return sorted(set(boundaries))
 
     def _ssm_block_aligned_boundary(self, boundary: int) -> int:
         """Return the largest positive paged-cache block boundary below boundary.
@@ -2148,7 +2208,10 @@ class MLLMBatchGenerator:
                     boundary = self._clean_ssm_boundary_for(
                         request, seq_len, has_images
                     )
-                    if boundary > 0:
+                    ssm_boundaries = self._ssm_capture_boundaries_for(
+                        request, seq_len, has_images, boundary
+                    )
+                    if ssm_boundaries:
                         # Use pre-materialized Python list to avoid an
                         # mx.array → list eval cycle that can pin the
                         # current op group to a non-default stream.
@@ -2156,29 +2219,20 @@ class MLLMBatchGenerator:
                             getattr(request, "_original_token_ids", None)
                             or input_ids[0].tolist()
                         )
-                        _ssm_block_aligned_boundary = (
-                            self._ssm_block_aligned_boundary(boundary)
-                        )
-                        if _ssm_block_aligned_boundary > 0:
-                            lm(
-                                input_ids[:, :_ssm_block_aligned_boundary],
-                                **_lm_kwargs_for(0, _ssm_block_aligned_boundary),
-                            )
+                        processed = 0
+                        for capture_boundary in ssm_boundaries:
+                            if capture_boundary > processed:
+                                lm(
+                                    input_ids[:, processed:capture_boundary],
+                                    **_lm_kwargs_for(processed, capture_boundary),
+                                )
+                                processed = capture_boundary
                             self._maybe_capture_clean_ssm_boundary(
-                                request, cache, all_tokens, _ssm_block_aligned_boundary
+                                request, cache, all_tokens, capture_boundary
                             )
-                            lm(
-                                input_ids[:, _ssm_block_aligned_boundary:boundary],
-                                **_lm_kwargs_for(_ssm_block_aligned_boundary, boundary),
-                            )
-                        else:
-                            lm(input_ids[:, :boundary], **_lm_kwargs_for(0, boundary))
-                        self._maybe_capture_clean_ssm_boundary(
-                            request, cache, all_tokens, boundary
-                        )
                         output = lm(
-                            input_ids[:, boundary:],
-                            **_lm_kwargs_for(boundary, seq_len),
+                            input_ids[:, processed:],
+                            **_lm_kwargs_for(processed, seq_len),
                         )
                     else:
                         output = lm(input_ids, **_lm_kwargs_for(0, seq_len))
@@ -2215,14 +2269,9 @@ class MLLMBatchGenerator:
                 ssm_boundary = self._clean_ssm_boundary_for(
                     request, seq_len, has_images
                 )
-                _ssm_block_aligned_boundary = (
-                    self._ssm_block_aligned_boundary(ssm_boundary)
+                ssm_boundaries = self._ssm_capture_boundaries_for(
+                    request, seq_len, has_images, ssm_boundary
                 )
-                ssm_boundaries = [
-                    b
-                    for b in (_ssm_block_aligned_boundary, ssm_boundary)
-                    if b > 0
-                ]
                 ssm_captured_boundaries: set[int] = set()
                 while processed < seq_len - 1:  # -1: keep last token for final logits
                     chunk_size = min(self.prefill_step_size, seq_len - 1 - processed)
@@ -2330,32 +2379,26 @@ class MLLMBatchGenerator:
                     self._clean_ssm_boundary_for(request, seq_len, has_images)
                     if cache is not None else 0
                 )
-                if boundary > 0:
+                ssm_boundaries = self._ssm_capture_boundaries_for(
+                    request, seq_len, has_images, boundary
+                ) if cache is not None else []
+                if ssm_boundaries:
                     all_tokens = (
                         getattr(request, "_original_token_ids", None)
                         or input_ids[0].tolist()
                     )
-                    _ssm_block_aligned_boundary = (
-                        self._ssm_block_aligned_boundary(boundary)
-                    )
-                    if _ssm_block_aligned_boundary > 0:
-                        lm(
-                            input_ids[:, :_ssm_block_aligned_boundary],
-                            **_lm_kwargs_for(0, _ssm_block_aligned_boundary),
-                        )
+                    processed = 0
+                    for capture_boundary in ssm_boundaries:
+                        if capture_boundary > processed:
+                            lm(
+                                input_ids[:, processed:capture_boundary],
+                                **_lm_kwargs_for(processed, capture_boundary),
+                            )
+                            processed = capture_boundary
                         self._maybe_capture_clean_ssm_boundary(
-                            request, cache, all_tokens, _ssm_block_aligned_boundary
+                            request, cache, all_tokens, capture_boundary
                         )
-                        lm(
-                            input_ids[:, _ssm_block_aligned_boundary:boundary],
-                            **_lm_kwargs_for(_ssm_block_aligned_boundary, boundary),
-                        )
-                    else:
-                        lm(input_ids[:, :boundary], **_lm_kwargs_for(0, boundary))
-                    self._maybe_capture_clean_ssm_boundary(
-                        request, cache, all_tokens, boundary
-                    )
-                    output = lm(input_ids[:, boundary:], **_lm_kwargs_for(boundary, seq_len))
+                    output = lm(input_ids[:, processed:], **_lm_kwargs_for(processed, seq_len))
                 else:
                     output = lm(input_ids, **_lm_kwargs_for(0, seq_len))
                 request.vision_encoded = True
@@ -2602,10 +2645,17 @@ class MLLMBatchGenerator:
                                                     f"checkpoint at {_ck_len} has is_complete=False "
                                                     f"(gpl-contaminated) — full prefill"
                                                 )
+                                                self._mark_required_ssm_checkpoint(
+                                                    req,
+                                                    int(getattr(block_table, "num_tokens", 0) or 0),
+                                                )
                                                 self.block_aware_cache.release_cache(req.request_id)
                                                 continue
                                             # Trim the block_table down to block-aligned
                                             # <= _ck_len so KV + SSM stay aligned.
+                                            _requested_kv_tokens = int(
+                                                getattr(block_table, "num_tokens", 0) or 0
+                                            )
                                             trimmed = self.block_aware_cache.trim_block_table(
                                                 req.request_id, _ck_len
                                             )
@@ -2620,6 +2670,12 @@ class MLLMBatchGenerator:
                                                     f"SSM state reused from checkpoint. "
                                                     f"Prefill tail: {len(remaining)} tokens"
                                                 )
+                                                if _requested_kv_tokens > trimmed.num_tokens:
+                                                    self._mark_required_ssm_checkpoint(
+                                                        req,
+                                                        _requested_kv_tokens,
+                                                        reset_cached_tokens=False,
+                                                    )
                                                 # Fall through to reconstruct with the trimmed
                                                 # block_table + ssm_states.
                                             else:
@@ -2650,6 +2706,10 @@ class MLLMBatchGenerator:
                                                     f"vmlx#91 RESUME skipped for {req.request_id}: "
                                                     f"checkpoint at {_ck_len} below one block — "
                                                     f"full prefill required"
+                                                )
+                                                self._mark_required_ssm_checkpoint(
+                                                    req,
+                                                    int(getattr(block_table, "num_tokens", 0) or 0),
                                                 )
                                                 self.block_aware_cache.release_cache(req.request_id)
                                                 continue
@@ -2698,6 +2758,10 @@ class MLLMBatchGenerator:
                                                 )
                                             # Release the block refs that fetch_cache incremented
                                             # to prevent ref_count leak → OOM on subsequent requests.
+                                            self._mark_required_ssm_checkpoint(
+                                                req,
+                                                int(getattr(block_table, "num_tokens", 0) or 0),
+                                            )
                                             self.block_aware_cache.release_cache(req.request_id)
                                             continue  # Skip reconstruction
 

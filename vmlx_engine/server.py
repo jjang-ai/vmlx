@@ -3930,7 +3930,40 @@ def _ssm_companion_snapshot(scheduler: Any) -> dict[str, Any] | None:
         if batch_generator is not None:
             ssm_cache = getattr(batch_generator, "_ssm_state_cache", None)
     if ssm_cache is None:
-        return None
+        # MLLM creates HybridSSMStateCache lazily with the batch generator, but
+        # its scheduler owns the L2 disk store at startup. Surface that
+        # configured L2 tier before the first request so /health and
+        # /v1/cache/stats don't falsely imply SSM persistence is absent.
+        disk = getattr(scheduler, "_ssm_companion_disk_store", None)
+        if disk is None:
+            return None
+        cfg = getattr(scheduler, "config", None)
+        max_entries = int(getattr(cfg, "ssm_state_cache_size", 0) or 0)
+        max_mb = getattr(cfg, "ssm_state_cache_max_mb", None)
+        snapshot: dict[str, Any] = {
+            "entries": 0,
+            "max_entries": max_entries,
+            "nbytes": 0,
+            "nbytes_mb": 0.0,
+            "max_bytes": (
+                int(max_mb) * 1024 * 1024
+                if max_mb is not None
+                else None
+            ),
+            "max_bytes_mb": (
+                round(float(max_mb), 2)
+                if max_mb is not None
+                else None
+            ),
+            "disk_enabled": True,
+            "disk_directory": str(getattr(disk, "directory", None) or ""),
+        }
+        if hasattr(disk, "stats"):
+            try:
+                snapshot["disk"] = disk.stats()
+            except Exception as exc:
+                snapshot["disk"] = {"enabled": True, "error": str(exc)}
+        return snapshot
 
     entries = getattr(ssm_cache, "size", None)
     if entries is None:

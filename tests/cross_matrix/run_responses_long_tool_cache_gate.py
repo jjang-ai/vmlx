@@ -237,6 +237,23 @@ def _extract_warnings(resp: dict[str, Any]) -> list[str]:
     return warnings
 
 
+def _tool_positive_int(value: Any, default: int, maximum: int = 200) -> int:
+    """Parse tool integer args without letting malformed calls abort the gate."""
+    try:
+        if isinstance(value, str):
+            match = re.search(r"-?\d+", value)
+            if match is None:
+                return default
+            parsed = int(match.group(0))
+        else:
+            parsed = int(value)
+    except Exception:
+        return default
+    if parsed <= 0:
+        return default
+    return min(parsed, maximum)
+
+
 def _tool_output(repo_root: Path, call: dict[str, Any]) -> dict[str, Any]:
     repo_root = repo_root.resolve()
     name = str(call.get("name") or "")
@@ -248,7 +265,7 @@ def _tool_output(repo_root: Path, call: dict[str, Any]) -> dict[str, Any]:
     if name == "inspect_symbol":
         rel = str(args.get("path") or "vmlx_engine/server.py")
         symbol = str(args.get("symbol") or "_resolve_enable_thinking")
-        context = int(args.get("context_lines") or 30)
+        context = _tool_positive_int(args.get("context_lines"), 30)
         target = (repo_root / rel).resolve()
         try:
             target.relative_to(repo_root)
@@ -301,7 +318,7 @@ def _tool_output(repo_root: Path, call: dict[str, Any]) -> dict[str, Any]:
     elif name == "grep_repo":
         pattern = str(args.get("pattern") or "cache")
         rel = str(args.get("path") or ".")
-        max_matches = int(args.get("max_matches") or 20)
+        max_matches = _tool_positive_int(args.get("max_matches"), 20)
         regex = re.compile(pattern)
         output_lines: list[str] = []
         for path in (repo_root / rel).rglob("*"):
@@ -392,6 +409,10 @@ def _tool_markup_leak(text: str) -> bool:
         "</invoke>",
         "<｜DSML｜invoke",
         "</｜DSML｜invoke",
+        "<tool_call",
+        "</tool_call>",
+        "<function=",
+        "</function>",
     )
     return any(needle in text for needle in needles)
 

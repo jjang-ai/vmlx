@@ -3990,6 +3990,40 @@ class TestTurboQuantKVTelemetry:
         assert cache["totals"]["l2_tokens_on_disk_store_sum"] == 768
         assert "may_overlap" in cache["totals"]["l2_tokens_on_disk_note"]
 
+    def test_cache_snapshot_reports_mllm_ssm_l2_before_lazy_generator(self):
+        import vmlx_engine.server as server
+
+        class _SSMDisk:
+            directory = "/tmp/vmlx-test/block-cache/ssm_companion"
+
+            def stats(self):
+                return {
+                    "entries": 3,
+                    "total_tokens_on_disk": 192,
+                    "total_cached_tokens": 192,
+                    "hits": 5,
+                    "misses": 1,
+                }
+
+        scheduler = SimpleNamespace(
+            batch_generator=None,
+            _ssm_companion_disk_store=_SSMDisk(),
+            config=SimpleNamespace(
+                ssm_state_cache_size=8,
+                ssm_state_cache_max_mb=512,
+            ),
+        )
+
+        cache = server._cache_telemetry_snapshot(scheduler)
+
+        assert cache["ssm_companion"]["entries"] == 0
+        assert cache["ssm_companion"]["max_entries"] == 8
+        assert cache["ssm_companion"]["disk_enabled"] is True
+        assert cache["ssm_companion"]["disk_directory"].endswith("ssm_companion")
+        assert cache["ssm_companion"]["disk"]["total_tokens_on_disk"] == 192
+        assert cache["totals"]["l2_ssm_tokens_on_disk"] == 192
+        assert cache["totals"]["l2_tokens_on_disk"] == 192
+
     def test_cache_stats_surfaces_cache_reuse_skip_telemetry(self):
         scheduler_source = Path("./vmlx_engine/scheduler.py").read_text()
         server_source = Path("./vmlx_engine/server.py").read_text()
@@ -4405,6 +4439,7 @@ class TestTurboQuantKVTelemetry:
         assert tool_markup_leak("plain visible answer") is False
         assert tool_markup_leak("<minimax:tool_call><invoke name=\"grep_repo\">") is True
         assert tool_markup_leak("<｜DSML｜invoke name=\"grep_repo\">") is True
+        assert tool_markup_leak("<tool_call>\n<function=grep_repo>") is True
 
     def test_responses_long_context_tool_cache_gate_can_require_tool_evidence(self):
         import runpy
@@ -4455,6 +4490,42 @@ class TestTurboQuantKVTelemetry:
         assert result["grounded"] is False
         assert result["markers"] == []
         assert result["reason"] == "no_file_line_tool_evidence"
+
+    def test_responses_long_context_tool_cache_gate_tolerates_malformed_tool_ints(self):
+        import json
+        import runpy
+        from pathlib import Path
+
+        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
+        tool_output = gate["_tool_output"]
+
+        result = tool_output(
+            Path("."),
+            {
+                "name": "grep_repo",
+                "call_id": "call_bad_int",
+                "arguments": json.dumps(
+                    {
+                        "pattern": "_prefix_cache",
+                        "path": "vmlx_engine",
+                        "max_matches": "5\n</parameter>",
+                    }
+                ),
+            },
+        )
+
+        assert result["type"] == "function_call_output"
+        assert result["call_id"] == "call_bad_int"
+        assert isinstance(result["output"], str)
+
+    def test_responses_long_context_tool_cache_gate_bounds_tool_ints(self):
+        import runpy
+
+        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
+        tool_positive_int = gate["_tool_positive_int"]
+
+        assert tool_positive_int("999999999", 20) == 200
+        assert tool_positive_int("-1", 20) == 20
 
     def test_responses_long_context_tool_cache_gate_resolution_tools_mode(self):
         import runpy
