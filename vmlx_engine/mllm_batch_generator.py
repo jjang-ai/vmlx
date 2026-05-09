@@ -325,6 +325,43 @@ def _call_processor_direct(
         kwargs = {k: v for k, v in kwargs.items() if k in params}
     return _as_input_mapping(processor(**kwargs))
 
+def _should_use_safe_processor_path(
+    processor: Any,
+    *,
+    has_image_literal: bool,
+    has_images: bool,
+) -> bool:
+    """Decide whether to bypass mlx_vlm.prepare_inputs / process_inputs.
+
+    Three failure modes flow into the safe path (``_call_processor_direct``):
+
+    1. Images present but no ``<image>`` literal in the prompt — prepare_inputs'
+       BaseImageProcessor branch hardcodes ``split("<image>")`` and silently
+       drops the image (Gemma 4 ``<|image|>``, Qwen3.5/3.6 native tokens).
+    2. Processor exposes a ``.process`` attribute that is not callable —
+       ``mlx_vlm.utils.process_inputs`` runs ``inspect.signature(.process)``
+       which raises ``TypeError: <TokenizerWrapper ...> is not a callable
+       object`` (vmlx#145).
+    3. Processor lacks ``.process`` entirely AND is not itself callable —
+       ``getattr(processor, "process", processor)`` then ``inspect.signature``
+       on a TokenizerWrapper raises the same ``not a callable object`` error.
+       This is the Case D edge that the original guard missed; some JANGTQ4
+       VLM bundles expose only the tokenizer wrapper as the processor.
+
+    Returns ``True`` when the safe path should be used. Pure helper for
+    testing — no side effects.
+    """
+    if not has_images:
+        return False
+    if not has_image_literal:
+        return True
+    process_attr = getattr(processor, "process", None)
+    if process_attr is None:
+        # Falls through to processor itself in mlx_vlm; safe iff callable.
+        return not callable(processor)
+    return not callable(process_attr)
+
+
 # TurboQuantKVCache class name for isinstance-free detection.
 # TQ is a drop-in replacement for KVCache (positional, sliceable, has .state/.keys/.values)
 # but does NOT inherit from KVCache. This constant enables KV-like detection without
@@ -1645,8 +1682,11 @@ class MLLMBatchGenerator:
         # get their images processed through that path. When the prompt has images but
         # no "<image>" literal, bypass prepare_inputs and call process_inputs directly
         # which invokes the processor's native __call__ (handles any image token format).
-        _process_attr = getattr(self.processor, "process", None)
-        if all_images and ("<image>" not in request.prompt or (hasattr(self.processor, "process") and not callable(_process_attr))):
+        if _should_use_safe_processor_path(
+            self.processor,
+            has_image_literal="<image>" in request.prompt,
+            has_images=bool(all_images),
+        ):
             inputs = _call_processor_direct(
                 self.processor,
                 prompts=request.prompt,
