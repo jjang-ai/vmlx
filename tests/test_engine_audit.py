@@ -3435,6 +3435,9 @@ class TestTurboQuantKVTelemetry:
         cache_panel_source = Path(
             "./panel/src/renderer/src/components/sessions/CachePanel.tsx"
         ).read_text()
+        performance_panel_source = Path(
+            "./panel/src/renderer/src/components/sessions/PerformancePanel.tsx"
+        ).read_text()
 
         for marker in (
             "cache_reuse_skips",
@@ -3458,6 +3461,9 @@ class TestTurboQuantKVTelemetry:
         assert "needed_mb" in cache_panel_source
         assert "budget_mb" in cache_panel_source
         assert "available_mb" in cache_panel_source
+        assert "Partial Reuse" in performance_panel_source
+        assert "last_cache_reuse_partial" in performance_panel_source
+        assert "budget_mb" in performance_panel_source
 
     def test_cache_stats_surface_displays_l2_token_totals(self):
         cache_panel_source = Path(
@@ -3494,6 +3500,28 @@ class TestTurboQuantKVTelemetry:
         assert "health.cache" in Path(
             "./panel/src/renderer/src/components/sessions/PerformancePanel.tsx"
         ).read_text()
+
+    def test_session_command_preview_mirrors_runtime_default_flags(self):
+        sessions_source = Path("./panel/src/main/sessions.ts").read_text()
+        preview_source = Path(
+            "./panel/src/renderer/src/components/sessions/SessionSettings.tsx"
+        ).read_text()
+
+        for flag in (
+            "--smelt",
+            "--flash-moe",
+            "--distributed",
+            "--default-repetition-penalty",
+            "--default-enable-thinking",
+            "--enable-jit",
+            "--omni-backend",
+            "--log-level",
+            "--allowed-origins",
+        ):
+            assert flag in sessions_source
+            assert flag in preview_source
+        assert "staleImageFlags" in sessions_source
+        assert "staleImageFlags" in preview_source
 
     def test_native_cache_status_reports_dsv4_separately_from_tq_kv(self, monkeypatch):
         from types import SimpleNamespace

@@ -25,8 +25,24 @@ interface HealthData {
     last_cache_reuse_skip?: {
       reason?: string
       needed_mb?: number
+      budget_mb?: number
       available_mb?: number
+      cache_mb?: number
+      budget_fraction?: number
       cached_tokens?: number
+    } | null
+    cache_reuse_partial_downgrades?: number
+    cache_reuse_partial_tokens?: number
+    last_cache_reuse_partial?: {
+      reason?: string
+      original_needed_mb?: number
+      available_mb?: number
+      budget_fraction?: number
+      original_cached_tokens?: number
+      used_cached_tokens?: number
+      dropped_cached_tokens?: number
+      tail_tokens?: number
+      cache_contract?: string
     } | null
   }
   cache?: {
@@ -274,10 +290,29 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
                 value={(health.scheduler.cache_reuse_skip_tokens || 0).toLocaleString()}
               />
             )}
+            {health.scheduler.cache_reuse_partial_downgrades != null && (
+              <InfoCard
+                label="Partial Reuse"
+                value={String(health.scheduler.cache_reuse_partial_downgrades || 0)}
+              />
+            )}
+            {health.scheduler.cache_reuse_partial_tokens != null && health.scheduler.cache_reuse_partial_tokens > 0 && (
+              <InfoCard
+                label="Partial Hit Tokens"
+                value={(health.scheduler.cache_reuse_partial_tokens || 0).toLocaleString()}
+              />
+            )}
           </div>
+          {health.scheduler.last_cache_reuse_partial && (
+            <div className="mt-2 text-xs bg-accent/10 border border-accent/30 text-foreground px-3 py-2 rounded">
+              Cache reuse was memory-fit: used {(health.scheduler.last_cache_reuse_partial.used_cached_tokens ?? 0).toLocaleString()} of {(health.scheduler.last_cache_reuse_partial.original_cached_tokens ?? 0).toLocaleString()} cached tokens,
+              prefilling {(health.scheduler.last_cache_reuse_partial.tail_tokens ?? 0).toLocaleString()} tail tokens.
+            </div>
+          )}
           {health.scheduler.last_cache_reuse_skip && (
             <div className="mt-2 text-xs bg-warning/10 border border-warning/30 text-warning px-3 py-2 rounded">
               Cache reuse skipped: needed {health.scheduler.last_cache_reuse_skip.needed_mb ?? '?'} MB,
+              budget {health.scheduler.last_cache_reuse_skip.budget_mb ?? health.scheduler.last_cache_reuse_skip.available_mb ?? '?'} MB,
               available {health.scheduler.last_cache_reuse_skip.available_mb ?? '?'} MB,
               cached {(health.scheduler.last_cache_reuse_skip.cached_tokens ?? 0).toLocaleString()} tokens.
             </div>

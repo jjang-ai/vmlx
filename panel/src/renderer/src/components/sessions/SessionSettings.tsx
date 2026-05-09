@@ -32,8 +32,12 @@ function buildCommandPreview(
   detected?: { toolParser?: string; reasoningParser?: string; isMultimodal?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; cacheType?: string; family?: string } | null
 ): string {
   const parts = ['vmlx-engine serve', modelPath]
-  // Manual config takes priority over auto-detect for VLM mode
-  const isVLM = config.isMultimodal ?? !!detected?.isMultimodal
+  const smeltActive = !!(config as any).smelt
+  const isVLM = smeltActive ? false
+    : detected?.isMultimodal ? true
+      : config.isMultimodal === true ? true
+        : config.isMultimodal === false ? false
+          : false
 
   // Server settings
   parts.push('--host', config.host)
@@ -138,6 +142,41 @@ function buildCommandPreview(
 
   if (config.mcpConfig) parts.push('--mcp-config', config.mcpConfig)
 
+  // Smelt mode (partial expert loading)
+  if ((config as any).smelt) {
+    parts.push('--smelt')
+    const pct = (config as any).smeltExperts ?? 50
+    if (pct !== 50) {
+      parts.push('--smelt-experts', pct.toString())
+    }
+  }
+
+  // Flash MoE (SSD expert streaming)
+  if ((config as any).flashMoe) {
+    parts.push('--flash-moe')
+    const slotBank = (config as any).flashMoeSlotBank
+    if (typeof slotBank === 'number' && slotBank > 0) {
+      parts.push('--flash-moe-slot-bank', slotBank.toString())
+    }
+    const prefetch = (config as any).flashMoePrefetch
+    if (prefetch && prefetch !== 'none') {
+      parts.push('--flash-moe-prefetch', prefetch)
+    }
+    const ioSplit = (config as any).flashMoeIoSplit
+    if (typeof ioSplit === 'number' && ioSplit > 0) {
+      parts.push('--flash-moe-io-split', ioSplit.toString())
+    }
+  }
+
+  // Distributed compute
+  if ((config as any).distributedEnabled) {
+    parts.push('--distributed')
+    const mode = (config as any).distributedMode || 'pipeline'
+    if (mode !== 'pipeline') {
+      parts.push('--distributed-mode', mode)
+    }
+  }
+
   // Served model name
   if (config.servedModelName) parts.push('--served-model-name', config.servedModelName)
 
@@ -159,11 +198,42 @@ function buildCommandPreview(
   if (config.defaultTopP && config.defaultTopP > 0) {
     parts.push('--default-top-p', (config.defaultTopP / 100).toFixed(2))
   }
+  if ((config as any).defaultRepetitionPenalty != null && (config as any).defaultRepetitionPenalty > 0) {
+    parts.push('--default-repetition-penalty', ((config as any).defaultRepetitionPenalty / 100).toFixed(2))
+  }
 
   // Embedding model
   if (config.embeddingModel) parts.push('--embedding-model', config.embeddingModel)
 
-  if (config.additionalArgs && config.additionalArgs.trim()) parts.push(config.additionalArgs.trim())
+  if (config.defaultEnableThinking === true) parts.push('--default-enable-thinking', 'true')
+  else if (config.defaultEnableThinking === false) parts.push('--default-enable-thinking', 'false')
+
+  if (config.enableJit) parts.push('--enable-jit')
+
+  if ((config as any).omniBackend && (config as any).omniBackend !== 'stage1') {
+    parts.push('--omni-backend', (config as any).omniBackend)
+  }
+
+  if (config.logLevel && config.logLevel !== 'INFO') {
+    parts.push('--log-level', config.logLevel)
+  }
+  if (config.corsOrigins && config.corsOrigins !== '*') {
+    parts.push('--allowed-origins', config.corsOrigins)
+  }
+
+  if (config.additionalArgs && config.additionalArgs.trim()) {
+    const staleImageFlags = new Set(['--mflux-class', '--image-mode', '--image-quantize'])
+    const extra = config.additionalArgs.trim().split(/\s+/).filter(Boolean)
+    const filtered: string[] = []
+    for (let i = 0; i < extra.length; i++) {
+      if (staleImageFlags.has(extra[i])) {
+        i++
+      } else {
+        filtered.push(extra[i])
+      }
+    }
+    if (filtered.length) parts.push(filtered.join(' '))
+  }
 
   return parts.join(' \\\n  ')
 }
