@@ -7,6 +7,8 @@ command injection attacks and other security vulnerabilities.
 """
 
 import re
+import sys
+import types
 import pytest
 from vmlx_engine.mcp.security import (
     MCPCommandValidator,
@@ -16,6 +18,59 @@ from vmlx_engine.mcp.security import (
     ToolExecutionAudit,
 )
 from vmlx_engine.mcp.types import MCPServerConfig, MCPTransport
+
+
+class _FakeMCPContext:
+    def __init__(self, enter_result):
+        self.enter_result = enter_result
+        self.exited = False
+
+    async def __aenter__(self):
+        return self.enter_result
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self.exited = True
+
+
+class _FakeClientSession:
+    def __init__(self, read, write):
+        self.read = read
+        self.write = write
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+
+def _install_fake_mcp_transport_modules(monkeypatch, *, sse_recorder=None, http_recorder=None):
+    mcp_mod = types.ModuleType("mcp")
+    mcp_mod.ClientSession = _FakeClientSession
+
+    client_pkg = types.ModuleType("mcp.client")
+    sse_mod = types.ModuleType("mcp.client.sse")
+    http_mod = types.ModuleType("mcp.client.streamable_http")
+
+    def fake_sse_client(url, **kwargs):
+        if sse_recorder is not None:
+            sse_recorder["url"] = url
+            sse_recorder["kwargs"] = kwargs
+        return _FakeMCPContext(("sse-read", "sse-write"))
+
+    def fake_streamablehttp_client(url, **kwargs):
+        if http_recorder is not None:
+            http_recorder["url"] = url
+            http_recorder["kwargs"] = kwargs
+        return _FakeMCPContext(("http-read", "http-write", lambda: "session-id"))
+
+    sse_mod.sse_client = fake_sse_client
+    http_mod.streamablehttp_client = fake_streamablehttp_client
+
+    monkeypatch.setitem(sys.modules, "mcp", mcp_mod)
+    monkeypatch.setitem(sys.modules, "mcp.client", client_pkg)
+    monkeypatch.setitem(sys.modules, "mcp.client.sse", sse_mod)
+    monkeypatch.setitem(sys.modules, "mcp.client.streamable_http", http_mod)
 
 
 class TestMCPCommandValidator:
@@ -332,6 +387,18 @@ class TestMCPServerConfigSecurity:
         )
         assert config.url == "https://api.example.com/mcp"
 
+    def test_remote_config_accepts_auth_headers(self):
+        """vmlx#131: remote MCP auth headers are part of the config contract."""
+        headers = {"Authorization": "Bearer test-token", "X-API-Key": "test-key"}
+        config = MCPServerConfig(
+            name="remote-server",
+            transport=MCPTransport.HTTP,
+            url="https://api.example.com/mcp",
+            headers=headers,
+        )
+
+        assert config.headers == headers
+
     def test_skip_security_validation(self):
         """Test that skip_security_validation allows any command (with warning)."""
         # This should not raise even with dangerous command
@@ -343,6 +410,60 @@ class TestMCPServerConfigSecurity:
             skip_security_validation=True,
         )
         assert config.command == "bash"
+
+    @pytest.mark.asyncio
+    async def test_sse_transport_forwards_auth_headers(self, monkeypatch):
+        """vmlx#131: SSE remote MCP transport must pass headers to the SDK."""
+        from vmlx_engine.mcp.client import MCPClient
+
+        recorder = {}
+        _install_fake_mcp_transport_modules(monkeypatch, sse_recorder=recorder)
+
+        headers = {"Authorization": "Bearer test-token"}
+        client = MCPClient(
+            MCPServerConfig(
+                name="sse-server",
+                transport=MCPTransport.SSE,
+                url="https://api.example.com/sse",
+                headers=headers,
+            )
+        )
+
+        await client._connect_sse()
+
+        assert recorder == {
+            "url": "https://api.example.com/sse",
+            "kwargs": {"headers": headers},
+        }
+        assert client._read == "sse-read"
+        assert client._write == "sse-write"
+
+    @pytest.mark.asyncio
+    async def test_streamable_http_transport_forwards_auth_headers(self, monkeypatch):
+        """vmlx#131: Streamable HTTP remote MCP transport must pass headers."""
+        from vmlx_engine.mcp.client import MCPClient
+
+        recorder = {}
+        _install_fake_mcp_transport_modules(monkeypatch, http_recorder=recorder)
+
+        headers = {"Authorization": "Bearer test-token", "X-API-Key": "test-key"}
+        client = MCPClient(
+            MCPServerConfig(
+                name="http-server",
+                transport=MCPTransport.HTTP,
+                url="https://api.example.com/mcp",
+                headers=headers,
+            )
+        )
+
+        await client._connect_http()
+
+        assert recorder == {
+            "url": "https://api.example.com/mcp",
+            "kwargs": {"headers": headers},
+        }
+        assert client._read == "http-read"
+        assert client._write == "http-write"
 
 
 class TestDefaultWhitelist:
