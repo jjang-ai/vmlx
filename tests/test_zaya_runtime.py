@@ -505,6 +505,33 @@ def test_zaya1_vl_sanitize_maps_prestacked_experts_without_double_mlp():
     )
 
 
+def test_zaya1_vl_sanitize_transposes_vision_patch_embed_to_mlx_conv3d_layout():
+    from vmlx_engine.models.zaya1_vl import Model, ModelConfig
+
+    config = ModelConfig.from_dict(
+        {
+            "model_type": "zaya1_vl",
+            "hidden_size": 16,
+            "num_hidden_layers": 1,
+            "ffn_hidden_size": 32,
+            "num_experts": 3,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 2,
+            "num_query_groups": 2,
+            "head_dim": 4,
+            "vocab_size": 64,
+            "zaya_mlp_expansion": 8,
+            "vision_config": {"model_type": "qwen2_5_vl"},
+        }
+    )
+    model = Model(config)
+    raw_patch = mx.zeros((1280, 3, 1, 14, 14))
+
+    fixed = model.sanitize({"vision_tower.patch_embed.proj.weight": raw_patch})
+
+    assert fixed["vision_tower.patch_embed.proj.weight"].shape == (1280, 1, 14, 14, 3)
+
+
 def test_build_vlm_processor_constructs_zaya1_vl_image_processor_when_autoload_falls_back():
     model_dir = Path("/Users/example/models/JANGQ/ZAYA1-VL-8B-MXFP4")
     if not model_dir.exists():

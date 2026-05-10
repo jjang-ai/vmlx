@@ -787,6 +787,14 @@ class Model(nn.Module):
             if ".layers." in key and ".zaya_block." in key and ".mlp.zaya_block." not in key:
                 key = key.replace(".zaya_block.", ".mlp.zaya_block.", 1)
 
+            if (
+                key.endswith("patch_embed.proj.weight")
+                and value.ndim == 5
+                and value.shape[1] in (1, 3)
+                and value.shape[-1] not in (1, 3)
+            ):
+                value = value.transpose(0, 2, 3, 4, 1)
+
             if ".self_attn.qkv.conv_qk." in key and key.endswith(".weight"):
                 value = value.swapaxes(-1, -2)
             fixed[key] = value
