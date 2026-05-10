@@ -246,6 +246,16 @@ class TestSchedulerBypassGating:
             "scheduler.py bypass check no longer forces _skip_cache_store = True"
         )
 
+    def test_scheduler_finish_path_skips_cache_extraction_when_bypassed(self):
+        src = self._read("vmlx_engine/scheduler.py")
+        idx = src.index("# Extract cache for future reuse")
+        window = src[idx : src.index("self.total_completion_tokens", idx)]
+        assert 'not getattr(request, "_bypass_prefix_cache", False)' in window, (
+            "scheduler.py still extracts prompt-boundary cache for bypassed "
+            "requests; cache_salt/skip_prefix_cache must avoid both lookup "
+            "and store-side extraction work/logs"
+        )
+
     def test_mllm_scheduler_store_path_honors_bypass(self):
         src = self._read("vmlx_engine/mllm_scheduler.py")
         assert (

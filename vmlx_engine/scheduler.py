@@ -5233,7 +5233,10 @@ class Scheduler:
                             pass
 
                 # Extract cache for future reuse
-                if hasattr(response, "prompt_cache"):
+                if (
+                    hasattr(response, "prompt_cache")
+                    and not getattr(request, "_bypass_prefix_cache", False)
+                ):
                     try:
                         # CLEAN PROMPT-BOUNDARY SNAPSHOT (DSV4 fast path).
                         #
