@@ -7,6 +7,8 @@ that transformers doesn't recognize. This module provides fallback loading
 directly from tokenizer.json.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os

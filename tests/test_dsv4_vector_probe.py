@@ -1,6 +1,10 @@
 from pathlib import Path
 import os
 
+import pytest
+
+_OFFICIAL_VEC = Path("/tmp/ds4-read/tests/test-vectors/official.vec")
+
 from tests.cross_matrix.dsv4_vector_probe import (
     _cache_disabled_requested,
     _disable_attention_sinks,
@@ -14,8 +18,14 @@ from tests.cross_matrix.dsv4_vector_probe import (
 
 
 def test_parse_ds4_official_vec_fixture():
+    if not _OFFICIAL_VEC.exists():
+        pytest.skip(
+            f"DSV4 official vector fixture not present at {_OFFICIAL_VEC}; "
+            "skipping (fixture lives outside the repo and is only mounted on "
+            "the DSV4 contributor box)."
+        )
     cases = parse_official_vec(
-        Path("/tmp/ds4-read/tests/test-vectors/official.vec"),
+        _OFFICIAL_VEC,
         base_dir=Path("/tmp/ds4-read"),
     )
 
