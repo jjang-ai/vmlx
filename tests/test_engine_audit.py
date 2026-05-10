@@ -2860,6 +2860,9 @@ class TestZayaCCACachePolicy:
             assert caps.get("family") == "zaya"
             assert caps.get("cache_type") == "hybrid"
             assert caps.get("tool_parser") == "zaya_xml"
+            assert caps.get("reasoning_parser") is None
+            assert caps.get("think_in_template") is False
+            assert caps.get("supports_thinking") is False
             assert cfg.get("zaya_expert_layout") == "split_switch_mlp"
 
             registry = get_model_config_registry()
