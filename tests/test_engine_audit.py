@@ -2507,6 +2507,17 @@ class TestStartupCompatibilityGuards:
         assert '"VMLINUX_SSM_STATE_CACHE_MB"' in cli_source
         assert 'default=_env_int("VMLX_SSM_STATE_CACHE_MB", 512, "VMLINUX_SSM_STATE_CACHE_MB")' in cli_source
 
+    def test_cli_tool_parser_choices_include_registry_only_parsers(self):
+        """Explicit CLI settings must accept parsers used by auto detection.
+
+        ZAYA and Hy3 can be launched via auto-detection, but direct users also
+        pass --tool-call-parser explicitly.  Missing choices make the CLI reject
+        a valid product setting before the server can apply the registry.
+        """
+        cli_source = Path("./vmlx_engine/cli.py").read_text()
+        assert '"zaya_xml"' in cli_source
+        assert '"hunyuan"' in cli_source
+
     def test_sampler_recreation_invalidates_pending_prefix_hits(self):
         """A sampler change must not leave requests pointing at cleared paged blocks."""
         import inspect
@@ -2838,7 +2849,7 @@ class TestZayaCCACachePolicy:
 
         assert zaya.Model.__name__ == "Model"
 
-    def test_jang_loader_rejects_zaya1_vl_until_real_adapter_exists(self, tmp_path):
+    def test_jang_loader_registers_zaya1_vl_runtime_adapter(self, tmp_path):
         from vmlx_engine.utils.jang_loader import _ensure_zaya_runtime_supported
 
         (tmp_path / "config.json").write_text(json.dumps({
@@ -2859,14 +2870,11 @@ class TestZayaCCACachePolicy:
             },
         }
 
-        with pytest.raises(RuntimeError) as exc:
-            _ensure_zaya_runtime_supported(tmp_path, jcfg)
+        _ensure_zaya_runtime_supported(tmp_path, jcfg)
 
-        msg = str(exc.value)
-        assert "ZAYA1-VL is detected" in msg
-        assert "does not yet ship a Zaya1VL MLX adapter" in msg
-        assert "aliasing this bundle to qwen2_5_vl would be incorrect" in msg
-        assert "vision-LoRA" in msg
+        import mlx_vlm.models.zaya1_vl as zaya1_vl
+
+        assert zaya1_vl.Model.__name__ == "Model"
 
     def test_local_zaya_bundles_carry_explicit_cca_contract(self):
         from vmlx_engine.model_config_registry import get_model_config_registry

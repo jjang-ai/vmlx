@@ -33,6 +33,27 @@ JANG_CONFIG_FILENAMES = [
 JANG_FORMAT_VALUES = ["jang", "jjqf", "mxq"]
 
 
+def _jang_quant_block_size(jang_cfg: dict, default: int = 64) -> int:
+    """Return the JANG affine/TQ group size for runtime quant modules.
+
+    Newer MXFP/JANG sidecars use MLX's canonical ``group_size`` key, while
+    older JANG configs used ``block_size``. Preserve ``block_size`` precedence
+    for legacy bundles that carry both, but do not silently fall back to 64
+    when a modern bundle only has ``group_size``.
+    """
+    quant = jang_cfg.get("quantization") or {}
+    return int(quant.get("block_size") or quant.get("group_size") or default)
+
+
+def _jang_default_bits(jang_cfg: dict, fallback: list[int] | None = None) -> int:
+    """Return the default JANG affine/TQ bit width for runtime modules."""
+    quant = jang_cfg.get("quantization") or {}
+    if quant.get("bits") is not None:
+        return int(quant["bits"])
+    bit_widths = quant.get("bit_widths_used", fallback or [4])
+    return int(min(bit_widths))
+
+
 def _sanitize_grouped_conv1d_layout(weights: dict) -> dict:
     """Force leftover grouped Conv1d weights into MLX layout.
 
@@ -194,16 +215,13 @@ def _ensure_zaya_runtime_supported(path: Path, jang_cfg: dict) -> None:
     if not _is_zaya_bundle(path, jang_cfg):
         return
     if _is_zaya_vl_bundle(path, jang_cfg):
-        raise RuntimeError(
-            "ZAYA1-VL is detected, but the Python engine does not yet ship a "
-            "Zaya1VL MLX adapter. Stock mlx_vlm has no zaya1_vl model module, "
-            "and aliasing this bundle to qwen2_5_vl would be incorrect because "
-            "the language trunk is ZAYA CCA + top-1 MoE with vision-LoRA gated "
-            "at image-token positions. Treat this bundle as runtime-pending "
-            "until the real Zaya1VL adapter implements the Qwen2.5-VL vision "
-            "tower, ZAYA CCA decoder state, pre-stacked ZAYA experts, and "
-            "vision-LoRA path."
-        )
+        try:
+            from ..models.zaya1_vl import register_mlx_vlm_zaya1_vl
+
+            register_mlx_vlm_zaya1_vl()
+            return
+        except Exception as local_err:
+            logger.debug("local ZAYA1-VL runtime registration failed: %s", local_err)
 
     try:
         from ..models.zaya import register_mlx_lm_zaya
@@ -745,16 +763,18 @@ def _load_jang_v2(
                 _flat[_kk] = config[_kk]
         config = _flat
 
-    # Always read block_size from jang_config (needed by _pre_fix_bits_from_shard
-    # and other per-shard fixups). config.json's quantization.group_size may differ
-    # from the JANG config's block_size for older models.
-    block_size = (jang_cfg.get("quantization") or {}).get("block_size", 64)
+    # Always read the quantization group size from jang_config (needed by
+    # _pre_fix_bits_from_shard and other per-shard fixups). Older sidecars used
+    # block_size; newer MXFP/JANG sidecars use MLX's group_size key.
+    block_size = _jang_quant_block_size(jang_cfg)
 
     # config.json already has quantization key (written by v2 converter)
     # but ensure it exists for older v2 models
     if "quantization" not in config:
-        bit_widths = (jang_cfg.get("quantization") or {}).get("bit_widths_used", [4])
-        config["quantization"] = {"group_size": block_size, "bits": min(bit_widths)}
+        config["quantization"] = {
+            "group_size": block_size,
+            "bits": _jang_default_bits(jang_cfg, [4]),
+        }
 
     # MXTQ / JANGTQ fast path ─────────────────────────────────────────────
     # Detect tq_packed keys in the first shard. If present, delegate loading
@@ -1500,9 +1520,8 @@ def _load_jang_v2_vlm(
 
     start = time.perf_counter()
 
-    block_size = (jang_cfg.get("quantization") or {}).get("block_size", 64)
-    bit_widths = (jang_cfg.get("quantization") or {}).get("bit_widths_used", [4])
-    default_bits = min(bit_widths)
+    block_size = _jang_quant_block_size(jang_cfg)
+    default_bits = _jang_default_bits(jang_cfg, [4])
 
     # Nemotron-H LatentMoE patch — see _load_jang_v2 for rationale. Must run
     # BEFORE model_class.Model(model_config) instantiates any NemotronHBlock.
@@ -2489,7 +2508,7 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
 
     start = time.perf_counter()
 
-    block_size = (jang_cfg.get("quantization") or {}).get("block_size", 64)
+    block_size = _jang_quant_block_size(jang_cfg)
     target_bits = (jang_cfg.get("quantization") or {}).get("target_bits", 4)
     actual_bits = (jang_cfg.get("quantization") or {}).get("actual_bits", target_bits)
     source_model = _safe_source_model_name(jang_cfg)
@@ -2500,8 +2519,7 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
     )
 
     config = load_config(path)
-    bit_widths = (jang_cfg.get("quantization") or {}).get("bit_widths_used", [2, 4, 6, 8])
-    default_bits = min(bit_widths)
+    default_bits = _jang_default_bits(jang_cfg, [2, 4, 6, 8])
     config.pop("quantization", None)
     config.pop("quantization_config", None)
     config["quantization"] = {"group_size": block_size, "bits": default_bits}
@@ -2620,9 +2638,8 @@ def _load_jang_v1_vlm(
 
     start = time.perf_counter()
 
-    block_size = (jang_cfg.get("quantization") or {}).get("block_size", 64)
-    bit_widths = (jang_cfg.get("quantization") or {}).get("bit_widths_used", [2, 4, 6, 8])
-    default_bits = min(bit_widths)
+    block_size = _jang_quant_block_size(jang_cfg)
+    default_bits = _jang_default_bits(jang_cfg, [2, 4, 6, 8])
     source_model = _safe_source_model_name(jang_cfg)
 
     logger.info(f"Loading JANG v1 VLM: {source_model}")
@@ -3630,10 +3647,19 @@ def _build_vlm_processor(model_path: Path, eos_token_id=None):
     config = json.loads((model_path / "config.json").read_text())
     model_type = config.get("model_type", "")
 
-    tok_config_path = model_path / "tokenizer_config.json"
     chat_template = None
-    if tok_config_path.exists():
+    chat_template_path = model_path / "chat_template.json"
+    if chat_template_path.exists():
+        chat_template_data = json.loads(chat_template_path.read_text())
+        chat_template = chat_template_data.get("chat_template")
+    tok_config_path = model_path / "tokenizer_config.json"
+    if chat_template is None and tok_config_path.exists():
         chat_template = json.loads(tok_config_path.read_text()).get("chat_template")
+    if chat_template is not None:
+        try:
+            tokenizer.chat_template = chat_template
+        except Exception:
+            pass
 
     processor = None
     try:
@@ -3682,13 +3708,186 @@ def _build_vlm_processor(model_path: Path, eos_token_id=None):
 
     if processor is None:
 
+        class _ImageProcessorProxy:
+            def __init__(self, inner):
+                self._inner = inner
+
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+            def __call__(self, *args, **kwargs):
+                return self._inner(*args, **kwargs)
+
+            def preprocess(self, *args, **kwargs):
+                return self._inner.preprocess(*args, **kwargs)
+
         class _SimpleVLMProcessor:
             def __init__(self, tok, ip):
                 self.tokenizer = tok
-                self.image_processor = ip
+                self._image_processor = ip
+                self.image_processor = (
+                    _ImageProcessorProxy(ip) if model_type == "zaya1_vl" else ip
+                )
+                self.chat_template = chat_template
+                self.image_token = "<image>" if model_type == "zaya1_vl" else None
+                self.video_token = "<video>" if model_type == "zaya1_vl" else None
+
+            def __getattr__(self, name):
+                return getattr(self.tokenizer, name)
+
+            def _flatten_zaya_content(self, content):
+                if isinstance(content, str):
+                    return content
+                if not isinstance(content, list):
+                    return "" if content is None else str(content)
+
+                parts = []
+                for item in content:
+                    if isinstance(item, str):
+                        parts.append(item)
+                    elif isinstance(item, dict):
+                        item_type = item.get("type", "")
+                        if item_type in ("image", "image_url", "input_image"):
+                            parts.append(self.image_token or "<image>")
+                        elif item_type in ("video", "video_url", "input_video"):
+                            parts.append(self.video_token or "<video>")
+                        elif item_type in ("text", "input_text"):
+                            text = item.get("text", "") or item.get("content", "")
+                            if text:
+                                parts.append(str(text))
+                        else:
+                            text = item.get("text", "") or item.get("content", "")
+                            if text:
+                                parts.append(str(text))
+                return " ".join(part for part in parts if part).strip()
+
+            def _zaya_template_accepts_list_content(self):
+                template = (
+                    self.chat_template
+                    or getattr(self.tokenizer, "chat_template", None)
+                    or ""
+                )
+                return (
+                    "selectattr" in template
+                    or "item.type" in template
+                    or "item['type']" in template
+                    or ('"type"' in template and "message.content" in template)
+                )
+
+            def apply_chat_template(self, messages, *args, **kwargs):
+                if (
+                    model_type == "zaya1_vl"
+                    and not self._zaya_template_accepts_list_content()
+                ):
+                    messages = [
+                        {
+                            **message,
+                            "content": self._flatten_zaya_content(
+                                message.get("content", "")
+                            ),
+                        }
+                        if isinstance(message, dict)
+                        else message
+                        for message in messages
+                    ]
+                if self.chat_template is not None:
+                    kwargs.setdefault("chat_template", self.chat_template)
+                return self.tokenizer.apply_chat_template(messages, *args, **kwargs)
 
             def __call__(self, *a, **kw):
-                return self.tokenizer(*a, **kw)
+                images = kw.pop("images", None)
+                text = kw.pop("text", None)
+                add_special_tokens = kw.pop("add_special_tokens", True)
+                padding = kw.pop("padding", True)
+                padding_side = kw.pop(
+                    "padding_side", getattr(self.tokenizer, "padding_side", "left")
+                )
+                kw.pop("return_tensors", None)
+                if text is None and a:
+                    text = a[0]
+                    a = a[1:]
+                if images is None:
+                    return self.tokenizer(
+                        text,
+                        *a,
+                        add_special_tokens=add_special_tokens,
+                        padding=padding,
+                        return_tensors="np",
+                        **kw,
+                    )
+
+                if model_type != "zaya1_vl":
+                    encoded = self.tokenizer(
+                        text,
+                        *a,
+                        add_special_tokens=add_special_tokens,
+                        padding=padding,
+                        return_tensors="np",
+                        **kw,
+                    )
+                    vision = self._image_processor(images=images, return_tensors="np")
+                    encoded.update(vision)
+                    return encoded
+
+                prompts = text if isinstance(text, list) else [text]
+                vision = self._image_processor(images=images, return_tensors="np")
+                grids = np.asarray(vision["image_grid_thw"], dtype=np.int64)
+                merge = int(getattr(self._image_processor, "merge_size", 2) or 2)
+                image_repeats = [
+                    int(t * h * w // (merge * merge)) for t, h, w in grids
+                ]
+                image_token_id = self.tokenizer.convert_tokens_to_ids(self.image_token)
+
+                expanded_ids = []
+                image_cursor = 0
+                for prompt in prompts:
+                    ids = self.tokenizer.encode(
+                        prompt or "",
+                        add_special_tokens=add_special_tokens,
+                    )
+                    out_ids = []
+                    for token_id in ids:
+                        if token_id == image_token_id:
+                            if image_cursor >= len(image_repeats):
+                                raise ValueError(
+                                    "ZAYA1-VL prompt has more <image> tokens than images"
+                                )
+                            out_ids.extend([image_token_id] * image_repeats[image_cursor])
+                            image_cursor += 1
+                        else:
+                            out_ids.append(token_id)
+                    expanded_ids.append(out_ids)
+                if image_cursor != len(image_repeats):
+                    raise ValueError(
+                        "ZAYA1-VL image count does not match <image> tokens in prompt"
+                    )
+
+                pad_id = self.tokenizer.pad_token_id
+                if pad_id is None:
+                    pad_id = self.tokenizer.eos_token_id
+                max_len = max(len(ids) for ids in expanded_ids)
+                input_ids = []
+                attention = []
+                for ids in expanded_ids:
+                    pad = [pad_id] * (max_len - len(ids))
+                    if padding and padding_side == "left":
+                        row = pad + ids
+                        mask = [0] * len(pad) + [1] * len(ids)
+                    elif padding:
+                        row = ids + pad
+                        mask = [1] * len(ids) + [0] * len(pad)
+                    else:
+                        row = ids
+                        mask = [1] * len(ids)
+                    input_ids.append(row)
+                    attention.append(mask)
+
+                return {
+                    "input_ids": np.asarray(input_ids, dtype=np.int64),
+                    "attention_mask": np.asarray(attention, dtype=np.int64),
+                    "pixel_values": vision["pixel_values"],
+                    "image_grid_thw": grids,
+                }
 
         processor = _SimpleVLMProcessor(tokenizer, image_processor)
 

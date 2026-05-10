@@ -15,6 +15,7 @@ Features:
 
 import atexit
 import base64
+import json
 import logging
 import math
 import os
@@ -34,6 +35,31 @@ logger = logging.getLogger(__name__)
 
 
 _VLM_STREAM = None
+
+
+def _register_local_mlx_vlm_runtime_if_needed(model_path: str | Path) -> None:
+    """Register vMLX-owned mlx-vlm model classes before stock mlx-vlm import.
+
+    Some locally converted bundles use architectures that are not yet shipped
+    by upstream mlx-vlm. Stock `mlx_vlm.utils.load()` resolves the model class
+    from `config.json["model_type"]` before weights are inspected, so local
+    adapters must be registered at the MLLM load boundary. This is not a
+    monkey-patch of an instantiated model; it supplies the missing model module
+    that mlx-vlm's normal loader contract already expects.
+    """
+    try:
+        cfg_path = Path(model_path) / "config.json"
+        if not cfg_path.exists():
+            return
+        cfg = json.loads(cfg_path.read_text())
+    except Exception:
+        return
+
+    model_type = str(cfg.get("model_type", "")).lower()
+    if model_type == "zaya1_vl":
+        from ..models.zaya1_vl import register_mlx_vlm_zaya1_vl
+
+        register_mlx_vlm_zaya1_vl()
 
 
 def _vlm_stream():
@@ -779,6 +805,7 @@ class MLXMultimodalLM:
         # file-based checks (jang_config.json, config.json) find the files.
         from ..api.utils import resolve_to_local_path
         resolved_name = resolve_to_local_path(self.model_name)
+        _register_local_mlx_vlm_runtime_if_needed(resolved_name)
 
         # Install mlx_vlm registry patches (gemma4 + kimi_k25) on THIS thread
         # so any module-level `mx.new_stream(...)` in mlx_vlm.generate ends
@@ -837,6 +864,10 @@ class MLXMultimodalLM:
                 warnings.filterwarnings("ignore", message=".*torchvision.*", category=UserWarning)
                 self.model, self.processor = load(self.model_name)
             self.config = load_config(self.model_name)
+            if str((self.config or {}).get("model_type", "")).lower() == "zaya1_vl":
+                from ..utils.jang_loader import _build_vlm_processor
+
+                self.processor = _build_vlm_processor(Path(resolved_name))
 
             # vmlx#80 follow-up (Flor1an-B, 2026-04-15): mlx_vlm.load() is a
             # DIFFERENT code path from utils.tokenizer.load_model_with_fallback,
@@ -1134,6 +1165,33 @@ class MLXMultimodalLM:
 
         return chat_messages, all_image_urls, videos
 
+    def _prompt_template_supports_thinking(self) -> bool:
+        """Return False for families that must not receive synthetic think tags."""
+
+        config = getattr(self, "config", None)
+        if not isinstance(config, dict):
+            return True
+
+        caps = config.get("capabilities")
+        if isinstance(caps, dict) and caps.get("supports_thinking") is False:
+            return False
+
+        model_type = config.get("model_type")
+        text_config = config.get("text_config")
+        if not model_type and isinstance(text_config, dict):
+            model_type = text_config.get("model_type")
+        if not model_type:
+            return True
+
+        try:
+            from vmlx_engine.model_config_registry import get_model_config_registry
+
+            family_config = get_model_config_registry().lookup(str(model_type))
+        except Exception:
+            return True
+
+        return getattr(family_config, "supports_thinking", None) is not False
+
     def _apply_chat_template(
         self,
         chat_messages: list[dict],
@@ -1192,7 +1250,7 @@ class MLXMultimodalLM:
                 after = formatted_prompt[last_think + 7:]
                 if "</think>" not in after:
                     formatted_prompt = formatted_prompt[:last_think + 7] + "</think>\n"
-            elif "<think>" not in formatted_prompt:
+            elif "<think>" not in formatted_prompt and self._prompt_template_supports_thinking():
                 formatted_prompt = formatted_prompt.rstrip() + "\n<think>\n</think>\n"
 
         if formatted_prompt is None:

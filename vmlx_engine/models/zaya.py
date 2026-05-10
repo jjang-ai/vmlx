@@ -298,7 +298,12 @@ class ZayaRouter(nn.Module):
             nn.GELU(),
             nn.Linear(d, logits, bias=False),
         ]
-        self.balancing_biases = mx.zeros((logits,))
+        if args.zaya_use_mod:
+            self.balancing_biases = mx.concatenate(
+                [mx.zeros((logits - 1,)), mx.array([-1.0])]
+            )
+        else:
+            self.balancing_biases = mx.zeros((logits,))
         if layer_idx > 1:
             self.router_states_scale = mx.ones((d,))
         self.num_experts = args.num_experts

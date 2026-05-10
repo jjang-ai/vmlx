@@ -702,10 +702,29 @@ class BatchedEngine(BaseEngine):
         # Count non-system messages to detect multi-turn conversations
         non_system_msgs = sum(1 for m in messages if m.get("role") != "system")
 
-        if self._is_mllm and self._processor and not tools and num_images > 0:
+        mllm_model_type = None
+        if self._is_mllm and self._processor and not tools:
+            try:
+                model_config = getattr(self._model, "config", None)
+                mllm_model_type = (
+                    model_config.get("model_type") if isinstance(model_config, dict)
+                    else getattr(model_config, "model_type", None)
+                )
+            except Exception:
+                mllm_model_type = None
+
+        if (
+            self._is_mllm
+            and self._processor
+            and not tools
+            and (num_images > 0 or mllm_model_type == "zaya1_vl")
+        ):
             # Use mlx_vlm for MLLM when actual images are present (any turn count).
             # Text-only VL conversations still use the standard tokenizer path,
-            # ensuring consistent cache keys across text-only turns.
+            # ensuring consistent cache keys across text-only turns. Local
+            # adapters with list-aware templates (currently ZAYA1-VL) need the
+            # processor path even for text-only prompts, otherwise the raw
+            # string content is ignored by the template's content-part filters.
             try:
                 from mlx_vlm.prompt_utils import apply_chat_template
                 from mlx_vlm.utils import load_config
@@ -714,43 +733,85 @@ class BatchedEngine(BaseEngine):
                 if config is None:
                     config = load_config(self._model_name)
 
-                # Two-step pipeline:
-                # 1. Build messages with image tokens via mlx_vlm (return_messages=True)
-                # 2. Apply template via processor with enable_thinking support
-                built_messages = apply_chat_template(
-                    self._processor,
-                    config,
-                    messages,
-                    num_images=num_images,
-                    return_messages=True,
-                )
-
-                # Apply template with enable_thinking via the processor directly.
-                # mlx_vlm's get_chat_template doesn't forward enable_thinking,
-                # causing thinking models to always use thinking-OFF format.
                 tpl_kwargs = build_chat_template_kwargs(
                     enable_thinking=enable_thinking,
                     extra=extra_template_kwargs,
                     tokenize=False,
-                    add_generation_prompt=True,
+                    add_generation_prompt=not skip_generation_prompt,
                     include_thinking_alias=False,
                 )
-                try:
-                    prompt = self._processor.apply_chat_template(
-                        built_messages, **tpl_kwargs
-                    )
-                except TypeError:
-                    # Processor doesn't support enable_thinking — fall back
-                    tpl_kwargs.pop("enable_thinking", None)
-                    prompt = self._processor.apply_chat_template(
-                        built_messages, **tpl_kwargs
-                    )
-                    if enable_thinking is False and not tools:
-                        last_think = prompt.rfind("<think>")
-                        if last_think >= 0:
-                            after = prompt[last_think + 7:]
-                            if "</think>" not in after:
-                                prompt = prompt[:last_think + 7] + "</think>\n"
+
+                def _normalize_processor_messages(messages_arg):
+                    try:
+                        from ..models.mllm import MLXMultimodalLM
+
+                        direct_messages, _, _ = (
+                            MLXMultimodalLM._extract_multimodal_messages(messages_arg)
+                        )
+                        if direct_messages:
+                            return direct_messages
+                    except Exception:
+                        pass
+                    return messages_arg
+
+                def _processor_template(messages_arg):
+                    try:
+                        prompt = self._processor.apply_chat_template(
+                            messages_arg, **tpl_kwargs
+                        )
+                    except TypeError:
+                        # Processor doesn't support enable_thinking — fall back
+                        # without it, then close any forced reasoning rail below.
+                        fallback_kwargs = dict(tpl_kwargs)
+                        fallback_kwargs.pop("enable_thinking", None)
+                        prompt = self._processor.apply_chat_template(
+                            messages_arg, **fallback_kwargs
+                        )
+                        if enable_thinking is False and not tools:
+                            last_think = prompt.rfind("<think>")
+                            if last_think >= 0:
+                                after = prompt[last_think + 7:]
+                                if "</think>" not in after:
+                                    prompt = prompt[:last_think + 7] + "</think>\n"
+                    return prompt
+
+                if num_images > 0:
+                    # Two-step pipeline:
+                    # 1. Build messages with image tokens via mlx_vlm
+                    #    (return_messages=True)
+                    # 2. Apply template via processor with enable_thinking support
+                    try:
+                        built_messages = apply_chat_template(
+                            self._processor,
+                            config,
+                            messages,
+                            num_images=num_images,
+                            return_messages=True,
+                        )
+                    except Exception as build_err:
+                        # Local adapters may have a real processor/template
+                        # before upstream mlx_vlm knows their model_type.
+                        # ZAYA1-VL is one example: normalize OpenAI
+                        # ``image_url`` parts to SimpleEngine-style
+                        # ``{"type": "image"}`` entries, otherwise the
+                        # template sees no image placeholders and the processor
+                        # later receives images with no matching token.
+                        direct_messages = _normalize_processor_messages(messages)
+                        try:
+                            return _processor_template(direct_messages)
+                        except Exception as direct_err:
+                            raise RuntimeError(
+                                "MLLM chat-template builder failed "
+                                f"({build_err}); direct processor template failed "
+                                f"({direct_err})"
+                            ) from direct_err
+                else:
+                    built_messages = _normalize_processor_messages(messages)
+
+                # Apply template with enable_thinking via the processor directly.
+                # mlx_vlm's get_chat_template doesn't forward enable_thinking,
+                # causing thinking models to always use thinking-OFF format.
+                prompt = _processor_template(built_messages)
                 return prompt
             except Exception as e:
                 logger.warning(f"Failed to apply MLLM chat template: {e}")

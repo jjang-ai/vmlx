@@ -1886,6 +1886,9 @@ Examples:
             # DeepSeek V4 DSML format (<｜DSML｜invoke name="…">)
             "dsml",
             "deepseek_v4",
+            # Family-specific XML tool formats.
+            "zaya_xml",
+            "hunyuan",
             # Aliases (map to same parsers)
             "generic",
             "qwen3",
@@ -1903,6 +1906,8 @@ Examples:
             "stepfun",
             "glm4",
             "gemma4",
+            "hy_v3",
+            "tencent",
         ],
         help="Which format to use for parsing tool calls from model output. Must match your "
              "model's training format. Common choices: 'qwen' for Qwen models, 'llama' for "

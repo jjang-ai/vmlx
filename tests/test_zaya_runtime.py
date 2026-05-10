@@ -1,9 +1,11 @@
 import json
+import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
 import mlx.core as mx
+import mlx.nn as nn
 import pytest
 
 from vmlx_engine.models.zaya import (
@@ -37,6 +39,735 @@ def test_zaya_runtime_registers_as_mlx_lm_model():
     import mlx_lm.models.zaya as zaya
 
     assert zaya.Model is Model
+
+
+def test_zaya1_vl_runtime_registers_as_mlx_vlm_model():
+    from vmlx_engine.models.zaya1_vl import Model as Zaya1VLModel
+    from vmlx_engine.models.zaya1_vl import register_mlx_vlm_zaya1_vl
+
+    register_mlx_vlm_zaya1_vl()
+
+    import mlx_vlm.models.zaya1_vl as zaya1_vl
+
+    assert zaya1_vl.Model is Zaya1VLModel
+
+
+def test_zaya1_vl_language_model_combines_cca_and_moe_every_layer():
+    from vmlx_engine.models.zaya1_vl import TextConfig, Zaya1VLLanguageModel
+
+    args = TextConfig(
+        model_type="zaya1_vl",
+        hidden_size=16,
+        num_hidden_layers=2,
+        ffn_hidden_size=32,
+        num_experts=3,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        num_query_groups=2,
+        head_dim=4,
+        vocab_size=64,
+        zaya_mlp_expansion=8,
+    )
+    model = Zaya1VLLanguageModel(args)
+
+    assert model.layers[0].attn.self_attn is not None
+    assert model.layers[0].mlp.zaya_block is not None
+    assert model.layers[0].zaya_block is model.layers[0].mlp.zaya_block
+
+    cache = model.make_cache()
+    logits = model(mx.array([[1, 2, 3]], dtype=mx.int32), cache=cache).logits
+    mx.eval(logits)
+
+    assert logits.shape == (1, 3, 64)
+    assert len(cache) == 2
+    assert all(type(c).__name__ == "CacheList" for c in cache)
+    assert cache[0][0].offset == 3
+
+
+def test_zaya1_vl_language_model_vision_lora_path_is_image_mask_gated():
+    from vmlx_engine.models.zaya1_vl import TextConfig, Zaya1VLLanguageModel
+
+    args = TextConfig(
+        model_type="zaya1_vl",
+        hidden_size=16,
+        num_hidden_layers=1,
+        ffn_hidden_size=32,
+        num_experts=3,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        num_query_groups=2,
+        head_dim=4,
+        vocab_size=64,
+        zaya_mlp_expansion=8,
+        vision_lora=True,
+        vision_lora_rank_attn=4,
+        vision_lora_rank_mlp=4,
+    )
+    model = Zaya1VLLanguageModel(args)
+    cache = model.make_cache()
+
+    logits = model(
+        mx.array([[1, 2, 3]], dtype=mx.int32),
+        cache=cache,
+        image_mask=mx.array([[False, True, False]]),
+    ).logits
+    mx.eval(logits)
+
+    assert logits.shape == (1, 3, 64)
+    assert hasattr(model.layers[0].attn.self_attn.qkv, "lora_linear_q")
+    assert hasattr(
+        model.layers[0].mlp.zaya_block.experts.local_experts[0],
+        "lora_fc1",
+    )
+
+
+def test_zaya_router_mod_skip_expert_has_negative_balancing_bias():
+    args = _small_args()
+    args.zaya_use_mod = True
+    args.num_experts = 3
+
+    from vmlx_engine.models.zaya import ZayaRouter
+
+    router = ZayaRouter(args, layer_idx=1)
+    biases = router.balancing_biases.tolist()
+
+    assert biases[:-1] == [0.0, 0.0, 0.0]
+    assert biases[-1] == -1.0
+
+
+def test_zaya1_vl_model_forward_returns_mlx_vlm_language_output():
+    from vmlx_engine.models.zaya1_vl import Model, ModelConfig
+
+    config = ModelConfig.from_dict(
+        {
+            "model_type": "zaya1_vl",
+            "hidden_size": 16,
+            "num_hidden_layers": 1,
+            "ffn_hidden_size": 32,
+            "num_experts": 3,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 2,
+            "num_query_groups": 2,
+            "head_dim": 4,
+            "vocab_size": 64,
+            "zaya_mlp_expansion": 8,
+            "vision_config": {"model_type": "qwen2_5_vl"},
+        }
+    )
+    model = Model(config)
+
+    output = model(mx.array([[1, 2, 3]], dtype=mx.int32))
+    mx.eval(output.logits)
+
+    assert output.logits.shape == (1, 3, 64)
+
+
+def test_zaya1_vl_language_model_accepts_mlx_vlm_inputs_embeds_keyword():
+    from vmlx_engine.models.zaya1_vl import TextConfig, Zaya1VLLanguageModel
+
+    class Recorder(nn.Module):
+        def __init__(self, hidden_size):
+            super().__init__()
+            self.hidden_size = hidden_size
+            self.seen_input_embeddings = None
+
+        def __call__(self, inputs, cache=None, input_embeddings=None, image_mask=None):
+            self.seen_input_embeddings = input_embeddings
+            return mx.zeros((inputs.shape[0], inputs.shape[1], self.hidden_size))
+
+    args = TextConfig(
+        model_type="zaya1_vl",
+        hidden_size=16,
+        num_hidden_layers=1,
+        ffn_hidden_size=32,
+        num_experts=3,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        num_query_groups=2,
+        head_dim=4,
+        vocab_size=64,
+        zaya_mlp_expansion=8,
+        tie_word_embeddings=False,
+    )
+    model = Zaya1VLLanguageModel(args)
+    recorder = Recorder(args.hidden_size)
+    model.model = recorder
+    supplied = mx.ones((1, 3, args.hidden_size))
+
+    model(mx.array([[1, 2, 3]], dtype=mx.int32), inputs_embeds=supplied)
+
+    assert recorder.seen_input_embeddings is supplied
+
+
+def test_zaya1_vl_language_model_matches_affine_quantized_switch_and_router_state():
+    from mlx.utils import tree_flatten
+
+    from vmlx_engine.models.zaya1_vl import TextConfig, Zaya1VLLanguageModel
+
+    args = TextConfig(
+        model_type="zaya1_vl",
+        hidden_size=64,
+        num_hidden_layers=2,
+        ffn_hidden_size=128,
+        num_experts=3,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        num_query_groups=2,
+        head_dim=16,
+        vocab_size=128,
+        zaya_mlp_expansion=16,
+        vision_lora=True,
+        vision_lora_rank_attn=4,
+        vision_lora_rank_mlp=4,
+        quantization={"bits": 4, "embed_bits": 8, "group_size": 32, "mode": "affine"},
+    )
+    model = Zaya1VLLanguageModel(args)
+    names = {k for k, _ in tree_flatten(model.parameters())}
+
+    assert model.model.embed_tokens.bits == 8
+    assert (
+        "model.layers.0.mlp.zaya_block.experts.switch_mlp.gate_proj.scales"
+        in names
+    )
+    assert (
+        "model.layers.0.mlp.zaya_block.experts.switch_mlp.gate_proj.biases"
+        in names
+    )
+    assert "model.layers.0.mlp.zaya_block.router.router_states_scale" not in names
+    assert "model.layers.1.mlp.zaya_block.router.router_states_scale" in names
+    assert (
+        "model.layers.0.mlp.zaya_block.experts.local_experts.0.lora_fc1.0.weight"
+        in names
+    )
+    assert not any(".layers.0.zaya_block." in name for name in names)
+
+
+def test_zaya1_vl_model_config_exposes_mlx_vlm_image_token_alias():
+    from vmlx_engine.models.zaya1_vl import ModelConfig
+
+    config = ModelConfig.from_dict(
+        {
+            "model_type": "zaya1_vl",
+            "image_token_id": 262147,
+            "vision_config": {"model_type": "qwen2_5_vl"},
+        }
+    )
+
+    assert config.image_token_id == 262147
+    assert config.image_token_index == 262147
+
+
+def test_zaya1_vl_model_config_merges_empty_text_config_with_flat_bundle_fields():
+    from vmlx_engine.models.zaya1_vl import ModelConfig
+    from vmlx_engine.models.zaya1_vl import TextConfig
+
+    raw = {
+        "model_type": "zaya1_vl",
+        "text_config": {},
+        "hidden_size": 2048,
+        "num_hidden_layers": 40,
+        "ffn_hidden_size": 4096,
+        "num_experts": 16,
+        "num_attention_heads": 16,
+        "num_key_value_heads": 4,
+        "num_query_groups": 4,
+        "head_dim": 128,
+        "vision_lora": True,
+        "vision_lora_rank_attn": 8,
+        "vision_lora_rank_mlp": 32,
+        "weight_format": "mxfp4",
+        "quantization": {"bits": 4, "group_size": 32, "mode": "affine"},
+        "rotary_base": 1000000,
+        "vision_config": {"model_type": "qwen2_5_vl"},
+    }
+    config = ModelConfig.from_dict(raw)
+
+    assert config.text_config.hidden_size == 2048
+    assert config.text_config.num_hidden_layers == 40
+    assert config.text_config.vision_lora is True
+    assert config.text_config.vision_lora_rank_attn == 8
+    assert config.text_config.vision_lora_rank_mlp == 32
+    assert config.text_config.rope_theta == 1000000
+    assert config.text_config.quantization["embed_bits"] == 8
+    assert TextConfig.from_dict(raw["text_config"]).vision_lora is True
+    assert TextConfig.from_dict(raw["text_config"]).num_attention_heads == 16
+    assert TextConfig.from_dict(raw["text_config"]).num_key_value_heads == 4
+
+
+def test_zaya1_vl_model_config_normalizes_affine_mxtq_module_mode():
+    from vmlx_engine.models.zaya1_vl import ModelConfig
+
+    config = ModelConfig.from_dict(
+        {
+            "model_type": "zaya1_vl",
+            "hidden_size": 16,
+            "num_hidden_layers": 1,
+            "ffn_hidden_size": 32,
+            "num_experts": 3,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 2,
+            "num_query_groups": 2,
+            "head_dim": 4,
+            "vocab_size": 64,
+            "vision_config": {"model_type": "qwen2_5_vl"},
+            "quantization": {
+                "bits": 8,
+                "embed_bits": 8,
+                "group_size": 32,
+                "mode": "affine+mxtq",
+                "routed_expert_bits": 2,
+            },
+            "weight_format": "mxtq",
+        }
+    )
+
+    assert config.text_config.quantization["mode"] == "affine"
+    assert config.text_config.quantization["container_mode"] == "affine+mxtq"
+
+
+def test_jang_loader_quant_block_size_falls_back_to_group_size():
+    from vmlx_engine.utils.jang_loader import _jang_default_bits, _jang_quant_block_size
+
+    assert _jang_quant_block_size({"quantization": {"group_size": 32}}) == 32
+    assert (
+        _jang_quant_block_size(
+            {"quantization": {"block_size": 64, "group_size": 32}}
+        )
+        == 64
+    )
+    assert _jang_quant_block_size({"quantization": {}}) == 64
+    assert _jang_default_bits({"quantization": {"bits": 4, "bit_widths_used": [2]}}) == 4
+    assert _jang_default_bits({"quantization": {"bit_widths_used": [2, 4]}}) == 2
+
+
+def test_zaya1_vl_exposes_raw_model_alias_for_jangtq_hydration():
+    from vmlx_engine.models.zaya1_vl import Model, ModelConfig
+
+    def get_module(root, dotted):
+        cur = root
+        for part in dotted.split("."):
+            cur = cur[int(part)] if part.isdigit() else getattr(cur, part)
+        return cur
+
+    def set_module(root, dotted, new_mod):
+        parts = dotted.split(".")
+        cur = root
+        for part in parts[:-1]:
+            cur = cur[int(part)] if part.isdigit() else getattr(cur, part)
+        setattr(cur, parts[-1], new_mod)
+
+    config = ModelConfig.from_dict(
+        {
+            "model_type": "zaya1_vl",
+            "hidden_size": 16,
+            "num_hidden_layers": 1,
+            "ffn_hidden_size": 32,
+            "num_experts": 3,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 2,
+            "num_query_groups": 2,
+            "head_dim": 4,
+            "vocab_size": 64,
+            "zaya_mlp_expansion": 8,
+            "vision_config": {"model_type": "qwen2_5_vl"},
+        }
+    )
+    model = Model(config)
+    raw_path = "model.layers.0.zaya_block.experts.switch_mlp.gate_proj"
+    canonical = model.language_model.model.layers[
+        0
+    ].mlp.zaya_block.experts.switch_mlp.gate_proj
+
+    assert get_module(model, raw_path) is canonical
+
+    replacement = nn.Linear(16, 16, bias=False)
+    set_module(model, raw_path, replacement)
+
+    assert (
+        model.language_model.model.layers[0]
+        .mlp.zaya_block.experts.switch_mlp.gate_proj
+        is replacement
+    )
+
+
+def test_zaya1_vl_sanitize_maps_prestacked_experts_without_double_mlp():
+    from vmlx_engine.models.zaya1_vl import Model, ModelConfig
+
+    config = ModelConfig.from_dict(
+        {
+            "model_type": "zaya1_vl",
+            "hidden_size": 16,
+            "num_hidden_layers": 1,
+            "ffn_hidden_size": 32,
+            "num_experts": 3,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 2,
+            "num_query_groups": 2,
+            "head_dim": 4,
+            "vocab_size": 64,
+            "zaya_mlp_expansion": 8,
+            "vision_config": {"model_type": "qwen2_5_vl"},
+        }
+    )
+    model = Model(config)
+
+    fixed = model.sanitize(
+        {
+            "model.layers.0.zaya_block.experts.switch_mlp.gate_proj.weight": mx.zeros(
+                (3, 16, 16)
+            ),
+            "model.layers.0.mlp.zaya_block.router.down_proj.weight": mx.zeros(
+                (8, 16)
+            ),
+            "model.layers.0.mlp.zaya_block.experts.local_experts.0.lora_fc1.0.weight": mx.zeros(
+                (8, 16)
+            ),
+        }
+    )
+
+    assert (
+        "language_model.model.layers.0.mlp.zaya_block.experts.switch_mlp.gate_proj.weight"
+        in fixed
+    )
+    assert "language_model.model.layers.0.mlp.mlp.zaya_block.router.down_proj.weight" not in fixed
+    assert (
+        "language_model.model.layers.0.mlp.zaya_block.router.down_proj.weight"
+        in fixed
+    )
+    assert (
+        "language_model.model.layers.0.mlp.zaya_block.experts.local_experts.0.lora_fc1.0.weight"
+        in fixed
+    )
+
+
+def test_build_vlm_processor_constructs_zaya1_vl_image_processor_when_autoload_falls_back():
+    model_dir = Path("/Users/example/models/JANGQ/ZAYA1-VL-8B-MXFP4")
+    if not model_dir.exists():
+        pytest.skip("local ZAYA1-VL MXFP4 bundle is not present")
+
+    from vmlx_engine.utils.jang_loader import _build_vlm_processor
+
+    processor = _build_vlm_processor(model_dir)
+
+    assert hasattr(processor, "tokenizer")
+    assert hasattr(processor, "image_processor")
+    assert getattr(processor, "image_token", None) == "<image>"
+    assert callable(processor)
+
+    prompt = processor.apply_chat_template(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": "Describe this image."},
+                ],
+            }
+        ],
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    token_ids = processor.tokenizer.encode(prompt, add_special_tokens=False)
+    assert "<image>" in prompt
+    assert token_ids.count(262147) == 1
+
+
+def test_zaya1_vl_processor_expands_image_token_to_grid_feature_count():
+    model_dir = Path("/Users/example/models/JANGQ/ZAYA1-VL-8B-MXFP4")
+    image_path = Path(
+        "docs/internal/release-gates/20260508_nemotron_omni_media_live/vmlx_icon.png"
+    )
+    if not model_dir.exists() or not image_path.exists():
+        pytest.skip("local ZAYA1-VL MXFP4 bundle or image fixture is not present")
+
+    from mlx_vlm.utils import prepare_inputs
+
+    from vmlx_engine.utils.jang_loader import _build_vlm_processor
+
+    processor = _build_vlm_processor(model_dir)
+    prompt = processor.apply_chat_template(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": "Describe this image."},
+                ],
+            }
+        ],
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    inputs = prepare_inputs(
+        processor,
+        images=[str(image_path)],
+        prompts=prompt,
+        image_token_index=262147,
+        add_special_tokens=True,
+    )
+
+    grid = inputs["image_grid_thw"][0].tolist()
+    expected_image_tokens = int(grid[0] * grid[1] * grid[2] // 4)
+    assert inputs["input_ids"].flatten().tolist().count(262147) == expected_image_tokens
+    assert inputs["pixel_values"].shape[0] == int(grid[0] * grid[1] * grid[2])
+
+
+def test_zaya1_vl_processor_prefers_chat_template_json_for_inference_prompt():
+    model_dir = Path("/Users/example/models/JANGQ/ZAYA1-VL-8B-MXFP4")
+    if not (model_dir / "chat_template.json").exists():
+        pytest.skip("local ZAYA1-VL MXFP4 chat_template.json is not present")
+
+    from vmlx_engine.utils.jang_loader import _build_vlm_processor
+
+    processor = _build_vlm_processor(model_dir)
+    prompt = processor.apply_chat_template(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": "Describe this image."},
+                ],
+            }
+        ],
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+
+    assert processor.chat_template == json.loads(
+        (model_dir / "chat_template.json").read_text()
+    )["chat_template"]
+    assert prompt == (
+        "<|vision_start|><image><|vision_end|>\n"
+        "<|im_start|>user\n"
+        "Describe this image.<|im_end|>\n"
+        "<|im_start|>assistant\n"
+    )
+
+
+def test_zaya1_vl_processor_preserves_list_content_for_list_aware_templates(monkeypatch):
+    model_dir = Path("/Users/example/models/JANGQ/ZAYA1-VL-8B-MXFP4")
+    if not model_dir.exists():
+        pytest.skip("local ZAYA1-VL MXFP4 bundle is not present")
+
+    from vmlx_engine.utils.jang_loader import _build_vlm_processor
+
+    processor = _build_vlm_processor(model_dir)
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                {"type": "text", "text": "Describe this image."},
+            ],
+        }
+    ]
+    captured = {}
+
+    def fake_apply_chat_template(messages_arg, *args, **kwargs):
+        captured["content"] = messages_arg[0]["content"]
+        captured["chat_template"] = kwargs.get("chat_template")
+        return "ok"
+
+    monkeypatch.setattr(
+        processor.tokenizer,
+        "apply_chat_template",
+        fake_apply_chat_template,
+    )
+
+    processor.chat_template = (
+        "{% for image in message.content|selectattr('type', 'equalto', 'image') %}"
+        "{{ image }}{% endfor %}"
+    )
+    processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    assert isinstance(captured["content"], list)
+    assert captured["chat_template"] == processor.chat_template
+
+    processor.chat_template = "{{ message.content if message.content is string else '' }}"
+    processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    assert captured["content"] == "<image> Describe this image."
+    assert captured["chat_template"] == processor.chat_template
+
+
+def test_zaya1_vl_thinking_off_prompt_does_not_inject_closed_think(monkeypatch):
+    """ZAYA1-VL is a no-thinking product family.
+
+    The local VL template renders a plain ``assistant: `` generation prompt.
+    The MLLM wrapper must not synthesize a closed ``<think></think>`` block for
+    a family whose metadata says thinking is unsupported.
+    """
+
+    from vmlx_engine.models.mllm import MLXMultimodalLM
+    import mlx_vlm.prompt_utils as prompt_utils
+
+    model = MLXMultimodalLM.__new__(MLXMultimodalLM)
+    model.processor = object()
+    model.config = {
+        "model_type": "zaya1_vl",
+        "capabilities": {"supports_thinking": False},
+    }
+
+    monkeypatch.setattr(
+        prompt_utils,
+        "get_chat_template",
+        lambda *args, **kwargs: "user: <image> Describe it.\nassistant: ",
+    )
+
+    prompt = model._apply_chat_template(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": "Describe it."},
+                ],
+            }
+        ],
+        enable_thinking=False,
+    )
+
+    assert prompt == "user: <image> Describe it.\nassistant: "
+    assert "<think>" not in prompt
+    assert "</think>" not in prompt
+
+
+def test_batched_engine_zaya1_vl_uses_processor_template_when_prompt_utils_unsupported(monkeypatch):
+    """Continuous batching must not drop ZAYA1-VL image placeholders.
+
+    ``mlx_vlm.prompt_utils.apply_chat_template`` does not know every local
+    adapter family. ZAYA1-VL's processor/template does know how to render rich
+    image/text content, so BatchedEngine should fall back to that local
+    processor path before trying the plain text tokenizer fallback.
+    """
+
+    from vmlx_engine.engine.batched import BatchedEngine
+    import mlx_vlm.prompt_utils as prompt_utils
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,AAAA"},
+                },
+                {"type": "text", "text": "Describe this image."},
+            ],
+        }
+    ]
+    captured = {}
+
+    class FakeProcessor:
+        tokenizer = SimpleNamespace()
+
+        def apply_chat_template(self, messages_arg, **kwargs):
+            captured["messages"] = messages_arg
+            captured["kwargs"] = kwargs
+            return (
+                "<|vision_start|><image><|vision_end|>\n"
+                "<|im_start|>user\n"
+                "Describe this image.<|im_end|>\n"
+                "<|im_start|>assistant\n"
+            )
+
+    def unsupported_model(*_args, **_kwargs):
+        raise ValueError("Unsupported model: zaya1_vl")
+
+    monkeypatch.setattr(prompt_utils, "apply_chat_template", unsupported_model)
+
+    engine = BatchedEngine.__new__(BatchedEngine)
+    engine._is_mllm = True
+    engine._processor = FakeProcessor()
+    engine._model = SimpleNamespace(config={"model_type": "zaya1_vl"})
+    engine._model_name = "zaya1-vl-test"
+    engine._tokenizer = None
+
+    prompt = engine._apply_chat_template(
+        messages,
+        num_images=1,
+        enable_thinking=False,
+    )
+
+    assert "<|vision_start|><image><|vision_end|>" in prompt
+    assert "<|im_start|>assistant\n" in prompt
+    assert isinstance(captured["messages"][0]["content"], list)
+    assert captured["messages"][0]["content"][0]["type"] == "image"
+    assert captured["kwargs"]["add_generation_prompt"] is True
+    assert captured["kwargs"]["tokenize"] is False
+
+
+def test_batched_engine_zaya1_vl_text_only_keeps_user_text():
+    model_dir = Path("/Users/example/models/JANGQ/ZAYA1-VL-8B-MXFP4")
+    if not model_dir.exists():
+        pytest.skip("local ZAYA1-VL MXFP4 bundle is not present")
+
+    from vmlx_engine.engine.batched import BatchedEngine
+    from vmlx_engine.utils.jang_loader import _build_vlm_processor
+
+    processor = _build_vlm_processor(model_dir)
+    engine = BatchedEngine.__new__(BatchedEngine)
+    engine._is_mllm = True
+    engine._processor = processor
+    engine._model = SimpleNamespace(config={"model_type": "zaya1_vl"})
+    engine._model_name = str(model_dir)
+    engine._tokenizer = None
+
+    prompt = engine._apply_chat_template(
+        [{"role": "user", "content": "What is 17 + 28?"}],
+        num_images=0,
+        enable_thinking=False,
+    )
+    ids = processor.tokenizer.encode(prompt, add_special_tokens=False)
+
+    assert "What is 17 + 28?" in prompt
+    assert prompt.endswith("<|im_start|>assistant\n")
+    assert len(ids) > 3
+
+
+def test_mllm_load_registers_zaya1_vl_adapter_before_stock_mlx_vlm_load(tmp_path, monkeypatch):
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "zaya1_vl",
+                "vision_config": {"model_type": "qwen2_5_vl"},
+            }
+        )
+    )
+    monkeypatch.delitem(sys.modules, "mlx_vlm.models.zaya1_vl", raising=False)
+
+    from vmlx_engine.api import utils as api_utils
+    from vmlx_engine.models.mllm import MLXMultimodalLM
+    from vmlx_engine.utils import jang_loader
+    import mlx_vlm
+    import mlx_vlm.utils
+
+    monkeypatch.setattr(api_utils, "resolve_to_local_path", lambda _: tmp_path)
+    monkeypatch.setattr(jang_loader, "is_jang_model", lambda _: False)
+    monkeypatch.setattr(
+        mlx_vlm.utils,
+        "load_config",
+        lambda *_args, **_kwargs: {"model_type": "zaya1_vl"},
+    )
+    monkeypatch.setattr(
+        jang_loader,
+        "_build_vlm_processor",
+        lambda _path: SimpleNamespace(replaced_zaya_processor=True),
+    )
+
+    def fake_load(_model_name):
+        assert "mlx_vlm.models.zaya1_vl" in sys.modules
+        return (
+            SimpleNamespace(language_model=SimpleNamespace(layers=[])),
+            SimpleNamespace(),
+        )
+
+    monkeypatch.setattr(mlx_vlm, "load", fake_load)
+
+    model = MLXMultimodalLM(str(tmp_path))
+    model.load()
+
+    assert model._loaded is True
+    assert model.processor.replaced_zaya_processor is True
 
 
 def test_zaya_cca_cache_carries_kv_conv_and_prev_hidden_state():
