@@ -325,7 +325,7 @@ class SSMCompanionCache:
                     c.__dict__.update(src_dict)
                 if hasattr(c, "cache") and isinstance(c.cache, list):
                     c.cache = [
-                        (mx.array(a) * 1 if a is not None else None)
+                        (mx.contiguous(mx.array(a)) if a is not None else None)
                         for a in c.cache
                     ]
                     materialise = [x for x in c.cache if x is not None]

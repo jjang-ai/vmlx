@@ -156,6 +156,70 @@ class TestMLLMBatch:
 
         assert len(batch) == 3
 
+
+class TestMLLMBatchFastNoLogprobs:
+    """Batched VLM decode should not materialize unsupported logprobs."""
+
+    def test_step_samples_from_logits_without_full_vocab_logsumexp(self, monkeypatch):
+        from vmlx_engine import mllm_batch_generator as mbg
+        from vmlx_engine.mllm_batch_generator import (
+            MLLMBatch,
+            MLLMBatchGenerator,
+            MLLMBatchRequest,
+        )
+
+        class DummyLanguageModel:
+            def __call__(self, input_tokens, cache=None):
+                batch = input_tokens.shape[0]
+                return mx.array([[[0.0, 0.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0]]] * batch)
+
+        def fail_logsumexp(*args, **kwargs):
+            raise AssertionError("MLLM fast path must not compute full-vocab logprobs")
+
+        monkeypatch.setattr(mbg.mx, "logsumexp", fail_logsumexp)
+
+        req = MLLMBatchRequest(
+            uid=0,
+            request_id="req-1",
+            prompt="hello",
+            temperature=0.0,
+        )
+        generator = MLLMBatchGenerator(
+            model=DummyLanguageModel(),
+            processor=object(),
+            enable_prefix_cache=False,
+        )
+        generator.active_batch = MLLMBatch(
+            uids=[0],
+            request_ids=["req-1"],
+            y=mx.array([1]),
+            logprobs=[None],
+            max_tokens=[16],
+            num_tokens=[0],
+            cache=[],
+            requests=[req],
+        )
+
+        sampled, logprobs = generator._step(mx.array([1]), [])
+
+        assert sampled.tolist() == [5]
+        assert logprobs == [None]
+
+    def test_cache_hit_absolute_positions_seed_qwen_rope_delta_for_decode(self):
+        from vmlx_engine.mllm_batch_generator import _seed_text_rope_delta_for_decode
+
+        class DummyLanguageModel:
+            _rope_deltas = None
+            _position_ids = mx.array([1, 2, 3])
+
+        lm = DummyLanguageModel()
+        input_ids = mx.array([[10, 11, 12]])
+
+        _seed_text_rope_delta_for_decode(lm, input_ids)
+
+        assert lm._position_ids is None
+        assert lm._rope_deltas.tolist() == [[0]]
+
     def test_batch_filter(self):
         """Test filtering a batch."""
         from vmlx_engine.mllm_batch_generator import MLLMBatch, MLLMBatchRequest

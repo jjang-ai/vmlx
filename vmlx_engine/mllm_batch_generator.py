@@ -473,6 +473,27 @@ def _absolute_text_position_ids(
     return mx.broadcast_to(pos[None, ...], (3, batch_size, seq_len))
 
 
+def _seed_text_rope_delta_for_decode(language_model: Any, input_ids: mx.array) -> None:
+    """Seed Qwen-style rope delta state after explicit cache-tail positions.
+
+    When a cache-hit tail is prefed with explicit absolute ``position_ids``,
+    mlx-vlm's Qwen language model does not compute/update ``_rope_deltas``.
+    The next decode token would then recompute positions from zero. Text-only
+    prompts have zero mRoPE delta, so seed that state explicitly and clear the
+    stale cached ``_position_ids`` slice.
+    """
+    if language_model is None or not hasattr(language_model, "_rope_deltas"):
+        return
+    batch_size = input_ids.shape[0] if getattr(input_ids, "ndim", 0) > 1 else 1
+    dtype = getattr(input_ids, "dtype", mx.int32)
+    try:
+        language_model._rope_deltas = mx.zeros((batch_size, 1), dtype=dtype)
+        if hasattr(language_model, "_position_ids"):
+            language_model._position_ids = None
+    except Exception:
+        return
+
+
 # Dedicated GPU stream for prefill + sample + materialize, matching the
 # pattern used by mlx_lm.generate_step, mlx_vlm.generate.generate_step,
 # and the reference jang_tools generate_vl helper.
@@ -1011,7 +1032,7 @@ class MLLMBatchResponse:
     uid: int  # Batch generator UID
     request_id: str  # External request ID
     token: int  # Generated token
-    logprobs: mx.array  # Log probabilities
+    logprobs: Optional[mx.array]  # Log probabilities when explicitly supported
     # "stop", "length", "error", or None. "error" is used for prefill failures
     # that the batched engine catches and converts into a client-visible error
     # (see Issue #56 Bug 1). Without a distinct reason, silent prefill crashes
@@ -2518,6 +2539,8 @@ class MLLMBatchGenerator:
                 _abs_position_ids = _absolute_text_position_ids(
                     input_ids, cache, lm
                 )
+                if _abs_position_ids is not None:
+                    _seed_text_rope_delta_for_decode(lm, input_ids)
 
                 def _lm_kwargs_for(start: int, end: int) -> Dict[str, Any]:
                     _kwargs: Dict[str, Any] = {"cache": cache}
@@ -2581,6 +2604,8 @@ class MLLMBatchGenerator:
                 _abs_position_ids = _absolute_text_position_ids(
                     input_ids, cache, lm
                 )
+                if _abs_position_ids is not None:
+                    _seed_text_rope_delta_for_decode(lm, input_ids)
 
                 def _lm_kwargs_for(start: int, end: int) -> Dict[str, Any]:
                     _kwargs: Dict[str, Any] = {"cache": cache}
@@ -2693,6 +2718,8 @@ class MLLMBatchGenerator:
                 _abs_position_ids = _absolute_text_position_ids(
                     input_ids, cache, lm
                 ) if cache is not None else None
+                if _abs_position_ids is not None:
+                    _seed_text_rope_delta_for_decode(lm, input_ids)
 
                 def _lm_kwargs_for(start: int, end: int) -> Dict[str, Any]:
                     _kwargs = dict(lm_kwargs)
@@ -4009,19 +4036,20 @@ class MLLMBatchGenerator:
 
         logits = logits[:, -1, :]
 
-        # Per-request sampling using each request's sampling parameters
-        logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
+        # Per-request sampling using each request's sampling parameters.
+        # VLM logprobs are rejected at the API layer, so do not materialize a
+        # full-vocab logsoftmax every decode token on the default fast path.
         batch = self.active_batch
-        if batch and len(batch.requests) == logprobs.shape[0]:
+        if batch and len(batch.requests) == logits.shape[0]:
             tokens = []
             for i, req in enumerate(batch.requests):
                 req_sampler = self._make_request_sampler(req)
-                tokens.append(req_sampler(logprobs[i:i+1]))
+                tokens.append(req_sampler(logits[i:i+1]))
             sampled = mx.concatenate(tokens, axis=0)
         else:
-            sampled = self.sampler(logprobs)
+            sampled = self.sampler(logits)
 
-        return sampled, list(logprobs)
+        return sampled, [None] * int(logits.shape[0])
 
     def _next(self) -> List[MLLMBatchResponse]:
         """
@@ -4098,6 +4126,7 @@ class MLLMBatchGenerator:
 
         y, logprobs = batch.y, batch.logprobs
         batch.y, batch.logprobs = self._step(y[:, None], batch.cache)
+        mx.async_eval(batch.y)
 
         y = y.tolist()
         toc = time.perf_counter()
