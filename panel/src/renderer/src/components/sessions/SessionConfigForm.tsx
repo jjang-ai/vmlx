@@ -802,7 +802,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           <IncompatWarning text={dsv4Active
             ? "JIT is disabled for DeepSeek-V4 native composite cache. DSV4 uses path-dependent SWA+CSA/HCA state that must stay on the uncompiled scheduler path."
             : turboQuantActive
-            ? "JIT is disabled for JANGTQ/TurboQuant KV. The live cache uses custom TurboQuant objects that mx.compile cannot trace; the engine keeps this path uncompiled."
+            ? "Server-level mx.compile is disabled for JANGTQ/TurboQuant KV because the live cache uses custom TurboQuant objects that mx.compile cannot trace. JANGTQ fused Metal kernels still run."
             : flashMoeActive
             ? "JIT is disabled while Flash MoE is on. Flash MoE's on-demand expert loading is incompatible with mx.compile tracing."
             : "JIT is disabled while distributed mode is on. Distributed orchestration cannot safely compile the local coordinator graph."} />
