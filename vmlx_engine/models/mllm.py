@@ -2030,6 +2030,7 @@ class MLXMultimodalLM:
         prompt_cache_state = None
         cache_hit = False
         use_cache = kwargs.pop("use_cache", True)
+        token_ids: list[int] = []
 
         if use_cache and self._cache_manager is not None and all_images:
             try:
@@ -2145,6 +2146,39 @@ class MLXMultimodalLM:
                 completion_tokens=token_count,
             )
             return
+
+        if (
+            use_cache
+            and self._cache_manager is not None
+            and all_images
+            and not cache_hit
+            and prompt_cache
+        ):
+            try:
+                prompt_tokens_count = last_prompt_tokens or len(token_ids)
+                cache_to_store = _copy_prompt_cache_to_prompt_boundary(
+                    prompt_cache, prompt_tokens_count
+                )
+                num_img_tokens = 0
+                if all_images and self.config:
+                    img_token_id = getattr(self.config, "image_token_index", None)
+                    if img_token_id is not None and token_ids:
+                        num_img_tokens = token_ids.count(img_token_id)
+                self._cache_manager.store(
+                    images=all_images,
+                    prompt=formatted_prompt,
+                    vision_embeddings=None,
+                    kv_cache=cache_to_store,
+                    token_ids=token_ids,
+                    num_image_tokens=num_img_tokens,
+                    model_name=self.model_name,
+                )
+                logger.info(
+                    f"[PREFIX CACHE] Stored streaming KV cache for {len(all_images)} "
+                    f"image(s) ({prompt_tokens_count} prompt tokens)"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to cache streaming MLLM prompt: {e}")
 
         # Final yield with finish_reason
         finish_reason = "length" if token_count >= max_tokens else "stop"

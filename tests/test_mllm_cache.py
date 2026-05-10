@@ -842,6 +842,79 @@ class TestMLXMultimodalLMCache:
         assert state.token_ids == [10, 11, 12]
         assert captured.get("prompt_cache") is None
 
+    def test_stream_chat_cache_miss_stores_prompt_boundary_only(
+        self, monkeypatch
+    ):
+        """Streaming image chat must populate cache for later streamed turns."""
+        from types import SimpleNamespace
+
+        import mlx.core as mx
+        import mlx_vlm
+        from mlx_vlm.models import cache as vlm_cache
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        manager = MLLMPrefixCacheManager(max_entries=4)
+
+        class _Tokenizer:
+            def encode(self, _text):
+                return [10, 11, 12, 13]
+
+        layer_cache = SimpleNamespace(
+            keys=mx.array([[[[1], [2], [3], [4], [5], [6]]]]),
+            values=mx.array([[[[11], [12], [13], [14], [15], [16]]]]),
+            state=(
+                mx.array([[[[1], [2], [3], [4], [5], [6]]]]),
+                mx.array([[[[11], [12], [13], [14], [15], [16]]]]),
+                6,
+            ),
+            offset=6,
+        )
+
+        def _fake_stream_generate(*_args, **_kwargs):
+            yield SimpleNamespace(text="o", prompt_tokens=4)
+            yield SimpleNamespace(text="k", prompt_tokens=4)
+
+        monkeypatch.setattr(vlm_cache, "make_prompt_cache", lambda _lm: [layer_cache])
+        monkeypatch.setattr(mlx_vlm, "stream_generate", _fake_stream_generate)
+
+        mllm = MLXMultimodalLM.__new__(MLXMultimodalLM)
+        mllm._loaded = True
+        mllm._cache_manager = manager
+        mllm.model_name = "fake-vlm"
+        mllm.model = SimpleNamespace(
+            config=SimpleNamespace(model_type="fake"),
+            language_model=object(),
+        )
+        mllm.config = SimpleNamespace(image_token_index=None)
+        mllm.processor = SimpleNamespace(tokenizer=_Tokenizer(), _patched_detok=True)
+        mllm._prepare_images = lambda _imgs: ["processed-image.png"]
+        mllm._prepare_video = lambda *_args, **_kwargs: []
+        mllm._apply_chat_template = lambda _msgs, _enable: "formatted prompt"
+
+        chunks = list(
+            mllm.stream_chat(
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": "image.png"}},
+                            {"type": "text", "text": "Describe"},
+                        ],
+                    }
+                ],
+                max_tokens=4,
+                use_cache=True,
+            )
+        )
+
+        assert "".join(c.text for c in chunks[:2]) == "ok"
+        assert len(manager._cache) == 1
+        stored_entry = next(iter(manager._cache.values()))
+        stored_layer = stored_entry.kv_cache[0]
+        assert stored_layer.offset == 4
+        assert stored_layer.keys.shape[2] == 4
+        assert stored_layer.values.shape[2] == 4
+
     def test_mllm_cache_custom_size(self):
         """Test custom cache size in MLXMultimodalLM."""
         from vmlx_engine.models.mllm import MLXMultimodalLM
