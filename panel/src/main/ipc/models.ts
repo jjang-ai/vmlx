@@ -22,6 +22,7 @@ import {
   IMAGE_MODELS,
   resolveImageModelRepo as _resolveImageModelRepo,
 } from "../../shared/imageModels";
+import { formatJangQuantizationLabel } from "../../shared/jangQuantization";
 
 /**
  * ms#75: resolve the HuggingFace-compatible base URL for API calls
@@ -573,20 +574,9 @@ async function scanModelsInPath(
                   "utf-8",
                 );
                 const jangConfig = JSON.parse(jangRaw);
-                if (
-                  jangConfig.format === "jang" ||
-                  jangConfig.format === "jjqf" ||
-                  jangConfig.format === "mxq"
-                ) {
-                  const profile = jangConfig.quantization?.profile;
-                  const bits =
-                    jangConfig.quantization?.actual_bits ||
-                    jangConfig.quantization?.target_bits;
-                  quantization = profile
-                    ? `${profile} (${bits}b)`
-                    : bits
-                      ? `JANG ${bits}-bit`
-                      : "JANG";
+                const jangLabel = formatJangQuantizationLabel(jangConfig);
+                if (jangLabel) {
+                  quantization = jangLabel;
                   break;
                 }
               } catch {

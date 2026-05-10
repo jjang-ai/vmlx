@@ -5031,6 +5031,40 @@ class TestTurboQuantKVTelemetry:
         assert status["profile"] == "JANGTQ2"
         assert status["sidecar"]["jangtq_runtime"] is True
 
+    @pytest.mark.parametrize(
+        ("profile", "expected_bits"),
+        [("JANGTQ1", 1), ("JANGTQ2", 2), ("JANGTQ4", 4)],
+    )
+    def test_quantization_status_derives_jangtq_bits_from_profile(
+        self, tmp_path, profile, expected_bits
+    ):
+        """Hy3/JANGTQ bundles may stamp only profile before sidecar sniffing.
+
+        The engine health surface must still expose the routed expert bit count
+        so the panel and release gates do not show a TurboQuant bundle as
+        "JANGTQ -bit" or treat it as unknown precision.
+        """
+        from vmlx_engine.server import _model_quantization_status
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "hy_v3",
+            "weight_format": "mxtq",
+        }))
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "weight_format": "mxtq",
+            "quantization": {
+                "profile": profile,
+                "quantization_backend": "turboquant",
+            },
+        }))
+
+        status = _model_quantization_status(str(tmp_path))
+
+        assert status["codec"] == "turboquant_codebook"
+        assert status["profile"] == profile
+        assert status["routed_expert_bits"] == expected_bits
+        assert status["target_bits"] == expected_bits
+
     def test_quantization_status_detects_prestacked_jangtq_bundle(self, tmp_path):
         from vmlx_engine.server import _model_quantization_status
 

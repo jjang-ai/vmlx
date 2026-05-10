@@ -391,6 +391,7 @@ def _family_fallback_for(model_name: str = "") -> tuple[float | None, float | No
 _THINK_STRIP_RE = re.compile(
     r"(?:<think>.*?</think>|\[THINK\].*?\[/THINK\])\s*", re.DOTALL
 )
+_JANGTQ_PROFILE_BITS_RE = re.compile(r"^JANGTQ([124])(?:$|[_-])", re.IGNORECASE)
 
 
 def _strip_think_for_tool_parse(text: str) -> str:
@@ -412,6 +413,21 @@ def _strip_think_for_tool_parse(text: str) -> str:
                 _, _, stripped = text.partition(end_tag)
                 break
     return stripped.strip()
+
+
+def _jangtq_bits_from_profile(profile: Any) -> int | None:
+    """Infer uniform routed-expert JANGTQ bits from a profile name.
+
+    Explicit per-role or per-projection `mxtq_bits` metadata remains the source
+    of truth. This is only a fallback for early bundles whose sidecar stamps
+    `quantization.profile=JANGTQ1|2|4` before adding `mxtq_bits`.
+    """
+    if not isinstance(profile, str):
+        return None
+    match = _JANGTQ_PROFILE_BITS_RE.match(profile.strip())
+    if not match:
+        return None
+    return int(match.group(1))
 
 
 def _dsv4_split_reasoning_from_token_ids(
@@ -3475,9 +3491,12 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
         or q_jang.get("mxtq_bits")
         or q_jang.get("bits_default")
     )
+    profile_bits = _jangtq_bits_from_profile(profile)
     routed_expert_bits_raw = (
         mxtq_bits.get("routed_expert") if isinstance(mxtq_bits, dict) else mxtq_bits
     )
+    if routed_expert_bits_raw is None:
+        routed_expert_bits_raw = profile_bits
     routed_expert_bits = None
     routed_expert_bits_by_projection = None
     routed_expert_bits_label = None
@@ -3505,7 +3524,7 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
         )
     elif routed_expert_bits_raw is not None:
         routed_expert_bits = int(routed_expert_bits_raw)
-    target_bits = q_jang.get("target_bits") or routed_expert_bits or q_cfg.get("bits")
+    target_bits = q_jang.get("target_bits") or routed_expert_bits or profile_bits or q_cfg.get("bits")
     actual_bits = q_jang.get("actual_bits")
 
     try:
