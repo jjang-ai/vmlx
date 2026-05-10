@@ -189,11 +189,11 @@ class MLLMSchedulerConfig:
     """
 
     # Maximum concurrent MLLM requests in the batch
-    max_num_seqs: int = 64
+    max_num_seqs: int = 1
     # Prefill batch size (all queued requests are prefilled together)
-    prefill_batch_size: int = 1024
+    prefill_batch_size: int = 512
     # Completion batch size
-    completion_batch_size: int = 1024
+    completion_batch_size: int = 512
     # Prefill step size for chunked prefill
     prefill_step_size: int = 2048
     # Enable vision embedding cache

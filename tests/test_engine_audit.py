@@ -4463,29 +4463,29 @@ class TestTurboQuantKVTelemetry:
         defaults_yaml = Path("./vmlx_engine/config/defaults.yaml").read_text()
         config_models = Path("./vmlx_engine/config/models.py").read_text()
 
-        assert "maxNumSeqs: 64" in session_form_source
-        assert "prefillBatchSize: 1024" in session_form_source
-        assert "completionBatchSize: 1024" in session_form_source
+        assert "maxNumSeqs: 1" in session_form_source
+        assert "prefillBatchSize: 512" in session_form_source
+        assert "completionBatchSize: 512" in session_form_source
         assert "enableJit: true" in session_form_source
-        assert "maxNumSeqs: 64" in sessions_source
-        assert "prefillBatchSize: 1024" in sessions_source
-        assert "completionBatchSize: 1024" in sessions_source
-        assert 'unlimitedLabel="Default (64)"' in session_form_source
-        assert 'unlimitedLabel="Default (1024)"' in session_form_source
+        assert "maxNumSeqs: 1" in sessions_source
+        assert "prefillBatchSize: 512" in sessions_source
+        assert "completionBatchSize: 512" in sessions_source
+        assert 'unlimitedLabel="Default (1)"' in session_form_source
+        assert 'unlimitedLabel="Default (512)"' in session_form_source
         assert 'unlimitedLabel="Default (2048)"' in session_form_source
         cli_source = Path("./vmlx_engine/cli.py").read_text()
-        assert '"--max-num-seqs", type=int, default=64' in cli_source
-        assert '"--prefill-batch-size", type=int, default=1024' in cli_source
-        assert '"--completion-batch-size", type=int, default=1024' in cli_source
-        assert "max_concurrent_requests: 64" in defaults_yaml
-        assert "prefill_batch_size: 1024" in defaults_yaml
-        assert "completion_batch_size: 1024" in defaults_yaml
+        assert '"--max-num-seqs", type=int, default=1' in cli_source
+        assert '"--prefill-batch-size", type=int, default=512' in cli_source
+        assert '"--completion-batch-size", type=int, default=512' in cli_source
+        assert "max_concurrent_requests: 1" in defaults_yaml
+        assert "prefill_batch_size: 512" in defaults_yaml
+        assert "completion_batch_size: 512" in defaults_yaml
         assert 'quantization: "q4"' in defaults_yaml
         assert 'quantization: "turboquant"' not in defaults_yaml
         assert "max_blocks: 1000" in defaults_yaml
-        assert "max_concurrent_requests: int = 64" in config_models
-        assert "prefill_batch_size: int = 1024" in config_models
-        assert "completion_batch_size: int = 1024" in config_models
+        assert "max_concurrent_requests: int = 1" in config_models
+        assert "prefill_batch_size: int = 512" in config_models
+        assert "completion_batch_size: int = 512" in config_models
         assert "max_blocks: int = 1000" in config_models
         assert "defaults to 5" not in sessions_source
         assert "default: 256" not in cli_source

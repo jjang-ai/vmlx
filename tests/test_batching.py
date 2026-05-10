@@ -274,10 +274,10 @@ class TestSchedulerConfig:
         """Test default scheduler config."""
         config = SchedulerConfig()
 
-        assert config.max_num_seqs == 64
+        assert config.max_num_seqs == 1
         assert config.policy == SchedulingPolicy.FCFS
-        assert config.prefill_batch_size == 1024
-        assert config.completion_batch_size == 1024
+        assert config.prefill_batch_size == 512
+        assert config.completion_batch_size == 512
 
     def test_custom_config(self):
         """Test custom scheduler config."""

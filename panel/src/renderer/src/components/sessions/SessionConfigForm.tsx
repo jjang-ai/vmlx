@@ -322,7 +322,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           defaultValue={DEFAULT_CONFIG.maxNumSeqs}
           allowUnlimited
           unlimitedValue={0}
-          unlimitedLabel="Default (64)"
+          unlimitedLabel="Default (1)"
         />
         <SliderField
           label="Prefill Batch Size"
@@ -335,7 +335,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           defaultValue={DEFAULT_CONFIG.prefillBatchSize}
           allowUnlimited
           unlimitedValue={0}
-          unlimitedLabel="Default (1024)"
+          unlimitedLabel="Default (512)"
         />
         <SliderField
           label="Prefill Step Size"
@@ -361,7 +361,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           defaultValue={DEFAULT_CONFIG.completionBatchSize}
           allowUnlimited
           unlimitedValue={0}
-          unlimitedLabel="Default (1024)"
+          unlimitedLabel="Default (512)"
         />
         <CheckField
           label="Smelt Mode"

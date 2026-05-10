@@ -1513,16 +1513,17 @@ Examples:
         help="TCP port for the API server (default: 8000). Example: --port 8092",
     )
     serve_parser.add_argument(
-        "--max-num-seqs", type=int, default=64,
+        "--max-num-seqs", type=int, default=1,
         help="Maximum number of requests that can be processed simultaneously. Higher values "
-             "use more memory but support more concurrent users. Requires --continuous-batching. "
-             "(default: 64)",
+             "use more memory but support more concurrent users. The default keeps the full "
+             "cache stack on for local single-user chat without reserving a multi-user batch. "
+             "Requires --continuous-batching. (default: 1)",
     )
     serve_parser.add_argument(
-        "--prefill-batch-size", type=int, default=1024,
+        "--prefill-batch-size", type=int, default=512,
         help="How many new prompts to process at once during the 'prefill' phase "
              "(reading the input). Higher = faster throughput but more memory spikes. "
-             "Requires --continuous-batching. (default: 1024)",
+             "Requires --continuous-batching. (default: 512)",
     )
     serve_parser.add_argument(
         "--prefill-step-size", type=int, default=2048,
@@ -1532,10 +1533,10 @@ Examples:
              "crashes. Requires --continuous-batching. (default: 2048)",
     )
     serve_parser.add_argument(
-        "--completion-batch-size", type=int, default=1024,
+        "--completion-batch-size", type=int, default=512,
         help="How many responses to generate tokens for simultaneously during the 'decode' phase. "
              "Higher = more throughput for concurrent requests but more memory. "
-             "Requires --continuous-batching. (default: 1024)",
+             "Requires --continuous-batching. (default: 512)",
     )
     serve_parser.add_argument(
         "--enable-prefix-cache",

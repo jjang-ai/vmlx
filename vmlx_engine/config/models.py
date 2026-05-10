@@ -203,9 +203,9 @@ class SamplingConfig(BaseModel):
 class InferenceConfig(BaseModel):
     """Inference engine configuration."""
 
-    max_concurrent_requests: int = 64
-    prefill_batch_size: int = 1024
-    completion_batch_size: int = 1024
+    max_concurrent_requests: int = 1
+    prefill_batch_size: int = 512
+    completion_batch_size: int = 512
     max_tokens_per_step: int = 8192
     sampling: SamplingConfig = Field(default_factory=SamplingConfig)
     max_tokens: int = 4096

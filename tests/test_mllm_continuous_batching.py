@@ -300,10 +300,10 @@ class TestMLLMSchedulerConfig:
 
         config = MLLMSchedulerConfig()
 
-        assert config.max_num_seqs == 64
-        assert config.prefill_batch_size == 1024
+        assert config.max_num_seqs == 1
+        assert config.prefill_batch_size == 512
         assert config.prefill_step_size == 2048
-        assert config.completion_batch_size == 1024
+        assert config.completion_batch_size == 512
         assert config.enable_vision_cache is True
         # Vision embedding cache remains conservative; text batch sizing is separate.
         assert config.vision_cache_size == 16

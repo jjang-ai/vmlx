@@ -265,13 +265,13 @@ Examples:
     inf_group.add_argument(
         "--max-concurrent-requests",
         type=int,
-        help="Maximum concurrent requests (default: 256)",
+        help="Maximum concurrent requests (default: 1)",
     )
     inf_group.add_argument(
-        "--prefill-batch-size", type=int, help="Prefill batch size (default: 8)"
+        "--prefill-batch-size", type=int, help="Prefill batch size (default: 512)"
     )
     inf_group.add_argument(
-        "--completion-batch-size", type=int, help="Completion batch size (default: 32)"
+        "--completion-batch-size", type=int, help="Completion batch size (default: 512)"
     )
     inf_group.add_argument(
         "--max-tokens", type=int, help="Maximum tokens to generate (default: 4096)"

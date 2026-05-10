@@ -147,14 +147,14 @@ class SchedulerConfig:
     """Configuration for the scheduler."""
 
     # Maximum number of concurrent requests in the batch
-    max_num_seqs: int = 64
+    max_num_seqs: int = 1
     # Maximum tokens to process per step (for prefill chunking)
     max_num_batched_tokens: int = 8192
     # Scheduling policy
     policy: SchedulingPolicy = SchedulingPolicy.FCFS
     # BatchGenerator settings
-    prefill_batch_size: int = 1024
-    completion_batch_size: int = 1024
+    prefill_batch_size: int = 512
+    completion_batch_size: int = 512
     prefill_step_size: int = 2048
 
     # Prefix cache settings
