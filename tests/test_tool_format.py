@@ -1071,6 +1071,68 @@ class TestFallbackToolPromptFormat:
         assert calls is None
         assert "README.md" in cleaned
 
+    def test_server_cleans_suppressed_zaya_tool_markup_without_calling_tool(
+        self, monkeypatch
+    ):
+        """tool_choice=none must strip native tool markup, not emit tool calls."""
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ResponsesRequest
+
+        monkeypatch.setattr(server, "_tool_call_parser", "zaya_xml")
+        req = ResponsesRequest(model="m", input="x", tool_choice="none")
+
+        cleaned = server._clean_suppressed_tool_markup_for_display(
+            "Before.\n"
+            "<zyphra_tool_call>\n"
+            "<function=list_directory>\n"
+            "<parameter=path>\n.\n</parameter>\n"
+            "</function>\n"
+            "</zyphra_tool_call>\n"
+            "After.",
+            req,
+        )
+
+        assert cleaned == "Before.\nAfter."
+        assert "<zyphra_tool_call>" not in cleaned
+        assert "<function=" not in cleaned
+
+    def test_server_streaming_suppressed_zaya_tool_markup_buffers_until_clean(
+        self, monkeypatch
+    ):
+        """Streaming tool_choice=none must not emit partial native tool tags."""
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ResponsesRequest
+
+        monkeypatch.setattr(server, "_tool_call_parser", "zaya_xml")
+        req = ResponsesRequest(model="m", input="x", tool_choice="none")
+
+        first = server._suppressed_tool_display_delta(
+            "Before.\n<zyphra_tool_call>\n",
+            "",
+            req,
+        )
+        assert first == "Before."
+
+        second = server._suppressed_tool_display_delta(
+            "Before.\n"
+            "<zyphra_tool_call>\n"
+            "<function=list_directory>\n"
+            "<parameter=path>\n.\n</parameter>\n"
+            "</function>\n"
+            "</zyphra_tool_call>\n"
+            "After.",
+            "Before.",
+            req,
+        )
+        assert second == "\nAfter."
+
+        hidden = server._suppressed_tool_display_delta(
+            "<zyphra_tool_call>\n<function=list_directory>",
+            "",
+            req,
+        )
+        assert hidden is None
+
     def test_server_repairs_schema_gated_tool_instruction_echo(self, monkeypatch):
         import vmlx_engine.server as server
         from vmlx_engine.api.models import ResponsesRequest

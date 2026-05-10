@@ -1393,10 +1393,12 @@ _reasoning_parser = None  # ReasoningParser instance when enabled
 # Cache: does a model's template inject <think> even when enable_thinking=False?
 # Some templates (e.g., MiniMax M2.5) unconditionally inject <think> regardless.
 _template_always_thinks_cache: dict[str, bool] = {}
+_template_starts_reasoning_cache: dict[tuple[str, bool], bool] = {}
 
 # Tool call markers to detect in streaming output for buffering
 _TOOL_CALL_MARKERS = [
     "<tool_call>",
+    "<zyphra_tool_call>",
     "<|tool_call>",  # Gemma 4 native tool call format
     "<|tool_call|>",
     "[TOOL_CALLS]",
@@ -1476,6 +1478,51 @@ def _template_always_thinks(tokenizer, model_name: str) -> bool:
         logger.debug(f"_template_always_thinks check failed for {model_name}: {e}")
 
     _template_always_thinks_cache[model_name] = result
+    return result
+
+
+def _template_starts_reasoning(
+    tokenizer,
+    model_name: str,
+    enable_thinking: bool,
+) -> bool:
+    """Check whether this request's rendered assistant prompt opens <think>."""
+    key = (model_name, bool(enable_thinking))
+    if key in _template_starts_reasoning_cache:
+        return _template_starts_reasoning_cache[key]
+
+    result = False
+    try:
+        test_msgs = [{"role": "user", "content": "__test__"}]
+        try:
+            rendered = tokenizer.apply_chat_template(
+                test_msgs,
+                enable_thinking=bool(enable_thinking),
+                add_generation_prompt=True,
+                tokenize=False,
+            )
+        except TypeError:
+            rendered = tokenizer.apply_chat_template(
+                test_msgs,
+                add_generation_prompt=True,
+                tokenize=False,
+            )
+        after_user = str(rendered).rsplit("__test__", 1)[-1]
+        # A closed sentinel (`<think></think>`) means "thinking produced
+        # nothing; visible answer starts now", not "parser starts in reasoning".
+        cleaned = re.sub(r"<think>\s*</think>", "", after_user)
+        result = (
+            "<think>" in cleaned
+            and "</think>" not in cleaned.split("<think>", 1)[1]
+        )
+    except Exception as exc:
+        logger.debug(
+            "_template_starts_reasoning check failed for %s: %s",
+            model_name,
+            exc,
+        )
+
+    _template_starts_reasoning_cache[key] = result
     return result
 
 
@@ -2513,6 +2560,58 @@ def _parse_tool_calls_with_parser(
     except Exception as e:
         logger.warning(f"Tool parser error: {e}")
         return _generic_parse_filtered(output_text)
+
+
+def _clean_suppressed_tool_markup_for_display(
+    output_text: str, request: ChatCompletionRequest | ResponsesRequest | None = None
+) -> str:
+    """Strip native tool-call markup when a request explicitly suppresses tools."""
+    if not output_text:
+        return output_text
+    try:
+        cleaned_text, tool_calls = _parse_tool_calls_with_parser(output_text, request)
+    except Exception as exc:
+        logger.debug("Suppressed tool-markup cleanup failed: %s", exc)
+        return output_text
+    if tool_calls:
+        return re.sub(r"[ \t]*\n[ \t]*\n[ \t]*", "\n", cleaned_text or "").strip()
+    return output_text
+
+
+def _suppressed_tool_display_delta(
+    accumulated_text: str,
+    streamed_display_text: str,
+    request: ChatCompletionRequest | ResponsesRequest | None = None,
+) -> str | None:
+    """Return the next visible delta while hiding suppressed native tool markup."""
+    cleaned = _clean_suppressed_tool_markup_for_display(accumulated_text, request)
+    if cleaned == accumulated_text:
+        marker_positions = [
+            pos
+            for marker in _TOOL_CALL_MARKERS
+            if (pos := accumulated_text.find(marker)) >= 0
+        ]
+        if marker_positions:
+            cleaned = accumulated_text[: min(marker_positions)].rstrip()
+        else:
+            # Avoid streaming a partial marker split across token boundaries.
+            partial_len = 0
+            for marker in _TOOL_CALL_MARKERS:
+                max_prefix = min(len(marker) - 1, len(accumulated_text))
+                for n in range(max_prefix, 0, -1):
+                    if accumulated_text.endswith(marker[:n]):
+                        partial_len = max(partial_len, n)
+                        break
+            cleaned = accumulated_text[:-partial_len] if partial_len else accumulated_text
+    if not cleaned:
+        return None
+    if streamed_display_text and cleaned.startswith(streamed_display_text):
+        delta = cleaned[len(streamed_display_text) :]
+    elif streamed_display_text == cleaned:
+        delta = ""
+    else:
+        delta = cleaned
+    return delta if delta else None
 
 
 def _suppress_tool_parsing_when_no_tools(
@@ -8710,6 +8809,14 @@ async def create_chat_completion(
                 _think_in_prompt_ns = False
             # User asked thinking off + template actually respects it → no think prefix
             _eff_thinking_ns = chat_kwargs.get("enable_thinking")
+            if _template_starts_reasoning(
+                engine.tokenizer,
+                _model_name or request.model,
+                bool(_eff_thinking_ns),
+            ):
+                _think_in_prompt_ns = True
+            elif not getattr(_mc_nonstream, "think_in_template", False):
+                _think_in_prompt_ns = False
             if _eff_thinking_ns is False and _think_in_prompt_ns:
                 if not _template_always_thinks(
                     engine.tokenizer, _model_name or request.model
@@ -8785,7 +8892,13 @@ async def create_chat_completion(
     cleaned_text, tool_calls = (
         _parse_tool_calls_with_parser(_cc_parse_text, request)
         if not _suppress_tools
-        else (_cc_parse_text or content_for_parsing, None)
+        else (
+            _clean_suppressed_tool_markup_for_display(
+                _cc_parse_text or content_for_parsing or "",
+                request,
+            ),
+            None,
+        )
     )
 
     # Process response_format if specified
@@ -10111,6 +10224,14 @@ async def create_response(
                 _think_in_prompt_ns = False
             # User asked thinking off + template actually respects it → no think prefix
             _eff_thinking_ns = chat_kwargs.get("enable_thinking")
+            if _template_starts_reasoning(
+                engine.tokenizer,
+                _model_name or request.model,
+                bool(_eff_thinking_ns),
+            ):
+                _think_in_prompt_ns = True
+            elif not getattr(_mc_nonstream, "think_in_template", False):
+                _think_in_prompt_ns = False
             if _eff_thinking_ns is False and _think_in_prompt_ns:
                 if not _template_always_thinks(
                     engine.tokenizer, _model_name or request.model
@@ -10209,7 +10330,13 @@ async def create_response(
     cleaned_text, tool_calls = (
         _parse_tool_calls_with_parser(parse_text, request)
         if not _suppress_tools
-        else (parse_text or content_for_parsing, None)
+        else (
+            _clean_suppressed_tool_markup_for_display(
+                parse_text or content_for_parsing or "",
+                request,
+            ),
+            None,
+        )
     )
 
     # Process text format (json_schema with strict) if specified — mirrors Chat Completions behavior
@@ -10596,6 +10723,16 @@ async def stream_chat_completion(
         if not _template_always_thinks(engine.tokenizer, _model_name or request.model):
             think_in_template = False
 
+    if _reasoning_parser:
+        if _template_starts_reasoning(
+            engine.tokenizer,
+            _model_name or request.model,
+            bool(_effective_thinking),
+        ):
+            think_in_template = True
+        elif not _model_config.think_in_template:
+            think_in_template = False
+
     if _hy3_prompt_starts_in_reasoning(
         model_key=_model_path or _model_name or request.model,
         enable_thinking=_effective_thinking,
@@ -10881,6 +11018,13 @@ async def stream_chat_completion(
                     emit_reasoning = delta_msg.reasoning
                     emit_content = delta_msg.content
 
+                if _suppress_tools and emit_content:
+                    emit_content = _suppressed_tool_display_delta(
+                        accumulated_content,
+                        streamed_content,
+                        request,
+                    )
+
                 # Skip chunks that have nothing to emit after conversion
                 if not emit_content and not emit_reasoning and not output.finished:
                     continue
@@ -10945,6 +11089,13 @@ async def stream_chat_completion(
                 if is_thinking_model and not think_prefix_sent and content:
                     content = "<think>" + content
                     think_prefix_sent = True
+
+                if _suppress_tools and content:
+                    content = _suppressed_tool_display_delta(
+                        accumulated_text,
+                        streamed_content,
+                        request,
+                    )
 
                 if content:
                     content_was_emitted = True
@@ -11500,6 +11651,16 @@ async def stream_responses_api(
         if not _template_always_thinks(engine.tokenizer, _model_name or request.model):
             think_in_template = False
 
+    if _reasoning_parser:
+        if _template_starts_reasoning(
+            engine.tokenizer,
+            _model_name or request.model,
+            bool(_effective_thinking),
+        ):
+            think_in_template = True
+        elif not _model_config.think_in_template:
+            think_in_template = False
+
     if _hy3_prompt_starts_in_reasoning(
         model_key=_model_path or _model_name or request.model,
         enable_thinking=_effective_thinking,
@@ -11687,6 +11848,13 @@ async def stream_responses_api(
                                 emit_reasoning = delta_msg.reasoning
                                 emit_content = delta_msg.content
 
+                            if _suppress_tools and emit_content:
+                                emit_content = _suppressed_tool_display_delta(
+                                    accumulated_content,
+                                    streamed_text,
+                                    request,
+                                )
+
                             # Emit reasoning as OpenAI Responses reasoning-summary events.
                             if emit_reasoning:
                                 reasoning_was_streamed = True
@@ -11739,6 +11907,13 @@ async def stream_responses_api(
                         if is_thinking_model and not think_prefix_sent and content:
                             content = "<think>" + content
                             think_prefix_sent = True
+
+                        if _suppress_tools and content:
+                            content = _suppressed_tool_display_delta(
+                                full_text,
+                                streamed_text,
+                                request,
+                            )
 
                         if content:
                             content_was_emitted = True
@@ -11849,6 +12024,11 @@ async def stream_responses_api(
             parse_text = _strip_think_for_tool_parse(full_text)
         cleaned_text, tool_calls = _parse_tool_calls_with_parser(
             parse_text or full_text, request
+        )
+    else:
+        cleaned_text = _clean_suppressed_tool_markup_for_display(
+            full_text,
+            request,
         )
 
     if (
@@ -12106,6 +12286,12 @@ async def stream_responses_api(
                         ),
                     },
                 )
+
+        if _suppress_tools and display_text:
+            display_text = _clean_suppressed_tool_markup_for_display(
+                display_text,
+                request,
+            )
 
         yield _sse(
             "response.output_text.done",

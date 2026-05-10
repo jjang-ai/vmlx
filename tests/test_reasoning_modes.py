@@ -709,6 +709,44 @@ def test_hy_v3_prompt_seeding_is_request_dependent(monkeypatch):
     ) is False
 
 
+def test_template_starts_reasoning_is_request_dependent_for_zaya_style_template():
+    """Default-off templates can still open a think rail for explicit thinking."""
+    from vmlx_engine import server
+
+    class ZayaStyleTokenizer:
+        has_thinking = True
+
+        def apply_chat_template(
+            self,
+            messages,
+            *,
+            enable_thinking=False,
+            add_generation_prompt=True,
+            tokenize=False,
+        ):
+            assert add_generation_prompt is True
+            assert tokenize is False
+            content = messages[0]["content"]
+            if enable_thinking:
+                return (
+                    f"<|im_start|>user\n{content}<|im_end|>\n"
+                    "<|im_start|>assistant\n<think>\n"
+                )
+            return (
+                f"<|im_start|>user\n{content}<|im_end|>\n"
+                "<|im_start|>assistant\n<think>\n</think>\n\n"
+            )
+
+    server._template_starts_reasoning_cache.clear()
+
+    assert server._template_starts_reasoning(
+        ZayaStyleTokenizer(), "zaya-test", True
+    ) is True
+    assert server._template_starts_reasoning(
+        ZayaStyleTokenizer(), "zaya-test", False
+    ) is False
+
+
 def test_hy_v3_qwen3_reasoning_parser_no_think_does_not_leak_tags():
     """Default Hy3 no_think prompt has closed tags; output must stay visible."""
     from vmlx_engine.reasoning.qwen3_parser import Qwen3ReasoningParser
