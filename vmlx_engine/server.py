@@ -1195,11 +1195,13 @@ def _resolve_enable_thinking(
         return False
     if _default_enable_thinking is True:
         return True
-    # vMLX's production default is reasoning-on for capable models. A stale
-    # server default false from older panel/profile state must not defeat that;
-    # explicit per-request/template false above still disables reasoning.
     if _default_enable_thinking is False:
-        return True
+        # vMLX's production default is reasoning-on for unknown models to
+        # avoid accidentally breaking first-run behavior. A stale
+        # --default-enable-thinking=false from older profiles should *not*
+        # override known model configs, but can still fall back to on for
+        # genuinely unknown models.
+        return False if getattr(_mc, "family_name", None) not in (None, "unknown") else True
 
     if auto_detect:
         _enable = bool(getattr(_mc, "think_in_template", False)) if _mc else False

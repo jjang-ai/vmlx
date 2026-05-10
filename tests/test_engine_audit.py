@@ -2529,6 +2529,39 @@ class TestStartupCompatibilityGuards:
 class TestZayaCCACachePolicy:
     """ZAYA/CCA must not fall through generic hybrid cache paths."""
 
+    def _write_minimax_fixture(self, tmp_path):
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "minimax",
+            "text_config": {
+                "model_type": "minimax",
+            },
+        }))
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "version": 2,
+            "weight_format": "mxtq",
+            "cache_type": "kv",
+            "source_model": {
+                "name": "MiniMax-Test",
+                "architecture": "minimax",
+            },
+            "capabilities": {
+                "family": "minimax",
+                "reasoning_parser": "qwen3",
+                "think_in_template": True,
+                "supports_thinking": True,
+                "cache_type": "kv",
+                "modality": "text",
+                "supports_tools": True,
+            },
+            "chat": {
+                "reasoning": {
+                    "supported": True,
+                    "parser": "qwen3",
+                }
+            },
+        }))
+        return tmp_path
+
     def _write_zaya_fixture(self, tmp_path, *, weight_format="mxtq"):
         (tmp_path / "config.json").write_text(json.dumps({
             "model_type": "zaya",
@@ -2634,6 +2667,29 @@ class TestZayaCCACachePolicy:
 
         assert resolved is True
         assert explicit_off is False
+
+    def test_server_default_false_respected_for_known_reasoning_model(self, tmp_path):
+        from vmlx_engine import server
+        from vmlx_engine.model_config_registry import get_model_config_registry
+
+        old_default = server._default_enable_thinking
+        server._default_enable_thinking = False
+        try:
+            model_dir = self._write_minimax_fixture(tmp_path)
+            registry = get_model_config_registry()
+            registry.clear_cache()
+            resolved = server._resolve_enable_thinking(
+                request_value=None,
+                ct_kwargs={},
+                tools_present=False,
+                model_key=str(model_dir),
+                engine=None,
+                auto_detect=False,
+            )
+        finally:
+            server._default_enable_thinking = old_default
+
+        assert resolved is False
 
     def test_gemma4_tools_still_auto_disable_thinking(self):
         from vmlx_engine import server
