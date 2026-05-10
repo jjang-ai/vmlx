@@ -207,6 +207,15 @@ class ModelConfigRegistry:
                 jcfg = json.loads(jcfg_path.read_text())
             except Exception:
                 return None
+            local_model_config: dict[str, Any] = {}
+            try:
+                cfg_path = Path(model_name) / "config.json"
+                if cfg_path.is_file():
+                    loaded_cfg = json.loads(cfg_path.read_text())
+                    if isinstance(loaded_cfg, dict):
+                        local_model_config = loaded_cfg
+            except Exception:
+                local_model_config = {}
             caps = jcfg.get("capabilities")
             if not isinstance(caps, dict):
                 # Fallback: some bundles (notably DSV4-Flash) use the
@@ -274,10 +283,11 @@ class ModelConfigRegistry:
             # `supports_thinking` separate from parser metadata only for
             # families where that is an explicit contract: ZAYA/ZAYA1-VL keep
             # qwen3 parser metadata while product behavior defaults to
-            # no-thinking via supports_thinking=False. Only text ZAYA keeps
-            # think_in_template=True; current ZAYA1-VL templates do not inject
-            # a think rail. Other no-thinking families (Ling/Bailing) must not
-            # resurrect stale reasoning-parser stamps.
+            # no-thinking via supports_thinking=False. ZAYA/ZAYA1-VL do not
+            # preserve stamped think_in_template=True values because their
+            # product prompt is forced to enable_thinking=False and starts from
+            # a closed empty think block. Other no-thinking families
+            # (Ling/Bailing) must not resurrect stale reasoning-parser stamps.
             from dataclasses import replace
             updates: Dict[str, Any] = {}
             rp = caps.get("reasoning_parser")
@@ -287,9 +297,11 @@ class ModelConfigRegistry:
             ct = caps.get("cache_type")
             cst = caps.get("cache_subtype") or jcfg.get("cache_subtype")
             mod = caps.get("modality")
+            model_type_from_config = str(local_model_config.get("model_type") or "").lower()
+            has_config_vision = isinstance(local_model_config.get("vision_config"), dict)
             base_supports_thinking = getattr(base, "supports_thinking", None)
             preserve_parser_metadata_when_no_thinking = base.family_name in {"zaya", "zaya1_vl"}
-            preserve_template_metadata_when_no_thinking = base.family_name == "zaya"
+            preserve_template_metadata_when_no_thinking = False
             if base_supports_thinking is False:
                 updates["supports_thinking"] = False
             elif isinstance(sth, bool):
@@ -316,7 +328,12 @@ class ModelConfigRegistry:
                 # tooling (image-extraction, etc.) is available on the model.
                 updates["is_mllm"] = True
             elif mod == "text":
-                updates["is_mllm"] = False
+                if base.family_name == "zaya1_vl" and (
+                    model_type_from_config == "zaya1_vl" or has_config_vision
+                ):
+                    updates["is_mllm"] = True
+                else:
+                    updates["is_mllm"] = False
             if updates:
                 base = replace(base, **updates)
             return base

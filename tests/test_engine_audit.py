@@ -2617,7 +2617,7 @@ class TestZayaCCACachePolicy:
         assert cfg.cache_subtype == "zaya_cca"
         assert cfg.tool_parser == "zaya_xml"
         assert cfg.reasoning_parser == "qwen3"
-        assert cfg.think_in_template is True
+        assert cfg.think_in_template is False
         assert cfg.supports_thinking is False
 
     def test_zaya_auto_thinking_disabled_even_with_stale_stamp(self, tmp_path):
@@ -2897,8 +2897,7 @@ class TestZayaCCACachePolicy:
             assert caps.get("cache_type") == "hybrid"
             assert caps.get("tool_parser") == "zaya_xml"
             assert caps.get("reasoning_parser") == "qwen3"
-            expected_think_in_template = model_type == "zaya"
-            assert caps.get("think_in_template") is expected_think_in_template
+            assert caps.get("think_in_template") is False
             assert caps.get("supports_thinking") is False
             assert cfg.get("zaya_expert_layout") == "split_switch_mlp"
             assert caps.get("modality") == ("vision" if model_type == "zaya1_vl" else "text")
@@ -2909,7 +2908,7 @@ class TestZayaCCACachePolicy:
             assert rcfg.family_name == expected_family
             assert rcfg.tool_parser == "zaya_xml"
             assert rcfg.reasoning_parser == "qwen3"
-            assert rcfg.think_in_template is expected_think_in_template
+            assert rcfg.think_in_template is False
             assert rcfg.supports_thinking is False
             assert rcfg.is_mllm is (model_type == "zaya1_vl")
 

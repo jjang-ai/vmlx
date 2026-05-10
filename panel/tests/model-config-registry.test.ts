@@ -77,6 +77,36 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.isMultimodal).toBe(true)
   })
 
+  it('keeps ZAYA1-VL multimodal when a stale stamp says text', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'zaya1_vl',
+        vision_config: { model_type: 'qwen2_5_vl' },
+      },
+      {
+        cache_subtype: 'zaya_cca',
+        capabilities: {
+          family: 'zaya1_vl',
+          tool_parser: 'zaya_xml',
+          reasoning_parser: 'qwen3',
+          think_in_template: true,
+          supports_thinking: true,
+          cache_type: 'hybrid',
+          modality: 'text',
+        },
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('zaya1-vl')
+    expect(detected.cacheType).toBe('hybrid')
+    expect(detected.usePagedCache).toBe(false)
+    expect(detected.toolParser).toBe('zaya_xml')
+    expect(detected.reasoningParser).toBeUndefined()
+    expect(detected.isMultimodal).toBe(true)
+  })
+
   it('detects Ling/Bailing hybrid with tools and hybrid cache defaults but no reasoning parser', () => {
     const dir = makeModelDir(
       {

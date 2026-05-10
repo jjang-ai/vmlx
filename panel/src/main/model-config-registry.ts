@@ -475,6 +475,10 @@ function resolveJangMultimodal(jangCfg: any, parsedConfig: any): boolean {
     return false
   }
 
+  if (parsedConfig?.model_type === 'zaya1_vl' && hasVisionConfig) {
+    return true
+  }
+
   // Explicit converter stamps are authoritative. A JANG bundle may keep a
   // vision_config in config.json even when the emitted artifact is text-only.
   if (typeof jangCfg?.has_vision === 'boolean') {

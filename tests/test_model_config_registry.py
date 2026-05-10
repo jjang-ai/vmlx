@@ -380,10 +380,9 @@ class TestModelConfigRegistry:
         """Ling is not a reasoning product surface.
 
         Some local or older converted bundles can stamp a parser even when the
-        registered family has supports_thinking=False. ZAYA/ZAYA1-VL are the
-        explicit exception because their template metadata is intentionally
-        preserved while behavior defaults off. Ling/Bailing must not inherit a
-        stale parser stamp and accidentally re-enable reasoning extraction.
+        registered family has supports_thinking=False. Ling/Bailing must not
+        inherit a stale parser stamp and accidentally re-enable reasoning
+        extraction.
         """
         import json
 
@@ -422,6 +421,116 @@ class TestModelConfigRegistry:
         assert result.reasoning_parser is None
         assert result.think_in_template is False
         assert result.tool_parser == "deepseek"
+
+    def test_zaya_preserves_parser_metadata_but_suppresses_stale_think_prompt(
+        self, empty_registry, tmp_path
+    ):
+        """ZAYA keeps qwen3 parser metadata for explicit opt-in extraction,
+        but stale converter stamps must not claim the no-thinking product
+        prompt starts inside an open <think> block.
+        """
+        import json
+
+        empty_registry.register(
+            ModelConfig(
+                family_name="zaya",
+                model_types=["zaya"],
+                cache_type="hybrid",
+                cache_subtype="zaya_cca",
+                tool_parser="zaya_xml",
+                reasoning_parser="qwen3",
+                think_in_template=False,
+                supports_thinking=False,
+                priority=10,
+            )
+        )
+        (tmp_path / "config.json").write_text(json.dumps({"model_type": "zaya"}))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "cache_subtype": "zaya_cca",
+                    "capabilities": {
+                        "family": "zaya",
+                        "cache_type": "hybrid",
+                        "cache_subtype": "zaya_cca",
+                        "tool_parser": "zaya_xml",
+                        "reasoning_parser": "qwen3",
+                        "think_in_template": True,
+                        "supports_thinking": True,
+                        "modality": "text",
+                    }
+                }
+            )
+        )
+
+        result = empty_registry.lookup(str(tmp_path))
+
+        assert result.family_name == "zaya"
+        assert result.cache_subtype == "zaya_cca"
+        assert result.tool_parser == "zaya_xml"
+        assert result.reasoning_parser == "qwen3"
+        assert result.supports_thinking is False
+        assert result.think_in_template is False
+
+    def test_zaya1_vl_vision_config_beats_stale_text_modality_stamp(
+        self, empty_registry, tmp_path
+    ):
+        """Old or hand-edited stamps must not demote a real ZAYA1-VL bundle.
+
+        ZAYA1-VL has `vision_config` in config.json. A stale
+        `capabilities.modality=text` stamp can exist on local copies, but the
+        registry must not use that stale stamp to turn off MLLM routing.
+        """
+        import json
+
+        empty_registry.register(
+            ModelConfig(
+                family_name="zaya1_vl",
+                model_types=["zaya1_vl"],
+                cache_type="hybrid",
+                cache_subtype="zaya_cca",
+                tool_parser="zaya_xml",
+                reasoning_parser="qwen3",
+                think_in_template=False,
+                supports_thinking=False,
+                is_mllm=True,
+                priority=10,
+            )
+        )
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "zaya1_vl",
+                    "vision_config": {"model_type": "qwen2_5_vl"},
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "cache_subtype": "zaya_cca",
+                    "capabilities": {
+                        "family": "zaya1_vl",
+                        "cache_type": "hybrid",
+                        "cache_subtype": "zaya_cca",
+                        "tool_parser": "zaya_xml",
+                        "reasoning_parser": "qwen3",
+                        "think_in_template": True,
+                        "supports_thinking": True,
+                        "modality": "text",
+                    },
+                }
+            )
+        )
+
+        result = empty_registry.lookup(str(tmp_path))
+
+        assert result.family_name == "zaya1_vl"
+        assert result.is_mllm is True
+        assert result.cache_subtype == "zaya_cca"
+        assert result.reasoning_parser == "qwen3"
+        assert result.think_in_template is False
+        assert result.supports_thinking is False
 
 
 class TestModelConfigs:
@@ -626,7 +735,7 @@ class TestModelConfigs:
         assert config.cache_subtype == "zaya_cca"
         assert config.tool_parser == "zaya_xml"
         assert config.reasoning_parser == "qwen3"
-        assert config.think_in_template is True
+        assert config.think_in_template is False
         assert config.supports_thinking is False
 
     # GLM family
