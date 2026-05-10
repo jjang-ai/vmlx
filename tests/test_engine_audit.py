@@ -5603,3 +5603,46 @@ class TestJitTurboQuantSymmetricGuard:
         assert "isTurboQuant" in registry
         # The stamp site sets next.isTurboQuant = true
         assert "next.isTurboQuant = true" in registry
+
+
+class TestStreamUsagePropagatesCacheDetail:
+    """Streaming SSE finish-chunk usage must surface cache_detail alongside
+    cached_tokens, mirroring the non-stream get_usage() path. Without this,
+    typed cache labels (paged+zaya_cca, paged+ssm+disk, paged+disk+tq, etc.)
+    are silently dropped from stream consumers even though server-side
+    cache_hit_tokens_by_detail accounting still works.
+
+    Bug exposed during ZAYA1-VL typed CCA validation (commit 4f3c1dc6):
+    non-stream returned cache_detail=paged+zaya_cca, stream returned None.
+    """
+
+    def test_chat_stream_tracks_cache_detail_alongside_cached_tokens(self):
+        from pathlib import Path
+        source = Path("./vmlx_engine/server.py").read_text()
+        assert "cached_tokens = 0\n    cache_detail" in source
+        assert (
+            'getattr(output, "cache_detail", "") or None\n            if _detail is not None:\n                cache_detail = _detail'
+            in source
+        )
+
+    def test_chat_stream_finish_chunks_emit_cache_detail(self):
+        from pathlib import Path
+        source = Path("./vmlx_engine/server.py").read_text()
+        # All three chat-stream finish paths (regular, error, tool_calls)
+        # construct PromptTokensDetails manually; each must pass cache_detail.
+        assert (
+            source.count("cached_tokens=cached_tokens, cache_detail=cache_detail")
+            >= 3
+        )
+
+    def test_responses_stream_tracks_cache_detail_alongside_cached(self):
+        from pathlib import Path
+        source = Path("./vmlx_engine/server.py").read_text()
+        assert "_cached = 0\n    _cache_detail" in source
+        assert '_detail_chunk = getattr(output, "cache_detail", "") or None' in source
+
+    def test_responses_stream_finish_emits_cache_detail(self):
+        from pathlib import Path
+        source = Path("./vmlx_engine/server.py").read_text()
+        # Responses uses dict-builder shape, not PromptTokensDetails class.
+        assert '"cache_detail": _cache_detail' in source

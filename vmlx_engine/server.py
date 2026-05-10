@@ -10305,6 +10305,7 @@ async def stream_chat_completion(
     prompt_tokens = 0
     completion_tokens = 0
     cached_tokens = 0
+    cache_detail: str | None = None
     last_output = None
     stream_logprob_offset = 0
 
@@ -10341,6 +10342,9 @@ async def stream_chat_completion(
                 completion_tokens = output.completion_tokens
             if hasattr(output, "cached_tokens") and output.cached_tokens:
                 cached_tokens = output.cached_tokens
+            _detail = getattr(output, "cache_detail", "") or None
+            if _detail is not None:
+                cache_detail = _detail
             chunk_logprobs = None
             if request.logprobs:
                 raw_logprobs = getattr(output, "logprobs", None) or []
@@ -10628,7 +10632,7 @@ async def stream_chat_completion(
             )
             if cached_tokens > 0:
                 _err_usage.prompt_tokens_details = PromptTokensDetails(
-                    cached_tokens=cached_tokens
+                    cached_tokens=cached_tokens, cache_detail=cache_detail
                 )
             err_usage_chunk = ChatCompletionChunk(
                 id=response_id,
@@ -10755,7 +10759,7 @@ async def stream_chat_completion(
                 )
                 if cached_tokens > 0:
                     _tc_usage.prompt_tokens_details = PromptTokensDetails(
-                        cached_tokens=cached_tokens
+                        cached_tokens=cached_tokens, cache_detail=cache_detail
                     )
                 usage_chunk = ChatCompletionChunk(
                     id=response_id,
@@ -10981,7 +10985,7 @@ async def stream_chat_completion(
         )
         if cached_tokens > 0:
             _usage.prompt_tokens_details = PromptTokensDetails(
-                cached_tokens=cached_tokens
+                cached_tokens=cached_tokens, cache_detail=cache_detail
             )
         usage_chunk = ChatCompletionChunk(
             id=response_id,
@@ -11080,6 +11084,7 @@ async def stream_responses_api(
     prompt_tokens = 0
     completion_tokens = 0
     _cached = 0
+    _cache_detail: str | None = None
     last_output = (
         None  # Track last engine output for finish_reason (status: incomplete)
     )
@@ -11188,6 +11193,9 @@ async def stream_responses_api(
             if hasattr(output, "completion_tokens") and output.completion_tokens:
                 completion_tokens = output.completion_tokens
             _cached = getattr(output, "cached_tokens", 0)
+            _detail_chunk = getattr(output, "cache_detail", "") or None
+            if _detail_chunk is not None:
+                _cache_detail = _detail_chunk
 
             if delta_text:
                 full_text += delta_text
@@ -11377,7 +11385,10 @@ async def stream_responses_api(
                     "total_tokens": prompt_tokens + completion_tokens,
                 }
                 if _cached > 0:
-                    usage_obj["input_tokens_details"] = {"cached_tokens": _cached}
+                    _ictd = {"cached_tokens": _cached}
+                    if _cache_detail:
+                        _ictd["cache_detail"] = _cache_detail
+                    usage_obj["input_tokens_details"] = _ictd
                 yield _sse(
                     "response.usage",
                     {
@@ -11869,7 +11880,13 @@ async def stream_responses_api(
             "output_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
             **(
-                {"input_tokens_details": {"cached_tokens": _cached}}
+                {
+                    "input_tokens_details": (
+                        {"cached_tokens": _cached, "cache_detail": _cache_detail}
+                        if _cache_detail
+                        else {"cached_tokens": _cached}
+                    )
+                }
                 if _cached > 0
                 else {}
             ),
