@@ -498,11 +498,20 @@ def register_all(registry=None):
     # auto-detects via .tq_packed suffix. Cache type: "kv" at engine
     # boundary (MLA is internal to DeepseekV3Attention, cache surface
     # is standard KV).
+    # Kimi K2.6 (kimi_k25) chat template uses `<|im_user|>` (163587),
+    # `<|im_assistant|>` (163588), `<|im_system|>` (163594) as role-boundary
+    # markers. Generation prompt is `<|im_assistant|>assistant<|im_middle|>`
+    # so the model starts AFTER the role marker — legitimate output never
+    # contains `<|im_user|>` or `<|im_system|>`. Without these stops a
+    # hallucinated new turn would not terminate generation (same class as
+    # the 2026-05-03 DSV4 incident). eos_tokens[0] (`<|im_end|>`, 163586)
+    # is the primary EOS already in tokenizer eos_token_id.
     _register(
         ModelConfig(
             family_name="kimi_k25",
             model_types=["kimi_k25"],
             cache_type="kv",
+            eos_tokens=["<|im_end|>", "<|im_user|>", "<|im_system|>"],
             # "kimi" is the canonical parser name in VALID_TOOL_PARSERS
             # (tests/test_model_config_registry.py); KimiToolParser registers
             # the aliases ["kimi", "kimi_k2", "moonshot"] at import so this

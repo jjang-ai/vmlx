@@ -1143,6 +1143,35 @@ class TestModelConfigComprehensiveChecks:
             "model output never contains this token."
         )
 
+    def test_kimi_k25_eos_includes_role_boundary_markers(self, registry):
+        """REGRESSION (2026-05-09): Kimi K2.6 (kimi_k25) chat template uses
+        `<|im_user|>` (163587), `<|im_assistant|>` (163588), `<|im_system|>`
+        (163594) as role-boundary tokens. The generation prompt is
+        `<|im_assistant|>assistant<|im_middle|>`, so the model starts AFTER
+        the role marker and legitimate output should never contain
+        `<|im_user|>`/`<|im_system|>`. Without these stops, a hallucinated
+        new turn does not terminate generation — same hallucination-loop
+        class as the 2026-05-03 DSV4 incident. eos_tokens[0] (`<|im_end|>`,
+        163586) is the primary EOS already in tokenizer eos_token_id."""
+        registry.clear_cache()
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("kimi_k25")):
+            config = registry.lookup("Kimi-K2.6-Small-JANGTQ")
+        assert config.family_name == "kimi_k25"
+        assert config.eos_tokens is not None, (
+            "kimi_k25 has no explicit eos_tokens — it cannot install the "
+            "`<|im_user|>`/`<|im_system|>` role-boundary stops and is "
+            "vulnerable to hallucinated user-turn loops."
+        )
+        assert "<|im_user|>" in config.eos_tokens, (
+            "kimi_k25 eos_tokens must include `<|im_user|>` (163587). It "
+            "is the user role-boundary marker; model emitting this is a "
+            "hallucinated new turn and must terminate generation."
+        )
+        assert "<|im_system|>" in config.eos_tokens, (
+            "kimi_k25 eos_tokens must include `<|im_system|>` (163594) for "
+            "the same reason — model should never emit a system turn."
+        )
+
     def test_qwen3_is_reasoning_but_qwen2_is_not(self, registry):
         """Qwen3 IS a reasoning model, Qwen2 is NOT. They must differ."""
         registry.clear_cache()
