@@ -47,6 +47,36 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.reasoningParser).toBeUndefined()
   })
 
+  it('detects ZAYA1-VL as multimodal CCA hybrid without reasoning parser', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'zaya1_vl',
+        vision_config: { model_type: 'qwen2_5_vl' },
+      },
+      {
+        cache_subtype: 'zaya_cca',
+        capabilities: {
+          family: 'zaya1_vl',
+          tool_parser: 'zaya_xml',
+          reasoning_parser: 'qwen3',
+          think_in_template: false,
+          supports_thinking: false,
+          cache_type: 'hybrid',
+          modality: 'vision',
+        },
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('zaya1-vl')
+    expect(detected.cacheType).toBe('hybrid')
+    expect(detected.usePagedCache).toBe(false)
+    expect(detected.toolParser).toBe('zaya_xml')
+    expect(detected.reasoningParser).toBeUndefined()
+    expect(detected.isMultimodal).toBe(true)
+  })
+
   it('detects Ling/Bailing hybrid with tools and hybrid cache defaults but no reasoning parser', () => {
     const dir = makeModelDir(
       {

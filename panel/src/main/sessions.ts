@@ -751,10 +751,10 @@ export class SessionManager extends EventEmitter {
           // `reasoningParser=qwen3` in session configs. Those stale values look
           // like user overrides on the next launch, so the generic "preserve
           // explicit overrides" rule keeps poisoning the runtime even after
-          // registry detection is fixed. ZAYA's current contract is explicit:
-          // native XML tools, no reasoning parser. Preserve only explicit
-          // "None" (`''`) choices.
-          if (freshConfig.family === 'zaya') {
+          // registry detection is fixed. ZAYA/ZAYA1-VL's current product
+          // contract is explicit: native XML tools, no reasoning default.
+          // Preserve only explicit "None" (`''`) choices.
+          if (freshConfig.family === 'zaya' || freshConfig.family === 'zaya1-vl') {
             if (config.toolCallParser !== '') {
               config.toolCallParser = freshConfig.toolParser || 'auto'
             }
@@ -776,7 +776,7 @@ export class SessionManager extends EventEmitter {
           if (oldFamily && oldFamily !== 'auto' && freshConfig.toolParser && oldFamily !== freshConfig.toolParser) {
             this.pushLog(sessionId, `[INFO] Model config re-detected from disk (was: ${oldFamily}, now: ${freshConfig.toolParser})`)
           }
-          if (oldReasoningParser && oldReasoningParser !== 'auto' && freshConfig.family === 'zaya' && oldReasoningParser !== config.reasoningParser) {
+          if (oldReasoningParser && oldReasoningParser !== 'auto' && (freshConfig.family === 'zaya' || freshConfig.family === 'zaya1-vl') && oldReasoningParser !== config.reasoningParser) {
             this.pushLog(sessionId, `[INFO] ZAYA reasoning parser reset from stale ${oldReasoningParser} to auto (no reasoning parser)`)
           }
           // Update DB with refreshed config

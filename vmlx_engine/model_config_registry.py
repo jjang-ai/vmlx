@@ -270,11 +270,14 @@ class ModelConfigRegistry:
                 )
 
             # Override with stamped values. For most families, the converter
-            # stamp wins because it describes the emitted artifact. Families
-            # with an explicit runtime verdict (`supports_thinking=False`)
-            # keep that verdict even if older local bundles were stamped too
-            # optimistically; otherwise Auto can open a reasoning rail and
-            # return reasoning-only/empty visible content.
+            # stamp wins because it describes the emitted artifact. Keep
+            # `supports_thinking` separate from parser metadata only for
+            # families where that is an explicit contract: ZAYA/ZAYA1-VL keep
+            # qwen3 parser metadata while product behavior defaults to
+            # no-thinking via supports_thinking=False. Only text ZAYA keeps
+            # think_in_template=True; current ZAYA1-VL templates do not inject
+            # a think rail. Other no-thinking families (Ling/Bailing) must not
+            # resurrect stale reasoning-parser stamps.
             from dataclasses import replace
             updates: Dict[str, Any] = {}
             rp = caps.get("reasoning_parser")
@@ -285,20 +288,21 @@ class ModelConfigRegistry:
             cst = caps.get("cache_subtype") or jcfg.get("cache_subtype")
             mod = caps.get("modality")
             base_supports_thinking = getattr(base, "supports_thinking", None)
+            preserve_parser_metadata_when_no_thinking = base.family_name in {"zaya", "zaya1_vl"}
+            preserve_template_metadata_when_no_thinking = base.family_name == "zaya"
             if base_supports_thinking is False:
-                updates["reasoning_parser"] = None
-                updates["think_in_template"] = False
                 updates["supports_thinking"] = False
             elif isinstance(sth, bool):
                 updates["supports_thinking"] = sth
-                if not sth:
-                    updates["reasoning_parser"] = None
-                    updates["think_in_template"] = False
-            if base_supports_thinking is not False and rp is not None:
+            if rp is not None and (
+                base_supports_thinking is not False or preserve_parser_metadata_when_no_thinking
+            ):
                 updates["reasoning_parser"] = rp if rp != "none" else None
             if tp is not None:
                 updates["tool_parser"] = tp if tp != "none" else None
-            if base_supports_thinking is not False and isinstance(tin, bool):
+            if isinstance(tin, bool) and (
+                base_supports_thinking is not False or preserve_template_metadata_when_no_thinking
+            ):
                 updates["think_in_template"] = tin
             if ct:
                 updates["cache_type"] = ct

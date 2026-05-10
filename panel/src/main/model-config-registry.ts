@@ -84,6 +84,10 @@ function registerFamily(familyName: string, config: Omit<ModelConfig, 'familyNam
 // reasoning is intentionally not advertised until ZAYA thinking passes live
 // Chat/Responses/Anthropic/Ollama gates; Auto must stay visible-answer-first.
 registerFamily('zaya', { cacheType: 'hybrid', toolParser: 'zaya_xml', usePagedCache: false, enableAutoToolChoice: true, description: 'ZAYA CCA hybrid MoE', priority: 3 })
+// ZAYA1-VL is detected separately so the UI does not fall through to generic
+// VLM defaults. Python runtime support is still pending a real Zaya1VL adapter;
+// this family stamp is for parser/cache/session honesty, not a production pass.
+registerFamily('zaya1-vl', { cacheType: 'hybrid', toolParser: 'zaya_xml', usePagedCache: false, enableAutoToolChoice: true, isMultimodal: true, description: 'ZAYA1-VL CCA hybrid vision-language', priority: 3 })
 
 // Qwen
 // Qwen 3.5 dense and MoE share model_types with VL variants — VL detection
@@ -229,6 +233,7 @@ registerFamily('rwkv', { cacheType: 'mamba', usePagedCache: true, description: '
 const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   // ── Qwen family ──
   'zaya': 'zaya',
+  'zaya1_vl': 'zaya1-vl',
   'qwen3_5': 'qwen3.5',
   'qwen3_5_moe': 'qwen3.5-moe',
   'qwen3_5_moe_text': 'qwen3.5-moe', // Qwen3.6-35B-A3B inner text_config model_type
@@ -397,6 +402,7 @@ function applyJangCapabilities(
 ): DetectedConfig {
   const caps = jangCfg?.capabilities
   const next = { ...detected }
+  const forceNoPagedCache = next.family === 'zaya' || next.family === 'zaya1-vl'
   if (jangCfg?.weight_format === 'mxtq' || jangCfg?.format === 'mxtq') {
     next.isTurboQuant = true
   }
@@ -408,7 +414,7 @@ function applyJangCapabilities(
       next.enableAutoToolChoice = true
     }
   }
-  if (caps.supports_thinking === false || next.family === 'zaya' || next.family === 'ling') {
+  if (caps.supports_thinking === false || next.family === 'zaya' || next.family === 'zaya1-vl' || next.family === 'ling') {
     next.reasoningParser = undefined
   } else if (typeof caps.reasoning_parser === 'string') {
     next.reasoningParser =
@@ -418,10 +424,13 @@ function applyJangCapabilities(
     const cacheType = caps.cache_type
     if (cacheType === 'kv' || cacheType === 'mamba' || cacheType === 'hybrid' || cacheType === 'rotating_kv') {
       next.cacheType = cacheType
-      if (cacheType === 'mamba' || cacheType === 'hybrid') {
+      if (!forceNoPagedCache && (cacheType === 'mamba' || cacheType === 'hybrid')) {
         next.usePagedCache = true
       }
     }
+  }
+  if (forceNoPagedCache) {
+    next.usePagedCache = false
   }
   return next
 }

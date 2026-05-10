@@ -87,11 +87,10 @@ def register_all(registry=None):
 
     # ZAYA (Zyphra) — alternating CCA attention + top-1 MoE.
     #
-    # The shipped template can emit Qwen-style <think> blocks, but live Python
-    # gates only pass with thinking explicitly off: Auto/short-budget requests
-    # can finish inside reasoning and return empty visible content. Keep the
-    # parser disabled and expose tools only until a ZAYA reasoning gate passes
-    # across OpenAI Chat, Responses, Anthropic, and Ollama.
+    # The shipped template has Qwen-style thinking branches, so keep qwen3 as
+    # parser metadata for extraction. Product behavior remains no-thinking
+    # until ZAYA reasoning gates pass; supports_thinking=False is the
+    # load-bearing default-off flag.
     _register(
         ModelConfig(
             family_name="zaya",
@@ -99,10 +98,26 @@ def register_all(registry=None):
             cache_type="hybrid",
             cache_subtype="zaya_cca",
             tool_parser="zaya_xml",
-            reasoning_parser=None,
+            reasoning_parser="qwen3",
+            think_in_template=True,
+            supports_thinking=False,
+            supports_native_tools=True,
+            priority=3,
+        )
+    )
+
+    _register(
+        ModelConfig(
+            family_name="zaya1_vl",
+            model_types=["zaya1_vl"],
+            cache_type="hybrid",
+            cache_subtype="zaya_cca",
+            tool_parser="zaya_xml",
+            reasoning_parser="qwen3",
             think_in_template=False,
             supports_thinking=False,
             supports_native_tools=True,
+            is_mllm=True,
             priority=3,
         )
     )

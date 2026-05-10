@@ -155,15 +155,29 @@ def _read_hf_config(path: Path) -> dict:
 def _is_zaya_bundle(path: Path, jang_cfg: dict | None = None) -> bool:
     """Return True for Zyphra/ZAYA bundles without loading weights."""
     cfg = _read_hf_config(path)
-    if str(cfg.get("model_type", "")).lower() == "zaya":
+    if str(cfg.get("model_type", "")).lower() in {"zaya", "zaya1_vl"}:
         return True
     if str((jang_cfg or {}).get("cache_subtype", "")).lower() == "zaya_cca":
         return True
     caps = (jang_cfg or {}).get("capabilities")
-    if isinstance(caps, dict) and str(caps.get("family", "")).lower() == "zaya":
+    if isinstance(caps, dict) and str(caps.get("family", "")).lower() in {"zaya", "zaya1_vl"}:
         return True
     source = (jang_cfg or {}).get("source_model")
-    if isinstance(source, dict) and str(source.get("architecture", "")).lower() == "zaya":
+    if isinstance(source, dict) and str(source.get("architecture", "")).lower() in {"zaya", "zaya1_vl"}:
+        return True
+    return False
+
+
+def _is_zaya_vl_bundle(path: Path, jang_cfg: dict | None = None) -> bool:
+    """Return True for ZAYA1-VL bundles that need the unshipped VL adapter."""
+    cfg = _read_hf_config(path)
+    if str(cfg.get("model_type", "")).lower() == "zaya1_vl":
+        return True
+    caps = (jang_cfg or {}).get("capabilities")
+    if isinstance(caps, dict) and str(caps.get("family", "")).lower() == "zaya1_vl":
+        return True
+    source = (jang_cfg or {}).get("source_model")
+    if isinstance(source, dict) and str(source.get("architecture", "")).lower() == "zaya1_vl":
         return True
     return False
 
@@ -179,6 +193,17 @@ def _ensure_zaya_runtime_supported(path: Path, jang_cfg: dict) -> None:
     """
     if not _is_zaya_bundle(path, jang_cfg):
         return
+    if _is_zaya_vl_bundle(path, jang_cfg):
+        raise RuntimeError(
+            "ZAYA1-VL is detected, but the Python engine does not yet ship a "
+            "Zaya1VL MLX adapter. Stock mlx_vlm has no zaya1_vl model module, "
+            "and aliasing this bundle to qwen2_5_vl would be incorrect because "
+            "the language trunk is ZAYA CCA + top-1 MoE with vision-LoRA gated "
+            "at image-token positions. Treat this bundle as runtime-pending "
+            "until the real Zaya1VL adapter implements the Qwen2.5-VL vision "
+            "tower, ZAYA CCA decoder state, pre-stacked ZAYA experts, and "
+            "vision-LoRA path."
+        )
 
     try:
         from ..models.zaya import register_mlx_lm_zaya

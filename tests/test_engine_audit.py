@@ -2616,8 +2616,8 @@ class TestZayaCCACachePolicy:
         assert cfg.cache_type == "hybrid"
         assert cfg.cache_subtype == "zaya_cca"
         assert cfg.tool_parser == "zaya_xml"
-        assert cfg.reasoning_parser is None
-        assert cfg.think_in_template is False
+        assert cfg.reasoning_parser == "qwen3"
+        assert cfg.think_in_template is True
         assert cfg.supports_thinking is False
 
     def test_zaya_auto_thinking_disabled_even_with_stale_stamp(self, tmp_path):
@@ -2838,10 +2838,44 @@ class TestZayaCCACachePolicy:
 
         assert zaya.Model.__name__ == "Model"
 
+    def test_jang_loader_rejects_zaya1_vl_until_real_adapter_exists(self, tmp_path):
+        from vmlx_engine.utils.jang_loader import _ensure_zaya_runtime_supported
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "zaya1_vl",
+            "vision_config": {"model_type": "qwen2_5_vl"},
+            "zaya_expert_layout": "split_switch_mlp",
+        }))
+        jcfg = {
+            "cache_subtype": "zaya_cca",
+            "capabilities": {
+                "family": "zaya1_vl",
+                "tool_parser": "zaya_xml",
+                "reasoning_parser": "qwen3",
+                "think_in_template": False,
+                "supports_thinking": False,
+                "cache_type": "hybrid",
+                "modality": "vision",
+            },
+        }
+
+        with pytest.raises(RuntimeError) as exc:
+            _ensure_zaya_runtime_supported(tmp_path, jcfg)
+
+        msg = str(exc.value)
+        assert "ZAYA1-VL is detected" in msg
+        assert "does not yet ship a Zaya1VL MLX adapter" in msg
+        assert "aliasing this bundle to qwen2_5_vl would be incorrect" in msg
+        assert "vision-LoRA" in msg
+
     def test_local_zaya_bundles_carry_explicit_cca_contract(self):
         from vmlx_engine.model_config_registry import get_model_config_registry
 
         model_dirs = [
+            Path("/Users/example/models/JANGQ/ZAYA1-VL-8B-MXFP4"),
+            Path("/Users/example/models/JANGQ/ZAYA1-VL-8B-JANGTQ2"),
+            Path("/Users/example/models/JANGQ/ZAYA1-8B-MXFP4"),
+            Path("/Users/example/models/JANGQ/ZAYA1-8B-JANGTQ2"),
             Path("/Users/example/jang/models/Zyphra/ZAYA1-8B-JANGTQ2"),
             Path("/Users/example/jang/models/Zyphra/ZAYA1-8B-JANGTQ4"),
             Path("/Users/example/jang/models/Zyphra/ZAYA1-8B-MXFP4"),
@@ -2855,24 +2889,29 @@ class TestZayaCCACachePolicy:
             jcfg = json.loads((model_dir / "jang_config.json").read_text())
             caps = jcfg.get("capabilities", {})
 
-            assert cfg.get("model_type") == "zaya"
+            model_type = cfg.get("model_type")
+            assert model_type in {"zaya", "zaya1_vl"}
             assert jcfg.get("cache_subtype") == "zaya_cca"
-            assert caps.get("family") == "zaya"
+            expected_family = "zaya1_vl" if model_type == "zaya1_vl" else "zaya"
+            assert caps.get("family") == expected_family
             assert caps.get("cache_type") == "hybrid"
             assert caps.get("tool_parser") == "zaya_xml"
-            assert caps.get("reasoning_parser") is None
-            assert caps.get("think_in_template") is False
+            assert caps.get("reasoning_parser") == "qwen3"
+            expected_think_in_template = model_type == "zaya"
+            assert caps.get("think_in_template") is expected_think_in_template
             assert caps.get("supports_thinking") is False
             assert cfg.get("zaya_expert_layout") == "split_switch_mlp"
+            assert caps.get("modality") == ("vision" if model_type == "zaya1_vl" else "text")
 
             registry = get_model_config_registry()
             registry.clear_cache()
             rcfg = registry.lookup(str(model_dir))
-            assert rcfg.family_name == "zaya"
+            assert rcfg.family_name == expected_family
             assert rcfg.tool_parser == "zaya_xml"
-            assert rcfg.reasoning_parser is None
-            assert rcfg.think_in_template is False
+            assert rcfg.reasoning_parser == "qwen3"
+            assert rcfg.think_in_template is expected_think_in_template
             assert rcfg.supports_thinking is False
+            assert rcfg.is_mllm is (model_type == "zaya1_vl")
 
             if jcfg.get("weight_format") == "mxtq":
                 bits = jcfg.get("mxtq_bits", {})

@@ -416,7 +416,7 @@ describe('enableThinking tri-state', () => {
     if (next.reasoningParser === undefined || next.reasoningParser === 'auto') {
       next.reasoningParser = freshConfig.reasoningParser || 'auto'
     }
-    if (freshConfig.family === 'zaya') {
+    if (freshConfig.family === 'zaya' || freshConfig.family === 'zaya1-vl') {
       if (next.toolCallParser !== '') next.toolCallParser = freshConfig.toolParser || 'auto'
       if (next.reasoningParser !== '') next.reasoningParser = 'auto'
     }
@@ -441,6 +441,16 @@ describe('enableThinking tri-state', () => {
 
     expect(refreshed.toolCallParser).toBe('')
     expect(refreshed.reasoningParser).toBe('')
+  })
+
+  it('ZAYA1-VL redetect clears stale Qwen parser values from upgraded session configs', () => {
+    const refreshed = refreshZayaDetectedParsers(
+      { toolCallParser: 'qwen', reasoningParser: 'qwen3' },
+      { family: 'zaya1-vl', toolParser: 'zaya_xml' },
+    )
+
+    expect(refreshed.toolCallParser).toBe('zaya_xml')
+    expect(refreshed.reasoningParser).toBe('auto')
   })
 
   function normalizeReasoningMode(mode: unknown): 'auto' | 'on' | 'off' {
