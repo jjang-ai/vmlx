@@ -10,6 +10,8 @@ import logging
 from dataclasses import dataclass
 from typing import Iterator
 
+from ..utils.multi_eos import collect_multi_eos_ids
+
 logger = logging.getLogger(__name__)
 
 
@@ -129,62 +131,13 @@ class MLXLanguageModel:
             # full id list survives.
             try:
                 from mlx_lm.tokenizer_utils import TokenizerWrapper
-                resolved: list[int] = []
-
-                # Source 1: tokenizer's own primary eos
-                primary = getattr(self.tokenizer, "eos_token_id", None)
-                if isinstance(primary, int):
-                    resolved.append(primary)
-
-                # Source 2: bundle's generation_config.json eos_token_id
-                # (list or int). This is the most authoritative — it's
-                # what HF / vLLM / llama.cpp use as the model's declared
-                # stop set.
-                try:
-                    from pathlib import Path as _Path
-                    import json as _json
-                    _gen_cfg_path = _Path(self.model_name) / "generation_config.json"
-                    if _gen_cfg_path.is_file():
-                        _gen_cfg = _json.loads(_gen_cfg_path.read_text())
-                        _gen_eos = _gen_cfg.get("eos_token_id")
-                        if isinstance(_gen_eos, list):
-                            for t in _gen_eos:
-                                if isinstance(t, int) and t not in resolved:
-                                    resolved.append(t)
-                        elif isinstance(_gen_eos, int):
-                            if _gen_eos not in resolved:
-                                resolved.append(_gen_eos)
-                except Exception:
-                    pass  # missing / unreadable generation_config — skip
-
-                # Source 3: registry-level eos_tokens (engine overrides
-                # like dsv4's `<｜User｜>` defensive stop). Resolve each
-                # string against the tokenizer's vocab.
-                unresolved: list[str] = []
-                if model_config.eos_tokens:
-                    for tok_str in model_config.eos_tokens:
-                        try:
-                            tid = int(tok_str)
-                        except ValueError:
-                            tid = self.tokenizer.convert_tokens_to_ids(tok_str) \
-                                if hasattr(self.tokenizer, "convert_tokens_to_ids") \
-                                else None
-                        if tid is None or tid < 0:
-                            unresolved.append(tok_str)
-                            continue
-                        # `convert_tokens_to_ids` returns `unk_token_id`
-                        # for strings not in vocab; treat that as
-                        # unresolved unless the user really IS asking for
-                        # the unk token.
-                        unk_id = getattr(self.tokenizer, "unk_token_id", None)
-                        if (
-                            unk_id is not None and tid == unk_id
-                            and tok_str != getattr(self.tokenizer, "unk_token", "")
-                        ):
-                            unresolved.append(tok_str)
-                            continue
-                        if tid not in resolved:
-                            resolved.append(tid)
+                resolved, unresolved = collect_multi_eos_ids(
+                    self.tokenizer,
+                    self.model_name,
+                    registry_eos_tokens=model_config.eos_tokens,
+                    reasoning_parser=model_config.reasoning_parser,
+                    use_rust_tokenizer=False,
+                )
 
                 # Only wrap when there's > 1 stop id — singleton equals
                 # the default, no need to interfere.
