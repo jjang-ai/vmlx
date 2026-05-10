@@ -126,7 +126,7 @@ function applyBundleStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
   }
 }
 
-function applySingleUserPerfDefaultMigration(config: Partial<ServerConfig>): void {
+function applyCacheStackStartupDefaultMigration(config: Partial<ServerConfig>): void {
   const staleContinuousDefaults =
     config.continuousBatching === true &&
     config.enablePrefixCache === true &&
@@ -143,11 +143,18 @@ function applySingleUserPerfDefaultMigration(config: Partial<ServerConfig>): voi
 
   if (!staleContinuousDefaults && !staleNoPrefixBatchDefaults) return
 
-  config.continuousBatching = false
-  config.enablePrefixCache = false
-  config.maxNumSeqs = 8
-  config.prefillBatchSize = 256
-  config.completionBatchSize = 256
+  config.continuousBatching = true
+  config.enablePrefixCache = true
+  config.maxNumSeqs = 1
+  config.prefillBatchSize = 512
+  config.prefillStepSize = 2048
+  config.completionBatchSize = 512
+  config.usePagedCache = true
+  config.maxCacheBlocks = 1000
+  config.kvCacheQuantization = 'auto'
+  config.enableBlockDiskCache = true
+  config.blockDiskCacheMaxGb = 10
+  config.cacheMemoryPercent = 15
 }
 
 /** Resolve bind address to connectable address (0.0.0.0 → 127.0.0.1) */
@@ -575,7 +582,7 @@ export class SessionManager extends EventEmitter {
     // Normalize path to prevent trailing-slash mismatches
     modelPath = normalizePath(modelPath)
     applyBundleStartupDefaults(config, modelPath)
-    applySingleUserPerfDefaultMigration(config)
+    applyCacheStackStartupDefaultMigration(config)
 
     // Check if session already exists for this model path
     const existing = db.getSessionByModelPath(modelPath)
@@ -587,7 +594,7 @@ export class SessionManager extends EventEmitter {
       const port = (config.port as number) || existing.port
       const merged = { ...existingConfig, ...config, modelPath, host, port }
       applyBundleStartupDefaults(merged, modelPath)
-      applySingleUserPerfDefaultMigration(merged)
+      applyCacheStackStartupDefaultMigration(merged)
       db.updateSession(existing.id, {
         config: JSON.stringify(merged),
         host,
@@ -699,7 +706,7 @@ export class SessionManager extends EventEmitter {
     config.host = session.host
     config.port = session.port
     applyBundleStartupDefaults(config, config.modelPath)
-    applySingleUserPerfDefaultMigration(config)
+    applyCacheStackStartupDefaultMigration(config)
 
     // Apply model_settings.reasoning_mode as server-level default for external API clients.
     // Auto must not serialize as false: local/API requests should then fall
@@ -1282,26 +1289,26 @@ export class SessionManager extends EventEmitter {
         const now = Date.now()
         // Auto-detect model config for proper defaults (paged cache, parsers, etc.)
         const detected = detectModelConfigFromDir(proc.modelPath)
-        // Defaults tuned for maximum single-user decode speed out of the box.
-        // Continuous batching remains available for multi-user/API-server
-        // sessions, but Qwen3.6 35B live benches show the MLLM batched path
-        // costs about 2x decode throughput for a single active request.
-        // Users can opt into prefix/paged/L2 cache when TTFT reuse matters.
+        // Defaults tuned for local single-user cache correctness. Continuous
+        // batching is the backend path that enables prefix cache, paged KV,
+        // block disk L2, and stored-cache codecs; maxNumSeqs=1 avoids a large
+        // multi-user batch shape while keeping those features active.
         // Stream interval 1 = lowest latency per-token delivery.
         const defaultConfig: ServerConfig = {
           modelPath: proc.modelPath,
           host: '127.0.0.1',
           port: proc.port,
           timeout: 300,
-          maxNumSeqs: 8,
-          prefillBatchSize: 256,
-          completionBatchSize: 256,
-          continuousBatching: false,
-          enablePrefixCache: false,
+          maxNumSeqs: 1,
+          prefillBatchSize: 512,
+          prefillStepSize: 2048,
+          completionBatchSize: 512,
+          continuousBatching: true,
+          enablePrefixCache: true,
           prefixCacheSize: 100,
           prefixCacheMaxBytes: 0, // 0 = unlimited (bounded by cacheMemoryPercent)
           cacheMemoryMb: 0,
-          cacheMemoryPercent: 20,
+          cacheMemoryPercent: 15,
           noMemoryAwareCache: false,
           usePagedCache: detected.usePagedCache ?? true,
           pagedCacheBlockSize: 64,

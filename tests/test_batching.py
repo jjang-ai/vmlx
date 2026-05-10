@@ -196,6 +196,44 @@ class TestRequestOutput:
 class TestSchedulerLogprobs:
     """Opt-in logprobs must be extracted on the scheduler worker, not faked later."""
 
+    def test_greedy_scheduler_sampler_is_marked_logits_compatible(self):
+        import inspect
+
+        source = inspect.getsource(Scheduler._create_batch_generator)
+        assert "_vmlx_accepts_logits" in source
+        assert "sampling_params.temperature" in source
+
+    def test_generation_batch_skips_logsumexp_for_greedy_no_logprobs(self):
+        import inspect
+        from vmlx_engine.utils import mamba_cache
+
+        source = inspect.getsource(mamba_cache._patch_generation_step_sync)
+        assert "can_sample_logits" in source
+        assert "not any(requested_logprobs)" in source
+        assert "sample_sampler(logits[e : e + 1])" in source
+        assert "mx.logsumexp(logits" in source
+
+    def test_generation_batch_cpu_tolist_detour_is_model_gated(self):
+        import inspect
+        from vmlx_engine.utils import mamba_cache
+
+        patch_source = inspect.getsource(mamba_cache._patch_generation_step_sync)
+        gate_source = inspect.getsource(mamba_cache._needs_cpu_tolist_detour)
+        assert "_needs_cpu_tolist_detour" in patch_source
+        assert "with mx.stream(mx.cpu)" in patch_source
+        assert "deepseek_v4" in gate_source
+        assert "VMLINUX_FORCE_CPU_TOLIST_DETOUR" in gate_source
+
+    def test_generation_batch_keeps_async_lookahead_for_normal_models(self):
+        import inspect
+        from vmlx_engine.utils import mamba_cache
+
+        source = inspect.getsource(mamba_cache._patch_generation_step_sync)
+        assert "mx.async_eval(*async_items)" in source
+        assert "mx.eval(*current_items)" in source
+        assert "if needs_cpu_detour:" in source
+        assert "A per-token synchronize here costs MiniMax/Qwen throughput" in source
+
     def test_format_token_logprobs_includes_sampled_token_and_top_k(self):
         import mlx.core as mx
 
@@ -284,8 +322,8 @@ class TestSchedulerBasic:
         assert scheduler.get_num_running() == 0
         assert not scheduler.has_requests()
 
-    def test_turboquant_live_cache_clamps_to_single_sequence(self, mock_tokenizer):
-        """TurboQuantKVCache does not implement mlx_lm multi-seq cache.extend()."""
+    def test_legacy_turboquant_live_cache_clamps_to_single_sequence(self, mock_tokenizer):
+        """Old bundled TurboQuantKVCache lacks real multi-seq batch methods."""
 
         class TurboQuantKVCache:
             pass
@@ -309,6 +347,87 @@ class TestSchedulerBasic:
         assert scheduler.config.max_num_seqs == 1
         assert scheduler.config.prefill_batch_size == 1
         assert scheduler.config.completion_batch_size == 1
+
+    def test_batch_api_turboquant_live_cache_preserves_configured_batching(self, mock_tokenizer):
+        """New TurboQuantKVCache declares the real batch API and may batch."""
+
+        class TurboQuantKVCache:
+            _vmlx_batch_api = "turboquant_kv_v1"
+
+            def extend(self, other):
+                return None
+
+            def filter(self, keep):
+                return None
+
+            def extract(self, idx):
+                return self
+
+            def prepare(self, *args, **kwargs):
+                return None
+
+            def finalize(self):
+                return None
+
+        class TQModel:
+            def __init__(self):
+                def _tq_make_cache():
+                    return [TurboQuantKVCache()]
+
+                self.make_cache = _tq_make_cache
+
+        cfg = SchedulerConfig(
+            max_num_seqs=4,
+            prefill_batch_size=4,
+            completion_batch_size=4,
+        )
+
+        scheduler = Scheduler(model=TQModel(), tokenizer=mock_tokenizer, config=cfg)
+
+        assert scheduler._tq_active
+        assert scheduler.config.max_num_seqs == 4
+        assert scheduler.config.prefill_batch_size == 4
+        assert scheduler.config.completion_batch_size == 4
+
+    def test_batch_api_turboquant_merge_preserves_turboquant_cache(self):
+        """mlx-lm merge patch must use TurboQuantKVCache.extend, not BatchKVCache."""
+        import importlib
+
+        from vmlx_engine.utils.mamba_cache import ensure_mamba_support
+
+        class TurboQuantKVCache:
+            _vmlx_batch_api = "turboquant_kv_v1"
+
+            def __init__(self, name):
+                self.name = name
+                self.extended = []
+
+            def extend(self, other):
+                self.extended.append(other.name)
+
+            def filter(self, keep):
+                return None
+
+            def extract(self, idx):
+                return self
+
+            def prepare(self, *args, **kwargs):
+                return None
+
+            def finalize(self):
+                return None
+
+        ensure_mamba_support()
+        gen_module = importlib.import_module("mlx_lm.generate")
+
+        merged = gen_module._merge_caches([
+            [TurboQuantKVCache("a")],
+            [TurboQuantKVCache("b")],
+        ])
+
+        assert type(merged[0]).__name__ == "TurboQuantKVCache"
+        assert merged[0].name == "a"
+        assert merged[0].extended == ["b"]
 
     def test_add_request(self, mock_model, mock_tokenizer):
         """Test adding requests to scheduler."""
@@ -982,6 +1101,47 @@ class TestSchedulerBasic:
         assert request.remaining_tokens == [256]
         assert request._paged_block_table_needs_worker_reconstruct is True
         assert request._cache_detail == "paged+disk+tq"
+
+    def test_paged_quantized_kv_hit_defers_worker_dequant_for_batch_generator(
+        self, mock_model, mock_tokenizer
+    ):
+        """Paged q4/q8 hits must not insert QuantizedKVCache into BatchGenerator.
+
+        Block-aware cache reconstruct runs on the scheduler worker. When stored
+        prefix blocks are quantized, the worker must dequantize them before
+        BatchGenerator sees the cache; otherwise mlx-lm calls .filter() on a
+        QuantizedKVCache at request finish and the cached turn returns an
+        engine error.
+        """
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        scheduler._kv_cache_bits = 4
+        scheduler._is_hybrid = False
+        scheduler._uses_dsv4_cache = False
+        scheduler._uses_zaya_cache = False
+
+        class _PagedCache:
+            stats = None
+
+        class _BlockAwareCache:
+            paged_cache = _PagedCache()
+
+            def fetch_cache(self, request_id, tokens):
+                return BlockTable(request_id=request_id, block_ids=[1], num_tokens=64), [64]
+
+            def get_stats(self):
+                return {}
+
+        scheduler.block_aware_cache = _BlockAwareCache()
+
+        request = Request("req-paged-q4", "x", SamplingParams())
+        request.prompt_token_ids = list(range(65))
+
+        scheduler.add_request(request)
+
+        assert request._paged_block_table_needs_worker_reconstruct is True
+        assert request._prompt_cache_needs_worker_dequant is True
+        assert request.cached_tokens == 64
+        assert request.remaining_tokens == [64]
 
     def test_hybrid_ssm_checkpoint_alignment_falls_back_to_exact_aligned_state(
         self, mock_model, mock_tokenizer

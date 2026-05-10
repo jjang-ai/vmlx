@@ -63,6 +63,90 @@ def test_mllm_scheduler_clamps_active_turboquant_kv_to_single_sequence():
     assert scheduler.config.completion_batch_size == 1
 
 
+def test_mllm_scheduler_preserves_turboquant_batch_api_config():
+    """VLM TurboQuant KV may batch when jang_tools exposes batch API v1."""
+
+    class TurboQuantKVCache:
+        _vmlx_batch_api = "turboquant_kv_v1"
+
+        def extend(self, other):
+            return None
+
+        def filter(self, keep):
+            return None
+
+        def extract(self, idx):
+            return self
+
+        def prepare(self, *args, **kwargs):
+            return None
+
+        def finalize(self):
+            return None
+
+    def _turboquant_make_cache():
+        return [TurboQuantKVCache()]
+
+    class LanguageModel:
+        make_cache = staticmethod(_turboquant_make_cache)
+
+    class VLMModel:
+        language_model = LanguageModel()
+        config = object()
+
+    config = MLLMSchedulerConfig(
+        enable_prefix_cache=False,
+        kv_cache_quantization="none",
+        max_num_seqs=8,
+        prefill_batch_size=16,
+        completion_batch_size=32,
+    )
+
+    scheduler = MLLMScheduler(VLMModel(), processor=object(), config=config)
+
+    assert scheduler._tq_active is True
+    assert scheduler._tq_batch_api is True
+    assert scheduler.config.max_num_seqs == 8
+    assert scheduler.config.prefill_batch_size == 16
+    assert scheduler.config.completion_batch_size == 32
+
+
+def test_mllm_merge_preserves_turboquant_batch_api_cache():
+    """MLLM batch merge must call TurboQuantKVCache.extend, not BatchKVCache."""
+    from vmlx_engine.mllm_batch_generator import _merge_caches
+
+    class TurboQuantKVCache:
+        _vmlx_batch_api = "turboquant_kv_v1"
+
+        def __init__(self, name):
+            self.name = name
+            self.extended = []
+
+        def extend(self, other):
+            self.extended.append(other.name)
+
+        def filter(self, keep):
+            return None
+
+        def extract(self, idx):
+            return self
+
+        def prepare(self, *args, **kwargs):
+            return None
+
+        def finalize(self):
+            return None
+
+    merged = _merge_caches([
+        [TurboQuantKVCache("a")],
+        [TurboQuantKVCache("b")],
+    ])
+
+    assert type(merged[0]).__name__ == "TurboQuantKVCache"
+    assert merged[0].name == "a"
+    assert merged[0].extended == ["b"]
+
+
 def test_mllm_exact_prefix_hit_with_generation_suffix_refeeds_last_prompt_token():
     """VLM memory/legacy hits store N-1 KV, so suffix-only prefill is wrong."""
 

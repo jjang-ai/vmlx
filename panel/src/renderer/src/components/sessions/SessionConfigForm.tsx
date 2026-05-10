@@ -87,20 +87,20 @@ export const DEFAULT_CONFIG: SessionConfig = {
   apiKey: '',
   rateLimit: 0,
   timeout: 300,
-  maxNumSeqs: 8,
-  // Continuous batching remains available for multi-user/API-server sessions,
-  // but single-user chat is fastest on SimpleEngine. Keep the batch ceilings
-  // conservative so opting into prefix/cache mode does not reserve a huge
-  // scheduler shape by default.
-  prefillBatchSize: 256,
+  maxNumSeqs: 1,
+  // Default to the production cache stack: continuous batching is the backend
+  // path that enables prefix, paged KV, block-L2, and stored-cache codecs.
+  // Keep max sequences at one for normal local chat so users get the cache
+  // features without reserving a large multi-user batch shape.
+  prefillBatchSize: 512,
   prefillStepSize: 2048,
-  completionBatchSize: 256,
-  continuousBatching: false,
-  enablePrefixCache: false,
+  completionBatchSize: 512,
+  continuousBatching: true,
+  enablePrefixCache: true,
   prefixCacheSize: 100,
   prefixCacheMaxBytes: 0,
   cacheMemoryMb: 0,
-  cacheMemoryPercent: 20,
+  cacheMemoryPercent: 15,
   cacheTtlMinutes: 0,
   noMemoryAwareCache: false,
   usePagedCache: true,
@@ -164,8 +164,8 @@ export const CASUAL_CONFIG: SessionConfig = {
   ...DEFAULT_CONFIG,
   host: '127.0.0.1',         // Local-only (safer for beginners)
   maxNumSeqs: 1,              // Single user (saves memory from batch overhead)
-  prefillBatchSize: 8,        // Low-memory defaults (override DEFAULT_CONFIG's 1024)
-  completionBatchSize: 32,    // Low-memory defaults (override DEFAULT_CONFIG's 1024)
+  prefillBatchSize: 8,        // Low-memory default (override DEFAULT_CONFIG's 512)
+  completionBatchSize: 32,    // Low-memory default (override DEFAULT_CONFIG's 512)
   cacheMemoryPercent: 15,     // 15% vs 30% — more headroom for model weights
   maxCacheBlocks: 500,        // Fewer paged blocks (half)
   prefixCacheSize: 50,        // Fewer cached prefixes
@@ -425,8 +425,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             <PerformanceHint text={`Streaming experts from SSD with ${config.flashMoeSlotBank}-slot LRU cache. Non-MoE models automatically pass through (no effect). JIT disabled (incompatible with on-demand loading).`} />
           </>
         )}
-        <CheckField label="Continuous Batching" tooltip="Processes multiple user requests simultaneously by continuously updating the batch. Crucial for serving multiple users efficiently. If disabled, requests are processed one by one (ideal for single-user peak throughput)." checked={config.continuousBatching} onChange={v => onChange('continuousBatching', v)} />
-        <PerformanceHint text="Keep OFF for peak single-user decode speed. Turn ON for multi-user serving, prefix cache, paged cache, and disk-backed cache reuse." />
+        <CheckField label="Continuous Batching" tooltip="Keep ON for best performance. This is the master switch for prefix cache, paged KV cache, block disk L2, and stored-cache codecs. Turning it off uses the direct single-request engine and disables the cache features below." checked={config.continuousBatching} onChange={v => onChange('continuousBatching', v)} />
+        <PerformanceHint text="Keep ON for best overall behavior: it enables prefix reuse, paged cache, block disk L2, and architecture-specific cache restore while the default max sequence count stays at one for local chat." />
         {!config.continuousBatching && config.enablePrefixCache && (
           <InfoNote text="Continuous batching will be auto-enabled at launch because prefix cache requires it." />
         )}

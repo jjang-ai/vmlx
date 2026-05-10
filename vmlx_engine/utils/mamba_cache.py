@@ -37,6 +37,7 @@ BatchKVCache merging, which is needed when KV cache quantization is active.
 """
 
 import logging
+import os
 from typing import List, Optional
 
 import mlx.core as mx
@@ -79,6 +80,67 @@ def _is_kv_like(c) -> bool:
     """Check if cache is KVCache-compatible (KVCache or TurboQuantKVCache)."""
     from mlx_lm.models.cache import KVCache
     return isinstance(c, KVCache) or type(c).__name__ == _TQ_CLASS_NAME
+
+
+def _is_tq_batch_api(c) -> bool:
+    """TurboQuant cache with real merge/filter/extract batch semantics."""
+    if type(c).__name__ != _TQ_CLASS_NAME:
+        return False
+    if getattr(c, "_vmlx_batch_api", None) != "turboquant_kv_v1":
+        return False
+    return all(
+        callable(getattr(c, name, None))
+        for name in ("extend", "filter", "extract", "prepare", "finalize")
+    )
+
+
+def _needs_cpu_tolist_detour(model, prompt_cache) -> bool:
+    """Return True for cache/model paths that still need CPU-stream tolist.
+
+    The CPU-stream round-trip protects DSV4 composite-cache custom kernels from
+    MLX cross-thread stream lookup failures. It is not free, so keep it off for
+    normal JANGTQ decode unless the direct path proves unsafe.
+    """
+    override = os.getenv("VMLINUX_FORCE_CPU_TOLIST_DETOUR", "").strip().lower()
+    if override in {"1", "true", "yes", "on"}:
+        return True
+    if override in {"0", "false", "no", "off"}:
+        return False
+
+    def _cfg_model_type(obj) -> str:
+        for attr in ("config", "args"):
+            cfg = getattr(obj, attr, None)
+            if cfg is None:
+                continue
+            raw = getattr(cfg, "_raw_config", None)
+            for source in (cfg, raw):
+                if isinstance(source, dict):
+                    mt = source.get("model_type")
+                else:
+                    mt = getattr(source, "model_type", None)
+                if mt:
+                    return str(mt).lower()
+        return ""
+
+    stack = [model]
+    seen = set()
+    while stack:
+        obj = stack.pop()
+        if obj is None or id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        if _cfg_model_type(obj) == "deepseek_v4":
+            return True
+        for attr in ("model", "language_model"):
+            nxt = getattr(obj, attr, None)
+            if nxt is not None and nxt is not obj:
+                stack.append(nxt)
+
+    for cache in prompt_cache or []:
+        name = type(cache).__name__
+        if name in {"DeepseekV4Cache", "PoolQuantizedV4Cache"}:
+            return True
+    return False
 
 
 # A3-BUG-004: warn-once per unknown kwarg in BatchMambaCache.prepare so we
@@ -195,15 +257,7 @@ def _patch_empty_batch_kv_extract() -> None:
     def _single_batch_finalize(self) -> None:
         return None
 
-    extra_single_batch_classes = []
-    try:
-        from jang_tools.turboquant.cache import TurboQuantKVCache
-
-        extra_single_batch_classes.append(TurboQuantKVCache)
-    except Exception:
-        pass
-
-    for _cls in (KVCache, RotatingKVCache, *extra_single_batch_classes):
+    for _cls in (KVCache, RotatingKVCache):
         if not hasattr(_cls, "filter"):
             _cls.filter = _single_batch_filter
         if not hasattr(_cls, "extract"):
@@ -531,6 +585,8 @@ def patch_mlx_lm_for_mamba():
         def to_batch_cache(c):
             if type(c).__name__ == "ZayaNoStateCache":
                 return type(c)()
+            if _is_tq_batch_api(c):
+                return c
             if _is_kv_like(c):
                 return BatchKVCache(left_padding)
             elif _QuantizedKVCache is not None and isinstance(c, _QuantizedKVCache):
@@ -610,6 +666,10 @@ def patch_mlx_lm_for_mamba():
                 # Dequantize all layers before merging as regular KVCache
                 dequantized = [_dequantize_layer(c[i]) for c in caches]
                 cache = BatchKVCache.merge(dequantized)
+            elif _is_tq_batch_api(layer_cache):
+                cache = caches[0][i]
+                for source in caches[1:]:
+                    cache.extend(source[i])
             elif _is_kv_like(layer_cache):
                 # TurboQuantKVCache after compress() has keys=None —
                 # BatchKVCache.merge needs actual tensors. Convert TQ
@@ -821,48 +881,94 @@ def _patch_generation_step_sync():
                         sample_logits = processor(token_context[e], sample_logits)
                     processed_logits.append(sample_logits)
                 logits = mx.concatenate(processed_logits, axis=0)
-            # mlx-lm's stock GenerationBatch stores and materializes a full
-            # vocab-sized logprob vector every token. Keep the default vMLX
-            # path allocation-free, but preserve the vector for UIDs whose
-            # OpenAI request explicitly asked for logprobs. The scheduler
-            # consumes those vectors on this same worker step and converts
-            # them to small Python top-k records before anything crosses
-            # thread boundaries.
-            logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
-            if any(self.samplers):
-                all_samples = []
-                for e in range(len(self.uids)):
-                    sample_sampler = self.samplers[e] or self.fallback_sampler
-                    sampled = sample_sampler(logprobs[e : e + 1])
-                    all_samples.append(sampled)
-                sampled = mx.concatenate(all_samples, axis=0)
-            else:
-                sampled = self.fallback_sampler(logprobs)
-            self._next_tokens = sampled
             requested_logprobs = _should_capture_generation_logprobs(
                 self.model, self.uids
             )
-            self._next_logprobs = [
-                logprobs[i] if requested_logprobs[i] else None
-                for i in range(len(self.uids))
+            samplers = [
+                sample_sampler or self.fallback_sampler
+                for sample_sampler in self.samplers
             ]
-            # Drain on active stream first.
-            if hasattr(mx, "synchronize"):
-                mx.synchronize()
-            # `inputs.tolist()` triggers an internal mx.ev on the tensor's
-            # source stream, which fails Stream(gpu, N) cross-thread on
-            # DSV4-Flash. Round-trip through CPU stream + numpy to break
-            # the stream dependency before materialising as Python ints.
-            try:
+            if not samplers:
+                samplers = [self.fallback_sampler] * len(self.uids)
+            can_sample_logits = (
+                not any(requested_logprobs)
+                and all(
+                    getattr(sample_sampler, "_vmlx_accepts_logits", False)
+                    for sample_sampler in samplers
+                )
+            )
+
+            # mlx-lm's stock GenerationBatch stores and materializes a full
+            # vocab-sized logprob vector every token. For greedy requests that
+            # did not ask for logprobs, argmax(logits) is identical to
+            # argmax(log_softmax(logits)); skip the full-vocab logsumexp.
+            if can_sample_logits:
+                if any(self.samplers):
+                    all_samples = []
+                    for e, sample_sampler in enumerate(samplers):
+                        sampled = sample_sampler(logits[e : e + 1])
+                        all_samples.append(sampled)
+                    sampled = mx.concatenate(all_samples, axis=0)
+                else:
+                    sampled = self.fallback_sampler(logits)
+                self._next_logprobs = [None] * len(self.uids)
+            else:
+                logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
+                if any(self.samplers):
+                    all_samples = []
+                    for e in range(len(self.uids)):
+                        sample_sampler = self.samplers[e] or self.fallback_sampler
+                        sampled = sample_sampler(logprobs[e : e + 1])
+                        all_samples.append(sampled)
+                    sampled = mx.concatenate(all_samples, axis=0)
+                else:
+                    sampled = self.fallback_sampler(logprobs)
+                self._next_logprobs = [
+                    logprobs[i] if requested_logprobs[i] else None
+                    for i in range(len(self.uids))
+                ]
+            self._next_tokens = sampled
+            # `inputs.tolist()` can trigger an internal mx.ev on the tensor's
+            # source stream. DSV4 composite-cache kernels still need a CPU
+            # stream round-trip; normal JANGTQ decode takes the direct path and
+            # only falls back if MLX reports a cross-thread stream error.
+            needs_cpu_detour = _needs_cpu_tolist_detour(self.model, self.prompt_cache)
+            if needs_cpu_detour:
+                # DSV4 custom kernels can leave tensors on worker-invisible
+                # internal streams. Drain the active stream before the CPU
+                # round-trip; this preserves the crash fix for that family.
+                if hasattr(mx, "synchronize"):
+                    mx.synchronize()
+            else:
+                # Keep the stock mlx-lm lookahead behavior for normal models:
+                # schedule the next token asynchronously, then only evaluate
+                # the current token/logprobs before materializing Python ints.
+                # A per-token synchronize here costs MiniMax/Qwen throughput.
+                async_items = [self._next_tokens]
+                async_items.extend(
+                    lp for lp in self._next_logprobs if lp is not None
+                )
+                async_items.extend(token_context)
+                mx.async_eval(*async_items)
+                current_items = [inputs]
+                current_items.extend(
+                    lp for lp in self._current_logprobs if lp is not None
+                )
+                mx.eval(*current_items)
+            if not needs_cpu_detour:
+                try:
+                    inputs = inputs.tolist()
+                except RuntimeError as exc:
+                    if "Stream(gpu" not in str(exc):
+                        raise
+                    needs_cpu_detour = True
+
+            if needs_cpu_detour:
                 with mx.stream(mx.cpu):
                     inputs_cpu = mx.array(inputs)
                     if hasattr(mx, "synchronize"):
                         mx.synchronize()
                 inputs = inputs_cpu.tolist()
-            except Exception:
-                # Fall back to direct tolist (may raise on DSV4 — caller
-                # will surface the error to the user).
-                inputs = inputs.tolist()
             for sti, ti in zip(self.tokens, inputs):
                 sti.append(ti)
             if len(self._current_logprobs) != len(inputs):

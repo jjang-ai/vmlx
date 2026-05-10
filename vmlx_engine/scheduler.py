@@ -357,8 +357,14 @@ class Scheduler:
         self._tq_active = getattr(model, "make_cache", None) and getattr(
             model.make_cache, "__name__", ""
         ) in ("_tq_make_cache", "_turboquant_make_cache")
+        self._tq_batch_api = self._turboquant_cache_supports_batch_api(model)
         self._log_runtime_cache_contract(model)
-        if self._tq_active:
+        if self._tq_active and self._tq_batch_api:
+            logger.info(
+                "TurboQuantKVCache live decode preserving configured batching "
+                "(batch cache API=turboquant_kv_v1)."
+            )
+        elif self._tq_active:
             changed = []
             if self.config.max_num_seqs != 1:
                 changed.append(f"max_num_seqs {self.config.max_num_seqs}->1")
@@ -374,9 +380,8 @@ class Scheduler:
             if changed:
                 logger.warning(
                     "TurboQuantKVCache live decode is single-sequence only "
-                    "(mlx_lm BatchGenerator multi-seq merge calls cache.extend(), "
-                    "which TurboQuantKVCache intentionally does not implement); "
-                    "overriding %s.",
+                    "with this jang_tools build (missing batch API "
+                    "turboquant_kv_v1); overriding %s.",
                     ", ".join(changed),
                 )
 
@@ -1045,6 +1050,26 @@ class Scheduler:
             )
         except Exception:
             return False
+
+    @staticmethod
+    def _turboquant_cache_supports_batch_api(model: Any) -> bool:
+        """Return True when every TurboQuant cache declares real batch support."""
+        if not hasattr(model, "make_cache"):
+            return False
+        try:
+            cache = model.make_cache() or []
+        except Exception:
+            return False
+        tq_slots = [c for c in cache if type(c).__name__ == "TurboQuantKVCache"]
+        if not tq_slots:
+            return False
+        required_methods = ("extend", "filter", "extract", "prepare", "finalize")
+        for slot in tq_slots:
+            if getattr(slot, "_vmlx_batch_api", None) != "turboquant_kv_v1":
+                return False
+            if not all(callable(getattr(slot, name, None)) for name in required_methods):
+                return False
+        return True
 
     def _log_runtime_cache_contract(self, model: Any) -> None:
         """Log per-layer cache classes for production-gate topology checks."""
@@ -2263,6 +2288,11 @@ class Scheduler:
             min_p=sampling_params.min_p,
             top_k=sampling_params.top_k,
         )
+        if float(sampling_params.temperature or 0.0) == 0.0:
+            try:
+                setattr(sampler, "_vmlx_accepts_logits", True)
+            except Exception:
+                pass
 
         # Build logits processors (e.g., repetition penalty).
         #
@@ -4062,7 +4092,7 @@ class Scheduler:
                 ):
                     request._hybrid_prompt_cache_needs_worker_ssm = True
                     request._hybrid_ssm_fetch_tokens = list(_fetch_tokens)
-                if getattr(self, "_kv_cache_bits", 0) and self._uses_dsv4_cache:
+                if getattr(self, "_kv_cache_bits", 0):
                     request._prompt_cache_needs_worker_dequant = True
                 if self._uses_dsv4_cache:
                     request._cache_detail = "paged+dsv4"

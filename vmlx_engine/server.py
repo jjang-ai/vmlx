@@ -4015,18 +4015,23 @@ def _turboquant_kv_cache_status(engine=None, scheduler=None) -> dict:
         }
         cfg = getattr(scheduler, "config", None) if scheduler is not None else None
         if cfg is not None:
+            batch_api = bool(getattr(scheduler, "_tq_batch_api", False))
+            single_sequence_only = not batch_api
+            runtime = {
+                "batch_api": "turboquant_kv_v1" if batch_api else None,
+                "single_sequence_only": single_sequence_only,
+                "effective_max_num_seqs": getattr(cfg, "max_num_seqs", None),
+                "effective_prefill_batch_size": getattr(
+                    cfg, "prefill_batch_size", None
+                ),
+                "effective_completion_batch_size": getattr(
+                    cfg, "completion_batch_size", None
+                ),
+            }
+            if single_sequence_only:
+                runtime["single_sequence_reason"] = "cache_extend_not_supported"
             status.update(
-                {
-                    "single_sequence_only": True,
-                    "single_sequence_reason": "cache_extend_not_supported",
-                    "effective_max_num_seqs": getattr(cfg, "max_num_seqs", None),
-                    "effective_prefill_batch_size": getattr(
-                        cfg, "prefill_batch_size", None
-                    ),
-                    "effective_completion_batch_size": getattr(
-                        cfg, "completion_batch_size", None
-                    ),
-                }
+                {k: v for k, v in runtime.items() if v is not None}
             )
         return status
     return {"enabled": False}

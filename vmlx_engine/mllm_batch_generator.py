@@ -674,6 +674,18 @@ def _is_kv_like(c) -> bool:
     return isinstance(c, KVCache) or type(c).__name__ == _TQ_CLASS_NAME
 
 
+def _is_tq_batch_api(c) -> bool:
+    """TurboQuant cache with real batch filter/extract/extend semantics."""
+    if type(c).__name__ != _TQ_CLASS_NAME:
+        return False
+    if getattr(c, "_vmlx_batch_api", None) != "turboquant_kv_v1":
+        return False
+    return all(
+        callable(getattr(c, name, None))
+        for name in ("extend", "filter", "extract", "prepare", "finalize")
+    )
+
+
 def _model_uses_zaya_cache_contract(model: Any) -> bool:
     """Return True when a model has ZAYA CCA typed cache slots."""
     if model is None:
@@ -1292,6 +1304,11 @@ def _merge_caches(caches: List[List[Any]]) -> List[Any]:
                 else:
                     logger.warning(f"Layer {i}: RotatingKVCache but BatchRotatingKVCache unavailable")
                     batch_cache.append(BatchKVCache([0] * len(caches)))
+            elif _is_tq_batch_api(layer_cache):
+                merged = layer_cache
+                for source in layer_caches[1:]:
+                    merged.extend(source)
+                batch_cache.append(merged)
             elif _is_kv_like(layer_cache):
                 # TQ: .keys buffer is over-allocated in 256-token chunks.
                 # BatchKVCache.merge() reads .keys directly, so convert to
@@ -1379,6 +1396,8 @@ def _ensure_batch_cache(cache: List[Any]) -> List[Any]:
             else:
                 # Dequant failed — use fresh KVCache
                 converted.append(BatchKVCache.merge([KVCache()]))
+        elif _is_tq_batch_api(c):
+            converted.append(c)
         elif _is_kv_like(c):
             # TQ: convert via .state to avoid over-allocated buffer
             if type(c).__name__ == _TQ_CLASS_NAME:

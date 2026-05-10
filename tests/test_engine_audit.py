@@ -3847,6 +3847,7 @@ class TestTurboQuantKVTelemetry:
 
         scheduler = SimpleNamespace(
             _tq_active=True,
+            _tq_batch_api=False,
             config=SimpleNamespace(
                 max_num_seqs=1,
                 prefill_batch_size=1,
@@ -3862,6 +3863,28 @@ class TestTurboQuantKVTelemetry:
         assert status["effective_max_num_seqs"] == 1
         assert status["effective_prefill_batch_size"] == 1
         assert status["effective_completion_batch_size"] == 1
+
+    def test_reports_turboquant_batch_api_runtime_contract(self):
+        from types import SimpleNamespace
+        from vmlx_engine.server import _turboquant_kv_cache_status
+
+        scheduler = SimpleNamespace(
+            _tq_active=True,
+            _tq_batch_api=True,
+            config=SimpleNamespace(
+                max_num_seqs=5,
+                prefill_batch_size=1024,
+                completion_batch_size=1024,
+            ),
+        )
+
+        status = _turboquant_kv_cache_status(scheduler=scheduler)
+
+        assert status["enabled"] is True
+        assert status["batch_api"] == "turboquant_kv_v1"
+        assert status["single_sequence_only"] is False
+        assert "single_sequence_reason" not in status
+        assert status["effective_max_num_seqs"] == 5
 
     def test_mllm_scheduler_aggregates_cached_tokens_for_stats(self):
         import threading

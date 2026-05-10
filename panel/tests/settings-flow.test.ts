@@ -76,16 +76,16 @@ const DEFAULT_CONFIG: SessionConfig = {
     apiKey: '',
     rateLimit: 0,
     timeout: 300,
-    maxNumSeqs: 8,
-    prefillBatchSize: 256,
+    maxNumSeqs: 1,
+    prefillBatchSize: 512,
     prefillStepSize: 2048,
-    completionBatchSize: 256,
-    continuousBatching: false,
-    enablePrefixCache: false,
+    completionBatchSize: 512,
+    continuousBatching: true,
+    enablePrefixCache: true,
     prefixCacheSize: 100,
     prefixCacheMaxBytes: 0,
     cacheMemoryMb: 0,
-    cacheMemoryPercent: 20,
+    cacheMemoryPercent: 15,
     cacheTtlMinutes: 0,
     noMemoryAwareCache: false,
     usePagedCache: true,
@@ -991,18 +991,18 @@ describe('Default IP and New Settings', () => {
         expect(getFlagValue(out, '--host')).toBe('127.0.0.1')
     })
 
-    it('current startup defaults favor SimpleEngine single-user decode speed', () => {
+    it('current startup defaults keep the single-user cache stack enabled', () => {
         const out = preview()
 
-        expect(getFlagValue(out, '--max-num-seqs')).toBe('8')
-        expect(getFlagValue(out, '--prefill-batch-size')).toBe('256')
+        expect(getFlagValue(out, '--max-num-seqs')).toBe('1')
+        expect(getFlagValue(out, '--prefill-batch-size')).toBe('512')
         expect(getFlagValue(out, '--prefill-step-size')).toBe('2048')
-        expect(getFlagValue(out, '--completion-batch-size')).toBe('256')
-        expect(hasFlag(out, '--continuous-batching')).toBe(false)
-        expect(hasFlag(out, '--disable-prefix-cache')).toBe(true)
+        expect(getFlagValue(out, '--completion-batch-size')).toBe('512')
+        expect(hasFlag(out, '--continuous-batching')).toBe(true)
+        expect(hasFlag(out, '--disable-prefix-cache')).toBe(false)
         expect(hasFlag(out, '--cache-memory-percent')).toBe(false)
-        expect(hasFlag(out, '--use-paged-cache')).toBe(false)
-        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(false)
+        expect(hasFlag(out, '--use-paged-cache')).toBe(true)
+        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(true)
         expect(getFlagValue(out, '--default-temperature')).toBe('0.70')
         expect(getFlagValue(out, '--default-top-p')).toBe('0.95')
         expect(getFlagValue(out, '--default-repetition-penalty')).toBe('1.10')
@@ -1011,17 +1011,24 @@ describe('Default IP and New Settings', () => {
 
     it('session manager migrates the exact stale continuous-cache default tuple', () => {
         const source = readFileSync('src/main/sessions.ts', 'utf8')
-        expect(source).toContain('function applySingleUserPerfDefaultMigration')
+        expect(source).toContain('function applyCacheStackStartupDefaultMigration')
         expect(source).toContain('config.continuousBatching === true')
         expect(source).toContain('config.enablePrefixCache === true')
         expect(source).toContain('Number(config.maxNumSeqs) === 64')
         expect(source).toContain('Number(config.prefillBatchSize) === 1024')
         expect(source).toContain('Number(config.completionBatchSize) === 1024')
-        expect(source).toContain('config.continuousBatching = false')
-        expect(source).toContain('config.enablePrefixCache = false')
-        expect(source).toContain('config.maxNumSeqs = 8')
-        expect(source).toContain('config.prefillBatchSize = 256')
-        expect(source).toContain('config.completionBatchSize = 256')
+        expect(source).toContain('config.continuousBatching = true')
+        expect(source).toContain('config.enablePrefixCache = true')
+        expect(source).toContain('config.maxNumSeqs = 1')
+        expect(source).toContain('config.prefillBatchSize = 512')
+        expect(source).toContain('config.prefillStepSize = 2048')
+        expect(source).toContain('config.completionBatchSize = 512')
+        expect(source).toContain('config.usePagedCache = true')
+        expect(source).toContain('config.maxCacheBlocks = 1000')
+        expect(source).toContain("config.kvCacheQuantization = 'auto'")
+        expect(source).toContain('config.enableBlockDiskCache = true')
+        expect(source).toContain('config.blockDiskCacheMaxGb = 10')
+        expect(source).toContain('config.cacheMemoryPercent = 15')
     })
 
     it('session manager migrates stale no-prefix MiniMax-style batch tuple', () => {
@@ -1320,9 +1327,9 @@ describe('Feature Interaction', () => {
         expect(launchSource).toContain('--prefix-cache-max-bytes')
     })
 
-    it('cacheMemoryPercent default 20 emits 0.2', () => {
-        const out = preview({ enablePrefixCache: true, cacheMemoryPercent: 20, usePagedCache: false })
-        expect(getFlagValue(out, '--cache-memory-percent')).toBe('0.2')
+    it('cacheMemoryPercent default 15 emits 0.15 when legacy memory cache is active', () => {
+        const out = preview({ enablePrefixCache: true, cacheMemoryPercent: 15, usePagedCache: false })
+        expect(getFlagValue(out, '--cache-memory-percent')).toBe('0.15')
     })
 
     it('omits memory-aware cache budget flags when paged cache is active', () => {
@@ -1549,7 +1556,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         }
     })
 
-    it('default config produces minimal flags (no unnecessary options)', () => {
+    it('default config produces the single-sequence cache-stack flags', () => {
         const out = preview()
         const normalized = out.replace(/\s*\\\n\s*/g, ' ')
 
@@ -1558,7 +1565,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized).not.toContain('VLLM_API_KEY')  // apiKey is empty
         expect(normalized).not.toContain('--rate-limit')     // rateLimit is 0
         expect(normalized).not.toContain('--is-mllm')        // isMultimodal is undefined/false
-        expect(normalized).toContain('--disable-prefix-cache')      // single-user speed default
+        expect(normalized).not.toContain('--disable-prefix-cache')  // cache stack is enabled by default
         expect(normalized).not.toContain('--enable-disk-cache')     // paged cache uses block L2, not legacy prompt L2
         expect(normalized).not.toContain('--speculative-model')     // no speculative model
         expect(normalized).not.toContain('--embedding-model')       // empty
@@ -1571,9 +1578,9 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized).toContain('--port')
         expect(normalized).toContain('--timeout')
         expect(normalized).toContain('--max-tokens')
-        expect(normalized).not.toContain('--continuous-batching')
-        expect(normalized).not.toContain('--use-paged-cache')
-        expect(normalized).not.toContain('--enable-block-disk-cache')
+        expect(normalized).toContain('--continuous-batching')
+        expect(normalized).toContain('--use-paged-cache')
+        expect(normalized).toContain('--enable-block-disk-cache')
         expect(normalized).toContain('--default-temperature')
         expect(normalized).toContain('--default-top-p')
         expect(normalized).toContain('--default-repetition-penalty')

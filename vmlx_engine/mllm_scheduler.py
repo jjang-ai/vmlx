@@ -737,6 +737,7 @@ class MLLMScheduler:
                 )
 
         self._tq_active = self._detect_turboquant_make_cache()
+        self._tq_batch_api = self._detect_turboquant_batch_api()
         self._enforce_turboquant_single_sequence()
 
         # Get stop tokens from tokenizer
@@ -1006,9 +1007,62 @@ class MLLMScheduler:
                     stack.append(nxt)
         return False
 
+    def _detect_turboquant_batch_api(self) -> bool:
+        """Return True when all VLM TurboQuant cache slots expose batch API v1."""
+
+        def _is_mock_object(obj: Any) -> bool:
+            return type(obj).__module__ == "unittest.mock"
+
+        def _safe_attr(obj: Any, name: str) -> Any:
+            if obj is None:
+                return None
+            if _is_mock_object(obj):
+                return getattr(obj, "__dict__", {}).get(name)
+            return getattr(obj, name, None)
+
+        seen = set()
+        stack = [self.model]
+        required_methods = ("extend", "filter", "extract", "prepare", "finalize")
+        while stack:
+            obj = stack.pop()
+            if obj is None or id(obj) in seen:
+                continue
+            seen.add(id(obj))
+
+            make_cache = _safe_attr(obj, "make_cache")
+            if make_cache is not None and getattr(make_cache, "__name__", "") in (
+                "_tq_make_cache",
+                "_turboquant_make_cache",
+            ):
+                try:
+                    cache = make_cache() or []
+                except Exception:
+                    return False
+                tq_slots = [c for c in cache if type(c).__name__ == "TurboQuantKVCache"]
+                if not tq_slots:
+                    return False
+                return all(
+                    getattr(slot, "_vmlx_batch_api", None) == "turboquant_kv_v1"
+                    and all(callable(getattr(slot, name, None)) for name in required_methods)
+                    for slot in tq_slots
+                )
+
+            for attr in ("model", "language_model"):
+                nxt = _safe_attr(obj, attr)
+                if nxt is not None and nxt is not obj and id(nxt) not in seen:
+                    stack.append(nxt)
+        return False
+
     def _enforce_turboquant_single_sequence(self) -> None:
         """Keep MLLM live batching honest for TurboQuantKVCache."""
         if not self._tq_active:
+            return
+
+        if self._tq_batch_api:
+            logger.info(
+                "VLM TurboQuantKVCache live decode preserving configured batching "
+                "(batch cache API=turboquant_kv_v1)."
+            )
             return
 
         changed = []
@@ -1026,8 +1080,8 @@ class MLLMScheduler:
         if changed:
             logger.warning(
                 "VLM TurboQuantKVCache live decode is single-sequence only "
-                "(multi-seq merge calls cache.extend(), which TurboQuantKVCache "
-                "intentionally does not implement); overriding %s.",
+                "with this jang_tools build (missing batch API turboquant_kv_v1); "
+                "overriding %s.",
                 ", ".join(changed),
             )
 
