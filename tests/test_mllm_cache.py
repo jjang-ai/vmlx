@@ -556,6 +556,292 @@ class TestMLXMultimodalLMCache:
         assert model.enable_cache is False
         assert model._cache_manager is None
 
+    def test_chat_image_prefix_hit_passes_prompt_cache_state_to_mlx_vlm(
+        self, monkeypatch
+    ):
+        """Image-prefix hits must use mlx-vlm's PromptCacheState handoff."""
+        from types import SimpleNamespace
+
+        import mlx_vlm
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        manager = MLLMPrefixCacheManager(max_entries=4)
+        manager.store(
+            images=["processed-image.png"],
+            prompt="old formatted prompt",
+            vision_embeddings=None,
+            kv_cache=["cached-kv"],
+            token_ids=[10, 11, 12],
+            num_image_tokens=1,
+            model_name="fake-vlm",
+        )
+
+        class _Tokenizer:
+            def encode(self, _text):
+                return [10, 11, 12, 13]
+
+        captured = {}
+
+        def _fake_generate(*_args, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(text="ok", prompt_tokens=4, generation_tokens=1)
+
+        monkeypatch.setattr(mlx_vlm, "generate", _fake_generate)
+
+        mllm = MLXMultimodalLM.__new__(MLXMultimodalLM)
+        mllm._loaded = True
+        mllm._cache_manager = manager
+        mllm.model_name = "fake-vlm"
+        mllm.model = SimpleNamespace(
+            config=SimpleNamespace(model_type="fake"),
+            language_model=object(),
+        )
+        mllm.config = SimpleNamespace(image_token_index=None)
+        mllm.processor = SimpleNamespace(tokenizer=_Tokenizer())
+        mllm._prepare_images = lambda _imgs: ["processed-image.png"]
+        mllm._prepare_video = lambda *_args, **_kwargs: []
+        mllm._apply_chat_template = lambda _msgs, _enable: "new formatted prompt"
+
+        output = mllm.chat(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": "image.png"}},
+                        {"type": "text", "text": "What changed?"},
+                    ],
+                }
+            ],
+            max_tokens=4,
+            use_cache=True,
+        )
+
+        assert output.text == "ok"
+        state = captured.get("prompt_cache_state")
+        assert state is not None
+        assert state.cache == ["cached-kv"]
+        assert state.token_ids == [10, 11, 12]
+        assert captured.get("prompt_cache") is None
+
+    def test_generate_image_prefix_hit_passes_prompt_cache_state_to_mlx_vlm(
+        self, monkeypatch
+    ):
+        """Direct image generation uses the same safe mlx-vlm prefix handoff."""
+        from types import SimpleNamespace
+
+        import mlx_vlm
+        import mlx_vlm.prompt_utils
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        manager = MLLMPrefixCacheManager(max_entries=4)
+        manager.store(
+            images=["image.png"],
+            prompt="new formatted prompt",
+            vision_embeddings=None,
+            kv_cache=["cached-kv"],
+            token_ids=[10, 11, 12],
+            num_image_tokens=1,
+            model_name="fake-vlm",
+        )
+
+        class _Tokenizer:
+            def encode(self, _text):
+                return [10, 11, 12, 13]
+
+        captured = {}
+
+        def _fake_generate(*_args, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(text="ok", prompt_tokens=4, generation_tokens=1)
+
+        monkeypatch.setattr(mlx_vlm, "generate", _fake_generate)
+        monkeypatch.setattr(
+            mlx_vlm.prompt_utils,
+            "apply_chat_template",
+            lambda *_args, **_kwargs: "new formatted prompt",
+        )
+
+        mllm = MLXMultimodalLM.__new__(MLXMultimodalLM)
+        mllm._loaded = True
+        mllm._cache_manager = manager
+        mllm.model_name = "fake-vlm"
+        mllm.model = SimpleNamespace(
+            config=SimpleNamespace(model_type="fake"),
+            language_model=object(),
+        )
+        mllm.config = SimpleNamespace(image_token_index=None)
+        mllm.processor = SimpleNamespace(tokenizer=_Tokenizer())
+        mllm._prepare_images = lambda _imgs: ["processed-image.png"]
+        mllm._prepare_video = lambda *_args, **_kwargs: []
+
+        output = mllm.generate(
+            "What changed?",
+            images=["image.png"],
+            max_tokens=4,
+            use_cache=True,
+        )
+
+        assert output.text == "ok"
+        state = captured.get("prompt_cache_state")
+        assert state is not None
+        assert state.cache == ["cached-kv"]
+        assert state.token_ids == [10, 11, 12]
+        assert captured.get("prompt_cache") is None
+
+    def test_generate_image_cache_miss_stores_prompt_boundary_only(
+        self, monkeypatch
+    ):
+        """Direct image generation must not persist generated-token cache tails."""
+        from types import SimpleNamespace
+
+        import mlx.core as mx
+        import mlx_vlm
+        import mlx_vlm.prompt_utils
+        from mlx_vlm.models import cache as vlm_cache
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        manager = MLLMPrefixCacheManager(max_entries=4)
+
+        class _Tokenizer:
+            def encode(self, _text):
+                return [10, 11, 12, 13]
+
+        layer_cache = SimpleNamespace(
+            keys=mx.array([[[[1], [2], [3], [4], [5], [6]]]]),
+            values=mx.array([[[[11], [12], [13], [14], [15], [16]]]]),
+            state=(
+                mx.array([[[[1], [2], [3], [4], [5], [6]]]]),
+                mx.array([[[[11], [12], [13], [14], [15], [16]]]]),
+                6,
+            ),
+            offset=6,
+        )
+
+        def _fake_generate(*_args, **_kwargs):
+            return SimpleNamespace(text="ok", prompt_tokens=4, generation_tokens=2)
+
+        monkeypatch.setattr(vlm_cache, "make_prompt_cache", lambda _lm: [layer_cache])
+        monkeypatch.setattr(mlx_vlm, "generate", _fake_generate)
+        monkeypatch.setattr(
+            mlx_vlm.prompt_utils,
+            "apply_chat_template",
+            lambda *_args, **_kwargs: "formatted prompt",
+        )
+
+        mllm = MLXMultimodalLM.__new__(MLXMultimodalLM)
+        mllm._loaded = True
+        mllm._cache_manager = manager
+        mllm.model_name = "fake-vlm"
+        mllm.model = SimpleNamespace(
+            config=SimpleNamespace(model_type="fake"),
+            language_model=object(),
+        )
+        mllm.config = SimpleNamespace(image_token_index=None)
+        mllm.processor = SimpleNamespace(tokenizer=_Tokenizer())
+        mllm._prepare_images = lambda _imgs: ["processed-image.png"]
+        mllm._prepare_video = lambda *_args, **_kwargs: []
+
+        output = mllm.generate(
+            "Describe",
+            images=["image.png"],
+            max_tokens=4,
+            use_cache=True,
+        )
+
+        assert output.text == "ok"
+        assert len(manager._cache) == 1
+        stored_entry = next(iter(manager._cache.values()))
+        stored_layer = stored_entry.kv_cache[0]
+        assert stored_layer.offset == 4
+        assert stored_layer.keys.shape[2] == 4
+        assert stored_layer.values.shape[2] == 4
+        assert layer_cache.offset == 6
+        assert layer_cache.keys.shape[2] == 6
+
+    def test_prompt_cache_state_rejects_legacy_dummy_token_ids(self):
+        """Legacy store_cache dummy tokens must not drive mlx-vlm prefix trim."""
+        from vmlx_engine.models.mllm import _prompt_cache_state_from_entry
+
+        entry = MLLMPrefixCacheEntry(
+            image_hash="img",
+            prompt_hash="prompt",
+            kv_cache=["stale-kv"],
+            token_ids=[0, 0, 0, 0],
+            prompt_tokens=4,
+        )
+
+        assert _prompt_cache_state_from_entry(entry) is None
+
+    def test_stream_chat_image_prefix_hit_passes_prompt_cache_state_to_mlx_vlm(
+        self, monkeypatch
+    ):
+        """Streaming image-prefix hits must use the same safe mlx-vlm handoff."""
+        from types import SimpleNamespace
+
+        import mlx_vlm
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        manager = MLLMPrefixCacheManager(max_entries=4)
+        manager.store(
+            images=["processed-image.png"],
+            prompt="old formatted prompt",
+            vision_embeddings=None,
+            kv_cache=["cached-kv"],
+            token_ids=[10, 11, 12],
+            num_image_tokens=1,
+            model_name="fake-vlm",
+        )
+
+        class _Tokenizer:
+            def encode(self, _text):
+                return [10, 11, 12, 13]
+
+        captured = {}
+
+        def _fake_stream_generate(*_args, **kwargs):
+            captured.update(kwargs)
+            yield SimpleNamespace(text="o", prompt_tokens=4)
+            yield SimpleNamespace(text="k", prompt_tokens=4)
+
+        monkeypatch.setattr(mlx_vlm, "stream_generate", _fake_stream_generate)
+
+        mllm = MLXMultimodalLM.__new__(MLXMultimodalLM)
+        mllm._loaded = True
+        mllm._cache_manager = manager
+        mllm.model_name = "fake-vlm"
+        mllm.model = SimpleNamespace(
+            config=SimpleNamespace(model_type="fake"),
+            language_model=object(),
+        )
+        mllm.config = SimpleNamespace(image_token_index=None)
+        mllm.processor = SimpleNamespace(tokenizer=_Tokenizer(), _patched_detok=True)
+        mllm._prepare_images = lambda _imgs: ["processed-image.png"]
+        mllm._prepare_video = lambda *_args, **_kwargs: []
+        mllm._apply_chat_template = lambda _msgs, _enable: "new formatted prompt"
+
+        chunks = list(
+            mllm.stream_chat(
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": "image.png"}},
+                            {"type": "text", "text": "What changed?"},
+                        ],
+                    }
+                ],
+                max_tokens=4,
+                use_cache=True,
+            )
+        )
+
+        assert "".join(c.text for c in chunks[:2]) == "ok"
+        state = captured.get("prompt_cache_state")
+        assert state is not None
+        assert state.cache == ["cached-kv"]
+        assert state.token_ids == [10, 11, 12]
+        assert captured.get("prompt_cache") is None
+
     def test_mllm_cache_custom_size(self):
         """Test custom cache size in MLXMultimodalLM."""
         from vmlx_engine.models.mllm import MLXMultimodalLM

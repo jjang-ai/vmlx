@@ -23,7 +23,7 @@ import tempfile
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 from urllib.parse import urlparse
 
 import numpy as np
@@ -108,6 +108,65 @@ class _MaybeVLMStream:
         if self._cm is not None:
             return self._cm.__exit__(*exc)
         return False
+
+
+def _prompt_cache_state_from_entry(cache_entry: Any) -> Any | None:
+    """Build mlx-vlm PromptCacheState from a vMLX MLLM prefix entry."""
+    if cache_entry is None:
+        return None
+    kv_cache = getattr(cache_entry, "kv_cache", None)
+    token_ids = getattr(cache_entry, "token_ids", None)
+    if kv_cache is None or not token_ids:
+        return None
+    # Legacy MLLMPrefixCacheManager.store_cache() writes dummy all-zero token IDs
+    # when the caller only knows a token count. mlx-vlm PromptCacheState uses
+    # token_ids as the authoritative trim boundary, so dummy IDs would turn a
+    # stale cache into a fake prefix hit.
+    if all(token_id == 0 for token_id in token_ids):
+        return None
+    try:
+        from mlx_vlm.generate import PromptCacheState
+    except Exception:
+        return None
+
+    state = PromptCacheState()
+    state.cache = kv_cache
+    state.token_ids = list(token_ids)
+    return state
+
+
+def _copy_prompt_cache_to_prompt_boundary(
+    prompt_cache: list[Any], prompt_tokens_count: int
+) -> list[Any]:
+    """Copy an mlx-vlm prompt cache and trim generated-token tails."""
+    import copy
+
+    import mlx.core as mx
+
+    cache_to_store = []
+    prompt_tokens_count = max(int(prompt_tokens_count or 0), 0)
+    for layer_cache in prompt_cache:
+        new_cache = copy.copy(layer_cache)
+        if hasattr(layer_cache, "state"):
+            state = layer_cache.state
+            if state is not None and len(state) >= 2 and state[0] is not None:
+                keys = mx.array(state[0])
+                values = mx.array(state[1])
+                cache_len = keys.shape[2] if len(keys.shape) >= 3 else None
+                target_len = prompt_tokens_count
+                if cache_len is not None:
+                    target_len = min(prompt_tokens_count, cache_len)
+                    if cache_len > target_len:
+                        keys = keys[:, :, :target_len, :]
+                        values = values[:, :, :target_len, :]
+                new_cache.keys = keys
+                new_cache.values = values
+                if len(state) >= 3:
+                    new_cache.offset = min(state[2], target_len)
+                elif hasattr(layer_cache, "offset"):
+                    new_cache.offset = min(layer_cache.offset, target_len)
+        cache_to_store.append(new_cache)
+    return cache_to_store
 
 
 class TempFileManager:
@@ -1374,6 +1433,7 @@ class MLXMultimodalLM:
 
         # Check cache for existing KV state
         prompt_cache = None
+        prompt_cache_state = None
         cache_hit = False
         _cache_token_ids: list[int] | None = None  # reused by store path below
 
@@ -1390,7 +1450,20 @@ class MLXMultimodalLM:
                     all_sources, formatted_prompt, token_ids
                 )
                 if cache_entry and cache_entry.kv_cache is not None:
-                    prompt_cache = cache_entry.kv_cache
+                    if all_images:
+                        prompt_cache_state = _prompt_cache_state_from_entry(cache_entry)
+                        if prompt_cache_state is None:
+                            logger.debug(
+                                "[PREFIX CACHE] Generate image hit lacked PromptCacheState; "
+                                "falling back to full prompt processing"
+                            )
+                        else:
+                            logger.debug(
+                                "[PREFIX CACHE] Generate image hit - using mlx-vlm "
+                                "PromptCacheState for prefix trim"
+                            )
+                    else:
+                        prompt_cache = cache_entry.kv_cache
                     cache_hit = True
                     logger.info(
                         f"MLLM cache hit for {len(all_sources)} source(s)"
@@ -1400,11 +1473,13 @@ class MLXMultimodalLM:
                 logger.debug(f"Generate cache fetch failed: {e}")
 
         # Create new cache if needed
-        if prompt_cache is None and self.model is not None:
+        if prompt_cache is None and prompt_cache_state is None and self.model is not None:
             try:
                 prompt_cache = vlm_cache.make_prompt_cache(self.model.language_model)
             except Exception:
                 prompt_cache = None
+        if prompt_cache_state is not None:
+            kwargs["prompt_cache_state"] = prompt_cache_state
 
         # Generate with cache
         result = generate(
@@ -1430,6 +1505,9 @@ class MLXMultimodalLM:
             if prompt_cache is not None:
                 try:
                     num_tokens = getattr(result, "prompt_tokens", 0)
+                    cache_to_store = _copy_prompt_cache_to_prompt_boundary(
+                        prompt_cache, num_tokens
+                    )
                     # Prefer the real token_ids (computed above during fetch)
                     # so partial-hit prefix matching works. store_cache's
                     # num_tokens-only path writes dummy `[0] * N` which makes
@@ -1439,14 +1517,14 @@ class MLXMultimodalLM:
                             images=all_sources,
                             prompt=formatted_prompt,
                             vision_embeddings=None,
-                            kv_cache=prompt_cache,
+                            kv_cache=cache_to_store,
                             token_ids=_cache_token_ids,
                             num_image_tokens=0,
                             model_name=self.model_name,
                         )
                     else:
                         self._cache_manager.store_cache(
-                            all_sources, formatted_prompt, prompt_cache, num_tokens
+                            all_sources, formatted_prompt, cache_to_store, num_tokens
                         )
                     logger.info(f"MLLM cache stored for {len(all_sources)} source(s)")
                 except Exception as e:
@@ -1699,18 +1777,26 @@ class MLXMultimodalLM:
 
         # Create or reuse prompt cache for prefix caching speedup
         prompt_cache = None
+        prompt_cache_state = None
         skip_prompt_processing = False
 
         if cache_hit and cache_entry and cache_entry.kv_cache:
-            # NOTE: mlx-vlm's generate_step() has its own multimodal KV cache with prefix matching
-            # (MULTIMODAL_KV_CACHE_ENABLED in mlx_vlm/utils.py). Let it handle caching.
-            # We only use vmlx-engine's cache for text-only requests (no images).
             if all_images:
-                # Let mlx-vlm's multimodal cache handle this - don't interfere
-                logger.debug(
-                    "[PREFIX CACHE] Images present - delegating to mlx-vlm multimodal cache"
-                )
-                prompt_cache = None  # Fresh cache, mlx-vlm will handle prefix matching
+                # mlx-vlm trims multimodal prefixes via PromptCacheState. Passing
+                # raw prompt_cache with the full prompt would double-process the
+                # image/prefix tokens; dropping the hit would full-prefill every
+                # follow-up turn.
+                prompt_cache_state = _prompt_cache_state_from_entry(cache_entry)
+                if prompt_cache_state is None:
+                    logger.debug(
+                        "[PREFIX CACHE] Image prefix hit lacked PromptCacheState; "
+                        "falling back to full prompt processing"
+                    )
+                else:
+                    logger.debug(
+                        "[PREFIX CACHE] Image prefix hit - using mlx-vlm "
+                        "PromptCacheState for prefix trim"
+                    )
                 skip_prompt_processing = False
             else:
                 # Text-only: can use skip_prompt_processing for maximum speedup
@@ -1746,7 +1832,7 @@ class MLXMultimodalLM:
                     prompt_cache = None
                     skip_prompt_processing = False
 
-        if prompt_cache is None and self.model is not None:
+        if prompt_cache is None and prompt_cache_state is None and self.model is not None:
             # Create fresh cache
             try:
                 prompt_cache = vlm_cache.make_prompt_cache(self.model.language_model)
@@ -1763,6 +1849,8 @@ class MLXMultimodalLM:
             kwargs["sampler"] = make_sampler(
                 temp=temperature, top_p=top_p, min_p=min_p, top_k=top_k
             )
+        if prompt_cache_state is not None:
+            kwargs["prompt_cache_state"] = prompt_cache_state
 
         result = generate(
             self.model,
@@ -1787,45 +1875,12 @@ class MLXMultimodalLM:
             and prompt_cache
         ):
             try:
-                import copy
-                import mlx.core as mx
-
                 # Get prompt token count (before generation)
                 prompt_tokens_count = getattr(result, "prompt_tokens", 0)
 
-                # Deep copy the cache and trim to prompt tokens only
-                cache_to_store = []
-                for layer_cache in prompt_cache:
-                    new_cache = copy.copy(layer_cache)
-                    if hasattr(layer_cache, "state"):
-                        state = layer_cache.state
-                        if (
-                            state is not None
-                            and len(state) >= 2
-                            and state[0] is not None
-                        ):
-                            # Copy arrays
-                            keys = mx.array(state[0])
-                            values = mx.array(state[1])
-                            # Trim to prompt tokens only (not generated tokens)
-                            if (
-                                hasattr(layer_cache, "offset")
-                                and layer_cache.offset > prompt_tokens_count
-                            ):
-                                # For caches with offset tracking, slice to prompt length
-                                new_cache.keys = keys[:, :, :prompt_tokens_count, :]
-                                new_cache.values = values[:, :, :prompt_tokens_count, :]
-                                new_cache.offset = prompt_tokens_count
-                            else:
-                                new_cache.keys = keys
-                                new_cache.values = values
-                                if len(state) >= 3:
-                                    new_cache.offset = state[2]
-                                elif hasattr(layer_cache, "offset"):
-                                    new_cache.offset = min(
-                                        layer_cache.offset, prompt_tokens_count
-                                    )
-                    cache_to_store.append(new_cache)
+                cache_to_store = _copy_prompt_cache_to_prompt_boundary(
+                    prompt_cache, prompt_tokens_count
+                )
 
                 # Estimate num_image_tokens from the model config or token IDs.
                 # Different models use different counts (e.g., Gemma3=256, Qwen2-VL varies).
@@ -1972,6 +2027,7 @@ class MLXMultimodalLM:
         from mlx_vlm.models import cache as vlm_cache
 
         prompt_cache = None
+        prompt_cache_state = None
         cache_hit = False
         use_cache = kwargs.pop("use_cache", True)
 
@@ -1987,7 +2043,12 @@ class MLXMultimodalLM:
                     all_images, formatted_prompt, token_ids
                 )
                 if cache_entry and cache_entry.kv_cache is not None:
-                    prompt_cache = cache_entry.kv_cache
+                    prompt_cache_state = _prompt_cache_state_from_entry(cache_entry)
+                    if prompt_cache_state is None:
+                        logger.debug(
+                            "Stream chat image prefix hit lacked PromptCacheState; "
+                            "falling back to full prompt processing"
+                        )
                     cache_hit = True
                     if prefix_match_len > 0:
                         logger.debug(
@@ -2000,7 +2061,7 @@ class MLXMultimodalLM:
                 logger.debug(f"Stream chat cache fetch failed: {e}")
 
         # Create new cache if needed
-        if prompt_cache is None and self.model is not None:
+        if prompt_cache is None and prompt_cache_state is None and self.model is not None:
             try:
                 prompt_cache = vlm_cache.make_prompt_cache(self.model.language_model)
             except Exception:
@@ -2038,6 +2099,8 @@ class MLXMultimodalLM:
             kwargs["sampler"] = make_sampler(
                 temp=temperature, top_p=top_p, min_p=min_p, top_k=top_k
             )
+        if prompt_cache_state is not None:
+            kwargs["prompt_cache_state"] = prompt_cache_state
 
         try:
             with _MaybeVLMStream():
