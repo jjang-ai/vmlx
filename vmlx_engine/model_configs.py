@@ -990,11 +990,21 @@ def register_all(registry=None):
 
     # ── MiniMax ──
 
+    # MiniMax M2/M2.5/M2.7 chat template uses `]~b]` (token id 200019) as the
+    # role-boundary prefix for every role start (`]~b]system`, `]~b]user`,
+    # `]~b]ai`, `]~b]tool`). The generation prompt is `]~b]ai\n<think>\n`, so
+    # the model starts AFTER the role marker and legitimate output should
+    # NEVER contain `]~b]`. Without this stop, a hallucinated `]~b]user`
+    # would not terminate generation — same hallucination-loop class as the
+    # 2026-05-03 DSV4 `<｜Assistant｜>` incident. eos_tokens[0] (`[e~[`,
+    # 200020) is the primary EOS already in tokenizer_config.json::eos_token;
+    # eos_tokens[1] adds the role-boundary stop via scheduler.py:1981-1993.
     _register(
         ModelConfig(
             family_name="minimax",
             model_types=["minimax", "minimax_m2", "minimax_m2_5"],
             cache_type="kv",
+            eos_tokens=["[e~[", "]~b]"],
             tool_parser="minimax",
             reasoning_parser="qwen3",
             think_in_template=True,

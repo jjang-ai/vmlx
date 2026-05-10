@@ -1114,6 +1114,35 @@ class TestModelConfigComprehensiveChecks:
             "mid-response must terminate generation."
         )
 
+    def test_minimax_eos_includes_role_boundary_marker(self, registry):
+        """REGRESSION (2026-05-09): MiniMax M2/M2.5/M2.7 chat template uses
+        `]~b]` (token id 200019) as the role-boundary prefix for every
+        role start (system/user/ai/tool). The generation prompt is
+        `]~b]ai\\n<think>\\n`, so the model starts AFTER the role marker
+        and legitimate output should NEVER contain `]~b]`. If the model
+        hallucinates a new turn (e.g. `]~b]user`), nothing stops it —
+        same hallucination-loop class as the 2026-05-03 DSV4 incident.
+
+        Adding `]~b]` to eos_tokens makes scheduler.py:1981-1993 register
+        token 200019 as an additional stop. tokenizer.eos_token (`[e~[`,
+        200020) remains the primary EOS via eos_tokens[0]."""
+        registry.clear_cache()
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("minimax_m2")):
+            config = registry.lookup("MiniMax-M2.7-JANGTQ")
+        assert config.family_name == "minimax"
+        assert config.eos_tokens is not None, (
+            "MiniMax has no explicit eos_tokens — it cannot install the "
+            "`]~b]` role-boundary stop and is vulnerable to hallucinated "
+            "user-turn loops just like DSV4 was."
+        )
+        assert "]~b]" in config.eos_tokens, (
+            "MiniMax eos_tokens must include `]~b]` (token id 200019). It "
+            "is the role-boundary prefix used for every turn start in the "
+            "chat template (`]~b]system`, `]~b]user`, `]~b]ai`, `]~b]tool`). "
+            "Generation begins after `]~b]ai\\n<think>\\n`, so legitimate "
+            "model output never contains this token."
+        )
+
     def test_qwen3_is_reasoning_but_qwen2_is_not(self, registry):
         """Qwen3 IS a reasoning model, Qwen2 is NOT. They must differ."""
         registry.clear_cache()
