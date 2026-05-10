@@ -1392,7 +1392,7 @@ def test_zaya_mllm_paged_store_rederives_clean_prompt_boundary():
             self.stop_tokens = set()
             self.prefilled = []
 
-        def _prefill_for_clean_ssm(self, token_ids):
+        def _prefill_for_clean_path_dependent_cache(self, token_ids):
             self.prefilled.append(list(token_ids))
             return ["clean-zaya-cache"]
 
@@ -1465,6 +1465,50 @@ def test_zaya_mllm_extract_cache_states_marks_cachelist_as_tensor_data():
     from vmlx_engine.prefix_cache import _is_zaya_cca_cache_list_state
 
     assert _is_zaya_cca_cache_list_state(extracted[0]) is True
+
+
+def test_zaya_frugal_store_keeps_terminal_cca_block_in_ram(monkeypatch):
+    """Immediate same-process ZAYA hits must not depend on async L2 visibility.
+
+    ZAYA CCA stores per-block KV slices plus terminal conv_state/prev_hs. If
+    frugal block-disk mode drops the in-RAM typed block records before the L2
+    write is readable, a same-process repeat can find the block table but fail
+    to reconstruct the CacheList required for CCA continuation.
+    """
+
+    from vmlx_engine.mllm_scheduler import MLLMScheduler
+    from vmlx_engine.paged_cache import PagedCacheManager
+    from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+    class _DummyDisk:
+        def write_block_async(self, *_args, **_kwargs):
+            return None
+
+    model = Model(_small_args())
+    cache = model.make_cache()
+    tokens = [1, 2, 3, 4, 5, 6, 7]
+    output = model(mx.array([tokens], dtype=mx.int32), cache=cache)
+    mx.eval(getattr(output, "logits", output))
+
+    extractor = MLLMScheduler.__new__(MLLMScheduler)
+    extractor._detect_n_kv_heads = lambda: 0
+    cache_states = extractor._extract_cache_states(cache)
+
+    monkeypatch.delenv("VMLX_PAGED_FRUGAL", raising=False)
+    paged = PagedCacheManager(block_size=4, max_blocks=8, disk_store=_DummyDisk())
+    pc = BlockAwarePrefixCache(model=None, paged_cache_manager=paged)
+
+    table = pc.store_cache("zaya-frugal-terminal", tokens, cache_states)
+
+    assert table is not None
+    for block_id in table.block_ids:
+        assert paged.allocated_blocks[block_id].cache_data is not None
+    terminal_block = paged.allocated_blocks[table.block_ids[-1]]
+    assert any(
+        entry[0] == "zaya_cca" and len(entry) > 2 and entry[2] is not None
+        for entry in terminal_block.cache_data
+    )
+    assert pc.reconstruct_cache(table) is not None
 
 
 def test_zaya_batch_generator_finishes_with_moe_no_state_cache():

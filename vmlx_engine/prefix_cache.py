@@ -743,6 +743,19 @@ def _is_zaya_cca_cache_list_state(layer_state: Dict[str, Any]) -> bool:
     return isinstance(second_state, (list, tuple)) and len(second_state) >= 2
 
 
+def _cache_data_has_zaya_cca(cache_data) -> bool:
+    """Return True when extracted cache states include typed ZAYA CCA layers."""
+    try:
+        for layer_state in cache_data or []:
+            if isinstance(layer_state, dict) and _is_zaya_cca_cache_list_state(
+                layer_state
+            ):
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def _dsv4_cache_meta(layer_state: Dict[str, Any]) -> Dict[str, Any]:
     meta: Dict[str, Any] = {}
     cr = layer_state.get("compress_ratio")
@@ -1523,6 +1536,9 @@ class BlockAwarePrefixCache:
             and "state" in cache_data[0]
         )
         has_dsv4_cache_data = _cache_data_has_dsv4(cache_data) if is_tensor_data else False
+        has_zaya_cca_cache_data = (
+            _cache_data_has_zaya_cca(cache_data) if is_tensor_data else False
+        )
 
         # Get or create block table
         block_table = self.paged_cache.get_block_table(request_id)
@@ -1765,7 +1781,7 @@ class BlockAwarePrefixCache:
                         and (
                             _block_needs_cumulative_update(existing_block.cache_data)
                             or (
-                                has_dsv4_cache_data
+                                (has_dsv4_cache_data or has_zaya_cca_cache_data)
                                 and existing_block.cache_data is None
                             )
                         )
@@ -1871,16 +1887,15 @@ class BlockAwarePrefixCache:
                     np_sources=np_sources if np_sources else None,
                 )
                 if block_kv_data:
-                    # DSV4 is not a normal per-block KV payload. Non-terminal
-                    # blocks carry only cheap pending markers plus the plain
-                    # SWA-only front-layer KV slices, while the terminal block
-                    # carries the full SWA+CSA/HCA composite state required for
-                    # reconstruction. If frugal mode drops those in-RAM records,
-                    # an immediate same-process repeat can hit the block table
-                    # before the async L2 write is readable and reconstruct as
-                    # None. Keep DSV4 block records resident; L2 still gets the
+                    # DSV4 and ZAYA CCA are not normal per-block KV payloads.
+                    # DSV4 terminal blocks carry SWA+CSA/HCA composite state;
+                    # ZAYA terminal blocks carry CCA conv_state + prev_hs.
+                    # If frugal mode drops those in-RAM records, an immediate
+                    # same-process repeat can hit the block table before the
+                    # async L2 write is readable and reconstruct as None. Keep
+                    # native path-dependent records resident; L2 still gets the
                     # write-through copy for restart restore.
-                    keep_in_ram = has_dsv4_cache_data
+                    keep_in_ram = has_dsv4_cache_data or has_zaya_cca_cache_data
                     if _paged_frugal and not keep_in_ram:
                         # Disk has it — skip the in-RAM duplicate. L1 lookup
                         # will fall through to L2 disk + _promote_from_disk

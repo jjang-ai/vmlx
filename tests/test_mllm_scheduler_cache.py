@@ -611,6 +611,19 @@ class TestHybridSSMBlockDiskWiring:
         assert "ssm_state_disk_store" in source_ensure
         assert config.enable_block_disk_cache is True
 
+    def test_scheduler_init_log_distinguishes_prompt_and_block_l2(self):
+        """Startup logs must not hide block-disk L2 behind prompt L2 status."""
+        import inspect
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+
+        source = inspect.getsource(MLLMScheduler.__init__)
+        log_section = source[source.find("MLLM Scheduler initialized") :]
+
+        assert "_block_disk_l2_enabled" in source
+        assert "prompt_l2=" in log_section
+        assert "block_l2=" in log_section
+        assert "disk_l2=" not in log_section
+
 
 # ============================================================
 # _cleanup_finished cache store paths

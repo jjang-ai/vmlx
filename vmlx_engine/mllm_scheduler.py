@@ -430,6 +430,7 @@ class MLLMScheduler:
         self.memory_aware_cache = None
         self.prefix_cache = None
         self.disk_cache = None
+        self._block_disk_l2_enabled = False
         self._ssm_companion_disk_store = None
         self._ssm_companion_model_key = ""
         self._kv_cache_bits = 0
@@ -533,6 +534,7 @@ class MLLMScheduler:
                             cache_dir=cache_dir,
                             max_size_gb=self.config.block_disk_cache_max_gb,
                         )
+                        self._block_disk_l2_enabled = True
                         logger.info(
                             f"VLM block disk cache enabled: dir={cache_dir}, "
                             f"max={self.config.block_disk_cache_max_gb}GB"
@@ -791,7 +793,8 @@ class MLLMScheduler:
             f"hybrid={self._is_hybrid}, "
             f"zaya_cca={self._uses_zaya_cache}, "
             f"kv_quant={self.config.kv_cache_quantization}, "
-            f"disk_l2={self.disk_cache is not None}, "
+            f"prompt_l2={self.disk_cache is not None}, "
+            f"block_l2={self._block_disk_l2_enabled}, "
             f"max_seqs={self.config.max_num_seqs}"
         )
 
@@ -2270,9 +2273,15 @@ class MLLMScheduler:
                                 cache_blocks = None
                                 prefill_fn = getattr(
                                     self.batch_generator,
-                                    "_prefill_for_clean_ssm",
+                                    "_prefill_for_clean_path_dependent_cache",
                                     None,
                                 )
+                                if not callable(prefill_fn):
+                                    prefill_fn = getattr(
+                                        self.batch_generator,
+                                        "_prefill_for_clean_ssm",
+                                        None,
+                                    )
                                 if truncated_tokens and callable(prefill_fn):
                                     cache_blocks = prefill_fn(truncated_tokens)
                                 if cache_blocks is None:

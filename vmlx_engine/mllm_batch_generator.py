@@ -3979,8 +3979,10 @@ class MLLMBatchGenerator:
         """Check if there are pending or active requests."""
         return bool(self.unprocessed_requests or self.active_batch)
 
-    def _prefill_for_clean_ssm(self, tokens: List[int]) -> Optional[List[Any]]:
-        """Run a clean prompt-only prefill to capture SSM state matching its key.
+    def _prefill_for_clean_path_dependent_cache(
+        self, tokens: List[int]
+    ) -> Optional[List[Any]]:
+        """Run a clean prompt-only prefill matching a path-dependent cache key.
 
         Mirrors Scheduler._prefill_for_prompt_only_cache for the MLLM path.
         Returned cache covers exactly `tokens` worth of processing — no
@@ -4074,6 +4076,10 @@ class MLLMBatchGenerator:
                     setattr(self.language_model, _attr, _value)
                 except Exception:
                     pass
+
+    def _prefill_for_clean_ssm(self, tokens: List[int]) -> Optional[List[Any]]:
+        """Compatibility alias for hybrid SSM callers."""
+        return self._prefill_for_clean_path_dependent_cache(tokens)
 
     def run_idle_rederive(self) -> bool:
         """Process one SSM rederive task from the queue (scheduler idle tick).

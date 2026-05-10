@@ -286,7 +286,7 @@ def test_dsv4_frugal_store_keeps_terminal_composite_block_in_ram(monkeypatch):
         def write_block_async(self, *_args, **_kwargs):
             return None
 
-    monkeypatch.delenv("VMLINUX_PAGED_FRUGAL", raising=False)
+    monkeypatch.delenv("VMLX_PAGED_FRUGAL", raising=False)
     paged = PagedCacheManager(block_size=4, max_blocks=8, disk_store=_DummyDisk())
     pc = BlockAwarePrefixCache(model=None, paged_cache_manager=paged)
 
