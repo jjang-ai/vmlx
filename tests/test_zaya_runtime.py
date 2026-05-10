@@ -340,6 +340,71 @@ def test_jang_loader_quant_block_size_falls_back_to_group_size():
     assert _jang_default_bits({"quantization": {"bit_widths_used": [2, 4]}}) == 2
 
 
+def test_public_jang_loaders_accept_mxfp4_weight_format(tmp_path, monkeypatch):
+    from vmlx_engine.utils import jang_loader
+
+    model_dir = tmp_path / "ZAYA1-VL-8B-MXFP4"
+    model_dir.mkdir()
+    (model_dir / "jang_config.json").write_text(
+        json.dumps({"version": 2, "weight_format": "mxfp4"})
+    )
+
+    calls = []
+
+    monkeypatch.setattr(jang_loader, "_is_v2_model", lambda path: True)
+
+    def fake_vlm(path, jang_cfg, **kwargs):
+        calls.append(("vlm", Path(path).name, jang_cfg["weight_format"]))
+        return "vlm-model", "processor"
+
+    def fake_text(path, jang_cfg, **kwargs):
+        calls.append(("text", Path(path).name, jang_cfg["weight_format"]))
+        return "text-model", "tokenizer"
+
+    monkeypatch.setattr(jang_loader, "_load_jang_v2_vlm", fake_vlm)
+    monkeypatch.setattr(jang_loader, "_load_jang_v2", fake_text)
+
+    assert jang_loader.is_jang_model(model_dir) is True
+    assert jang_loader.load_jang_vlm_model(model_dir) == ("vlm-model", "processor")
+    assert jang_loader.load_jang_model(model_dir) == ("text-model", "tokenizer")
+    assert calls == [
+        ("vlm", "ZAYA1-VL-8B-MXFP4", "mxfp4"),
+        ("text", "ZAYA1-VL-8B-MXFP4", "mxfp4"),
+    ]
+
+
+def test_zaya1_vl_jang_vlm_processor_uses_local_inference_template(monkeypatch):
+    from vmlx_engine.utils import jang_loader
+
+    calls = []
+    fake_processor = SimpleNamespace()
+
+    def fail_stock_processor(*args, **kwargs):
+        raise AssertionError("ZAYA1-VL must not use stock training-template processor")
+
+    def fake_local_processor(path, eos_token_id=None):
+        calls.append(("local", Path(path).name, eos_token_id))
+        return fake_processor
+
+    import mlx_vlm.utils as vlm_utils
+
+    monkeypatch.setattr(vlm_utils, "load_image_processor", lambda path: "image-proc")
+    monkeypatch.setattr(vlm_utils, "load_processor", fail_stock_processor)
+    monkeypatch.setattr(jang_loader, "_build_vlm_processor", fake_local_processor)
+
+    model = SimpleNamespace(
+        config=SimpleNamespace(model_type="zaya1_vl", eos_token_id=262143)
+    )
+    processor = jang_loader._load_jang_vlm_processor(
+        Path("/tmp/ZAYA1-VL-8B-MXFP4"),
+        model,
+    )
+
+    assert processor is fake_processor
+    assert processor.image_processor == "image-proc"
+    assert calls == [("local", "ZAYA1-VL-8B-MXFP4", 262143)]
+
+
 def test_zaya1_vl_exposes_raw_model_alias_for_jangtq_hydration():
     from vmlx_engine.models.zaya1_vl import Model, ModelConfig
 
@@ -545,6 +610,27 @@ def test_zaya1_vl_processor_prefers_chat_template_json_for_inference_prompt():
     )
 
 
+def test_zaya1_vl_processor_wraps_string_content_for_list_template():
+    model_dir = Path("/Users/example/models/JANGQ/ZAYA1-VL-8B-MXFP4")
+    if not (model_dir / "chat_template.json").exists():
+        pytest.skip("local ZAYA1-VL MXFP4 chat_template.json is not present")
+
+    from vmlx_engine.utils.jang_loader import _build_vlm_processor
+
+    processor = _build_vlm_processor(model_dir)
+    prompt = processor.apply_chat_template(
+        [{"role": "user", "content": "What is 17 + 28?"}],
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+
+    assert prompt == (
+        "<|im_start|>user\n"
+        "What is 17 + 28?<|im_end|>\n"
+        "<|im_start|>assistant\n"
+    )
+
+
 def test_zaya1_vl_processor_preserves_list_content_for_list_aware_templates(monkeypatch):
     model_dir = Path("/Users/example/models/JANGQ/ZAYA1-VL-8B-MXFP4")
     if not model_dir.exists():
@@ -629,6 +715,24 @@ def test_zaya1_vl_thinking_off_prompt_does_not_inject_closed_think(monkeypatch):
     assert prompt == "user: <image> Describe it.\nassistant: "
     assert "<think>" not in prompt
     assert "</think>" not in prompt
+
+
+def test_zaya1_vl_affine_vlm_quant_candidates_include_raw_bundle_namespace():
+    from vmlx_engine.utils.jang_loader import _vlm_quant_module_path_candidates
+
+    candidates = _vlm_quant_module_path_candidates(
+        "language_model.model.layers.0.attn.self_attn.qkv.linear_q",
+        "zaya1_vl",
+    )
+
+    assert "model.layers.0.attn.self_attn.qkv.linear_q" in candidates
+    assert (
+        "model.layers.0.zaya_block.router.down_proj"
+        in _vlm_quant_module_path_candidates(
+            "language_model.model.layers.0.mlp.zaya_block.router.down_proj",
+            "zaya1_vl",
+        )
+    )
 
 
 def test_batched_engine_zaya1_vl_uses_processor_template_when_prompt_utils_unsupported(monkeypatch):

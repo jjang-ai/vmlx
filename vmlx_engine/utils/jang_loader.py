@@ -31,6 +31,7 @@ JANG_CONFIG_FILENAMES = [
     "mxq_config.json",
 ]
 JANG_FORMAT_VALUES = ["jang", "jjqf", "mxq"]
+JANG_WEIGHT_FORMAT_VALUES = {"mxtq", "mxfp4"}
 
 
 def _jang_quant_block_size(jang_cfg: dict, default: int = 64) -> int:
@@ -52,6 +53,63 @@ def _jang_default_bits(jang_cfg: dict, fallback: list[int] | None = None) -> int
         return int(quant["bits"])
     bit_widths = quant.get("bit_widths_used", fallback or [4])
     return int(min(bit_widths))
+
+
+def _vlm_quant_module_path_candidates(module_path: str, model_type: str = "") -> set[str]:
+    """Return on-disk quant module paths that may correspond to a VLM module."""
+    candidates = {module_path, f"model.{module_path}"}
+    if "language_model.model." in module_path:
+        candidates.add(
+            module_path.replace("language_model.model.", "model.language_model.", 1)
+        )
+    if module_path.endswith("lm_head") or "language_model.lm_head" in module_path:
+        candidates.add("lm_head")
+
+    if str(model_type or "").lower() == "zaya1_vl":
+        if module_path.startswith("language_model.model."):
+            raw = module_path.replace("language_model.model.", "model.", 1)
+            candidates.add(raw)
+            if ".mlp.zaya_block." in raw:
+                candidates.add(raw.replace(".mlp.zaya_block.", ".zaya_block.", 1))
+        if module_path.startswith("vision_tower."):
+            suffix = module_path[len("vision_tower") :]
+            candidates.add(f"model.visual{suffix}")
+            candidates.add(f"model.vision_tower{suffix}")
+    return candidates
+
+
+def _vlm_model_type_from_config(config) -> str:
+    if isinstance(config, dict):
+        return str(config.get("model_type", "")).lower()
+    return str(getattr(config, "model_type", "") or "").lower()
+
+
+def _load_jang_vlm_processor(path: Path, model):
+    """Load a VLM processor while preserving local model-family overrides."""
+    from mlx_vlm.utils import load_image_processor, load_processor
+
+    image_processor = load_image_processor(path)
+    eos_token_id = getattr(model.config, "eos_token_id", None)
+    model_type = _vlm_model_type_from_config(getattr(model, "config", None))
+
+    if model_type == "zaya1_vl":
+        processor = _build_vlm_processor(path, eos_token_id)
+    else:
+        try:
+            processor = load_processor(path, True, eos_token_ids=eos_token_id)
+        except (ImportError, ValueError):
+            processor = _build_vlm_processor(path, eos_token_id)
+
+    if image_processor is not None:
+        processor.image_processor = image_processor
+
+    try:
+        from jang_tools.load_jangtq_vlm import _install_video_fallback
+        _install_video_fallback(processor)
+    except Exception as _vfe:
+        logger.debug(f"video fallback not installed: {_vfe}")
+
+    return processor
 
 
 def _sanitize_grouped_conv1d_layout(weights: dict) -> dict:
@@ -481,7 +539,7 @@ def is_jang_model(model_path: str | Path) -> bool:
     weight_format = cfg.get("weight_format")
     # Recognized JANG-codec formats. Anything else (notably 'mlx') is a
     # capability-only stamp on a stock MLX bundle.
-    JANG_CODEC_FORMATS = {"jang", "jjqf", "mxq", "mxtq"}
+    JANG_CODEC_FORMATS = set(JANG_FORMAT_VALUES) | JANG_WEIGHT_FORMAT_VALUES
     if fmt in JANG_CODEC_FORMATS or weight_format in JANG_CODEC_FORMATS:
         return True
     # Legacy JANG/JJQF bundles can carry an otherwise-empty config file. Treat
@@ -1776,11 +1834,9 @@ def _load_jang_v2_vlm(
         Tries the same path-mapping fallbacks as the existing predicate so the
         override matches whether the converter wrote bare or `language_model.`
         -prefixed keys."""
-        candidates = [p, f"model.{p}"]
-        if "language_model.model." in p:
-            candidates.append(p.replace("language_model.model.", "model.language_model.", 1))
-        if p.endswith("lm_head") or "language_model.lm_head" in p:
-            candidates.append("lm_head")
+        candidates = _vlm_quant_module_path_candidates(
+            p, str(config.get("model_type", ""))
+        )
         for cand in candidates:
             v = _qcfg_overrides.get(cand)
             if isinstance(v, dict) and "bits" in v and "group_size" in v:
@@ -1794,15 +1850,10 @@ def _load_jang_v2_vlm(
             return False
         # Path matches: same logic as before for "should this module be quantized?"
         _matched = False
-        if p in quantized_suffixes:
-            _matched = True
-        elif f"model.{p}" in quantized_suffixes:
-            _matched = True
-        elif "language_model.model." in p:
-            remapped = p.replace("language_model.model.", "model.language_model.", 1)
-            if remapped in quantized_suffixes:
-                _matched = True
-        elif (p.endswith("lm_head") or "language_model.lm_head" in p) and "lm_head" in quantized_suffixes:
+        if _vlm_quant_module_path_candidates(
+            p,
+            str(config.get("model_type", "")),
+        ) & quantized_suffixes:
             _matched = True
         if not _matched:
             return False
@@ -2324,27 +2375,7 @@ def _load_jang_v2_vlm(
     elapsed = time.perf_counter() - start
     logger.info(f"JANG v2 VLM loaded in {elapsed:.1f}s")
 
-    image_processor = load_image_processor(path)
-    eos_token_id = getattr(model.config, "eos_token_id", None)
-    try:
-        processor = load_processor(path, True, eos_token_ids=eos_token_id)
-    except (ImportError, ValueError):
-        processor = _build_vlm_processor(path, eos_token_id)
-    if image_processor is not None:
-        processor.image_processor = image_processor
-
-    # transformers' AutoVideoProcessor requires torchvision, which is not
-    # in the bundled Python. Without this install, Qwen3VLProcessor's
-    # video_processor stays None and the fallback path raises TypeError
-    # the first time a caller passes `videos=`. This class-level patch
-    # routes videos through image_processor when video_processor is None.
-    try:
-        from jang_tools.load_jangtq_vlm import _install_video_fallback
-        _install_video_fallback(processor)
-    except Exception as _vfe:
-        logger.debug(f"video fallback not installed: {_vfe}")
-
-    return model, processor
+    return model, _load_jang_vlm_processor(path, model)
 
 
 def _get_v2_weight_files(path: Path) -> list[Path]:
@@ -2387,19 +2418,18 @@ def load_jang_vlm_model(
 
     jang_cfg = json.loads(config_path.read_text())
     _ensure_zaya_runtime_supported(path, jang_cfg)
-    # JANGTQ writer emits {"version": 2, "weight_format": "mxtq", ...} and
-    # omits the legacy `format` field entirely. Accept that shape in addition
-    # to the {"format": "jang"|"jjqf"|"mxq"} legacy envelope. Mirrors the text
-    # loader at line ~1649 — without this, Qwen 3.6 JANGTQ_2L (VLM wrapper
-    # model_type=qwen3_5_moe) hit `ValueError: Not a JANG model: format='None'`.
+    # Modern JANG writers emit {"version": 2, "weight_format": "...", ...} and
+    # omit the legacy `format` field entirely. Accept native JANG weight formats
+    # in addition to the {"format": "jang"|"jjqf"|"mxq"} legacy envelope.
     fmt = jang_cfg.get("format")
     weight_format = jang_cfg.get("weight_format")
-    if not fmt and weight_format == "mxtq":
-        fmt = "mxtq"
-    if not fmt or (fmt not in JANG_FORMAT_VALUES and fmt != "mxtq"):
+    if not fmt and weight_format in JANG_WEIGHT_FORMAT_VALUES:
+        fmt = weight_format
+    if not fmt or (fmt not in JANG_FORMAT_VALUES and fmt not in JANG_WEIGHT_FORMAT_VALUES):
         raise ValueError(
             f"Not a JANG VLM: format='{fmt}' weight_format='{weight_format}' "
-            f"(expected one of {', '.join(JANG_FORMAT_VALUES)} or weight_format=mxtq)"
+            f"(expected one of {', '.join(JANG_FORMAT_VALUES)} or "
+            f"weight_format={','.join(sorted(JANG_WEIGHT_FORMAT_VALUES))})"
         )
 
     # v2: instant load
@@ -2443,22 +2473,23 @@ def load_jang_model(
 
     jang_cfg = json.loads(config_path.read_text())
     _ensure_zaya_runtime_supported(path, jang_cfg)
-    # JANGTQ writer emits {"version": 2, "weight_format": "mxtq", ...} and
-    # omits the legacy `format` field entirely. Accept that shape in addition
-    # to the {"format": "jang"|"jjqf"|"mxq"} legacy envelope.
+    # Modern JANG writers emit {"version": 2, "weight_format": "...", ...} and
+    # omit the legacy `format` field entirely. Accept native JANG weight formats
+    # in addition to the {"format": "jang"|"jjqf"|"mxq"} legacy envelope.
     fmt = jang_cfg.get("format")
     weight_format = jang_cfg.get("weight_format")
-    if not fmt and weight_format == "mxtq":
-        fmt = "mxtq"
+    if not fmt and weight_format in JANG_WEIGHT_FORMAT_VALUES:
+        fmt = weight_format
     if not fmt:
         raise ValueError(
             f"JANG config {config_path.name} is missing 'format' / 'weight_format'. "
-            f"Expected one of: {', '.join(JANG_FORMAT_VALUES)} or weight_format=mxtq"
+            f"Expected one of: {', '.join(JANG_FORMAT_VALUES)} or "
+            f"weight_format={','.join(sorted(JANG_WEIGHT_FORMAT_VALUES))}"
         )
-    if fmt not in JANG_FORMAT_VALUES and fmt != "mxtq":
+    if fmt not in JANG_FORMAT_VALUES and fmt not in JANG_WEIGHT_FORMAT_VALUES:
         raise ValueError(
             f"Not a JANG model: format='{fmt}' (expected {', '.join(JANG_FORMAT_VALUES)} "
-            f"or weight_format=mxtq)"
+            f"or weight_format={','.join(sorted(JANG_WEIGHT_FORMAT_VALUES))})"
         )
 
     # Legacy: format_version string ("1.0"/"2.0"). JANGTQ: int version 2.
@@ -2746,23 +2777,7 @@ def _load_jang_v1_vlm(
     elapsed = time.perf_counter() - start
     logger.info(f"JANG v1 VLM loaded in {elapsed:.1f}s")
 
-    image_processor = load_image_processor(path)
-    eos_token_id = getattr(model.config, "eos_token_id", None)
-    try:
-        processor = load_processor(path, True, eos_token_ids=eos_token_id)
-    except (ImportError, ValueError):
-        processor = _build_vlm_processor(path, eos_token_id)
-    if image_processor is not None:
-        processor.image_processor = image_processor
-
-    # See v2 VLM path for rationale — install torchvision-free video fallback.
-    try:
-        from jang_tools.load_jangtq_vlm import _install_video_fallback
-        _install_video_fallback(processor)
-    except Exception as _vfe:
-        logger.debug(f"video fallback not installed: {_vfe}")
-
-    return model, processor
+    return model, _load_jang_vlm_processor(path, model)
 
 
 # ─── v1 repack engine (unchanged from original) ─────────────────────
@@ -3761,6 +3776,36 @@ def _build_vlm_processor(model_path: Path, eos_token_id=None):
                                 parts.append(str(text))
                 return " ".join(part for part in parts if part).strip()
 
+            def _normalize_zaya_content_for_list_template(self, content):
+                if isinstance(content, str):
+                    return [{"type": "text", "text": content}]
+                if not isinstance(content, list):
+                    if content is None:
+                        return []
+                    return [{"type": "text", "text": str(content)}]
+
+                normalized = []
+                for item in content:
+                    if isinstance(item, str):
+                        normalized.append({"type": "text", "text": item})
+                        continue
+                    if not isinstance(item, dict):
+                        normalized.append({"type": "text", "text": str(item)})
+                        continue
+                    item_type = item.get("type", "")
+                    if item_type in ("image", "image_url", "input_image"):
+                        normalized.append({"type": "image"})
+                    elif item_type in ("video", "video_url", "input_video"):
+                        normalized.append({"type": "video"})
+                    elif item_type in ("text", "input_text"):
+                        text = item.get("text", "") or item.get("content", "")
+                        normalized.append({"type": "text", "text": str(text)})
+                    else:
+                        text = item.get("text", "") or item.get("content", "")
+                        if text:
+                            normalized.append({"type": "text", "text": str(text)})
+                return normalized
+
             def _zaya_template_accepts_list_content(self):
                 template = (
                     self.chat_template
@@ -3775,10 +3820,19 @@ def _build_vlm_processor(model_path: Path, eos_token_id=None):
                 )
 
             def apply_chat_template(self, messages, *args, **kwargs):
-                if (
-                    model_type == "zaya1_vl"
-                    and not self._zaya_template_accepts_list_content()
-                ):
+                if model_type == "zaya1_vl" and self._zaya_template_accepts_list_content():
+                    messages = [
+                        {
+                            **message,
+                            "content": self._normalize_zaya_content_for_list_template(
+                                message.get("content", "")
+                            ),
+                        }
+                        if isinstance(message, dict)
+                        else message
+                        for message in messages
+                    ]
+                elif model_type == "zaya1_vl":
                     messages = [
                         {
                             **message,
