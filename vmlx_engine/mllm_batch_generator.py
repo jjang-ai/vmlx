@@ -445,6 +445,48 @@ def _is_kv_like(c) -> bool:
     return isinstance(c, KVCache) or type(c).__name__ == _TQ_CLASS_NAME
 
 
+def _model_uses_zaya_cache_contract(model: Any) -> bool:
+    """Return True when a model has ZAYA CCA typed cache slots."""
+    if model is None:
+        return False
+
+    def _model_type_is_zaya(obj: Any) -> bool:
+        cfgs = []
+        for attr in ("config", "args"):
+            cfg = getattr(obj, attr, None)
+            if cfg is not None:
+                cfgs.append(cfg)
+                nested = (
+                    cfg.get("text_config")
+                    if isinstance(cfg, dict)
+                    else getattr(cfg, "text_config", None)
+                )
+                if nested is not None:
+                    cfgs.append(nested)
+        for cfg in cfgs:
+            mt = cfg.get("model_type") if isinstance(cfg, dict) else getattr(cfg, "model_type", None)
+            if str(mt or "").lower() in ("zaya", "zaya1_vl"):
+                return True
+        return False
+
+    if _model_type_is_zaya(model):
+        return True
+    if not hasattr(model, "make_cache"):
+        return False
+    try:
+        cache = model.make_cache() or []
+        names = [type(c).__name__ for c in cache]
+        if "ZayaNoStateCache" in names:
+            return True
+        return any(
+            type(c).__name__ == "CacheList"
+            and "zaya" in str(type(c).__module__).lower()
+            for c in cache
+        )
+    except Exception:
+        return False
+
+
 def _recompress_to_tq(cache: List[Any], language_model) -> List[Any]:
     """Re-wrap reconstructed KVCache layers into TurboQuantKVCache and compress.
 
@@ -1298,6 +1340,7 @@ class MLLMBatchGenerator:
         ssm_state_disk_store: Optional[Any] = None,
         ssm_state_cache_model_key: str = "",
         enable_prefix_cache: bool = True,
+        uses_zaya_cache: Optional[bool] = None,
     ):
         """
         Initialize MLLM batch generator.
@@ -1333,6 +1376,9 @@ class MLLMBatchGenerator:
             enable_prefix_cache: Enables SSM companion cache work for hybrid
                 prefix-cache hits/stores. When false, no hidden companion
                 lookup/store/re-derive work is performed.
+            uses_zaya_cache: True when the model uses ZAYA's typed CCA cache
+                contract. ZAYA is hybrid-shaped but must use zaya_cca_v1
+                paged blocks, not the generic SSM companion cache.
         """
         self.model = model
         self.processor = processor
@@ -1343,10 +1389,18 @@ class MLLMBatchGenerator:
         self.disk_cache = disk_cache
         self._kv_cache_bits = kv_cache_bits
         self._kv_cache_group_size = kv_cache_group_size
+        self._uses_zaya_cache = bool(
+            uses_zaya_cache
+            if uses_zaya_cache is not None
+            else _model_uses_zaya_cache_contract(
+                getattr(model, "language_model", model)
+            )
+        )
 
         self._prefix_cache_enabled = bool(enable_prefix_cache)
         self._ssm_companion_enabled = bool(
             self._prefix_cache_enabled
+            and not self._uses_zaya_cache
             and (
                 block_aware_cache is not None
                 or memory_aware_cache is not None
@@ -2906,9 +2960,12 @@ class MLLMBatchGenerator:
                                     # Pure attention VLM: TQ recompress safe (original float16)
                                     req.prompt_cache = reconstructed
                                     req._cached_tokens = block_table.num_tokens
-                                    req._cache_detail = (
-                                        "paged+disk" if _paged_disk_hit else "paged"
-                                    )
+                                    if self._uses_zaya_cache:
+                                        req._cache_detail = "paged+zaya_cca"
+                                    else:
+                                        req._cache_detail = (
+                                            "paged+disk" if _paged_disk_hit else "paged"
+                                        )
                                     # Re-attach gen-prompt suffix (see hybrid branch above
                                     # for full rationale — same correctness requirement
                                     # for attention-only thinking VLMs).
@@ -2994,7 +3051,10 @@ class MLLMBatchGenerator:
                                     continue
 
                                 # Hybrid model check (same logic as paged path)
-                                is_hybrid = self._is_hybrid
+                                is_hybrid = (
+                                    self._is_hybrid
+                                    and not self._uses_zaya_cache
+                                )
                                 if is_hybrid:
                                     logger.info(
                                         f"VLM memory/legacy cache HIT for {req.request_id}: "
@@ -3977,17 +4037,25 @@ class MLLMBatchGenerator:
                     setattr(self.language_model, _attr, None)
             _ = self.language_model(input_ids, cache=fresh_cache)
             materialize: List[Any] = []
-            for c in fresh_cache:
-                if hasattr(c, "keys") and c.keys is not None:
-                    if isinstance(c.keys, tuple):
-                        materialize.extend(c.keys)
-                        materialize.extend(c.values)
+            def _collect_cache_arrays(cache_obj: Any) -> None:
+                if hasattr(cache_obj, "keys") and cache_obj.keys is not None:
+                    if isinstance(cache_obj.keys, tuple):
+                        materialize.extend(cache_obj.keys)
+                        materialize.extend(cache_obj.values)
                     else:
-                        materialize.extend([c.keys, c.values])
-                elif hasattr(c, "cache") and isinstance(c.cache, list):
-                    for arr in c.cache:
+                        materialize.extend([cache_obj.keys, cache_obj.values])
+                elif hasattr(cache_obj, "caches") and isinstance(
+                    getattr(cache_obj, "caches", None), (list, tuple)
+                ):
+                    for sub_cache in cache_obj.caches:
+                        _collect_cache_arrays(sub_cache)
+                elif hasattr(cache_obj, "cache") and isinstance(cache_obj.cache, list):
+                    for arr in cache_obj.cache:
                         if hasattr(arr, "shape"):
                             materialize.append(arr)
+
+            for c in fresh_cache:
+                _collect_cache_arrays(c)
             if materialize:
                 try:
                     mx.eval(materialize)

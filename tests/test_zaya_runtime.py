@@ -1318,6 +1318,155 @@ def test_zaya_scheduler_stores_clean_prompt_boundary_for_paged_cache():
     assert scheduler.block_aware_cache.paged_cache.stats.cache_hits >= 1
 
 
+def test_zaya_mllm_scheduler_uses_typed_cca_not_hybrid_ssm_companion():
+    """ZAYA-VL is hybrid-shaped but must not use the generic SSM companion.
+
+    Its CacheList(KVCache, ArraysCache) entries are a typed zaya_cca_v1
+    contract. Routing them through the Qwen-style SSM companion path records
+    paged KV hits as cache wins, then rejects reuse as "no SSM companion".
+    """
+
+    from vmlx_engine.mllm_scheduler import MLLMScheduler, MLLMSchedulerConfig
+
+    language_model = Model(_small_args())
+    vlm_model = SimpleNamespace(
+        language_model=language_model,
+        config=SimpleNamespace(model_type="zaya1_vl"),
+    )
+    tokenizer = SimpleNamespace(
+        eos_token_id=0,
+        eos_token_ids=[0],
+        name_or_path=None,
+        encode=lambda text, add_special_tokens=False: [1, 2],
+    )
+    processor = SimpleNamespace(tokenizer=tokenizer)
+
+    scheduler = MLLMScheduler(
+        vlm_model,
+        processor=processor,
+        config=MLLMSchedulerConfig(
+            enable_prefix_cache=True,
+            use_paged_cache=False,
+            use_memory_aware_cache=False,
+            enable_block_disk_cache=False,
+            kv_cache_quantization="q4",
+        ),
+    )
+
+    assert scheduler._uses_zaya_cache is True
+    assert scheduler._is_hybrid is True
+    assert scheduler.config.use_paged_cache is True
+    assert scheduler.config.use_memory_aware_cache is False
+    assert scheduler.config.kv_cache_quantization == "none"
+    assert scheduler._ssm_companion_disk_store is None
+
+    scheduler._ensure_batch_generator()
+    assert scheduler.batch_generator._uses_zaya_cache is True
+    assert scheduler.batch_generator._is_hybrid is True
+    assert scheduler.batch_generator._ssm_companion_enabled is False
+    assert scheduler.batch_generator._ssm_state_cache is None
+
+
+def test_zaya_mllm_paged_store_rederives_clean_prompt_boundary():
+    """MLLM ZAYA stores must use clean N-1 CCA state, not decode state."""
+
+    from vmlx_engine.mllm_scheduler import MLLMScheduler
+
+    class FakeBlockAwareCache:
+        def __init__(self):
+            self.stores = []
+            self._request_tables = {}
+
+        def store_cache(self, request_id, token_ids, cache_states):
+            self.stores.append((request_id, list(token_ids), list(cache_states)))
+
+    class FakePagedCacheManager:
+        def __init__(self):
+            self.detached = []
+
+        def detach_request(self, request_id):
+            self.detached.append(request_id)
+
+    class FakeBatchGenerator:
+        def __init__(self):
+            self.stop_tokens = set()
+            self.prefilled = []
+
+        def _prefill_for_clean_ssm(self, token_ids):
+            self.prefilled.append(list(token_ids))
+            return ["clean-zaya-cache"]
+
+    scheduler = MLLMScheduler.__new__(MLLMScheduler)
+    scheduler.block_aware_cache = FakeBlockAwareCache()
+    scheduler.paged_cache_manager = FakePagedCacheManager()
+    scheduler.memory_aware_cache = None
+    scheduler.prefix_cache = None
+    scheduler.disk_cache = None
+    scheduler.batch_generator = FakeBatchGenerator()
+    scheduler.stop_tokens = set()
+    scheduler.running = {
+        "zaya-vl-clean": SimpleNamespace(
+            request_id="zaya-vl-clean",
+            _extracted_tokens=[10, 11, 12, 13],
+            _extracted_cache=lambda: (_ for _ in ()).throw(
+                AssertionError("post-decode ZAYA cache must not be stored")
+            ),
+            _added_stop_tokens=set(),
+            num_output_tokens=1,
+        )
+    }
+    scheduler.request_id_to_uid = {"zaya-vl-clean": 7}
+    scheduler.uid_to_request_id = {7: "zaya-vl-clean"}
+    scheduler.requests = dict(scheduler.running)
+    scheduler.finished_req_ids = set()
+    scheduler._is_hybrid = True
+    scheduler._uses_zaya_cache = True
+    scheduler._kv_cache_bits = 0
+    scheduler._cleanup_detokenizer = lambda _request_id: None
+    scheduler._mllm_request_has_media_cache_context = lambda _request, _tokens: False
+    scheduler._validate_cache = lambda _cache, source: True
+    scheduler._extract_cache_states = lambda cache: [
+        {"class_name": "CacheList", "state": cache[0]}
+    ]
+
+    scheduler._cleanup_finished({"zaya-vl-clean"})
+
+    assert scheduler.batch_generator.prefilled == [[10, 11, 12]]
+    assert scheduler.block_aware_cache.stores == [
+        (
+            "zaya-vl-clean",
+            [10, 11, 12],
+            [{"class_name": "CacheList", "state": "clean-zaya-cache"}],
+        )
+    ]
+    assert scheduler.paged_cache_manager.detached == ["zaya-vl-clean"]
+
+
+def test_zaya_mllm_extract_cache_states_marks_cachelist_as_tensor_data():
+    """MLLM ZAYA CacheList extraction must feed BlockAwarePrefixCache's typed path."""
+
+    from vmlx_engine.mllm_scheduler import MLLMScheduler
+
+    model = Model(_small_args())
+    cache = model.make_cache()
+    mx.eval(model(mx.array([[1, 2, 3]], dtype=mx.int32), cache=cache))
+
+    scheduler = MLLMScheduler.__new__(MLLMScheduler)
+    scheduler._detect_n_kv_heads = lambda: 0
+    extracted = scheduler._extract_cache_states(cache)
+
+    assert extracted
+    assert extracted[0]["class_name"] == "CacheList"
+    assert "state" in extracted[0]
+    assert "meta_state" in extracted[0]
+    assert extracted[0]["state"] is None
+    assert "sub_caches" in extracted[0]
+
+    from vmlx_engine.prefix_cache import _is_zaya_cca_cache_list_state
+
+    assert _is_zaya_cca_cache_list_state(extracted[0]) is True
+
+
 def test_zaya_batch_generator_finishes_with_moe_no_state_cache():
     """Finished ZAYA generations must be able to return prompt_cache.
 

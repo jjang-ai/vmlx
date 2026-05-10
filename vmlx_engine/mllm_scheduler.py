@@ -160,6 +160,7 @@ from .mllm_batch_generator import (
     MLLMBatchGenerator,
     MLLMBatchRequest,
     MLLMBatchResponse,
+    _model_uses_zaya_cache_contract,
 )
 from .request import RequestOutput, RequestStatus, SamplingParams
 from .utils.head_dim_detection import (
@@ -437,6 +438,13 @@ class MLLMScheduler:
 
         # Detect hybrid models (mixed KVCache + MambaCache layers)
         lang_model = self.model.language_model if hasattr(self.model, "language_model") else self.model
+        # ZAYA/ZAYA1-VL are hybrid-shaped but have a first-class typed CCA
+        # cache contract (KV + conv_state + prev_hs). They must not enter
+        # the generic Qwen-style SSM companion path.
+        self._uses_zaya_cache = (
+            _model_uses_zaya_cache_contract(lang_model)
+            or _model_uses_zaya_cache_contract(self.model)
+        )
         self._is_hybrid = False
         try:
             self._is_hybrid = self._is_hybrid_model(lang_model)
@@ -458,7 +466,20 @@ class MLLMScheduler:
         except Exception as e:
             logger.debug(f"Mixed-attention detection failed: {e}")
 
-        if self._is_hybrid:
+        if self._uses_zaya_cache and self.config.enable_prefix_cache:
+            if not self.config.use_paged_cache:
+                logger.info(
+                    "ZAYA/CCA typed cache requires paged prefix cache. "
+                    "Auto-switching VLM prefix-only configuration to paged "
+                    "cache so zaya_cca_v1 records carry KV + conv_state + "
+                    "prev_hs."
+                )
+                self.config.use_paged_cache = True
+                self.config.use_memory_aware_cache = False
+            else:
+                self.config.use_memory_aware_cache = False
+
+        if self._is_hybrid and not self._uses_zaya_cache:
             try:
                 from .utils.mamba_cache import ensure_mamba_support
                 ensure_mamba_support()
@@ -516,7 +537,7 @@ class MLLMScheduler:
                             f"VLM block disk cache enabled: dir={cache_dir}, "
                             f"max={self.config.block_disk_cache_max_gb}GB"
                         )
-                        if self._is_hybrid:
+                        if self._is_hybrid and not self._uses_zaya_cache:
                             try:
                                 try:
                                     ssm_budget_gb = float(
@@ -572,7 +593,7 @@ class MLLMScheduler:
                         model=lang_model,
                         paged_cache_manager=self.paged_cache_manager,
                     )
-                    if self._is_hybrid:
+                    if self._is_hybrid and not self._uses_zaya_cache:
                         effective_kv_bits = (
                             4 if self.config.kv_cache_quantization == "q4"
                             else 8 if self.config.kv_cache_quantization == "q8"
@@ -686,6 +707,15 @@ class MLLMScheduler:
         # MLA models (Mistral 4, DeepSeek V2/V3) store compressed KV latents —
         # quantizing already-compressed representations destroys quality.
         _is_mla = self._detect_mla()
+        if self._uses_zaya_cache and self.config.kv_cache_quantization != "none":
+            logger.info(
+                "ZAYA/CCA typed cache detected — disabling generic KV cache "
+                "quantization (was: %s). zaya_cca_v1 must preserve KV plus "
+                "CCA conv_state/prev_hs until a typed partial codec proves "
+                "numeric parity.",
+                self.config.kv_cache_quantization,
+            )
+            self.config.kv_cache_quantization = "none"
         if _is_mla and self.config.kv_cache_quantization != "none":
             logger.info("KV cache quantization disabled: MLA model (compressed KV latents)")
             self.config.kv_cache_quantization = "none"
@@ -759,6 +789,7 @@ class MLLMScheduler:
         logger.info(
             f"MLLM Scheduler initialized: cache_mode={cache_mode}, "
             f"hybrid={self._is_hybrid}, "
+            f"zaya_cca={self._uses_zaya_cache}, "
             f"kv_quant={self.config.kv_cache_quantization}, "
             f"disk_l2={self.disk_cache is not None}, "
             f"max_seqs={self.config.max_num_seqs}"
@@ -1474,6 +1505,8 @@ class MLLMScheduler:
                     if sub_caches:
                         extracted.append({
                             "class_name": "CacheList",
+                            "state": None,
+                            "meta_state": None,
                             "sub_caches": sub_caches,
                         })
                     continue
@@ -1650,6 +1683,7 @@ class MLLMScheduler:
             ssm_state_disk_store=self._ssm_companion_disk_store,
             ssm_state_cache_model_key=self._ssm_companion_model_key,
             enable_prefix_cache=self.config.enable_prefix_cache,
+            uses_zaya_cache=self._uses_zaya_cache,
         )
         self._current_sampler_params = new_params
 
@@ -2213,14 +2247,52 @@ class MLLMScheduler:
                                 )
                                 request._extracted_cache = None
                             raw = request._extracted_cache
-                            cache_blocks = raw() if callable(raw) else raw
+                            prompt_len = len(token_list)
+                            truncated_tokens = (
+                                token_list[: prompt_len - 1]
+                                if prompt_len > 1
+                                else list(token_list)
+                            )
+                            _uses_zaya_cache = bool(
+                                getattr(self, "_uses_zaya_cache", False)
+                            )
+                            if raw is None:
+                                cache_blocks = None
+                            elif _uses_zaya_cache:
+                                # ZAYA CCA is path-dependent: the post-decode
+                                # cache has already absorbed generated tokens
+                                # into conv_state/prev_hs. Re-prefill exactly
+                                # the N-1 cache key and store that clean typed
+                                # state. If the clean prefill is unavailable,
+                                # skip the store instead of writing a
+                                # contaminated "hit" that later hurts
+                                # coherence.
+                                cache_blocks = None
+                                prefill_fn = getattr(
+                                    self.batch_generator,
+                                    "_prefill_for_clean_ssm",
+                                    None,
+                                )
+                                if truncated_tokens and callable(prefill_fn):
+                                    cache_blocks = prefill_fn(truncated_tokens)
+                                if cache_blocks is None:
+                                    logger.info(
+                                        "Skipping ZAYA VLM paged cache store "
+                                        "for %s: clean zaya_cca_v1 prompt "
+                                        "prefill unavailable",
+                                        request_id,
+                                    )
+                            else:
+                                cache_blocks = raw() if callable(raw) else raw
                             if cache_blocks is None:
                                 logger.debug(f"No cache blocks to store for {request_id}")
                             else:
-                                prompt_len = len(token_list)
-                                cache_blocks = self._truncate_hybrid_cache(
-                                    cache_blocks, prompt_len
-                                )
+                                if _uses_zaya_cache:
+                                    cache_blocks = list(cache_blocks)
+                                else:
+                                    cache_blocks = self._truncate_hybrid_cache(
+                                        cache_blocks, prompt_len
+                                    )
                                 if cache_blocks is None:
                                     logger.debug(
                                         f"Cache truncation failed for {request_id}"
@@ -2238,7 +2310,6 @@ class MLLMScheduler:
                                     # by the batch generator (_original_token_ids at line 1411-1413).
                                     # Do NOT strip again here — double stripping collapses the
                                     # token list to near-zero length.
-                                    truncated_tokens = token_list[:prompt_len - 1] if prompt_len > 1 else token_list
                                     # L2: persist to disk before quantization.
                                     # Skip for hybrid models — the prompt-level disk cache
                                     # can't reconstruct SSM state on fetch (mllm_batch_generator
