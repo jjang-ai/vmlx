@@ -76,12 +76,12 @@ const DEFAULT_CONFIG: SessionConfig = {
     apiKey: '',
     rateLimit: 0,
     timeout: 300,
-    maxNumSeqs: 64,
-    prefillBatchSize: 1024,
+    maxNumSeqs: 8,
+    prefillBatchSize: 256,
     prefillStepSize: 2048,
-    completionBatchSize: 1024,
-    continuousBatching: true,
-    enablePrefixCache: true,
+    completionBatchSize: 256,
+    continuousBatching: false,
+    enablePrefixCache: false,
     prefixCacheSize: 100,
     prefixCacheMaxBytes: 0,
     cacheMemoryMb: 0,
@@ -433,45 +433,45 @@ describe('Prefix Cache', () => {
     })
 
     it('legacy mode: sets --no-memory-aware-cache and --prefix-cache-size', () => {
-        const out = preview({ noMemoryAwareCache: true, prefixCacheSize: 500 })
+        const out = preview({ enablePrefixCache: true, noMemoryAwareCache: true, prefixCacheSize: 500 })
         expect(hasFlag(out, '--no-memory-aware-cache')).toBe(true)
         expect(getFlagValue(out, '--prefix-cache-size')).toBe('500')
     })
 
     it('memory-aware mode: sets --cache-memory-mb', () => {
-        const out = preview({ cacheMemoryMb: 4096, usePagedCache: false })
+        const out = preview({ enablePrefixCache: true, cacheMemoryMb: 4096, usePagedCache: false })
         expect(getFlagValue(out, '--cache-memory-mb')).toBe('4096')
     })
 
     it('memory-aware mode: sets --cache-memory-percent as fraction', () => {
-        const out = preview({ cacheMemoryPercent: 30, usePagedCache: false })
+        const out = preview({ enablePrefixCache: true, cacheMemoryPercent: 30, usePagedCache: false })
         expect(getFlagValue(out, '--cache-memory-percent')).toBe('0.3')
     })
 
     it('sets --cache-ttl-minutes when > 0 and paged cache off', () => {
-        const out = preview({ cacheTtlMinutes: 60, usePagedCache: false })
+        const out = preview({ enablePrefixCache: true, cacheTtlMinutes: 60, usePagedCache: false })
         expect(getFlagValue(out, '--cache-ttl-minutes')).toBe('60')
     })
 
     it('suppresses --cache-ttl-minutes when paged cache is on', () => {
-        const out = preview({ cacheTtlMinutes: 60, usePagedCache: true })
+        const out = preview({ enablePrefixCache: true, cacheTtlMinutes: 60, usePagedCache: true })
         expect(hasFlag(out, '--cache-ttl-minutes')).toBe(false)
     })
 })
 
 describe('Paged KV Cache', () => {
     it('includes --use-paged-cache when enabled', () => {
-        const out = preview({ usePagedCache: true })
+        const out = preview({ enablePrefixCache: true, usePagedCache: true })
         expect(hasFlag(out, '--use-paged-cache')).toBe(true)
     })
 
     it('sets block size from config', () => {
-        const out = preview({ usePagedCache: true, pagedCacheBlockSize: 128 })
+        const out = preview({ enablePrefixCache: true, usePagedCache: true, pagedCacheBlockSize: 128 })
         expect(getFlagValue(out, '--paged-cache-block-size')).toBe('128')
     })
 
     it('sets max cache blocks from config', () => {
-        const out = preview({ usePagedCache: true, maxCacheBlocks: 2000 })
+        const out = preview({ enablePrefixCache: true, usePagedCache: true, maxCacheBlocks: 2000 })
         expect(getFlagValue(out, '--max-cache-blocks')).toBe('2000')
     })
 
@@ -481,7 +481,7 @@ describe('Paged KV Cache', () => {
     })
 
     it('paged cache from detected config', () => {
-        const out = preview({ usePagedCache: false }, { usePagedCache: true })
+        const out = preview({ enablePrefixCache: true, usePagedCache: false }, { usePagedCache: true })
         // When config explicitly sets false, config wins over detected
         expect(hasFlag(out, '--use-paged-cache')).toBe(false)
     })
@@ -489,22 +489,22 @@ describe('Paged KV Cache', () => {
 
 describe('KV Cache Quantization', () => {
     it('sets q8 quantization', () => {
-        const out = preview({ kvCacheQuantization: 'q8' })
+        const out = preview({ enablePrefixCache: true, kvCacheQuantization: 'q8' })
         expect(getFlagValue(out, '--kv-cache-quantization')).toBe('q8')
     })
 
     it('sets q4 quantization', () => {
-        const out = preview({ kvCacheQuantization: 'q4' })
+        const out = preview({ enablePrefixCache: true, kvCacheQuantization: 'q4' })
         expect(getFlagValue(out, '--kv-cache-quantization')).toBe('q4')
     })
 
     it('omits quantization in auto mode', () => {
-        const out = preview({ kvCacheQuantization: 'auto' })
+        const out = preview({ enablePrefixCache: true, kvCacheQuantization: 'auto' })
         expect(hasFlag(out, '--kv-cache-quantization')).toBe(false)
     })
 
     it('passes explicit none to disable auto quantization', () => {
-        const out = preview({ kvCacheQuantization: 'none' })
+        const out = preview({ enablePrefixCache: true, kvCacheQuantization: 'none' })
         expect(getFlagValue(out, '--kv-cache-quantization')).toBe('none')
     })
 
@@ -590,12 +590,12 @@ describe('KV Cache Quantization', () => {
     })
 
     it('sets custom group size', () => {
-        const out = preview({ kvCacheQuantization: 'q8', kvCacheGroupSize: 32 })
+        const out = preview({ enablePrefixCache: true, kvCacheQuantization: 'q8', kvCacheGroupSize: 32 })
         expect(getFlagValue(out, '--kv-cache-group-size')).toBe('32')
     })
 
     it('omits default group size 64', () => {
-        const out = preview({ kvCacheQuantization: 'q8', kvCacheGroupSize: 64 })
+        const out = preview({ enablePrefixCache: true, kvCacheQuantization: 'q8', kvCacheGroupSize: 64 })
         expect(hasFlag(out, '--kv-cache-group-size')).toBe(false)
     })
 
@@ -607,17 +607,17 @@ describe('KV Cache Quantization', () => {
 
 describe('Disk Cache', () => {
     it('enables disk cache', () => {
-        const out = preview({ enableDiskCache: true, usePagedCache: false })
+        const out = preview({ enablePrefixCache: true, enableDiskCache: true, usePagedCache: false })
         expect(hasFlag(out, '--enable-disk-cache')).toBe(true)
     })
 
     it('sets disk cache dir', () => {
-        const out = preview({ enableDiskCache: true, usePagedCache: false, diskCacheDir: '/tmp/cache' })
+        const out = preview({ enablePrefixCache: true, enableDiskCache: true, usePagedCache: false, diskCacheDir: '/tmp/cache' })
         expect(getFlagValue(out, '--disk-cache-dir')).toBe('/tmp/cache')
     })
 
     it('sets disk cache max gb', () => {
-        const out = preview({ enableDiskCache: true, usePagedCache: false, diskCacheMaxGb: 50 })
+        const out = preview({ enablePrefixCache: true, enableDiskCache: true, usePagedCache: false, diskCacheMaxGb: 50 })
         expect(getFlagValue(out, '--disk-cache-max-gb')).toBe('50')
     })
 
@@ -629,22 +629,22 @@ describe('Disk Cache', () => {
 
 describe('Block Disk Cache', () => {
     it('enables block disk cache', () => {
-        const out = preview({ usePagedCache: true, enableBlockDiskCache: true })
+        const out = preview({ enablePrefixCache: true, usePagedCache: true, enableBlockDiskCache: true })
         expect(hasFlag(out, '--enable-block-disk-cache')).toBe(true)
     })
 
     it('sets block disk cache dir', () => {
-        const out = preview({ usePagedCache: true, enableBlockDiskCache: true, blockDiskCacheDir: '/ssd/blocks' })
+        const out = preview({ enablePrefixCache: true, usePagedCache: true, enableBlockDiskCache: true, blockDiskCacheDir: '/ssd/blocks' })
         expect(getFlagValue(out, '--block-disk-cache-dir')).toBe('/ssd/blocks')
     })
 
     it('sets block disk cache max gb', () => {
-        const out = preview({ usePagedCache: true, enableBlockDiskCache: true, blockDiskCacheMaxGb: 20 })
+        const out = preview({ enablePrefixCache: true, usePagedCache: true, enableBlockDiskCache: true, blockDiskCacheMaxGb: 20 })
         expect(getFlagValue(out, '--block-disk-cache-max-gb')).toBe('20')
     })
 
     it('omits block disk cache when paged cache is off', () => {
-        const out = preview({ usePagedCache: false, enableBlockDiskCache: true })
+        const out = preview({ enablePrefixCache: true, usePagedCache: false, enableBlockDiskCache: true })
         expect(hasFlag(out, '--enable-block-disk-cache')).toBe(false)
     })
 })
@@ -940,13 +940,13 @@ describe('No Hardcoded Values', () => {
     })
 
     it('changing pagedCacheBlockSize produces different CLI output', () => {
-        expect(getFlagValue(preview({ pagedCacheBlockSize: 32 }), '--paged-cache-block-size')).toBe('32')
-        expect(getFlagValue(preview({ pagedCacheBlockSize: 256 }), '--paged-cache-block-size')).toBe('256')
+        expect(getFlagValue(preview({ enablePrefixCache: true, pagedCacheBlockSize: 32 }), '--paged-cache-block-size')).toBe('32')
+        expect(getFlagValue(preview({ enablePrefixCache: true, pagedCacheBlockSize: 256 }), '--paged-cache-block-size')).toBe('256')
     })
 
     it('changing maxCacheBlocks produces different CLI output', () => {
-        expect(getFlagValue(preview({ maxCacheBlocks: 500 }), '--max-cache-blocks')).toBe('500')
-        expect(getFlagValue(preview({ maxCacheBlocks: 5000 }), '--max-cache-blocks')).toBe('5000')
+        expect(getFlagValue(preview({ enablePrefixCache: true, maxCacheBlocks: 500 }), '--max-cache-blocks')).toBe('500')
+        expect(getFlagValue(preview({ enablePrefixCache: true, maxCacheBlocks: 5000 }), '--max-cache-blocks')).toBe('5000')
     })
 
     it('changing defaultTemperature produces different CLI output', () => {
@@ -991,21 +991,37 @@ describe('Default IP and New Settings', () => {
         expect(getFlagValue(out, '--host')).toBe('127.0.0.1')
     })
 
-    it('current startup defaults emit optimized batching, sampling, cache, and JIT flags', () => {
+    it('current startup defaults favor SimpleEngine single-user decode speed', () => {
         const out = preview()
 
-        expect(getFlagValue(out, '--max-num-seqs')).toBe('64')
-        expect(getFlagValue(out, '--prefill-batch-size')).toBe('1024')
+        expect(getFlagValue(out, '--max-num-seqs')).toBe('8')
+        expect(getFlagValue(out, '--prefill-batch-size')).toBe('256')
         expect(getFlagValue(out, '--prefill-step-size')).toBe('2048')
-        expect(getFlagValue(out, '--completion-batch-size')).toBe('1024')
+        expect(getFlagValue(out, '--completion-batch-size')).toBe('256')
+        expect(hasFlag(out, '--continuous-batching')).toBe(false)
+        expect(hasFlag(out, '--disable-prefix-cache')).toBe(true)
         expect(hasFlag(out, '--cache-memory-percent')).toBe(false)
-        expect(hasFlag(out, '--use-paged-cache')).toBe(true)
-        expect(getFlagValue(out, '--max-cache-blocks')).toBe('1000')
-        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(true)
+        expect(hasFlag(out, '--use-paged-cache')).toBe(false)
+        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(false)
         expect(getFlagValue(out, '--default-temperature')).toBe('0.70')
         expect(getFlagValue(out, '--default-top-p')).toBe('0.95')
         expect(getFlagValue(out, '--default-repetition-penalty')).toBe('1.10')
         expect(hasFlag(out, '--enable-jit')).toBe(true)
+    })
+
+    it('session manager migrates the exact stale continuous-cache default tuple', () => {
+        const source = readFileSync('src/main/sessions.ts', 'utf8')
+        expect(source).toContain('function applySingleUserPerfDefaultMigration')
+        expect(source).toContain('config.continuousBatching === true')
+        expect(source).toContain('config.enablePrefixCache === true')
+        expect(source).toContain('Number(config.maxNumSeqs) === 64')
+        expect(source).toContain('Number(config.prefillBatchSize) === 1024')
+        expect(source).toContain('Number(config.completionBatchSize) === 1024')
+        expect(source).toContain('config.continuousBatching = false')
+        expect(source).toContain('config.enablePrefixCache = false')
+        expect(source).toContain('config.maxNumSeqs = 8')
+        expect(source).toContain('config.prefillBatchSize = 256')
+        expect(source).toContain('config.completionBatchSize = 256')
     })
 
     it('logLevel INFO (default) does not emit --log-level flag', () => {
@@ -1267,6 +1283,7 @@ describe('Feature Interaction', () => {
 
     it('noMemoryAwareCache suppresses memory-aware flags', () => {
         const out = preview({
+            enablePrefixCache: true,
             noMemoryAwareCache: true,
             cacheMemoryMb: 2048,
             cacheMemoryPercent: 30,
@@ -1294,12 +1311,13 @@ describe('Feature Interaction', () => {
     })
 
     it('cacheMemoryPercent default 20 emits 0.2', () => {
-        const out = preview({ cacheMemoryPercent: 20, usePagedCache: false })
+        const out = preview({ enablePrefixCache: true, cacheMemoryPercent: 20, usePagedCache: false })
         expect(getFlagValue(out, '--cache-memory-percent')).toBe('0.2')
     })
 
     it('omits memory-aware cache budget flags when paged cache is active', () => {
         const out = preview({
+            enablePrefixCache: true,
             usePagedCache: true,
             cacheMemoryMb: 4096,
             cacheMemoryPercent: 35,
@@ -1322,13 +1340,13 @@ describe('Feature Interaction', () => {
     })
 
     it('empty diskCacheDir with enableDiskCache does not emit --disk-cache-dir', () => {
-        const out = preview({ enableDiskCache: true, diskCacheDir: '', usePagedCache: false })
+        const out = preview({ enablePrefixCache: true, enableDiskCache: true, diskCacheDir: '', usePagedCache: false })
         expect(hasFlag(out, '--enable-disk-cache')).toBe(true)
         expect(hasFlag(out, '--disk-cache-dir')).toBe(false)
     })
 
     it('enableDiskCache suppressed when usePagedCache is on', () => {
-        const out = preview({ enableDiskCache: true, usePagedCache: true })
+        const out = preview({ enablePrefixCache: true, enableDiskCache: true, usePagedCache: true })
         expect(hasFlag(out, '--enable-disk-cache')).toBe(false)
     })
 
@@ -1530,7 +1548,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized).not.toContain('VLLM_API_KEY')  // apiKey is empty
         expect(normalized).not.toContain('--rate-limit')     // rateLimit is 0
         expect(normalized).not.toContain('--is-mllm')        // isMultimodal is undefined/false
-        expect(normalized).not.toContain('--disable-prefix-cache')  // prefix cache is on by default
+        expect(normalized).toContain('--disable-prefix-cache')      // single-user speed default
         expect(normalized).not.toContain('--enable-disk-cache')     // paged cache uses block L2, not legacy prompt L2
         expect(normalized).not.toContain('--speculative-model')     // no speculative model
         expect(normalized).not.toContain('--embedding-model')       // empty
@@ -1543,9 +1561,9 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized).toContain('--port')
         expect(normalized).toContain('--timeout')
         expect(normalized).toContain('--max-tokens')
-        expect(normalized).toContain('--continuous-batching')
-        expect(normalized).toContain('--use-paged-cache')
-        expect(normalized).toContain('--enable-block-disk-cache')
+        expect(normalized).not.toContain('--continuous-batching')
+        expect(normalized).not.toContain('--use-paged-cache')
+        expect(normalized).not.toContain('--enable-block-disk-cache')
         expect(normalized).toContain('--default-temperature')
         expect(normalized).toContain('--default-top-p')
         expect(normalized).toContain('--default-repetition-penalty')
@@ -1562,6 +1580,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
     it('mutual exclusion: disk cache NOT emitted when paged cache is active', () => {
         // enableDiskCache is gated by !(usePagedCache) in buildCommandPreview
         const out = preview({
+            enablePrefixCache: true,
             enableDiskCache: true,
             diskCacheMaxGb: 20,
             diskCacheDir: '/tmp/cache',
@@ -1578,6 +1597,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
     it('mutual exclusion: block disk cache only emitted when paged cache is active', () => {
         // enableBlockDiskCache requires usePagedCache
         const out = preview({
+            enablePrefixCache: true,
             enableBlockDiskCache: true,
             blockDiskCacheMaxGb: 50,
             blockDiskCacheDir: '/tmp/blocks',
@@ -1589,6 +1609,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
 
         // Without paged cache, block disk cache should NOT appear
         const out2 = preview({
+            enablePrefixCache: true,
             enableBlockDiskCache: true,
             blockDiskCacheMaxGb: 50,
             usePagedCache: false,
@@ -1625,6 +1646,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
     it('cache TTL only emitted without paged cache', () => {
         // cacheTtlMinutes gated by !(usePagedCache)
         const withPaged = preview({
+            enablePrefixCache: true,
             cacheTtlMinutes: 30,
             usePagedCache: true,
             noMemoryAwareCache: false,
@@ -1632,6 +1654,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(withPaged.replace(/\s*\\\n\s*/g, ' ')).not.toContain('--cache-ttl-minutes')
 
         const withoutPaged = preview({
+            enablePrefixCache: true,
             cacheTtlMinutes: 30,
             usePagedCache: false,
             noMemoryAwareCache: false,

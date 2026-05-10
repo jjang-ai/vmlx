@@ -126,6 +126,23 @@ function applyBundleStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
   }
 }
 
+function applySingleUserPerfDefaultMigration(config: Partial<ServerConfig>): void {
+  const staleContinuousDefaults =
+    config.continuousBatching === true &&
+    config.enablePrefixCache === true &&
+    Number(config.maxNumSeqs) === 64 &&
+    Number(config.prefillBatchSize) === 1024 &&
+    Number(config.completionBatchSize) === 1024
+
+  if (!staleContinuousDefaults) return
+
+  config.continuousBatching = false
+  config.enablePrefixCache = false
+  config.maxNumSeqs = 8
+  config.prefillBatchSize = 256
+  config.completionBatchSize = 256
+}
+
 /** Resolve bind address to connectable address (0.0.0.0 → 127.0.0.1) */
 export function connectHost(host: string): string {
   return host === '0.0.0.0' ? '127.0.0.1' : host
@@ -551,6 +568,7 @@ export class SessionManager extends EventEmitter {
     // Normalize path to prevent trailing-slash mismatches
     modelPath = normalizePath(modelPath)
     applyBundleStartupDefaults(config, modelPath)
+    applySingleUserPerfDefaultMigration(config)
 
     // Check if session already exists for this model path
     const existing = db.getSessionByModelPath(modelPath)
@@ -562,6 +580,7 @@ export class SessionManager extends EventEmitter {
       const port = (config.port as number) || existing.port
       const merged = { ...existingConfig, ...config, modelPath, host, port }
       applyBundleStartupDefaults(merged, modelPath)
+      applySingleUserPerfDefaultMigration(merged)
       db.updateSession(existing.id, {
         config: JSON.stringify(merged),
         host,
@@ -673,6 +692,7 @@ export class SessionManager extends EventEmitter {
     config.host = session.host
     config.port = session.port
     applyBundleStartupDefaults(config, config.modelPath)
+    applySingleUserPerfDefaultMigration(config)
 
     // Apply model_settings.reasoning_mode as server-level default for external API clients.
     // Auto must not serialize as false: local/API requests should then fall
@@ -1255,24 +1275,22 @@ export class SessionManager extends EventEmitter {
         const now = Date.now()
         // Auto-detect model config for proper defaults (paged cache, parsers, etc.)
         const detected = detectModelConfigFromDir(proc.modelPath)
-        // Defaults tuned for maximum speed out of the box.
-        // Continuous batching + paged cache + prefix cache = best TTFT.
-        // Cache memory at 20% of available RAM for generous prefix reuse while
-        // keeping headroom for large model weights.
+        // Defaults tuned for maximum single-user decode speed out of the box.
+        // Continuous batching remains available for multi-user/API-server
+        // sessions, but Qwen3.6 35B live benches show the MLLM batched path
+        // costs about 2x decode throughput for a single active request.
+        // Users can opt into prefix/paged/L2 cache when TTFT reuse matters.
         // Stream interval 1 = lowest latency per-token delivery.
-        // All users get production-grade inference settings on first launch.
         const defaultConfig: ServerConfig = {
           modelPath: proc.modelPath,
           host: '127.0.0.1',
           port: proc.port,
           timeout: 300,
-          maxNumSeqs: 64,
-          // Throughput-optimized defaults (1.3.99) — bumped from 512/1024/512
-          // to saturate prefill+decode pipeline on M-series with 64+ GB RAM.
-          prefillBatchSize: 1024,
-          completionBatchSize: 1024,
-          continuousBatching: true,
-          enablePrefixCache: true,
+          maxNumSeqs: 8,
+          prefillBatchSize: 256,
+          completionBatchSize: 256,
+          continuousBatching: false,
+          enablePrefixCache: false,
           prefixCacheSize: 100,
           prefixCacheMaxBytes: 0, // 0 = unlimited (bounded by cacheMemoryPercent)
           cacheMemoryMb: 0,

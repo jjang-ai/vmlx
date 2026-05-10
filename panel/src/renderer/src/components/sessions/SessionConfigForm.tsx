@@ -87,16 +87,16 @@ export const DEFAULT_CONFIG: SessionConfig = {
   apiKey: '',
   rateLimit: 0,
   timeout: 300,
-  maxNumSeqs: 64,
-  // Throughput-optimized defaults (1.3.99) — bumped from 512/1024/512 to
-  // saturate the prefill+decode pipeline on M-series with 64+ GB RAM. On
-  // low-memory hardware the panel's auto-tune still falls through to the
-  // 8/32 conservative defaults at sessions/SessionConfigForm.tsx LOW_MEM_CONFIG.
-  prefillBatchSize: 1024,
+  maxNumSeqs: 8,
+  // Continuous batching remains available for multi-user/API-server sessions,
+  // but single-user chat is fastest on SimpleEngine. Keep the batch ceilings
+  // conservative so opting into prefix/cache mode does not reserve a huge
+  // scheduler shape by default.
+  prefillBatchSize: 256,
   prefillStepSize: 2048,
-  completionBatchSize: 1024,
-  continuousBatching: true,
-  enablePrefixCache: true,
+  completionBatchSize: 256,
+  continuousBatching: false,
+  enablePrefixCache: false,
   prefixCacheSize: 100,
   prefixCacheMaxBytes: 0,
   cacheMemoryMb: 0,
@@ -426,7 +426,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           </>
         )}
         <CheckField label="Continuous Batching" tooltip="Processes multiple user requests simultaneously by continuously updating the batch. Crucial for serving multiple users efficiently. If disabled, requests are processed one by one (ideal for single-user peak throughput)." checked={config.continuousBatching} onChange={v => onChange('continuousBatching', v)} />
-        <PerformanceHint text="Keep ON for best performance. This is the master switch — turning it off disables all caching features below." />
+        <PerformanceHint text="Keep OFF for peak single-user decode speed. Turn ON for multi-user serving, prefix cache, paged cache, and disk-backed cache reuse." />
         {!config.continuousBatching && config.enablePrefixCache && (
           <InfoNote text="Continuous batching will be auto-enabled at launch because prefix cache requires it." />
         )}
