@@ -787,6 +787,22 @@ def test_dsv4_cache_hit_store_rederives_prompt_boundary_when_snapshot_missing():
     assert "chunk_size = len(prompt_tokens) if self._uses_dsv4_cache else 2048" in helper_src
 
 
+def test_dsv4_long_prefill_guard_describes_single_shot_default():
+    """The DSV4 long-prefill guard must not claim chunked prefill is default.
+
+    DSV4BatchGenerator deliberately defaults to single-shot prefill because
+    arbitrary chunking has not been proven safe for SWA+CSA/HCA composite state.
+    """
+    import inspect
+
+    from vmlx_engine import scheduler
+
+    guard_src = inspect.getsource(scheduler.Scheduler.add_request)
+
+    assert "defaults to single-shot" in guard_src
+    assert "uses chunked prefill" not in guard_src
+
+
 def test_dsv4_prompt_only_prefill_collects_composite_state_without_values_attr():
     """DeepseekV4Cache has `.keys` but no top-level `.values` property.
 

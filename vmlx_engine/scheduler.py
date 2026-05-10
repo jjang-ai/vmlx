@@ -3973,9 +3973,11 @@ class Scheduler:
                 raise ValueError(
                     "DeepSeek V4 Flash JANGTQ long-prefill guard: prompt has "
                     f"{len(request.prompt_token_ids)} tokens, max safe prefill is "
-                    f"{_dsv4_max_prefill}. The Python DSV4 path uses chunked "
-                    "prefill for SWA+CSA/HCA cache state, but very large prompts "
-                    "still scale with accumulated compressor/indexer pool work. "
+                    f"{_dsv4_max_prefill}. The Python DSV4 path defaults to single-shot "
+                    "prefill for SWA+CSA/HCA cache-state correctness; chunked "
+                    "prefill remains opt-in via DSV4_PREFILL_STEP_SIZE only after "
+                    "parity validation. Very large prompts still scale with "
+                    "accumulated compressor/indexer pool work. "
                     "Set DSV4_MAX_PREFILL_TOKENS=0 to disable this production "
                     "guard after validating the workload on this machine."
                 )
