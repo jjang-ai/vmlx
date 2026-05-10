@@ -166,7 +166,9 @@ function buildCommandPreview(
     if (config.completionBatchSize && config.completionBatchSize > 0) parts.push('--completion-batch-size', config.completionBatchSize.toString())
 
     if (isVLM) parts.push('--is-mllm')
-    if (config.continuousBatching) parts.push('--continuous-batching')
+    const cacheStackActive = config.continuousBatching !== false
+    if (cacheStackActive) parts.push('--continuous-batching')
+    else parts.push('--no-continuous-batching')
 
     // Parser resolution: User explicit choice -> Detected config -> Fallback
     // (mirrors buildArgs: user choice wins over detection)
@@ -181,16 +183,12 @@ function buildCommandPreview(
             : detected?.reasoningParser)
 
     const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
-    const prefixCacheOff = config.enablePrefixCache === false && !toolsNeedCache
+    const prefixCacheOff = !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
     const usePagedCache = config.usePagedCache ?? detected?.usePagedCache
 
     if (prefixCacheOff) {
         parts.push('--disable-prefix-cache')
     } else {
-        // Auto-enable continuous batching when prefix cache is on (required by vmlx-engine)
-        if (!config.continuousBatching && !parts.includes('--continuous-batching')) {
-            parts.push('--continuous-batching')
-        }
         if (config.noMemoryAwareCache) {
             parts.push('--no-memory-aware-cache')
             if (config.prefixCacheSize && config.prefixCacheSize > 0) parts.push('--prefix-cache-size', config.prefixCacheSize.toString())
@@ -399,10 +397,14 @@ describe('VLM Mode', () => {
         expect(hasFlag(out, '--continuous-batching')).toBe(true)
     })
 
-    it('VLM without continuous batching gets auto-enabled via prefix cache', () => {
+    it('VLM continuous batching off emits explicit opt-out and suppresses cache stack', () => {
         const out = preview({ isMultimodal: true, continuousBatching: false, enablePrefixCache: true })
         expect(hasFlag(out, '--is-mllm')).toBe(true)
-        expect(hasFlag(out, '--continuous-batching')).toBe(true)
+        expect(hasFlag(out, '--continuous-batching')).toBe(false)
+        expect(hasFlag(out, '--no-continuous-batching')).toBe(true)
+        expect(hasFlag(out, '--disable-prefix-cache')).toBe(true)
+        expect(hasFlag(out, '--use-paged-cache')).toBe(false)
+        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(false)
     })
 
     it('detects VLM from model config', () => {
@@ -1194,17 +1196,25 @@ describe('connectHost Resolution', () => {
 })
 
 describe('Feature Interaction', () => {
-    it('auto-enables continuous batching when prefix cache is on (LLM)', () => {
+    it('continuous batching off is a real master switch for LLM cache flags', () => {
         const out = preview({ continuousBatching: false, enablePrefixCache: true })
-        expect(hasFlag(out, '--continuous-batching')).toBe(true)
+        expect(hasFlag(out, '--continuous-batching')).toBe(false)
+        expect(hasFlag(out, '--no-continuous-batching')).toBe(true)
+        expect(hasFlag(out, '--disable-prefix-cache')).toBe(true)
+        expect(hasFlag(out, '--use-paged-cache')).toBe(false)
+        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(false)
     })
 
-    it('auto-enables continuous batching when prefix cache is on (VLM)', () => {
+    it('continuous batching off is a real master switch for VLM cache flags', () => {
         const out = preview({ isMultimodal: true, continuousBatching: false, enablePrefixCache: true })
-        expect(hasFlag(out, '--continuous-batching')).toBe(true)
+        expect(hasFlag(out, '--is-mllm')).toBe(true)
+        expect(hasFlag(out, '--continuous-batching')).toBe(false)
+        expect(hasFlag(out, '--no-continuous-batching')).toBe(true)
+        expect(hasFlag(out, '--disable-prefix-cache')).toBe(true)
+        expect(hasFlag(out, '--use-paged-cache')).toBe(false)
     })
 
-    it('prefillBatchSize 0 omits flag (uses backend default 1024)', () => {
+    it('prefillBatchSize 0 omits flag (uses backend default 512)', () => {
         const out = preview({ prefillBatchSize: 0, enablePrefixCache: true })
         expect(hasFlag(out, '--prefill-batch-size')).toBe(false)
     })
@@ -1635,15 +1645,17 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized2).not.toContain('--enable-block-disk-cache')
     })
 
-    it('prefix cache auto-enables continuous batching', () => {
-        // When prefix cache is on and continuousBatching is off,
-        // buildCommandPreview still emits --continuous-batching
+    it('continuous batching off suppresses prefix cache even if prefix toggle is still on', () => {
         const out = preview({
             enablePrefixCache: true,
             continuousBatching: false,
         })
         const normalized = out.replace(/\s*\\\n\s*/g, ' ')
-        expect(normalized).toContain('--continuous-batching')
+        expect(normalized).not.toContain('--continuous-batching')
+        expect(normalized).toContain('--no-continuous-batching')
+        expect(normalized).toContain('--disable-prefix-cache')
+        expect(normalized).not.toContain('--use-paged-cache')
+        expect(normalized).not.toContain('--enable-block-disk-cache')
     })
 
     it('prefix cache disabled suppresses all cache sub-flags', () => {

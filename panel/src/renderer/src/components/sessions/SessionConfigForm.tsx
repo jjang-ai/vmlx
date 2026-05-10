@@ -428,7 +428,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <CheckField label="Continuous Batching" tooltip="Keep ON for best performance. This is the master switch for prefix cache, paged KV cache, block disk L2, and stored-cache codecs. Turning it off uses the direct single-request engine and disables the cache features below." checked={config.continuousBatching} onChange={v => onChange('continuousBatching', v)} />
         <PerformanceHint text="Keep ON for best overall behavior: it enables prefix reuse, paged cache, block disk L2, and architecture-specific cache restore while the default max sequence count stays at one for local chat." />
         {!config.continuousBatching && config.enablePrefixCache && (
-          <InfoNote text="Continuous batching will be auto-enabled at launch because prefix cache requires it." />
+          <InfoNote text="Cache flags will be omitted at launch while continuous batching is off. Turn it back on to use prefix cache, paged KV cache, block disk L2, and stored-cache codecs." />
         )}
         {!config.continuousBatching && (
           <InfoNote text="Turning this off disables: prefix caching, paged KV cache, KV cache quantization, and disk caching. Enable it to unlock these features." />
@@ -607,7 +607,13 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               unlimitedValue={0}
               unlimitedLabel="Default (1000)"
             />
-            <CheckField label="Block Disk Cache (L2)" tooltip="Persist individual paged cache blocks to SSD. When a block is evicted from RAM, it's saved to disk and can be reloaded later without recomputation. Dramatically speeds up cache warm-up for repeated system prompts and common prefixes. Uses content-addressable storage with background writes so disk I/O doesn't block inference. Compatible runtimes store compressed blocks in their native codec; path-dependent architectures use typed cache records instead of generic TurboQuant." checked={config.enableBlockDiskCache} onChange={v => onChange('enableBlockDiskCache', v)} />
+            <CheckField
+              label="Block Disk Cache (L2)"
+              tooltip="Persist individual paged cache blocks to SSD. When a block is evicted from RAM, it's saved to disk and can be reloaded later without recomputation. Dramatically speeds up cache warm-up for repeated system prompts and common prefixes. Uses content-addressable storage with background writes so disk I/O doesn't block inference. Compatible runtimes store compressed blocks in their native codec; path-dependent architectures use typed cache records instead of generic TurboQuant."
+              checked={config.enableBlockDiskCache && !batchingOff && !prefixOff}
+              onChange={v => onChange('enableBlockDiskCache', v)}
+              disabled={batchingOff || prefixOff}
+            />
             {config.enableBlockDiskCache && (
               <>
                 <SliderField
@@ -699,7 +705,13 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {batchingOff && <IncompatWarning text="Disk cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
         {!effectivelyNoBatching && config.usePagedCache && <IncompatWarning text="Legacy disk cache is not compatible with paged cache. To use disk-based persistence with paged cache, use 'Block Disk Cache (L2)' in the Paged KV Cache section instead. To use this legacy disk cache, disable 'Use Paged KV Cache' first." />}
         {!batchingOff && prefixOff && <IncompatWarning text="Disk cache requires prefix cache. Enable 'Prefix Cache' above to use disk caching." />}
-        <CheckField label="Enable Disk Cache" tooltip="Persist prompt caches to disk for reuse across server restarts. Acts as L2 cache behind the in-memory prefix cache — when a prompt isn't found in memory, it's loaded from disk instead of recomputing. Dramatically speeds up repeated prompts (system prompts, common prefixes). Compatible runtimes store compressed cache data in their native format; path-dependent caches use typed restore records. Requires prefix cache to be enabled. Note: not compatible with paged cache (uses different storage format)." checked={config.enableDiskCache} onChange={v => onChange('enableDiskCache', v)} />
+        <CheckField
+          label="Enable Disk Cache"
+          tooltip="Persist prompt caches to disk for reuse across server restarts. Acts as L2 cache behind the in-memory prefix cache — when a prompt isn't found in memory, it's loaded from disk instead of recomputing. Dramatically speeds up repeated prompts (system prompts, common prefixes). Compatible runtimes store compressed cache data in their native format; path-dependent caches use typed restore records. Requires prefix cache to be enabled. Note: not compatible with paged cache (uses different storage format)."
+          checked={config.enableDiskCache && !batchingOff && !prefixOff && !config.usePagedCache}
+          onChange={v => onChange('enableDiskCache', v)}
+          disabled={batchingOff || prefixOff || config.usePagedCache}
+        />
         {config.enableDiskCache && (
           <>
             <SliderField

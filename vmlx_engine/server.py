@@ -4470,6 +4470,11 @@ async def health():
         result["scheduler"] = {
             "num_waiting": scheduler_stats.get("num_waiting", 0),
             "num_running": scheduler_stats.get("num_running", 0),
+            "engine_path": scheduler_stats.get("engine_path"),
+            "batch_generator": scheduler_stats.get("batch_generator", {}),
+            "single_active_decode": (
+                scheduler_stats.get("batch_generator", {}) or {}
+            ).get("single_active_decode", False),
             "ewma_ttft_seconds": scheduler_stats.get("ewma_ttft_seconds", 0),
             "cache_hit_requests": scheduler_stats.get("cache_hit_requests", 0),
             "cache_hit_tokens": scheduler_stats.get("cache_hit_tokens", 0),
@@ -4872,6 +4877,11 @@ async def cache_stats():
         result["scheduler_stats"] = {
             "num_waiting": stats.get("num_waiting", 0),
             "num_running": stats.get("num_running", 0),
+            "engine_path": stats.get("engine_path"),
+            "batch_generator": stats.get("batch_generator", {}),
+            "single_active_decode": (
+                stats.get("batch_generator", {}) or {}
+            ).get("single_active_decode", False),
             "num_requests_processed": stats.get("num_requests_processed", 0),
             "total_prompt_tokens": stats.get("total_prompt_tokens", 0),
             "total_completion_tokens": stats.get("total_completion_tokens", 0),
@@ -12346,8 +12356,16 @@ Examples:
     )
     parser.add_argument(
         "--continuous-batching",
+        dest="continuous_batching",
         action="store_true",
-        help="Enable continuous batching for multiple concurrent users",
+        default=True,
+        help="Enable continuous batching/cache-stack path (default: enabled)",
+    )
+    parser.add_argument(
+        "--no-continuous-batching",
+        dest="continuous_batching",
+        action="store_false",
+        help="Use SimpleEngine and disable cache-stack features that require batching",
     )
     # Smelt options
     parser.add_argument(

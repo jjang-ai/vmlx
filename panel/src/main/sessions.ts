@@ -136,7 +136,7 @@ function applyBundleStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
   }
 }
 
-function applyCacheStackStartupDefaultMigration(config: Partial<ServerConfig>): void {
+function applyCacheStackStartupDefaultMigration(config: Partial<ServerConfig>): boolean {
   const staleContinuousDefaults =
     config.continuousBatching === true &&
     config.enablePrefixCache === true &&
@@ -151,7 +151,7 @@ function applyCacheStackStartupDefaultMigration(config: Partial<ServerConfig>): 
     Number(config.prefillBatchSize) === 1024 &&
     Number(config.completionBatchSize) === 1024
 
-  if (!staleContinuousDefaults && !staleNoPrefixBatchDefaults) return
+  if (!staleContinuousDefaults && !staleNoPrefixBatchDefaults) return false
 
   config.continuousBatching = true
   config.enablePrefixCache = true
@@ -165,6 +165,7 @@ function applyCacheStackStartupDefaultMigration(config: Partial<ServerConfig>): 
   config.enableBlockDiskCache = true
   config.blockDiskCacheMaxGb = 10
   config.cacheMemoryPercent = 15
+  return true
 }
 
 /** Resolve bind address to connectable address (0.0.0.0 → 127.0.0.1) */
@@ -716,7 +717,20 @@ export class SessionManager extends EventEmitter {
     config.host = session.host
     config.port = session.port
     applyBundleStartupDefaults(config, config.modelPath)
-    applyCacheStackStartupDefaultMigration(config)
+    const migrated = applyCacheStackStartupDefaultMigration(config)
+    if (migrated) {
+      // Persist the migrated config so the settings UI reflects the corrected
+      // values on next render and the same migration doesn't have to re-fire
+      // on every session start. Without this writeback the saved config keeps
+      // showing the stale tuple even though the engine launches with the new
+      // values.
+      try {
+        db.updateSession(session.id, { config: JSON.stringify(config) })
+        console.log(`[SESSION] Persisted cache-stack migration for session ${session.id}`)
+      } catch (e) {
+        console.warn(`[SESSION] Failed to persist migration for ${session.id}: ${e}`)
+      }
+    }
 
     // Apply model_settings.reasoning_mode as server-level default for external API clients.
     // Auto must not serialize as false: local/API requests should then fall
@@ -1323,6 +1337,9 @@ export class SessionManager extends EventEmitter {
           usePagedCache: detected.usePagedCache ?? true,
           pagedCacheBlockSize: 64,
           maxCacheBlocks: 1000,
+          enableBlockDiskCache: true,
+          blockDiskCacheMaxGb: 10,
+          kvCacheQuantization: 'auto',
           streamInterval: 1,
           maxTokens: 32768,
           toolCallParser: 'auto',
@@ -2086,7 +2103,12 @@ export class SessionManager extends EventEmitter {
             : false
     if (isVLM) args.push('--is-mllm')
 
-    if (config.continuousBatching) args.push('--continuous-batching')
+    const cacheStackActive = config.continuousBatching !== false
+    if (cacheStackActive) {
+      args.push('--continuous-batching')
+    } else {
+      args.push('--no-continuous-batching')
+    }
 
     // Parser resolution: User explicit choice -> Detected config -> Fallback logic
     // Empty string "" = user explicitly chose "None" (disabled) — always respected.
@@ -2135,16 +2157,12 @@ export class SessionManager extends EventEmitter {
     // Tool follow-up requests share most of the prompt with the original request;
     // without prefix cache each follow-up re-processes the entire prompt (~16s).
     const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
-    const prefixCacheOff = config.enablePrefixCache === false && !toolsNeedCache
+    const prefixCacheOff = !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
     const usePagedCache = config.usePagedCache ?? detected.usePagedCache
 
     if (prefixCacheOff) {
       args.push('--disable-prefix-cache')
     } else {
-      // Auto-enable continuous batching when prefix cache is on (required by vmlx-engine).
-      if (!config.continuousBatching && !args.includes('--continuous-batching')) {
-        args.push('--continuous-batching')
-      }
       if (config.noMemoryAwareCache) {
         args.push('--no-memory-aware-cache')
         if (config.prefixCacheSize && config.prefixCacheSize > 0) {

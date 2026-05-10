@@ -62,7 +62,12 @@ function buildCommandPreview(
   if (config.completionBatchSize && config.completionBatchSize > 0) parts.push('--completion-batch-size', config.completionBatchSize.toString())
 
   if (isVLM) parts.push('--is-mllm')
-  if (config.continuousBatching) parts.push('--continuous-batching')
+  const cacheStackActive = config.continuousBatching !== false
+  if (cacheStackActive) {
+    parts.push('--continuous-batching')
+  } else {
+    parts.push('--no-continuous-batching')
+  }
 
   // Parser resolution: User explicit choice -> Detected config -> Fallback
   // (mirrors buildArgs: user choice wins over detection)
@@ -78,16 +83,12 @@ function buildCommandPreview(
 
   // Prefix cache (mirrors buildArgs lines 1077-1114)
   const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
-  const prefixCacheOff = config.enablePrefixCache === false && !toolsNeedCache
+  const prefixCacheOff = !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
   const usePagedCache = config.usePagedCache ?? detected?.usePagedCache
 
   if (prefixCacheOff) {
     parts.push('--disable-prefix-cache')
   } else {
-    // Auto-enable continuous batching when prefix cache is on (required by vmlx-engine)
-    if (!config.continuousBatching && !parts.includes('--continuous-batching')) {
-      parts.push('--continuous-batching')
-    }
     if (config.noMemoryAwareCache) {
       parts.push('--no-memory-aware-cache')
       if (config.prefixCacheSize && config.prefixCacheSize > 0) parts.push('--prefix-cache-size', config.prefixCacheSize.toString())

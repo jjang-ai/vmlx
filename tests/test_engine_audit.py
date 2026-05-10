@@ -681,6 +681,42 @@ class TestMLLMStepErrorRecovery:
         )
 
 
+class TestLLMSingleActiveGenerator:
+    """Text max_num_seqs=1 must be an engine path, not a patched mlx-lm merge."""
+
+    def test_scheduler_imports_single_active_generator(self):
+        from pathlib import Path
+
+        source = Path("./vmlx_engine/scheduler.py").read_text()
+
+        assert "from .utils.single_batch_generator import SingleBatchGenerator" in source
+        assert "return SingleBatchGenerator(" in source
+        assert "max_num_seqs=1" in source
+        assert '"engine_path": generator_path' in source
+        assert '"single_active_decode": generator_path == "single_active"' in source
+
+    def test_single_active_generator_is_repo_owned(self):
+        from pathlib import Path
+
+        source = Path("./vmlx_engine/utils/single_batch_generator.py").read_text()
+
+        assert "class SingleBatchGenerator" in source
+        assert "from mlx_lm.generate import BatchGenerator" not in source
+        assert "BatchKVCache(" not in source
+        assert "BatchMambaCache(" not in source
+        assert "BatchGenerator(" not in source
+        assert "prompt_cache=req.cache" in source
+
+    def test_health_and_cache_stats_surface_single_active_path(self):
+        from pathlib import Path
+
+        source = Path("./vmlx_engine/server.py").read_text()
+
+        assert '"engine_path": scheduler_stats.get("engine_path")' in source
+        assert '"single_active_decode": (' in source
+        assert '"engine_path": stats.get("engine_path")' in source
+
+
 class TestMLLMStopTokenIds:
     """Test that MLLM properly handles stop_token_ids."""
 
@@ -4475,10 +4511,15 @@ class TestTurboQuantKVTelemetry:
         assert 'unlimitedLabel="Default (2048)"' in session_form_source
         assert "isLingCrackModelPath" in sessions_source
         assert "out.defaultTemperature = 20" in sessions_source
+        assert "args.push('--no-continuous-batching')" in sessions_source
+        assert "Auto-enable continuous batching when prefix cache is on" not in sessions_source
         cli_source = Path("./vmlx_engine/cli.py").read_text()
         assert '"--max-num-seqs", type=int, default=1' in cli_source
         assert '"--prefill-batch-size", type=int, default=512' in cli_source
         assert '"--completion-batch-size", type=int, default=512' in cli_source
+        assert '"--continuous-batching"' in cli_source
+        assert '"--no-continuous-batching"' in cli_source
+        assert "default=True" in cli_source
         assert "max_concurrent_requests: 1" in defaults_yaml
         assert "prefill_batch_size: 512" in defaults_yaml
         assert "completion_batch_size: 512" in defaults_yaml

@@ -1638,11 +1638,19 @@ Examples:
     )
     serve_parser.add_argument(
         "--continuous-batching",
+        dest="continuous_batching",
         action="store_true",
+        default=True,
         help="Process multiple requests simultaneously using continuous batching. "
-             "Required for: prefix caching, paged cache, KV quantization, and concurrent users. "
-             "Without this, requests are processed one at a time (faster for single user). "
-             "Example: vmlx-engine serve model --continuous-batching",
+             "Enables prefix caching, paged cache, KV/storage cache codecs, and concurrent users. "
+             "Default is enabled with max-num-seqs=1 for local chat.",
+    )
+    serve_parser.add_argument(
+        "--no-continuous-batching",
+        dest="continuous_batching",
+        action="store_false",
+        help="Use the direct single-request engine and disable cache-stack features "
+             "that require continuous batching.",
     )
     # Paged cache options
     serve_parser.add_argument(

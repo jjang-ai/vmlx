@@ -47,6 +47,7 @@ from .utils.mamba_cache import (
     register_generation_logprobs,
     unregister_generation_logprobs,
 )
+from .utils.single_batch_generator import SingleBatchGenerator
 from .utils.head_dim_detection import (
     choose_supported_kv_group_size,
     detect_cache_head_dims,
@@ -2363,6 +2364,22 @@ class Scheduler:
                 )
         except Exception as _dsv4_err:
             logger.debug(f"DSV4 generator detection failed: {_dsv4_err}")
+
+        if int(getattr(self.config, "max_num_seqs", 1) or 1) <= 1:
+            logger.info(
+                "max_num_seqs=1 — using vMLX SingleBatchGenerator "
+                "(raw native cache, scheduler-owned single-active path)"
+            )
+            return SingleBatchGenerator(
+                model=self.model,
+                max_tokens=sampling_params.max_tokens,
+                stop_tokens=stop_tokens,
+                sampler=sampler,
+                logits_processors=None,
+                prefill_batch_size=1,
+                completion_batch_size=1,
+                prefill_step_size=self.config.prefill_step_size,
+            )
 
         return BatchGenerator(
             model=self.model,
@@ -7074,6 +7091,19 @@ class Scheduler:
 
     def get_stats(self) -> Dict[str, Any]:
         """Get scheduler statistics."""
+        generator_cls = (
+            self.batch_generator.__class__.__name__
+            if self.batch_generator is not None
+            else None
+        )
+        if generator_cls == "SingleBatchGenerator":
+            generator_path = "single_active"
+        elif generator_cls == "DSV4BatchGenerator":
+            generator_path = "dsv4"
+        elif generator_cls == "BatchGenerator":
+            generator_path = "batched"
+        else:
+            generator_path = "none" if generator_cls is None else "custom"
         stats = {
             "num_waiting": len(self.waiting),
             "num_running": len(self.running),
@@ -7090,6 +7120,13 @@ class Scheduler:
             "cache_reuse_partial_downgrades": self._cache_reuse_partial_downgrades,
             "cache_reuse_partial_tokens": self._cache_reuse_partial_tokens,
             "last_cache_reuse_partial": self._last_cache_reuse_partial,
+            "engine_path": generator_path,
+            "batch_generator": {
+                "class": generator_cls,
+                "path": generator_path,
+                "single_active_decode": generator_path == "single_active",
+                "max_num_seqs": self.config.max_num_seqs,
+            },
         }
         # Include cache stats
         if self.block_aware_cache is not None:
@@ -7132,6 +7169,28 @@ class Scheduler:
                 base["disk_cache"] = disk_stats
             except Exception:
                 pass
+        if base is not None:
+            generator_cls = (
+                self.batch_generator.__class__.__name__
+                if self.batch_generator is not None
+                else None
+            )
+            if generator_cls == "SingleBatchGenerator":
+                engine_path = "single_active"
+            elif generator_cls == "DSV4BatchGenerator":
+                engine_path = "dsv4"
+            elif generator_cls == "BatchGenerator":
+                engine_path = "batched"
+            else:
+                engine_path = "none" if generator_cls is None else "custom"
+            base = dict(base)
+            base["engine_path"] = engine_path
+            base["batch_generator"] = {
+                "class": generator_cls,
+                "path": engine_path,
+                "single_active_decode": engine_path == "single_active",
+                "max_num_seqs": self.config.max_num_seqs,
+            }
         return base
 
     def _get_ssm_cache_stats(self) -> Optional[Dict[str, Any]]:
