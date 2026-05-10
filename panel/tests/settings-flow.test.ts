@@ -1024,6 +1024,16 @@ describe('Default IP and New Settings', () => {
         expect(source).toContain('config.completionBatchSize = 256')
     })
 
+    it('session manager migrates stale no-prefix MiniMax-style batch tuple', () => {
+        const source = readFileSync('src/main/sessions.ts', 'utf8')
+        expect(source).toContain('staleNoPrefixBatchDefaults')
+        expect(source).toContain('config.enablePrefixCache === false')
+        expect(source).toContain('Number(config.maxNumSeqs) <= 8')
+        expect(source).toContain('Number(config.prefillBatchSize) === 1024')
+        expect(source).toContain('Number(config.completionBatchSize) === 1024')
+        expect(source).toContain('!staleContinuousDefaults && !staleNoPrefixBatchDefaults')
+    })
+
     it('logLevel INFO (default) does not emit --log-level flag', () => {
         const out = preview({ logLevel: 'INFO' })
         expect(hasFlag(out, '--log-level')).toBe(false)

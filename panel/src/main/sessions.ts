@@ -133,8 +133,15 @@ function applySingleUserPerfDefaultMigration(config: Partial<ServerConfig>): voi
     Number(config.maxNumSeqs) === 64 &&
     Number(config.prefillBatchSize) === 1024 &&
     Number(config.completionBatchSize) === 1024
+  const staleNoPrefixBatchDefaults =
+    config.continuousBatching === true &&
+    config.enablePrefixCache === false &&
+    Number(config.maxNumSeqs) > 0 &&
+    Number(config.maxNumSeqs) <= 8 &&
+    Number(config.prefillBatchSize) === 1024 &&
+    Number(config.completionBatchSize) === 1024
 
-  if (!staleContinuousDefaults) return
+  if (!staleContinuousDefaults && !staleNoPrefixBatchDefaults) return
 
   config.continuousBatching = false
   config.enablePrefixCache = false
