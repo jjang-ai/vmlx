@@ -422,12 +422,15 @@ class TestModelConfigRegistry:
         assert result.think_in_template is False
         assert result.tool_parser == "deepseek"
 
-    def test_zaya_preserves_parser_metadata_but_suppresses_stale_think_prompt(
+    def test_zaya_is_reasoning_capable_but_does_not_auto_open_in_no_think_prompt(
         self, empty_registry, tmp_path
     ):
-        """ZAYA keeps qwen3 parser metadata for explicit opt-in extraction,
-        but stale converter stamps must not claim the no-thinking product
-        prompt starts inside an open <think> block.
+        """Text ZAYA is a reasoning model with a default-off-safe prompt.
+
+        The real ZAYA text template supports `enable_thinking=True` and the
+        upstream card recommends qwen3 extraction. With enable_thinking=False
+        it renders a closed empty think block, so think_in_template remains
+        False even though supports_thinking must be True.
         """
         import json
 
@@ -440,7 +443,7 @@ class TestModelConfigRegistry:
                 tool_parser="zaya_xml",
                 reasoning_parser="qwen3",
                 think_in_template=False,
-                supports_thinking=False,
+                supports_thinking=True,
                 priority=10,
             )
         )
@@ -469,7 +472,7 @@ class TestModelConfigRegistry:
         assert result.cache_subtype == "zaya_cca"
         assert result.tool_parser == "zaya_xml"
         assert result.reasoning_parser == "qwen3"
-        assert result.supports_thinking is False
+        assert result.supports_thinking is True
         assert result.think_in_template is False
 
     def test_zaya1_vl_vision_config_beats_stale_text_modality_stamp(
@@ -492,7 +495,7 @@ class TestModelConfigRegistry:
                 tool_parser="zaya_xml",
                 reasoning_parser="qwen3",
                 think_in_template=False,
-                supports_thinking=False,
+                supports_thinking=True,
                 is_mllm=True,
                 priority=10,
             )
@@ -515,7 +518,7 @@ class TestModelConfigRegistry:
                         "cache_subtype": "zaya_cca",
                         "tool_parser": "zaya_xml",
                         "reasoning_parser": "qwen3",
-                        "think_in_template": True,
+                        "think_in_template": False,
                         "supports_thinking": True,
                         "modality": "text",
                     },
@@ -530,7 +533,7 @@ class TestModelConfigRegistry:
         assert result.cache_subtype == "zaya_cca"
         assert result.reasoning_parser == "qwen3"
         assert result.think_in_template is False
-        assert result.supports_thinking is False
+        assert result.supports_thinking is True
 
 
 class TestModelConfigs:
@@ -736,7 +739,7 @@ class TestModelConfigs:
         assert config.tool_parser == "zaya_xml"
         assert config.reasoning_parser == "qwen3"
         assert config.think_in_template is False
-        assert config.supports_thinking is False
+        assert config.supports_thinking is True
 
     # GLM family
     def test_glm4_moe_config(self, registry):
@@ -1312,19 +1315,20 @@ class TestModelConfigComprehensiveChecks:
     def test_zaya1_vl_registered_with_full_contract(self, registry):
         """REGRESSION (2026-05-09): Local ZAYA1-VL bundles stamp
         capabilities = {family: zaya1_vl, tool_parser: zaya_xml,
-        reasoning_parser: qwen3 (metadata), think_in_template: False
-        (current VL template has no think rail), supports_thinking: False
-        (product contract), cache_type: hybrid}. The vMLX registry only had
-        plain `zaya` (text), so `zaya1_vl` model_type fell through to
-        `family_name=unknown` → no tool parser, cache_type=kv (wrong),
-        is_mllm=False (wrong, has vision_config). That breaks
-        zaya_xml tool parsing, hybrid cache wiring, and MLLM batch
-        generator dispatch all at once.
+        reasoning_parser: qwen3, think_in_template: False, cache_type: hybrid}.
+        The vMLX registry only had plain `zaya` (text), so `zaya1_vl`
+        model_type fell through to `family_name=unknown` → no tool parser,
+        cache_type=kv (wrong), is_mllm=False (wrong, has vision_config).
+        That breaks zaya_xml tool parsing, hybrid cache wiring, and MLLM
+        batch generator dispatch all at once.
 
-        Per Eric+Codex 2026-05-09: VL bundles are non-thinking by
-        product contract. supports_thinking=False is the load-bearing
-        default-off flag; reasoning_parser=qwen3 is still preserved as
-        parser metadata for extraction and capabilities."""
+        Per Eric 2026-05-10: ZAYA does reason. The shipped tokenizer template
+        has `enable_thinking` and a `<think>` rail. supports_thinking=True is
+        the honest flag — callers opt in via enable_thinking=True; the qwen3
+        parser extracts <think> content cleanly because ZAYA opens <think> in
+        both modes. think_in_template stays False because with
+        enable_thinking=False the prompt contains a closed empty <think>
+        block, not an auto-opened one."""
         registry.clear_cache()
         with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("zaya1_vl")):
             config = registry.lookup("Zyphra/ZAYA1-VL-8B-MXFP4")
@@ -1345,19 +1349,20 @@ class TestModelConfigComprehensiveChecks:
             "the engine wires it through the LLM batch generator instead of "
             "MLLM batch generator and image inputs break."
         )
-        assert config.supports_thinking is False, (
-            "ZAYA1-VL product contract is no-thinking. supports_thinking=False "
-            "is the load-bearing flag the engine uses to default thinking off."
+        assert config.supports_thinking is True, (
+            "Per Eric 2026-05-10 honest-flag directive: ZAYA1-VL does reason "
+            "(template has <think> rail + enable_thinking flag). "
+            "supports_thinking=True; callers opt in via enable_thinking=True."
         )
         assert config.reasoning_parser == "qwen3", (
-            "ZAYA1-VL keeps qwen3 as parser metadata for compatibility, while "
-            "supports_thinking=False keeps Auto and product defaults on the "
-            "visible no-thinking rail."
+            "ZAYA1-VL uses qwen3-style <think> blocks in output, so the qwen3 "
+            "reasoning parser is the authoritative extractor."
         )
         assert config.think_in_template is False, (
-            "Current local ZAYA1-VL tokenizer templates do not contain "
-            "<think> or enable_thinking; a stale jang_config stamp must not "
-            "make the server treat the prompt as starting inside reasoning."
+            "With enable_thinking=False the prompt contains a closed empty "
+            "<think> block (not auto-opened), so think_in_template stays "
+            "False. The parser must not treat the prompt as starting inside "
+            "reasoning."
         )
 
     def test_ling_supports_thinking_true_per_eric_canonical_contract(self, registry):

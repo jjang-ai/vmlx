@@ -304,19 +304,35 @@ class ModelConfigRegistry:
             model_type_from_config = str(local_model_config.get("model_type") or "").lower()
             has_config_vision = isinstance(local_model_config.get("vision_config"), dict)
             base_supports_thinking = getattr(base, "supports_thinking", None)
-            preserve_parser_metadata_when_no_thinking = base.family_name in {"zaya", "zaya1_vl"}
+            is_ling_family = base.family_name == "ling"
+            is_zaya_family = base.family_name in {"zaya", "zaya1_vl"}
             preserve_template_metadata_when_no_thinking = False
-            if base_supports_thinking is False:
+            if is_zaya_family:
+                # ZAYA and ZAYA1-VL are reasoning-capable, but the honest
+                # prompt contract is still not "starts inside <think>".
+                # enable_thinking=False renders a closed empty block. Do not
+                # let stale converter stamps resurrect think_in_template=True.
+                updates["supports_thinking"] = True
+                updates["reasoning_parser"] = "qwen3"
+                updates["think_in_template"] = False
+            elif is_ling_family:
+                # Ling/Bailing is a known default-off but opt-in reasoning
+                # family.  Bundle stamps have drifted in both directions, so
+                # keep the canonical registry contract: supports_thinking=True
+                # plus deepseek_r1 parser, but never treat the prompt as if it
+                # auto-opened <think>.
+                updates["supports_thinking"] = True
+                updates["reasoning_parser"] = "deepseek_r1"
+                updates["think_in_template"] = False
+            elif base_supports_thinking is False:
                 updates["supports_thinking"] = False
             elif isinstance(sth, bool):
                 updates["supports_thinking"] = sth
-            if rp is not None and (
-                base_supports_thinking is not False or preserve_parser_metadata_when_no_thinking
-            ):
+            if rp is not None and not (is_zaya_family or is_ling_family) and base_supports_thinking is not False:
                 updates["reasoning_parser"] = rp if rp != "none" else None
             if tp is not None:
                 updates["tool_parser"] = tp if tp != "none" else None
-            if isinstance(tin, bool) and (
+            if isinstance(tin, bool) and not (is_zaya_family or is_ling_family) and (
                 base_supports_thinking is not False or preserve_template_metadata_when_no_thinking
             ):
                 updates["think_in_template"] = tin

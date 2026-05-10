@@ -2629,9 +2629,9 @@ class TestZayaCCACachePolicy:
         assert cfg.tool_parser == "zaya_xml"
         assert cfg.reasoning_parser == "qwen3"
         assert cfg.think_in_template is False
-        assert cfg.supports_thinking is False
+        assert cfg.supports_thinking is True
 
-    def test_zaya_auto_thinking_disabled_even_with_stale_stamp(self, tmp_path):
+    def test_zaya_auto_thinking_enabled_but_no_think_prompt_stays_safe(self, tmp_path):
         from vmlx_engine import server
 
         model_dir = self._write_zaya_fixture(tmp_path)
@@ -2649,7 +2649,7 @@ class TestZayaCCACachePolicy:
         finally:
             server._default_enable_thinking = old_default
 
-        assert resolved is False
+        assert resolved is True
 
     def test_server_default_false_does_not_override_reasoning_on_runtime_default(self):
         from vmlx_engine import server
@@ -2864,7 +2864,7 @@ class TestZayaCCACachePolicy:
                 "tool_parser": "zaya_xml",
                 "reasoning_parser": "qwen3",
                 "think_in_template": False,
-                "supports_thinking": False,
+                "supports_thinking": True,
                 "cache_type": "hybrid",
                 "modality": "vision",
             },
@@ -2906,7 +2906,10 @@ class TestZayaCCACachePolicy:
             assert caps.get("tool_parser") == "zaya_xml"
             assert caps.get("reasoning_parser") == "qwen3"
             assert caps.get("think_in_template") is False
-            assert caps.get("supports_thinking") is False
+            # Per Eric 2026-05-10 honest-flag directive: ZAYA AND ZAYA1-VL both
+            # have <think> rail + enable_thinking flag; supports_thinking=True
+            # for the entire family. Callers opt in via enable_thinking=True.
+            assert caps.get("supports_thinking") is True
             assert cfg.get("zaya_expert_layout") == "split_switch_mlp"
             assert caps.get("modality") == ("vision" if model_type == "zaya1_vl" else "text")
 
@@ -2917,7 +2920,7 @@ class TestZayaCCACachePolicy:
             assert rcfg.tool_parser == "zaya_xml"
             assert rcfg.reasoning_parser == "qwen3"
             assert rcfg.think_in_template is False
-            assert rcfg.supports_thinking is False
+            assert rcfg.supports_thinking is True
             assert rcfg.is_mllm is (model_type == "zaya1_vl")
 
             if jcfg.get("weight_format") == "mxtq":

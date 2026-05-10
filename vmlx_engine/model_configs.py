@@ -87,11 +87,13 @@ def register_all(registry=None):
 
     # ZAYA (Zyphra) — alternating CCA attention + top-1 MoE.
     #
-    # The shipped template has Qwen-style thinking branches, so keep qwen3 as
-    # parser metadata for explicit opt-in extraction. Product behavior remains
-    # no-thinking until ZAYA reasoning gates pass. With enable_thinking=False
-    # the prompt contains a closed empty <think> block, so think_in_template
-    # must stay False or the parser can route plain content into reasoning.
+    # ZAYA does reason. The shipped template has Qwen-style thinking branches
+    # plus an enable_thinking flag, and the qwen3 parser extracts generated
+    # <think> blocks on the thinking rail. The honest flag is
+    # supports_thinking=True; product callers opt in explicitly via
+    # enable_thinking=True. think_in_template stays False because with
+    # enable_thinking=False the prompt contains a closed empty <think> block,
+    # so the parser must NOT treat the prompt as if it auto-opened reasoning.
     _register(
         ModelConfig(
             family_name="zaya",
@@ -101,7 +103,7 @@ def register_all(registry=None):
             tool_parser="zaya_xml",
             reasoning_parser="qwen3",
             think_in_template=False,
-            supports_thinking=False,
+            supports_thinking=True,
             supports_native_tools=True,
             priority=3,
         )
@@ -116,7 +118,7 @@ def register_all(registry=None):
             tool_parser="zaya_xml",
             reasoning_parser="qwen3",
             think_in_template=False,
-            supports_thinking=False,
+            supports_thinking=True,
             supports_native_tools=True,
             is_mllm=True,
             priority=3,
