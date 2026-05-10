@@ -643,6 +643,37 @@ class TestBlockAwarePrefixCache:
         assert block_table.num_tokens == len(prefix_tokens)
         assert remaining == long_tail
 
+    def test_oversized_prompt_stores_capacity_limited_partial_prefix(self, caplog):
+        """A prompt larger than Max Cache Blocks should degrade to partial reuse.
+
+        Long agent/system prompts must not turn cache pressure into an opaque
+        failure. The cache stores the largest block-aligned prefix that fits,
+        indexes only that prefix, and reports the partial capacity in logs.
+        """
+        import logging
+
+        from vmlx_engine.paged_cache import PagedCacheManager
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+        caplog.set_level(logging.WARNING, logger="vmlx_engine.prefix_cache")
+
+        paged_manager = PagedCacheManager(block_size=4, max_blocks=3)
+        cache = BlockAwarePrefixCache(model=None, paged_cache_manager=paged_manager)
+
+        tokens = list(range(12))
+        stored = cache.store_cache("req-too-large", tokens, ["cache_data"])
+
+        assert stored is not None
+        assert stored.num_tokens == 8
+        assert len(stored.block_ids) == 2
+
+        hit_table, remaining = cache.fetch_cache("req-repeat", tokens + [99])
+        assert hit_table is not None
+        assert hit_table.num_tokens == 8
+        assert remaining == [8, 9, 10, 11, 99]
+        assert "stored partial prefix" in caplog.text
+        assert "8/12 tokens" in caplog.text
+
     def test_block_aware_fetch_ignores_context_free_legacy_block_hash(self):
         """Repeated block bytes under a different parent are not a prefix hit.
 
@@ -693,6 +724,49 @@ class TestBlockAwarePrefixCache:
         assert block_table.num_tokens == len(tokens)
         assert len(block_table.block_ids) == 2
         assert len(set(block_table.block_ids)) == 2
+
+    def test_media_extra_key_isolates_identical_placeholder_tokens(self):
+        """Media prompts need a side key; token ids alone collide by image size.
+
+        VLM templates emit the same placeholder token sequence for two images
+        with the same grid shape. Reusing a paged cache entry across different
+        image bytes would replay the first image's vision-conditioned KV state.
+        The cache key must therefore include a media fingerprint while keeping
+        the cached token count equal to the real model-token count.
+        """
+        from vmlx_engine.paged_cache import PagedCacheManager
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+        cache = BlockAwarePrefixCache(
+            model=object(),
+            paged_cache_manager=PagedCacheManager(block_size=4, max_blocks=16),
+        )
+        tokens = [101, 262147, 262147, 102, 103, 104]
+
+        stored = cache.store_cache(
+            "media-a",
+            tokens,
+            ["cache-a"],
+            cache_extra_keys={"media": "image-a"},
+        )
+        assert stored is not None
+
+        miss_table, miss_remaining = cache.fetch_cache(
+            "media-b",
+            tokens,
+            cache_extra_keys={"media": "image-b"},
+        )
+        assert miss_table is None
+        assert miss_remaining == tokens
+
+        hit_table, hit_remaining = cache.fetch_cache(
+            "media-a-repeat",
+            tokens + [105],
+            cache_extra_keys={"media": "image-a"},
+        )
+        assert hit_table is not None
+        assert hit_table.num_tokens == len(tokens)
+        assert hit_remaining == [105]
 
     def test_release_cache(self):
         """Test releasing cache."""

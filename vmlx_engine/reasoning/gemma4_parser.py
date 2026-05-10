@@ -106,6 +106,16 @@ class Gemma4ReasoningParser(ReasoningParser):
             after_soc = stripped[len(_THOUGHT) + 1:]
             return after_soc.strip() or None, None
 
+        # Defensive orphan-close handling: if a bundle/template placed the
+        # empty thought block in the prompt and only the channel close marker
+        # leaks into generated text, strip it instead of showing it to users.
+        if soc_thought_idx < 0 and text.lstrip().startswith(_EOC):
+            stripped = text.lstrip()
+            content = stripped[len(_EOC):].strip()
+            while content.endswith(_EOT):
+                content = content[:-len(_EOT)].strip()
+            return None, content or None
+
         # Check for thought channel (full marker form)
         if soc_thought_idx >= 0:
             idx = soc_thought_idx
@@ -238,6 +248,15 @@ class Gemma4ReasoningParser(ReasoningParser):
         elif text.lstrip().startswith(_THOUGHT + "\n"):
             stripped = text.lstrip()
             after_soc = stripped[len(_THOUGHT) + 1:]
+        # Orphan channel close: treat the post-marker tail as content. This
+        # matches complete extraction and prevents streamed `<channel|>` leaks.
+        elif text.lstrip().startswith(_EOC):
+            stripped = text.lstrip()
+            content = stripped[len(_EOC):]
+            while content.endswith(_EOT):
+                content = content[:-len(_EOT)]
+            content = content.strip()
+            return None, content or None
         else:
             return None, text.strip() if text.strip() else None
 

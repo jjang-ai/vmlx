@@ -1377,8 +1377,10 @@ def test_zaya_mllm_paged_store_rederives_clean_prompt_boundary():
             self.stores = []
             self._request_tables = {}
 
-        def store_cache(self, request_id, token_ids, cache_states):
-            self.stores.append((request_id, list(token_ids), list(cache_states)))
+        def store_cache(self, request_id, token_ids, cache_states, cache_extra_keys=None):
+            self.stores.append(
+                (request_id, list(token_ids), list(cache_states), cache_extra_keys)
+            )
 
     class FakePagedCacheManager:
         def __init__(self):
@@ -1437,9 +1439,135 @@ def test_zaya_mllm_paged_store_rederives_clean_prompt_boundary():
             "zaya-vl-clean",
             [10, 11, 12],
             [{"class_name": "CacheList", "state": "clean-zaya-cache"}],
+            None,
         )
     ]
     assert scheduler.paged_cache_manager.detached == ["zaya-vl-clean"]
+
+
+def test_zaya_mllm_media_paged_store_uses_media_cache_key():
+    """ZAYA-VL media prompts should store only under a media-fingerprinted key."""
+
+    from vmlx_engine.mllm_scheduler import MLLMScheduler
+
+    class FakeBlockAwareCache:
+        def __init__(self):
+            self.stores = []
+            self._request_tables = {}
+
+        def store_cache(
+            self,
+            request_id,
+            token_ids,
+            cache_states,
+            cache_extra_keys=None,
+        ):
+            self.stores.append(
+                (request_id, list(token_ids), list(cache_states), cache_extra_keys)
+            )
+
+    class FakePagedCacheManager:
+        def __init__(self):
+            self.detached = []
+
+        def detach_request(self, request_id):
+            self.detached.append(request_id)
+
+    class FakePromptDiskCache:
+        def __init__(self):
+            self.stores = []
+
+        def store(self, token_ids, cache_blocks):
+            self.stores.append((list(token_ids), list(cache_blocks)))
+
+    class FakeBatchGenerator:
+        def __init__(self):
+            self.stop_tokens = set()
+            self.prefilled = []
+
+        def _prefill_for_clean_path_dependent_cache(self, token_ids):
+            self.prefilled.append(list(token_ids))
+            return ["clean-zaya-media-cache"]
+
+    scheduler = MLLMScheduler.__new__(MLLMScheduler)
+    scheduler.block_aware_cache = FakeBlockAwareCache()
+    scheduler.paged_cache_manager = FakePagedCacheManager()
+    scheduler.memory_aware_cache = None
+    scheduler.prefix_cache = None
+    scheduler.disk_cache = FakePromptDiskCache()
+    scheduler.batch_generator = FakeBatchGenerator()
+    scheduler.stop_tokens = set()
+    scheduler.running = {
+        "zaya-vl-media": SimpleNamespace(
+            request_id="zaya-vl-media",
+            images=["data:image/png;base64,AAAA"],
+            videos=None,
+            _cache_extra_keys={"media": "sha256:img-a"},
+            _extracted_tokens=[10, 262147, 262147, 11, 12],
+            _extracted_cache=lambda: (_ for _ in ()).throw(
+                AssertionError("post-decode ZAYA cache must not be stored")
+            ),
+            _added_stop_tokens=set(),
+            num_output_tokens=1,
+        )
+    }
+    scheduler.request_id_to_uid = {"zaya-vl-media": 3}
+    scheduler.uid_to_request_id = {3: "zaya-vl-media"}
+    scheduler.requests = dict(scheduler.running)
+    scheduler.finished_req_ids = set()
+    scheduler._is_hybrid = True
+    scheduler._uses_zaya_cache = True
+    scheduler._kv_cache_bits = 0
+    scheduler._cleanup_detokenizer = lambda _request_id: None
+    scheduler._mllm_request_has_media_cache_context = lambda _request, _tokens: True
+    scheduler._validate_cache = lambda _cache, source: True
+    scheduler._extract_cache_states = lambda cache: [
+        {"class_name": "CacheList", "state": cache[0]}
+    ]
+
+    scheduler._cleanup_finished({"zaya-vl-media"})
+
+    assert scheduler.batch_generator.prefilled == [[10, 262147, 262147, 11]]
+    assert scheduler.block_aware_cache.stores == [
+        (
+            "zaya-vl-media",
+            [10, 262147, 262147, 11],
+            [{"class_name": "CacheList", "state": "clean-zaya-media-cache"}],
+            {"media": "sha256:img-a"},
+        )
+    ]
+    assert scheduler.disk_cache.stores == []
+
+
+def test_mllm_media_cache_key_ignores_prompt_attention_mask_length():
+    """Same media must keep the same cache side-key across longer chat turns."""
+
+    from vmlx_engine.mllm_batch_generator import _mllm_media_cache_extra_keys
+
+    short = SimpleNamespace(
+        images=["data:image/png;base64,AAAA"],
+        videos=None,
+        image_grid_thw=mx.array([[1, 2, 2]]),
+        attention_mask=mx.array([[1, 1, 1]]),
+        pixel_values=mx.array([[1.0, 2.0]]),
+    )
+    longer = SimpleNamespace(
+        images=["data:image/png;base64,AAAA"],
+        videos=None,
+        image_grid_thw=mx.array([[1, 2, 2]]),
+        attention_mask=mx.array([[1, 1, 1, 1, 1, 1]]),
+        pixel_values=mx.array([[9.0, 9.0]]),
+    )
+    other_image = SimpleNamespace(
+        images=["data:image/png;base64,BBBB"],
+        videos=None,
+        image_grid_thw=mx.array([[1, 2, 2]]),
+        attention_mask=mx.array([[1, 1, 1]]),
+        pixel_values=mx.array([[1.0, 2.0]]),
+    )
+
+    assert _mllm_media_cache_extra_keys(short) == _mllm_media_cache_extra_keys(longer)
+    assert _mllm_media_cache_extra_keys(short) != _mllm_media_cache_extra_keys(other_image)
 
 
 def test_zaya_mllm_extract_cache_states_marks_cachelist_as_tensor_data():

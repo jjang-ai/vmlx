@@ -85,15 +85,13 @@ def register_all(registry=None):
             registry.register(config)
             existing.add(config.family_name)
 
-    # ZAYA (Zyphra) — alternating CCA attention + top-1 MoE.
+    # ZAYA (Zyphra) — CCA attention + top-1 MoE.
     #
-    # ZAYA does reason. The shipped template has Qwen-style thinking branches
-    # plus an enable_thinking flag, and the qwen3 parser extracts generated
-    # <think> blocks on the thinking rail. The honest flag is
-    # supports_thinking=True; product callers opt in explicitly via
-    # enable_thinking=True. think_in_template stays False because with
-    # enable_thinking=False the prompt contains a closed empty <think> block,
-    # so the parser must NOT treat the prompt as if it auto-opened reasoning.
+    # ZAYA is reasoning-capable, and the qwen3 parser extracts generated
+    # <think> blocks on the thinking rail. The honest product contract is
+    # supports_thinking=True. think_in_template stays False because the default
+    # no-thinking prompt must start generation in visible content, not make the
+    # parser route every first token into reasoning_content.
     _register(
         ModelConfig(
             family_name="zaya",
@@ -139,6 +137,7 @@ def register_all(registry=None):
             tool_parser="qwen",
             reasoning_parser="qwen3",
             think_in_template=True,
+            supports_thinking=True,
             is_mllm=False,
             priority=4,
         )
@@ -157,6 +156,7 @@ def register_all(registry=None):
             tool_parser="qwen",
             reasoning_parser="qwen3",
             think_in_template=True,
+            supports_thinking=True,
             is_mllm=False,
             priority=4,
         )
@@ -214,6 +214,7 @@ def register_all(registry=None):
             tool_parser="qwen",
             reasoning_parser="qwen3",
             think_in_template=True,
+            supports_thinking=True,
             is_mllm=False,
             priority=10,
         )
@@ -229,6 +230,7 @@ def register_all(registry=None):
             reasoning_parser="qwen3",
             think_in_template=True,
             supports_native_tools=True,
+            supports_thinking=True,
             priority=10,
         )
     )
@@ -243,6 +245,7 @@ def register_all(registry=None):
             reasoning_parser="qwen3",
             think_in_template=True,
             supports_native_tools=True,
+            supports_thinking=True,
             priority=5,
         )
     )
@@ -256,6 +259,7 @@ def register_all(registry=None):
             tool_parser="qwen",
             reasoning_parser="qwen3",
             think_in_template=True,
+            supports_thinking=True,
             is_mllm=True,
             priority=5,
         )
@@ -270,6 +274,7 @@ def register_all(registry=None):
             tool_parser="qwen",
             reasoning_parser="qwen3",
             think_in_template=True,
+            supports_thinking=True,
             priority=1,
         )
     )
@@ -537,6 +542,7 @@ def register_all(registry=None):
             tool_parser="kimi",
             reasoning_parser="deepseek_r1",
             think_in_template=True,
+            supports_thinking=True,
             is_mllm=True,
             priority=20,
         )
@@ -601,6 +607,7 @@ def register_all(registry=None):
             family_name="deepseek_v4",
             model_types=["deepseek_v4"],
             cache_type="kv",
+            cache_subtype="deepseek_v4_composite",
             eos_tokens=[
                 "<｜end▁of▁sentence｜>",
                 "<｜User｜>",
@@ -610,6 +617,7 @@ def register_all(registry=None):
             tool_parser="dsml",
             reasoning_parser="deepseek_r1",
             think_in_template=True,
+            supports_thinking=True,
             priority=20,
         )
     )
@@ -771,6 +779,7 @@ def register_all(registry=None):
             cache_type="kv",
             tool_parser="gemma4",
             reasoning_parser="gemma4",  # qwen3 parser is more robust with quantized models
+            supports_thinking=True,
             eos_tokens=["<eos>", "<turn|>"],
             special_tokens_to_clean=["<turn|>", "<|turn>", "<|channel>", "<channel|>"],
             is_mllm=True,
@@ -786,6 +795,7 @@ def register_all(registry=None):
             cache_type="kv",
             tool_parser="gemma4",
             reasoning_parser="gemma4",  # qwen3 parser is more robust with quantized models
+            supports_thinking=True,
             eos_tokens=["<eos>", "<turn|>"],
             special_tokens_to_clean=["<turn|>", "<|turn>", "<|channel>", "<channel|>"],
             priority=4,
@@ -962,6 +972,7 @@ def register_all(registry=None):
             tool_parser="nemotron",
             reasoning_parser="deepseek_r1",
             think_in_template=True,
+            supports_thinking=True,
             tokenizer_fallback=True,
             priority=10,
         )
@@ -978,6 +989,7 @@ def register_all(registry=None):
             tool_parser="nemotron",
             reasoning_parser="deepseek_r1",
             think_in_template=True,
+            supports_thinking=True,
             tokenizer_fallback=True,
             priority=10,
         )
@@ -1050,6 +1062,7 @@ def register_all(registry=None):
             tool_parser="minimax",
             reasoning_parser="qwen3",
             think_in_template=True,
+            supports_thinking=True,
             priority=20,
         )
     )
@@ -1275,9 +1288,8 @@ def register_all(registry=None):
     #     (normal autoregressive decode using only the 80 base layers).
     #   - Reasoning: `<think>...</think>` tags + `<｜reasoning_mode｜>reasoning_effort:
     #     no_think|low|high`. Default `no_think` emits closed `<think></think>`
-    #     prefill. The `<think>` tag matches the deepseek_r1 reasoning parser
-    #     contract, so reuse `deepseek_r1` until any Hy3-specific divergence
-    #     is observed.
+    #     prefill. The tags are qwen3-compatible and match the JANG
+    #     capabilities contract.
     #   - Tool format: Hunyuan/Tencent custom XML
     #     `<tool_calls><tool_call>NAME<tool_sep><arg_key>K</arg_key>
     #     <arg_value>V</arg_value>...</tool_call></tool_calls>`. New
@@ -1303,7 +1315,7 @@ def register_all(registry=None):
                 "<｜hy_Assistant｜>",
             ],
             tool_parser="hunyuan",
-            reasoning_parser="deepseek_r1",
+            reasoning_parser="qwen3",
             think_in_template=False,
             supports_thinking=True,
             supports_native_tools=True,

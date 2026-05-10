@@ -475,6 +475,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               </>
             ) : (
               <>
+                {config.usePagedCache && (
+                  <IncompatWarning text="Cache Memory Limit and Cache Memory % only apply to memory-aware non-paged prefix cache. With paged cache on, use Max Cache Blocks for L1 RAM capacity and Block Cache Max for L2 disk capacity." />
+                )}
                 <SliderField
                   label="Cache Memory Limit (MB)"
                   tooltip="Hard limit on memory used by the prefix cache in megabytes. Set to 'Auto-detect' to let the system auto-detect based on available RAM and the percentage setting below. Set an explicit value if you need to reserve memory for other applications."
@@ -487,6 +490,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                   allowUnlimited
                   unlimitedValue={0}
                   unlimitedLabel="Auto-detect"
+                  disabled={config.usePagedCache}
                 />
                 <SliderField
                   label="Cache Memory %"
@@ -498,6 +502,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                   step={1}
                   defaultValue={DEFAULT_CONFIG.cacheMemoryPercent}
                   maxInput={100}
+                  disabled={config.usePagedCache}
                 />
                 {config.usePagedCache && <IncompatWarning text="Cache TTL has no effect when paged cache is enabled — paged cache uses block-count LRU eviction instead. To control paged cache size, adjust 'Max Cache Blocks' in the Paged KV Cache section below. To use time-based TTL, disable 'Use Paged KV Cache' in the Paged KV Cache section." />}
                 <SliderField
@@ -868,7 +873,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           min={0}
           max={200}
           step={5}
-          defaultValue={70}
+          defaultValue={DEFAULT_CONFIG.defaultTemperature}
           maxInput={200}
           allowUnlimited
           unlimitedValue={0}
@@ -885,7 +890,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           min={1}
           max={100}
           step={1}
-          defaultValue={90}
+          defaultValue={DEFAULT_CONFIG.defaultTopP}
           maxInput={100}
           allowUnlimited
           unlimitedValue={0}
@@ -893,6 +898,23 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         />
         {config.defaultTopP > 0 && (
           <InfoNote text={`Top-P: ${(config.defaultTopP / 100).toFixed(2)}`} />
+        )}
+        <SliderField
+          label="Default Repetition Penalty"
+          tooltip="Server-wide default repetition penalty. Values above 1.00 discourage repeated tokens and help stop loops in Gemma, MiniMax, and low-bit JANGTQ outputs. Overridden by per-request repetition_penalty when clients send one."
+          value={config.defaultRepetitionPenalty}
+          onChange={v => onChange('defaultRepetitionPenalty', v)}
+          min={80}
+          max={200}
+          step={5}
+          defaultValue={DEFAULT_CONFIG.defaultRepetitionPenalty}
+          maxInput={300}
+          allowUnlimited
+          unlimitedValue={0}
+          unlimitedLabel="Server default"
+        />
+        {config.defaultRepetitionPenalty > 0 && (
+          <InfoNote text={`Repetition penalty: ${(config.defaultRepetitionPenalty / 100).toFixed(2)}`} />
         )}
       </Section>
 

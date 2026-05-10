@@ -7,6 +7,7 @@
  * VLM mode, cache feature gating, batching parameters, speculative decoding,
  * generation defaults, and embedding model.
  */
+import { readFileSync } from 'node:fs'
 import { describe, it, expect } from 'vitest'
 
 // ─── SessionConfig replica (from SessionConfigForm.tsx) ──────────────────────
@@ -181,6 +182,7 @@ function buildCommandPreview(
 
     const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
     const prefixCacheOff = config.enablePrefixCache === false && !toolsNeedCache
+    const usePagedCache = config.usePagedCache ?? detected?.usePagedCache
 
     if (prefixCacheOff) {
         parts.push('--disable-prefix-cache')
@@ -194,13 +196,13 @@ function buildCommandPreview(
             if (config.prefixCacheSize && config.prefixCacheSize > 0) parts.push('--prefix-cache-size', config.prefixCacheSize.toString())
             if (config.prefixCacheMaxBytes && config.prefixCacheMaxBytes > 0) parts.push('--prefix-cache-max-bytes', config.prefixCacheMaxBytes.toString())
         } else {
-            if (config.cacheMemoryMb && config.cacheMemoryMb > 0) parts.push('--cache-memory-mb', config.cacheMemoryMb.toString())
-            if (config.cacheMemoryPercent && config.cacheMemoryPercent > 0) parts.push('--cache-memory-percent', (config.cacheMemoryPercent / 100).toString())
-            if (config.cacheTtlMinutes && config.cacheTtlMinutes > 0 && !(config.usePagedCache ?? detected?.usePagedCache)) parts.push('--cache-ttl-minutes', config.cacheTtlMinutes.toString())
+            if (!usePagedCache && config.cacheMemoryMb && config.cacheMemoryMb > 0) parts.push('--cache-memory-mb', config.cacheMemoryMb.toString())
+            if (!usePagedCache && config.cacheMemoryPercent && config.cacheMemoryPercent > 0) parts.push('--cache-memory-percent', (config.cacheMemoryPercent / 100).toString())
+            if (config.cacheTtlMinutes && config.cacheTtlMinutes > 0 && !usePagedCache) parts.push('--cache-ttl-minutes', config.cacheTtlMinutes.toString())
         }
     }
 
-    if (!prefixCacheOff && (config.usePagedCache ?? detected?.usePagedCache)) {
+    if (!prefixCacheOff && usePagedCache) {
         parts.push('--use-paged-cache')
         if (config.pagedCacheBlockSize && config.pagedCacheBlockSize > 0) parts.push('--paged-cache-block-size', config.pagedCacheBlockSize.toString())
         if (config.maxCacheBlocks && config.maxCacheBlocks > 0) parts.push('--max-cache-blocks', config.maxCacheBlocks.toString())
@@ -213,13 +215,13 @@ function buildCommandPreview(
         }
     }
 
-    if (!prefixCacheOff && config.enableDiskCache && !(config.usePagedCache ?? detected?.usePagedCache)) {
+    if (!prefixCacheOff && config.enableDiskCache && !usePagedCache) {
         parts.push('--enable-disk-cache')
         if (config.diskCacheDir) parts.push('--disk-cache-dir', config.diskCacheDir)
         if (config.diskCacheMaxGb != null && config.diskCacheMaxGb >= 0) parts.push('--disk-cache-max-gb', config.diskCacheMaxGb.toString())
     }
 
-    if (!prefixCacheOff && (config.usePagedCache ?? detected?.usePagedCache) && config.enableBlockDiskCache) {
+    if (!prefixCacheOff && usePagedCache && config.enableBlockDiskCache) {
         parts.push('--enable-block-disk-cache')
         if (config.blockDiskCacheDir) parts.push('--block-disk-cache-dir', config.blockDiskCacheDir)
         if (config.blockDiskCacheMaxGb != null && config.blockDiskCacheMaxGb >= 0) parts.push('--block-disk-cache-max-gb', config.blockDiskCacheMaxGb.toString())
@@ -437,12 +439,12 @@ describe('Prefix Cache', () => {
     })
 
     it('memory-aware mode: sets --cache-memory-mb', () => {
-        const out = preview({ cacheMemoryMb: 4096 })
+        const out = preview({ cacheMemoryMb: 4096, usePagedCache: false })
         expect(getFlagValue(out, '--cache-memory-mb')).toBe('4096')
     })
 
     it('memory-aware mode: sets --cache-memory-percent as fraction', () => {
-        const out = preview({ cacheMemoryPercent: 30 })
+        const out = preview({ cacheMemoryPercent: 30, usePagedCache: false })
         expect(getFlagValue(out, '--cache-memory-percent')).toBe('0.3')
     })
 
@@ -996,7 +998,9 @@ describe('Default IP and New Settings', () => {
         expect(getFlagValue(out, '--prefill-batch-size')).toBe('1024')
         expect(getFlagValue(out, '--prefill-step-size')).toBe('2048')
         expect(getFlagValue(out, '--completion-batch-size')).toBe('1024')
-        expect(getFlagValue(out, '--cache-memory-percent')).toBe('0.2')
+        expect(hasFlag(out, '--cache-memory-percent')).toBe(false)
+        expect(hasFlag(out, '--use-paged-cache')).toBe(true)
+        expect(getFlagValue(out, '--max-cache-blocks')).toBe('1000')
         expect(hasFlag(out, '--enable-block-disk-cache')).toBe(true)
         expect(getFlagValue(out, '--default-temperature')).toBe('0.70')
         expect(getFlagValue(out, '--default-top-p')).toBe('0.95')
@@ -1290,8 +1294,19 @@ describe('Feature Interaction', () => {
     })
 
     it('cacheMemoryPercent default 20 emits 0.2', () => {
-        const out = preview({ cacheMemoryPercent: 20 })
+        const out = preview({ cacheMemoryPercent: 20, usePagedCache: false })
         expect(getFlagValue(out, '--cache-memory-percent')).toBe('0.2')
+    })
+
+    it('omits memory-aware cache budget flags when paged cache is active', () => {
+        const out = preview({
+            usePagedCache: true,
+            cacheMemoryMb: 4096,
+            cacheMemoryPercent: 35,
+        })
+        expect(hasFlag(out, '--use-paged-cache')).toBe(true)
+        expect(hasFlag(out, '--cache-memory-mb')).toBe(false)
+        expect(hasFlag(out, '--cache-memory-percent')).toBe(false)
     })
 
     it('defaultTopP minimum boundary 1 emits 0.01', () => {
@@ -1535,6 +1550,13 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized).toContain('--default-top-p')
         expect(normalized).toContain('--default-repetition-penalty')
         expect(normalized).toContain('--enable-jit')
+    })
+
+    it('generation slider reset defaults match DEFAULT_CONFIG', () => {
+        const source = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
+        expect(source).toContain('defaultValue={DEFAULT_CONFIG.defaultTemperature}')
+        expect(source).toContain('defaultValue={DEFAULT_CONFIG.defaultTopP}')
+        expect(source).toContain('defaultValue={DEFAULT_CONFIG.defaultRepetitionPenalty}')
     })
 
     it('mutual exclusion: disk cache NOT emitted when paged cache is active', () => {

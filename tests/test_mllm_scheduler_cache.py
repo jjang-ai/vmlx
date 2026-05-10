@@ -835,6 +835,7 @@ class TestCleanupFinishedCacheStore:
             "req-1",
             [10, 11, 12, 13],
             ["state"],
+            cache_extra_keys=None,
         )
 
     def test_memory_aware_store_uses_n_minus_one_key_for_truncated_payload(self):

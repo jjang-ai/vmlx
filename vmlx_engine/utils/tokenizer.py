@@ -149,8 +149,9 @@ def _apply_turboquant_to_model(model, model_path: str):
             "on",
         ):
             logger.info(
-                "  TurboQuant skipped: hybrid SSM cache detected; native KV+SSM "
-                "state is required until the typed hybrid TQ cache codec lands"
+                "  TurboQuant skipped: hybrid/path-dependent cache detected; "
+                "native KV + non-KV state is required until the typed hybrid "
+                "TQ cache codec lands"
             )
             return
 

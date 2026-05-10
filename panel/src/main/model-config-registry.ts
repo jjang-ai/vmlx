@@ -80,14 +80,14 @@ function registerFamily(familyName: string, config: Omit<ModelConfig, 'familyNam
   CONFIG_BY_FAMILY.set(familyName, config)
 }
 
-// ZAYA / Zyphra: CCA attention + top-1 MoE. Tools are native XML, but
-// reasoning is intentionally not advertised until ZAYA thinking passes live
-// Chat/Responses/Anthropic/Ollama gates; Auto must stay visible-answer-first.
-registerFamily('zaya', { cacheType: 'hybrid', toolParser: 'zaya_xml', usePagedCache: false, enableAutoToolChoice: true, description: 'ZAYA CCA hybrid MoE', priority: 3 })
+// ZAYA / Zyphra: CCA attention + top-1 MoE. ZAYA is reasoning-capable with a
+// qwen3-compatible <think> rail, but default/no-thinking prompts must start in
+// visible content, so the backend keeps think_in_template=false.
+registerFamily('zaya', { cacheType: 'hybrid', toolParser: 'zaya_xml', reasoningParser: 'qwen3', usePagedCache: false, enableAutoToolChoice: true, description: 'ZAYA CCA hybrid MoE', priority: 3 })
 // ZAYA1-VL is detected separately so the UI does not fall through to generic
 // VLM defaults. Python runtime support is still pending a real Zaya1VL adapter;
 // this family stamp is for parser/cache/session honesty, not a production pass.
-registerFamily('zaya1-vl', { cacheType: 'hybrid', toolParser: 'zaya_xml', usePagedCache: false, enableAutoToolChoice: true, isMultimodal: true, description: 'ZAYA1-VL CCA hybrid vision-language', priority: 3 })
+registerFamily('zaya1-vl', { cacheType: 'hybrid', toolParser: 'zaya_xml', reasoningParser: 'qwen3', usePagedCache: false, enableAutoToolChoice: true, isMultimodal: true, description: 'ZAYA1-VL CCA hybrid vision-language', priority: 3 })
 
 // Qwen
 // Qwen 3.5 dense and MoE share model_types with VL variants — VL detection
@@ -173,6 +173,11 @@ registerFamily('minimax', { cacheType: 'kv', toolParser: 'minimax', reasoningPar
 // request-level enable_thinking; deepseek_r1 is still required when a system
 // message explicitly opts into "detailed thinking on".
 registerFamily('ling', { cacheType: 'hybrid', toolParser: 'deepseek', reasoningParser: 'deepseek_r1', usePagedCache: true, enableAutoToolChoice: true, description: 'Ling / Bailing hybrid', priority: 20 })
+
+// Tencent Hy3-preview: text-only dense GQA KV + MoE. The chat template uses
+// reasoning_effort=no_think|low|high, so Python normalizes the UI thinking
+// toggle into Hy3's effort field before render.
+registerFamily('hy3', { cacheType: 'kv', toolParser: 'hunyuan', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'Tencent Hy3-preview', priority: 4 })
 
 // StepFun
 registerFamily('step-vl', { cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'StepFun Step-1V Vision-Language', priority: 3 })
@@ -276,6 +281,8 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'bailing_moe_v2_5': 'ling',
   'bailing_moe_linear': 'ling',
   'bailing_moe': 'ling',
+  // ── Tencent Hy3 ──
+  'hy_v3': 'hy3',
   // ── GLM family ──
   'chatglm': 'glm4',
   'glm4': 'glm4',
@@ -414,7 +421,11 @@ function applyJangCapabilities(
       next.enableAutoToolChoice = true
     }
   }
-  if (caps.supports_thinking === false || next.family === 'zaya' || next.family === 'zaya1-vl') {
+  if (next.family === 'zaya' || next.family === 'zaya1-vl') {
+    next.reasoningParser = 'qwen3'
+  } else if (next.family === 'hy3') {
+    next.reasoningParser = 'qwen3'
+  } else if (caps.supports_thinking === false) {
     next.reasoningParser = undefined
   } else if (typeof caps.reasoning_parser === 'string') {
     next.reasoningParser =

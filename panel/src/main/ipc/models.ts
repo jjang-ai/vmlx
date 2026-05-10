@@ -94,12 +94,24 @@ export async function readGenerationDefaults(
         if (typeof sampling.temperature === "number")
           defaults.temperature = sampling.temperature;
         if (typeof sampling.top_p === "number") defaults.topP = sampling.top_p;
-        if (typeof sampling.repetition_penalty_thinking === "number")
-          defaults.repeatPenalty = sampling.repetition_penalty_thinking;
-        else if (typeof sampling.repetition_penalty_chat === "number")
-          defaults.repeatPenalty = sampling.repetition_penalty_chat;
-        else if (typeof sampling.repetition_penalty === "number")
-          defaults.repeatPenalty = sampling.repetition_penalty;
+        const defaultMode = jang?.chat?.reasoning?.default_mode;
+        const repThinking =
+          typeof sampling.repetition_penalty_thinking === "number"
+            ? sampling.repetition_penalty_thinking
+            : undefined;
+        const repChat =
+          typeof sampling.repetition_penalty_chat === "number"
+            ? sampling.repetition_penalty_chat
+            : undefined;
+        const repScalar =
+          typeof sampling.repetition_penalty === "number"
+            ? sampling.repetition_penalty
+            : undefined;
+        const rep =
+          defaultMode === "thinking"
+            ? (repThinking ?? repChat ?? repScalar)
+            : (repChat ?? repThinking ?? repScalar);
+        if (typeof rep === "number") defaults.repeatPenalty = rep;
         if (typeof sampling.max_new_tokens === "number")
           defaults.maxNewTokens = sampling.max_new_tokens;
         defaults.source = "jang_config";

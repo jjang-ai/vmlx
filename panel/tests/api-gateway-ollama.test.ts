@@ -90,3 +90,33 @@ describe("Ollama gateway parity contracts", () => {
     );
   });
 });
+
+describe("Gateway passthrough contracts for non-Ollama APIs", () => {
+  it("proxies OpenAI, Anthropic, Responses, cache, audio, and MCP paths verbatim", () => {
+    expect(source).toContain("return this.proxyRequest(req, res, session, body)");
+    expect(source).toContain("path: clientReq.url");
+    expect(source).toContain("method: clientReq.method");
+    expect(source).toContain("...clientReq.headers");
+    expect(source).toContain("if (body) proxyReq.write(body)");
+  });
+
+  it("preserves backend status, headers, and streaming response bytes", () => {
+    expect(source).toContain("clientRes.writeHead(proxyRes.statusCode || 502, proxyRes.headers)");
+    expect(source).toContain("proxyRes.pipe(clientRes)");
+    expect(source).toContain("preserves SSE Content-Type");
+  });
+
+  it("resolves target sessions from POST body, capabilities URL, or query model", () => {
+    expect(source).toContain("modelName = parsed.model");
+    expect(source).toContain('url.match(/^\\/v1\\/models\\/(.+)\\/capabilities');
+    expect(source).toContain("new URLSearchParams(url.slice(qIdx))");
+    expect(source).toContain('params.get("model")');
+  });
+
+  it("broadcasts cancel requests without requiring a model field", () => {
+    expect(source).toContain('const isCancel = method === "POST" && /\\/cancel\\/?$/.test(url)');
+    expect(source).toContain('accepted ? 200 : 404');
+    expect(source).toContain('status: "cancelled"');
+    expect(source).toContain('{ error: "Request ID not found on any backend" }');
+  });
+});

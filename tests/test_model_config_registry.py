@@ -255,6 +255,19 @@ class TestModelConfigRegistry:
         assert result.is_mllm is True
         assert result.architecture_hints.get("inject_pixel_values") is True
 
+    def test_gemma4_registry_pins_thinking_support_explicitly(self, empty_registry):
+        """Gemma 4 templates expose an enable_thinking rail; don't leave this implicit."""
+        from vmlx_engine.model_configs import register_all
+
+        register_all(empty_registry)
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("gemma4")):
+            config = empty_registry.lookup("google/gemma-4-26b-it")
+
+        assert config.family_name == "gemma4"
+        assert config.reasoning_parser == "gemma4"
+        assert config.supports_thinking is True
+        assert config.think_in_template is False
+
     def test_tool_parser(self, empty_registry):
         config = ModelConfig(
             family_name="mistral",
@@ -1322,13 +1335,11 @@ class TestModelConfigComprehensiveChecks:
         That breaks zaya_xml tool parsing, hybrid cache wiring, and MLLM
         batch generator dispatch all at once.
 
-        Per Eric 2026-05-10: ZAYA does reason. The shipped tokenizer template
-        has `enable_thinking` and a `<think>` rail. supports_thinking=True is
-        the honest flag — callers opt in via enable_thinking=True; the qwen3
-        parser extracts <think> content cleanly because ZAYA opens <think> in
-        both modes. think_in_template stays False because with
-        enable_thinking=False the prompt contains a closed empty <think>
-        block, not an auto-opened one."""
+        Per Eric 2026-05-10: ZAYA does reason. supports_thinking=True is the
+        honest flag, and qwen3 is the parser for generated <think> blocks.
+        think_in_template stays False because the default/no-thinking prompt
+        must start generation in visible content, not in an auto-opened think
+        rail."""
         registry.clear_cache()
         with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("zaya1_vl")):
             config = registry.lookup("Zyphra/ZAYA1-VL-8B-MXFP4")
@@ -1351,7 +1362,6 @@ class TestModelConfigComprehensiveChecks:
         )
         assert config.supports_thinking is True, (
             "Per Eric 2026-05-10 honest-flag directive: ZAYA1-VL does reason "
-            "(template has <think> rail + enable_thinking flag). "
             "supports_thinking=True; callers opt in via enable_thinking=True."
         )
         assert config.reasoning_parser == "qwen3", (
@@ -1364,6 +1374,46 @@ class TestModelConfigComprehensiveChecks:
             "False. The parser must not treat the prompt as starting inside "
             "reasoning."
         )
+
+    def test_zaya_stale_stamp_cannot_disable_reasoning_or_reenable_think_seed(
+        self, registry, tmp_path
+    ):
+        """ZAYA is reasoning-capable but default/no-thinking is not open-think.
+
+        Converter stamps have drifted in both directions during the ZAYA
+        bring-up. vMLX must keep the runtime contract stable: qwen3 parser,
+        zaya_xml tools, supports_thinking=True, think_in_template=False.
+        """
+        import json
+
+        (tmp_path / "config.json").write_text(json.dumps({"model_type": "zaya"}))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "capabilities": {
+                        "family": "zaya",
+                        "cache_type": "hybrid",
+                        "cache_subtype": "zaya_cca",
+                        "tool_parser": "zaya_xml",
+                        "reasoning_parser": "none",
+                        "think_in_template": True,
+                        "supports_thinking": False,
+                        "modality": "text",
+                    }
+                }
+            )
+        )
+
+        registry.clear_cache()
+        config = registry.lookup(str(tmp_path))
+
+        assert config.family_name == "zaya"
+        assert config.cache_type == "hybrid"
+        assert config.cache_subtype == "zaya_cca"
+        assert config.tool_parser == "zaya_xml"
+        assert config.reasoning_parser == "qwen3"
+        assert config.supports_thinking is True
+        assert config.think_in_template is False
 
     def test_ling_supports_thinking_true_per_eric_canonical_contract(self, registry):
         """REGRESSION (2026-05-09): Eric's canonical FAMILY_MAP for Ling/Bailing
@@ -1414,8 +1464,8 @@ class TestModelConfigComprehensiveChecks:
         Contract:
             cache_type=kv          (standard causal GQA, NOT MLA/SSM/CCA/VL)
             tool_parser=hunyuan    (custom XML <tool_calls><tool_call> format)
-            reasoning_parser=deepseek_r1  (`<think>...</think>` extraction —
-                                           reuse R1 parser until divergence)
+            reasoning_parser=qwen3  (`<think>...</think>` extraction; matches
+                                     JANG capabilities + converter stamps)
             think_in_template=False  (default `no_think` emits CLOSED
                                       `<think></think>` prefill; parser must
                                       not pre-classify first chunk as reasoning)
@@ -1432,7 +1482,7 @@ class TestModelConfigComprehensiveChecks:
             "Hy3 uses standard causal GQA KV cache. Not MLA/SSM/CCA/VL."
         )
         assert config.tool_parser == "hunyuan"
-        assert config.reasoning_parser == "deepseek_r1"
+        assert config.reasoning_parser == "qwen3"
         assert config.think_in_template is False, (
             "Default `no_think` emits CLOSED <think></think> prefill in the "
             "chat template. think_in_template=True would cause the reasoning "
@@ -1447,6 +1497,41 @@ class TestModelConfigComprehensiveChecks:
             "mid-response. Same hallucination-loop defense as 2026-05-03 DSV4."
         )
         assert "<｜hy_Assistant｜>" in config.eos_tokens
+
+    def test_hy_v3_stale_stamp_cannot_reenable_static_think_in_template(
+        self, registry, tmp_path
+    ):
+        """Hy3's stamp used to say think_in_template=True, but the actual
+        template is request-dependent: default/no_think renders a closed
+        `<think></think>` block and only low/high opens `<think>`.
+        """
+        import json
+
+        (tmp_path / "config.json").write_text(json.dumps({"model_type": "hy_v3"}))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "capabilities": {
+                        "family": "hy_v3",
+                        "reasoning_parser": "qwen3",
+                        "tool_parser": "hunyuan",
+                        "think_in_template": True,
+                        "supports_thinking": True,
+                        "modality": "text",
+                        "cache_type": "kv",
+                    }
+                }
+            )
+        )
+
+        registry.clear_cache()
+        config = registry.lookup(str(tmp_path))
+
+        assert config.family_name == "hy_v3"
+        assert config.reasoning_parser == "qwen3"
+        assert config.tool_parser == "hunyuan"
+        assert config.supports_thinking is True
+        assert config.think_in_template is False
 
     def test_kimi_k25_eos_includes_role_boundary_markers(self, registry):
         """REGRESSION (2026-05-09): Kimi K2.6 (kimi_k25) chat template uses

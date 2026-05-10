@@ -95,6 +95,9 @@ class TestHunyuanToolParser:
         assert out.content is not None
         assert "Sure, calling the function now." in out.content
         assert "Done." in out.content
+        assert "<tool_calls>" not in out.content
+        assert "<tool_call>" not in out.content
+        assert "<arg_key>" not in out.content
 
     def test_no_tool_sep_in_call_is_skipped(self, parser):
         """Malformed call without <tool_sep> is silently dropped (defensive)."""

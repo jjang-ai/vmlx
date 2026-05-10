@@ -392,6 +392,22 @@ _THINK_STRIP_RE = re.compile(
     r"(?:<think>.*?</think>|\[THINK\].*?\[/THINK\])\s*", re.DOTALL
 )
 _JANGTQ_PROFILE_BITS_RE = re.compile(r"^JANGTQ([124])(?:$|[_-])", re.IGNORECASE)
+_THINK_MARKER_RE = re.compile(
+    r"[ \t]*(?:\n[ \t]*)?(?:</?think>|\[/?THINK\])[ \t]*(?:\n[ \t]*)?",
+    re.IGNORECASE,
+)
+
+
+def _strip_think_markers_keep_spacing(text: str) -> str:
+    def _replacement(match: re.Match[str]) -> str:
+        matched = match.group(0)
+        if "\n" in matched:
+            return "\n"
+        if matched[:1].isspace() or matched[-1:].isspace():
+            return " "
+        return ""
+
+    return _THINK_MARKER_RE.sub(_replacement, text)
 
 
 def _strip_think_for_tool_parse(text: str) -> str:
@@ -412,6 +428,7 @@ def _strip_think_for_tool_parse(text: str) -> str:
             if end_tag in text:
                 _, _, stripped = text.partition(end_tag)
                 break
+    stripped = _strip_think_markers_keep_spacing(stripped)
     return stripped.strip()
 
 
@@ -428,6 +445,22 @@ def _jangtq_bits_from_profile(profile: Any) -> int | None:
     if not match:
         return None
     return int(match.group(1))
+
+
+def _strip_residual_think_markup_for_display(text: str) -> str:
+    """Remove stale think markup after reasoning was intentionally suppressed.
+
+    `clean_output_text()` deliberately keeps `<think>` markers for normal
+    reasoning-mode display, including reopening a missing start tag when only
+    `</think>` appears.  That is wrong for product paths where thinking has
+    been resolved off: residual model tags are not user-visible content and
+    must be removed before display cleaning runs.
+    """
+    if not text:
+        return ""
+    stripped = _THINK_STRIP_RE.sub("", text)
+    stripped = _strip_think_markers_keep_spacing(stripped)
+    return stripped.strip()
 
 
 def _dsv4_split_reasoning_from_token_ids(
@@ -885,6 +918,83 @@ def _dsv4_reasoning_effort_route_label(
     if normalized_effort == "high":
         return "downgraded"
     return None
+
+
+def _is_hy3_model(model_key: str) -> bool:
+    """Return True when the current registry contract resolves to Hy3."""
+    try:
+        from .model_config_registry import get_model_config_registry
+
+        cfg = get_model_config_registry().lookup(model_key)
+        return getattr(cfg, "family_name", None) == "hy_v3"
+    except Exception:
+        return False
+
+
+def _normalize_hy3_reasoning_effort(
+    effort: str | None,
+    *,
+    enable_thinking: bool | None,
+) -> str | None:
+    """Map public thinking controls to Hy3's template vocabulary.
+
+    Hy3's template ignores ``enable_thinking`` directly. It opens the thinking
+    rail only for ``reasoning_effort in {"low", "high"}``; invalid values
+    silently fall back to ``no_think`` inside the template. Normalize here so
+    UI/API "reasoning" modes cannot accidentally render the no-thinking rail.
+    """
+    if enable_thinking is False:
+        return "no_think"
+
+    if effort is not None:
+        raw = str(effort).strip().lower()
+        if raw in {"", "none", "off", "false", "instruct", "chat", "no_think"}:
+            return "no_think"
+        if raw in {"low", "high"}:
+            return raw
+        if raw in {"medium", "max", "reasoning", "thinking", "on", "true"}:
+            return "high"
+
+    if enable_thinking is True:
+        return "high"
+    return None
+
+
+def _apply_hy3_reasoning_policy(
+    chat_kwargs: dict,
+    ct_kwargs: dict,
+    *,
+    model_key: str,
+    enable_thinking: bool | None,
+) -> None:
+    """Inject Hy3's request-level ``reasoning_effort`` when needed."""
+    if not _is_hy3_model(model_key):
+        return
+    requested = chat_kwargs.get("reasoning_effort") or ct_kwargs.get("reasoning_effort")
+    normalized = _normalize_hy3_reasoning_effort(
+        requested,
+        enable_thinking=enable_thinking,
+    )
+    if normalized is None:
+        return
+    chat_kwargs["reasoning_effort"] = normalized
+    ct_kwargs["reasoning_effort"] = normalized
+
+
+def _hy3_prompt_starts_in_reasoning(
+    *,
+    model_key: str,
+    enable_thinking: bool | None,
+    ct_kwargs: dict,
+) -> bool:
+    """Hy3 opens ``<think>`` only for low/high reasoning effort."""
+    if enable_thinking is False or not _is_hy3_model(model_key):
+        return False
+    effort = _normalize_hy3_reasoning_effort(
+        ct_kwargs.get("reasoning_effort"),
+        enable_thinking=enable_thinking,
+    )
+    return effort in {"low", "high"}
 
 
 def _resolve_repetition_penalty(
@@ -3556,10 +3666,12 @@ def _model_mtp_status(bundle_path: str | None) -> dict:
         and has_mtp_tensors
         and not issues
     )
+    runtime_supported = _bundle_mtp_runtime_supported(family)
     # vMLX does not yet have a verifier / accept-reject MTP decode path wired
     # through the scheduler. Presence of mtp.* weights is an artifact fact, not
     # proof that runtime acceleration is active.
     runtime_available = False
+    runtime_reason = None
     if issues:
         status = "metadata_inconsistent"
         runtime_reason = "metadata_inconsistent"
@@ -3568,7 +3680,16 @@ def _model_mtp_status(bundle_path: str | None) -> dict:
         runtime_reason = "jang_config.drop_mtp=true"
     elif artifact_available:
         status = "weights_present_runtime_unwired"
-        runtime_reason = "MTP weights are present, but vMLX MTP decode is not wired"
+        if runtime_supported:
+            runtime_reason = (
+                "MTP metadata is present and family is in the JangMTP "
+                "candidate set; runtime decode wiring is not implemented in vMLX yet"
+            )
+        else:
+            runtime_reason = (
+                f"MTP metadata is present for family '{family or 'unknown'}', but "
+                "this family is not currently on the JangMTP support map"
+            )
     elif config_layers:
         status = "configured_without_runtime"
         runtime_reason = "config requests MTP but runtime requirements are incomplete"
@@ -3581,6 +3702,8 @@ def _model_mtp_status(bundle_path: str | None) -> dict:
         "jang_drop_mtp": drop_mtp,
         "index_has_mtp_tensors": has_mtp_tensors,
         "artifact_available": artifact_available,
+        "family": family,
+        "runtime_supported": runtime_supported,
         "runtime_available": runtime_available,
         "runtime_reason": runtime_reason,
         "status": status,
@@ -5298,7 +5421,9 @@ async def model_capabilities(model_id: str) -> dict:
         reasoning_efforts = ["low", "medium", "high", "max"]
     elif supports_thinking:
         supported_modes = ["instruct", "reasoning"]
-        if reasoning_parser in ("openai_gptoss", "mistral"):
+        if family == "hy_v3":
+            reasoning_efforts = ["low", "high"]
+        elif reasoning_parser in ("openai_gptoss", "mistral"):
             reasoning_efforts = ["low", "medium", "high"]
         else:
             reasoning_efforts = []
@@ -5577,6 +5702,13 @@ async def create_anthropic_message(
             _msg_kwargs["reasoning_effort"] = "high"
         elif chat_req.enable_thinking is False and "reasoning_effort" not in _ct_kwargs:
             _ct_kwargs["reasoning_effort"] = "none"
+
+    _apply_hy3_reasoning_policy(
+        _msg_kwargs,
+        _ct_kwargs,
+        model_key=_model_path or _model_name or chat_req.model,
+        enable_thinking=chat_req.enable_thinking,
+    )
 
     # DeepSeek V4 three-mode encoder (mirror OpenAI chat-completions path).
     # See research/DSV4-RUNTIME-ARCHITECTURE.md §4 + dsv4_chat_encoder.py.
@@ -8227,6 +8359,13 @@ async def create_chat_completion(
         elif request.enable_thinking is False and "reasoning_effort" not in _ct_kwargs:
             _ct_kwargs["reasoning_effort"] = "none"
 
+    _apply_hy3_reasoning_policy(
+        chat_kwargs,
+        _ct_kwargs,
+        model_key=_model_path or _model_name or request.model,
+        enable_thinking=request.enable_thinking,
+    )
+
     # DeepSeek V4 three-mode encoder: thinking_mode=chat|thinking + optional
     # reasoning_effort=high|max. Auto-map enable_thinking toggle to the right
     # pair so the UI's simple on/off switch lands on the correct prompt
@@ -8533,6 +8672,12 @@ async def create_chat_completion(
                     engine.tokenizer, _model_name or request.model
                 ):
                     _think_in_prompt_ns = False
+            if _hy3_prompt_starts_in_reasoning(
+                model_key=_model_path or _model_name or request.model,
+                enable_thinking=_eff_thinking_ns,
+                ct_kwargs=chat_kwargs.get("chat_template_kwargs") or _ct_kwargs,
+            ):
+                _think_in_prompt_ns = True
         except Exception as _tpe:
             logger.debug(f"think_in_prompt derivation failed non-stream: {_tpe}")
             _think_in_prompt_ns = False
@@ -8573,6 +8718,10 @@ async def create_chat_completion(
             # with content=null and reasoning_content=null — the tokens are lost.
             if not content_for_parsing and reasoning_text:
                 content_for_parsing = reasoning_text
+            elif content_for_parsing:
+                content_for_parsing = _strip_residual_think_markup_for_display(
+                    content_for_parsing
+                )
             reasoning_text = None
 
         # Post-parse cleaning: the parser operates on raw_text which carries
@@ -9541,6 +9690,12 @@ async def create_response(
         elif _resp_thinking is False and "reasoning_effort" not in _ct_kwargs:
             _ct_kwargs["reasoning_effort"] = "none"
 
+    _apply_hy3_reasoning_policy(
+        chat_kwargs,
+        _ct_kwargs,
+        model_key=_model_path or _model_name or request.model,
+        enable_thinking=request.enable_thinking,
+    )
 
     # DSV4 rail-policy + reasoning_effort handling — REAL /v1/responses path.
     # This is the actual route the panel uses; the earlier DSV4 block in this
@@ -9918,6 +10073,12 @@ async def create_response(
                     engine.tokenizer, _model_name or request.model
                 ):
                     _think_in_prompt_ns = False
+            if _hy3_prompt_starts_in_reasoning(
+                model_key=_model_path or _model_name or request.model,
+                enable_thinking=_eff_thinking_ns,
+                ct_kwargs=chat_kwargs.get("chat_template_kwargs") or _ct_kwargs,
+            ):
+                _think_in_prompt_ns = True
         except Exception as _tpe:
             logger.debug(f"think_in_prompt derivation failed non-stream: {_tpe}")
             _think_in_prompt_ns = False
@@ -9983,6 +10144,10 @@ async def create_response(
             # with content=null and reasoning_content=null — the tokens are lost.
             if not content_for_parsing and reasoning_text:
                 content_for_parsing = reasoning_text
+            elif content_for_parsing:
+                content_for_parsing = _strip_residual_think_markup_for_display(
+                    content_for_parsing
+                )
             reasoning_text = None
 
         # Post-parse cleaning — matches the chat_completions path so content
@@ -10387,6 +10552,13 @@ async def stream_chat_completion(
     if _effective_thinking is False and think_in_template:
         if not _template_always_thinks(engine.tokenizer, _model_name or request.model):
             think_in_template = False
+
+    if _hy3_prompt_starts_in_reasoning(
+        model_key=_model_path or _model_name or request.model,
+        enable_thinking=_effective_thinking,
+        ct_kwargs=kwargs.get("chat_template_kwargs") or _ct_kwargs,
+    ):
+        think_in_template = True
 
     # Keep think_in_prompt active even when tool results are present.
     # Models like Qwen3/Qwen3.5-VL DO produce <think> blocks on follow-up
@@ -11284,6 +11456,13 @@ async def stream_responses_api(
     if _effective_thinking is False and think_in_template:
         if not _template_always_thinks(engine.tokenizer, _model_name or request.model):
             think_in_template = False
+
+    if _hy3_prompt_starts_in_reasoning(
+        model_key=_model_path or _model_name or request.model,
+        enable_thinking=_effective_thinking,
+        ct_kwargs=kwargs.get("chat_template_kwargs") or _ct_kwargs,
+    ):
+        think_in_template = True
 
     # Keep think_in_prompt active even when tool results are present.
     # (Same rationale as Chat Completions path — see stream_chat_completion.)

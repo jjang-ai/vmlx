@@ -354,21 +354,21 @@ def serve_command(args):
             getattr(_mc, "cache_type", None) == "hybrid"
             and not getattr(args, "kv_cache_quantization_explicit", False)
         ):
-            # Hybrid SSM models carry cumulative non-KV state in addition to
-            # attention KV. Live TurboQuantKVCache currently compresses only
-            # positional KV slots; Ling/Bailing JANGTQ2 live tests showed
-            # deterministic generated-token loops with auto TQ-KV enabled,
-            # while the same prompt was coherent with unquantized native cache.
-            # Do not patch or quantize the model's cache contract until the
-            # hybrid TQ codec covers KV + SSM state end to end.
+            # Hybrid/path-dependent models carry cumulative non-KV state in
+            # addition to attention KV. This includes SSM/Mamba caches and
+            # Qwen3.5/3.6 GatedDelta ArraysCache layers. Live TurboQuantKVCache
+            # currently compresses only positional KV slots; do not patch or
+            # quantize the model's cache contract until a typed hybrid TQ codec
+            # covers KV + non-KV state end to end.
             _old_kvq = args.kv_cache_quantization
             args.kv_cache_quantization = "none"
             args.kv_cache_quantization_explicit = True
             os.environ["VMLX_DISABLE_TQ_KV"] = "1"
             os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
             logger.info(
-                "Hybrid SSM cache model detected — disabling live TurboQuant KV "
-                "and generic KV quantization for correctness (was: %s).",
+                "Hybrid/path-dependent cache model detected — disabling live "
+                "TurboQuant KV and generic KV quantization for correctness "
+                "(was: %s).",
                 _old_kvq,
             )
         if _mc.family_name != "unknown":
@@ -729,6 +729,16 @@ def serve_command(args):
         if not args.use_paged_cache and args.enable_block_disk_cache:
             print("  WARNING: --enable-block-disk-cache requires --use-paged-cache, disabling disk cache")
             args.enable_block_disk_cache = False
+        if args.use_paged_cache and (
+            getattr(args, "cache_memory_mb", None)
+            or getattr(args, "cache_memory_percent", 0) != 0.20
+        ):
+            logger.warning(
+                "--cache-memory-mb/--cache-memory-percent apply only to "
+                "memory-aware non-paged prefix cache. Paged cache ignores "
+                "those flags. Use --max-cache-blocks for L1 RAM capacity and "
+                "--block-disk-cache-max-gb for L2 disk capacity."
+            )
 
         scheduler_config = SchedulerConfig(
             max_num_seqs=args.max_num_seqs,

@@ -160,6 +160,7 @@ from .mllm_batch_generator import (
     MLLMBatchGenerator,
     MLLMBatchRequest,
     MLLMBatchResponse,
+    _mllm_media_cache_extra_keys,
     _model_uses_zaya_cache_contract,
 )
 from .request import RequestOutput, RequestStatus, SamplingParams
@@ -1985,6 +1986,10 @@ class MLLMScheduler:
             if request is None:
                 continue
 
+            cache_extra_keys = getattr(response, "cache_extra_keys", None)
+            if cache_extra_keys:
+                request._cache_extra_keys = dict(cache_extra_keys)
+
             # Set prompt token count from first response (batch generator knows actual count)
             if request.num_prompt_tokens == 0:
                 prompt_ids = getattr(response, "prompt_token_ids", None)
@@ -2237,9 +2242,16 @@ class MLLMScheduler:
                     try:
                         token_list = getattr(request, "_extracted_tokens", [])
                         if token_list:
-                            if self._mllm_request_has_media_cache_context(
+                            media_context = self._mllm_request_has_media_cache_context(
                                 request, token_list
-                            ):
+                            )
+                            cache_extra_keys = getattr(request, "_cache_extra_keys", None)
+                            media_store_allowed = (
+                                bool(getattr(self, "_uses_zaya_cache", False))
+                                and media_context
+                                and cache_extra_keys is not None
+                            )
+                            if media_context and not media_store_allowed:
                                 logger.info(
                                     "Skipping VLM prefix cache store for %s: "
                                     "prompt contains media context/placeholders; "
@@ -2325,7 +2337,11 @@ class MLLMScheduler:
                                     # guards with `if not self._is_hybrid`), so writing is
                                     # wasted I/O. Block-level disk cache (block_disk_store)
                                     # still works for hybrid via the paged path.
-                                    if self.disk_cache is not None and not self._is_hybrid:
+                                    if (
+                                        self.disk_cache is not None
+                                        and not self._is_hybrid
+                                        and not media_context
+                                    ):
                                         try:
                                             self.disk_cache.store(token_list, cache_blocks)
                                         except Exception as de:
@@ -2348,6 +2364,11 @@ class MLLMScheduler:
                                                 request_id,
                                                 truncated_tokens,
                                                 cache_states,
+                                                cache_extra_keys=(
+                                                    cache_extra_keys
+                                                    if media_store_allowed
+                                                    else None
+                                                ),
                                             )
                                             logger.info(
                                                 f"VLM Scheduler stored paged Prefix Cache for "

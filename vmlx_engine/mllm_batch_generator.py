@@ -100,6 +100,7 @@ HELPER FUNCTIONS
 - ``_merge_caches()`` -- Merge per-request caches into batch-aware caches
 """
 
+import hashlib
 import logging
 import inspect
 import os
@@ -134,6 +135,63 @@ def _positive_int_or_none(value: Any) -> Optional[int]:
         parsed = int(value)
         return parsed if parsed > 0 else None
     return None
+
+
+def _mllm_media_cache_extra_keys(request: Any) -> Optional[Dict[str, str]]:
+    """Return a stable media fingerprint for paged VLM prefix-cache keys.
+
+    Token ids are not enough for media prompts: two different images with the
+    same grid shape render the same placeholder tokens. The model state after
+    prefill, however, depends on pixel values and media grids. This side key is
+    mixed into paged/block hashes while token counts stay based on real model
+    tokens only.
+    """
+    if request is None:
+        return None
+    has_media = bool(
+        getattr(request, "images", None)
+        or getattr(request, "videos", None)
+        or getattr(request, "pixel_values", None) is not None
+        or getattr(request, "image_grid_thw", None) is not None
+    )
+    if not has_media:
+        return None
+
+    hasher = hashlib.sha256()
+    hasher.update(b"vmlx-mllm-media-cache-v1")
+    media_sources = list(getattr(request, "images", None) or []) + list(
+        getattr(request, "videos", None) or []
+    )
+
+    def _hash_text(label: str, value: Any) -> None:
+        hasher.update(label.encode("utf-8"))
+        hasher.update(hashlib.sha256(str(value).encode("utf-8")).digest())
+
+    def _hash_array(label: str, value: Any) -> None:
+        if value is None:
+            return
+        hasher.update(label.encode("utf-8"))
+        try:
+            hasher.update(str(getattr(value, "shape", "")).encode("utf-8"))
+            hasher.update(str(getattr(value, "dtype", "")).encode("utf-8"))
+            import numpy as np
+
+            hasher.update(np.array(value).tobytes())
+        except Exception:
+            _hash_text(label, value)
+
+    for source in getattr(request, "images", None) or []:
+        _hash_text("image", source)
+    for source in getattr(request, "videos", None) or []:
+        _hash_text("video", source)
+    _hash_array("image_grid_thw", getattr(request, "image_grid_thw", None))
+    if not media_sources:
+        # Fallback for callers that hand us preprocessed pixel tensors without
+        # source URLs/paths. Do not hash attention_mask: it changes with text
+        # history length and would make the same image miss across turns.
+        _hash_array("pixel_values", getattr(request, "pixel_values", None))
+
+    return {"mllm_media": hasher.hexdigest()}
 
 
 @dataclass(frozen=True)
@@ -963,6 +1021,7 @@ class MLLMBatchResponse:
     prompt_token_ids: Optional[List[int]] = None  # Original tokenized prompt for prefix key
     cached_tokens: int = 0  # Number of prompt tokens served from cache
     cache_detail: str = ""  # e.g. "paged+ssm", "paged+ssm+disk", "disk"
+    cache_extra_keys: Optional[Dict[str, str]] = None
     # Generation-prefix tokens captured from the untruncated prompt tail
     # (e.g. [<|im_start|>, assistant, \n, <think>, \n] for Qwen 3.6 thinking-on).
     # Thinking models occasionally re-emit these as their first output tokens
@@ -2725,6 +2784,7 @@ class MLLMBatchGenerator:
 
         for req in requests:
             self._preprocess_request(req)
+            req._cache_extra_keys = _mllm_media_cache_extra_keys(req)
             # Save full token list BEFORE cache fetch can mutate req.input_ids.
             # Used later for SSM state cache keying (must be consistent with fetch key).
             _all_tokens = (
@@ -2767,11 +2827,19 @@ class MLLMBatchGenerator:
             # legacy prefix, disk L2, SSM companion — so benchmark runs get
             # fresh execution without pollution from prior multimodal requests.
             _mllm_bypass = bool(getattr(req, "_bypass_prefix_cache", False))
+            _media_context = self._request_has_media_cache_context(req)
+            _media_cache_extra_keys = getattr(req, "_cache_extra_keys", None)
             if (
                 self._prefix_cache_enabled
                 and self.block_aware_cache is not None
                 and req.prompt_cache is None
-                and not self._request_has_media_cache_context(req)
+                and (
+                    not _media_context
+                    or (
+                        self._uses_zaya_cache
+                        and _media_cache_extra_keys is not None
+                    )
+                )
                 and not _mllm_bypass
             ):
                 if req.input_ids is not None:
@@ -2808,7 +2876,11 @@ class MLLMBatchGenerator:
                             )
                         except Exception:
                             _paged_disk_hits_before = 0
-                        block_table, remaining = self.block_aware_cache.fetch_cache(req.request_id, token_list)
+                        block_table, remaining = self.block_aware_cache.fetch_cache(
+                            req.request_id,
+                            token_list,
+                            cache_extra_keys=_media_cache_extra_keys,
+                        )
                         _paged_disk_hit = False
                         try:
                             _paged_disk_hits_after = int(
@@ -4090,6 +4162,7 @@ class MLLMBatchGenerator:
                     ),
                     cached_tokens=getattr(req, '_cached_tokens', 0),
                     cache_detail=getattr(req, '_cache_detail', "") or "",
+                    cache_extra_keys=getattr(req, '_cache_extra_keys', None),
                     gen_prefix_tokens=getattr(req, '_gen_prefix_tokens', None),
                 )
             )

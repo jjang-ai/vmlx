@@ -426,9 +426,10 @@ class Scheduler:
             and not _allow_hybrid_kvq
         ):
             logger.info(
-                "Hybrid SSM cache model detected — disabling generic KV cache "
-                "quantization (was: %s). Hybrid models have cumulative SSM state "
-                "in addition to attention KV; q4/q8 KV-only quantization is not "
+                "Hybrid/path-dependent cache model detected — disabling generic "
+                "KV cache quantization (was: %s). Hybrid models have cumulative "
+                "non-KV state (SSM/Mamba or GatedDelta ArraysCache) in addition "
+                "to attention KV; q4/q8 KV-only quantization is not "
                 "production-safe for this cache contract. Set "
                 "VMLX_ALLOW_HYBRID_KV_QUANT=1 only for explicit bisects.",
                 self.config.kv_cache_quantization,
@@ -442,7 +443,7 @@ class Scheduler:
             and _allow_hybrid_kvq
         ):
             logger.warning(
-                "Hybrid SSM model + KV cache quantization='%s' requested via "
+                "Hybrid/path-dependent model + KV cache quantization='%s' requested via "
                 "VMLX_ALLOW_HYBRID_KV_QUANT=1. This is a diagnostic override; "
                 "watch full output for loops or token drift.",
                 self.config.kv_cache_quantization,

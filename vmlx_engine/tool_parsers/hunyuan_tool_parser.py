@@ -26,8 +26,8 @@ from the argument body. Argument values are coerced via ``json.loads``
 when possible (so ``"true"`` becomes ``True``, ``"42"`` becomes
 ``42``), otherwise kept as strings.
 
-Reasoning is handled by the separate ``deepseek_r1`` reasoning parser
-on ``<think>...</think>`` tags — this parser only touches tool calls.
+Reasoning is handled by the separate ``qwen3`` reasoning parser on
+``<think>...</think>`` tags — this parser only touches tool calls.
 """
 
 from __future__ import annotations

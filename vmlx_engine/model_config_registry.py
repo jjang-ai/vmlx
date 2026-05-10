@@ -306,6 +306,7 @@ class ModelConfigRegistry:
             base_supports_thinking = getattr(base, "supports_thinking", None)
             is_ling_family = base.family_name == "ling"
             is_zaya_family = base.family_name in {"zaya", "zaya1_vl"}
+            is_hy3_family = base.family_name == "hy_v3"
             preserve_template_metadata_when_no_thinking = False
             if is_zaya_family:
                 # ZAYA and ZAYA1-VL are reasoning-capable, but the honest
@@ -324,15 +325,30 @@ class ModelConfigRegistry:
                 updates["supports_thinking"] = True
                 updates["reasoning_parser"] = "deepseek_r1"
                 updates["think_in_template"] = False
+            elif is_hy3_family:
+                # Hy3's template defaults to `reasoning_effort=no_think` and
+                # emits a closed `<think></think>` prefill. It only opens
+                # `<think>` when vMLX supplies `reasoning_effort=low|high`.
+                # Older conversion stamps used think_in_template=True, which
+                # makes the parser treat normal visible text as reasoning on
+                # default/no-thinking turns. Keep the canonical runtime
+                # contract regardless of stale bundle stamps.
+                updates["supports_thinking"] = True
+                updates["reasoning_parser"] = "qwen3"
+                updates["think_in_template"] = False
             elif base_supports_thinking is False:
                 updates["supports_thinking"] = False
             elif isinstance(sth, bool):
                 updates["supports_thinking"] = sth
-            if rp is not None and not (is_zaya_family or is_ling_family) and base_supports_thinking is not False:
+            if (
+                rp is not None
+                and not (is_zaya_family or is_ling_family or is_hy3_family)
+                and base_supports_thinking is not False
+            ):
                 updates["reasoning_parser"] = rp if rp != "none" else None
             if tp is not None:
                 updates["tool_parser"] = tp if tp != "none" else None
-            if isinstance(tin, bool) and not (is_zaya_family or is_ling_family) and (
+            if isinstance(tin, bool) and not (is_zaya_family or is_ling_family or is_hy3_family) and (
                 base_supports_thinking is not False or preserve_template_metadata_when_no_thinking
             ):
                 updates["think_in_template"] = tin

@@ -2447,14 +2447,14 @@ class TestStartupCompatibilityGuards:
         assert 'os.environ["VMLX_DISABLE_TQ_KV"] = "1"' in cli_source
         assert "VMLINUX_DISABLE_TQ_KV" not in cli_source
 
-    def test_hybrid_ssm_auto_mode_skips_kv_quant_codecs(self):
-        """Hybrid SSM auto mode must not use KV-only quant codecs."""
+    def test_hybrid_auto_mode_skips_kv_only_quant_codecs(self):
+        """Hybrid/path-dependent auto mode must not use KV-only quant codecs."""
         cli_source = Path("./vmlx_engine/cli.py").read_text()
         scheduler_source = Path("./vmlx_engine/scheduler.py").read_text()
         tokenizer_source = Path("./vmlx_engine/utils/tokenizer.py").read_text()
 
         assert 'getattr(_mc, "cache_type", None) == "hybrid"' in cli_source
-        assert "Hybrid SSM cache model detected" in cli_source
+        assert "Hybrid/path-dependent cache model detected" in cli_source
         assert "os.environ.pop(\"VMLX_FORCE_TQ_AUTO\", None)" in cli_source
         assert 'args.kv_cache_quantization = "none"' in cli_source
         hybrid_idx = cli_source.index('getattr(_mc, "cache_type", None) == "hybrid"')
@@ -2464,7 +2464,7 @@ class TestStartupCompatibilityGuards:
         assert "VMLX_ALLOW_HYBRID_KV_QUANT" in scheduler_source
         assert "disabling generic KV cache" in scheduler_source
         assert 'self.config.kv_cache_quantization = "none"' in scheduler_source
-        assert "TurboQuant skipped: hybrid SSM cache detected" in tokenizer_source
+        assert "TurboQuant skipped: hybrid/path-dependent cache detected" in tokenizer_source
         assert "model.make_cache()" in tokenizer_source
 
     def test_generic_turboquant_patcher_honors_disable_env(self, tmp_path, monkeypatch):
@@ -5279,6 +5279,8 @@ class TestTurboQuantKVTelemetry:
             "jang_drop_mtp": True,
             "index_has_mtp_tensors": False,
             "artifact_available": False,
+            "family": "deepseek_v4",
+            "runtime_supported": False,
             "runtime_available": False,
             "runtime_reason": "jang_config.drop_mtp=true",
             "status": "dropped",
@@ -5374,7 +5376,7 @@ class TestTurboQuantKVTelemetry:
         assert status["artifact_available"] is True
         assert status["runtime_available"] is False
         assert status["status"] == "weights_present_runtime_unwired"
-        assert "not wired" in status["runtime_reason"]
+        assert "not currently on the JangMTP support map" in status["runtime_reason"]
 
     @pytest.mark.asyncio
     async def test_health_and_capabilities_surface_mtp_status(

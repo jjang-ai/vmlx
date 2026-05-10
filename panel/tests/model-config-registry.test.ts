@@ -24,7 +24,7 @@ afterEach(() => {
 })
 
 describe('detectModelConfigFromDir JANG multimodal detection', () => {
-  it('detects ZAYA as tools-only CCA hybrid without reasoning parser', () => {
+  it('detects text ZAYA as CCA hybrid with opt-in qwen3 reasoning parser', () => {
     const dir = makeModelDir(
       { model_type: 'zaya' },
       {
@@ -44,10 +44,10 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.cacheType).toBe('hybrid')
     expect(detected.usePagedCache).toBe(false)
     expect(detected.toolParser).toBe('zaya_xml')
-    expect(detected.reasoningParser).toBeUndefined()
+    expect(detected.reasoningParser).toBe('qwen3')
   })
 
-  it('detects ZAYA1-VL as multimodal CCA hybrid without reasoning parser', () => {
+  it('detects ZAYA1-VL as multimodal CCA hybrid with qwen3 reasoning parser', () => {
     const dir = makeModelDir(
       {
         model_type: 'zaya1_vl',
@@ -60,7 +60,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
           tool_parser: 'zaya_xml',
           reasoning_parser: 'qwen3',
           think_in_template: false,
-          supports_thinking: false,
+          supports_thinking: true,
           cache_type: 'hybrid',
           modality: 'vision',
         },
@@ -73,7 +73,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.cacheType).toBe('hybrid')
     expect(detected.usePagedCache).toBe(false)
     expect(detected.toolParser).toBe('zaya_xml')
-    expect(detected.reasoningParser).toBeUndefined()
+    expect(detected.reasoningParser).toBe('qwen3')
     expect(detected.isMultimodal).toBe(true)
   })
 
@@ -103,7 +103,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.cacheType).toBe('hybrid')
     expect(detected.usePagedCache).toBe(false)
     expect(detected.toolParser).toBe('zaya_xml')
-    expect(detected.reasoningParser).toBeUndefined()
+    expect(detected.reasoningParser).toBe('qwen3')
     expect(detected.isMultimodal).toBe(true)
   })
 
@@ -152,6 +152,39 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.toolParser).toBe('deepseek')
     expect(detected.reasoningParser).toBe('deepseek_r1')
     expect(detected.isMultimodal).toBe(false)
+  })
+
+  it('detects Hy3 as text-only KV with Hunyuan tools and qwen3 reasoning', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'hy_v3',
+        num_hidden_layers: 80,
+        num_nextn_predict_layers: 1,
+      },
+      {
+        weight_format: 'mxtq',
+        capabilities: {
+          family: 'hy_v3',
+          tool_parser: 'hunyuan',
+          reasoning_parser: 'qwen3',
+          think_in_template: true,
+          supports_thinking: true,
+          cache_type: 'kv',
+          modality: 'text',
+        },
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('hy3')
+    expect(detected.cacheType).toBe('kv')
+    expect(detected.usePagedCache).toBe(true)
+    expect(detected.toolParser).toBe('hunyuan')
+    expect(detected.reasoningParser).toBe('qwen3')
+    expect(detected.enableAutoToolChoice).toBe(true)
+    expect(detected.isMultimodal).toBe(false)
+    expect(detected.isTurboQuant).toBe(true)
   })
 
   it('keeps Gemma 4 VLM wrapper multimodal instead of demoting to gemma4-text', () => {

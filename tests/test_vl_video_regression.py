@@ -1035,6 +1035,107 @@ class TestIssueGuards:
         assert "mx.clear_cache()" in image_forward
         assert "output = self.model(input_ids, **kwargs)" in image_forward
 
+    def test_vmlx156_simple_mllm_paths_apply_image_prefill_guard(self):
+        """SimpleEngine / direct MLXMultimodalLM paths must share the vmlx#156
+        image-prefill guard. Otherwise disabling prefix/continuous batching can
+        still let image prompts reach mlx_vlm.generate and kill the process with
+        a Metal command-buffer OOM.
+        """
+        import inspect
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        source = inspect.getsource(MLXMultimodalLM)
+        assert "_guard_simple_image_prefill" in source
+        assert "_raise_if_image_prefill_exceeds_budget" in source
+        assert source.count("self._guard_simple_image_prefill(") >= 4, (
+            "generate, stream_generate, chat, and stream_chat must all run the "
+            "same image-prefill preflight before calling mlx_vlm generate APIs"
+        )
+
+    def test_vmlx156_simple_mllm_guard_rejects_large_image_prompt(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        model = MLXMultimodalLM.__new__(MLXMultimodalLM)
+        model.processor = SimpleNamespace(
+            tokenizer=SimpleNamespace(encode=lambda _prompt: list(range(24_000)))
+        )
+        model.model = SimpleNamespace(
+            language_model=SimpleNamespace(
+                config=SimpleNamespace(num_attention_heads=32)
+            )
+        )
+        monkeypatch.setenv("VMLX_VLM_IMAGE_PREFILL_GUARD", "1")
+        monkeypatch.setenv("VMLX_VLM_IMAGE_PREFILL_BUFFER_GB", "8")
+
+        with pytest.raises(RuntimeError, match="VLM image prefill rejected"):
+            model._guard_simple_image_prefill("oversized image prompt", True)
+
+        model._guard_simple_image_prefill("oversized text-only prompt", False)
+
+    def test_vmlx156_simple_mllm_guard_uses_media_expanded_input_ids(self, monkeypatch):
+        """The direct-path guard must budget the real processor-expanded prompt.
+
+        Raw tokenizer output can contain only one image placeholder while the
+        VLM processor expands it to thousands of image tokens depending on
+        family/image resolution. Guarding on the raw template length would miss
+        the vmlx#156 OOM class on Qwen/Nemotron/Gemma/ZAYA-style VLMs.
+        """
+        from types import SimpleNamespace
+
+        import mlx.core as mx
+
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        model = MLXMultimodalLM.__new__(MLXMultimodalLM)
+        model.processor = SimpleNamespace(
+            tokenizer=SimpleNamespace(encode=lambda _prompt: list(range(8)))
+        )
+        model.model = SimpleNamespace(
+            config=SimpleNamespace(model_type="qwen3_vl", image_token_index=123),
+            language_model=SimpleNamespace(
+                config=SimpleNamespace(num_attention_heads=32)
+            ),
+        )
+
+        def _expanded_inputs(*_args, **_kwargs):
+            return {
+                "input_ids": mx.array([list(range(24_000))]),
+                "attention_mask": mx.ones((1, 24_000), dtype=mx.int32),
+            }
+
+        import importlib
+
+        generate_mod = importlib.import_module("mlx_vlm.generate")
+        monkeypatch.setattr(generate_mod, "prepare_inputs", _expanded_inputs)
+        monkeypatch.setenv("VMLINUX_VLM_IMAGE_PREFILL_GUARD", "1")
+        monkeypatch.setenv("VMLINUX_VLM_IMAGE_PREFILL_BUFFER_GB", "8")
+
+        with pytest.raises(RuntimeError, match="VLM image prefill rejected"):
+            model._guard_simple_image_prefill(
+                "prompt with one image placeholder",
+                True,
+                images=["/tmp/fake.png"],
+            )
+
+    def test_mllm_temp_cleanup_ignores_closed_logging_stream(self, tmp_path, monkeypatch):
+        """Atexit cleanup must not print logging errors after pytest closes streams."""
+        from vmlx_engine.models import mllm
+
+        temp_path = tmp_path / "orphan-frame.png"
+        temp_path.write_bytes(b"x")
+        manager = mllm.TempFileManager()
+        manager.register(str(temp_path))
+
+        def _closed_stream(*_args, **_kwargs):
+            raise ValueError("I/O operation on closed file")
+
+        monkeypatch.setattr(mllm.logger, "info", _closed_stream)
+
+        assert manager.cleanup_all() == 1
+        assert not temp_path.exists()
+
     def test_v1384_ssm_rederive_skips_oom_prompts_not_chunks(self):
         """v1.3.84: `_prefill_for_clean_ssm` previously chunked long prompts in
         fixed 2048-token slices. That broke on the 2nd chunk with
@@ -6541,11 +6642,11 @@ class TestTurboQuantDefaultAndSpeed:
         # but no opt-IN required
 
     def test_hybrid_ssm_auto_mode_disables_live_tq_kv(self):
-        """Hybrid SSM cache state must not be partially TQ-quantized."""
+        """Hybrid/path-dependent cache state must not be partially TQ-quantized."""
         cli_src = Path("/private/tmp/vmlx-1.3.66-build/vmlx_engine/cli.py").read_text()
         sched_src = Path("/private/tmp/vmlx-1.3.66-build/vmlx_engine/scheduler.py").read_text()
 
-        assert "Hybrid SSM cache model detected" in cli_src
+        assert "Hybrid/path-dependent cache model detected" in cli_src
         assert 'os.environ["VMLX_DISABLE_TQ_KV"] = "1"' in cli_src
         assert 'args.kv_cache_quantization = "none"' in cli_src
         assert "VMLX_ALLOW_HYBRID_KV_QUANT" in sched_src
@@ -6624,7 +6725,7 @@ class TestJangStampAutoDetectsParsers:
         reg._match_cache.clear()
         c = reg.lookup(path)
         assert c.is_mllm is True, "Qwen3.6-JANGTQ2 must be detected as VL (modality=vision)"
-        assert c.cache_type == "hybrid", "Qwen3.5 family uses hybrid SSM cache"
+        assert c.cache_type == "hybrid", "Qwen3.5 family uses GatedDelta/ArraysCache hybrid cache"
         # And the jang_config directly confirms it
         with open(os.path.join(path, "jang_config.json")) as f:
             jc = json.load(f)

@@ -211,8 +211,9 @@ class TempFileManager:
             except OSError:
                 pass
 
-        if cleaned:
-            logger.info(f"Cleaned up {cleaned} temp files")
+        # Do not log from atexit cleanup: logging streams may already be closed
+        # by pytest or the app shutdown path, which makes logging print noisy
+        # "I/O operation on closed file" diagnostics despite successful cleanup.
         return cleaned
 
 
@@ -1082,6 +1083,128 @@ class MLXMultimodalLM:
         )
         return save_frames_to_temp(frames)
 
+    def _guard_simple_image_prefill(
+        self,
+        formatted_prompt: str,
+        has_images: bool,
+        *,
+        images: list | None = None,
+        resize_shape: object | None = None,
+    ) -> None:
+        """Apply the vmlx#156 image-prefill guard on SimpleEngine paths.
+
+        Continuous-batching VLMs run this guard inside
+        ``MLLMBatchGenerator._run_vision_encoding_inner``. Direct
+        ``MLXMultimodalLM`` generate/chat paths still call ``mlx_vlm``
+        one-shot APIs, so they need the same preflight before Metal sees an
+        image-expanded prompt. Use processor-expanded ``input_ids`` when
+        possible because each VLM family can expand one image/video placeholder
+        into a different number of language tokens.
+        """
+        if not has_images:
+            return
+        try:
+            import mlx.core as mx
+
+            mx.clear_cache()
+        except Exception:
+            mx = None  # type: ignore[assignment]
+
+        try:
+            seq_len = self._simple_vlm_prefill_seq_len(
+                formatted_prompt,
+                images=images,
+                resize_shape=resize_shape,
+            )
+        except Exception as exc:
+            logger.debug("Simple VLM image-prefill guard skipped: tokenize failed: %s", exc)
+            return
+
+        try:
+            if mx is not None:
+                mx.clear_cache()
+        except Exception:
+            pass
+
+        from vmlx_engine.mllm_batch_generator import (
+            _raise_if_image_prefill_exceeds_budget,
+        )
+
+        language_model = getattr(self.model, "language_model", None)
+        if language_model is None:
+            inner = getattr(self.model, "model", None)
+            language_model = getattr(inner, "language_model", None)
+        _raise_if_image_prefill_exceeds_budget(
+            has_images=True,
+            seq_len=seq_len,
+            language_model=language_model,
+        )
+
+    def _simple_vlm_prefill_seq_len(
+        self,
+        formatted_prompt: str,
+        *,
+        images: list | None = None,
+        resize_shape: object | None = None,
+    ) -> int:
+        """Return the best available VLM prefill length for direct paths."""
+
+        def _seq_len_from_input_ids(input_ids: object) -> int | None:
+            if input_ids is None:
+                return None
+            shape = getattr(input_ids, "shape", None)
+            if shape:
+                if len(shape) >= 2:
+                    return int(shape[1])
+                return int(shape[0])
+            if isinstance(input_ids, list):
+                if input_ids and isinstance(input_ids[0], list):
+                    return int(len(input_ids[0]))
+                return int(len(input_ids))
+            return None
+
+        if images:
+            try:
+                from mlx_vlm.generate import normalize_resize_shape, prepare_inputs
+
+                model_config = getattr(self.model, "config", None)
+                image_token_index = (
+                    getattr(model_config, "image_token_index", None)
+                    if model_config is not None else None
+                )
+                if image_token_index is None and model_config is not None:
+                    image_token_index = getattr(model_config, "image_token_id", None)
+                model_type = str(getattr(model_config, "model_type", "") or "")
+                add_special_tokens = (
+                    getattr(self.processor, "chat_template", None) is None
+                    if model_type in {"gemma3", "gemma3n", "gemma4"}
+                    else True
+                )
+                inputs = prepare_inputs(
+                    self.processor,
+                    images=images,
+                    prompts=formatted_prompt,
+                    image_token_index=image_token_index,
+                    resize_shape=normalize_resize_shape(resize_shape),
+                    add_special_tokens=add_special_tokens,
+                )
+                seq_len = _seq_len_from_input_ids(inputs.get("input_ids"))
+                if seq_len:
+                    return seq_len
+            except Exception as exc:
+                logger.debug(
+                    "Simple VLM image-prefill guard using raw tokenizer length; "
+                    "processor expansion probe failed: %s",
+                    exc,
+                )
+
+        tokenizer = (
+            self.processor.tokenizer
+            if hasattr(self.processor, "tokenizer")
+            else self.processor
+        )
+        return len(tokenizer.encode(formatted_prompt))
+
     @staticmethod
     def _extract_multimodal_messages(
         messages: list[dict],
@@ -1481,6 +1604,13 @@ class MLXMultimodalLM:
         if prompt_cache_state is not None:
             kwargs["prompt_cache_state"] = prompt_cache_state
 
+        self._guard_simple_image_prefill(
+            formatted_prompt,
+            bool(all_images and prompt_cache_state is None),
+            images=all_images,
+            resize_shape=kwargs.get("resize_shape"),
+        )
+
         # Generate with cache
         result = generate(
             self.model,
@@ -1680,6 +1810,13 @@ class MLXMultimodalLM:
                 prompt_cache = None
         if prompt_cache_state is not None:
             kwargs["prompt_cache_state"] = prompt_cache_state
+
+        self._guard_simple_image_prefill(
+            formatted_prompt,
+            bool(all_images and prompt_cache_state is None),
+            images=all_images,
+            resize_shape=kwargs.get("resize_shape"),
+        )
 
         last_prompt_tokens = 0
         with _MaybeVLMStream():
@@ -1935,6 +2072,13 @@ class MLXMultimodalLM:
         if prompt_cache_state is not None:
             kwargs["prompt_cache_state"] = prompt_cache_state
 
+        self._guard_simple_image_prefill(
+            formatted_prompt,
+            bool(all_images and prompt_cache_state is None),
+            images=all_images,
+            resize_shape=kwargs.get("resize_shape"),
+        )
+
         result = generate(
             self.model,
             self.processor,
@@ -2185,6 +2329,13 @@ class MLXMultimodalLM:
             )
         if prompt_cache_state is not None:
             kwargs["prompt_cache_state"] = prompt_cache_state
+
+        self._guard_simple_image_prefill(
+            formatted_prompt,
+            bool(all_images and prompt_cache_state is None),
+            images=all_images,
+            resize_shape=kwargs.get("resize_shape"),
+        )
 
         try:
             with _MaybeVLMStream():

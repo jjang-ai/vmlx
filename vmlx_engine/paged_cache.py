@@ -827,6 +827,7 @@ class PagedCacheManager:
         token_ids: List[int],
         num_cached_blocks: int,
         num_full_blocks: int,
+        extra_keys: Optional[Any] = None,
     ) -> None:
         """
         Cache full blocks for prefix caching (vLLM style).
@@ -863,7 +864,11 @@ class PagedCacheManager:
                 block_tokens = token_ids[start:end]
 
                 # Compute chain hash
-                block_hash = compute_block_hash(parent_hash, block_tokens)
+                block_hash = compute_block_hash(
+                    parent_hash,
+                    block_tokens,
+                    extra_keys=extra_keys,
+                )
                 block.block_hash = block_hash
                 block.token_count = len(block_tokens)
 
@@ -880,6 +885,7 @@ class PagedCacheManager:
     def get_computed_blocks(
         self,
         token_ids: List[int],
+        extra_keys: Optional[Any] = None,
     ) -> Tuple[List[CacheBlock], int]:
         """
         Find cached blocks for a token prefix (vLLM style).
@@ -905,7 +911,11 @@ class PagedCacheManager:
             block_tokens = token_ids[start:end]
 
             # Compute expected hash
-            block_hash = compute_block_hash(parent_hash, block_tokens)
+            block_hash = compute_block_hash(
+                parent_hash,
+                block_tokens,
+                extra_keys=extra_keys,
+            )
 
             # Look up in L1 cache (under lock)
             with self._lock:
@@ -965,7 +975,11 @@ class PagedCacheManager:
 
             for size in partial_sizes:
                 block_tokens = remaining_tokens[:size]
-                block_hash = compute_block_hash(parent_hash, block_tokens)
+                block_hash = compute_block_hash(
+                    parent_hash,
+                    block_tokens,
+                    extra_keys=extra_keys,
+                )
 
                 with self._lock:
                     cached_block = self.cached_block_hash_to_block.get_block(block_hash)

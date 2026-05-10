@@ -30,7 +30,7 @@ try:
 except ImportError:
     HAS_MLX = False
 
-from .paged_cache import BlockTable, PagedCacheManager
+from .paged_cache import BlockTable, PagedCacheManager, compute_block_hash
 
 logger = logging.getLogger(__name__)
 
@@ -1263,6 +1263,7 @@ class BlockAwarePrefixCache:
         self,
         request_id: str,
         tokens: List[int],
+        cache_extra_keys: Optional[Any] = None,
     ) -> Tuple[Optional[BlockTable], List[int]]:
         """
         Find cached prefix blocks for the given tokens.
@@ -1288,7 +1289,10 @@ class BlockAwarePrefixCache:
         # find_shared_prefix() block-content hash here: it keys only on the
         # current block's token bytes and can replay a repeated 64-token chunk
         # under the wrong history/position, corrupting decoded text.
-        cached_blocks, num_cached = self.paged_cache.get_computed_blocks(tokens)
+        cached_blocks, num_cached = self.paged_cache.get_computed_blocks(
+            tokens,
+            extra_keys=cache_extra_keys,
+        )
         # MLLM/DSV4 paths store blocks with N-1 tokens (truncated for re-feed).
         # Always try the N-1 key as well, not only on total miss. After process
         # restart the in-memory partial-size index is empty, so the full-N lookup
@@ -1299,7 +1303,10 @@ class BlockAwarePrefixCache:
         # 43" or a forced full prefill. Prefer whichever lookup restores more
         # cached tokens, and release request refs from the loser.
         if len(tokens) > 1:
-            alt_blocks, alt_num_cached = self.paged_cache.get_computed_blocks(tokens[:-1])
+            alt_blocks, alt_num_cached = self.paged_cache.get_computed_blocks(
+                tokens[:-1],
+                extra_keys=cache_extra_keys,
+            )
             if alt_num_cached > num_cached:
                 if cached_blocks:
                     try:
@@ -1330,7 +1337,10 @@ class BlockAwarePrefixCache:
         # one block, it can stop at the last full block and never consider the
         # longer exact partial prefix. The prefix index stores those terminal
         # partial boundaries, so compare before accepting the shorter hit.
-        best_match = self._find_best_prefix_match(tokens)
+        best_match = self._find_best_prefix_match(
+            tokens,
+            cache_extra_keys=cache_extra_keys,
+        )
         if cached_blocks and best_match and len(best_match[0]) > num_cached:
             try:
                 self.paged_cache.release_request_refs(
@@ -1503,6 +1513,7 @@ class BlockAwarePrefixCache:
         tokens: List[int],
         cache_data: List[Any],
         cache_type: str = "assistant",
+        cache_extra_keys: Optional[Any] = None,
     ) -> Optional[BlockTable]:
         """
         Store computed cache for future reuse.
@@ -1566,7 +1577,11 @@ class BlockAwarePrefixCache:
             for eb_idx in range(num_existing_full):
                 eb_start = eb_idx * self.block_size
                 eb_end = eb_start + self.block_size
-                parent_hash = _compute_chain_hash(parent_hash, tokens[eb_start:eb_end])
+                parent_hash = _compute_chain_hash(
+                    parent_hash,
+                    tokens[eb_start:eb_end],
+                    extra_keys=cache_extra_keys,
+                )
 
         disk_store = self.paged_cache._disk_store  # May be None
         # Frugal mode: when block disk store is on, disk is authoritative for
@@ -1756,7 +1771,11 @@ class BlockAwarePrefixCache:
             global_end = existing_tokens + end_idx
 
             # Compute chain hash for this block
-            block_chain_hash = _compute_chain_hash(parent_hash, block_tokens)
+            block_chain_hash = _compute_chain_hash(
+                parent_hash,
+                block_tokens,
+                extra_keys=cache_extra_keys,
+            )
 
             # Check if this block already exists via chain hash (deduplication)
             # IMPORTANT: lookup + ref bump must be atomic under _lock to prevent
@@ -1860,10 +1879,35 @@ class BlockAwarePrefixCache:
 
                 # Then run block-level LRU eviction under memory pressure.
                 if not self.paged_cache.handle_memory_pressure(1):
-                    logger.warning(f"Cannot allocate block for {request_id}")
+                    if block_table.num_tokens > 0:
+                        logger.warning(
+                            "Paged cache capacity reached for %s; stored partial "
+                            "prefix %s/%s tokens (%s blocks). Increase Max Cache "
+                            "Blocks or lower Block Size to cache more of this prompt.",
+                            request_id,
+                            block_table.num_tokens,
+                            len(tokens),
+                            len(block_table.block_ids),
+                        )
+                    else:
+                        logger.warning(
+                            "Paged cache capacity reached for %s before any prefix "
+                            "blocks fit. Increase Max Cache Blocks or lower Block "
+                            "Size to enable prefix reuse for this prompt.",
+                            request_id,
+                        )
                     break
                 block = self.paged_cache.allocate_block()
                 if not block:
+                    if block_table.num_tokens > 0:
+                        logger.warning(
+                            "Paged cache allocation stopped for %s; stored partial "
+                            "prefix %s/%s tokens (%s blocks).",
+                            request_id,
+                            block_table.num_tokens,
+                            len(tokens),
+                            len(block_table.block_ids),
+                        )
                     break
 
             # Store block data
@@ -1997,7 +2041,11 @@ class BlockAwarePrefixCache:
                     )
 
         # Update prefix index
-        self._update_prefix_index(tokens, block_table.block_ids)
+        self._update_prefix_index(
+            tokens,
+            block_table.block_ids,
+            cache_extra_keys=cache_extra_keys,
+        )
 
         # Store entry for request (for legacy compatibility)
         norm_type = cache_type if cache_type in ("system", "user", "assistant") else "assistant"
@@ -3415,10 +3463,12 @@ class BlockAwarePrefixCache:
     def _find_best_prefix_match(
         self,
         tokens: List[int],
+        cache_extra_keys: Optional[Any] = None,
     ) -> Optional[Tuple[List[int], List[int]]]:
         """Find best matching prefix in the index."""
         best_match = None
         best_len = 0
+        extra_marker = self._prefix_index_extra_marker(cache_extra_keys)
 
         # Try progressively longer prefixes
         for num_blocks in range(1, len(tokens) // self.block_size + 1):
@@ -3427,10 +3477,17 @@ class BlockAwarePrefixCache:
                 break
 
             prefix_tokens = tokens[:prefix_len]
-            prefix_hash = self.paged_cache.compute_block_hash(prefix_tokens)
+            prefix_hash = self._prefix_index_hash(
+                prefix_tokens,
+                cache_extra_keys=cache_extra_keys,
+            )
 
             if prefix_hash in self._prefix_index:
-                cached_tokens, block_ids = self._prefix_index[prefix_hash]
+                entry = self._prefix_index[prefix_hash]
+                cached_tokens, block_ids = entry[:2]
+                cached_extra = entry[2] if len(entry) > 2 else None
+                if cached_extra != extra_marker:
+                    continue
                 if cached_tokens == prefix_tokens and len(cached_tokens) > best_len:
                     # Validate that all referenced blocks still exist
                     valid = all(
@@ -3450,7 +3507,11 @@ class BlockAwarePrefixCache:
         # its hash. Scan indexed entries by exact token-prefix equality and
         # live block IDs only; this preserves chain-hash safety and avoids the
         # legacy content-only block hash path.
-        for prefix_hash, (cached_tokens, block_ids) in list(self._prefix_index.items()):
+        for prefix_hash, entry in list(self._prefix_index.items()):
+            cached_tokens, block_ids = entry[:2]
+            cached_extra = entry[2] if len(entry) > 2 else None
+            if cached_extra != extra_marker:
+                continue
             cached_len = len(cached_tokens)
             if cached_len <= best_len or cached_len > len(tokens):
                 continue
@@ -3469,18 +3530,51 @@ class BlockAwarePrefixCache:
 
         return best_match
 
+    @staticmethod
+    def _prefix_index_extra_marker(cache_extra_keys: Optional[Any]) -> Optional[str]:
+        if cache_extra_keys is None:
+            return None
+        try:
+            import json
+
+            return json.dumps(cache_extra_keys, sort_keys=True, default=str)
+        except Exception:
+            return repr(cache_extra_keys)
+
+    def _prefix_index_hash(
+        self,
+        tokens: List[int],
+        cache_extra_keys: Optional[Any] = None,
+    ) -> str:
+        if cache_extra_keys is None:
+            return self.paged_cache.compute_block_hash(tokens)
+        return compute_block_hash(
+            None,
+            tokens,
+            extra_keys=cache_extra_keys,
+        ).hex()
+
     def _update_prefix_index(
         self,
         tokens: List[int],
         block_ids: List[int],
+        cache_extra_keys: Optional[Any] = None,
     ) -> None:
         """Update prefix index with new token sequence."""
+        extra_marker = self._prefix_index_extra_marker(cache_extra_keys)
         # Index block-aligned prefixes
         for i in range(1, len(block_ids) + 1):
             prefix_len = min(i * self.block_size, len(tokens))
             prefix_tokens = tokens[:prefix_len]
-            prefix_hash = self.paged_cache.compute_block_hash(prefix_tokens)
-            self._prefix_index[prefix_hash] = (prefix_tokens, block_ids[:i])
+            prefix_hash = self._prefix_index_hash(
+                prefix_tokens,
+                cache_extra_keys=cache_extra_keys,
+            )
+            self._prefix_index[prefix_hash] = (
+                prefix_tokens,
+                block_ids[:i],
+                extra_marker,
+            )
 
     def get_stats(self) -> Dict[str, Any]:
         """Get cache statistics."""

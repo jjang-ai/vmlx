@@ -154,6 +154,39 @@ def test_dsv4_token_split_reads_batched_output_token_ids():
     ]
 
 
+def test_tool_parse_strips_full_and_orphan_think_markers():
+    """Tool parsing must not see stale think markers after suppressed reasoning.
+
+    ZAYA can emit a complete think block followed by an extra orphan close tag
+    when the product path has thinking disabled.  Leaving the orphan close in
+    place makes downstream display cleaning re-open a fake <think> block and
+    leaks markup to users.
+    """
+    from vmlx_engine import server
+
+    text = "<think>hidden</think>\ncall get_weather\n</think>\nagain"
+
+    stripped = server._strip_think_for_tool_parse(text)
+
+    assert stripped == "call get_weather\nagain"
+    assert "<think>" not in stripped
+    assert "</think>" not in stripped
+
+
+def test_display_cleanup_removes_residual_think_markup_without_reopening():
+    from vmlx_engine import server
+
+    assert server._strip_residual_think_markup_for_display(
+        "<think>hidden</think>Visible"
+    ) == "Visible"
+    assert server._strip_residual_think_markup_for_display(
+        "Visible</think> tail"
+    ) == "Visible tail"
+    assert server._strip_residual_think_markup_for_display(
+        "<think>Visible"
+    ) == "Visible"
+
+
 def test_dsv4_thinking_policy_defaults_to_direct_rail_when_not_requested(monkeypatch):
     """DSV4 stays on direct rail only when the request did not ask to think."""
     from vmlx_engine import server
@@ -342,27 +375,31 @@ def test_ling_stamped_bailing_family_gets_ling_safety_floor(tmp_path, monkeypatc
     assert server._resolve_repetition_penalty(1.0) == 1.15
 
 
-def test_ling_does_not_default_to_reasoning_even_with_stale_capabilities(tmp_path, monkeypatch):
-    """Ling/Bailing is not a default-reasoning family.
+@pytest.mark.parametrize("model_type", ["bailing_hybrid", "bailing_moe_v2_5"])
+def test_ling_preserves_opt_in_parser_but_rejects_stale_think_in_template(
+    tmp_path, monkeypatch, model_type
+):
+    """Ling/Bailing is default-off but opt-in reasoning-capable.
 
-    Older local JANG bundles can stamp deepseek_r1 in jang_config capabilities,
-    but the runtime contract for Ling keeps chat/template output visible by
-    default. The base family verdict must override stale stamps so Auto does not
-    send the first turn down a reasoning-only rail.
+    The parser metadata must survive so explicit "detailed thinking on" system
+    prompts can extract <think> blocks.  A stale think_in_template=True stamp
+    must not survive, because Ling's default template does not auto-open
+    <think>; preserving that stale flag would route visible content into
+    reasoning_content.
     """
     import json
     from vmlx_engine import server
     import vmlx_engine.model_config_registry as mcr
 
-    (tmp_path / "config.json").write_text(json.dumps({"model_type": "bailing_hybrid"}))
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": model_type}))
     (tmp_path / "jang_config.json").write_text(json.dumps({
         "capabilities": {
-            "family": "bailing_hybrid",
+            "family": model_type,
             "cache_type": "hybrid",
             "tool_parser": "deepseek",
-            "reasoning_parser": "deepseek_r1",
+            "reasoning_parser": "none",
             "think_in_template": True,
-            "supports_thinking": True,
+            "supports_thinking": False,
             "modality": "text",
         }
     }))
@@ -384,14 +421,14 @@ def test_ling_does_not_default_to_reasoning_even_with_stale_capabilities(tmp_pat
     )
 
     assert cfg.family_name == "ling"
-    assert cfg.supports_thinking is False
-    assert cfg.reasoning_parser is None
+    assert cfg.supports_thinking is True
+    assert cfg.reasoning_parser == "deepseek_r1"
     assert cfg.think_in_template is False
-    assert resolved is False
+    assert resolved is True
 
 
-def test_panel_ling_registry_does_not_advertise_reasoning():
-    """Panel auto-detect must match engine Ling no-reasoning contract."""
+def test_panel_ling_registry_advertises_opt_in_reasoning_parser():
+    """Panel auto-detect must match engine Ling opt-in reasoning contract."""
     from pathlib import Path
 
     source = Path("./panel/src/main/model-config-registry.ts").read_text()
@@ -399,8 +436,8 @@ def test_panel_ling_registry_does_not_advertise_reasoning():
 
     assert "cacheType: 'hybrid'" in ling_line
     assert "toolParser: 'deepseek'" in ling_line
-    assert "reasoningParser" not in ling_line
-    assert "next.family === 'ling'" in source
+    assert "reasoningParser: 'deepseek_r1'" in ling_line
+    assert "next.family === 'ling'" not in source
 
 
 def test_minimax_m2_uses_stronger_reasoning_rumination_floor(tmp_path, monkeypatch):
@@ -481,3 +518,239 @@ async def test_capabilities_reports_loaded_scheduler_cache(monkeypatch):
     assert caps["quantization"]["codec"] == "turboquant_codebook"
     assert caps["acceleration"]["kernel_type"] == "turboquant_codebook"
     assert caps["acceleration"]["metal_na_active_on_host"] is False
+
+
+@pytest.mark.asyncio
+async def test_hy_v3_capabilities_advertise_only_documented_reasoning_efforts(monkeypatch):
+    """Hy3 handoff documents no_think/low/high, not medium or max."""
+    from types import SimpleNamespace
+
+    import vmlx_engine.model_config_registry as mcr
+    from vmlx_engine import server
+
+    cfg = SimpleNamespace(
+        family_name="hy_v3",
+        reasoning_parser="deepseek_r1",
+        tool_parser="hunyuan",
+        think_in_template=False,
+        supports_thinking=True,
+        is_mllm=False,
+    )
+
+    class _Registry:
+        def lookup(self, _model_key):
+            return cfg
+
+    monkeypatch.setattr(mcr, "get_model_config_registry", lambda: _Registry())
+    monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=False))
+    monkeypatch.setattr(server, "_model_path", "")
+    monkeypatch.setattr(server, "_model_name", "")
+
+    caps = await server.model_capabilities("hy3-preview")
+
+    assert caps["family"] == "hy_v3"
+    assert caps["supports_thinking"] is True
+    assert caps["reasoning_efforts"] == ["low", "high"]
+    assert "medium" not in caps["reasoning_efforts"]
+    assert "max" not in caps["reasoning_efforts"]
+
+
+def test_hy_v3_reasoning_policy_maps_enable_thinking_to_template_effort(monkeypatch):
+    """Hy3 ignores enable_thinking directly; vMLX must feed reasoning_effort."""
+    from types import SimpleNamespace
+
+    import vmlx_engine.model_config_registry as mcr
+    from vmlx_engine import server
+
+    cfg = SimpleNamespace(family_name="hy_v3")
+
+    class _Registry:
+        def lookup(self, _model_key):
+            return cfg
+
+    monkeypatch.setattr(mcr, "get_model_config_registry", lambda: _Registry())
+
+    kwargs = {}
+    ct_kwargs = {}
+    server._apply_hy3_reasoning_policy(
+        kwargs,
+        ct_kwargs,
+        model_key="hy3-preview",
+        enable_thinking=True,
+    )
+    assert kwargs["reasoning_effort"] == "high"
+    assert ct_kwargs["reasoning_effort"] == "high"
+
+    kwargs = {"reasoning_effort": "medium"}
+    ct_kwargs = {"reasoning_effort": "medium"}
+    server._apply_hy3_reasoning_policy(
+        kwargs,
+        ct_kwargs,
+        model_key="hy3-preview",
+        enable_thinking=True,
+    )
+    assert kwargs["reasoning_effort"] == "high"
+    assert ct_kwargs["reasoning_effort"] == "high"
+
+    kwargs = {}
+    ct_kwargs = {}
+    server._apply_hy3_reasoning_policy(
+        kwargs,
+        ct_kwargs,
+        model_key="hy3-preview",
+        enable_thinking=False,
+    )
+    assert kwargs["reasoning_effort"] == "no_think"
+    assert ct_kwargs["reasoning_effort"] == "no_think"
+
+
+def test_hy_v3_prompt_seeding_is_request_dependent(monkeypatch):
+    """Parser seed is true only after low/high reasoning_effort opens <think>."""
+    from types import SimpleNamespace
+
+    import vmlx_engine.model_config_registry as mcr
+    from vmlx_engine import server
+
+    cfg = SimpleNamespace(family_name="hy_v3")
+
+    class _Registry:
+        def lookup(self, _model_key):
+            return cfg
+
+    monkeypatch.setattr(mcr, "get_model_config_registry", lambda: _Registry())
+
+    assert server._hy3_prompt_starts_in_reasoning(
+        model_key="hy3-preview",
+        enable_thinking=True,
+        ct_kwargs={"reasoning_effort": "high"},
+    ) is True
+    assert server._hy3_prompt_starts_in_reasoning(
+        model_key="hy3-preview",
+        enable_thinking=True,
+        ct_kwargs={"reasoning_effort": "no_think"},
+    ) is False
+    assert server._hy3_prompt_starts_in_reasoning(
+        model_key="hy3-preview",
+        enable_thinking=False,
+        ct_kwargs={"reasoning_effort": "high"},
+    ) is False
+
+
+def test_hy_v3_qwen3_reasoning_parser_no_think_does_not_leak_tags():
+    """Default Hy3 no_think prompt has closed tags; output must stay visible."""
+    from vmlx_engine.reasoning.qwen3_parser import Qwen3ReasoningParser
+
+    parser = Qwen3ReasoningParser()
+    parser.reset_state(think_in_prompt=False)
+
+    reasoning, content = parser.extract_reasoning("<think></think>The answer is 4.")
+
+    assert reasoning is None
+    assert content == "The answer is 4."
+    assert "<think>" not in content
+    assert "</think>" not in content
+
+
+def test_hy_v3_qwen3_reasoning_parser_low_high_routes_reasoning_only():
+    """When Hy3 low/high opens <think>, parser must split before content."""
+    from vmlx_engine.reasoning.qwen3_parser import Qwen3ReasoningParser
+
+    parser = Qwen3ReasoningParser()
+    parser.reset_state(think_in_prompt=True)
+
+    reasoning, content = parser.extract_reasoning("Compute 2+2.</think>The answer is 4.")
+
+    assert reasoning == "Compute 2+2."
+    assert content == "The answer is 4."
+    assert "<think>" not in content
+    assert "</think>" not in content
+
+
+def test_deepseek_r1_reasoning_parser_no_think_does_not_leak_tags():
+    """Closed or implicit DeepSeek-R1 think rails must not leak into content."""
+    from vmlx_engine.reasoning.deepseek_r1_parser import DeepSeekR1ReasoningParser
+
+    parser = DeepSeekR1ReasoningParser()
+    parser.reset_state(think_in_prompt=False)
+
+    reasoning, content = parser.extract_reasoning("<think></think>The answer is 4.")
+
+    assert reasoning is None
+    assert content == "The answer is 4."
+    assert "<think>" not in content
+    assert "</think>" not in content
+
+
+def test_deepseek_r1_reasoning_parser_prompt_open_routes_reasoning_only():
+    """Families using DeepSeek-R1 with prompt-open think must split on </think>."""
+    from vmlx_engine.reasoning.deepseek_r1_parser import DeepSeekR1ReasoningParser
+
+    parser = DeepSeekR1ReasoningParser()
+    parser.reset_state(think_in_prompt=True)
+
+    reasoning, content = parser.extract_reasoning("Compute 2+2.</think>The answer is 4.")
+
+    assert reasoning == "Compute 2+2."
+    assert content == "The answer is 4."
+    assert "<think>" not in content
+    assert "</think>" not in content
+
+
+def test_deepseek_r1_reasoning_parser_orphan_close_is_not_visible():
+    """An orphan close marker should be stripped instead of shown to users."""
+    from vmlx_engine.reasoning.deepseek_r1_parser import DeepSeekR1ReasoningParser
+
+    parser = DeepSeekR1ReasoningParser()
+
+    reasoning, content = parser.extract_reasoning("</think>The answer is 4.")
+
+    assert reasoning is None
+    assert content == "The answer is 4."
+    assert "</think>" not in content
+
+
+def test_gemma4_reasoning_parser_no_thought_does_not_leak_markers():
+    """Gemma 4 closed thought rail must produce visible content only."""
+    from vmlx_engine.reasoning.gemma4_parser import Gemma4ReasoningParser
+
+    parser = Gemma4ReasoningParser()
+
+    reasoning, content = parser.extract_reasoning(
+        "<|channel>thought\n<channel|>The answer is 4.<turn|>"
+    )
+
+    assert reasoning is None
+    assert content == "The answer is 4."
+    assert "<|channel>" not in content
+    assert "<channel|>" not in content
+    assert "<turn|>" not in content
+
+
+def test_gemma4_reasoning_parser_routes_thought_channel():
+    """Gemma 4 thought channel must split reasoning from final content."""
+    from vmlx_engine.reasoning.gemma4_parser import Gemma4ReasoningParser
+
+    parser = Gemma4ReasoningParser()
+
+    reasoning, content = parser.extract_reasoning(
+        "thought\nCompute 2+2.<channel|>The answer is 4.<turn|>"
+    )
+
+    assert reasoning == "Compute 2+2."
+    assert content == "The answer is 4."
+    assert "<channel|>" not in content
+    assert "<turn|>" not in content
+
+
+def test_gemma4_reasoning_parser_orphan_channel_close_is_not_visible():
+    """A stray Gemma 4 channel close marker should not render as content."""
+    from vmlx_engine.reasoning.gemma4_parser import Gemma4ReasoningParser
+
+    parser = Gemma4ReasoningParser()
+
+    reasoning, content = parser.extract_reasoning("<channel|>The answer is 4.<turn|>")
+
+    assert reasoning is None
+    assert content == "The answer is 4."
+    assert "<channel|>" not in content
+    assert "<turn|>" not in content

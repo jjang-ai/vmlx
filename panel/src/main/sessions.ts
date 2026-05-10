@@ -2094,6 +2094,7 @@ export class SessionManager extends EventEmitter {
     // without prefix cache each follow-up re-processes the entire prompt (~16s).
     const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
     const prefixCacheOff = config.enablePrefixCache === false && !toolsNeedCache
+    const usePagedCache = config.usePagedCache ?? detected.usePagedCache
 
     if (prefixCacheOff) {
       args.push('--disable-prefix-cache')
@@ -2111,21 +2112,21 @@ export class SessionManager extends EventEmitter {
           args.push('--prefix-cache-max-bytes', config.prefixCacheMaxBytes.toString())
         }
       } else {
-        if (config.cacheMemoryMb && config.cacheMemoryMb > 0) {
+        if (!usePagedCache && config.cacheMemoryMb && config.cacheMemoryMb > 0) {
           args.push('--cache-memory-mb', config.cacheMemoryMb.toString())
         }
-        if (config.cacheMemoryPercent && config.cacheMemoryPercent > 0) {
+        if (!usePagedCache && config.cacheMemoryPercent && config.cacheMemoryPercent > 0) {
           args.push('--cache-memory-percent', (config.cacheMemoryPercent / 100).toString())
         }
         // Cache TTL (time-to-live for cache entries) — only meaningful for memory-aware cache, not paged cache
-        if (config.cacheTtlMinutes && config.cacheTtlMinutes > 0 && !(config.usePagedCache ?? detected.usePagedCache)) {
+        if (config.cacheTtlMinutes && config.cacheTtlMinutes > 0 && !usePagedCache) {
           args.push('--cache-ttl-minutes', config.cacheTtlMinutes.toString())
         }
       }
     }
 
     // Paged cache is a prefix cache backend — works for both LLMs and VLMs
-    if (!prefixCacheOff && (config.usePagedCache ?? detected.usePagedCache)) {
+    if (!prefixCacheOff && usePagedCache) {
       args.push('--use-paged-cache')
       if (config.pagedCacheBlockSize && config.pagedCacheBlockSize > 0) {
         args.push('--paged-cache-block-size', config.pagedCacheBlockSize.toString())
@@ -2149,7 +2150,7 @@ export class SessionManager extends EventEmitter {
     // TQ-native serialization stores 3-bit compressed data directly (26x smaller).
     // Metal crash fix: all mx.save_safetensors calls now happen on main thread;
     // background writer only does atomic rename + SQLite update.
-    if (!prefixCacheOff && config.enableDiskCache && !(config.usePagedCache ?? detected.usePagedCache)) {
+    if (!prefixCacheOff && config.enableDiskCache && !usePagedCache) {
       args.push('--enable-disk-cache')
       if (config.diskCacheDir) {
         args.push('--disk-cache-dir', config.diskCacheDir)
@@ -2162,7 +2163,7 @@ export class SessionManager extends EventEmitter {
     // Block-level disk cache (L2 for paged cache blocks) — RE-ENABLED in v1.3.15
     // All serialization happens on main thread (same Metal safety as above).
     // Background writer only does atomic rename + SQLite index update.
-    if (!prefixCacheOff && (config.usePagedCache ?? detected.usePagedCache) && config.enableBlockDiskCache) {
+    if (!prefixCacheOff && usePagedCache && config.enableBlockDiskCache) {
       args.push('--enable-block-disk-cache')
       if (config.blockDiskCacheDir) {
         args.push('--block-disk-cache-dir', config.blockDiskCacheDir)
