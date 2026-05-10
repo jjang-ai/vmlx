@@ -903,10 +903,11 @@ def dsv4_thinking_mode_max_ok(
 ) -> bool:
     """Return whether DSV4 ``thinking_mode=max`` visibly answered the probe."""
     normalized_content = normalize_short_answer(content).lower()
+    has_visible_seven = bool(re.search(r"(?<!\d)7(?!\d)", normalized_content))
     return (
         code == 200
         and finish == "stop"
-        and normalized_content == "7"
+        and has_visible_seven
         and bool(content.strip())
         and content.strip() != reasoning.strip()
         and not has_duplicate_block(f"{content}\n{reasoning}".lower())

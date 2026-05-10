@@ -370,6 +370,13 @@ def test_dsv4_max_mode_requires_visible_exact_answer_not_reasoning_mention():
         reasoning="3 plus 4 equals 7.",
     )
 
+    assert dsv4_thinking_mode_max_ok(
+        code=200,
+        finish="stop",
+        content="3 plus 4 equals 7. The final digit is 7.",
+        reasoning="3 plus 4 equals 7.",
+    )
+
     assert not dsv4_thinking_mode_max_ok(
         code=200,
         finish="stop",
