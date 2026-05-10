@@ -56,6 +56,9 @@ export interface SessionConfig {
   defaultTopP: number
   defaultRepetitionPenalty: number
   defaultEnableThinking?: boolean
+  dsv4RawMax?: boolean
+  dsv4FinalizerTokens?: number
+  dsv4ForceDirect?: boolean
   embeddingModel: string
   additionalArgs: string
   enableJit: boolean
@@ -133,6 +136,9 @@ export const DEFAULT_CONFIG: SessionConfig = {
   defaultTopP: 95,
   defaultRepetitionPenalty: 110,
   defaultEnableThinking: undefined,
+  dsv4RawMax: false,
+  dsv4FinalizerTokens: 4096,
+  dsv4ForceDirect: false,
   embeddingModel: '',
   additionalArgs: '',
   enableJit: true,
@@ -795,6 +801,39 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             : flashMoeActive
             ? "JIT is disabled while Flash MoE is on. Flash MoE's on-demand expert loading is incompatible with mx.compile tracing."
             : "JIT is disabled while distributed mode is on. Distributed orchestration cannot safely compile the local coordinator graph."} />
+        )}
+
+        {dsv4Active && (
+          <>
+            <InfoNote text="DeepSeek-V4 uses a native SWA+CSA/HCA composite cache. These controls map to DSV4-only engine env vars and require a restart." />
+            <CheckField
+              label="DSV4 Raw Max Thinking"
+              tooltip="Allows DSV4 reasoning_effort=max to reach the canonical encoder instead of being downgraded to the safer high-thinking rail. Use for long-form max-thinking tests after confirming memory headroom."
+              checked={!!config.dsv4RawMax}
+              onChange={v => onChange('dsv4RawMax', v)}
+              disabled={!!config.dsv4ForceDirect}
+            />
+            <SliderField
+              label="DSV4 Finalizer Tokens"
+              tooltip="Visible-answer budget after DSV4 is forced to close an unfinished thinking block. Larger values help long-form answers finish after max thinking, at the cost of longer generations."
+              value={config.dsv4FinalizerTokens ?? DEFAULT_CONFIG.dsv4FinalizerTokens ?? 4096}
+              onChange={v => onChange('dsv4FinalizerTokens', v)}
+              min={512}
+              max={8192}
+              step={512}
+              defaultValue={DEFAULT_CONFIG.dsv4FinalizerTokens ?? 4096}
+              maxInput={32768}
+            />
+            <CheckField
+              label="DSV4 Force Direct Rail"
+              tooltip="Forces DSV4 into visible-answer mode by setting VMLX_DSV4_FORCE_DIRECT_RAIL=1. This is a compatibility/debug escape hatch and takes precedence over raw max thinking."
+              checked={!!config.dsv4ForceDirect}
+              onChange={v => onChange('dsv4ForceDirect', v)}
+            />
+            {config.dsv4ForceDirect && (
+              <IncompatWarning text="Direct rail is forced for this session; DSV4 raw max thinking will not be used until Force Direct Rail is turned off." />
+            )}
+          </>
         )}
 
         <SliderField

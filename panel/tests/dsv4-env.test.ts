@@ -100,3 +100,34 @@ describe('dsv4EnvFromConfig wired into sessions.ts spawnEnv', () => {
     expect(source).toContain('spawnEnv[key] = value')
   })
 })
+
+describe('DSV4 runtime controls in SessionConfigForm', () => {
+  it('declares typed session config fields with safe defaults', () => {
+    const fs = require('node:fs')
+    const path = require('node:path')
+    const formPath = path.resolve(__dirname, '../src/renderer/src/components/sessions/SessionConfigForm.tsx')
+    const source = fs.readFileSync(formPath, 'utf8')
+
+    expect(source).toContain('dsv4RawMax?: boolean')
+    expect(source).toContain('dsv4FinalizerTokens?: number')
+    expect(source).toContain('dsv4ForceDirect?: boolean')
+    expect(source).toContain('dsv4RawMax: false')
+    expect(source).toContain('dsv4FinalizerTokens: 4096')
+    expect(source).toContain('dsv4ForceDirect: false')
+  })
+
+  it('renders DSV4-only raw-max/finalizer controls in performance settings', () => {
+    const fs = require('node:fs')
+    const path = require('node:path')
+    const formPath = path.resolve(__dirname, '../src/renderer/src/components/sessions/SessionConfigForm.tsx')
+    const source = fs.readFileSync(formPath, 'utf8')
+
+    expect(source).toContain('{dsv4Active && (')
+    expect(source).toContain('DSV4 Raw Max Thinking')
+    expect(source).toContain("onChange={v => onChange('dsv4RawMax', v)}")
+    expect(source).toContain('DSV4 Finalizer Tokens')
+    expect(source).toContain("onChange={v => onChange('dsv4FinalizerTokens', v)}")
+    expect(source).toContain('DSV4 Force Direct Rail')
+    expect(source).toContain("onChange={v => onChange('dsv4ForceDirect', v)}")
+  })
+})
