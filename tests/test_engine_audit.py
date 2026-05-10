@@ -2351,6 +2351,16 @@ class TestStartupCompatibilityGuards:
         assert '"$PYTHON" -m pip install --force-reinstall --no-deps "$VMLX_LOCAL"' in local_install_block
         assert '"$PYTHON" -m pip install --force-reinstall --no-deps "$JANG_LOCAL"' in local_install_block
 
+    def test_bundled_python_does_not_silently_fallback_to_pypi_jang_tools(self):
+        bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
+        verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
+
+        assert "VMLINUX_ALLOW_PYPI_JANG" in bundle_script
+        assert "RELEASE BLOCKED — local jang-tools source missing" in bundle_script
+        assert "pip install --no-deps \"jang>=" in bundle_script
+        assert "VMLINUX_ALLOW_MISSING_JANG_SOURCE_HASH" in verify_script
+        assert "RELEASE BLOCKED — local jang_tools source unavailable for hash parity" in verify_script
+
     def test_bundled_python_console_scripts_are_relocatable(self):
         bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
         verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
@@ -2382,12 +2392,18 @@ class TestStartupCompatibilityGuards:
     def test_bundled_python_hash_gate_covers_critical_jang_tools_files(self):
         verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
         for rel in (
+            "capabilities.py",
+            "convert_hy3_jangtq.py",
             "load_jangtq.py",
             "load_jangtq_kimi_vlm.py",
             "dsv4/mlx_model.py",
             "dsv4/pool_quant_cache.py",
+            "hy3/__init__.py",
+            "hy3/model.py",
+            "hy3/runtime.py",
             "kimi_prune/generate_vl.py",
             "kimi_prune/runtime_patch.py",
+            "topk_override.py",
             "turboquant/fused_gate_up_kernel.py",
             "turboquant/gather_tq_kernel.py",
             "turboquant/hadamard_kernel.py",
@@ -2730,6 +2746,23 @@ class TestZayaCCACachePolicy:
         assert resolved is False
         assert explicit_on is True
 
+    def test_gemma4_supports_thinking_is_explicit_not_implicit(self):
+        from unittest.mock import patch
+        from vmlx_engine.model_config_registry import get_model_config_registry
+
+        registry = get_model_config_registry()
+        registry.clear_cache()
+        with patch(
+            "vmlx_engine.model_config_registry.load_config",
+            lambda _path: {"model_type": "gemma4"},
+        ):
+            cfg = registry.lookup("google/gemma-4-26b-it")
+
+        assert cfg.family_name == "gemma4"
+        assert cfg.reasoning_parser == "gemma4"
+        assert cfg.supports_thinking is True
+        assert cfg.think_in_template is False
+
     def test_cli_disables_prefix_paged_l2_and_tq_for_zaya_cca(self):
         source = Path("./vmlx_engine/cli.py").read_text()
 
@@ -2906,9 +2939,9 @@ class TestZayaCCACachePolicy:
             assert caps.get("tool_parser") == "zaya_xml"
             assert caps.get("reasoning_parser") == "qwen3"
             assert caps.get("think_in_template") is False
-            # Per Eric 2026-05-10 honest-flag directive: ZAYA AND ZAYA1-VL both
-            # have <think> rail + enable_thinking flag; supports_thinking=True
-            # for the entire family. Callers opt in via enable_thinking=True.
+            # Per Eric 2026-05-10 honest-flag directive: ZAYA AND ZAYA1-VL are
+            # reasoning-capable and use qwen3 parsing, while default prompts
+            # are not stamped as starting inside an open think rail.
             assert caps.get("supports_thinking") is True
             assert cfg.get("zaya_expert_layout") == "split_switch_mlp"
             assert caps.get("modality") == ("vision" if model_type == "zaya1_vl" else "text")

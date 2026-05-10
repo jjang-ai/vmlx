@@ -326,14 +326,20 @@ def test_packaged_bundled_hash_gate_covers_critical_jang_tools_files():
     gate_module = _load_gate_module()
 
     expected = {
+        "capabilities.py",
         "convert.py",
+        "convert_hy3_jangtq.py",
         "loader.py",
         "load_jangtq.py",
         "load_jangtq_kimi_vlm.py",
         "dsv4/mlx_model.py",
         "dsv4/pool_quant_cache.py",
+        "hy3/__init__.py",
+        "hy3/model.py",
+        "hy3/runtime.py",
         "kimi_prune/generate_vl.py",
         "kimi_prune/runtime_patch.py",
+        "topk_override.py",
         "turboquant/fused_gate_up_kernel.py",
         "turboquant/gather_tq_kernel.py",
         "turboquant/hadamard_kernel.py",
@@ -412,12 +418,18 @@ def test_verify_bundled_python_hash_gate_covers_release_runtime_files():
         "utils/tokenizer.py",
     }
     expected_jang_tools_files = {
+        "capabilities.py",
         "convert.py",
+        "convert_hy3_jangtq.py",
         "loader.py",
         "load_jangtq.py",
         "load_jangtq_kimi_vlm.py",
+        "hy3/__init__.py",
+        "hy3/model.py",
+        "hy3/runtime.py",
         "kimi_prune/generate_vl.py",
         "kimi_prune/runtime_patch.py",
+        "topk_override.py",
         "turboquant/fused_gate_up_kernel.py",
         "turboquant/gather_tq_kernel.py",
         "turboquant/hadamard_kernel.py",
@@ -426,6 +438,18 @@ def test_verify_bundled_python_hash_gate_covers_release_runtime_files():
 
     for rel in expected_engine_files | expected_jang_tools_files:
         assert f'"{rel}"' in verifier
+
+
+def test_verify_bundled_python_import_gate_covers_hy3_jangtq_runtime_modules():
+    verifier = Path("panel/scripts/verify-bundled-python.sh").read_text()
+
+    for mod in (
+        "jang_tools.hy3",
+        "jang_tools.hy3.runtime",
+        "jang_tools.topk_override",
+        "jang_tools.capabilities",
+    ):
+        assert f'("{mod}",' in verifier
 
 
 def test_nemotron_omni_media_dependency_timm_is_packaged_and_verified():

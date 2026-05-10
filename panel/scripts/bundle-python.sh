@@ -124,8 +124,16 @@ if [ -f "$JANG_LOCAL/pyproject.toml" ]; then
   echo "    using local jang-tools at $JANG_LOCAL"
   "$PYTHON" -m pip install --force-reinstall --no-deps "$JANG_LOCAL"
 else
-  echo "    local jang-tools missing, falling back to PyPI"
-  "$PYTHON" -m pip install --no-deps "jang>=2.5.27"
+  if [ "${VMLINUX_ALLOW_PYPI_JANG:-0}" = "1" ]; then
+    echo "    local jang-tools missing; VMLX_ALLOW_PYPI_JANG=1 so using PyPI fallback"
+    "$PYTHON" -m pip install --no-deps "jang>=2.5.27"
+  else
+    echo "ERROR: RELEASE BLOCKED — local jang-tools source missing: $JANG_LOCAL" >&2
+    echo "       vMLX release builds must bundle the checked-out JANG runtime," >&2
+    echo "       not whatever PyPI happens to have. Set VMLX_ALLOW_PYPI_JANG=1" >&2
+    echo "       only for non-release CI smoke builds." >&2
+    exit 1
+  fi
 fi
 
 # Clean up to reduce size

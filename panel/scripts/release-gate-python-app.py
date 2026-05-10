@@ -354,14 +354,20 @@ BUNDLED_SOURCE_HASH_PATHS = (
 )
 
 JANG_TOOLS_SOURCE_HASH_PATHS = (
+    "capabilities.py",
     "convert.py",
+    "convert_hy3_jangtq.py",
     "loader.py",
     "load_jangtq.py",
     "load_jangtq_kimi_vlm.py",
     "dsv4/mlx_model.py",
     "dsv4/pool_quant_cache.py",
+    "hy3/__init__.py",
+    "hy3/model.py",
+    "hy3/runtime.py",
     "kimi_prune/generate_vl.py",
     "kimi_prune/runtime_patch.py",
+    "topk_override.py",
     "turboquant/fused_gate_up_kernel.py",
     "turboquant/gather_tq_kernel.py",
     "turboquant/hadamard_kernel.py",

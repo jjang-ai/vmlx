@@ -135,14 +135,20 @@ echo "  ok   bundled critical vmlx_engine files match source content"
 BUNDLED_JANG_TOOLS_DIR="$(PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH= "$PY" -B -s -c 'import pathlib, jang_tools; print(pathlib.Path(jang_tools.__file__).resolve().parent)' 2>/dev/null || true)"
 JANG_TOOLS_SOURCE_DIR="${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}/jang_tools"
 HASH_GATED_JANG_TOOLS_FILES=(
+  "capabilities.py"
   "convert.py"
+  "convert_hy3_jangtq.py"
   "loader.py"
   "load_jangtq.py"
   "load_jangtq_kimi_vlm.py"
   "dsv4/mlx_model.py"
   "dsv4/pool_quant_cache.py"
+  "hy3/__init__.py"
+  "hy3/model.py"
+  "hy3/runtime.py"
   "kimi_prune/generate_vl.py"
   "kimi_prune/runtime_patch.py"
+  "topk_override.py"
   "turboquant/fused_gate_up_kernel.py"
   "turboquant/gather_tq_kernel.py"
   "turboquant/hadamard_kernel.py"
@@ -154,7 +160,16 @@ if [ -z "$BUNDLED_JANG_TOOLS_DIR" ] || [ ! -d "$BUNDLED_JANG_TOOLS_DIR" ]; then
   exit 1
 fi
 if [ ! -d "$JANG_TOOLS_SOURCE_DIR" ]; then
-  echo "⚠️  skipping jang_tools content hash parity; local source not present: $JANG_TOOLS_SOURCE_DIR"
+  if [ "${VMLINUX_ALLOW_MISSING_JANG_SOURCE_HASH:-0}" = "1" ]; then
+    echo "⚠️  skipping jang_tools content hash parity; local source not present: $JANG_TOOLS_SOURCE_DIR"
+  else
+    echo "❌ RELEASE BLOCKED — local jang_tools source unavailable for hash parity"
+    echo "   expected source: $JANG_TOOLS_SOURCE_DIR"
+    echo
+    echo "   Release builds must compare bundled jang_tools against local source."
+    echo "   Set VMLX_ALLOW_MISSING_JANG_SOURCE_HASH=1 only for non-release CI smoke builds."
+    exit 1
+  fi
 else
   for rel in "${HASH_GATED_JANG_TOOLS_FILES[@]}"; do
     if [ ! -f "$JANG_TOOLS_SOURCE_DIR/$rel" ] || [ ! -f "$BUNDLED_JANG_TOOLS_DIR/$rel" ]; then
@@ -197,7 +212,11 @@ REQUIRED = [
     ("einops", "einops tensor rearrange", "bundled einops package missing — Nemotron-Omni vision remote code will fail before generation"),
     ("librosa", "librosa audio features", "bundled librosa package missing — Nemotron-Omni session construction will fail before generation"),
     ("jang_tools", "jang-tools", "bundled jang-tools package missing"),
+    ("jang_tools.capabilities", "jang_tools.capabilities", "JANG capability stamping/verification helpers missing from bundled jang-tools"),
+    ("jang_tools.hy3", "jang_tools.hy3", "Hy3 model-family registration missing from bundled jang-tools"),
+    ("jang_tools.hy3.runtime", "jang_tools.hy3.runtime", "Hy3 runtime loader missing from bundled jang-tools"),
     ("jang_tools.load_jangtq", "jang_tools.load_jangtq", "JANGTQ fast-path loader missing from bundled jang-tools"),
+    ("jang_tools.topk_override", "jang_tools.topk_override", "JANGTQ top-k runtime override helper missing from bundled jang-tools"),
     ("jang_tools.turboquant.tq_kernel", "jang_tools.turboquant.tq_kernel", "TQ Metal kernel runtime missing from bundled jang-tools"),
     ("jang_tools.turboquant.hadamard_kernel", "hadamard_kernel", "P3 Hadamard kernel missing"),
     ("jang_tools.turboquant.fused_gate_up_kernel", "fused_gate_up_kernel", "P17 fused kernel missing"),
