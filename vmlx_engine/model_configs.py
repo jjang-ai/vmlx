@@ -623,12 +623,27 @@ def register_all(registry=None):
     # `bundle-python.sh`).
     #
     # Cache type "hybrid" — engine builds KVCache slots for the MLA
-    # layers and ArraysCache(size=1) for the linear-attn layers. The
-    # `<role>SYSTEM</role>...<|role_end|>` chat template hardcodes
-    # `detailed thinking off`. Do not advertise Ling as a default-reasoning
-    # family: stale bundle capability stamps have claimed deepseek_r1 support,
-    # but Auto must keep visible-answer-first behavior unless a future live
-    # gate proves a proper Ling reasoning rail.
+    # layers and ArraysCache(size=1) for the linear-attn layers.
+    #
+    # 2026-05-09 contract per Eric's canonical FAMILY_MAP after Ling restamp:
+    #   think_in_template=False  — chat_template.jinja line 1 hardcodes
+    #     `{% set thinking_option = 'off' %}`. There is NO `enable_thinking`
+    #     template variable; vMLX's request-time `enable_thinking=true` is a
+    #     no-op for Ling. Only system message containing 'detailed thinking
+    #     on' flips the prompt-side thinking_option to 'on'.
+    #   supports_thinking=True   — model CAN do <think> blocks when opted-in
+    #     via system message. This is a model capability fact, distinct from
+    #     default template behavior. CAPS endpoint advertises this so callers
+    #     know they can opt in.
+    #   reasoning_parser=deepseek_r1  — when user opts in via system message
+    #     and model emits <think>...</think>, the parser extracts those
+    #     blocks into reasoning_content. Idle when not opted in (no <think>
+    #     blocks present → nothing to extract).
+    #
+    # Default chat path remains visible-answer-first: template emits
+    # 'detailed thinking off', model never opens <think>, parser idle.
+    # Only changes vs prior contract: CAPS endpoint advertises true, and
+    # opt-in via system message now works end-to-end through the parser.
     # MTP layer (`model.layers.32`) is loaded but skipped in standard
     # generation; spec-decode wiring is a future pass. Tool format is
     # DeepSeek-style.
@@ -650,9 +665,9 @@ def register_all(registry=None):
             cache_type="hybrid",
             eos_tokens=["<|role_end|>", "<|endoftext|>"],
             tool_parser="deepseek",
-            reasoning_parser=None,
+            reasoning_parser="deepseek_r1",
             think_in_template=False,
-            supports_thinking=False,
+            supports_thinking=True,
             priority=20,
         )
     )
