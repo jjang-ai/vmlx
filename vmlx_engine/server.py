@@ -3380,10 +3380,100 @@ def _bundle_index_has_tensor_prefix(bundle_path: str | None, prefix: str) -> boo
     return _bundle_index_tensor_prefix_status(bundle_path, prefix)[0]
 
 
+def _bundle_index_mtp_layer_count(bundle_path: str | None) -> int | None:
+    """Count distinct ``mtp.N.*`` layer indexes in the bundle's weight map.
+
+    Returns the highest-N + 1 (i.e. layer count) when at least one mtp.N tensor
+    is present, else None. Used to cross-check
+    ``config.num_nextn_predict_layers`` so a bundle that ships partial MTP
+    weights doesn't silently report ``artifact_available=True`` with a wrong
+    layer count.
+    """
+    if not bundle_path:
+        return None
+    try:
+        from pathlib import Path
+        import re as _re
+
+        index_path = Path(bundle_path) / "model.safetensors.index.json"
+        if not index_path.is_file():
+            return None
+        index = json.loads(index_path.read_text())
+        weight_map = index.get("weight_map") if isinstance(index, dict) else None
+        if not isinstance(weight_map, dict):
+            return None
+        layer_re = _re.compile(r"^mtp\.(\d+)(?:\.|$)")
+        indexes: set[int] = set()
+        for key in weight_map:
+            m = layer_re.match(str(key))
+            if m:
+                indexes.add(int(m.group(1)))
+        if not indexes:
+            return None
+        return len(indexes)
+    except Exception:
+        return None
+
+
+_JANGMTP_FAMILY_ALIAS = {
+    "qwen3_5_moe_text": "qwen3_5_moe",
+    "hy3": "hy_v3",
+    "zaya_vl": "zaya1_vl",
+    "mininax": "minimax",
+}
+
+_JANGMTP_SUPPORTED_FAMILIES: set[str] = {
+    "qwen3_5",
+    "qwen3_5_moe",
+    "qwen3_next",
+    "gemma4",
+    "nemotron",
+    "nemotron_h",
+    "hy_v3",
+    "minimax",
+    "zaya",
+    "zaya1_vl",
+}
+
+
+def _normalize_jangmtp_family(name: str | None) -> str | None:
+    if not name:
+        return None
+    normalized = str(name).strip().lower()
+    return _JANGMTP_FAMILY_ALIAS.get(normalized, normalized)
+
+
+def _bundle_mtp_family(bundle_path: str | None) -> str | None:
+    if not bundle_path:
+        return None
+    try:
+        from .model_config_registry import get_model_config_registry
+
+        cfg = get_model_config_registry().lookup(bundle_path)
+        family_name = getattr(cfg, "family_name", None)
+        if family_name:
+            normalized = _normalize_jangmtp_family(family_name)
+            if normalized and normalized != "unknown":
+                return normalized
+    except Exception:
+        # Keep telemetry functional even if registry is unavailable.
+        pass
+
+    cfg = _read_bundle_json(bundle_path, "config.json")
+    return _normalize_jangmtp_family(cfg.get("model_type"))
+
+
+def _bundle_mtp_runtime_supported(family: str | None) -> bool:
+    if not family:
+        return False
+    return _normalize_jangmtp_family(family) in _JANGMTP_SUPPORTED_FAMILIES
+
+
 def _model_mtp_status(bundle_path: str | None) -> dict:
     """Describe whether a bundle contains usable multi-token prediction heads."""
     cfg = _read_bundle_json(bundle_path, "config.json")
     jang_cfg = _read_bundle_json(bundle_path, "jang_config.json")
+    family = _bundle_mtp_family(bundle_path)
     raw_layers = cfg.get("num_nextn_predict_layers")
     invalid_config_layers = False
     try:
@@ -3391,11 +3481,21 @@ def _model_mtp_status(bundle_path: str | None) -> dict:
     except (TypeError, ValueError):
         config_layers = None
         invalid_config_layers = True
-    drop_mtp = jang_cfg.get("drop_mtp")
+    drop_mtp_raw = jang_cfg.get("drop_mtp")
+    # Strict boolean check: only literal True is treated as "drop". Truthy
+    # non-bool values (e.g. "yes", 1) historically slipped past the
+    # `drop_mtp is True` identity check and were silently treated as "don't
+    # drop", which then claimed weights_present_runtime_unwired even when the
+    # bundle author tried to disable MTP. Flag invalid types loudly.
+    drop_mtp_invalid_type = (
+        drop_mtp_raw is not None and not isinstance(drop_mtp_raw, bool)
+    )
+    drop_mtp = drop_mtp_raw if isinstance(drop_mtp_raw, bool) else None
     has_mtp_tensors, index_error = _bundle_index_tensor_prefix_status(
         bundle_path,
         "mtp.",
     )
+    indexed_mtp_layer_count = _bundle_index_mtp_layer_count(bundle_path)
 
     issues: list[str] = []
     if index_error:
@@ -3403,6 +3503,18 @@ def _model_mtp_status(bundle_path: str | None) -> dict:
     if invalid_config_layers:
         issues.append(
             "config.num_nextn_predict_layers is invalid; expected an integer"
+        )
+    if config_layers is not None and config_layers < 0:
+        # Negative layer count is corrupt metadata. Pin loudly so callers
+        # don't silently treat it as "configured without runtime".
+        issues.append(
+            "config.num_nextn_predict_layers is negative "
+            f"({config_layers}); expected a non-negative integer"
+        )
+    if drop_mtp_invalid_type:
+        issues.append(
+            "jang_config.drop_mtp must be a boolean; got "
+            f"{type(drop_mtp_raw).__name__}: {drop_mtp_raw!r}"
         )
     if config_layers and config_layers > 0 and drop_mtp is not True and not has_mtp_tensors:
         issues.append(
@@ -3417,6 +3529,22 @@ def _model_mtp_status(bundle_path: str | None) -> dict:
         issues.append(
             "jang_config.drop_mtp=true but config.num_nextn_predict_layers="
             f"{config_layers}"
+        )
+    if (
+        config_layers is not None
+        and config_layers > 0
+        and indexed_mtp_layer_count is not None
+        and indexed_mtp_layer_count != config_layers
+        and drop_mtp is not True
+    ):
+        # Bundle indexes a different number of distinct mtp.N layers than the
+        # config claims. Either the converter wrote partial MTP weights
+        # (artifact corruption) or num_nextn_predict_layers was edited
+        # without re-running the converter. Either way, runtime acceleration
+        # would silently use the wrong layer count.
+        issues.append(
+            f"config.num_nextn_predict_layers={config_layers} but bundle "
+            f"index has {indexed_mtp_layer_count} distinct mtp.N layer(s)"
         )
     if drop_mtp is True and has_mtp_tensors:
         issues.append("jang_config.drop_mtp=true but bundle still indexes mtp.* tensors")
