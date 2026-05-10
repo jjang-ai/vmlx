@@ -324,6 +324,18 @@ export function resolveImageModelFromDirectoryName(name: string): ImageModelDef 
   return undefined
 }
 
+/**
+ * mflux format validation depends on encoder topology:
+ * Flux1 variants are dual-encoder and require `text_encoder_2/`; ZImage,
+ * Flux2Klein, QwenImage, FIBO, etc. are single-encoder and must not be
+ * rejected just because `text_encoder_2/` is absent.
+ */
+export function getImageModelEncoderType(name: string): 'single' | 'dual' | undefined {
+  const model = resolveImageModelFromDirectoryName(name) || getImageModel(name)
+  if (!model) return undefined
+  return model.mfluxClass === 'Flux1' ? 'dual' : 'single'
+}
+
 /** Get default inference steps for a model ID */
 export function getDefaultSteps(modelId: string): number {
   return getImageModel(modelId)?.steps ?? 4

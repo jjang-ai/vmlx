@@ -84,6 +84,18 @@ def _env_int(name: str, default: int, legacy_name: str | None = None) -> int:
         return default
 
 
+def _suppress_image_resource_tracker_warning() -> None:
+    """Hide benign mflux multiprocessing semaphore cleanup noise on shutdown."""
+    import warnings
+
+    warnings.filterwarnings(
+        "ignore",
+        message=r"resource_tracker: There appear to be .* leaked semaphore objects to clean up at shutdown",
+        category=UserWarning,
+        module=r"multiprocessing\.resource_tracker",
+    )
+
+
 def serve_command(args):
     """Start the OpenAI-compatible server."""
     import logging
@@ -853,6 +865,7 @@ def serve_command(args):
     # idempotent — the second check is a defensive nop.
 
     if _is_image:
+        _suppress_image_resource_tracker_warning()
         # Image model path — load via mflux, serve /v1/images/generations only
         logger.info(f"Detected image model: {args.model}")
         server._model_type = "image"

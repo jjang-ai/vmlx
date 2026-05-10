@@ -60,6 +60,15 @@ describe('Download System', () => {
       expect(schnell!.category).toBe('generate')
     })
 
+    it('encoder topology is explicit so single-encoder image models are not rejected as incomplete', async () => {
+      const { getImageModelEncoderType } = await import('../src/shared/imageModels')
+      expect(getImageModelEncoderType('schnell')).toBe('dual')
+      expect(getImageModelEncoderType('FLUX.1-schnell-mflux-4bit')).toBe('dual')
+      expect(getImageModelEncoderType('z-image-turbo')).toBe('single')
+      expect(getImageModelEncoderType('Z-Image-Turbo-mflux-4bit')).toBe('single')
+      expect(getImageModelEncoderType('flux2-klein-9b')).toBe('single')
+    })
+
     it('Qwen Image Edit is full precision only', async () => {
       const { getImageModel } = await import('../src/shared/imageModels')
       const qwen = getImageModel('qwen-image-edit')

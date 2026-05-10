@@ -491,6 +491,7 @@ declare global {
         isGenerating: () => Promise<{
           generating: boolean;
           startTime: number | null;
+          sessionId: string | null;
         }>;
         getModelPaths: () => Promise<
           Array<{

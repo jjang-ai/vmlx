@@ -6,7 +6,7 @@ import { homedir } from 'os'
 import { mkdirSync, writeFileSync, existsSync, unlinkSync, readdirSync, rmdirSync, readFileSync } from 'fs'
 import { sessionManager } from '../sessions'
 import { db } from '../database'
-import { getImageModel, resolveImageModelFromDirectoryName } from '../../shared/imageModels'
+import { getImageModel, resolveImageModelFromDirectoryName, resolveImageModelRepo } from '../../shared/imageModels'
 import type { ServerConfig } from '../server'
 import type { ImageSession, ImageGeneration } from '../database'
 
@@ -18,6 +18,8 @@ let activeGenerationController: AbortController | null = null
 // Track whether image generation is in-flight (persists across tab switches)
 let isImageGenerating = false
 let generationStartTime: number | null = null
+let activeGenerationSessionId: string | null = null
+let lastGenerationSessionId: string | null = null
 
 // Serialize startServer calls to prevent race conditions when the user
 // rapidly switches models (e.g., clicks model A then immediately model B).
@@ -25,6 +27,22 @@ let generationStartTime: number | null = null
 // double-stop the same session, and both create new servers — leaving an
 // orphaned server process that nobody tracks.
 let startServerChain: Promise<any> = Promise.resolve()
+
+function findDownloadedImageModelPath(modelName: string, quantize: number): { localPath: string; modelId: string; repoId?: string } | null {
+  const modelDef = resolveImageModelFromDirectoryName(modelName) || getImageModel(modelName)
+  const modelId = modelDef?.id || modelName
+  const repoId = resolveImageModelRepo(modelId, quantize)
+  const repoName = repoId?.split('/').pop()
+  if (!repoName) return null
+
+  for (const base of [join(homedir(), '.mlxstudio', 'models', 'image'), join(homedir(), '.mlxstudio', 'models', 'xcreates')]) {
+    const candidate = join(base, repoName)
+    if (existsSync(candidate)) {
+      return { localPath: candidate, modelId, repoId: repoId || undefined }
+    }
+  }
+  return null
+}
 
 /** Build fetch headers for image server requests, including auth if API key is configured. */
 function getImageFetchHeaders(): Record<string, string> {
@@ -199,6 +217,8 @@ export function registerImageHandlers(): void {
       activeGenerationController = new AbortController()
       isImageGenerating = true
       generationStartTime = Date.now()
+      activeGenerationSessionId = sessionId
+      lastGenerationSessionId = sessionId
       // 30-minute timeout — use Node.js http.request instead of Electron fetch
       // (Chromium's net stack has its own ~5 min socket timeout that ignores keepalive)
       const timeoutId = setTimeout(() => activeGenerationController?.abort(), 30 * 60 * 1000)
@@ -285,10 +305,14 @@ export function registerImageHandlers(): void {
 
       isImageGenerating = false
       generationStartTime = null
+      activeGenerationSessionId = null
+      activeGenerationController = null
       return { success: true, generations }
     } catch (error) {
       isImageGenerating = false
       generationStartTime = null
+      activeGenerationSessionId = null
+      activeGenerationController = null
       console.error('[IMAGE] Generation failed:', error)
       return { success: false, error: (error as Error).message }
     }
@@ -345,6 +369,8 @@ export function registerImageHandlers(): void {
       activeGenerationController = new AbortController()
       isImageGenerating = true
       generationStartTime = Date.now()
+      activeGenerationSessionId = sessionId
+      lastGenerationSessionId = sessionId
       // 30-minute timeout for image edits (Qwen full precision can take 10+ minutes)
       // Use Node.js http.request instead of Electron fetch — Chromium's net stack
       // has its own socket timeout (~5 min) that ignores keepalive, causing
@@ -428,10 +454,14 @@ export function registerImageHandlers(): void {
 
       isImageGenerating = false
       generationStartTime = null
+      activeGenerationSessionId = null
+      activeGenerationController = null
       return { success: true, generations }
     } catch (error) {
       isImageGenerating = false
       generationStartTime = null
+      activeGenerationSessionId = null
+      activeGenerationController = null
       console.error('[IMAGE] Edit failed:', error)
       return { success: false, error: (error as Error).message }
     }
@@ -443,6 +473,7 @@ export function registerImageHandlers(): void {
     return {
       generating: isImageGenerating,
       startTime: generationStartTime,
+      sessionId: activeGenerationSessionId || lastGenerationSessionId,
     }
   })
 
@@ -464,6 +495,8 @@ export function registerImageHandlers(): void {
             }
             isImageGenerating = false
             generationStartTime = null
+            activeGenerationSessionId = null
+            lastGenerationSessionId = null
             try {
               await sessionManager.stopSession(activeImageSessionId)
             } catch (e) {
@@ -484,8 +517,15 @@ export function registerImageHandlers(): void {
               console.log(`[IMAGE] Stale DB entry for ${modelName} (quantize=${quantize}): path no longer exists, removing.`)
               db.deleteImageModelPath(modelName, quantize || 0)
             }
-            console.log(`[IMAGE] No local model found for ${modelName} (quantize=${quantize}). User must download first.`)
-            return { success: false, error: `Model "${modelName}" not downloaded. Use the Download button first.` }
+            const discovered = findDownloadedImageModelPath(modelName, quantize || 0)
+            if (discovered) {
+              modelPath = discovered.localPath
+              db.setImageModelPath(discovered.modelId, quantize || 0, discovered.localPath, discovered.repoId)
+              console.log(`[IMAGE] Registered existing downloaded image model: ${discovered.modelId} q=${quantize || 0} → ${modelPath}`)
+            } else {
+              console.log(`[IMAGE] No local model found for ${modelName} (quantize=${quantize}). User must download first.`)
+              return { success: false, error: `Model "${modelName}" not downloaded. Use the Download button first.` }
+            }
           }
 
           // Create a session config for image serving
@@ -545,6 +585,8 @@ export function registerImageHandlers(): void {
         }
         isImageGenerating = false
         generationStartTime = null
+        activeGenerationSessionId = null
+        lastGenerationSessionId = null
         await sessionManager.stopSession(activeImageSessionId)
         activeImageSessionId = null
       }
@@ -560,6 +602,8 @@ export function registerImageHandlers(): void {
       activeGenerationController = null
       isImageGenerating = false
       generationStartTime = null
+      activeGenerationSessionId = null
+      lastGenerationSessionId = null
       return { success: true }
     }
     return { success: false, error: 'No active generation' }

@@ -658,6 +658,14 @@ class TestImageGenWorkerExecutor:
         assert "server._run_image_gen_call_sync(" in source
         assert "server._image_gen.load" in source
 
+    def test_cli_image_mode_suppresses_resource_tracker_shutdown_noise(self):
+        import vmlx_engine.cli as cli
+
+        helper_source = inspect.getsource(cli._suppress_image_resource_tracker_warning)
+        serve_source = inspect.getsource(cli.serve_command)
+        assert "resource_tracker: There appear to be .* leaked semaphore objects" in helper_source
+        assert "_suppress_image_resource_tracker_warning()" in serve_source
+
 
 # ---------------------------------------------------------------------------
 # 9. Error handling

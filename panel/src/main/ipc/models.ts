@@ -18,6 +18,7 @@ import { db } from "../database";
 import { detectModelConfigFromDir } from "../model-config-registry";
 import { getBundledPythonPath } from "../engine-manager";
 import {
+  getImageModelEncoderType,
   IMAGE_MODELS,
   resolveImageModelRepo as _resolveImageModelRepo,
 } from "../../shared/imageModels";
@@ -329,34 +330,41 @@ function checkImageModelLocal(
   repoId?: string;
   missing?: string[];
 } {
+  const repoId = resolveImageModelRepo(modelName, quantize);
+  const encoderType = getImageModelEncoderType(modelName);
+
+  const validateCandidate = (localPath: string, candidateRepoId?: string) => {
+    if (existsSync(join(localPath, ".vmlx-downloading"))) {
+      return {
+        available: false,
+        localPath,
+        repoId: candidateRepoId,
+        missing: ["download incomplete"],
+      };
+    }
+
+    const validation = validateImageModelCompleteness(localPath, encoderType);
+    if (!validation.complete) {
+      return {
+        available: false,
+        localPath,
+        repoId: candidateRepoId,
+        missing: validation.missing,
+      };
+    }
+
+    return {
+      available: true,
+      localPath,
+      repoId: candidateRepoId,
+    };
+  };
+
   const stored = db.getImageModelPath(modelName, quantize);
   if (stored) {
     try {
       if (existsSync(stored.localPath)) {
-        // Check for .vmlx-downloading marker (download in progress)
-        if (existsSync(join(stored.localPath, ".vmlx-downloading"))) {
-          return {
-            available: false,
-            localPath: stored.localPath,
-            repoId: stored.repoId,
-            missing: ["download incomplete"],
-          };
-        }
-        // Use thorough validation matching validateImageModelCompleteness
-        const validation = validateImageModelCompleteness(stored.localPath);
-        if (!validation.complete) {
-          return {
-            available: false,
-            localPath: stored.localPath,
-            repoId: stored.repoId,
-            missing: validation.missing,
-          };
-        }
-        return {
-          available: true,
-          localPath: stored.localPath,
-          repoId: stored.repoId,
-        };
+        return validateCandidate(stored.localPath, stored.repoId);
       } else {
         // Path was deleted — remove stale entry from DB
         db.deleteImageModelPath(modelName, quantize);
@@ -365,7 +373,24 @@ function checkImageModelLocal(
       /* fs error — treat as unavailable */
     }
   }
-  const repoId = resolveImageModelRepo(modelName, quantize);
+
+  // Users often already have HF repos under ~/.mlxstudio/models/image from a
+  // manual `hf download`, migration from another install, or a completed
+  // download before the DB row was written. Do a deterministic registry-based
+  // disk fallback before telling the UI the model is missing.
+  const repoName = repoId?.split("/").pop();
+  if (repoName) {
+    for (const baseDir of getModelDirectories("image")) {
+      const candidate = join(baseDir, repoName);
+      if (!existsSync(candidate)) continue;
+      const result = validateCandidate(candidate, repoId || undefined);
+      if (result.available) {
+        db.setImageModelPath(modelName, quantize, candidate, repoId || undefined);
+      }
+      return result;
+    }
+  }
+
   return { available: false, repoId: repoId || undefined };
 }
 

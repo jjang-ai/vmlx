@@ -49,6 +49,12 @@ interface ImageSettings {
   strength: number
 }
 
+interface ImageGenerationStatus {
+  generating: boolean
+  startTime: number | null
+  sessionId: string | null
+}
+
 export function ImageTab() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
   const [sessions, setSessions] = useState<ImageSessionInfo[]>([])
@@ -155,12 +161,16 @@ export function ImageTab() {
   // Check if image generation is in-flight (persists across tab switches)
   // Also reload gallery if generation completed while we were on another tab
   useEffect(() => {
-    window.api.image.isGenerating().then((status: { generating: boolean; startTime: number | null }) => {
+    window.api.image.isGenerating().then((status: ImageGenerationStatus) => {
       if (status.generating) {
         setGenerating(true)
-      } else if (currentSessionId) {
+        if (status.sessionId) setCurrentSessionId(status.sessionId)
+      } else if (status.sessionId || currentSessionId) {
         // Generation may have completed while we were away — reload gallery
-        loadGenerations(currentSessionId)
+        const sessionIdToRefresh = status.sessionId || currentSessionId!
+        setCurrentSessionId(sessionIdToRefresh)
+        loadGenerations(sessionIdToRefresh)
+        loadSessions()
       }
     }).catch(() => {})
   }, [])
@@ -245,6 +255,32 @@ export function ImageTab() {
     const result = await window.api.image.getGenerations(sessionId)
     setGenerations(result || [])
   }, [])
+
+  const syncGenerationStatus = useCallback(async () => {
+    const status: ImageGenerationStatus = await window.api.image.isGenerating()
+    if (status.generating) {
+      setGenerating(true)
+      if (status.sessionId && status.sessionId !== currentSessionId) {
+        setCurrentSessionId(status.sessionId)
+      }
+      return
+    }
+
+    setGenerating(false)
+    const sessionIdToRefresh = status.sessionId || currentSessionId
+    if (sessionIdToRefresh) {
+      setCurrentSessionId(sessionIdToRefresh)
+      await loadGenerations(sessionIdToRefresh)
+      await loadSessions()
+    }
+  }, [currentSessionId, loadGenerations, loadSessions])
+
+  useEffect(() => {
+    if (!generating) return
+    const timer = setInterval(syncGenerationStatus, 1500)
+    syncGenerationStatus().catch(() => {})
+    return () => clearInterval(timer)
+  }, [generating, syncGenerationStatus])
 
   const handleModelSelect = useCallback(async (modelId: string, modelQuantize?: number, category?: 'generate' | 'edit', serverSettings?: ImageServerSettings) => {
     const mode = category || 'generate'
