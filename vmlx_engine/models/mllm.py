@@ -1581,6 +1581,7 @@ class MLXMultimodalLM:
 
         try:
             from mlx_vlm import stream_generate
+            from mlx_vlm.models import cache as vlm_cache
             from mlx_vlm.prompt_utils import apply_chat_template
         except ImportError:
             # Fallback to non-streaming
@@ -1601,11 +1602,17 @@ class MLXMultimodalLM:
 
         # Process images
         all_images = []
+        all_sources = []
         if images:
             all_images.extend(self._prepare_images(images))
+            all_sources.extend(images)
         for video_path in videos:
             frames = self._prepare_video(video_path, fps=video_fps, max_frames=video_max_frames)
             all_images.extend(frames)
+            video_str = video_path if isinstance(video_path, str) else str(video_path)
+            all_sources.append(
+                f"video:{video_str}:fps{video_fps}:max{video_max_frames}"
+            )
 
         # Guard against excessive total images (including video frames)
         _max_images = kwargs.get("max_images_per_request", 20)
@@ -1630,6 +1637,51 @@ class MLXMultimodalLM:
         else:
             formatted_prompt = prompt
 
+        prompt_cache = None
+        prompt_cache_state = None
+        cache_hit = False
+        token_ids: list[int] = []
+        use_cache = kwargs.pop("use_cache", True)
+
+        if use_cache and self._cache_manager is not None and all_sources:
+            try:
+                tokenizer = (
+                    self.processor.tokenizer
+                    if hasattr(self.processor, "tokenizer")
+                    else self.processor
+                )
+                token_ids = tokenizer.encode(formatted_prompt)
+                cache_entry, prefix_match_len = self._cache_manager.fetch(
+                    all_sources, formatted_prompt, token_ids
+                )
+                if cache_entry and cache_entry.kv_cache is not None:
+                    if all_images:
+                        prompt_cache_state = _prompt_cache_state_from_entry(cache_entry)
+                        if prompt_cache_state is None:
+                            logger.debug(
+                                "[PREFIX CACHE] Stream generate image hit lacked "
+                                "PromptCacheState; falling back to full prompt processing"
+                            )
+                    else:
+                        prompt_cache = cache_entry.kv_cache
+                    cache_hit = True
+                    if prefix_match_len > 0:
+                        logger.debug(
+                            f"Stream generate prefix cache hit: {prefix_match_len} tokens, "
+                            f"{len(all_sources)} source(s)"
+                        )
+            except Exception as e:
+                logger.debug(f"Stream generate cache fetch failed: {e}")
+
+        if prompt_cache is None and prompt_cache_state is None and self.model is not None:
+            try:
+                prompt_cache = vlm_cache.make_prompt_cache(self.model.language_model)
+            except Exception:
+                prompt_cache = None
+        if prompt_cache_state is not None:
+            kwargs["prompt_cache_state"] = prompt_cache_state
+
+        last_prompt_tokens = 0
         with _MaybeVLMStream():
             for chunk in stream_generate(
                 self.model,
@@ -1638,9 +1690,40 @@ class MLXMultimodalLM:
                 all_images if all_images else None,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                prompt_cache=prompt_cache,
                 **kwargs,
             ):
+                chunk_prompt_tokens = getattr(chunk, "prompt_tokens", 0)
+                if chunk_prompt_tokens:
+                    last_prompt_tokens = chunk_prompt_tokens
                 yield chunk
+
+        if (
+            use_cache
+            and self._cache_manager is not None
+            and all_sources
+            and not cache_hit
+            and prompt_cache
+        ):
+            try:
+                prompt_tokens_count = last_prompt_tokens or len(token_ids)
+                cache_to_store = _copy_prompt_cache_to_prompt_boundary(
+                    prompt_cache, prompt_tokens_count
+                )
+                self._cache_manager.store(
+                    images=all_sources,
+                    prompt=formatted_prompt,
+                    vision_embeddings=None,
+                    kv_cache=cache_to_store,
+                    token_ids=token_ids,
+                    num_image_tokens=0,
+                    model_name=self.model_name,
+                )
+                logger.info(
+                    f"MLLM stream cache stored for {len(all_sources)} source(s)"
+                )
+            except Exception as e:
+                logger.debug(f"Failed to store MLLM stream cache: {e}")
 
     def chat(
         self,
