@@ -20,8 +20,11 @@ import { readGenerationDefaults } from '../src/main/ipc/models'
 
 const createdDirs: string[] = []
 
-function makeModelDir(files: Record<string, unknown>): string {
-  const dir = mkdtempSync(join(tmpdir(), 'vmlx-generation-defaults-'))
+function makeModelDir(
+  files: Record<string, unknown>,
+  prefix = 'vmlx-generation-defaults-',
+): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix))
   createdDirs.push(dir)
   for (const [name, payload] of Object.entries(files)) {
     writeFileSync(join(dir, name), JSON.stringify(payload, null, 2))
@@ -37,6 +40,27 @@ afterEach(() => {
 })
 
 describe('readGenerationDefaults JANG sampling defaults', () => {
+  it('forces Ling CRACK startup temperature to 0.2 without changing other defaults', async () => {
+    const dir = makeModelDir({
+      'jang_config.json': {
+        chat: {
+          sampling_defaults: {
+            temperature: 0.6,
+            top_p: 0.95,
+            repetition_penalty: 1.0,
+          },
+        },
+      },
+    }, 'vmlx-generation-defaults-Ling-2.6-flash-JANGTQ2-CRACK-')
+
+    await expect(readGenerationDefaults(dir)).resolves.toMatchObject({
+      temperature: 0.2,
+      topP: 0.95,
+      repeatPenalty: 1.0,
+      source: 'jang_config',
+    })
+  })
+
   it('uses chat repetition penalty when bundle default reasoning mode is not thinking', async () => {
     const dir = makeModelDir({
       'jang_config.json': {

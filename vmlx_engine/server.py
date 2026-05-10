@@ -556,6 +556,26 @@ def _is_stale_dsv4_ui_default(key: str, value: float | None) -> bool:
     return False
 
 
+def _is_ling_crack_bundle(model_name: str = "") -> bool:
+    """Whether the loaded bundle is a Ling/Bailing CRACK variant.
+
+    Scope is intentionally both name/path and registry family. The path/name
+    check prevents changing every Ling default; the family check prevents an
+    unrelated directory containing "ling" and "crack" from inheriting this.
+    """
+    bundle_path = _model_path or model_name
+    if not bundle_path:
+        return False
+    try:
+        from pathlib import Path as _P
+        name = _P(str(bundle_path)).name.lower()
+    except Exception:
+        name = str(bundle_path).lower()
+    if "ling" not in name or "crack" not in name:
+        return False
+    return _model_family_for_defaults(model_name) == "ling"
+
+
 def _jang_chat_sampling_default(model_name: str, key: str) -> float | None:
     """Read a numeric default from the loaded bundle's
     ``jang_config.json::chat.sampling_defaults.<key>``. Cached per-path.
@@ -753,6 +773,14 @@ def _resolve_temperature(request_value: float | None, model_name: str = "") -> f
         v = _bundle_sampling_default(model_name, "temperature")
         if v is not None:
             return v
+    if _is_ling_crack_bundle(model_name):
+        # Ling CRACK was validated with a colder default. Preserve explicitly
+        # supplied request temperatures, and preserve non-generic CLI defaults,
+        # but treat the built-in 0.7 server default as unset for this bundle.
+        if _default_temperature is None or _nearly_equal(
+            _default_temperature, _FALLBACK_TEMPERATURE
+        ):
+            return 0.2
     if _default_temperature is not None:
         return _default_temperature
     v = _bundle_sampling_default(model_name, "temperature")

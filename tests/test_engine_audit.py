@@ -4473,6 +4473,8 @@ class TestTurboQuantKVTelemetry:
         assert 'unlimitedLabel="Default (1)"' in session_form_source
         assert 'unlimitedLabel="Default (512)"' in session_form_source
         assert 'unlimitedLabel="Default (2048)"' in session_form_source
+        assert "isLingCrackModelPath" in sessions_source
+        assert "out.defaultTemperature = 20" in sessions_source
         cli_source = Path("./vmlx_engine/cli.py").read_text()
         assert '"--max-num-seqs", type=int, default=1' in cli_source
         assert '"--prefill-batch-size", type=int, default=512' in cli_source

@@ -44,6 +44,11 @@ interface BundleStartupDefaults {
   source?: 'generation_config' | 'jang_config'
 }
 
+function isLingCrackModelPath(modelPath: string): boolean {
+  const name = basename(modelPath).toLowerCase()
+  return name.includes('ling') && name.includes('crack')
+}
+
 function normalizeReasoningMode(mode: unknown): 'auto' | 'on' | 'off' {
   const m = String(mode ?? 'auto').toLowerCase()
   if (m === 'on' || m === 'always' || m === 'true' || m === 'reasoning') return 'on'
@@ -89,6 +94,11 @@ function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
       out.source = 'jang_config'
     }
   } catch { /* jang_config.json is optional */ }
+
+  if (isLingCrackModelPath(modelPath)) {
+    out.defaultTemperature = 20
+    out.source = out.source ?? 'jang_config'
+  }
 
   return out
 }

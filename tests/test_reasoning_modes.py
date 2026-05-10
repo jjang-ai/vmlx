@@ -375,6 +375,79 @@ def test_ling_stamped_bailing_family_gets_ling_safety_floor(tmp_path, monkeypatc
     assert server._resolve_repetition_penalty(1.0) == 1.15
 
 
+def test_ling_crack_defaults_temperature_to_02_without_overriding_request(
+    tmp_path, monkeypatch
+):
+    """Ling CRACK bundles need a colder server default, but explicit request
+    temperatures must remain user intent."""
+    import json
+    from vmlx_engine import server
+    import vmlx_engine.model_config_registry as mcr
+
+    bundle = tmp_path / "Ling-2.6-flash-JANGTQ2-CRACK"
+    bundle.mkdir()
+    (bundle / "config.json").write_text(json.dumps({"model_type": "bailing_hybrid"}))
+    (bundle / "jang_config.json").write_text(json.dumps({
+        "capabilities": {
+            "family": "bailing_hybrid",
+            "cache_type": "hybrid",
+            "tool_parser": "deepseek",
+            "reasoning_parser": "deepseek_r1",
+            "think_in_template": False,
+            "modality": "text",
+        },
+        "chat": {
+            "sampling_defaults": {
+                "temperature": 0.6,
+                "top_p": 0.95,
+                "repetition_penalty": 1.0,
+            }
+        },
+    }))
+
+    mcr.ModelConfigRegistry._instance = None
+    mcr._configs_loaded = False
+    mcr.get_model_config_registry().clear_cache()
+    monkeypatch.setattr(server, "_model_path", str(bundle))
+    monkeypatch.setattr(server, "_model_name", "ling")
+    monkeypatch.setattr(server, "_default_temperature", None)
+    server._jang_sampling_defaults_cache.clear()
+    server._generation_defaults_cache.clear()
+
+    assert server._model_family_for_defaults() == "ling"
+    assert server._resolve_temperature(None) == 0.2
+    assert server._resolve_temperature(0.7) == 0.7
+
+    monkeypatch.setattr(server, "_default_temperature", 0.7)
+    assert server._resolve_temperature(None) == 0.2
+
+    monkeypatch.setattr(server, "_default_temperature", 0.4)
+    assert server._resolve_temperature(None) == 0.4
+
+
+def test_ling_non_crack_keeps_normal_family_temperature(tmp_path, monkeypatch):
+    """The Ling CRACK default must not bleed into regular Ling bundles."""
+    import json
+    from vmlx_engine import server
+    import vmlx_engine.model_config_registry as mcr
+
+    bundle = tmp_path / "Ling-2.6-flash-JANGTQ2"
+    bundle.mkdir()
+    (bundle / "config.json").write_text(json.dumps({"model_type": "bailing_hybrid"}))
+
+    mcr.ModelConfigRegistry._instance = None
+    mcr._configs_loaded = False
+    mcr.get_model_config_registry().clear_cache()
+    monkeypatch.setattr(server, "_model_path", str(bundle))
+    monkeypatch.setattr(server, "_model_name", "ling")
+    monkeypatch.setattr(server, "_default_temperature", None)
+    server._jang_sampling_defaults_cache.clear()
+    server._generation_defaults_cache.clear()
+
+    assert server._model_family_for_defaults() == "ling"
+    assert server._resolve_temperature(None) == 0.6
+
+
 @pytest.mark.parametrize("model_type", ["bailing_hybrid", "bailing_moe_v2_5"])
 def test_ling_preserves_opt_in_parser_but_rejects_stale_think_in_template(
     tmp_path, monkeypatch, model_type
