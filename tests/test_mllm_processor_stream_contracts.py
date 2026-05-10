@@ -141,22 +141,82 @@ class TestHybridOomGuardWrapperTraversal:
     decision against the wrong attention shape.
     """
 
-    def test_walks_text_config_for_wrapped_attention_head_count(self):
-        """Source pin: the OOM-guard helper inspects text_config and inner.model."""
-        from pathlib import Path
-
-        source = Path("./vmlx_engine/mllm_batch_generator.py").read_text()
-        # The new traversal block must be present (cites text_config + inner.model).
-        assert '"text_config"' in source
-        # Wrapper traversal walks model + inner.model
-        idx = source.index("_OOM_GUARD_BYTES")
-        guard_window = source[idx : idx + 2000]
-        assert 'getattr(self.language_model, "model"' in guard_window, (
-            "OOM guard no longer walks language_model.model wrapper — "
-            "Kimi-style wrappers will fall back to 32-head default"
+    def test_detects_kimi_style_config_text_config_heads(self):
+        from types import SimpleNamespace
+        from vmlx_engine.mllm_batch_generator import (
+            _infer_attention_heads_for_hybrid_oom_guard,
         )
-        # text_config fallback inside the loop
-        assert "_tc = getattr(_cfg, \"text_config\"" in guard_window
+
+        # Local Kimi-K2.6 config shape: top-level VLM config has no
+        # num_attention_heads, text_config is the DeepseekV3 text backbone.
+        language_model = SimpleNamespace(
+            config=SimpleNamespace(
+                model_type="kimi_k25",
+                text_config=SimpleNamespace(
+                    model_type="kimi_k2",
+                    num_attention_heads=64,
+                ),
+            )
+        )
+
+        assert _infer_attention_heads_for_hybrid_oom_guard(language_model) == 64
+
+    def test_detects_inner_model_config_heads(self):
+        from types import SimpleNamespace
+        from vmlx_engine.mllm_batch_generator import (
+            _infer_attention_heads_for_hybrid_oom_guard,
+        )
+
+        language_model = SimpleNamespace(
+            config=SimpleNamespace(model_type="wrapper"),
+            model=SimpleNamespace(
+                config=SimpleNamespace(
+                    model_type="inner_text",
+                    num_attention_heads=80,
+                )
+            ),
+        )
+
+        assert _infer_attention_heads_for_hybrid_oom_guard(language_model) == 80
+
+    def test_valid_32_head_config_does_not_fall_through_to_inner_default_sentinel(self):
+        from types import SimpleNamespace
+        from vmlx_engine.mllm_batch_generator import (
+            _infer_attention_heads_for_hybrid_oom_guard,
+        )
+
+        language_model = SimpleNamespace(
+            config=SimpleNamespace(model_type="text", num_attention_heads=32),
+            model=SimpleNamespace(
+                config=SimpleNamespace(model_type="nested", num_attention_heads=64)
+            ),
+        )
+
+        assert _infer_attention_heads_for_hybrid_oom_guard(language_model) == 32
+
+    def test_dict_text_config_shape_is_supported(self):
+        from types import SimpleNamespace
+        from vmlx_engine.mllm_batch_generator import (
+            _infer_attention_heads_for_hybrid_oom_guard,
+        )
+
+        language_model = SimpleNamespace(
+            config={
+                "model_type": "kimi_k25",
+                "text_config": {
+                    "model_type": "kimi_k2",
+                    "num_attention_heads": 64,
+                },
+            }
+        )
+
+        assert _infer_attention_heads_for_hybrid_oom_guard(language_model) == 64
+
+    def test_oom_guard_call_sites_use_shared_helper(self):
+        source = Path("./vmlx_engine/mllm_batch_generator.py").read_text()
+
+        assert source.count("_infer_attention_heads_for_hybrid_oom_guard(") >= 3
+        assert "cfg = getattr(self.language_model, \"config\", None) or getattr(\n" not in source
 
 
 def test_simple_mllm_stream_generate_runs_inside_stream_context():

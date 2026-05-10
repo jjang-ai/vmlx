@@ -116,6 +116,76 @@ from .vision_embedding_cache import VisionEmbeddingCache
 logger = logging.getLogger(__name__)
 
 
+def _read_config_field(obj: Any, field: str) -> Any:
+    """Read config fields from object-style or dict-style configs."""
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj.get(field)
+    return getattr(obj, field, None)
+
+
+def _positive_int_or_none(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str) and value.isdigit():
+        parsed = int(value)
+        return parsed if parsed > 0 else None
+    return None
+
+
+def _infer_attention_heads_for_hybrid_oom_guard(
+    language_model: Any,
+    default: int = 32,
+) -> int:
+    """Infer text-backbone attention heads for hybrid one-shot OOM estimates.
+
+    MLLM wrappers can hide text model config under ``config.text_config`` or
+    an inner ``.model`` / ``.language_model`` object. This helper keeps the
+    OOM guard and clean-SSM rederive guard on the same traversal path.
+    """
+    candidates: List[Any] = []
+    seen: set[int] = set()
+
+    def add_candidate(obj: Any) -> None:
+        if obj is None:
+            return
+        marker = id(obj)
+        if marker in seen:
+            return
+        seen.add(marker)
+        candidates.append(obj)
+
+    add_candidate(language_model)
+    index = 0
+    while index < len(candidates) and index < 8:
+        obj = candidates[index]
+        index += 1
+
+        for attr in ("args", "config", "text_config"):
+            cfg = _read_config_field(obj, attr)
+            if cfg is None:
+                continue
+            heads = _positive_int_or_none(
+                _read_config_field(cfg, "num_attention_heads")
+            )
+            if heads is not None:
+                return heads
+            text_cfg = _read_config_field(cfg, "text_config")
+            heads = _positive_int_or_none(
+                _read_config_field(text_cfg, "num_attention_heads")
+            )
+            if heads is not None:
+                return heads
+
+        add_candidate(_read_config_field(obj, "model"))
+        add_candidate(_read_config_field(obj, "language_model"))
+
+    return default
+
+
 def _prefix_hit_tail_and_cached_tokens(
     *,
     token_list: List[int],
@@ -2127,34 +2197,9 @@ class MLLMBatchGenerator:
         # Estimate attention_scores = heads * seq_len^2 * 2 bytes. Use a
         # conservative 8 GB threshold (Metal cap is 9.5 GB on 64 GB Macs).
         _OOM_GUARD_BYTES = 8 * 1024 * 1024 * 1024
-        _n_heads_guess = 32
-        try:
-            # Walk wrappers (model + inner.model) × (args, config, text_config)
-            # so VLM wrappers and Mistral4-style nested text_config are caught.
-            # Without traversal, Kimi K2.6 / glm_moe_dsa style wrappers fell
-            # back to the 32-head default and the chunking decision was made
-            # against the wrong attention shape.
-            _candidates = [self.language_model]
-            _inner = getattr(self.language_model, "model", None)
-            if _inner is not None and _inner is not self.language_model:
-                _candidates.append(_inner)
-            for _obj in _candidates:
-                for _attr in ("args", "config", "text_config"):
-                    _cfg = getattr(_obj, _attr, None)
-                    if _cfg is None:
-                        continue
-                    _h = getattr(_cfg, "num_attention_heads", None)
-                    if not _h:
-                        _tc = getattr(_cfg, "text_config", None)
-                        if _tc is not None:
-                            _h = getattr(_tc, "num_attention_heads", None)
-                    if isinstance(_h, int) and _h > 0:
-                        _n_heads_guess = _h
-                        break
-                if _n_heads_guess != 32:
-                    break
-        except Exception:
-            pass
+        _n_heads_guess = _infer_attention_heads_for_hybrid_oom_guard(
+            self.language_model
+        )
         _predicted_attn_bytes = _n_heads_guess * seq_len * seq_len * 2
         if (
             _hybrid_blocks_chunk
@@ -3895,16 +3940,9 @@ class MLLMBatchGenerator:
             return None
         seq_len = len(tokens)
         _OOM_GUARD_BYTES = 8 * 1024 * 1024 * 1024
-        _n_heads_guess = 32
-        try:
-            cfg = getattr(self.language_model, "config", None) or getattr(
-                self.language_model, "args", None
-            )
-            _h = getattr(cfg, "num_attention_heads", None) if cfg is not None else None
-            if isinstance(_h, int) and _h > 0:
-                _n_heads_guess = _h
-        except Exception:
-            pass
+        _n_heads_guess = _infer_attention_heads_for_hybrid_oom_guard(
+            self.language_model
+        )
         _predicted_attn_bytes = _n_heads_guess * seq_len * seq_len * 2
         if _predicted_attn_bytes > _OOM_GUARD_BYTES:
             logger.info(
