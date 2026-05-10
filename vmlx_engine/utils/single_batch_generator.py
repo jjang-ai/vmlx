@@ -349,6 +349,12 @@ class SingleBatchGenerator:
         last_token = int(req.prompt_tokens[-1])
         req.prompt_processed = True
         self._compute_next_from_input(req, last_token)
+        # The native KV cache has now consumed `last_token` (the prompt's final
+        # token), but `_compute_next_from_input` only updates the TokenBuffer,
+        # not `context_tokens`. Without this append, response.all_tokens and
+        # extract_cache() context would skip the final prompt token entirely
+        # (e.g., prompt [11,12] -> sampled 3 would yield [11,3]).
+        req.context_tokens.append(last_token)
         return self._yield_current_and_schedule_next(req)
 
     def next(self):
@@ -362,9 +368,15 @@ class SingleBatchGenerator:
     def next_generated(self):
         while True:
             prompt_responses, generation_responses = self.next()
-            if not generation_responses and prompt_responses:
-                continue
-            return generation_responses
+            if generation_responses:
+                return generation_responses
+            if not prompt_responses:
+                # No active or queued request; nothing more to yield.
+                # Without this guard, a prompt-only response that finished the
+                # request (e.g., max_tokens=1 length-cap on the first sampled
+                # token) would loop forever because `next()` would keep
+                # returning ([], []).
+                return []
 
     def _find(self, uid: int) -> Optional[_Request]:
         if self._request is not None and self._request.uid == uid:

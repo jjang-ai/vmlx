@@ -111,6 +111,31 @@ class TestSingleActiveBatchGenerator:
         assert prompt_responses[0].token == 3
         assert prompt_responses[0].prompt_cache[0] is native_cache[0]
         assert native_cache[0].tokens == [11, 12, 3]
+        # Regression: response.all_tokens must include the final prompt token
+        # before the sampled token (the cache has consumed it).
+        assert prompt_responses[0].all_tokens == [11, 12, 3]
+        # extract_cache() context metadata must agree with all_tokens.
+        extracted = generator.extract_cache([uid])
+        _cache, context = extracted[uid]
+        assert context == [11, 12, 3]
+
+    def test_single_active_generator_next_generated_does_not_infinite_loop_when_prompt_finishes(self):
+        from vmlx_engine.utils.single_batch_generator import SingleBatchGenerator
+
+        generator = SingleBatchGenerator(
+            model=_TinyModel(),
+            max_tokens=1,  # forces length-cap on first sampled token
+            sampler=lambda logits: mx.argmax(logits, axis=-1),
+        )
+        generator.insert([[11, 12]], max_tokens=[1])
+
+        # First call returns the prompt response (which has finish_reason=length),
+        # so the active request is cleared. next_generated() must return [] on
+        # the follow-up call instead of looping forever.
+        first = generator.next_generated()
+        assert first == []
+        second = generator.next_generated()
+        assert second == []
 
     def test_single_active_generator_finishes_on_stop_token(self):
         from vmlx_engine.utils.single_batch_generator import SingleBatchGenerator
@@ -155,3 +180,38 @@ class TestSingleActiveBatchGenerator:
         assert output.outputs[0].new_token_ids == [3]
         assert output.outputs[0].finish_reason == "length"
         assert request.status == RequestStatus.FINISHED_LENGTH_CAPPED
+
+    def test_single_active_scheduler_serializes_second_request(self):
+        first = Request(
+            request_id="r1",
+            prompt=[1, 2],
+            sampling_params=SamplingParams(max_tokens=1, temperature=0.0),
+        )
+        second = Request(
+            request_id="r2",
+            prompt=[4, 5],
+            sampling_params=SamplingParams(max_tokens=1, temperature=0.0),
+        )
+        for request in (first, second):
+            request.prompt_token_ids = list(request.prompt)
+            request.num_prompt_tokens = len(request.prompt)
+
+        scheduler = Scheduler(
+            _TinyModel(),
+            tokenizer=_TinyTokenizer(),
+            config=SchedulerConfig(
+                max_num_seqs=1,
+                enable_prefix_cache=False,
+            ),
+        )
+
+        scheduler.add_request(first)
+        scheduler.add_request(second)
+        first_output = scheduler.step()
+        second_output = scheduler.step()
+
+        assert scheduler.batch_generator.__class__.__name__ == "SingleBatchGenerator"
+        assert [out.request_id for out in first_output.outputs] == ["r1"]
+        assert [out.request_id for out in second_output.outputs] == ["r2"]
+        assert first.status == RequestStatus.FINISHED_LENGTH_CAPPED
+        assert second.status == RequestStatus.FINISHED_LENGTH_CAPPED
