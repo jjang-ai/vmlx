@@ -1256,6 +1256,59 @@ def register_all(registry=None):
         )
     )
 
+    # ── Hunyuan / Tencent Hy3 (model_type=hy_v3) ──
+    #
+    # Tencent Hy3-preview, ~295B total / ~21B active, dense GQA + MoE
+    # (192 experts, top-8, sigmoid + expert-bias routing) + 1 MTP layer.
+    # Source contract per `~/jang/docs/runtime/2026-05-09-hy3-runtime-handoff-vmlx-python-swift.md`:
+    #
+    #   - Architecture: 80 decoder layers + 1 MTP, dense causal GQA
+    #     (64 Q heads, 8 KV heads, head_dim=128, q/k RMSNorm before RoPE,
+    #     RoPE theta 11158840, context 262144).
+    #   - MoE: sigmoid router + expert-bias correction, top-8, 1 always-active
+    #     shared expert, layer 0 dense FFN (first_k_dense_replace=1),
+    #     route_norm=True, router_scaling_factor=2.826.
+    #   - Cache: standard causal KV. NOT MLA, NOT SSM hybrid, NOT CCA, NOT VL.
+    #   - MTP: `num_nextn_predict_layers=1`. First runtime: `preserved_disabled`
+    #     (normal autoregressive decode using only the 80 base layers).
+    #   - Reasoning: `<think>...</think>` tags + `<｜reasoning_mode｜>reasoning_effort:
+    #     no_think|low|high`. Default `no_think` emits closed `<think></think>`
+    #     prefill. The `<think>` tag matches the deepseek_r1 reasoning parser
+    #     contract, so reuse `deepseek_r1` until any Hy3-specific divergence
+    #     is observed.
+    #   - Tool format: Hunyuan/Tencent custom XML
+    #     `<tool_calls><tool_call>NAME<tool_sep><arg_key>K</arg_key>
+    #     <arg_value>V</arg_value>...</tool_call></tool_calls>`. New
+    #     `hunyuan` tool parser (NOT hermes/qwen JSON).
+    #   - Special tokens: `<｜hy_User｜>`, `<｜hy_Assistant｜>`, `<｜hy_eos｜>`.
+    #     Role-boundary stops: model output should never emit `<｜hy_User｜>`
+    #     or `<｜hy_Assistant｜>` mid-response (same hallucination-loop class
+    #     as DSV4/MiniMax/Kimi role-marker fixes).
+    #   - Provisional contract until first bundle ships and `verify_directory`
+    #     proves the per-projection bit map. think_in_template=False because
+    #     the template prefills `<think></think>` for default `no_think`,
+    #     so the parser must NOT pre-classify the first chunk as reasoning.
+    #     supports_thinking=True because the model DOES support `<think>`
+    #     blocks via `reasoning_effort=low|high` opt-in.
+    _register(
+        ModelConfig(
+            family_name="hy_v3",
+            model_types=["hy_v3"],
+            cache_type="kv",
+            eos_tokens=[
+                "<｜hy_eos｜>",
+                "<｜hy_User｜>",
+                "<｜hy_Assistant｜>",
+            ],
+            tool_parser="hunyuan",
+            reasoning_parser="deepseek_r1",
+            think_in_template=False,
+            supports_thinking=True,
+            supports_native_tools=True,
+            priority=20,
+        )
+    )
+
     # ── Others ──
 
     _register(

@@ -388,7 +388,7 @@ class TestModelConfigRegistry:
 
         empty_registry.register(
             ModelConfig(
-                family_name="ling",
+                family_name="synthetic_no_think",
                 model_types=["bailing_hybrid", "bailing_moe_v2_5"],
                 cache_type="hybrid",
                 tool_parser="deepseek",
@@ -416,7 +416,7 @@ class TestModelConfigRegistry:
 
         result = empty_registry.lookup(str(tmp_path))
 
-        assert result.family_name == "ling"
+        assert result.family_name == "synthetic_no_think"
         assert result.supports_thinking is False
         assert result.reasoning_parser is None
         assert result.think_in_template is False
@@ -1112,6 +1112,14 @@ class TestModelConfigComprehensiveChecks:
         # documented ``` ```tool_code\\nname(k=v)\\n``` ``` format, and
         # `gemma3n` for Gemma 3n (same parser, separate registry entry).
         "gemma3", "gemma3n", "gemma4",
+        # Hunyuan / Tencent Hy3 (model_type=hy_v3) custom XML tool format:
+        # <tool_calls><tool_call>NAME<tool_sep>
+        # <arg_key>K</arg_key><arg_value>V</arg_value>...
+        # </tool_call></tool_calls>
+        # See vmlx_engine/tool_parsers/hunyuan_tool_parser.py + the
+        # contract reference at
+        # ~/jang/jang-tools/examples/hy3/python_runtime/hy3_parser_contract.py
+        "hunyuan",
     }
     VALID_CACHE_TYPES = {"kv", "mamba", "hybrid"}
 
@@ -1390,6 +1398,50 @@ class TestModelConfigComprehensiveChecks:
             "user opts in via system message, <think>...</think> blocks get "
             "extracted into reasoning_content correctly."
         )
+
+    def test_hy_v3_provisional_contract(self, registry):
+        """Tencent Hy3-preview (model_type=hy_v3) provisional contract per
+        `~/jang/docs/runtime/2026-05-09-hy3-runtime-handoff-vmlx-python-swift.md`.
+
+        Bundle drops as JANGTQ2 first; vMLX must already detect the family
+        and route it through the right cache + parsers when the bundle lands.
+
+        Contract:
+            cache_type=kv          (standard causal GQA, NOT MLA/SSM/CCA/VL)
+            tool_parser=hunyuan    (custom XML <tool_calls><tool_call> format)
+            reasoning_parser=deepseek_r1  (`<think>...</think>` extraction —
+                                           reuse R1 parser until divergence)
+            think_in_template=False  (default `no_think` emits CLOSED
+                                      `<think></think>` prefill; parser must
+                                      not pre-classify first chunk as reasoning)
+            supports_thinking=True   (model CAN reason via reasoning_effort=
+                                      low|high opt-in)
+            eos_tokens contain `<｜hy_eos｜>` (primary) plus `<｜hy_User｜>` and
+            `<｜hy_Assistant｜>` as role-boundary stops (same hallucination-loop
+            defense as DSV4/MiniMax/Kimi)."""
+        registry.clear_cache()
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("hy_v3")):
+            config = registry.lookup("Tencent/Hy3-preview")
+        assert config.family_name == "hy_v3"
+        assert config.cache_type == "kv", (
+            "Hy3 uses standard causal GQA KV cache. Not MLA/SSM/CCA/VL."
+        )
+        assert config.tool_parser == "hunyuan"
+        assert config.reasoning_parser == "deepseek_r1"
+        assert config.think_in_template is False, (
+            "Default `no_think` emits CLOSED <think></think> prefill in the "
+            "chat template. think_in_template=True would cause the reasoning "
+            "parser to pre-classify the first visible content as reasoning."
+        )
+        assert config.supports_thinking is True
+        assert config.supports_native_tools is True
+        assert config.eos_tokens is not None
+        assert "<｜hy_eos｜>" in config.eos_tokens
+        assert "<｜hy_User｜>" in config.eos_tokens, (
+            "Role-boundary stop: model output should never emit `<｜hy_User｜>` "
+            "mid-response. Same hallucination-loop defense as 2026-05-03 DSV4."
+        )
+        assert "<｜hy_Assistant｜>" in config.eos_tokens
 
     def test_kimi_k25_eos_includes_role_boundary_markers(self, registry):
         """REGRESSION (2026-05-09): Kimi K2.6 (kimi_k25) chat template uses

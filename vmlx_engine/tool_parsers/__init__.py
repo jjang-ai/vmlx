@@ -64,6 +64,7 @@ from .minimax_tool_parser import MiniMaxToolParser
 from .gemma4_tool_parser import Gemma4ToolParser
 from .gemma3_tool_parser import Gemma3ToolParser
 from .zaya_tool_parser import ZayaToolParser
+from .hunyuan_tool_parser import HunyuanToolParser  # Hy3 / hy_v3
 
 __all__ = [
     # Base classes
@@ -88,4 +89,5 @@ __all__ = [
     "Gemma4ToolParser",
     "Gemma3ToolParser",
     "ZayaToolParser",
+    "HunyuanToolParser",
 ]
