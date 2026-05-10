@@ -215,3 +215,48 @@ class TestSingleActiveBatchGenerator:
         assert [out.request_id for out in second_output.outputs] == ["r2"]
         assert first.status == RequestStatus.FINISHED_LENGTH_CAPPED
         assert second.status == RequestStatus.FINISHED_LENGTH_CAPPED
+
+    def test_single_active_generator_preserves_cached_prefix_in_resumed_context(self):
+        """Cache-hit insertion: scheduler hands a warm cache + cached prefix as
+        all_tokens; only the tail tokens are processed but response.all_tokens
+        must continue from the full cached prefix (not start fresh).
+
+        Without this, scheduler.append_to_cache + extract_cache round-trips
+        would silently lose the cached prefix on the first decode response.
+        """
+        from vmlx_engine.utils.single_batch_generator import SingleBatchGenerator
+
+        model = _TinyModel()
+        # Simulate a warm cache that already saw 5 prefix tokens.
+        warm_cache = [_TinyCache()]
+        warm_cache[0].tokens = [101, 102, 103, 104, 105]
+        warm_cache[0].offset = 5
+        cached_prefix = [101, 102, 103, 104, 105]
+        tail_tokens = [201, 202]
+
+        generator = SingleBatchGenerator(
+            model=model,
+            max_tokens=1,
+            sampler=lambda logits: mx.argmax(logits, axis=-1),
+        )
+        [uid] = generator.insert(
+            [tail_tokens],
+            caches=[warm_cache],
+            all_tokens=[cached_prefix],
+            max_tokens=[1],
+        )
+
+        prompt_responses, _ = generator.next()
+        assert len(prompt_responses) == 1
+        # Sampled token from _TinyModel is 3 (argmax of fixed logits vector).
+        assert prompt_responses[0].token == 3
+        # Critical: response.all_tokens must = cached_prefix + tail + sampled.
+        # If SingleBatchGenerator dropped the prefix, this would be [201,202,3].
+        assert prompt_responses[0].all_tokens == [101, 102, 103, 104, 105, 201, 202, 3]
+        # Native cache must have consumed only the tail forwards (prefix
+        # tokens were already in the cache; the sampled output token is not
+        # fed back when max_tokens=1 short-circuits the lookahead).
+        assert warm_cache[0].tokens == [101, 102, 103, 104, 105, 201, 202]
+        # Model received only the tail tokens, never re-processed the prefix.
+        flat_calls = [t for call in model.calls for t in call]
+        assert flat_calls == [201, 202]
