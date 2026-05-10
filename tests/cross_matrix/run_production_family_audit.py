@@ -1022,6 +1022,20 @@ def audit_child_env_for_row(
         # generator's repetition-blocking logit warp. Product defaults stay in
         # the generator; this only affects the audit subprocess.
         child_env["VMLX_DSV4_HARD_REP_BLOCK"] = "0"
+        jang_source = Path(
+            child_env.get(
+                "VMLINUX_JANG_TOOLS_SOURCE",
+                str(Path.home() / "jang" / "jang-tools"),
+            )
+        )
+        if (jang_source / "jang_tools" / "dsv4" / "mlx_model.py").is_file():
+            existing_pythonpath = child_env.get("PYTHONPATH")
+            child_env["PYTHONPATH"] = (
+                f"{jang_source}:{existing_pythonpath}"
+                if existing_pythonpath
+                else str(jang_source)
+            )
+            child_env["VMLINUX_JANG_TOOLS_SOURCE"] = str(jang_source)
     return child_env
 
 

@@ -330,6 +330,8 @@ def test_packaged_bundled_hash_gate_covers_critical_jang_tools_files():
         "loader.py",
         "load_jangtq.py",
         "load_jangtq_kimi_vlm.py",
+        "dsv4/mlx_model.py",
+        "dsv4/pool_quant_cache.py",
         "kimi_prune/generate_vl.py",
         "kimi_prune/runtime_patch.py",
         "turboquant/fused_gate_up_kernel.py",

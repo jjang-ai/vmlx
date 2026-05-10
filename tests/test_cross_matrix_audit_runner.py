@@ -386,3 +386,20 @@ def test_dsv4_live_gate_disables_hard_repetition_block_for_proof_rows():
     )
 
     assert env["VMLX_DSV4_HARD_REP_BLOCK"] == "0"
+
+
+def test_dsv4_live_gate_prefers_local_jang_source_when_available(tmp_path):
+    rows = {row.id: row for row in ROWS}
+    local_jang = tmp_path / "jang-tools"
+    (local_jang / "jang_tools" / "dsv4").mkdir(parents=True)
+    (local_jang / "jang_tools" / "dsv4" / "mlx_model.py").write_text("# local dsv4 runtime\n")
+
+    env = audit_child_env_for_row(
+        rows["dsv4_tq"],
+        {
+            "VMLINUX_JANG_TOOLS_SOURCE": str(local_jang),
+            "PYTHONPATH": "/existing/path",
+        },
+    )
+
+    assert env["PYTHONPATH"].split(":")[:2] == [str(local_jang), "/existing/path"]
