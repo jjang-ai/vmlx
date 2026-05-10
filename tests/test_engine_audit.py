@@ -3167,6 +3167,179 @@ class TestMLLMNKvHeadsWrapperParity:
         assert sched._detect_n_kv_heads() == 32
 
 
+class TestHeadDimWrapperTraversal:
+    """Scheduler._detect_head_dim + MLLMScheduler._detect_head_dim must walk wrappers.
+
+    Symmetric to ``_detect_mla`` and ``_detect_n_kv_heads``. Earlier
+    implementations only inspected ``self.model.{args,config}`` (LLM) or
+    ``language_model.{args,config}`` (MLLM) directly. For VLM-wrapped
+    backbones (Kimi K2.6 around DeepseekV3, glm_moe_dsa, Mistral 4
+    wrappers), head_dim is exposed via ``language_model.config.text_config``
+    or via an inner ``.model`` candidate. Without traversal, both helpers
+    returned None silently — and the KV-quant
+    ``_wrap_make_cache_quantized`` skipped its head_dim/group_size
+    compatibility check, allowing a mismatched group_size into mx.quantize
+    to fail at runtime.
+    """
+
+    def test_llm_scheduler_finds_head_dim_via_text_config_wrapper(self):
+        from vmlx_engine.scheduler import Scheduler
+
+        class _TextCfg:
+            model_type = "kimi_k25"
+            head_dim = 128
+
+        class _Cfg:
+            text_config = _TextCfg()
+
+        class _LM:
+            config = _Cfg()
+
+        class _Wrapper:
+            language_model = _LM()
+
+        s = Scheduler.__new__(Scheduler)
+        s.model = _Wrapper()
+        assert s._detect_head_dim() == 128
+
+    def test_llm_scheduler_derives_head_dim_from_hidden_div_heads_via_inner_model(self):
+        from vmlx_engine.scheduler import Scheduler
+
+        class _Args:
+            hidden_size = 4096
+            num_attention_heads = 32
+
+        class _Inner:
+            args = _Args()
+
+        class _Wrapper:
+            model = _Inner()
+
+        s = Scheduler.__new__(Scheduler)
+        s.model = _Wrapper()
+        # 4096 / 32 = 128
+        assert s._detect_head_dim() == 128
+
+    def test_mllm_scheduler_finds_head_dim_via_text_config_wrapper(self):
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+
+        class _TextCfg:
+            model_type = "kimi_k25"
+            head_dim = 128
+
+        class _Cfg:
+            text_config = _TextCfg()
+
+        class _LM:
+            config = _Cfg()
+
+        class _Wrapper:
+            language_model = _LM()
+
+        s = MLLMScheduler.__new__(MLLMScheduler)
+        s.model = _Wrapper()
+        assert s._detect_head_dim() == 128
+
+    def test_llm_and_mllm_scheduler_agree_on_wrapped_head_dim(self):
+        from vmlx_engine.scheduler import Scheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+
+        class _TextCfg:
+            model_type = "kimi_k25"
+            head_dim = 128
+
+        class _Cfg:
+            text_config = _TextCfg()
+
+        class _LM:
+            config = _Cfg()
+
+        class _Wrapper:
+            language_model = _LM()
+
+        llm = Scheduler.__new__(Scheduler)
+        llm.model = _Wrapper()
+        mllm = MLLMScheduler.__new__(MLLMScheduler)
+        mllm.model = _Wrapper()
+        assert llm._detect_head_dim() == mllm._detect_head_dim()
+
+    def test_kimi_mla_cache_dims_do_not_use_hidden_div_heads(self):
+        """Kimi MLA cache dims are latent+RoPE dims, not hidden/heads.
+
+        The local Kimi K2.6 VLM bundle exposes hidden_size=7168 and
+        num_attention_heads=64, but mlx_lm caches ``kv_lora_rank`` and
+        ``qk_rope_head_dim`` via cache.update_and_fetch(kv_latent, k_pe).
+        Treating 7168 / 64 = 112 as the cache head dim makes the
+        group-size validator adjust default-compatible KV quant settings to
+        the wrong value.
+        """
+        from vmlx_engine.scheduler import Scheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+
+        class _TextCfg:
+            model_type = "kimi_k25"
+            hidden_size = 7168
+            num_attention_heads = 64
+            kv_lora_rank = 512
+            qk_rope_head_dim = 64
+            v_head_dim = 128
+
+        class _Cfg:
+            text_config = _TextCfg()
+
+        class _LM:
+            config = _Cfg()
+
+        class _Wrapper:
+            language_model = _LM()
+
+        llm = Scheduler.__new__(Scheduler)
+        llm.model = _Wrapper()
+        mllm = MLLMScheduler.__new__(MLLMScheduler)
+        mllm.model = _Wrapper()
+
+        assert llm._detect_cache_head_dims() == (512, 64)
+        assert mllm._detect_cache_head_dims() == (512, 64)
+        assert llm._detect_head_dim() == 512
+        assert mllm._detect_head_dim() == 512
+
+    def test_kimi_mla_quant_group_validation_checks_all_cache_dims(self):
+        """A group size must divide both MLA cache tensors.
+
+        Kimi/DeepSeek/Mistral MLA caches store latent KV with width
+        ``kv_lora_rank`` and RoPE keys with width ``qk_rope_head_dim``.
+        A user-provided group_size=128 divides 512 but not 64, so the
+        validator must adjust to 64. The old hidden/heads fallback returned
+        112 and adjusted to 16, which was a false fix.
+        """
+        from types import SimpleNamespace
+
+        from vmlx_engine.scheduler import Scheduler
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+
+        text_config = SimpleNamespace(
+            model_type="kimi_k25",
+            hidden_size=7168,
+            num_attention_heads=64,
+            kv_lora_rank=512,
+            qk_rope_head_dim=64,
+            v_head_dim=128,
+        )
+        model = SimpleNamespace(language_model=SimpleNamespace(config=SimpleNamespace(text_config=text_config)))
+
+        llm = Scheduler.__new__(Scheduler)
+        llm.model = model
+        llm.config = SimpleNamespace(kv_cache_group_size=128)
+        llm._wrap_make_cache_quantized(bits=4, group_size=128)
+        assert llm._kv_cache_group_size == 64
+        assert llm.config.kv_cache_group_size == 64
+
+        mllm = MLLMScheduler.__new__(MLLMScheduler)
+        mllm.model = model
+        mllm._wrap_make_cache_quantized(bits=4, group_size=128)
+        assert mllm._kv_cache_group_size == 64
+
+
 class TestLLMMlaDetectionWrapperParity:
     """LLM scheduler MLA detection must match MLLMScheduler._detect_mla traversal.
 

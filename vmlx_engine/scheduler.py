@@ -47,6 +47,10 @@ from .utils.mamba_cache import (
     register_generation_logprobs,
     unregister_generation_logprobs,
 )
+from .utils.head_dim_detection import (
+    choose_supported_kv_group_size,
+    detect_cache_head_dims,
+)
 from .utils.ssm_companion_disk_store import SSMCompanionDiskStore
 
 logger = logging.getLogger(__name__)
@@ -1238,29 +1242,19 @@ class Scheduler:
             pass
         return False
 
-    def _detect_head_dim(self) -> Optional[int]:
-        """Detect the model's KV head dimension from model config."""
+    def _detect_cache_head_dims(self) -> Tuple[int, ...]:
+        """Detect cache tensor trailing dims for KV quant validation."""
         try:
-            # Inspect model config for head_dim
-            if hasattr(self.model, "args"):
-                args = self.model.args
-                if hasattr(args, "head_dim") and args.head_dim:
-                    return args.head_dim
-                if hasattr(args, "hidden_size") and hasattr(
-                    args, "num_attention_heads"
-                ):
-                    return args.hidden_size // args.num_attention_heads
-            # Try model.config
-            if hasattr(self.model, "config"):
-                config = self.model.config
-                if hasattr(config, "head_dim") and config.head_dim:
-                    return config.head_dim
-                if hasattr(config, "hidden_size") and hasattr(
-                    config, "num_attention_heads"
-                ):
-                    return config.hidden_size // config.num_attention_heads
+            return detect_cache_head_dims(self.model)
         except Exception as e:
-            logger.debug(f"Could not detect head_dim: {e}")
+            logger.debug(f"Could not detect cache head dims: {e}")
+            return ()
+
+    def _detect_head_dim(self) -> Optional[int]:
+        """Detect the model's primary KV cache trailing dim from config."""
+        dims = self._detect_cache_head_dims()
+        if dims:
+            return dims[0]
         return None
 
     def _detect_n_kv_heads(self) -> int:
@@ -1403,28 +1397,30 @@ class Scheduler:
                 logger.debug("Patched QuantizedKVCache.size() to return self.offset")
             QuantizedKVCache._size_patched = True
 
-        # Validate head_dim compatibility with group_size.
+        # Validate cache trailing-dim compatibility with group_size.
         # mx.quantize() requires group_size to divide the last dimension.
-        head_dim = self._detect_head_dim()
-        if head_dim is not None and head_dim > 0:
-            if head_dim % group_size != 0:
-                # Try common group sizes that divide head_dim
-                for candidate in [32, 16, 8]:
-                    if head_dim % candidate == 0:
-                        logger.warning(
-                            f"KV cache quantization: group_size={group_size} does not divide "
-                            f"head_dim={head_dim}. Auto-adjusting to group_size={candidate}."
-                        )
-                        group_size = candidate
-                        break
-                else:
-                    logger.error(
-                        f"KV cache quantization: no valid group_size found for head_dim={head_dim}. "
-                        f"Disabling KV cache quantization."
-                    )
-                    return
+        cache_head_dims = self._detect_cache_head_dims()
+        head_dim = cache_head_dims[0] if cache_head_dims else None
+        if cache_head_dims:
+            adjusted_group_size = choose_supported_kv_group_size(
+                cache_head_dims, group_size
+            )
+            if adjusted_group_size is None:
+                logger.error(
+                    "KV cache quantization: no supported group_size found for "
+                    f"cache_head_dims={cache_head_dims}. Disabling KV cache quantization."
+                )
+                return
+            if adjusted_group_size != group_size:
+                logger.warning(
+                    f"KV cache quantization: group_size={group_size} does not divide "
+                    f"cache_head_dims={cache_head_dims} or is unsupported. "
+                    f"Auto-adjusting to group_size={adjusted_group_size}."
+                )
+                group_size = adjusted_group_size
             logger.info(
-                f"KV cache quantization validated: head_dim={head_dim}, group_size={group_size}"
+                "KV cache quantization validated: "
+                f"cache_head_dims={cache_head_dims}, group_size={group_size}"
             )
 
         # Run a quantize/dequantize round-trip test with realistic tensor shapes.

@@ -11,6 +11,8 @@ import base64
 import inspect
 import platform
 import sys
+import threading
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -153,6 +155,64 @@ class TestImageGenRequestValidation:
         assert min(10, 4) == 4
         assert min(0, 4) == 0
         assert min(-1, 4) == -1
+
+    @pytest.mark.anyio
+    async def test_load_and_generate_run_on_same_image_worker_thread(
+        self, client, monkeypatch, tmp_path
+    ):
+        """mflux/MLX image models must not cross event-loop/default-worker threads.
+
+        MLX stream registries are thread-local. The image engine must load the
+        mflux model and run `generate()` on the same dedicated worker thread;
+        otherwise real image models fail with "There is no Stream(gpu,N) in
+        current thread" on the first prompt.
+        """
+        import vmlx_engine.image_gen as image_gen_mod
+        import vmlx_engine.server as srv
+
+        class ThreadBoundImageEngine:
+            def __init__(self):
+                self._load_thread = None
+                self._loaded = False
+                self.model_name = "schnell"
+
+            @property
+            def is_loaded(self):
+                return self._loaded
+
+            def load(self, *args, **kwargs):
+                self._load_thread = threading.get_ident()
+                self._loaded = True
+
+            def generate(self, **kwargs):
+                if threading.get_ident() != self._load_thread:
+                    raise RuntimeError(
+                        "There is no Stream(gpu,1) in current thread"
+                    )
+                return SimpleNamespace(
+                    b64_json="AAAA",
+                    seed=kwargs.get("seed") or 123,
+                )
+
+        monkeypatch.setattr(srv, "_image_gen", None)
+        monkeypatch.setattr(srv, "_model_name", "schnell")
+        monkeypatch.setattr(srv, "_served_model_name", None)
+        monkeypatch.setattr(srv, "_model_path", str(tmp_path))
+        monkeypatch.setattr(image_gen_mod, "ImageGenEngine", ThreadBoundImageEngine)
+
+        resp = await client.post(
+            "/v1/images/generations",
+            json={
+                "model": "schnell",
+                "prompt": "thread-bound image proof",
+                "size": "64x64",
+                "steps": 1,
+                "seed": 7,
+            },
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"][0]["b64_json"] == "AAAA"
 
 
 # ---------------------------------------------------------------------------
@@ -557,6 +617,49 @@ class TestImageGenLock:
 
 
 # ---------------------------------------------------------------------------
+# 8b. Dedicated image worker thread
+# ---------------------------------------------------------------------------
+
+class TestImageGenWorkerExecutor:
+    """Pin the mflux/MLX same-thread contract for image generation."""
+
+    @pytest.mark.anyio
+    async def test_helper_reuses_one_image_worker_thread(self):
+        import vmlx_engine.server as srv
+
+        try:
+            first = await srv._run_image_gen_call(threading.get_ident)
+            second = await srv._run_image_gen_call(threading.get_ident)
+        finally:
+            srv._shutdown_image_gen_executor()
+
+        assert first == second
+        assert first != threading.get_ident()
+
+    def test_generation_paths_use_image_worker_helper(self):
+        import vmlx_engine.server as srv
+
+        gen_source = inspect.getsource(srv.create_image)
+        edit_source = inspect.getsource(srv.create_image_edit)
+        wake_source = inspect.getsource(srv.admin_wake)
+        shutdown_source = inspect.getsource(srv.lifespan)
+
+        assert "_run_image_gen_call(" in gen_source
+        assert "_run_image_gen_call(" in edit_source
+        assert "_run_image_gen_call(" in wake_source
+        assert "_run_image_gen_call(" in shutdown_source
+        assert "asyncio.to_thread(\n                        _image_gen" not in gen_source
+        assert "asyncio.to_thread(\n                        _image_gen" not in edit_source
+
+    def test_cli_startup_image_load_uses_same_worker_contract(self):
+        import vmlx_engine.cli as cli
+
+        source = inspect.getsource(cli.serve_command)
+        assert "server._run_image_gen_call_sync(" in source
+        assert "server._image_gen.load" in source
+
+
+# ---------------------------------------------------------------------------
 # 9. Error handling
 # ---------------------------------------------------------------------------
 
@@ -684,6 +787,7 @@ class TestImageGenErrorHandling:
         mock_engine = MagicMock()
         mock_engine.is_loaded = True
         mock_engine.model_name = "schnell"
+        mock_engine.generate.side_effect = RuntimeError("CUDA OOM")
 
         srv._image_gen = mock_engine
 
@@ -700,8 +804,7 @@ class TestImageGenErrorHandling:
                     return mock_img_mod
             return real_import(name, globals, locals, fromlist, level)
 
-        with patch.object(builtins, "__import__", side_effect=selective_import), \
-             patch("asyncio.to_thread", side_effect=RuntimeError("CUDA OOM")):
+        with patch.object(builtins, "__import__", side_effect=selective_import):
             resp = await client.post(
                 "/v1/images/generations",
                 json={"model": "schnell", "prompt": "test", "size": "512x512"},

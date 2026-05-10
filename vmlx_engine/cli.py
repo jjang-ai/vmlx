@@ -894,8 +894,13 @@ def serve_command(args):
         try:
             server._image_gen = ImageGenEngine()
             _mflux_class = getattr(args, 'mflux_class', None)
-            # Unified load — handles both gen and edit models via mflux_class dispatch
-            server._image_gen.load(
+            # Unified load — handles both gen and edit models via mflux_class
+            # dispatch. Run startup preload on the same dedicated image worker
+            # used later by /v1/images/* generation; MLX streams are
+            # thread-local, so loading here on the CLI thread and generating
+            # later on an executor thread reopens the Stream(gpu,N) crash.
+            server._run_image_gen_call_sync(
+                server._image_gen.load,
                 model_name=server._model_name,
                 model_path=args.model,
                 quantize=_image_quantize,

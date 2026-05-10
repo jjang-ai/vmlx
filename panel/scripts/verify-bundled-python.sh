@@ -107,8 +107,10 @@ HASH_GATED_ENGINE_FILES=(
   "paged_cache.py"
   "prefix_cache.py"
   "scheduler.py"
+  "utils/head_dim_detection.py"
   "utils/ssm_companion_cache.py"
   "utils/ssm_companion_disk_store.py"
+  "utils/tokenizer.py"
 )
 for rel in "${HASH_GATED_ENGINE_FILES[@]}"; do
   if [ ! -f "$SOURCE_ENGINE_DIR/$rel" ] || [ ! -f "$BUNDLED_ENGINE_DIR/$rel" ]; then

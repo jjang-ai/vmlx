@@ -307,6 +307,10 @@ class TestNemotronLatentMoePatch:
                     "group_size": 64,
                     "bits": 4,
                 },
+                "backbone.layers.0.mixer.gate.weight.scales": {
+                    "group_size": 64,
+                    "bits": 4,
+                },
                 "backbone.layers.0.mixer.switch_mlp.fc1": {
                     "group_size": 64,
                     "bits": 4,
@@ -327,11 +331,34 @@ class TestNemotronLatentMoePatch:
         assert removed == [
             "backbone.layers.0.mixer.gate",
             "backbone.layers.0.mixer.gate.weight",
+            "backbone.layers.0.mixer.gate.weight.scales",
         ]
         assert "backbone.layers.0.mixer.gate" not in sanitized["quantization"]
         assert "backbone.layers.0.mixer.gate.weight" not in sanitized["quantization"]
+        assert "backbone.layers.0.mixer.gate.weight.scales" not in sanitized["quantization"]
         assert "backbone.layers.0.mixer.switch_mlp.fc1" in sanitized["quantization"]
         assert "backbone.layers.0.mixer.gate" not in sanitized["quantization_config"]
+
+    def test_nemotron_h_v2_load_sanitizes_moegate_quantization(self):
+        """Nemotron-H v2 uses the same MoEGate non-quantizable module."""
+        from vmlx_engine.utils.tokenizer import (
+            _sanitize_nemotron_quantization_config_for_load,
+        )
+
+        config = {
+            "model_type": "nemotron_h_v2",
+            "quantization": {
+                "group_size": 64,
+                "bits": 4,
+                "backbone.layers.0.mixer.gate": {"group_size": 64, "bits": 4},
+            },
+        }
+
+        sanitized, removed = _sanitize_nemotron_quantization_config_for_load(config)
+
+        assert sanitized is not None
+        assert removed == ["backbone.layers.0.mixer.gate"]
+        assert "backbone.layers.0.mixer.gate" not in sanitized["quantization"]
 
     def test_nemotron_load_keeps_coarse_quantization_unchanged(self):
         from vmlx_engine.utils.tokenizer import (

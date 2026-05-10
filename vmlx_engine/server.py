@@ -42,6 +42,7 @@ import argparse
 import atexit
 import asyncio
 import base64
+import functools
 import json
 import logging
 import os
@@ -55,6 +56,7 @@ import time
 import uuid
 from collections import OrderedDict, defaultdict
 from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -1461,10 +1463,11 @@ async def lifespan(app: FastAPI):
             logger.warning(f"Engine shutdown error (continuing): {e}")
     if _image_gen is not None and _image_gen.is_loaded:
         try:
-            _image_gen.unload()
+            await asyncio.wait_for(_run_image_gen_call(_image_gen.unload), timeout=10)
             logger.info("Image engine unloaded")
         except Exception as e:
             logger.warning(f"Image engine shutdown error (continuing): {e}")
+    _shutdown_image_gen_executor()
     if caffeinate_process is not None:
         try:
             caffeinate_process.terminate()
@@ -4356,7 +4359,7 @@ async def admin_deep_sleep():
                     scheduler.deep_reset()
 
             if _model_type == "image" and _image_gen is not None:
-                _image_gen.unload()
+                await _run_image_gen_call(_image_gen.unload)
             elif _engine is not None:
                 if hasattr(_engine, "stop"):
                     try:
@@ -4449,9 +4452,11 @@ async def admin_wake():
             _pre_sleep_cache_limit = None
 
             if _model_type == "image" and _image_gen is not None:
-                # Reload image model — run in thread to avoid blocking event loop
-                # (loading Flux models takes 15-60s)
-                await asyncio.to_thread(
+                # Reload image model on the same dedicated worker used for
+                # generation. MLX streams are thread-local; reloading on the
+                # default executor and generating elsewhere reopens the
+                # Stream(gpu,N) crash class.
+                await _run_image_gen_call(
                     _image_gen.load,
                     _model_name,
                     quantize=getattr(_image_gen, "_quantize", None),
@@ -6672,6 +6677,45 @@ _image_gen = None  # Lazy-loaded ImageGenEngine
 _image_gen_lock: asyncio.Lock | None = (
     None  # Lazy-init to avoid binding to wrong event loop
 )
+_image_gen_executor: ThreadPoolExecutor | None = None
+
+
+def _get_image_gen_executor() -> ThreadPoolExecutor:
+    """Return the dedicated single-thread executor for mflux/MLX image work.
+
+    MLX streams are thread-local. Image model load, wake reload, generation,
+    editing, and unload must stay on the same worker thread; using
+    `asyncio.to_thread()` lets Python pick arbitrary default-executor threads
+    and can crash real mflux requests with `There is no Stream(gpu,N) in
+    current thread`.
+    """
+    global _image_gen_executor
+    if _image_gen_executor is None:
+        _image_gen_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="image-worker"
+        )
+    return _image_gen_executor
+
+
+async def _run_image_gen_call(fn, /, *args, **kwargs):
+    """Run an ImageGenEngine method on the dedicated image MLX thread."""
+    loop = asyncio.get_running_loop()
+    call = functools.partial(fn, *args, **kwargs)
+    return await loop.run_in_executor(_get_image_gen_executor(), call)
+
+
+def _run_image_gen_call_sync(fn, /, *args, **kwargs):
+    """Synchronous form for CLI startup image preload before uvicorn exists."""
+    call = functools.partial(fn, *args, **kwargs)
+    return _get_image_gen_executor().submit(call).result()
+
+
+def _shutdown_image_gen_executor() -> None:
+    """Stop the dedicated image executor at process shutdown/test teardown."""
+    global _image_gen_executor
+    if _image_gen_executor is not None:
+        _image_gen_executor.shutdown(wait=False, cancel_futures=True)
+        _image_gen_executor = None
 
 
 @app.post(
@@ -6836,12 +6880,13 @@ async def create_image(request: Request):
         if not already_loaded:
             try:
                 if _image_gen.is_loaded:
-                    _image_gen.unload()
+                    await _run_image_gen_call(_image_gen.unload)
                 # mlxstudio#98: frontend doesn't send model_path on /v1/images/generations,
                 # so fall back to the global _model_path set by `serve`. /v1/images/edits
                 # already does this — keep both paths symmetric so standby-wake reloads
                 # don't fail with "No local model files found".
-                _image_gen.load(
+                await _run_image_gen_call(
+                    _image_gen.load,
                     model,
                     quantize=quantize,
                     model_path=model_path or _model_path,
@@ -6875,7 +6920,7 @@ async def create_image(request: Request):
                     break
                 img_seed = (seed + i) if seed is not None else None
                 try:
-                    result = await asyncio.to_thread(
+                    result = await _run_image_gen_call(
                         _image_gen.generate,
                         prompt=prompt,
                         width=width,
@@ -7181,10 +7226,13 @@ async def create_image_edit(request: Request):
             if not already_loaded:
                 try:
                     if _image_gen.is_loaded:
-                        _image_gen.unload()
+                        await _run_image_gen_call(_image_gen.unload)
                     edit_model_path = body.get("model_path") or _model_path
-                    _image_gen.load(
-                        model, model_path=edit_model_path, quantize=_image_quantize
+                    await _run_image_gen_call(
+                        _image_gen.load,
+                        model,
+                        model_path=edit_model_path,
+                        quantize=_image_quantize,
                     )
                 except HTTPException:
                     raise
@@ -7221,7 +7269,7 @@ async def create_image_edit(request: Request):
                     break
                 img_seed = (seed + i) if seed is not None else None
                 try:
-                    result = await asyncio.to_thread(
+                    result = await _run_image_gen_call(
                         _image_gen.edit,
                         prompt=prompt,
                         image_path=str(image_path),

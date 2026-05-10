@@ -30,7 +30,7 @@ def _sanitize_nemotron_quantization_config_for_load(config: dict) -> tuple[dict 
     those entries make upstream call ``nn.quantize`` on a module that has no
     ``to_quantized`` method and startup fails before weights are loaded.
     """
-    if str(config.get("model_type", "")).lower() != "nemotron_h":
+    if str(config.get("model_type", "")).lower() not in {"nemotron_h", "nemotron_h_v2"}:
         return None, []
 
     quantization = config.get("quantization")
@@ -46,12 +46,15 @@ def _sanitize_nemotron_quantization_config_for_load(config: dict) -> tuple[dict 
             sanitized_quantization[key] = value
             continue
         parts = key.split(".")
-        # load_model's class_predicate receives module paths, not tensor paths.
-        # Catch both module entries ("...mixer.gate") and stale tensor-style
-        # entries ("...mixer.gate.weight").
-        is_gate_module = parts[-1] == "gate"
-        is_gate_tensor = len(parts) >= 2 and parts[-2] == "gate"
-        if is_gate_module or is_gate_tensor:
+        # load_model's class_predicate receives module paths, but converted
+        # configs have appeared in module and tensor/metadata forms:
+        #   ...mixer.gate
+        #   ...mixer.gate.weight
+        #   ...mixer.gate.weight.scales
+        # MoEGate is not a Linear and has no to_quantized(); remove every
+        # quantization entry whose path contains the exact `gate` segment while
+        # leaving names like `gate_proj` alone.
+        if "gate" in parts:
             removed.append(key)
             changed = True
             continue

@@ -347,8 +347,10 @@ BUNDLED_SOURCE_HASH_PATHS = (
     "paged_cache.py",
     "prefix_cache.py",
     "scheduler.py",
+    "utils/head_dim_detection.py",
     "utils/ssm_companion_cache.py",
     "utils/ssm_companion_disk_store.py",
+    "utils/tokenizer.py",
 )
 
 JANG_TOOLS_SOURCE_HASH_PATHS = (

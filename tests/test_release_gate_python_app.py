@@ -313,8 +313,10 @@ def test_packaged_bundled_hash_gate_covers_runtime_files_changed_for_release():
         "paged_cache.py",
         "prefix_cache.py",
         "scheduler.py",
+        "utils/head_dim_detection.py",
         "utils/ssm_companion_cache.py",
         "utils/ssm_companion_disk_store.py",
+        "utils/tokenizer.py",
     }
 
     assert expected.issubset(set(gate_module.BUNDLED_SOURCE_HASH_PATHS))
@@ -402,8 +404,10 @@ def test_verify_bundled_python_hash_gate_covers_release_runtime_files():
         "paged_cache.py",
         "prefix_cache.py",
         "scheduler.py",
+        "utils/head_dim_detection.py",
         "utils/ssm_companion_cache.py",
         "utils/ssm_companion_disk_store.py",
+        "utils/tokenizer.py",
     }
     expected_jang_tools_files = {
         "convert.py",

@@ -7,6 +7,7 @@ to return the expected model_type for each test.
 """
 
 import json
+import logging
 from unittest.mock import patch
 
 import pytest
@@ -116,6 +117,30 @@ class TestModelConfigRegistry:
         with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("unknown_type")):
             result = empty_registry.lookup("totally-unknown-model")
         assert result.family_name == "unknown"
+
+    def test_lookup_image_model_dirs_do_not_warn_about_missing_text_config(
+        self, empty_registry, tmp_path, caplog
+    ):
+        """Diffusers/mflux image directories are not text model config misses."""
+        diffusers_dir = tmp_path / "Qwen-Image"
+        diffusers_dir.mkdir()
+        (diffusers_dir / "model_index.json").write_text(
+            json.dumps({"_class_name": "QwenImagePipeline"})
+        )
+
+        mflux_dir = tmp_path / "Z-Image-Turbo"
+        (mflux_dir / "transformer").mkdir(parents=True)
+        (mflux_dir / "text_encoder").mkdir()
+
+        with patch(
+            "vmlx_engine.model_config_registry.load_config",
+            side_effect=AssertionError("text load_config should not run for image dirs"),
+        ):
+            with caplog.at_level(logging.WARNING):
+                assert empty_registry.lookup(str(diffusers_dir)).family_name == "unknown"
+                assert empty_registry.lookup(str(mflux_dir)).family_name == "unknown"
+
+        assert "Could not load config.json" not in caplog.text
 
     def test_priority_ordering(self, empty_registry):
         """Higher priority (lower number) config should match first when multiple match."""

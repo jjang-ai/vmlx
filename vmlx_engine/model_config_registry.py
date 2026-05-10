@@ -115,6 +115,27 @@ def _with_linear_attention_cache_override(
     return config
 
 
+def _looks_like_image_model_dir(model_path: str) -> bool:
+    """Return True for diffusers/mflux image dirs that are not text configs."""
+    try:
+        from pathlib import Path
+        path = Path(model_path)
+        if not path.is_dir():
+            return False
+        if (path / "model_index.json").is_file():
+            return True
+        if (path / "transformer").is_dir():
+            text_encoder = (
+                (path / "text_encoder").is_dir()
+                or (path / "text_encoder_2").is_dir()
+            )
+            if text_encoder or (path / "vae").is_dir():
+                return True
+    except Exception:
+        return False
+    return False
+
+
 class ModelConfigRegistry:
     """
     Singleton registry mapping model families to configurations.
@@ -336,6 +357,10 @@ class ModelConfigRegistry:
                 )
                 self._match_cache[model_name] = _stamped
                 return _stamped
+
+            if _looks_like_image_model_dir(resolved_path):
+                self._match_cache[model_name] = _DEFAULT_CONFIG
+                return _DEFAULT_CONFIG
 
             model_type = None
             model_config: dict[str, Any] = {}

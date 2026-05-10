@@ -162,6 +162,10 @@ from .mllm_batch_generator import (
     MLLMBatchResponse,
 )
 from .request import RequestOutput, RequestStatus, SamplingParams
+from .utils.head_dim_detection import (
+    choose_supported_kv_group_size,
+    detect_cache_head_dims,
+)
 from .utils.ssm_companion_disk_store import SSMCompanionDiskStore
 
 logger = logging.getLogger(__name__)
@@ -992,24 +996,19 @@ class MLLMScheduler:
                 ", ".join(changed),
             )
 
-    def _detect_head_dim(self) -> Optional[int]:
-        """Detect the VLM language model's KV head dimension."""
+    def _detect_cache_head_dims(self) -> Tuple[int, ...]:
+        """Detect VLM language-model cache trailing dims for KV quant validation."""
         try:
-            lm = self.model.language_model if hasattr(self.model, 'language_model') else self.model
-            if hasattr(lm, 'args'):
-                args = lm.args
-                if hasattr(args, 'head_dim') and args.head_dim:
-                    return args.head_dim
-                if hasattr(args, 'hidden_size') and hasattr(args, 'num_attention_heads'):
-                    return args.hidden_size // args.num_attention_heads
-            if hasattr(lm, 'config'):
-                config = lm.config
-                if hasattr(config, 'head_dim') and config.head_dim:
-                    return config.head_dim
-                if hasattr(config, 'hidden_size') and hasattr(config, 'num_attention_heads'):
-                    return config.hidden_size // config.num_attention_heads
+            return detect_cache_head_dims(self.model)
         except Exception as e:
-            logger.debug(f"Could not detect VLM head_dim: {e}")
+            logger.debug(f"Could not detect VLM cache head dims: {e}")
+            return ()
+
+    def _detect_head_dim(self) -> Optional[int]:
+        """Detect the primary VLM KV cache trailing dim from config."""
+        dims = self._detect_cache_head_dims()
+        if dims:
+            return dims[0]
         return None
 
     def _wrap_make_cache_quantized(self, bits: int, group_size: int) -> None:
@@ -1046,24 +1045,30 @@ class MLLMScheduler:
                 logger.debug("Patched QuantizedKVCache.size() to return self.offset")
             QuantizedKVCache._size_patched = True
 
-        # Validate head_dim compatibility
-        head_dim = self._detect_head_dim()
-        if head_dim is not None and head_dim > 0:
-            if head_dim % group_size != 0:
-                for candidate in [32, 16, 8]:
-                    if head_dim % candidate == 0:
-                        logger.warning(
-                            f"VLM KV quant: group_size={group_size} doesn't divide "
-                            f"head_dim={head_dim}. Auto-adjusting to {candidate}."
-                        )
-                        group_size = candidate
-                        break
-                else:
-                    logger.error(
-                        f"VLM KV quant: no valid group_size for head_dim={head_dim}. Disabled."
-                    )
-                    return
-            logger.info(f"VLM KV quant validated: head_dim={head_dim}, group_size={group_size}")
+        # Validate cache trailing-dim compatibility
+        cache_head_dims = self._detect_cache_head_dims()
+        head_dim = cache_head_dims[0] if cache_head_dims else None
+        if cache_head_dims:
+            adjusted_group_size = choose_supported_kv_group_size(
+                cache_head_dims, group_size
+            )
+            if adjusted_group_size is None:
+                logger.error(
+                    "VLM KV quant: no supported group_size for "
+                    f"cache_head_dims={cache_head_dims}. Disabled."
+                )
+                return
+            if adjusted_group_size != group_size:
+                logger.warning(
+                    f"VLM KV quant: group_size={group_size} doesn't divide "
+                    f"cache_head_dims={cache_head_dims} or is unsupported. "
+                    f"Auto-adjusting to {adjusted_group_size}."
+                )
+                group_size = adjusted_group_size
+            logger.info(
+                f"VLM KV quant validated: cache_head_dims={cache_head_dims}, "
+                f"group_size={group_size}"
+            )
 
         # Round-trip test
         try:
