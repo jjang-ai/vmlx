@@ -374,15 +374,15 @@ class TestModelConfigRegistry:
         assert result.cache_type == "hybrid"
         assert result.tool_parser == "deepseek"
 
-    def test_no_thinking_family_suppresses_stale_reasoning_stamp_unless_opted_in(
+    def test_synthetic_no_thinking_family_suppresses_stale_reasoning_stamp(
         self, empty_registry, tmp_path
     ):
-        """Ling is not a reasoning product surface.
+        """No-thinking base configs must not resurrect stale parser stamps.
 
-        Some local or older converted bundles can stamp a parser even when the
-        registered family has supports_thinking=False. Ling/Bailing must not
-        inherit a stale parser stamp and accidentally re-enable reasoning
-        extraction.
+        This intentionally uses a synthetic Ling-shaped config with
+        supports_thinking=False so the resolver override stays pinned even
+        though the production Ling registry entry is now default-off but
+        opt-in thinking-capable.
         """
         import json
 

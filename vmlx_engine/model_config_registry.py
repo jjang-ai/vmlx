@@ -286,8 +286,12 @@ class ModelConfigRegistry:
             # no-thinking via supports_thinking=False. ZAYA/ZAYA1-VL do not
             # preserve stamped think_in_template=True values because their
             # product prompt is forced to enable_thinking=False and starts from
-            # a closed empty think block. Other no-thinking families
-            # (Ling/Bailing) must not resurrect stale reasoning-parser stamps.
+            # a closed empty think block. Other no-thinking families with
+            # base supports_thinking=False still cannot resurrect stale
+            # reasoning-parser stamps. Ling/Bailing is no longer in that
+            # bucket: it is default-off but opt-in thinking-capable via a
+            # system-message template switch, so its deepseek_r1 parser must
+            # survive for explicit opt-in extraction.
             from dataclasses import replace
             updates: Dict[str, Any] = {}
             rp = caps.get("reasoning_parser")

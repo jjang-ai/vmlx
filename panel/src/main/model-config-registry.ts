@@ -169,10 +169,10 @@ registerFamily('functionary', { cacheType: 'kv', toolParser: 'functionary', enab
 registerFamily('minimax', { cacheType: 'kv', toolParser: 'minimax', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'MiniMax', priority: 20 })
 
 // Ling / Bailing hybrid: MLA softmax layers plus linear-attention/SSM-style
-// companion state. Keep reasoning absent here: Ling is not a default-reasoning
-// family, and stale bundle stamps must not make the panel send enable_thinking
-// on first launch.
-registerFamily('ling', { cacheType: 'hybrid', toolParser: 'deepseek', usePagedCache: true, enableAutoToolChoice: true, description: 'Ling / Bailing hybrid', priority: 20 })
+// companion state. The template defaults detailed thinking off and ignores
+// request-level enable_thinking; deepseek_r1 is still required when a system
+// message explicitly opts into "detailed thinking on".
+registerFamily('ling', { cacheType: 'hybrid', toolParser: 'deepseek', reasoningParser: 'deepseek_r1', usePagedCache: true, enableAutoToolChoice: true, description: 'Ling / Bailing hybrid', priority: 20 })
 
 // StepFun
 registerFamily('step-vl', { cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'StepFun Step-1V Vision-Language', priority: 3 })
@@ -270,8 +270,8 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   // ── Ling / Bailing family (inclusionAI / Ant Group) ──
   // Hybrid MLA + Lightning-Attn-2 (linear attention). Engine-side
   // model_configs.py registers `bailing_hybrid`/`bailing_moe_v2_5`
-  // under canonical family `ling` with cache_type=hybrid, no reasoning
-  // parser, and deepseek tool parser. See research/LING-RUNTIME-ARCHITECTURE.md.
+  // under canonical family `ling` with cache_type=hybrid, deepseek_r1
+  // opt-in reasoning parser, and deepseek tool parser.
   'bailing_hybrid': 'ling',
   'bailing_moe_v2_5': 'ling',
   'bailing_moe_linear': 'ling',
@@ -414,7 +414,7 @@ function applyJangCapabilities(
       next.enableAutoToolChoice = true
     }
   }
-  if (caps.supports_thinking === false || next.family === 'zaya' || next.family === 'zaya1-vl' || next.family === 'ling') {
+  if (caps.supports_thinking === false || next.family === 'zaya' || next.family === 'zaya1-vl') {
     next.reasoningParser = undefined
   } else if (typeof caps.reasoning_parser === 'string') {
     next.reasoningParser =

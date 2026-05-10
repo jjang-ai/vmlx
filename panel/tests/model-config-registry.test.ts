@@ -107,7 +107,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.isMultimodal).toBe(true)
   })
 
-  it('detects Ling/Bailing hybrid with tools and hybrid cache defaults but no reasoning parser', () => {
+  it('detects Ling/Bailing hybrid with tools, opt-in reasoning parser, and hybrid cache defaults', () => {
     const dir = makeModelDir(
       {
         model_type: 'bailing_hybrid',
@@ -131,7 +131,26 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.cacheType).toBe('hybrid')
     expect(detected.usePagedCache).toBe(true)
     expect(detected.toolParser).toBe('deepseek')
-    expect(detected.reasoningParser).toBeUndefined()
+    expect(detected.reasoningParser).toBe('deepseek_r1')
+    expect(detected.isMultimodal).toBe(false)
+  })
+
+  it('keeps Ling/Bailing opt-in reasoning parser even without a JANG capability stamp', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'bailing_hybrid',
+        num_hidden_layers: 32,
+        layer_group_size: 8,
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('ling')
+    expect(detected.cacheType).toBe('hybrid')
+    expect(detected.usePagedCache).toBe(true)
+    expect(detected.toolParser).toBe('deepseek')
+    expect(detected.reasoningParser).toBe('deepseek_r1')
     expect(detected.isMultimodal).toBe(false)
   })
 
