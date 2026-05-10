@@ -574,7 +574,12 @@ def register_all(registry=None):
             family_name="deepseek_v4",
             model_types=["deepseek_v4"],
             cache_type="kv",
-            eos_tokens=["<｜end▁of▁sentence｜>", "<｜User｜>", "<｜Assistant｜>"],
+            eos_tokens=[
+                "<｜end▁of▁sentence｜>",
+                "<｜User｜>",
+                "<｜Assistant｜>",
+                "<｜latest_reminder｜>",
+            ],
             tool_parser="dsml",
             reasoning_parser="deepseek_r1",
             think_in_template=True,

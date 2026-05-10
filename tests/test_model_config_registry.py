@@ -1092,6 +1092,28 @@ class TestModelConfigComprehensiveChecks:
         assert config.reasoning_parser is None
         assert config.think_in_template is False
 
+    def test_deepseek_v4_eos_includes_latest_reminder(self, registry):
+        """REGRESSION (2026-05-09): DSV4 jang_config.chat.role_tokens has THREE
+        role markers: <｜User｜>, <｜Assistant｜>, <｜latest_reminder｜>. The
+        encoder (encoding_dsv4.py) uses all three as prompt-side prefixes.
+        Without latest_reminder in eos_tokens, a model hallucination of that
+        token mid-response is not stopped — same failure mode as the
+        2026-05-03 <｜Assistant｜> hallucination loop. eos_tokens[1:] are
+        installed as additional stop strings in scheduler.py:1981-1993."""
+        registry.clear_cache()
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("deepseek_v4")):
+            config = registry.lookup("DeepSeek-V4-Flash")
+        assert config.family_name == "deepseek_v4"
+        assert "<｜end▁of▁sentence｜>" in config.eos_tokens
+        assert "<｜User｜>" in config.eos_tokens
+        assert "<｜Assistant｜>" in config.eos_tokens
+        assert "<｜latest_reminder｜>" in config.eos_tokens, (
+            "DSV4 eos_tokens must include <｜latest_reminder｜> — it is one "
+            "of three role markers in jang_config.chat.role_tokens and the "
+            "DSV4 encoder uses it as a prompt-side prefix. A stray emission "
+            "mid-response must terminate generation."
+        )
+
     def test_qwen3_is_reasoning_but_qwen2_is_not(self, registry):
         """Qwen3 IS a reasoning model, Qwen2 is NOT. They must differ."""
         registry.clear_cache()
