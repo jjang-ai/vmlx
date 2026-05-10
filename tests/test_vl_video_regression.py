@@ -186,12 +186,20 @@ class TestVideoFallback:
 
 class TestVlmLoaderIntegration:
     def test_v2_vlm_path_installs_fallback(self, monkeypatch):
-        """_load_jang_v2_vlm has try-import _install_video_fallback."""
+        """Both JANG VLM loader generations install the shared video fallback."""
         src = Path("/private/tmp/vmlx-1.3.66-build/vmlx_engine/utils/jang_loader.py")
         text = src.read_text()
-        # Pin two call sites that must stay in sync
-        assert text.count("_install_video_fallback(processor)") >= 2, (
-            "Both v1 VLM and v2 VLM load sites must install the video fallback"
+
+        helper_start = text.index("def _load_jang_vlm_processor")
+        helper_end = text.index("def _sanitize_grouped_conv1d_layout")
+        helper = text[helper_start:helper_end]
+
+        assert "_install_video_fallback(processor)" in helper, (
+            "Shared JANG VLM processor loader must install video fallback"
+        )
+        assert text.count("_load_jang_vlm_processor(path, model)") >= 2, (
+            "Both v1 VLM and v2 VLM load sites must return through the shared "
+            "processor loader that installs the video fallback"
         )
 
     def test_jangtq_vlm_skeleton_installs_fallback(self):
@@ -976,6 +984,57 @@ class TestIssueGuards:
             "spot-check-correctness wording."
         )
 
+    def test_vmlx156_image_prefill_guard_rejects_before_metal_forward(self):
+        """vmlx#156: image requests cannot use text chunking, so oversized
+        image-expanded prompts must be rejected before the one-shot VLM forward
+        reaches Metal and kills the server process.
+        """
+        from vmlx_engine.mllm_batch_generator import _vlm_image_prefill_budget
+
+        decision = _vlm_image_prefill_budget(
+            has_images=True,
+            seq_len=24_000,
+            num_attention_heads=32,
+            active_memory_bytes=26 * 1024**3,
+            max_working_set_bytes=37 * 1024**3,
+            reject_pct=85.0,
+            single_buffer_limit_bytes=8 * 1024**3,
+            guard_enabled=True,
+        )
+
+        assert decision.should_reject is True
+        assert decision.predicted_attention_bytes > 8 * 1024**3
+        assert "image prefill" in decision.detail
+        assert "cannot be chunked safely" in decision.detail
+        assert "VMLX_VLM_IMAGE_PREFILL_GUARD=0" in decision.detail
+
+    def test_vmlx156_image_prefill_guard_does_not_touch_text_only_path(self):
+        from vmlx_engine.mllm_batch_generator import _vlm_image_prefill_budget
+
+        decision = _vlm_image_prefill_budget(
+            has_images=False,
+            seq_len=24_000,
+            num_attention_heads=32,
+            active_memory_bytes=26 * 1024**3,
+            max_working_set_bytes=37 * 1024**3,
+            reject_pct=85.0,
+            single_buffer_limit_bytes=8 * 1024**3,
+            guard_enabled=True,
+        )
+
+        assert decision.should_reject is False
+
+    def test_vmlx156_image_path_clears_allocator_cache_before_one_shot_forward(self):
+        import inspect
+        import vmlx_engine.mllm_batch_generator as _m
+
+        src = inspect.getsource(_m.MLLMBatchGenerator._run_vision_encoding_inner)
+        image_forward = src[src.index("output = self.model(input_ids, **kwargs)") - 900 :]
+
+        assert "_raise_if_image_prefill_exceeds_budget" in image_forward
+        assert "mx.clear_cache()" in image_forward
+        assert "output = self.model(input_ids, **kwargs)" in image_forward
+
     def test_v1384_ssm_rederive_skips_oom_prompts_not_chunks(self):
         """v1.3.84: `_prefill_for_clean_ssm` previously chunked long prompts in
         fixed 2048-token slices. That broke on the 2nd chunk with
@@ -989,12 +1048,14 @@ class TestIssueGuards:
         """
         import inspect
         import vmlx_engine.mllm_batch_generator as _m
-        src = inspect.getsource(_m.MLLMBatchGenerator._prefill_for_clean_ssm)
+        src = inspect.getsource(
+            _m.MLLMBatchGenerator._prefill_for_clean_path_dependent_cache
+        )
 
         # No fixed-chunk loop remains.
         assert "chunk_size = 2048" not in src, (
             "v1.3.84 regression: chunked prefill removed from "
-            "_prefill_for_clean_ssm — broadcast_shapes bug returns."
+            "_prefill_for_clean_path_dependent_cache — broadcast_shapes bug returns."
         )
         assert "for start in range(0, len(tokens), chunk_size)" not in src
         # OOM-skip path and one-shot call must both be present.
@@ -1003,7 +1064,7 @@ class TestIssueGuards:
             "v1.3.84 regression: long prompts must log INFO + skip, not chunk."
         )
         assert "mx.array([tokens])" in src, (
-            "v1.3.84 regression: _prefill_for_clean_ssm must do one-shot "
+            "v1.3.84 regression: clean path-dependent cache rederive must do one-shot "
             "forward over the full prompt."
         )
         # Non-fatal: still catches + logs at WARNING level.
@@ -1021,7 +1082,9 @@ class TestIssueGuards:
         import inspect
         import vmlx_engine.mllm_batch_generator as _m
 
-        src = inspect.getsource(_m.MLLMBatchGenerator._prefill_for_clean_ssm)
+        src = inspect.getsource(
+            _m.MLLMBatchGenerator._prefill_for_clean_path_dependent_cache
+        )
         assert '"_rope_deltas", "_position_ids"' in src
         assert "_saved_pos_state" in src
         assert "setattr(self.language_model, _attr, None)" in src

@@ -3,11 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { formatJangQuantizationLabel } from '../src/shared/jangQuantization'
 
 describe('JANG quantization labels', () => {
-  it('derives JANGTQ1 bits from profile when explicit bits are absent', () => {
+  it('derives JANGTQ1 bits but labels it unsupported', () => {
     expect(formatJangQuantizationLabel({
       weight_format: 'mxtq',
       quantization: { profile: 'JANGTQ1' },
-    })).toBe('JANGTQ1 (1b)')
+    })).toBe('JANGTQ1 (1b, unsupported)')
   })
 
   it('derives JANGTQ2 and JANGTQ4 bits from profile when explicit bits are absent', () => {

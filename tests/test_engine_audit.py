@@ -5032,11 +5032,11 @@ class TestTurboQuantKVTelemetry:
         assert status["sidecar"]["jangtq_runtime"] is True
 
     @pytest.mark.parametrize(
-        ("profile", "expected_bits"),
-        [("JANGTQ1", 1), ("JANGTQ2", 2), ("JANGTQ4", 4)],
+        ("profile", "expected_bits", "unsupported"),
+        [("JANGTQ1", 1, True), ("JANGTQ2", 2, False), ("JANGTQ4", 4, False)],
     )
     def test_quantization_status_derives_jangtq_bits_from_profile(
-        self, tmp_path, profile, expected_bits
+        self, tmp_path, profile, expected_bits, unsupported
     ):
         """Hy3/JANGTQ bundles may stamp only profile before sidecar sniffing.
 
@@ -5063,6 +5063,8 @@ class TestTurboQuantKVTelemetry:
         assert status["codec"] == "turboquant_codebook"
         assert status["profile"] == profile
         assert status["routed_expert_bits"] == expected_bits
+        warnings = status.get("compat_warnings") or []
+        assert any("not production-supported" in w for w in warnings) is unsupported
         assert status["target_bits"] == expected_bits
 
     def test_quantization_status_detects_prestacked_jangtq_bundle(self, tmp_path):

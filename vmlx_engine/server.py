@@ -3573,6 +3573,14 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
         "lfm2_moe",
     }
     compat_warnings = []
+    if codec == "turboquant_codebook" and (
+        profile_bits == 1 or routed_expert_bits == 1
+    ):
+        compat_warnings.append(
+            "JANGTQ1 is recognized for metadata compatibility only and is not "
+            "production-supported; use JANGTQ2/JANGTQ4 or affine JANG for "
+            "release-quality generation."
+        )
     if (
         has_jang_config
         and model_types.intersection(hybrid_conv_families)

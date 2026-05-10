@@ -136,6 +136,156 @@ def _positive_int_or_none(value: Any) -> Optional[int]:
     return None
 
 
+@dataclass(frozen=True)
+class VLMImagePrefillBudgetDecision:
+    should_reject: bool
+    predicted_attention_bytes: int
+    active_memory_bytes: int
+    max_working_set_bytes: int
+    detail: str
+
+
+def _vlm_image_prefill_budget(
+    *,
+    has_images: bool,
+    seq_len: int,
+    num_attention_heads: int,
+    active_memory_bytes: int,
+    max_working_set_bytes: int,
+    reject_pct: float,
+    single_buffer_limit_bytes: int,
+    guard_enabled: bool,
+) -> VLMImagePrefillBudgetDecision:
+    """Budget a one-shot image prefill before it reaches Metal.
+
+    Image/video prompts cannot use the text chunking path because the vision
+    wrapper needs the full media-expanded prompt. The expensive tensor is the
+    language attention score buffer, roughly heads * seq_len^2 * bf16 bytes.
+    Rejecting here turns a process-killing Metal command-buffer OOM into a
+    normal request error the scheduler can report to the client.
+    """
+    heads = max(1, int(num_attention_heads or 1))
+    tokens = max(0, int(seq_len or 0))
+    predicted = int(heads * tokens * tokens * 2)
+    active = max(0, int(active_memory_bytes or 0))
+    max_ws = max(0, int(max_working_set_bytes or 0))
+    reject_pct = float(reject_pct or 85.0)
+    single_limit = max(0, int(single_buffer_limit_bytes or 0))
+
+    def gb(value: int) -> float:
+        return value / (1024**3)
+
+    if not guard_enabled or not has_images:
+        return VLMImagePrefillBudgetDecision(
+            should_reject=False,
+            predicted_attention_bytes=predicted,
+            active_memory_bytes=active,
+            max_working_set_bytes=max_ws,
+            detail="VLM image prefill guard bypassed for text-only or disabled path",
+        )
+
+    exceeds_single_buffer = single_limit > 0 and predicted > single_limit
+    exceeds_working_set = False
+    projected_pct = 0.0
+    if max_ws > 0:
+        projected_pct = ((active + predicted) / max_ws) * 100.0
+        exceeds_working_set = projected_pct >= reject_pct
+
+    if not (exceeds_single_buffer or exceeds_working_set):
+        return VLMImagePrefillBudgetDecision(
+            should_reject=False,
+            predicted_attention_bytes=predicted,
+            active_memory_bytes=active,
+            max_working_set_bytes=max_ws,
+            detail=(
+                "VLM image prefill budget ok: "
+                f"seq_len={tokens}, heads={heads}, "
+                f"predicted_attention={gb(predicted):.1f}GB"
+            ),
+        )
+
+    reasons: List[str] = []
+    if exceeds_single_buffer:
+        reasons.append(
+            f"predicted attention buffer {gb(predicted):.1f}GB exceeds "
+            f"single-buffer guard {gb(single_limit):.1f}GB"
+        )
+    if exceeds_working_set:
+        reasons.append(
+            f"projected Metal working set {projected_pct:.0f}% exceeds "
+            f"threshold {reject_pct:.0f}%"
+        )
+    return VLMImagePrefillBudgetDecision(
+        should_reject=True,
+        predicted_attention_bytes=predicted,
+        active_memory_bytes=active,
+        max_working_set_bytes=max_ws,
+        detail=(
+            "VLM image prefill rejected before Metal forward: "
+            + "; ".join(reasons)
+            + ". Image prefill cannot be chunked safely because the VLM "
+            "wrapper needs the full media-expanded prompt. Reduce image "
+            "resolution/prompt length, use a smaller model, or set "
+            "VMLX_VLM_IMAGE_PREFILL_GUARD=0 to bypass this guard at OOM risk."
+        ),
+    )
+
+
+def _raise_if_image_prefill_exceeds_budget(
+    *,
+    has_images: bool,
+    seq_len: int,
+    language_model: Any,
+) -> None:
+    if os.environ.get("VMLX_VLM_IMAGE_PREFILL_GUARD", "1") == "0":
+        guard_enabled = False
+    else:
+        guard_enabled = True
+
+    try:
+        reject_pct = float(
+            os.environ.get(
+                "VMLX_VLM_IMAGE_PREFILL_REJECT_PCT",
+                os.environ.get("VMLX_METAL_WS_REJECT_PCT", "85"),
+            )
+        )
+    except (TypeError, ValueError):
+        reject_pct = 85.0
+    try:
+        single_buffer_limit = int(
+            float(os.environ.get("VMLX_VLM_IMAGE_PREFILL_BUFFER_GB", "8"))
+            * 1024**3
+        )
+    except (TypeError, ValueError):
+        single_buffer_limit = 8 * 1024**3
+
+    active = 0
+    max_ws = 0
+    try:
+        _device_info = getattr(mx, "device_info", None) or mx.metal.device_info
+        _get_active = getattr(mx, "get_active_memory", None) or mx.metal.get_active_memory
+        max_ws = int(_device_info().get("max_recommended_working_set_size", 0) or 0)
+        active = int(_get_active() or 0)
+    except Exception:
+        pass
+
+    decision = _vlm_image_prefill_budget(
+        has_images=has_images,
+        seq_len=seq_len,
+        num_attention_heads=_infer_attention_heads_for_hybrid_oom_guard(
+            language_model
+        ),
+        active_memory_bytes=active,
+        max_working_set_bytes=max_ws,
+        reject_pct=reject_pct,
+        single_buffer_limit_bytes=single_buffer_limit,
+        guard_enabled=guard_enabled,
+    )
+    if decision.should_reject:
+        logger.warning(decision.detail)
+        raise RuntimeError(decision.detail)
+
+
 def _infer_attention_heads_for_hybrid_oom_guard(
     language_model: Any,
     default: int = 32,
@@ -2525,6 +2675,16 @@ class MLLMBatchGenerator:
                     return output.logits
                 return output
 
+        if has_images:
+            # Image-expanded prompts must use the one-shot VLM wrapper path.
+            # Drop allocator free-list memory and reject impossible requests
+            # before Metal executes a command buffer that can kill the server.
+            mx.clear_cache()
+        _raise_if_image_prefill_exceeds_budget(
+            has_images=has_images,
+            seq_len=seq_len,
+            language_model=self.language_model,
+        )
         output = self.model(input_ids, **kwargs)
         request.vision_encoded = True
 
