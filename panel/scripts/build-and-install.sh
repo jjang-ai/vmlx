@@ -8,6 +8,41 @@ DEST="/Applications/$APP_NAME"
 
 cd "$PANEL_DIR"
 
+finalize_local_app_signature() {
+  local app_path="$1"
+  local identity="${VMLINUX_INSTALL_CODESIGN_IDENTITY:--}"
+
+  if [ ! -d "$app_path" ]; then
+    echo "ERROR: Cannot finalize missing app: $app_path"
+    exit 1
+  fi
+
+  local bundled_python="$app_path/Contents/Resources/bundled-python"
+  if [ -d "$bundled_python" ]; then
+    echo "==> Removing Python bytecode before app seal: $app_path"
+    find "$bundled_python" -name "*.pyc" -type f -delete
+    find "$bundled_python" -name "__pycache__" -type d -prune -exec rm -rf {} +
+  fi
+
+  # This script installs a local app-dir build, not the notarized release DMG.
+  # Electron-builder may sign the .app before later copy/xattr/resource changes.
+  # Re-seal at the end so spawned bundled-Python native libraries do not trip
+  # macOS code-signing validation as "unsigned" or modified resources.
+  if [ "${VMLINUX_INSTALL_SKIP_FINAL_SIGN:-0}" != "1" ]; then
+    echo "==> Final app seal/signature: $app_path"
+    codesign --force --deep --sign "$identity" "$app_path"
+  else
+    echo "==> Skipping final app sign because VMLX_INSTALL_SKIP_FINAL_SIGN=1"
+  fi
+
+  echo "==> Verifying app signature: $app_path"
+  codesign --verify --deep --strict --verbose=2 "$app_path"
+
+  # Local unsigned/ad-hoc installs are intended to be runnable for smoke tests.
+  # Notarized release artifacts are produced by the release pipeline, not here.
+  xattr -dr com.apple.quarantine "$app_path" 2>/dev/null || true
+}
+
 # ─── Pre-build checklist ──────────────────────────────────────────────
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
@@ -118,6 +153,8 @@ fi
 
 echo "==> Found: $APP_PATH"
 
+finalize_local_app_signature "$APP_PATH"
+
 # Stop running instances
 echo "==> Stopping running instances..."
 pkill -f "$APP_NAME" 2>/dev/null || true
@@ -132,6 +169,8 @@ fi
 
 echo "==> Copying to /Applications/"
 cp -R "$APP_PATH" "$DEST"
+
+finalize_local_app_signature "$DEST"
 
 echo "==> Done! $APP_NAME installed to /Applications/"
 echo "    Launch it from Spotlight or: open /Applications/$APP_NAME"
