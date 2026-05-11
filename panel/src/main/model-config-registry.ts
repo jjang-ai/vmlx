@@ -390,47 +390,6 @@ function configMarksTurboQuant(config: any): boolean {
   )
 }
 
-function routedMxtqHasTwoBit(bits: any): boolean {
-  const routed = bits?.routed_expert
-  if (typeof routed === 'number') return routed <= 2
-  if (routed && typeof routed === 'object' && !Array.isArray(routed)) {
-    return Object.values(routed).some(value => typeof value === 'number' && value <= 2)
-  }
-  return false
-}
-
-function jangHasTwoBitRoutedProfile(jangCfg: any, parsedConfig?: any): boolean {
-  const profile = String(jangCfg?.profile ?? parsedConfig?.profile ?? '').toUpperCase()
-  const bitsDefault =
-    jangCfg?.quantization?.bits_default ??
-    parsedConfig?.quantization?.bits_default
-  return (
-    profile === 'JANGTQ2' ||
-    (typeof bitsDefault === 'number' && bitsDefault <= 2) ||
-    routedMxtqHasTwoBit(jangCfg?.mxtq_bits) ||
-    routedMxtqHasTwoBit(parsedConfig?.mxtq_bits) ||
-    routedMxtqHasTwoBit(jangCfg?.quantization?.mxtq_bits) ||
-    routedMxtqHasTwoBit(parsedConfig?.quantization?.mxtq_bits)
-  )
-}
-
-function jangIsJangtqKTwoBitRoutedProfile(jangCfg: any, parsedConfig?: any): boolean {
-  const profile = String(jangCfg?.profile ?? parsedConfig?.profile ?? '').toUpperCase()
-  const bitsDefault =
-    jangCfg?.quantization?.bits_default ??
-    parsedConfig?.quantization?.bits_default
-  return (
-    profile === 'JANGTQ_K' &&
-    (
-      (typeof bitsDefault === 'number' && bitsDefault <= 2) ||
-      routedMxtqHasTwoBit(jangCfg?.mxtq_bits) ||
-      routedMxtqHasTwoBit(parsedConfig?.mxtq_bits) ||
-      routedMxtqHasTwoBit(jangCfg?.quantization?.mxtq_bits) ||
-      routedMxtqHasTwoBit(parsedConfig?.quantization?.mxtq_bits)
-    )
-  )
-}
-
 function configDeclaresMedia(config: any): boolean {
   if (!config || typeof config !== 'object') return false
   for (const key of ['vision_config', 'audio_config', 'video_config']) {
@@ -504,13 +463,10 @@ function configToDetected(family: string, config: Omit<ModelConfig, 'pattern' | 
 function applyJangCapabilities(
   detected: DetectedConfig,
   jangCfg: any,
-  parsedConfig?: any,
 ): DetectedConfig {
   const caps = jangCfg?.capabilities
   const next = { ...detected }
   const zayaTypedCca = next.family === 'zaya' || next.family === 'zaya1-vl'
-  const twoBitRoutedProfile = jangHasTwoBitRoutedProfile(jangCfg, parsedConfig)
-  const jangtqKTwoBitRoutedProfile = jangIsJangtqKTwoBitRoutedProfile(jangCfg, parsedConfig)
   if (jangCfg?.weight_format === 'mxtq' || jangCfg?.format === 'mxtq') {
     next.isTurboQuant = true
   }
@@ -522,12 +478,8 @@ function applyJangCapabilities(
       next.enableAutoToolChoice = true
     }
   }
-  if ((next.family === 'zaya' || next.family === 'zaya1-vl') && twoBitRoutedProfile) {
-    next.reasoningParser = undefined
-  } else if (next.family === 'zaya' || next.family === 'zaya1-vl') {
+  if (next.family === 'zaya' || next.family === 'zaya1-vl') {
     next.reasoningParser = 'qwen3'
-  } else if (next.family === 'hy3' && jangtqKTwoBitRoutedProfile) {
-    next.reasoningParser = undefined
   } else if (next.family === 'hy3') {
     next.reasoningParser = 'qwen3'
   } else if (next.family === 'ling') {
@@ -635,7 +587,7 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
             if (existsSync(jangConfigPath)) {
             try {
               const jangCfg = JSON.parse(readFileSync(jangConfigPath, 'utf-8'))
-              detected = applyJangCapabilities(detected, jangCfg, parsed)
+              detected = applyJangCapabilities(detected, jangCfg)
               detected.isMultimodal = resolveJangMultimodal(jangCfg, parsed)
             } catch {
               if ('vision_config' in parsed) {

@@ -3195,20 +3195,16 @@ class TestZayaCCACachePolicy:
             assert rcfg.family_name == expected_family
             assert rcfg.tool_parser == "zaya_xml"
             assert rcfg.think_in_template is False
-            bits = jcfg.get("mxtq_bits", {})
-            is_jangtq2 = (
-                str(jcfg.get("profile") or "").upper() == "JANGTQ2"
-                or bits.get("routed_expert") == 2
-            )
-            if is_jangtq2:
-                assert rcfg.reasoning_parser is None
-                assert rcfg.supports_thinking is False
-            else:
-                assert rcfg.reasoning_parser == "qwen3"
-                assert rcfg.supports_thinking is True
+            # Bit profile is still audited for kernel/cache metadata below, but
+            # it must not change ZAYA reasoning policy. Low-bit artifact quality
+            # warnings live with model distribution notes, not hidden vMLX
+            # runtime guards.
+            assert rcfg.reasoning_parser == "qwen3"
+            assert rcfg.supports_thinking is True
             assert rcfg.is_mllm is (model_type == "zaya1_vl")
 
             if jcfg.get("weight_format") == "mxtq":
+                bits = jcfg.get("mxtq_bits", {})
                 assert bits.get("cca_conv") == 16
                 assert bits.get("router") == 16
                 assert (model_dir / "jangtq_runtime.safetensors").is_file()

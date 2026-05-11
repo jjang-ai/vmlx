@@ -555,28 +555,14 @@ class TestModelConfigRegistry:
         assert result.think_in_template is False
         assert result.supports_thinking is True
 
-    def test_zaya_jangtq2_profile_clamps_supports_thinking_false(
+    def test_zaya_jangtq2_profile_keeps_supports_thinking_true(
         self, empty_registry, tmp_path
     ):
-        """REGRESSION (Eric directive 2026-05-11): The JANGTQ2 (2-bit MXTQ
-        codebook) ZAYA profile cannot sustain a coherent reasoning rail.
+        """ZAYA bit profiles do not change the runtime reasoning contract.
 
-        Live evidence 2026-05-10:
-        - chat_overrides.enable_thinking=1 → 1333-token loop, garbled output
-        - same backend with thinking off → answers correctly ("Blue.")
-
-        Per project_jangtq2_quality_floor.md, this is a fundamental quality
-        ceiling of the 2-bit codebook, not a runtime bug. Production policy:
-        clamp supports_thinking=False for JANGTQ2 ZAYA bundles so:
-        - panel UI hides Thinking buttons (gates on supports_thinking)
-        - server-side _resolve_enable_thinking returns False even when
-          stale chat overrides or raw API requests send enable_thinking=true
-        - reasoning_parser is None so any leaked <think> tags don't get
-          extracted into reasoning_content (unsafe-mode output stays content)
-
-        JANGTQ4 / MXFP4 ZAYA bundles keep supports_thinking=True (they
-        sustain the reasoning rail). The profile field in jang_config.json
-        is the authoritative signal.
+        Per Eric 2026-05-11: quality warnings for low-bit ZAYA artifacts
+        belong with model distribution notes, not hidden vMLX guards. Do not
+        disable ZAYA simply because routed/default bits are 2-bit.
         """
         import json
 
@@ -623,20 +609,11 @@ class TestModelConfigRegistry:
 
         result = empty_registry.lookup(str(tmp_path))
 
-        # ZAYA family stays as ZAYA — only the thinking rail is clamped.
         assert result.family_name == "zaya"
         assert result.cache_subtype == "zaya_cca"
         assert result.tool_parser == "zaya_xml"
-        # JANGTQ2-specific clamps:
-        assert result.supports_thinking is False, (
-            "JANGTQ2 ZAYA profile must clamp supports_thinking=False "
-            "(2-bit codebook quality floor cannot sustain reasoning rail). "
-            "Panel UI gates on this flag to hide Thinking buttons."
-        )
-        assert result.reasoning_parser is None, (
-            "JANGTQ2 ZAYA profile must clamp reasoning_parser=None so leaked "
-            "<think> tags do not get extracted as reasoning_content."
-        )
+        assert result.supports_thinking is True
+        assert result.reasoning_parser == "qwen3"
         assert result.think_in_template is False
 
     def test_zaya_mxfp4_profile_keeps_supports_thinking_true(
@@ -644,8 +621,8 @@ class TestModelConfigRegistry:
     ):
         """Counter-test: MXFP4 ZAYA stays reasoning-capable.
 
-        The JANGTQ2 clamp is profile-specific. Quality-safe profiles
-        (JANGTQ4, MXFP4, BF16) must NOT trigger it.
+        This also guards against reintroducing a profile-specific ZAYA
+        no-reasoning clamp while cleaning up lower-bit artifacts.
         """
         import json
 
@@ -690,17 +667,14 @@ class TestModelConfigRegistry:
         assert result.supports_thinking is True
         assert result.reasoning_parser == "qwen3"
 
-    def test_zaya_jangtq_k_routed_2bit_clamps_thinking(
+    def test_zaya_jangtq_k_routed_2bit_keeps_thinking_enabled(
         self, empty_registry, tmp_path
     ):
-        """REGRESSION (Eric directive 2026-05-11): JANGTQ_K mixed-bit (4/2/2)
-        ZAYA bundles loop the thinking rail on enable_thinking=true because
-        the 2-bit routed gate/up experts cannot sustain coherent reasoning.
-        Live evidence: ZAYA1-VL-8B-JANGTQ_K with thinking=On in panel
-        chat repeated the prompt and recycled placeholder paragraphs.
+        """ZAYA JANGTQ_K remains reasoning-capable at runtime.
 
-        Clamp triggers on `mxtq_bits.routed_expert.gate_proj <= 2` even
-        when `bits_default` is unset or > 2.
+        Eric will carry any quality warning on the model page; vMLX should
+        not add a runtime guard that hides or suppresses Thinking for this
+        profile.
         """
         import json
 
@@ -747,19 +721,16 @@ class TestModelConfigRegistry:
 
         result = empty_registry.lookup(str(tmp_path))
         assert result.family_name == "zaya"
-        assert result.supports_thinking is False, \
-            "JANGTQ_K 2-bit routed must clamp thinking off"
-        assert result.reasoning_parser is None, \
-            "JANGTQ_K 2-bit routed must drop reasoning parser"
+        assert result.supports_thinking is True
+        assert result.reasoning_parser == "qwen3"
 
-    def test_hy3_jangtq_k_routed_2bit_clamps_thinking(
+    def test_hy3_jangtq_k_routed_2bit_keeps_low_high_reasoning_contract(
         self, empty_registry, tmp_path
     ):
-        """REGRESSION (Eric directive 2026-05-11): Hy3 JANGTQ_K (4/2/2) has
-        2-bit routed gate/up that loops the thinking rail when reasoning
-        effort low/high is forced. Clamp supports_thinking=False so panel
-        hides effort picker for these bundles. JANGTQ4 / MXFP4 Hy3 keeps
-        reasoning capability.
+        """Hy3 JANGTQ_K follows the Hy3 family reasoning contract.
+
+        vMLX exposes Hy3 reasoning as Low/High effort. Do not add a bit-profile
+        runtime guard unless a future separate policy is explicitly requested.
         """
         import json
 
@@ -804,19 +775,17 @@ class TestModelConfigRegistry:
 
         result = empty_registry.lookup(str(tmp_path))
         assert result.family_name == "hy_v3"
-        assert result.supports_thinking is False, \
-            "Hy3 JANGTQ_K 2-bit routed must clamp thinking off"
-        assert result.reasoning_parser is None, \
-            "Hy3 JANGTQ_K 2-bit routed must drop reasoning parser"
+        assert result.supports_thinking is True
+        assert result.reasoning_parser == "qwen3"
 
     def test_hy3_jangtq2_keeps_low_high_reasoning_effort_contract(
         self, empty_registry, tmp_path
     ):
         """Hy3 JANGTQ2 keeps the proven Low/High effort UI contract.
 
-        Do not transfer the new Hy3 JANGTQ_K mixed 4/2/2 clamp onto the
-        already-gated Hy3 JANGTQ2 row. The product smoke list expects
-        Low/High visible and Medium hidden for Hy3 JANGTQ2.
+        Do not add bit-profile runtime guards to Hy3 while cleaning up ZAYA
+        policy. The product smoke list expects Low/High visible and Medium
+        hidden for Hy3 JANGTQ2.
         """
         import json
 

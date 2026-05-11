@@ -312,18 +312,15 @@ class ModelConfigRegistry:
 
             # Override with stamped values. For most families, the converter
             # stamp wins because it describes the emitted artifact. Keep
-            # `supports_thinking` separate from parser metadata only for
-            # families where that is an explicit contract: ZAYA/ZAYA1-VL keep
-            # qwen3 parser metadata while product behavior defaults to
-            # no-thinking at session startup. ZAYA/ZAYA1-VL do not
-            # preserve stamped think_in_template=True values because their
-            # product prompt is forced to enable_thinking=False and starts from
-            # a closed empty think block. Other no-thinking families with
-            # base supports_thinking=False still cannot resurrect stale
-            # reasoning-parser stamps. Ling/Bailing stays in that bucket for
-            # vMLX's production contract: stale JANG sidecars advertise an
-            # experimental system-message switch, but the app/API should not
-            # expose it as a reasoning-capable model.
+            # Keep family reasoning policy separate from quantization bit
+            # metadata. Bit width is used for kernel/cache selection and
+            # observability, not for hidden runtime guards. ZAYA/ZAYA1-VL are
+            # reasoning-capable qwen3-parser families, but their template does
+            # not start in an open think rail, so stale converter stamps must
+            # not resurrect think_in_template=True. Ling/Bailing is the one
+            # explicit no-reasoning contract here: stale JANG sidecars
+            # advertise an experimental system-message switch, but the app/API
+            # should not expose it as a reasoning-capable model.
             from dataclasses import replace
             updates: Dict[str, Any] = {}
             rp = caps.get("reasoning_parser")
@@ -342,37 +339,6 @@ class ModelConfigRegistry:
             is_hy3_family = base.family_name == "hy_v3"
             preserve_template_metadata_when_no_thinking = False
 
-            # Detect 2-bit MXTQ routed experts (the MoE quality floor that
-            # makes the thinking rail loop / repeat-prompt). JANGTQ2 has
-            # scalar 2-bit routed; JANGTQ_K mixed-bit (e.g. 4/2/2 = down/gate/up
-            # or attention/gate/up) has dict form with some 2-bit fields.
-            # Both fail strict-output / thinking quality (Eric directive
-            # 2026-05-10/11). See project_jangtq2_quality_floor.md.
-            _mxtq_bits = jcfg.get("mxtq_bits")
-            _routed = (
-                _mxtq_bits.get("routed_expert")
-                if isinstance(_mxtq_bits, dict) else None
-            )
-            _routed_has_2bit = False
-            if isinstance(_routed, int):
-                _routed_has_2bit = _routed <= 2
-            elif isinstance(_routed, dict):
-                # gate_proj/up_proj at 2-bit is the killer — these gate the
-                # MoE forward and dominate strict-output coherence. down_proj
-                # at 2-bit is somewhat more tolerable but still risky.
-                for _v in _routed.values():
-                    if isinstance(_v, int) and _v <= 2:
-                        _routed_has_2bit = True
-                        break
-            _profile = str(jcfg.get("profile") or "").upper()
-            _quant = jcfg.get("quantization") or {}
-            _bits_default = _quant.get("bits_default") if isinstance(_quant, dict) else None
-            _has_2bit_routed_or_default = (
-                _profile == "JANGTQ2"
-                or (isinstance(_bits_default, int) and _bits_default <= 2)
-                or _routed_has_2bit
-            )
-
             if is_zaya_family:
                 # ZAYA and ZAYA1-VL are reasoning-capable, but the honest
                 # prompt contract is still not "starts inside <think>".
@@ -381,13 +347,6 @@ class ModelConfigRegistry:
                 updates["supports_thinking"] = True
                 updates["reasoning_parser"] = "qwen3"
                 updates["think_in_template"] = False
-                # ZAYA 2-bit routed profiles cannot safely expose a reasoning
-                # rail. Clamp at the registry boundary so panel UI, saved chat
-                # overrides, and raw API kwargs all converge on no-thinking.
-                # JANGTQ4 and MXFP4 ZAYA bundles keep reasoning enabled.
-                if _has_2bit_routed_or_default:
-                    updates["supports_thinking"] = False
-                    updates["reasoning_parser"] = None
             elif is_ling_family:
                 # Ling/Bailing emits plain content. Do not let drifted bundle
                 # stamps resurrect a reasoning parser or thinking-capable
@@ -406,13 +365,6 @@ class ModelConfigRegistry:
                 updates["supports_thinking"] = True
                 updates["reasoning_parser"] = "qwen3"
                 updates["think_in_template"] = False
-                # Keep the already-proven Hy3 JANGTQ2 Low/High effort
-                # contract intact. The newer Hy3 JANGTQ_K mixed 4/2/2 profile
-                # is a separate product surface; for that profile, do not
-                # expose Low/High until it has its own live quality proof.
-                if _profile == "JANGTQ_K" and _routed_has_2bit:
-                    updates["supports_thinking"] = False
-                    updates["reasoning_parser"] = None
             elif base_supports_thinking is False:
                 updates["supports_thinking"] = False
             elif isinstance(sth, bool):

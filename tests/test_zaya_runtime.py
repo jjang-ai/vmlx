@@ -703,11 +703,12 @@ def test_zaya1_vl_processor_preserves_list_content_for_list_aware_templates(monk
 
 
 def test_zaya1_vl_thinking_off_prompt_does_not_inject_closed_think(monkeypatch):
-    """ZAYA1-VL is a no-thinking product family.
+    """ZAYA1-VL no-thinking mode must not synthesize a closed think block.
 
     The local VL template renders a plain ``assistant: `` generation prompt.
     The MLLM wrapper must not synthesize a closed ``<think></think>`` block for
-    a family whose metadata says thinking is unsupported.
+    an explicit metadata path whose model configuration says thinking is
+    unsupported. This is not the default ZAYA family policy.
     """
 
     from vmlx_engine.models.mllm import MLXMultimodalLM

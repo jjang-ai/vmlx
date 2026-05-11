@@ -77,7 +77,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.isMultimodal).toBe(true)
   })
 
-  it('clamps ZAYA1-VL JANGTQ_K reasoning while keeping VL and typed CCA detection', () => {
+  it('keeps ZAYA1-VL JANGTQ_K reasoning parser enabled while preserving VL and typed CCA detection', () => {
     const dir = makeModelDir(
       {
         model_type: 'zaya1_vl',
@@ -112,7 +112,40 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.cacheType).toBe('hybrid')
     expect(detected.usePagedCache).toBe(true)
     expect(detected.toolParser).toBe('zaya_xml')
-    expect(detected.reasoningParser).toBeUndefined()
+    expect(detected.reasoningParser).toBe('qwen3')
+    expect(detected.isMultimodal).toBe(true)
+    expect(detected.isTurboQuant).toBe(true)
+  })
+
+  it('keeps ZAYA1-VL JANGTQ2 reasoning parser enabled because bit profiles are not runtime-clamped', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'zaya1_vl',
+        vision_config: { model_type: 'qwen2_5_vl' },
+        weight_format: 'mxtq',
+        mxtq_bits: { routed_expert: 2 },
+      },
+      {
+        profile: 'JANGTQ2',
+        weight_format: 'mxtq',
+        cache_subtype: 'zaya_cca',
+        mxtq_bits: { routed_expert: 2 },
+        capabilities: {
+          family: 'zaya1_vl',
+          tool_parser: 'zaya_xml',
+          reasoning_parser: 'qwen3',
+          think_in_template: false,
+          supports_thinking: true,
+          cache_type: 'hybrid',
+          modality: 'vision',
+        },
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('zaya1-vl')
+    expect(detected.reasoningParser).toBe('qwen3')
     expect(detected.isMultimodal).toBe(true)
     expect(detected.isTurboQuant).toBe(true)
   })
@@ -292,7 +325,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.isTurboQuant).toBe(true)
   })
 
-  it('clamps Hy3 JANGTQ_K reasoning until the mixed 4/2/2 profile has live proof', () => {
+  it('keeps Hy3 JANGTQ_K Low/High reasoning contract', () => {
     const dir = makeModelDir(
       {
         model_type: 'hy_v3',
@@ -324,7 +357,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
 
     expect(detected.family).toBe('hy3')
     expect(detected.toolParser).toBe('hunyuan')
-    expect(detected.reasoningParser).toBeUndefined()
+    expect(detected.reasoningParser).toBe('qwen3')
     expect(detected.isTurboQuant).toBe(true)
   })
 
