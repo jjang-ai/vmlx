@@ -411,6 +411,33 @@ class TestDiskCacheManagerTQ:
         finally:
             mgr.shutdown()
 
+    def test_fetch_rejects_runtime_fingerprint_drift(self, monkeypatch):
+        """Prompt disk cache misses after runtime/package fingerprint drift."""
+        from vmlx_engine import prefix_cache
+
+        mgr = self._make_manager()
+        try:
+            cache = _create_non_tq_cache(n_layers=2)
+            tokens = list(range(50))
+
+            monkeypatch.setattr(
+                prefix_cache,
+                "runtime_cache_fingerprint",
+                lambda: "runtime=a",
+            )
+            assert mgr.store(tokens, cache) is True
+            time.sleep(1.0)
+            assert mgr.fetch(tokens) is not None
+
+            monkeypatch.setattr(
+                prefix_cache,
+                "runtime_cache_fingerprint",
+                lambda: "runtime=b",
+            )
+            assert mgr.fetch(tokens) is None
+        finally:
+            mgr.shutdown()
+
     def test_stats_include_tq_native(self):
         """stats() should include tq_native_stores/hits when TQ ops occur."""
         mgr = self._make_manager()

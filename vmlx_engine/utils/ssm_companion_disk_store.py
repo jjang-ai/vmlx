@@ -87,6 +87,15 @@ _ENV_NAMESPACE = "VMLX_SSM_DISK_CACHE_NAMESPACE"
 _DEFAULT_BUDGET_GB = 10.0
 
 
+def _runtime_cache_fingerprint() -> str:
+    try:
+        from vmlx_engine.prefix_cache import runtime_cache_fingerprint
+
+        return runtime_cache_fingerprint()
+    except Exception:
+        return "unknown"
+
+
 def is_enabled() -> bool:
     """True iff the L2 disk cache is enabled by env flag."""
     return os.environ.get(_ENV_ENABLE, "").strip() in ("1", "true", "TRUE", "yes")
@@ -244,6 +253,7 @@ class SSMCompanionDiskStore:
             "num_tokens": int(num_tokens),
             "stored_at": time.time(),
             "layer_metas": layer_metas,
+            "runtime_cache_fingerprint": _runtime_cache_fingerprint(),
             # Tokens are not strictly needed for fetch (the key implies them)
             # but storing them helps debugging and makes the file
             # self-describing for offline inspection.
@@ -305,6 +315,16 @@ class SSMCompanionDiskStore:
 
         layer_metas: List[Dict[str, Any]] = sidecar.get("layer_metas", [])
         is_complete = bool(sidecar.get("is_complete", True))
+        stored_runtime = sidecar.get("runtime_cache_fingerprint")
+        current_runtime = _runtime_cache_fingerprint()
+        if stored_runtime != current_runtime:
+            logger.info(
+                "SSM disk cache runtime fingerprint mismatch; treating as miss "
+                "(stored=%s current=%s)",
+                stored_runtime or "missing",
+                current_runtime,
+            )
+            return None
 
         flat: Dict[str, mx.array] = {}
         if data_path.exists() and data_path.stat().st_size > 0:

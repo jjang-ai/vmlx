@@ -16,6 +16,7 @@ This module provides two implementations:
 
 import copy
 import hashlib
+import importlib.metadata
 import logging
 import os
 import time
@@ -49,6 +50,31 @@ logger = logging.getLogger(__name__)
 # v7 schema tag below to invalidate v6 entries that were stored before
 # the guard landed.
 PAGED_CACHE_SCHEMA_VERSION = "paged_n1_keys_v3"
+
+
+def runtime_cache_fingerprint() -> str:
+    """Fingerprint runtime packages that define cache tensor semantics.
+
+    Disk L2 is intentionally reusable across same-version process restarts.
+    It must not, however, silently cross an app/runtime update when a cache
+    schema string was not bumped. Keep this compact string inside cache
+    namespaces and model keys so old blocks miss cleanly after package drift.
+    """
+    parts: List[str] = []
+    try:
+        from . import __version__ as engine_version
+    except Exception:
+        engine_version = "unknown"
+    parts.append(f"vmlx_engine={engine_version}")
+    for package in ("jang", "mlx", "mlx-lm", "mlx-vlm"):
+        try:
+            version = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            version = "missing"
+        except Exception:
+            version = "unknown"
+        parts.append(f"{package}={version}")
+    return "runtime_cache=" + ",".join(parts)
 
 
 def compute_model_cache_key(
@@ -121,6 +147,7 @@ def compute_model_cache_key(
 
     # 3. Loader fingerprint — A4 Concern #1
     parts.append(f"paged_cache_schema={PAGED_CACHE_SCHEMA_VERSION}")
+    parts.append(runtime_cache_fingerprint())
     parts.append(f"smelt={1 if smelt_enabled else 0}")
     if smelt_enabled and smelt_pct is not None:
         parts.append(f"smelt_pct={float(smelt_pct):.4f}")

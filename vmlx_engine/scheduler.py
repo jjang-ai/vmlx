@@ -36,6 +36,7 @@ from .prefix_cache import (
     PAGED_CACHE_SCHEMA_VERSION,
     PrefixCacheManager,
     compute_model_cache_key,
+    runtime_cache_fingerprint,
 )
 from .prompt_lookup import NgramIndex, find_draft_tokens, pld_stats
 from .request import Request, RequestOutput, RequestStatus, SamplingParams
@@ -779,6 +780,7 @@ class Scheduler:
                         block_scope_key = (
                             f"{self.config.model_path}:quant={quant_tag}"
                             f":paged_cache_schema={PAGED_CACHE_SCHEMA_VERSION}"
+                            f":{runtime_cache_fingerprint()}"
                             f"{dsv4_scope}"
                             f"{zaya_scope}"
                         )
@@ -951,6 +953,7 @@ class Scheduler:
                 scope_key = (
                     f"{self.config.model_path}:quant={quant_tag}:layers={n_layers}"
                     f":prefix_cache_schema={PAGED_CACHE_SCHEMA_VERSION}"
+                    f":{runtime_cache_fingerprint()}"
                 )
                 model_hash = hashlib.sha256(scope_key.encode()).hexdigest()[:12]
                 model_slug = os.path.basename(self.config.model_path.rstrip("/"))

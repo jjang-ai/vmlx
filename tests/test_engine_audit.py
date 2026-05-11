@@ -3936,10 +3936,26 @@ class TestJangVLMFallbacks:
         assert 'globals()["_LAST_LOAD_VLM_FALLBACK"] = True' in mistral_fallback
         assert 'globals()["_LAST_LOAD_VLM_FALLBACK"] = False' in source
 
-    def test_affine_qwen_hybrid_jang_routes_text_only(self, tmp_path):
+    @pytest.mark.parametrize(
+        "model_type,text_model_type",
+        [
+            ("qwen3_5", "qwen3_5_text"),
+            ("qwen3_vl", "qwen3_vl"),
+            ("qwen3_vl_moe", "qwen3_vl_moe"),
+        ],
+    )
+    def test_affine_qwen_mrope_families_route_text_only(
+        self, tmp_path, model_type, text_model_type
+    ):
         from vmlx_engine.api import utils
 
-        model_dir = self._write_qwen_hybrid_fixture(tmp_path)
+        model_dir = self._write_qwen_hybrid_fixture(
+            tmp_path,
+            text_model_type=text_model_type,
+        )
+        config = json.loads((model_dir / "config.json").read_text())
+        config["model_type"] = model_type
+        (model_dir / "config.json").write_text(json.dumps(config))
         utils._IS_MLLM_CACHE.clear()
 
         assert utils.is_mllm_model(str(model_dir)) is False

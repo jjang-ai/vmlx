@@ -405,12 +405,16 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detectModelConfigFromDir(dir).isMultimodal).toBe(true)
   })
 
-  it('routes affine-JANG Qwen hybrid text-only until the mlx-vlm M-RoPE path is fixed', () => {
+  it.each([
+    ['qwen3_5', 'qwen3_5_text'],
+    ['qwen3_vl', 'qwen3_vl'],
+    ['qwen3_vl_moe', 'qwen3_vl_moe'],
+  ])('routes affine-JANG %s text-only until the mlx-vlm M-RoPE path is fixed', (modelType, textModelType) => {
     const dir = makeModelDir(
       {
-        model_type: 'qwen3_5',
+        model_type: modelType,
         text_config: {
-          model_type: 'qwen3_5_text',
+          model_type: textModelType,
           layer_types: ['linear_attention', 'full_attention'],
         },
         vision_config: { hidden_size: 1024 },

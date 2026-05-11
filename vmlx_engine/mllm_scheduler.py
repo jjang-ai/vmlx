@@ -169,6 +169,7 @@ from .utils.head_dim_detection import (
     detect_cache_head_dims,
 )
 from .utils.ssm_companion_disk_store import SSMCompanionDiskStore
+from .prefix_cache import runtime_cache_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -516,6 +517,7 @@ class MLLMScheduler:
                         block_scope_key = (
                             f"{self.config.model_path}:quant={quant_tag}"
                             f":paged_cache_schema={PAGED_CACHE_SCHEMA_VERSION}"
+                            f":{runtime_cache_fingerprint()}"
                         )
                         model_hash = hashlib.sha256(
                             block_scope_key.encode()
@@ -684,6 +686,7 @@ class MLLMScheduler:
                 scope_key = (
                     f"{self.config.model_path}:quant={quant_tag}:layers={n_layers}"
                     f":prefix_cache_schema={PAGED_CACHE_SCHEMA_VERSION}"
+                    f":{runtime_cache_fingerprint()}"
                 )
                 model_hash = hashlib.sha256(
                     scope_key.encode()

@@ -50,6 +50,25 @@ def _hash_tokens(tokens: List[int]) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _runtime_cache_fingerprint() -> str:
+    try:
+        from .prefix_cache import runtime_cache_fingerprint
+
+        return runtime_cache_fingerprint()
+    except Exception:
+        return "unknown"
+
+
+def _metadata_runtime_fingerprint(metadata: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(metadata, dict):
+        return None
+    return (
+        metadata.get("__runtime_cache_fingerprint__")
+        or metadata.get("runtime_cache_fingerprint")
+        or metadata.get("1.runtime_cache_fingerprint")
+    )
+
+
 class _ConnectionPool:
     """Simple SQLite connection pool (thread-safe).
 
@@ -320,6 +339,27 @@ class DiskCacheManager:
                 raw_arrays, file_metadata = mx.load(
                     str(file_path), return_metadata=True
                 )
+                stored_runtime = _metadata_runtime_fingerprint(file_metadata)
+                current_runtime = _runtime_cache_fingerprint()
+                if stored_runtime != current_runtime:
+                    try:
+                        file_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    conn.execute(
+                        "DELETE FROM cache_entries WHERE token_hash = ?",
+                        (token_hash,),
+                    )
+                    conn.commit()
+                    with self._stats_lock:
+                        self.misses += 1
+                    logger.info(
+                        "Disk prompt cache runtime fingerprint mismatch; "
+                        "treating as miss (stored=%s current=%s)",
+                        stored_runtime or "missing",
+                        current_runtime,
+                    )
+                    return None
 
                 # ─── Step 2: Check for TQ-native format ───
                 # TQ-native files have "__tq_native__" = "true" in metadata.
@@ -519,6 +559,7 @@ class DiskCacheManager:
             save_metadata = metadata or {}
             save_metadata["num_tokens"] = str(len(tokens))
             save_metadata["created_at"] = str(time.time())
+            save_metadata["runtime_cache_fingerprint"] = _runtime_cache_fingerprint()
 
             cache_metadata = [cache_info, save_metadata, cache_classes]
             cache_metadata_flat = dict(tree_flatten(cache_metadata))
@@ -592,6 +633,7 @@ class DiskCacheManager:
             tq_metadata["created_at"] = str(time.time())
             if metadata:
                 tq_metadata.update(metadata)
+            tq_metadata["__runtime_cache_fingerprint__"] = _runtime_cache_fingerprint()
 
             # Materialize all lazy MLX arrays before saving.
             # This ensures no Metal ops happen during the background thread's
@@ -732,6 +774,7 @@ class DiskCacheManager:
 
             # Insert into index
             db_meta = {"num_tokens": str(len(tokens)), "created_at": str(now)}
+            db_meta["runtime_cache_fingerprint"] = _runtime_cache_fingerprint()
             conn = self._pool.get()
             try:
                 conn.execute(
@@ -821,6 +864,7 @@ class DiskCacheManager:
                 "num_tokens": str(len(tokens)),
                 "created_at": str(now),
                 "tq_native": "true",
+                "runtime_cache_fingerprint": _runtime_cache_fingerprint(),
             })
             conn = self._pool.get()
             try:

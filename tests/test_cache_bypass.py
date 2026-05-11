@@ -534,6 +534,114 @@ class TestServerForwarding:
         assert "prefix_cache_schema={PAGED_CACHE_SCHEMA_VERSION}" in sched
         assert "prefix_cache_schema={PAGED_CACHE_SCHEMA_VERSION}" in mllm
 
+    def test_l2_namespaces_include_runtime_cache_fingerprint(self, monkeypatch):
+        """App/runtime updates must invalidate L2 without killing same-version restore."""
+        from types import SimpleNamespace
+
+        from vmlx_engine import prefix_cache
+        from vmlx_engine.prefix_cache import compute_model_cache_key
+
+        model = SimpleNamespace(config=SimpleNamespace(model_type="qwen3"))
+        monkeypatch.setattr(prefix_cache, "runtime_cache_fingerprint", lambda: "runtime=a")
+        key_a = compute_model_cache_key(model, model_path="/models/qwen")
+
+        monkeypatch.setattr(prefix_cache, "runtime_cache_fingerprint", lambda: "runtime=b")
+        key_b = compute_model_cache_key(model, model_path="/models/qwen")
+
+        assert key_a != key_b
+
+        with open("vmlx_engine/scheduler.py") as f:
+            sched = f.read()
+        with open("vmlx_engine/mllm_scheduler.py") as f:
+            mllm = f.read()
+
+        assert "runtime_cache_fingerprint()" in sched
+        assert "runtime_cache_fingerprint()" in mllm
+
+    def test_block_disk_record_rejects_runtime_fingerprint_drift(
+        self, monkeypatch, tmp_path
+    ):
+        """Explicit L2 dirs still reject records from a different runtime build."""
+        import hashlib
+        import time
+
+        mx = pytest.importorskip("mlx.core")
+        from vmlx_engine import prefix_cache
+        from vmlx_engine.block_disk_store import BlockDiskStore
+
+        block_hash = hashlib.sha256(b"runtime-fingerprint").digest()
+        cache_data = [
+            (
+                "kv",
+                mx.array([[1.0, 2.0], [3.0, 4.0]]),
+                mx.array([[5.0, 6.0], [7.0, 8.0]]),
+            )
+        ]
+
+        monkeypatch.setattr(
+            prefix_cache,
+            "runtime_cache_fingerprint",
+            lambda: "runtime=a",
+        )
+        store1 = BlockDiskStore(str(tmp_path), max_size_gb=0.1, expected_num_layers=1)
+        try:
+            store1.write_block_async(block_hash, cache_data, token_count=2)
+            for _ in range(20):
+                if store1.get_stats()["blocks_on_disk"] >= 1:
+                    break
+                time.sleep(0.1)
+            assert store1.get_stats()["blocks_on_disk"] == 1
+            assert store1.read_block(block_hash) is not None
+        finally:
+            store1.shutdown()
+
+        monkeypatch.setattr(
+            prefix_cache,
+            "runtime_cache_fingerprint",
+            lambda: "runtime=b",
+        )
+        store2 = BlockDiskStore(str(tmp_path), max_size_gb=0.1, expected_num_layers=1)
+        try:
+            assert store2.read_block(block_hash) is None
+        finally:
+            store2.shutdown()
+
+    def test_ssm_companion_record_rejects_runtime_fingerprint_drift(
+        self, monkeypatch, tmp_path
+    ):
+        """Hybrid SSM companion L2 also rejects explicit-dir runtime drift."""
+        mx = pytest.importorskip("mlx.core")
+        from vmlx_engine import prefix_cache
+        from vmlx_engine.utils.ssm_companion_disk_store import SSMCompanionDiskStore
+
+        class FakeArraysCache:
+            def __init__(self):
+                self.cache = [mx.array([1.0, 2.0, 3.0])]
+                self.lengths = None
+
+        monkeypatch.setattr(
+            prefix_cache,
+            "runtime_cache_fingerprint",
+            lambda: "runtime=a",
+        )
+        disk1 = SSMCompanionDiskStore(directory=tmp_path, budget_bytes=32 * 1024 * 1024)
+        assert disk1.store(
+            "ssm-runtime-fingerprint",
+            [FakeArraysCache()],
+            is_complete=True,
+            token_ids=[1, 2, 3],
+            num_tokens=3,
+        )
+        assert disk1.fetch("ssm-runtime-fingerprint") is not None
+
+        monkeypatch.setattr(
+            prefix_cache,
+            "runtime_cache_fingerprint",
+            lambda: "runtime=b",
+        )
+        disk2 = SSMCompanionDiskStore(directory=tmp_path, budget_bytes=32 * 1024 * 1024)
+        assert disk2.fetch("ssm-runtime-fingerprint") is None
+
 
 # ---------------------------------------------------------------------------
 # Multi-turn coherence: the happy path without bypass must still work

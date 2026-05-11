@@ -780,6 +780,12 @@ def _serialize_block(
     num_layers = 0
     # Per-layer metadata including type tags for mixed-type block support
     meta: Dict[str, Any] = {"__layer_types__": {}}
+    try:
+        from .prefix_cache import runtime_cache_fingerprint
+
+        meta["__runtime_cache_fingerprint__"] = runtime_cache_fingerprint()
+    except Exception:
+        meta["__runtime_cache_fingerprint__"] = "unknown"
 
     for i, layer_data in enumerate(cache_data):
         tag = layer_data[0]
@@ -971,6 +977,22 @@ def _deserialize_block(
     # Remove from data dict so it's not picked up as a layer
     data.pop("__vmlx_block_meta__", None)
     data.pop("__metadata__", None)
+
+    try:
+        from .prefix_cache import runtime_cache_fingerprint
+
+        current_runtime = runtime_cache_fingerprint()
+    except Exception:
+        current_runtime = "unknown"
+    stored_runtime = meta.get("__runtime_cache_fingerprint__")
+    if stored_runtime != current_runtime:
+        logger.info(
+            "Disk cache block runtime fingerprint mismatch; treating as miss "
+            "(stored=%s current=%s)",
+            stored_runtime or "missing",
+            current_runtime,
+        )
+        return []
 
     # Per-layer type map (new format with __layer_types__)
     layer_types = meta.get("__layer_types__", {})
