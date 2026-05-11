@@ -2299,19 +2299,12 @@ class MLLMScheduler:
                             media_context = self._mllm_request_has_media_cache_context(
                                 request, token_list
                             )
-                            cache_extra_keys = getattr(request, "_cache_extra_keys", None)
-                            media_store_allowed = (
-                                bool(getattr(self, "_uses_zaya_cache", False))
-                                and media_context
-                                and cache_extra_keys is not None
-                            )
-                            if media_context and not media_store_allowed:
+                            if media_context:
                                 logger.info(
                                     "Skipping VLM prefix cache store for %s: "
                                     "prompt contains media context/placeholders; "
                                     "media embeddings are path-dependent and "
-                                    "must not be saved under a token-only "
-                                    "prefix key",
+                                    "must not be rebuilt from text-only tokens",
                                     request_id,
                                 )
                                 request._extracted_cache = None
@@ -2418,11 +2411,7 @@ class MLLMScheduler:
                                                 request_id,
                                                 truncated_tokens,
                                                 cache_states,
-                                                cache_extra_keys=(
-                                                    cache_extra_keys
-                                                    if media_store_allowed
-                                                    else None
-                                                ),
+                                                cache_extra_keys=None,
                                             )
                                             logger.info(
                                                 f"VLM Scheduler stored paged Prefix Cache for "

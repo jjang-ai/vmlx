@@ -2893,18 +2893,11 @@ class MLLMBatchGenerator:
             # fresh execution without pollution from prior multimodal requests.
             _mllm_bypass = bool(getattr(req, "_bypass_prefix_cache", False))
             _media_context = self._request_has_media_cache_context(req)
-            _media_cache_extra_keys = getattr(req, "_cache_extra_keys", None)
             if (
                 self._prefix_cache_enabled
                 and self.block_aware_cache is not None
                 and req.prompt_cache is None
-                and (
-                    not _media_context
-                    or (
-                        self._uses_zaya_cache
-                        and _media_cache_extra_keys is not None
-                    )
-                )
+                and not _media_context
                 and not _mllm_bypass
             ):
                 if req.input_ids is not None:

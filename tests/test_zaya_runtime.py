@@ -1574,8 +1574,14 @@ def test_zaya_mllm_paged_store_rederives_clean_prompt_boundary():
     assert scheduler.paged_cache_manager.detached == ["zaya-vl-clean"]
 
 
-def test_zaya_mllm_media_paged_store_uses_media_cache_key():
-    """ZAYA-VL media prompts should store only under a media-fingerprinted key."""
+def test_zaya_mllm_media_paged_store_skips_prefix_cache():
+    """ZAYA-VL media prompts must not store token-prefix CCA cache.
+
+    A media side-key separates different image payloads, but the current clean
+    ZAYA CCA store path re-prefills from text tokens only. That loses the
+    image-conditioned state, so storing it under any prefix key can make a later
+    image request hit a non-image/incorrect CCA state.
+    """
 
     from vmlx_engine.mllm_scheduler import MLLMScheduler
 
@@ -1656,15 +1662,8 @@ def test_zaya_mllm_media_paged_store_uses_media_cache_key():
 
     scheduler._cleanup_finished({"zaya-vl-media"})
 
-    assert scheduler.batch_generator.prefilled == [[10, 262147, 262147, 11]]
-    assert scheduler.block_aware_cache.stores == [
-        (
-            "zaya-vl-media",
-            [10, 262147, 262147, 11],
-            [{"class_name": "CacheList", "state": "clean-zaya-media-cache"}],
-            {"media": "sha256:img-a"},
-        )
-    ]
+    assert scheduler.batch_generator.prefilled == []
+    assert scheduler.block_aware_cache.stores == []
     assert scheduler.disk_cache.stores == []
 
 
