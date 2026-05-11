@@ -152,7 +152,11 @@ echo ""
 
 # ─── Build ─────────────────────────────────────────────────────────────
 echo "==> Installing dependencies..."
-npm install
+# Avoid running package.json postinstall here. The postinstall hook invokes
+# electron-builder install-app-deps directly, which can fail under the host
+# Node ABI even though electron-builder's packaging rebuild for Electron ABI is
+# valid. The packaging step below performs the native Electron rebuild.
+npm install --ignore-scripts
 
 echo "==> Building app..."
 npm run build
