@@ -100,4 +100,14 @@ describe('chat settings cross-family compatibility warnings', () => {
     expect(source).toContain("detectedFamily === 'hy3' || reasoningParser === 'openai_gptoss' || reasoningParser === 'mistral'")
     expect(source).toContain("const showMediumEffort = reasoningParser !== 'mistral' && detectedFamily !== 'hy3'")
   })
+
+  it('main IPC refuses stale local Thinking On when fresh detection has no reasoning parser', () => {
+    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+
+    expect(source).toContain('if (!detected.reasoningParser) {')
+    expect(source).toContain('sessionHasReasoningParser = false;')
+    expect(source).toContain('const effectiveEnableThinkingOverride =')
+    expect(source).toContain('!sessionHasReasoningParser')
+    expect(source).toContain('chatDetectedFamily !== "deepseek-v4"')
+  })
 })

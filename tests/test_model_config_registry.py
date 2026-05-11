@@ -809,6 +809,63 @@ class TestModelConfigRegistry:
         assert result.reasoning_parser is None, \
             "Hy3 JANGTQ_K 2-bit routed must drop reasoning parser"
 
+    def test_hy3_jangtq2_keeps_low_high_reasoning_effort_contract(
+        self, empty_registry, tmp_path
+    ):
+        """Hy3 JANGTQ2 keeps the proven Low/High effort UI contract.
+
+        Do not transfer the new Hy3 JANGTQ_K mixed 4/2/2 clamp onto the
+        already-gated Hy3 JANGTQ2 row. The product smoke list expects
+        Low/High visible and Medium hidden for Hy3 JANGTQ2.
+        """
+        import json
+
+        empty_registry.register(
+            ModelConfig(
+                family_name="hy_v3",
+                model_types=["hy_v3", "hunyuan_v1"],
+                cache_type="kv",
+                tool_parser="hunyuan",
+                reasoning_parser="qwen3",
+                think_in_template=False,
+                supports_thinking=True,
+                is_mllm=False,
+                priority=10,
+            )
+        )
+        (tmp_path / "config.json").write_text(json.dumps({"model_type": "hy_v3"}))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "profile": "JANGTQ2",
+                    "mxtq_bits": {
+                        "routed_expert": 2,
+                        "attention": 8,
+                    },
+                    "quantization": {
+                        "method": "affine+mxtq",
+                        "group_size": 64,
+                        "bits_default": 2,
+                    },
+                    "capabilities": {
+                        "family": "hy_v3",
+                        "cache_type": "kv",
+                        "tool_parser": "hunyuan",
+                        "reasoning_parser": "qwen3",
+                        "think_in_template": False,
+                        "supports_thinking": True,
+                        "modality": "text",
+                    },
+                }
+            )
+        )
+
+        result = empty_registry.lookup(str(tmp_path))
+        assert result.family_name == "hy_v3"
+        assert result.supports_thinking is True
+        assert result.reasoning_parser == "qwen3"
+        assert result.tool_parser == "hunyuan"
+
 
 class TestModelConfigs:
     """Tests for the pre-registered model configurations.

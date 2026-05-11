@@ -77,6 +77,79 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.isMultimodal).toBe(true)
   })
 
+  it('clamps ZAYA1-VL JANGTQ_K reasoning while keeping VL and typed CCA detection', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'zaya1_vl',
+        vision_config: { model_type: 'qwen2_5_vl' },
+        weight_format: 'mxtq',
+        mxtq_bits: {
+          routed_expert: { gate_proj: 2, up_proj: 2, down_proj: 4 },
+        },
+      },
+      {
+        profile: 'JANGTQ_K',
+        weight_format: 'mxtq',
+        cache_subtype: 'zaya_cca',
+        mxtq_bits: {
+          routed_expert: { gate_proj: 2, up_proj: 2, down_proj: 4 },
+        },
+        capabilities: {
+          family: 'zaya1_vl',
+          tool_parser: 'zaya_xml',
+          reasoning_parser: 'qwen3',
+          think_in_template: false,
+          supports_thinking: true,
+          cache_type: 'hybrid',
+          modality: 'vision',
+        },
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('zaya1-vl')
+    expect(detected.cacheType).toBe('hybrid')
+    expect(detected.usePagedCache).toBe(true)
+    expect(detected.toolParser).toBe('zaya_xml')
+    expect(detected.reasoningParser).toBeUndefined()
+    expect(detected.isMultimodal).toBe(true)
+    expect(detected.isTurboQuant).toBe(true)
+  })
+
+  it('keeps ZAYA1-VL JANGTQ4 reasoning parser enabled', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'zaya1_vl',
+        vision_config: { model_type: 'qwen2_5_vl' },
+        weight_format: 'mxtq',
+        mxtq_bits: { routed_expert: 4 },
+      },
+      {
+        profile: 'JANGTQ4',
+        weight_format: 'mxtq',
+        cache_subtype: 'zaya_cca',
+        mxtq_bits: { routed_expert: 4 },
+        capabilities: {
+          family: 'zaya1_vl',
+          tool_parser: 'zaya_xml',
+          reasoning_parser: 'qwen3',
+          think_in_template: false,
+          supports_thinking: true,
+          cache_type: 'hybrid',
+          modality: 'vision',
+        },
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('zaya1-vl')
+    expect(detected.reasoningParser).toBe('qwen3')
+    expect(detected.isMultimodal).toBe(true)
+    expect(detected.isTurboQuant).toBe(true)
+  })
+
   it('keeps ZAYA1-VL multimodal when a stale stamp says text', () => {
     const dir = makeModelDir(
       {
@@ -184,6 +257,74 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.reasoningParser).toBe('qwen3')
     expect(detected.enableAutoToolChoice).toBe(true)
     expect(detected.isMultimodal).toBe(false)
+    expect(detected.isTurboQuant).toBe(true)
+  })
+
+  it('keeps Hy3 JANGTQ2 Low/High reasoning contract despite 2-bit routed experts', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'hy_v3',
+        num_hidden_layers: 80,
+        weight_format: 'mxtq',
+        mxtq_bits: { routed_expert: 2 },
+      },
+      {
+        profile: 'JANGTQ2',
+        weight_format: 'mxtq',
+        mxtq_bits: { routed_expert: 2 },
+        capabilities: {
+          family: 'hy_v3',
+          tool_parser: 'hunyuan',
+          reasoning_parser: 'qwen3',
+          think_in_template: false,
+          supports_thinking: true,
+          cache_type: 'kv',
+          modality: 'text',
+        },
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('hy3')
+    expect(detected.toolParser).toBe('hunyuan')
+    expect(detected.reasoningParser).toBe('qwen3')
+    expect(detected.isTurboQuant).toBe(true)
+  })
+
+  it('clamps Hy3 JANGTQ_K reasoning until the mixed 4/2/2 profile has live proof', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'hy_v3',
+        num_hidden_layers: 80,
+        weight_format: 'mxtq',
+        mxtq_bits: {
+          routed_expert: { gate_proj: 2, up_proj: 2, down_proj: 4 },
+        },
+      },
+      {
+        profile: 'JANGTQ_K',
+        weight_format: 'mxtq',
+        mxtq_bits: {
+          routed_expert: { gate_proj: 2, up_proj: 2, down_proj: 4 },
+        },
+        capabilities: {
+          family: 'hy_v3',
+          tool_parser: 'hunyuan',
+          reasoning_parser: 'qwen3',
+          think_in_template: false,
+          supports_thinking: true,
+          cache_type: 'kv',
+          modality: 'text',
+        },
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('hy3')
+    expect(detected.toolParser).toBe('hunyuan')
+    expect(detected.reasoningParser).toBeUndefined()
     expect(detected.isTurboQuant).toBe(true)
   })
 

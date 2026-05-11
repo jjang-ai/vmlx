@@ -43,6 +43,12 @@ function buildRequestBody(
     const outputBudget = detectedFamily === 'deepseek-v4' && overrides?.enableThinking !== false
         ? Math.max(overrides?.maxTokens ?? 0, 4096)
         : overrides?.maxTokens
+    const effectiveEnableThinkingOverride =
+        !isRemote &&
+        !sessionHasReasoningParser &&
+        detectedFamily !== 'deepseek-v4'
+            ? undefined
+            : overrides?.enableThinking
 
     if (wireApi === 'responses') {
         const systemMessages = requestMessages.filter(m => m.role === 'system')
@@ -70,8 +76,8 @@ function buildRequestBody(
                 parameters: t.function.parameters
             }))
         }
-        if (overrides?.enableThinking !== undefined) {
-            obj.enable_thinking = overrides.enableThinking
+        if (effectiveEnableThinkingOverride !== undefined) {
+            obj.enable_thinking = effectiveEnableThinkingOverride
         } else if (isRemote) {
             obj.enable_thinking = sessionHasReasoningParser
         }
@@ -95,8 +101,8 @@ function buildRequestBody(
         if (tools) {
             obj.tools = tools
         }
-        if (overrides?.enableThinking !== undefined) {
-            obj.enable_thinking = overrides.enableThinking
+        if (effectiveEnableThinkingOverride !== undefined) {
+            obj.enable_thinking = effectiveEnableThinkingOverride
         } else if (isRemote) {
             obj.enable_thinking = sessionHasReasoningParser
         }
@@ -208,10 +214,16 @@ describe('buildRequestBody — Remote vs Local gating', () => {
         expect(body.chat_template_kwargs).toBeUndefined()
     })
 
-    it('includes chat_template_kwargs for explicit local thinking override', () => {
-        const body = buildRequestBody('completions', 'model', messages, { enableThinking: true }, false, false)
+    it('includes chat_template_kwargs for explicit local thinking override on reasoning-capable models', () => {
+        const body = buildRequestBody('completions', 'model', messages, { enableThinking: true }, false, true)
         expect(body.enable_thinking).toBe(true)
         expect(body.chat_template_kwargs).toEqual({ enable_thinking: true })
+    })
+
+    it('suppresses stale explicit local thinking override when the model has no reasoning parser', () => {
+        const body = buildRequestBody('completions', 'zaya-k', messages, { enableThinking: true }, false, false)
+        expect(body.enable_thinking).toBeUndefined()
+        expect(body.chat_template_kwargs).toBeUndefined()
     })
 
     it('EXCLUDES chat_template_kwargs for remote sessions', () => {
@@ -272,6 +284,12 @@ describe('buildRequestBody — Responses API', () => {
         const body = buildRequestBody('responses', 'dsv4', messages, { enableThinking: false, reasoningEffort: 'max', maxTokens: 300 }, false, true, undefined, 'deepseek-v4')
         expect(body.max_output_tokens).toBe(300)
         expect(body.reasoning_effort).toBeUndefined()
+    })
+
+    it('suppresses stale Responses enable_thinking when a local model has no reasoning parser', () => {
+        const body = buildRequestBody('responses', 'zaya-vl-k', messages, { enableThinking: true }, false, false)
+        expect(body.enable_thinking).toBeUndefined()
+        expect(body.chat_template_kwargs).toBeUndefined()
     })
 })
 

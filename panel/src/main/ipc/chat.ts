@@ -809,7 +809,10 @@ export function registerChatHandlers(
                       ? false
                       : false;
 
-            if (
+            if (!detected.reasoningParser) {
+              sessionHasReasoningParser = false;
+              isHarmonyModel = false;
+            } else if (
               sessionConfig.reasoningParser &&
               sessionConfig.reasoningParser !== "auto"
             ) {
@@ -1441,6 +1444,12 @@ export function registerChatHandlers(
             overrides?.enableThinking,
             chatDetectedFamily,
           );
+          const effectiveEnableThinkingOverride =
+            !isRemote &&
+            !sessionHasReasoningParser &&
+            chatDetectedFamily !== "deepseek-v4"
+              ? undefined
+              : overrides?.enableThinking;
           if (useResponsesApi) {
             const systemMessages = requestMessages.filter(
               (m: any) => m.role === "system",
@@ -1489,8 +1498,8 @@ export function registerChatHandlers(
             }
             // enable_thinking: explicit user override sent to both local and remote.
             // When undefined (auto), local server auto-detects from model config; remote gets sessionHasReasoningParser as hint.
-            if (overrides?.enableThinking !== undefined) {
-              obj.enable_thinking = overrides.enableThinking;
+            if (effectiveEnableThinkingOverride !== undefined) {
+              obj.enable_thinking = effectiveEnableThinkingOverride;
             } else if (isRemote) {
               obj.enable_thinking = sessionHasReasoningParser;
             }
@@ -1568,8 +1577,8 @@ export function registerChatHandlers(
                 apiUrl.includes("api.deepseek.com"));
 
             if (!isStrictApi) {
-              if (overrides?.enableThinking !== undefined) {
-                obj.enable_thinking = overrides.enableThinking;
+              if (effectiveEnableThinkingOverride !== undefined) {
+                obj.enable_thinking = effectiveEnableThinkingOverride;
               } else if (isRemote) {
                 obj.enable_thinking = sessionHasReasoningParser;
               }

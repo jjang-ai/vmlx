@@ -381,30 +381,17 @@ class ModelConfigRegistry:
                 updates["supports_thinking"] = True
                 updates["reasoning_parser"] = "qwen3"
                 updates["think_in_template"] = False
-                # Eric directive 2026-05-11 (ZAYA JANGTQ2 incoherence fix):
-                # The 2-bit MXTQ codebook profile (JANGTQ2) cannot sustain a
-                # coherent thinking rail — strict-quality gate on 2026-05-10
-                # showed a 1333-token loop with enable_thinking=true; with
-                # thinking off the same backend answers correctly. Clamp
-                # supports_thinking=False for ZAYA bundles whose JANG sidecar
-                # declares the JANGTQ2 (2-bit) profile, so:
-                #   - panel UI hides Thinking buttons (gates on supports_thinking)
-                #   - server-side _resolve_enable_thinking returns False even
-                #     when stale chat overrides or raw API requests send
-                #     enable_thinking=true
-                # JANGTQ4 / MXFP4 ZAYA bundles keep supports_thinking=True
-                # (quality-safe per project_jangtq2_quality_floor.md).
-                # JANGTQ_K mixed-bit (4/2/2) is ALSO clamped — 2-bit routed
-                # gate/up loops the thinking rail just like JANGTQ2.
+                # ZAYA 2-bit routed profiles cannot safely expose a reasoning
+                # rail. Clamp at the registry boundary so panel UI, saved chat
+                # overrides, and raw API kwargs all converge on no-thinking.
+                # JANGTQ4 and MXFP4 ZAYA bundles keep reasoning enabled.
                 if _has_2bit_routed_or_default:
                     updates["supports_thinking"] = False
                     updates["reasoning_parser"] = None
             elif is_ling_family:
-                # Ling/Bailing is NOT a reasoning model. Eric directive
-                # 2026-05-11: Ling chat output is plain content. Do not let any
-                # bundle stamp (including drifted JANG sidecars that previously
-                # claimed deepseek_r1 capability) resurrect a reasoning parser
-                # or thinking-capable advertisement for Ling.
+                # Ling/Bailing emits plain content. Do not let drifted bundle
+                # stamps resurrect a reasoning parser or thinking-capable
+                # advertisement for this family.
                 updates["supports_thinking"] = False
                 updates["reasoning_parser"] = None
                 updates["think_in_template"] = False
@@ -419,12 +406,11 @@ class ModelConfigRegistry:
                 updates["supports_thinking"] = True
                 updates["reasoning_parser"] = "qwen3"
                 updates["think_in_template"] = False
-                # Hy3 JANGTQ_K (4/2/2) has 2-bit routed gate/up — same MoE
-                # quality floor as ZAYA JANGTQ_K. Forced reasoning_effort=
-                # low/high will loop on the thinking rail. Clamp the rail
-                # off for 2-bit routed Hy3 bundles; user can still pick a
-                # higher-precision Hy3 variant for reasoning.
-                if _has_2bit_routed_or_default:
+                # Keep the already-proven Hy3 JANGTQ2 Low/High effort
+                # contract intact. The newer Hy3 JANGTQ_K mixed 4/2/2 profile
+                # is a separate product surface; for that profile, do not
+                # expose Low/High until it has its own live quality proof.
+                if _profile == "JANGTQ_K" and _routed_has_2bit:
                     updates["supports_thinking"] = False
                     updates["reasoning_parser"] = None
             elif base_supports_thinking is False:
