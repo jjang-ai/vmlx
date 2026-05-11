@@ -2,6 +2,7 @@ import { readFileSync } from 'fs'
 import { describe, expect, it } from 'vitest'
 import {
   buildChatSettingsCompatibilityWarnings,
+  isThinkingBlockedForModel,
   type ChatSettingsCompatibilityInput,
 } from '../src/renderer/src/components/chat/chatSettingsCompatibility'
 
@@ -85,13 +86,28 @@ describe('chat settings cross-family compatibility warnings', () => {
     })).toContain('Built-in tools are enabled, but this model has no detected tool parser. Tool calls may not round-trip.')
   })
 
+  it('blocks Thinking On for ZAYA JANGTQ2 but not ZAYA MXFP4 or JANGTQ4', () => {
+    expect(isThinkingBlockedForModel('/models/ZAYA1-8B-JANGTQ2', 'zaya')).toBe(true)
+    expect(isThinkingBlockedForModel('/models/ZAYA1-VL-8B-JANGTQ2', 'zaya1-vl')).toBe(true)
+    expect(isThinkingBlockedForModel('/models/ZAYA1-8B-JANGTQ4', 'zaya')).toBe(false)
+    expect(isThinkingBlockedForModel('/models/ZAYA1-8B-MXFP4', 'zaya')).toBe(false)
+  })
+
   it('disables Thinking buttons when no reasoning parser is detected', () => {
     const source = readFileSync('src/renderer/src/components/chat/ChatSettings.tsx', 'utf8')
 
-    expect(source).toContain("const thinkingSupported = detectedFamily === 'deepseek-v4' || !!reasoningParser")
+    expect(source).toContain("const thinkingSupported = !thinkingBlocked && (detectedFamily === 'deepseek-v4' || !!reasoningParser)")
     expect(source).toContain("const showReasoningEffort = detectedFamily === 'hy3' || reasoningParser === 'openai_gptoss' || reasoningParser === 'mistral'")
     expect(source).toContain('const displayedEnableThinking = thinkingSupported ? overrides.enableThinking : undefined')
     expect(source).toContain('disabled={!thinkingSupported}')
+  })
+
+  it('main chat IPC coerces stale ZAYA JANGTQ2 Thinking On overrides off', () => {
+    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+
+    expect(source).toContain('function isZayaJangtq2ThinkingBlocked')
+    expect(source).toContain('isZayaJangtq2ThinkingBlocked(chat.modelPath, chatDetectedFamily)')
+    expect(source).toContain('sanitized.enableThinking = false')
   })
 
   it('shows Hy3 low/high effort controls without exposing medium', () => {

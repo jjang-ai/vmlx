@@ -2915,6 +2915,30 @@ class TestZayaCCACachePolicy:
 
         assert resolved is True
 
+    def test_zaya_jangtq2_forces_thinking_off_even_when_requested(self, tmp_path):
+        from vmlx_engine import server
+
+        model_dir = self._write_zaya_fixture(tmp_path)
+        jcfg_path = model_dir / "jang_config.json"
+        jcfg = json.loads(jcfg_path.read_text())
+        jcfg["profile"] = "JANGTQ2"
+        jcfg_path.write_text(json.dumps(jcfg))
+        old_default = server._default_enable_thinking
+        server._default_enable_thinking = None
+        try:
+            resolved = server._resolve_enable_thinking(
+                request_value=True,
+                ct_kwargs={"enable_thinking": True},
+                tools_present=False,
+                model_key=str(model_dir),
+                engine=None,
+                auto_detect=True,
+            )
+        finally:
+            server._default_enable_thinking = old_default
+
+        assert resolved is False
+
     def test_server_default_false_does_not_override_reasoning_on_runtime_default(self):
         from vmlx_engine import server
 
@@ -3194,13 +3218,21 @@ class TestZayaCCACachePolicy:
             rcfg = registry.lookup(str(model_dir))
             assert rcfg.family_name == expected_family
             assert rcfg.tool_parser == "zaya_xml"
-            assert rcfg.reasoning_parser == "qwen3"
             assert rcfg.think_in_template is False
-            assert rcfg.supports_thinking is True
+            bits = jcfg.get("mxtq_bits", {})
+            is_jangtq2 = (
+                str(jcfg.get("profile") or "").upper() == "JANGTQ2"
+                or bits.get("routed_expert") == 2
+            )
+            if is_jangtq2:
+                assert rcfg.reasoning_parser is None
+                assert rcfg.supports_thinking is False
+            else:
+                assert rcfg.reasoning_parser == "qwen3"
+                assert rcfg.supports_thinking is True
             assert rcfg.is_mllm is (model_type == "zaya1_vl")
 
             if jcfg.get("weight_format") == "mxtq":
-                bits = jcfg.get("mxtq_bits", {})
                 assert bits.get("cca_conv") == 16
                 assert bits.get("router") == 16
                 assert (model_dir / "jangtq_runtime.safetensors").is_file()

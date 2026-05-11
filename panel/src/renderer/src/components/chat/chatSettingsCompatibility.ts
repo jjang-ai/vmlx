@@ -14,6 +14,13 @@ export interface ChatSettingsCompatibilityInput {
   detectedFamily?: string
 }
 
+export function isThinkingBlockedForModel(modelPath?: string, detectedFamily?: string): boolean {
+  const family = String(detectedFamily || '').toLowerCase().replace(/_/g, '-')
+  const name = String(modelPath || '').toLowerCase()
+  if (family !== 'zaya' && family !== 'zaya1-vl' && !name.includes('zaya')) return false
+  return name.includes('jangtq2')
+}
+
 function basename(path?: string): string {
   if (!path) return 'unknown model'
   return path.replace(/\/+$/, '').split('/').pop() || path
@@ -53,6 +60,9 @@ export function buildChatSettingsCompatibilityWarnings(input: ChatSettingsCompat
 
   if (overrides.enableThinking === true && !reasoningParser) {
     warnings.push('Saved Thinking On cannot take effect because this model has no detected reasoning parser.')
+  }
+  if (overrides.enableThinking === true && isThinkingBlockedForModel(currentModelPath, detectedFamily)) {
+    warnings.push('Saved Thinking On is blocked for ZAYA JANGTQ2 because that experimental 2-bit tier fails strict chat coherency.')
   }
 
   if (overrides.reasoningEffort) {

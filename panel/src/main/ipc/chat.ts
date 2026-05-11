@@ -35,6 +35,13 @@ function enableThinkingFromReasoningMode(mode: unknown): boolean | undefined {
   return undefined;
 }
 
+function isZayaJangtq2ThinkingBlocked(modelPath?: string, detectedFamily?: string): boolean {
+  const family = String(detectedFamily || "").toLowerCase().replace(/_/g, "-");
+  const name = String(modelPath || "").toLowerCase();
+  if (family !== "zaya" && family !== "zaya1-vl" && !name.includes("zaya")) return false;
+  return name.includes("jangtq2");
+}
+
 function shouldForwardReasoningEffort(
   reasoningEffort: unknown,
   enableThinking: unknown,
@@ -1436,9 +1443,12 @@ export function registerChatHandlers(
 
         // Build request body — shared between initial request and tool follow-ups
         const buildRequestBody = (): Record<string, any> => {
+          const effectiveEnableThinkingOverride = isZayaJangtq2ThinkingBlocked(chat.modelPath, chatDetectedFamily)
+            ? false
+            : overrides?.enableThinking;
           const resolvedOutputBudget = dsv4OutputBudget(
             overrides?.maxTokens,
-            overrides?.enableThinking,
+            effectiveEnableThinkingOverride,
             chatDetectedFamily,
           );
           if (useResponsesApi) {
@@ -1489,8 +1499,8 @@ export function registerChatHandlers(
             }
             // enable_thinking: explicit user override sent to both local and remote.
             // When undefined (auto), local server auto-detects from model config; remote gets sessionHasReasoningParser as hint.
-            if (overrides?.enableThinking !== undefined) {
-              obj.enable_thinking = overrides.enableThinking;
+            if (effectiveEnableThinkingOverride !== undefined) {
+              obj.enable_thinking = effectiveEnableThinkingOverride;
             } else if (isRemote) {
               obj.enable_thinking = sessionHasReasoningParser;
             }
@@ -1568,8 +1578,8 @@ export function registerChatHandlers(
                 apiUrl.includes("api.deepseek.com"));
 
             if (!isStrictApi) {
-              if (overrides?.enableThinking !== undefined) {
-                obj.enable_thinking = overrides.enableThinking;
+              if (effectiveEnableThinkingOverride !== undefined) {
+                obj.enable_thinking = effectiveEnableThinkingOverride;
               } else if (isRemote) {
                 obj.enable_thinking = sessionHasReasoningParser;
               }
@@ -3539,10 +3549,22 @@ export function registerChatHandlers(
           100,
           500000,
         );
+      const chat = db.getChat(chatId);
+      let overrideDetectedFamily: string | undefined;
+      if (chat?.modelPath) {
+        try {
+          overrideDetectedFamily = detectModelConfigFromDir(chat.modelPath).family;
+        } catch (_) {}
+      }
+      if (
+        sanitized.enableThinking === true &&
+        isZayaJangtq2ThinkingBlocked(chat?.modelPath, overrideDetectedFamily)
+      ) {
+        sanitized.enableThinking = false;
+      }
       db.setChatOverrides({ chatId, ...sanitized });
 
       // QoL sync: also sync inference bounds to the root model instances
-      const chat = db.getChat(chatId);
       if (chat && chat.modelPath) {
         const existingModelConfig = db.getModelSettings(chat.modelPath) || {};
         let syncNeeded = false;

@@ -555,6 +555,141 @@ class TestModelConfigRegistry:
         assert result.think_in_template is False
         assert result.supports_thinking is True
 
+    def test_zaya_jangtq2_profile_clamps_supports_thinking_false(
+        self, empty_registry, tmp_path
+    ):
+        """REGRESSION (Eric directive 2026-05-11): The JANGTQ2 (2-bit MXTQ
+        codebook) ZAYA profile cannot sustain a coherent reasoning rail.
+
+        Live evidence 2026-05-10:
+        - chat_overrides.enable_thinking=1 → 1333-token loop, garbled output
+        - same backend with thinking off → answers correctly ("Blue.")
+
+        Per project_jangtq2_quality_floor.md, this is a fundamental quality
+        ceiling of the 2-bit codebook, not a runtime bug. Production policy:
+        clamp supports_thinking=False for JANGTQ2 ZAYA bundles so:
+        - panel UI hides Thinking buttons (gates on supports_thinking)
+        - server-side _resolve_enable_thinking returns False even when
+          stale chat overrides or raw API requests send enable_thinking=true
+        - reasoning_parser is None so any leaked <think> tags don't get
+          extracted into reasoning_content (unsafe-mode output stays content)
+
+        JANGTQ4 / MXFP4 ZAYA bundles keep supports_thinking=True (they
+        sustain the reasoning rail). The profile field in jang_config.json
+        is the authoritative signal.
+        """
+        import json
+
+        empty_registry.register(
+            ModelConfig(
+                family_name="zaya",
+                model_types=["zaya"],
+                cache_type="hybrid",
+                cache_subtype="zaya_cca",
+                tool_parser="zaya_xml",
+                reasoning_parser="qwen3",
+                think_in_template=False,
+                supports_thinking=True,
+                is_mllm=False,
+                priority=10,
+            )
+        )
+        (tmp_path / "config.json").write_text(
+            json.dumps({"model_type": "zaya"})
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "profile": "JANGTQ2",
+                    "quantization": {
+                        "method": "affine+mxtq",
+                        "group_size": 32,
+                        "bits_default": 2,
+                    },
+                    "mxtq_bits": {"routed_expert": 2, "attention": 8},
+                    "capabilities": {
+                        "family": "zaya",
+                        "cache_type": "hybrid",
+                        "cache_subtype": "zaya_cca",
+                        "tool_parser": "zaya_xml",
+                        "reasoning_parser": "qwen3",
+                        "think_in_template": False,
+                        "supports_thinking": True,
+                        "modality": "text",
+                    },
+                }
+            )
+        )
+
+        result = empty_registry.lookup(str(tmp_path))
+
+        # ZAYA family stays as ZAYA — only the thinking rail is clamped.
+        assert result.family_name == "zaya"
+        assert result.cache_subtype == "zaya_cca"
+        assert result.tool_parser == "zaya_xml"
+        # JANGTQ2-specific clamps:
+        assert result.supports_thinking is False, (
+            "JANGTQ2 ZAYA profile must clamp supports_thinking=False "
+            "(2-bit codebook quality floor cannot sustain reasoning rail). "
+            "Panel UI gates on this flag to hide Thinking buttons."
+        )
+        assert result.reasoning_parser is None, (
+            "JANGTQ2 ZAYA profile must clamp reasoning_parser=None so leaked "
+            "<think> tags do not get extracted as reasoning_content."
+        )
+        assert result.think_in_template is False
+
+    def test_zaya_mxfp4_profile_keeps_supports_thinking_true(
+        self, empty_registry, tmp_path
+    ):
+        """Counter-test: MXFP4 ZAYA stays reasoning-capable.
+
+        The JANGTQ2 clamp is profile-specific. Quality-safe profiles
+        (JANGTQ4, MXFP4, BF16) must NOT trigger it.
+        """
+        import json
+
+        empty_registry.register(
+            ModelConfig(
+                family_name="zaya",
+                model_types=["zaya"],
+                cache_type="hybrid",
+                cache_subtype="zaya_cca",
+                tool_parser="zaya_xml",
+                reasoning_parser="qwen3",
+                think_in_template=False,
+                supports_thinking=True,
+                is_mllm=False,
+                priority=10,
+            )
+        )
+        (tmp_path / "config.json").write_text(
+            json.dumps({"model_type": "zaya"})
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "profile": "MXFP4",
+                    "quantization": {"bits_default": 4, "method": "mxfp4"},
+                    "capabilities": {
+                        "family": "zaya",
+                        "cache_type": "hybrid",
+                        "cache_subtype": "zaya_cca",
+                        "tool_parser": "zaya_xml",
+                        "reasoning_parser": "qwen3",
+                        "think_in_template": False,
+                        "supports_thinking": True,
+                        "modality": "text",
+                    },
+                }
+            )
+        )
+
+        result = empty_registry.lookup(str(tmp_path))
+        assert result.family_name == "zaya"
+        assert result.supports_thinking is True
+        assert result.reasoning_parser == "qwen3"
+
 
 class TestModelConfigs:
     """Tests for the pre-registered model configurations.

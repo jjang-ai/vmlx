@@ -48,6 +48,22 @@ def test_omni_prompt_builder_forwards_enable_thinking_false_on_followup_turn():
     assert tok.calls[0][1]["enable_thinking"] is False
 
 
+def test_omni_prompt_builder_uses_image_placeholders_for_video_tokens():
+    tok = _FakeTokenizer()
+
+    _build_omni_turn_prompt_with_thinking(
+        tok,
+        "Describe the video.",
+        n_video_tokens=3,
+        is_first=True,
+        enable_thinking=False,
+    )
+
+    content = tok.calls[0][0][1]["content"]
+    assert "<img><image><image><image></img>" in content
+    assert "<video>" not in content
+
+
 def test_omni_dispatcher_sets_thinking_flag_on_first_session_turn(tmp_path):
     class _FakeSession:
         def __init__(self):

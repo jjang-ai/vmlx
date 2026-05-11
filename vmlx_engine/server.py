@@ -1296,6 +1296,33 @@ def _generation_error_detail(exc: Exception, *, prefix: str = "Generation failed
     return f"{prefix}: {type(exc).__name__}: {exc}"
 
 
+def _zaya_jangtq2_thinking_blocked(model_key: str, family: str | None = None) -> bool:
+    fam = str(family or "").lower().replace("_", "-")
+    model_text = str(model_key or "")
+    name_l = model_text.lower()
+    if fam not in {"zaya", "zaya1-vl"} and "zaya" not in name_l:
+        return False
+    if "jangtq2" in name_l:
+        return True
+    try:
+        from pathlib import Path as _Path
+        import json as _json
+
+        jcfg_path = _Path(model_key) / "jang_config.json"
+        if not jcfg_path.is_file():
+            return False
+        jcfg = _json.loads(jcfg_path.read_text())
+        profile = str(jcfg.get("profile") or jcfg.get("quant_profile") or "").lower()
+        if profile == "jangtq2":
+            return True
+        bits = jcfg.get("mxtq_bits") or jcfg.get("quantization", {}).get("mxtq_bits")
+        if isinstance(bits, dict) and bits.get("routed_expert") == 2:
+            return True
+    except Exception:
+        return False
+    return False
+
+
 def _resolve_enable_thinking(
     request_value: bool | None,
     ct_kwargs: dict,
@@ -1323,11 +1350,6 @@ def _resolve_enable_thinking(
     registry.reasoning_parser, and tokenizer.has_thinking to infer a
     default.
     """
-    if request_value is not None:
-        return request_value
-    if "enable_thinking" in ct_kwargs:
-        return bool(ct_kwargs["enable_thinking"])
-
     _mc = None
     try:
         from .model_config_registry import get_model_config_registry
@@ -1338,6 +1360,17 @@ def _resolve_enable_thinking(
     if not _family or str(_family).lower() == "unknown":
         _family = str(model_key or "")
     _family_l = str(_family).lower()
+    if _zaya_jangtq2_thinking_blocked(model_key, _family_l):
+        # ZAYA/ZAYA1-VL JANGTQ2 is mechanically loadable, fast, and cache-correct,
+        # but live strict rows show its open-thinking rail degenerates into
+        # prompt-copy/repetition loops. Treat it as an experimental no-thinking
+        # quant tier even if stale app DB rows or raw API clients send
+        # enable_thinking=true.
+        return False
+    if request_value is not None:
+        return request_value
+    if "enable_thinking" in ct_kwargs:
+        return bool(ct_kwargs["enable_thinking"])
     if tools_present and _family_l in ("gemma4", "gemma4_text"):
         # mlxstudio#71: Gemma 4 emits a native thought channel before tools and
         # can truncate the actual tool call under small budgets. This is an

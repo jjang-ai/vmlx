@@ -349,6 +349,25 @@ class ModelConfigRegistry:
                 updates["supports_thinking"] = True
                 updates["reasoning_parser"] = "qwen3"
                 updates["think_in_template"] = False
+                # Eric directive 2026-05-11 (ZAYA JANGTQ2 incoherence fix):
+                # The 2-bit MXTQ codebook profile (JANGTQ2) cannot sustain a
+                # coherent thinking rail — strict-quality gate on 2026-05-10
+                # showed a 1333-token loop with enable_thinking=true; with
+                # thinking off the same backend answers correctly. Clamp
+                # supports_thinking=False for ZAYA bundles whose JANG sidecar
+                # declares the JANGTQ2 (2-bit) profile, so:
+                #   - panel UI hides Thinking buttons (gates on supports_thinking)
+                #   - server-side _resolve_enable_thinking returns False even
+                #     when stale chat overrides or raw API requests send
+                #     enable_thinking=true
+                # JANGTQ4 / MXFP4 ZAYA bundles keep supports_thinking=True
+                # (quality-safe per project_jangtq2_quality_floor.md).
+                _profile = str(jcfg.get("profile") or "").upper()
+                _quant = jcfg.get("quantization") or {}
+                _bits_default = _quant.get("bits_default") if isinstance(_quant, dict) else None
+                if _profile == "JANGTQ2" or (isinstance(_bits_default, int) and _bits_default <= 2):
+                    updates["supports_thinking"] = False
+                    updates["reasoning_parser"] = None
             elif is_ling_family:
                 # Ling/Bailing is NOT a reasoning model. Eric directive
                 # 2026-05-11: Ling chat output is plain content. Do not let any

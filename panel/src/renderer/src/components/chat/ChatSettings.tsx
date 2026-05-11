@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { AlertTriangle, X, Save, Trash2, Star } from 'lucide-react'
 import { useToast } from '../Toast'
 import { useTranslation } from '../../i18n'
-import { buildChatSettingsCompatibilityWarnings } from './chatSettingsCompatibility'
+import { buildChatSettingsCompatibilityWarnings, isThinkingBlockedForModel } from './chatSettingsCompatibility'
 
 interface ChatProfile {
   id: string
@@ -74,7 +74,8 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   const [messageCount, setMessageCount] = useState(0)
   const isRemote = session.type === 'remote'
   const effectiveWireApi = overrides.wireApi ?? (isRemote ? 'completions' : 'responses')
-  const thinkingSupported = detectedFamily === 'deepseek-v4' || !!reasoningParser
+  const thinkingBlocked = isThinkingBlockedForModel(session.modelPath, detectedFamily)
+  const thinkingSupported = !thinkingBlocked && (detectedFamily === 'deepseek-v4' || !!reasoningParser)
   const displayedEnableThinking = thinkingSupported ? overrides.enableThinking : undefined
   const thinkingDisabledClass = thinkingSupported ? '' : ' opacity-50 cursor-not-allowed'
   const showReasoningEffort = detectedFamily === 'hy3' || reasoningParser === 'openai_gptoss' || reasoningParser === 'mistral'
@@ -505,6 +506,11 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
               <p className="text-xs text-muted-foreground mt-1.5">
                 {t('chat.settings.thinkingHelp')}
               </p>
+              {thinkingBlocked && (
+                <p className="text-xs text-amber-400 mt-1.5">
+                  ZAYA JANGTQ2 is an experimental 2-bit tier. Thinking is disabled because live coherency gates show prompt-copy/repetition loops in the reasoning rail.
+                </p>
+              )}
               {detectedFamily !== 'deepseek-v4' && overrides.enableThinking !== false && showReasoningEffort && (
                 <div className="mt-3">
                   <div className="flex items-center justify-between mb-1.5">

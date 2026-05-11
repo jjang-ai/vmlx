@@ -215,7 +215,9 @@ def _build_omni_turn_prompt_with_thinking(
     if n_image_tokens > 0:
         media += "<img>" + ("<image>" * n_image_tokens) + "</img>\n"
     if n_video_tokens > 0:
-        media += "<video>" + ("<video>" * n_video_tokens) + "</video>\n"
+        # Nemotron-Omni's tokenizer has no real printable <video> token.  The
+        # bundle processor reuses image placeholders for video frame embeds.
+        media += "<img>" + ("<image>" * n_video_tokens) + "</img>\n"
     if n_audio_tokens > 0:
         media += "<sound>" + ("<so_embedding>" * n_audio_tokens) + "</sound>\n"
     msg_content = media + user_text
