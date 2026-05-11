@@ -29,6 +29,7 @@ const AVAILABLE_MODELS: ImageModel[] = IMAGE_MODELS.map(m => ({
 
 interface ImageTopBarProps {
   model: string | null
+  displayModelName?: string | null
   quantize: number
   status: ServerStatus
   port: number | null
@@ -45,6 +46,7 @@ interface ImageTopBarProps {
 
 export function ImageTopBar({
   model,
+  displayModelName,
   quantize,
   status,
   port,
@@ -113,7 +115,8 @@ export function ImageTopBar({
     })
   }, [showPicker])
 
-  const displayName = model ? (model.includes('/') ? model.split('/').pop() : model) : 'No model selected'
+  const displaySource = displayModelName || model
+  const displayName = displaySource ? (displaySource.includes('/') ? displaySource.split('/').pop() : displaySource) : 'No model selected'
 
   const genModels = AVAILABLE_MODELS.filter(m => m.category === 'generate')
   const editModels = AVAILABLE_MODELS.filter(m => m.category === 'edit')

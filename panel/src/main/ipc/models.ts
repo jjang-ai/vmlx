@@ -300,6 +300,10 @@ export function validateImageModelCompleteness(
         if (!Array.isArray(value)) continue; // skip non-component entries
         const [className] = value as string[];
         if (!className || className === "None" || className === null) continue;
+        // Flux1 is dual-encoder. QwenImage, ZImage, Flux2Klein, FIBO, and
+        // similar mflux families are single-encoder and must not be
+        // rejected if a stale/over-broad model_index mentions text_encoder_2.
+        if (key === "text_encoder_2" && encoderType === "single") continue;
         // Check that the component directory exists
         if (!files.includes(key)) {
           missing.push(`${key}/`);
@@ -1362,6 +1366,30 @@ export function registerModelHandlers(): void {
         try {
           await unlink(markerFile);
         } catch (_) {}
+        if (job.imageModelName != null && job.imageQuantize != null) {
+          const encoderType = getImageModelEncoderType(job.imageModelName);
+          const validation = validateImageModelCompleteness(
+            job.modelDir,
+            encoderType,
+          );
+          if (!validation.complete) {
+            job.status = "error";
+            job.error =
+              `Download completed but model is incomplete: ` +
+              validation.missing.join(", ");
+            emitToRenderer("models:downloadError", {
+              jobId: job.id,
+              repoId: job.repoId,
+              error: job.error,
+              missing: validation.missing,
+            });
+            activeJobs.delete(job.id);
+            job.process = undefined;
+            trackCompleted(job);
+            processQueue();
+            return;
+          }
+        }
         job.status = "complete";
         // Store downloaded image model path in DB for fast lookup
         if (job.imageModelName != null && job.imageQuantize != null) {

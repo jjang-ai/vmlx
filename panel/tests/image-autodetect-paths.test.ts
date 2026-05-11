@@ -11,6 +11,18 @@ describe("image model autodetection path", () => {
     expect(src).toContain("getImageModelEncoderType");
     expect(src).toMatch(/const encoderType\s*=\s*getImageModelEncoderType\(modelName\)/);
     expect(src).toContain("validateImageModelCompleteness(localPath, encoderType)");
+    expect(src).toContain('key === "text_encoder_2" && encoderType === "single"');
+  });
+
+  it("completed image downloads are validated before being marked ready", () => {
+    const src = readFileSync(MODELS_TS, "utf-8");
+    const successBranch = src.slice(src.indexOf("} else if (code === 0) {"));
+    expect(src).toContain("Download completed but model is incomplete");
+    expect(src).toContain("validateImageModelCompleteness(");
+    expect(src).toContain('emitToRenderer("models:downloadError"');
+    expect(successBranch.indexOf("Download completed but model is incomplete")).toBeLessThan(
+      successBranch.indexOf('emitToRenderer("models:downloadComplete"'),
+    );
   });
 
   it("download availability check registers manually downloaded registry repos from disk", () => {

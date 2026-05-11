@@ -35,6 +35,35 @@ describe("image generation in-flight state survives tab switches", () => {
     expect(src).toContain("loadSessions()");
   });
 
+  it("renderer keeps canonical image model id separate from display basename after tab return", () => {
+    const src = readFileSync(IMAGE_TAB_TSX, "utf-8");
+    const topbar = readFileSync(
+      join(
+        __dirname,
+        "..",
+        "src",
+        "renderer",
+        "src",
+        "components",
+        "image",
+        "ImageTopBar.tsx",
+      ),
+      "utf-8",
+    );
+    expect(src).toContain("resolveImageModelFromDirectoryName");
+    expect(src).toContain("canonicalModelId");
+    expect(src).toContain("selectedModelDisplayName");
+    expect(topbar).toContain("displayModelName");
+  });
+
+  it("image requests disable connection reuse and normalize reset-like socket errors", () => {
+    const src = readFileSync(IMAGE_TS, "utf-8");
+    expect(src.match(/agent:\s*false/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(src).toContain("Image server connection lost");
+    expect(src).toContain("socket hang up");
+    expect(src).toContain("ECONNRESET");
+  });
+
   it("preload and renderer types expose image generation session ids", () => {
     const preload = readFileSync(PRELOAD_TS, "utf-8");
     const env = readFileSync(ENV_D_TS, "utf-8");

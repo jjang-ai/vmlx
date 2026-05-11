@@ -236,6 +236,7 @@ export function registerImageHandlers(): void {
           const req = http.request(`${baseUrl}/v1/images/generations`, {
             method: 'POST',
             headers,
+            agent: false,
             timeout: 30 * 60 * 1000,
           }, (res: any) => {
             let data = ''
@@ -314,7 +315,16 @@ export function registerImageHandlers(): void {
       activeGenerationSessionId = null
       activeGenerationController = null
       console.error('[IMAGE] Generation failed:', error)
-      return { success: false, error: (error as Error).message }
+      const err = error as any
+      const msg = String(err?.message || error)
+      const code = String(err?.code || '')
+      const resetLike = code === 'ECONNRESET' || /socket hang up|ECONNRESET|aborted/i.test(msg)
+      return {
+        success: false,
+        error: resetLike
+          ? 'Image server connection lost. The model may have crashed, been stopped, or hit memory pressure. Check Logs and restart the image server.'
+          : msg
+      }
     }
   })
 
@@ -389,6 +399,7 @@ export function registerImageHandlers(): void {
           const req = http.request(`${baseUrl}/v1/images/edits`, {
             method: 'POST',
             headers,
+            agent: false,
             timeout: 30 * 60 * 1000,
           }, (res: any) => {
             let data = ''
@@ -463,7 +474,16 @@ export function registerImageHandlers(): void {
       activeGenerationSessionId = null
       activeGenerationController = null
       console.error('[IMAGE] Edit failed:', error)
-      return { success: false, error: (error as Error).message }
+      const err = error as any
+      const msg = String(err?.message || error)
+      const code = String(err?.code || '')
+      const resetLike = code === 'ECONNRESET' || /socket hang up|ECONNRESET|aborted/i.test(msg)
+      return {
+        success: false,
+        error: resetLike
+          ? 'Image server connection lost. The model may have crashed, been stopped, or hit memory pressure. Check Logs and restart the image server.'
+          : msg
+      }
     }
   })
 
@@ -631,6 +651,8 @@ export function registerImageHandlers(): void {
         return {
           sessionId: s.id,
           modelName,
+          displayModelName: modelName,
+          canonicalModelId: cfg.servedModelName || undefined,
           modelPath: s.modelPath,
           host: s.host,
           port: s.port,

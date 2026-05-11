@@ -6,7 +6,7 @@ import { ImageHistory } from './ImageHistory'
 import { ImageTopBar } from './ImageTopBar'
 import { ImageSettings } from './ImageSettings'
 import { LogsPanel } from '../sessions/LogsPanel'
-import { getDefaultSteps, getDefaultGuidance, getImageModel } from '../../../../shared/imageModels'
+import { getDefaultSteps, getDefaultGuidance, getImageModel, resolveImageModelFromDirectoryName } from '../../../../shared/imageModels'
 import type { ImageServerSettings } from './ImageModelPicker'
 
 export interface ImageSessionInfo {
@@ -59,6 +59,7 @@ export function ImageTab() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
   const [sessions, setSessions] = useState<ImageSessionInfo[]>([])
   const [selectedModel, setSelectedModel] = useState<string | null>(null)
+  const [selectedModelDisplayName, setSelectedModelDisplayName] = useState<string | null>(null)
   const [serverStatus, setServerStatus] = useState<ServerStatus>('stopped')
   const [serverPort, setServerPort] = useState<number | null>(null)
   const [serverSessionId, _setServerSessionId] = useState<string | null>(null)
@@ -128,7 +129,9 @@ export function ImageTab() {
     window.api.image.getRunningServer().then((server: any) => {
       if (server) {
         const name = server.modelName
-        setSelectedModel(name)
+        const canonical = server.canonicalModelId || resolveImageModelFromDirectoryName(name)?.id || name
+        setSelectedModel(canonical)
+        setSelectedModelDisplayName(server.displayModelName || name)
         setServerStatus(server.status === 'loading' ? 'starting' : 'running')
         setServerPort(server.port)
         setServerSessionId(server.sessionId)
@@ -297,6 +300,7 @@ export function ImageTab() {
     }
 
     setSelectedModel(modelId)
+    setSelectedModelDisplayName(null)
     setShowModelPicker(false)
     setError(null)
     // Use the provided quantize, or fall back to the model's first supported quantize option
@@ -449,6 +453,7 @@ export function ImageTab() {
       await handleStop()
     }
     setSelectedModel(null)
+    setSelectedModelDisplayName(null)
     setShowModelPicker(true)
   }, [serverStatus, handleStop])
 
@@ -521,6 +526,7 @@ export function ImageTab() {
       <div className="flex-1 flex flex-col min-w-0">
         <ImageTopBar
           model={selectedModel}
+          displayModelName={selectedModelDisplayName}
           quantize={quantize}
           status={serverStatus}
           port={serverPort}

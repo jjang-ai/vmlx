@@ -102,13 +102,34 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
     const unsubComplete = window.api.models.onDownloadComplete((data: any) => {
       if (downloadState === 'downloading') {
         if (data.status === 'complete') {
-          setDownloadState('ready')
-          setDownloadProgress(null)
-          // Update availability cache
-          if (selectedModel) {
+          const finish = async () => {
+            setDownloadProgress(null)
+            if (!selectedModel) {
+              setDownloadState('ready')
+              return
+            }
             const key = `${selectedModel}-${selectedQuantize}`
-            setModelAvailability(prev => ({ ...prev, [key]: true }))
+            const result = await window.api.models.checkImageModel(selectedModel, selectedQuantize)
+            setModelAvailability(prev => ({ ...prev, [key]: !!result.available }))
+            const missing = Array.isArray(result.missing) ? result.missing as string[] : []
+            if (missing.length > 0) {
+              setModelMissing(prev => ({ ...prev, [key]: missing }))
+              setDownloadError(`Download completed but model is incomplete: ${missing.join(', ')}`)
+              setDownloadState('error')
+              return
+            }
+            setModelMissing(prev => {
+              return Object.fromEntries(
+                Object.entries(prev).filter(([k]) => k !== key),
+              ) as Record<string, string[]>
+            })
+            setDownloadState(result.available ? 'ready' : 'idle')
           }
+          finish().catch((err) => {
+            setDownloadError((err as Error).message)
+            setDownloadState('error')
+            setDownloadProgress(null)
+          })
         }
       }
     })
@@ -452,7 +473,7 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
                 {filteredQuantizeOptions.map(opt => (
                   <button
                     key={opt.value}
-                    onClick={() => { setSelectedQuantize(opt.value); setDownloadState('idle'); setDownloadError(null) }}
+                onClick={() => { setSelectedQuantize(opt.value); setDownloadState('idle'); setDownloadError(null) }}
                     className={`flex-1 px-3 py-1.5 text-xs rounded transition-colors ${
                       selectedQuantize === opt.value
                         ? 'bg-primary text-primary-foreground'
