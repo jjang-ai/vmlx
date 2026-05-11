@@ -690,6 +690,125 @@ class TestModelConfigRegistry:
         assert result.supports_thinking is True
         assert result.reasoning_parser == "qwen3"
 
+    def test_zaya_jangtq_k_routed_2bit_clamps_thinking(
+        self, empty_registry, tmp_path
+    ):
+        """REGRESSION (Eric directive 2026-05-11): JANGTQ_K mixed-bit (4/2/2)
+        ZAYA bundles loop the thinking rail on enable_thinking=true because
+        the 2-bit routed gate/up experts cannot sustain coherent reasoning.
+        Live evidence: ZAYA1-VL-8B-JANGTQ_K with thinking=On in panel
+        chat repeated the prompt and recycled placeholder paragraphs.
+
+        Clamp triggers on `mxtq_bits.routed_expert.gate_proj <= 2` even
+        when `bits_default` is unset or > 2.
+        """
+        import json
+
+        empty_registry.register(
+            ModelConfig(
+                family_name="zaya",
+                model_types=["zaya"],
+                cache_type="hybrid",
+                cache_subtype="zaya_cca",
+                tool_parser="zaya_xml",
+                reasoning_parser="qwen3",
+                think_in_template=False,
+                supports_thinking=True,
+                is_mllm=False,
+                priority=10,
+            )
+        )
+        (tmp_path / "config.json").write_text(json.dumps({"model_type": "zaya"}))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "profile": "JANGTQ_K",
+                    "mxtq_bits": {
+                        "routed_expert": {
+                            "gate_proj": 2,
+                            "up_proj": 2,
+                            "down_proj": 4,
+                        },
+                        "attention": 8,
+                    },
+                    "capabilities": {
+                        "family": "zaya",
+                        "cache_type": "hybrid",
+                        "cache_subtype": "zaya_cca",
+                        "tool_parser": "zaya_xml",
+                        "reasoning_parser": "qwen3",
+                        "think_in_template": False,
+                        "supports_thinking": True,
+                        "modality": "text",
+                    },
+                }
+            )
+        )
+
+        result = empty_registry.lookup(str(tmp_path))
+        assert result.family_name == "zaya"
+        assert result.supports_thinking is False, \
+            "JANGTQ_K 2-bit routed must clamp thinking off"
+        assert result.reasoning_parser is None, \
+            "JANGTQ_K 2-bit routed must drop reasoning parser"
+
+    def test_hy3_jangtq_k_routed_2bit_clamps_thinking(
+        self, empty_registry, tmp_path
+    ):
+        """REGRESSION (Eric directive 2026-05-11): Hy3 JANGTQ_K (4/2/2) has
+        2-bit routed gate/up that loops the thinking rail when reasoning
+        effort low/high is forced. Clamp supports_thinking=False so panel
+        hides effort picker for these bundles. JANGTQ4 / MXFP4 Hy3 keeps
+        reasoning capability.
+        """
+        import json
+
+        empty_registry.register(
+            ModelConfig(
+                family_name="hy_v3",
+                model_types=["hy_v3", "hunyuan_v1"],
+                cache_type="kv",
+                tool_parser="hunyuan",
+                reasoning_parser="qwen3",
+                think_in_template=False,
+                supports_thinking=True,
+                is_mllm=False,
+                priority=10,
+            )
+        )
+        (tmp_path / "config.json").write_text(json.dumps({"model_type": "hy_v3"}))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "profile": "JANGTQ_K",
+                    "mxtq_bits": {
+                        "routed_expert": {
+                            "gate_proj": 2,
+                            "up_proj": 2,
+                            "down_proj": 4,
+                        },
+                        "attention": 8,
+                    },
+                    "capabilities": {
+                        "family": "hy_v3",
+                        "cache_type": "kv",
+                        "tool_parser": "hunyuan",
+                        "reasoning_parser": "qwen3",
+                        "think_in_template": False,
+                        "supports_thinking": True,
+                        "modality": "text",
+                    },
+                }
+            )
+        )
+
+        result = empty_registry.lookup(str(tmp_path))
+        assert result.family_name == "hy_v3"
+        assert result.supports_thinking is False, \
+            "Hy3 JANGTQ_K 2-bit routed must clamp thinking off"
+        assert result.reasoning_parser is None, \
+            "Hy3 JANGTQ_K 2-bit routed must drop reasoning parser"
+
 
 class TestModelConfigs:
     """Tests for the pre-registered model configurations.

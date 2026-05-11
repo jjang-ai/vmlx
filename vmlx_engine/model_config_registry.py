@@ -341,6 +341,38 @@ class ModelConfigRegistry:
             is_zaya_family = base.family_name in {"zaya", "zaya1_vl"}
             is_hy3_family = base.family_name == "hy_v3"
             preserve_template_metadata_when_no_thinking = False
+
+            # Detect 2-bit MXTQ routed experts (the MoE quality floor that
+            # makes the thinking rail loop / repeat-prompt). JANGTQ2 has
+            # scalar 2-bit routed; JANGTQ_K mixed-bit (e.g. 4/2/2 = down/gate/up
+            # or attention/gate/up) has dict form with some 2-bit fields.
+            # Both fail strict-output / thinking quality (Eric directive
+            # 2026-05-10/11). See project_jangtq2_quality_floor.md.
+            _mxtq_bits = jcfg.get("mxtq_bits")
+            _routed = (
+                _mxtq_bits.get("routed_expert")
+                if isinstance(_mxtq_bits, dict) else None
+            )
+            _routed_has_2bit = False
+            if isinstance(_routed, int):
+                _routed_has_2bit = _routed <= 2
+            elif isinstance(_routed, dict):
+                # gate_proj/up_proj at 2-bit is the killer — these gate the
+                # MoE forward and dominate strict-output coherence. down_proj
+                # at 2-bit is somewhat more tolerable but still risky.
+                for _v in _routed.values():
+                    if isinstance(_v, int) and _v <= 2:
+                        _routed_has_2bit = True
+                        break
+            _profile = str(jcfg.get("profile") or "").upper()
+            _quant = jcfg.get("quantization") or {}
+            _bits_default = _quant.get("bits_default") if isinstance(_quant, dict) else None
+            _has_2bit_routed_or_default = (
+                _profile == "JANGTQ2"
+                or (isinstance(_bits_default, int) and _bits_default <= 2)
+                or _routed_has_2bit
+            )
+
             if is_zaya_family:
                 # ZAYA and ZAYA1-VL are reasoning-capable, but the honest
                 # prompt contract is still not "starts inside <think>".
@@ -362,10 +394,9 @@ class ModelConfigRegistry:
                 #     enable_thinking=true
                 # JANGTQ4 / MXFP4 ZAYA bundles keep supports_thinking=True
                 # (quality-safe per project_jangtq2_quality_floor.md).
-                _profile = str(jcfg.get("profile") or "").upper()
-                _quant = jcfg.get("quantization") or {}
-                _bits_default = _quant.get("bits_default") if isinstance(_quant, dict) else None
-                if _profile == "JANGTQ2" or (isinstance(_bits_default, int) and _bits_default <= 2):
+                # JANGTQ_K mixed-bit (4/2/2) is ALSO clamped — 2-bit routed
+                # gate/up loops the thinking rail just like JANGTQ2.
+                if _has_2bit_routed_or_default:
                     updates["supports_thinking"] = False
                     updates["reasoning_parser"] = None
             elif is_ling_family:
@@ -388,6 +419,14 @@ class ModelConfigRegistry:
                 updates["supports_thinking"] = True
                 updates["reasoning_parser"] = "qwen3"
                 updates["think_in_template"] = False
+                # Hy3 JANGTQ_K (4/2/2) has 2-bit routed gate/up — same MoE
+                # quality floor as ZAYA JANGTQ_K. Forced reasoning_effort=
+                # low/high will loop on the thinking rail. Clamp the rail
+                # off for 2-bit routed Hy3 bundles; user can still pick a
+                # higher-precision Hy3 variant for reasoning.
+                if _has_2bit_routed_or_default:
+                    updates["supports_thinking"] = False
+                    updates["reasoning_parser"] = None
             elif base_supports_thinking is False:
                 updates["supports_thinking"] = False
             elif isinstance(sth, bool):
