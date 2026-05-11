@@ -1318,13 +1318,13 @@ def test_zaya_scheduler_stores_clean_prompt_boundary_for_paged_cache():
     assert scheduler.block_aware_cache.paged_cache.stats.cache_hits >= 1
 
 
-def test_zaya_single_active_store_uses_prompt_snapshot_without_reprefill(monkeypatch):
-    """Single-active ZAYA should not re-prefill after decode to store cache.
+def test_zaya_single_active_store_uses_clean_reprefill_not_snapshot(monkeypatch):
+    """Single-active ZAYA stores typed CCA from a clean prompt-only re-prefill.
 
-    The generator can capture a clean prompt-boundary snapshot before the first
-    generated-token lookahead mutates CCA state. The scheduler should store that
-    snapshot directly instead of running an extra prompt-only prefill after the
-    last streamed token.
+    ZAYA chat templates can append generation-prompt suffix tokens. A generator
+    snapshot captured after normal prefill can therefore represent a later CCA
+    boundary than the no-suffix N-1 prefix key. Re-prefill is slower, but it is
+    the safe typed-CCA store contract for text ZAYA.
     """
 
     from vmlx_engine.request import Request, SamplingParams
@@ -1356,10 +1356,14 @@ def test_zaya_single_active_store_uses_prompt_snapshot_without_reprefill(monkeyp
         ),
     )
 
-    def fail_reprefill(_tokens):
-        raise AssertionError("single-active ZAYA should store prompt snapshot")
+    original_reprefill = scheduler._prefill_for_prompt_only_cache
+    calls = []
 
-    monkeypatch.setattr(scheduler, "_prefill_for_prompt_only_cache", fail_reprefill)
+    def spy_reprefill(tokens):
+        calls.append(list(tokens))
+        return original_reprefill(tokens)
+
+    monkeypatch.setattr(scheduler, "_prefill_for_prompt_only_cache", spy_reprefill)
 
     request = Request(
         request_id="zaya-snapshot-store",
@@ -1375,6 +1379,7 @@ def test_zaya_single_active_store_uses_prompt_snapshot_without_reprefill(monkeyp
             break
 
     assert request.is_finished(), "ZAYA scheduler request did not finish"
+    assert calls == [[1, 2, 3]]
     assert scheduler.block_aware_cache is not None
     table, remaining = scheduler.block_aware_cache.fetch_cache(
         "zaya-snapshot-store-repeat",
@@ -1386,8 +1391,8 @@ def test_zaya_single_active_store_uses_prompt_snapshot_without_reprefill(monkeyp
     assert remaining == [4]
 
 
-def test_zaya_single_active_multitoken_store_keeps_prompt_snapshot(monkeypatch):
-    """Prompt snapshot must survive until a later generation response finishes."""
+def test_zaya_single_active_multitoken_store_uses_clean_reprefill(monkeypatch):
+    """Multi-token ZAYA completions still store the clean N-1 prompt boundary."""
 
     from vmlx_engine.request import Request, SamplingParams
     from vmlx_engine.scheduler import Scheduler, SchedulerConfig
@@ -1418,10 +1423,14 @@ def test_zaya_single_active_multitoken_store_keeps_prompt_snapshot(monkeypatch):
         ),
     )
 
-    def fail_reprefill(_tokens):
-        raise AssertionError("multi-token ZAYA should retain prompt snapshot")
+    original_reprefill = scheduler._prefill_for_prompt_only_cache
+    calls = []
 
-    monkeypatch.setattr(scheduler, "_prefill_for_prompt_only_cache", fail_reprefill)
+    def spy_reprefill(tokens):
+        calls.append(list(tokens))
+        return original_reprefill(tokens)
+
+    monkeypatch.setattr(scheduler, "_prefill_for_prompt_only_cache", spy_reprefill)
 
     request = Request(
         request_id="zaya-multitoken-snapshot-store",
@@ -1437,6 +1446,7 @@ def test_zaya_single_active_multitoken_store_keeps_prompt_snapshot(monkeypatch):
             break
 
     assert request.is_finished(), "ZAYA scheduler request did not finish"
+    assert calls == [[1, 2, 3]]
     table, remaining = scheduler.block_aware_cache.fetch_cache(
         "zaya-multitoken-snapshot-store-repeat",
         [1, 2, 3, 4],
@@ -1696,6 +1706,19 @@ def test_mllm_media_cache_key_ignores_prompt_attention_mask_length():
 
     assert _mllm_media_cache_extra_keys(short) == _mllm_media_cache_extra_keys(longer)
     assert _mllm_media_cache_extra_keys(short) != _mllm_media_cache_extra_keys(other_image)
+
+
+def test_mllm_paged_fetch_uses_request_cache_extra_keys_without_stale_name():
+    """Regression for live ZAYA-VL text rows warning on undefined side-key name."""
+
+    source = Path("vmlx_engine/mllm_batch_generator.py").read_text()
+    fetch_idx = source.find("self.block_aware_cache.fetch_cache(")
+    assert fetch_idx >= 0
+    fetch_block = source[fetch_idx : source.find(")", fetch_idx) + 1]
+
+    assert '_cache_extra_keys = getattr(req, "_cache_extra_keys", None)' in source
+    assert "cache_extra_keys=_cache_extra_keys" in fetch_block
+    assert "cache_extra_keys=_media_cache_extra_keys" not in source
 
 
 def test_zaya_mllm_extract_cache_states_marks_cachelist_as_tensor_data():

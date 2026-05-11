@@ -8,6 +8,25 @@ DEST="/Applications/$APP_NAME"
 
 cd "$PANEL_DIR"
 
+sign_bundled_python_native_files() {
+  local bundled_python="$1"
+  local identity="$2"
+
+  if [ ! -d "$bundled_python" ]; then
+    return
+  fi
+
+  echo "==> Signing bundled Python native files: $bundled_python"
+  local signed_count=0
+  while IFS= read -r native_file; do
+    if file "$native_file" | grep -q "Mach-O"; then
+      codesign --force --sign "$identity" "$native_file" >/dev/null
+      signed_count=$((signed_count + 1))
+    fi
+  done < <(find "$bundled_python" -type f \( -name "*.dylib" -o -name "*.so" -o -perm +111 \))
+  echo "  signed $signed_count bundled Python native files"
+}
+
 finalize_local_app_signature() {
   local app_path="$1"
   local identity="${VMLINUX_INSTALL_CODESIGN_IDENTITY:--}"
@@ -29,6 +48,7 @@ finalize_local_app_signature() {
   # Re-seal at the end so spawned bundled-Python native libraries do not trip
   # macOS code-signing validation as "unsigned" or modified resources.
   if [ "${VMLINUX_INSTALL_SKIP_FINAL_SIGN:-0}" != "1" ]; then
+    sign_bundled_python_native_files "$bundled_python" "$identity"
     echo "==> Final app seal/signature: $app_path"
     codesign --force --deep --sign "$identity" "$app_path"
   else

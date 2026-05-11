@@ -15,6 +15,7 @@ let handlersRegistered = false
 // Track the current image server session ID (only one at a time)
 let activeImageSessionId: string | null = null
 let activeGenerationController: AbortController | null = null
+let activeGenerationAbortReason: 'cancel' | 'timeout' | null = null
 // Track whether image generation is in-flight (persists across tab switches)
 let isImageGenerating = false
 let generationStartTime: number | null = null
@@ -59,6 +60,61 @@ function getImageFetchHeaders(): Record<string, string> {
     } catch { /* ignore parse errors */ }
   }
   return headers
+}
+
+function resetActiveImageGeneration(): void {
+  isImageGenerating = false
+  generationStartTime = null
+  activeGenerationSessionId = null
+  activeGenerationController = null
+  activeGenerationAbortReason = null
+}
+
+function clearActiveImageGenerationAfterLocalAbort(): void {
+  isImageGenerating = false
+  generationStartTime = null
+  activeGenerationSessionId = null
+  activeGenerationController = null
+}
+
+function classifyImageGenerationError(error: unknown): string {
+  const err = error as any
+  const msg = String(err?.message || error)
+  const code = String(err?.code || '')
+  if (activeGenerationAbortReason === 'cancel') return 'Image generation cancelled.'
+  if (activeGenerationAbortReason === 'timeout') {
+    return 'Image generation timed out after 30 minutes.'
+  }
+  const resetLike = code === 'ECONNRESET' || /socket hang up|ECONNRESET/i.test(msg)
+  return resetLike
+    ? 'Image server connection lost. The model may have crashed, been stopped, or hit memory pressure. Check Logs and restart the image server.'
+    : msg
+}
+
+function requestImageServerCancel(): void {
+  if (!activeImageSessionId) return
+  const session = db.getSession(activeImageSessionId)
+  const port = session?.port
+  if (!port) return
+  try {
+    const http = require('http')
+    const bodyStr = '{}'
+    const headers = { ...getImageFetchHeaders(), 'Content-Length': Buffer.byteLength(bodyStr) }
+    const req = http.request(`http://127.0.0.1:${port}/v1/images/cancel`, {
+      method: 'POST',
+      headers,
+      agent: false,
+      timeout: 5000,
+    }, (res: any) => {
+      res.resume()
+    })
+    req.on('error', () => {})
+    req.on('timeout', () => req.destroy())
+    req.write(bodyStr)
+    req.end()
+  } catch {
+    // Best-effort cancel; local abort still clears the UI immediately.
+  }
 }
 
 export function registerImageHandlers(): void {
@@ -215,13 +271,18 @@ export function registerImageHandlers(): void {
       }
 
       activeGenerationController = new AbortController()
+      activeGenerationAbortReason = null
       isImageGenerating = true
       generationStartTime = Date.now()
       activeGenerationSessionId = sessionId
       lastGenerationSessionId = sessionId
       // 30-minute timeout — use Node.js http.request instead of Electron fetch
       // (Chromium's net stack has its own ~5 min socket timeout that ignores keepalive)
-      const timeoutId = setTimeout(() => activeGenerationController?.abort(), 30 * 60 * 1000)
+      const timeoutId = setTimeout(() => {
+        activeGenerationAbortReason = 'timeout'
+        requestImageServerCancel()
+        activeGenerationController?.abort()
+      }, 30 * 60 * 1000)
       // Periodically touch session during long image generations (Qwen edits can take 10+ min)
       // to prevent idle timer from triggering sleep mid-generation
       const touchInterval = setInterval(() => {
@@ -246,7 +307,10 @@ export function registerImageHandlers(): void {
             })
           })
           req.on('error', reject)
-          activeGenerationController!.signal.addEventListener('abort', () => { req.destroy(); reject(new Error('Aborted')) })
+          activeGenerationController!.signal.addEventListener('abort', () => {
+            req.destroy()
+            reject(new Error('ImageGenerationAborted'))
+          })
           req.write(bodyStr)
           req.end()
         })
@@ -304,26 +368,15 @@ export function registerImageHandlers(): void {
         generations.push(gen)
       }
 
-      isImageGenerating = false
-      generationStartTime = null
-      activeGenerationSessionId = null
-      activeGenerationController = null
+      resetActiveImageGeneration()
       return { success: true, generations }
     } catch (error) {
-      isImageGenerating = false
-      generationStartTime = null
-      activeGenerationSessionId = null
-      activeGenerationController = null
       console.error('[IMAGE] Generation failed:', error)
-      const err = error as any
-      const msg = String(err?.message || error)
-      const code = String(err?.code || '')
-      const resetLike = code === 'ECONNRESET' || /socket hang up|ECONNRESET|aborted/i.test(msg)
+      const errorMessage = classifyImageGenerationError(error)
+      resetActiveImageGeneration()
       return {
         success: false,
-        error: resetLike
-          ? 'Image server connection lost. The model may have crashed, been stopped, or hit memory pressure. Check Logs and restart the image server.'
-          : msg
+        error: errorMessage
       }
     }
   })
@@ -377,6 +430,7 @@ export function registerImageHandlers(): void {
       if (maskBase64) body.mask = maskBase64
 
       activeGenerationController = new AbortController()
+      activeGenerationAbortReason = null
       isImageGenerating = true
       generationStartTime = Date.now()
       activeGenerationSessionId = sessionId
@@ -385,7 +439,11 @@ export function registerImageHandlers(): void {
       // Use Node.js http.request instead of Electron fetch — Chromium's net stack
       // has its own socket timeout (~5 min) that ignores keepalive, causing
       // "fetch failed" errors on long image edits.
-      const timeoutId = setTimeout(() => activeGenerationController?.abort(), 30 * 60 * 1000)
+      const timeoutId = setTimeout(() => {
+        activeGenerationAbortReason = 'timeout'
+        requestImageServerCancel()
+        activeGenerationController?.abort()
+      }, 30 * 60 * 1000)
       // Periodically touch session during long image edits (Qwen can take 10+ min)
       const touchInterval = setInterval(() => {
         if (activeImageSessionId) sessionManager.touchSession(activeImageSessionId)
@@ -409,7 +467,10 @@ export function registerImageHandlers(): void {
             })
           })
           req.on('error', reject)
-          activeGenerationController!.signal.addEventListener('abort', () => { req.destroy(); reject(new Error('Aborted')) })
+          activeGenerationController!.signal.addEventListener('abort', () => {
+            req.destroy()
+            reject(new Error('ImageGenerationAborted'))
+          })
           req.write(bodyStr)
           req.end()
         })
@@ -463,26 +524,15 @@ export function registerImageHandlers(): void {
         generations.push(gen)
       }
 
-      isImageGenerating = false
-      generationStartTime = null
-      activeGenerationSessionId = null
-      activeGenerationController = null
+      resetActiveImageGeneration()
       return { success: true, generations }
     } catch (error) {
-      isImageGenerating = false
-      generationStartTime = null
-      activeGenerationSessionId = null
-      activeGenerationController = null
       console.error('[IMAGE] Edit failed:', error)
-      const err = error as any
-      const msg = String(err?.message || error)
-      const code = String(err?.code || '')
-      const resetLike = code === 'ECONNRESET' || /socket hang up|ECONNRESET|aborted/i.test(msg)
+      const errorMessage = classifyImageGenerationError(error)
+      resetActiveImageGeneration()
       return {
         success: false,
-        error: resetLike
-          ? 'Image server connection lost. The model may have crashed, been stopped, or hit memory pressure. Check Logs and restart the image server.'
-          : msg
+        error: errorMessage
       }
     }
   })
@@ -510,12 +560,11 @@ export function registerImageHandlers(): void {
           // Stop any existing image server first
           if (activeImageSessionId) {
             if (activeGenerationController) {
+              activeGenerationAbortReason = 'cancel'
+              requestImageServerCancel()
               activeGenerationController.abort()
-              activeGenerationController = null
             }
-            isImageGenerating = false
-            generationStartTime = null
-            activeGenerationSessionId = null
+            clearActiveImageGenerationAfterLocalAbort()
             lastGenerationSessionId = null
             try {
               await sessionManager.stopSession(activeImageSessionId)
@@ -600,12 +649,11 @@ export function registerImageHandlers(): void {
       if (activeImageSessionId) {
         // Cancel any in-flight generation before stopping
         if (activeGenerationController) {
+          activeGenerationAbortReason = 'cancel'
+          requestImageServerCancel()
           activeGenerationController.abort()
-          activeGenerationController = null
         }
-        isImageGenerating = false
-        generationStartTime = null
-        activeGenerationSessionId = null
+        clearActiveImageGenerationAfterLocalAbort()
         lastGenerationSessionId = null
         await sessionManager.stopSession(activeImageSessionId)
         activeImageSessionId = null
@@ -618,11 +666,10 @@ export function registerImageHandlers(): void {
 
   ipcMain.handle('image:cancelGeneration', async () => {
     if (activeGenerationController) {
+      activeGenerationAbortReason = 'cancel'
+      requestImageServerCancel()
       activeGenerationController.abort()
-      activeGenerationController = null
-      isImageGenerating = false
-      generationStartTime = null
-      activeGenerationSessionId = null
+      clearActiveImageGenerationAfterLocalAbort()
       lastGenerationSessionId = null
       return { success: true }
     }

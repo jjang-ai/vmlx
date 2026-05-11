@@ -2934,10 +2934,11 @@ class MLLMBatchGenerator:
                             )
                         except Exception:
                             _paged_disk_hits_before = 0
+                        _cache_extra_keys = getattr(req, "_cache_extra_keys", None)
                         block_table, remaining = self.block_aware_cache.fetch_cache(
                             req.request_id,
                             token_list,
-                            cache_extra_keys=_media_cache_extra_keys,
+                            cache_extra_keys=_cache_extra_keys,
                         )
                         _paged_disk_hit = False
                         try:

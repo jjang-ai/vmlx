@@ -177,8 +177,6 @@ class SingleBatchGenerator:
 
     @classmethod
     def _cache_needs_prompt_snapshot(cls, cache_obj) -> bool:
-        if isinstance(cache_obj, mlx_cache.ArraysCache):
-            return True
         if isinstance(cache_obj, mlx_cache.CacheList):
             return any(cls._cache_needs_prompt_snapshot(c) for c in cache_obj.caches)
         return type(cache_obj).__name__ in {"DeepseekV4Cache"}

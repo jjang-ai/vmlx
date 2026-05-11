@@ -57,6 +57,11 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
   const [modelAvailability, setModelAvailability] = useState<Record<string, boolean>>({})
   const [modelMissing, setModelMissing] = useState<Record<string, string[]>>({})
   const [hasHfToken, setHasHfToken] = useState(false)
+  const [activeDownload, setActiveDownload] = useState<{
+    jobId: string
+    model: string
+    quantize: number
+  } | null>(null)
 
   // Check HF token and in-progress downloads on mount
   useEffect(() => {
@@ -67,6 +72,13 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
     window.api.models.getDownloadStatus().then((status: any) => {
       if (status.active) {
         setDownloadState('downloading')
+        if (status.active.jobId && status.active.imageModelName != null) {
+          setActiveDownload({
+            jobId: status.active.jobId,
+            model: status.active.imageModelName,
+            quantize: Number(status.active.imageQuantize ?? selectedQuantize),
+          })
+        }
         if (status.active.progress) setDownloadProgress(status.active.progress)
       }
     }).catch(() => {})
@@ -94,22 +106,32 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
 
   // Listen for download progress
   useEffect(() => {
+    const isActiveDownloadEvent = (data: any) => {
+      if (!activeDownload) return downloadState === 'downloading'
+      if (data?.jobId && data.jobId !== activeDownload.jobId) return false
+      if (data?.imageModelName != null && data.imageModelName !== activeDownload.model) return false
+      if (data?.imageQuantize != null && Number(data.imageQuantize) !== activeDownload.quantize) return false
+      return true
+    }
+    const activeModel = activeDownload?.model ?? selectedModel
+    const activeQuantize = activeDownload?.quantize ?? selectedQuantize
     const unsubProgress = window.api.models.onDownloadProgress((data: any) => {
-      if (downloadState === 'downloading') {
+      if (downloadState === 'downloading' && isActiveDownloadEvent(data)) {
         setDownloadProgress(data.progress)
       }
     })
     const unsubComplete = window.api.models.onDownloadComplete((data: any) => {
-      if (downloadState === 'downloading') {
+      if (downloadState === 'downloading' && isActiveDownloadEvent(data)) {
         if (data.status === 'complete') {
           const finish = async () => {
             setDownloadProgress(null)
-            if (!selectedModel) {
+            if (!activeModel) {
               setDownloadState('ready')
+              setActiveDownload(null)
               return
             }
-            const key = `${selectedModel}-${selectedQuantize}`
-            const result = await window.api.models.checkImageModel(selectedModel, selectedQuantize)
+            const key = `${activeModel}-${activeQuantize}`
+            const result = await window.api.models.checkImageModel(activeModel, activeQuantize)
             setModelAvailability(prev => ({ ...prev, [key]: !!result.available }))
             const missing = Array.isArray(result.missing) ? result.missing as string[] : []
             if (missing.length > 0) {
@@ -124,17 +146,22 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
               ) as Record<string, string[]>
             })
             setDownloadState(result.available ? 'ready' : 'idle')
+            setActiveDownload(null)
           }
           finish().catch((err) => {
             setDownloadError((err as Error).message)
             setDownloadState('error')
             setDownloadProgress(null)
           })
+        } else if (data.status === 'cancelled') {
+          setDownloadProgress(null)
+          setDownloadState('idle')
+          setActiveDownload(null)
         }
       }
     })
     const unsubError = window.api.models.onDownloadError((data: any) => {
-      if (downloadState === 'downloading') {
+      if (downloadState === 'downloading' && isActiveDownloadEvent(data)) {
         const errMsg = data.error || 'Download failed'
         const isGated = data.gated
         if (isGated) {
@@ -147,6 +174,7 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
         }
         setDownloadState('error')
         setDownloadProgress(null)
+        setActiveDownload(null)
       }
     })
     return () => {
@@ -154,7 +182,7 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
       unsubComplete()
       unsubError()
     }
-  }, [downloadState, selectedModel, selectedQuantize])
+  }, [activeDownload, downloadState, selectedModel, selectedQuantize])
 
   const handleDownload = async () => {
     if (!selectedModel) return
@@ -164,8 +192,16 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
 
     try {
       const result = await window.api.models.downloadImageModel(selectedModel, selectedQuantize)
+      if (result.jobId) {
+        setActiveDownload({
+          jobId: result.jobId,
+          model: selectedModel,
+          quantize: selectedQuantize,
+        })
+      }
       if (result.status === 'already_downloaded') {
         setDownloadState('ready')
+        setActiveDownload(null)
         const key = `${selectedModel}-${selectedQuantize}`
         setModelAvailability(prev => ({ ...prev, [key]: true }))
       }

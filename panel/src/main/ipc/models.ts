@@ -1324,6 +1324,8 @@ export function registerModelHandlers(): void {
           emitToRenderer("models:downloadProgress", {
             jobId: job.id,
             repoId: job.repoId,
+            imageModelName: job.imageModelName,
+            imageQuantize: job.imageQuantize,
             progress: lastProgress,
           });
         } catch {
@@ -1360,6 +1362,8 @@ export function registerModelHandlers(): void {
         emitToRenderer("models:downloadComplete", {
           jobId: job.id,
           repoId: job.repoId,
+          imageModelName: job.imageModelName,
+          imageQuantize: job.imageQuantize,
           status: "cancelled",
         });
       } else if (code === 0) {
@@ -1380,6 +1384,8 @@ export function registerModelHandlers(): void {
             emitToRenderer("models:downloadError", {
               jobId: job.id,
               repoId: job.repoId,
+              imageModelName: job.imageModelName,
+              imageQuantize: job.imageQuantize,
               error: job.error,
               missing: validation.missing,
             });
@@ -1406,6 +1412,8 @@ export function registerModelHandlers(): void {
         emitToRenderer("models:downloadComplete", {
           jobId: job.id,
           repoId: job.repoId,
+          imageModelName: job.imageModelName,
+          imageQuantize: job.imageQuantize,
           status: "complete",
           path: job.modelDir,
         });
@@ -1423,6 +1431,8 @@ export function registerModelHandlers(): void {
               emitToRenderer("models:downloadComplete", {
                 jobId: job.id,
                 repoId: job.repoId,
+                imageModelName: job.imageModelName,
+                imageQuantize: job.imageQuantize,
                 status: "cancelled",
               });
               activeJobs.delete(job.id);
@@ -1448,6 +1458,8 @@ export function registerModelHandlers(): void {
         emitToRenderer("models:downloadError", {
           jobId: job.id,
           repoId: job.repoId,
+          imageModelName: job.imageModelName,
+          imageQuantize: job.imageQuantize,
           error: errorMsg,
           gated: isGatedError,
         });
@@ -1472,6 +1484,8 @@ export function registerModelHandlers(): void {
       emitToRenderer("models:downloadError", {
         jobId: job.id,
         repoId: job.repoId,
+        imageModelName: job.imageModelName,
+        imageQuantize: job.imageQuantize,
         error: job.error,
       });
       processQueue();
@@ -1995,6 +2009,8 @@ export function registerModelHandlers(): void {
       emitToRenderer("models:downloadComplete", {
         jobId: removed.id,
         repoId: removed.repoId,
+        imageModelName: removed.imageModelName,
+        imageQuantize: removed.imageQuantize,
         status: "cancelled",
       });
       return { success: true };
@@ -2079,6 +2095,8 @@ export function registerModelHandlers(): void {
     const active = Array.from(activeJobs.values()).map((j) => ({
       jobId: j.id,
       repoId: j.repoId,
+      imageModelName: j.imageModelName,
+      imageQuantize: j.imageQuantize,
       progress: j.progress,
     }));
     return {
@@ -2087,11 +2105,15 @@ export function registerModelHandlers(): void {
       queue: downloadQueue.map((j) => ({
         jobId: j.id,
         repoId: j.repoId,
+        imageModelName: j.imageModelName,
+        imageQuantize: j.imageQuantize,
         status: j.status,
       })),
       completed: completedJobs.slice(-10).map((j) => ({
         jobId: j.id,
         repoId: j.repoId,
+        imageModelName: j.imageModelName,
+        imageQuantize: j.imageQuantize,
         status: j.status,
         error: j.error,
       })),
@@ -2355,7 +2377,12 @@ export function registerModelHandlers(): void {
       );
 
       // Notify UI about new queue entry immediately
-      emitToRenderer("models:downloadQueued", { jobId: id, repoId });
+      emitToRenderer("models:downloadQueued", {
+        jobId: id,
+        repoId,
+        imageModelName: modelName,
+        imageQuantize: quantize,
+      });
 
       processQueue();
 

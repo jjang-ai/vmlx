@@ -64,6 +64,16 @@ describe("image generation in-flight state survives tab switches", () => {
     expect(src).toContain("ECONNRESET");
   });
 
+  it("image cancel is distinguished from server reset and sends backend cancel", () => {
+    const src = readFileSync(IMAGE_TS, "utf-8");
+    expect(src).toContain("activeGenerationAbortReason = 'cancel'");
+    expect(src).toContain("requestImageServerCancel()");
+    expect(src).toContain("/v1/images/cancel");
+    expect(src).toContain("Image generation cancelled.");
+    expect(src).toContain("clearActiveImageGenerationAfterLocalAbort");
+    expect(src).not.toContain("aborted/i.test(msg)");
+  });
+
   it("preload and renderer types expose image generation session ids", () => {
     const preload = readFileSync(PRELOAD_TS, "utf-8");
     const env = readFileSync(ENV_D_TS, "utf-8");

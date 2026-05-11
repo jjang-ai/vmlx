@@ -25,6 +25,35 @@ describe("image model autodetection path", () => {
     );
   });
 
+  it("image download completion events carry canonical model identity", () => {
+    const src = readFileSync(MODELS_TS, "utf-8");
+    expect(src).toContain("imageModelName: job.imageModelName");
+    expect(src).toContain("imageQuantize: job.imageQuantize");
+    expect(src).toContain("imageModelName: modelName");
+    expect(src).toContain("imageQuantize: quantize");
+  });
+
+  it("image picker ignores completion events for a different download job", () => {
+    const src = readFileSync(
+      join(
+        __dirname,
+        "..",
+        "src",
+        "renderer",
+        "src",
+        "components",
+        "image",
+        "ImageModelPicker.tsx",
+      ),
+      "utf-8",
+    );
+    expect(src).toContain("activeDownload");
+    expect(src).toContain("isActiveDownloadEvent");
+    expect(src).toContain("data.jobId !== activeDownload.jobId");
+    expect(src).toContain("data.imageModelName !== activeDownload.model");
+    expect(src).toContain("Number(data.imageQuantize) !== activeDownload.quantize");
+  });
+
   it("download availability check registers manually downloaded registry repos from disk", () => {
     const src = readFileSync(MODELS_TS, "utf-8");
     expect(src).toContain("already have HF repos under ~/.mlxstudio/models/image");
