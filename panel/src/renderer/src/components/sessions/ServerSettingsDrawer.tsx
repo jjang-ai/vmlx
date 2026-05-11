@@ -32,6 +32,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
   const [detectedFamily, setDetectedFamily] = useState<string | undefined>()
   const [detectedIsTurboQuant, setDetectedIsTurboQuant] = useState<boolean>(false)
   const [detectedIsMultimodal, setDetectedIsMultimodal] = useState<boolean>(false)
+  const [detectedForceTextOnly, setDetectedForceTextOnly] = useState<boolean>(false)
   const [detectedMaxContext, setDetectedMaxContext] = useState<number | undefined>()
   const restartingRef = useRef(false)
   restartingRef.current = restarting
@@ -55,6 +56,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
           else setDetectedFamily(undefined)
           setDetectedIsTurboQuant(!!det?.isTurboQuant)
           setDetectedIsMultimodal(!!det?.isMultimodal)
+          setDetectedForceTextOnly(!!det?.forceTextOnly)
           if (det?.maxContextLength) setDetectedMaxContext(det.maxContextLength)
         })
         .catch((err) => console.error('Failed to detect model config:', err))
@@ -172,15 +174,18 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
           setDetectedFamily(detected.family)
           setDetectedIsTurboQuant(!!detected.isTurboQuant)
           setDetectedIsMultimodal(!!detected.isMultimodal)
+          setDetectedForceTextOnly(!!detected.forceTextOnly)
         } else {
           setDetectedFamily(undefined)
           setDetectedIsTurboQuant(false)
           setDetectedIsMultimodal(false)
+          setDetectedForceTextOnly(false)
         }
       } catch (_) {
         setDetectedFamily(undefined)
         setDetectedIsTurboQuant(false)
         setDetectedIsMultimodal(false)
+        setDetectedForceTextOnly(false)
       }
     }
     setConfig(base)
@@ -235,7 +240,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
             />
           </div>
         ) : (
-          <SessionConfigForm config={config} onChange={handleChange} detectedCacheType={detectedCacheType} detectedFamily={detectedFamily} detectedIsTurboQuant={detectedIsTurboQuant} detectedIsMultimodal={detectedIsMultimodal} detectedMaxContext={detectedMaxContext} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} imageMode={(() => { try { return JSON.parse(session.config || '{}').imageMode } catch { return undefined } })()} sessionId={session.id} />
+          <SessionConfigForm config={config} onChange={handleChange} detectedCacheType={detectedCacheType} detectedFamily={detectedFamily} detectedIsTurboQuant={detectedIsTurboQuant} detectedIsMultimodal={detectedIsMultimodal} detectedForceTextOnly={detectedForceTextOnly} detectedMaxContext={detectedMaxContext} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} imageMode={(() => { try { return JSON.parse(session.config || '{}').imageMode } catch { return undefined } })()} sessionId={session.id} />
         )}
       </div>
 

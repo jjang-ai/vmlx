@@ -799,7 +799,7 @@ export function registerChatHandlers(
             chatDetectedFamily = detected.family;
             const smeltActive = !!sessionConfig.smelt;
             chatIsMultimodal =
-              smeltActive
+              smeltActive || detected.forceTextOnly
                 ? false
                 : detected.isMultimodal === true
                   ? true
@@ -998,7 +998,22 @@ export function registerChatHandlers(
       };
       const hasMediaAttachments =
         hasAttachments && attachments!.some((a) => inferKind(a) !== "text");
-      if (hasMediaAttachments && !chatIsMultimodal) {
+      const modelForceTextOnly = (() => {
+        try {
+          return !!chat.modelPath &&
+            detectModelConfigFromDir(chat.modelPath).forceTextOnly === true;
+        } catch (_) {
+          return false;
+        }
+      })();
+      if (hasMediaAttachments && modelForceTextOnly) {
+        const imgs = attachments!.filter((a) => inferKind(a) === "image").length;
+        const vids = attachments!.filter((a) => inferKind(a) === "video").length;
+        const auds = attachments!.filter((a) => inferKind(a) === "audio").length;
+        console.log(
+          `[CHAT] Keeping multimodal=false for ${chatId} — model is forceTextOnly and user attached ${imgs} image(s), ${vids} video(s), ${auds} audio file(s)`,
+        );
+      } else if (hasMediaAttachments && !chatIsMultimodal) {
         const imgs = attachments!.filter((a) => inferKind(a) === "image").length;
         const vids = attachments!.filter((a) => inferKind(a) === "video").length;
         const auds = attachments!.filter((a) => inferKind(a) === "audio").length;

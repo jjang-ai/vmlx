@@ -17,6 +17,7 @@ import {
 } from "http";
 import { db } from "./database";
 import { sessionManager } from "./sessions";
+import { detectModelConfigFromDir } from "./model-config-registry";
 import { EventEmitter } from "events";
 
 const DEFAULT_PORT = 8080;
@@ -1373,7 +1374,16 @@ export class ApiGateway extends EventEmitter {
     const capabilities: string[] = ["completion"];
     const toolParser = cfg.toolCallParser || cfg.toolParser;
     if (!toolParser || toolParser !== "none") capabilities.push("tools");
-    if (cfg.isMultimodal === true || cfg.modelType === "vlm")
+    let detectedForceTextOnly = false;
+    try {
+      const detected = session.modelPath
+        ? detectModelConfigFromDir(session.modelPath)
+        : null;
+      detectedForceTextOnly = detected?.forceTextOnly === true;
+    } catch (_) {
+      detectedForceTextOnly = false;
+    }
+    if (!detectedForceTextOnly && (cfg.isMultimodal === true || cfg.modelType === "vlm"))
       capabilities.push("vision");
     const rp = cfg.reasoningParser;
     if (rp && rp !== "none") capabilities.push("thinking");

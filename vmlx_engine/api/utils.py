@@ -176,6 +176,100 @@ _QWEN_HYBRID_VLM_MODEL_TYPES = {
 }
 
 
+def _config_declares_media(config: object) -> bool:
+    """Return True when config.json declares image/audio/video support."""
+    if not isinstance(config, dict):
+        return False
+    for key in ("vision_config", "audio_config", "video_config"):
+        if key in config and config.get(key) is not None:
+            return True
+    for key in (
+        "image_token_id",
+        "image_token_index",
+        "video_token_id",
+        "video_token_index",
+        "audio_token_id",
+        "audio_token_index",
+    ):
+        if key in config and config.get(key) is not None:
+            return True
+    return False
+
+
+def _is_qwen_hybrid_model_type(config: dict) -> bool:
+    candidates = [
+        config.get("model_type"),
+        (config.get("text_config") or {}).get("model_type"),
+    ]
+    return any(
+        str(value or "").lower() in _QWEN_HYBRID_VLM_MODEL_TYPES
+        for value in candidates
+    )
+
+
+def _is_mxtq_jang_config(jang_config: dict) -> bool:
+    quant = jang_config.get("quantization") or {}
+    values = (
+        jang_config.get("weight_format"),
+        jang_config.get("format"),
+        quant.get("weight_format"),
+        quant.get("format"),
+        quant.get("method"),
+        quant.get("profile"),
+    )
+    lowered = [str(value or "").lower() for value in values]
+    if any("mxtq" in value or "jangtq" in value for value in lowered):
+        return True
+    return "mxtq_bits" in jang_config or "mxtq_bits" in quant
+
+
+def _is_explicit_affine_jang_config(jang_config: dict) -> bool:
+    quant = jang_config.get("quantization") or {}
+    values = (
+        jang_config.get("weight_format"),
+        jang_config.get("format"),
+        quant.get("weight_format"),
+        quant.get("format"),
+        quant.get("method"),
+        quant.get("profile"),
+    )
+    lowered = [str(value or "").lower() for value in values]
+    return any(
+        value in {"jang", "jang_v2", "affine", "jang-importance"}
+        or value.startswith("jang_")
+        for value in lowered
+    )
+
+
+def _is_affine_jang_qwen_hybrid_vlm_path(local_path: str) -> bool:
+    """True for the known-bad affine-JANG Qwen hybrid mlx_vlm text path.
+
+    Qwen3.6 affine-JANG bundles carry real VL/video metadata, but the current
+    mlx_vlm qwen3_5 language path uses M-RoPE for text-only generation and
+    corrupts logits. Keep only affine-JANG on the text loader until
+    docs/AUDIT-QWEN-AFFINE-JANG-VLM.md is resolved. MXTQ/JANGTQ and non-JANG
+    Qwen VL bundles must remain multimodal.
+    """
+    try:
+        cfg_path = os.path.join(local_path, "config.json")
+        jang_path = os.path.join(local_path, "jang_config.json")
+        if not (os.path.isfile(cfg_path) and os.path.isfile(jang_path)):
+            return False
+        with open(cfg_path) as f:
+            config = json.load(f)
+        with open(jang_path) as f:
+            jang_config = json.load(f)
+        if not _is_qwen_hybrid_model_type(config):
+            return False
+        if not _config_declares_media(config):
+            return False
+        if not _is_explicit_affine_jang_config(jang_config):
+            return False
+        return not _is_mxtq_jang_config(jang_config)
+    except Exception:
+        return False
+
+
 def _is_mllm_cache_key(model_name: str, local_path: str) -> tuple:
     """Build a cache key that invalidates on config.json / jang_config.json edits."""
     try:
@@ -196,7 +290,8 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     """
     Check if model is a multimodal language model.
 
-    Primary check: force_mllm flag (highest priority, from --is-mllm / user setting)
+    Primary check: force_mllm flag (from --is-mllm / user setting), except for
+        documented runtime-unsafe families that must override it.
     Secondary check: reads the model's config.json for vision_config presence.
     Tertiary: uses the model config registry.
 
@@ -294,6 +389,22 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     except Exception:
         pass
 
+    if _is_affine_jang_qwen_hybrid_vlm_path(local_path):
+        if force_mllm:
+            _logger.warning(
+                "is_mllm_model(%s): affine-JANG Qwen hybrid overrides "
+                "force_mllm — current mlx_vlm qwen3_5 M-RoPE path corrupts "
+                "text logits; routing text-only until the VLM path is fixed",
+                model_name,
+            )
+        else:
+            _logger.info(
+                "is_mllm_model(%s): tier=affine_qwen_hybrid_jang_text_only "
+                "result=False",
+                model_name,
+            )
+        return False
+
     if force_mllm:
         # Not cached — force_mllm is cheap + callers may toggle at runtime.
         _logger.info("is_mllm_model(%s): tier=force_mllm result=True", model_name)
@@ -321,6 +432,15 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
                     if "has_vision" in arch:
                         has_vision = arch.get("has_vision")
                         if has_vision is True:
+                            if _is_affine_jang_qwen_hybrid_vlm_path(local_path):
+                                _logger.warning(
+                                    "is_mllm_model(%s): affine-JANG Qwen "
+                                    "hybrid has vision metadata but current "
+                                    "mlx_vlm M-RoPE path is unsafe — forcing "
+                                    "text-only",
+                                    model_name,
+                                )
+                                return False
                             # Mistral 4 has_vision=true exception: mlx_vlm has
                             # mistral3 (standard attention) and mistral4 (text
                             # only; no VLM class). A Mistral 4 VLM config

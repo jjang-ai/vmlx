@@ -69,6 +69,7 @@ export interface DetectedConfig {
   usePagedCache: boolean
   enableAutoToolChoice: boolean
   isMultimodal: boolean
+  forceTextOnly?: boolean
   isTurboQuant?: boolean
   description: string
   maxContextLength?: number
@@ -408,6 +409,70 @@ function configDeclaresMedia(config: any): boolean {
   return false
 }
 
+function isMxtqJangConfig(jangCfg: any): boolean {
+  if (!jangCfg || typeof jangCfg !== 'object') return false
+  const quant = jangCfg.quantization && typeof jangCfg.quantization === 'object'
+    ? jangCfg.quantization
+    : {}
+  const candidates = [
+    jangCfg.weight_format,
+    jangCfg.format,
+    quant.weight_format,
+    quant.format,
+    quant.method,
+    quant.profile,
+  ]
+  if (candidates.some(value => {
+    const s = String(value || '').toLowerCase()
+    return s.includes('mxtq') || s.includes('jangtq')
+  })) {
+    return true
+  }
+  return 'mxtq_bits' in jangCfg || 'mxtq_bits' in quant
+}
+
+function isExplicitAffineJangConfig(jangCfg: any): boolean {
+  if (!jangCfg || typeof jangCfg !== 'object') return false
+  const quant = jangCfg.quantization && typeof jangCfg.quantization === 'object'
+    ? jangCfg.quantization
+    : {}
+  const values = [
+    jangCfg.weight_format,
+    jangCfg.format,
+    quant.weight_format,
+    quant.format,
+    quant.method,
+    quant.profile,
+  ].map(value => String(value || '').toLowerCase())
+  return values.some(value =>
+    value === 'jang' ||
+    value === 'jang_v2' ||
+    value === 'affine' ||
+    value === 'jang-importance' ||
+    value.startsWith('jang_')
+  )
+}
+
+function isAffineJangQwenHybridVlm(parsedConfig: any, jangCfg: any): boolean {
+  if (!parsedConfig || typeof parsedConfig !== 'object') return false
+  if (!jangCfg || typeof jangCfg !== 'object') return false
+  const qwenTypes = new Set([
+    'qwen3_5',
+    'qwen3_5_text',
+    'qwen3_5_moe',
+    'qwen3_vl',
+    'qwen3_vl_moe',
+  ])
+  const modelTypes = [
+    parsedConfig.model_type,
+    parsedConfig.text_config?.model_type,
+  ].map(value => String(value || '').toLowerCase())
+  if (!modelTypes.some(value => qwenTypes.has(value))) return false
+  if (!configDeclaresMedia(parsedConfig)) return false
+  if (!isExplicitAffineJangConfig(jangCfg)) return false
+  return !isMxtqJangConfig(jangCfg)
+}
+
 function configDeclaresLinearAttention(config: any): boolean {
   if (!config || typeof config !== 'object') return false
   const containers = [config]
@@ -438,7 +503,7 @@ function applyConfigMetadataOverrides(
     next.cacheType = 'hybrid'
     next.usePagedCache = true
   }
-  if (isQwen36 && configDeclaresMedia(parsedConfig)) {
+  if (isQwen36 && configDeclaresMedia(parsedConfig) && !next.forceTextOnly) {
     next.isMultimodal = true
   }
   if (next.family === 'nemotron-h' && !configDeclaresMedia(parsedConfig)) {
@@ -516,6 +581,10 @@ function resolveJangMultimodal(jangCfg: any, parsedConfig: any): boolean {
     return true
   }
 
+  if (isAffineJangQwenHybridVlm(parsedConfig, jangCfg)) {
+    return false
+  }
+
   // Explicit converter stamps are authoritative. A JANG bundle may keep a
   // vision_config in config.json even when the emitted artifact is text-only.
   if (typeof jangCfg?.has_vision === 'boolean') {
@@ -588,6 +657,9 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
             try {
               const jangCfg = JSON.parse(readFileSync(jangConfigPath, 'utf-8'))
               detected = applyJangCapabilities(detected, jangCfg)
+              if (isAffineJangQwenHybridVlm(parsed, jangCfg)) {
+                detected.forceTextOnly = true
+              }
               detected.isMultimodal = resolveJangMultimodal(jangCfg, parsed)
             } catch {
               if ('vision_config' in parsed) {

@@ -405,7 +405,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detectModelConfigFromDir(dir).isMultimodal).toBe(true)
   })
 
-  it('keeps affine-JANG Qwen hybrid VLM multimodal because Qwen 3.6 is VL/video capable', () => {
+  it('routes affine-JANG Qwen hybrid text-only until the mlx-vlm M-RoPE path is fixed', () => {
     const dir = makeModelDir(
       {
         model_type: 'qwen3_5',
@@ -418,6 +418,26 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
         video_token_index: 151666,
       },
       { format: 'jang', architecture: { has_vision: true } },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+    expect(detected.isMultimodal).toBe(false)
+    expect(detected.forceTextOnly).toBe(true)
+  })
+
+  it('keeps MXTQ/JANGTQ Qwen hybrid VLM multimodal', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'qwen3_5',
+        text_config: {
+          model_type: 'qwen3_5_text',
+          layer_types: ['linear_attention', 'full_attention'],
+        },
+        vision_config: { hidden_size: 1024 },
+        video_token_id: 151666,
+        video_token_index: 151666,
+      },
+      { format: 'mxtq', weight_format: 'mxtq', architecture: { has_vision: true } },
     )
 
     expect(detectModelConfigFromDir(dir).isMultimodal).toBe(true)

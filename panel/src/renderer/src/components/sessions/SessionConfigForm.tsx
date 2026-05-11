@@ -206,6 +206,8 @@ interface SessionConfigFormProps {
   detectedIsTurboQuant?: boolean
   /** True for VLM/MLLM models detected from config/capabilities */
   detectedIsMultimodal?: boolean
+  /** True when a model has media metadata but must use the text runtime */
+  detectedForceTextOnly?: boolean
   /** Detected model max context length from config.json (max_position_embeddings) */
   detectedMaxContext?: number
   /** Model type — image models show minimal settings */
@@ -216,7 +218,7 @@ interface SessionConfigFormProps {
   sessionId?: string
 }
 
-export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedFamily, detectedIsTurboQuant, detectedIsMultimodal, detectedMaxContext, modelType, imageMode, sessionId }: SessionConfigFormProps) {
+export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedFamily, detectedIsTurboQuant, detectedIsMultimodal, detectedForceTextOnly, detectedMaxContext, modelType, imageMode, sessionId }: SessionConfigFormProps) {
   const { t } = useTranslation()
   const isImage = modelType === 'image'
   const isImageEdit = isImage && (imageMode === 'edit' || config.imageMode === 'edit')
@@ -245,7 +247,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const turboQuantActive = !!detectedIsTurboQuant
   const topKOverrideBlocked = topKOverrideBlockedByFamily(normalizedDetectedFamily)
   const jangtqTopKOverrideAllowed = turboQuantActive && !topKOverrideBlocked
-  const multimodalActive = !!detectedIsMultimodal || config.isMultimodal === true
+  const multimodalActive = !detectedForceTextOnly && (!!detectedIsMultimodal || config.isMultimodal === true)
   const batchingOff = !config.continuousBatching
   const effectivelyNoBatching = batchingOff
   const prefixOff = !config.enablePrefixCache
@@ -1025,29 +1027,32 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         </Field>
         <SelectField
           label="Multimodal Support (VLM)"
-          tooltip="Vision-Language Model mode for models like Qwen2-VL, Qwen3-VL, Pixtral, InternVL, or LLaVA. Auto-detected VLMs launch with the MLLM scheduler even if an older saved session says off. Smelt still forces text-only loading."
-          value={smeltActive ? 'off' : config.isMultimodal === true ? 'on' : config.isMultimodal === false ? 'off' : 'auto'}
+          tooltip="Vision-Language Model mode for models like Qwen2-VL, Qwen3-VL, Pixtral, InternVL, or LLaVA. Auto-detected VLMs launch with the MLLM scheduler even if an older saved session says off. Smelt and documented unsafe runtimes force text-only loading."
+          value={smeltActive || detectedForceTextOnly ? 'off' : config.isMultimodal === true ? 'on' : config.isMultimodal === false ? 'off' : 'auto'}
           onChange={v => onChange('isMultimodal', v === 'on' ? true : v === 'off' ? false : undefined)}
           options={[
             { value: 'auto', label: 'Auto (detect from model)' },
             { value: 'on', label: 'Force On' },
             { value: 'off', label: 'Force Off' },
           ]}
-          disabled={smeltActive}
+          disabled={smeltActive || detectedForceTextOnly}
         />
         {smeltActive && (
           <IncompatWarning text="VLM is disabled when Smelt Mode is active. Smelt forces text-only loading for partial expert support." />
         )}
-        {!smeltActive && config.isMultimodal === true && (
+        {detectedForceTextOnly && (
+          <IncompatWarning text="This model has media metadata, but vMLX is using the text runtime because its current VLM language path is not production-safe. Use an MXFP4 or JANGTQ/MXTQ variant for image/video input." />
+        )}
+        {!smeltActive && !detectedForceTextOnly && config.isMultimodal === true && (
           <InfoNote text="VLM mode forced ON — the MLLM scheduler handles image/video processing with full prefix cache, paged KV cache, and KV quantization support." />
         )}
-        {!smeltActive && config.isMultimodal === false && (
+        {!smeltActive && !detectedForceTextOnly && config.isMultimodal === false && (
           <InfoNote text="VLM mode is off only when the model is not auto-detected as multimodal. Detected VLM bundles launch with image/video support." />
         )}
         {/* Video sampling — only relevant for VL models that accept video_url.
             Qwen 3.6 / Qwen3.5-VL both have native video understanding via
             temporal position embeddings, so 2 fps × 8 frames is typical. */}
-        {config.isMultimodal !== false && (
+        {!detectedForceTextOnly && config.isMultimodal !== false && (
           <>
             <SliderField
               label="Video Frames/Second"

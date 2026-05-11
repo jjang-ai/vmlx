@@ -3923,28 +3923,28 @@ class TestJangVLMFallbacks:
         source = Path("vmlx_engine/utils/jang_loader.py").read_text()
 
         assert "VMLINUX_FORCE_VLM_LOADER" not in source
-        assert "Qwen3.5/3.6-VL hybrid SSM bundles must stay on the real VLM path" in source
-        assert "demoting the bundle" in source
+        assert "Qwen3.5/3.6-VL MXTQ/JANGTQ hybrid SSM bundles must stay on the real VLM" in source
+        assert "affine-JANG exception above is deliberately narrow" in source
 
     def test_text_only_vlm_fallbacks_mark_vision_unavailable(self):
         source = Path("vmlx_engine/utils/jang_loader.py").read_text()
         mistral_fallback = source[
             source.index('config.get("model_type") == "mistral3"'):
-            source.index("# Qwen3.5/3.6-VL hybrid SSM bundles", source.index('config.get("model_type") == "mistral3"'))
+            source.index("# Qwen3.5/3.6-VL MXTQ/JANGTQ hybrid SSM bundles", source.index('config.get("model_type") == "mistral3"'))
         ]
 
         assert 'globals()["_LAST_LOAD_VLM_FALLBACK"] = True' in mistral_fallback
         assert 'globals()["_LAST_LOAD_VLM_FALLBACK"] = False' in source
 
-    def test_affine_qwen_hybrid_jang_routes_multimodal(self, tmp_path):
+    def test_affine_qwen_hybrid_jang_routes_text_only(self, tmp_path):
         from vmlx_engine.api import utils
 
         model_dir = self._write_qwen_hybrid_fixture(tmp_path)
         utils._IS_MLLM_CACHE.clear()
 
-        assert utils.is_mllm_model(str(model_dir)) is True
+        assert utils.is_mllm_model(str(model_dir)) is False
 
-    def test_affine_qwen_hybrid_detection_normalizes_config_case_for_vlm(self, tmp_path):
+    def test_affine_qwen_hybrid_detection_normalizes_config_case_for_text_only(self, tmp_path):
         from vmlx_engine.api import utils
 
         model_dir = self._write_qwen_hybrid_fixture(
@@ -3954,15 +3954,15 @@ class TestJangVLMFallbacks:
         )
         utils._IS_MLLM_CACHE.clear()
 
-        assert utils.is_mllm_model(str(model_dir)) is True
+        assert utils.is_mllm_model(str(model_dir)) is False
 
-    def test_affine_qwen_hybrid_jang_keeps_forced_mllm_true(self, tmp_path):
+    def test_affine_qwen_hybrid_jang_overrides_forced_mllm(self, tmp_path):
         from vmlx_engine.api import utils
 
         model_dir = self._write_qwen_hybrid_fixture(tmp_path)
         utils._IS_MLLM_CACHE.clear()
 
-        assert utils.is_mllm_model(str(model_dir), force_mllm=True) is True
+        assert utils.is_mllm_model(str(model_dir), force_mllm=True) is False
 
     def test_mxtq_qwen_hybrid_jang_routes_multimodal(self, tmp_path):
         from vmlx_engine.api import utils
@@ -3972,13 +3972,10 @@ class TestJangVLMFallbacks:
 
         assert utils.is_mllm_model(str(model_dir)) is True
 
-    def test_qwen_vlm_loader_affine_uses_native_vlm_loader(self, tmp_path, monkeypatch):
-        """Qwen 3.6 affine-JANG is still a VL/video bundle; do not drop media."""
+    def test_qwen_vlm_loader_affine_delegates_to_text_loader(self, tmp_path, monkeypatch):
+        """Affine-JANG Qwen hybrid uses text loader until mlx_vlm M-RoPE is fixed."""
         from vmlx_engine.utils import jang_loader
         import mlx_vlm.utils as vlm_utils
-
-        class NativeVlmReached(RuntimeError):
-            pass
 
         model_dir = self._write_qwen_hybrid_fixture(tmp_path)
         config = json.loads((model_dir / "config.json").read_text())
@@ -3988,31 +3985,30 @@ class TestJangVLMFallbacks:
         monkeypatch.setattr(
             vlm_utils,
             "get_model_and_args",
-            lambda *, config: (_ for _ in ()).throw(NativeVlmReached()),
+            lambda *, config: pytest.fail("affine-JANG Qwen must not hit native VLM loader"),
         )
+        sentinel = object()
 
         monkeypatch.setattr(
             jang_loader,
             "_load_jang_v2",
-            lambda *args, **kwargs: pytest.fail("Qwen 3.6 VLM must not use text fallback"),
+            lambda *args, **kwargs: (sentinel, "tokenizer"),
         )
 
-        with pytest.raises(NativeVlmReached):
-            jang_loader._load_jang_v2_vlm(model_dir, jang_cfg)
-        assert jang_loader._LAST_LOAD_VLM_FALLBACK is False
+        model, tokenizer = jang_loader._load_jang_v2_vlm(model_dir, jang_cfg)
+        assert model is sentinel
+        assert tokenizer == "tokenizer"
+        assert jang_loader._LAST_LOAD_VLM_FALLBACK is True
 
     def test_qwen_vlm_loader_affine_native_path_normalizes_config_case(
         self,
         tmp_path,
         monkeypatch,
     ):
-        """The native loader path must match the same normalized Qwen
+        """The text fallback path must match the same normalized Qwen
         hybrid predicate as is_mllm_model()."""
         from vmlx_engine.utils import jang_loader
         import mlx_vlm.utils as vlm_utils
-
-        class NativeVlmReached(RuntimeError):
-            pass
 
         model_dir = self._write_qwen_hybrid_fixture(
             tmp_path,
@@ -4026,18 +4022,20 @@ class TestJangVLMFallbacks:
         monkeypatch.setattr(
             vlm_utils,
             "get_model_and_args",
-            lambda *, config: (_ for _ in ()).throw(NativeVlmReached()),
+            lambda *, config: pytest.fail("affine-JANG Qwen must not hit native VLM loader"),
         )
+        sentinel = object()
 
         monkeypatch.setattr(
             jang_loader,
             "_load_jang_v2",
-            lambda *args, **kwargs: pytest.fail("Qwen 3.6 VLM must not use text fallback"),
+            lambda *args, **kwargs: (sentinel, "tokenizer"),
         )
 
-        with pytest.raises(NativeVlmReached):
-            jang_loader._load_jang_v2_vlm(model_dir, jang_cfg)
-        assert jang_loader._LAST_LOAD_VLM_FALLBACK is False
+        model, tokenizer = jang_loader._load_jang_v2_vlm(model_dir, jang_cfg)
+        assert model is sentinel
+        assert tokenizer == "tokenizer"
+        assert jang_loader._LAST_LOAD_VLM_FALLBACK is True
 
     def test_qwen_vlm_loader_mxtq_stays_native_vlm(self, tmp_path, monkeypatch):
         """JANGTQ/MXTQ Qwen VLM must not be caught by the affine fallback."""

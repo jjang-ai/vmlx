@@ -1601,6 +1601,63 @@ def _load_jang_v2_vlm(
     except Exception as _qsi_err:
         logger.debug(f"quant_shape_inference (VLM): skipped ({_qsi_err})")
 
+    _tc = config.get("text_config") or {}
+    _qwen_types = {
+        "qwen3_5",
+        "qwen3_5_text",
+        "qwen3_5_moe",
+        "qwen3_vl",
+        "qwen3_vl_moe",
+    }
+    _is_qwen_hybrid = (
+        str(config.get("model_type") or "").lower() in _qwen_types
+        or str(_tc.get("model_type") or "").lower() in _qwen_types
+    )
+    _has_media = any(
+        config.get(key) is not None
+        for key in (
+            "vision_config",
+            "audio_config",
+            "video_config",
+            "image_token_id",
+            "image_token_index",
+            "video_token_id",
+            "video_token_index",
+        )
+    )
+    _quant = jang_cfg.get("quantization") or {}
+    _jang_markers = [
+        jang_cfg.get("weight_format"),
+        jang_cfg.get("format"),
+        _quant.get("weight_format"),
+        _quant.get("format"),
+        _quant.get("method"),
+        _quant.get("profile"),
+    ]
+    _is_mxtq = (
+        any(
+            "mxtq" in str(value or "").lower()
+            or "jangtq" in str(value or "").lower()
+            for value in _jang_markers
+        )
+        or "mxtq_bits" in jang_cfg
+        or "mxtq_bits" in _quant
+    )
+    if _is_qwen_hybrid and _has_media and not _is_mxtq:
+        logger.warning(
+            "  Qwen3.5/3.6 affine-JANG VLM is routed text-only: current "
+            "mlx_vlm qwen3_5 M-RoPE text path corrupts logits. MXTQ/JANGTQ "
+            "Qwen VLM remains on the native VLM loader. See "
+            "docs/AUDIT-QWEN-AFFINE-JANG-VLM.md."
+        )
+        globals()["_LAST_LOAD_VLM_FALLBACK"] = True
+        return _load_jang_v2(
+            path,
+            jang_cfg,
+            skip_eval=skip_eval,
+            filter_expert_keys=filter_expert_keys,
+        )
+
     # Mistral 4 VLM fallback: the outer config has model_type=mistral3 (the VLM
     # wrapper class name in HuggingFace) but text_config.model_type=mistral4
     # (the inner MLA language model). `get_model_and_args` picks mlx_vlm's
@@ -1616,7 +1673,6 @@ def _load_jang_v2_vlm(
     # coherent output. Cost: no image input for Mistral 4 until mlx_vlm adds
     # a VLM class. (Image input was already broken pre-rerouting — the class
     # mismatch meant weights were corrupt; no regression.)
-    _tc = config.get("text_config") or {}
     if config.get("model_type") == "mistral3" and _tc.get("model_type") == "mistral4":
         logger.warning(
             "  Mistral 4 VLM not supported by mlx_vlm (no mistral4 VLM class); "
@@ -1625,11 +1681,9 @@ def _load_jang_v2_vlm(
         globals()["_LAST_LOAD_VLM_FALLBACK"] = True
         return _load_jang_v2(path, jang_cfg, skip_eval=skip_eval, filter_expert_keys=filter_expert_keys)
 
-    # Qwen3.5/3.6-VL hybrid SSM bundles must stay on the real VLM path.
-    # They carry real vision/video metadata and need a callable VLM processor.
-    # Text-only fallback loses media support and lets attached images/videos get
-    # ignored, so loader failures must be fixed in the VLM path instead of
-    # demoting the bundle.
+    # Qwen3.5/3.6-VL MXTQ/JANGTQ hybrid SSM bundles must stay on the real VLM
+    # path. The affine-JANG exception above is deliberately narrow and exists
+    # only because the current mlx_vlm qwen3_5 text path corrupts logits.
 
     # Kimi K2.6 (model_type="kimi_k25") — route through
     # jang_tools.load_jangtq_kimi_vlm so the kimi_k25 → kimi_vl remap is

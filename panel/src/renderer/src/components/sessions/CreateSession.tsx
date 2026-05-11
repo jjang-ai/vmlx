@@ -31,6 +31,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
   const [detectedFamily, setDetectedFamily] = useState<string | undefined>()
   const [detectedIsTurboQuant, setDetectedIsTurboQuant] = useState<boolean>(false)
   const [detectedIsMultimodal, setDetectedIsMultimodal] = useState<boolean>(false)
+  const [detectedForceTextOnly, setDetectedForceTextOnly] = useState<boolean>(false)
   const [detectedMaxContext, setDetectedMaxContext] = useState<number | undefined>()
   const [launching, setLaunching] = useState(false)
   const [launchError, setLaunchError] = useState<string | null>(null)
@@ -75,6 +76,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
     else setDetectedFamily(undefined)
     setDetectedIsTurboQuant(!!detected?.isTurboQuant)
     setDetectedIsMultimodal(!!detected?.isMultimodal)
+    setDetectedForceTextOnly(!!detected?.forceTextOnly)
     if (detected?.maxContextLength) setDetectedMaxContext(detected.maxContextLength)
   }
 
@@ -164,10 +166,12 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
           setDetectedFamily(detected.family)
           setDetectedIsTurboQuant(!!detected.isTurboQuant)
           setDetectedIsMultimodal(!!detected.isMultimodal)
+          setDetectedForceTextOnly(!!detected.forceTextOnly)
         } else {
           setDetectedFamily(undefined)
           setDetectedIsTurboQuant(false)
           setDetectedIsMultimodal(false)
+          setDetectedForceTextOnly(false)
         }
         if (gen?.temperature != null) base.defaultTemperature = Math.round(gen.temperature * 100)
         if (gen?.topP != null) base.defaultTopP = Math.round(gen.topP * 100)
@@ -177,6 +181,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
         setDetectedFamily(undefined)
         setDetectedIsTurboQuant(false)
         setDetectedIsMultimodal(false)
+        setDetectedForceTextOnly(false)
       }
     }
     setConfig(base)
@@ -559,6 +564,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
                                 else setDetectedFamily(undefined)
                                 setDetectedIsTurboQuant(!!det?.isTurboQuant)
                                 setDetectedIsMultimodal(!!det?.isMultimodal)
+                                setDetectedForceTextOnly(!!det?.forceTextOnly)
                                 if (det?.maxContextLength) setDetectedMaxContext(det.maxContextLength)
                               } catch (_) { }
                               // Auto-detect image model
@@ -790,7 +796,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
             </p>
           </div>
         ) : (
-          <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedCacheType} detectedFamily={detectedFamily} detectedIsTurboQuant={detectedIsTurboQuant} detectedIsMultimodal={detectedIsMultimodal} detectedMaxContext={detectedMaxContext} />
+          <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedCacheType} detectedFamily={detectedFamily} detectedIsTurboQuant={detectedIsTurboQuant} detectedIsMultimodal={detectedIsMultimodal} detectedForceTextOnly={detectedForceTextOnly} detectedMaxContext={detectedMaxContext} />
         )}
 
         {/* Launch */}

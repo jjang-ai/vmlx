@@ -137,6 +137,7 @@ type DetectedConfig = {
     toolParser?: string
     reasoningParser?: string
     isMultimodal?: boolean
+    forceTextOnly?: boolean
     usePagedCache?: boolean
     enableAutoToolChoice?: boolean
     cacheType?: string
@@ -174,7 +175,7 @@ function buildCommandPreview(
     if (turboQuantActive && !topKOverrideBlocked && Number.isFinite(jangtqTopKOverride) && jangtqTopKOverride > 0) {
         parts.unshift(`JANGTQ_TOPK_OVERRIDE=${Math.floor(Math.min(64, Math.max(1, jangtqTopKOverride)))}`)
     }
-    const isVLM = !!detected?.isMultimodal || config.isMultimodal === true
+    const isVLM = detected?.forceTextOnly ? false : (!!detected?.isMultimodal || config.isMultimodal === true)
     const dsv4Active = detectedFamily === 'deepseek-v4'
     const zayaCcaActive = isZayaCcaFamily(detectedFamily)
 
@@ -448,6 +449,11 @@ describe('VLM Mode', () => {
 
     it('manual isMultimodal=false is respected when detection is not VLM', () => {
         const out = preview({ isMultimodal: false }, { isMultimodal: false })
+        expect(hasFlag(out, '--is-mllm')).toBe(false)
+    })
+
+    it('forceTextOnly detection wins over stale forced multimodal settings', () => {
+        const out = preview({ isMultimodal: true }, { isMultimodal: false, forceTextOnly: true })
         expect(hasFlag(out, '--is-mllm')).toBe(false)
     })
 })

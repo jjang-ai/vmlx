@@ -46,11 +46,11 @@ function topKOverrideBlockedByFamily(family?: string): boolean {
 function buildCommandPreview(
   modelPath: string,
   config: SessionConfig,
-  detected?: { toolParser?: string; reasoningParser?: string; isMultimodal?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; cacheType?: string; family?: string } | null
+  detected?: { toolParser?: string; reasoningParser?: string; isMultimodal?: boolean; forceTextOnly?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; cacheType?: string; family?: string } | null
 ): string {
   const parts = ['vmlx-engine serve', modelPath]
   const smeltActive = !!(config as any).smelt
-  const isVLM = smeltActive ? false
+  const isVLM = smeltActive || detected?.forceTextOnly ? false
     : detected?.isMultimodal ? true
       : config.isMultimodal === true ? true
         : config.isMultimodal === false ? false
@@ -284,7 +284,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
   const [restarting, setRestarting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [showPreview, setShowPreview] = useState(false)
-  const [detectedConfig, setDetectedConfig] = useState<{ toolParser?: string; reasoningParser?: string; cacheType?: string; isMultimodal?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; family?: string } | null>(null)
+  const [detectedConfig, setDetectedConfig] = useState<{ toolParser?: string; reasoningParser?: string; cacheType?: string; isMultimodal?: boolean; forceTextOnly?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; family?: string } | null>(null)
 
   useEffect(() => {
     const load = async () => {
@@ -427,8 +427,9 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         if (detected && detected.family !== 'unknown') {
           base.enableAutoToolChoice = detected.enableAutoToolChoice
           base.usePagedCache = detected.usePagedCache
-          // VLM models: set isMultimodal flag (all cache features now supported)
-          if (detected.isMultimodal) {
+          // VLM models: set isMultimodal flag unless this model has a
+          // runtime forceTextOnly policy (affine-JANG Qwen hybrid).
+          if (detected.isMultimodal && !detected.forceTextOnly) {
             base.isMultimodal = true
           }
         }
@@ -497,7 +498,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         )}
 
         {/* Config Form */}
-        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedConfig?.cacheType} detectedFamily={detectedConfig?.family} detectedIsTurboQuant={detectedConfig?.isTurboQuant} detectedIsMultimodal={detectedConfig?.isMultimodal} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} sessionId={sessionId} />
+        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedConfig?.cacheType} detectedFamily={detectedConfig?.family} detectedIsTurboQuant={detectedConfig?.isTurboQuant} detectedIsMultimodal={detectedConfig?.isMultimodal} detectedForceTextOnly={detectedConfig?.forceTextOnly} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} sessionId={sessionId} />
 
         {/* Command Preview */}
         <div className="mt-4">

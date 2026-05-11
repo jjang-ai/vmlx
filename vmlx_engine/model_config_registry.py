@@ -122,6 +122,68 @@ def _config_declares_media(config: Any) -> bool:
     return False
 
 
+def _is_mxtq_jang_config(jang_config: Any) -> bool:
+    if not isinstance(jang_config, dict):
+        return False
+    quant = jang_config.get("quantization") or {}
+    values = (
+        jang_config.get("weight_format"),
+        jang_config.get("format"),
+        quant.get("weight_format") if isinstance(quant, dict) else None,
+        quant.get("format") if isinstance(quant, dict) else None,
+        quant.get("method") if isinstance(quant, dict) else None,
+        quant.get("profile") if isinstance(quant, dict) else None,
+    )
+    lowered = [str(value or "").lower() for value in values]
+    if any("mxtq" in value or "jangtq" in value for value in lowered):
+        return True
+    return (
+        "mxtq_bits" in jang_config
+        or (isinstance(quant, dict) and "mxtq_bits" in quant)
+    )
+
+
+def _is_explicit_affine_jang_config(jang_config: Any) -> bool:
+    if not isinstance(jang_config, dict):
+        return False
+    quant = jang_config.get("quantization") or {}
+    values = (
+        jang_config.get("weight_format"),
+        jang_config.get("format"),
+        quant.get("weight_format") if isinstance(quant, dict) else None,
+        quant.get("format") if isinstance(quant, dict) else None,
+        quant.get("method") if isinstance(quant, dict) else None,
+        quant.get("profile") if isinstance(quant, dict) else None,
+    )
+    lowered = [str(value or "").lower() for value in values]
+    return any(
+        value in {"jang", "jang_v2", "affine", "jang-importance"}
+        or value.startswith("jang_")
+        for value in lowered
+    )
+
+
+def _is_affine_jang_qwen_hybrid_vlm(
+    model_config: dict[str, Any],
+    jang_config: Any,
+) -> bool:
+    if not isinstance(model_config, dict) or not isinstance(jang_config, dict):
+        return False
+    model_types = {
+        str(model_config.get("model_type") or "").lower(),
+        str((model_config.get("text_config") or {}).get("model_type") or "").lower(),
+    }
+    if not model_types.intersection(
+        {"qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_vl", "qwen3_vl_moe"}
+    ):
+        return False
+    if not _config_declares_media(model_config):
+        return False
+    if not _is_explicit_affine_jang_config(jang_config):
+        return False
+    return not _is_mxtq_jang_config(jang_config)
+
+
 def _with_linear_attention_cache_override(
     config: ModelConfig,
     model_config: dict[str, Any],
@@ -385,7 +447,13 @@ class ModelConfigRegistry:
                 updates["cache_type"] = ct
             if cst:
                 updates["cache_subtype"] = str(cst)
-            if mod == "vision" or (mod == "omni" and has_config_media):
+            if _is_affine_jang_qwen_hybrid_vlm(local_model_config, jcfg):
+                # Qwen3.6 affine-JANG carries real VL/video metadata, but the
+                # current mlx_vlm qwen3_5 language path corrupts text logits
+                # through the M-RoPE fallback. Keep registry in text-loader
+                # mode until docs/AUDIT-QWEN-AFFINE-JANG-VLM.md is resolved.
+                updates["is_mllm"] = False
+            elif mod == "vision" or (mod == "omni" and has_config_media):
                 # `omni` only becomes MLLM when config.json carries real
                 # media metadata. Some Nemotron-H text extracts keep stale
                 # Omni stamps or preprocessor_config.json sidecars but do not

@@ -897,11 +897,14 @@ export class SessionManager extends EventEmitter {
             }
           }
           // Refresh multimodal detection from disk. A detected VLM must win
-          // over stale saved `isMultimodal=false` from older sessions; otherwise
-          // the app launches text-only and strips media for Qwen/Pixtral/etc.
+          // over stale saved `isMultimodal=false` from older sessions, while a
+          // forceTextOnly policy must clear stale true rows. The latter is used
+          // for affine-JANG Qwen hybrid until its mlx_vlm M-RoPE path is fixed.
           // Smelt is handled later at launch time because it intentionally
           // forces text-only loading.
-          if (freshConfig.isMultimodal === true) {
+          if (freshConfig.forceTextOnly === true) {
+            config.isMultimodal = false
+          } else if (freshConfig.isMultimodal === true) {
             config.isMultimodal = true
           } else if (config.isMultimodal === undefined) {
             config.isMultimodal = freshConfig.isMultimodal
@@ -2184,7 +2187,7 @@ export class SessionManager extends EventEmitter {
     // avoids the edge case where a saved session has isMultimodal=true from
     // before smelt was turned on.
     const smeltActive = !!(config as any).smelt
-    const isVLM = smeltActive ? false
+    const isVLM = smeltActive || detected.forceTextOnly ? false
       : detected.isMultimodal ? true
         : config.isMultimodal === true ? true
           : config.isMultimodal === false ? false

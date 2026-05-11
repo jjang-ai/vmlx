@@ -29,6 +29,7 @@ declare global {
           usePagedCache: boolean;
           enableAutoToolChoice: boolean;
           isMultimodal: boolean;
+          forceTextOnly?: boolean;
           isTurboQuant?: boolean;
           description: string;
           maxContextLength?: number;
