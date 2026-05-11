@@ -1296,33 +1296,6 @@ def _generation_error_detail(exc: Exception, *, prefix: str = "Generation failed
     return f"{prefix}: {type(exc).__name__}: {exc}"
 
 
-def _zaya_jangtq2_thinking_blocked(model_key: str, family: str | None = None) -> bool:
-    fam = str(family or "").lower().replace("_", "-")
-    model_text = str(model_key or "")
-    name_l = model_text.lower()
-    if fam not in {"zaya", "zaya1-vl"} and "zaya" not in name_l:
-        return False
-    if "jangtq2" in name_l:
-        return True
-    try:
-        from pathlib import Path as _Path
-        import json as _json
-
-        jcfg_path = _Path(model_key) / "jang_config.json"
-        if not jcfg_path.is_file():
-            return False
-        jcfg = _json.loads(jcfg_path.read_text())
-        profile = str(jcfg.get("profile") or jcfg.get("quant_profile") or "").lower()
-        if profile == "jangtq2":
-            return True
-        bits = jcfg.get("mxtq_bits") or jcfg.get("quantization", {}).get("mxtq_bits")
-        if isinstance(bits, dict) and bits.get("routed_expert") == 2:
-            return True
-    except Exception:
-        return False
-    return False
-
-
 def _resolve_enable_thinking(
     request_value: bool | None,
     ct_kwargs: dict,
@@ -1360,12 +1333,10 @@ def _resolve_enable_thinking(
     if not _family or str(_family).lower() == "unknown":
         _family = str(model_key or "")
     _family_l = str(_family).lower()
-    if _zaya_jangtq2_thinking_blocked(model_key, _family_l):
-        # ZAYA/ZAYA1-VL JANGTQ2 is mechanically loadable, fast, and cache-correct,
-        # but live strict rows show its open-thinking rail degenerates into
-        # prompt-copy/repetition loops. Treat it as an experimental no-thinking
-        # quant tier even if stale app DB rows or raw API clients send
-        # enable_thinking=true.
+    if _mc is not None and getattr(_mc, "supports_thinking", None) is False:
+        # The registry is the compatibility boundary. If a model family or
+        # quant profile cannot safely expose a reasoning rail, stale UI state
+        # and raw API kwargs must not resurrect it.
         return False
     if request_value is not None:
         return request_value
@@ -1377,8 +1348,6 @@ def _resolve_enable_thinking(
         # architecture-specific incompatible row, so it stays off by default
         # only when tools are present; explicit request/template values above
         # still win.
-        return False
-    if _mc is not None and getattr(_mc, "supports_thinking", None) is False:
         return False
     if _default_enable_thinking is True:
         return True

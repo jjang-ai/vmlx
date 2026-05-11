@@ -2915,30 +2915,6 @@ class TestZayaCCACachePolicy:
 
         assert resolved is True
 
-    def test_zaya_jangtq2_forces_thinking_off_even_when_requested(self, tmp_path):
-        from vmlx_engine import server
-
-        model_dir = self._write_zaya_fixture(tmp_path)
-        jcfg_path = model_dir / "jang_config.json"
-        jcfg = json.loads(jcfg_path.read_text())
-        jcfg["profile"] = "JANGTQ2"
-        jcfg_path.write_text(json.dumps(jcfg))
-        old_default = server._default_enable_thinking
-        server._default_enable_thinking = None
-        try:
-            resolved = server._resolve_enable_thinking(
-                request_value=True,
-                ct_kwargs={"enable_thinking": True},
-                tools_present=False,
-                model_key=str(model_dir),
-                engine=None,
-                auto_detect=True,
-            )
-        finally:
-            server._default_enable_thinking = old_default
-
-        assert resolved is False
-
     def test_server_default_false_does_not_override_reasoning_on_runtime_default(self):
         from vmlx_engine import server
 
