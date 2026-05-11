@@ -236,11 +236,13 @@ class TestApplyChatTemplate:
 
 class TestMultimodalPromotion:
     def test_panel_chat_ts_promotes_on_attachment(self):
-        """panel/src/main/ipc/chat.ts must force chatIsMultimodal=true on attach."""
+        """panel/src/main/ipc/chat.ts must force chatIsMultimodal=true on media attach."""
         src = Path("/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/chat.ts").read_text()
         # Marker comments and the promotion line must both be present
         assert "mlxstudio#69" in src
-        assert "hasAttachments && !chatIsMultimodal" in src
+        assert "const hasMediaAttachments" in src
+        assert 'inferKind(a) !== "text"' in src
+        assert "hasMediaAttachments && !chatIsMultimodal" in src
         assert "chatIsMultimodal = true" in src
 
 
@@ -4070,7 +4072,9 @@ class TestMlxstudio69ImageAttachmentForceMultimodal:
     vision_config). The user's explicit click on "attach image" must win.
 
     Fix (shipped v1.3.49): in panel/src/main/ipc/chat.ts the send handler
-    forces `chatIsMultimodal = true` when `hasAttachments && !chatIsMultimodal`.
+    forces `chatIsMultimodal = true` when media attachments are present and
+    `!chatIsMultimodal`. Text-file attachments stay plain text context and do
+    not need multimodal routing.
 
     These guards pin the panel contract so a refactor can't drop it.
     """
@@ -4085,13 +4089,17 @@ class TestMlxstudio69ImageAttachmentForceMultimodal:
             "mlxstudio#69 anchor dropped — silent image-drop regression "
             "is now possible on sessions with stale isMultimodal=false"
         )
-        # The specific branch pattern
-        assert "hasAttachments && !chatIsMultimodal" in src, (
+        # The specific branch pattern. Keep the text-file exception pinned:
+        # image/video/audio attachments force multimodal routing, but text
+        # attachments are inlined into the prompt and must not force MLLM.
+        assert "const hasMediaAttachments" in src
+        assert 'inferKind(a) !== "text"' in src
+        assert "hasMediaAttachments && !chatIsMultimodal" in src, (
             "force-multimodal branch missing; attachments get silently "
             "dropped when session thinks it's text-only"
         )
         # The assignment must still set chatIsMultimodal = true
-        force_idx = src.find("hasAttachments && !chatIsMultimodal")
+        force_idx = src.find("hasMediaAttachments && !chatIsMultimodal")
         assert force_idx > 0
         # Within ~500 chars after the branch, chatIsMultimodal=true assignment
         window = src[force_idx:force_idx + 500]
