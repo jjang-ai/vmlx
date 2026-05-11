@@ -399,7 +399,9 @@ export function registerImageHandlers(): void {
       }
       if (params.negativePrompt) body.negative_prompt = params.negativePrompt
       if (seed != null) body.seed = seed
-      if (maskBase64) body.mask = maskBase64
+      if (maskBase64) {
+        body.mask = maskBase64.replace(/^data:image\/[\w+.-]+;base64,/, '')
+      }
 
       const controller = beginImageGeneration(sessionId)
       generationController = controller

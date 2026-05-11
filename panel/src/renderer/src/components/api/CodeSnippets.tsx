@@ -21,6 +21,12 @@ const OLLAMA_LANGS: { key: Lang; label: string }[] = [
   { key: 'python-requests', label: 'Python' },
 ]
 
+const IMAGE_LANGS: { key: Lang; label: string }[] = [
+  { key: 'curl', label: 'curl' },
+  { key: 'python-requests', label: 'Python' },
+  { key: 'javascript', label: 'JavaScript' },
+]
+
 interface CodeSnippetsProps {
   baseUrl: string
   apiKey: string | null
@@ -90,6 +96,153 @@ for await (const chunk of stream) {
   if (content) process.stdout.write(content);
 }
 console.log();`
+}
+
+// ── Image snippets ──
+
+function imageAuthHeader(apiKey: string | null): string {
+  return apiKey ? `\n  -H "Authorization: Bearer ${apiKey}" \\` : ''
+}
+
+function buildImageCurl(baseUrl: string, apiKey: string | null, model: string, isEdit: boolean): string {
+  if (isEdit) {
+    return `IMAGE_B64=$(base64 -i input.png | tr -d '\\n')
+MASK_B64=$(test -f mask.png && base64 -i mask.png | tr -d '\\n' || true)  # Optional, required by Fill/inpaint
+
+curl ${baseUrl}/v1/images/edits \\
+  -H "Content-Type: application/json" \\${imageAuthHeader(apiKey)}
+  -d "{
+    \\"model\\": \\"${model}\\",
+    \\"prompt\\": \\"Replace the selected area with polished metal\\",
+    \\"image\\": \\"$IMAGE_B64\\",
+    \\"mask\\": \\"$MASK_B64\\",
+    \\"size\\": \\"1024x1024\\",
+    \\"steps\\": 20,
+    \\"guidance\\": 4.0,
+    \\"response_format\\": \\"b64_json\\"
+  }"`
+  }
+  return `curl ${baseUrl}/v1/images/generations \\
+  -H "Content-Type: application/json" \\${imageAuthHeader(apiKey)}
+  -d '{
+    "model": "${model}",
+    "prompt": "A compact workstation on a walnut desk, product photo",
+    "size": "1024x1024",
+    "steps": 4,
+    "guidance": 0,
+    "response_format": "b64_json"
+  }'`
+}
+
+function buildImagePython(baseUrl: string, apiKey: string | null, model: string, isEdit: boolean): string {
+  const headers = apiKey
+    ? `headers = {"Authorization": "Bearer ${apiKey}"}`
+    : 'headers = {}'
+  if (isEdit) {
+    return `import base64
+import requests
+
+${headers}
+
+with open("input.png", "rb") as f:
+    image_b64 = base64.b64encode(f.read()).decode()
+
+payload = {
+    "model": "${model}",
+    "prompt": "Replace the selected area with polished metal",
+    "image": image_b64,
+    "size": "1024x1024",
+    "steps": 20,
+    "guidance": 4.0,
+    "response_format": "b64_json",
+}
+
+try:
+    with open("mask.png", "rb") as f:
+        payload["mask"] = base64.b64encode(f.read()).decode()
+except FileNotFoundError:
+    pass
+
+response = requests.post(
+    "${baseUrl}/v1/images/edits",
+    headers=headers,
+    json=payload,
+)
+response.raise_for_status()
+print(response.json()["data"][0]["b64_json"][:80])`
+  }
+  return `import requests
+
+${headers}
+
+response = requests.post(
+    "${baseUrl}/v1/images/generations",
+    headers=headers,
+    json={
+        "model": "${model}",
+        "prompt": "A compact workstation on a walnut desk, product photo",
+        "size": "1024x1024",
+        "steps": 4,
+        "guidance": 0,
+        "response_format": "b64_json",
+    },
+)
+response.raise_for_status()
+print(response.json()["data"][0]["b64_json"][:80])`
+}
+
+function buildImageJavaScript(baseUrl: string, apiKey: string | null, model: string, isEdit: boolean): string {
+  const authLine = apiKey ? `\n    Authorization: "Bearer ${apiKey}",` : ''
+  if (isEdit) {
+    return `import { readFile } from "node:fs/promises";
+
+const image = Buffer.from(await readFile("input.png")).toString("base64");
+const body = {
+  model: "${model}",
+  prompt: "Replace the selected area with polished metal",
+  image,
+  size: "1024x1024",
+  steps: 20,
+  guidance: 4.0,
+  response_format: "b64_json",
+};
+
+try {
+  body.mask = Buffer.from(await readFile("mask.png")).toString("base64");
+} catch (err) {
+  if (err?.code !== "ENOENT") throw err;
+}
+
+const response = await fetch("${baseUrl}/v1/images/edits", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",${authLine}
+  },
+  body: JSON.stringify(body),
+});
+
+if (!response.ok) throw new Error(await response.text());
+const data = await response.json();
+console.log(data.data[0].b64_json.slice(0, 80));`
+  }
+  return `const response = await fetch("${baseUrl}/v1/images/generations", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",${authLine}
+  },
+  body: JSON.stringify({
+    model: "${model}",
+    prompt: "A compact workstation on a walnut desk, product photo",
+    size: "1024x1024",
+    steps: 4,
+    guidance: 0,
+    response_format: "b64_json",
+  }),
+});
+
+if (!response.ok) throw new Error(await response.text());
+const data = await response.json();
+console.log(data.data[0].b64_json.slice(0, 80));`
 }
 
 // ── Anthropic snippets ──
@@ -205,6 +358,12 @@ const OLLAMA_BUILDERS: Record<string, (b: string, k: string | null, m: string) =
   'python-requests': buildOllamaPython,
 }
 
+const IMAGE_BUILDERS: Record<string, (b: string, k: string | null, m: string, e: boolean) => string> = {
+  'curl': buildImageCurl,
+  'python-requests': buildImagePython,
+  'javascript': buildImageJavaScript,
+}
+
 const FORMAT_LANGS: Record<ApiFormat, { key: Lang; label: string }[]> = {
   openai: OPENAI_LANGS,
   anthropic: ANTHROPIC_LANGS,
@@ -217,8 +376,8 @@ const FORMAT_BUILDERS: Record<ApiFormat, Record<string, (b: string, k: string | 
   ollama: OLLAMA_BUILDERS,
 }
 
-export function CodeSnippets({ baseUrl, apiKey, modelId, format = 'openai' }: CodeSnippetsProps) {
-  const availableLangs = FORMAT_LANGS[format]
+export function CodeSnippets({ baseUrl, apiKey, modelId, isImage = false, isEdit = false, format = 'openai' }: CodeSnippetsProps) {
+  const availableLangs = isImage ? IMAGE_LANGS : FORMAT_LANGS[format]
   const [lang, setLang] = useState<Lang>(availableLangs[0].key)
   const [copied, setCopied] = useState(false)
 
@@ -231,8 +390,14 @@ export function CodeSnippets({ baseUrl, apiKey, modelId, format = 'openai' }: Co
   const model = modelId || 'your-model-name'
   const builders = FORMAT_BUILDERS[format]
   const snippet = useMemo(
-    () => (builders[lang] || builders[availableLangs[0].key])(baseUrl, apiKey, model),
-    [lang, baseUrl, apiKey, model, format]
+    () => {
+      if (isImage) {
+        const imageBuilder = IMAGE_BUILDERS[lang] || IMAGE_BUILDERS[availableLangs[0].key]
+        return imageBuilder(baseUrl, apiKey, model, isEdit)
+      }
+      return (builders[lang] || builders[availableLangs[0].key])(baseUrl, apiKey, model)
+    },
+    [lang, baseUrl, apiKey, model, format, isImage, isEdit]
   )
 
   const handleCopy = () => {

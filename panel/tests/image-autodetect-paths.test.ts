@@ -15,6 +15,26 @@ const IMAGE_DOWNLOAD_EVENTS_TS = join(
   "image",
   "imageDownloadEvents.ts",
 );
+const CODE_SNIPPETS_TSX = join(
+  __dirname,
+  "..",
+  "src",
+  "renderer",
+  "src",
+  "components",
+  "api",
+  "CodeSnippets.tsx",
+);
+const API_DASHBOARD_TSX = join(
+  __dirname,
+  "..",
+  "src",
+  "renderer",
+  "src",
+  "components",
+  "api",
+  "ApiDashboard.tsx",
+);
 
 describe("image model autodetection path", () => {
   it("download availability check validates mflux dirs with the model encoder topology", () => {
@@ -107,5 +127,23 @@ describe("image model autodetection path", () => {
     expect(src).toContain("Registered existing downloaded image model");
     expect(src).toContain("resolveImageModelRepo(modelId, quantize)");
     expect(src).toContain("db.setImageModelPath(discovered.modelId, quantize || 0, discovered.localPath, discovered.repoId)");
+  });
+
+  it("image edit requests normalize painted mask data URLs before proxying", () => {
+    const src = readFileSync(IMAGE_TS, "utf-8");
+    expect(src).toContain("body.mask = maskBase64.replace");
+    expect(src).toContain("data:image");
+  });
+
+  it("API quick-start snippets switch to image generation/edit endpoints for image sessions", () => {
+    const snippets = readFileSync(CODE_SNIPPETS_TSX, "utf-8");
+    const dashboard = readFileSync(API_DASHBOARD_TSX, "utf-8");
+
+    expect(snippets).toContain("IMAGE_LANGS");
+    expect(snippets).toContain("/v1/images/generations");
+    expect(snippets).toContain("/v1/images/edits");
+    expect(snippets).toContain("mask.png");
+    expect(dashboard).toContain("firstModelIsImage");
+    expect(dashboard).toContain("isEdit={firstModelType === \"image-edit\"}");
   });
 });

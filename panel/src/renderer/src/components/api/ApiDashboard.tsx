@@ -85,6 +85,8 @@ export function ApiDashboard() {
   const firstModelName = hasModels
     ? getModelDisplayName(runningSessions[0])
     : "your-model-name";
+  const firstModelType = hasModels ? getModelType(runningSessions[0]) : "text";
+  const firstModelIsImage = firstModelType === "image-gen" || firstModelType === "image-edit";
 
   const handlePortSubmit = async () => {
     const port = parseInt(portInput, 10);
@@ -280,6 +282,8 @@ export function ApiDashboard() {
           baseUrl={gatewayUrl}
           apiKey={null}
           modelId={firstModelName}
+          isImage={firstModelIsImage}
+          isEdit={firstModelType === "image-edit"}
           format={format}
         />
 
