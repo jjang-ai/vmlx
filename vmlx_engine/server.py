@@ -2226,27 +2226,22 @@ async def check_metal_working_set_pressure(request: Request):
     system-RAM guard (mlxstudio#63) misses because RAM isn't exhausted
     but Metal's command-buffer cap is.
     """
-    if os.environ.get("VMLX_METAL_WS_GUARD", "1") == "0":
-        return
-    try:
-        threshold_pct = float(
-            os.environ.get("VMLX_METAL_WS_REJECT_PCT", "85")
-        )
-    except (TypeError, ValueError):
-        threshold_pct = 85.0
     try:
         import mlx.core as mx
     except ImportError:
         return
     try:
-        _device_info = getattr(mx, "device_info", None) or mx.metal.device_info
-        _get_active = (
-            getattr(mx, "get_active_memory", None) or mx.metal.get_active_memory
+        from vmlx_engine.utils.memory_limits import (
+            get_effective_metal_working_set_bytes,
+            get_metal_ws_guard_threshold,
+            is_metal_ws_guard_enabled,
         )
-        max_ws = _device_info().get("max_recommended_working_set_size", 0)
+        if not is_metal_ws_guard_enabled():
+            return
+        threshold_pct = get_metal_ws_guard_threshold(85.0)
+        active, max_ws = get_effective_metal_working_set_bytes(mx)
         if max_ws <= 0:
             return  # no limit exposed — skip
-        active = _get_active()
     except Exception:
         return
 
@@ -2277,6 +2272,7 @@ async def check_metal_working_set_pressure(request: Request):
             f"Retry after the GPU catches up, reduce concurrent load, "
             f"or try a smaller model / smaller quant. Tune via "
             f"VMLX_METAL_WS_REJECT_PCT (default 85), "
+            f"set VMLX_METAL_WS_MAX_GB to raise/lower the working-set ceiling, "
             f"disable via VMLX_METAL_WS_GUARD=0."
         ),
         headers={"Retry-After": "5"},

@@ -20,6 +20,7 @@ from typing import Any, Optional
 
 import mlx.core as mx
 import numpy as np
+from .memory_limits import get_effective_metal_working_set_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +166,7 @@ def _set_wired_limit_for_model(weight_files):
         target = total_bytes + headroom
         # Cap at OS max working set (sysctl iogpu.wired_limit_mb)
         try:
-            max_ws = mx.metal.device_info().get("max_recommended_working_set_size")
+            _, max_ws = get_effective_metal_working_set_bytes(mx)
             if max_ws and target > max_ws:
                 target = max_ws
         except Exception:

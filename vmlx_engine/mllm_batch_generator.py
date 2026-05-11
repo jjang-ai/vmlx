@@ -113,6 +113,10 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from .vision_embedding_cache import VisionEmbeddingCache
+from .utils.memory_limits import (
+    get_effective_metal_working_set_bytes,
+    get_metal_ws_guard_threshold,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -301,14 +305,16 @@ def _raise_if_image_prefill_exceeds_budget(
         guard_enabled = True
 
     try:
-        reject_pct = float(
-            os.environ.get(
-                "VMLX_VLM_IMAGE_PREFILL_REJECT_PCT",
-                os.environ.get("VMLX_METAL_WS_REJECT_PCT", "85"),
+        reject_pct = get_metal_ws_guard_threshold(
+            default=float(
+                os.environ.get(
+                    "VMLX_VLM_IMAGE_PREFILL_REJECT_PCT",
+                    os.environ.get("VMLX_METAL_WS_REJECT_PCT", "85"),
+                )
             )
         )
     except (TypeError, ValueError):
-        reject_pct = 85.0
+        reject_pct = get_metal_ws_guard_threshold(85.0)
     try:
         single_buffer_limit = int(
             float(os.environ.get("VMLX_VLM_IMAGE_PREFILL_BUFFER_GB", "8"))
@@ -317,15 +323,11 @@ def _raise_if_image_prefill_exceeds_budget(
     except (TypeError, ValueError):
         single_buffer_limit = 8 * 1024**3
 
-    active = 0
-    max_ws = 0
     try:
-        _device_info = getattr(mx, "device_info", None) or mx.metal.device_info
-        _get_active = getattr(mx, "get_active_memory", None) or mx.metal.get_active_memory
-        max_ws = int(_device_info().get("max_recommended_working_set_size", 0) or 0)
-        active = int(_get_active() or 0)
+        active, max_ws = get_effective_metal_working_set_bytes(mx)
     except Exception:
-        pass
+        active = 0
+        max_ws = 0
 
     decision = _vlm_image_prefill_budget(
         has_images=has_images,
@@ -1791,12 +1793,10 @@ class MLLMBatchGenerator:
         self._old_cache_limit = None
         if mx.metal.is_available():
             # Use non-deprecated API when available (MLX ≥ 0.25)
-            _device_info = getattr(mx, 'device_info', None) or mx.metal.device_info
             _set_cache = getattr(mx, 'set_cache_limit', None) or mx.metal.set_cache_limit
             if True:  # Always set Metal limits (smelt mode doesn't need special limits)
-                self._old_wired_limit = mx.set_wired_limit(
-                    _device_info()["max_recommended_working_set_size"]
-                )
+                active_mem, max_ws = get_effective_metal_working_set_bytes(mx)
+                self._old_wired_limit = mx.set_wired_limit(max_ws) if max_ws > 0 else None
                 # Set Metal allocator cache limit.
                 # mlxstudio#78: previously was a hard `max_ws * 0.25`, which
                 # on a 64GB M4 Max loading Gemma-4-31B (~41GB active) would
@@ -1811,13 +1811,12 @@ class MLLMBatchGenerator:
                 # while adapting on tight-memory systems where the model
                 # already consumed most of the budget.
                 try:
-                    max_ws = _device_info()["max_recommended_working_set_size"]
-                    _get_active = (
-                        getattr(mx, "get_active_memory", None)
-                        or mx.metal.get_active_memory
-                    )
-                    active = _get_active()
-                    free = max(0, max_ws - active)
+                    active = active_mem
+                    if active <= 0:
+                        active = (
+                            getattr(mx, "get_active_memory", None) or mx.metal.get_active_memory
+                        )()
+                    free = max(0, max_ws - active) if max_ws > 0 else 0
                     # Base policy: 25% of max_ws (unchanged semantics on
                     # big-headroom systems).
                     base_limit = int(max_ws * 0.25)
@@ -1829,16 +1828,17 @@ class MLLMBatchGenerator:
                     cache_limit = max(
                         512 * 1024 * 1024, min(base_limit, safety_limit)
                     )
-                    self._old_cache_limit = _set_cache(cache_limit)
-                    logger.info(
-                        f"Metal cache limit set to {cache_limit / (1024**3):.2f}GB "
-                        f"(max_ws={max_ws / (1024**3):.1f}GB, "
-                        f"active={active / (1024**3):.1f}GB, "
-                        f"free={free / (1024**3):.1f}GB; "
-                        f"base={base_limit / (1024**3):.2f}GB "
-                        f"safety={safety_limit / (1024**3):.2f}GB; "
-                        f"mlxstudio#78)"
-                    )
+                    if max_ws > 0:
+                        self._old_cache_limit = _set_cache(cache_limit)
+                        logger.info(
+                            f"Metal cache limit set to {cache_limit / (1024**3):.2f}GB "
+                            f"(max_ws={max_ws / (1024**3):.1f}GB, "
+                            f"active={active / (1024**3):.1f}GB, "
+                            f"free={free / (1024**3):.1f}GB; "
+                            f"base={base_limit / (1024**3):.2f}GB "
+                            f"safety={safety_limit / (1024**3):.2f}GB; "
+                            f"mlxstudio#78)"
+                        )
                     if safety_limit < base_limit:
                         logger.warning(
                             "Tight-memory configuration detected: model is "

@@ -2539,16 +2539,28 @@ class TestVmlx94MxMetalDeprecationCleanup:
     """
 
     def test_scheduler_memory_pressure_uses_fallback_pattern(self):
-        """Both sites must use `getattr(mx, 'X', None) or mx.metal.X`."""
+        """The memory-pressure guard must not hard-wire `mx.metal.*`.
+
+        This repo now routes the guard through shared helpers, so either direct
+        fallback pattern or helper-backed retrieval is acceptable.
+        """
         src = Path(
             "/private/tmp/vmlx-1.3.66-build/vmlx_engine/scheduler.py"
         ).read_text()
         # Memory-pressure guard lives in the admission loop
-        assert 'getattr(mx, "get_active_memory", None)' in src, (
-            "scheduler.py must use getattr fallback for get_active_memory"
+        assert (
+            'getattr(mx, "get_active_memory", None)' in src
+            or "get_effective_metal_working_set_bytes" in src
+        ), (
+            "scheduler.py must use top-level/compat fallback or helper-backed "
+            "metal stats lookup for get_active_memory"
         )
-        assert 'getattr(mx, "device_info", None)' in src, (
-            "scheduler.py must use getattr fallback for device_info"
+        assert (
+            'getattr(mx, "device_info", None)' in src
+            or "get_effective_metal_working_set_bytes" in src
+        ), (
+            "scheduler.py must use top-level/compat fallback or helper-backed "
+            "metal stats lookup for device_info"
         )
         # Anchor the issue
         assert "vmlx#94" in src
@@ -4887,19 +4899,19 @@ class TestVmlx94MxMetalDeprecation:
     mx.* and only fall back to mx.metal.* when the top-level isn't present."""
 
     def test_scheduler_uses_getattr_fallback(self):
-        """scheduler.py memory-pressure guard must use getattr fallback."""
+        """scheduler.py memory-pressure guard must prefer top-level mlx APIs."""
         src = Path(
             "/private/tmp/vmlx-1.3.66-build/vmlx_engine/scheduler.py"
         ).read_text()
-        # The two functions vmlx#94 flagged:
+        # The issue was bare mx.metal usage; helper-based lookup is acceptable.
         assert (
-            "getattr(mx, \"get_active_memory\", None) or mx.metal.get_active_memory"
-            in src
-        ), "scheduler get_active_memory must use getattr fallback"
+            'getattr(mx, "get_active_memory", None)' in src
+            or "get_effective_metal_working_set_bytes" in src
+        ), "scheduler get_active_memory must use getattr fallback or helper-backed lookup"
         assert (
-            "getattr(mx, \"device_info\", None) or mx.metal.device_info"
-            in src
-        ), "scheduler device_info must use getattr fallback"
+            'getattr(mx, "device_info", None)' in src
+            or "get_effective_metal_working_set_bytes" in src
+        ), "scheduler device_info must use getattr fallback or helper-backed lookup"
 
     def test_no_bare_mx_metal_outside_hasattr_guards(self):
         """Every bare `mx.metal.<fn>(` call must be inside a hasattr(mx, ...)

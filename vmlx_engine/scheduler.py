@@ -54,6 +54,10 @@ from .utils.head_dim_detection import (
     detect_cache_head_dims,
 )
 from .utils.ssm_companion_disk_store import SSMCompanionDiskStore
+from .utils.memory_limits import (
+    get_effective_metal_working_set_bytes,
+    get_metal_ws_guard_threshold,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -4712,19 +4716,16 @@ class Scheduler:
                 import mlx.core as mx
 
                 # vmlx#94: prefer mx.* top-level APIs, fall back to mx.metal.*
-                # for pre-0.31 MLX builds. Same pattern used in server.py.
-                _get_active = getattr(mx, "get_active_memory", None) or mx.metal.get_active_memory
-                _device_info = getattr(mx, "device_info", None) or mx.metal.device_info
-
-                active_mem = _get_active()
-                if active_mem > 0 and len(self.running) > 0:
-                    max_mem = _device_info().get(
-                        "max_recommended_working_set_size", 0
-                    )
-                    if max_mem > 0 and active_mem / max_mem > 0.85:
+                active_mem, max_mem = get_effective_metal_working_set_bytes(mx)
+                guard_threshold = get_metal_ws_guard_threshold(85.0)
+                if max_mem > 0 and active_mem > 0 and len(self.running) > 0:
+                    if active_mem / max_mem * 100.0 >= guard_threshold:
                         logger.debug(
-                            f"Memory pressure ({active_mem / 1e9:.1f}GB / {max_mem / 1e9:.1f}GB = "
-                            f"{active_mem / max_mem:.0%}), deferring new request admission"
+                            "Memory pressure (%.1fGB / %.1fGB = %.0f%%), "
+                            "deferring new request admission",
+                            active_mem / 1e9,
+                            max_mem / 1e9,
+                            active_mem / max_mem * 100.0,
                         )
                         break
             except Exception:
