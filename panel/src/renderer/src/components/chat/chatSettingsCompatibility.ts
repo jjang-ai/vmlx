@@ -11,6 +11,7 @@ export interface ChatSettingsCompatibilityInput {
   overrides: ChatSettingsCompatibilityOverrides
   reasoningParser?: string
   toolParser?: string
+  detectedFamily?: string
 }
 
 function basename(path?: string): string {
@@ -23,12 +24,23 @@ function samePath(a?: string, b?: string): boolean {
   return a.replace(/\/+$/, '') === b.replace(/\/+$/, '')
 }
 
-function parserUsesEffortLevels(parser?: string): boolean {
+function parserUsesEffortLevels(parser?: string, detectedFamily?: string): boolean {
+  if (detectedFamily === 'hy3') return true
   return parser === 'openai_gptoss' || parser === 'mistral'
 }
 
+function parserAcceptsEffort(effort: string, parser?: string, detectedFamily?: string): boolean {
+  if (detectedFamily === 'hy3') {
+    return effort === 'low' || effort === 'high'
+  }
+  if (parser === 'mistral') {
+    return effort === 'high'
+  }
+  return true
+}
+
 export function buildChatSettingsCompatibilityWarnings(input: ChatSettingsCompatibilityInput): string[] {
-  const { messageCount, savedChatModelPath, currentModelPath, overrides, reasoningParser, toolParser } = input
+  const { messageCount, savedChatModelPath, currentModelPath, overrides, reasoningParser, toolParser, detectedFamily } = input
   if (messageCount <= 0) return []
 
   const warnings: string[] = []
@@ -48,9 +60,10 @@ export function buildChatSettingsCompatibilityWarnings(input: ChatSettingsCompat
       warnings.push(
         `Saved reasoning effort "${overrides.reasoningEffort}" cannot take effect because this model has no detected reasoning parser.`,
       )
-    } else if (reasoningParser === 'mistral' && overrides.reasoningEffort !== 'high') {
-      warnings.push(`Saved reasoning effort "${overrides.reasoningEffort}" is not supported by Mistral. Use Auto or High.`)
-    } else if (!parserUsesEffortLevels(reasoningParser)) {
+    } else if (!parserAcceptsEffort(overrides.reasoningEffort, reasoningParser, detectedFamily)) {
+      const modelName = detectedFamily === 'hy3' ? 'Hy3' : reasoningParser === 'mistral' ? 'Mistral' : reasoningParser
+      warnings.push(`Saved reasoning effort "${overrides.reasoningEffort}" is not supported by ${modelName}. Use Auto or High.`)
+    } else if (!parserUsesEffortLevels(reasoningParser, detectedFamily)) {
       warnings.push(`Saved reasoning effort "${overrides.reasoningEffort}" is not used by ${reasoningParser}. Reset the chat setting or switch to Auto.`)
     }
   }

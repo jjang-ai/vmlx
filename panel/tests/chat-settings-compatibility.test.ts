@@ -1,3 +1,4 @@
+import { readFileSync } from 'fs'
 import { describe, expect, it } from 'vitest'
 import {
   buildChatSettingsCompatibilityWarnings,
@@ -44,6 +45,14 @@ describe('chat settings cross-family compatibility warnings', () => {
     })).toContain('Saved reasoning effort "medium" is not used by qwen3. Reset the chat setting or switch to Auto.')
   })
 
+  it('allows Hy3 low/high effort even though it reuses the qwen3 text parser', () => {
+    expect(warnings({
+      detectedFamily: 'hy3',
+      reasoningParser: 'qwen3',
+      overrides: { reasoningEffort: 'low' },
+    })).toEqual([])
+  })
+
   it('warns when Mistral carries a non-high effort from another model family', () => {
     expect(warnings({
       reasoningParser: 'mistral',
@@ -51,10 +60,44 @@ describe('chat settings cross-family compatibility warnings', () => {
     })).toContain('Saved reasoning effort "medium" is not supported by Mistral. Use Auto or High.')
   })
 
+  it('allows Hy3 low/high reasoning effort but warns on medium', () => {
+    expect(warnings({
+      detectedFamily: 'hy3',
+      reasoningParser: 'qwen3',
+      overrides: { reasoningEffort: 'low' },
+    })).toEqual([])
+    expect(warnings({
+      detectedFamily: 'hy3',
+      reasoningParser: 'qwen3',
+      overrides: { reasoningEffort: 'high' },
+    })).toEqual([])
+    expect(warnings({
+      detectedFamily: 'hy3',
+      reasoningParser: 'qwen3',
+      overrides: { reasoningEffort: 'medium' },
+    })).toContain('Saved reasoning effort "medium" is not supported by Hy3. Use Auto or High.')
+  })
+
   it('warns when built-in tools are enabled without a detected tool parser', () => {
     expect(warnings({
       toolParser: undefined,
       overrides: { builtinToolsEnabled: true },
     })).toContain('Built-in tools are enabled, but this model has no detected tool parser. Tool calls may not round-trip.')
+  })
+
+  it('disables Thinking buttons when no reasoning parser is detected', () => {
+    const source = readFileSync('src/renderer/src/components/chat/ChatSettings.tsx', 'utf8')
+
+    expect(source).toContain("const thinkingSupported = detectedFamily === 'deepseek-v4' || !!reasoningParser")
+    expect(source).toContain("const supportsReasoningEffort = detectedFamily === 'hy3' || reasoningParser === 'openai_gptoss' || reasoningParser === 'mistral'")
+    expect(source).toContain('const displayedEnableThinking = thinkingSupported ? overrides.enableThinking : undefined')
+    expect(source).toContain('disabled={!thinkingSupported}')
+  })
+
+  it('shows Hy3 low/high effort controls without exposing medium', () => {
+    const source = readFileSync('src/renderer/src/components/chat/ChatSettings.tsx', 'utf8')
+
+    expect(source).toContain("detectedFamily === 'hy3' || reasoningParser === 'openai_gptoss' || reasoningParser === 'mistral'")
+    expect(source).toContain("const showMediumEffort = reasoningParser !== 'mistral' && detectedFamily !== 'hy3'")
   })
 })

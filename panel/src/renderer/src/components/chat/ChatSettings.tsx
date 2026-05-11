@@ -74,6 +74,12 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   const [messageCount, setMessageCount] = useState(0)
   const isRemote = session.type === 'remote'
   const effectiveWireApi = overrides.wireApi ?? (isRemote ? 'completions' : 'responses')
+  const thinkingSupported = detectedFamily === 'deepseek-v4' || !!reasoningParser
+  const displayedEnableThinking = thinkingSupported ? overrides.enableThinking : undefined
+  const thinkingDisabledClass = thinkingSupported ? '' : ' opacity-50 cursor-not-allowed'
+  const supportsReasoningEffort = detectedFamily === 'hy3' || reasoningParser === 'openai_gptoss' || reasoningParser === 'mistral'
+  const showLowEffort = reasoningParser !== 'mistral'
+  const showMediumEffort = reasoningParser !== 'mistral' && detectedFamily !== 'hy3'
 
   const loadProfiles = useCallback(() => {
     window.api.chat.getProfiles().then((p: ChatProfile[]) => setProfiles(p))
@@ -243,6 +249,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
     overrides,
     reasoningParser,
     toolParser: detectedToolParser,
+    detectedFamily,
   })
 
   return (
@@ -461,32 +468,35 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
               ) : (
                 <div className="flex gap-1 bg-background rounded border border-border p-0.5">
                   <button
+                    disabled={!thinkingSupported}
                     onClick={() => update('enableThinking', undefined)}
                     className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
-                      overrides.enableThinking == null
+                      displayedEnableThinking == null
                         ? 'bg-primary text-primary-foreground'
-                        : 'hover:bg-accent text-muted-foreground'
-                    }`}
+                        : thinkingSupported ? 'hover:bg-accent text-muted-foreground' : 'text-muted-foreground opacity-50 cursor-not-allowed'
+                    }${thinkingDisabledClass}`}
                   >
                     {t('chat.settings.thinkingAuto')}
                   </button>
                   <button
+                    disabled={!thinkingSupported}
                     onClick={() => update('enableThinking', true)}
                     className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
-                      overrides.enableThinking === true
+                      displayedEnableThinking === true
                         ? 'bg-primary text-primary-foreground'
-                        : 'hover:bg-accent text-muted-foreground'
-                    }`}
+                        : thinkingSupported ? 'hover:bg-accent text-muted-foreground' : 'text-muted-foreground opacity-50 cursor-not-allowed'
+                    }${thinkingDisabledClass}`}
                   >
                     {t('chat.settings.thinkingOn')}
                   </button>
                   <button
+                    disabled={!thinkingSupported}
                     onClick={() => update('enableThinking', false)}
                     className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
-                      overrides.enableThinking === false
+                      displayedEnableThinking === false
                         ? 'bg-primary text-primary-foreground'
-                        : 'hover:bg-accent text-muted-foreground'
-                    }`}
+                        : thinkingSupported ? 'hover:bg-accent text-muted-foreground' : 'text-muted-foreground opacity-50 cursor-not-allowed'
+                    }${thinkingDisabledClass}`}
                   >
                     {t('chat.settings.thinkingOff')}
                   </button>
@@ -495,7 +505,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
               <p className="text-xs text-muted-foreground mt-1.5">
                 {t('chat.settings.thinkingHelp')}
               </p>
-              {detectedFamily !== 'deepseek-v4' && overrides.enableThinking !== false && (reasoningParser === 'openai_gptoss' || reasoningParser === 'mistral') && (
+              {detectedFamily !== 'deepseek-v4' && overrides.enableThinking !== false && supportsReasoningEffort && (
                 <div className="mt-3">
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-xs text-muted-foreground">{t('chat.settings.reasoningEffort')}</span>
@@ -511,7 +521,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
                     >
                       Auto
                     </button>
-                    {reasoningParser !== 'mistral' && (
+                    {showLowEffort && (
                       <>
                         <button
                           onClick={() => update('reasoningEffort', 'low')}
@@ -523,16 +533,18 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
                         >
                           Low
                         </button>
-                        <button
-                          onClick={() => update('reasoningEffort', 'medium')}
-                          className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
-                            overrides.reasoningEffort === 'medium'
-                              ? 'bg-primary text-primary-foreground'
-                              : 'hover:bg-accent text-muted-foreground'
-                          }`}
-                        >
-                          Medium
-                        </button>
+                        {showMediumEffort && (
+                          <button
+                            onClick={() => update('reasoningEffort', 'medium')}
+                            className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
+                              overrides.reasoningEffort === 'medium'
+                                ? 'bg-primary text-primary-foreground'
+                                : 'hover:bg-accent text-muted-foreground'
+                            }`}
+                          >
+                            Medium
+                          </button>
+                        )}
                       </>
                     )}
                     <button
