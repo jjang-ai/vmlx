@@ -2429,10 +2429,11 @@ class MLLMBatchGenerator:
     ) -> bool:
         """Return True when token-only prefix caches are unsafe for request.
 
-        Media embeddings depend on the image/video payload, not just the text
+        Media embeddings depend on the image/video/audio payload, not just text
         token ids. If a request carries media inputs, processed pixel values, or
-        media placeholder token ids, every token-only cache tier must be skipped.
-        Text-only follow-up turns remain cacheable.
+        media placeholder token ids from current or historical turns, every
+        token-prefix cache tier must be skipped. Only prompts whose serialized
+        tokens are pure text remain eligible for token-prefix reuse.
         """
         if getattr(request, "images", None) or getattr(request, "videos", None):
             return True

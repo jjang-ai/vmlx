@@ -1,6 +1,11 @@
 import { useState, useEffect } from 'react'
 import { Zap, Sparkles, Gauge, FolderOpen, Play, Download, AlertCircle, CheckCircle, Loader2, Pencil } from 'lucide-react'
 import { IMAGE_MODELS } from '../../../../shared/imageModels'
+import {
+  isImageDownloadEventForActive,
+  type ActiveImageDownload,
+  type ImageDownloadState,
+} from './imageDownloadEvents'
 
 // Map model IDs to icons (icons are React components, can't live in the shared registry)
 const MODEL_ICONS: Record<string, typeof Zap> = {
@@ -34,8 +39,6 @@ interface ImageModelPickerProps {
   onSelect: (modelId: string, quantize?: number, category?: 'generate' | 'edit', serverSettings?: ImageServerSettings) => void
 }
 
-type DownloadState = 'idle' | 'checking' | 'downloading' | 'ready' | 'error'
-
 export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
   const [selectedModel, setSelectedModel] = useState<string | null>(null)
   const [selectedQuantize, setSelectedQuantize] = useState<number>(4)
@@ -51,17 +54,13 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
   const [serverLogLevel, setServerLogLevel] = useState('INFO')
 
   // Download state
-  const [downloadState, setDownloadState] = useState<DownloadState>('idle')
+  const [downloadState, setDownloadState] = useState<ImageDownloadState>('idle')
   const [downloadProgress, setDownloadProgress] = useState<any>(null)
   const [downloadError, setDownloadError] = useState<string | null>(null)
   const [modelAvailability, setModelAvailability] = useState<Record<string, boolean>>({})
   const [modelMissing, setModelMissing] = useState<Record<string, string[]>>({})
   const [hasHfToken, setHasHfToken] = useState(false)
-  const [activeDownload, setActiveDownload] = useState<{
-    jobId: string
-    model: string
-    quantize: number
-  } | null>(null)
+  const [activeDownload, setActiveDownload] = useState<ActiveImageDownload | null>(null)
 
   // Check HF token and in-progress downloads on mount
   useEffect(() => {
@@ -106,13 +105,8 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
 
   // Listen for download progress
   useEffect(() => {
-    const isActiveDownloadEvent = (data: any) => {
-      if (!activeDownload) return downloadState === 'downloading'
-      if (data?.jobId && data.jobId !== activeDownload.jobId) return false
-      if (data?.imageModelName != null && data.imageModelName !== activeDownload.model) return false
-      if (data?.imageQuantize != null && Number(data.imageQuantize) !== activeDownload.quantize) return false
-      return true
-    }
+    const isActiveDownloadEvent = (data: any) =>
+      isImageDownloadEventForActive(data, activeDownload, downloadState)
     const activeModel = activeDownload?.model ?? selectedModel
     const activeQuantize = activeDownload?.quantize ?? selectedQuantize
     const unsubProgress = window.api.models.onDownloadProgress((data: any) => {
@@ -152,6 +146,7 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
             setDownloadError((err as Error).message)
             setDownloadState('error')
             setDownloadProgress(null)
+            setActiveDownload(null)
           })
         } else if (data.status === 'cancelled') {
           setDownloadProgress(null)

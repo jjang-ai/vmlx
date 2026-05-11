@@ -1,9 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { isImageDownloadEventForActive } from "../src/renderer/src/components/image/imageDownloadEvents";
 
 const MODELS_TS = join(__dirname, "..", "src", "main", "ipc", "models.ts");
 const IMAGE_TS = join(__dirname, "..", "src", "main", "ipc", "image.ts");
+const IMAGE_DOWNLOAD_EVENTS_TS = join(
+  __dirname,
+  "..",
+  "src",
+  "renderer",
+  "src",
+  "components",
+  "image",
+  "imageDownloadEvents.ts",
+);
 
 describe("image model autodetection path", () => {
   it("download availability check validates mflux dirs with the model encoder topology", () => {
@@ -47,11 +58,40 @@ describe("image model autodetection path", () => {
       ),
       "utf-8",
     );
+    const eventSrc = readFileSync(IMAGE_DOWNLOAD_EVENTS_TS, "utf-8");
     expect(src).toContain("activeDownload");
     expect(src).toContain("isActiveDownloadEvent");
-    expect(src).toContain("data.jobId !== activeDownload.jobId");
-    expect(src).toContain("data.imageModelName !== activeDownload.model");
-    expect(src).toContain("Number(data.imageQuantize) !== activeDownload.quantize");
+    expect(eventSrc).toContain("data.jobId !== activeDownload.jobId");
+    expect(eventSrc).toContain("data.imageModelName !== activeDownload.model");
+    expect(eventSrc).toContain("Number(data.imageQuantize) !== activeDownload.quantize");
+    expect(src).toContain("setActiveDownload(null)");
+  });
+
+  it("image download event matching is scoped to the active job identity", () => {
+    const active = { jobId: "job-a", model: "schnell", quantize: 4 };
+
+    expect(
+      isImageDownloadEventForActive(
+        { jobId: "job-a", imageModelName: "schnell", imageQuantize: 4 },
+        active,
+        "downloading",
+      ),
+    ).toBe(true);
+    expect(
+      isImageDownloadEventForActive(
+        { jobId: "job-b", imageModelName: "schnell", imageQuantize: 4 },
+        active,
+        "downloading",
+      ),
+    ).toBe(false);
+    expect(
+      isImageDownloadEventForActive(
+        { jobId: "job-a", imageModelName: "z-image-turbo", imageQuantize: 4 },
+        active,
+        "downloading",
+      ),
+    ).toBe(false);
+    expect(isImageDownloadEventForActive({ jobId: "job-a" }, null, "idle")).toBe(false);
   });
 
   it("download availability check registers manually downloaded registry repos from disk", () => {

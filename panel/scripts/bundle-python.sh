@@ -78,6 +78,11 @@ echo "==> Installing dependencies..."
   "timm>=1.0.20" \
   "einops>=0.8.0"  # Kimi K2.6 tokenizer + Nemotron-Omni RADIO/ViT deps
 
+PYTHON_BIN="$BUNDLE_DIR/python/bin/python3.12"
+if [ -f "$PYTHON_BIN" ]; then
+  chmod +x "$PYTHON_BIN"
+  ln -sf python3.12 "$PYTHON"
+fi
 if [ ! -x "$PYTHON" ]; then
   echo "ERROR: bundled Python executable disappeared after dependency install: $PYTHON" >&2
   find "$BUNDLE_DIR/python/bin" -maxdepth 1 \( -name 'python*' -o -name 'pip*' \) -ls >&2 || true

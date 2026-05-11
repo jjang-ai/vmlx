@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
+import {
+  beginImageGeneration,
+  classifyImageGenerationError,
+  clearImageGenerationAfterLocalAbort,
+  finishImageGeneration,
+  getImageGenerationStatus,
+  markImageGenerationAbort,
+  resetImageGenerationStateForTests,
+} from "../src/main/ipc/imageGenerationState";
 
 const IMAGE_TS = join(__dirname, "..", "src", "main", "ipc", "image.ts");
 const IMAGE_TAB_TSX = join(
@@ -13,17 +22,53 @@ const IMAGE_TAB_TSX = join(
   "image",
   "ImageTab.tsx",
 );
+const IMAGE_GENERATION_STATE_TS = join(
+  __dirname,
+  "..",
+  "src",
+  "main",
+  "ipc",
+  "imageGenerationState.ts",
+);
 const PRELOAD_TS = join(__dirname, "..", "src", "preload", "index.ts");
 const ENV_D_TS = join(__dirname, "..", "src", "env.d.ts");
 
 describe("image generation in-flight state survives tab switches", () => {
+  it("classifies cancel per request without clearing a newer generation", () => {
+    resetImageGenerationStateForTests();
+
+    const controllerA = new AbortController();
+    beginImageGeneration("session-a", controllerA);
+    markImageGenerationAbort(controllerA, "cancel");
+    clearImageGenerationAfterLocalAbort(controllerA);
+
+    const controllerB = new AbortController();
+    beginImageGeneration("session-b", controllerB);
+
+    expect(
+      classifyImageGenerationError(
+        new Error("ImageGenerationAborted"),
+        controllerA,
+      ),
+    ).toBe("Image generation cancelled.");
+
+    finishImageGeneration(controllerA);
+    expect(getImageGenerationStatus()).toMatchObject({
+      generating: true,
+      sessionId: "session-b",
+    });
+
+    finishImageGeneration(controllerB);
+    expect(getImageGenerationStatus()).toMatchObject({
+      generating: false,
+      sessionId: "session-b",
+    });
+  });
+
   it("main process status includes the active or last generation session id", () => {
     const src = readFileSync(IMAGE_TS, "utf-8");
-    expect(src).toContain("let activeGenerationSessionId: string | null = null");
-    expect(src).toContain("let lastGenerationSessionId: string | null = null");
-    expect(src).toMatch(/activeGenerationSessionId\s*=\s*sessionId/);
-    expect(src).toMatch(/lastGenerationSessionId\s*=\s*sessionId/);
-    expect(src).toMatch(/sessionId:\s*activeGenerationSessionId\s*\|\|\s*lastGenerationSessionId/);
+    expect(src).toContain("beginImageGeneration(sessionId)");
+    expect(src).toContain("getImageGenerationStatus()");
   });
 
   it("renderer polls in-flight image status until the detached generation finishes", () => {
@@ -58,20 +103,22 @@ describe("image generation in-flight state survives tab switches", () => {
 
   it("image requests disable connection reuse and normalize reset-like socket errors", () => {
     const src = readFileSync(IMAGE_TS, "utf-8");
+    const stateSrc = readFileSync(IMAGE_GENERATION_STATE_TS, "utf-8");
     expect(src.match(/agent:\s*false/g)?.length).toBeGreaterThanOrEqual(2);
-    expect(src).toContain("Image server connection lost");
-    expect(src).toContain("socket hang up");
-    expect(src).toContain("ECONNRESET");
+    expect(stateSrc).toContain("Image server connection lost");
+    expect(stateSrc).toContain("socket hang up");
+    expect(stateSrc).toContain("ECONNRESET");
   });
 
   it("image cancel is distinguished from server reset and sends backend cancel", () => {
     const src = readFileSync(IMAGE_TS, "utf-8");
-    expect(src).toContain("activeGenerationAbortReason = 'cancel'");
+    const stateSrc = readFileSync(IMAGE_GENERATION_STATE_TS, "utf-8");
+    expect(src).toContain('markImageGenerationAbort(controller, "cancel")');
     expect(src).toContain("requestImageServerCancel()");
     expect(src).toContain("/v1/images/cancel");
-    expect(src).toContain("Image generation cancelled.");
-    expect(src).toContain("clearActiveImageGenerationAfterLocalAbort");
-    expect(src).not.toContain("aborted/i.test(msg)");
+    expect(stateSrc).toContain("Image generation cancelled.");
+    expect(src).toContain("clearImageGenerationAfterLocalAbort");
+    expect(stateSrc).not.toContain("aborted/i.test(msg)");
   });
 
   it("preload and renderer types expose image generation session ids", () => {

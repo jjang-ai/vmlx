@@ -158,7 +158,11 @@ echo "==> Building app..."
 npm run build
 
 echo "==> Packaging for macOS..."
-npx electron-builder --mac --dir
+# This is the local smoke-test installer. Do not let electron-builder
+# auto-discover Developer ID identities here; notarized release packaging is a
+# separate pipeline. The final app seal below uses ad-hoc signing by default
+# unless VMLX_INSTALL_CODESIGN_IDENTITY is explicitly set.
+CSC_IDENTITY_AUTO_DISCOVERY="${CSC_IDENTITY_AUTO_DISCOVERY:-false}" npx electron-builder --mac --dir
 
 # Find the built .app in release/ — prefer mac-arm64 over mas (sandboxed)
 APP_PATH=$(find release/mac-arm64 -name "$APP_NAME" -type d -maxdepth 2 2>/dev/null | head -1)
