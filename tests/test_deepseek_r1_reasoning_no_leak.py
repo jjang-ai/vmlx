@@ -3,9 +3,9 @@
 
 Issue: per `docs/internal/AUDIT_2026_05_10_PARSER_NO_LEAK_COVERAGE.md` Finding R1,
 the DeepSeek-R1 reasoning parser had no explicit no-leak test. It binds to 6
-families: deepseek_v4, kimi_k25, ling, nemotron / nemotron_h, glm5,
+families: deepseek_v4, kimi_k25, nemotron / nemotron_h, glm5,
 phi4_reasoning. A regression that left `<think>` or `</think>` in the visible
-content would silently affect all 6.
+content would silently affect all covered families.
 
 DeepSeek-R1 is more lenient than Qwen3:
   - Implicit start: model may emit reasoning without an opening `<think>`
@@ -111,7 +111,12 @@ class TestDeepSeekR1ReasoningParserNoLeak:
 
     def test_used_by_documented_families(self):
         """Sanity: the registry binds deepseek_r1 to deepseek_v4/kimi_k25/
-        ling/nemotron*/glm5/phi4_reasoning per AUDIT_2026_05_10_PARSER_NO_LEAK_COVERAGE.md."""
+        nemotron*/glm5/phi4_reasoning per AUDIT_2026_05_10_PARSER_NO_LEAK_COVERAGE.md.
+
+        Ling used to be in this set, but Eric's 2026-05-11 directive pins
+        Ling as non-reasoning/plain-content while keeping DeepSeek tool
+        parsing.
+        """
         from vmlx_engine.model_configs import register_all
         from vmlx_engine.model_config_registry import ModelConfigRegistry
 
@@ -119,7 +124,7 @@ class TestDeepSeekR1ReasoningParserNoLeak:
         register_all(registry)
 
         # Spot-check a few families that should bind to deepseek_r1
-        for family_name in ("deepseek_v4", "kimi_k25", "ling", "nemotron", "nemotron_h"):
+        for family_name in ("deepseek_v4", "kimi_k25", "nemotron", "nemotron_h"):
             entries = [c for c in registry._configs if c.family_name == family_name]
             assert entries, f"family {family_name!r} not found in registry"
             for entry in entries:

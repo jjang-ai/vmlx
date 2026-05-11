@@ -169,10 +169,10 @@ registerFamily('functionary', { cacheType: 'kv', toolParser: 'functionary', enab
 registerFamily('minimax', { cacheType: 'kv', toolParser: 'minimax', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'MiniMax', priority: 20 })
 
 // Ling / Bailing hybrid: MLA softmax layers plus linear-attention/SSM-style
-// companion state. The template defaults detailed thinking off and ignores
-// request-level enable_thinking; deepseek_r1 is still required when a system
-// message explicitly opts into "detailed thinking on".
-registerFamily('ling', { cacheType: 'hybrid', toolParser: 'deepseek', reasoningParser: 'deepseek_r1', usePagedCache: true, enableAutoToolChoice: true, description: 'Ling / Bailing hybrid', priority: 20 })
+// companion state. Eric directive 2026-05-11: treat Ling chat output as plain
+// content. Keep DeepSeek tool parsing, but do not advertise a reasoning parser
+// or thinking capability even when stale JANG sidecars claim deepseek_r1.
+registerFamily('ling', { cacheType: 'hybrid', toolParser: 'deepseek', usePagedCache: true, enableAutoToolChoice: true, description: 'Ling / Bailing hybrid', priority: 20 })
 
 // Tencent Hy3-preview: text-only dense GQA KV + MoE. The chat template uses
 // reasoning_effort=no_think|low|high, so Python normalizes the UI thinking
@@ -482,6 +482,8 @@ function applyJangCapabilities(
     next.reasoningParser = 'qwen3'
   } else if (next.family === 'hy3') {
     next.reasoningParser = 'qwen3'
+  } else if (next.family === 'ling') {
+    next.reasoningParser = undefined
   } else if (caps.supports_thinking === false) {
     next.reasoningParser = undefined
   } else if (typeof caps.reasoning_parser === 'string') {

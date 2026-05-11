@@ -449,16 +449,14 @@ def test_ling_non_crack_keeps_normal_family_temperature(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("model_type", ["bailing_hybrid", "bailing_moe_v2_5"])
-def test_ling_preserves_opt_in_parser_but_rejects_stale_think_in_template(
+def test_ling_suppresses_reasoning_parser_and_stale_think_in_template(
     tmp_path, monkeypatch, model_type
 ):
-    """Ling/Bailing is default-off but opt-in reasoning-capable.
+    """Ling/Bailing is not a reasoning model in vMLX.
 
-    The parser metadata must survive so explicit "detailed thinking on" system
-    prompts can extract <think> blocks.  A stale think_in_template=True stamp
-    must not survive, because Ling's default template does not auto-open
-    <think>; preserving that stale flag would route visible content into
-    reasoning_content.
+    Stale bundle stamps may still claim deepseek_r1 or supports_thinking=True,
+    but the product contract is plain visible content. Tool parser stays
+    DeepSeek because tool calling is orthogonal to reasoning.
     """
     import json
     from vmlx_engine import server
@@ -470,9 +468,9 @@ def test_ling_preserves_opt_in_parser_but_rejects_stale_think_in_template(
             "family": model_type,
             "cache_type": "hybrid",
             "tool_parser": "deepseek",
-            "reasoning_parser": "none",
+            "reasoning_parser": "deepseek_r1",
             "think_in_template": True,
-            "supports_thinking": False,
+            "supports_thinking": True,
             "modality": "text",
         }
     }))
@@ -494,14 +492,14 @@ def test_ling_preserves_opt_in_parser_but_rejects_stale_think_in_template(
     )
 
     assert cfg.family_name == "ling"
-    assert cfg.supports_thinking is True
-    assert cfg.reasoning_parser == "deepseek_r1"
+    assert cfg.supports_thinking is False
+    assert cfg.reasoning_parser is None
     assert cfg.think_in_template is False
-    assert resolved is True
+    assert resolved is False
 
 
-def test_panel_ling_registry_advertises_opt_in_reasoning_parser():
-    """Panel auto-detect must match engine Ling opt-in reasoning contract."""
+def test_panel_ling_registry_does_not_advertise_reasoning_parser():
+    """Panel auto-detect must match engine Ling no-reasoning contract."""
     from pathlib import Path
 
     source = Path("./panel/src/main/model-config-registry.ts").read_text()
@@ -509,8 +507,8 @@ def test_panel_ling_registry_advertises_opt_in_reasoning_parser():
 
     assert "cacheType: 'hybrid'" in ling_line
     assert "toolParser: 'deepseek'" in ling_line
-    assert "reasoningParser: 'deepseek_r1'" in ling_line
-    assert "next.family === 'ling'" not in source
+    assert "reasoningParser" not in ling_line
+    assert "next.family === 'ling'" in source
 
 
 def test_minimax_m2_uses_stronger_reasoning_rumination_floor(tmp_path, monkeypatch):

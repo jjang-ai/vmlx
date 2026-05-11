@@ -315,15 +315,15 @@ class ModelConfigRegistry:
             # `supports_thinking` separate from parser metadata only for
             # families where that is an explicit contract: ZAYA/ZAYA1-VL keep
             # qwen3 parser metadata while product behavior defaults to
-            # no-thinking via supports_thinking=False. ZAYA/ZAYA1-VL do not
+            # no-thinking at session startup. ZAYA/ZAYA1-VL do not
             # preserve stamped think_in_template=True values because their
             # product prompt is forced to enable_thinking=False and starts from
             # a closed empty think block. Other no-thinking families with
             # base supports_thinking=False still cannot resurrect stale
-            # reasoning-parser stamps. Ling/Bailing is no longer in that
-            # bucket: it is default-off but opt-in thinking-capable via a
-            # system-message template switch, so its deepseek_r1 parser must
-            # survive for explicit opt-in extraction.
+            # reasoning-parser stamps. Ling/Bailing stays in that bucket for
+            # vMLX's production contract: stale JANG sidecars advertise an
+            # experimental system-message switch, but the app/API should not
+            # expose it as a reasoning-capable model.
             from dataclasses import replace
             updates: Dict[str, Any] = {}
             rp = caps.get("reasoning_parser")

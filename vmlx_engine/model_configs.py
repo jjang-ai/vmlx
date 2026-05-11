@@ -637,25 +637,16 @@ def register_all(registry=None):
     # Cache type "hybrid" — engine builds KVCache slots for the MLA
     # layers and ArraysCache(size=1) for the linear-attn layers.
     #
-    # 2026-05-09 contract per Eric's canonical FAMILY_MAP after Ling restamp:
-    #   think_in_template=False  — chat_template.jinja line 1 hardcodes
-    #     `{% set thinking_option = 'off' %}`. There is NO `enable_thinking`
-    #     template variable; vMLX's request-time `enable_thinking=true` is a
-    #     no-op for Ling. Only system message containing 'detailed thinking
-    #     on' flips the prompt-side thinking_option to 'on'.
-    #   supports_thinking=True   — model CAN do <think> blocks when opted-in
-    #     via system message. This is a model capability fact, distinct from
-    #     default template behavior. CAPS endpoint advertises this so callers
-    #     know they can opt in.
-    #   reasoning_parser=deepseek_r1  — when user opts in via system message
-    #     and model emits <think>...</think>, the parser extracts those
-    #     blocks into reasoning_content. Idle when not opted in (no <think>
-    #     blocks present → nothing to extract).
+    # 2026-05-11 production contract: expose Ling/Bailing as plain-content
+    # chat in vMLX. Local sidecars and templates still contain a historical
+    # "detailed thinking on/off" system-message switch, but there is no
+    # request-level `enable_thinking` template variable and live product rows
+    # were validated on the visible-answer path. Do not auto-attach a
+    # reasoning parser or advertise a Thinking button from stale sidecars.
     #
-    # Default chat path remains visible-answer-first: template emits
-    # 'detailed thinking off', model never opens <think>, parser idle.
-    # Only changes vs prior contract: CAPS endpoint advertises true, and
-    # opt-in via system message now works end-to-end through the parser.
+    # This is not Harmony. It is not Hy3. Hy3 uses qwen3 reasoning + Hunyuan
+    # tools. Ling uses DeepSeek-style tools, hybrid SSM cache, and no exposed
+    # reasoning rail in the product UI/API contract.
     # MTP layer (`model.layers.32`) is loaded but skipped in standard
     # generation; spec-decode wiring is a future pass. Tool format is
     # DeepSeek-style.
