@@ -21,6 +21,23 @@ interface SessionSettingsProps {
   onBack: () => void
 }
 
+function normalizeDetectedFamilyName(family?: string): string | undefined {
+  if (!family) return undefined
+  if (family === 'zaya1_vl') return 'zaya1-vl'
+  if (family === 'bailing_hybrid') return 'ling'
+  return family
+}
+
+function isZayaCcaFamily(family?: string): boolean {
+  const normalized = normalizeDetectedFamilyName(family)
+  return normalized === 'zaya' || normalized === 'zaya1-vl'
+}
+
+function topKOverrideBlockedByFamily(family?: string): boolean {
+  const normalized = normalizeDetectedFamilyName(family)
+  return normalized === 'zaya' || normalized === 'zaya1-vl' || normalized === 'ling'
+}
+
 /**
  * Build a preview of the CLI command from config.
  * This MUST mirror the logic in sessions.ts buildArgs() exactly.
@@ -40,11 +57,19 @@ function buildCommandPreview(
           : false
   const requestedDistributed = !!(config as any).distributedEnabled
   const requestedFlashMoe = !!(config as any).flashMoe
-  const dsv4Active = detected?.family === 'deepseek-v4'
+  const detectedFamily = normalizeDetectedFamilyName(detected?.family)
+  const dsv4Active = detectedFamily === 'deepseek-v4'
+  const zayaCcaActive = isZayaCcaFamily(detectedFamily)
+  const topKOverrideBlocked = topKOverrideBlockedByFamily(detectedFamily)
   const turboQuantActive = !!detected?.isTurboQuant
+  const jangtqTopKOverrideAllowed = turboQuantActive && !topKOverrideBlocked
+  const jangtqTopKOverride = Number((config as any).jangtqTopKOverride || 0)
+  if (jangtqTopKOverrideAllowed && Number.isFinite(jangtqTopKOverride) && jangtqTopKOverride > 0) {
+    parts.unshift(`JANGTQ_TOPK_OVERRIDE=${Math.floor(Math.min(64, Math.max(1, jangtqTopKOverride)))}`)
+  }
   const effectiveDistributed = requestedDistributed
   const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed
-  const effectiveEnableJit = !!config.enableJit && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !turboQuantActive
+  const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !zayaCcaActive && !turboQuantActive
 
   // Server settings
   parts.push('--host', config.host)
@@ -84,7 +109,10 @@ function buildCommandPreview(
   // Prefix cache (mirrors buildArgs lines 1077-1114)
   const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
   const prefixCacheOff = !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
-  const usePagedCache = config.usePagedCache ?? detected?.usePagedCache
+  const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
+  const usePagedCache = zayaTypedCacheRequiresPaged
+    ? true
+    : (config.usePagedCache ?? detected?.usePagedCache)
 
   if (prefixCacheOff) {
     parts.push('--disable-prefix-cache')
@@ -469,7 +497,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         )}
 
         {/* Config Form */}
-        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedConfig?.cacheType} detectedFamily={detectedConfig?.family} detectedIsTurboQuant={detectedConfig?.isTurboQuant} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} sessionId={sessionId} />
+        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedConfig?.cacheType} detectedFamily={detectedConfig?.family} detectedIsTurboQuant={detectedConfig?.isTurboQuant} detectedIsMultimodal={detectedConfig?.isMultimodal} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} sessionId={sessionId} />
 
         {/* Command Preview */}
         <div className="mt-4">

@@ -44,6 +44,7 @@ export interface ServerConfig {
   // KV cache quantization
   kvCacheQuantization?: string
   kvCacheGroupSize?: number
+  cacheStackStartupDefaultsVersion?: number
 
   // Disk cache (L2 persistent cache)
   enableDiskCache?: boolean
@@ -58,6 +59,8 @@ export interface ServerConfig {
   // Performance
   streamInterval: number
   maxTokens?: number
+  // JANGTQ MoE active-expert override. 0/undefined = trained model default.
+  jangtqTopKOverride?: number
 
   // Tool integration
   mcpConfig?: string

@@ -556,6 +556,45 @@ class TestMLXMultimodalLMCache:
         assert model.enable_cache is False
         assert model._cache_manager is None
 
+    def test_stream_chat_generation_error_raises_not_model_text(self, monkeypatch):
+        """mlx-vlm runtime failures must not be converted into generated text chunks."""
+        from types import SimpleNamespace
+
+        import mlx_vlm
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        def _failing_stream_generate(*_args, **_kwargs):
+            raise RuntimeError("There is no Stream(gpu, 0) in current thread.")
+            yield  # pragma: no cover
+
+        monkeypatch.setattr(mlx_vlm, "stream_generate", _failing_stream_generate)
+
+        mllm = MLXMultimodalLM.__new__(MLXMultimodalLM)
+        mllm._loaded = True
+        mllm._cache_manager = None
+        mllm.model_name = "fake-vlm"
+        mllm.model = SimpleNamespace(language_model=object())
+        mllm.config = SimpleNamespace(image_token_index=None)
+        mllm.processor = SimpleNamespace(tokenizer=SimpleNamespace())
+        mllm.processor._patched_detok = True
+        mllm._extract_multimodal_messages = lambda _messages: (
+            [{"role": "user", "content": "hi"}],
+            [],
+            [],
+        )
+        mllm._apply_chat_template = lambda _messages, _enable_thinking: "prompt"
+        mllm._prepare_images = lambda _images: []
+        mllm._prepare_video = lambda *_args, **_kwargs: []
+        mllm._guard_simple_image_prefill = lambda *_args, **_kwargs: None
+
+        with pytest.raises(RuntimeError, match="There is no Stream"):
+            list(
+                mllm.stream_chat(
+                    [{"role": "user", "content": "hi"}],
+                    max_tokens=4,
+                )
+            )
+
     def test_chat_image_prefix_hit_passes_prompt_cache_state_to_mlx_vlm(
         self, monkeypatch
     ):

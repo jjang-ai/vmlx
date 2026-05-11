@@ -534,6 +534,7 @@ class BatchedEngine(BaseEngine):
         enable_thinking: bool,
         extra_template_kwargs: dict | None,
         prompt_with_gen: str,
+        num_videos: int = 0,
     ) -> int:
         """Compute the number of tokens added by add_generation_prompt=True.
 
@@ -558,6 +559,7 @@ class BatchedEngine(BaseEngine):
                 messages,
                 tools,
                 num_images=num_images,
+                num_videos=num_videos,
                 enable_thinking=enable_thinking,
                 extra_template_kwargs=extra_template_kwargs,
                 skip_generation_prompt=True,
@@ -599,6 +601,7 @@ class BatchedEngine(BaseEngine):
         num_images: int,
         enable_thinking: bool,
         extra_template_kwargs: dict | None,
+        num_videos: int = 0,
     ) -> list[tuple[int, str]]:
         """Compute (token_offset, role) boundaries for the chat history.
 
@@ -649,6 +652,7 @@ class BatchedEngine(BaseEngine):
                         messages[:i],
                         tools if i == len(messages) else None,
                         num_images=num_images if i == len(messages) else 0,
+                        num_videos=num_videos if i == len(messages) else 0,
                         enable_thinking=enable_thinking,
                         extra_template_kwargs=extra_template_kwargs,
                         skip_generation_prompt=True,
@@ -678,6 +682,7 @@ class BatchedEngine(BaseEngine):
         messages: list[dict[str, Any]],
         tools: list[dict] | None = None,
         num_images: int = 0,
+        num_videos: int = 0,
         enable_thinking: bool = True,
         extra_template_kwargs: dict | None = None,
         skip_generation_prompt: bool = False,
@@ -717,7 +722,7 @@ class BatchedEngine(BaseEngine):
             self._is_mllm
             and self._processor
             and not tools
-            and (num_images > 0 or mllm_model_type == "zaya1_vl")
+            and (num_images > 0 or num_videos > 0 or mllm_model_type == "zaya1_vl")
         ):
             # Use mlx_vlm for MLLM when actual images are present (any turn count).
             # Text-only VL conversations still use the standard tokenizer path,
@@ -1214,6 +1219,7 @@ class BatchedEngine(BaseEngine):
             messages,
             template_tools,
             num_images=len(all_images),
+            num_videos=len(all_videos),
             enable_thinking=thinking_enabled,
             extra_template_kwargs=extra_tpl,
             skip_generation_prompt=skip_gen_prompt,
@@ -1228,6 +1234,7 @@ class BatchedEngine(BaseEngine):
             gen_prompt_len = self._compute_gen_prompt_len(
                 messages, template_tools, len(all_images),
                 thinking_enabled, extra_tpl, prompt,
+                num_videos=len(all_videos),
             )
 
         # Phase 5 audit fix (F11, 2026-04-08): compute per-segment boundaries
@@ -1239,6 +1246,7 @@ class BatchedEngine(BaseEngine):
         segment_boundaries = self._compute_segment_boundaries(
             messages, template_tools, len(all_images),
             thinking_enabled, extra_tpl,
+            num_videos=len(all_videos),
         )
 
         # Append prompt suffix (e.g. Harmony analysis prefix for GPT-OSS)
@@ -1325,6 +1333,7 @@ class BatchedEngine(BaseEngine):
             messages,
             template_tools,
             num_images=len(all_images),
+            num_videos=len(all_videos),
             enable_thinking=thinking_enabled,
             extra_template_kwargs=extra_tpl,
             skip_generation_prompt=skip_gen_prompt,
@@ -1339,6 +1348,7 @@ class BatchedEngine(BaseEngine):
             gen_prompt_len = self._compute_gen_prompt_len(
                 messages, template_tools, len(all_images),
                 thinking_enabled, extra_tpl, prompt,
+                num_videos=len(all_videos),
             )
 
         # F11 (audit 2026-04-08): per-segment boundaries for cache_type LRU.
@@ -1347,6 +1357,7 @@ class BatchedEngine(BaseEngine):
         segment_boundaries = self._compute_segment_boundaries(
             messages, template_tools, len(all_images),
             thinking_enabled, extra_tpl,
+            num_videos=len(all_videos),
         )
 
         # Append prompt suffix (e.g. Harmony analysis prefix for GPT-OSS)

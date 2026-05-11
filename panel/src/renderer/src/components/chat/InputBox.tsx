@@ -1,9 +1,9 @@
 import { useState, useRef, useCallback, useEffect, KeyboardEvent, DragEvent, ClipboardEvent } from 'react'
-import { Paperclip, Send, Square, ImagePlus, X, Film } from 'lucide-react'
+import { Paperclip, Send, Square, ImagePlus, X, Film, Music, FileText } from 'lucide-react'
 import { VoiceChat } from './VoiceChat'
 import { useTranslation } from '../../i18n'
 
-export type AttachmentKind = 'image' | 'video'
+export type AttachmentKind = 'image' | 'video' | 'audio' | 'text'
 
 export interface MediaAttachment {
   id: string
@@ -12,6 +12,7 @@ export interface MediaAttachment {
   name: string
   type: string
   size: number
+  text?: string
 }
 
 // Back-compat alias — older callers imported ImageAttachment when it was
@@ -28,21 +29,41 @@ interface InputBoxProps {
 }
 
 // Caps: images up to 10 MB, videos up to 100 MB (engine extracts frames
-// smartly via OpenCV, so no reason to block reasonable clips locally).
+// smartly via OpenCV, so no reason to block reasonable clips locally),
+// audio up to 50 MB for Omni / Parakeet paths, and text files up to 2 MB
+// inlined as prompt context. Other binary files are intentionally not accepted.
 const IMAGE_MAX_BYTES = 10 * 1024 * 1024
 const VIDEO_MAX_BYTES = 100 * 1024 * 1024
+const AUDIO_MAX_BYTES = 50 * 1024 * 1024
+const TEXT_MAX_BYTES = 2 * 1024 * 1024
 
 const ACCEPTED_IMAGE_TYPES = 'image/png,image/jpeg,image/gif,image/webp'
 const ACCEPTED_VIDEO_TYPES = 'video/mp4,video/webm,video/quicktime,video/x-m4v'
+const ACCEPTED_AUDIO_TYPES = 'audio/wav,audio/wave,audio/x-wav,audio/mpeg,audio/mp3,audio/flac,audio/ogg,audio/mp4,audio/x-m4a'
+const ACCEPTED_TEXT_TYPES = 'text/plain,text/markdown,text/csv,application/json,application/xml,application/x-yaml'
+const TEXT_FILE_EXTENSIONS = new Set([
+  'txt', 'md', 'markdown', 'json', 'jsonl', 'csv', 'tsv', 'yaml', 'yml',
+  'xml', 'html', 'css', 'js', 'jsx', 'ts', 'tsx', 'py', 'rb', 'go', 'rs',
+  'java', 'c', 'cc', 'cpp', 'h', 'hpp', 'swift', 'kt', 'sh', 'zsh', 'bash',
+  'toml', 'ini', 'cfg', 'conf', 'log', 'sql',
+])
 
 function kindForFile(f: File): AttachmentKind | null {
   if (f.type.startsWith('image/')) return 'image'
   if (f.type.startsWith('video/')) return 'video'
+  if (f.type.startsWith('audio/')) return 'audio'
+  if (f.type.startsWith('text/')) return 'text'
+  if (f.type === 'application/json' || f.type === 'application/xml' || f.type === 'application/x-yaml') return 'text'
+  const ext = f.name.split('.').pop()?.toLowerCase()
+  if (ext && TEXT_FILE_EXTENSIONS.has(ext)) return 'text'
   return null
 }
 
 function sizeLimitForKind(kind: AttachmentKind): number {
-  return kind === 'video' ? VIDEO_MAX_BYTES : IMAGE_MAX_BYTES
+  if (kind === 'video') return VIDEO_MAX_BYTES
+  if (kind === 'audio') return AUDIO_MAX_BYTES
+  if (kind === 'text') return TEXT_MAX_BYTES
+  return IMAGE_MAX_BYTES
 }
 
 export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, sessionId }: InputBoxProps) {
@@ -103,26 +124,31 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
         setAttachments(prev => [...prev, {
           id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
           kind,
-          dataUrl: reader.result as string,
+          dataUrl: kind === 'text' ? '' : reader.result as string,
           name: file.name,
           type: file.type,
           size: file.size,
+          text: kind === 'text' ? reader.result as string : undefined,
         }])
       }
       reader.onerror = () => {
         console.error('Failed to read file:', file.name, reader.error)
       }
-      reader.readAsDataURL(file)
+      if (kind === 'text') {
+        reader.readAsText(file)
+      } else {
+        reader.readAsDataURL(file)
+      }
     }
   }, [])
 
   const handlePaste = useCallback((e: ClipboardEvent) => {
     const items = e.clipboardData?.items
     if (!items) return
-    // Clipboard paste accepts images and videos. Most OSes only paste image
-    // data from clipboard; videos typically come via drop or picker.
+    // Clipboard paste accepts images, videos, and audio. Text paste remains
+    // normal textarea input; text files come via drop or picker.
     const mediaItems = Array.from(items).filter(i =>
-      i.type.startsWith('image/') || i.type.startsWith('video/')
+      i.type.startsWith('image/') || i.type.startsWith('video/') || i.type.startsWith('audio/')
     )
     if (mediaItems.length === 0) return
     e.preventDefault()
@@ -179,7 +205,17 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
         <div className="flex gap-2 mb-3 flex-wrap">
           {attachments.map(att => (
             <div key={att.id} className="relative group">
-              {att.kind === 'video' ? (
+              {att.kind === 'audio' ? (
+                <div className="h-20 w-20 rounded-lg border border-border bg-muted flex flex-col items-center justify-center overflow-hidden text-muted-foreground">
+                  <Music className="h-6 w-6" />
+                  <span className="mt-1 max-w-[72px] truncate text-[10px]">Audio</span>
+                </div>
+              ) : att.kind === 'text' ? (
+                <div className="h-20 w-20 rounded-lg border border-border bg-muted flex flex-col items-center justify-center overflow-hidden text-muted-foreground">
+                  <FileText className="h-6 w-6" />
+                  <span className="mt-1 max-w-[72px] truncate text-[10px]">Text</span>
+                </div>
+              ) : att.kind === 'video' ? (
                 <div className="h-20 w-20 rounded-lg border border-border bg-black flex items-center justify-center overflow-hidden">
                   <video
                     src={att.dataUrl}
@@ -216,7 +252,7 @@ export function InputBox({ onSend, onAbort, disabled, loading, sessionEndpoint, 
         <input
           ref={fileInputRef}
           type="file"
-          accept={`${ACCEPTED_IMAGE_TYPES},${ACCEPTED_VIDEO_TYPES}`}
+          accept={`${ACCEPTED_IMAGE_TYPES},${ACCEPTED_VIDEO_TYPES},${ACCEPTED_AUDIO_TYPES},${ACCEPTED_TEXT_TYPES}`}
           multiple
           className="hidden"
           onChange={(e) => { if (e.target.files) addFiles(e.target.files) }}

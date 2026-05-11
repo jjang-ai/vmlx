@@ -62,6 +62,7 @@ interface SessionConfig {
     defaultTopP: number
     defaultRepetitionPenalty: number
     defaultEnableThinking?: boolean
+    jangtqTopKOverride: number
     embeddingModel: string
     additionalArgs: string
     enableJit: boolean
@@ -120,6 +121,7 @@ const DEFAULT_CONFIG: SessionConfig = {
     defaultTopP: 95,
     defaultRepetitionPenalty: 110,
     defaultEnableThinking: undefined,
+    jangtqTopKOverride: 0,
     embeddingModel: '',
     additionalArgs: '',
     enableJit: true,
@@ -142,15 +144,39 @@ type DetectedConfig = {
     isTurboQuant?: boolean
 } | null
 
+function normalizeDetectedFamilyName(family?: string): string | undefined {
+    if (!family) return undefined
+    if (family === 'zaya1_vl') return 'zaya1-vl'
+    if (family === 'bailing_hybrid') return 'ling'
+    return family
+}
+
+function isZayaCcaFamily(family?: string): boolean {
+    const normalized = normalizeDetectedFamilyName(family)
+    return normalized === 'zaya' || normalized === 'zaya1-vl'
+}
+
+function topKOverrideBlockedByFamily(family?: string): boolean {
+    const normalized = normalizeDetectedFamilyName(family)
+    return normalized === 'zaya' || normalized === 'zaya1-vl' || normalized === 'ling'
+}
+
 function buildCommandPreview(
     modelPath: string,
     config: SessionConfig,
     detected?: DetectedConfig
 ): string {
     const parts = ['vmlx-engine serve', modelPath]
-    const isVLM = !!detected?.isMultimodal || config.isMultimodal === true
-    const dsv4Active = detected?.family === 'deepseek-v4'
+    const detectedFamily = normalizeDetectedFamilyName(detected?.family)
+    const topKOverrideBlocked = topKOverrideBlockedByFamily(detectedFamily)
     const turboQuantActive = !!detected?.isTurboQuant
+    const jangtqTopKOverride = Number(config.jangtqTopKOverride || 0)
+    if (turboQuantActive && !topKOverrideBlocked && Number.isFinite(jangtqTopKOverride) && jangtqTopKOverride > 0) {
+        parts.unshift(`JANGTQ_TOPK_OVERRIDE=${Math.floor(Math.min(64, Math.max(1, jangtqTopKOverride)))}`)
+    }
+    const isVLM = !!detected?.isMultimodal || config.isMultimodal === true
+    const dsv4Active = detectedFamily === 'deepseek-v4'
+    const zayaCcaActive = isZayaCcaFamily(detectedFamily)
 
     parts.push('--host', config.host)
     parts.push('--port', config.port.toString())
@@ -184,7 +210,10 @@ function buildCommandPreview(
 
     const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
     const prefixCacheOff = !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
-    const usePagedCache = config.usePagedCache ?? detected?.usePagedCache
+    const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
+    const usePagedCache = zayaTypedCacheRequiresPaged
+        ? true
+        : (config.usePagedCache ?? detected?.usePagedCache)
 
     if (prefixCacheOff) {
         parts.push('--disable-prefix-cache')
@@ -273,7 +302,7 @@ function buildCommandPreview(
     else if (config.defaultEnableThinking === false) parts.push('--default-enable-thinking', 'false')
 
     // JIT compilation
-    if (config.enableJit && !dsv4Active && !turboQuantActive) parts.push('--enable-jit')
+    if (config.enableJit && !isVLM && !dsv4Active && !zayaCcaActive && !turboQuantActive) parts.push('--enable-jit')
 
     if (config.omniBackend && config.omniBackend !== 'stage1') {
         parts.push('--omni-backend', config.omniBackend)
@@ -487,6 +516,38 @@ describe('Paged KV Cache', () => {
         // When config explicitly sets false, config wins over detected
         expect(hasFlag(out, '--use-paged-cache')).toBe(false)
     })
+
+    it('ZAYA typed CCA forces paged cache when prefix cache is enabled', () => {
+        const out = preview(
+            {
+                enablePrefixCache: true,
+                usePagedCache: false,
+                enableBlockDiskCache: true,
+                cacheMemoryPercent: 30,
+            },
+            { family: 'zaya', usePagedCache: false },
+        )
+
+        expect(hasFlag(out, '--disable-prefix-cache')).toBe(false)
+        expect(hasFlag(out, '--use-paged-cache')).toBe(true)
+        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(true)
+        expect(hasFlag(out, '--cache-memory-percent')).toBe(false)
+    })
+
+    it('ZAYA typed CCA still honors explicit prefix-cache off', () => {
+        const out = preview(
+            {
+                enablePrefixCache: false,
+                usePagedCache: false,
+                enableBlockDiskCache: true,
+            },
+            { family: 'zaya1-vl', usePagedCache: false },
+        )
+
+        expect(hasFlag(out, '--disable-prefix-cache')).toBe(true)
+        expect(hasFlag(out, '--use-paged-cache')).toBe(false)
+        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(false)
+    })
 })
 
 describe('KV Cache Quantization', () => {
@@ -670,6 +731,27 @@ describe('Performance & Generation', () => {
     it('custom max tokens is not overridden by default', () => {
         const out = preview({ maxTokens: 4096 })
         expect(getFlagValue(out, '--max-tokens')).toBe('4096')
+    })
+
+    it('JANGTQ top-k override is shown as an explicit env prefix', () => {
+        const out = preview({ jangtqTopKOverride: 4 }, { family: 'minimax', isTurboQuant: true })
+        const normalized = out.replace(/\s*\\\n\s*/g, ' ')
+        expect(normalized.startsWith('JANGTQ_TOPK_OVERRIDE=4 vmlx-engine serve')).toBe(true)
+    })
+
+    it('JANGTQ top-k trained default emits no override env', () => {
+        const out = preview({ jangtqTopKOverride: 0 }, { family: 'minimax', isTurboQuant: true })
+        expect(out.includes('JANGTQ_TOPK_OVERRIDE=')).toBe(false)
+    })
+
+    it('JANGTQ top-k override is suppressed for Ling group-routing models', () => {
+        const out = preview({ jangtqTopKOverride: 4 }, { family: 'ling', isTurboQuant: true })
+        expect(out.includes('JANGTQ_TOPK_OVERRIDE=')).toBe(false)
+    })
+
+    it('JANGTQ top-k override is suppressed for ZAYA typed-CCA models', () => {
+        const out = preview({ jangtqTopKOverride: 4 }, { family: 'zaya1-vl', isTurboQuant: true })
+        expect(out.includes('JANGTQ_TOPK_OVERRIDE=')).toBe(false)
     })
 })
 
@@ -1014,6 +1096,9 @@ describe('Default IP and New Settings', () => {
     it('session manager migrates the exact stale continuous-cache default tuple', () => {
         const source = readFileSync('src/main/sessions.ts', 'utf8')
         expect(source).toContain('function applyCacheStackStartupDefaultMigration')
+        expect(source).toContain('const CACHE_STACK_STARTUP_DEFAULTS_VERSION = 2')
+        expect(source).toContain('function markCacheStackStartupDefaultsCurrent')
+        expect(source).toContain('config.cacheStackStartupDefaultsVersion = CACHE_STACK_STARTUP_DEFAULTS_VERSION')
         expect(source).toContain('config.continuousBatching === true')
         expect(source).toContain('config.enablePrefixCache === true')
         expect(source).toContain('Number(config.maxNumSeqs) === 64')
@@ -1033,6 +1118,31 @@ describe('Default IP and New Settings', () => {
         expect(source).toContain('config.cacheMemoryPercent = 15')
     })
 
+    it('cache-stack migration is one-time versioned so saved user toggles stick', () => {
+        const source = readFileSync('src/main/sessions.ts', 'utf8')
+        const serverSource = readFileSync('src/main/server.ts', 'utf8')
+        expect(serverSource).toContain('cacheStackStartupDefaultsVersion?: number')
+        expect(source).toContain('Number(config.cacheStackStartupDefaultsVersion || 0) >= CACHE_STACK_STARTUP_DEFAULTS_VERSION')
+        expect(source).toContain('const markedCurrent = markCacheStackStartupDefaultsCurrent(config)')
+        expect(source).toContain('if (migrated || markedCurrent)')
+        expect(source).toContain('markCacheStackStartupDefaultsCurrent(merged as Partial<ServerConfig>)')
+        expect(source).toContain('cacheStackStartupDefaultsVersion: CACHE_STACK_STARTUP_DEFAULTS_VERSION')
+    })
+
+    it('create-session stamps incoming settings current before saved legacy migration', () => {
+        const source = readFileSync('src/main/sessions.ts', 'utf8')
+        const start = source.indexOf('private async _createSessionInner')
+        const existing = source.indexOf('const existing = db.getSessionByModelPath(modelPath)', start)
+        const beforeExisting = source.slice(start, existing)
+        const existingBlock = source.slice(existing, source.indexOf('const id = uuidv4()', existing))
+
+        expect(beforeExisting).toContain('markCacheStackStartupDefaultsCurrent(config)')
+        expect(beforeExisting).not.toContain('applyCacheStackStartupDefaultMigration(config')
+        expect(existingBlock).toContain('applyCacheStackStartupDefaultMigration(existingConfig, modelPath)')
+        expect(existingBlock).toContain('const merged = { ...existingConfig, ...config, modelPath, host, port }')
+        expect(existingBlock).toContain('markCacheStackStartupDefaultsCurrent(merged)')
+    })
+
     it('session manager migrates stale no-prefix MiniMax-style batch tuple', () => {
         const source = readFileSync('src/main/sessions.ts', 'utf8')
         expect(source).toContain('staleNoPrefixBatchDefaults')
@@ -1040,7 +1150,45 @@ describe('Default IP and New Settings', () => {
         expect(source).toContain('Number(config.maxNumSeqs) <= 8')
         expect(source).toContain('Number(config.prefillBatchSize) === 1024')
         expect(source).toContain('Number(config.completionBatchSize) === 1024')
-        expect(source).toContain('!staleContinuousDefaults && !staleNoPrefixBatchDefaults')
+        expect(source).toContain('stalePartialPagedCacheDefaults')
+        expect(source).toContain('config.usePagedCache === false')
+        expect(source).toContain('!stalePartialPagedCacheDefaults')
+    })
+
+    it('session manager migrates stale explicit none cache codec defaults back to auto', () => {
+        const source = readFileSync('src/main/sessions.ts', 'utf8')
+        expect(source).toContain('const zayaCacheMigrationTarget = isZayaCacheStackMigrationTarget(modelPath || config.modelPath)')
+        expect(source).toContain('staleExplicitNoneCacheCodecDefaults')
+        expect(source).toContain('zayaCacheMigrationTarget &&')
+        expect(source).toContain("config.kvCacheQuantization === 'none'")
+        expect(source).toContain('!staleExplicitNoneCacheCodecDefaults')
+        expect(source).toContain("config.kvCacheQuantization = 'auto'")
+    })
+
+    it('stale explicit none migration is limited to the single-user cache-stack default shape', () => {
+        const source = readFileSync('src/main/sessions.ts', 'utf8')
+        const start = source.indexOf('const staleExplicitNoneCacheCodecDefaults =')
+        const end = source.indexOf('if (', start)
+        const block = source.slice(start, end)
+
+        expect(block).toContain('zayaCacheMigrationTarget &&')
+        expect(block).toContain('config.continuousBatching === true')
+        expect(block).toContain('config.enablePrefixCache === true')
+        expect(block).toContain('Number(config.maxNumSeqs) === 1')
+        expect(block).toContain('Number(config.prefillBatchSize) === 512')
+        expect(block).toContain('Number(config.completionBatchSize) === 512')
+        expect(block).toContain('config.usePagedCache === true')
+        expect(block).toContain('config.enableBlockDiskCache === true')
+        expect(block).toContain("config.kvCacheQuantization === 'none'")
+    })
+
+    it('ZAYA sessions default thinking off when no user thinking choice is saved', () => {
+        const source = readFileSync('src/main/sessions.ts', 'utf8')
+        expect(source).toContain('function isZayaCcaFamily')
+        expect(source).toContain('if (isZayaCcaFamily(freshFamily))')
+        expect(source).toContain('config.defaultEnableThinking === undefined')
+        expect(source).toContain('config.defaultEnableThinking = false')
+        expect(source).toContain('defaultEnableThinking: isZayaCcaFamily(detected.family) ? false : undefined')
     })
 
     it('logLevel INFO (default) does not emit --log-level flag', () => {
@@ -1077,6 +1225,7 @@ describe('Default IP and New Settings', () => {
         expect(DEFAULT_CONFIG.defaultTemperature).toBe(70)
         expect(DEFAULT_CONFIG.defaultTopP).toBe(95)
         expect(DEFAULT_CONFIG.defaultRepetitionPenalty).toBe(110)
+        expect(DEFAULT_CONFIG.jangtqTopKOverride).toBe(0)
         expect(DEFAULT_CONFIG.omniBackend).toBe('stage1')
     })
 })
@@ -1108,6 +1257,32 @@ describe('JIT Toggle', () => {
             { family: 'minimax', isTurboQuant: true },
         )
 
+        expect(hasFlag(out, '--enable-jit')).toBe(false)
+    })
+
+    it('multimodal/VLM detection suppresses --enable-jit because mlx-vlm streaming is not compile-safe', () => {
+        const out = preview(
+            { enableJit: true, isMultimodal: false },
+            { family: 'zaya1-vl', isMultimodal: true },
+        )
+
+        expect(hasFlag(out, '--is-mllm')).toBe(true)
+        expect(hasFlag(out, '--enable-jit')).toBe(false)
+    })
+
+    it('ZAYA typed CCA detection suppresses --enable-jit because cache path is faster uncompiled', () => {
+        const out = preview(
+            { enableJit: true },
+            { family: 'zaya' },
+        )
+
+        expect(hasFlag(out, '--enable-jit')).toBe(false)
+    })
+
+    it('manual multimodal mode suppresses --enable-jit even without detection', () => {
+        const out = preview({ enableJit: true, isMultimodal: true })
+
+        expect(hasFlag(out, '--is-mllm')).toBe(true)
         expect(hasFlag(out, '--enable-jit')).toBe(false)
     })
 
@@ -1152,6 +1327,60 @@ describe('JIT Toggle', () => {
         expect(form).toContain('TurboQuant KV')
         expect(sessions).toContain('turboQuantActive')
         expect(sessions).toContain('TurboQuantKVCache uses custom cache objects')
+    })
+
+    it('settings form surfaces multimodal JIT as effectively disabled', () => {
+        const fs = require('fs')
+        const form = fs.readFileSync(
+            'src/renderer/src/components/sessions/SessionConfigForm.tsx',
+            'utf-8',
+        )
+        const settings = fs.readFileSync(
+            'src/renderer/src/components/sessions/SessionSettings.tsx',
+            'utf-8',
+        )
+        const sessions = fs.readFileSync('src/main/sessions.ts', 'utf-8')
+
+        expect(form).toContain('detectedIsMultimodal')
+        expect(form).toContain('multimodal/VLM models')
+        expect(settings).toContain('detectedIsMultimodal={detectedConfig?.isMultimodal}')
+        expect(sessions).toContain('mlx-vlm streaming path')
+    })
+
+    it('settings form surfaces ZAYA typed CCA JIT as effectively disabled', () => {
+        const fs = require('fs')
+        const form = fs.readFileSync(
+            'src/renderer/src/components/sessions/SessionConfigForm.tsx',
+            'utf-8',
+        )
+        const settings = fs.readFileSync(
+            'src/renderer/src/components/sessions/SessionSettings.tsx',
+            'utf-8',
+        )
+        const sessions = fs.readFileSync('src/main/sessions.ts', 'utf-8')
+
+        expect(form).toContain('zayaCcaActive')
+        expect(form).toContain('ZAYA typed CCA cache')
+        expect(settings).toContain('zayaCcaActive')
+        expect(sessions).toContain('ZAYA typed CCA cache is path-dependent')
+    })
+
+    it('settings form and launch code surface ZAYA typed CCA paged-cache requirement', () => {
+        const fs = require('fs')
+        const form = fs.readFileSync(
+            'src/renderer/src/components/sessions/SessionConfigForm.tsx',
+            'utf-8',
+        )
+        const settings = fs.readFileSync(
+            'src/renderer/src/components/sessions/SessionSettings.tsx',
+            'utf-8',
+        )
+        const sessions = fs.readFileSync('src/main/sessions.ts', 'utf-8')
+
+        expect(form).toContain('zayaTypedCacheRequiresPaged')
+        expect(form).toContain('ZAYA typed CCA cache requires paged cache while prefix cache is enabled')
+        expect(settings).toContain('zayaTypedCacheRequiresPaged')
+        expect(sessions).toContain('zayaTypedCacheRequiresPaged')
     })
 
     it('enableJit does not affect other flags', () => {
@@ -1545,6 +1774,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         'speculativeModel', 'numDraftTokens',
         'smelt', 'smeltExperts', 'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
         'defaultTemperature', 'defaultTopP', 'defaultRepetitionPenalty', 'defaultEnableThinking',
+        'jangtqTopKOverride',
         'embeddingModel', 'additionalArgs',
         'enableJit', 'logLevel', 'corsOrigins', 'maxContextLength',
     ]
@@ -1602,6 +1832,21 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(source).toContain('defaultValue={DEFAULT_CONFIG.defaultTemperature}')
         expect(source).toContain('defaultValue={DEFAULT_CONFIG.defaultTopP}')
         expect(source).toContain('defaultValue={DEFAULT_CONFIG.defaultRepetitionPenalty}')
+    })
+
+    it('JANGTQ top-k override is wired through settings UI and launch env', () => {
+        const formSource = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
+        const settingsSource = readFileSync('src/renderer/src/components/sessions/SessionSettings.tsx', 'utf8')
+        const sessionsSource = readFileSync('src/main/sessions.ts', 'utf8')
+        expect(formSource).toContain('JANGTQ Active Experts Override')
+        expect(formSource).toContain('jangtqTopKOverrideAllowed')
+        expect(settingsSource).toContain('JANGTQ_TOPK_OVERRIDE')
+        expect(settingsSource).toContain('jangtqTopKOverrideAllowed')
+        expect(settingsSource).toContain('topKOverrideBlockedByFamily')
+        expect(sessionsSource).toContain('delete spawnEnv.JANGTQ_TOPK_OVERRIDE')
+        expect(sessionsSource).toContain('topKOverrideAllowed')
+        expect(sessionsSource).toContain('topKOverrideBlockedByFamily')
+        expect(sessionsSource).toContain('spawnEnv.JANGTQ_TOPK_OVERRIDE')
     })
 
     it('mutual exclusion: disk cache NOT emitted when paged cache is active', () => {

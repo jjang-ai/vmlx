@@ -196,7 +196,18 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
     if (contentParts) {
       const images = contentParts.filter(p => p.type === 'image_url' && p.image_url?.url)
       const videos = contentParts.filter(p => p.type === 'video_url' && p.video_url?.url)
+      const audios = contentParts.filter(p =>
+        (p.type === 'input_audio' && p.input_audio?.data) ||
+        (p.type === 'audio_url' && p.audio_url?.url)
+      )
       const textParts = contentParts.filter(p => p.type === 'text' && p.text)
+      const audioSrc = (p: any) => {
+        if (p.type === 'audio_url') return p.audio_url.url
+        const format = p.input_audio?.format || 'wav'
+        const mime = format === 'mp3' ? 'audio/mpeg' : `audio/${format}`
+        const data = p.input_audio?.data || ''
+        return data.startsWith('data:') ? data : `data:${mime};base64,${data}`
+      }
       return (
         <div>
           {images.length > 0 && (
@@ -221,6 +232,19 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
                   controls
                   preload="metadata"
                   className="max-w-[360px] max-h-[240px] rounded-md border border-white/10 bg-black"
+                />
+              ))}
+            </div>
+          )}
+          {audios.length > 0 && (
+            <div className="flex flex-col gap-2 mb-2">
+              {audios.map((aud, i) => (
+                <audio
+                  key={`a-${i}`}
+                  src={audioSrc(aud)}
+                  controls
+                  preload="metadata"
+                  className="max-w-[360px]"
                 />
               ))}
             </div>

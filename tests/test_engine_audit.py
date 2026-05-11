@@ -250,6 +250,60 @@ class TestMLLMBatchRequestSampling:
         assert req.repetition_penalty == 1.0
 
 
+class TestBatchedEngineVideoTemplate:
+    """BatchedEngine MLLM template handling for video-only requests."""
+
+    def test_video_only_mllm_uses_processor_template_not_tokenizer_fallback(self):
+        pytest.importorskip("mlx_vlm")
+        from vmlx_engine.engine.batched import BatchedEngine
+
+        captured = {}
+
+        class _Tokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                raise AssertionError("video-only MLLM request used tokenizer fallback")
+
+            def encode(self, text, add_special_tokens=False):
+                return [1, 2, 3]
+
+        class _Processor:
+            tokenizer = _Tokenizer()
+
+            def apply_chat_template(self, messages, **kwargs):
+                captured["messages"] = messages
+                return "VIDEO_PROMPT"
+
+        engine = BatchedEngine.__new__(BatchedEngine)
+        engine._is_mllm = True
+        engine._processor = _Processor()
+        engine._tokenizer = None
+        engine._model_name = "qwen36-video-test"
+        engine._model = SimpleNamespace(config={"model_type": "qwen3_5_moe"})
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "video_url", "video_url": {"url": "data:video/mp4;base64,AAAA"}},
+                    {"type": "text", "text": "Reply only BLUE."},
+                ],
+            }
+        ]
+
+        prompt = engine._apply_chat_template(
+            messages,
+            num_images=0,
+            num_videos=1,
+            enable_thinking=False,
+        )
+
+        assert prompt == "VIDEO_PROMPT"
+        content = captured["messages"][0]["content"]
+        assert content[0]["type"] == "video"
+        assert content[1]["type"] == "text"
+        assert not any(part.get("type") == "video_url" for part in content)
+
+
 class TestServerSamplingResolution:
     """Tests for server-side sampling parameter resolution."""
 
@@ -314,13 +368,171 @@ class TestModelConfigRegistryLookup:
         assert config.reasoning_parser == "deepseek_r1"
 
     def test_lookup_qwen3_5(self):
-        """qwen3_5 model_type is shared between text and VL variants.
-        Registry is_mllm must be False — VLM detection relies on config.json vision_config."""
+        """The bare qwen3_5 family entry is neutral.
+
+        Local Qwen 3.6 bundles with vision/video metadata are tested below via
+        registry.lookup(path), because that path reads config.json.
+        """
         from vmlx_engine.model_config_registry import get_model_config_registry
         registry = get_model_config_registry()
         config = self._find_by_model_type(registry, "qwen3_5")
         assert config is not None
         assert config.is_mllm is False
+
+    def test_lookup_qwen3_6_dense_path_with_vision_video_is_mllm(self, tmp_path):
+        from vmlx_engine.model_config_registry import get_model_config_registry
+        registry = get_model_config_registry()
+        registry._match_cache.clear()
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "qwen3_5",
+            "architectures": ["Qwen3_5ForConditionalGeneration"],
+            "text_config": {"model_type": "qwen3_5_text"},
+            "vision_config": {"model_type": "qwen3_vl"},
+            "image_token_id": 248056,
+            "video_token_id": 248057,
+        }))
+
+        config = registry.lookup(str(tmp_path))
+
+        assert config.family_name == "qwen3_5"
+        assert config.is_mllm is True
+
+    def test_lookup_qwen3_6_moe_path_with_vision_video_is_mllm(self, tmp_path):
+        from vmlx_engine.model_config_registry import get_model_config_registry
+        registry = get_model_config_registry()
+        registry._match_cache.clear()
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "qwen3_5_moe",
+            "architectures": ["Qwen3_5MoeForConditionalGeneration"],
+            "text_config": {"model_type": "qwen3_5_moe_text"},
+            "vision_config": {"model_type": "qwen3_vl"},
+            "image_token_id": 248056,
+            "video_token_id": 248057,
+        }))
+
+        config = registry.lookup(str(tmp_path))
+
+        assert config.family_name == "qwen3_5_moe"
+        assert config.is_mllm is True
+
+    @pytest.mark.parametrize(
+        ("model_type", "family_name"),
+        [
+            ("qwen3_5", "qwen3_5"),
+            ("qwen3_5_moe", "qwen3_5_moe"),
+        ],
+    )
+    def test_qwen3_6_vision_video_config_marks_bundle_multimodal(
+        self, tmp_path, model_type, family_name
+    ):
+        from vmlx_engine.model_config_registry import get_model_config_registry
+
+        model_dir = tmp_path / model_type
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": model_type,
+                    "architectures": [f"{model_type}ForConditionalGeneration"],
+                    "text_config": {
+                        "model_type": model_type,
+                        "layer_types": ["linear_attention", "full_attention"],
+                    },
+                    "vision_config": {"hidden_size": 1024},
+                    "video_token_id": 151666,
+                    "video_token_index": 151666,
+                }
+            )
+        )
+
+        config = get_model_config_registry().lookup(str(model_dir))
+
+        assert config.family_name == family_name
+        assert config.cache_type == "hybrid"
+        assert config.is_mllm is True
+
+    def test_nemotron_h_without_media_config_is_text_runtime(self, tmp_path):
+        from vmlx_engine.model_config_registry import get_model_config_registry
+
+        model_dir = tmp_path / "nemotron-text"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "nemotron_h",
+                    "architectures": ["NemotronHForCausalLM"],
+                    "text_config": {
+                        "layer_types": ["mamba", "full_attention"],
+                    },
+                }
+            )
+        )
+        (model_dir / "preprocessor_config.json").write_text("{}")
+
+        config = get_model_config_registry().lookup(str(model_dir))
+
+        assert config.family_name == "nemotron_h"
+        assert config.cache_type == "hybrid"
+        assert config.is_mllm is False
+
+    def test_nemotron_h_omni_stamp_without_media_config_is_text_runtime(self, tmp_path):
+        from vmlx_engine.model_config_registry import get_model_config_registry
+
+        model_dir = tmp_path / "nemotron-stamped-text"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "nemotron_h",
+                    "architectures": ["NemotronHForCausalLM"],
+                    "text_config": {
+                        "layer_types": ["mamba", "full_attention"],
+                    },
+                }
+            )
+        )
+        (model_dir / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "capabilities": {
+                        "family": "nemotron_h",
+                        "modality": "omni",
+                        "cache_type": "hybrid",
+                    }
+                }
+            )
+        )
+
+        config = get_model_config_registry().lookup(str(model_dir))
+
+        assert config.family_name == "nemotron_h"
+        assert config.cache_type == "hybrid"
+        assert config.is_mllm is False
+
+    @pytest.mark.parametrize("model_type", ["zaya", "zaya1_vl"])
+    def test_zaya_registry_preserves_tokenizer_eos_boundary(self, tmp_path, model_type):
+        from vmlx_engine.model_config_registry import get_model_config_registry
+
+        model_dir = tmp_path / model_type
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": model_type,
+                    **({"vision_config": {"hidden_size": 1024}} if model_type == "zaya1_vl" else {}),
+                }
+            )
+        )
+        (model_dir / "tokenizer_config.json").write_text(
+            json.dumps({"eos_token": "<|im_end|>", "eos_token_id": 106})
+        )
+
+        config = get_model_config_registry().lookup(str(model_dir))
+
+        assert config.family_name == model_type
+        assert config.eos_tokens == ["<|im_end|>"]
 
     def test_lookup_unknown_type_returns_none(self):
         from vmlx_engine.model_config_registry import get_model_config_registry
@@ -2799,17 +3011,13 @@ class TestZayaCCACachePolicy:
         assert cfg.supports_thinking is True
         assert cfg.think_in_template is False
 
-    def test_cli_disables_prefix_paged_l2_and_tq_for_zaya_cca(self):
+    def test_cli_enables_typed_paged_cache_and_forces_tq_off_for_zaya_cca(self):
         source = Path("./vmlx_engine/cli.py").read_text()
 
         assert 'getattr(_mc, "cache_subtype", None) == "zaya_cca"' in source
-        assert 'args.enable_prefix_cache = False' in source
-        assert 'args.use_paged_cache = False' in source
-        assert 'args.enable_block_disk_cache = False' in source
+        assert 'args.use_paged_cache = True' in source
         assert 'args.kv_cache_quantization = "none"' in source
-        assert "VMLX_ZAYA_ENABLE_TYPED_CCA_CACHE" in source
-        assert "typed CCA restore" in source
-        assert "full-model prefix/paged/L2 replay gates" in source
+        assert "ZAYA/CCA typed cache enabled" in source
         assert "conv_state + prev_hs" in source
         assert "server._tool_call_parser or args.tool_call_parser" in source
 
@@ -2820,12 +3028,11 @@ class TestZayaCCACachePolicy:
         assert "ZAYA/CCA cache contract detected but prefix cache is disabled" in scheduler_source
         assert "and not self._uses_zaya_cache" in scheduler_source
 
-    def test_zaya_cli_policy_default_disables_prefix_paged_l2_and_tq(
+    def test_zaya_cli_policy_default_keeps_prefix_paged_l2_but_forces_tq_off(
         self, monkeypatch
     ):
         from vmlx_engine.cli import _apply_zaya_cca_cache_policy
 
-        monkeypatch.delenv("VMLX_ZAYA_ENABLE_TYPED_CCA_CACHE", raising=False)
         monkeypatch.setenv("VMLX_FORCE_TQ_AUTO", "1")
         args = SimpleNamespace(
             enable_prefix_cache=True,
@@ -2836,23 +3043,23 @@ class TestZayaCCACachePolicy:
 
         gate, changed = _apply_zaya_cca_cache_policy(args, MagicMock())
 
-        assert gate is False
-        assert changed == ("prefix", "paged", "L2 disk", "kv_quant=q4")
-        assert args.enable_prefix_cache is False
-        assert args.use_paged_cache is False
-        assert args.enable_block_disk_cache is False
+        assert gate is True
+        assert changed == ("kv_quant=q4",)
+        assert args.enable_prefix_cache is True
+        assert args.use_paged_cache is True
+        assert args.enable_block_disk_cache is True
         assert args.kv_cache_quantization == "none"
         assert args.kv_cache_quantization_explicit is True
         assert os.environ["VMLX_DISABLE_TQ_KV"] == "1"
         assert "VMLX_FORCE_TQ_AUTO" not in os.environ
         os.environ.pop("VMLX_DISABLE_TQ_KV", None)
 
-    def test_zaya_cli_policy_live_gate_keeps_prefix_paged_l2_but_forces_tq_off(
+    def test_zaya_cli_policy_no_longer_requires_live_gate_env(
         self, monkeypatch
     ):
         from vmlx_engine.cli import _apply_zaya_cca_cache_policy
 
-        monkeypatch.setenv("VMLX_ZAYA_ENABLE_TYPED_CCA_CACHE", "1")
+        monkeypatch.delenv("VMLX_ZAYA_ENABLE_TYPED_CCA_CACHE", raising=False)
         monkeypatch.setenv("VMLX_FORCE_TQ_AUTO", "1")
         args = SimpleNamespace(
             enable_prefix_cache=True,
@@ -2874,12 +3081,12 @@ class TestZayaCCACachePolicy:
         assert "VMLX_FORCE_TQ_AUTO" not in os.environ
         os.environ.pop("VMLX_DISABLE_TQ_KV", None)
 
-    def test_zaya_cli_policy_live_gate_upgrades_prefix_only_to_paged(
+    def test_zaya_cli_policy_upgrades_prefix_only_to_paged(
         self, monkeypatch
     ):
         from vmlx_engine.cli import _apply_zaya_cca_cache_policy
 
-        monkeypatch.setenv("VMLX_ZAYA_ENABLE_TYPED_CCA_CACHE", "1")
+        monkeypatch.delenv("VMLX_ZAYA_ENABLE_TYPED_CCA_CACHE", raising=False)
         args = SimpleNamespace(
             enable_prefix_cache=True,
             use_paged_cache=False,
@@ -3692,6 +3899,8 @@ class TestJangVLMFallbacks:
                 "layer_types": layer_types or ["linear_attention", "full_attention"],
             },
             "vision_config": {},
+            "image_token_id": 248056,
+            "video_token_id": 248057,
         }))
         jang = {
             "format": "jang" if weight_format is None else weight_format,
@@ -3710,8 +3919,8 @@ class TestJangVLMFallbacks:
         source = Path("vmlx_engine/utils/jang_loader.py").read_text()
 
         assert "VMLINUX_FORCE_VLM_LOADER" not in source
-        assert "JANGTQ/MXTQ Qwen VLM remains" in source
-        assert "native multimodal fast path" in source
+        assert "Qwen3.5/3.6-VL hybrid SSM bundles must stay on the real VLM path" in source
+        assert "demoting the bundle" in source
 
     def test_text_only_vlm_fallbacks_mark_vision_unavailable(self):
         source = Path("vmlx_engine/utils/jang_loader.py").read_text()
@@ -3723,15 +3932,15 @@ class TestJangVLMFallbacks:
         assert 'globals()["_LAST_LOAD_VLM_FALLBACK"] = True' in mistral_fallback
         assert 'globals()["_LAST_LOAD_VLM_FALLBACK"] = False' in source
 
-    def test_affine_qwen_hybrid_jang_routes_text_only(self, tmp_path):
+    def test_affine_qwen_hybrid_jang_routes_multimodal(self, tmp_path):
         from vmlx_engine.api import utils
 
         model_dir = self._write_qwen_hybrid_fixture(tmp_path)
         utils._IS_MLLM_CACHE.clear()
 
-        assert utils.is_mllm_model(str(model_dir)) is False
+        assert utils.is_mllm_model(str(model_dir)) is True
 
-    def test_affine_qwen_hybrid_detection_normalizes_config_case(self, tmp_path):
+    def test_affine_qwen_hybrid_detection_normalizes_config_case_for_vlm(self, tmp_path):
         from vmlx_engine.api import utils
 
         model_dir = self._write_qwen_hybrid_fixture(
@@ -3741,15 +3950,15 @@ class TestJangVLMFallbacks:
         )
         utils._IS_MLLM_CACHE.clear()
 
-        assert utils.is_mllm_model(str(model_dir)) is False
+        assert utils.is_mllm_model(str(model_dir)) is True
 
-    def test_affine_qwen_hybrid_jang_overrides_forced_mllm(self, tmp_path):
+    def test_affine_qwen_hybrid_jang_keeps_forced_mllm_true(self, tmp_path):
         from vmlx_engine.api import utils
 
         model_dir = self._write_qwen_hybrid_fixture(tmp_path)
         utils._IS_MLLM_CACHE.clear()
 
-        assert utils.is_mllm_model(str(model_dir), force_mllm=True) is False
+        assert utils.is_mllm_model(str(model_dir), force_mllm=True) is True
 
     def test_mxtq_qwen_hybrid_jang_routes_multimodal(self, tmp_path):
         from vmlx_engine.api import utils
@@ -3759,10 +3968,13 @@ class TestJangVLMFallbacks:
 
         assert utils.is_mllm_model(str(model_dir)) is True
 
-    def test_qwen_vlm_loader_affine_delegates_to_text_loader(self, tmp_path, monkeypatch):
-        """The loader fallback must execute, not just exist in comments."""
+    def test_qwen_vlm_loader_affine_uses_native_vlm_loader(self, tmp_path, monkeypatch):
+        """Qwen 3.6 affine-JANG is still a VL/video bundle; do not drop media."""
         from vmlx_engine.utils import jang_loader
         import mlx_vlm.utils as vlm_utils
+
+        class NativeVlmReached(RuntimeError):
+            pass
 
         model_dir = self._write_qwen_hybrid_fixture(tmp_path)
         config = json.loads((model_dir / "config.json").read_text())
@@ -3772,29 +3984,31 @@ class TestJangVLMFallbacks:
         monkeypatch.setattr(
             vlm_utils,
             "get_model_and_args",
-            lambda *, config: pytest.fail("affine Qwen hybrid must not reach native VLM load"),
+            lambda *, config: (_ for _ in ()).throw(NativeVlmReached()),
         )
 
-        def _fake_text_loader(path, cfg, **kwargs):
-            return "text-model", "text-tokenizer"
-
-        monkeypatch.setattr(jang_loader, "_load_jang_v2", _fake_text_loader)
-
-        assert jang_loader._load_jang_v2_vlm(model_dir, jang_cfg) == (
-            "text-model",
-            "text-tokenizer",
+        monkeypatch.setattr(
+            jang_loader,
+            "_load_jang_v2",
+            lambda *args, **kwargs: pytest.fail("Qwen 3.6 VLM must not use text fallback"),
         )
-        assert jang_loader._LAST_LOAD_VLM_FALLBACK is True
 
-    def test_qwen_vlm_loader_affine_fallback_normalizes_config_case(
+        with pytest.raises(NativeVlmReached):
+            jang_loader._load_jang_v2_vlm(model_dir, jang_cfg)
+        assert jang_loader._LAST_LOAD_VLM_FALLBACK is False
+
+    def test_qwen_vlm_loader_affine_native_path_normalizes_config_case(
         self,
         tmp_path,
         monkeypatch,
     ):
-        """The defensive loader fallback must match the same normalized Qwen
+        """The native loader path must match the same normalized Qwen
         hybrid predicate as is_mllm_model()."""
         from vmlx_engine.utils import jang_loader
         import mlx_vlm.utils as vlm_utils
+
+        class NativeVlmReached(RuntimeError):
+            pass
 
         model_dir = self._write_qwen_hybrid_fixture(
             tmp_path,
@@ -3808,19 +4022,18 @@ class TestJangVLMFallbacks:
         monkeypatch.setattr(
             vlm_utils,
             "get_model_and_args",
-            lambda *, config: pytest.fail("affine Qwen hybrid must not reach native VLM load"),
+            lambda *, config: (_ for _ in ()).throw(NativeVlmReached()),
         )
 
-        def _fake_text_loader(path, cfg, **kwargs):
-            return "text-model", "text-tokenizer"
-
-        monkeypatch.setattr(jang_loader, "_load_jang_v2", _fake_text_loader)
-
-        assert jang_loader._load_jang_v2_vlm(model_dir, jang_cfg) == (
-            "text-model",
-            "text-tokenizer",
+        monkeypatch.setattr(
+            jang_loader,
+            "_load_jang_v2",
+            lambda *args, **kwargs: pytest.fail("Qwen 3.6 VLM must not use text fallback"),
         )
-        assert jang_loader._LAST_LOAD_VLM_FALLBACK is True
+
+        with pytest.raises(NativeVlmReached):
+            jang_loader._load_jang_v2_vlm(model_dir, jang_cfg)
+        assert jang_loader._LAST_LOAD_VLM_FALLBACK is False
 
     def test_qwen_vlm_loader_mxtq_stays_native_vlm(self, tmp_path, monkeypatch):
         """JANGTQ/MXTQ Qwen VLM must not be caught by the affine fallback."""
@@ -4579,17 +4792,11 @@ class TestTurboQuantKVTelemetry:
             assert "if (effectiveEnableJit)" in source
             assert "if (config.enableJit) args.push('--enable-jit')" not in source
 
-        assert "detectedFamily === 'deepseek-v4'" in form_source
+        assert "normalizedDetectedFamily === 'deepseek-v4'" in form_source
         # JIT incompat list expanded 2026-05-09 to include TurboQuant
         # (engine skips mx.compile for TurboQuantKVCache; UI now matches).
-        assert (
-            "disabled={flashMoeActive || distributedActive || dsv4Active || turboQuantActive}"
-            in form_source
-        )
-        assert (
-            "checked={!!config.enableJit && !flashMoeActive && !distributedActive && !dsv4Active && !turboQuantActive}"
-            in form_source
-        )
+        assert "disabled={flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive}" in form_source
+        assert "checked={!!config.enableJit && !flashMoeActive && !distributedActive && !dsv4Active && !zayaCcaActive && !turboQuantActive && !multimodalActive}" in form_source
 
     def test_responses_long_context_tool_cache_gate_script_pins_artifacts(self):
         gate_source = Path(
@@ -5729,10 +5936,7 @@ class TestJitTurboQuantSymmetricGuard:
         assert "turboQuantActive" in form
         assert "detectedIsTurboQuant" in form
         # disabled prop covers turboQuantActive
-        assert (
-            "disabled={flashMoeActive || distributedActive || dsv4Active || turboQuantActive}"
-            in form
-        )
+        assert "disabled={flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive}" in form
 
     def test_detect_config_stamps_isTurboQuant_flag(self):
         """detectModelConfigFromDir must set isTurboQuant when bundle is TQ.

@@ -62,6 +62,8 @@ export function parseContentArray(
   text?: string;
   image_url?: { url: string };
   video_url?: { url: string };
+  input_audio?: { data: string; format?: string };
+  audio_url?: { url: string };
 }> | null {
   if (!content.startsWith("[")) return null;
   try {

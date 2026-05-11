@@ -29,47 +29,33 @@ def _apply_zaya_cca_cache_policy(args, logger):
     Generic TurboQuant KV only covers the KV portion, so it stays disabled.
     """
 
-    zaya_cache_gate = _env_truthy("VMLX_ZAYA_ENABLE_TYPED_CCA_CACHE")
     changed = []
-    if not zaya_cache_gate and getattr(args, "enable_prefix_cache", True):
-        args.enable_prefix_cache = False
-        changed.append("prefix")
-    if not zaya_cache_gate and getattr(args, "use_paged_cache", False):
-        args.use_paged_cache = False
-        changed.append("paged")
     if (
-        zaya_cache_gate
-        and getattr(args, "enable_prefix_cache", True)
+        getattr(args, "enable_prefix_cache", True)
         and not getattr(args, "use_paged_cache", False)
     ):
         args.use_paged_cache = True
         changed.append("paged=required_for_zaya_cca")
-    if not zaya_cache_gate and getattr(args, "enable_block_disk_cache", False):
+    if (
+        not getattr(args, "enable_prefix_cache", True)
+        and getattr(args, "enable_block_disk_cache", False)
+    ):
         args.enable_block_disk_cache = False
-        changed.append("L2 disk")
+        changed.append("L2 disk=disabled_without_prefix")
     if getattr(args, "kv_cache_quantization", "none") != "none":
         changed.append(f"kv_quant={args.kv_cache_quantization}")
     args.kv_cache_quantization = "none"
     args.kv_cache_quantization_explicit = True
     os.environ["VMLX_DISABLE_TQ_KV"] = "1"
     os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
-    if zaya_cache_gate:
-        logger.warning(
-            "ZAYA/CCA typed cache live gate enabled via "
-            "VMLX_ZAYA_ENABLE_TYPED_CCA_CACHE=1. Prefix reuse uses "
-            "paged zaya_cca_v1 records; prefix-only cache is upgraded "
-            "to paged because memory-aware/legacy prefix caches cannot "
-            "store CCA conv_state + prev_hs safely. "
-            "Generic TurboQuant KV remains forced off."
-        )
-    else:
-        logger.warning(
-            "ZAYA/CCA cache contract detected — disabling %s until the "
-            "Python runtime's typed CCA restore (standard KV + conv_state "
-            "+ prev_hs) passes full-model prefix/paged/L2 replay gates.",
-            ", ".join(changed) if changed else "prefix/paged/L2/TQ-KV",
-        )
-    return zaya_cache_gate, tuple(changed)
+    logger.warning(
+        "ZAYA/CCA typed cache enabled. Prefix reuse uses paged "
+        "zaya_cca_v1 records; prefix-only cache is upgraded to paged "
+        "because memory-aware/legacy prefix caches cannot store CCA "
+        "conv_state + prev_hs safely. Generic TurboQuant KV remains "
+        "forced off."
+    )
+    return True, tuple(changed)
 
 
 def _env_int(name: str, default: int, legacy_name: str | None = None) -> int:

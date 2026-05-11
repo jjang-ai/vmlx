@@ -224,3 +224,25 @@ class TestSimpleEngineConcurrency:
             assert len(results) == 3
             for result in results:
                 assert result.text == "test response"
+
+    @pytest.mark.asyncio
+    async def test_mllm_stream_chat_generation_error_raises_not_model_text(self):
+        """Runtime failures from MLLM streaming must surface as errors, not assistant text."""
+        from vmlx_engine.engine.simple import SimpleEngine
+
+        model = MagicMock()
+        model.stream_chat.side_effect = RuntimeError(
+            "There is no Stream(gpu, 0) in current thread."
+        )
+
+        with patch("vmlx_engine.engine.simple.is_mllm_model", return_value=True):
+            engine = SimpleEngine("test-vlm")
+            engine._model = model
+            engine._loaded = True
+
+            with pytest.raises(RuntimeError, match="There is no Stream"):
+                async for _chunk in engine.stream_chat(
+                    messages=[{"role": "user", "content": "hi"}],
+                    max_tokens=4,
+                ):
+                    pass

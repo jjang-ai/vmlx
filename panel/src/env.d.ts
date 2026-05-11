@@ -174,7 +174,14 @@ declare global {
           chatId: string,
           content: string,
           endpoint?: { host: string; port: number },
-          attachments?: Array<{ dataUrl: string; name: string }>,
+          attachments?: Array<{
+            dataUrl: string;
+            name: string;
+            kind?: "image" | "video" | "audio" | "text";
+            type?: string;
+            size?: number;
+            text?: string;
+          }>,
         ) => Promise<any>;
         onStream: (callback: (data: any) => void) => () => void;
         onComplete: (callback: (data: any) => void) => () => void;
@@ -350,9 +357,11 @@ declare global {
           running: boolean;
           port: number;
           host?: string;
+          lanHost?: string;
+          displayHost?: string;
         }>;
-        setPort: (port: number) => Promise<void>;
-        setHostAndPort: (port: number, host: string) => Promise<void>;
+        setPort: (port: number) => Promise<{ running: boolean; port: number; host?: string; lanHost?: string; displayHost?: string }>;
+        setHostAndPort: (port: number, host: string) => Promise<{ running: boolean; port: number; host?: string; lanHost?: string; displayHost?: string }>;
       };
       developer: {
         info: (

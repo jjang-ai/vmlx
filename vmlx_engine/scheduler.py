@@ -5328,8 +5328,15 @@ class Scheduler:
                                         # prompt boundary — use it
                                         # DIRECTLY. No truncation, no
                                         # rewind, no guard.
+                                        snapshot_family = (
+                                            "ZAYA"
+                                            if self._uses_zaya_cache
+                                            else "DSV4"
+                                            if self._uses_dsv4_cache
+                                            else "Path-dependent"
+                                        )
                                         logger.info(
-                                            f"DSV4 prefix cache store using "
+                                            f"{snapshot_family} prefix cache store using "
                                             f"clean prompt-boundary snapshot "
                                             f"({len(snapshot_cache)} layers, "
                                             f"prompt_len={prompt_len}). No "

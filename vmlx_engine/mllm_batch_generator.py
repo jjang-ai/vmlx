@@ -578,6 +578,7 @@ def _call_processor_direct(
     *,
     prompts: Any,
     images: Optional[List[str]],
+    videos: Optional[List[Any]] = None,
     add_special_tokens: bool,
 ) -> Dict[str, Any]:
     """Call a VLM processor without mlx_vlm.process_inputs' bad `.process` trap.
@@ -591,7 +592,7 @@ def _call_processor_direct(
     filtering.
     """
     process_method = getattr(processor, "process", None)
-    if callable(process_method):
+    if callable(process_method) and not videos:
         from mlx_vlm.utils import process_inputs
 
         return _as_input_mapping(
@@ -611,11 +612,14 @@ def _call_processor_direct(
 
     kwargs: Dict[str, Any] = {
         "text": prompts,
-        "images": images,
         "padding": True,
         "return_tensors": "mlx",
         "add_special_tokens": add_special_tokens,
     }
+    if images:
+        kwargs["images"] = images
+    if videos:
+        kwargs["videos"] = videos
     try:
         params = inspect.signature(processor).parameters
     except (TypeError, ValueError):
@@ -1988,8 +1992,12 @@ class MLLMBatchGenerator:
 
         from mlx_vlm.utils import prepare_inputs
 
-        # Collect all images (including video frames)
+        # Collect media for native processor ingestion. Videos must stay on the
+        # processor's ``videos=`` path so Qwen-style processors return
+        # pixel_values_videos + video_grid_thw matching the <|video_pad|> token.
         all_images = []
+        video_inputs = []
+        video_cache_sources = []
 
         if request.images:
             from .models.mllm import process_image_input
@@ -2004,11 +2012,10 @@ class MLLMBatchGenerator:
         if request.videos:
             from .models.mllm import (
                 process_video_input,
-                extract_video_frames_smart,
-                save_frames_to_temp,
                 DEFAULT_FPS,
                 MAX_FRAMES,
             )
+            from mlx_vlm.video_generate import fetch_video
 
             fps = request.video_fps or DEFAULT_FPS
             max_frames = request.video_max_frames or MAX_FRAMES
@@ -2016,18 +2023,19 @@ class MLLMBatchGenerator:
             for video in request.videos:
                 try:
                     video_path = process_video_input(video)
-                    frames = extract_video_frames_smart(
-                        video_path,
-                        fps=fps,
-                        max_frames=max_frames,
+                    video_cache_sources.append(video_path)
+                    video_input = fetch_video(
+                        {"video": video_path, "fps": fps, "max_frames": max_frames}
                     )
-                    frame_paths = save_frames_to_temp(frames)
-                    all_images.extend(frame_paths)
+                    video_inputs.append(video_input)
                 except Exception as e:
                     logger.warning(f"Failed to process video: {e}")
+            if request.videos and not video_inputs:
+                raise ValueError("All video inputs failed to process")
 
         # Check pixel cache first
-        cached_pixels = self.vision_cache.get_pixel_cache(all_images, request.prompt)
+        media_cache_sources = all_images + video_cache_sources
+        cached_pixels = self.vision_cache.get_pixel_cache(media_cache_sources, request.prompt)
         if cached_pixels is not None:
             # Cache hit - use cached pixel values
             request.input_ids = cached_pixels.input_ids
@@ -2059,11 +2067,12 @@ class MLLMBatchGenerator:
             self.processor,
             has_image_literal="<image>" in request.prompt,
             has_images=bool(all_images),
-        ):
+        ) or bool(video_inputs):
             inputs = _call_processor_direct(
                 self.processor,
                 prompts=request.prompt,
                 images=all_images,
+                videos=video_inputs,
                 add_special_tokens=False,
             )
         else:
@@ -2116,23 +2125,32 @@ class MLLMBatchGenerator:
         # Qwen3.5-VL, Gemma 4, and future VLM families without having to
         # special-case each processor's output format.
         request.input_ids = _ensure_mx_array(inputs.get("input_ids"), mx.int32)
-        request.pixel_values = _ensure_mx_array(inputs.get("pixel_values"))
+        pixel_values = inputs.get("pixel_values")
+        if pixel_values is None:
+            pixel_values = inputs.get("pixel_values_videos")
+        request.pixel_values = _ensure_mx_array(pixel_values)
         request.attention_mask = _ensure_mx_array(inputs.get("attention_mask"))
 
         # Extract extra kwargs
         request.extra_kwargs = {
             k: v
             for k, v in inputs.items()
-            if k not in ["input_ids", "pixel_values", "attention_mask"]
+            if k not in ["input_ids", "pixel_values", "pixel_values_videos", "attention_mask"]
         }
-        request.image_grid_thw = request.extra_kwargs.pop("image_grid_thw", None)
+        request.image_grid_thw = _ensure_mx_array(
+            request.extra_kwargs.pop("image_grid_thw", None), mx.int32
+        )
+        if "video_grid_thw" in request.extra_kwargs:
+            request.extra_kwargs["video_grid_thw"] = _ensure_mx_array(
+                request.extra_kwargs["video_grid_thw"], mx.int32
+            )
 
         processing_time = time.perf_counter() - tic
 
         # Store in pixel cache for future reuse
-        if all_images and request.pixel_values is not None:
+        if media_cache_sources and request.pixel_values is not None:
             self.vision_cache.set_pixel_cache(
-                images=all_images,
+                images=media_cache_sources,
                 prompt=request.prompt,
                 pixel_values=request.pixel_values,
                 input_ids=request.input_ids,
@@ -2142,12 +2160,13 @@ class MLLMBatchGenerator:
                 processing_time=processing_time,
             )
 
-        self._stats.num_images_processed += len(all_images)
+        self._stats.num_images_processed += len(media_cache_sources)
         self._stats.vision_encoding_time += processing_time
 
         logger.debug(
             f"Preprocessed request {request.request_id}: "
-            f"{len(all_images)} images, {request.input_ids.size if request.input_ids is not None else 0} tokens "
+            f"{len(all_images)} images, {len(video_inputs)} videos, "
+            f"{request.input_ids.size if request.input_ids is not None else 0} tokens "
             f"({processing_time:.2f}s)"
         )
 

@@ -595,15 +595,7 @@ class SimpleEngine(BaseEngine):
                         mx.clear_memory_cache()
                     except Exception:
                         pass
-                    yield GenerationOutput(
-                        text=f"[Generation error: {type(e).__name__}: {e}]",
-                        new_text=f"[Generation error: {type(e).__name__}: {e}]",
-                        prompt_tokens=0,
-                        completion_tokens=0,
-                        finished=True,
-                        finish_reason="stop",
-                    )
-                    return
+                    raise
 
                 # Per-token iteration: offload each next() to thread pool
                 _sentinel = object()
@@ -623,15 +615,7 @@ class SimpleEngine(BaseEngine):
                             mx.clear_memory_cache()
                         except Exception:
                             pass
-                        yield GenerationOutput(
-                            text=accumulated_text + f"\n[Generation error: {type(e).__name__}: {e}]",
-                            new_text=f"\n[Generation error: {type(e).__name__}: {e}]",
-                            prompt_tokens=0,
-                            completion_tokens=token_count,
-                            finished=True,
-                            finish_reason="stop",
-                        )
-                        return
+                        raise
 
                     if chunk is _sentinel:
                         break

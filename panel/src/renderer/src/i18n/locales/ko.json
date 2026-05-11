@@ -363,10 +363,10 @@
       "braveGetKey": "무료 API 키 받기 →"
     },
     "input": {
-      "dropOverlay": "이미지 또는 비디오를 드래그하여 첨부",
+      "dropOverlay": "이미지, 비디오, 오디오 또는 텍스트 파일을 드래그하여 첨부",
       "placeholderWaiting": "응답 대기 중...",
       "placeholderDefault": "메시지...",
-      "attachTitle": "이미지 또는 비디오 첨부",
+      "attachTitle": "이미지, 비디오, 오디오 또는 텍스트 파일 첨부",
       "stopTitle": "생성 중지 (Esc)",
       "sendTitle": "메시지 전송 (Enter)"
     },

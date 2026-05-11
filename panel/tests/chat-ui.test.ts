@@ -17,6 +17,7 @@
  *   - JSON formatting + args parsing
  *   - String truncation
  */
+import { readFileSync } from 'node:fs'
 import { describe, it, expect } from 'vitest'
 
 // ─── Re-implement pure functions from chat-utils.ts for testing ──────────────
@@ -58,7 +59,7 @@ function calcTextareaHeight(
 
 function parseContentArray(
   content: string
-): Array<{ type: string; text?: string; image_url?: { url: string } }> | null {
+): Array<{ type: string; text?: string; image_url?: { url: string }; video_url?: { url: string }; input_audio?: { data: string; format?: string } }> | null {
   if (!content.startsWith('[')) return null
   try {
     const parsed = JSON.parse(content)
@@ -338,6 +339,34 @@ describe('Content Array Parsing', () => {
     expect(result).toHaveLength(2)
     expect(result![0].type).toBe('image_url')
     expect(result![1].type).toBe('text')
+  })
+
+  it('parses audio + text content array', () => {
+    const content = JSON.stringify([
+      { type: 'input_audio', input_audio: { data: 'UklGRg==', format: 'wav' } },
+      { type: 'text', text: 'Transcribe this.' },
+    ])
+    const result = parseContentArray(content)
+    expect(result).toHaveLength(2)
+    expect(result![0].type).toBe('input_audio')
+    expect(result![0].input_audio?.format).toBe('wav')
+    expect(result![1].type).toBe('text')
+  })
+
+  it('parses full attachment content array with image video audio and text-file context', () => {
+    const content = JSON.stringify([
+      { type: 'text', text: 'Compare attachments.' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,abc' } },
+      { type: 'video_url', video_url: { url: 'data:video/mp4;base64,def' } },
+      { type: 'input_audio', input_audio: { data: 'UklGRg==', format: 'wav' } },
+      { type: 'text', text: '[Attached file: note.txt]\\nblue cat' },
+    ])
+    const result = parseContentArray(content)
+    expect(result).toHaveLength(5)
+    expect(result![1].type).toBe('image_url')
+    expect(result![2].type).toBe('video_url')
+    expect(result![3].type).toBe('input_audio')
+    expect(result![4].text).toContain('blue cat')
   })
 
   it('handles malformed JSON gracefully', () => {
@@ -1082,7 +1111,7 @@ describe('Chat Date Grouping', () => {
 // Re-implement fixed parseContentArray for testing
 function parseContentArrayFixed(
   content: string
-): Array<{ type: string; text?: string; image_url?: { url: string } }> | null {
+): Array<{ type: string; text?: string; image_url?: { url: string }; video_url?: { url: string }; input_audio?: { data: string; format?: string } }> | null {
   if (!content.startsWith('[')) return null
   try {
     const parsed = JSON.parse(content)
@@ -1121,11 +1150,13 @@ describe('Audit Fix: parseContentArray validates all elements', () => {
   it('accepts array where all elements have string type', () => {
     const input = JSON.stringify([
       { type: 'text', text: 'hello' },
-      { type: 'image_url', image_url: { url: 'data:...' } }
+      { type: 'image_url', image_url: { url: 'data:...' } },
+      { type: 'video_url', video_url: { url: 'data:video/mp4;base64,...' } },
+      { type: 'input_audio', input_audio: { data: 'abc', format: 'wav' } }
     ])
     const result = parseContentArrayFixed(input)
     expect(result).not.toBeNull()
-    expect(result).toHaveLength(2)
+    expect(result).toHaveLength(4)
   })
 
   it('rejects empty array', () => {
@@ -1171,6 +1202,48 @@ describe('Audit Fix: InlineToolCall empty statuses guard', () => {
     expect(group.statuses.length).toBeGreaterThan(0)
     const lastPhase = group.statuses[group.statuses.length - 1]
     expect(lastPhase.phase).toBe('calling')
+  })
+})
+
+describe('Media attachment product path', () => {
+  it('chat input accepts audio files in addition to image and video', () => {
+    const source = readFileSync('src/renderer/src/components/chat/InputBox.tsx', 'utf8')
+    expect(source).toContain("export type AttachmentKind = 'image' | 'video' | 'audio' | 'text'")
+    expect(source).toContain("const ACCEPTED_AUDIO_TYPES = 'audio/wav")
+    expect(source).toContain("const ACCEPTED_TEXT_TYPES = 'text/plain")
+    expect(source).toContain("if (f.type.startsWith('audio/')) return 'audio'")
+    expect(source).toContain("if (f.type.startsWith('text/')) return 'text'")
+    expect(source).toContain('${ACCEPTED_IMAGE_TYPES},${ACCEPTED_VIDEO_TYPES},${ACCEPTED_AUDIO_TYPES},${ACCEPTED_TEXT_TYPES}')
+  })
+
+  it('renderer serializes audio attachments as OpenAI input_audio parts', () => {
+    const source = readFileSync('src/renderer/src/components/chat/ChatInterface.tsx', 'utf8')
+    expect(source).toContain("if (a.kind === 'audio')")
+    expect(source).toContain("type: 'input_audio'")
+    expect(source).toContain('format: audioFormatFromDataUrl(a.dataUrl)')
+    expect(source).toContain("p.type === 'input_audio' && p.input_audio?.data")
+  })
+
+  it('main IPC persists audio attachments as input_audio for the engine', () => {
+    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    expect(source).toContain('kind?: "image" | "video" | "audio" | "text"')
+    expect(source).toContain('if (a.dataUrl.startsWith("data:audio/")) return "audio"')
+    expect(source).toContain('type: "input_audio"')
+    expect(source).toContain('format: audioFormatFromDataUrl(a.dataUrl)')
+  })
+
+  it('text-file attachments stay plain text instead of forcing multimodal routing', () => {
+    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    expect(source).toContain('inferKind(a) !== "text"')
+    expect(source).toContain('if (kind === "text")')
+    expect(source).toContain('[Attached file: ${a.name}]')
+  })
+
+  it('message rendering includes audio controls for persisted audio parts', () => {
+    const source = readFileSync('src/renderer/src/components/chat/MessageBubble.tsx', 'utf8')
+    expect(source).toContain("p.type === 'input_audio' && p.input_audio?.data")
+    expect(source).toContain('<audio')
+    expect(source).toContain('controls')
   })
 })
 

@@ -386,6 +386,13 @@ class TestModelConfigRegistry:
         assert result.eos_tokens == ["<|role_end|>", "<|endoftext|>"]
         assert result.cache_type == "hybrid"
         assert result.tool_parser == "deepseek"
+        # Eric directive 2026-05-11: Ling is NOT a reasoning model. The
+        # canonical contract pins reasoning_parser=None and
+        # supports_thinking=False even when the bundle stamp claims
+        # capabilities.reasoning_parser="deepseek_r1".
+        assert result.reasoning_parser is None
+        assert result.supports_thinking is False
+        assert result.think_in_template is False
 
     def test_synthetic_no_thinking_family_suppresses_stale_reasoning_stamp(
         self, empty_registry, tmp_path
@@ -1415,43 +1422,39 @@ class TestModelConfigComprehensiveChecks:
         assert config.supports_thinking is True
         assert config.think_in_template is False
 
-    def test_ling_supports_thinking_true_per_eric_canonical_contract(self, registry):
-        """REGRESSION (2026-05-09): Eric's canonical FAMILY_MAP for Ling/Bailing
-        per the post-restamp table:
-            think_in_template = False  (template hardcodes thinking_option='off',
-                                        opt-in only via 'detailed thinking on'
-                                        in system message)
-            supports_thinking = True   (model CAN do <think> blocks when opted-in)
-            reasoning_parser  = deepseek_r1  (matches bundle stamp; needed to
-                                              extract <think>...</think> when emitted)
+    def test_ling_is_not_a_reasoning_model_per_eric_2026_05_11(self, registry):
+        """REGRESSION (2026-05-11): Eric directive — Ling is NOT a reasoning model.
 
-        Safe to flip: Ling chat_template.jinja line 1 hardcodes
-        `{% set thinking_option = 'off' %}`. There is NO `enable_thinking`
-        template variable. The vMLX engine `_resolve_enable_thinking`'s
-        request-time enable_thinking=true is a no-op for Ling — only system
-        message can flip thinking_option. So registry default chat path stays
-        visible-answer-first regardless of supports_thinking flag value."""
+        Supersedes the 2026-05-09 contract that flagged Ling as opt-in
+        reasoning-capable via 'detailed thinking on' system messages. The
+        decision now is to treat Ling chat output as plain content
+        unconditionally, with no reasoning parser auto-attached.
+
+        Why this is the right contract:
+        - Ling chat_template.jinja line 1 hardcodes `thinking_option='off'`
+          and there is no template variable to flip it on a per-request basis,
+          so the system-message-opt-in path was always edge-case and confusing
+          for users.
+        - Bundle stamps that claim `capabilities.reasoning_parser="deepseek_r1"`
+          must NOT resurrect the parser at runtime — the Ling family override
+          in `_try_jang_stamp` enforces reasoning_parser=None.
+        - Existing tool parser stays `deepseek` because tool calling is
+          orthogonal to reasoning.
+        """
         registry.clear_cache()
         with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("bailing_hybrid")):
             config = registry.lookup("inclusionAI/Ling-2.6-flash-JANGTQ")
         assert config.family_name == "ling"
         assert config.cache_type == "hybrid"
-        assert config.tool_parser == "deepseek"
-        assert config.think_in_template is False, (
-            "Ling template hardcodes thinking_option='off'; think_in_template "
-            "must be False so reasoning parser doesn't pre-classify visible "
-            "content as reasoning."
+        assert config.tool_parser == "deepseek", "tool calling stays — orthogonal to reasoning"
+        assert config.think_in_template is False
+        assert config.supports_thinking is False, (
+            "Eric directive 2026-05-11: Ling is NOT a reasoning model. "
+            "Do not advertise thinking capability."
         )
-        assert config.supports_thinking is True, (
-            "Eric's canonical FAMILY_MAP says supports_thinking=True for Ling: "
-            "model DOES support <think> blocks via 'detailed thinking on' "
-            "system-message opt-in. This is a model capability fact, "
-            "independent of default template behavior."
-        )
-        assert config.reasoning_parser == "deepseek_r1", (
-            "Bundle stamp + Eric's contract specify deepseek_r1 so that when "
-            "user opts in via system message, <think>...</think> blocks get "
-            "extracted into reasoning_content correctly."
+        assert config.reasoning_parser is None, (
+            "Eric directive 2026-05-11: do not auto-attach a reasoning parser. "
+            "Ling chat output is plain content."
         )
 
     def test_hy_v3_provisional_contract(self, registry):

@@ -102,6 +102,26 @@ def _config_declares_linear_attention(config: Any) -> bool:
     return False
 
 
+def _config_declares_media(config: Any) -> bool:
+    """Return True when config.json declares real image/audio/video support."""
+    if not isinstance(config, dict):
+        return False
+    for key in ("vision_config", "audio_config", "video_config"):
+        if key in config and config.get(key) is not None:
+            return True
+    for key in (
+        "image_token_id",
+        "image_token_index",
+        "video_token_id",
+        "video_token_index",
+        "audio_token_id",
+        "audio_token_index",
+    ):
+        if key in config and config.get(key) is not None:
+            return True
+    return False
+
+
 def _with_linear_attention_cache_override(
     config: ModelConfig,
     model_config: dict[str, Any],
@@ -112,6 +132,18 @@ def _with_linear_attention_cache_override(
         and _config_declares_linear_attention(model_config)
     ):
         return replace(config, cache_type="hybrid")
+    return config
+
+
+def _with_config_metadata_overrides(
+    config: ModelConfig,
+    model_config: dict[str, Any],
+) -> ModelConfig:
+    config = _with_linear_attention_cache_override(config, model_config)
+    if config.family_name in {"qwen3_5", "qwen3_5_moe"} and _config_declares_media(
+        model_config
+    ):
+        return replace(config, is_mllm=True)
     return config
 
 
@@ -303,6 +335,7 @@ class ModelConfigRegistry:
             mod = caps.get("modality")
             model_type_from_config = str(local_model_config.get("model_type") or "").lower()
             has_config_vision = isinstance(local_model_config.get("vision_config"), dict)
+            has_config_media = _config_declares_media(local_model_config)
             base_supports_thinking = getattr(base, "supports_thinking", None)
             is_ling_family = base.family_name == "ling"
             is_zaya_family = base.family_name in {"zaya", "zaya1_vl"}
@@ -317,13 +350,13 @@ class ModelConfigRegistry:
                 updates["reasoning_parser"] = "qwen3"
                 updates["think_in_template"] = False
             elif is_ling_family:
-                # Ling/Bailing is a known default-off but opt-in reasoning
-                # family.  Bundle stamps have drifted in both directions, so
-                # keep the canonical registry contract: supports_thinking=True
-                # plus deepseek_r1 parser, but never treat the prompt as if it
-                # auto-opened <think>.
-                updates["supports_thinking"] = True
-                updates["reasoning_parser"] = "deepseek_r1"
+                # Ling/Bailing is NOT a reasoning model. Eric directive
+                # 2026-05-11: Ling chat output is plain content. Do not let any
+                # bundle stamp (including drifted JANG sidecars that previously
+                # claimed deepseek_r1 capability) resurrect a reasoning parser
+                # or thinking-capable advertisement for Ling.
+                updates["supports_thinking"] = False
+                updates["reasoning_parser"] = None
                 updates["think_in_template"] = False
             elif is_hy3_family:
                 # Hy3's template defaults to `reasoning_effort=no_think` and
@@ -356,13 +389,15 @@ class ModelConfigRegistry:
                 updates["cache_type"] = ct
             if cst:
                 updates["cache_subtype"] = str(cst)
-            if mod == "vision" or mod == "omni":
-                # `omni` covers Nemotron-Omni (text+image+audio+video) — the
-                # dispatch logic at request time decides between text-only LLM
-                # path and the OmniMultimodalDispatcher based on what's
-                # actually in the messages, but is_mllm=True ensures MLLM
-                # tooling (image-extraction, etc.) is available on the model.
+            if mod == "vision" or (mod == "omni" and has_config_media):
+                # `omni` only becomes MLLM when config.json carries real
+                # media metadata. Some Nemotron-H text extracts keep stale
+                # Omni stamps or preprocessor_config.json sidecars but do not
+                # have image/audio/video weights; routing those through MLLM
+                # is a false positive.
                 updates["is_mllm"] = True
+            elif mod == "omni":
+                updates["is_mllm"] = False
             elif mod == "text":
                 if base.family_name == "zaya1_vl" and (
                     model_type_from_config == "zaya1_vl" or has_config_vision
@@ -448,10 +483,7 @@ class ModelConfigRegistry:
                     if cfg_path.exists():
                         raw = json.loads(cfg_path.read_text())
                         text_model_type = raw.get("text_config", {}).get("model_type", "").lower()
-                        has_media_config = has_media_config or any(
-                            bool(raw.get(k))
-                            for k in ("vision_config", "audio_config", "video_config")
-                        )
+                        has_media_config = has_media_config or _config_declares_media(raw)
                 except Exception:
                     pass
 
@@ -494,7 +526,7 @@ class ModelConfigRegistry:
                 if text_model_type and text_model_type != model_type:
                     for config in self._configs:
                         if text_model_type in config.model_types and config.priority > 0:
-                            config = _with_linear_attention_cache_override(
+                            config = _with_config_metadata_overrides(
                                 config,
                                 model_config,
                             )
@@ -504,18 +536,22 @@ class ModelConfigRegistry:
 
                 for config in self._configs:
                     if model_type in config.model_types:
-                        next_config = _with_linear_attention_cache_override(
+                        next_config = _with_config_metadata_overrides(
                             config,
                             model_config,
                         )
                         if next_config.cache_type != config.cache_type:
-                            config = next_config
                             logger.info(
                                 "Model config: qwen3_5 linear_attention layers detected "
                                 "from config.json; using hybrid cache"
                             )
-                        self._match_cache[model_name] = config
-                        return config
+                        if next_config.is_mllm != config.is_mllm:
+                            logger.info(
+                                "Model config: qwen3_5 media config detected "
+                                "from config.json; using multimodal routing"
+                            )
+                        self._match_cache[model_name] = next_config
+                        return next_config
 
             self._match_cache[model_name] = _DEFAULT_CONFIG
             return _DEFAULT_CONFIG

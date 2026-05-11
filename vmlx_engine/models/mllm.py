@@ -569,17 +569,20 @@ def process_video_input(video: str | dict) -> str:
     if not video:
         raise ValueError("Empty video input")
 
-    # Check if it's a local file
-    if Path(video).exists():
-        return video
+    # Check URL/data-URL formats before filesystem probing. Long data URLs can
+    # exceed platform filename limits if passed through Path.exists().
+    if is_base64_video(video):
+        return decode_base64_video(video)
 
-    # Check if it's a URL
     if is_url(video):
         return download_video(video)
 
-    # Check if it's base64
-    if is_base64_video(video):
-        return decode_base64_video(video)
+    # Check if it's a local file
+    try:
+        if Path(video).exists():
+            return video
+    except OSError:
+        pass
 
     raise ValueError(f"Cannot process video: {video[:50]}...")
 
@@ -1234,6 +1237,7 @@ class MLXMultimodalLM:
             content = msg.get("content", "")
             msg_text = ""
             msg_image_count = 0
+            msg_video_count = 0
 
             if isinstance(content, str):
                 msg_text = content
@@ -1285,6 +1289,7 @@ class MLXMultimodalLM:
 
                         elif item_type == "video":
                             videos.append(item.get("video", item.get("url", "")))
+                            msg_video_count += 1
 
                         elif item_type == "video_url":
                             vid_url = item.get("video_url", {})
@@ -1292,6 +1297,7 @@ class MLXMultimodalLM:
                                 videos.append(vid_url)
                             else:
                                 videos.append(vid_url.get("url", ""))
+                            msg_video_count += 1
 
                         elif item_type == "input_video":
                             vid_url = item.get("video_url", item.get("url", item.get("file_id", "")))
@@ -1299,23 +1305,26 @@ class MLXMultimodalLM:
                                 videos.append(vid_url)
                             else:
                                 videos.append(vid_url.get("url", ""))
+                            msg_video_count += 1
 
             # Build properly structured message for Qwen3-VL-MoE
-            # Format: {"role": "...", "content": [{"type": "image"}, ..., {"type": "text", "text": "..."}]}
+            # Format: {"role": "...", "content": [{"type": "image"|"video"}, ..., {"type": "text", "text": "..."}]}
             # Preserve tool_calls on assistant messages and tool role fields
             tool_calls = msg.get("tool_calls")
             tool_call_id = msg.get("tool_call_id")
             msg_name = msg.get("name")
 
-            if msg_text or msg_image_count > 0 or tool_calls or role == "tool":
-                if msg_image_count > 0 and role in ("user", "assistant"):
+            if msg_text or msg_image_count > 0 or msg_video_count > 0 or tool_calls or role == "tool":
+                if (msg_image_count > 0 or msg_video_count > 0) and role in ("user", "assistant"):
                     # Build multimodal content list with image markers for
-                    # any role that carries images (user or assistant).
+                    # any role that carries media (user or assistant).
                     # Some UIs (e.g. klite) send images on assistant messages
                     # when attaching an image to the conversation context.
                     content_list: list[dict] = []
                     for _ in range(msg_image_count):
                         content_list.append({"type": "image"})
+                    for _ in range(msg_video_count):
+                        content_list.append({"type": "video"})
                     content_list.append(
                         {"type": "text", "text": msg_text, "content": msg_text}
                     )
@@ -2365,21 +2374,13 @@ class MLXMultimodalLM:
                         completion_tokens=token_count,
                     )
         except Exception as e:
-            # Catch OOM and other generation errors to prevent server crash.
-            # Try to free Metal memory before reporting the error.
             try:
                 import mlx.core as mx
                 mx.clear_memory_cache()
             except Exception:
                 pass
             logger.error(f"VLM stream_generate error: {type(e).__name__}: {e}")
-            yield MLLMOutput(
-                text=f"\n\n[Generation error: {type(e).__name__}: {e}]",
-                finish_reason="stop",
-                prompt_tokens=0,
-                completion_tokens=token_count,
-            )
-            return
+            raise
 
         if (
             use_cache

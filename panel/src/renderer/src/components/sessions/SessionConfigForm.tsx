@@ -79,6 +79,8 @@ export interface SessionConfig {
   distributedMode?: 'pipeline' | 'tensor'
   distributedSecret?: string
   distributedNodes?: Array<{ address: string; port: number; hostname?: string }>
+  // JANGTQ MoE active-expert override. 0 = trained model default.
+  jangtqTopKOverride: number
 }
 
 export const DEFAULT_CONFIG: SessionConfig = {
@@ -151,6 +153,24 @@ export const DEFAULT_CONFIG: SessionConfig = {
   // temporal embedding capacity). mlx_vlm/models/mllm.py DEFAULT_FPS=2.0.
   videoFps: 2,
   videoMaxFrames: 8,
+  jangtqTopKOverride: 0,
+}
+
+function normalizeDetectedFamilyName(family?: string): string | undefined {
+  if (!family) return undefined
+  if (family === 'zaya1_vl') return 'zaya1-vl'
+  if (family === 'bailing_hybrid') return 'ling'
+  return family
+}
+
+function isZayaCcaFamily(family?: string): boolean {
+  const normalized = normalizeDetectedFamilyName(family)
+  return normalized === 'zaya' || normalized === 'zaya1-vl'
+}
+
+function topKOverrideBlockedByFamily(family?: string): boolean {
+  const normalized = normalizeDetectedFamilyName(family)
+  return normalized === 'zaya' || normalized === 'zaya1-vl' || normalized === 'ling'
 }
 
 // Expert = current defaults (backwards compatible, full control)
@@ -184,6 +204,8 @@ interface SessionConfigFormProps {
   detectedFamily?: string
   /** True for JANGTQ/MXTQ models whose live TurboQuant KV cache cannot be mx.compile traced */
   detectedIsTurboQuant?: boolean
+  /** True for VLM/MLLM models detected from config/capabilities */
+  detectedIsMultimodal?: boolean
   /** Detected model max context length from config.json (max_position_embeddings) */
   detectedMaxContext?: number
   /** Model type — image models show minimal settings */
@@ -194,7 +216,7 @@ interface SessionConfigFormProps {
   sessionId?: string
 }
 
-export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedFamily, detectedIsTurboQuant, detectedMaxContext, modelType, imageMode, sessionId }: SessionConfigFormProps) {
+export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedFamily, detectedIsTurboQuant, detectedIsMultimodal, detectedMaxContext, modelType, imageMode, sessionId }: SessionConfigFormProps) {
   const { t } = useTranslation()
   const isImage = modelType === 'image'
   const isImageEdit = isImage && (imageMode === 'edit' || config.imageMode === 'edit')
@@ -217,11 +239,18 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const smeltActive = !!config.smelt
   const flashMoeActive = !!config.flashMoe
   const distributedActive = !!config.distributedEnabled
-  const dsv4Active = detectedFamily === 'deepseek-v4'
+  const normalizedDetectedFamily = normalizeDetectedFamilyName(detectedFamily)
+  const dsv4Active = normalizedDetectedFamily === 'deepseek-v4'
+  const zayaCcaActive = isZayaCcaFamily(normalizedDetectedFamily)
   const turboQuantActive = !!detectedIsTurboQuant
+  const topKOverrideBlocked = topKOverrideBlockedByFamily(normalizedDetectedFamily)
+  const jangtqTopKOverrideAllowed = turboQuantActive && !topKOverrideBlocked
+  const multimodalActive = !!detectedIsMultimodal || config.isMultimodal === true
   const batchingOff = !config.continuousBatching
   const effectivelyNoBatching = batchingOff
   const prefixOff = !config.enablePrefixCache
+  const zayaTypedCacheRequiresPaged = zayaCcaActive && !batchingOff && !prefixOff
+  const effectiveUsePagedCache = zayaTypedCacheRequiresPaged || config.usePagedCache
   const isMambaCache = detectedCacheType === 'mamba' || detectedCacheType === 'hybrid'
 
   const toggleSection = (section: keyof typeof expandedSections) => {
@@ -581,8 +610,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {batchingOff && <IncompatWarning text="Paged cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable paged cache." />}
         {config.enableDiskCache && <IncompatWarning text="Paged cache and legacy Disk Cache cannot run simultaneously. Enabling paged cache will auto-disable legacy Disk Cache. For persistent caching with paged cache, use 'Block Disk Cache (L2)' below instead." />}
         {!batchingOff && prefixOff && <IncompatWarning text="Paged cache requires prefix cache. Enable 'Prefix Cache' above to use paged KV cache." />}
-        <CheckField label="Use Paged KV Cache" tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations." checked={config.usePagedCache} onChange={v => { onChange('usePagedCache', v); if (v && config.enableDiskCache) onChange('enableDiskCache', false) }} disabled={batchingOff || prefixOff} />
-        {config.usePagedCache && (
+        {zayaTypedCacheRequiresPaged && <InfoNote text="ZAYA typed CCA cache requires paged cache while prefix cache is enabled. Turn off Prefix Cache to disable this cache stack for ZAYA." />}
+        <CheckField label="Use Paged KV Cache" tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations." checked={effectiveUsePagedCache} onChange={v => { onChange('usePagedCache', v); if (v && config.enableDiskCache) onChange('enableDiskCache', false) }} disabled={batchingOff || prefixOff || zayaTypedCacheRequiresPaged} />
+        {effectiveUsePagedCache && (
           <>
             <SliderField
               label="Block Size (tokens)"
@@ -703,14 +733,14 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {!effectivelyNoBatching && <PerformanceHint text="Saves cached prompts to your SSD so they survive server restarts. Next time you load the same model, previous conversations warm up instantly." />}
         <InfoNote text="Legacy disk cache works with memory-aware prefix cache. Block disk cache (in the Paged KV Cache section) works with paged cache. Only one can be active at a time." />
         {batchingOff && <IncompatWarning text="Disk cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
-        {!effectivelyNoBatching && config.usePagedCache && <IncompatWarning text="Legacy disk cache is not compatible with paged cache. To use disk-based persistence with paged cache, use 'Block Disk Cache (L2)' in the Paged KV Cache section instead. To use this legacy disk cache, disable 'Use Paged KV Cache' first." />}
+        {!effectivelyNoBatching && effectiveUsePagedCache && <IncompatWarning text="Legacy disk cache is not compatible with paged cache. To use disk-based persistence with paged cache, use 'Block Disk Cache (L2)' in the Paged KV Cache section instead. To use this legacy disk cache, disable 'Use Paged KV Cache' first." />}
         {!batchingOff && prefixOff && <IncompatWarning text="Disk cache requires prefix cache. Enable 'Prefix Cache' above to use disk caching." />}
         <CheckField
           label="Enable Disk Cache"
           tooltip="Persist prompt caches to disk for reuse across server restarts. Acts as L2 cache behind the in-memory prefix cache — when a prompt isn't found in memory, it's loaded from disk instead of recomputing. Dramatically speeds up repeated prompts (system prompts, common prefixes). Compatible runtimes store compressed cache data in their native format; path-dependent caches use typed restore records. Requires prefix cache to be enabled. Note: not compatible with paged cache (uses different storage format)."
-          checked={config.enableDiskCache && !batchingOff && !prefixOff && !config.usePagedCache}
+          checked={config.enableDiskCache && !batchingOff && !prefixOff && !effectiveUsePagedCache}
           onChange={v => onChange('enableDiskCache', v)}
-          disabled={batchingOff || prefixOff || config.usePagedCache}
+          disabled={batchingOff || prefixOff || effectiveUsePagedCache}
         />
         {config.enableDiskCache && (
           <>
@@ -795,14 +825,14 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       {/* Performance */}
       <Section title={t('sessions.config.performanceGeneration')} expanded={expandedSections.performance} onToggle={() => toggleSection('performance')} hidden={isImage}>
         <PerformanceHint text="Controls how tokens stream to you and the max response length. For chat, keep stream interval at 1. Max tokens limits how long a single reply can be." />
-        {/* JIT is not available for image models (mflux uses its own GPU pipeline). */}
+        {/* JIT is not available for image models or VLM chat models. */}
         <Field label="JIT Compile (mx.compile)" tooltip="Enable Metal kernel fusion via mx.compile on the model forward pass. This optimizes GPU operations for faster inference after a one-time warmup on the first request. May not work with all models — falls back gracefully if compilation fails. Requires restart.">
-          <label className={`flex items-center gap-2 ${flashMoeActive || distributedActive || dsv4Active || turboQuantActive ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
+          <label className={`flex items-center gap-2 ${flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
             <input
               type="checkbox"
-              checked={!!config.enableJit && !flashMoeActive && !distributedActive && !dsv4Active && !turboQuantActive}
+              checked={!!config.enableJit && !flashMoeActive && !distributedActive && !dsv4Active && !zayaCcaActive && !turboQuantActive && !multimodalActive}
               onChange={e => onChange('enableJit', e.target.checked)}
-              disabled={flashMoeActive || distributedActive || dsv4Active || turboQuantActive}
+              disabled={flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive}
               className="rounded border-input"
             />
             <span className="text-xs text-muted-foreground">
@@ -810,14 +840,43 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             </span>
           </label>
         </Field>
-        {(flashMoeActive || distributedActive || dsv4Active || turboQuantActive) && (
+        {(flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive) && (
           <IncompatWarning text={dsv4Active
             ? "JIT is disabled for DeepSeek-V4 native composite cache. DSV4 uses path-dependent SWA+CSA/HCA state that must stay on the uncompiled scheduler path."
+            : zayaCcaActive
+            ? "JIT is disabled for ZAYA typed CCA cache. CCA state is path-dependent and the full cache stack benchmarks faster on the uncompiled scheduler path."
+            : multimodalActive
+            ? "JIT is disabled for multimodal/VLM models. The mlx-vlm streaming path owns image/video preprocessing and stream context state that is not safe to trace with mx.compile."
             : turboQuantActive
             ? "Server-level mx.compile is disabled for JANGTQ/TurboQuant KV because the live cache uses custom TurboQuant objects that mx.compile cannot trace. JANGTQ fused Metal kernels still run."
             : flashMoeActive
             ? "JIT is disabled while Flash MoE is on. Flash MoE's on-demand expert loading is incompatible with mx.compile tracing."
             : "JIT is disabled while distributed mode is on. Distributed orchestration cannot safely compile the local coordinator graph."} />
+        )}
+
+        {jangtqTopKOverrideAllowed && (
+          <>
+            <SliderField
+              label="JANGTQ Active Experts Override"
+              tooltip="Overrides the trained MoE top-k active expert count through JANGTQ_TOPK_OVERRIDE. Trained default preserves model quality. Lower values can improve decode speed on MiniMax/JANGTQ and must be quality-tested."
+              value={config.jangtqTopKOverride ?? 0}
+              onChange={v => onChange('jangtqTopKOverride', v)}
+              min={1}
+              max={16}
+              step={1}
+              defaultValue={DEFAULT_CONFIG.jangtqTopKOverride}
+              maxInput={64}
+              allowUnlimited
+              unlimitedValue={0}
+              unlimitedLabel="Trained default"
+            />
+            {(config.jangtqTopKOverride ?? 0) > 0 && (
+              <InfoNote text={`JANGTQ_TOPK_OVERRIDE=${Math.floor(config.jangtqTopKOverride)} is active. This is a real speed/quality tradeoff: current MiniMax M2.7 measured about 41 tok/s at K=4 versus about 37 tok/s at trained K=8.`} />
+            )}
+          </>
+        )}
+        {!jangtqTopKOverrideAllowed && turboQuantActive && topKOverrideBlocked && (config.jangtqTopKOverride ?? 0) > 0 && (
+          <InfoNote text="Saved JANGTQ_TOPK_OVERRIDE is ignored for this model family. Trained routing is enforced because this cache/runtime path has family-specific router semantics." />
         )}
 
         {dsv4Active && (

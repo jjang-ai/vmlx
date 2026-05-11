@@ -83,11 +83,11 @@ function registerFamily(familyName: string, config: Omit<ModelConfig, 'familyNam
 // ZAYA / Zyphra: CCA attention + top-1 MoE. ZAYA is reasoning-capable with a
 // qwen3-compatible <think> rail, but default/no-thinking prompts must start in
 // visible content, so the backend keeps think_in_template=false.
-registerFamily('zaya', { cacheType: 'hybrid', toolParser: 'zaya_xml', reasoningParser: 'qwen3', usePagedCache: false, enableAutoToolChoice: true, description: 'ZAYA CCA hybrid MoE', priority: 3 })
+registerFamily('zaya', { cacheType: 'hybrid', toolParser: 'zaya_xml', reasoningParser: 'qwen3', usePagedCache: true, enableAutoToolChoice: true, description: 'ZAYA CCA hybrid MoE', priority: 3 })
 // ZAYA1-VL is detected separately so the UI does not fall through to generic
-// VLM defaults. Python runtime support is still pending a real Zaya1VL adapter;
-// this family stamp is for parser/cache/session honesty, not a production pass.
-registerFamily('zaya1-vl', { cacheType: 'hybrid', toolParser: 'zaya_xml', reasoningParser: 'qwen3', usePagedCache: false, enableAutoToolChoice: true, isMultimodal: true, description: 'ZAYA1-VL CCA hybrid vision-language', priority: 3 })
+// VLM defaults. The Python runtime uses a typed CCA cache contract, so panel
+// sessions must start on paged cache instead of the legacy prefix-cache backend.
+registerFamily('zaya1-vl', { cacheType: 'hybrid', toolParser: 'zaya_xml', reasoningParser: 'qwen3', usePagedCache: true, enableAutoToolChoice: true, isMultimodal: true, description: 'ZAYA1-VL CCA hybrid vision-language', priority: 3 })
 
 // Qwen
 // Qwen 3.5 dense and MoE share model_types with VL variants — VL detection
@@ -390,6 +390,63 @@ function configMarksTurboQuant(config: any): boolean {
   )
 }
 
+function configDeclaresMedia(config: any): boolean {
+  if (!config || typeof config !== 'object') return false
+  for (const key of ['vision_config', 'audio_config', 'video_config']) {
+    if (key in config && config[key] != null) return true
+  }
+  for (const key of [
+    'image_token_id',
+    'image_token_index',
+    'video_token_id',
+    'video_token_index',
+    'audio_token_id',
+    'audio_token_index',
+  ]) {
+    if (key in config && config[key] != null) return true
+  }
+  return false
+}
+
+function configDeclaresLinearAttention(config: any): boolean {
+  if (!config || typeof config !== 'object') return false
+  const containers = [config]
+  if (config.text_config && typeof config.text_config === 'object') {
+    containers.push(config.text_config)
+  }
+  for (const container of containers) {
+    for (const key of ['layer_types', 'layer_type']) {
+      const value = container[key]
+      if (typeof value === 'string' && value.toLowerCase() === 'linear_attention') {
+        return true
+      }
+      if (Array.isArray(value) && value.some(v => String(v).toLowerCase() === 'linear_attention')) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+function applyConfigMetadataOverrides(
+  detected: DetectedConfig,
+  parsedConfig: any,
+): DetectedConfig {
+  const next = { ...detected }
+  const isQwen36 = next.family === 'qwen3.5' || next.family === 'qwen3.5-moe'
+  if (isQwen36 && configDeclaresLinearAttention(parsedConfig)) {
+    next.cacheType = 'hybrid'
+    next.usePagedCache = true
+  }
+  if (isQwen36 && configDeclaresMedia(parsedConfig)) {
+    next.isMultimodal = true
+  }
+  if (next.family === 'nemotron-h' && !configDeclaresMedia(parsedConfig)) {
+    next.isMultimodal = false
+  }
+  return next
+}
+
 function configToDetected(family: string, config: Omit<ModelConfig, 'pattern' | 'familyName'>): DetectedConfig {
   return {
     family: family,
@@ -409,7 +466,7 @@ function applyJangCapabilities(
 ): DetectedConfig {
   const caps = jangCfg?.capabilities
   const next = { ...detected }
-  const forceNoPagedCache = next.family === 'zaya' || next.family === 'zaya1-vl'
+  const zayaTypedCca = next.family === 'zaya' || next.family === 'zaya1-vl'
   if (jangCfg?.weight_format === 'mxtq' || jangCfg?.format === 'mxtq') {
     next.isTurboQuant = true
   }
@@ -435,58 +492,25 @@ function applyJangCapabilities(
     const cacheType = caps.cache_type
     if (cacheType === 'kv' || cacheType === 'mamba' || cacheType === 'hybrid' || cacheType === 'rotating_kv') {
       next.cacheType = cacheType
-      if (!forceNoPagedCache && (cacheType === 'mamba' || cacheType === 'hybrid')) {
+      if (cacheType === 'mamba' || cacheType === 'hybrid') {
         next.usePagedCache = true
       }
     }
   }
-  if (forceNoPagedCache) {
-    next.usePagedCache = false
+  if (zayaTypedCca) {
+    next.usePagedCache = true
   }
   return next
 }
 
-function isAffineJangQwenHybridVlm(jangCfg: any, parsedConfig: any): boolean {
-  const textConfig = parsedConfig?.text_config ?? {}
-  const modelType = textConfig?.model_type ?? parsedConfig?.model_type
-  const layerTypes = Array.isArray(textConfig?.layer_types) ? textConfig.layer_types : []
-  const isQwenHybrid =
-    ['qwen3_5', 'qwen3_5_text', 'qwen3_5_moe', 'qwen3_vl', 'qwen3_vl_moe'].includes(modelType) &&
-    layerTypes.some((t: unknown) => t === 'linear_attention')
-  if (!isQwenHybrid) return false
-
-  const isMxtq = jangCfg?.weight_format === 'mxtq' || jangCfg?.format === 'mxtq'
-  if (isMxtq) return false
-
-  const modality =
-    jangCfg?.capabilities?.modality ??
-    jangCfg?.modality ??
-    parsedConfig?._jang_modality
-  const hasVision =
-    jangCfg?.has_vision === true ||
-    jangCfg?.architecture?.has_vision === true ||
-    'vision_config' in parsedConfig ||
-    (typeof modality === 'string' && !['text', 'embedding', 'rerank'].includes(modality))
-
-  return hasVision
-}
-
 function resolveJangMultimodal(jangCfg: any, parsedConfig: any): boolean {
-  const hasVisionConfig = 'vision_config' in parsedConfig
+  const hasMediaConfig = configDeclaresMedia(parsedConfig)
   const modality =
     jangCfg?.capabilities?.modality ??
     jangCfg?.modality ??
     parsedConfig?._jang_modality
 
-  // Affine-JANG Qwen3.5/3.6 hybrid VLM bundles keep vision metadata, but the
-  // Python engine intentionally routes them text-only because the mlx_vlm
-  // wrapper corrupts text/image prompts. Do not pass --is-mllm from the panel;
-  // JANGTQ/MXTQ Qwen VLM remains multimodal via the native jang_tools path.
-  if (isAffineJangQwenHybridVlm(jangCfg, parsedConfig)) {
-    return false
-  }
-
-  if (parsedConfig?.model_type === 'zaya1_vl' && hasVisionConfig) {
+  if (parsedConfig?.model_type === 'zaya1_vl' && hasMediaConfig) {
     return true
   }
 
@@ -499,9 +523,10 @@ function resolveJangMultimodal(jangCfg: any, parsedConfig: any): boolean {
     return jangCfg.architecture.has_vision
   }
   if (typeof modality === 'string') {
+    if (modality === 'omni') return hasMediaConfig
     return modality !== 'text' && modality !== 'embedding' && modality !== 'rerank'
   }
-  return hasVisionConfig
+  return hasMediaConfig
 }
 
 /**
@@ -567,9 +592,10 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
                 detected.isMultimodal = true
               }
             }
-          } else if ('vision_config' in parsed) {
+          } else if (configDeclaresMedia(parsed)) {
             detected.isMultimodal = true
           }
+          detected = applyConfigMetadataOverrides(detected, parsed)
           return detected
         }
       }
@@ -578,7 +604,7 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
       const fallback = { ...DEFAULT_CONFIG }
       if (maxContextLength) fallback.maxContextLength = maxContextLength
       if (configMarksTurboQuant(parsed)) fallback.isTurboQuant = true
-      if ('vision_config' in parsed) {
+      if (configDeclaresMedia(parsed)) {
         fallback.isMultimodal = true
       }
       return fallback

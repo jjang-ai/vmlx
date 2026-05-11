@@ -34,6 +34,30 @@ let handlersRegistered = false
 let isQuitting = false
 const processManager = new ProcessManager()
 
+function getLanAddress(): string | undefined {
+  const nets = require('os').networkInterfaces() as Record<string, Array<{ address?: string; family?: string; internal?: boolean }> | undefined>
+  for (const addrs of Object.values(nets)) {
+    for (const addr of addrs || []) {
+      if (addr.family === 'IPv4' && !addr.internal && addr.address) {
+        return addr.address
+      }
+    }
+  }
+  return undefined
+}
+
+function gatewayStatusPayload() {
+  const host = apiGateway.activeHost
+  const lanHost = host === '0.0.0.0' ? getLanAddress() : undefined
+  return {
+    running: apiGateway.running,
+    port: apiGateway.activePort,
+    host,
+    lanHost,
+    displayHost: lanHost || (host === '0.0.0.0' ? 'localhost' : host),
+  }
+}
+
 // Global crash handlers — prevent unhandled errors from silently crashing the app
 process.on('uncaughtException', (error) => {
   console.error('[CRASH] Uncaught exception:', error)
@@ -199,14 +223,10 @@ function createWindow(): void {
     }
 
     // API Gateway
-    ipcMain.handle('gateway:status', () => ({
-      running: apiGateway.running,
-      port: apiGateway.activePort,
-      host: apiGateway.activeHost,
-    }))
+    ipcMain.handle('gateway:status', () => gatewayStatusPayload())
     ipcMain.handle('gateway:start', async (_e, port?: number, host?: string) => {
       await apiGateway.start(port, host)
-      return { running: true, port: apiGateway.activePort, host: apiGateway.activeHost }
+      return gatewayStatusPayload()
     })
     ipcMain.handle('gateway:stop', async () => {
       await apiGateway.stop()
@@ -216,7 +236,7 @@ function createWindow(): void {
       db.setSetting('gateway_port', String(port))
       if (host) db.setSetting('gateway_host', host)
       await apiGateway.restart(port, host)
-      return { running: true, port: apiGateway.activePort, host: apiGateway.activeHost }
+      return gatewayStatusPayload()
     })
 
     // Prompt templates

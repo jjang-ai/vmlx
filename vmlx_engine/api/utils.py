@@ -192,58 +192,6 @@ def _is_mllm_cache_key(model_name: str, local_path: str) -> tuple:
         return (model_name, local_path, 0.0, 0.0)
 
 
-def _is_affine_jang_qwen_hybrid_vlm(local_path: str) -> bool:
-    """Return True for Qwen3.5/3.6 hybrid VLM bundles that must load text-only.
-
-    Affine-JANG Qwen3.5/3.6 hybrid VLM bundles carry vision metadata, but the
-    current mlx_vlm wrapper path corrupts text and image prompts. MXTQ/JANGTQ
-    bundles are different: they use the native jang_tools VLM runtime and must
-    remain multimodal.
-    """
-    try:
-        jang_path = os.path.join(local_path, "jang_config.json")
-        cfg_path = os.path.join(local_path, "config.json")
-        if not os.path.isfile(jang_path) or not os.path.isfile(cfg_path):
-            return False
-
-        jang_cfg = json.loads(open(jang_path).read())
-        hf_cfg = json.loads(open(cfg_path).read())
-        tc = hf_cfg.get("text_config") or {}
-        mt = str(tc.get("model_type") or hf_cfg.get("model_type") or "").lower()
-        layer_types = tc.get("layer_types") or []
-        if not (
-            mt in _QWEN_HYBRID_VLM_MODEL_TYPES
-            and isinstance(layer_types, list)
-            and any(str(t).lower() == "linear_attention" for t in layer_types)
-        ):
-            return False
-
-        is_mxtq = (
-            jang_cfg.get("weight_format") == "mxtq"
-            or jang_cfg.get("format") == "mxtq"
-        )
-        if is_mxtq:
-            return False
-
-        modality = (
-            (jang_cfg.get("capabilities") or {}).get("modality")
-            or jang_cfg.get("modality")
-            or hf_cfg.get("_jang_modality")
-        )
-        has_vision = (
-            jang_cfg.get("has_vision") is True
-            or (jang_cfg.get("architecture") or {}).get("has_vision") is True
-            or "vision_config" in hf_cfg
-            or (
-                isinstance(modality, str)
-                and modality not in ("text", "embedding", "rerank")
-            )
-        )
-        return bool(has_vision)
-    except Exception:
-        return False
-
-
 def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     """
     Check if model is a multimodal language model.
@@ -346,28 +294,6 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     except Exception:
         pass
 
-    # Qwen3.5/3.6 affine-JANG hybrid VLM: override even an explicit
-    # --is-mllm/force_mllm request. The VLM loader defensively falls back to
-    # text-only too, but keeping engine.is_mllm=True around a text fallback
-    # leaves the MLLM scheduler/processor stack active and can still corrupt
-    # generation or image handling.
-    if _is_affine_jang_qwen_hybrid_vlm(local_path):
-        if force_mllm:
-            _logger.warning(
-                "is_mllm_model(%s): force_mllm overridden — Qwen3.5/3.6 "
-                "affine-JANG hybrid VLM is text-only for correctness; "
-                "JANGTQ/MXTQ Qwen VLM remains multimodal",
-                model_name,
-            )
-        else:
-            _logger.warning(
-                "is_mllm_model(%s): Qwen3.5/3.6 affine-JANG hybrid VLM "
-                "is text-only for correctness; JANGTQ/MXTQ Qwen VLM "
-                "remains multimodal",
-                model_name,
-            )
-        return False
-
     if force_mllm:
         # Not cached — force_mllm is cheap + callers may toggle at runtime.
         _logger.info("is_mllm_model(%s): tier=force_mllm result=True", model_name)
@@ -395,21 +321,6 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
                     if "has_vision" in arch:
                         has_vision = arch.get("has_vision")
                         if has_vision is True:
-                            # Qwen3.5/3.6 hybrid VLM affine-JANG bundles currently
-                            # produce corrupt output through mlx_vlm's wrapper path
-                            # even for text-only prompts, while the text loader is
-                            # coherent. JANGTQ/MXTQ Qwen VLM bundles use the native
-                            # jang_tools.load_jangtq_vlm path and are live-verified
-                            # for image_url + input_image, so keep those multimodal.
-                            if _is_affine_jang_qwen_hybrid_vlm(local_path):
-                                _logger.warning(
-                                    "is_mllm_model(%s): Qwen3.5/3.6 hybrid "
-                                    "VLM affine-JANG path is text-only for "
-                                    "correctness; native VLM remains enabled "
-                                    "for JANGTQ/MXTQ bundles",
-                                    model_name,
-                                )
-                                return False
                             # Mistral 4 has_vision=true exception: mlx_vlm has
                             # mistral3 (standard attention) and mistral4 (text
                             # only; no VLM class). A Mistral 4 VLM config

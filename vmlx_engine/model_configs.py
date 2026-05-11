@@ -98,6 +98,7 @@ def register_all(registry=None):
             model_types=["zaya"],
             cache_type="hybrid",
             cache_subtype="zaya_cca",
+            eos_tokens=["<|im_end|>"],
             tool_parser="zaya_xml",
             reasoning_parser="qwen3",
             think_in_template=False,
@@ -113,6 +114,7 @@ def register_all(registry=None):
             model_types=["zaya1_vl"],
             cache_type="hybrid",
             cache_subtype="zaya_cca",
+            eos_tokens=["<|im_end|>"],
             tool_parser="zaya_xml",
             reasoning_parser="qwen3",
             think_in_template=False,
@@ -125,9 +127,9 @@ def register_all(registry=None):
 
     # ── Qwen family ──
 
-    # Note: qwen3_5 / qwen3_5_moe model_types are shared between text and VL variants.
-    # VL detection relies on config.json vision_config presence (authoritative check),
-    # NOT the registry's is_mllm flag. Keep is_mllm=False here.
+    # Note: qwen3_5 / qwen3_5_moe model_types are shared between text and VL/video
+    # variants. Base rows stay text-only, then registry.lookup(path) upgrades
+    # concrete bundles to is_mllm=True when config.json declares media metadata.
     _register(
         ModelConfig(
             family_name="qwen3_5",
@@ -675,9 +677,12 @@ def register_all(registry=None):
             cache_type="hybrid",
             eos_tokens=["<|role_end|>", "<|endoftext|>"],
             tool_parser="deepseek",
-            reasoning_parser="deepseek_r1",
+            # Ling/Bailing is NOT a reasoning model. Eric directive 2026-05-11:
+            # do not auto-attach a reasoning parser; do not advertise thinking
+            # capability. Ling chat output should be treated as plain content.
+            reasoning_parser=None,
             think_in_template=False,
-            supports_thinking=True,
+            supports_thinking=False,
             priority=20,
         )
     )

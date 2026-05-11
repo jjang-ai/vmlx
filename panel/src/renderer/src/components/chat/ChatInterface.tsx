@@ -53,6 +53,46 @@ function hydrateMessages(msgs: Message[]): Message[] {
   })
 }
 
+function audioFormatFromDataUrl(dataUrl: string): string {
+  const mime = dataUrl.match(/^data:([^;,]+)[;,]/)?.[1]?.toLowerCase() || ''
+  if (mime === 'audio/mpeg' || mime === 'audio/mp3') return 'mp3'
+  if (mime === 'audio/wave' || mime === 'audio/x-wav' || mime === 'audio/wav') return 'wav'
+  if (mime === 'audio/mp4' || mime === 'audio/x-m4a') return 'm4a'
+  if (mime.startsWith('audio/')) return mime.slice('audio/'.length)
+  return 'wav'
+}
+
+function audioDataFromDataUrl(dataUrl: string): string {
+  return dataUrl.includes(',') ? dataUrl.split(',', 2)[1] : dataUrl
+}
+
+function dataUrlFromInputAudio(part: any): string {
+  const data = part?.input_audio?.data || ''
+  const format = part?.input_audio?.format || 'wav'
+  const mime = format === 'mp3' ? 'audio/mpeg' : `audio/${format}`
+  return data.startsWith('data:') ? data : `data:${mime};base64,${data}`
+}
+
+function attachmentContentPart(a: MediaAttachment): any {
+  if (a.kind === 'audio') {
+    return {
+      type: 'input_audio',
+      input_audio: {
+        data: audioDataFromDataUrl(a.dataUrl),
+        format: audioFormatFromDataUrl(a.dataUrl),
+      },
+    }
+  }
+  if (a.kind === 'text') {
+    return {
+      type: 'text',
+      text: `[Attached file: ${a.name}]\n${a.text ?? ''}`.trim(),
+    }
+  }
+  if (a.kind === 'video') return { type: 'video_url', video_url: { url: a.dataUrl } }
+  return { type: 'image_url', image_url: { url: a.dataUrl } }
+}
+
 interface ChatInterfaceProps {
   chatId: string | null
   onNewChat?: () => void
@@ -332,16 +372,12 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
     setCurrentMetrics(null)
 
     // Build display content for user message: if attachments present, store as JSON content array.
-    // Images use image_url; videos use video_url — the engine's extract_multimodal_content()
-    // parses both and routes each to the appropriate processor (vision tower for images,
-    // OpenCV frame-sampler then vision tower for videos).
+    // Images use image_url; videos use video_url; audio uses input_audio so
+    // Nemotron-Omni/Parakeet receives actual media instead of transcribed text.
     const displayContent = attachments && attachments.length > 0
       ? JSON.stringify([
         ...(content.trim() ? [{ type: 'text', text: content }] : []),
-        ...attachments.map(a => a.kind === 'video'
-          ? { type: 'video_url', video_url: { url: a.dataUrl } }
-          : { type: 'image_url', image_url: { url: a.dataUrl } }
-        ),
+        ...attachments.map(attachmentContentPart),
       ])
       : content
 
@@ -437,21 +473,38 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
       try { await window.api.chat.deleteMessage(lastAssistant.id) } catch {}
     }
     setMessages(prev => prev.filter(m => m.id !== lastAssistant?.id))
-    // Handle multimodal content (JSON array with text + images + videos)
+    // Handle multimodal content (JSON array with text + image/video/audio)
     let content = lastUser.content
     let attachments: MediaAttachment[] | undefined
     try {
       const parsed = JSON.parse(content)
       if (Array.isArray(parsed)) {
-        content = parsed.find((p: any) => p.type === 'text')?.text ?? ''
+        content = parsed
+          .filter((p: any) => p.type === 'text' && p.text)
+          .map((p: any) => p.text)
+          .join('\n\n')
         attachments = parsed
           .filter((p: any) =>
             (p.type === 'image_url' && p.image_url?.url) ||
-            (p.type === 'video_url' && p.video_url?.url)
+            (p.type === 'video_url' && p.video_url?.url) ||
+            (p.type === 'input_audio' && p.input_audio?.data)
           )
           .map((p: any, i: number): MediaAttachment => {
             // Reconstruct MediaAttachment shape — id/type/size are synthetic
             // on regenerate (original values are lost when persisted to DB).
+            if (p.type === 'input_audio') {
+              const url = dataUrlFromInputAudio(p)
+              const mimeMatch =
+                typeof url === 'string' ? url.match(/^data:([^;]+);/) : null
+              return {
+                id: `regen-${Date.now()}-${i}`,
+                kind: 'audio',
+                dataUrl: url,
+                name: 'audio',
+                type: mimeMatch ? mimeMatch[1] : 'audio/wav',
+                size: 0,
+              }
+            }
             const isVideo = p.type === 'video_url'
             const url: string = isVideo ? p.video_url.url : p.image_url.url
             const mimeMatch =

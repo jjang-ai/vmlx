@@ -1626,37 +1626,10 @@ def _load_jang_v2_vlm(
         return _load_jang_v2(path, jang_cfg, skip_eval=skip_eval, filter_expert_keys=filter_expert_keys)
 
     # Qwen3.5/3.6-VL hybrid SSM bundles must stay on the real VLM path.
-    # A temporary 2026-05-02 text-only fallback masked an older VLM-loader
-    # quality issue, but it returned a tokenizer wrapper instead of a VLM
-    # processor. Any image request then failed with:
-    #   TokenizerWrapper is not callable and does not expose a callable .process
-    # Current native JANGTQ/MXTQ VLM loading preserves image support and was
-    # live verified on Qwen3.6-35B-A3B-JANGTQ-CRACK for both /v1/chat/completions
-    # image_url and /v1/responses input_image.
-    #
-    # Affine-JANG Qwen hybrid VLM remains different: the mlx_vlm wrapper path
-    # corrupts both text-only and image prompts, while the text loader is
-    # coherent. Normal auto-detection routes those bundles to text-only in
-    # api.utils.is_mllm_model(); this fallback is a defense for explicit
-    # --is-mllm / force_mllm launches.
-    _is_qwen35_vl_hybrid = (
-        str(config.get("model_type") or "").lower() in ("qwen3_5", "qwen3_5_moe", "qwen3_vl", "qwen3_vl_moe")
-        and isinstance(_tc.get("layer_types"), (list, tuple))
-        and any(str(t).lower() == "linear_attention" for t in _tc.get("layer_types", []))
-    )
-    _is_mxtq_bundle = (
-        jang_cfg.get("weight_format") == "mxtq"
-        or jang_cfg.get("format") == "mxtq"
-    )
-    if _is_qwen35_vl_hybrid and not _is_mxtq_bundle:
-        logger.warning(
-            "  Qwen3.5/3.6 affine-JANG hybrid VLM detected — using text-only "
-            "JANG loader for correctness. The VLM wrapper path produced corrupt "
-            "output on Qwen3.6-27B-JANG_4M-CRACK; JANGTQ/MXTQ Qwen VLM remains "
-            "on the native multimodal fast path."
-        )
-        globals()["_LAST_LOAD_VLM_FALLBACK"] = True
-        return _load_jang_v2(path, jang_cfg, skip_eval=skip_eval, filter_expert_keys=filter_expert_keys)
+    # They carry real vision/video metadata and need a callable VLM processor.
+    # Text-only fallback loses media support and lets attached images/videos get
+    # ignored, so loader failures must be fixed in the VLM path instead of
+    # demoting the bundle.
 
     # Kimi K2.6 (model_type="kimi_k25") — route through
     # jang_tools.load_jangtq_kimi_vlm so the kimi_k25 → kimi_vl remap is

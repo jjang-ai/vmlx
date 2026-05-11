@@ -363,10 +363,10 @@
       "braveGetKey": "获取免费 API 密钥 →"
     },
     "input": {
-      "dropOverlay": "拖放图像或视频以附加",
+      "dropOverlay": "拖放图像、视频、音频或文本文件以附加",
       "placeholderWaiting": "等待响应...",
       "placeholderDefault": "消息...",
-      "attachTitle": "附加图像或视频",
+      "attachTitle": "附加图像、视频、音频或文本文件",
       "stopTitle": "停止生成 (Esc)",
       "sendTitle": "发送消息 (Enter)"
     },

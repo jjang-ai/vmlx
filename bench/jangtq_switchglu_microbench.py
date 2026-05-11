@@ -24,7 +24,10 @@ import mlx.core as mx
 from jang_tools.turboquant.fused_gate_up_kernel import (
     make_fused_gate_up_swiglu_decode,
 )
-from jang_tools.turboquant.gather_tq_kernel import make_gather_tq_decode_per_row
+from jang_tools.turboquant.gather_tq_kernel import (
+    make_fused_rot_gather_decode,
+    make_gather_tq_decode_per_row,
+)
 from jang_tools.turboquant.hadamard_kernel import hadamard_rotate_metal
 
 
@@ -122,6 +125,12 @@ def main() -> int:
         args.down_bits,
         args.top_k,
     )
+    fused_rot_gather_dn = make_fused_rot_gather_decode(
+        args.intermediate_features,
+        args.hidden_features,
+        args.down_bits,
+        args.top_k,
+    )
 
     def hidden_rotate():
         return hadamard_rotate_metal(data["x"], data["signs_hidden"])
@@ -158,6 +167,18 @@ def main() -> int:
             data["idx"],
         )
 
+    def down_fused_rot_gather():
+        if fused_rot_gather_dn is None:
+            raise RuntimeError("fused rot+gather helper unavailable for this shape")
+        return fused_rot_gather_dn(
+            x_act,
+            data["signs_inter"],
+            data["packed_down"],
+            data["norms_down"],
+            data["cb_down"],
+            data["idx"],
+        )
+
     def full_split():
         xr = hadamard_rotate_metal(data["x"], data["signs_hidden"])
         xa = fused_gu(
@@ -178,16 +199,48 @@ def main() -> int:
             data["idx"],
         )
 
-    compiled_full = mx.compile(full_split)
+    def full_fused_rot_down():
+        if fused_rot_gather_dn is None:
+            raise RuntimeError("fused rot+gather helper unavailable for this shape")
+        xr = hadamard_rotate_metal(data["x"], data["signs_hidden"])
+        xa = fused_gu(
+            xr,
+            data["packed_gate"],
+            data["norms_gate"],
+            data["packed_up"],
+            data["norms_up"],
+            data["cb_gate"],
+            data["idx"],
+        )
+        return fused_rot_gather_dn(
+            xa,
+            data["signs_inter"],
+            data["packed_down"],
+            data["norms_down"],
+            data["cb_down"],
+            data["idx"],
+        )
 
-    rows: list[dict[str, Any]] = []
-    for name, fn in (
+    compiled_full = mx.compile(full_split)
+    compiled_fused_rot_down = mx.compile(full_fused_rot_down)
+
+    bench_fns: list[tuple[str, Callable[[], Any]]] = [
         ("hidden_rotate", hidden_rotate),
         ("fused_gate_up_swiglu", gate_up),
         ("intermediate_rotate", inter_rotate),
         ("down_gather", down_gather),
         ("full_split_compiled", compiled_full),
-    ):
+    ]
+    if fused_rot_gather_dn is not None:
+        bench_fns.extend(
+            [
+                ("down_fused_rot_gather", down_fused_rot_gather),
+                ("full_fused_rot_down_compiled", compiled_fused_rot_down),
+            ]
+        )
+
+    rows: list[dict[str, Any]] = []
+    for name, fn in bench_fns:
         mean_ms, out = _time_ms(fn, warmup=args.warmup, iters=args.iters)
         rows.append({"name": name, "mean_ms": mean_ms, "shape": tuple(out.shape)})
 

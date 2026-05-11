@@ -1,6 +1,8 @@
 from vmlx_engine.omni_multimodal import (
     OmniMultimodalDispatcher,
     _build_omni_turn_prompt_with_thinking,
+    _extract_parts,
+    request_has_multimodal,
 )
 
 
@@ -70,3 +72,28 @@ def test_omni_dispatcher_sets_thinking_flag_on_first_session_turn(tmp_path):
     )
 
     assert dispatcher._session._vmlx_enable_thinking is False
+
+
+def test_omni_extracts_input_audio_shape_emitted_by_panel(tmp_path):
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Transcribe the sound."},
+                {
+                    "type": "input_audio",
+                    "input_audio": {"data": "UklGRg==", "format": "wav"},
+                },
+            ],
+        }
+    ]
+
+    assert request_has_multimodal(messages) is True
+    text, images, audio, video = _extract_parts(messages, tmp_path)
+
+    assert text == "Transcribe the sound."
+    assert images == []
+    assert video is None
+    assert audio is not None
+    assert audio.suffix == ".wav"
+    assert audio.read_bytes() == b"RIFF"

@@ -74,12 +74,28 @@ describe("Ollama gateway parity contracts", () => {
       resolve(process.cwd(), "src/main/index.ts"),
       "utf8",
     );
+    expect(mainSource).toContain("function gatewayStatusPayload()");
     expect(mainSource).toContain(
-      "return { running: true, port: apiGateway.activePort, host: apiGateway.activeHost }",
+      "return gatewayStatusPayload()",
     );
     expect(mainSource).not.toContain(
       "return { running: true, port, host: apiGateway.activeHost }",
     );
+  });
+
+  it("surfaces a usable LAN gateway URL instead of showing 0.0.0.0 to users", () => {
+    const mainSource = readFileSync(
+      resolve(process.cwd(), "src/main/index.ts"),
+      "utf8",
+    );
+    const dashboardSource = readFileSync(
+      resolve(process.cwd(), "src/renderer/src/components/api/ApiDashboard.tsx"),
+      "utf8",
+    );
+    expect(mainSource).toContain("host === '0.0.0.0' ? getLanAddress()");
+    expect(mainSource).toContain("displayHost");
+    expect(dashboardSource).toContain("const gatewayDisplayHost = lanEnabled ? (gwLanHost || gwHost) : \"localhost\"");
+    expect(dashboardSource).toContain("const gatewayUrl = `http://${gatewayDisplayHost}:${gwPort}`");
   });
 
   it("collapses OpenAI tool arguments back to Ollama object arguments", () => {

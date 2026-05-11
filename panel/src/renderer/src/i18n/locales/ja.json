@@ -363,10 +363,10 @@
       "braveGetKey": "無料 API キーを取得 →"
     },
     "input": {
-      "dropOverlay": "画像または動画をドロップして添付",
+      "dropOverlay": "画像、動画、音声、またはテキストファイルをドロップして添付",
       "placeholderWaiting": "応答を待っています...",
       "placeholderDefault": "メッセージ...",
-      "attachTitle": "画像または動画を添付",
+      "attachTitle": "画像、動画、音声、またはテキストファイルを添付",
       "stopTitle": "生成を停止 (Esc)",
       "sendTitle": "メッセージを送信 (Enter)"
     },

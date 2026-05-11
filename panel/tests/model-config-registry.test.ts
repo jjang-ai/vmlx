@@ -42,7 +42,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
 
     expect(detected.family).toBe('zaya')
     expect(detected.cacheType).toBe('hybrid')
-    expect(detected.usePagedCache).toBe(false)
+    expect(detected.usePagedCache).toBe(true)
     expect(detected.toolParser).toBe('zaya_xml')
     expect(detected.reasoningParser).toBe('qwen3')
   })
@@ -71,7 +71,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
 
     expect(detected.family).toBe('zaya1-vl')
     expect(detected.cacheType).toBe('hybrid')
-    expect(detected.usePagedCache).toBe(false)
+    expect(detected.usePagedCache).toBe(true)
     expect(detected.toolParser).toBe('zaya_xml')
     expect(detected.reasoningParser).toBe('qwen3')
     expect(detected.isMultimodal).toBe(true)
@@ -101,7 +101,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
 
     expect(detected.family).toBe('zaya1-vl')
     expect(detected.cacheType).toBe('hybrid')
-    expect(detected.usePagedCache).toBe(false)
+    expect(detected.usePagedCache).toBe(true)
     expect(detected.toolParser).toBe('zaya_xml')
     expect(detected.reasoningParser).toBe('qwen3')
     expect(detected.isMultimodal).toBe(true)
@@ -231,7 +231,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detectModelConfigFromDir(dir).isMultimodal).toBe(true)
   })
 
-  it('keeps affine-JANG Qwen hybrid VLM text-only so the panel does not pass --is-mllm', () => {
+  it('keeps affine-JANG Qwen hybrid VLM multimodal because Qwen 3.6 is VL/video capable', () => {
     const dir = makeModelDir(
       {
         model_type: 'qwen3_5',
@@ -240,11 +240,56 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
           layer_types: ['linear_attention', 'full_attention'],
         },
         vision_config: { hidden_size: 1024 },
+        video_token_id: 151666,
+        video_token_index: 151666,
       },
       { format: 'jang', architecture: { has_vision: true } },
     )
 
-    expect(detectModelConfigFromDir(dir).isMultimodal).toBe(false)
+    expect(detectModelConfigFromDir(dir).isMultimodal).toBe(true)
+  })
+
+  it('marks non-JANG Qwen 3.6 MoE bundles with vision/video metadata as multimodal', () => {
+    const dir = makeModelDir({
+      model_type: 'qwen3_5_moe',
+      text_config: {
+        model_type: 'qwen3_5_moe',
+        layer_types: ['linear_attention', 'full_attention'],
+      },
+      vision_config: { hidden_size: 1024 },
+      video_token_id: 151666,
+      video_token_index: 151666,
+    })
+
+    const detected = detectModelConfigFromDir(dir)
+    expect(detected.family).toBe('qwen3.5-moe')
+    expect(detected.cacheType).toBe('hybrid')
+    expect(detected.isMultimodal).toBe(true)
+  })
+
+  it('does not route Nemotron-H text extracts through MLLM from stale sidecars', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'nemotron_h',
+        architectures: ['NemotronHForCausalLM'],
+        text_config: {
+          layer_types: ['mamba', 'full_attention'],
+        },
+      },
+      {
+        capabilities: {
+          family: 'nemotron_h',
+          modality: 'omni',
+          cache_type: 'hybrid',
+        },
+      },
+    )
+    writeFileSync(join(dir, 'preprocessor_config.json'), '{}')
+
+    const detected = detectModelConfigFromDir(dir)
+    expect(detected.family).toBe('nemotron-h')
+    expect(detected.cacheType).toBe('hybrid')
+    expect(detected.isMultimodal).toBe(false)
   })
 
   it('keeps MXTQ/JANGTQ Qwen hybrid VLM multimodal', () => {

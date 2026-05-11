@@ -52,7 +52,8 @@ export function ApiDashboard() {
 
   const [gwPort, setGwPort] = useState("8080");
   const [portInput, setPortInput] = useState("8080");
-  const [_gwHost, setGwHost] = useState("127.0.0.1");
+  const [gwHost, setGwHost] = useState("127.0.0.1");
+  const [gwLanHost, setGwLanHost] = useState<string | null>(null);
   const [lanEnabled, setLanEnabled] = useState(false);
   const [portError, setPortError] = useState<string | null>(null);
   const [format, setFormat] = useState<ApiFormat>("openai");
@@ -71,11 +72,13 @@ export function ApiDashboard() {
           setGwHost(status.host);
           setLanEnabled(status.host === "0.0.0.0");
         }
+        setGwLanHost(status?.lanHost ?? null);
       })
       .catch(() => {});
   }, []);
 
-  const gatewayUrl = `http://localhost:${gwPort}`;
+  const gatewayDisplayHost = lanEnabled ? (gwLanHost || gwHost) : "localhost";
+  const gatewayUrl = `http://${gatewayDisplayHost}:${gwPort}`;
   const hasModels = runningSessions.length > 0;
 
   // First model name for code snippets
@@ -92,9 +95,10 @@ export function ApiDashboard() {
     setPortError(null);
     try {
       const host = lanEnabled ? "0.0.0.0" : "127.0.0.1";
-      await window.api.gateway?.setHostAndPort?.(port, host);
+      const status = await window.api.gateway?.setHostAndPort?.(port, host);
       setGwPort(String(port));
-      setGwHost(host);
+      setGwHost(status?.host || host);
+      setGwLanHost(status?.lanHost ?? null);
     } catch (err: any) {
       setPortError(err?.message || "Failed to change port");
     }
@@ -105,8 +109,9 @@ export function ApiDashboard() {
     const host = newLan ? "0.0.0.0" : "127.0.0.1";
     setLanEnabled(newLan);
     try {
-      await window.api.gateway?.setHostAndPort?.(parseInt(gwPort, 10), host);
-      setGwHost(host);
+      const status = await window.api.gateway?.setHostAndPort?.(parseInt(gwPort, 10), host);
+      setGwHost(status?.host || host);
+      setGwLanHost(status?.lanHost ?? null);
     } catch (err: any) {
       setPortError(err?.message || "Failed to change host");
       setLanEnabled(!newLan);
@@ -194,7 +199,9 @@ export function ApiDashboard() {
               </button>
               <span className="text-muted-foreground text-[10px]">
                 {lanEnabled
-                  ? t('api.lanEnabled')
+                  ? gwLanHost
+                    ? `${t('api.lanEnabled')} (${gwLanHost})`
+                    : t('api.lanEnabled')
                   : t('api.lanDisabled')}
               </span>
             </div>

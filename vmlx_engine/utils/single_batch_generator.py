@@ -37,6 +37,7 @@ class _Request:
     token_context: TokenBuffer
     prompt_processed: bool = False
     output_tokens: list[int] = field(default_factory=list)
+    prompt_cache_snapshot: Optional[list[Any]] = None
     finish_reason: Optional[str] = None
     current_state: Any = None
     match_sequence: Any = None
@@ -54,6 +55,7 @@ class Response:
     match_sequence: Any
     prompt_cache: Optional[list[Any]]
     all_tokens: Optional[list[int]]
+    prompt_cache_snapshot: Optional[list[Any]] = None
 
 
 class SingleBatchGenerator:
@@ -135,6 +137,60 @@ class SingleBatchGenerator:
 
     def _make_new_cache(self):
         return mlx_cache.make_prompt_cache(self.model, max_kv_size=self.max_kv_size)
+
+    @staticmethod
+    def _clone_array(value):
+        if value is None:
+            return None
+        # MLX assignment into cache buffers can mutate the original allocation
+        # after this point. Materialize an independent array for the snapshot.
+        cloned = value + mx.zeros_like(value)
+        mx.eval(cloned)
+        return cloned
+
+    @classmethod
+    def _clone_cache_object(cls, cache_obj):
+        if cache_obj is None:
+            return None
+        if isinstance(cache_obj, mlx_cache.CacheList):
+            cloned_children = [cls._clone_cache_object(c) for c in cache_obj.caches]
+            if any(c is None for c in cloned_children):
+                return None
+            return mlx_cache.CacheList(*cloned_children)
+        if isinstance(cache_obj, mlx_cache.KVCache):
+            cloned = type(cache_obj)()
+            if cache_obj.keys is not None:
+                keys, values = cache_obj.state
+                cloned.state = (cls._clone_array(keys), cls._clone_array(values))
+            return cloned
+        if isinstance(cache_obj, mlx_cache.ArraysCache):
+            cloned = type(cache_obj)(len(cache_obj.cache))
+            cloned.cache = [cls._clone_array(c) for c in cache_obj.cache]
+            if getattr(cache_obj, "lengths", None) is not None:
+                cloned.lengths = cls._clone_array(cache_obj.lengths)
+            if getattr(cache_obj, "left_padding", None) is not None:
+                cloned.left_padding = cls._clone_array(cache_obj.left_padding)
+            return cloned
+        if type(cache_obj).__name__ == "ZayaNoStateCache":
+            return cache_obj.extract(0)
+        return None
+
+    @classmethod
+    def _cache_needs_prompt_snapshot(cls, cache_obj) -> bool:
+        if isinstance(cache_obj, mlx_cache.ArraysCache):
+            return True
+        if isinstance(cache_obj, mlx_cache.CacheList):
+            return any(cls._cache_needs_prompt_snapshot(c) for c in cache_obj.caches)
+        return type(cache_obj).__name__ in {"DeepseekV4Cache"}
+
+    @classmethod
+    def _clone_prompt_cache_snapshot(cls, cache):
+        if not cache or not any(cls._cache_needs_prompt_snapshot(c) for c in cache):
+            return None
+        cloned = [cls._clone_cache_object(c) for c in cache]
+        if any(c is None for c in cloned):
+            return None
+        return cloned
 
     def insert(
         self,
@@ -297,7 +353,12 @@ class SingleBatchGenerator:
             return "length"
         return None
 
-    def _yield_current_and_schedule_next(self, req: _Request) -> Response:
+    def _yield_current_and_schedule_next(
+        self,
+        req: _Request,
+        *,
+        prompt_cache_snapshot: Optional[list[Any]] = None,
+    ) -> Response:
         current_token = req.next_token
         current_logprobs = req.next_logprobs
         if current_token is None:
@@ -335,6 +396,7 @@ class SingleBatchGenerator:
             match_sequence=req.match_sequence,
             prompt_cache=req.cache,
             all_tokens=list(req.context_tokens),
+            prompt_cache_snapshot=prompt_cache_snapshot or req.prompt_cache_snapshot,
         )
         if req.finish_reason is not None:
             self._request = None
@@ -355,7 +417,12 @@ class SingleBatchGenerator:
         # extract_cache() context would skip the final prompt token entirely
         # (e.g., prompt [11,12] -> sampled 3 would yield [11,3]).
         req.context_tokens.append(last_token)
-        return self._yield_current_and_schedule_next(req)
+        prompt_cache_snapshot = self._clone_prompt_cache_snapshot(req.cache)
+        req.prompt_cache_snapshot = prompt_cache_snapshot
+        return self._yield_current_and_schedule_next(
+            req,
+            prompt_cache_snapshot=prompt_cache_snapshot,
+        )
 
     def next(self):
         if self._request is None and self._unprocessed:

@@ -687,10 +687,11 @@ export function registerChatHandlers(
 
   // Send message and get streaming response
   // Optional 4th arg: endpoint override { host, port } for multi-server support
-  // Optional 5th arg: media attachments for vision/multimodal models.
-  // `kind` distinguishes image vs video so we emit the right OpenAI content
-  // part (image_url vs video_url). Back-compat: undefined `kind` falls back
-  // to image detection via the data URL mime prefix below.
+  // Optional 5th arg: attachments from the chat composer. Media attachments
+  // force multimodal routing; text files are inlined as text context.
+  // `kind` distinguishes image, video, audio, and text so we emit the right
+  // OpenAI content part. Back-compat: undefined `kind` falls back to detection
+  // via the data URL mime prefix below.
   ipcMain.handle(
     "chat:sendMessage",
     async (
@@ -698,7 +699,13 @@ export function registerChatHandlers(
       chatId: string,
       content: string,
       endpoint?: { host: string; port: number },
-      attachments?: Array<{ dataUrl: string; name: string; kind?: "image" | "video" }>,
+      attachments?: Array<{
+        dataUrl: string;
+        name: string;
+        kind?: "image" | "video" | "audio" | "text";
+        type?: string;
+        text?: string;
+      }>,
     ) => {
       // B6: Concurrency guard — reject if a request is already active for this chat
       // B6: Concurrency guard with stale lock recovery
@@ -964,36 +971,73 @@ export function registerChatHandlers(
 
       // Add user message AFTER health check passes — this prevents orphaned
       // user messages when the server isn't ready yet.
-      // When images are attached, store content as JSON array of content parts
+      // When attachments are present, store content as JSON array of content parts.
       const hasAttachments = attachments && attachments.length > 0;
-      // mlxstudio#69: explicit image attachments override chatIsMultimodal
+      // mlxstudio#69: explicit media attachments override chatIsMultimodal
       // detection. The user clicked "attach image" — that intent must be
       // honored even when (a) the session lookup failed, (b) the session
       // config has isMultimodal=false from an older save, or (c) the model
       // dir's config.json doesn't expose vision_config. The downstream
       // server will reject the request properly if the model truly cannot
-      // handle images, which is far better than silently dropping them.
-      if (hasAttachments && !chatIsMultimodal) {
-        const imgs = attachments!.filter((a) => (a.kind ?? 'image') === 'image').length;
-        const vids = attachments!.filter((a) => a.kind === 'video').length;
+      // handle media, which is far better than silently dropping it. Text-file
+      // attachments are plain text context and do not need multimodal routing.
+      const inferKind = (a: {
+        dataUrl: string;
+        kind?: "image" | "video" | "audio" | "text";
+        text?: string;
+      }): "image" | "video" | "audio" | "text" => {
+        if (a.kind) return a.kind;
+        if (a.text !== undefined) return "text";
+        if (a.dataUrl.startsWith("data:audio/")) return "audio";
+        if (a.dataUrl.startsWith("data:video/")) return "video";
+        if (a.dataUrl.startsWith("data:text/")) return "text";
+        return "image";
+      };
+      const hasMediaAttachments =
+        hasAttachments && attachments!.some((a) => inferKind(a) !== "text");
+      if (hasMediaAttachments && !chatIsMultimodal) {
+        const imgs = attachments!.filter((a) => inferKind(a) === "image").length;
+        const vids = attachments!.filter((a) => inferKind(a) === "video").length;
+        const auds = attachments!.filter((a) => inferKind(a) === "audio").length;
         console.log(
-          `[CHAT] Forcing multimodal=true for ${chatId} — user attached ${imgs} image(s), ${vids} video(s)`,
+          `[CHAT] Forcing multimodal=true for ${chatId} — user attached ${imgs} image(s), ${vids} video(s), ${auds} audio file(s)`,
         );
         chatIsMultimodal = true;
       }
-      // Back-compat: infer kind from the data URL mime prefix when the
-      // client (older renderer build) didn't send a `kind` field.
-      const inferKind = (a: { dataUrl: string; kind?: "image" | "video" }): "image" | "video" => {
-        if (a.kind) return a.kind;
-        return a.dataUrl.startsWith("data:video/") ? "video" : "image";
+      const audioFormatFromDataUrl = (dataUrl: string): string => {
+        const mime = dataUrl.match(/^data:([^;,]+)[;,]/)?.[1]?.toLowerCase() || "";
+        if (mime === "audio/mpeg" || mime === "audio/mp3") return "mp3";
+        if (mime === "audio/wave" || mime === "audio/x-wav" || mime === "audio/wav") return "wav";
+        if (mime === "audio/mp4" || mime === "audio/x-m4a") return "m4a";
+        if (mime.startsWith("audio/")) return mime.slice("audio/".length);
+        return "wav";
       };
+      const audioDataFromDataUrl = (dataUrl: string): string =>
+        dataUrl.includes(",") ? dataUrl.split(",", 2)[1] : dataUrl;
       const userContentForDb = hasAttachments
         ? JSON.stringify([
             ...(content.trim() ? [{ type: "text", text: content }] : []),
-            ...attachments.map((a) => inferKind(a) === "video"
-              ? { type: "video_url", video_url: { url: a.dataUrl } }
-              : { type: "image_url", image_url: { url: a.dataUrl } }
-            ),
+            ...attachments.map((a) => {
+              const kind = inferKind(a);
+              if (kind === "audio") {
+                return {
+                  type: "input_audio",
+                  input_audio: {
+                    data: audioDataFromDataUrl(a.dataUrl),
+                    format: audioFormatFromDataUrl(a.dataUrl),
+                  },
+                };
+              }
+              if (kind === "text") {
+                return {
+                  type: "text",
+                  text: `[Attached file: ${a.name}]\n${a.text || ""}`.trim(),
+                };
+              }
+              return kind === "video"
+                ? { type: "video_url", video_url: { url: a.dataUrl } }
+                : { type: "image_url", image_url: { url: a.dataUrl } };
+            }),
           ])
         : content;
       const userMessage: Message = {

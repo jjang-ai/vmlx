@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for MLX Multimodal Language Model (MLLM) wrapper."""
 
+import base64
+import os
 import platform
 import sys
 from pathlib import Path
@@ -218,6 +220,18 @@ class TestVideoProcessing:
         result = process_video_input({"url": test_video_path})
         assert Path(result).exists()
 
+    def test_process_video_input_long_data_url_decodes_before_path_probe(self, monkeypatch):
+        """Long data URLs must not be treated as filesystem paths."""
+        from vmlx_engine.models.mllm import process_video_input
+
+        def fail_if_path_probe(_path):
+            raise OSError("data URL should be decoded before Path.exists()")
+
+        monkeypatch.setattr(Path, "exists", fail_if_path_probe)
+        payload = base64.b64encode(b"0" * 512).decode("ascii")
+        result = process_video_input(f"data:video/mp4;base64,{payload}")
+        assert os.path.exists(result)
+
     def test_process_video_input_empty_raises(self):
         """Test that empty input raises error."""
         from vmlx_engine.models.mllm import process_video_input
@@ -227,6 +241,35 @@ class TestVideoProcessing:
 
         with pytest.raises(ValueError):
             process_video_input({})
+
+    def test_call_processor_direct_threads_native_videos(self):
+        """Qwen video paths must use processor(videos=...), not image-frame emulation."""
+        from vmlx_engine.mllm_batch_generator import _call_processor_direct
+
+        captured = {}
+
+        class _Processor:
+            def __call__(self, **kwargs):
+                captured.update(kwargs)
+                return {
+                    "input_ids": [[1]],
+                    "attention_mask": [[1]],
+                    "pixel_values_videos": [[[1.0]]],
+                    "video_grid_thw": [[1, 1, 1]],
+                }
+
+        out = _call_processor_direct(
+            _Processor(),
+            prompts="prompt",
+            images=[],
+            videos=["video-array"],
+            add_special_tokens=False,
+        )
+
+        assert captured["videos"] == ["video-array"]
+        assert "images" not in captured
+        assert out["pixel_values_videos"] == [[[1.0]]]
+        assert out["video_grid_thw"] == [[1, 1, 1]]
 
 
 # =============================================================================
@@ -254,6 +297,8 @@ class TestExtractMultimodalMessages:
         chat_msgs, images, videos = MLXMultimodalLM._extract_multimodal_messages(messages)
         assert len(videos) == 1
         assert videos[0] == "https://example.com/video.mp4"
+        assert chat_msgs[0]["content"][0]["type"] == "video"
+        assert chat_msgs[0]["content"][1]["text"] == "Describe this video"
 
     def test_video_url_string_format(self):
         """video_url can also be a plain string."""

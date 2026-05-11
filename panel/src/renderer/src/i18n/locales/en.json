@@ -363,10 +363,10 @@
       "braveGetKey": "Get a free API key →"
     },
     "input": {
-      "dropOverlay": "Drop image or video to attach",
+      "dropOverlay": "Drop image, video, audio, or text file to attach",
       "placeholderWaiting": "Waiting for response...",
       "placeholderDefault": "Message...",
-      "attachTitle": "Attach image or video",
+      "attachTitle": "Attach image, video, audio, or text file",
       "stopTitle": "Stop generating (Esc)",
       "sendTitle": "Send message (Enter)"
     },

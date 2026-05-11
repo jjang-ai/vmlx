@@ -892,15 +892,24 @@ describe('request body conditional params', () => {
 // =============================================================================
 
 describe('wire API format selection', () => {
-  function resolveApiUrl(baseUrl: string, wireApi: string | undefined): string {
-    const useResponsesApi = wireApi === 'responses'
+  function resolveApiUrl(
+    baseUrl: string,
+    wireApi: string | undefined,
+    isRemote = false,
+  ): string {
+    const effectiveWireApi = wireApi || (isRemote ? 'completions' : 'responses')
+    const useResponsesApi = effectiveWireApi === 'responses'
     return useResponsesApi
       ? `${baseUrl}/v1/responses`
       : `${baseUrl}/v1/chat/completions`
   }
 
-  it('default (undefined) uses chat completions', () => {
-    expect(resolveApiUrl('http://localhost:8000', undefined)).toBe('http://localhost:8000/v1/chat/completions')
+  it('local default (undefined) uses responses API', () => {
+    expect(resolveApiUrl('http://localhost:8000', undefined)).toBe('http://localhost:8000/v1/responses')
+  })
+
+  it('remote default (undefined) uses chat completions', () => {
+    expect(resolveApiUrl('http://localhost:8000', undefined, true)).toBe('http://localhost:8000/v1/chat/completions')
   })
 
   it('completions uses chat completions', () => {
@@ -913,6 +922,20 @@ describe('wire API format selection', () => {
 
   it('unknown value falls back to chat completions', () => {
     expect(resolveApiUrl('http://localhost:8000', 'invalid')).toBe('http://localhost:8000/v1/chat/completions')
+  })
+
+  it('chat settings renders the same local responses default shown by request builder', () => {
+    const fs = require('fs')
+    const chatSettings = fs.readFileSync(
+      'src/renderer/src/components/chat/ChatSettings.tsx',
+      'utf-8',
+    )
+    const chatIpc = fs.readFileSync('src/main/ipc/chat.ts', 'utf-8')
+
+    expect(chatIpc).toContain('overrides?.wireApi || (isRemote ? "completions" : "responses")')
+    expect(chatSettings).toContain('effectiveWireApi')
+    expect(chatSettings).toContain("session.type === 'remote'")
+    expect(chatSettings).toContain('/v1/responses')
   })
 })
 

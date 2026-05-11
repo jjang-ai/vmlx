@@ -72,6 +72,8 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   const [detectedToolParser, setDetectedToolParser] = useState<string | undefined>(undefined)
   const [savedChatModelPath, setSavedChatModelPath] = useState<string | undefined>(undefined)
   const [messageCount, setMessageCount] = useState(0)
+  const isRemote = session.type === 'remote'
+  const effectiveWireApi = overrides.wireApi ?? (isRemote ? 'completions' : 'responses')
 
   const loadProfiles = useCallback(() => {
     window.api.chat.getProfiles().then((p: ChatProfile[]) => setProfiles(p))
@@ -264,12 +266,15 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
         <div>
           <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{t('chat.settings.serverInfo')}</h3>
           {(() => {
-            const isRemote = session.type === 'remote'
             const baseUrl = isRemote && session.remoteUrl
               ? session.remoteUrl.replace(/\/+$/, '')
               : `http://${session.host}:${session.port}`
             const isImage = session.modelType === 'image'
-            const apiUrl = isImage ? `${baseUrl}/v1/images/generations` : `${baseUrl}/v1/chat/completions`
+            const apiUrl = isImage
+              ? `${baseUrl}/v1/images/generations`
+              : effectiveWireApi === 'responses'
+                ? `${baseUrl}/v1/responses`
+                : `${baseUrl}/v1/chat/completions`
             return (
               <div className="space-y-1.5 text-sm">
                 <div className="flex justify-between">
@@ -626,7 +631,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
         <div>
           <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{t('chat.settings.wireFormat')}</h3>
           <select
-            value={overrides.wireApi ?? 'completions'}
+            value={effectiveWireApi}
             onChange={e => update('wireApi', e.target.value as 'completions' | 'responses')}
             className="w-full px-3 py-2 bg-background border border-input rounded text-sm focus:outline-none focus:ring-1 focus:ring-ring"
           >

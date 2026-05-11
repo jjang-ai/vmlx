@@ -56,6 +56,23 @@ function normalizeReasoningMode(mode: unknown): 'auto' | 'on' | 'off' {
   return 'auto'
 }
 
+function normalizeDetectedFamilyName(family?: string): string | undefined {
+  if (!family) return undefined
+  if (family === 'zaya1_vl') return 'zaya1-vl'
+  if (family === 'bailing_hybrid') return 'ling'
+  return family
+}
+
+function isZayaCcaFamily(family?: string): boolean {
+  const normalized = normalizeDetectedFamilyName(family)
+  return normalized === 'zaya' || normalized === 'zaya1-vl'
+}
+
+function topKOverrideBlockedByFamily(family?: string): boolean {
+  const normalized = normalizeDetectedFamilyName(family)
+  return normalized === 'zaya' || normalized === 'zaya1-vl' || normalized === 'ling'
+}
+
 function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
   if (!modelPath) return {}
   const out: BundleStartupDefaults = {}
@@ -136,7 +153,25 @@ function applyBundleStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
   }
 }
 
-function applyCacheStackStartupDefaultMigration(config: Partial<ServerConfig>): boolean {
+const CACHE_STACK_STARTUP_DEFAULTS_VERSION = 2
+
+function markCacheStackStartupDefaultsCurrent(config: Partial<ServerConfig>): boolean {
+  if (config.cacheStackStartupDefaultsVersion === CACHE_STACK_STARTUP_DEFAULTS_VERSION) return false
+  config.cacheStackStartupDefaultsVersion = CACHE_STACK_STARTUP_DEFAULTS_VERSION
+  return true
+}
+
+function isZayaCacheStackMigrationTarget(modelPath?: string): boolean {
+  const lower = String(modelPath || '').toLowerCase()
+  return lower.includes('zaya1') || lower.includes('zaya')
+}
+
+function applyCacheStackStartupDefaultMigration(config: Partial<ServerConfig>, modelPath?: string): boolean {
+  if (Number(config.cacheStackStartupDefaultsVersion || 0) >= CACHE_STACK_STARTUP_DEFAULTS_VERSION) {
+    return false
+  }
+
+  const zayaCacheMigrationTarget = isZayaCacheStackMigrationTarget(modelPath || config.modelPath)
   const staleContinuousDefaults =
     config.continuousBatching === true &&
     config.enablePrefixCache === true &&
@@ -150,8 +185,31 @@ function applyCacheStackStartupDefaultMigration(config: Partial<ServerConfig>): 
     Number(config.maxNumSeqs) <= 8 &&
     Number(config.prefillBatchSize) === 1024 &&
     Number(config.completionBatchSize) === 1024
+  const stalePartialPagedCacheDefaults =
+    zayaCacheMigrationTarget &&
+    config.continuousBatching === true &&
+    config.enablePrefixCache === true &&
+    Number(config.maxNumSeqs) === 1 &&
+    Number(config.prefillBatchSize) === 512 &&
+    Number(config.completionBatchSize) === 512 &&
+    config.usePagedCache === false
+  const staleExplicitNoneCacheCodecDefaults =
+    zayaCacheMigrationTarget &&
+    config.continuousBatching === true &&
+    config.enablePrefixCache === true &&
+    Number(config.maxNumSeqs) === 1 &&
+    Number(config.prefillBatchSize) === 512 &&
+    Number(config.completionBatchSize) === 512 &&
+    config.usePagedCache === true &&
+    config.enableBlockDiskCache === true &&
+    config.kvCacheQuantization === 'none'
 
-  if (!staleContinuousDefaults && !staleNoPrefixBatchDefaults) return false
+  if (
+    !staleContinuousDefaults &&
+    !staleNoPrefixBatchDefaults &&
+    !stalePartialPagedCacheDefaults &&
+    !staleExplicitNoneCacheCodecDefaults
+  ) return false
 
   config.continuousBatching = true
   config.enablePrefixCache = true
@@ -165,6 +223,7 @@ function applyCacheStackStartupDefaultMigration(config: Partial<ServerConfig>): 
   config.enableBlockDiskCache = true
   config.blockDiskCacheMaxGb = 10
   config.cacheMemoryPercent = 15
+  markCacheStackStartupDefaultsCurrent(config)
   return true
 }
 
@@ -593,7 +652,7 @@ export class SessionManager extends EventEmitter {
     // Normalize path to prevent trailing-slash mismatches
     modelPath = normalizePath(modelPath)
     applyBundleStartupDefaults(config, modelPath)
-    applyCacheStackStartupDefaultMigration(config)
+    markCacheStackStartupDefaultsCurrent(config)
 
     // Check if session already exists for this model path
     const existing = db.getSessionByModelPath(modelPath)
@@ -603,9 +662,10 @@ export class SessionManager extends EventEmitter {
       try { existingConfig = JSON.parse(existing.config || '{}') } catch (_) { }
       const host = (config.host as string) || existing.host
       const port = (config.port as number) || existing.port
+      applyCacheStackStartupDefaultMigration(existingConfig, modelPath)
       const merged = { ...existingConfig, ...config, modelPath, host, port }
       applyBundleStartupDefaults(merged, modelPath)
-      applyCacheStackStartupDefaultMigration(merged)
+      markCacheStackStartupDefaultsCurrent(merged)
       db.updateSession(existing.id, {
         config: JSON.stringify(merged),
         host,
@@ -717,8 +777,9 @@ export class SessionManager extends EventEmitter {
     config.host = session.host
     config.port = session.port
     applyBundleStartupDefaults(config, config.modelPath)
-    const migrated = applyCacheStackStartupDefaultMigration(config)
-    if (migrated) {
+    const migrated = applyCacheStackStartupDefaultMigration(config, config.modelPath)
+    const markedCurrent = markCacheStackStartupDefaultsCurrent(config)
+    if (migrated || markedCurrent) {
       // Persist the migrated config so the settings UI reflects the corrected
       // values on next render and the same migration doesn't have to re-fire
       // on every session start. Without this writeback the saved config keeps
@@ -726,7 +787,7 @@ export class SessionManager extends EventEmitter {
       // values.
       try {
         db.updateSession(session.id, { config: JSON.stringify(config) })
-        console.log(`[SESSION] Persisted cache-stack migration for session ${session.id}`)
+        console.log(`[SESSION] Persisted cache-stack startup defaults version for session ${session.id}`)
       } catch (e) {
         console.warn(`[SESSION] Failed to persist migration for ${session.id}: ${e}`)
       }
@@ -790,10 +851,15 @@ export class SessionManager extends EventEmitter {
     // Re-detect model config from disk — handles case where model files were
     // replaced with a different model (same folder name, different model_type).
     // User-set overrides (port, host, apiKey, etc.) are preserved.
+    let freshDetectedFamily: string | undefined
+    let freshDetectedIsTurboQuant = false
     if (!isImageSession) {
       try {
         const freshConfig = detectModelConfigFromDir(config.modelPath)
         if (freshConfig) {
+          const freshFamily = normalizeDetectedFamilyName(freshConfig.family)
+          freshDetectedFamily = freshFamily
+          freshDetectedIsTurboQuant = !!freshConfig.isTurboQuant
           const oldFamily = config.toolCallParser
           const oldReasoningParser = config.reasoningParser
           // Update auto-detected fields only if user hasn't explicitly overridden them
@@ -812,12 +878,15 @@ export class SessionManager extends EventEmitter {
           // registry detection is fixed. ZAYA/ZAYA1-VL's current product
           // contract is explicit: native XML tools, no reasoning default.
           // Preserve only explicit "None" (`''`) choices.
-          if (freshConfig.family === 'zaya' || freshConfig.family === 'zaya1-vl') {
+          if (isZayaCcaFamily(freshFamily)) {
             if (config.toolCallParser !== '') {
               config.toolCallParser = freshConfig.toolParser || 'auto'
             }
             if (config.reasoningParser !== '') {
               config.reasoningParser = 'auto'
+            }
+            if (config.defaultEnableThinking === undefined) {
+              config.defaultEnableThinking = false
             }
           }
           // Refresh multimodal detection from disk. A detected VLM must win
@@ -834,7 +903,7 @@ export class SessionManager extends EventEmitter {
           if (oldFamily && oldFamily !== 'auto' && freshConfig.toolParser && oldFamily !== freshConfig.toolParser) {
             this.pushLog(sessionId, `[INFO] Model config re-detected from disk (was: ${oldFamily}, now: ${freshConfig.toolParser})`)
           }
-          if (oldReasoningParser && oldReasoningParser !== 'auto' && (freshConfig.family === 'zaya' || freshConfig.family === 'zaya1-vl') && oldReasoningParser !== config.reasoningParser) {
+          if (oldReasoningParser && oldReasoningParser !== 'auto' && isZayaCcaFamily(freshFamily) && oldReasoningParser !== config.reasoningParser) {
             this.pushLog(sessionId, `[INFO] ZAYA reasoning parser reset from stale ${oldReasoningParser} to auto (no reasoning parser)`)
           }
           // Update DB with refreshed config
@@ -912,6 +981,14 @@ export class SessionManager extends EventEmitter {
     const hfToken = db.getSetting('hf_api_key')
     if (hfToken) {
       spawnEnv.HF_TOKEN = hfToken
+    }
+    delete spawnEnv.JANGTQ_TOPK_OVERRIDE
+    const jangtqTopKOverride = Number((config as any).jangtqTopKOverride || 0)
+    const topKOverrideAllowed = freshDetectedIsTurboQuant && !topKOverrideBlockedByFamily(freshDetectedFamily)
+    if (topKOverrideAllowed && Number.isFinite(jangtqTopKOverride) && jangtqTopKOverride > 0) {
+      spawnEnv.JANGTQ_TOPK_OVERRIDE = String(Math.floor(Math.min(64, Math.max(1, jangtqTopKOverride))))
+    } else if (!topKOverrideAllowed && Number.isFinite(jangtqTopKOverride) && jangtqTopKOverride > 0) {
+      this.pushLog(sessionId, `[INFO] Ignoring JANGTQ_TOPK_OVERRIDE=${Math.floor(jangtqTopKOverride)} for ${freshDetectedFamily || 'this model'}; trained routing is enforced for this family.`)
     }
     // DSV4 Flash runtime knobs (raw-max opt-in + finalizer budget + force-direct).
     // Helper validates inputs and emits only the env vars the engine reads.
@@ -1204,6 +1281,7 @@ export class SessionManager extends EventEmitter {
     'maxTokens', 'mcpConfig', 'servedModelName',
     'speculativeModel', 'numDraftTokens', 'smelt', 'smeltExperts',
     'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
+    'jangtqTopKOverride',
     'distributedEnabled', 'distributedMode', 'distributedSecret',
     'defaultTemperature', 'defaultTopP', 'defaultRepetitionPenalty',
     'embeddingModel', 'additionalArgs', 'mfluxClass',
@@ -1258,6 +1336,7 @@ export class SessionManager extends EventEmitter {
       if (v !== undefined) cleanConfig[k] = v
     }
     const merged = { ...currentConfig, ...cleanConfig }
+    markCacheStackStartupDefaultsCurrent(merged as Partial<ServerConfig>)
 
     // Log sleep config changes
     if ('idleTimeoutSoftMin' in cleanConfig || 'idleTimeoutHardMin' in cleanConfig || 'autoSleepEnabled' in cleanConfig) {
@@ -1340,10 +1419,13 @@ export class SessionManager extends EventEmitter {
           enableBlockDiskCache: true,
           blockDiskCacheMaxGb: 10,
           kvCacheQuantization: 'auto',
+          cacheStackStartupDefaultsVersion: CACHE_STACK_STARTUP_DEFAULTS_VERSION,
           streamInterval: 1,
           maxTokens: 32768,
+          jangtqTopKOverride: 0,
           toolCallParser: 'auto',
           reasoningParser: 'auto',
+          defaultEnableThinking: isZayaCcaFamily(detected.family) ? false : undefined,
           enableAutoToolChoice: detected.enableAutoToolChoice
         }
         session = {
@@ -2158,7 +2240,12 @@ export class SessionManager extends EventEmitter {
     // without prefix cache each follow-up re-processes the entire prompt (~16s).
     const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
     const prefixCacheOff = !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
-    const usePagedCache = config.usePagedCache ?? detected.usePagedCache
+    const detectedFamily = normalizeDetectedFamilyName(detected.family)
+    const zayaCcaActive = isZayaCcaFamily(detectedFamily)
+    const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
+    const usePagedCache = zayaTypedCacheRequiresPaged
+      ? true
+      : (config.usePagedCache ?? detected.usePagedCache)
 
     if (prefixCacheOff) {
       args.push('--disable-prefix-cache')
@@ -2253,13 +2340,17 @@ export class SessionManager extends EventEmitter {
     const turboQuantActive = !!(detected as any).isTurboQuant
     const effectiveDistributed = requestedDistributed
     const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed
-    const effectiveEnableJit = !!config.enableJit && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !turboQuantActive
+    const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !zayaCcaActive && !turboQuantActive
     if (requestedFlashMoe && !effectiveFlashMoe) {
       console.warn('[SESSION] Ignoring stale Flash MoE flag because distributed mode is active')
     }
     if (config.enableJit && !effectiveEnableJit) {
       const reason = dsv4Active
         ? 'DeepSeek-V4 uses native SWA+CSA/HCA composite cache'
+        : zayaCcaActive
+        ? 'ZAYA typed CCA cache is path-dependent and benchmarks faster on the uncompiled scheduler path'
+        : isVLM
+        ? 'multimodal/VLM models use the mlx-vlm streaming path, which is not mx.compile safe'
         : turboQuantActive
         ? 'TurboQuantKVCache uses custom cache objects that mx.compile cannot trace'
         : 'Flash MoE or distributed mode is active'

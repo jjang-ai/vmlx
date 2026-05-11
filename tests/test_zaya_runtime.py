@@ -1318,6 +1318,135 @@ def test_zaya_scheduler_stores_clean_prompt_boundary_for_paged_cache():
     assert scheduler.block_aware_cache.paged_cache.stats.cache_hits >= 1
 
 
+def test_zaya_single_active_store_uses_prompt_snapshot_without_reprefill(monkeypatch):
+    """Single-active ZAYA should not re-prefill after decode to store cache.
+
+    The generator can capture a clean prompt-boundary snapshot before the first
+    generated-token lookahead mutates CCA state. The scheduler should store that
+    snapshot directly instead of running an extra prompt-only prefill after the
+    last streamed token.
+    """
+
+    from vmlx_engine.request import Request, SamplingParams
+    from vmlx_engine.scheduler import Scheduler, SchedulerConfig
+
+    mx.random.seed(23)
+    model = Model(_small_args())
+    tokenizer = SimpleNamespace(
+        eos_token_id=0,
+        eos_token_ids=[0],
+        clean_up_tokenization_spaces=False,
+        encode=lambda text, add_special_tokens=False: [1, 2, 3, 4],
+        decode=lambda ids: "".join(chr(65 + (int(i) % 26)) for i in ids),
+    )
+    scheduler = Scheduler(
+        model,
+        tokenizer,
+        SchedulerConfig(
+            max_num_seqs=1,
+            enable_prefix_cache=True,
+            use_paged_cache=True,
+            use_memory_aware_cache=False,
+            paged_cache_block_size=8,
+            max_cache_blocks=8,
+            kv_cache_quantization="none",
+            prefill_batch_size=1,
+            completion_batch_size=1,
+            prefill_step_size=8,
+        ),
+    )
+
+    def fail_reprefill(_tokens):
+        raise AssertionError("single-active ZAYA should store prompt snapshot")
+
+    monkeypatch.setattr(scheduler, "_prefill_for_prompt_only_cache", fail_reprefill)
+
+    request = Request(
+        request_id="zaya-snapshot-store",
+        prompt=[1, 2, 3, 4],
+        prompt_token_ids=[1, 2, 3, 4],
+        sampling_params=SamplingParams(max_tokens=1, temperature=0.0),
+    )
+    scheduler.add_request(request)
+
+    for _ in range(8):
+        scheduler.step()
+        if request.is_finished():
+            break
+
+    assert request.is_finished(), "ZAYA scheduler request did not finish"
+    assert scheduler.block_aware_cache is not None
+    table, remaining = scheduler.block_aware_cache.fetch_cache(
+        "zaya-snapshot-store-repeat",
+        [1, 2, 3, 4],
+    )
+
+    assert table is not None
+    assert table.num_tokens == 3
+    assert remaining == [4]
+
+
+def test_zaya_single_active_multitoken_store_keeps_prompt_snapshot(monkeypatch):
+    """Prompt snapshot must survive until a later generation response finishes."""
+
+    from vmlx_engine.request import Request, SamplingParams
+    from vmlx_engine.scheduler import Scheduler, SchedulerConfig
+
+    mx.random.seed(24)
+    model = Model(_small_args())
+    tokenizer = SimpleNamespace(
+        eos_token_id=0,
+        eos_token_ids=[0],
+        clean_up_tokenization_spaces=False,
+        encode=lambda text, add_special_tokens=False: [1, 2, 3, 4],
+        decode=lambda ids: "".join(chr(65 + (int(i) % 26)) for i in ids),
+    )
+    scheduler = Scheduler(
+        model,
+        tokenizer,
+        SchedulerConfig(
+            max_num_seqs=1,
+            enable_prefix_cache=True,
+            use_paged_cache=True,
+            use_memory_aware_cache=False,
+            paged_cache_block_size=8,
+            max_cache_blocks=8,
+            kv_cache_quantization="none",
+            prefill_batch_size=1,
+            completion_batch_size=1,
+            prefill_step_size=8,
+        ),
+    )
+
+    def fail_reprefill(_tokens):
+        raise AssertionError("multi-token ZAYA should retain prompt snapshot")
+
+    monkeypatch.setattr(scheduler, "_prefill_for_prompt_only_cache", fail_reprefill)
+
+    request = Request(
+        request_id="zaya-multitoken-snapshot-store",
+        prompt=[1, 2, 3, 4],
+        prompt_token_ids=[1, 2, 3, 4],
+        sampling_params=SamplingParams(max_tokens=2, temperature=0.0),
+    )
+    scheduler.add_request(request)
+
+    for _ in range(8):
+        scheduler.step()
+        if request.is_finished():
+            break
+
+    assert request.is_finished(), "ZAYA scheduler request did not finish"
+    table, remaining = scheduler.block_aware_cache.fetch_cache(
+        "zaya-multitoken-snapshot-store-repeat",
+        [1, 2, 3, 4],
+    )
+
+    assert table is not None
+    assert table.num_tokens == 3
+    assert remaining == [4]
+
+
 def test_zaya_mllm_scheduler_uses_typed_cca_not_hybrid_ssm_companion():
     """ZAYA-VL is hybrid-shaped but must not use the generic SSM companion.
 

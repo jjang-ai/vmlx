@@ -104,7 +104,7 @@ const api = {
     getMessages: (chatId: string) => ipcRenderer.invoke('chat:getMessages', chatId),
     addMessage: (chatId: string, role: string, content: string) =>
       ipcRenderer.invoke('chat:addMessage', chatId, role, content),
-    sendMessage: (chatId: string, content: string, endpoint?: { host: string; port: number }, attachments?: Array<{ dataUrl: string; name: string }>) =>
+    sendMessage: (chatId: string, content: string, endpoint?: { host: string; port: number }, attachments?: Array<{ dataUrl: string; name: string; kind?: 'image' | 'video' | 'audio' | 'text'; type?: string; size?: number; text?: string }>) =>
       ipcRenderer.invoke('chat:sendMessage', chatId, content, endpoint, attachments),
     onStream: (callback: (data: any) => void) => {
       const handler = (_: any, data: any) => callback(data)
