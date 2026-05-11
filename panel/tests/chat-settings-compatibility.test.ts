@@ -89,7 +89,7 @@ describe('chat settings cross-family compatibility warnings', () => {
     const source = readFileSync('src/renderer/src/components/chat/ChatSettings.tsx', 'utf8')
 
     expect(source).toContain("const thinkingSupported = detectedFamily === 'deepseek-v4' || !!reasoningParser")
-    expect(source).toContain("const supportsReasoningEffort = detectedFamily === 'hy3' || reasoningParser === 'openai_gptoss' || reasoningParser === 'mistral'")
+    expect(source).toContain("const showReasoningEffort = detectedFamily === 'hy3' || reasoningParser === 'openai_gptoss' || reasoningParser === 'mistral'")
     expect(source).toContain('const displayedEnableThinking = thinkingSupported ? overrides.enableThinking : undefined')
     expect(source).toContain('disabled={!thinkingSupported}')
   })

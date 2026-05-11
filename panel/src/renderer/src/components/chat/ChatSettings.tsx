@@ -77,7 +77,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   const thinkingSupported = detectedFamily === 'deepseek-v4' || !!reasoningParser
   const displayedEnableThinking = thinkingSupported ? overrides.enableThinking : undefined
   const thinkingDisabledClass = thinkingSupported ? '' : ' opacity-50 cursor-not-allowed'
-  const supportsReasoningEffort = detectedFamily === 'hy3' || reasoningParser === 'openai_gptoss' || reasoningParser === 'mistral'
+  const showReasoningEffort = detectedFamily === 'hy3' || reasoningParser === 'openai_gptoss' || reasoningParser === 'mistral'
   const showLowEffort = reasoningParser !== 'mistral'
   const showMediumEffort = reasoningParser !== 'mistral' && detectedFamily !== 'hy3'
 
@@ -505,7 +505,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
               <p className="text-xs text-muted-foreground mt-1.5">
                 {t('chat.settings.thinkingHelp')}
               </p>
-              {detectedFamily !== 'deepseek-v4' && overrides.enableThinking !== false && supportsReasoningEffort && (
+              {detectedFamily !== 'deepseek-v4' && overrides.enableThinking !== false && showReasoningEffort && (
                 <div className="mt-3">
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-xs text-muted-foreground">{t('chat.settings.reasoningEffort')}</span>
