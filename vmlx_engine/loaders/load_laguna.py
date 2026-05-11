@@ -8,8 +8,8 @@ RoPE — full uses YaRN, SWA uses default), 256 routed experts top-8 + 1
 shared, sigmoid routing with per-head gating (`g_proj`), q_norm/k_norm
 in attention, dense layer 0 + sparse layers 1..39. Text-only.
 
-`model_type = "laguna"`. Bundle layout (see
-`/Users/example/jang/jang-tools/jang_tools/laguna/README.md`):
+`model_type = "laguna"`. Bundle layout (see the `jang_tools.laguna`
+runtime README):
 
   - bf16 reference   (`weight_format` absent or "bf16")
   - JANG affine      (`quantization.bits` set)

@@ -422,7 +422,6 @@ def main():
 
     possible_paths = [
         Path.home() / ".mlxstudio/models/Qwen3.5-397B-CODEBOOK-TEST",
-        Path("/Users/example/.mlxstudio/models/Qwen3.5-397B-CODEBOOK-TEST"),
     ]
 
     codebook_file = None

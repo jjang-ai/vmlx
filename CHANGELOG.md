@@ -46,9 +46,7 @@ All notable changes to vMLX Engine will be documented in this file.
 - Rebuilt packaged app live-gated ZAYA JANGTQ4 in both Reasoning Auto and
   explicit thinking-off modes. Both gates passed OpenAI Chat, Responses,
   Anthropic, Ollama, multi-turn recall, cache-stat/memory observation, and JIT
-  soft sleep/wake. Evidence lives under
-  `docs/internal/release-gates/20260507_114150/` and
-  `docs/internal/release-gates/20260507_114229/`.
+  soft sleep/wake. Evidence was captured in private release-gate artifacts.
 - Qwen3.6 reasoning Auto live-verified with the desktop request shape: Auto,
   explicit Off, and explicit On all produced visible final content; reasoning
   was present only for Auto/On, and prefix/paged/block-disk cache stats were

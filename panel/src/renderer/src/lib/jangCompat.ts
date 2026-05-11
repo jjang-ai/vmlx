@@ -11,7 +11,7 @@
  * direct mlx_lm/mlx_vlm users need a fresh conversion, and vMLX coherence still
  * depends on the normal live model gate.
  *
- * Cross-reference: docs/internal/AUDIT_jang_hybrid_conv1d_compat_2026_05_09.md
+ * The internal release gate records the exact conv1d compatibility audit.
  */
 
 export interface FamilyCompatEntry {

@@ -8,10 +8,8 @@ bundles because the mlx_lm code path triggers ``mx.eval`` /
 llm-worker step executor (DSV4 model forward allocates internal Metal
 streams that don't survive the cross-thread context).
 
-This implementation mirrors the canonical
-``jang_tools.dsv4.runtime.generate`` path that lives at
-``/Users/example/jang/jang-tools/jang_tools/dsv4/runtime.py`` — same prompt
-encode → prefill → decode → parse loop, but exposes the BatchGenerator
+This implementation mirrors the canonical ``jang_tools.dsv4.runtime.generate``
+path — same prompt encode → prefill → decode → parse loop, but exposes the BatchGenerator
 API surface (``insert`` / ``next`` / ``next_generated`` / ``remove`` /
 ``extract_cache``) so the existing vmlx scheduler can drive it without
 caring which generator is underneath.
@@ -595,8 +593,7 @@ class DSV4BatchGenerator:
         Default bumped from 512 -> 2048 (2026-05-09) so long-form thinking
         turns can still emit substantive visible content even when the model
         spent most of its output budget reasoning. Tunable via
-        ``VMLX_DSV4_FINALIZER_TOKENS``. See
-        ``docs/internal/AUDIT_dsv4_flash_long_form_max_thinking_2026_05_09.md``.
+        ``VMLX_DSV4_FINALIZER_TOKENS``.
         """
         try:
             return max(1, int(os.environ.get("VMLX_DSV4_FINALIZER_TOKENS", "2048")))

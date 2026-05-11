@@ -914,8 +914,7 @@ class ResponsesObject(BaseModel):
     # Non-fatal warnings surfaced to the client. Set when the response is
     # technically valid but a chain/coherence/cache-prefix risk applies — e.g.,
     # `previous_response_id` chained a prior response that produced reasoning
-    # only (no visible message, no tool calls). See
-    # docs/internal/AUDIT_responses_reasoning_history_alignment_2026_05_09.md.
+    # only (no visible message, no tool calls).
     warnings: list[str] | None = None
 
     @computed_field

@@ -476,9 +476,8 @@ fi
 echo ""
 # Post-bundle: rewrite shebangs in console scripts to a relocatable sibling
 # Python trampoline.
-# pip bakes the source bundled-python path into shebangs (e.g.
-# `#!/Users/example/mlx/vllm-mlx/panel/bundled-python/python/bin/python3`),
-# which would ship to users and never resolve. Older builds rewrote to
+# pip bakes the source bundled-python path into shebangs, which would ship to
+# users and never resolve. Older builds rewrote to
 # `/Applications/vMLX.app/...`, but that breaks repo-local test apps and users
 # who run the app from another location. Keep every console script anchored to
 # its own `python/bin/python3` instead.

@@ -889,10 +889,9 @@ def _dsv4_raw_max_enabled() -> bool:
     """Return True iff the user has opted in to DSV4's genuine raw-max
     reasoning_effort template via env. Off by default for safety.
 
-    See `docs/internal/AUDIT_dsv4_flash_long_form_max_thinking_2026_05_09.md`
-    for context. Combined with the bumped default finalizer budget (2048
-    visible tokens after forced `</think>`), opt-in raw-max produces coherent
-    long-form output where high alone may truncate.
+    Combined with the bumped default finalizer budget (2048 visible tokens
+    after forced `</think>`), opt-in raw-max produces coherent long-form output
+    where high alone may truncate.
     """
     return os.environ.get("VMLX_DSV4_RAW_MAX", "0").lower() in {"1", "true", "yes"}
 
@@ -9117,7 +9116,6 @@ def _responses_output_to_assistant_messages(output_items: list) -> list[dict]:
         # alignment. Without this, chained turns lose all record that turn N
         # happened and cache reuse drops because the next turn's prefill prompt
         # has no overlap with prior assistant tokens.
-        # See docs/internal/AUDIT_responses_reasoning_history_alignment_2026_05_09.md
         assistant_messages.append({"role": "assistant", "content": ""})
     return assistant_messages
 
@@ -9137,8 +9135,7 @@ def _responses_store_history(
         reasoning_only: True when the response produced ONLY reasoning items
             (no visible text, no tool calls). Tracked in
             `_responses_was_reasoning_only` so chained turns can surface a
-            warning to the client. See
-            `docs/internal/AUDIT_responses_reasoning_history_alignment_2026_05_09.md`.
+            warning to the client.
     """
     if not response_id:
         return
@@ -10431,7 +10428,7 @@ async def create_response(
     # Detect reasoning-only output: any reasoning items present, no visible
     # message text, no tool/function calls. Empty streaming-style message
     # shells do not count as visible output. Tracked so chained turns surface
-    # a warning. See docs/internal/AUDIT_responses_reasoning_history_alignment_2026_05_09.md.
+    # a warning.
     _reasoning_only = _responses_output_is_reasoning_only(output_items)
 
     response_obj = ResponsesObject(
@@ -12420,7 +12417,6 @@ async def stream_responses_api(
 
     # Reasoning-only detection mirrors the non-stream path. Empty streaming
     # output_text shells do not count as visible output.
-    # See docs/internal/AUDIT_responses_reasoning_history_alignment_2026_05_09.md.
     _stream_reasoning_only = _responses_output_is_reasoning_only(all_output_items)
     _stream_chain_warnings = _chain_warnings_for_previous_response_id(
         getattr(request, "previous_response_id", None)

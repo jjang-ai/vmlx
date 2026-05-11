@@ -42,6 +42,16 @@ CACHE_WARM_PROMPT = (
 )
 
 
+def twine_command() -> list[str]:
+    override = os.environ.get("TWINE")
+    if override:
+        return [override]
+    found = shutil.which("twine")
+    if found:
+        return [found]
+    return [sys.executable, "-m", "twine"]
+
+
 class Gate:
     def __init__(self, log_dir: Path):
         self.log_dir = log_dir
@@ -588,7 +598,7 @@ def check_static(gate: Gate, app: Path, skip_app: bool) -> None:
     else:
         gate.record("version triple", "FAIL", f"pyproject={version}, panel={panel_pkg['version']}, init={init_version}")
 
-    gate.run("twine check dist", ["/Users/example/.local/bin/twine", "check", *map(str, sorted((ROOT / "dist").glob("vmlx-*")))], timeout=120)
+    gate.run("twine check dist", [*twine_command(), "check", *map(str, sorted((ROOT / "dist").glob("vmlx-*")))], timeout=120)
     gate.run("panel request/type tests", ["npm", "test", "--", "request-builder.test.ts", "reasoning-display.test.ts", "audit-fixes.test.ts"], cwd=PANEL, timeout=180)
     gate.run("panel typecheck", ["npm", "run", "typecheck"], cwd=PANEL, timeout=180)
     gate.run("bundled python import gate", ["npm", "run", "verify-bundled"], cwd=PANEL, timeout=180)

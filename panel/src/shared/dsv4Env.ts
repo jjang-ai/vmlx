@@ -7,8 +7,7 @@
  *
  * Knobs:
  *   - `dsv4RawMax` -> `VMLX_DSV4_RAW_MAX=1` — opt in to genuine
- *     reasoning_effort=max template (default downgrades to high). See
- *     docs/internal/AUDIT_dsv4_flash_long_form_max_thinking_2026_05_09.md.
+ *     reasoning_effort=max template (default downgrades to high).
  *   - `dsv4FinalizerTokens` -> `VMLX_DSV4_FINALIZER_TOKENS=<int>` — visible
  *     answer budget after forced `</think>` (default 2048). Bump for long-form
  *     content where 2048 is still too tight.

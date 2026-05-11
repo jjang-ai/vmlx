@@ -999,7 +999,6 @@ export class SessionManager extends EventEmitter {
     }
     // DSV4 Flash runtime knobs (raw-max opt-in + finalizer budget + force-direct).
     // Helper validates inputs and emits only the env vars the engine reads.
-    // See docs/internal/AUDIT_dsv4_flash_long_form_max_thinking_2026_05_09.md.
     const dsv4Env = dsv4EnvFromConfig(config as any)
     for (const [key, value] of Object.entries(dsv4Env)) {
       spawnEnv[key] = value

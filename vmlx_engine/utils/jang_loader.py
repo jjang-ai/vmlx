@@ -197,7 +197,7 @@ def _safe_source_model_name(jang_cfg: dict) -> str:
     Handles all known shapes the field has taken across JANG versions:
 
       * older bundles  → ``{"source_model": {"name": "...", "path": "..."}}``
-      * DSV4 bundles    → ``{"source_model": "/Users/example/sources/DeepSeek-V4-Flash"}``
+      * DSV4 bundles    → ``{"source_model": "/path/to/DeepSeek-V4-Flash"}``
                           (plain string path)
       * missing / null  → "unknown"
 
@@ -215,7 +215,7 @@ def _safe_source_model_name(jang_cfg: dict) -> str:
         return sm.get("name") or sm.get("path") or "unknown"
     if isinstance(sm, str) and sm:
         # Treat as path — show the basename so the log line stays readable
-        # ("DeepSeek-V4-Flash" vs "/Users/example/sources/DeepSeek-V4-Flash").
+        # ("DeepSeek-V4-Flash" vs a full local source path).
         from os.path import basename
         return basename(sm.rstrip("/")) or sm
     return "unknown"
