@@ -231,7 +231,7 @@ def _vlm_image_prefill_budget(
     predicted = int(heads * tokens * tokens * 2)
     active = max(0, int(active_memory_bytes or 0))
     max_ws = max(0, int(max_working_set_bytes or 0))
-    reject_pct = float(reject_pct or 85.0)
+    reject_pct = float(reject_pct or 98.0)
     single_limit = max(0, int(single_buffer_limit_bytes or 0))
 
     def gb(value: int) -> float:
@@ -309,12 +309,12 @@ def _raise_if_image_prefill_exceeds_budget(
             default=float(
                 os.environ.get(
                     "VMLX_VLM_IMAGE_PREFILL_REJECT_PCT",
-                    os.environ.get("VMLX_METAL_WS_REJECT_PCT", "85"),
+                    os.environ.get("VMLX_METAL_WS_REJECT_PCT", "98"),
                 )
             )
         )
     except (TypeError, ValueError):
-        reject_pct = get_metal_ws_guard_threshold(85.0)
+        reject_pct = get_metal_ws_guard_threshold(98.0)
     try:
         single_buffer_limit = int(
             float(os.environ.get("VMLX_VLM_IMAGE_PREFILL_BUFFER_GB", "8"))

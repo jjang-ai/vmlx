@@ -4331,7 +4331,7 @@ class TestMlxstudio78MetalWorkingSetGuard:
     Fix: `check_metal_working_set_pressure` FastAPI dependency rejects
     with 503 + Retry-After=5 when
       active_memory / max_recommended_working_set_size > threshold
-    (default 85% — leaves ~7GB headroom on M4 Max).
+    (default 98%, tunable with VMLX_METAL_WS_REJECT_PCT).
 
     This is ORTHOGONAL to mlxstudio#63: the RAM guard catches system-
     level pressure (swap thrashing), the Metal guard catches GPU-level
@@ -4493,7 +4493,7 @@ class TestMlxstudio78MetalWorkingSetGuard:
     incoming requests when the working set is already saturated.
 
     Guard triggers when active_memory / max_recommended_working_set
-    exceeds VMLX_METAL_WS_REJECT_PCT (default 85).
+    exceeds VMLX_METAL_WS_REJECT_PCT (default 98).
     """
 
     def test_guard_rejects_high_pressure(self):
@@ -4506,7 +4506,7 @@ class TestMlxstudio78MetalWorkingSetGuard:
         def _di():
             return {"max_recommended_working_set_size": 48 * 1024 ** 3}
         def _active():
-            return 41 * 1024 ** 3  # 85.4% → above 85% default
+            return 48 * 1024 ** 3  # 100% -> above 98% default
 
         with patch.object(mx, "device_info", _di, create=True), \
              patch.object(mx, "get_active_memory", _active, create=True):
@@ -4541,7 +4541,7 @@ class TestMlxstudio78MetalWorkingSetGuard:
         def _di():
             return {"max_recommended_working_set_size": 48 * 1024 ** 3}
         def _active():
-            return 47 * 1024 ** 3  # 97.9% → would reject
+            return 48 * 1024 ** 3  # 100% -> would reject
 
         os.environ["VMLX_METAL_WS_GUARD"] = "0"
         try:
@@ -4563,7 +4563,7 @@ class TestMlxstudio78MetalWorkingSetGuard:
         def _active():
             return 40 * 1024 ** 3  # 40% → allowed at 85% default, rejected at 30%
 
-        # At default 85% — passes
+        # At default 98% — passes
         with patch.object(mx, "device_info", _di, create=True), \
              patch.object(mx, "get_active_memory", _active, create=True):
             asyncio.run(check_metal_working_set_pressure(MagicMock()))

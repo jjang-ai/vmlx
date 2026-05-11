@@ -2211,12 +2211,15 @@ async def check_memory_pressure(request: Request):
 #
 # This guard reads `mx.get_active_memory()` (with mx.metal fallback per
 # vmlx#94) and rejects when `active / max_working_set` exceeds threshold
-# (default 85%). 85% leaves ~7GB headroom on M4 Max — enough for a
-# moderate prefill but tight enough to catch the failure case early.
+# (default 98%, raised from 85% per Eric directive 2026-05-11). 98%
+# lets users effectively fill their unified memory with the model + cache,
+# while the 2% headroom still catches the genuine Metal command-buffer
+# OOM signature before MLX raises [METAL] Insufficient Memory and the
+# engine process dies.
 #
 # Knobs:
-# - VMLX_METAL_WS_GUARD=0       → disable entirely
-# - VMLX_METAL_WS_REJECT_PCT=N  → tune threshold (default 85)
+# - VMLX_METAL_WS_GUARD=0       → disable entirely (accept hard-crash risk)
+# - VMLX_METAL_WS_REJECT_PCT=N  → tune threshold (default 98)
 _last_metal_ws_log: float = 0.0
 
 
@@ -2238,7 +2241,7 @@ async def check_metal_working_set_pressure(request: Request):
         )
         if not is_metal_ws_guard_enabled():
             return
-        threshold_pct = get_metal_ws_guard_threshold(85.0)
+        threshold_pct = get_metal_ws_guard_threshold(98.0)
         active, max_ws = get_effective_metal_working_set_bytes(mx)
         if max_ws <= 0:
             return  # no limit exposed — skip
@@ -2271,7 +2274,7 @@ async def check_metal_working_set_pressure(request: Request):
             f"accuracy or MMLU score. "
             f"Retry after the GPU catches up, reduce concurrent load, "
             f"or try a smaller model / smaller quant. Tune via "
-            f"VMLX_METAL_WS_REJECT_PCT (default 85), "
+            f"VMLX_METAL_WS_REJECT_PCT (default 98), "
             f"set VMLX_METAL_WS_MAX_GB to raise/lower the working-set ceiling, "
             f"disable via VMLX_METAL_WS_GUARD=0."
         ),

@@ -59,6 +59,7 @@ def test_get_effective_metal_working_set_bytes_apply_override():
 
 
 def test_guard_threshold_parse_default_and_override():
+    assert get_metal_ws_guard_threshold() == 98.0
     assert get_metal_ws_guard_threshold(85.0) == 85.0
     with patch.dict("os.environ", {"VMLX_METAL_WS_REJECT_PCT": "30"}, clear=True):
         assert get_metal_ws_guard_threshold(85.0) == 30.0
@@ -87,8 +88,14 @@ def test_scheduler_waiting_uses_shared_memory_helper():
 
     assert "get_effective_metal_working_set_bytes" in inspect.getsource(Scheduler._schedule_waiting)
     assert "get_metal_ws_guard_threshold" in inspect.getsource(Scheduler._schedule_waiting)
+    assert "get_metal_ws_guard_threshold(85.0)" not in inspect.getsource(
+        Scheduler._schedule_waiting
+    )
     assert (
         "get_effective_metal_working_set_bytes"
         in inspect.getsource(MLLMScheduler._schedule_waiting)
     )
     assert "get_metal_ws_guard_threshold" in inspect.getsource(MLLMScheduler._schedule_waiting)
+    assert "get_metal_ws_guard_threshold(85.0)" not in inspect.getsource(
+        MLLMScheduler._schedule_waiting
+    )

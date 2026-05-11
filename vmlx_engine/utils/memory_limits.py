@@ -106,8 +106,15 @@ def get_effective_metal_working_set_bytes(mx_module=None) -> Tuple[int, int]:
     return active, resolve_working_set_override(base_ws)
 
 
-def get_metal_ws_guard_threshold(default: float = 85.0) -> float:
-    """Current percent threshold for working-set rejection (e.g. 85 = 85%)."""
+def get_metal_ws_guard_threshold(default: float = 98.0) -> float:
+    """Current percent threshold for working-set rejection (e.g. 98 = 98%).
+
+    Default raised from 85 to 98 (Eric directive 2026-05-11): users should be
+    able to fill near-all of their unified memory before the guard fires.
+    The 2% headroom still catches the genuine Metal command-buffer OOM edge
+    case before MLX raises [METAL] Insufficient Memory and crashes the
+    engine process. Override via VMLX_METAL_WS_REJECT_PCT.
+    """
     return _parse_float_env("VMLX_METAL_WS_REJECT_PCT", default)
 
 

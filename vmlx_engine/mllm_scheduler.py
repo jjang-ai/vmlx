@@ -1954,7 +1954,7 @@ class MLLMScheduler:
             # Memory-pressure guard: don't admit new requests if GPU memory is critically low
             try:
                 active_mem, max_mem = get_effective_metal_working_set_bytes(mx)
-                guard_threshold = get_metal_ws_guard_threshold(85.0)
+                guard_threshold = get_metal_ws_guard_threshold()
                 if active_mem > 0 and len(self.running) > 0:
                     if max_mem > 0 and (active_mem / max_mem * 100.0) >= guard_threshold:
                         logger.debug(
