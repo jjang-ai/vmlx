@@ -1182,11 +1182,11 @@ describe('Default IP and New Settings', () => {
         expect(block).toContain("config.kvCacheQuantization === 'none'")
     })
 
-    it('ZAYA sessions default thinking off when no user thinking choice is saved', () => {
+    it('ZAYA sessions force stale default thinking off on startup', () => {
         const source = readFileSync('src/main/sessions.ts', 'utf8')
         expect(source).toContain('function isZayaCcaFamily')
         expect(source).toContain('if (isZayaCcaFamily(freshFamily))')
-        expect(source).toContain('config.defaultEnableThinking === undefined')
+        expect(source).toContain('config.defaultEnableThinking !== false')
         expect(source).toContain('config.defaultEnableThinking = false')
         expect(source).toContain('defaultEnableThinking: isZayaCcaFamily(detected.family) ? false : undefined')
     })

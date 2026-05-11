@@ -877,6 +877,9 @@ export class SessionManager extends EventEmitter {
           // explicit overrides" rule keeps poisoning the runtime even after
           // registry detection is fixed. ZAYA/ZAYA1-VL's current product
           // contract is explicit: native XML tools, no reasoning default.
+          // Existing rows with `defaultEnableThinking=true` must also be reset;
+          // otherwise the installed app launches ZAYA JANGTQ2 into a hidden
+          // thinking rail and the first user turn can appear stuck as "Thinking".
           // Preserve only explicit "None" (`''`) choices.
           if (isZayaCcaFamily(freshFamily)) {
             if (config.toolCallParser !== '') {
@@ -885,8 +888,12 @@ export class SessionManager extends EventEmitter {
             if (config.reasoningParser !== '') {
               config.reasoningParser = 'auto'
             }
-            if (config.defaultEnableThinking === undefined) {
+            const oldDefaultEnableThinking = config.defaultEnableThinking
+            if (config.defaultEnableThinking !== false) {
               config.defaultEnableThinking = false
+            }
+            if (oldDefaultEnableThinking === true) {
+              this.pushLog(sessionId, '[INFO] ZAYA default thinking reset from stale on to off')
             }
           }
           // Refresh multimodal detection from disk. A detected VLM must win
