@@ -125,10 +125,18 @@ def test_zaya_cca_rows_require_typed_exact_hit_cache_probe():
     assert cache_exact_hit_required(rows["dsv4_tq"])
 
 
-def test_dsv4_row_points_at_current_corrected_f32_mixed_bundle():
+def test_dsv4_row_points_at_current_sub80_upload_candidate_bundle():
     rows = {row.id: row for row in ROWS}
 
-    assert rows["dsv4_tq"].path.endswith("DeepSeek-V4-Flash-JANGTQ-V3-F32-MIXED")
+    assert rows["dsv4_tq"].path.endswith("DeepSeek-V4-Flash-JANGTQ-K")
+
+
+def test_mistral_medium_jangtq_path_matches_current_drive_layout():
+    rows = {row.id: row for row in ROWS}
+
+    assert rows["mistral_medium35_tq"].path == (
+        "/Volumes/ModelDrive/jangq-ai/Mistral-Medium-3.5-128B-JANGTQ"
+    )
 
 
 def test_dsv4_static_audit_exposes_actual_bit_plan_when_local_bundle_exists():

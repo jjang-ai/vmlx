@@ -114,16 +114,17 @@ ROWS: list[ModelRow] = [
     ),
     ModelRow(
         id="dsv4_tq",
-        label="DeepSeek-V4-Flash JANGTQ V3-F32-MIXED",
-        path="/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-V3-F32-MIXED",
+        label="DeepSeek-V4-Flash JANGTQ-K sub-80 candidate",
+        path="/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
         family="deepseek_v4",
         expect_reasoning=True,
         expect_tool_parser="dsml",
         cache_profile="dsv4_composite",
         slow=True,
         notes=[
-            "Current corrected local DSV4 artifact: F32 critical controls, "
-            "V3 mixed routed bits, prestacked JANGTQ sidecar.",
+            "Current local DSV4 upload candidate: sub-80GB JANGTQ-K plan with "
+            "F32 critical controls, explicit bit plan, and prestacked JANGTQ "
+            "sidecar.",
             "DSV4 SWA+CSA/HCA heterogenous cache; paged/block L2 must use "
             "deepseek_v4_v7 composite-state serialization, not generic KV blocks"
         ],
@@ -263,7 +264,7 @@ ROWS: list[ModelRow] = [
     ModelRow(
         id="mistral_medium35_tq",
         label="Mistral-Medium-3.5-128B JANGTQ2",
-        path="/Volumes/ModelDrive/jangq-ai/JANGQ-AI/Mistral-Medium-3.5-128B-JANGTQ",
+        path="/Volumes/ModelDrive/jangq-ai/Mistral-Medium-3.5-128B-JANGTQ",
         family="mistral3",
         kind="vl",
         expect_reasoning=False,
