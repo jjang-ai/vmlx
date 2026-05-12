@@ -124,7 +124,7 @@ else
   echo "    local vmlx missing, falling back to PyPI"
   "$PYTHON" -m pip install --no-deps "vmlx>=1.5.24"
 fi
-JANG_LOCAL="$HOME/jang/jang-tools"
+JANG_LOCAL="${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}"
 if [ -f "$JANG_LOCAL/pyproject.toml" ]; then
   echo "    using local jang-tools at $JANG_LOCAL"
   "$PYTHON" -m pip install --force-reinstall --no-deps "$JANG_LOCAL"

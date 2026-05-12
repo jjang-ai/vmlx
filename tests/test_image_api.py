@@ -763,6 +763,18 @@ class TestImageGenWorkerExecutor:
         assert "resource_tracker: There appear to be .* leaked semaphore objects" in helper_source
         assert "_suppress_image_resource_tracker_warning()" in serve_source
 
+    def test_cli_explicit_image_flags_force_image_runtime_detection(self):
+        import vmlx_engine.cli as cli
+
+        source = inspect.getsource(cli.serve_command)
+        flag_check = 'getattr(args, "image_mode", None) or getattr(args, "mflux_class", None)'
+        served_name_check = (
+            '_served_model_name and _served_model_name.lower() in MFLUX_NAMED_MODELS'
+        )
+        assert flag_check in source
+        assert served_name_check in source
+        assert source.index(flag_check) < source.index('if not _is_image and (model_dir / "model_index.json").exists()')
+
 
 # ---------------------------------------------------------------------------
 # 9. Error handling

@@ -2597,6 +2597,7 @@ class TestStartupCompatibilityGuards:
         ]
 
         assert '"$PYTHON" -m pip install --force-reinstall --no-deps "$VMLX_LOCAL"' in local_install_block
+        assert 'JANG_LOCAL="${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}"' in local_install_block
         assert '"$PYTHON" -m pip install --force-reinstall --no-deps "$JANG_LOCAL"' in local_install_block
 
     def test_bundled_python_does_not_silently_fallback_to_pypi_jang_tools(self):

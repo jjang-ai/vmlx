@@ -217,7 +217,12 @@ def serve_command(args):
     MFLUX_NAMED_MODELS = set(_IMG_SUPPORTED.keys()) | set(_EDIT_SUPPORTED.keys()) | {
         'krea-dev', 'dev-krea', 'qwen', 'fibo', 'fibo-lite',  # Additional mflux models
     }
-    if args.model.lower() in MFLUX_NAMED_MODELS:
+    _served_model_name = getattr(args, "served_model_name", None)
+    if getattr(args, "image_mode", None) or getattr(args, "mflux_class", None):
+        _is_image = True
+    elif args.model.lower() in MFLUX_NAMED_MODELS:
+        _is_image = True
+    elif _served_model_name and _served_model_name.lower() in MFLUX_NAMED_MODELS:
         _is_image = True
 
     if not _is_image and (model_dir / "model_index.json").exists():
