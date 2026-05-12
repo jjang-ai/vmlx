@@ -203,6 +203,9 @@ function createWindow(): void {
     ipcMain.handle('settings:get', (_e, key: string) => {
       return db.getSetting(key) ?? null
     })
+    ipcMain.handle('settings:has', (_e, key: string) => {
+      return db.hasSetting(key)
+    })
     ipcMain.handle('settings:set', (_e, key: string, value: string) => {
       db.setSetting(key, value)
       return { success: true }

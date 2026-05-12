@@ -294,6 +294,7 @@ const api = {
   // App-level settings (API keys, preferences)
   settings: {
     get: (key: string) => ipcRenderer.invoke('settings:get', key),
+    has: (key: string) => ipcRenderer.invoke('settings:has', key),
     set: (key: string, value: string) => ipcRenderer.invoke('settings:set', key, value),
     delete: (key: string) => ipcRenderer.invoke('settings:delete', key)
   },

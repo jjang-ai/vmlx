@@ -70,6 +70,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
 
   // HuggingFace token
   const [hfToken, setHfToken] = useState('')
+  const [hasSavedHfToken, setHasSavedHfToken] = useState(false)
   const [showHfToken, setShowHfToken] = useState(false)
   const [hfTokenSaving, setHfTokenSaving] = useState(false)
 
@@ -97,8 +98,8 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   // Load recommended models, download dir, and HF token on mount
   useEffect(() => {
     window.api.models.getDownloadDir().then(setDownloadDir)
-    window.api.settings.get('hf_api_key').then((val: string | null) => {
-      if (val) setHfToken(val)
+    window.api.settings.has('hf_api_key').then((exists: boolean) => {
+      setHasSavedHfToken(exists)
     })
     // ms#75: load saved mirror endpoint
     window.api.settings.get('hf_endpoint').then((val: string | null) => {
@@ -285,6 +286,7 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
         await window.api.settings.delete('hf_api_key')
       }
       setHfToken(token.trim())
+      setHasSavedHfToken(!!token.trim())
       showToast('success', token.trim() ? 'HuggingFace token saved' : 'HuggingFace token removed')
     } catch (err) {
       showToast('error', 'Failed to save token', (err as Error).message)
@@ -409,12 +411,12 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
           <span className="text-xs text-muted-foreground whitespace-nowrap">HF Token:</span>
           <div className="flex-1 relative">
             <input
-              type={showHfToken ? 'text' : 'password'}
-              value={hfToken}
-              onChange={(e) => setHfToken(e.target.value)}
-              placeholder="hf_..."
-              className="w-full px-2 py-1 pr-16 bg-background border border-input rounded text-xs font-mono"
-            />
+                type={showHfToken ? 'text' : 'password'}
+                value={hfToken}
+                onChange={(e) => setHfToken(e.target.value)}
+                placeholder={hasSavedHfToken ? 'Saved token configured (enter a new token to replace)' : 'hf_...'}
+                className="w-full px-2 py-1 pr-16 bg-background border border-input rounded text-xs font-mono"
+              />
             <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-1">
               <button
                 onClick={() => setShowHfToken(!showHfToken)}

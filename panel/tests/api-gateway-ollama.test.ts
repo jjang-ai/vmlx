@@ -6,6 +6,10 @@ const source = readFileSync(
   resolve(process.cwd(), "src/main/api-gateway.ts"),
   "utf8",
 );
+const bodySource = readFileSync(
+  resolve(process.cwd(), "src/main/gateway-body.ts"),
+  "utf8",
+);
 
 describe("Ollama gateway parity contracts", () => {
   it("translates Ollama image messages into OpenAI content parts", () => {
@@ -113,7 +117,7 @@ describe("Gateway passthrough contracts for non-Ollama APIs", () => {
     expect(source).toContain("path: clientReq.url");
     expect(source).toContain("method: clientReq.method");
     expect(source).toContain("...clientReq.headers");
-    expect(source).toContain("if (body) proxyReq.write(body)");
+    expect(source).toContain("if (body.length > 0) proxyReq.write(body)");
   });
 
   it("preserves backend status, headers, and streaming response bytes", () => {
@@ -123,10 +127,20 @@ describe("Gateway passthrough contracts for non-Ollama APIs", () => {
   });
 
   it("resolves target sessions from POST body, capabilities URL, or query model", () => {
-    expect(source).toContain("modelName = parsed.model");
+    expect(source).toContain("modelName = extractGatewayModelFromBody(body, req.headers[\"content-type\"]");
+    expect(bodySource).toContain("return typeof parsed?.model === \"string\" ? parsed.model : undefined");
     expect(source).toContain('url.match(/^\\/v1\\/models\\/(.+)\\/capabilities');
     expect(source).toContain("new URLSearchParams(url.slice(qIdx))");
     expect(source).toContain('params.get("model")');
+  });
+
+  it("keeps multipart image edits binary-safe while still resolving model fields", () => {
+    expect(source).toContain("private readBody(req: IncomingMessage): Promise<Buffer>");
+    expect(source).toContain("resolve(Buffer.concat(chunks))");
+    expect(bodySource).toContain("extractGatewayModelFromBody");
+    expect(bodySource).toContain("extractMultipartFormField");
+    expect(source).not.toContain("resolve(Buffer.concat(chunks).toString())");
+    expect(source).not.toContain("name=\"model\"(?:\\r?\\n");
   });
 
   it("broadcasts cancel requests without requiring a model field", () => {

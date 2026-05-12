@@ -214,6 +214,69 @@ class TestImageGenRequestValidation:
         assert resp.status_code == 200, resp.text
         assert resp.json()["data"][0]["b64_json"] == "AAAA"
 
+    @pytest.mark.anyio
+    async def test_generation_model_switch_does_not_reuse_previous_mflux_class(
+        self, client, monkeypatch, tmp_path
+    ):
+        """Switching image model families via the API must not pass a stale class.
+
+        A server can already have Flux1 loaded and then receive an OpenAI image
+        request for a different family such as Z-Image Turbo. In that case the
+        load call must let ImageGenEngine resolve the class from the requested
+        model, not force the previous engine's ``_mflux_class``.
+        """
+        import vmlx_engine.server as srv
+
+        class SwitchingImageEngine:
+            def __init__(self):
+                self._loaded = True
+                self.model_name = "schnell"
+                self._mflux_class = "Flux1"
+                self.load_calls = []
+
+            @property
+            def is_loaded(self):
+                return self._loaded
+
+            def unload(self):
+                self._loaded = False
+
+            def load(self, model_name, **kwargs):
+                self.load_calls.append({"model_name": model_name, **kwargs})
+                self.model_name = model_name
+                self._mflux_class = kwargs.get("mflux_class")
+                self._loaded = True
+
+            def generate(self, **kwargs):
+                return SimpleNamespace(
+                    b64_json="AAAA",
+                    seed=kwargs.get("seed") or 123,
+                )
+
+        engine = SwitchingImageEngine()
+        monkeypatch.setattr(srv, "_image_gen", engine)
+        monkeypatch.setattr(srv, "_image_gen_lock", None)
+        monkeypatch.setattr(srv, "_standby_state", None)
+        monkeypatch.setattr(srv, "_model_name", "schnell")
+        monkeypatch.setattr(srv, "_served_model_name", None)
+        monkeypatch.setattr(srv, "_model_path", str(tmp_path))
+
+        resp = await client.post(
+            "/v1/images/generations",
+            json={
+                "model": "z-image-turbo",
+                "prompt": "class switch proof",
+                "size": "64x64",
+                "steps": 1,
+                "seed": 7,
+            },
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert engine.load_calls, "model switch must reload the requested family"
+        assert engine.load_calls[-1]["model_name"] == "z-image-turbo"
+        assert engine.load_calls[-1].get("mflux_class") is None
+
 
 # ---------------------------------------------------------------------------
 # 3. Image edit request body validation
@@ -251,6 +314,40 @@ class TestImageEditRequestValidation:
         )
         assert resp.status_code == 400
         assert "image" in resp.json()["detail"].lower()
+
+    @pytest.mark.anyio
+    async def test_edit_accepts_multipart_png_without_utf8_body_decode(
+        self, client
+    ):
+        """OpenAI-compatible edits upload binary images as multipart files.
+
+        A PNG body starts with 0x89 and must never be decoded as UTF-8 by the
+        request parser. This should reach normal edit endpoint validation.
+        """
+        tiny_png = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+            b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4"
+            b"\x89\x00\x00\x00\rIDATx\x9cc\xf8\xff\xff?\x03\x00"
+            b"\x08\xfc\x02\xfe\xa9,\x82\x15\x00\x00\x00\x00IEND"
+            b"\xaeB`\x82"
+        )
+
+        resp = await client.post(
+            "/v1/images/edits",
+            data={
+                "model": "schnell",
+                "prompt": "make it blue",
+                "size": "64x64",
+                "n": "1",
+                "strength": "0.75",
+            },
+            files={"image": ("input.png", tiny_png, "image/png")},
+        )
+
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert "generation model" in detail
+        assert "utf-8" not in detail.lower()
 
     def test_edit_strength_default(self):
         """Default strength is 0.75 (verified from source)."""

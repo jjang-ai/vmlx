@@ -1689,6 +1689,14 @@ class DatabaseManager {
       : row.value;
   }
 
+  hasSetting(key: string): boolean {
+    this.ensureOpen();
+    const stmt = this.db.prepare(
+      "SELECT 1 FROM settings WHERE key = ? AND value != '' LIMIT 1",
+    );
+    return !!stmt.get(key);
+  }
+
   setSetting(key: string, value: string): void {
     this.ensureOpen();
     const encValue =

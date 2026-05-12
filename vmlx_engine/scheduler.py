@@ -5356,45 +5356,83 @@ class Scheduler:
                                         # tail plus generated tokens, so
                                         # trimming it would rewind SWA without
                                         # proving CSA/HCA pool correctness.
-                                        # Re-derive the exact N-1 cache-key
-                                        # state instead.
-                                        dsv4_prompt_tokens = list(
-                                            request.prompt_token_ids
-                                        )
-                                        _gpl_d = (
-                                            getattr(request, "_gen_prompt_len", 0)
-                                            or 0
-                                        )
-                                        if 0 < _gpl_d < len(dsv4_prompt_tokens):
-                                            dsv4_prompt_tokens = dsv4_prompt_tokens[
-                                                :-_gpl_d
-                                            ]
-                                        dsv4_key_tokens = (
-                                            dsv4_prompt_tokens[:-1]
-                                            if len(dsv4_prompt_tokens) > 1
-                                            else []
-                                        )
-                                        if dsv4_key_tokens:
+                                        #
+                                        # If this request already came from a
+                                        # paged-prefix hit, do NOT synchronously
+                                        # re-prefill the whole expanded prompt
+                                        # just to donate a longer prefix. A real
+                                        # live row showed a 7,719-token hit with
+                                        # only 38 remaining tokens still spent
+                                        # ~70s in this post-hit re-prefill
+                                        # before returning. The existing N-1
+                                        # terminal DeepseekV4Cache record is the
+                                        # correctness-safe cache point; later
+                                        # requests can reuse it and re-feed the
+                                        # cheap tail until an async extension
+                                        # store exists.
+                                        if (
+                                            int(
+                                                getattr(
+                                                    request, "cached_tokens", 0
+                                                )
+                                                or 0
+                                            )
+                                            > 0
+                                        ):
                                             logger.info(
-                                                "DSV4 prefix cache store using "
-                                                "clean prompt-boundary re-prefill "
-                                                "(%d cache-key tokens from %d "
-                                                "prompt tokens).",
-                                                len(dsv4_key_tokens),
-                                                len(dsv4_prompt_tokens),
+                                                "DSV4 prefix cache store skipped "
+                                                "for cache-hit request %s "
+                                                "(cached_tokens=%s, prompt_len=%s): "
+                                                "avoiding synchronous full "
+                                                "prompt-boundary re-prefill.",
+                                                request.request_id,
+                                                getattr(request, "cached_tokens", 0),
+                                                len(request.prompt_token_ids),
                                             )
-                                            cache_for_extract = (
-                                                self._prefill_for_prompt_only_cache(
-                                                    dsv4_key_tokens
-                                                )
-                                            )
-                                            if cache_for_extract is not None:
-                                                request._extracted_cache_key_tokens = (
-                                                    list(dsv4_key_tokens)
-                                                )
-                                                request._extracted_cache_from_prompt_snapshot = True
-                                        else:
                                             cache_for_extract = None
+                                            request._dsv4_cache_hit_store_skipped = True
+                                        else:
+                                            # No snapshot and no prefix hit:
+                                            # re-derive the exact N-1 cache-key
+                                            # state instead of trimming the live
+                                            # post-generation cache.
+                                            dsv4_prompt_tokens = list(
+                                                request.prompt_token_ids
+                                            )
+                                            _gpl_d = (
+                                                getattr(request, "_gen_prompt_len", 0)
+                                                or 0
+                                            )
+                                            if 0 < _gpl_d < len(dsv4_prompt_tokens):
+                                                dsv4_prompt_tokens = dsv4_prompt_tokens[
+                                                    :-_gpl_d
+                                                ]
+                                            dsv4_key_tokens = (
+                                                dsv4_prompt_tokens[:-1]
+                                                if len(dsv4_prompt_tokens) > 1
+                                                else []
+                                            )
+                                            if dsv4_key_tokens:
+                                                logger.info(
+                                                    "DSV4 prefix cache store using "
+                                                    "clean prompt-boundary re-prefill "
+                                                    "(%d cache-key tokens from %d "
+                                                    "prompt tokens).",
+                                                    len(dsv4_key_tokens),
+                                                    len(dsv4_prompt_tokens),
+                                                )
+                                                cache_for_extract = (
+                                                    self._prefill_for_prompt_only_cache(
+                                                        dsv4_key_tokens
+                                                    )
+                                                )
+                                                if cache_for_extract is not None:
+                                                    request._extracted_cache_key_tokens = (
+                                                        list(dsv4_key_tokens)
+                                                    )
+                                                    request._extracted_cache_from_prompt_snapshot = True
+                                            else:
+                                                cache_for_extract = None
                                     elif self._uses_zaya_cache:
                                         # ZAYA CCA cache is path-dependent:
                                         # CacheList(KVCache, ArraysCache)
@@ -5539,6 +5577,12 @@ class Scheduler:
                                                 f"Cache extraction returned empty "
                                                 f"for {request_id}"
                                             )
+                                    elif getattr(
+                                        request,
+                                        "_dsv4_cache_hit_store_skipped",
+                                        False,
+                                    ):
+                                        pass
                                     else:
                                         logger.warning(
                                             f"Cannot produce prompt-only cache for "

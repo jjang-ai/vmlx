@@ -36,6 +36,14 @@ function normalizePath(p: string): string {
   return p.replace(/\/+$/, '')
 }
 
+function shouldPassHfTokenToEngine(modelPath?: string): boolean {
+  const value = String(modelPath || '').trim()
+  if (!value || value.startsWith('remote://')) return false
+  if (/^https?:\/\//i.test(value)) return true
+  if (existsSync(value)) return false
+  return /^[A-Za-z0-9][\w.-]*\/[\w./-]+$/.test(value)
+}
+
 interface BundleStartupDefaults {
   defaultTemperature?: number
   defaultTopP?: number
@@ -989,10 +997,14 @@ export class SessionManager extends EventEmitter {
     if (clusterSecret) {
       spawnEnv.VMLX_CLUSTER_SECRET = clusterSecret
     }
-    // Pass HuggingFace token for gated model access (used by mflux, transformers, etc.)
-    const hfToken = db.getSetting('hf_api_key')
-    if (hfToken) {
-      spawnEnv.HF_TOKEN = hfToken
+    // Pass HuggingFace token only for remote repo IDs/URLs. Decrypting the
+    // stored token is synchronous in Electron safeStorage and can block the
+    // main thread; local bundles do not need HF_TOKEN at session startup.
+    if (shouldPassHfTokenToEngine(config.modelPath)) {
+      const hfToken = db.getSetting('hf_api_key')
+      if (hfToken) {
+        spawnEnv.HF_TOKEN = hfToken
+      }
     }
     delete spawnEnv.JANGTQ_TOPK_OVERRIDE
     const jangtqTopKOverride = Number((config as any).jangtqTopKOverride || 0)

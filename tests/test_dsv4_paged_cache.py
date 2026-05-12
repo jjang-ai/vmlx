@@ -822,21 +822,25 @@ def test_dsv4_length_capped_clean_snapshot_is_cacheable():
     )
 
 
-def test_dsv4_cache_hit_store_rederives_prompt_boundary_when_snapshot_missing():
-    """DSV4 cache-hit kickoff responses may not carry a generator snapshot.
+def test_dsv4_cache_hit_store_skips_sync_full_reprefill_when_snapshot_missing():
+    """DSV4 cache-hit kickoff must not synchronously re-prefill long prompts.
 
-    On a paged-prefix hit, DSV4BatchGenerator starts from a restored cache and
-    processes only the remaining tail. That path can finish with
-    prompt_cache_snapshot=None, but the live DeepseekV4Cache is then
-    post-decode-contaminated and must not be trimmed. Scheduler must re-prefill
-    the N-1 cache-key tokens, mirroring the ZAYA CCA path.
+    On a paged-prefix hit, DSV4BatchGenerator starts from a restored terminal
+    DeepseekV4Cache checkpoint and processes only the remaining prompt tail.
+    That path can finish with ``prompt_cache_snapshot=None``. The live cache is
+    then post-decode-contaminated and must not be trimmed; but re-prefilling the
+    entire expanded prompt before returning the response makes long-context
+    "cache hits" slow again. Keep the existing terminal N-1 cache point and skip
+    synchronous extension-store until there is an async store path.
     """
     import inspect
     from vmlx_engine import scheduler
 
     src = inspect.getsource(scheduler.Scheduler._process_batch_responses)
 
-    assert "DSV4 prefix cache store using" in src
+    assert "DSV4 prefix cache store skipped" in src
+    assert "avoiding synchronous full" in src
+    assert "cached_tokens" in src
     assert "clean prompt-boundary re-prefill" in src
     assert "dsv4_key_tokens" in src
     assert "_prefill_for_prompt_only_cache" in src

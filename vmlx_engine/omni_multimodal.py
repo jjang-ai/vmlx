@@ -49,33 +49,100 @@ _AUDIO_TYPES = {"input_audio", "audio"}
 _VIDEO_TYPES = {"video_url", "video"}
 
 
-def is_omni_multimodal_bundle(model_path: str | Path) -> bool:
-    """Return True iff the bundle is a Nemotron-3-Nano-Omni text+multimodal bundle.
+def omni_multimodal_component_status(model_path: str | Path) -> dict[str, Any]:
+    """Inspect whether a Nemotron-Omni bundle has its media components.
 
-    Checks:
+    Checks are intentionally header/config-only:
       1. ``config.json`` exists and ``model_type == "nemotron_h"``
       2. ``config_omni.json`` exists alongside (carries the NVLM/parakeet wrapper
          metadata that ``OmniChat`` reads)
-      3. The bundle's safetensors index includes ``vision_model.*`` keys
-         (proves multimodal weights are merged into the LLM bundle — addon
-         already absorbed). All 3 published JANGQ-AI Omni bundles satisfy this.
+      3. ``configuration_radio.py`` exists for the RADIO vision config
+      4. The safetensors index includes RADIO/vision keys
+      5. The safetensors index includes Parakeet/sound keys
+      6. The safetensors index includes the media projector keys
     """
     p = Path(model_path)
+    status: dict[str, Any] = {
+        "bundle_compatible": False,
+        "config_model_type": None,
+        "has_config": False,
+        "has_config_omni": False,
+        "has_index": False,
+        "has_radio_config": False,
+        "sound_config_model_type": None,
+        "has_radio_weights": False,
+        "has_parakeet_weights": False,
+        "has_media_projector": False,
+        "modalities": [],
+        "missing": [],
+    }
     if not p.is_dir():
-        return False
+        status["missing"].append("directory")
+        return status
     cfg = p / "config.json"
     omni_cfg = p / "config_omni.json"
     idx = p / "model.safetensors.index.json"
+    radio_cfg = p / "configuration_radio.py"
+    status["has_config"] = cfg.is_file()
+    status["has_config_omni"] = omni_cfg.is_file()
+    status["has_index"] = idx.is_file()
+    status["has_radio_config"] = radio_cfg.is_file()
+    for name, present in (
+        ("config.json", status["has_config"]),
+        ("config_omni.json", status["has_config_omni"]),
+        ("model.safetensors.index.json", status["has_index"]),
+        ("configuration_radio.py", status["has_radio_config"]),
+    ):
+        if not present:
+            status["missing"].append(name)
     if not (cfg.is_file() and omni_cfg.is_file() and idx.is_file()):
-        return False
+        return status
     try:
-        if json.loads(cfg.read_text()).get("model_type") != "nemotron_h":
-            return False
+        cfg_data = json.loads(cfg.read_text())
+        omni_data = json.loads(omni_cfg.read_text())
+        status["config_model_type"] = cfg_data.get("model_type")
+        sound_config = omni_data.get("sound_config")
+        if isinstance(sound_config, dict):
+            status["sound_config_model_type"] = sound_config.get("model_type")
         keys = json.loads(idx.read_text()).get("weight_map", {}).keys()
-        return any(k.startswith("vision_model.") for k in keys)
+        key_list = [str(k) for k in keys]
+        status["has_radio_weights"] = any(
+            k.startswith("vision_model.radio_model.") for k in key_list
+        )
+        status["has_parakeet_weights"] = any(
+            k.startswith("sound_encoder.") or k.startswith("parakeet.")
+            for k in key_list
+        )
+        status["has_media_projector"] = any(
+            k.startswith("mlp1.")
+            or k.startswith("sound_projector.")
+            or k.startswith("projector.")
+            for k in key_list
+        )
+        if status["has_radio_weights"]:
+            status["modalities"].extend(["image", "video"])
+        if status["has_parakeet_weights"]:
+            status["modalities"].append("audio")
+        requirements = {
+            "model_type=nemotron_h": status["config_model_type"] == "nemotron_h",
+            "sound_config.model_type=parakeet": status["sound_config_model_type"] == "parakeet",
+            "radio weights": status["has_radio_weights"],
+            "parakeet weights": status["has_parakeet_weights"],
+            "media projector": status["has_media_projector"],
+        }
+        status["missing"].extend([name for name, ok in requirements.items() if not ok])
+        status["modalities"] = ["text"] + sorted(set(status["modalities"]))
+        status["bundle_compatible"] = not status["missing"]
+        return status
     except Exception as e:  # pragma: no cover
-        logger.debug(f"is_omni_multimodal_bundle({p}) check failed: {e}")
-        return False
+        status["missing"].append(f"inspect_error:{type(e).__name__}")
+        logger.debug(f"omni_multimodal_component_status({p}) check failed: {e}")
+        return status
+
+
+def is_omni_multimodal_bundle(model_path: str | Path) -> bool:
+    """Return True iff the bundle has Nemotron-Omni RADIO + Parakeet media."""
+    return bool(omni_multimodal_component_status(model_path).get("bundle_compatible"))
 
 
 def request_has_multimodal(messages: List[Dict[str, Any]]) -> bool:

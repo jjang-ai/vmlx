@@ -19,6 +19,7 @@ import { db } from "./database";
 import { sessionManager } from "./sessions";
 import { detectModelConfigFromDir } from "./model-config-registry";
 import { EventEmitter } from "events";
+import { extractGatewayModelFromBody } from "./gateway-body";
 
 const DEFAULT_PORT = 8080;
 const JIT_TIMEOUT_MS = 120_000;
@@ -191,13 +192,8 @@ export class ApiGateway extends EventEmitter {
     let modelName: string | undefined;
 
     // Extract model from body (POST) or query param (GET/DELETE)
-    if (method === "POST" && body) {
-      try {
-        const parsed = JSON.parse(body);
-        modelName = parsed.model;
-      } catch (_) {
-        /* not JSON — forward raw */
-      }
+    if (method === "POST" && body.length > 0) {
+      modelName = extractGatewayModelFromBody(body, req.headers["content-type"]);
     }
     if (!modelName) {
       const capMatch = url.match(/^\/v1\/models\/(.+)\/capabilities(?:\?|$)/);
@@ -251,7 +247,7 @@ export class ApiGateway extends EventEmitter {
               cancelReq.destroy();
               resolve(500);
             });
-            if (body) cancelReq.write(body);
+            if (body.length > 0) cancelReq.write(body);
             cancelReq.end();
           });
           if (cancelRes >= 200 && cancelRes < 300) accepted = true;
@@ -488,7 +484,7 @@ export class ApiGateway extends EventEmitter {
     clientReq: IncomingMessage,
     clientRes: ServerResponse,
     session: ResolvedSession,
-    body: string,
+    body: Buffer,
   ): void {
     const options = {
       hostname: session.host,
@@ -532,7 +528,7 @@ export class ApiGateway extends EventEmitter {
       }
     });
 
-    if (body) proxyReq.write(body);
+    if (body.length > 0) proxyReq.write(body);
     proxyReq.end();
 
     // Abort backend inference when client disconnects mid-stream
@@ -842,11 +838,12 @@ export class ApiGateway extends EventEmitter {
     res: ServerResponse,
   ): Promise<void> {
     const body = await this.readBody(req);
-    if (!body) return this.sendJson(res, 400, { error: "Empty request body" });
+    if (body.length === 0) return this.sendJson(res, 400, { error: "Empty request body" });
+    const bodyText = body.toString("utf8");
 
     let parsed: any;
     try {
-      parsed = JSON.parse(body);
+      parsed = JSON.parse(bodyText);
     } catch (_) {
       return this.sendJson(res, 400, { error: "Invalid JSON" });
     }
@@ -1124,11 +1121,12 @@ export class ApiGateway extends EventEmitter {
     res: ServerResponse,
   ): Promise<void> {
     const body = await this.readBody(req);
-    if (!body) return this.sendJson(res, 400, { error: "Empty request body" });
+    if (body.length === 0) return this.sendJson(res, 400, { error: "Empty request body" });
+    const bodyText = body.toString("utf8");
 
     let parsed: any;
     try {
-      parsed = JSON.parse(body);
+      parsed = JSON.parse(bodyText);
     } catch (_) {
       return this.sendJson(res, 400, { error: "Invalid JSON" });
     }
@@ -1353,9 +1351,10 @@ export class ApiGateway extends EventEmitter {
     res: ServerResponse,
   ): Promise<void> {
     const body = await this.readBody(req);
+    const bodyText = body.toString("utf8");
     let parsed: any;
     try {
-      parsed = JSON.parse(body || "{}");
+      parsed = JSON.parse(bodyText || "{}");
     } catch (_) {
       return this.sendJson(res, 400, { error: "Invalid JSON" });
     }
@@ -1417,9 +1416,10 @@ export class ApiGateway extends EventEmitter {
     res: ServerResponse,
   ): Promise<void> {
     const body = await this.readBody(req);
+    const bodyText = body.toString("utf8");
     let parsed: any;
     try {
-      parsed = JSON.parse(body || "{}");
+      parsed = JSON.parse(bodyText || "{}");
     } catch (_) {
       return this.sendJson(res, 400, { error: "Invalid JSON" });
     }
@@ -1492,12 +1492,12 @@ export class ApiGateway extends EventEmitter {
   // Utilities
   // ═══════════════════════════════════════════════════════════════
 
-  private readBody(req: IncomingMessage): Promise<string> {
+  private readBody(req: IncomingMessage): Promise<Buffer> {
     return new Promise((resolve) => {
       const chunks: Buffer[] = [];
       req.on("data", (chunk: Buffer) => chunks.push(chunk));
-      req.on("end", () => resolve(Buffer.concat(chunks).toString()));
-      req.on("error", () => resolve(""));
+      req.on("end", () => resolve(Buffer.concat(chunks)));
+      req.on("error", () => resolve(Buffer.alloc(0)));
     });
   }
 

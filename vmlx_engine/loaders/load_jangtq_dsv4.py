@@ -223,6 +223,8 @@ def _audit_dsv4_artifact_bit_plan(model_path: str | Path) -> dict[str, Any]:
         "routed_bit_counts": {},
         "metadata_routed_layer_bits": {},
         "metadata_matches_actual": None,
+        "metadata_layer_value_mismatches": {},
+        "actual_overrides_missing_from_metadata": {},
         "projection_mismatches": [],
         "missing_projection_layers": [],
         "sidecar": {
@@ -317,11 +319,24 @@ def _audit_dsv4_artifact_bit_plan(model_path: str | Path) -> dict[str, Any]:
     }
     metadata = _dsv4_nested_routed_bit_plan(config, jang)
     report["metadata_routed_layer_bits"] = metadata
-    report["metadata_matches_actual"] = metadata == actual_overrides
-    if metadata and metadata != actual_overrides:
+    metadata_mismatches = {
+        layer: {"metadata": bits, "actual": layer_bits.get(layer)}
+        for layer, bits in metadata.items()
+        if layer_bits.get(layer) != bits
+    }
+    missing_actual_overrides = {
+        layer: bits
+        for layer, bits in actual_overrides.items()
+        if metadata.get(layer) != bits
+    }
+    report["metadata_layer_value_mismatches"] = metadata_mismatches
+    report["actual_overrides_missing_from_metadata"] = missing_actual_overrides
+    report["metadata_matches_actual"] = not metadata_mismatches and not missing_actual_overrides
+    if metadata and not report["metadata_matches_actual"]:
         report["issues"].append(
-            f"metadata routed_layer_bits {metadata} does not match actual "
-            f"non-default tq_bits {actual_overrides}"
+            f"metadata routed_layer_bits {metadata} does not match actual headers "
+            f"(value_mismatches={metadata_mismatches}, "
+            f"missing_non_default_overrides={missing_actual_overrides})"
         )
 
     sidecar_path = bundle / "jangtq_runtime.safetensors"

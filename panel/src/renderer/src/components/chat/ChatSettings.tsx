@@ -882,8 +882,8 @@ function BraveSearchToggle({ checked, onChange }: { checked: boolean; onChange: 
   onChangeRef.current = onChange
 
   useEffect(() => {
-    window.api.settings.get('braveApiKey').then((val: string | null) => {
-      if (val) { setKey(val); setHasKey(true) }
+    window.api.settings.has('braveApiKey').then((exists: boolean) => {
+      if (exists) setHasKey(true)
       else if (checkedRef.current) onChangeRef.current(false) // correct stale enabled state when key was deleted
     })
   }, [])
@@ -927,7 +927,7 @@ function BraveSearchToggle({ checked, onChange }: { checked: boolean; onChange: 
           value={key}
           onChange={e => setKey(e.target.value)}
           onBlur={e => saveKey(e.target.value)}
-          placeholder="Brave Search API key..."
+          placeholder={hasKey ? 'Saved key configured (enter a new key to replace)' : 'Brave Search API key...'}
           className="w-full px-2 py-1 bg-background border border-input rounded text-xs font-mono focus:outline-none focus:ring-1 focus:ring-ring"
         />
         <a

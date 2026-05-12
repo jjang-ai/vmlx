@@ -5489,6 +5489,170 @@ class TestTurboQuantKVTelemetry:
         assert status["compat_warnings"]
         assert "grouped-Conv1d layout backstop" in status["compat_warnings"][0]
 
+    def test_quantization_status_reports_jangtq_weight_index_and_dispatch(self, tmp_path):
+        """JANGTQ speed gates need actual indexed codec targets, not labels."""
+        from vmlx_engine.server import _model_quantization_status
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "qwen3_5_moe",
+            "weight_format": "mxtq",
+            "mxtq_bits": {
+                "attention": 8,
+                "routed_expert": 4,
+                "embed_tokens": 8,
+                "lm_head": 8,
+            },
+        }))
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "weight_format": "mxtq",
+            "quantization": {
+                "profile": "JANGTQ4",
+                "quantization_backend": "turboquant",
+            },
+        }))
+        (tmp_path / "model.safetensors.index.json").write_text(json.dumps({
+            "weight_map": {
+                "model.layers.0.mlp.switch_mlp.gate_proj.tq_packed": "a.safetensors",
+                "model.layers.0.mlp.switch_mlp.gate_proj.tq_norms": "a.safetensors",
+                "model.layers.1.mlp.switch_mlp.down_proj.tq_bits": "b.safetensors",
+                "model.layers.2.self_attn.q_proj.weight": "c.safetensors",
+                "model.embed_tokens.weight": "d.safetensors",
+            },
+        }))
+
+        status = _model_quantization_status(str(tmp_path))
+
+        assert status["codec"] == "turboquant_codebook"
+        assert status["weight_index"]["total_tensors"] == 5
+        assert status["weight_index"]["suffix_counts"]["tq_packed"] == 1
+        assert status["weight_index"]["suffix_counts"]["tq_norms"] == 1
+        assert status["weight_index"]["suffix_counts"]["tq_bits"] == 1
+        assert status["weight_index"]["tq_target_counts"]["routed_expert"] == 3
+        assert status["weight_index"]["sample_tq_packed_targets"] == [
+            "model.layers.0.mlp.switch_mlp.gate_proj"
+        ]
+        assert status["weight_matmul_dispatch"] == {
+            "primary": "jang_tools_turboquant_custom_kernels",
+            "uses_mlx_quantized_matmul": False,
+            "metal_na_eligible": False,
+            "reason": "turboquant_codebook_uses_custom_tq_kernels",
+        }
+
+    def test_quantization_status_reports_routed_layer_bit_plan(self, tmp_path):
+        """Layer-specific routed bits must be visible for speed/quality audits."""
+        from vmlx_engine.server import _model_quantization_status
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "deepseek_v4",
+            "weight_format": "mxtq",
+        }))
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "weight_format": "mxtq",
+            "mxtq_bits": {
+                "attention": 8,
+                "routed_expert": 2,
+            },
+            "quantization": {
+                "profile": "JANGTQ2",
+                "routed_experts": {
+                    "bit_plan": {
+                        "routed_layer_bits": {
+                            "0": 4,
+                            "1": 4,
+                            "23": 2,
+                        }
+                    }
+                },
+            },
+        }))
+
+        status = _model_quantization_status(str(tmp_path))
+
+        assert status["routed_layer_bits"] == {"0": 4, "1": 4, "23": 2}
+        assert status["routed_layer_bits_source"] == (
+            "jang_config.quantization.routed_experts.bit_plan.routed_layer_bits"
+        )
+
+    def test_quantization_status_reports_affine_dispatch_path(self, tmp_path):
+        from vmlx_engine.server import _model_quantization_status
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "qwen3",
+            "quantization": {"bits": 4, "group_size": 64},
+        }))
+
+        status = _model_quantization_status(str(tmp_path))
+
+        assert status["codec"] == "affine_quantized_matmul"
+        assert status["weight_matmul_dispatch"] == {
+            "primary": "mlx_affine_quantized_matmul",
+            "uses_mlx_quantized_matmul": True,
+            "metal_na_eligible": True,
+            "reason": None,
+        }
+
+    def test_routing_status_reports_trained_top_k_without_override(self, monkeypatch, tmp_path):
+        from vmlx_engine.server import _model_routing_status
+
+        monkeypatch.delenv("JANGTQ_TOPK_OVERRIDE", raising=False)
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "minimax",
+            "n_routed_experts": 256,
+            "num_experts_per_tok": 8,
+        }))
+
+        status = _model_routing_status(str(tmp_path))
+
+        assert status == {
+            "trained_active_experts": 8,
+            "trained_active_experts_source": "config.num_experts_per_tok",
+            "n_routed_experts": 256,
+            "override_env": None,
+            "effective_active_experts": 8,
+            "effective_active_experts_source": "trained_default",
+        }
+
+    def test_routing_status_reports_jangtq_top_k_override(self, monkeypatch, tmp_path):
+        from vmlx_engine.server import _model_routing_status
+
+        monkeypatch.setenv("JANGTQ_TOPK_OVERRIDE", "4")
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "minimax",
+            "text_config": {
+                "n_routed_experts": 256,
+                "num_experts_per_tok": 8,
+            },
+        }))
+
+        status = _model_routing_status(str(tmp_path))
+
+        assert status["trained_active_experts"] == 8
+        assert status["trained_active_experts_source"] == "config.text_config.num_experts_per_tok"
+        assert status["n_routed_experts"] == 256
+        assert status["override_env"] == "4"
+        assert status["effective_active_experts"] == 4
+        assert status["effective_active_experts_source"] == "JANGTQ_TOPK_OVERRIDE"
+
+    def test_routing_status_reports_invalid_jangtq_top_k_override(
+        self, monkeypatch, tmp_path
+    ):
+        from vmlx_engine.server import _model_routing_status
+
+        monkeypatch.setenv("JANGTQ_TOPK_OVERRIDE", "abc")
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "minimax",
+            "n_routed_experts": 256,
+            "num_experts_per_tok": 8,
+        }))
+
+        status = _model_routing_status(str(tmp_path))
+
+        assert status["trained_active_experts"] == 8
+        assert status["override_env"] == "abc"
+        assert status["override_issue"] == "JANGTQ_TOPK_OVERRIDE must be an integer"
+        assert status["effective_active_experts"] == 8
+        assert status["effective_active_experts_source"] == "trained_default"
+
     def test_grouped_conv1d_native_error_gets_actionable_detail(self):
         from vmlx_engine.server import _generation_error_detail
 
@@ -5556,7 +5720,8 @@ class TestTurboQuantKVTelemetry:
         from vmlx_engine.server import _model_mtp_status
 
         (tmp_path / "config.json").write_text(
-            '{"model_type":"deepseek_v4","num_nextn_predict_layers":0}'
+            '{"model_type":"deepseek_v4","num_nextn_predict_layers":0,'
+            '"n_routed_experts":256,"num_experts_per_tok":6}'
         )
         (tmp_path / "jang_config.json").write_text(
             '{"weight_format":"mxtq","drop_mtp":true}'
@@ -5601,7 +5766,8 @@ class TestTurboQuantKVTelemetry:
         from vmlx_engine.server import _model_mtp_status
 
         (tmp_path / "config.json").write_text(
-            '{"model_type":"deepseek_v4","num_nextn_predict_layers":0}'
+            '{"model_type":"deepseek_v4","num_nextn_predict_layers":0,'
+            '"n_routed_experts":256,"num_experts_per_tok":6}'
         )
         (tmp_path / "jang_config.json").write_text(
             '{"weight_format":"mxtq","drop_mtp":false}'
@@ -5676,7 +5842,8 @@ class TestTurboQuantKVTelemetry:
         import vmlx_engine.server as server
 
         (tmp_path / "config.json").write_text(
-            '{"model_type":"deepseek_v4","num_nextn_predict_layers":0}'
+            '{"model_type":"deepseek_v4","num_nextn_predict_layers":0,'
+            '"n_routed_experts":256,"num_experts_per_tok":6}'
         )
         (tmp_path / "jang_config.json").write_text(
             '{"weight_format":"mxtq","drop_mtp":true}'
@@ -5713,8 +5880,12 @@ class TestTurboQuantKVTelemetry:
 
         assert health["mtp"]["status"] == "dropped"
         assert health["mtp"]["runtime_available"] is False
+        assert health["routing"]["trained_active_experts"] == 6
+        assert health["routing"]["effective_active_experts_source"] == "trained_default"
         assert capabilities["mtp"]["status"] == "dropped"
         assert capabilities["mtp"]["runtime_available"] is False
+        assert capabilities["routing"]["trained_active_experts"] == 6
+        assert capabilities["routing"]["effective_active_experts_source"] == "trained_default"
 
     def test_mlx_metal_na_status_handles_namespace_mlx_package(self, monkeypatch, tmp_path):
         """MLX can be a namespace package with mlx.__file__ == None.
@@ -5751,6 +5922,36 @@ class TestTurboQuantKVTelemetry:
         assert status["available"] is True
         assert status["nax_symbols"] == 1
         assert status["naxtile_symbols"] == 1
+
+    def test_mlx_metal_na_status_accepts_affine_qmm_symbols(
+        self, monkeypatch, tmp_path
+    ):
+        """Bundled MLX 0.31.x exposes affine qmm symbols, not _nax_/NAXTile."""
+        import sys
+        import types
+        import vmlx_engine.server as server
+
+        site = tmp_path / "site-packages"
+        metal = site / "mlx" / "lib" / "mlx.metallib"
+        metal.parent.mkdir(parents=True)
+        metal.write_bytes(b"prefix affine_qmm affine_gather_qmm suffix")
+        init = site / "mlx" / "__init__.py"
+        init.write_text("")
+
+        monkeypatch.setitem(
+            sys.modules,
+            "mlx",
+            types.SimpleNamespace(__file__=str(init)),
+        )
+        server._metal_na_status_cache.clear()
+
+        status = server._mlx_metal_na_status()
+
+        assert status["available"] is True
+        assert status["nax_symbols"] == 0
+        assert status["naxtile_symbols"] == 0
+        assert status["affine_qmm_symbols"] == 1
+        assert status["affine_gather_qmm_symbols"] == 1
 
 
 class TestNonStreamingReceiveDrainDisconnect:

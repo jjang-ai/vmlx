@@ -501,17 +501,19 @@ function ApiKeysSection() {
   const [hfToken, setHfToken] = useState('')
   const [saved, setSaved] = useState(false)
   const [hfSaved, setHfSaved] = useState(false)
+  const [hasSavedBraveKey, setHasSavedBraveKey] = useState(false)
+  const [hasSavedHfToken, setHasSavedHfToken] = useState(false)
   const [showKey, setShowKey] = useState(false)
   const [showHfKey, setShowHfKey] = useState(false)
   const mountedRef = useRef(true)
 
   useEffect(() => {
     mountedRef.current = true
-    window.api.settings.get('braveApiKey').then((val) => {
-      if (mountedRef.current && val) setBraveKey(val)
+    window.api.settings.has('braveApiKey').then((exists) => {
+      if (mountedRef.current) setHasSavedBraveKey(exists)
     })
-    window.api.settings.get('hf_api_key').then((val) => {
-      if (mountedRef.current && val) setHfToken(val)
+    window.api.settings.has('hf_api_key').then((exists) => {
+      if (mountedRef.current) setHasSavedHfToken(exists)
     })
     return () => { mountedRef.current = false }
   }, [])
@@ -523,6 +525,7 @@ function ApiKeysSection() {
     } else {
       await window.api.settings.delete('braveApiKey')
     }
+    setHasSavedBraveKey(!!trimmed)
     setSaved(true)
     setTimeout(() => { if (mountedRef.current) setSaved(false) }, 2000)
   }
@@ -534,6 +537,7 @@ function ApiKeysSection() {
     } else {
       await window.api.settings.delete('hf_api_key')
     }
+    setHasSavedHfToken(!!trimmed)
     setHfSaved(true)
     setTimeout(() => { if (mountedRef.current) setHfSaved(false) }, 2000)
   }
@@ -561,7 +565,7 @@ function ApiKeysSection() {
                 type={showKey ? 'text' : 'password'}
                 value={braveKey}
                 onChange={e => { setBraveKey(e.target.value); setSaved(false) }}
-                placeholder="BSA..."
+                placeholder={hasSavedBraveKey ? 'Saved key configured (enter a new key to replace)' : 'BSA...'}
                 className="w-full px-3 py-2 bg-background border border-input rounded text-sm font-mono focus:outline-none focus:ring-1 focus:ring-ring pr-10"
               />
               <button
@@ -599,7 +603,7 @@ function ApiKeysSection() {
                 type={showHfKey ? 'text' : 'password'}
                 value={hfToken}
                 onChange={e => { setHfToken(e.target.value); setHfSaved(false) }}
-                placeholder="hf_..."
+                placeholder={hasSavedHfToken ? 'Saved token configured (enter a new token to replace)' : 'hf_...'}
                 className="w-full px-3 py-2 bg-background border border-input rounded text-sm font-mono focus:outline-none focus:ring-1 focus:ring-ring pr-10"
               />
               <button

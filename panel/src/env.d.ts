@@ -339,6 +339,7 @@ declare global {
       };
       settings: {
         get: (key: string) => Promise<string | null>;
+        has: (key: string) => Promise<boolean>;
         set: (key: string, value: string) => Promise<{ success: boolean }>;
         delete: (key: string) => Promise<{ success: boolean }>;
       };

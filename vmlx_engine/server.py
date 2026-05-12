@@ -1235,10 +1235,12 @@ def _responses_input_has_multimodal(input_data) -> bool:
 
 def _loaded_omni_modalities() -> list[str] | None:
     try:
-        from .omni_multimodal import is_omni_multimodal_bundle
+        from .omni_multimodal import omni_multimodal_component_status
         _omni_path = _model_path or _model_name
-        if _omni_path and is_omni_multimodal_bundle(_omni_path):
-            return ["text", "vision", "audio", "video"]
+        if _omni_path:
+            status = omni_multimodal_component_status(_omni_path)
+            if status.get("bundle_compatible"):
+                return list(status.get("modalities") or ["text", "image", "audio", "video"])
     except Exception:
         pass
     return None
@@ -3592,6 +3594,147 @@ def _bundle_has_prestacked_jangtq(bundle_path: str | None) -> bool:
         return False
 
 
+def _weight_index_role_for_key(key: str) -> str:
+    """Best-effort role classifier for safetensors index telemetry.
+
+    This is diagnostic metadata only. Runtime loading still owns the actual
+    tensor interpretation.
+    """
+    lowered = key.lower()
+    if ".switch_mlp." in lowered or ".experts." in lowered:
+        return "routed_expert"
+    if "shared_expert" in lowered or ".shared_mlp." in lowered:
+        return "shared_expert"
+    if (
+        ".self_attn." in lowered
+        or ".attention." in lowered
+        or ".attn." in lowered
+    ):
+        return "attention"
+    if "embed_tokens" in lowered or ".embed." in lowered or "embeddings" in lowered:
+        return "embed_tokens"
+    if "lm_head" in lowered:
+        return "lm_head"
+    if "mamba" in lowered or "conv1d" in lowered or "ssm" in lowered:
+        return "hybrid_ssm"
+    return "other"
+
+
+def _bundle_weight_index_status(bundle_path: str | None) -> dict | None:
+    """Summarize safetensors index codec targets without reading weights."""
+    if not bundle_path:
+        return None
+    try:
+        from pathlib import Path
+
+        index_path = Path(bundle_path) / "model.safetensors.index.json"
+        if not index_path.is_file():
+            return None
+        index = json.loads(index_path.read_text())
+        weight_map = index.get("weight_map") if isinstance(index, dict) else None
+        if not isinstance(weight_map, dict):
+            return {"error": "model.safetensors.index.json has no weight_map object"}
+
+        suffix_counts: dict[str, int] = defaultdict(int)
+        tq_target_counts: dict[str, int] = defaultdict(int)
+        sample_tq_packed_targets: list[str] = []
+        suffixes = (
+            "tq_packed",
+            "tq_norms",
+            "tq_bits",
+            "scales",
+            "biases",
+            "weight",
+        )
+
+        for raw_key in weight_map:
+            key = str(raw_key)
+            suffix = next(
+                (candidate for candidate in suffixes if key.endswith(f".{candidate}")),
+                None,
+            )
+            if suffix is not None:
+                suffix_counts[suffix] += 1
+            if suffix in ("tq_packed", "tq_norms", "tq_bits"):
+                tq_target_counts[_weight_index_role_for_key(key)] += 1
+            if suffix == "tq_packed" and len(sample_tq_packed_targets) < 12:
+                sample_tq_packed_targets.append(key[: -len(".tq_packed")])
+
+        result = {
+            "index_file": str(index_path),
+            "total_tensors": len(weight_map),
+            "suffix_counts": dict(sorted(suffix_counts.items())),
+            "tq_target_counts": dict(sorted(tq_target_counts.items())),
+            "sample_tq_packed_targets": sample_tq_packed_targets or None,
+        }
+        return {k: v for k, v in result.items() if v is not None}
+    except Exception as exc:
+        return {"error": f"model.safetensors.index.json read failed: {type(exc).__name__}: {exc}"}
+
+
+def _coerce_routed_layer_bits(raw) -> dict[str, int] | None:
+    if not isinstance(raw, dict):
+        return None
+    routed_layer_bits: dict[str, int] = {}
+    for key, value in raw.items():
+        try:
+            routed_layer_bits[str(int(key))] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return dict(sorted(routed_layer_bits.items(), key=lambda item: int(item[0]))) or None
+
+
+def _find_routed_layer_bit_plan(cfg: dict, jang_cfg: dict, q_jang: dict) -> tuple[dict[str, int] | None, str | None]:
+    routed_experts = q_jang.get("routed_experts")
+    bit_plan = routed_experts.get("bit_plan") if isinstance(routed_experts, dict) else None
+    candidates = (
+        (
+            "jang_config.quantization.routed_experts.bit_plan.routed_layer_bits",
+            bit_plan.get("routed_layer_bits") if isinstance(bit_plan, dict) else None,
+        ),
+        (
+            "jang_config.quantization.routed_layer_bits",
+            q_jang.get("routed_layer_bits"),
+        ),
+        (
+            "jang_config.routed_layer_bits",
+            jang_cfg.get("routed_layer_bits"),
+        ),
+        (
+            "config.routed_layer_bits",
+            cfg.get("routed_layer_bits"),
+        ),
+    )
+    for source, raw in candidates:
+        routed_layer_bits = _coerce_routed_layer_bits(raw)
+        if routed_layer_bits:
+            return routed_layer_bits, source
+    return None, None
+
+
+def _weight_matmul_dispatch_status(codec: str) -> dict:
+    if codec == "turboquant_codebook":
+        return {
+            "primary": "jang_tools_turboquant_custom_kernels",
+            "uses_mlx_quantized_matmul": False,
+            "metal_na_eligible": False,
+            "reason": "turboquant_codebook_uses_custom_tq_kernels",
+        }
+    if codec == "affine_quantized_matmul":
+        return {
+            "primary": "mlx_affine_quantized_matmul",
+            "uses_mlx_quantized_matmul": True,
+            "metal_na_eligible": True,
+            "reason": None,
+        }
+    return {
+        "primary": "full_precision_or_unknown",
+        "uses_mlx_quantized_matmul": False,
+        "metal_na_eligible": False,
+        "reason": "not_quantized_matmul",
+    }
+
+
 def _bundle_index_tensor_prefix_status(
     bundle_path: str | None,
     prefix: str,
@@ -3904,6 +4047,10 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
         routed_expert_bits = int(routed_expert_bits_raw)
     target_bits = q_jang.get("target_bits") or routed_expert_bits or profile_bits or q_cfg.get("bits")
     actual_bits = q_jang.get("actual_bits")
+    routed_layer_bits, routed_layer_bits_source = _find_routed_layer_bit_plan(
+        cfg, jang_cfg, q_jang
+    )
+    weight_index = _bundle_weight_index_status(bundle_path)
 
     try:
         from pathlib import Path
@@ -3984,8 +4131,12 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
         "actual_bits": actual_bits,
         "config_bits": q_cfg.get("bits"),
         "group_size": q_cfg.get("group_size") or q_jang.get("group_size"),
+        "routed_layer_bits": routed_layer_bits,
+        "routed_layer_bits_source": routed_layer_bits_source,
         "passthrough_bit_widths_used": q_jang.get("passthrough_bit_widths_used"),
         "passthrough_tensor_count": q_jang.get("passthrough_tensor_count"),
+        "weight_index": weight_index,
+        "weight_matmul_dispatch": _weight_matmul_dispatch_status(codec),
         "compat_warnings": compat_warnings or None,
         "sidecar": {
             "jang_config": has_jang_config,
@@ -3994,6 +4145,79 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
         },
     }
     return {k: v for k, v in result.items() if v is not None}
+
+
+def _model_routing_status(bundle_path: str | None) -> dict:
+    """Expose trained MoE active-expert K and any explicit JANGTQ override."""
+    cfg = _read_bundle_json(bundle_path, "config.json")
+
+    def _config_sections():
+        yield "config", cfg
+        for key in ("text_config", "language_config", "llm_config"):
+            sub = cfg.get(key)
+            if isinstance(sub, dict):
+                yield f"config.{key}", sub
+
+    def _first_int(keys: tuple[str, ...]) -> tuple[int | None, str | None]:
+        for prefix, section in _config_sections():
+            for key in keys:
+                raw = section.get(key)
+                if raw is None:
+                    continue
+                try:
+                    value = int(raw)
+                except (TypeError, ValueError):
+                    continue
+                if value > 0:
+                    return value, f"{prefix}.{key}"
+        return None, None
+
+    trained_k, trained_source = _first_int(
+        (
+            "num_experts_per_tok",
+            "top_k_experts",
+            "moe_router_topk",
+            "num_activated_experts",
+            "top_k",
+        )
+    )
+    routed_experts, _routed_source = _first_int(
+        ("n_routed_experts", "num_local_experts", "num_experts")
+    )
+
+    override_env = os.environ.get("JANGTQ_TOPK_OVERRIDE")
+    override_k = None
+    override_issue = None
+    if override_env is not None and override_env.strip() and override_env.strip() != "0":
+        try:
+            parsed = int(override_env)
+            if parsed >= 1:
+                override_k = parsed
+            else:
+                override_issue = "JANGTQ_TOPK_OVERRIDE must be >= 1"
+        except ValueError:
+            override_issue = "JANGTQ_TOPK_OVERRIDE must be an integer"
+
+    if trained_k is None and routed_experts is None and override_k is None and override_issue is None:
+        return {}
+
+    effective_k = trained_k
+    effective_source = "trained_default" if trained_k is not None else None
+    if override_k is not None:
+        effective_k = override_k
+        effective_source = "JANGTQ_TOPK_OVERRIDE"
+
+    has_override_env = override_env is not None and bool(override_env.strip())
+    result = {
+        "trained_active_experts": trained_k,
+        "trained_active_experts_source": trained_source,
+        "n_routed_experts": routed_experts,
+        "override_env": override_env if has_override_env else None,
+        "override_issue": override_issue,
+        "effective_active_experts": effective_k,
+        "effective_active_experts_source": effective_source,
+    }
+    return {k: v for k, v in result.items() if v is not None or k == "override_env"}
 
 
 def _mlx_metal_na_status() -> dict:
@@ -4022,16 +4246,22 @@ def _mlx_metal_na_status() -> dict:
                 "available": False,
                 "nax_symbols": 0,
                 "naxtile_symbols": 0,
+                "affine_qmm_symbols": 0,
+                "affine_gather_qmm_symbols": 0,
             }
         else:
             data = metallib.read_bytes()
             nax = data.count(b"_nax_")
             naxtile = data.count(b"NAXTile")
+            affine_qmm = data.count(b"affine_qmm")
+            affine_gather_qmm = data.count(b"affine_gather_qmm")
             status = {
                 "metallib": key,
-                "available": bool(nax or naxtile),
+                "available": bool(nax or naxtile or affine_qmm or affine_gather_qmm),
                 "nax_symbols": nax,
                 "naxtile_symbols": naxtile,
+                "affine_qmm_symbols": affine_qmm,
+                "affine_gather_qmm_symbols": affine_gather_qmm,
             }
         _metal_na_status_cache[key] = dict(status)
         return status
@@ -4040,6 +4270,8 @@ def _mlx_metal_na_status() -> dict:
             "available": False,
             "nax_symbols": 0,
             "naxtile_symbols": 0,
+            "affine_qmm_symbols": 0,
+            "affine_gather_qmm_symbols": 0,
             "error": type(exc).__name__,
         }
 
@@ -4096,6 +4328,8 @@ def _model_acceleration_status(bundle_path: str | None = None) -> dict:
             "available": bool(na_status.get("available")),
             "nax_symbols": na_status.get("nax_symbols", 0),
             "naxtile_symbols": na_status.get("naxtile_symbols", 0),
+            "affine_qmm_symbols": na_status.get("affine_qmm_symbols", 0),
+            "affine_gather_qmm_symbols": na_status.get("affine_gather_qmm_symbols", 0),
         },
         "host": host,
     }
@@ -4644,6 +4878,9 @@ async def health():
         result["quantization"] = _model_quantization_status(bundle_key)
         result["acceleration"] = _model_acceleration_status(bundle_key)
         result["mtp"] = _model_mtp_status(bundle_key)
+        routing_status = _model_routing_status(bundle_key)
+        if routing_status:
+            result["routing"] = routing_status
 
     if _max_prompt_tokens > 0:
         result["max_prompt_tokens"] = _max_prompt_tokens
@@ -4651,13 +4888,25 @@ async def health():
     # Nemotron-3-Nano-Omni multimodal: surface bundle status + active backend.
     # Lets the UI show "Vision/Audio: Native MLX (fast)" vs "PyTorch bridge".
     try:
-        from .omni_multimodal import is_omni_multimodal_bundle, OmniMultimodalDispatcher
+        from .omni_multimodal import (
+            OmniMultimodalDispatcher,
+            omni_multimodal_component_status,
+        )
         _omni_path = _model_path or _model_name
-        if _omni_path and is_omni_multimodal_bundle(_omni_path):
+        _omni_status = (
+            omni_multimodal_component_status(_omni_path) if _omni_path else {}
+        )
+        if _omni_status.get("bundle_compatible"):
             result["omni_multimodal"] = {
                 "bundle_compatible": True,
                 "backend": OmniMultimodalDispatcher._pick_backend(),
-                "modalities": ["text", "image", "audio", "video"],
+                "modalities": _omni_status.get("modalities")
+                or ["text", "audio", "image", "video"],
+                "components": {
+                    "radio": bool(_omni_status.get("has_radio_weights")),
+                    "parakeet": bool(_omni_status.get("has_parakeet_weights")),
+                    "media_projector": bool(_omni_status.get("has_media_projector")),
+                },
             }
     except Exception:
         pass
@@ -5618,6 +5867,7 @@ async def model_capabilities(model_id: str) -> dict:
     quantization_status = _model_quantization_status(bundle_path)
     acceleration_status = _model_acceleration_status(bundle_path)
     mtp_status = _model_mtp_status(bundle_path)
+    routing_status = _model_routing_status(bundle_path)
 
     # Append family-specific runtime compat warnings on top of the
     # quantization-derived ones. DSV4: surface the max-thinking downgrade
@@ -5654,6 +5904,7 @@ async def model_capabilities(model_id: str) -> dict:
         "quantization": quantization_status,
         "acceleration": acceleration_status,
         "mtp": mtp_status,
+        "routing": routing_status or None,
         "sampling_defaults": sampling_defaults,
     }
 
@@ -7316,12 +7567,27 @@ async def create_image(request: Request):
                 # so fall back to the global _model_path set by `serve`. /v1/images/edits
                 # already does this — keep both paths symmetric so standby-wake reloads
                 # don't fail with "No local model files found".
+                _preserved_mflux_class = getattr(_image_gen, "_mflux_class", None)
+                _preserve_mflux_class_for_same_model = bool(
+                    _preserved_mflux_class
+                    and (
+                        not model
+                        or resolved_model == getattr(_image_gen, "model_name", None)
+                        or model == _model_name
+                        or model == _served_model_name
+                        or model == _model_path
+                    )
+                )
                 await _run_image_gen_call(
                     _image_gen.load,
                     model,
                     quantize=quantize,
                     model_path=model_path or _model_path,
-                    mflux_class=getattr(_image_gen, "_mflux_class", None),
+                    mflux_class=(
+                        _preserved_mflux_class
+                        if _preserve_mflux_class_for_same_model
+                        else None
+                    ),
                 )
             except Exception as e:
                 raise HTTPException(
@@ -7429,10 +7695,7 @@ async def create_image_edit(request: Request):
     """
     global _image_gen
 
-    try:
-        body = await request.json()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid request body: {e}")
+    body = await _parse_image_edit_request_body(request)
 
     from pathlib import Path
     import shutil
@@ -7751,6 +8014,64 @@ async def create_image_edit(request: Request):
             "images_generated": len(images),
         },
     }
+
+
+async def _parse_image_edit_request_body(request: Request) -> dict[str, Any]:
+    """Parse OpenAI-compatible image edit bodies.
+
+    The OpenAI edit API is multipart/form-data for image and mask uploads, while
+    older vMLX clients may still send JSON with base64 image fields. Keep both
+    forms, but never ask Starlette to decode a multipart PNG body as UTF-8 JSON.
+    """
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" not in content_type.lower():
+        try:
+            body = await request.json()
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid request body: {e}")
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Invalid request body: object required")
+        return body
+
+    try:
+        form = await request.form()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid multipart body: {e}")
+
+    parsed: dict[str, Any] = {}
+    int_fields = {"n", "steps", "seed"}
+    float_fields = {"strength", "guidance"}
+
+    async def _file_to_b64(value: Any) -> str:
+        data = await value.read()
+        if not data:
+            return ""
+        return base64.b64encode(data).decode("ascii")
+
+    for key, value in form.multi_items():
+        if key in {"image", "mask"} and hasattr(value, "read"):
+            parsed[key] = await _file_to_b64(value)
+            continue
+
+        if hasattr(value, "read"):
+            # Unknown file field: ignore for OpenAI compatibility.
+            continue
+
+        text = str(value)
+        if key in int_fields and text.strip():
+            try:
+                parsed[key] = int(text)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"{key} must be an integer")
+        elif key in float_fields and text.strip():
+            try:
+                parsed[key] = float(text)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"{key} must be a number")
+        else:
+            parsed[key] = text
+
+    return parsed
 
 
 # =============================================================================

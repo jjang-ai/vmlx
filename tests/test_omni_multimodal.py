@@ -1,7 +1,11 @@
+import json
+
 from vmlx_engine.omni_multimodal import (
     OmniMultimodalDispatcher,
     _build_omni_turn_prompt_with_thinking,
     _extract_parts,
+    is_omni_multimodal_bundle,
+    omni_multimodal_component_status,
     request_has_multimodal,
 )
 
@@ -14,6 +18,66 @@ class _FakeTokenizer:
         self.calls.append((messages, kwargs))
         rail = "<think></think>" if kwargs.get("enable_thinking") is False else "<think>\n"
         return f"rendered:{messages[-1]['content']}:{rail}"
+
+
+def _write_omni_bundle(
+    tmp_path,
+    *,
+    radio: bool = True,
+    parakeet: bool = True,
+    projector: bool = True,
+    model_type: str = "nemotron_h",
+    sound_model_type: str = "parakeet",
+):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": model_type}))
+    (tmp_path / "config_omni.json").write_text(
+        json.dumps({"sound_config": {"model_type": sound_model_type}})
+    )
+    (tmp_path / "configuration_radio.py").write_text("# radio config placeholder\n")
+    weight_map = {}
+    if radio:
+        weight_map[
+            "vision_model.radio_model.model.blocks.0.attn.qkv.weight"
+        ] = "model.safetensors"
+    if parakeet:
+        weight_map[
+            "sound_encoder.encoder.layers.0.conv.depthwise_conv.weight"
+        ] = "model.safetensors"
+    if projector:
+        weight_map["mlp1.0.weight"] = "model.safetensors"
+    (tmp_path / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": weight_map})
+    )
+    return tmp_path
+
+
+def test_omni_component_status_requires_radio_parakeet_and_projector(tmp_path):
+    bundle = _write_omni_bundle(tmp_path / "omni")
+
+    status = omni_multimodal_component_status(bundle)
+
+    assert status["bundle_compatible"] is True
+    assert status["config_model_type"] == "nemotron_h"
+    assert status["sound_config_model_type"] == "parakeet"
+    assert status["has_radio_weights"] is True
+    assert status["has_parakeet_weights"] is True
+    assert status["has_media_projector"] is True
+    assert status["modalities"] == ["text", "audio", "image", "video"]
+    assert status["missing"] == []
+    assert is_omni_multimodal_bundle(bundle) is True
+
+
+def test_omni_component_status_rejects_vision_only_bundle(tmp_path):
+    bundle = _write_omni_bundle(tmp_path / "omni", parakeet=False)
+
+    status = omni_multimodal_component_status(bundle)
+
+    assert status["bundle_compatible"] is False
+    assert status["has_radio_weights"] is True
+    assert status["has_parakeet_weights"] is False
+    assert "parakeet weights" in status["missing"]
+    assert is_omni_multimodal_bundle(bundle) is False
 
 
 def test_omni_prompt_builder_forwards_enable_thinking_false_on_first_turn():

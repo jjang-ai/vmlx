@@ -225,6 +225,52 @@ def test_dsv4_artifact_bit_plan_audit_reads_actual_tq_bits_and_sidecar(tmp_path)
     assert report["issues"] == []
 
 
+def test_dsv4_artifact_bit_plan_accepts_explicit_default_layer_metadata(tmp_path):
+    """Bit-plan metadata may list default-bit layers explicitly.
+
+    Current DSV4 upload-prep bundles record the full planned set, including
+    some layers pinned at the same value as the role default. The validator
+    should compare metadata layer values against actual headers, not treat
+    explicit default entries as drift.
+    """
+    from vmlx_engine.loaders.load_jangtq_dsv4 import (
+        _audit_dsv4_artifact_bit_plan,
+    )
+
+    bundle = _write_dsv4_tq_artifact(
+        tmp_path / "dsv4",
+        layer_bits={0: 2, 1: 2, 2: 2, 23: 4, 25: 4},
+    )
+    jang = json.loads((bundle / "jang_config.json").read_text())
+    jang["quantization"]["routed_experts"]["bit_plan"]["routed_layer_bits"] = {
+        "0": 2,
+        "1": 2,
+        "2": 2,
+        "23": 4,
+        "25": 4,
+    }
+    (bundle / "jang_config.json").write_text(json.dumps(jang))
+
+    report = _audit_dsv4_artifact_bit_plan(bundle)
+
+    assert report["routed_layer_bits"] == {
+        "0": 2,
+        "1": 2,
+        "2": 2,
+        "23": 4,
+        "25": 4,
+    }
+    assert report["metadata_routed_layer_bits"] == {
+        "0": 2,
+        "1": 2,
+        "2": 2,
+        "23": 4,
+        "25": 4,
+    }
+    assert report["metadata_matches_actual"] is True
+    assert report["issues"] == []
+
+
 def test_dsv4_artifact_bit_plan_audit_flags_missing_sidecar_key(tmp_path):
     from safetensors.numpy import save_file
 

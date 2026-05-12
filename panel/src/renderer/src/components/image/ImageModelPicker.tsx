@@ -64,8 +64,8 @@ export function ImageModelPicker({ onSelect }: ImageModelPickerProps) {
 
   // Check HF token and in-progress downloads on mount
   useEffect(() => {
-    window.api.settings.get('hf_api_key').then((val: string | null) => {
-      setHasHfToken(!!val)
+    window.api.settings.has('hf_api_key').then((exists: boolean) => {
+      setHasHfToken(exists)
     })
     // Recover state if a download is already in progress (e.g., user navigated away and back)
     window.api.models.getDownloadStatus().then((status: any) => {
