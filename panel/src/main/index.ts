@@ -55,7 +55,19 @@ function gatewayStatusPayload() {
     host,
     lanHost,
     displayHost: lanHost || (host === '0.0.0.0' ? 'localhost' : host),
+    singleModelMode: apiGateway.singleModelMode,
   }
+}
+
+function broadcastGatewaySingleModelMode(): void {
+  try {
+    const win = mainWindow
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('gateway:singleModelModeChanged', {
+        singleModelMode: apiGateway.singleModelMode,
+      })
+    }
+  } catch (_) {}
 }
 
 // Global crash handlers — prevent unhandled errors from silently crashing the app
@@ -239,6 +251,12 @@ function createWindow(): void {
       db.setSetting('gateway_port', String(port))
       if (host) db.setSetting('gateway_host', host)
       await apiGateway.restart(port, host)
+      return gatewayStatusPayload()
+    })
+    ipcMain.handle('gateway:setSingleModelMode', async (_e, enabled: boolean) => {
+      apiGateway.setSingleModelMode(!!enabled)
+      broadcastGatewaySingleModelMode()
+      try { rebuildTrayMenu(processManager, () => mainWindow) } catch {}
       return gatewayStatusPayload()
     })
 

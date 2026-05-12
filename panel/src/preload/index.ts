@@ -289,6 +289,12 @@ const api = {
     getStatus: () => ipcRenderer.invoke('gateway:status'),
     setPort: (port: number) => ipcRenderer.invoke('gateway:restart', port),
     setHostAndPort: (port: number, host: string) => ipcRenderer.invoke('gateway:restart', port, host),
+    setSingleModelMode: (enabled: boolean) => ipcRenderer.invoke('gateway:setSingleModelMode', enabled),
+    onSingleModelModeChanged: (callback: (data: { singleModelMode: boolean }) => void) => {
+      const handler = (_: any, data: { singleModelMode: boolean }) => callback(data)
+      ipcRenderer.on('gateway:singleModelModeChanged', handler)
+      return () => { ipcRenderer.removeListener('gateway:singleModelModeChanged', handler) }
+    },
   },
 
   // App-level settings (API keys, preferences)

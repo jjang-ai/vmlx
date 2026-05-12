@@ -285,6 +285,11 @@ export function ImageTab() {
     return () => clearInterval(timer)
   }, [generating, syncGenerationStatus])
 
+  const handleSourceImageChange = useCallback((img: { dataUrl: string; name: string } | null) => {
+    setSourceImage(img)
+    setMaskBase64(null)
+  }, [])
+
   const handleModelSelect = useCallback(async (modelId: string, modelQuantize?: number, category?: 'generate' | 'edit', serverSettings?: ImageServerSettings) => {
     const mode = category || 'generate'
 
@@ -433,7 +438,7 @@ export function ImageTab() {
     } finally {
       setGenerating(false)
     }
-  }, [serverPort, serverStatus, selectedModel, currentSessionId, settings, sessionMode, sourceImage, loadSessions])
+  }, [serverPort, serverStatus, selectedModel, currentSessionId, settings, sessionMode, sourceImage, maskBase64, loadSessions])
 
   const handleStop = useCallback(async () => {
     try {
@@ -489,11 +494,11 @@ export function ImageTab() {
     if (currentSessionId === sessionId) {
       setCurrentSessionId(null)
       setGenerations([])
-      setSourceImage(null)
+      handleSourceImageChange(null)
       setError(null)
     }
     await loadSessions()
-  }, [currentSessionId, loadSessions])
+  }, [currentSessionId, handleSourceImageChange, loadSessions])
 
   const handleSettingsChange = useCallback((newSettings: ImageSettings) => {
     setSettings(newSettings)
@@ -589,7 +594,7 @@ export function ImageTab() {
                   setError('Failed to load image for iteration — file may have been deleted')
                   return
                 }
-                setSourceImage({ dataUrl, name: `iterate-${gen.id.slice(0, 8)}.png` })
+                handleSourceImageChange({ dataUrl, name: `iterate-${gen.id.slice(0, 8)}.png` })
                 // Restore settings from this generation
                 setSettings(prev => ({
                   ...prev,
@@ -638,12 +643,12 @@ export function ImageTab() {
           mode={sessionMode}
           modelName={selectedModel}
           sourceImage={sourceImage}
-          onSourceImageChange={(img) => { setSourceImage(img); if (!img) setMaskBase64(null) }}
+          onSourceImageChange={handleSourceImageChange}
           maskBase64={maskBase64}
           onMaskChange={setMaskBase64}
           iteratePrompt={iteratePrompt}
           iterateCounter={iterateCounter}
-          onClearIterate={() => { setIteratePrompt(null); setSourceImage(null); setMaskBase64(null) }}
+          onClearIterate={() => { setIteratePrompt(null); handleSourceImageChange(null) }}
         />
       </div>
     </div>

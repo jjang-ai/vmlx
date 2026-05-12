@@ -25,6 +25,7 @@ const DEFAULT_PORT = 8080;
 const JIT_TIMEOUT_MS = 120_000;
 const HEALTH_POLL_MS = 2_000;
 const PROXY_TIMEOUT_MS = 300_000; // 5 min max for a single proxied request
+const SINGLE_MODEL_MODE_KEY = "gateway_single_model_mode";
 
 interface ResolvedSession {
   id: string;
@@ -54,6 +55,14 @@ export class ApiGateway extends EventEmitter {
   }
   get activeHost(): string {
     return this.host;
+  }
+  get singleModelMode(): boolean {
+    return db.getSetting(SINGLE_MODEL_MODE_KEY) === "true";
+  }
+
+  setSingleModelMode(enabled: boolean): void {
+    db.setSetting(SINGLE_MODEL_MODE_KEY, enabled ? "true" : "false");
+    this.emit("singleModelModeChanged", enabled);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -274,6 +283,8 @@ export class ApiGateway extends EventEmitter {
       });
     }
 
+    await this.enforceSingleModelMode(session.id);
+
     // JIT auto-load if not running
     if (session.status !== "running") {
       const ok = await this.jitLoad(session.id);
@@ -421,6 +432,27 @@ export class ApiGateway extends EventEmitter {
       }
     }
     return names;
+  }
+
+  private async enforceSingleModelMode(targetSessionId: string): Promise<void> {
+    if (!this.singleModelMode) return;
+    const sessions = db.getSessions().filter((s: any) => {
+      if (s.id === targetSessionId) return false;
+      if (s.type === "remote") return false;
+      return ["running", "loading", "standby"].includes(s.status);
+    });
+    for (const s of sessions) {
+      try {
+        console.log(
+          `[gateway] single-model mode: stopping session ${s.id} before routing to ${targetSessionId}`,
+        );
+        await sessionManager.stopSession(s.id);
+      } catch (err) {
+        console.warn(
+          `[gateway] single-model mode: failed to stop session ${s.id}: ${err}`,
+        );
+      }
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -609,6 +641,7 @@ export class ApiGateway extends EventEmitter {
     this.sendJson(res, 200, {
       status: "ok",
       gateway_port: this.port,
+      single_model_mode: this.singleModelMode,
       backends: sessions.map((s) => {
         let config: any = {};
         try {
@@ -854,6 +887,8 @@ export class ApiGateway extends EventEmitter {
         error: `model '${parsed.model || "unknown"}' not found`,
       });
     }
+
+    await this.enforceSingleModelMode(session.id);
 
     if (session.status !== "running") {
       const ok = await this.jitLoad(session.id);
@@ -1136,6 +1171,8 @@ export class ApiGateway extends EventEmitter {
       return this.sendJson(res, 404, {
         error: `model '${parsed.model || "unknown"}' not found`,
       });
+
+    await this.enforceSingleModelMode(session.id);
 
     if (session.status !== "running") {
       const ok = await this.jitLoad(session.id);
@@ -1426,6 +1463,8 @@ export class ApiGateway extends EventEmitter {
 
     const session = this.resolveSession(parsed.model);
     if (!session) return this.sendJson(res, 404, { error: "model not found" });
+
+    await this.enforceSingleModelMode(session.id);
 
     if (session.status !== "running") {
       const ok = await this.jitLoad(session.id);

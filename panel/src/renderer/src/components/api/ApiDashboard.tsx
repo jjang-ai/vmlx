@@ -55,6 +55,7 @@ export function ApiDashboard() {
   const [gwHost, setGwHost] = useState("127.0.0.1");
   const [gwLanHost, setGwLanHost] = useState<string | null>(null);
   const [lanEnabled, setLanEnabled] = useState(false);
+  const [singleModelMode, setSingleModelMode] = useState(false);
   const [portError, setPortError] = useState<string | null>(null);
   const [format, setFormat] = useState<ApiFormat>("openai");
   const portRef = useRef<HTMLInputElement>(null);
@@ -73,8 +74,16 @@ export function ApiDashboard() {
           setLanEnabled(status.host === "0.0.0.0");
         }
         setGwLanHost(status?.lanHost ?? null);
+        setSingleModelMode(!!status?.singleModelMode);
       })
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.api.gateway?.onSingleModelModeChanged?.((data) => {
+      setSingleModelMode(!!data?.singleModelMode);
+    });
+    return () => { unsubscribe?.(); };
   }, []);
 
   const gatewayDisplayHost = lanEnabled ? (gwLanHost || gwHost) : "localhost";
@@ -117,6 +126,20 @@ export function ApiDashboard() {
     } catch (err: any) {
       setPortError(err?.message || "Failed to change host");
       setLanEnabled(!newLan);
+    }
+  };
+
+  const handleSingleModelModeToggle = async () => {
+    const next = !singleModelMode;
+    setSingleModelMode(next);
+    try {
+      const status = await window.api.gateway?.setSingleModelMode?.(next);
+      if (typeof status?.singleModelMode === "boolean") {
+        setSingleModelMode(status.singleModelMode);
+      }
+    } catch (err: any) {
+      setPortError(err?.message || "Failed to change single model mode");
+      setSingleModelMode(!next);
     }
   };
 
@@ -205,6 +228,26 @@ export function ApiDashboard() {
                     ? `${t('api.lanEnabled')} (${gwLanHost})`
                     : t('api.lanEnabled')
                   : t('api.lanDisabled')}
+              </span>
+            </div>
+
+            {/* Single loaded model toggle */}
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-muted-foreground w-20 flex-shrink-0">
+                {t('api.singleModelMode')}
+              </span>
+              <button
+                onClick={handleSingleModelModeToggle}
+                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${singleModelMode ? "bg-primary" : "bg-muted"}`}
+              >
+                <span
+                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${singleModelMode ? "translate-x-4.5" : "translate-x-0.5"}`}
+                />
+              </button>
+              <span className="text-muted-foreground text-[10px]">
+                {singleModelMode
+                  ? t('api.singleModelModeOn')
+                  : t('api.singleModelModeOff')}
               </span>
             </div>
 

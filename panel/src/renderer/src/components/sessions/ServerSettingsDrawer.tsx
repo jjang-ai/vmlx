@@ -34,6 +34,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
   const [detectedIsMultimodal, setDetectedIsMultimodal] = useState<boolean>(false)
   const [detectedForceTextOnly, setDetectedForceTextOnly] = useState<boolean>(false)
   const [detectedMaxContext, setDetectedMaxContext] = useState<number | undefined>()
+  const [singleModelMode, setSingleModelMode] = useState(false)
   const restartingRef = useRef(false)
   restartingRef.current = restarting
 
@@ -62,6 +63,19 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
         .catch((err) => console.error('Failed to detect model config:', err))
     }
   }, [session.id, session.config, session.host, session.port])
+
+  useEffect(() => {
+    window.api.gateway?.getStatus?.()
+      .then((status: any) => setSingleModelMode(!!status?.singleModelMode))
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    const unsubscribe = window.api.gateway?.onSingleModelModeChanged?.((data: { singleModelMode: boolean }) => {
+      setSingleModelMode(!!data?.singleModelMode)
+    })
+    return () => { unsubscribe?.() }
+  }, [])
 
   // Listen for restart completion
   useEffect(() => {
@@ -193,6 +207,20 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
     setMessage(null)
   }
 
+  const handleGatewaySingleModelModeToggle = async () => {
+    const next = !singleModelMode
+    setSingleModelMode(next)
+    try {
+      const status = await window.api.gateway?.setSingleModelMode?.(next)
+      if (typeof status?.singleModelMode === 'boolean') {
+        setSingleModelMode(status.singleModelMode)
+      }
+    } catch (e) {
+      setSingleModelMode(!next)
+      setMessage({ type: 'error', text: (e as Error).message })
+    }
+  }
+
   const isRunning = session.status === 'running' || session.status === 'loading'
 
   return (
@@ -219,6 +247,27 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
         {isRunning && !restarting && !isRemote && (
           <div className="p-2 bg-warning/10 border border-warning/30 rounded text-xs text-warning">
             Session is running. Save & Restart to apply changes.
+          </div>
+        )}
+
+        {!isRemote && (
+          <div className="p-3 rounded border border-border bg-background/60 space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium">API Gateway Single Model</div>
+                <div className="text-xs text-muted-foreground">
+                  Gateway requests unload other local models before loading or waking the requested model.
+                </div>
+              </div>
+              <button
+                onClick={handleGatewaySingleModelModeToggle}
+                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors flex-shrink-0 ${singleModelMode ? 'bg-primary' : 'bg-muted'}`}
+              >
+                <span
+                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${singleModelMode ? 'translate-x-4.5' : 'translate-x-0.5'}`}
+                />
+              </button>
+            </div>
           </div>
         )}
 

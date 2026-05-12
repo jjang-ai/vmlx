@@ -14,6 +14,7 @@ import { app, Tray, Menu, nativeImage, BrowserWindow, clipboard } from 'electron
 import type { ProcessManager } from './process-manager'
 import { db } from './database'
 import { sessionManager, connectHost } from './sessions'
+import { apiGateway } from './api-gateway'
 import { t } from './i18n'
 
 let tray: Tray | null = null
@@ -105,6 +106,7 @@ function buildMenu(
   const totalRunning = running.length + sessionOnlyCount
 
   const gwPort = db.getSetting('gateway_port') || '8080'
+  const singleModelMode = db.getSetting('gateway_single_model_mode') === 'true'
 
   const items: Electron.MenuItemConstructorOptions[] = [
     {
@@ -118,6 +120,22 @@ function buildMenu(
     {
       label: t('main.tray.copyApiUrl'),
       click: () => clipboard.writeText(`http://localhost:${gwPort}`),
+    },
+    {
+      label: t('main.tray.singleModelMode'),
+      type: 'checkbox',
+      checked: singleModelMode,
+      click: () => {
+        const next = !singleModelMode
+        apiGateway.setSingleModelMode(next)
+        try {
+          const win = getWindow()
+          if (win && !win.isDestroyed()) {
+            win.webContents.send('gateway:singleModelModeChanged', { singleModelMode: next })
+          }
+        } catch (_) {}
+        rebuildMenu(processManager, getWindow)
+      },
     },
     { type: 'separator' },
   ]

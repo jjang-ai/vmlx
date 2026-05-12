@@ -361,9 +361,14 @@ declare global {
           host?: string;
           lanHost?: string;
           displayHost?: string;
+          singleModelMode: boolean;
         }>;
-        setPort: (port: number) => Promise<{ running: boolean; port: number; host?: string; lanHost?: string; displayHost?: string }>;
-        setHostAndPort: (port: number, host: string) => Promise<{ running: boolean; port: number; host?: string; lanHost?: string; displayHost?: string }>;
+        setPort: (port: number) => Promise<{ running: boolean; port: number; host?: string; lanHost?: string; displayHost?: string; singleModelMode: boolean }>;
+        setHostAndPort: (port: number, host: string) => Promise<{ running: boolean; port: number; host?: string; lanHost?: string; displayHost?: string; singleModelMode: boolean }>;
+        setSingleModelMode: (enabled: boolean) => Promise<{ running: boolean; port: number; host?: string; lanHost?: string; displayHost?: string; singleModelMode: boolean }>;
+        onSingleModelModeChanged: (
+          callback: (data: { singleModelMode: boolean }) => void,
+        ) => () => void;
       };
       developer: {
         info: (

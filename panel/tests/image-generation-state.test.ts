@@ -127,4 +127,14 @@ describe("image generation in-flight state survives tab switches", () => {
     expect(preload).toContain("sessionId: string | null");
     expect(env).toContain("sessionId: string | null");
   });
+
+  it("fill/edit mask state is part of submit wiring and clears when source changes", () => {
+    const src = readFileSync(IMAGE_TAB_TSX, "utf-8");
+    expect(src).toContain("const handleSourceImageChange = useCallback");
+    expect(src).toContain("setMaskBase64(null)");
+    expect(src).toContain("onSourceImageChange={handleSourceImageChange}");
+    expect(src).toMatch(
+      /}\s*,\s*\[[^\]]*maskBase64[^\]]*\]\s*\)/s,
+    );
+  });
 });

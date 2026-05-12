@@ -102,6 +102,51 @@ describe("Ollama gateway parity contracts", () => {
     expect(dashboardSource).toContain("const gatewayUrl = `http://${gatewayDisplayHost}:${gwPort}`");
   });
 
+  it("exposes a synchronized single-loaded-model gateway mode in main, preload, API dashboard, server settings, and tray", () => {
+    const mainSource = readFileSync(
+      resolve(process.cwd(), "src/main/index.ts"),
+      "utf8",
+    );
+    const preloadSource = readFileSync(
+      resolve(process.cwd(), "src/preload/index.ts"),
+      "utf8",
+    );
+    const envSource = readFileSync(
+      resolve(process.cwd(), "src/env.d.ts"),
+      "utf8",
+    );
+    const dashboardSource = readFileSync(
+      resolve(process.cwd(), "src/renderer/src/components/api/ApiDashboard.tsx"),
+      "utf8",
+    );
+    const drawerSource = readFileSync(
+      resolve(process.cwd(), "src/renderer/src/components/sessions/ServerSettingsDrawer.tsx"),
+      "utf8",
+    );
+    const traySource = readFileSync(
+      resolve(process.cwd(), "src/main/tray.ts"),
+      "utf8",
+    );
+    expect(source).toContain("gateway_single_model_mode");
+    expect(source).toContain("enforceSingleModelMode");
+    expect(source).toContain("sessionManager.stopSession(s.id)");
+    expect(source).toContain("single_model_mode: this.singleModelMode");
+    expect(mainSource).toContain("singleModelMode: apiGateway.singleModelMode");
+    expect(mainSource).toContain("gateway:setSingleModelMode");
+    expect(mainSource).toContain("gateway:singleModelModeChanged");
+    expect(preloadSource).toContain("setSingleModelMode");
+    expect(preloadSource).toContain("onSingleModelModeChanged");
+    expect(envSource).toContain("singleModelMode: boolean");
+    expect(envSource).toContain("onSingleModelModeChanged");
+    expect(dashboardSource).toContain("singleModelMode");
+    expect(dashboardSource).toContain("handleSingleModelModeToggle");
+    expect(dashboardSource).toContain("window.api.gateway?.onSingleModelModeChanged");
+    expect(drawerSource).toContain("handleGatewaySingleModelModeToggle");
+    expect(drawerSource).toContain("window.api.gateway?.onSingleModelModeChanged");
+    expect(traySource).toContain("main.tray.singleModelMode");
+    expect(traySource).toContain("gateway:singleModelModeChanged");
+  });
+
   it("collapses OpenAI tool arguments back to Ollama object arguments", () => {
     expect(source).toContain("private openAIToolCallsToOllama");
     expect(source).toContain("JSON.parse(args)");
