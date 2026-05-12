@@ -4715,6 +4715,50 @@ class TestModelUnloadOnShutdown:
         assert "_old_wired_limit" in src
         assert "_old_cache_limit" in src
 
+    def test_batch_generator_close_falls_back_when_stream_is_thread_local(self, monkeypatch):
+        """Shutdown may run outside the MLLM generation stream's owner thread.
+
+        MLX can raise "There is no Stream(gpu, N) in current thread" when
+        synchronizing that stream during process shutdown. close() must still
+        restore the global wired/cache limits and avoid surfacing a noisy
+        Engine shutdown warning.
+        """
+        import vmlx_engine.mllm_batch_generator as mllm_bg
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        calls: list[tuple[str, object | None]] = []
+
+        class FakeMX:
+            def synchronize(self, stream=None):
+                calls.append(("synchronize", stream))
+                if stream is not None:
+                    raise RuntimeError("There is no Stream(gpu, 4) in current thread.")
+
+            def set_wired_limit(self, value):
+                calls.append(("set_wired_limit", value))
+
+            @property
+            def metal(self):
+                return self
+
+            def set_cache_limit(self, value):
+                calls.append(("set_cache_limit", value))
+
+        monkeypatch.setattr(mllm_bg, "mx", FakeMX())
+        monkeypatch.setattr(MLLMBatchGenerator, "_stream", object())
+
+        gen = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+        gen._old_wired_limit = 123
+        gen._old_cache_limit = 456
+
+        gen.close()
+
+        assert ("synchronize", None) in calls
+        assert ("set_wired_limit", 123) in calls
+        assert ("set_cache_limit", 456) in calls
+        assert gen._old_wired_limit is None
+        assert gen._old_cache_limit is None
+
 
 class TestPanelEngineIPCContract:
     """Panel ↔ engine IPC shape contracts — the panel TS side and the

@@ -1076,6 +1076,8 @@ def audit_child_env_for_row(
     child_env["PYTHONDONTWRITEBYTECODE"] = "1"
     child_env["PYTHONNOUSERSITE"] = "1"
     child_env["PYTHONPATH"] = ""
+    if child_env.get("VMLINUX_AUDIT_USE_SOURCE_VMLX") == "1":
+        child_env["PYTHONPATH"] = str(ROOT)
     if row.cache_profile == "zaya_cca":
         child_env["VMLX_ZAYA_ENABLE_TYPED_CCA_CACHE"] = "1"
         child_env["VMLX_DISABLE_TQ_KV"] = "1"
@@ -2451,6 +2453,7 @@ def main() -> None:
     ap.add_argument("--keep-running", action="store_true")
     ap.add_argument("--out", default=str(OUT_DIR / "production_family_audit.json"))
     args = ap.parse_args()
+    py = Path(args.py).expanduser().resolve()
 
     rows = ROWS
     if args.rows:
@@ -2461,7 +2464,7 @@ def main() -> None:
 
     results: dict[str, Any] = {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "python": args.py,
+        "python": str(py),
         "live": args.live,
         "rows": [],
     }
@@ -2479,7 +2482,7 @@ def main() -> None:
         if args.live:
             live = live_audit(
                 row,
-                Path(args.py),
+                py,
                 args.port,
                 args.load_timeout,
                 keep_running=args.keep_running,

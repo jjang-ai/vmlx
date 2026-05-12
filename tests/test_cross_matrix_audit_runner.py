@@ -148,6 +148,19 @@ def test_zaya_cca_rows_require_typed_exact_hit_cache_probe():
     assert cache_exact_hit_required(rows["dsv4_tq"])
 
 
+def test_live_audit_can_opt_into_source_vmlx_imports():
+    row = next(row for row in ROWS if row.id == "zaya_vl_jangtq4")
+
+    env = audit_child_env_for_row(
+        row,
+        base_env={"VMLINUX_AUDIT_USE_SOURCE_VMLX": "1", "PYTHONPATH": "stale"},
+    )
+
+    assert env["PYTHONPATH"] == str(audit_harness.ROOT)
+    assert env["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert env["PYTHONNOUSERSITE"] == "1"
+
+
 def test_dsv4_row_points_at_current_sub80_upload_candidate_bundle():
     rows = {row.id: row for row in ROWS}
 

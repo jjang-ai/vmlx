@@ -1855,7 +1855,19 @@ class MLLMBatchGenerator:
     def close(self) -> None:
         """Release resources and reset wired/cache limits."""
         if self._old_wired_limit is not None:
-            mx.synchronize(MLLMBatchGenerator._stream)
+            try:
+                if MLLMBatchGenerator._stream is not None:
+                    mx.synchronize(MLLMBatchGenerator._stream)
+                else:
+                    mx.synchronize()
+            except RuntimeError as e:
+                # Shutdown can run outside the generation stream's owner
+                # thread. MLX then rejects the stream handle as thread-local;
+                # a bare synchronize drains pending work without resolving that
+                # stale handle and still lets us restore global Metal limits.
+                if "There is no Stream" not in str(e):
+                    raise
+                mx.synchronize()
             mx.set_wired_limit(self._old_wired_limit)
             self._old_wired_limit = None
         if self._old_cache_limit is not None:
