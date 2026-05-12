@@ -343,6 +343,7 @@ def test_packaged_bundled_hash_gate_covers_critical_jang_tools_files():
         "turboquant/fused_gate_up_kernel.py",
         "turboquant/gather_tq_kernel.py",
         "turboquant/hadamard_kernel.py",
+        "turboquant/mpp_nax_kernel.py",
         "turboquant/tq_kernel.py",
     }
 
@@ -433,6 +434,7 @@ def test_verify_bundled_python_hash_gate_covers_release_runtime_files():
         "turboquant/fused_gate_up_kernel.py",
         "turboquant/gather_tq_kernel.py",
         "turboquant/hadamard_kernel.py",
+        "turboquant/mpp_nax_kernel.py",
         "turboquant/tq_kernel.py",
     }
 

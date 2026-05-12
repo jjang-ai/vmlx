@@ -381,6 +381,7 @@ JANG_TOOLS_SOURCE_HASH_PATHS = (
     "turboquant/fused_gate_up_kernel.py",
     "turboquant/gather_tq_kernel.py",
     "turboquant/hadamard_kernel.py",
+    "turboquant/mpp_nax_kernel.py",
     "turboquant/tq_kernel.py",
 )
 
