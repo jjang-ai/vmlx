@@ -112,6 +112,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import mlx.core as mx
 import mlx.nn as nn
 
+# Sampler helpers are hot-path imports (called once per new request inside
+# `_make_request_sampler`).  Hoist to module scope so the import system isn't
+# touched on every sampler construction.
+from mlx_lm.sample_utils import make_logits_processors, make_sampler
+
 from .vision_embedding_cache import VisionEmbeddingCache
 from .utils.memory_limits import (
     get_effective_metal_working_set_bytes,
@@ -1095,6 +1100,41 @@ class MLLMBatch:
     def __len__(self) -> int:
         return len(self.uids)
 
+    def index_of(self, uid: int) -> int:
+        """Return the index of ``uid`` in this batch.
+
+        Maintains a lazily-built ``uid → idx`` dict so PLD and other
+        per-request lookups don't fall through to an O(N) list scan on
+        every speculative step.  The cache is invalidated on
+        :meth:`filter` and :meth:`extend`.
+        """
+        idx_map = getattr(self, "_uid_index", None)
+        if idx_map is None or len(idx_map) != len(self.uids):
+            idx_map = {u: i for i, u in enumerate(self.uids)}
+            self._uid_index = idx_map
+        try:
+            return idx_map[uid]
+        except KeyError:
+            # Stale cache (uid map drifted out of sync, e.g. via direct
+            # list mutation in a callsite that bypassed filter/extend).
+            # Rebuild once and try again before failing.
+            idx_map = {u: i for i, u in enumerate(self.uids)}
+            self._uid_index = idx_map
+            return idx_map[uid]
+
+    def has_uid(self, uid: int) -> bool:
+        """O(1) membership check backed by the same cached index map."""
+        idx_map = getattr(self, "_uid_index", None)
+        if idx_map is None or len(idx_map) != len(self.uids):
+            idx_map = {u: i for i, u in enumerate(self.uids)}
+            self._uid_index = idx_map
+        return uid in idx_map
+
+    def _invalidate_uid_index(self) -> None:
+        # Cheap: just drop the cache.  Next index_of/has_uid rebuilds.
+        if hasattr(self, "_uid_index"):
+            self._uid_index = None
+
     def filter(self, keep_idx: List[int]) -> None:
         """
         Filter batch to keep only requests at specified indices.
@@ -1108,6 +1148,7 @@ class MLLMBatch:
         self.max_tokens = [self.max_tokens[k] for k in keep_idx]
         self.num_tokens = [self.num_tokens[k] for k in keep_idx]
         self.requests = [self.requests[k] for k in keep_idx]
+        self._invalidate_uid_index()
 
         keep_idx_array = mx.array(keep_idx, mx.int32)
         self.y = self.y[keep_idx_array]
@@ -1144,6 +1185,7 @@ class MLLMBatch:
         self.max_tokens.extend(other.max_tokens)
         self.num_tokens.extend(other.num_tokens)
         self.requests.extend(other.requests)
+        self._invalidate_uid_index()
         try:
             from mlx_lm.models.cache import CacheList as _CacheList
         except ImportError:
@@ -3998,7 +4040,6 @@ class MLLMBatchGenerator:
         if cached is not None:
             return cached
 
-        from mlx_lm.sample_utils import make_sampler
         base_sampler = make_sampler(
             temp=request.temperature,
             top_p=request.top_p,
@@ -4009,7 +4050,6 @@ class MLLMBatchGenerator:
         # Apply repetition penalty if set for this request
         rep_penalty = getattr(request, "repetition_penalty", 1.0)
         if rep_penalty is not None and rep_penalty != 1.0:
-            from mlx_lm.sample_utils import make_logits_processors
             logits_procs = make_logits_processors(repetition_penalty=rep_penalty)
             # Use _original_token_ids (saved before cache fetch trims input_ids)
             # so repetition penalty covers the full prompt, not just uncached tokens.

@@ -333,7 +333,12 @@ class SSMCompanionCache:
                         _mx_materialize(*materialise)
                 if getattr(c, "lengths", None) is not None:
                     try:
-                        c.lengths = mx.array(c.lengths) * 1
+                        # `mx.array(c.lengths)` already detaches from the
+                        # caller-owned buffer; the previous `* 1` multiply was
+                        # a force-materialize trick that emitted a needless
+                        # Metal op.  `_mx_materialize` below handles the
+                        # synchronous eval.
+                        c.lengths = mx.array(c.lengths)
                         _mx_materialize(c.lengths)
                     except Exception:
                         pass
