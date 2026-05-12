@@ -80,6 +80,9 @@ export interface SessionConfig {
   distributedMode?: 'pipeline' | 'tensor'
   distributedSecret?: string
   distributedNodes?: Array<{ address: string; port: number; hostname?: string }>
+  // JANGTQ/MXTQ custom kernel TensorOps mode. Auto uses M5 MPP/NAX only for
+  // shapes that benchmark faster; off keeps legacy kernels; on forces it for diagnostics.
+  jangtqMppNax: 'auto' | 'off' | 'on'
   // JANGTQ MoE active-expert override. 0 = trained model default.
   jangtqTopKOverride: number
 }
@@ -155,6 +158,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   // temporal embedding capacity). mlx_vlm/models/mllm.py DEFAULT_FPS=2.0.
   videoFps: 2,
   videoMaxFrames: 8,
+  jangtqMppNax: 'auto',
   jangtqTopKOverride: 0,
 }
 
@@ -890,6 +894,18 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {!jangtqTopKOverrideAllowed && turboQuantActive && topKOverrideBlocked && (config.jangtqTopKOverride ?? 0) > 0 && (
           <InfoNote text="Saved JANGTQ_TOPK_OVERRIDE is ignored for this model family. Trained routing is enforced because this cache/runtime path has family-specific router semantics." />
         )}
+
+        <SelectField
+          label="JANGTQ MPP/NAX TensorOps"
+          tooltip="Controls the custom TurboQuant MPP/NAX TensorOps path for JANGTQ/MXTQ routed-expert kernels on M5-class GPUs. Auto uses it only for shapes that benchmark faster. Requires restart."
+          value={config.jangtqMppNax || 'auto'}
+          onChange={v => onChange('jangtqMppNax', v as SessionConfig['jangtqMppNax'])}
+          options={[
+            { value: 'auto', label: 'Auto' },
+            { value: 'off', label: 'Off' },
+            { value: 'on', label: 'On (diagnostic)' },
+          ]}
+        />
 
         {dsv4Active && (
           <>

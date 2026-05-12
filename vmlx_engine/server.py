@@ -3735,6 +3735,64 @@ def _weight_matmul_dispatch_status(codec: str) -> dict:
     }
 
 
+def _normalize_jangtq_mpp_nax_mode(raw: str | None = None) -> tuple[str, str | None]:
+    """Normalize the JANGTQ MPP/NAX TensorOps control env.
+
+    The new path is not MLX affine quantized_matmul; it is the JANGTQ custom
+    codebook kernel using MPP/NAX TensorOps directly. Keep the mode explicit so
+    health/UI can tell "disabled", "auto", and forced-on apart.
+    """
+    value = os.environ.get("JANGTQ_MPP_NAX") if raw is None else raw
+    text = str(value or "").strip().lower()
+    if text in ("", "0", "false", "no", "off"):
+        return "off", None
+    if text == "auto":
+        return "auto", None
+    if text in ("1", "true", "yes", "on"):
+        return "on", None
+    return "off", f"invalid JANGTQ_MPP_NAX={value!r}; expected off/auto/on"
+
+
+@functools.lru_cache(maxsize=1)
+def _jangtq_mpp_nax_available() -> tuple[bool, str | None]:
+    try:
+        from jang_tools.turboquant.mpp_nax_kernel import mpp_nax_tensorops_available
+
+        return bool(mpp_nax_tensorops_available()), None
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+def _jangtq_mpp_nax_runtime_status(host: dict | None = None) -> dict:
+    mode, mode_issue = _normalize_jangtq_mpp_nax_mode()
+    requested = mode in ("auto", "on")
+    host = host or _host_supports_metal_na()
+    host_supported = bool(host.get("supported"))
+    available, availability_error = (
+        _jangtq_mpp_nax_available() if requested else (False, None)
+    )
+
+    active = bool(requested and host_supported and available)
+    reason = None
+    if mode_issue:
+        reason = mode_issue
+    elif not requested:
+        reason = "disabled"
+    elif not host_supported:
+        reason = host.get("reason") or "host_not_known_na_capable"
+    elif not available:
+        reason = availability_error or "mpp_nax_tensorops_unavailable"
+
+    return {
+        "mode": mode,
+        "requested": requested,
+        "available": bool(available),
+        "active": active,
+        "uses_mlx_quantized_matmul": False,
+        "reason": reason,
+    }
+
+
 def _bundle_index_tensor_prefix_status(
     bundle_path: str | None,
     prefix: str,
@@ -4068,6 +4126,8 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
     normalized_backend = str(backend or "").lower()
     if normalized_format in ("mxtq", "jangtq") or has_jangtq_sidecar:
         codec = "turboquant_codebook"
+    elif normalized_format in ("mxfp4", "mxfp8", "nvfp4", "fp4", "fp8"):
+        codec = "affine_quantized_matmul"
     elif normalized_backend in ("mlx", "mlx_uniform", "affine"):
         codec = "affine_quantized_matmul"
     elif q_cfg or target_bits or actual_bits:
@@ -4307,21 +4367,38 @@ def _model_acceleration_status(bundle_path: str | None = None) -> dict:
     host = _host_supports_metal_na()
 
     if codec == "turboquant_codebook":
-        kernel_type = "turboquant_codebook"
-        active = False
-        reason = "turboquant_custom_kernels_do_not_use_mlx_na"
+        mpp_nax = _jangtq_mpp_nax_runtime_status(host)
+        active = bool(mpp_nax.get("active"))
+        kernel_type = (
+            "turboquant_codebook_mpp_nax" if active else "turboquant_codebook"
+        )
+        reason = None
+        if not active:
+            reason = (
+                "turboquant_custom_kernels_do_not_use_mlx_na"
+                if mpp_nax.get("mode") == "off"
+                else (
+                    mpp_nax.get("reason")
+                    or "turboquant_custom_kernels_do_not_use_mlx_na"
+                )
+            )
+        metal_na_capable = bool(
+            mpp_nax.get("requested") and host.get("supported") and mpp_nax.get("available")
+        )
     elif codec == "affine_quantized_matmul":
         kernel_type = "affine_quantized_matmul"
         active = bool(na_status.get("available") and host.get("supported"))
         reason = None if active else "mlx_na_symbols_or_host_support_unavailable"
+        metal_na_capable = True
     else:
         kernel_type = "full_precision_or_unknown"
         active = False
         reason = "not_affine_quantized_matmul"
+        metal_na_capable = False
 
-    return {
+    result = {
         "kernel_type": kernel_type,
-        "metal_na_capable": kernel_type == "affine_quantized_matmul",
+        "metal_na_capable": metal_na_capable,
         "metal_na_active_on_host": active,
         "reason": reason,
         "metal_na_symbols": {
@@ -4333,6 +4410,9 @@ def _model_acceleration_status(bundle_path: str | None = None) -> dict:
         },
         "host": host,
     }
+    if codec == "turboquant_codebook":
+        result["jangtq_mpp_nax"] = mpp_nax
+    return result
 
 
 def _turboquant_kv_cache_status(engine=None, scheduler=None) -> dict:

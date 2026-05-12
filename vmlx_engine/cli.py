@@ -24,6 +24,26 @@ def _env_truthy(name: str) -> bool:
     return os.environ.get(name, "").lower() in ("1", "true", "yes", "on")
 
 
+def _apply_jangtq_mpp_nax_policy(args, logger):
+    """Apply JANGTQ MPP/NAX TensorOps startup mode.
+
+    This controls JANGTQ's own codebook kernels. It is separate from MLX
+    affine quantized_matmul: MXFP4/JANG affine models use MLX's native path,
+    while JANGTQ/MXTQ uses the custom TurboQuant path with optional direct
+    MPP/NAX kernels.
+    """
+    raw_mode = getattr(args, "jangtq_mpp_nax", None)
+    if raw_mode is None:
+        raw_mode = os.environ.get("JANGTQ_MPP_NAX", "auto")
+    mode = str(raw_mode).strip().lower()
+    if mode not in ("off", "auto", "on"):
+        logger.warning("Invalid --jangtq-mpp-nax=%r; using auto", raw_mode)
+        mode = "auto"
+    os.environ["JANGTQ_MPP_NAX"] = "1" if mode == "on" else mode
+    logger.info("JANGTQ MPP/NAX TensorOps mode: %s", mode)
+    return mode
+
+
 def _apply_zaya_cca_cache_policy(args, logger):
     """Apply ZAYA's typed CCA cache contract to serve args.
 
@@ -136,6 +156,7 @@ def serve_command(args):
     from .server import RateLimiter, app, load_model
 
     logger = logging.getLogger(__name__)
+    _apply_jangtq_mpp_nax_policy(args, logger)
 
     # mlxstudio#138/#156: --kv-cache-quantization explicit-pass detection.
     # default=None lets us tell "user didn't pass it" from "user said none".
@@ -1036,6 +1057,9 @@ def bench_command(args):
     from .engine_core import AsyncEngineCore, EngineConfig
     from .request import SamplingParams
     from .scheduler import SchedulerConfig
+    import logging
+
+    _apply_jangtq_mpp_nax_policy(args, logging.getLogger(__name__))
 
     # mlxstudio#138: mirror serve_command's explicit-pass detection so bench
     # also disables JANG-calibrated TurboQuant when the user passes
@@ -1741,6 +1765,16 @@ Examples:
         help="Group size for KV cache quantization. Smaller = better accuracy but larger "
              "metadata overhead. Only used when --kv-cache-quantization is q4 or q8. (default: 64)",
     )
+    serve_parser.add_argument(
+        "--jangtq-mpp-nax",
+        type=str,
+        default=os.environ.get("JANGTQ_MPP_NAX", "auto"),
+        choices=["off", "auto", "on"],
+        help="Enable JANGTQ/MXTQ custom TurboQuant MPP/NAX TensorOps kernels. "
+             "auto uses the M5 TensorOps path only for dispatch shapes that benchmark faster; "
+             "off keeps the legacy custom kernels; on forces the path for diagnostics. "
+             "(default: auto)",
+    )
     # Disk cache options
     serve_parser.add_argument(
         "--enable-disk-cache",
@@ -2228,6 +2262,14 @@ Examples:
         type=int,
         default=64,
         help="Group size for KV cache quantization (default: 64)",
+    )
+    bench_parser.add_argument(
+        "--jangtq-mpp-nax",
+        type=str,
+        default=os.environ.get("JANGTQ_MPP_NAX", "auto"),
+        choices=["off", "auto", "on"],
+        help="Enable JANGTQ/MXTQ custom TurboQuant MPP/NAX TensorOps kernels "
+             "(default: auto)",
     )
     # Disk cache options (bench)
     bench_parser.add_argument(

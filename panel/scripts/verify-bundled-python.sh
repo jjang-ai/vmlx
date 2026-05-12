@@ -152,6 +152,7 @@ HASH_GATED_JANG_TOOLS_FILES=(
   "turboquant/fused_gate_up_kernel.py"
   "turboquant/gather_tq_kernel.py"
   "turboquant/hadamard_kernel.py"
+  "turboquant/mpp_nax_kernel.py"
   "turboquant/tq_kernel.py"
 )
 if [ -z "$BUNDLED_JANG_TOOLS_DIR" ] || [ ! -d "$BUNDLED_JANG_TOOLS_DIR" ]; then
@@ -221,6 +222,7 @@ REQUIRED = [
     ("jang_tools.turboquant.hadamard_kernel", "hadamard_kernel", "P3 Hadamard kernel missing"),
     ("jang_tools.turboquant.fused_gate_up_kernel", "fused_gate_up_kernel", "P17 fused kernel missing"),
     ("jang_tools.turboquant.gather_tq_kernel", "gather_tq_kernel", "P17 gather kernel missing"),
+    ("jang_tools.turboquant.mpp_nax_kernel", "mpp_nax_kernel", "MPP/NAX TensorOps kernel missing — JANGTQ_MPP_NAX cannot activate"),
     # Kimi K2.6 runtime — research/KIMI-K2.6-VMLX-INTEGRATION.md §1.1
     ("jang_tools.load_jangtq_kimi_vlm", "jang_tools.load_jangtq_kimi_vlm", "Kimi VL loader missing (kimi_k25 remap + wired_limit + command-buffer split)"),
     ("jang_tools.kimi_prune.generate_vl", "jang_tools.kimi_prune.generate_vl", "Kimi chunked VL generate path missing — required by vmlx_engine.vlm.generate_vl"),

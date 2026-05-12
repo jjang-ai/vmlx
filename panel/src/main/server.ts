@@ -60,6 +60,7 @@ export interface ServerConfig {
   streamInterval: number
   maxTokens?: number
   // JANGTQ MoE active-expert override. 0/undefined = trained model default.
+  jangtqMppNax?: 'auto' | 'off' | 'on'
   jangtqTopKOverride?: number
 
   // Tool integration

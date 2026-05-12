@@ -38,6 +38,13 @@ function topKOverrideBlockedByFamily(family?: string): boolean {
   return normalized === 'zaya' || normalized === 'zaya1-vl' || normalized === 'ling'
 }
 
+function normalizeJangtqMppNaxMode(mode: unknown): 'auto' | 'off' | 'on' {
+  const value = String(mode ?? 'auto').trim().toLowerCase()
+  if (value === 'off' || value === '0' || value === 'false' || value === 'no') return 'off'
+  if (value === 'on' || value === '1' || value === 'true' || value === 'yes') return 'on'
+  return 'auto'
+}
+
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 
 /**
@@ -171,6 +178,7 @@ function buildCommandPreview(
   } else {
     parts.push('--max-tokens', '1000000')
   }
+  parts.push('--jangtq-mpp-nax', normalizeJangtqMppNaxMode((config as any).jangtqMppNax))
 
   // Tool integration — mirrors buildArgs lines 1136-1147
   if (effectiveToolParser) {

@@ -81,6 +81,13 @@ function topKOverrideBlockedByFamily(family?: string): boolean {
   return normalized === 'zaya' || normalized === 'zaya1-vl' || normalized === 'ling'
 }
 
+function normalizeJangtqMppNaxMode(mode: unknown): 'auto' | 'off' | 'on' {
+  const value = String(mode ?? 'auto').trim().toLowerCase()
+  if (value === 'off' || value === '0' || value === 'false' || value === 'no') return 'off'
+  if (value === 'on' || value === '1' || value === 'true' || value === 'yes') return 'on'
+  return 'auto'
+}
+
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 
 function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
@@ -1307,7 +1314,7 @@ export class SessionManager extends EventEmitter {
     'maxTokens', 'mcpConfig', 'servedModelName',
     'speculativeModel', 'numDraftTokens', 'smelt', 'smeltExperts',
     'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
-    'jangtqTopKOverride',
+    'jangtqMppNax', 'jangtqTopKOverride',
     'distributedEnabled', 'distributedMode', 'distributedSecret',
     'defaultTemperature', 'defaultTopP', 'defaultRepetitionPenalty',
     'embeddingModel', 'additionalArgs', 'mfluxClass',
@@ -1448,6 +1455,7 @@ export class SessionManager extends EventEmitter {
           cacheStackStartupDefaultsVersion: CACHE_STACK_STARTUP_DEFAULTS_VERSION,
           streamInterval: 1,
           maxTokens: 32768,
+          jangtqMppNax: 'auto',
           jangtqTopKOverride: 0,
           toolCallParser: 'auto',
           reasoningParser: 'auto',
@@ -2367,6 +2375,7 @@ export class SessionManager extends EventEmitter {
     } else {
       args.push('--max-tokens', '1000000')
     }
+    args.push('--jangtq-mpp-nax', normalizeJangtqMppNaxMode((config as any).jangtqMppNax))
 
     // Tool integration (parsers and --enable-auto-tool-choice already pushed above)
     if (config.mcpConfig) args.push('--mcp-config', config.mcpConfig)

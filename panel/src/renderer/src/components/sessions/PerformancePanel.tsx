@@ -160,6 +160,13 @@ interface HealthData {
     metal_na_capable?: boolean
     metal_na_active_on_host?: boolean
     reason?: string
+    jangtq_mpp_nax?: {
+      mode?: 'auto' | 'off' | 'on'
+      requested?: boolean
+      available?: boolean
+      active?: boolean
+      reason?: string | null
+    }
     metal_na_symbols?: {
       available?: boolean
       nax_symbols?: number
@@ -286,6 +293,20 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
                       : health.acceleration.metal_na_capable
                         ? 'unavailable'
                         : 'not applicable'
+                }
+              />
+            )}
+            {health.acceleration?.jangtq_mpp_nax && (
+              <InfoCard
+                label="JANGTQ MPP/NAX"
+                value={
+                  health.acceleration.jangtq_mpp_nax.active
+                    ? `active (${health.acceleration.jangtq_mpp_nax.mode || 'auto'})`
+                    : health.acceleration.jangtq_mpp_nax.mode === 'off'
+                      ? 'off'
+                      : health.acceleration.jangtq_mpp_nax.available
+                        ? 'ready'
+                        : 'unavailable'
                 }
               />
             )}

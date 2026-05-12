@@ -2671,9 +2671,16 @@ class TestStartupCompatibilityGuards:
             "turboquant/fused_gate_up_kernel.py",
             "turboquant/gather_tq_kernel.py",
             "turboquant/hadamard_kernel.py",
+            "turboquant/mpp_nax_kernel.py",
             "turboquant/tq_kernel.py",
         ):
             assert f'"{rel}"' in verify_script
+
+    def test_bundled_python_import_gate_covers_jangtq_mpp_nax_kernel(self):
+        verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
+
+        assert '"jang_tools.turboquant.mpp_nax_kernel"' in verify_script
+        assert "MPP/NAX TensorOps kernel missing" in verify_script
 
     def test_embeddings_and_rerank_endpoints_have_memory_pressure_guards(self):
         source = Path("./vmlx_engine/server.py").read_text()
@@ -3856,6 +3863,65 @@ class TestPromptLookupDocumentation:
         assert "Scheduler integration owns runtime acceleration" in doc
         assert "_try_pld_speculative_decode" in doc
         assert "Hybrid SSM/attention models need family-aware" in doc
+
+
+class TestJangTqMppNaxCliPolicy:
+    def test_jangtq_mpp_nax_cli_policy_defaults_to_auto(self, monkeypatch):
+        from vmlx_engine.cli import _apply_jangtq_mpp_nax_policy
+
+        monkeypatch.delenv("JANGTQ_MPP_NAX", raising=False)
+        args = SimpleNamespace(jangtq_mpp_nax="auto")
+        logger = MagicMock()
+
+        _apply_jangtq_mpp_nax_policy(args, logger)
+
+        assert os.environ["JANGTQ_MPP_NAX"] == "auto"
+        logger.info.assert_called_once()
+
+    def test_jangtq_mpp_nax_cli_policy_can_force_off(self, monkeypatch):
+        from vmlx_engine.cli import _apply_jangtq_mpp_nax_policy
+
+        monkeypatch.setenv("JANGTQ_MPP_NAX", "auto")
+        args = SimpleNamespace(jangtq_mpp_nax="off")
+        logger = MagicMock()
+
+        _apply_jangtq_mpp_nax_policy(args, logger)
+
+        assert os.environ["JANGTQ_MPP_NAX"] == "off"
+
+    def test_jangtq_mpp_nax_cli_policy_can_force_on(self, monkeypatch):
+        from vmlx_engine.cli import _apply_jangtq_mpp_nax_policy
+
+        monkeypatch.setenv("JANGTQ_MPP_NAX", "off")
+        args = SimpleNamespace(jangtq_mpp_nax="on")
+        logger = MagicMock()
+
+        mode = _apply_jangtq_mpp_nax_policy(args, logger)
+
+        assert mode == "on"
+        assert os.environ["JANGTQ_MPP_NAX"] == "1"
+
+    def test_jangtq_mpp_nax_cli_policy_invalid_value_falls_back_to_auto(
+        self, monkeypatch
+    ):
+        from vmlx_engine.cli import _apply_jangtq_mpp_nax_policy
+
+        monkeypatch.setenv("JANGTQ_MPP_NAX", "off")
+        args = SimpleNamespace(jangtq_mpp_nax="bogus")
+        logger = MagicMock()
+
+        mode = _apply_jangtq_mpp_nax_policy(args, logger)
+
+        assert mode == "auto"
+        assert os.environ["JANGTQ_MPP_NAX"] == "auto"
+        logger.warning.assert_called_once()
+
+    def test_jangtq_mpp_nax_serve_parser_exposes_toggle(self):
+        source = Path("vmlx_engine/cli.py").read_text()
+
+        assert '"--jangtq-mpp-nax"' in source
+        assert 'choices=["off", "auto", "on"]' in source
+        assert 'default=os.environ.get("JANGTQ_MPP_NAX", "auto")' in source
 
 
 class TestDistributedStreamingUnicode:
@@ -5607,6 +5673,26 @@ class TestTurboQuantKVTelemetry:
             "reason": None,
         }
 
+    def test_quantization_status_treats_mxfp4_weight_format_as_affine_na_path(self, tmp_path):
+        """MXFP4 bundles use the native MLX affine matmul lane, not JANGTQ TQ."""
+        from vmlx_engine.server import _model_quantization_status
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "qwen3_5_moe",
+            "weight_format": "mxfp4",
+        }))
+
+        status = _model_quantization_status(str(tmp_path))
+
+        assert status["codec"] == "affine_quantized_matmul"
+        assert status["weight_format"] == "mxfp4"
+        assert status["weight_matmul_dispatch"] == {
+            "primary": "mlx_affine_quantized_matmul",
+            "uses_mlx_quantized_matmul": True,
+            "metal_na_eligible": True,
+            "reason": None,
+        }
+
     def test_routing_status_reports_trained_top_k_without_override(self, monkeypatch, tmp_path):
         from vmlx_engine.server import _model_routing_status
 
@@ -5686,6 +5772,7 @@ class TestTurboQuantKVTelemetry:
     def test_acceleration_status_does_not_claim_metal_na_for_jangtq(self, monkeypatch, tmp_path):
         import vmlx_engine.server as server
 
+        monkeypatch.delenv("JANGTQ_MPP_NAX", raising=False)
         (tmp_path / "config.json").write_text(json.dumps({
             "weight_format": "mxtq",
             "mxtq_bits": 2,
@@ -5708,6 +5795,55 @@ class TestTurboQuantKVTelemetry:
         assert status["metal_na_capable"] is False
         assert status["metal_na_active_on_host"] is False
         assert status["reason"] == "turboquant_custom_kernels_do_not_use_mlx_na"
+
+    def test_acceleration_status_reports_jangtq_mpp_nax_when_enabled(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "weight_format": "mxtq",
+            "mxtq_bits": 4,
+        }))
+        (tmp_path / "jangtq_runtime.safetensors").write_bytes(b"sidecar")
+        monkeypatch.setenv("JANGTQ_MPP_NAX", "auto")
+        monkeypatch.setattr(
+            server,
+            "_mlx_metal_na_status",
+            lambda: {"available": True, "nax_symbols": 3534, "naxtile_symbols": 786},
+        )
+        monkeypatch.setattr(
+            server,
+            "_host_supports_metal_na",
+            lambda: {"supported": True, "brand": "Apple M5 Max"},
+        )
+        monkeypatch.setattr(
+            server,
+            "_jangtq_mpp_nax_runtime_status",
+            lambda _host=None: {
+                "mode": "auto",
+                "requested": True,
+                "available": True,
+                "active": True,
+                "uses_mlx_quantized_matmul": False,
+                "reason": None,
+            },
+        )
+
+        status = server._model_acceleration_status(str(tmp_path))
+
+        assert status["kernel_type"] == "turboquant_codebook_mpp_nax"
+        assert status["metal_na_capable"] is True
+        assert status["metal_na_active_on_host"] is True
+        assert status["reason"] is None
+        assert status["jangtq_mpp_nax"] == {
+            "mode": "auto",
+            "requested": True,
+            "available": True,
+            "active": True,
+            "uses_mlx_quantized_matmul": False,
+            "reason": None,
+        }
 
     def test_acceleration_status_reports_affine_na_only_when_symbols_and_host_match(self, monkeypatch, tmp_path):
         import vmlx_engine.server as server

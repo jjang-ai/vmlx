@@ -62,6 +62,7 @@ interface SessionConfig {
     defaultTopP: number
     defaultRepetitionPenalty: number
     defaultEnableThinking?: boolean
+    jangtqMppNax: 'auto' | 'off' | 'on'
     jangtqTopKOverride: number
     embeddingModel: string
     additionalArgs: string
@@ -121,6 +122,7 @@ const DEFAULT_CONFIG: SessionConfig = {
     defaultTopP: 95,
     defaultRepetitionPenalty: 110,
     defaultEnableThinking: undefined,
+    jangtqMppNax: 'auto',
     jangtqTopKOverride: 0,
     embeddingModel: '',
     additionalArgs: '',
@@ -267,6 +269,7 @@ function buildCommandPreview(
     } else {
         parts.push('--max-tokens', '1000000')
     }
+    parts.push('--jangtq-mpp-nax', config.jangtqMppNax || 'auto')
 
     // Pass resolved parsers directly (mirrors buildArgs lines 1139-1150)
     if (effectiveToolParser) {
@@ -749,6 +752,12 @@ describe('Performance & Generation', () => {
         const out = preview({ jangtqTopKOverride: 4 }, { family: 'minimax', isTurboQuant: true })
         const normalized = out.replace(/\s*\\\n\s*/g, ' ')
         expect(normalized.startsWith('JANGTQ_TOPK_OVERRIDE=4 vmlx-engine serve')).toBe(true)
+    })
+
+    it('JANGTQ MPP/NAX TensorOps mode is emitted as a restart CLI flag', () => {
+        expect(getFlagValue(preview(), '--jangtq-mpp-nax')).toBe('auto')
+        expect(getFlagValue(preview({ jangtqMppNax: 'off' }), '--jangtq-mpp-nax')).toBe('off')
+        expect(getFlagValue(preview({ jangtqMppNax: 'on' }), '--jangtq-mpp-nax')).toBe('on')
     })
 
     it('JANGTQ top-k trained default emits no override env', () => {
@@ -1247,6 +1256,7 @@ describe('Default IP and New Settings', () => {
         expect(DEFAULT_CONFIG.defaultTemperature).toBe(70)
         expect(DEFAULT_CONFIG.defaultTopP).toBe(95)
         expect(DEFAULT_CONFIG.defaultRepetitionPenalty).toBe(110)
+        expect(DEFAULT_CONFIG.jangtqMppNax).toBe('auto')
         expect(DEFAULT_CONFIG.jangtqTopKOverride).toBe(0)
         expect(DEFAULT_CONFIG.omniBackend).toBe('stage1')
     })
@@ -1815,7 +1825,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         'speculativeModel', 'numDraftTokens',
         'smelt', 'smeltExperts', 'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
         'defaultTemperature', 'defaultTopP', 'defaultRepetitionPenalty', 'defaultEnableThinking',
-        'jangtqTopKOverride',
+        'jangtqMppNax', 'jangtqTopKOverride',
         'embeddingModel', 'additionalArgs',
         'enableJit', 'logLevel', 'corsOrigins', 'maxContextLength',
     ]
@@ -1888,6 +1898,20 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(sessionsSource).toContain('topKOverrideAllowed')
         expect(sessionsSource).toContain('topKOverrideBlockedByFamily')
         expect(sessionsSource).toContain('spawnEnv.JANGTQ_TOPK_OVERRIDE')
+    })
+
+    it('JANGTQ MPP/NAX TensorOps toggle is wired through UI, launch, and performance health', () => {
+        const formSource = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
+        const settingsSource = readFileSync('src/renderer/src/components/sessions/SessionSettings.tsx', 'utf8')
+        const sessionsSource = readFileSync('src/main/sessions.ts', 'utf8')
+        const perfSource = readFileSync('src/renderer/src/components/sessions/PerformancePanel.tsx', 'utf8')
+
+        expect(formSource).toContain('JANGTQ MPP/NAX TensorOps')
+        expect(formSource).toContain("onChange('jangtqMppNax'")
+        expect(settingsSource).toContain('--jangtq-mpp-nax')
+        expect(sessionsSource).toContain('--jangtq-mpp-nax')
+        expect(perfSource).toContain('jangtq_mpp_nax?:')
+        expect(perfSource).toContain('JANGTQ MPP/NAX')
     })
 
     it('mutual exclusion: disk cache NOT emitted when paged cache is active', () => {
