@@ -1493,6 +1493,40 @@ def serve_command(args):
             print(
                 "     The draft model will be ignored for VLM requests (mlx-vlm has no spec decoding).")
 
+    # PFlash sparse prefill (issue #136)
+    pflash_enabled = bool(getattr(args, 'enable_pflash', False))
+    if pflash_enabled:
+        from .utils.pflash import PFlashConfig, configure_pflash
+        from .utils.pflash_drafter import load_pflash_drafter
+
+        pflash_config = PFlashConfig(
+            enabled=True,
+            drafter_model=getattr(args, 'pflash_drafter', '') or '',
+            block_size=getattr(args, 'pflash_block_size', 256),
+            keep_ratio=getattr(args, 'pflash_keep_ratio', 0.10),
+            min_seq_len=getattr(args, 'pflash_min_seq_len', 8192),
+        )
+        configure_pflash(pflash_config)
+        if not pflash_config.drafter_model:
+            print(
+                "  ⚠️  --enable-pflash requires --pflash-drafter. "
+                "PFlash will stay inactive (dense prefill remains the default)."
+            )
+        else:
+            try:
+                load_pflash_drafter(pflash_config)
+                print(
+                    f"PFlash drafter loaded: {pflash_config.drafter_model} "
+                    f"(block_size={pflash_config.block_size}, "
+                    f"keep_ratio={pflash_config.keep_ratio}, "
+                    f"min_seq_len={pflash_config.min_seq_len})"
+                )
+            except Exception as e:
+                print(
+                    f"  ⚠️  PFlash drafter load failed ({e}); "
+                    "dense prefill remains the default."
+                )
+
     # Configure log level
     log_level = getattr(args, 'log_level', 'INFO').upper()
     logging.basicConfig(level=getattr(logging, log_level, logging.INFO), force=True)
@@ -2876,6 +2910,47 @@ Examples:
         help="Nemotron-Omni multimodal backend. stage1 is correctness-first "
              "PyTorch/MPS; stage2 opts into the native MLX RADIO + Parakeet "
              "path via VMLX_OMNI_BACKEND=stage2.",
+    )
+
+    # PFlash sparse prefill (issue #136)
+    serve_parser.add_argument(
+        "--enable-pflash",
+        action="store_true",
+        default=False,
+        help="Enable PFlash importance-scored sparse prefill for long-context "
+             "cold TTFT (issue #136). A small drafter scores per-block "
+             "importance over the prompt; the target prefills only the "
+             "highest-scoring blocks. Default OFF. Requires --pflash-drafter.",
+    )
+    serve_parser.add_argument(
+        "--pflash-drafter",
+        type=str,
+        default=None,
+        help="Path or HuggingFace name of the small drafter for PFlash. "
+             "Recommended: Qwen3-0.6B-BF16 or equivalent ≤1B BF16 model with "
+             "the same tokenizer family as the target. (default: unset)",
+    )
+    serve_parser.add_argument(
+        "--pflash-block-size",
+        type=int,
+        default=256,
+        help="Tokens per PFlash scoring block. Smaller = finer-grained "
+             "selection but more bookkeeping overhead. (default: 256)",
+    )
+    serve_parser.add_argument(
+        "--pflash-keep-ratio",
+        type=float,
+        default=0.10,
+        help="Fraction of non-head/non-tail blocks to keep. CUDA reference "
+             "uses 0.05 for 128K NIAH; 0.10 is safer for general workloads. "
+             "(default: 0.10)",
+    )
+    serve_parser.add_argument(
+        "--pflash-min-seq-len",
+        type=int,
+        default=8192,
+        help="Minimum prompt token count before PFlash activates; shorter "
+             "prompts always go through dense prefill. (default: 8192)",
     )
 
     # Prompt Lookup Decoding (PLD)

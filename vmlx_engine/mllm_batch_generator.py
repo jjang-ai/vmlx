@@ -4728,6 +4728,51 @@ class MLLMBatchGenerator:
         media_ids = self._media_placeholder_token_ids()
         return bool(media_ids and any(t in media_ids for t in token_ids or []))
 
+    def _maybe_build_pflash_plan(
+        self,
+        input_ids: "mx.array",
+        seq_len: int,
+        has_images: bool,
+    ) -> Optional[Any]:
+        """Build a PFlash sparse-prefill plan if conditions are met.
+
+        Returns ``PFlashPlan`` on success, ``None`` otherwise.  Logs a
+        one-line telemetry summary when a plan is built so operators can
+        confirm the path is active.  Issue #136.
+        """
+        if has_images:
+            return None
+        try:
+            from .utils.pflash import (
+                get_pflash_config,
+                plan_sparse_prefill,
+                record_pflash_failure,
+                should_activate_pflash,
+            )
+            from .utils.pflash_drafter import make_drafter_score_fn
+        except Exception:
+            return None
+
+        cfg = get_pflash_config()
+        if cfg is None or not should_activate_pflash(seq_len):
+            return None
+        try:
+            score_fn = make_drafter_score_fn(input_ids, cfg.block_size)
+            plan = plan_sparse_prefill(
+                score_fn, seq_len=seq_len, config=cfg
+            )
+        except Exception as e:
+            record_pflash_failure(str(e))
+            return None
+        logger.info(
+            "[pflash] plan: %d/%d blocks kept (%.1f%% coverage, %d ranges)",
+            plan.kept_blocks,
+            plan.total_blocks,
+            100.0 * plan.coverage(),
+            len(plan.keep_ranges),
+        )
+        return plan
+
     def _request_has_media_cache_context(
         self,
         request: "MLLMBatchRequest",
@@ -5156,6 +5201,16 @@ class MLLMBatchGenerator:
 
                 processed = 0
                 chunk_num = 0
+
+                # PFlash (issue #136): build a sparse-prefill plan for cold
+                # long-context prompts.  The plan currently *informs* the
+                # loop (telemetry + future sparse dispatch) but the
+                # forward path remains dense — the sparse-mask kernel is a
+                # follow-up to this PR (see vmlx_engine.utils.pflash).
+                _pflash_plan = self._maybe_build_pflash_plan(
+                    input_ids, seq_len, has_images
+                )
+
                 # vmlx#109: clean boundary for inline SSM capture. Land
                 # one chunk on this boundary exactly (shrinking the chunk
                 # if needed), snapshot SSM, then continue chunked prefill

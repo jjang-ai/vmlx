@@ -7344,6 +7344,15 @@ async def health():
     except ImportError:
         pass
 
+    # PFlash sparse prefill stats (issue #136)
+    pflash_info = None
+    try:
+        from .utils.pflash import get_pflash_stats
+
+        pflash_info = get_pflash_stats()
+    except ImportError:
+        pass
+
     if _model_type == "image":
         result = {
             "status": status,
@@ -7377,6 +7386,8 @@ async def health():
         result["speculative_decoding"] = spec_info.get(
             "speculative_decoding", spec_info
         )
+    if pflash_info and pflash_info.get("configured"):
+        result["pflash"] = pflash_info
     if scheduler:
         try:
             scheduler_stats = scheduler.get_stats()
