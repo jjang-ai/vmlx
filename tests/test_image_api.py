@@ -840,7 +840,34 @@ class TestImageGenWorkerExecutor:
         helper_source = inspect.getsource(cli._suppress_image_resource_tracker_warning)
         serve_source = inspect.getsource(cli.serve_command)
         assert "resource_tracker: There appear to be .* leaked semaphore objects" in helper_source
+        assert "ignore:resource_tracker:UserWarning" in helper_source
         assert "_suppress_image_resource_tracker_warning()" in serve_source
+
+    def test_cli_image_mode_suppression_reaches_resource_tracker_child(self, monkeypatch):
+        import os
+
+        import vmlx_engine.cli as cli
+
+        monkeypatch.delenv("PYTHONWARNINGS", raising=False)
+
+        cli._suppress_image_resource_tracker_warning()
+
+        assert os.environ["PYTHONWARNINGS"] == "ignore:resource_tracker:UserWarning"
+
+    def test_cli_image_mode_suppression_preserves_existing_pythonwarnings(self, monkeypatch):
+        import os
+
+        import vmlx_engine.cli as cli
+
+        monkeypatch.setenv("PYTHONWARNINGS", "default::DeprecationWarning")
+
+        cli._suppress_image_resource_tracker_warning()
+        cli._suppress_image_resource_tracker_warning()
+
+        assert (
+            os.environ["PYTHONWARNINGS"]
+            == "default::DeprecationWarning,ignore:resource_tracker:UserWarning"
+        )
 
     def test_cli_explicit_image_flags_force_image_runtime_detection(self):
         import vmlx_engine.cli as cli

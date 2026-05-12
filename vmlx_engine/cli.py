@@ -136,6 +136,20 @@ def _suppress_image_resource_tracker_warning() -> None:
     """Hide benign mflux multiprocessing semaphore cleanup noise on shutdown."""
     import warnings
 
+    # The warning is emitted by multiprocessing's resource_tracker helper
+    # process, not always by this parent process. Keep the parent warning
+    # filter, and also propagate a warning filter through the environment
+    # before mflux/loky can start that helper.
+    child_filter = "ignore:resource_tracker:UserWarning"
+    existing_filters = [
+        item.strip()
+        for item in os.environ.get("PYTHONWARNINGS", "").split(",")
+        if item.strip()
+    ]
+    if child_filter not in existing_filters:
+        existing_filters.append(child_filter)
+        os.environ["PYTHONWARNINGS"] = ",".join(existing_filters)
+
     warnings.filterwarnings(
         "ignore",
         message=r"resource_tracker: There appear to be .* leaked semaphore objects to clean up at shutdown",
