@@ -1188,7 +1188,12 @@ export function registerModelHandlers(): void {
     console.log(`[DOWNLOADS] Starting: ${job.repoId} → ${job.modelDir}`);
 
     // Build spawn environment — inject HF_TOKEN if user has configured one
-    const downloadEnv: Record<string, string | undefined> = { ...process.env };
+    const downloadEnv: Record<string, string | undefined> = {
+      ...process.env,
+      PYTHONDONTWRITEBYTECODE: "1",
+      PYTHONNOUSERSITE: "1",
+      PYTHONPATH: undefined,
+    };
     const hfToken = db.getSetting("hf_api_key");
     if (hfToken) {
       downloadEnv.HF_TOKEN = hfToken;
@@ -1206,7 +1211,7 @@ export function registerModelHandlers(): void {
 
     const proc = spawn(
       pythonPath,
-      ["-u", "-c", script, job.repoId, job.modelDir],
+      ["-B", "-s", "-u", "-c", script, job.repoId, job.modelDir],
       {
         stdio: ["pipe", "pipe", "pipe"],
         env: downloadEnv,

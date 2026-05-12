@@ -219,7 +219,7 @@ export function ApiDashboard() {
                 className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${lanEnabled ? "bg-primary" : "bg-muted"}`}
               >
                 <span
-                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${lanEnabled ? "translate-x-4.5" : "translate-x-0.5"}`}
+                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${lanEnabled ? "translate-x-[18px]" : "translate-x-0.5"}`}
                 />
               </button>
               <span className="text-muted-foreground text-[10px]">
@@ -241,7 +241,7 @@ export function ApiDashboard() {
                 className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${singleModelMode ? "bg-primary" : "bg-muted"}`}
               >
                 <span
-                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${singleModelMode ? "translate-x-4.5" : "translate-x-0.5"}`}
+                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${singleModelMode ? "translate-x-[18px]" : "translate-x-0.5"}`}
                 />
               </button>
               <span className="text-muted-foreground text-[10px]">

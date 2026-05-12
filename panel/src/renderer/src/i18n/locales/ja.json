@@ -846,7 +846,8 @@
       "largerTitle": "ブラシを大きく",
       "clearTitle": "マスク全体をクリア",
       "applyTitle": "マスクを適用して編集",
-      "cancelTitle": "マスクペイントをキャンセル"
+      "cancelTitle": "マスクペイントをキャンセル",
+      "emptyError": "適用する前にマスク領域をペイントまたは描画してください。"
     }
   },
   "downloads": {

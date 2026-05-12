@@ -846,7 +846,8 @@
       "largerTitle": "더 큰 브러시",
       "clearTitle": "마스크 전체 지우기",
       "applyTitle": "마스크 적용 및 편집",
-      "cancelTitle": "마스크 칠하기 취소"
+      "cancelTitle": "마스크 칠하기 취소",
+      "emptyError": "적용하기 전에 마스크 영역을 칠하거나 그려 주세요."
     }
   },
   "downloads": {

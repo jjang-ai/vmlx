@@ -9,6 +9,7 @@ import {
   Plus,
   Square,
 } from "lucide-react";
+import { useTranslation } from "../../i18n";
 
 interface MaskPainterProps {
   /** Source image as data URL */
@@ -17,6 +18,13 @@ interface MaskPainterProps {
   onConfirm: (maskBase64: string) => void;
   /** Called when user cancels mask painting */
   onCancel: () => void;
+}
+
+export function maskHasPaintedPixels(data: Uint8ClampedArray): boolean {
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] > 0 && data[i] > 128) return true;
+  }
+  return false;
 }
 
 /**
@@ -29,11 +37,13 @@ export function MaskPainter({
   onConfirm,
   onCancel,
 }: MaskPainterProps) {
+  const { t } = useTranslation();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const maskCanvasRef = useRef<HTMLCanvasElement>(null);
   const [brushSize, setBrushSize] = useState(30);
   const [tool, setTool] = useState<"brush" | "eraser" | "rect">("brush");
   const [drawing, setDrawing] = useState(false);
+  const [maskError, setMaskError] = useState<string | null>(null);
   const rectStart = useRef<{ x: number; y: number } | null>(null);
   const [imageLoaded, setImageLoaded] = useState(false);
   const imgRef = useRef<HTMLImageElement | null>(null);
@@ -73,6 +83,7 @@ export function MaskPainter({
     const maskCtx = maskCanvas.getContext("2d")!;
     maskCtx.fillStyle = "#000000";
     maskCtx.fillRect(0, 0, img.width, img.height);
+    setMaskError(null);
 
     redraw();
   }, [imageLoaded]);
@@ -161,6 +172,7 @@ export function MaskPainter({
       maskCtx.arc(mx, my, mr, 0, Math.PI * 2);
       maskCtx.fillStyle = tool === "brush" ? "#ffffff" : "#000000";
       maskCtx.fill();
+      setMaskError(null);
 
       redraw();
     },
@@ -186,6 +198,7 @@ export function MaskPainter({
       maskCtx.moveTo(from.x * scaleX, from.y * scaleY);
       maskCtx.lineTo(to.x * scaleX, to.y * scaleY);
       maskCtx.stroke();
+      setMaskError(null);
 
       redraw();
     },
@@ -209,6 +222,7 @@ export function MaskPainter({
 
       maskCtx.fillStyle = "#ffffff";
       maskCtx.fillRect(x, y, w, h);
+      setMaskError(null);
       redraw();
     },
     [redraw],
@@ -276,16 +290,24 @@ export function MaskPainter({
     const ctx = maskCanvas.getContext("2d")!;
     ctx.fillStyle = "#000000";
     ctx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+    setMaskError(null);
     redraw();
   }, [redraw]);
 
   const handleConfirm = useCallback(() => {
     const maskCanvas = maskCanvasRef.current;
     if (!maskCanvas) return;
+    const maskCtx = maskCanvas.getContext("2d");
+    if (!maskCtx) return;
+    const maskData = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+    if (!maskHasPaintedPixels(maskData.data)) {
+      setMaskError(t("image.mask.emptyError"));
+      return;
+    }
     // Export mask as PNG base64
     const dataUrl = maskCanvas.toDataURL("image/png");
     onConfirm(dataUrl);
-  }, [onConfirm]);
+  }, [onConfirm, t]);
 
   return (
     <div className="flex flex-col items-center gap-3">
@@ -370,6 +392,9 @@ export function MaskPainter({
         Paint over areas you want to edit (shown in red). The model will
         fill/replace only the painted areas.
       </p>
+      {maskError && (
+        <p className="text-[10px] text-destructive">{maskError}</p>
+      )}
 
       {/* Canvas */}
       <div

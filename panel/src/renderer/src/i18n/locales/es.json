@@ -846,7 +846,8 @@
       "largerTitle": "Pincel más grande",
       "clearTitle": "Vaciar toda la máscara",
       "applyTitle": "Aplicar máscara y editar",
-      "cancelTitle": "Cancelar el pintado de la máscara"
+      "cancelTitle": "Cancelar el pintado de la máscara",
+      "emptyError": "Pinte o dibuje un área de máscara antes de aplicar."
     }
   },
   "downloads": {

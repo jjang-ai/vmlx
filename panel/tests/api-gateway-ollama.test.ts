@@ -147,6 +147,24 @@ describe("Ollama gateway parity contracts", () => {
     expect(traySource).toContain("gateway:singleModelModeChanged");
   });
 
+  it("keeps single-model gateway controls localized and tailwind-safe", () => {
+    const dashboardSource = readFileSync(
+      resolve(process.cwd(), "src/renderer/src/components/api/ApiDashboard.tsx"),
+      "utf8",
+    );
+    const drawerSource = readFileSync(
+      resolve(process.cwd(), "src/renderer/src/components/sessions/ServerSettingsDrawer.tsx"),
+      "utf8",
+    );
+    expect(dashboardSource + drawerSource).not.toContain("translate-x-4.5");
+    expect(drawerSource).toContain("useTranslation");
+    expect(drawerSource).toContain("t('main.tray.singleModelMode')");
+    expect(drawerSource).toContain("t('api.singleModelModeOn')");
+    expect(drawerSource).toContain("t('api.singleModelModeOff')");
+    expect(drawerSource).not.toContain("API Gateway Single Model");
+    expect(drawerSource).not.toContain("Gateway requests unload other local models");
+  });
+
   it("collapses OpenAI tool arguments back to Ollama object arguments", () => {
     expect(source).toContain("private openAIToolCallsToOllama");
     expect(source).toContain("JSON.parse(args)");

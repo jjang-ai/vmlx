@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
 import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG, SliderField } from './SessionConfigForm'
 import { useInferenceMode } from '../layout/InferenceMode'
+import { useTranslation } from '../../i18n'
 
 interface Session {
   id: string
@@ -23,6 +24,7 @@ interface ServerSettingsDrawerProps {
 
 export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpdate }: ServerSettingsDrawerProps) {
   const { defaultConfig } = useInferenceMode()
+  const { t } = useTranslation()
   const [config, setConfig] = useState<SessionConfig>(defaultConfig)
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -254,9 +256,9 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
           <div className="p-3 rounded border border-border bg-background/60 space-y-2">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="text-sm font-medium">API Gateway Single Model</div>
+                <div className="text-sm font-medium">{t('main.tray.singleModelMode')}</div>
                 <div className="text-xs text-muted-foreground">
-                  Gateway requests unload other local models before loading or waking the requested model.
+                  {singleModelMode ? t('api.singleModelModeOn') : t('api.singleModelModeOff')}
                 </div>
               </div>
               <button
@@ -264,7 +266,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
                 className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors flex-shrink-0 ${singleModelMode ? 'bg-primary' : 'bg-muted'}`}
               >
                 <span
-                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${singleModelMode ? 'translate-x-4.5' : 'translate-x-0.5'}`}
+                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${singleModelMode ? 'translate-x-[18px]' : 'translate-x-0.5'}`}
                 />
               </button>
             </div>

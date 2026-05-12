@@ -121,6 +121,14 @@ describe("image model autodetection path", () => {
     expect(src).toContain("db.setImageModelPath(modelName, quantize, candidate, repoId || undefined)");
   });
 
+  it("image model downloader cannot write bytecode into the signed app bundle", () => {
+    const src = readFileSync(MODELS_TS, "utf-8");
+    expect(src).toContain('PYTHONDONTWRITEBYTECODE: "1"');
+    expect(src).toContain('PYTHONNOUSERSITE: "1"');
+    expect(src).toContain("PYTHONPATH: undefined");
+    expect(src).toContain('["-B", "-s", "-u", "-c", script, job.repoId, job.modelDir]');
+  });
+
   it("image startServer falls back to existing downloaded repo directories before failing", () => {
     const src = readFileSync(IMAGE_TS, "utf-8");
     expect(src).toContain("findDownloadedImageModelPath");

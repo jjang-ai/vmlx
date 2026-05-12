@@ -10,6 +10,7 @@ import {
   markImageGenerationAbort,
   resetImageGenerationStateForTests,
 } from "../src/main/ipc/imageGenerationState";
+import { maskHasPaintedPixels } from "../src/renderer/src/components/image/MaskPainter";
 
 const IMAGE_TS = join(__dirname, "..", "src", "main", "ipc", "image.ts");
 const IMAGE_TAB_TSX = join(
@@ -29,6 +30,16 @@ const IMAGE_GENERATION_STATE_TS = join(
   "main",
   "ipc",
   "imageGenerationState.ts",
+);
+const MASK_PAINTER_TSX = join(
+  __dirname,
+  "..",
+  "src",
+  "renderer",
+  "src",
+  "components",
+  "image",
+  "MaskPainter.tsx",
 );
 const PRELOAD_TS = join(__dirname, "..", "src", "preload", "index.ts");
 const ENV_D_TS = join(__dirname, "..", "src", "env.d.ts");
@@ -136,5 +147,23 @@ describe("image generation in-flight state survives tab switches", () => {
     expect(src).toMatch(
       /}\s*,\s*\[[^\]]*maskBase64[^\]]*\]\s*\)/s,
     );
+  });
+
+  it("painted mask detection rejects empty masks and accepts edited pixels", () => {
+    const src = readFileSync(MASK_PAINTER_TSX, "utf-8");
+    const empty = new Uint8ClampedArray([
+      0, 0, 0, 255,
+      0, 0, 0, 255,
+    ]);
+    const painted = new Uint8ClampedArray([
+      0, 0, 0, 255,
+      255, 255, 255, 255,
+    ]);
+
+    expect(maskHasPaintedPixels(empty)).toBe(false);
+    expect(maskHasPaintedPixels(painted)).toBe(true);
+    expect(src).toContain("maskHasPaintedPixels(maskData.data)");
+    expect(src).toContain('t("image.mask.emptyError")');
+    expect(src).toContain("}, [onConfirm, t])");
   });
 });

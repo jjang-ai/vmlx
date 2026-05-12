@@ -846,7 +846,8 @@
       "largerTitle": "Larger brush",
       "clearTitle": "Clear entire mask",
       "applyTitle": "Apply mask and edit",
-      "cancelTitle": "Cancel mask painting"
+      "cancelTitle": "Cancel mask painting",
+      "emptyError": "Paint or draw a mask area before applying."
     }
   },
   "downloads": {

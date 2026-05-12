@@ -846,7 +846,8 @@
       "largerTitle": "更大的笔刷",
       "clearTitle": "清除整个蒙版",
       "applyTitle": "应用蒙版并编辑",
-      "cancelTitle": "取消蒙版绘制"
+      "cancelTitle": "取消蒙版绘制",
+      "emptyError": "请先绘制或框选蒙版区域，然后再应用。"
     }
   },
   "downloads": {
