@@ -19,6 +19,7 @@ import { registerCodingToolHandlers } from './ipc/coding-tools'
 import { registerDistributedHandlers } from './ipc/distributed'
 import { sessionManager } from './sessions'
 import { apiGateway } from './api-gateway'
+import { buildContentSecurityPolicy } from './csp'
 import { db } from './database'
 import { checkEngineVersion, installEngineStreaming } from './engine-manager'
 import { checkForUpdates } from './update-checker'
@@ -303,21 +304,11 @@ function createWindow(): void {
 
   // Content Security Policy — hardens renderer against XSS
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const devRenderer = is.dev && !!process.env['ELECTRON_RENDERER_URL']
     callback({
       responseHeaders: {
         ...details.responseHeaders,
-        'Content-Security-Policy': [
-          "default-src 'self';" +
-          " script-src 'self';" +
-          " style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;" +
-          " font-src 'self' https://fonts.gstatic.com;" +
-          // ms#75: allow hf-mirror.com and modelscope.cn so users in
-          // mainland China can load README images and previews when
-          // the hf_endpoint setting points at a mirror.
-          " img-src 'self' data: blob: http://127.0.0.1:* http://localhost:* https://huggingface.co https://*.huggingface.co https://raw.githubusercontent.com https://mlx.studio https://*.mlx.studio https://hf-mirror.com https://*.hf-mirror.com https://modelscope.cn https://*.modelscope.cn;" +
-          " connect-src 'self' http://127.0.0.1:* http://localhost:* https://huggingface.co https://*.huggingface.co https://hf-mirror.com https://*.hf-mirror.com https://modelscope.cn https://*.modelscope.cn;" +
-          " media-src 'self' blob:;"
-        ]
+        'Content-Security-Policy': [buildContentSecurityPolicy({ devRenderer })]
       }
     })
   })
