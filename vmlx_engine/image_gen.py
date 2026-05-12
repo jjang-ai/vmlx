@@ -406,12 +406,29 @@ class ImageGenEngine:
         # The normalized form is used for table lookups; the final
         # `resolved_name` is the canonical mflux value ("dev", "flux2-klein-9b",
         # etc.) that mflux's ModelConfig.from_name() understands.
-        raw_input = mflux_name or model_name
+        raw_candidates: list[str] = []
+        for candidate in (
+            mflux_name or model_name,
+            Path(model_path).name if model_path else None,
+        ):
+            if candidate and candidate not in raw_candidates:
+                raw_candidates.append(candidate)
+
+        raw_input = raw_candidates[0]
         normalized = _normalize_for_lookup(raw_input)
-        canonical = (
-            SUPPORTED_MODELS.get(normalized)
-            or EDIT_MODELS.get(normalized)
-        )
+        canonical = None
+        for candidate in raw_candidates:
+            candidate_normalized = _normalize_for_lookup(candidate)
+            candidate_canonical = (
+                SUPPORTED_MODELS.get(candidate_normalized)
+                or EDIT_MODELS.get(candidate_normalized)
+            )
+            if candidate_canonical:
+                raw_input = candidate
+                normalized = candidate_normalized
+                canonical = candidate_canonical
+                break
+
         if canonical:
             resolved_name = canonical
         elif mflux_name:

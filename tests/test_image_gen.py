@@ -1015,6 +1015,31 @@ class TestLoadMethod:
         # _detect_base_model may resolve "z-image-turbo" to "z-image" depending on model_index.json
         assert engine._model_name in ("z-image-turbo", "z-image")
 
+    def test_served_alias_uses_model_path_for_mflux_class_detection(self, tmp_path):
+        """A custom served/display name must not hide the local mflux family."""
+        model_dir = tmp_path / "Z-Image-Turbo-mflux-4bit"
+        (model_dir / "transformer").mkdir(parents=True)
+        (model_dir / "transformer" / "0.safetensors").write_bytes(b"fake")
+
+        mocks = _mock_mflux_modules()
+        mock_config = MagicMock()
+        mocks["mflux.models.common.config.model_config"].ModelConfig = mock_config
+
+        MockZImage = MagicMock()
+        mocks["mflux.models.z_image.variants.z_image"].ZImage = MockZImage
+
+        with patch.dict(sys.modules, mocks):
+            from vmlx_engine.image_gen import ImageGenEngine
+            engine = ImageGenEngine()
+            engine.load(
+                "z-image-turbo-test",
+                model_path=str(model_dir),
+                mflux_name="z-image-turbo-test",
+            )
+
+        MockZImage.assert_called_once()
+        assert engine._model_name == "z-image-turbo"
+
     def test_flux_model_uses_flux1_class(self, tmp_path):
         """load('dev') should use Flux1 class, not ZImage."""
         (tmp_path / "transformer").mkdir()
