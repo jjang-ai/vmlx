@@ -848,6 +848,104 @@ class TestFallbackToolPromptFormat:
         assert "fake directory listing" in rendered
         assert "tools" not in tokenizer.last_kwargs
 
+    def test_zaya_parser_id_forces_native_tool_example_for_plain_template(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            last_kwargs = None
+
+            def apply_chat_template(self, messages, **kwargs):
+                self.last_kwargs = kwargs
+                return "\n".join(m.get("content", "") for m in messages)
+
+        prompt = "user: Use list_directory for path '.'\nassistant: "
+        messages = [{"role": "user", "content": "Use list_directory for path '.'"}]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_directory",
+                    "description": "List files",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            }
+        ]
+
+        tokenizer = FakeTokenizer()
+        rendered = check_and_inject_fallback_tools(
+            prompt,
+            messages,
+            tools,
+            tokenizer,
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="zaya_xml",
+        )
+
+        assert "<zyphra_tool_call>" in rendered
+        assert "<function=list_directory>" in rendered
+        assert "<parameter=path>" in rendered
+        assert "<tool_call>" not in rendered
+        assert "tools" not in tokenizer.last_kwargs
+
+    def test_zaya_fallback_survives_templates_that_ignore_system_messages(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class ZayaLikeTokenizer:
+            call_count = 0
+            last_messages = None
+
+            def apply_chat_template(self, messages, **kwargs):
+                self.call_count += 1
+                self.last_messages = messages
+                rendered = []
+                for msg in messages:
+                    if msg.get("role") == "user":
+                        rendered.append(f"user: {msg.get('content', '')}")
+                    elif msg.get("role") == "assistant":
+                        rendered.append(f"assistant: {msg.get('content', '')}")
+                    elif msg.get("role") == "tool":
+                        rendered.append(f"tool: {msg.get('content', '')}")
+                rendered.append("assistant: ")
+                return "\n".join(rendered)
+
+        prompt = "user: Use list_directory for path '.'\nassistant: "
+        messages = [{"role": "user", "content": "Use list_directory for path '.'"}]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_directory",
+                    "description": "List files",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            }
+        ]
+
+        tokenizer = ZayaLikeTokenizer()
+        rendered = check_and_inject_fallback_tools(
+            prompt,
+            messages,
+            tools,
+            tokenizer,
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="zaya_xml",
+        )
+
+        assert tokenizer.call_count == 2
+        assert tokenizer.last_messages[0]["role"] == "user"
+        assert "<zyphra_tool_call>" in rendered
+        assert "<function=list_directory>" in rendered
+        assert "<parameter=path>" in rendered
+        assert "Use list_directory for path '.'" in rendered
+
     def test_zaya_fallback_skips_when_concrete_native_example_present(self):
         from unittest.mock import MagicMock
 

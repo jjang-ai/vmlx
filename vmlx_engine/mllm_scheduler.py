@@ -749,6 +749,7 @@ class MLLMScheduler:
 
         # Get stop tokens from tokenizer
         self.stop_tokens = self._get_stop_tokens()
+        self._log_runtime_cache_contract(lang_model)
 
         # Batch generator (created lazily, recreated on sampler param change)
         self.batch_generator: Optional[MLLMBatchGenerator] = None
@@ -797,6 +798,12 @@ class MLLMScheduler:
             cache_mode = "memory-aware"
         elif self.prefix_cache is not None:
             cache_mode = "legacy"
+        if self._uses_zaya_cache and self.block_aware_cache is not None:
+            logger.info(
+                "ZAYA/CCA typed paged prefix cache enabled — VLM cache "
+                "records use zaya_cca_v1 state (KV + conv_state + prev_hs); "
+                "generic KV quantization remains disabled."
+            )
         logger.info(
             f"MLLM Scheduler initialized: cache_mode={cache_mode}, "
             f"hybrid={self._is_hybrid}, "
@@ -806,6 +813,33 @@ class MLLMScheduler:
             f"block_l2={self._block_disk_l2_enabled}, "
             f"max_seqs={self.config.max_num_seqs}"
         )
+
+    def _log_runtime_cache_contract(self, model: Any) -> None:
+        """Log per-layer cache classes for production-gate topology checks."""
+        if not hasattr(model, "make_cache"):
+            return
+        try:
+            cache = model.make_cache() or []
+            layout = []
+            for idx, slot in enumerate(cache):
+                cls = type(slot).__name__
+                if cls == "CacheList":
+                    sub = [
+                        type(sub_slot).__name__
+                        for sub_slot in getattr(slot, "caches", ())
+                    ]
+                    layout.append(f"{idx}:CacheList({','.join(sub)})")
+                else:
+                    layout.append(f"{idx}:{cls}")
+            model_type = getattr(self.model_config, "model_type", None) or "unknown"
+            logger.info(
+                "Runtime cache layout: model_type=%s layers=%d layout=%s",
+                model_type,
+                len(cache),
+                ";".join(layout),
+            )
+        except Exception as exc:
+            logger.debug("Runtime cache layout logging skipped: %s", exc)
 
     def _get_detokenizer(self, request_id: str, tokenizer: Any) -> Any:
         """Get or create a streaming detokenizer for a request."""

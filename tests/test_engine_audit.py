@@ -3051,6 +3051,10 @@ class TestZayaCCACachePolicy:
         assert "ZAYA/CCA cache contract detected but prefix cache is disabled" in scheduler_source
         assert "and not self._uses_zaya_cache" in scheduler_source
 
+        mllm_scheduler_source = Path("./vmlx_engine/mllm_scheduler.py").read_text()
+        assert "Runtime cache layout:" in mllm_scheduler_source
+        assert "zaya_cca_v1" in mllm_scheduler_source
+
     def test_zaya_cli_policy_default_keeps_prefix_paged_l2_but_forces_tq_off(
         self, monkeypatch
     ):

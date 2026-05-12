@@ -29,7 +29,8 @@ def check_and_inject_fallback_tools(
     messages: List[Dict[str, Any]],
     template_tools: Optional[List[dict]],
     tokenizer: Any,
-    template_kwargs: dict
+    template_kwargs: dict,
+    tool_parser_id: Optional[str] = None,
 ) -> Optional[str]:
     """
     Check if the chat template silently dropped tool definitions, and if so,
@@ -60,9 +61,13 @@ def check_and_inject_fallback_tools(
         and "<tools>" in prompt
         and "<function=example_function_name>" in prompt
     )
+    parser_id = (tool_parser_id or "").strip().lower()
     is_zaya_native_tool_prompt = (
-        "<zyphra_tool_call>" in prompt
-        and "<tools>" in prompt
+        parser_id in {"zaya_xml", "zaya", "zyphra"}
+        or (
+            "<zyphra_tool_call>" in prompt
+            and "<tools>" in prompt
+        )
     )
 
     # If ALL tool names made it into a prompt and the prompt also contains a
@@ -273,6 +278,19 @@ def check_and_inject_fallback_tools(
             "</tool_call>"
         )
 
+    def _rendered_prompt_kept_tool_instructions(rendered: Optional[str]) -> bool:
+        if not rendered:
+            return False
+        if not all(name in rendered for name in tool_names):
+            return False
+        if is_dsv4_prompt:
+            return "<｜DSML｜invoke" in rendered
+        if is_zaya_native_tool_prompt:
+            return "<zyphra_tool_call>" in rendered
+        if is_qwen_native_tool_prompt:
+            return "<tool_call>" in rendered
+        return True
+
     # Inject into messages
     messages_copy = [dict(m) for m in messages]
     injected = False
@@ -292,7 +310,33 @@ def check_and_inject_fallback_tools(
 
     try:
         new_prompt = tokenizer.apply_chat_template(messages_copy, **safe_kwargs)
-        return new_prompt
+        if _rendered_prompt_kept_tool_instructions(new_prompt):
+            return new_prompt
+
+        # Some templates, including current ZAYA-VL, ignore system messages
+        # entirely. Retry by putting the parser-native tool instructions into
+        # the first user turn so the template cannot drop them silently.
+        logger.warning(
+            "Chat template dropped fallback tool schema after system injection; "
+            "retrying with first-user injection."
+        )
+        user_messages = [dict(m) for m in messages]
+        user_injected = False
+        for msg in user_messages:
+            if msg.get("role") == "user":
+                msg["content"] = tool_prompt + "\n\n" + (msg.get("content") or "")
+                user_injected = True
+                break
+        if not user_injected:
+            user_messages.insert(0, {"role": "user", "content": tool_prompt})
+        new_prompt = tokenizer.apply_chat_template(user_messages, **safe_kwargs)
+        if _rendered_prompt_kept_tool_instructions(new_prompt):
+            return new_prompt
+        logger.warning(
+            "Chat template dropped fallback tool schema after first-user "
+            "injection; prefixing rendered prompt directly."
+        )
+        return tool_prompt + "\n\n" + prompt
     except Exception as e:
         logger.error(f"Failed to apply template with injected tools: {e}")
         return prompt

@@ -130,6 +130,12 @@ class BatchedEngine(BaseEngine):
         except Exception:
             return None
 
+    def _model_tool_parser_name(self) -> str | None:
+        try:
+            return get_model_config_registry().lookup(self._model_name).tool_parser
+        except Exception:
+            return None
+
     @property
     def is_mllm(self) -> bool:
         """Check if this is a multimodal model."""
@@ -897,7 +903,12 @@ class BatchedEngine(BaseEngine):
                     prompt = tokenizer.apply_chat_template(messages, **template_kwargs)
 
             prompt = check_and_inject_fallback_tools(
-                prompt, messages, tools, tokenizer, template_kwargs
+                prompt,
+                messages,
+                tools,
+                tokenizer,
+                template_kwargs,
+                tool_parser_id=self._model_tool_parser_name(),
             )
 
             # When thinking is OFF and no tools in request, close any unclosed

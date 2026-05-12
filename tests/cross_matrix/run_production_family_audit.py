@@ -1583,7 +1583,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         )
         check(
             "zaya_cca_typed_cache_live_gate_enabled",
-            "ZAYA/CCA typed cache live gate enabled" in log_text
+            "ZAYA/CCA typed cache enabled" in log_text
             and "ZAYA/CCA typed paged prefix cache enabled" in log_text
             and not bool(_kvq0.get("enabled"))
             and not bool(_tq0.get("enabled")),
@@ -1721,7 +1721,10 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
     basic_messages = [
         {
             "role": "user",
-            "content": "Remember these facts: color blue, pet cat. Reply exactly: noted.",
+            "content": (
+                "Store these facts for the next turn: secret_color=blue; "
+                "secret_pet=cat. Do not explain. Reply only with noted."
+            ),
         }
     ]
     r1 = chat_probe(
@@ -1739,6 +1742,16 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
             and finish1 == "stop"
             and ("blue" in (c1 + reasoning1).lower() or "noted" in (c1 + reasoning1).lower())
             and not has_duplicate_block(c1 + reasoning1)
+        )
+    elif row.family == "zaya1_vl":
+        basic_text = (c1 + "\n" + reasoning1).lower()
+        basic_ok = (
+            r1["code"] == 200
+            and finish1 == "stop"
+            and not reasoning1.strip()
+            and "blue" in basic_text
+            and "cat" in basic_text
+            and not has_duplicate_block(basic_text)
         )
     else:
         basic_ok = (

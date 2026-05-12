@@ -77,6 +77,12 @@ class SimpleEngine(BaseEngine):
         except Exception:
             return None
 
+    def _model_tool_parser_name(self) -> str | None:
+        try:
+            return get_model_config_registry().lookup(self._model_name).tool_parser
+        except Exception:
+            return None
+
     @property
     def tokenizer(self) -> Any:
         """Get the tokenizer."""
@@ -447,7 +453,12 @@ class SimpleEngine(BaseEngine):
                             prompt = tokenizer.apply_chat_template(messages, **tpl_kwargs)
 
                     prompt = check_and_inject_fallback_tools(
-                        prompt, messages, template_tools, tokenizer, tpl_kwargs
+                        prompt,
+                        messages,
+                        template_tools,
+                        tokenizer,
+                        tpl_kwargs,
+                        tool_parser_id=self._model_tool_parser_name(),
                     )
 
                     if thinking_enabled is False and not template_tools:
@@ -733,7 +744,12 @@ class SimpleEngine(BaseEngine):
                         prompt += "\nassistant:"
 
             prompt = check_and_inject_fallback_tools(
-                prompt, messages, template_tools, tokenizer, template_kwargs
+                prompt,
+                messages,
+                template_tools,
+                tokenizer,
+                template_kwargs,
+                tool_parser_id=self._model_tool_parser_name(),
             )
 
             if thinking_enabled is False and not template_tools:
