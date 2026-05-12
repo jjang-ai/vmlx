@@ -1083,25 +1083,11 @@ def _install_dsv4_memory_defaults() -> None:
 
 
 def _configure_dsv4_pool_quant_default() -> str:
-    """Use DSV4 pool quant when the installed JANG runtime supports it.
-
-    Older JANG builds used a peer ``PoolQuantizedV4Cache`` class that failed
-    DeepseekV4Cache isinstance gates. Current JANG subclasses DeepseekV4Cache,
-    which is the correct SWA+CSA/HCA-compatible path and should be the default.
-    Preserve an explicit user env override.
-    """
+    """Keep DSV4 pool quant explicit until cached-prefix parity is proven."""
     os.environ["DSV4_LONG_CTX"] = "1"
     if "DSV4_POOL_QUANT" in os.environ:
         return os.environ["DSV4_POOL_QUANT"]
-    supported = False
-    try:
-        from jang_tools.dsv4.mlx_model import DeepseekV4Cache
-        from jang_tools.dsv4.pool_quant_cache import PoolQuantizedV4Cache
-
-        supported = issubclass(PoolQuantizedV4Cache, DeepseekV4Cache)
-    except Exception as e:
-        _log.warning("DSV4 pool quant support check failed: %s", e)
-    os.environ["DSV4_POOL_QUANT"] = "1" if supported else "0"
+    os.environ["DSV4_POOL_QUANT"] = "0"
     return os.environ["DSV4_POOL_QUANT"]
 
 
@@ -1189,8 +1175,10 @@ def load_jangtq_dsv4_model(model_path: str, *, skip_params_eval: bool = True) ->
     # DSV4_LONG_CTX=1 is the only supported runtime mode. The installed JANG
     # attention path must carry the native mask-width and per-query compressed
     # pool fixes; vMLX verifies that contract below and does not patch the class.
-    # Pool quant is enabled by default only when the installed JANG runtime's
-    # PoolQuantizedV4Cache subclasses DeepseekV4Cache.
+    # Pool quant remains opt-in until restored-prefix parity is proven for
+    # the active DSV4 runtime. The native unquantized composite cache is the
+    # correctness-safe default; explicit DSV4_POOL_QUANT env overrides are
+    # preserved for debug/bisect.
     pool_quant = _configure_dsv4_pool_quant_default()
     _log.info("DSV4 runtime defaults: DSV4_LONG_CTX=1, DSV4_POOL_QUANT=%s", pool_quant)
     _install_dsv4_memory_defaults()

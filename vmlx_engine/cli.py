@@ -291,10 +291,10 @@ def serve_command(args):
         from .model_config_registry import get_model_config_registry
         _mc = get_model_config_registry().lookup(args.model)
         # DSV4-Flash auto-config. DSV4_LONG_CTX=1 is the only supported
-        # runtime mode (tri-mode SWA+CSA/HCA). Pool quant is enabled by
-        # default only when the installed JANG runtime's PoolQuantizedV4Cache
-        # subclasses DeepseekV4Cache; explicit DSV4_POOL_QUANT env overrides
-        # are preserved for debug/bisect.
+        # runtime mode (tri-mode SWA+CSA/HCA). Pool quant is intentionally
+        # opt-in until restored-prefix parity is proven for the active DSV4
+        # runtime; explicit DSV4_POOL_QUANT env overrides are preserved for
+        # debug/bisect.
         if _mc.family_name == "deepseek_v4":
             _is_dsv4_model = True
             try:
@@ -323,13 +323,14 @@ def serve_command(args):
             # Paged + block-disk L2 are honored as the user requests them.
             # The DSV4-aware paged schema (scheduler.py: deepseek_v4_v7
             # nested-state serialization) handles the mixed KVCache /
-            # DeepseekV4Cache layer layout via the prefill mask-trim patch
-            # installed by load_jangtq_dsv4. Short prompts (<512 tokens)
-            # stores composite prompt-boundary state with N-1 prompt keys.
+            # DeepseekV4Cache layer layout after load_jangtq_dsv4 verifies
+            # the installed native JANG attention mask/compressed-pool
+            # contract. Short prompts (<512 tokens) store composite
+            # prompt-boundary state with N-1 prompt keys.
             logger.info(
                 "DSV4-Flash detected — DSV4_LONG_CTX=1 (tri-mode SWA+CSA/HCA), "
-                f"DSV4_POOL_QUANT={_dsv4_pool_quant}. Upstream prefill shape bug patched in-process "
-                "by load_jangtq_dsv4."
+                f"DSV4_POOL_QUANT={_dsv4_pool_quant}. Native JANG attention "
+                "contract is verified by load_jangtq_dsv4 before inference."
             )
         elif (
             _mc.family_name == "zaya"

@@ -9,6 +9,8 @@ reconstruction and L2 disk promotion.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 
@@ -68,6 +70,23 @@ def test_pool_quantized_v4_cache_does_not_route_to_hybrid_ssm():
 
     assert Scheduler._model_uses_dsv4_cache(_Model())
     assert not Scheduler._is_hybrid_model(_Model())
+
+
+def test_dsv4_pool_quant_default_is_correctness_safe_opt_in(monkeypatch):
+    """DSV4 pool quant must not auto-enable just because the class exists."""
+    from vmlx_engine.loaders.load_jangtq_dsv4 import (
+        _configure_dsv4_pool_quant_default,
+    )
+
+    monkeypatch.delenv("DSV4_LONG_CTX", raising=False)
+    monkeypatch.delenv("DSV4_POOL_QUANT", raising=False)
+
+    assert _configure_dsv4_pool_quant_default() == "0"
+    assert os.environ["DSV4_LONG_CTX"] == "1"
+    assert os.environ["DSV4_POOL_QUANT"] == "0"
+
+    monkeypatch.setenv("DSV4_POOL_QUANT", "1")
+    assert _configure_dsv4_pool_quant_default() == "1"
 
 
 def test_dsv4_block_slice_uses_deepseek_v4_tag_only_on_terminal_block():
