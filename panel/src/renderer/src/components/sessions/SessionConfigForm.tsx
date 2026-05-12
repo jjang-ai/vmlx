@@ -59,6 +59,7 @@ export interface SessionConfig {
   dsv4RawMax?: boolean
   dsv4FinalizerTokens?: number
   dsv4ForceDirect?: boolean
+  dsv4PoolQuant?: boolean
   embeddingModel: string
   additionalArgs: string
   enableJit: boolean
@@ -141,6 +142,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   dsv4RawMax: false,
   dsv4FinalizerTokens: 4096,
   dsv4ForceDirect: false,
+  dsv4PoolQuant: false,
   embeddingModel: '',
   additionalArgs: '',
   enableJit: true,
@@ -915,6 +917,12 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               tooltip="Forces DSV4 into visible-answer mode by setting VMLX_DSV4_FORCE_DIRECT_RAIL=1. This is a compatibility/debug escape hatch and takes precedence over raw max thinking."
               checked={!!config.dsv4ForceDirect}
               onChange={v => onChange('dsv4ForceDirect', v)}
+            />
+            <CheckField
+              label="DSV4 Pool Quantization"
+              tooltip="Enables the experimental native CSA/HCA pool codec with DSV4_POOL_QUANT=1. Keep off for production correctness; use only for local memory/restore experiments."
+              checked={!!config.dsv4PoolQuant}
+              onChange={v => onChange('dsv4PoolQuant', v)}
             />
             {config.dsv4ForceDirect && (
               <IncompatWarning text="Direct rail is forced for this session; DSV4 raw max thinking will not be used until Force Direct Rail is turned off." />

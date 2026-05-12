@@ -70,6 +70,12 @@ export interface ServerConfig {
   // Reasoning
   reasoningParser?: string
 
+  // DSV4 Flash runtime env controls
+  dsv4RawMax?: boolean
+  dsv4FinalizerTokens?: number
+  dsv4ForceDirect?: boolean
+  dsv4PoolQuant?: boolean
+
   // Custom API model name (--served-model-name)
   servedModelName?: string
 

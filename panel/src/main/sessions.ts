@@ -1004,7 +1004,9 @@ export class SessionManager extends EventEmitter {
     }
     // DSV4 Flash runtime knobs (raw-max opt-in + finalizer budget + force-direct).
     // Helper validates inputs and emits only the env vars the engine reads.
-    const dsv4Env = dsv4EnvFromConfig(config as any)
+    const dsv4Env = dsv4EnvFromConfig(config as any, {
+      dsv4Active: freshDetectedFamily === 'deepseek-v4',
+    })
     for (const [key, value] of Object.entries(dsv4Env)) {
       spawnEnv[key] = value
     }
@@ -1285,6 +1287,7 @@ export class SessionManager extends EventEmitter {
     'enableBlockDiskCache', 'blockDiskCacheMaxGb', 'blockDiskCacheDir',
     'prefixCacheSize', 'prefixCacheMaxBytes', 'cacheTtlMinutes', 'isMultimodal',
     'toolCallParser', 'reasoningParser',
+    'dsv4RawMax', 'dsv4FinalizerTokens', 'dsv4ForceDirect', 'dsv4PoolQuant',
     'maxNumSeqs', 'prefillBatchSize', 'prefillStepSize', 'completionBatchSize',
     'streamInterval', 'apiKey', 'rateLimit',
     // NOTE: 'timeout' intentionally omitted — client sends per-request timeout
@@ -1436,6 +1439,10 @@ export class SessionManager extends EventEmitter {
           jangtqTopKOverride: 0,
           toolCallParser: 'auto',
           reasoningParser: 'auto',
+          dsv4RawMax: false,
+          dsv4FinalizerTokens: 4096,
+          dsv4ForceDirect: false,
+          dsv4PoolQuant: false,
           defaultEnableThinking: isZayaCcaFamily(detected.family) ? false : undefined,
           enableAutoToolChoice: detected.enableAutoToolChoice
         }

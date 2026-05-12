@@ -13,6 +13,9 @@
  *     content where 2048 is still too tight.
  *   - `dsv4ForceDirect` -> `VMLX_DSV4_FORCE_DIRECT_RAIL=1` — disable thinking
  *     entirely (visible-only direct rail).
+ *   - `dsv4PoolQuant` -> `DSV4_POOL_QUANT=1` — experimental native CSA/HCA
+ *     pool codec. Production DSV4 launches explicitly set `DSV4_POOL_QUANT=0`
+ *     unless this is enabled.
  *
  * Engine reconciles precedence (`forceDirect` short-circuits ahead of
  * `rawMax`); helper just emits the env vars.
@@ -22,13 +25,24 @@ export interface Dsv4EnvConfig {
   dsv4RawMax?: boolean
   dsv4FinalizerTokens?: number
   dsv4ForceDirect?: boolean
+  dsv4PoolQuant?: boolean
+}
+
+export interface Dsv4EnvOptions {
+  dsv4Active?: boolean
 }
 
 export function dsv4EnvFromConfig(
   config: Dsv4EnvConfig | null | undefined,
+  options: Dsv4EnvOptions = {},
 ): Record<string, string> {
   if (!config) return {}
   const env: Record<string, string> = {}
+
+  if (options.dsv4Active === true) {
+    env.DSV4_LONG_CTX = '1'
+    env.DSV4_POOL_QUANT = config.dsv4PoolQuant === true ? '1' : '0'
+  }
 
   if (config.dsv4RawMax === true) {
     env.VMLX_DSV4_RAW_MAX = '1'
