@@ -2637,6 +2637,17 @@ class TestStartupCompatibilityGuards:
         assert "check_packaged_console_script_shebangs" in release_gate
         assert "/Applications/vMLX.app" in release_gate
 
+    def test_release_gate_packaged_python_probes_cannot_mutate_signed_app(self):
+        release_gate = Path("./panel/scripts/release-gate-python-app.py").read_text()
+
+        assert "packaged_python_env" in release_gate
+        assert "PYTHONPYCACHEPREFIX" in release_gate
+        assert "twine_env" in release_gate
+        assert '"twine check dist"' in release_gate
+        assert "env=twine_env(gate)" in release_gate
+        assert "check_no_packaged_pycache" in release_gate
+        assert "packaged app pycache clean" in release_gate
+
     def test_bundled_python_hash_gate_covers_runtime_files_changed_for_release(self):
         verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
         for rel in (

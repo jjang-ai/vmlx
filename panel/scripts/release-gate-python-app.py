@@ -46,10 +46,43 @@ def twine_command() -> list[str]:
     override = os.environ.get("TWINE")
     if override:
         return [override]
+    repo_venv_python = ROOT / ".venv" / "bin" / "python"
+    if python_has_module(repo_venv_python, "twine"):
+        return [str(repo_venv_python), "-m", "twine"]
+    if python_has_module(Path(sys.executable), "twine"):
+        return [sys.executable, "-m", "twine"]
     found = shutil.which("twine")
     if found:
         return [found]
     return [sys.executable, "-m", "twine"]
+
+
+def python_has_module(py: Path, module_name: str) -> bool:
+    if not py.exists():
+        return False
+    proc = subprocess.run(
+        [str(py), "-B", "-s", "-c", f"import {module_name}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env={
+            **os.environ,
+            "PYTHONPATH": "",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        },
+        timeout=30,
+    )
+    return proc.returncode == 0
+
+
+def twine_env(gate: Gate) -> dict[str, str]:
+    """Run twine without letting stale console-script shebangs mutate the app."""
+    pycache_prefix = gate.log_dir / "twine-pycache"
+    pycache_prefix.mkdir(parents=True, exist_ok=True)
+    return {
+        "PYTHONPATH": "",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPYCACHEPREFIX": str(pycache_prefix),
+    }
 
 
 class Gate:
@@ -295,6 +328,32 @@ def packaged_python(app: Path) -> Path:
     return app / "Contents" / "Resources" / "bundled-python" / "python" / "bin" / "python3"
 
 
+def packaged_python_env(gate: Gate) -> dict[str, str]:
+    """Environment for probing packaged Python without mutating the app seal."""
+    pycache_prefix = gate.log_dir / "packaged-python-pycache"
+    pycache_prefix.mkdir(parents=True, exist_ok=True)
+    return {
+        "PYTHONPATH": "",
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPYCACHEPREFIX": str(pycache_prefix),
+    }
+
+
+def check_no_packaged_pycache(gate: Gate, app: Path) -> None:
+    python_root = app / "Contents" / "Resources" / "bundled-python" / "python"
+    if not python_root.exists():
+        gate.record("packaged app pycache clean", "FAIL", f"missing {python_root}")
+        return
+    hits = sorted(p for p in python_root.rglob("*.pyc") if "__pycache__" in p.parts)
+    if hits:
+        head = ", ".join(str(p.relative_to(python_root)) for p in hits[:8])
+        more = f" (+{len(hits) - 8} more)" if len(hits) > 8 else ""
+        gate.record("packaged app pycache clean", "FAIL", f"{head}{more}")
+        return
+    gate.record("packaged app pycache clean", "PASS", str(python_root))
+
+
 def _last_nonempty_stdout_line(output: str) -> str:
     for line in reversed((output or "").splitlines()):
         line = line.strip()
@@ -319,11 +378,7 @@ def check_packaged_bundled_import_version(
             "import vmlx_engine, mflux, mlx_lm, mlx_vlm, jang_tools; print(vmlx_engine.__version__)",
         ],
         cwd=gate.log_dir,
-        env={
-            "PYTHONPATH": "",
-            "PYTHONNOUSERSITE": "1",
-            "PYTHONDONTWRITEBYTECODE": "1",
-        },
+        env=packaged_python_env(gate),
         timeout=180,
     )
     bundled_version = _last_nonempty_stdout_line(proc.stdout)
@@ -514,11 +569,7 @@ def packaged_engine_dir(gate: Gate, py: Path) -> Path | None:
             "import pathlib, vmlx_engine; print(pathlib.Path(vmlx_engine.__file__).resolve().parent)",
         ],
         cwd=gate.log_dir,
-        env={
-            "PYTHONPATH": "",
-            "PYTHONNOUSERSITE": "1",
-            "PYTHONDONTWRITEBYTECODE": "1",
-        },
+        env=packaged_python_env(gate),
         timeout=60,
     )
     value = _last_nonempty_stdout_line(proc.stdout)
@@ -539,11 +590,7 @@ def packaged_package_dir(gate: Gate, py: Path, module_name: str) -> Path | None:
             f"import pathlib, {module_name}; print(pathlib.Path({module_name}.__file__).resolve().parent)",
         ],
         cwd=gate.log_dir,
-        env={
-            "PYTHONPATH": "",
-            "PYTHONNOUSERSITE": "1",
-            "PYTHONDONTWRITEBYTECODE": "1",
-        },
+        env=packaged_python_env(gate),
         timeout=60,
     )
     value = _last_nonempty_stdout_line(proc.stdout)
@@ -599,7 +646,12 @@ def check_static(gate: Gate, app: Path, skip_app: bool) -> None:
     else:
         gate.record("version triple", "FAIL", f"pyproject={version}, panel={panel_pkg['version']}, init={init_version}")
 
-    gate.run("twine check dist", [*twine_command(), "check", *map(str, sorted((ROOT / "dist").glob("vmlx-*")))], timeout=120)
+    gate.run(
+        "twine check dist",
+        [*twine_command(), "check", *map(str, sorted((ROOT / "dist").glob("vmlx-*")))],
+        env=twine_env(gate),
+        timeout=120,
+    )
     gate.run("panel request/type tests", ["npm", "test", "--", "request-builder.test.ts", "reasoning-display.test.ts", "audit-fixes.test.ts"], cwd=PANEL, timeout=180)
     gate.run("panel typecheck", ["npm", "run", "typecheck"], cwd=PANEL, timeout=180)
     gate.run("bundled python import gate", ["npm", "run", "verify-bundled"], cwd=PANEL, timeout=180)
@@ -632,6 +684,7 @@ def check_static(gate: Gate, app: Path, skip_app: bool) -> None:
             jang_tools_source,
             rel_paths=JANG_TOOLS_SOURCE_HASH_PATHS,
         )
+    check_no_packaged_pycache(gate, app)
     gate.run("codesign strict verify", ["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(app)], timeout=180, allow_fail=False)
     gate.run("spctl assessment", ["spctl", "--assess", "--type", "execute", "--verbose=4", str(app)], timeout=120, allow_fail=True)
 
@@ -740,11 +793,7 @@ def live_engine_gate(gate: Gate, app: Path, model: str, port: int, skip_sleep_wa
         "512",
     ]
     live_env = os.environ.copy()
-    live_env.update({
-        "PYTHONPATH": "",
-        "PYTHONNOUSERSITE": "1",
-        "PYTHONDONTWRITEBYTECODE": "1",
-    })
+    live_env.update(packaged_python_env(gate))
     prompt_cache_dir.mkdir(parents=True, exist_ok=True)
     block_cache_dir.mkdir(parents=True, exist_ok=True)
     with log.open("w") as fp:

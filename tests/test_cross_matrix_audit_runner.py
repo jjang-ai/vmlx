@@ -21,6 +21,7 @@ from tests.cross_matrix.run_production_family_audit import (
     simple_loop_score,
     static_audit,
 )
+from tests.cross_matrix import run_production_family_audit as audit_harness
 
 
 def test_anthropic_exact_probe_ignores_reasoning_blocks():
@@ -434,9 +435,37 @@ def test_dsv4_live_gate_prefers_local_jang_source_when_available(tmp_path):
     env = audit_child_env_for_row(
         rows["dsv4_tq"],
         {
+            "VMLINUX_AUDIT_USE_SOURCE_JANG": "1",
             "VMLINUX_JANG_TOOLS_SOURCE": str(local_jang),
             "PYTHONPATH": "/existing/path",
         },
     )
 
-    assert env["PYTHONPATH"].split(":")[:2] == [str(local_jang), "/existing/path"]
+    assert env["PYTHONPATH"] == str(local_jang)
+
+
+def test_live_gate_child_env_prevents_packaged_app_pycache_writes():
+    rows = {row.id: row for row in ROWS}
+    env = audit_child_env_for_row(
+        rows["zaya_vl_jangtq4"],
+        {"PYTHONDONTWRITEBYTECODE": "0", "PYTHONPATH": "/repo/shadow"},
+    )
+
+    assert env["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert env["PYTHONNOUSERSITE"] == "1"
+    assert env["PYTHONPATH"] == ""
+
+
+def test_live_gate_server_command_does_not_import_from_repo_cwd(tmp_path):
+    command = getattr(audit_harness, "live_server_command", None)
+
+    assert command is not None
+    cmd = command(
+        tmp_path / "python3",
+        tmp_path / "model",
+        8123,
+        tmp_path / "block-cache",
+    )
+    assert cmd[:4] == [str(tmp_path / "python3"), "-B", "-s", "-P"]
+    assert "-m" in cmd
+    assert cmd[cmd.index("-m") + 1] == "vmlx_engine.cli"

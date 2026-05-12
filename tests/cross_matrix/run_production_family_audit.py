@@ -1073,6 +1073,9 @@ def audit_child_env_for_row(
 ) -> dict[str, str]:
     """Return subprocess environment overrides for a live audit row."""
     child_env = dict(os.environ if base_env is None else base_env)
+    child_env["PYTHONDONTWRITEBYTECODE"] = "1"
+    child_env["PYTHONNOUSERSITE"] = "1"
+    child_env["PYTHONPATH"] = ""
     if row.cache_profile == "zaya_cca":
         child_env["VMLX_ZAYA_ENABLE_TYPED_CCA_CACHE"] = "1"
         child_env["VMLX_DISABLE_TQ_KV"] = "1"
@@ -1088,8 +1091,11 @@ def audit_child_env_for_row(
                 str(Path.home() / "jang" / "jang-tools"),
             )
         )
-        if (jang_source / "jang_tools" / "dsv4" / "mlx_model.py").is_file():
-            existing_pythonpath = child_env.get("PYTHONPATH")
+        if (
+            child_env.get("VMLINUX_AUDIT_USE_SOURCE_JANG") == "1"
+            and (jang_source / "jang_tools" / "dsv4" / "mlx_model.py").is_file()
+        ):
+            existing_pythonpath = child_env.get("PYTHONPATH") or ""
             child_env["PYTHONPATH"] = (
                 f"{jang_source}:{existing_pythonpath}"
                 if existing_pythonpath
@@ -1097,6 +1103,74 @@ def audit_child_env_for_row(
             )
             child_env["VMLINUX_JANG_TOOLS_SOURCE"] = str(jang_source)
     return child_env
+
+
+def live_server_command(
+    py: Path,
+    model_dir: Path,
+    port: int,
+    block_cache_dir: Path,
+) -> list[str]:
+    """Build a live audit server command that proves the selected Python.
+
+    Installed-app gates pass ``/Applications/vMLX.app/.../python3`` here. The
+    subprocess must not import repo-local modules just because the audit script
+    lives in the source checkout, and it must not write pycache into the signed
+    app bundle before codesign verification.
+    """
+    return [
+        str(py),
+        "-B",
+        "-s",
+        "-P",
+        "-m",
+        "vmlx_engine.cli",
+        "serve",
+        str(model_dir),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--timeout",
+        "300",
+        "--continuous-batching",
+        "--max-num-seqs",
+        "5",
+        "--prefill-batch-size",
+        "1024",
+        "--prefill-step-size",
+        "2048",
+        "--completion-batch-size",
+        "1024",
+        "--cache-memory-percent",
+        "0.2",
+        "--stream-interval",
+        "1",
+        "--max-tokens",
+        "32768",
+        "--default-temperature",
+        "0.6",
+        "--default-top-p",
+        "0.95",
+        "--default-repetition-penalty",
+        "1.10",
+        "--enable-prefix-cache",
+        "--use-paged-cache",
+        "--paged-cache-block-size",
+        "64",
+        "--max-cache-blocks",
+        "1000",
+        "--enable-block-disk-cache",
+        "--block-disk-cache-max-gb",
+        "10",
+        "--block-disk-cache-dir",
+        str(block_cache_dir),
+        "--reasoning-parser",
+        "auto",
+        "--tool-call-parser",
+        "auto",
+        "--enable-auto-tool-choice",
+    ]
 
 
 def has_duplicate_block(text: str, min_len: int = 80) -> bool:
@@ -1402,57 +1476,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
     log = OUT_DIR / f"{row.id}_{int(time.time())}.log"
     block_cache_dir = OUT_DIR / f"{row.id}_block_cache_{int(time.time())}"
     block_cache_dir.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        str(py),
-        "-s",
-        "-m",
-        "vmlx_engine.cli",
-        "serve",
-        str(model_dir),
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(port),
-        "--timeout",
-        "300",
-        "--continuous-batching",
-        "--max-num-seqs",
-        "5",
-        "--prefill-batch-size",
-        "1024",
-        "--prefill-step-size",
-        "2048",
-        "--completion-batch-size",
-        "1024",
-        "--cache-memory-percent",
-        "0.2",
-        "--stream-interval",
-        "1",
-        "--max-tokens",
-        "32768",
-        "--default-temperature",
-        "0.6",
-        "--default-top-p",
-        "0.95",
-        "--default-repetition-penalty",
-        "1.10",
-        "--enable-prefix-cache",
-        "--use-paged-cache",
-        "--paged-cache-block-size",
-        "64",
-        "--max-cache-blocks",
-        "1000",
-        "--enable-block-disk-cache",
-        "--block-disk-cache-max-gb",
-        "10",
-        "--block-disk-cache-dir",
-        str(block_cache_dir),
-        "--reasoning-parser",
-        "auto",
-        "--tool-call-parser",
-        "auto",
-        "--enable-auto-tool-choice",
-    ]
+    cmd = live_server_command(py, model_dir, port, block_cache_dir)
 
     if os.environ.get("VMLINUX_AUDIT_KILL_EXISTING") == "1":
         subprocess.run(["pkill", "-9", "-f", "vmlx_engine.cli"], capture_output=True)
@@ -1464,7 +1488,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         lf.flush()
         proc = subprocess.Popen(
             cmd,
-            cwd=str(ROOT),
+            cwd=str(OUT_DIR),
             stdout=lf,
             stderr=subprocess.STDOUT,
             env=child_env,
