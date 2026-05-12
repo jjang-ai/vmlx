@@ -215,6 +215,85 @@ class TestImageGenRequestValidation:
         assert resp.json()["data"][0]["b64_json"] == "AAAA"
 
     @pytest.mark.anyio
+    async def test_generation_disconnect_watch_is_cancelled_after_success(
+        self, client, monkeypatch, tmp_path
+    ):
+        """A normal image response must not leave a stale disconnect watcher.
+
+        Live repro before the fix: request N succeeds, its orphaned watcher
+        later sees the closed client connection and calls ImageGenEngine.cancel();
+        request N+1 then fails before generation with a stale cancel flag.
+        """
+        import vmlx_engine.image_gen as image_gen_mod
+        import vmlx_engine.server as srv
+
+        class FakeWatchTask:
+            def __init__(self):
+                self.cancelled = False
+
+            def cancel(self):
+                self.cancelled = True
+
+            def __await__(self):
+                async def _done():
+                    return None
+
+                return _done().__await__()
+
+        class SimpleImageEngine:
+            def __init__(self):
+                self._loaded = False
+                self.model_name = "schnell"
+
+            @property
+            def is_loaded(self):
+                return self._loaded
+
+            def load(self, *args, **kwargs):
+                self._loaded = True
+
+            def generate(self, **kwargs):
+                return SimpleNamespace(
+                    b64_json="AAAA",
+                    seed=kwargs.get("seed") or 123,
+                )
+
+        created_tasks = []
+
+        def fake_create_task(coro):
+            coro.close()
+            task = FakeWatchTask()
+            created_tasks.append(task)
+            return task
+
+        monkeypatch.setattr(srv, "_image_gen", None)
+        monkeypatch.setattr(srv, "_image_gen_lock", None)
+        monkeypatch.setattr(srv, "_standby_state", None)
+        monkeypatch.setattr(srv, "_model_name", "schnell")
+        monkeypatch.setattr(srv, "_served_model_name", None)
+        monkeypatch.setattr(srv, "_model_path", str(tmp_path))
+        monkeypatch.setattr(image_gen_mod, "ImageGenEngine", SimpleImageEngine)
+        monkeypatch.setattr(srv.asyncio, "create_task", fake_create_task)
+
+        resp = await client.post(
+            "/v1/images/generations",
+            json={
+                "model": "schnell",
+                "prompt": "disconnect watcher cleanup proof",
+                "size": "64x64",
+                "steps": 1,
+                "seed": 7,
+            },
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert created_tasks, "endpoint must start a disconnect watcher"
+        assert created_tasks[-1].cancelled, (
+            "normal image responses must cancel the disconnect watcher before "
+            "the client connection closes"
+        )
+
+    @pytest.mark.anyio
     async def test_generation_model_switch_does_not_reuse_previous_mflux_class(
         self, client, monkeypatch, tmp_path
     ):

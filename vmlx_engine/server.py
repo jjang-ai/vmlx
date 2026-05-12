@@ -7400,6 +7400,17 @@ def _shutdown_image_gen_executor() -> None:
         _image_gen_executor = None
 
 
+async def _cancel_image_disconnect_watch(task: asyncio.Task | None) -> None:
+    """Cancel and drain an image disconnect watcher."""
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 @app.post(
     "/v1/images/generations",
     dependencies=[
@@ -7451,7 +7462,6 @@ async def create_image(request: Request):
                     return
         except asyncio.CancelledError:
             return
-    _disconnect_watch = asyncio.create_task(_watch_disconnect())
 
     prompt = body.get("prompt", "")
     model = body.get("model", "schnell")
@@ -7597,6 +7607,7 @@ async def create_image(request: Request):
         # If source image provided (img2img), save to temp file for mflux
         source_image_path = None
         images = []
+        _disconnect_watch = asyncio.create_task(_watch_disconnect())
         try:
             if source_image_b64 and image_strength is not None:
                 import tempfile
@@ -7649,6 +7660,7 @@ async def create_image(request: Request):
                     os.unlink(source_image_path)
                 except OSError:
                     pass
+            await _cancel_image_disconnect_watch(_disconnect_watch)
 
     return {
         "created": int(time.time()),
