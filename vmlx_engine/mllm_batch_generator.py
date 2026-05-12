@@ -396,6 +396,44 @@ def _infer_attention_heads_for_hybrid_oom_guard(
     return default
 
 
+def _batch_shares_sampler_params(requests: List[Any]) -> bool:
+    """True if every request in ``requests`` shares an identical sampling
+    parameter tuple AND none has a repetition penalty.
+
+    Used by :meth:`MLLMBatchGenerator._step` to decide whether the per-token
+    sampling step can dispatch the batched ``self.sampler(logits)`` in one
+    shot instead of slicing logits per row, calling the per-request sampler,
+    and concatenating the results.
+
+    Repetition penalty is excluded because it conditions sampling on the
+    request's token history, which is intrinsically per-request and cannot
+    be vectorised.
+    """
+    if not requests:
+        return False
+    first_req = requests[0]
+    if getattr(first_req, "repetition_penalty", 1.0) not in (None, 1.0):
+        return False
+    first_key = (
+        getattr(first_req, "temperature", None),
+        getattr(first_req, "top_p", None),
+        getattr(first_req, "top_k", None),
+        getattr(first_req, "min_p", None),
+    )
+    for req in requests[1:]:
+        if getattr(req, "repetition_penalty", 1.0) not in (None, 1.0):
+            return False
+        key = (
+            getattr(req, "temperature", None),
+            getattr(req, "top_p", None),
+            getattr(req, "top_k", None),
+            getattr(req, "min_p", None),
+        )
+        if key != first_key:
+            return False
+    return True
+
+
 def _prefix_hit_tail_and_cached_tokens(
     *,
     token_list: List[int],
@@ -3987,7 +4025,9 @@ class MLLMBatchGenerator:
             requests=requests,
         )
 
-    def _make_request_sampler(self, request: MLLMBatchRequest) -> Callable[[mx.array], mx.array]:
+    def _make_request_sampler(  # noqa: D401 — keep position with helpers
+        self, request: MLLMBatchRequest
+    ) -> Callable[[mx.array], mx.array]:
         """Create a sampler for a specific request's sampling parameters.
 
         Each request can have different temperature/top_p/top_k/min_p.
@@ -4074,11 +4114,19 @@ class MLLMBatchGenerator:
         # full-vocab logsoftmax every decode token on the default fast path.
         batch = self.active_batch
         if batch and len(batch.requests) == logits.shape[0]:
-            tokens = []
-            for i, req in enumerate(batch.requests):
-                req_sampler = self._make_request_sampler(req)
-                tokens.append(req_sampler(logits[i:i+1]))
-            sampled = mx.concatenate(tokens, axis=0)
+            # Fast-path: when every active request shares the same sampling
+            # tuple AND no request has a repetition penalty (which depends
+            # on per-request token history and cannot be batched), dispatch
+            # the batched sampler in one shot.  Skips a per-request
+            # `logits[i:i+1]` slice + sampler call + concatenate chain.
+            if _batch_shares_sampler_params(batch.requests):
+                sampled = self.sampler(logits)
+            else:
+                tokens = []
+                for i, req in enumerate(batch.requests):
+                    req_sampler = self._make_request_sampler(req)
+                    tokens.append(req_sampler(logits[i:i+1]))
+                sampled = mx.concatenate(tokens, axis=0)
         else:
             sampled = self.sampler(logits)
 

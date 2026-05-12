@@ -144,7 +144,12 @@ class SingleBatchGenerator:
             return None
         # MLX assignment into cache buffers can mutate the original allocation
         # after this point. Materialize an independent array for the snapshot.
-        cloned = value + mx.zeros_like(value)
+        #
+        # `value + mx.zeros_like(value)` previously allocated a zero tensor
+        # only to discard it after the add — `1 * value` is a single Metal op
+        # that produces an independent buffer with the same shape/dtype and
+        # no zero-init waste.
+        cloned = 1 * value
         mx.eval(cloned)
         return cloned
 
@@ -375,9 +380,14 @@ class SingleBatchGenerator:
             req.next_logprobs = None
 
         try:
-            mx.eval(current_token)
+            # Pipeline the two evals through a single async submission so
+            # the kernel queue overlaps both materialisations.  The
+            # subsequent `_token_to_int(current_token)` triggers the
+            # implicit sync; logprobs are picked up on the response build.
             if current_logprobs is not None:
-                mx.eval(current_logprobs)
+                mx.async_eval(current_token, current_logprobs)
+            else:
+                mx.async_eval(current_token)
         except Exception:
             self._sync()
 
