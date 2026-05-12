@@ -1209,14 +1209,26 @@ def simple_loop_score(text: str) -> float:
     if len(compact) < 48:
         return word_score
     tail = compact[-512:]
-    char_score = max(tail.count(ch) for ch in set(tail)) / len(tail)
+    char_score = 0.0
+    run_len = 1
+    max_run_len = 1
+    for prev, curr in zip(tail, tail[1:]):
+        if curr == prev:
+            run_len += 1
+            max_run_len = max(max_run_len, run_len)
+        else:
+            run_len = 1
+    if max_run_len >= 8:
+        char_score = max(char_score, max_run_len / len(tail))
     for period in range(2, min(64, len(tail) // 3) + 1):
         pattern = tail[:period]
         if len(set(pattern)) < 2:
             continue
         expected = (pattern * ((len(tail) // period) + 1))[: len(tail)]
         matches = sum(1 for a, b in zip(tail, expected) if a == b)
-        char_score = max(char_score, matches / len(tail))
+        periodic_score = matches / len(tail)
+        if periodic_score >= 0.85:
+            char_score = max(char_score, periodic_score)
     for n in (2, 3, 4, 6, 8, 12):
         if len(tail) < n * 12:
             continue

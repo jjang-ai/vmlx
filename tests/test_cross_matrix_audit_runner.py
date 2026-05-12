@@ -368,6 +368,18 @@ def test_loop_score_catches_no_space_cjk_and_emoji_repetition():
     assert simple_loop_score("Paris is the capital of France.") < 0.25
 
 
+def test_loop_score_does_not_false_fail_coherent_cyrillic_list():
+    text = (
+        "1. Сцена создаётся с травой и деревьями.\n"
+        "2. Игрок управляется клавиатурой перемещаясь.\n"
+        "3. Дробовик стреляет при нажатии специальной кнопки.\n"
+        "4. Враги появляются случайным образом в пределах поля зрения.\n"
+        "5. Игра завершается после определённого количества целей."
+    )
+
+    assert simple_loop_score(text) < 0.25
+
+
 def test_dsv4_long_output_requires_stop_not_length_cap():
     complete_answer = (
         "Visible answer with a complete useful paragraph. "
