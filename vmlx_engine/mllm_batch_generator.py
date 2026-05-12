@@ -2664,18 +2664,53 @@ class MLLMBatchGenerator:
                 ssm_boundaries = self._ssm_capture_boundaries_for(
                     request, seq_len, has_images, ssm_boundary
                 )
+                # Sort once + maintain a pointer so the per-chunk "next
+                # boundary" lookup is O(1) instead of an O(B) generator
+                # scan.  Boundaries are tiny (≤ ~5 entries) so the sort
+                # itself is free.
+                _sorted_boundaries: List[int] = sorted(set(ssm_boundaries))
+                _boundary_idx: int = 0
                 ssm_captured_boundaries: set[int] = set()
+                # Precompute the cache layers that expose a `.state`
+                # attribute so the per-chunk eval doesn't do a `hasattr`
+                # walk over the full cache layer list every iteration.
+                _state_layers = [c for c in cache if hasattr(c, "state")]
+                # Hoist the prompt-tolist Metal→CPU sync out of the loop.
+                # `_maybe_capture_clean_ssm_boundary` accepts a Python list;
+                # computing it once avoids a GPU sync per chunk boundary.
+                _hoisted_all_tokens: Optional[List[int]] = getattr(
+                    request, "_original_token_ids", None
+                )
+                if _hoisted_all_tokens is None and _sorted_boundaries:
+                    _hoisted_all_tokens = input_ids[0].tolist()
+                # Env-gated per-chunk allocator clears: redundant on
+                # systems with the v1.5.31 98 % working-set guard, but
+                # stays on by default.  Set VMLX_PREFILL_KEEP_ALLOC=1 to
+                # keep the Metal allocator free-list warm across prefill
+                # chunks (saves a Metal sync per chunk on long prompts).
+                _prefill_keep_alloc: bool = os.environ.get(
+                    "VMLX_PREFILL_KEEP_ALLOC", ""
+                ).lower() in {"1", "true", "yes", "on"}
                 while processed < seq_len - 1:  # -1: keep last token for final logits
                     chunk_size = min(self.prefill_step_size, seq_len - 1 - processed)
-                    next_ssm_boundary = next(
-                        (
-                            b
-                            for b in ssm_boundaries
-                            if b not in ssm_captured_boundaries
-                            and processed < b <= processed + chunk_size
-                        ),
-                        None,
-                    )
+                    # Advance pointer past boundaries already captured /
+                    # behind us so the "next" lookup is O(1).
+                    while (
+                        _boundary_idx < len(_sorted_boundaries)
+                        and (
+                            _sorted_boundaries[_boundary_idx] <= processed
+                            or _sorted_boundaries[_boundary_idx]
+                            in ssm_captured_boundaries
+                        )
+                    ):
+                        _boundary_idx += 1
+                    next_ssm_boundary: Optional[int] = None
+                    if (
+                        _boundary_idx < len(_sorted_boundaries)
+                        and _sorted_boundaries[_boundary_idx]
+                        <= processed + chunk_size
+                    ):
+                        next_ssm_boundary = _sorted_boundaries[_boundary_idx]
                     if next_ssm_boundary is not None:
                         chunk_size = next_ssm_boundary - processed
                     chunk = input_ids[:, processed:processed + chunk_size]
@@ -2702,7 +2737,11 @@ class MLLMBatchGenerator:
                         )
                         raise
                     try:
-                        mx.eval([c.state for c in cache if hasattr(c, 'state')])
+                        # Reuse the precomputed list of `.state`-carrying
+                        # layers instead of doing a `hasattr` walk on
+                        # every chunk.
+                        if _state_layers:
+                            mx.eval([c.state for c in _state_layers])
                     except RuntimeError as _eval_err:
                         if "Stream" in str(_eval_err):
                             mx.synchronize()
@@ -2710,16 +2749,19 @@ class MLLMBatchGenerator:
                             raise
                     processed += chunk_size
                     chunk_num += 1
-                    if processed in ssm_boundaries and processed not in ssm_captured_boundaries:
-                        all_tokens = (
-                            getattr(request, "_original_token_ids", None)
-                            or input_ids[0].tolist()
-                        )
+                    if (
+                        processed in ssm_boundaries
+                        and processed not in ssm_captured_boundaries
+                    ):
                         if self._maybe_capture_clean_ssm_boundary(
-                            request, cache, all_tokens, processed
+                            request,
+                            cache,
+                            _hoisted_all_tokens or input_ids[0].tolist(),
+                            processed,
                         ):
                             ssm_captured_boundaries.add(processed)
-                    mx.clear_cache()
+                    if not _prefill_keep_alloc:
+                        mx.clear_cache()
 
                 # Final chunk: get logits from last token
                 last_chunk = input_ids[:, processed:]

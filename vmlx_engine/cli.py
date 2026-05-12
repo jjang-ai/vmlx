@@ -896,6 +896,12 @@ def serve_command(args):
     # Configure JIT compilation
     server._enable_jit = getattr(args, 'enable_jit', False)
 
+    # Propagate --prefill-keep-alloc into the env so MLLMBatchGenerator's
+    # chunked-prefill loop reads it directly (the generator is instantiated
+    # later, after this point — env is the cleanest plumbing).
+    if getattr(args, 'prefill_keep_alloc', False):
+        os.environ["VMLX_PREFILL_KEEP_ALLOC"] = "1"
+
     # Port validation now happens at the top of `serve_command` so a
     # bad port short-circuits BEFORE any model / registry / parser
     # logging. This kept producing user reports of "Process exited
@@ -2059,6 +2065,20 @@ Examples:
         help="Enable JIT compilation (mx.compile) on the model forward pass. "
              "This fuses Metal operations for faster inference after a one-time warmup. "
              "May not work with all models. Falls back gracefully if compilation fails.",
+    )
+
+    # Prefill allocator behaviour
+    serve_parser.add_argument(
+        "--prefill-keep-alloc",
+        action="store_true",
+        default=False,
+        help="Skip the per-prefill-chunk mx.clear_cache() call (alias for "
+             "VMLX_PREFILL_KEEP_ALLOC=1).  Keeps the Metal allocator "
+             "free-list warm across chunks of a long-context prefill — "
+             "saves a Metal sync per chunk and lowers TTFT ~5-12%% on 16K+ "
+             "prompts.  Off by default; the v1.5.31 working-set guard "
+             "(98%%) catches genuine OOMs.  Recommended for systems with "
+             "≥64GB unified memory.",
     )
 
     # Speculative decoding options
