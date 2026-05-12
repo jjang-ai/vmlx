@@ -97,6 +97,28 @@ def test_zaya_rows_are_present_and_marked_cca():
     assert rows["zaya_mxfp4"].cache_profile == "zaya_cca"
 
 
+def test_zaya_vl_rows_are_present_and_marked_cca_mllm():
+    rows = {row.id: row for row in ROWS}
+
+    assert rows["zaya_vl_mxfp4"].family == "zaya1_vl"
+    assert rows["zaya_vl_mxfp4"].kind == "vl"
+    assert rows["zaya_vl_mxfp4"].cache_profile == "zaya_cca"
+    assert rows["zaya_vl_jangtq4"].family == "zaya1_vl"
+    assert rows["zaya_vl_jangtq4"].kind == "vl"
+    assert rows["zaya_vl_jangtq4"].cache_profile == "zaya_cca"
+    assert rows["zaya_vl_jangtq_k"].family == "zaya1_vl"
+    assert rows["zaya_vl_jangtq_k"].kind == "vl"
+    assert rows["zaya_vl_jangtq_k"].cache_profile == "zaya_cca"
+
+
+def test_hy3_release_row_is_present_with_hunyuan_contract():
+    rows = {row.id: row for row in ROWS}
+
+    assert rows["hy3_preview_jangtq2"].family == "hy_v3"
+    assert rows["hy3_preview_jangtq2"].expect_reasoning is True
+    assert rows["hy3_preview_jangtq2"].expect_tool_parser == "hunyuan"
+
+
 def test_ling_rows_do_not_expect_reasoning():
     rows = {row.id: row for row in ROWS}
 

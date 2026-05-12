@@ -113,6 +113,48 @@ ROWS: list[ModelRow] = [
         ],
     ),
     ModelRow(
+        id="zaya_vl_mxfp4",
+        label="ZAYA1-VL-8B MXFP4 CCA",
+        path="/Users/example/models/JANGQ/ZAYA1-VL-8B-MXFP4",
+        family="zaya1_vl",
+        kind="vl",
+        expect_reasoning=True,
+        expect_tool_parser="zaya_xml",
+        cache_profile="zaya_cca",
+        notes=[
+            "ZAYA-VL media row. Must keep typed zaya_cca_v1 cache for text-only "
+            "prefixes while media-bearing requests bypass token-prefix CCA cache."
+        ],
+    ),
+    ModelRow(
+        id="zaya_vl_jangtq4",
+        label="ZAYA1-VL-8B JANGTQ4 CCA",
+        path="/Users/example/models/JANGQ/ZAYA1-VL-8B-JANGTQ4",
+        family="zaya1_vl",
+        kind="vl",
+        expect_reasoning=True,
+        expect_tool_parser="zaya_xml",
+        cache_profile="zaya_cca",
+        notes=[
+            "ZAYA-VL routed 4-bit control row. Validates JANGTQ MLLM fast path, "
+            "ZAYA CCA text cache, and media-prefix cache isolation."
+        ],
+    ),
+    ModelRow(
+        id="zaya_vl_jangtq_k",
+        label="ZAYA1-VL-8B JANGTQ_K CCA",
+        path="/Users/example/models/JANGQ/ZAYA1-VL-8B-JANGTQ_K",
+        family="zaya1_vl",
+        kind="vl",
+        expect_reasoning=True,
+        expect_tool_parser="zaya_xml",
+        cache_profile="zaya_cca",
+        notes=[
+            "Mixed 2/2/4 ZAYA-VL row. Product repo may warn about forced "
+            "thinking quality, but the runtime should not silently clamp this row."
+        ],
+    ),
+    ModelRow(
         id="dsv4_tq",
         label="DeepSeek-V4-Flash JANGTQ-K sub-80 candidate",
         path="/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
@@ -194,6 +236,22 @@ ROWS: list[ModelRow] = [
         family="qwen3_5",
         expect_reasoning=True,
         expect_tool_parser="qwen",
+    ),
+    ModelRow(
+        id="hy3_preview_jangtq2",
+        label="Hy3-preview JANGTQ2",
+        path="/Users/example/models/JANGQ/Hy3-preview-JANGTQ2",
+        family="hy_v3",
+        expect_reasoning=True,
+        expect_tool_parser="hunyuan",
+        slow=True,
+        notes=[
+            "Hy3/Hunyuan reasoning row. UI/API contract is reasoning_effort "
+            "low/high with no Medium; runtime parser is qwen3 text extraction "
+            "and tool parser is hunyuan.",
+            "Large 128GB-class row; Metal working-set guard must allow the "
+            "validated near-limit load without command-buffer OOM.",
+        ],
     ),
     ModelRow(
         id="nemotron_omni_tq2",
