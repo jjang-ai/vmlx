@@ -23,6 +23,7 @@ import {
   resolveImageModelRepo as _resolveImageModelRepo,
 } from "../../shared/imageModels";
 import { formatJangQuantizationLabel } from "../../shared/jangQuantization";
+import { hubRepoIdFromSnapshotPath } from "../../shared/hfHubLayout";
 
 /**
  * ms#75: resolve the HuggingFace-compatible base URL for API calls
@@ -537,7 +538,10 @@ async function scanModelsInPath(
 
         const size = await getDirectorySize(currentPath);
         let id = basename(currentPath);
-        if (depth > 1) {
+        const hubRepoId = hubRepoIdFromSnapshotPath(currentPath);
+        if (hubRepoId) {
+          id = hubRepoId;
+        } else if (depth > 1) {
           const parent = basename(join(currentPath, ".."));
           if (parent !== basename(basePath)) id = `${parent}/${id}`;
         }
@@ -562,7 +566,13 @@ async function scanModelsInPath(
         if (size >= 1024 * 1024) {
           // If the model is a subdirectory, use its relative-ish name (org/model-name)
           let id = basename(currentPath);
-          if (depth > 1) {
+          const hubRepoId = hubRepoIdFromSnapshotPath(currentPath);
+          if (hubRepoId) {
+            // HF hub layout: `models--<org>--<name>/snapshots/<sha>/`.
+            // Display the repo id, not the sha. Path stays at the snapshot
+            // dir so the engine still resolves blobs/ correctly.
+            id = hubRepoId;
+          } else if (depth > 1) {
             const parent = basename(join(currentPath, ".."));
             if (parent !== basename(basePath)) {
               id = `${parent}/${id}`;
