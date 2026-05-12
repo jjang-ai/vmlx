@@ -162,6 +162,8 @@ function topKOverrideBlockedByFamily(family?: string): boolean {
     return normalized === 'zaya' || normalized === 'zaya1-vl' || normalized === 'ling'
 }
 
+const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
+
 function buildCommandPreview(
     modelPath: string,
     config: SessionConfig,
@@ -212,7 +214,8 @@ function buildCommandPreview(
     const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
     const prefixCacheOff = !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
     const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
-    const usePagedCache = zayaTypedCacheRequiresPaged
+    const dsv4CompositeRequiresPaged = dsv4Active && !prefixCacheOff
+    const usePagedCache = zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged
         ? true
         : (config.usePagedCache ?? detected?.usePagedCache)
 
@@ -232,7 +235,10 @@ function buildCommandPreview(
 
     if (!prefixCacheOff && usePagedCache) {
         parts.push('--use-paged-cache')
-        if (config.pagedCacheBlockSize && config.pagedCacheBlockSize > 0) parts.push('--paged-cache-block-size', config.pagedCacheBlockSize.toString())
+        const effectivePagedCacheBlockSize = dsv4Active
+            ? DSV4_PAGED_CACHE_BLOCK_SIZE
+            : config.pagedCacheBlockSize
+        if (effectivePagedCacheBlockSize && effectivePagedCacheBlockSize > 0) parts.push('--paged-cache-block-size', effectivePagedCacheBlockSize.toString())
         if (config.maxCacheBlocks && config.maxCacheBlocks > 0) parts.push('--max-cache-blocks', config.maxCacheBlocks.toString())
     }
 
@@ -1034,6 +1040,16 @@ describe('No Hardcoded Values', () => {
         expect(getFlagValue(preview({ enablePrefixCache: true, pagedCacheBlockSize: 256 }), '--paged-cache-block-size')).toBe('256')
     })
 
+    it('deepseek-v4 uses DS4 page-sized blocks even when stale config has generic 64', () => {
+        const out = preview(
+            { enablePrefixCache: true, usePagedCache: false, pagedCacheBlockSize: 64 },
+            { family: 'deepseek-v4', usePagedCache: false },
+        )
+
+        expect(hasFlag(out, '--use-paged-cache')).toBe(true)
+        expect(getFlagValue(out, '--paged-cache-block-size')).toBe('256')
+    })
+
     it('changing maxCacheBlocks produces different CLI output', () => {
         expect(getFlagValue(preview({ enablePrefixCache: true, maxCacheBlocks: 500 }), '--max-cache-blocks')).toBe('500')
         expect(getFlagValue(preview({ enablePrefixCache: true, maxCacheBlocks: 5000 }), '--max-cache-blocks')).toBe('5000')
@@ -1387,6 +1403,25 @@ describe('JIT Toggle', () => {
         expect(form).toContain('ZAYA typed CCA cache requires paged cache while prefix cache is enabled')
         expect(settings).toContain('zayaTypedCacheRequiresPaged')
         expect(sessions).toContain('zayaTypedCacheRequiresPaged')
+    })
+
+    it('settings form and launch code surface DSV4 composite paged-cache policy', () => {
+        const fs = require('fs')
+        const form = fs.readFileSync(
+            'src/renderer/src/components/sessions/SessionConfigForm.tsx',
+            'utf-8',
+        )
+        const settings = fs.readFileSync(
+            'src/renderer/src/components/sessions/SessionSettings.tsx',
+            'utf-8',
+        )
+        const sessions = fs.readFileSync('src/main/sessions.ts', 'utf-8')
+
+        expect(form).toContain('dsv4CompositeRequiresPaged')
+        expect(form).toContain('block size is fixed to 256 tokens')
+        expect(settings).toContain('DSV4_PAGED_CACHE_BLOCK_SIZE = 256')
+        expect(sessions).toContain('DSV4_PAGED_CACHE_BLOCK_SIZE = 256')
+        expect(sessions).toContain('native SWA+CSA/HCA composite cache')
     })
 
     it('enableJit does not affect other flags', () => {

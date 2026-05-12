@@ -38,6 +38,8 @@ function topKOverrideBlockedByFamily(family?: string): boolean {
   return normalized === 'zaya' || normalized === 'zaya1-vl' || normalized === 'ling'
 }
 
+const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
+
 /**
  * Build a preview of the CLI command from config.
  * This MUST mirror the logic in sessions.ts buildArgs() exactly.
@@ -110,7 +112,8 @@ function buildCommandPreview(
   const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
   const prefixCacheOff = !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
   const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
-  const usePagedCache = zayaTypedCacheRequiresPaged
+  const dsv4CompositeRequiresPaged = dsv4Active && !prefixCacheOff
+  const usePagedCache = zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged
     ? true
     : (config.usePagedCache ?? detected?.usePagedCache)
 
@@ -131,7 +134,10 @@ function buildCommandPreview(
   // Paged cache — requires prefix cache ON (works for both LLM and VLM)
   if (!prefixCacheOff && usePagedCache) {
     parts.push('--use-paged-cache')
-    if (config.pagedCacheBlockSize && config.pagedCacheBlockSize > 0) parts.push('--paged-cache-block-size', config.pagedCacheBlockSize.toString())
+    const effectivePagedCacheBlockSize = dsv4Active
+      ? DSV4_PAGED_CACHE_BLOCK_SIZE
+      : config.pagedCacheBlockSize
+    if (effectivePagedCacheBlockSize && effectivePagedCacheBlockSize > 0) parts.push('--paged-cache-block-size', effectivePagedCacheBlockSize.toString())
     if (config.maxCacheBlocks && config.maxCacheBlocks > 0) parts.push('--max-cache-blocks', config.maxCacheBlocks.toString())
   }
 

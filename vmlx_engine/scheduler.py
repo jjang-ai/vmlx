@@ -777,6 +777,7 @@ class Scheduler:
                                 f":dsv4_long_ctx={os.environ.get('DSV4_LONG_CTX', '0')}"
                                 f":dsv4_pool_quant={os.environ.get('DSV4_POOL_QUANT', '')}"
                                 f":dsv4_unsafe_trim={_unsafe_trim}"
+                                f":dsv4_paged_block_size={self.config.paged_cache_block_size}"
                                 ":dsv4_cache_schema=deepseek_v4_v7"
                             )
                         elif self._uses_zaya_cache:

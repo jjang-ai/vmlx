@@ -10,6 +10,7 @@ reconstruction and L2 disk promotion.
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -87,6 +88,43 @@ def test_dsv4_pool_quant_default_is_correctness_safe_opt_in(monkeypatch):
 
     monkeypatch.setenv("DSV4_POOL_QUANT", "1")
     assert _configure_dsv4_pool_quant_default() == "1"
+
+
+def test_dsv4_cli_cache_policy_uses_ds4_page_sized_blocks(caplog):
+    """DSV4 serve auto-config must not inherit generic 64-token pages.
+
+    DeepSeek-V4 Flash uses a composite SWA+CSA/HCA decode cache; the paged
+    prefix layer stores prompt-boundary snapshots of that composite state,
+    not plain KV. The production serve path therefore needs the DS4/vLLM-style
+    256-token block size even when a stale panel/session config still carries
+    the generic 64-token default.
+    """
+    from vmlx_engine.cli import _apply_dsv4_cache_policy
+
+    args = SimpleNamespace(
+        enable_prefix_cache=True,
+        disable_prefix_cache=False,
+        use_paged_cache=False,
+        paged_cache_block_size=64,
+        enable_block_disk_cache=True,
+    )
+
+    changed = _apply_dsv4_cache_policy(args, logger=__import__("logging").getLogger("test"))
+
+    assert args.use_paged_cache is True
+    assert args.paged_cache_block_size == 256
+    assert "paged=required_for_dsv4_composite" in changed
+    assert "block_size=64->256" in changed
+
+
+def test_dsv4_block_l2_namespace_includes_paged_block_size():
+    """DSV4 L2 namespaces must not mix 64-token and 256-token block records."""
+    import inspect
+    from vmlx_engine.scheduler import Scheduler
+
+    source = inspect.getsource(Scheduler.__init__)
+
+    assert ":dsv4_paged_block_size={self.config.paged_cache_block_size}" in source
 
 
 def test_dsv4_block_slice_uses_deepseek_v4_tag_only_on_terminal_block():

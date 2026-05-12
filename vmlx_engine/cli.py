@@ -17,6 +17,8 @@ import argparse
 import os
 import sys
 
+DSV4_PAGED_CACHE_BLOCK_SIZE = 256
+
 
 def _env_truthy(name: str) -> bool:
     return os.environ.get(name, "").lower() in ("1", "true", "yes", "on")
@@ -56,6 +58,46 @@ def _apply_zaya_cca_cache_policy(args, logger):
         "forced off."
     )
     return True, tuple(changed)
+
+
+def _apply_dsv4_cache_policy(args, logger):
+    """Apply DSV4's composite SWA+CSA/HCA prefix-cache contract.
+
+    DSV4 paged-prefix entries hold prompt-boundary DeepseekV4Cache snapshots
+    for SWA plus CSA/HCA compressed pools. Treating those records like generic
+    KV pages makes stale app defaults too easy to launch. Keep DSV4 on the
+    DS4/vLLM-style 256-token page size whenever prefix cache is active.
+    """
+
+    changed = []
+    prefix_active = (
+        getattr(args, "enable_prefix_cache", True)
+        and not getattr(args, "disable_prefix_cache", False)
+    )
+    if not prefix_active:
+        if getattr(args, "enable_block_disk_cache", False):
+            args.enable_block_disk_cache = False
+            changed.append("L2 disk=disabled_without_prefix")
+        return tuple(changed)
+
+    if not getattr(args, "use_paged_cache", False):
+        args.use_paged_cache = True
+        changed.append("paged=required_for_dsv4_composite")
+
+    old_block_size = int(getattr(args, "paged_cache_block_size", 0) or 0)
+    if old_block_size != DSV4_PAGED_CACHE_BLOCK_SIZE:
+        args.paged_cache_block_size = DSV4_PAGED_CACHE_BLOCK_SIZE
+        changed.append(f"block_size={old_block_size}->{DSV4_PAGED_CACHE_BLOCK_SIZE}")
+
+    if changed:
+        logger.info(
+            "DSV4-Flash cache policy applied: %s. Paged prefix cache stores "
+            "native SWA+CSA/HCA composite prompt-boundary state; using "
+            "%d-token blocks for DS4 decode-cache compatibility.",
+            ", ".join(changed),
+            DSV4_PAGED_CACHE_BLOCK_SIZE,
+        )
+    return tuple(changed)
 
 
 def _env_int(name: str, default: int, legacy_name: str | None = None) -> int:
@@ -320,13 +362,14 @@ def serve_command(args):
                     _old_kvq,
                     _dsv4_pool_quant,
                 )
-            # Paged + block-disk L2 are honored as the user requests them.
+            _apply_dsv4_cache_policy(args, logger)
             # The DSV4-aware paged schema (scheduler.py: deepseek_v4_v7
             # nested-state serialization) handles the mixed KVCache /
             # DeepseekV4Cache layer layout after load_jangtq_dsv4 verifies
             # the installed native JANG attention mask/compressed-pool
-            # contract. Short prompts (<512 tokens) store composite
-            # prompt-boundary state with N-1 prompt keys.
+            # contract. Short prompts store composite prompt-boundary state
+            # with N-1 prompt keys; stale 64-token app defaults are upgraded
+            # to 256-token DSV4 pages at CLI entry.
             logger.info(
                 "DSV4-Flash detected — DSV4_LONG_CTX=1 (tri-mode SWA+CSA/HCA), "
                 f"DSV4_POOL_QUANT={_dsv4_pool_quant}. Native JANG attention "

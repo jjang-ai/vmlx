@@ -156,6 +156,8 @@ export const DEFAULT_CONFIG: SessionConfig = {
   jangtqTopKOverride: 0,
 }
 
+const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
+
 function normalizeDetectedFamilyName(family?: string): string | undefined {
   if (!family) return undefined
   if (family === 'zaya1_vl') return 'zaya1-vl'
@@ -252,7 +254,11 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const effectivelyNoBatching = batchingOff
   const prefixOff = !config.enablePrefixCache
   const zayaTypedCacheRequiresPaged = zayaCcaActive && !batchingOff && !prefixOff
-  const effectiveUsePagedCache = zayaTypedCacheRequiresPaged || config.usePagedCache
+  const dsv4CompositeRequiresPaged = dsv4Active && !batchingOff && !prefixOff
+  const effectiveUsePagedCache = zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged || config.usePagedCache
+  const effectivePagedCacheBlockSize = dsv4CompositeRequiresPaged
+    ? DSV4_PAGED_CACHE_BLOCK_SIZE
+    : config.pagedCacheBlockSize
   const isMambaCache = detectedCacheType === 'mamba' || detectedCacheType === 'hybrid'
 
   const toggleSection = (section: keyof typeof expandedSections) => {
@@ -613,18 +619,20 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {config.enableDiskCache && <IncompatWarning text="Paged cache and legacy Disk Cache cannot run simultaneously. Enabling paged cache will auto-disable legacy Disk Cache. For persistent caching with paged cache, use 'Block Disk Cache (L2)' below instead." />}
         {!batchingOff && prefixOff && <IncompatWarning text="Paged cache requires prefix cache. Enable 'Prefix Cache' above to use paged KV cache." />}
         {zayaTypedCacheRequiresPaged && <InfoNote text="ZAYA typed CCA cache requires paged cache while prefix cache is enabled. Turn off Prefix Cache to disable this cache stack for ZAYA." />}
-        <CheckField label="Use Paged KV Cache" tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations." checked={effectiveUsePagedCache} onChange={v => { onChange('usePagedCache', v); if (v && config.enableDiskCache) onChange('enableDiskCache', false) }} disabled={batchingOff || prefixOff || zayaTypedCacheRequiresPaged} />
+        {dsv4CompositeRequiresPaged && <InfoNote text="DSV4 uses native SWA+CSA/HCA composite cache snapshots, so paged cache stays on and block size is fixed to 256 tokens for production decode compatibility." />}
+        <CheckField label="Use Paged KV Cache" tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations." checked={effectiveUsePagedCache} onChange={v => { onChange('usePagedCache', v); if (v && config.enableDiskCache) onChange('enableDiskCache', false) }} disabled={batchingOff || prefixOff || zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged} />
         {effectiveUsePagedCache && (
           <>
             <SliderField
               label="Block Size (tokens)"
-              tooltip="Number of tokens per paged KV cache block. Smaller blocks reduce memory waste per sequence but increase overhead from managing more blocks. Default 64 is optimal for most models. Increase to 128-256 for very long context scenarios."
-              value={config.pagedCacheBlockSize}
+              tooltip="Number of tokens per paged KV cache block. Smaller blocks reduce memory waste per sequence but increase overhead from managing more blocks. Default 64 is optimal for most models. DSV4 uses 256-token blocks for its native composite cache."
+              value={effectivePagedCacheBlockSize}
               onChange={v => onChange('pagedCacheBlockSize', v)}
               min={1}
               max={1024}
               step={16}
               defaultValue={DEFAULT_CONFIG.pagedCacheBlockSize}
+              disabled={dsv4CompositeRequiresPaged}
             />
             <SliderField
               label="Max Cache Blocks"

@@ -73,6 +73,8 @@ function topKOverrideBlockedByFamily(family?: string): boolean {
   return normalized === 'zaya' || normalized === 'zaya1-vl' || normalized === 'ling'
 }
 
+const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
+
 function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
   if (!modelPath) return {}
   const out: BundleStartupDefaults = {}
@@ -1423,7 +1425,7 @@ export class SessionManager extends EventEmitter {
           cacheMemoryPercent: 15,
           noMemoryAwareCache: false,
           usePagedCache: detected.usePagedCache ?? true,
-          pagedCacheBlockSize: 64,
+          pagedCacheBlockSize: normalizeDetectedFamilyName(detected.family) === 'deepseek-v4' ? DSV4_PAGED_CACHE_BLOCK_SIZE : 64,
           maxCacheBlocks: 1000,
           enableBlockDiskCache: true,
           blockDiskCacheMaxGb: 10,
@@ -2252,7 +2254,8 @@ export class SessionManager extends EventEmitter {
     const detectedFamily = normalizeDetectedFamilyName(detected.family)
     const zayaCcaActive = isZayaCcaFamily(detectedFamily)
     const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
-    const usePagedCache = zayaTypedCacheRequiresPaged
+    const dsv4CompositeRequiresPaged = detectedFamily === 'deepseek-v4' && !prefixCacheOff
+    const usePagedCache = zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged
       ? true
       : (config.usePagedCache ?? detected.usePagedCache)
 
@@ -2284,8 +2287,14 @@ export class SessionManager extends EventEmitter {
     // Paged cache is a prefix cache backend — works for both LLMs and VLMs
     if (!prefixCacheOff && usePagedCache) {
       args.push('--use-paged-cache')
-      if (config.pagedCacheBlockSize && config.pagedCacheBlockSize > 0) {
-        args.push('--paged-cache-block-size', config.pagedCacheBlockSize.toString())
+      const effectivePagedCacheBlockSize = detectedFamily === 'deepseek-v4'
+        ? DSV4_PAGED_CACHE_BLOCK_SIZE
+        : config.pagedCacheBlockSize
+      if (detectedFamily === 'deepseek-v4' && config.pagedCacheBlockSize !== DSV4_PAGED_CACHE_BLOCK_SIZE) {
+        console.log(`[SESSION] DSV4-Flash detected: overriding pagedCacheBlockSize ${config.pagedCacheBlockSize} -> ${DSV4_PAGED_CACHE_BLOCK_SIZE} (native SWA+CSA/HCA composite cache)`)
+      }
+      if (effectivePagedCacheBlockSize && effectivePagedCacheBlockSize > 0) {
+        args.push('--paged-cache-block-size', effectivePagedCacheBlockSize.toString())
       }
       if (config.maxCacheBlocks && config.maxCacheBlocks > 0) {
         args.push('--max-cache-blocks', config.maxCacheBlocks.toString())
