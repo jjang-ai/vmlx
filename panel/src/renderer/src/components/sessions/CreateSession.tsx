@@ -3,6 +3,10 @@ import { ArrowLeft } from 'lucide-react'
 import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG } from './SessionConfigForm'
 import { DownloadTab } from './DownloadTab'
 import { DirectoryManager } from './DirectoryManager'
+import {
+  JANGTQ_MPP_NAX_SETTING_KEY,
+  normalizeJangtqMppNaxMode,
+} from '../../../../shared/jangtqMppNax'
 
 interface ModelInfo {
   path: string
@@ -149,12 +153,36 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
     detect()
   }, [initialModelPath])
 
+  const handleJangtqMppNaxModeChange = (value: unknown) => {
+    const mode = normalizeJangtqMppNaxMode(value)
+    setConfig(prev => ({ ...prev, jangtqMppNax: mode }))
+    window.api.settings.set(JANGTQ_MPP_NAX_SETTING_KEY, mode).catch((err: unknown) => {
+      setLaunchError((err as Error).message)
+    })
+  }
+
   const handleChange = <K extends keyof SessionConfig>(key: K, value: SessionConfig[K]) => {
+    if (key === 'jangtqMppNax') {
+      handleJangtqMppNaxModeChange(value)
+      return
+    }
     setConfig(prev => ({ ...prev, [key]: value }))
   }
 
+  useEffect(() => {
+    window.api.settings.get(JANGTQ_MPP_NAX_SETTING_KEY)
+      .then((mode: string | null) => {
+        setConfig(prev => ({ ...prev, jangtqMppNax: normalizeJangtqMppNaxMode(mode) }))
+      })
+      .catch(() => {})
+    const unsubscribe = window.api.settings.onJangtqMppNaxChanged?.((data: { mode: 'auto' | 'off' | 'on' }) => {
+      setConfig(prev => ({ ...prev, jangtqMppNax: normalizeJangtqMppNaxMode(data?.mode) }))
+    })
+    return () => { unsubscribe?.() }
+  }, [])
+
   const handleReset = async () => {
-    const base = { ...DEFAULT_CONFIG, port: config.port }
+    const base = { ...DEFAULT_CONFIG, port: config.port, jangtqMppNax: normalizeJangtqMppNaxMode(await window.api.settings.get(JANGTQ_MPP_NAX_SETTING_KEY).catch(() => null)) }
     // Re-run model detection to get proper defaults for this model
     if (selectedModel) {
       try {

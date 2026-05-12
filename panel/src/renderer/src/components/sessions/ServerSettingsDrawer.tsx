@@ -3,6 +3,10 @@ import { X } from 'lucide-react'
 import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG, SliderField } from './SessionConfigForm'
 import { useInferenceMode } from '../layout/InferenceMode'
 import { useTranslation } from '../../i18n'
+import {
+  JANGTQ_MPP_NAX_SETTING_KEY,
+  normalizeJangtqMppNaxMode,
+} from '../../../../shared/jangtqMppNax'
 
 interface Session {
   id: string
@@ -73,6 +77,18 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
   }, [])
 
   useEffect(() => {
+    window.api.settings.get(JANGTQ_MPP_NAX_SETTING_KEY)
+      .then((mode: string | null) => {
+        setConfig(prev => ({ ...prev, jangtqMppNax: normalizeJangtqMppNaxMode(mode) }))
+      })
+      .catch(() => {})
+    const unsubscribe = window.api.settings.onJangtqMppNaxChanged?.((data: { mode: 'auto' | 'off' | 'on' }) => {
+      setConfig(prev => ({ ...prev, jangtqMppNax: normalizeJangtqMppNaxMode(data?.mode) }))
+    })
+    return () => { unsubscribe?.() }
+  }, [session.id])
+
+  useEffect(() => {
     const unsubscribe = window.api.gateway?.onSingleModelModeChanged?.((data: { singleModelMode: boolean }) => {
       setSingleModelMode(!!data?.singleModelMode)
     })
@@ -100,7 +116,23 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
     }
   }, [session.id])
 
+  const handleJangtqMppNaxModeChange = async (value: unknown) => {
+    const mode = normalizeJangtqMppNaxMode(value)
+    setConfig(prev => ({ ...prev, jangtqMppNax: mode }))
+    setDirty(true)
+    setMessage(null)
+    try {
+      await window.api.settings.set(JANGTQ_MPP_NAX_SETTING_KEY, mode)
+    } catch (e) {
+      setMessage({ type: 'error', text: (e as Error).message })
+    }
+  }
+
   const handleChange = <K extends keyof SessionConfig>(key: K, value: SessionConfig[K]) => {
+    if (key === 'jangtqMppNax') {
+      handleJangtqMppNaxModeChange(value)
+      return
+    }
     setConfig(prev => ({ ...prev, [key]: value }))
     setDirty(true)
     setMessage(null)
@@ -179,7 +211,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
   }
 
   const handleReset = async () => {
-    const base = { ...DEFAULT_CONFIG, host: config.host, port: config.port }
+    const base = { ...DEFAULT_CONFIG, host: config.host, port: config.port, jangtqMppNax: normalizeJangtqMppNaxMode(await window.api.settings.get(JANGTQ_MPP_NAX_SETTING_KEY).catch(() => null)) }
     // Re-run model detection to get proper defaults for this model
     if (session.modelPath) {
       try {

@@ -2,6 +2,10 @@ import { useState, useEffect } from 'react'
 import { ArrowLeft, ChevronRight } from 'lucide-react'
 import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG } from './SessionConfigForm'
 import { useTranslation } from '../../i18n'
+import {
+  JANGTQ_MPP_NAX_SETTING_KEY,
+  normalizeJangtqMppNaxMode,
+} from '../../../../shared/jangtqMppNax'
 
 interface Session {
   id: string
@@ -36,13 +40,6 @@ function isZayaCcaFamily(family?: string): boolean {
 function topKOverrideBlockedByFamily(family?: string): boolean {
   const normalized = normalizeDetectedFamilyName(family)
   return normalized === 'zaya' || normalized === 'zaya1-vl' || normalized === 'ling'
-}
-
-function normalizeJangtqMppNaxMode(mode: unknown): 'auto' | 'off' | 'on' {
-  const value = String(mode ?? 'auto').trim().toLowerCase()
-  if (value === 'off' || value === '0' || value === 'false' || value === 'no') return 'off'
-  if (value === 'on' || value === '1' || value === 'true' || value === 'yes') return 'on'
-  return 'auto'
 }
 
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
@@ -308,7 +305,8 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         // Parse stored config JSON, merge with defaults
         try {
           const stored = JSON.parse(s.config)
-          setConfig({ ...DEFAULT_CONFIG, ...stored })
+          const globalMppNax = normalizeJangtqMppNaxMode(await window.api.settings.get(JANGTQ_MPP_NAX_SETTING_KEY).catch(() => null))
+          setConfig({ ...DEFAULT_CONFIG, ...stored, jangtqMppNax: globalMppNax })
         } catch {
           setConfig(DEFAULT_CONFIG)
           setMessage({ type: 'error', text: 'Stored configuration was corrupted and has been reset to defaults. Save to persist.' })
@@ -323,6 +321,13 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
     }
     load()
   }, [sessionId])
+
+  useEffect(() => {
+    const unsubscribe = window.api.settings.onJangtqMppNaxChanged?.((data: { mode: 'auto' | 'off' | 'on' }) => {
+      setConfig(prev => ({ ...prev, jangtqMppNax: normalizeJangtqMppNaxMode(data?.mode) }))
+    })
+    return () => { unsubscribe?.() }
+  }, [])
 
   // Listen for session status changes
   useEffect(() => {
@@ -353,7 +358,23 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
     }
   }, [sessionId])
 
+  const handleJangtqMppNaxModeChange = async (value: unknown) => {
+    const mode = normalizeJangtqMppNaxMode(value)
+    setConfig(prev => ({ ...prev, jangtqMppNax: mode }))
+    setDirty(true)
+    setMessage(null)
+    try {
+      await window.api.settings.set(JANGTQ_MPP_NAX_SETTING_KEY, mode)
+    } catch (e) {
+      setMessage({ type: 'error', text: (e as Error).message })
+    }
+  }
+
   const handleChange = <K extends keyof SessionConfig>(key: K, value: SessionConfig[K]) => {
+    if (key === 'jangtqMppNax') {
+      handleJangtqMppNaxModeChange(value)
+      return
+    }
     setConfig(prev => ({ ...prev, [key]: value }))
     setDirty(true)
     setMessage(null)
@@ -433,7 +454,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
   }
 
   const handleReset = async () => {
-    const base = { ...DEFAULT_CONFIG, host: config.host, port: config.port }
+    const base = { ...DEFAULT_CONFIG, host: config.host, port: config.port, jangtqMppNax: normalizeJangtqMppNaxMode(await window.api.settings.get(JANGTQ_MPP_NAX_SETTING_KEY).catch(() => null)) }
     // Re-run model detection to get proper defaults for this model
     if (session?.modelPath) {
       try {

@@ -896,8 +896,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         )}
 
         <SelectField
-          label="JANGTQ MPP/NAX TensorOps"
-          tooltip="Controls the custom TurboQuant MPP/NAX TensorOps path for JANGTQ/MXTQ routed-expert kernels on M5-class GPUs. Auto uses it only for shapes that benchmark faster. Requires restart."
+          label="App-wide JANGTQ MPP/NAX TensorOps"
+          tooltip="Controls the app-wide custom TurboQuant MPP/NAX TensorOps path for JANGTQ/MXTQ routed-expert kernels on M5-class GPUs. Auto uses it only for shapes that benchmark faster. Requires restart for already-running sessions."
           value={config.jangtqMppNax || 'auto'}
           onChange={v => onChange('jangtqMppNax', v as SessionConfig['jangtqMppNax'])}
           options={[

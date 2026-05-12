@@ -10,6 +10,10 @@ import { v4 as uuidv4 } from 'uuid'
 import { db, Session } from './database'
 import { resolveImageModelFromDirectoryName } from '../shared/imageModels'
 import { dsv4EnvFromConfig } from '../shared/dsv4Env'
+import {
+  JANGTQ_MPP_NAX_SETTING_KEY,
+  normalizeJangtqMppNaxMode,
+} from '../shared/jangtqMppNax'
 
 export type { ServerConfig, DetectedProcess } from './server'
 import type { ServerConfig, DetectedProcess } from './server'
@@ -81,11 +85,8 @@ function topKOverrideBlockedByFamily(family?: string): boolean {
   return normalized === 'zaya' || normalized === 'zaya1-vl' || normalized === 'ling'
 }
 
-function normalizeJangtqMppNaxMode(mode: unknown): 'auto' | 'off' | 'on' {
-  const value = String(mode ?? 'auto').trim().toLowerCase()
-  if (value === 'off' || value === '0' || value === 'false' || value === 'no') return 'off'
-  if (value === 'on' || value === '1' || value === 'true' || value === 'yes') return 'on'
-  return 'auto'
+function getGlobalJangtqMppNaxMode(): 'auto' | 'off' | 'on' {
+  return normalizeJangtqMppNaxMode(db.getSetting(JANGTQ_MPP_NAX_SETTING_KEY))
 }
 
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
@@ -1455,7 +1456,7 @@ export class SessionManager extends EventEmitter {
           cacheStackStartupDefaultsVersion: CACHE_STACK_STARTUP_DEFAULTS_VERSION,
           streamInterval: 1,
           maxTokens: 32768,
-          jangtqMppNax: 'auto',
+          jangtqMppNax: getGlobalJangtqMppNaxMode(),
           jangtqTopKOverride: 0,
           toolCallParser: 'auto',
           reasoningParser: 'auto',
@@ -2375,7 +2376,7 @@ export class SessionManager extends EventEmitter {
     } else {
       args.push('--max-tokens', '1000000')
     }
-    args.push('--jangtq-mpp-nax', normalizeJangtqMppNaxMode((config as any).jangtqMppNax))
+    args.push('--jangtq-mpp-nax', getGlobalJangtqMppNaxMode())
 
     // Tool integration (parsers and --enable-auto-tool-choice already pushed above)
     if (config.mcpConfig) args.push('--mcp-config', config.mcpConfig)
