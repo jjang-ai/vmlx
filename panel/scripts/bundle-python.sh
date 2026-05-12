@@ -12,8 +12,34 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PANEL_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_DIR="$(dirname "$PANEL_DIR")"
 BUNDLE_DIR="$PANEL_DIR/bundled-python"
+JANG_LOCAL="${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}"
 
 echo "==> Bundling Python $PYTHON_VERSION for standalone vMLX distribution"
+
+check_local_jang_source_clean() {
+  if [ ! -f "$JANG_LOCAL/pyproject.toml" ]; then
+    return 0
+  fi
+  if ! git -C "$JANG_LOCAL" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ "${VMLINUX_ALLOW_DIRTY_JANG_SOURCE:-0}" = "1" ]; then
+    echo "    WARNING: VMLX_ALLOW_DIRTY_JANG_SOURCE=1 — bundling tracked-dirty jang-tools" >&2
+    return 0
+  fi
+  if ! git -C "$JANG_LOCAL" diff --quiet --ignore-submodules -- \
+    || ! git -C "$JANG_LOCAL" diff --cached --quiet --ignore-submodules --; then
+    echo "ERROR: RELEASE BLOCKED — local jang-tools source has tracked changes: $JANG_LOCAL" >&2
+    echo "       Release bundles must not silently package uncommitted JANG runtime changes." >&2
+    echo "       Commit/stash/drop those changes, point VMLX_JANG_TOOLS_SOURCE at a clean" >&2
+    echo "       checkout, or set VMLX_ALLOW_DIRTY_JANG_SOURCE=1 only for local smoke builds." >&2
+    echo "       Tracked dirty files:" >&2
+    git -C "$JANG_LOCAL" status --short --untracked-files=no >&2 || true
+    exit 1
+  fi
+}
+
+check_local_jang_source_clean
 
 # Clean previous build
 rm -rf "$BUNDLE_DIR"
@@ -124,7 +150,6 @@ else
   echo "    local vmlx missing, falling back to PyPI"
   "$PYTHON" -m pip install --no-deps "vmlx>=1.5.24"
 fi
-JANG_LOCAL="${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}"
 if [ -f "$JANG_LOCAL/pyproject.toml" ]; then
   echo "    using local jang-tools at $JANG_LOCAL"
   "$PYTHON" -m pip install --force-reinstall --no-deps "$JANG_LOCAL"

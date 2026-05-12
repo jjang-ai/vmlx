@@ -2597,7 +2597,7 @@ class TestStartupCompatibilityGuards:
         ]
 
         assert '"$PYTHON" -m pip install --force-reinstall --no-deps "$VMLX_LOCAL"' in local_install_block
-        assert 'JANG_LOCAL="${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}"' in local_install_block
+        assert 'JANG_LOCAL="${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}"' in bundle_script
         assert '"$PYTHON" -m pip install --force-reinstall --no-deps "$JANG_LOCAL"' in local_install_block
 
     def test_bundled_python_does_not_silently_fallback_to_pypi_jang_tools(self):
@@ -2609,6 +2609,21 @@ class TestStartupCompatibilityGuards:
         assert "pip install --no-deps \"jang>=" in bundle_script
         assert "VMLINUX_ALLOW_MISSING_JANG_SOURCE_HASH" in verify_script
         assert "RELEASE BLOCKED — local jang_tools source unavailable for hash parity" in verify_script
+
+    def test_bundled_python_blocks_tracked_dirty_local_jang_tools_by_default(self):
+        bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
+        local_install_block = bundle_script[
+            bundle_script.index('JANG_LOCAL="${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}"')
+            : bundle_script.index("# Clean up to reduce size")
+        ]
+        destructive_build_index = bundle_script.index('rm -rf "$BUNDLE_DIR"')
+        dirty_guard_index = bundle_script.index("check_local_jang_source_clean")
+
+        assert "VMLINUX_ALLOW_DIRTY_JANG_SOURCE" in local_install_block
+        assert "RELEASE BLOCKED — local jang-tools source has tracked changes" in local_install_block
+        assert 'git -C "$JANG_LOCAL" diff --quiet --ignore-submodules --' in local_install_block
+        assert 'git -C "$JANG_LOCAL" diff --cached --quiet --ignore-submodules --' in local_install_block
+        assert dirty_guard_index < destructive_build_index
 
     def test_bundled_python_console_scripts_are_relocatable(self):
         bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
