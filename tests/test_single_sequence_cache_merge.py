@@ -1,5 +1,6 @@
 import importlib
 
+import mlx.core as mx
 import pytest
 
 from vmlx_engine.utils.mamba_cache import ensure_mamba_support
@@ -49,12 +50,39 @@ def test_turboquant_kv_single_sequence_batch_api_is_explicit():
 
     tq = TurboQuantKVCache(key_dim=8, value_dim=8)
 
+    assert getattr(tq, "_vmlx_batch_api", None) == "turboquant_kv_v1"
+
     tq.filter([0])
-    assert tq.extract(0) is tq
+    extracted_empty = tq.extract(0)
+    assert isinstance(extracted_empty, TurboQuantKVCache)
+    assert extracted_empty is not tq
+    assert extracted_empty.offset == 0
     tq.prepare(right_padding=[0])
     tq.finalize()
 
-    with pytest.raises(NotImplementedError):
-        tq.filter([0, 1])
-    with pytest.raises(IndexError):
-        tq.extract(1)
+    empty_batch = TurboQuantKVCache(key_dim=8, value_dim=8)
+    empty_batch.filter([0, 1])
+    assert empty_batch._idx == 0
+    assert empty_batch.offset.shape == (2,)
+
+
+def test_turboquant_kv_extract_slices_single_batch_row():
+    ensure_mamba_support()
+
+    pytest.importorskip("jang_tools.turboquant.cache")
+    from jang_tools.turboquant.cache import TurboQuantKVCache
+
+    tq = TurboQuantKVCache(key_dim=8, value_dim=8)
+    keys = mx.arange(24, dtype=mx.float16).reshape(1, 1, 3, 8)
+    values = mx.arange(24, dtype=mx.float16).reshape(1, 1, 3, 8) + 100
+    tq.update_and_fetch(keys, values)
+
+    extracted = tq.extract(0)
+
+    assert isinstance(extracted, TurboQuantKVCache)
+    assert extracted is not tq
+    assert extracted.offset == 3
+    assert extracted.keys.shape == (1, 1, 3, 8)
+    assert extracted.values.shape == (1, 1, 3, 8)
+    assert mx.array_equal(extracted.keys, keys).item()
+    assert mx.array_equal(extracted.values, values).item()
