@@ -2065,7 +2065,12 @@ class MLLMBatchGenerator:
 
         # Check pixel cache first
         media_cache_sources = all_images + video_cache_sources
-        cached_pixels = self.vision_cache.get_pixel_cache(media_cache_sources, request.prompt)
+        _mllm_bypass = bool(getattr(request, "_bypass_prefix_cache", False))
+        cached_pixels = None
+        if not _mllm_bypass:
+            cached_pixels = self.vision_cache.get_pixel_cache(
+                media_cache_sources, request.prompt
+            )
         if cached_pixels is not None:
             # Cache hit - use cached pixel values
             request.input_ids = cached_pixels.input_ids
@@ -2178,7 +2183,11 @@ class MLLMBatchGenerator:
         processing_time = time.perf_counter() - tic
 
         # Store in pixel cache for future reuse
-        if media_cache_sources and request.pixel_values is not None:
+        if (
+            not _mllm_bypass
+            and media_cache_sources
+            and request.pixel_values is not None
+        ):
             self.vision_cache.set_pixel_cache(
                 images=media_cache_sources,
                 prompt=request.prompt,

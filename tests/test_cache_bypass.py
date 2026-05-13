@@ -258,6 +258,8 @@ class TestSchedulerBypassGating:
 
     def test_mllm_scheduler_store_path_honors_bypass(self):
         src = self._read("vmlx_engine/mllm_scheduler.py")
+        cleanup_idx = src.index("def _cleanup_finished(")
+        src = src[cleanup_idx:]
         assert (
             "getattr(request, '_bypass_prefix_cache', False):" in src
         ), "mllm_scheduler.py store path no longer checks _bypass_prefix_cache"
@@ -276,6 +278,24 @@ class TestSchedulerBypassGating:
             "mllm_scheduler.add_request no longer attaches _bypass_prefix_cache to request"
         )
 
+    def test_mllm_scheduler_threads_bypass_to_batch_request(self):
+        """The scheduler must copy bypass from MLLMRequest to MLLMBatchRequest.
+
+        The batch generator owns prefix-cache fetch and vision pixel-cache
+        fetch, so setting the flag only on the scheduler request is not enough.
+        """
+        src = self._read("vmlx_engine/mllm_scheduler.py")
+        idx = src.index("batch_req = MLLMBatchRequest(")
+        window = src[idx : src.index("batch_requests.append(batch_req)", idx)]
+        assert "getattr(request, '_bypass_prefix_cache', False)" in window, (
+            "mllm_scheduler lost the MLLMRequest -> MLLMBatchRequest "
+            "bypass propagation check"
+        )
+        assert "batch_req._bypass_prefix_cache = True" in window, (
+            "mllm_scheduler no longer copies _bypass_prefix_cache to "
+            "MLLMBatchRequest before prefix-cache fetch"
+        )
+
     def test_mllm_batch_generator_gates_all_three_fetch_paths(self):
         src = self._read("vmlx_engine/mllm_batch_generator.py")
         # Must have the bypass variable
@@ -290,6 +310,23 @@ class TestSchedulerBypassGating:
         assert src.count("not _mllm_bypass") >= 3, (
             "mllm_batch_generator.py must gate paged + memory-aware + disk-L2 "
             f"fetches — found only {src.count('not _mllm_bypass')} gates"
+        )
+
+    def test_mllm_batch_generator_gates_vision_pixel_cache_on_bypass(self):
+        src = self._read("vmlx_engine/mllm_batch_generator.py")
+        idx = src.index("media_cache_sources = all_images + video_cache_sources")
+        window = src[idx : src.index("# Cache miss - process images", idx)]
+        assert "_mllm_bypass" in window, (
+            "mllm_batch_generator._preprocess_request no longer computes "
+            "the bypass flag before consulting the vision pixel cache"
+        )
+        assert "not _mllm_bypass" in window, (
+            "vision pixel-cache fetch must be gated by not _mllm_bypass"
+        )
+        store_idx = src.index("# Store in pixel cache for future reuse")
+        store_window = src[store_idx : store_idx + 400]
+        assert "not _mllm_bypass" in store_window, (
+            "vision pixel-cache store must be gated by not _mllm_bypass"
         )
 
     def test_engine_core_add_request_accepts_bypass(self):

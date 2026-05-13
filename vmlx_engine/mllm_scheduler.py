@@ -2025,6 +2025,8 @@ class MLLMScheduler:
             _gpl = getattr(request, '_gen_prompt_len', 0)
             if _gpl > 0:
                 batch_req._gen_prompt_len = _gpl
+            if getattr(request, '_bypass_prefix_cache', False):
+                batch_req._bypass_prefix_cache = True
             batch_requests.append(batch_req)
 
             request.status = RequestStatus.RUNNING
