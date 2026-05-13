@@ -15,6 +15,7 @@ These tests are pure unit tests with NO MLX dependency.
 """
 
 import pytest
+import json
 
 from vmlx_engine.api.models import (
     ContentPart,
@@ -1276,6 +1277,151 @@ class TestSimpleEngineMLLMKwargs:
         assert "enable_thinking" in mllm_kwargs
         assert "reasoning_effort" not in mllm_kwargs
         assert "thinking_budget" not in mllm_kwargs
+
+    def test_direct_mllm_streaming_falls_back_to_template_prompt_tokens(self):
+        """Direct MLLM streaming must not report prompt_tokens=0 forever.
+
+        Some mlx-vlm streaming chunks do not carry prompt_tokens. The final
+        direct SimpleEngine chunk must count the formatted prompt so streaming
+        usage, PP speed, and UI counters stay meaningful when continuous
+        batching is disabled.
+        """
+        import asyncio
+        from types import SimpleNamespace
+
+        from vmlx_engine.engine.simple import SimpleEngine
+
+        class _Tokenizer:
+            def encode(self, text):
+                return text.split()
+
+        class _Processor:
+            tokenizer = _Tokenizer()
+
+        class _Model:
+            processor = _Processor()
+
+            def _apply_chat_template(self, messages, enable_thinking=None):
+                assert enable_thinking is False
+                return "system user prompt assistant"
+
+            def stream_chat(self, **kwargs):
+                assert kwargs["enable_thinking"] is False
+                return iter([
+                    SimpleNamespace(text="READY", finish_reason="stop", prompt_tokens=0)
+                ])
+
+        engine = SimpleEngine.__new__(SimpleEngine)
+        engine._loaded = True
+        engine._model = _Model()
+        engine._is_mllm = True
+        engine._generation_lock = asyncio.Lock()
+        engine._abort_requested = False
+        engine._current_request_id = None
+
+        async def _collect():
+            outputs = []
+            async for output in engine.stream_chat(
+                [{"role": "user", "content": "ignored"}],
+                max_tokens=8,
+                enable_thinking=False,
+            ):
+                outputs.append(output)
+            return outputs
+
+        outputs = asyncio.run(_collect())
+
+        assert outputs[-1].text == "READY"
+        assert outputs[-1].prompt_tokens == 4
+
+    def test_direct_llm_streaming_falls_back_to_prompt_tokens_on_finished_chunk(self):
+        """Direct LLM streaming must count prompt tokens when mlx-lm reports 0."""
+        import asyncio
+        from types import SimpleNamespace
+
+        from vmlx_engine.engine.simple import SimpleEngine
+
+        class _Tokenizer:
+            def encode(self, text):
+                return text.split()
+
+        class _Model:
+            tokenizer = _Tokenizer()
+
+            def stream_generate(self, **kwargs):
+                assert kwargs["prompt"] == "one two three"
+                return iter([
+                    SimpleNamespace(
+                        text="READY",
+                        finished=True,
+                        finish_reason="stop",
+                        prompt_tokens=0,
+                    )
+                ])
+
+        engine = SimpleEngine.__new__(SimpleEngine)
+        engine._loaded = True
+        engine._model = _Model()
+        engine._is_mllm = False
+        engine._generation_lock = asyncio.Lock()
+        engine._abort_requested = False
+        engine._current_request_id = None
+
+        async def _collect():
+            outputs = []
+            async for output in engine.stream_generate(
+                "one two three",
+                max_tokens=8,
+            ):
+                outputs.append(output)
+            return outputs
+
+        outputs = asyncio.run(_collect())
+
+        assert outputs[-1].text == "READY"
+        assert outputs[-1].prompt_tokens == 3
+
+    def test_direct_mllm_thinking_sentinel_uses_bundle_template_contract(self, tmp_path):
+        """ZAYA supports reasoning but does not start default/off prompts in <think>.
+
+        Direct SimpleEngine MLLM paths use MLXMultimodalLM._apply_chat_template().
+        That helper must consult the real bundle path, not the bare model_type
+        string, so ZAYA/ZAYA1-VL do not receive a synthetic <think></think>
+        block when enable_thinking=false.
+        """
+        from vmlx_engine.model_config_registry import get_model_config_registry
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "zaya1_vl",
+            "vision_config": {"hidden_size": 1024},
+        }))
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "cache_subtype": "zaya_cca",
+            "capabilities": {
+                "family": "zaya1_vl",
+                "cache_type": "hybrid",
+                "cache_subtype": "zaya_cca",
+                "tool_parser": "zaya_xml",
+                "reasoning_parser": "qwen3",
+                "think_in_template": False,
+                "supports_thinking": True,
+                "modality": "vision",
+            },
+        }))
+        get_model_config_registry().clear_cache()
+
+        mllm = MLXMultimodalLM.__new__(MLXMultimodalLM)
+        mllm.model_name = str(tmp_path)
+        mllm.config = {
+            "model_type": "zaya1_vl",
+            "capabilities": {
+                "supports_thinking": True,
+                "think_in_template": False,
+            },
+        }
+
+        assert mllm._prompt_template_supports_thinking() is False
 
     def test_extra_ct_kwargs_merge_does_not_overwrite(self):
         """chat_template_kwargs should merge into mllm_kwargs without overwriting."""

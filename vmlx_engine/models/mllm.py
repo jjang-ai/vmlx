@@ -1357,31 +1357,41 @@ class MLXMultimodalLM:
         return chat_messages, all_image_urls, videos
 
     def _prompt_template_supports_thinking(self) -> bool:
-        """Return False for families that must not receive synthetic think tags."""
+        """Return True only when the prompt template owns a think rail.
+
+        ``supports_thinking`` means a model can reason when the API enables
+        that rail. It does not mean a direct SimpleEngine MLLM prompt should
+        synthesize ``<think></think>`` when thinking is off. ZAYA/Hy3/Gemma
+        are reasoning-capable but their prompt contract is not "assistant
+        starts inside <think>" in the default/off path.
+        """
 
         config = getattr(self, "config", None)
         if not isinstance(config, dict):
-            return True
+            return False
 
         caps = config.get("capabilities")
-        if isinstance(caps, dict) and caps.get("supports_thinking") is False:
-            return False
+        if isinstance(caps, dict):
+            if caps.get("supports_thinking") is False:
+                return False
+            if isinstance(caps.get("think_in_template"), bool):
+                return bool(caps["think_in_template"])
 
         model_type = config.get("model_type")
         text_config = config.get("text_config")
         if not model_type and isinstance(text_config, dict):
             model_type = text_config.get("model_type")
-        if not model_type:
-            return True
-
         try:
             from vmlx_engine.model_config_registry import get_model_config_registry
 
-            family_config = get_model_config_registry().lookup(str(model_type))
+            registry = get_model_config_registry()
+            family_config = registry.lookup(str(getattr(self, "model_name", "") or ""))
+            if family_config.family_name == "unknown" and model_type:
+                family_config = registry.lookup(str(model_type))
         except Exception:
-            return True
+            return False
 
-        return getattr(family_config, "supports_thinking", None) is not False
+        return bool(getattr(family_config, "think_in_template", False))
 
     def _apply_chat_template(
         self,

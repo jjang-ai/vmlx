@@ -7,8 +7,10 @@ performance when serving a single user at a time.
 """
 
 import asyncio
+import functools
 import logging
 from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from ..api.tool_calling import check_and_inject_fallback_tools, convert_tools_for_template
@@ -60,6 +62,30 @@ class SimpleEngine(BaseEngine):
         # Abort flag — checked between tokens in stream_generate
         self._abort_requested = False
         self._current_request_id: str | None = None
+        self._model_executor: ThreadPoolExecutor | None = None
+
+    def _ensure_model_executor(self) -> ThreadPoolExecutor:
+        executor = getattr(self, "_model_executor", None)
+        if executor is None:
+            executor = ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="simple-engine-model",
+            )
+            self._model_executor = executor
+        return executor
+
+    async def _run_model_call(self, fn, /, *args, **kwargs):
+        """Run all MLX model work on SimpleEngine's one model thread.
+
+        MLX streams are thread-local. Loading on one thread and later calling
+        generate()/next() from arbitrary default-executor threads can crash
+        JANG/JANGTQ/VLM/hybrid kernels with `There is no Stream(gpu,N) in
+        current thread`. BatchedEngine already pins load+step to one executor;
+        SimpleEngine needs the same invariant for direct/no-CB mode.
+        """
+        loop = asyncio.get_running_loop()
+        call = functools.partial(fn, *args, **kwargs)
+        return await loop.run_in_executor(self._ensure_model_executor(), call)
 
     @property
     def model_name(self) -> str:
@@ -92,28 +118,76 @@ class SimpleEngine(BaseEngine):
             return getattr(self._model, "processor", None)
         return self._model.tokenizer
 
+    def _estimate_mllm_chat_prompt_tokens(
+        self,
+        messages: list[dict[str, Any]],
+        enable_thinking: bool | None = None,
+    ) -> int:
+        """Best-effort prompt-token count for direct MLLM streaming usage.
+
+        Some mlx-vlm stream chunks do not carry prompt_tokens. The LLM direct
+        stream path already falls back to tokenizer.encode(prompt); keep MLLM
+        usage accounting equivalent by applying the same chat template the
+        MLLM wrapper uses and counting that formatted prompt.
+        """
+        if self._model is None:
+            return 0
+        processor = getattr(self._model, "processor", None)
+        tokenizer = (
+            getattr(processor, "tokenizer", None)
+            if processor is not None
+            else None
+        ) or processor
+        if tokenizer is None or not hasattr(tokenizer, "encode"):
+            return 0
+        formatted_prompt = None
+        apply_template = getattr(self._model, "_apply_chat_template", None)
+        if callable(apply_template):
+            try:
+                formatted_prompt = apply_template(messages, enable_thinking)
+            except Exception:
+                formatted_prompt = None
+        if not formatted_prompt:
+            parts: list[str] = []
+            for msg in messages:
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    parts.append(content)
+                elif isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict) and isinstance(part.get("text"), str):
+                            parts.append(part["text"])
+            formatted_prompt = "\n".join(parts)
+        try:
+            return len(tokenizer.encode(formatted_prompt))
+        except Exception:
+            return 0
+
     async def start(self) -> None:
         """Start the engine (load model if not loaded)."""
         if self._loaded:
             return
 
-        if self._is_mllm:
-            from ..models.mllm import MLXMultimodalLM
+        def _construct_and_load():
+            if self._is_mllm:
+                from ..models.mllm import MLXMultimodalLM
 
-            self._model = MLXMultimodalLM(
-                self._model_name,
-                trust_remote_code=self._trust_remote_code,
-                enable_cache=self._enable_cache,
-            )
-        else:
-            from ..models.llm import MLXLanguageModel
+                model = MLXMultimodalLM(
+                    self._model_name,
+                    trust_remote_code=self._trust_remote_code,
+                    enable_cache=self._enable_cache,
+                )
+            else:
+                from ..models.llm import MLXLanguageModel
 
-            self._model = MLXLanguageModel(
-                self._model_name,
-                trust_remote_code=self._trust_remote_code,
-            )
+                model = MLXLanguageModel(
+                    self._model_name,
+                    trust_remote_code=self._trust_remote_code,
+                )
+            model.load()
+            return model
 
-        self._model.load()
+        self._model = await self._run_model_call(_construct_and_load)
         self._loaded = True
         logger.info(f"SimpleEngine loaded: {self._model_name} (MLLM={self._is_mllm})")
 
@@ -137,6 +211,10 @@ class SimpleEngine(BaseEngine):
         """Stop the engine and cleanup resources."""
         self._model = None
         self._loaded = False
+        executor = getattr(self, "_model_executor", None)
+        self._model_executor = None
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
         logger.info("SimpleEngine stopped")
 
     async def generate(
@@ -169,8 +247,7 @@ class SimpleEngine(BaseEngine):
         kwargs.pop("_bypass_prefix_cache", None)
 
         async with self._generation_lock:
-            # Run in thread pool to allow asyncio timeout to work
-            output = await asyncio.to_thread(
+            output = await self._run_model_call(
                 self._model.generate,
                 prompt=prompt,
                 max_tokens=max_tokens,
@@ -237,13 +314,17 @@ class SimpleEngine(BaseEngine):
             self._current_request_id = kwargs.pop("request_id", None)
 
             try:
-                stream_iter = self._model.stream_generate(
-                    prompt=prompt,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    stop=stop,
-                    **kwargs,
+                stream_iter = await self._run_model_call(
+                    lambda: iter(
+                        self._model.stream_generate(
+                            prompt=prompt,
+                            max_tokens=max_tokens,
+                            temperature=temperature,
+                            top_p=top_p,
+                            stop=stop,
+                            **kwargs,
+                        )
+                    )
                 )
             except Exception as gen_err:
                 logger.error(f"stream_generate failed to start: {gen_err}", exc_info=True)
@@ -259,7 +340,7 @@ class SimpleEngine(BaseEngine):
                     return _sentinel
 
             while True:
-                chunk = await asyncio.to_thread(_next)
+                chunk = await self._run_model_call(_next)
                 if chunk is _sentinel:
                     break
 
@@ -292,6 +373,11 @@ class SimpleEngine(BaseEngine):
                 finish_reason = None
                 if finished:
                     finish_reason = getattr(chunk, "finish_reason", "stop")
+                    if prompt_tokens == 0:
+                        try:
+                            prompt_tokens = len(self._model.tokenizer.encode(prompt))
+                        except Exception:
+                            prompt_tokens = 0
 
                 yield GenerationOutput(
                     text=accumulated_text,
@@ -383,7 +469,7 @@ class SimpleEngine(BaseEngine):
                         k: v for k, v in extra_ct_kwargs.items()
                         if k not in ("tokenize", "add_generation_prompt")
                     })
-                output = await asyncio.to_thread(
+                output = await self._run_model_call(
                     self._model.chat,
                     messages=messages,
                     max_tokens=max_tokens,
@@ -478,7 +564,7 @@ class SimpleEngine(BaseEngine):
 
                 # Generate inline (don't call self.generate() — we already hold
                 # _generation_lock and asyncio.Lock is not reentrant).
-                output = await asyncio.to_thread(
+                output = await self._run_model_call(
                     self._model.generate,
                     prompt=prompt,
                     max_tokens=max_tokens,
@@ -563,10 +649,9 @@ class SimpleEngine(BaseEngine):
 
         # Build prompt using tokenizer
         if self._is_mllm:
-            # For MLLM, stream tokens one at a time via asyncio.to_thread(_next).
-            # This mirrors the LLM stream_generate pattern for true per-token
-            # streaming — each next() call is offloaded individually so the
-            # event loop stays responsive between tokens.
+            # For MLLM, stream tokens one at a time on the dedicated model
+            # worker. This mirrors the LLM stream_generate pattern for true
+            # per-token streaming while preserving MLX stream thread affinity.
             accumulated_text = ""
             token_count = 0
             last_prompt_tokens = 0
@@ -589,8 +674,9 @@ class SimpleEngine(BaseEngine):
 
             async with self._generation_lock:
                 try:
-                    # Create the synchronous iterator in a thread
-                    stream_iter = await asyncio.to_thread(
+                    # Create and consume the synchronous iterator on the
+                    # same MLX worker thread that loaded the model.
+                    stream_iter = await self._run_model_call(
                         lambda: iter(self._model.stream_chat(
                             messages=messages,
                             max_tokens=max_tokens,
@@ -618,7 +704,7 @@ class SimpleEngine(BaseEngine):
 
                 while True:
                     try:
-                        chunk = await asyncio.to_thread(_next)
+                        chunk = await self._run_model_call(_next)
                     except Exception as e:
                         logger.error(f"MLLM generation error: {type(e).__name__}: {e}")
                         try:
@@ -654,6 +740,11 @@ class SimpleEngine(BaseEngine):
                         last_prompt_tokens = chunk_prompt_tokens
 
                     finished = chunk.finish_reason is not None
+                    if finished and last_prompt_tokens == 0:
+                        last_prompt_tokens = self._estimate_mllm_chat_prompt_tokens(
+                            messages,
+                            thinking_enabled,
+                        )
 
                     yield GenerationOutput(
                         text=accumulated_text,
@@ -669,6 +760,11 @@ class SimpleEngine(BaseEngine):
 
                 # If stream ended without explicit finish, emit final chunk
                 if not finished:
+                    if last_prompt_tokens == 0:
+                        last_prompt_tokens = self._estimate_mllm_chat_prompt_tokens(
+                            messages,
+                            thinking_enabled,
+                        )
                     yield GenerationOutput(
                         text=accumulated_text,
                         new_text="",

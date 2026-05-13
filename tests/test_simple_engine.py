@@ -2,6 +2,8 @@
 """Tests for SimpleEngine concurrency handling."""
 
 import asyncio
+import inspect
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -246,3 +248,98 @@ class TestSimpleEngineConcurrency:
                     max_tokens=4,
                 ):
                     pass
+
+    def test_simple_engine_model_work_uses_dedicated_executor_not_to_thread(self):
+        """SimpleEngine must not use arbitrary default-executor threads for MLX.
+
+        MLX streams are thread-local. Direct/no-continuous-batching mode must
+        load and execute on one dedicated model worker, otherwise JANG/JANGTQ,
+        VLM, and hybrid kernels can crash with Stream(gpu,N) missing from the
+        current thread.
+        """
+        from vmlx_engine.engine.simple import SimpleEngine
+
+        source = inspect.getsource(SimpleEngine)
+        assert "ThreadPoolExecutor(" in source
+        assert "thread_name_prefix=\"simple-engine-model\"" in source
+        assert "asyncio.to_thread" not in source
+
+    @pytest.mark.asyncio
+    async def test_simple_engine_load_generate_and_stream_next_stay_on_one_thread(self):
+        """Load, generate, stream iterator creation, and next() share one thread."""
+        from types import SimpleNamespace
+
+        from vmlx_engine.engine.simple import SimpleEngine
+
+        thread_events: list[tuple[str, int, str]] = []
+
+        class _Tokenizer:
+            def encode(self, text):
+                return text.split()
+
+            def apply_chat_template(self, messages, **_kwargs):
+                return " ".join(str(m["content"]) for m in messages)
+
+        class _Model:
+            tokenizer = _Tokenizer()
+
+            def load(self):
+                thread_events.append(
+                    ("load", threading.get_ident(), threading.current_thread().name)
+                )
+
+            def generate(self, **_kwargs):
+                thread_events.append(
+                    ("generate", threading.get_ident(), threading.current_thread().name)
+                )
+                return SimpleNamespace(
+                    text="READY",
+                    tokens=[1],
+                    prompt_tokens=1,
+                    completion_tokens=1,
+                    finish_reason="stop",
+                )
+
+            def stream_generate(self, **_kwargs):
+                thread_events.append(
+                    (
+                        "stream_create",
+                        threading.get_ident(),
+                        threading.current_thread().name,
+                    )
+                )
+
+                def _gen():
+                    thread_events.append(
+                        (
+                            "stream_next",
+                            threading.get_ident(),
+                            threading.current_thread().name,
+                        )
+                    )
+                    yield SimpleNamespace(
+                        text="READY",
+                        prompt_tokens=1,
+                        finished=True,
+                        finish_reason="stop",
+                    )
+
+                return _gen()
+
+        with (
+            patch("vmlx_engine.engine.simple.is_mllm_model", return_value=False),
+            patch("vmlx_engine.models.llm.MLXLanguageModel", return_value=_Model()),
+        ):
+            engine = SimpleEngine("test-model")
+            await engine.start()
+            await engine.generate("one two")
+            chunks = [
+                chunk
+                async for chunk in engine.stream_generate("one two", max_tokens=4)
+            ]
+            await engine.stop()
+
+        assert chunks[-1].text == "READY"
+        worker_ids = {ident for _event, ident, _name in thread_events}
+        assert len(worker_ids) == 1
+        assert all("simple-engine-model" in name for _event, _ident, name in thread_events)
