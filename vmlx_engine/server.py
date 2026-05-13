@@ -3024,6 +3024,16 @@ def _apply_flash_moe_patching():
         _flash_moe_loader = None
 
 
+def _reset_mllm_generation_streams() -> None:
+    """Clear MLLM thread-local MLX streams after engine teardown/reload."""
+    try:
+        from .mllm_batch_generator import reset_generation_streams
+
+        reset_generation_streams()
+    except Exception as e:
+        logger.debug("MLLM generation stream reset skipped: %s", e)
+
+
 def load_model(
     model_name: str,
     use_batching: bool = False,
@@ -3111,6 +3121,7 @@ def load_model(
                 _engine._scheduler.deep_reset()
         except Exception as e:
             logger.warning(f"Failed to stop previous engine: {e}")
+        _reset_mllm_generation_streams()
         _engine = None
 
     _model_load_error = None  # Clear any previous error
@@ -5113,6 +5124,7 @@ async def admin_deep_sleep():
                     except Exception:
                         pass
                 _engine = None
+                _reset_mllm_generation_streams()
 
             # Clear stale Flash MoE loader — the FlashMoEExpertLoader holds
             # references to the now-freed model's ExpertIndex and thread pool.

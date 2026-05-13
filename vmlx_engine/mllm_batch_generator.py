@@ -527,6 +527,24 @@ def _gen_stream() -> Any:
     return _GENERATION_STREAM
 
 
+def reset_generation_streams() -> None:
+    """Drop thread-local MLX stream handles after MLLM engine teardown.
+
+    MLX stream objects are bound to the worker thread that created them. Deep
+    sleep and model switch tear down the scheduler/executor and create a new
+    worker on wake. Keeping these globals across that lifecycle can make the
+    next generation try to use a stream from the old thread.
+    """
+    global _GENERATION_STREAM
+    _GENERATION_STREAM = None
+    cls = globals().get("MLLMBatchGenerator")
+    if cls is not None:
+        try:
+            cls._stream = None
+        except Exception:
+            pass
+
+
 class _MaybeStream:
     """Context manager that wraps mx.stream(stream) only if stream exists."""
     __slots__ = ("_cm",)
