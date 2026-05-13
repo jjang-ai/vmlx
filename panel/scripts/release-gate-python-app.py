@@ -76,8 +76,7 @@ def python_has_module(py: Path, module_name: str) -> bool:
 
 def twine_env(gate: Gate) -> dict[str, str]:
     """Run twine without letting stale console-script shebangs mutate the app."""
-    pycache_prefix = gate.log_dir / "twine-pycache"
-    pycache_prefix.mkdir(parents=True, exist_ok=True)
+    pycache_prefix = writable_probe_cache_dir(gate, "twine-pycache")
     return {
         "PYTHONPATH": "",
         "PYTHONDONTWRITEBYTECODE": "1",
@@ -328,10 +327,29 @@ def packaged_python(app: Path) -> Path:
     return app / "Contents" / "Resources" / "bundled-python" / "python" / "bin" / "python3"
 
 
+def writable_probe_cache_dir(gate: Gate, name: str) -> Path:
+    """Return a writable cache dir for subprocess probes.
+
+    Release probes run against a signed app bundle, so Python bytecode/cache
+    writes must never land inside the app. The normal evidence directory is
+    writable, but unit tests intentionally use isolated/read-only paths to
+    prove the helper does not require mutating the packaged root.
+    """
+    preferred = gate.log_dir / name
+    try:
+        preferred.mkdir(parents=True, exist_ok=True)
+        return preferred
+    except OSError:
+        fallback = Path(tempfile.gettempdir()) / "vmlx-release-gate" / slug(
+            str(gate.log_dir)
+        ) / name
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+
 def packaged_python_env(gate: Gate) -> dict[str, str]:
     """Environment for probing packaged Python without mutating the app seal."""
-    pycache_prefix = gate.log_dir / "packaged-python-pycache"
-    pycache_prefix.mkdir(parents=True, exist_ok=True)
+    pycache_prefix = writable_probe_cache_dir(gate, "packaged-python-pycache")
     return {
         "PYTHONPATH": "",
         "PYTHONNOUSERSITE": "1",
