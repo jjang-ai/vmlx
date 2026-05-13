@@ -2372,6 +2372,27 @@ class TestAnthropicOmniStreamingAdapter:
         assert "pass through unchanged" not in source
         assert "Caller may see OpenAI" not in source
 
+    def test_omni_messages_path_adapts_plain_dict_completion(self):
+        import inspect
+        from vmlx_engine.server import create_anthropic_message
+
+        source = inspect.getsource(create_anthropic_message)
+        assert "if isinstance(cc, dict):" in source
+        assert "to_anthropic_response(cc, resolved_name)" in source
+
+    def test_omni_responses_path_adapts_plain_dict_and_forwards_thinking(self):
+        import inspect
+        from vmlx_engine.server import create_response
+
+        source = inspect.getsource(create_response)
+        start = source.index("Nemotron-Omni multimodal dispatch (Responses API parity")
+        end = source.index("if request.stream:", start)
+        block = source[start:end]
+
+        assert "enable_thinking=request.enable_thinking" in block
+        assert "elif isinstance(cc, dict):" in block
+        assert "cc_dict = cc" in block
+
 
 class TestDSV4FastLoadSwitchGLUScope:
     """DSV4 fast-load speed patch must not hijack other SwitchGLU models."""
@@ -2589,6 +2610,15 @@ class TestStartupCompatibilityGuards:
         assert '("mflux", "mflux image runtime"' in verify_script
         assert '"mflux.models.common.config.model_config"' in verify_script
 
+    def test_bundled_python_installs_distutils_version_shim_for_radio(self):
+        bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
+
+        assert "Installing distutils.version compatibility shim" in bundle_script
+        assert 'mkdir -p "$SITE/distutils"' in bundle_script
+        assert "class LooseVersion" in bundle_script
+        assert 'from distutils.version import LooseVersion' in bundle_script
+        assert 'LooseVersion("1.2") < LooseVersion("1.3")' in bundle_script
+
     def test_bundled_python_local_source_installs_force_reinstall(self):
         bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
         local_install_block = bundle_script[
@@ -2680,6 +2710,7 @@ class TestStartupCompatibilityGuards:
             "convert_hy3_jangtq.py",
             "load_jangtq.py",
             "load_jangtq_kimi_vlm.py",
+            "nemotron_omni_chat.py",
             "dsv4/mlx_model.py",
             "dsv4/pool_quant_cache.py",
             "hy3/__init__.py",

@@ -141,6 +141,7 @@ HASH_GATED_JANG_TOOLS_FILES=(
   "loader.py"
   "load_jangtq.py"
   "load_jangtq_kimi_vlm.py"
+  "nemotron_omni_chat.py"
   "dsv4/mlx_model.py"
   "dsv4/pool_quant_cache.py"
   "hy3/__init__.py"

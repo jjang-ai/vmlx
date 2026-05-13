@@ -6094,6 +6094,10 @@ async def create_anthropic_message(
                 return _JR(
                     content=to_anthropic_response(cc_dict, resolved_name)
                 )
+            if isinstance(cc, dict):
+                return _JR(
+                    content=to_anthropic_response(cc, resolved_name)
+                )
             from starlette.responses import StreamingResponse as _SR
             if isinstance(cc, _SR) and anthropic_req.stream:
                 adapter = AnthropicStreamAdapter(model=resolved_name)
@@ -10515,11 +10519,16 @@ async def create_response(
                 top_p=request.top_p,
                 max_tokens=request.max_output_tokens,
                 stream=False,
+                enable_thinking=request.enable_thinking,
                 reasoning_effort=request.reasoning_effort,
             )
             cc = await _omni_dispatch_resp(_cc_req, _omni_path_dispatch)
+            cc_dict = None
             if isinstance(cc, _JR2):
                 cc_dict = json.loads(cc.body.decode("utf-8")) if cc.body else {}
+            elif isinstance(cc, dict):
+                cc_dict = cc
+            if cc_dict is not None:
                 _msg = (cc_dict.get("choices") or [{}])[0].get("message") or {}
                 _txt = _msg.get("content") or ""
                 _u = cc_dict.get("usage") or {}

@@ -435,6 +435,62 @@ if ! grep -q 'class LanguageModel' "$BAILING_DST"; then
   exit 1
 fi
 
+# --- Python 3.12 compatibility: distutils.version shim for RADIO remote code ---
+# NVIDIA C-RADIO's HF remote code still imports
+# `from distutils.version import LooseVersion`. Python 3.12 removed distutils,
+# and the bundled runtime intentionally does not include setuptools. Provide the
+# tiny compatibility surface that RADIO needs so Nemotron-Omni media startup
+# works in the installed app without pulling dev-machine site-packages.
+echo "  Installing distutils.version compatibility shim (Python 3.12 RADIO support)..."
+mkdir -p "$SITE/distutils"
+cat > "$SITE/distutils/__init__.py" <<'PY'
+"""Minimal distutils compatibility package for bundled Python 3.12."""
+PY
+cat > "$SITE/distutils/version.py" <<'PY'
+"""Subset of distutils.version used by legacy HF remote-code modules."""
+
+from packaging.version import parse as _parse
+
+
+class LooseVersion:
+    def __init__(self, vstring=None):
+        self.vstring = "" if vstring is None else str(vstring)
+        self._version = _parse(self.vstring)
+
+    def __repr__(self):
+        return f"LooseVersion({self.vstring!r})"
+
+    def __str__(self):
+        return self.vstring
+
+    def _coerce(self, other):
+        if isinstance(other, LooseVersion):
+            return other._version
+        return _parse(str(other))
+
+    def __lt__(self, other):
+        return self._version < self._coerce(other)
+
+    def __le__(self, other):
+        return self._version <= self._coerce(other)
+
+    def __eq__(self, other):
+        return self._version == self._coerce(other)
+
+    def __ne__(self, other):
+        return not self == other
+
+    def __gt__(self, other):
+        return self._version > self._coerce(other)
+
+    def __ge__(self, other):
+        return self._version >= self._coerce(other)
+PY
+"$PYTHON" -s - <<'PY'
+from distutils.version import LooseVersion
+assert LooseVersion("1.2") < LooseVersion("1.3")
+PY
+
 # --- Patch: mlx_lm/models/ssm.py (Mamba/Nemotron-H hybrid state space model) ---
 # Fix 1: mx.clip(dt, ...) upper-clips dt values, corrupting Mamba state transitions.
 #         Replace with mx.maximum(dt, time_step_limit[0]) — only lower-clip.
