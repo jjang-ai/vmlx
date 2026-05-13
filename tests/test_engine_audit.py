@@ -2637,6 +2637,15 @@ class TestStartupCompatibilityGuards:
         assert "check_packaged_console_script_shebangs" in release_gate
         assert "/Applications/vMLX.app" in release_gate
 
+    def test_local_installer_installs_node_deps_before_typecheck(self):
+        install_script = Path("./panel/scripts/build-and-install.sh").read_text()
+
+        assert "ensure_node_dependencies()" in install_script
+        assert 'node_modules/.bin/tsc' in install_script
+        install_idx = install_script.index("ensure_node_dependencies")
+        typecheck_idx = install_script.index("npm run typecheck")
+        assert install_idx < typecheck_idx
+
     def test_release_gate_packaged_python_probes_cannot_mutate_signed_app(self):
         release_gate = Path("./panel/scripts/release-gate-python-app.py").read_text()
 
@@ -2705,13 +2714,19 @@ class TestStartupCompatibilityGuards:
         assert '@app.post(\n    "/api/embed",\n    dependencies=[\n        Depends(verify_api_key),\n        Depends(check_memory_pressure),' in source
         assert '@app.post(\n    "/api/embed",\n    dependencies=[\n        Depends(verify_api_key),\n        Depends(check_memory_pressure),\n        Depends(check_metal_working_set_pressure),' in source
 
-    def test_bundle_forces_sonoma_mlx_wheels_on_tahoe_build_hosts(self):
-        """The release bundle must not inherit the builder host's macOS wheel tag."""
+    def test_bundle_selects_native_mlx_wheels_with_compat_override(self):
+        """M5/Tahoe builds need native MLX wheels; compat builds stay explicit."""
         bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
         assert 'MLX_VERSION="0.31.2"' in bundle_script
         assert 'MLX_LM_VERSION="0.31.3"' in bundle_script
         assert 'MLX_VLM_VERSION="0.4.4"' in bundle_script
-        assert 'MLX_WHEEL_PLATFORM="${VMLX_BUNDLE_MLX_PLATFORM:-macosx_14_0_arm64}"' in bundle_script
+        assert 'detect_mlx_wheel_platform()' in bundle_script
+        assert 'VMLINUX_BUNDLE_MLX_PLATFORM:-auto' in bundle_script
+        assert 'sw_vers -productVersion' in bundle_script
+        assert 'echo "macosx_26_0_arm64"' in bundle_script
+        assert 'compat|sonoma|sequoia)' in bundle_script
+        assert 'echo "macosx_14_0_arm64"' in bundle_script
+        assert 'MLX_WHEEL_PLATFORM="$(detect_mlx_wheel_platform)"' in bundle_script
         assert '--platform "$MLX_WHEEL_PLATFORM"' in bundle_script
         assert '"mlx==$MLX_VERSION"' in bundle_script
         assert '"mlx-metal==$MLX_VERSION"' in bundle_script

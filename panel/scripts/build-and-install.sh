@@ -8,6 +8,14 @@ DEST="/Applications/$APP_NAME"
 
 cd "$PANEL_DIR"
 
+ensure_node_dependencies() {
+  if [ -x "node_modules/.bin/tsc" ]; then
+    return
+  fi
+  echo "==> Installing dependencies for pre-build checks..."
+  npm install --ignore-scripts
+}
+
 sign_bundled_python_native_files() {
   local bundled_python="$1"
   local identity="$2"
@@ -79,6 +87,9 @@ else
   echo "  [WARN] No bundled Python found. App will require system Python."
   echo "         Run: bash scripts/bundle-python.sh"
 fi
+
+ensure_node_dependencies
+
 echo ""
 echo "  TypeScript compilation..."
 if npm run typecheck 2>/dev/null; then

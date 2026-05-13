@@ -63,16 +63,47 @@ echo "==> Upgrading pip..."
 # Install ALL dependencies (lean: no gradio, no dev tools, no pytz)
 # Uses opencv-python-headless instead of opencv-python (no GUI deps, smaller)
 #
-# Build reproducibility note:
-# On macOS Tahoe, pip prefers MLX wheels tagged macosx_26_0_arm64. Shipping
-# that wheel in a DMG whose Info.plist allows Sonoma/Sequoia reopens the
-# mlxstudio#104 "Metal language version 4.0 unsupported" crash. The same MLX
-# release publishes macosx_14_0_arm64 wheels, so force those for the bundle.
 MLX_VERSION="0.31.2"
 MLX_LM_VERSION="0.31.3"
 MLX_VLM_VERSION="0.4.4"
 MFLUX_VERSION="0.17.5"
-MLX_WHEEL_PLATFORM="${VMLX_BUNDLE_MLX_PLATFORM:-macosx_14_0_arm64}"
+
+detect_mlx_wheel_platform() {
+  local requested="${VMLINUX_BUNDLE_MLX_PLATFORM:-auto}"
+  case "$requested" in
+    auto|"")
+      local product_version major
+      product_version="$(sw_vers -productVersion 2>/dev/null || true)"
+      major="${product_version%%.*}"
+      if [[ "$major" =~ ^[0-9]+$ ]] && [ "$major" -ge 26 ]; then
+        echo "macosx_26_0_arm64"
+      else
+        echo "macosx_14_0_arm64"
+      fi
+      ;;
+    compat|sonoma|sequoia)
+      echo "macosx_14_0_arm64"
+      ;;
+    tahoe|native|m5)
+      echo "macosx_26_0_arm64"
+      ;;
+    macosx_*_arm64)
+      echo "$requested"
+      ;;
+    *)
+      echo "ERROR: unsupported VMLX_BUNDLE_MLX_PLATFORM=$requested" >&2
+      echo "       Use auto, compat, native, or an explicit macosx_*_arm64 wheel tag." >&2
+      exit 1
+      ;;
+  esac
+}
+
+# MLX publishes multiple macOS-tagged wheels for the same version. The older
+# macosx_14 wheel preserves Sonoma/Sequoia compatibility but lacks the M5/Tahoe
+# Metal kernels that make prompt processing fast. Default to the current host's
+# native wheel, while still allowing compatibility builds via:
+#   VMLX_BUNDLE_MLX_PLATFORM=compat ./panel/scripts/bundle-python.sh
+MLX_WHEEL_PLATFORM="$(detect_mlx_wheel_platform)"
 WHEELHOUSE="$BUNDLE_DIR/wheelhouse"
 mkdir -p "$WHEELHOUSE"
 echo "==> Installing MLX $MLX_VERSION wheels for $MLX_WHEEL_PLATFORM..."
