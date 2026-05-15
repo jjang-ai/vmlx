@@ -5920,13 +5920,13 @@ async def create_anthropic_message(
 
     # Build generation kwargs from the converted chat request (shared by streaming + non-streaming)
     _msg_kwargs: dict = {
-        "temperature": _resolve_temperature(chat_req.temperature),
-        "top_p": _resolve_top_p(chat_req.top_p),
+        "temperature": _resolve_temperature(chat_req.temperature, chat_req.model),
+        "top_p": _resolve_top_p(chat_req.top_p, chat_req.model),
         "max_tokens": _resolve_max_tokens(chat_req.max_tokens, chat_req.model),
     }
     _set_resolved_top_k(_msg_kwargs, chat_req.top_k, chat_req.model)
     _set_resolved_min_p(_msg_kwargs, chat_req.min_p, chat_req.model)
-    _rp = _resolve_repetition_penalty(chat_req.repetition_penalty)
+    _rp = _resolve_repetition_penalty(chat_req.repetition_penalty, chat_req.model)
     if _rp is not None:
         _msg_kwargs["repetition_penalty"] = _rp
     if _compute_bypass_prefix_cache(chat_req):
@@ -6676,14 +6676,14 @@ async def ollama_chat(fastapi_request: Request):
     engine = get_engine()
     chat_kwargs = {
         "max_tokens": _resolve_max_tokens(chat_req.max_tokens, chat_req.model),
-        "temperature": _resolve_temperature(chat_req.temperature),
-        "top_p": _resolve_top_p(chat_req.top_p),
+        "temperature": _resolve_temperature(chat_req.temperature, chat_req.model),
+        "top_p": _resolve_top_p(chat_req.top_p, chat_req.model),
     }
     if chat_req.stop:
         chat_kwargs["stop"] = chat_req.stop
     _set_resolved_top_k(chat_kwargs, chat_req.top_k, chat_req.model)
     _set_resolved_min_p(chat_kwargs, chat_req.min_p, chat_req.model)
-    _rp = _resolve_repetition_penalty(chat_req.repetition_penalty)
+    _rp = _resolve_repetition_penalty(chat_req.repetition_penalty, chat_req.model)
     if _rp is not None:
         chat_kwargs["repetition_penalty"] = _rp
     if _compute_bypass_prefix_cache(chat_req):
@@ -8199,13 +8199,13 @@ async def create_completion(request: CompletionRequest):
             gen_kwargs = {
                 "prompt": prompt,
                 "max_tokens": _resolve_max_tokens(request.max_tokens, getattr(request, "model", "")),
-                "temperature": _resolve_temperature(request.temperature),
-                "top_p": _resolve_top_p(request.top_p),
+                "temperature": _resolve_temperature(request.temperature, request.model),
+                "top_p": _resolve_top_p(request.top_p, request.model),
                 "stop": request.stop,
             }
             _set_resolved_top_k(gen_kwargs, request.top_k, request.model)
             _set_resolved_min_p(gen_kwargs, request.min_p, request.model)
-            _rp = _resolve_repetition_penalty(request.repetition_penalty)
+            _rp = _resolve_repetition_penalty(request.repetition_penalty, request.model)
             if _rp is not None:
                 gen_kwargs["repetition_penalty"] = _rp
             if _compute_bypass_prefix_cache(request):
@@ -8546,8 +8546,8 @@ async def create_chat_completion(
     _request_max_tokens = request.max_tokens if request.max_tokens is not None else None
     chat_kwargs = {
         "max_tokens": _resolve_max_tokens(_request_max_tokens, request.model),
-        "temperature": _resolve_temperature(request.temperature),
-        "top_p": _resolve_top_p(request.top_p),
+        "temperature": _resolve_temperature(request.temperature, request.model),
+        "top_p": _resolve_top_p(request.top_p, request.model),
     }
     # Forward stop sequences from request to engine
     if request.stop:
@@ -8555,7 +8555,7 @@ async def create_chat_completion(
     # Extended sampling params (only pass if explicitly set)
     _set_resolved_top_k(chat_kwargs, request.top_k, request.model)
     _set_resolved_min_p(chat_kwargs, request.min_p, request.model)
-    _rp = _resolve_repetition_penalty(request.repetition_penalty)
+    _rp = _resolve_repetition_penalty(request.repetition_penalty, request.model)
     if _rp is not None:
         chat_kwargs["repetition_penalty"] = _rp
     if _compute_bypass_prefix_cache(request):
@@ -9878,8 +9878,8 @@ async def create_response(
     # Build kwargs
     chat_kwargs = {
         "max_tokens": _resolve_max_tokens(request.max_output_tokens, request.model),
-        "temperature": _resolve_temperature(request.temperature),
-        "top_p": _resolve_top_p(request.top_p),
+        "temperature": _resolve_temperature(request.temperature, request.model),
+        "top_p": _resolve_top_p(request.top_p, request.model),
     }
     # Forward stop sequences from request to engine
     if request.stop:
@@ -9887,7 +9887,7 @@ async def create_response(
     # Extended sampling params (only pass if explicitly set)
     _set_resolved_top_k(chat_kwargs, request.top_k, request.model)
     _set_resolved_min_p(chat_kwargs, request.min_p, request.model)
-    _rp = _resolve_repetition_penalty(request.repetition_penalty)
+    _rp = _resolve_repetition_penalty(request.repetition_penalty, request.model)
     if _rp is not None:
         chat_kwargs["repetition_penalty"] = _rp
     if _compute_bypass_prefix_cache(request):
@@ -10598,14 +10598,14 @@ async def stream_completions_multi(
             gen_kwargs: dict = {
                 "prompt": prompt,
                 "max_tokens": _resolve_max_tokens(request.max_tokens, getattr(request, "model", "")),
-                "temperature": _resolve_temperature(request.temperature),
-                "top_p": _resolve_top_p(request.top_p),
+                "temperature": _resolve_temperature(request.temperature, request.model),
+                "top_p": _resolve_top_p(request.top_p, request.model),
                 "stop": request.stop,
                 "request_id": prompt_request_id,
             }
             _set_resolved_top_k(gen_kwargs, request.top_k, request.model)
             _set_resolved_min_p(gen_kwargs, request.min_p, request.model)
-            _rp = _resolve_repetition_penalty(request.repetition_penalty)
+            _rp = _resolve_repetition_penalty(request.repetition_penalty, request.model)
             if _rp is not None:
                 gen_kwargs["repetition_penalty"] = _rp
             if _compute_bypass_prefix_cache(request):

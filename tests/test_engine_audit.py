@@ -16,6 +16,7 @@ These are unit tests that do NOT require model loading.
 import hashlib
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -328,6 +329,27 @@ class TestServerSamplingResolution:
         from vmlx_engine.server import _resolve_top_p
         result = _resolve_top_p(None)
         assert isinstance(result, float)
+
+    def test_api_routes_pass_model_to_sampling_resolvers(self):
+        """API handlers must resolve omitted sampling params against the request model.
+
+        This pins the generation_config/jang_config behavior at the route layer:
+        the resolver helpers support model-scoped defaults, but callers can still
+        accidentally fall back to process-global state if they omit model_name.
+        """
+        source = Path("./vmlx_engine/server.py").read_text()
+        bad_patterns = {
+            "temperature": r"_resolve_temperature\(\s*(?:chat_req|request)\.temperature\s*\)",
+            "top_p": r"_resolve_top_p\(\s*(?:chat_req|request)\.top_p\s*\)",
+            "repetition_penalty": (
+                r"_resolve_repetition_penalty\(\s*(?:chat_req|request)\.repetition_penalty\s*\)"
+            ),
+        }
+        for name, pattern in bad_patterns.items():
+            assert not re.search(pattern, source), (
+                f"{name} resolver call is not model-scoped; pass request.model/chat_req.model "
+                "so bundle generation_config.json and jang_config sampling defaults apply."
+            )
 
 
 # ===========================================================================
