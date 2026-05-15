@@ -85,6 +85,20 @@ def _vlm_stream():
     return None if _VLM_STREAM is False else _VLM_STREAM
 
 
+def reset_vlm_stream() -> None:
+    """Clear the direct mlx-vlm stream handle after model teardown.
+
+    ``_VLM_STREAM`` is owned by the worker thread that first runs direct
+    ``mlx_vlm.stream_generate``. Deep sleep, wake, model switch, and direct
+    SimpleEngine teardown can replace that worker; retaining the old stream
+    lets a later request enter ``mx.stream(old_stream)`` from a different
+    thread and raises ``RuntimeError: There is no Stream(gpu, N) in current
+    thread``.
+    """
+    global _VLM_STREAM
+    _VLM_STREAM = None
+
+
 class _MaybeVLMStream:
     __slots__ = ("_cm",)
 

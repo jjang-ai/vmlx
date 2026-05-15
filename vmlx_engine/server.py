@@ -2815,6 +2815,12 @@ def _reset_mllm_generation_streams() -> None:
         reset_generation_streams()
     except Exception as e:
         logger.debug("MLLM generation stream reset skipped: %s", e)
+    try:
+        from .models.mllm import reset_vlm_stream
+
+        reset_vlm_stream()
+    except Exception as e:
+        logger.debug("Direct VLM stream reset skipped: %s", e)
 
 
 def load_model(

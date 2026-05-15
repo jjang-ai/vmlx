@@ -211,6 +211,12 @@ class SimpleEngine(BaseEngine):
         """Stop the engine and cleanup resources."""
         self._model = None
         self._loaded = False
+        try:
+            from ..models.mllm import reset_vlm_stream
+
+            reset_vlm_stream()
+        except Exception as e:
+            logger.debug("Direct VLM stream reset skipped during SimpleEngine stop: %s", e)
         executor = getattr(self, "_model_executor", None)
         self._model_executor = None
         if executor is not None:

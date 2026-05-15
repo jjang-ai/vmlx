@@ -24,6 +24,22 @@ def test_reset_generation_streams_clears_module_and_class_handles():
         gen.MLLMBatchGenerator._stream = old_class_stream
 
 
+def test_reset_generation_streams_clears_direct_vlm_handle():
+    """Direct mlx-vlm streams are thread-local and must reset with MLLM streams."""
+    import vmlx_engine.models.mllm as mllm
+    import vmlx_engine.server as srv
+
+    old_stream = mllm._VLM_STREAM
+    try:
+        mllm._VLM_STREAM = object()
+
+        srv._reset_mllm_generation_streams()
+
+        assert mllm._VLM_STREAM is None
+    finally:
+        mllm._VLM_STREAM = old_stream
+
+
 def test_server_resets_mllm_streams_when_replacing_or_unloading_engine():
     """Model switch and deep sleep both tear down MLLM stream ownership."""
     import vmlx_engine.server as srv
