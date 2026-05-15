@@ -635,6 +635,73 @@ class DatabaseManager {
           .run(effortResetKey, String(Date.now()));
       }
 
+      // v1.5.34 stale repetition-penalty recovery:
+      // Older chat settings displayed and persisted 1.10 as a generic
+      // anti-loop default. That value suppresses family EOS tokens in
+      // multi-turn MiniMax/Ling-style prompts and bypasses bundle
+      // generation_config defaults. Clear only the known historical default
+      // once; users can deliberately set 1.10 again after upgrade.
+      const repeatPenaltyResetKey =
+        "migration_reset_stale_repeat_penalty_1_5_34";
+      const repeatPenaltyResetDone = this.db
+        .prepare("SELECT value FROM settings WHERE key = ?")
+        .get(repeatPenaltyResetKey) as { value: string } | undefined;
+      if (!repeatPenaltyResetDone) {
+        const affectedRepeatOverrides = this.db
+          .prepare(
+            "SELECT COUNT(*) as cnt FROM chat_overrides WHERE ABS(repeat_penalty - 1.1) < 0.000001",
+          )
+          .get() as { cnt: number };
+        if (affectedRepeatOverrides.cnt > 0) {
+          this.db.exec(
+            "UPDATE chat_overrides SET repeat_penalty = NULL WHERE ABS(repeat_penalty - 1.1) < 0.000001",
+          );
+          console.log(
+            `[DB] v1.5.34 reset ${affectedRepeatOverrides.cnt} stale chat repeat_penalty=1.10 override(s) to bundle defaults`,
+          );
+        }
+
+        const repeatProfiles = this.db
+          .prepare("SELECT id, overrides_json FROM chat_profiles")
+          .all() as { id: string; overrides_json: string }[];
+        const updateRepeatProfile = this.db.prepare(
+          "UPDATE chat_profiles SET overrides_json = ?, updated_at = ? WHERE id = ?",
+        );
+        let repeatProfileCount = 0;
+        for (const profile of repeatProfiles) {
+          try {
+            const parsed = JSON.parse(profile.overrides_json || "{}");
+            if (
+              parsed &&
+              typeof parsed.repeatPenalty === "number" &&
+              Math.abs(parsed.repeatPenalty - 1.1) < 0.000001
+            ) {
+              delete parsed.repeatPenalty;
+              updateRepeatProfile.run(
+                JSON.stringify(parsed),
+                Date.now(),
+                profile.id,
+              );
+              repeatProfileCount += 1;
+            }
+          } catch {
+            // Keep malformed profile JSON untouched; profile loading is already
+            // best-effort and should not block startup migrations.
+          }
+        }
+        if (repeatProfileCount > 0) {
+          console.log(
+            `[DB] v1.5.34 reset repeatPenalty in ${repeatProfileCount} chat profile(s) to bundle defaults`,
+          );
+        }
+
+        this.db
+          .prepare(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+          )
+          .run(repeatPenaltyResetKey, String(Date.now()));
+      }
+
       // Clean up orphan benchmarks from deleted sessions
       this.db.exec(
         "DELETE FROM benchmarks WHERE session_id NOT IN (SELECT id FROM sessions)",

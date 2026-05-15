@@ -975,6 +975,36 @@ describe('Generation Defaults', () => {
         expect(getFlagValue(out, '--default-repetition-penalty')).toBe('1.15')
     })
 
+    it('chat settings default to neutral repeat penalty when bundle has no value', () => {
+        const source = readFileSync('src/renderer/src/components/chat/ChatSettings.tsx', 'utf8')
+        expect(source).toContain('value={overrides.repeatPenalty ?? 1.0}')
+        expect(source).toContain("onChange={v => update('repeatPenalty', v === 1.0 ? undefined : v)}")
+        expect(source).not.toContain('value={overrides.repeatPenalty ?? 1.1}')
+    })
+
+    it('new chat sibling inheritance does not copy stale sampling params', () => {
+        const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+        const start = source.indexOf('const inheritedKeys = [')
+        const end = source.indexOf('] as const', start)
+        const block = source.slice(start, end)
+
+        expect(block).not.toContain('"temperature"')
+        expect(block).not.toContain('"topP"')
+        expect(block).not.toContain('"topK"')
+        expect(block).not.toContain('"minP"')
+        expect(block).not.toContain('"maxTokens"')
+        expect(block).not.toContain('"repeatPenalty"')
+        expect(block).toContain('"builtinToolsEnabled"')
+        expect(block).toContain('"workingDirectory"')
+    })
+
+    it('database migrates historical repeatPenalty 1.10 back to bundle defaults', () => {
+        const source = readFileSync('src/main/database.ts', 'utf8')
+        expect(source).toContain('migration_reset_stale_repeat_penalty_1_5_34')
+        expect(source).toContain('UPDATE chat_overrides SET repeat_penalty = NULL')
+        expect(source).toContain('delete parsed.repeatPenalty')
+    })
+
     it('sets server default thinking override only when explicit', () => {
         expect(hasFlag(preview({ defaultEnableThinking: undefined }), '--default-enable-thinking')).toBe(false)
         expect(getFlagValue(preview({ defaultEnableThinking: true }), '--default-enable-thinking')).toBe('true')

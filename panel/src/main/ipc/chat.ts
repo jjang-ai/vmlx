@@ -537,16 +537,12 @@ export function registerChatHandlers(
               const existing = db.getChatOverrides(chat.id) || {
                 chatId: chat.id,
               };
-              // Inherit ALL settings (tools, search, system, AND generation parameters)
-              // from the last sibling chat to ensure session-wide continuity
-              // (user request: "make it so that when within app and chatting, all 'chat' side setings get saved for that model instance/session")
+              // Inherit tool/search/session ergonomics from the last sibling
+              // chat, but never copy sampling parameters. Temperature/top_p/
+              // top_k/min_p/max_tokens/repeat_penalty must come from the
+              // model's generation_config/jang_config unless the current chat
+              // explicitly changes them.
               const inheritedKeys = [
-                "temperature",
-                "topP",
-                "topK",
-                "minP",
-                "maxTokens",
-                "repeatPenalty",
                 "stopSequences",
                 "wireApi",
                 "builtinToolsEnabled",

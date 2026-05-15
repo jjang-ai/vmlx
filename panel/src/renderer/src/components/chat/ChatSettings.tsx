@@ -604,8 +604,8 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
             />
             <SliderField
               label={t('chat.settings.repetitionPenalty')}
-              value={overrides.repeatPenalty ?? 1.1}
-              onChange={v => update('repeatPenalty', v === 1.1 ? undefined : v)}
+              value={overrides.repeatPenalty ?? 1.0}
+              onChange={v => update('repeatPenalty', v === 1.0 ? undefined : v)}
               min={1.0} max={2.0} step={0.05}
               help={t('chat.settings.repetitionPenaltyHelp')}
             />

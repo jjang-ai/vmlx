@@ -12,6 +12,7 @@ mlx-lm's BatchGenerator.
 from __future__ import annotations
 
 from collections import deque
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Sequence, Union
 
@@ -106,7 +107,7 @@ class SingleBatchGenerator:
         self._unprocessed: deque[_Request] = deque()
         self._request: Optional[_Request] = None
         self._device = mx.default_device()
-        self._stream = stream or mx.default_stream(self._device)
+        self._stream = stream or self._make_generation_stream()
 
     def close(self):
         return None
@@ -123,15 +124,50 @@ class SingleBatchGenerator:
         return total
 
     def _refresh_thread_stream(self) -> None:
+        stream = self._make_generation_stream()
+        if stream is not None:
+            self._stream = stream
+
+    def _make_generation_stream(self):
         try:
-            self._stream = mx.default_stream(self._device)
+            return mx.new_stream(self._device)
         except Exception:
             pass
+        try:
+            return mx.default_stream(self._device)
+        except Exception:
+            return None
+
+    def _stream_context(self):
+        if self._stream is None:
+            return nullcontext()
+        return mx.stream(self._stream)
+
+    def _rehome_on_stream(self, value):
+        try:
+            return value + mx.zeros_like(value)
+        except Exception:
+            return value
+
+    def _eval_on_stream(self, *values):
+        if not values:
+            return ()
+        rebound = tuple(self._rehome_on_stream(value) for value in values)
+        with self._stream_context():
+            try:
+                mx.eval(*rebound)
+            except TypeError:
+                for value in rebound:
+                    mx.eval(value)
+        return rebound
 
     def _sync(self) -> None:
         if hasattr(mx, "synchronize"):
             try:
-                mx.synchronize(self._stream)
+                if self._stream is not None:
+                    mx.synchronize(self._stream)
+                else:
+                    mx.synchronize()
             except TypeError:
                 mx.synchronize()
 
@@ -306,7 +342,14 @@ class SingleBatchGenerator:
             async_items.append(logprobs)
         if token_context is not None:
             async_items.append(token_context)
-        mx.async_eval(*async_items)
+        # Cache-hit replay can restore KV arrays whose lazy graph still refers
+        # to a thread-local default stream from a prior request.  Materialize
+        # the sampled scalar/logprobs inside this generator's concrete stream so
+        # the next scheduler step never resolves a stale Stream(gpu,0).
+        evaluated = self._eval_on_stream(*async_items)
+        sampled = evaluated[0]
+        if logprobs is not None:
+            logprobs = evaluated[1]
         return sampled, logprobs
 
     def _compute_next_from_input_array(
@@ -314,7 +357,8 @@ class SingleBatchGenerator:
         req: _Request,
         input_tokens: mx.array,
     ) -> None:
-        with mx.stream(self._stream):
+        with self._stream_context():
+            input_tokens = self._rehome_on_stream(input_tokens)
             logits = self.model(input_tokens[:, None], cache=req.cache)
             logits = logits[:, -1, :]
             req.next_token, req.next_logprobs = self._sample_from_logits(
@@ -375,9 +419,9 @@ class SingleBatchGenerator:
             req.next_logprobs = None
 
         try:
-            mx.eval(current_token)
+            current_token = self._eval_on_stream(current_token)[0]
             if current_logprobs is not None:
-                mx.eval(current_logprobs)
+                current_logprobs = self._eval_on_stream(current_logprobs)[0]
         except Exception:
             self._sync()
 

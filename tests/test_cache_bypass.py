@@ -947,16 +947,26 @@ class TestDeepseekV32AbsorbFp32Patch:
 
     def test_bundled_deepseek_v32_module_imports(self):
         """Smoke test: the patched module must still be valid Python."""
-        import importlib
-        mod = importlib.import_module("mlx_lm.models.deepseek_v32")
-        assert hasattr(mod, "DeepseekV32Attention"), "module schema regressed"
-        assert hasattr(mod, "Model"), "module schema regressed"
-        import inspect
-        attn_src = inspect.getsource(mod.DeepseekV32Attention.__call__)
-        assert "q_sdpa" in attn_src, (
-            "loaded mlx_lm has unpatched deepseek_v32.py — bundled and "
-            "active site-packages may have drifted; reapply patch"
+        import subprocess
+        import sys
+
+        bundled_python = (
+            "panel/bundled-python/python/bin/python3"
         )
+        code = """
+import inspect
+import mlx_lm.models.deepseek_v32 as mod
+assert hasattr(mod, "DeepseekV32Attention"), "module schema regressed"
+assert hasattr(mod, "Model"), "module schema regressed"
+src = inspect.getsource(mod.DeepseekV32Attention.__call__)
+assert "q_sdpa" in src, "bundled deepseek_v32 import loaded unpatched source"
+"""
+        result = subprocess.run(
+            [bundled_python, "-B", "-s", "-c", code],
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 0, result.stderr or result.stdout
 
     def test_bundled_mistral4_has_fp32_absorb_fix(self):
         """Mistral 4's MLA absorb decode path needs the same fp32-SDPA cast

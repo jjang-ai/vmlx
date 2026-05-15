@@ -75,6 +75,75 @@ class TestSingleActiveBatchGenerator:
         assert generator.__class__.__module__ == "vmlx_engine.utils.single_batch_generator"
         assert generator.__class__.__name__ == "SingleBatchGenerator"
 
+    def test_single_active_generator_uses_concrete_stream_not_thread_default(self, monkeypatch):
+        """Single-active cache-hit replay must not depend on the thread-default
+        Metal stream.  The app runs scheduler.step() through an executor, and
+        MLX default streams are thread-local; using Stream(gpu,0) here can fail
+        with "There is no Stream(gpu, 0) in current thread" on cache-hit decode.
+        """
+        from vmlx_engine.utils import single_batch_generator as single
+
+        fake_device = object()
+        fake_streams = [object(), object()]
+        new_stream_calls = []
+
+        monkeypatch.setattr(single.mx, "default_device", lambda: fake_device)
+
+        def fake_new_stream(device):
+            new_stream_calls.append(device)
+            return fake_streams[len(new_stream_calls) - 1]
+
+        def fail_default_stream(device):
+            raise AssertionError("SingleBatchGenerator must not use default_stream")
+
+        monkeypatch.setattr(single.mx, "new_stream", fake_new_stream)
+        monkeypatch.setattr(single.mx, "default_stream", fail_default_stream)
+
+        generator = single.SingleBatchGenerator(model=_TinyModel())
+
+        assert generator._stream is fake_streams[0]
+        generator._refresh_thread_stream()
+        assert generator._stream is fake_streams[1]
+        assert new_stream_calls == [fake_device, fake_device]
+
+    def test_single_active_generator_materializes_sample_without_async_eval(
+        self, monkeypatch
+    ):
+        """The single-active path must materialize sampled tokens on its owned
+        stream.  Cache-hit replay can carry restored KV graphs from an earlier
+        request; mx.async_eval() may resolve those graphs through a missing
+        thread-local Stream(gpu,0).
+        """
+        from vmlx_engine.utils import single_batch_generator as single
+
+        generator = single.SingleBatchGenerator(model=_TinyModel())
+
+        def sampler(logits):
+            return mx.array([3], dtype=mx.int32)
+
+        sampler._vmlx_accepts_logits = True
+
+        def fail_async_eval(*args, **kwargs):
+            raise AssertionError("SingleBatchGenerator must not use async_eval")
+
+        eval_calls = []
+        original_eval = single.mx.eval
+
+        def recording_eval(*args, **kwargs):
+            eval_calls.append(len(args))
+            return original_eval(*args, **kwargs)
+
+        monkeypatch.setattr(single.mx, "async_eval", fail_async_eval)
+        monkeypatch.setattr(single.mx, "eval", recording_eval)
+
+        generator.insert([[11]], max_tokens=[1], samplers=[sampler])
+        prompt_responses, generation_responses = generator.next()
+
+        assert generation_responses == []
+        assert prompt_responses[0].token == 3
+        assert prompt_responses[0].finish_reason == "length"
+        assert eval_calls
+
     def test_scheduler_keeps_mlx_lm_batch_generator_for_real_multi_sequence(self):
         scheduler = Scheduler(
             _TinyModel(),

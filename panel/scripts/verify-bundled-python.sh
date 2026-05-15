@@ -301,6 +301,29 @@ except Exception as e:
     print(f"  FAIL Kimi K2.6 MLA patch check: {type(e).__name__}: {e}")
     sys.exit(1)
 
+# DeepSeek V3.2 / GLM-5.1 and Mistral4 use the same MLA L==1 absorb branch.
+# bundle-python.sh vendors deterministic patched source for all three files;
+# verify all three so a future mlx-lm reinstall cannot silently drop one.
+for _mod_name, _class_name, _label in [
+    ("mlx_lm.models.deepseek_v32", "DeepseekV32Attention", "DeepSeek V3.2 / GLM-5.1"),
+    ("mlx_lm.models.mistral4", "Mistral4Attention", "Mistral 4"),
+]:
+    try:
+        import importlib
+        import inspect
+
+        _mod = importlib.import_module(_mod_name)
+        _cls = getattr(_mod, _class_name)
+        _src = inspect.getsource(_cls.__call__)
+        if "q_sdpa" in _src and "astype(mx.float32)" in _src:
+            print(f"  ok   {_label} fp32 MLA L==1 SDPA patch in bundled mlx_lm")
+        else:
+            print(f"  FAIL {_label} fp32 MLA L==1 SDPA patch missing from bundled {_mod_name}")
+            sys.exit(1)
+    except Exception as e:
+        print(f"  FAIL {_label} MLA patch check: {type(e).__name__}: {e}")
+        sys.exit(1)
+
 # mlx_vlm kimi_k25 dispatch remap must be live (installed by
 # vmlx_engine.__init__ at import time). Catches a silent regression if the
 # remap block ever gets removed.
