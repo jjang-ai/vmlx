@@ -22,9 +22,9 @@ Three reasoning modes (research/DSV4-RUNTIME-ARCHITECTURE.md §4):
   |    effort="high" |  "high"             |                     |
   +------------------+---------------------+---------------------+
   |  reasoning_      |  thinking_mode=     |  extra system hint  |
-  |    effort="max"  |  "thinking" +       |  only when raw-max  |
-  |                  |  reasoning_effort=  |  opt-in env is set; |
-  |                  |  "max" or "high"    |  otherwise high     |
+  |    effort="max"  |  "thinking" +       |  from the canonical |
+  |                  |  reasoning_effort=  |  DSV4 encoder       |
+  |                  |  "max"              |                     |
   +------------------+---------------------+---------------------+
 
 Multi-turn: ``drop_earlier_reasoning=True`` (default) — DSV4 encoder
@@ -203,18 +203,14 @@ def _resolve_mode_and_effort(
       - enable_thinking True + reasoning_effort in (None, "low", "medium",
         "high") → "thinking" mode with reasoning_effort="high" (DSV4
         only distinguishes high vs max below/above).
-      - reasoning_effort == "max" → "thinking" mode. By default this still
-        uses the stable high rail. When ``VMLX_DSV4_RAW_MAX=1`` is set, the
-        genuine raw-max rail is passed through for users who accept the risk.
+      - reasoning_effort == "max" → "thinking" mode with max effort.
 
     Returns (thinking_mode, reasoning_effort). ``reasoning_effort`` is
     always one of ``{None, "high", "max"}`` — safe for direct passthrough to
     the encoder.
     """
     if reasoning_effort == "max":
-        if os.environ.get("VMLX_DSV4_RAW_MAX", "0").lower() in {"1", "true", "yes"}:
-            return "thinking", "max"
-        return "thinking", "high"
+        return "thinking", "max"
 
     if enable_thinking is False:
         return "chat", None

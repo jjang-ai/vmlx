@@ -18,6 +18,10 @@ def test_chat_thinking_mode_maps_to_enable_thinking_and_effort():
     assert reasoning.enable_thinking is True
     assert reasoning.reasoning_effort == "medium"
 
+    high = ChatCompletionRequest(**base, thinking_mode="high")
+    assert high.enable_thinking is True
+    assert high.reasoning_effort == "high"
+
     max_mode = ChatCompletionRequest(**base, thinking_mode="max")
     assert max_mode.enable_thinking is True
     assert max_mode.reasoning_effort == "max"
@@ -48,6 +52,10 @@ def test_responses_reasoning_alias_and_thinking_mode():
     assert nested.enable_thinking is None
     assert nested.reasoning_effort == "high"
 
+    high = ResponsesRequest(model="m", input="hi", thinking_mode="high")
+    assert high.enable_thinking is True
+    assert high.reasoning_effort == "high"
+
 
 def test_reasoning_effort_none_disables_thinking_for_chat_and_responses():
     from vmlx_engine.api.models import ChatCompletionRequest, ResponsesRequest
@@ -65,30 +73,31 @@ def test_reasoning_effort_none_disables_thinking_for_chat_and_responses():
     assert responses.reasoning_effort is None
 
 
-def test_dsv4_max_effort_normalizes_to_stable_rail_by_default(monkeypatch):
-    """DSV4's raw max rail is not production-safe.
+def test_dsv4_reasoning_effort_preserves_requested_rails(monkeypatch):
+    """DSV4 should expose the real requested effort rail.
 
-    Public request models can still carry reasoning_effort="max" for generic
-    API compatibility, but DSV4 routing must normalize it before the encoder
-    gets called.
+    Runtime should fix cache/attention/prompt bugs directly, not downgrade a
+    public API value like max to another rail as a hidden behavior guard.
     """
     from vmlx_engine import server
     from vmlx_engine.loaders import dsv4_chat_encoder
 
     monkeypatch.delenv("VMLX_DSV4_RAW_MAX", raising=False)
 
+    # Official DSV4 encoder accepts None/high/max; low/medium map to high
+    # for encoder compatibility, while max must not be silently downgraded.
     assert server._normalize_dsv4_reasoning_effort("low") == "high"
     assert server._normalize_dsv4_reasoning_effort("medium") == "high"
     assert server._normalize_dsv4_reasoning_effort("high") == "high"
-    assert server._normalize_dsv4_reasoning_effort("max") == "high"
+    assert server._normalize_dsv4_reasoning_effort("max") == "max"
     assert server._normalize_dsv4_reasoning_effort(None) is None
     assert dsv4_chat_encoder._resolve_mode_and_effort(True, "max") == (
         "thinking",
-        "high",
+        "max",
     )
     assert dsv4_chat_encoder._resolve_mode_and_effort(None, "max") == (
         "thinking",
-        "high",
+        "max",
     )
 
 
@@ -191,8 +200,6 @@ def test_dsv4_thinking_policy_defaults_to_direct_rail_when_not_requested(monkeyp
     """DSV4 stays on direct rail only when the request did not ask to think."""
     from vmlx_engine import server
 
-    monkeypatch.delenv("VMLX_DSV4_FORCE_DIRECT_RAIL", raising=False)
-
     decision = server._resolve_dsv4_thinking_policy(
         requested_enable_thinking=None,
         effort_requested=False,
@@ -208,8 +215,6 @@ def test_dsv4_thinking_policy_defaults_to_direct_rail_when_not_requested(monkeyp
 def test_dsv4_thinking_policy_honors_requested_thinking(monkeypatch):
     from vmlx_engine import server
 
-    monkeypatch.delenv("VMLX_DSV4_FORCE_DIRECT_RAIL", raising=False)
-
     decision = server._resolve_dsv4_thinking_policy(
         requested_enable_thinking=True,
         effort_requested=False,
@@ -222,7 +227,7 @@ def test_dsv4_thinking_policy_honors_requested_thinking(monkeypatch):
     assert decision.reason == "requested_thinking"
 
 
-def test_dsv4_thinking_policy_debug_force_direct(monkeypatch):
+def test_dsv4_thinking_policy_does_not_have_env_force_direct_guard(monkeypatch):
     from vmlx_engine import server
 
     monkeypatch.setenv("VMLX_DSV4_FORCE_DIRECT_RAIL", "1")
@@ -234,15 +239,13 @@ def test_dsv4_thinking_policy_debug_force_direct(monkeypatch):
         tool_choice=None,
     )
 
-    assert decision.enable_thinking is False
-    assert decision.reasoning_effort_allowed is False
-    assert decision.reason == "env_force_direct"
+    assert decision.enable_thinking is True
+    assert decision.reasoning_effort_allowed is True
+    assert decision.reason == "requested_thinking"
 
 
 def test_dsv4_thinking_policy_reasoning_effort_implies_thinking(monkeypatch):
     from vmlx_engine import server
-
-    monkeypatch.delenv("VMLX_DSV4_FORCE_DIRECT_RAIL", raising=False)
 
     decision = server._resolve_dsv4_thinking_policy(
         requested_enable_thinking=None,
@@ -258,8 +261,6 @@ def test_dsv4_thinking_policy_reasoning_effort_implies_thinking(monkeypatch):
 
 def test_dsv4_thinking_policy_keeps_tool_calls_on_direct_rail(monkeypatch):
     from vmlx_engine import server
-
-    monkeypatch.delenv("VMLX_DSV4_FORCE_DIRECT_RAIL", raising=False)
 
     decision = server._resolve_dsv4_thinking_policy(
         requested_enable_thinking=True,
@@ -284,8 +285,6 @@ def test_dsv4_thinking_policy_explicit_false_stays_direct(monkeypatch):
     """
     from vmlx_engine import server
 
-    monkeypatch.delenv("VMLX_DSV4_FORCE_DIRECT_RAIL", raising=False)
-
     decision = server._resolve_dsv4_thinking_policy(
         requested_enable_thinking=False,
         effort_requested=False,
@@ -298,10 +297,8 @@ def test_dsv4_thinking_policy_explicit_false_stays_direct(monkeypatch):
     assert decision.reason == "thinking_not_requested"
 
 
-def test_dsv4_bundle_defaults_override_stale_ui_defaults(tmp_path, monkeypatch):
-    """Old chats saved generic 0.7/1.0/1.1 values as explicit request
-    overrides. For DSV4 those are not real user intent; they are stale UI
-    defaults and must resolve to bundle-calibrated jang_config values."""
+def test_dsv4_bundle_defaults_apply_only_when_request_omits_values(tmp_path, monkeypatch):
+    """Bundle sampling defaults are startup/API defaults, not hidden request rewrites."""
     import json
     from vmlx_engine import server
 
@@ -326,24 +323,27 @@ def test_dsv4_bundle_defaults_override_stale_ui_defaults(tmp_path, monkeypatch):
     server._jang_sampling_defaults_cache.clear()
     server._generation_defaults_cache.clear()
 
-    assert server._resolve_temperature(0.7) == 0.6
-    assert server._resolve_top_p(1.0) == 0.95
-    assert server._resolve_repetition_penalty(1.10, enable_thinking=True) == 1.0
+    assert server._resolve_temperature(None) == 0.7
+    assert server._resolve_top_p(None) == 0.95
+    assert server._resolve_repetition_penalty(None, enable_thinking=True) == 1.10
     assert server._resolve_max_tokens(None) == 4096
 
-    # Non-generic explicit values are preserved.
+    # Explicit request values are always preserved.
+    assert server._resolve_temperature(0.7) == 0.7
+    assert server._resolve_top_p(1.0) == 1.0
+    assert server._resolve_repetition_penalty(1.10, enable_thinking=True) == 1.10
     assert server._resolve_temperature(0.2) == 0.2
     assert server._resolve_top_p(0.8) == 0.8
     assert server._resolve_repetition_penalty(1.25) == 1.25
-    assert server._resolve_repetition_penalty(1.05, enable_thinking=True) == 1.0
+    assert server._resolve_repetition_penalty(1.05, enable_thinking=True) == 1.05
 
 
-def test_ling_stamped_bailing_family_gets_ling_safety_floor(tmp_path, monkeypatch):
+def test_ling_stamped_bailing_family_preserves_sampling_values(tmp_path, monkeypatch):
     """Ling JANGTQ bundles stamp capabilities.family=bailing_hybrid.
 
-    That is the HF model_type, not the canonical vMLX family. The server's
-    family default resolver must still identify it as "ling" so default CLI/UI
-    repetition_penalty=1.0 gets raised to the Ling floor.
+    That is the HF model_type, not the canonical vMLX family. The server must
+    still identify it as "ling" for runtime/cache policy, but it must not hide
+    model/runtime issues behind a family-wide repetition-penalty floor.
     """
     import json
     from vmlx_engine import server
@@ -371,15 +371,14 @@ def test_ling_stamped_bailing_family_gets_ling_safety_floor(tmp_path, monkeypatc
     server._generation_defaults_cache.clear()
 
     assert server._model_family_for_defaults() == "ling"
-    assert server._resolve_repetition_penalty(None) == 1.15
-    assert server._resolve_repetition_penalty(1.0) == 1.15
+    assert server._resolve_repetition_penalty(None) is None
+    assert server._resolve_repetition_penalty(1.0) == 1.0
 
 
-def test_ling_crack_defaults_temperature_to_02_without_overriding_request(
+def test_ling_crack_uses_bundle_temperature_without_path_guard(
     tmp_path, monkeypatch
 ):
-    """Ling CRACK bundles need a colder server default, but explicit request
-    temperatures must remain user intent."""
+    """Ling CRACK must use metadata defaults, not a filename-based cold hack."""
     import json
     from vmlx_engine import server
     import vmlx_engine.model_config_registry as mcr
@@ -415,18 +414,47 @@ def test_ling_crack_defaults_temperature_to_02_without_overriding_request(
     server._generation_defaults_cache.clear()
 
     assert server._model_family_for_defaults() == "ling"
-    assert server._resolve_temperature(None) == 0.2
+    assert server._resolve_temperature(None) == 0.6
     assert server._resolve_temperature(0.7) == 0.7
 
     monkeypatch.setattr(server, "_default_temperature", 0.7)
-    assert server._resolve_temperature(None) == 0.2
+    assert server._resolve_temperature(None) == 0.7
 
     monkeypatch.setattr(server, "_default_temperature", 0.4)
     assert server._resolve_temperature(None) == 0.4
 
 
+def test_generation_config_top_k_and_min_p_are_used_when_request_omits_values(
+    tmp_path, monkeypatch
+):
+    """Native top_k/min_p from generation_config must reach API generation paths."""
+    import json
+    from vmlx_engine import server
+
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "minimax_m2"}))
+    (tmp_path / "generation_config.json").write_text(json.dumps({
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "min_p": 0.05,
+        "max_new_tokens": 8192,
+    }))
+
+    monkeypatch.setattr(server, "_model_path", str(tmp_path))
+    monkeypatch.setattr(server, "_model_name", "minimax")
+    monkeypatch.setattr(server, "_default_top_k", None)
+    monkeypatch.setattr(server, "_default_min_p", None)
+    server._jang_sampling_defaults_cache.clear()
+    server._generation_defaults_cache.clear()
+
+    assert server._resolve_top_k(None) == 40
+    assert server._resolve_top_k(20) == 20
+    assert server._resolve_min_p(None) == 0.05
+    assert server._resolve_min_p(0.02) == 0.02
+
+
 def test_ling_non_crack_keeps_normal_family_temperature(tmp_path, monkeypatch):
-    """The Ling CRACK default must not bleed into regular Ling bundles."""
+    """Bundles with no sampling metadata use neutral engine defaults."""
     import json
     from vmlx_engine import server
     import vmlx_engine.model_config_registry as mcr
@@ -445,7 +473,38 @@ def test_ling_non_crack_keeps_normal_family_temperature(tmp_path, monkeypatch):
     server._generation_defaults_cache.clear()
 
     assert server._model_family_for_defaults() == "ling"
-    assert server._resolve_temperature(None) == 0.6
+    assert server._resolve_temperature(None) == 0.0
+
+
+def test_missing_bundle_sampling_defaults_do_not_force_sampler(tmp_path, monkeypatch):
+    """No bundle/default metadata means neutral MLX-style sampling, not 0.7/0.9."""
+    import json
+    from vmlx_engine import server
+
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "zaya_vl"}))
+    (tmp_path / "generation_config.json").write_text(json.dumps({
+        "eos_token_id": 262143,
+        "pad_token_id": 0,
+    }))
+    (tmp_path / "jang_config.json").write_text(json.dumps({
+        "capabilities": {
+            "family": "zaya1_vl",
+            "reasoning_parser": "qwen3",
+            "think_in_template": False,
+        }
+    }))
+
+    monkeypatch.setattr(server, "_model_path", str(tmp_path))
+    monkeypatch.setattr(server, "_model_name", "zaya-vl")
+    monkeypatch.setattr(server, "_default_temperature", None)
+    monkeypatch.setattr(server, "_default_top_p", None)
+    server._jang_sampling_defaults_cache.clear()
+    server._generation_defaults_cache.clear()
+
+    assert server._resolve_temperature(None) == 0.0
+    assert server._resolve_top_p(None) == 1.0
+    assert server._resolve_temperature(0.7) == 0.7
+    assert server._resolve_top_p(0.95) == 0.95
 
 
 @pytest.mark.parametrize("model_type", ["bailing_hybrid", "bailing_moe_v2_5"])
@@ -511,8 +570,9 @@ def test_panel_ling_registry_does_not_advertise_reasoning_parser():
     assert "next.family === 'ling'" in source
 
 
-def test_minimax_m2_uses_stronger_reasoning_rumination_floor(tmp_path, monkeypatch):
-    """MiniMax M2.7 needs a 1.20 floor to close temp-0 reasoning loops."""
+def test_minimax_m2_preserves_sampling_values_without_family_floor(tmp_path, monkeypatch):
+    """MiniMax loops must be fixed in runtime/template/cache code, not hidden
+    behind a family-wide repetition-penalty floor that slows every decode."""
     import json
     from vmlx_engine import server
 
@@ -535,8 +595,8 @@ def test_minimax_m2_uses_stronger_reasoning_rumination_floor(tmp_path, monkeypat
     server._generation_defaults_cache.clear()
 
     assert server._model_family_for_defaults() == "minimax_m2"
-    assert server._resolve_repetition_penalty(None, enable_thinking=True) == 1.20
-    assert server._resolve_repetition_penalty(1.15, enable_thinking=True) == 1.20
+    assert server._resolve_repetition_penalty(None, enable_thinking=True) is None
+    assert server._resolve_repetition_penalty(1.15, enable_thinking=True) == 1.15
     assert server._resolve_repetition_penalty(1.25, enable_thinking=True) == 1.25
 
 

@@ -65,6 +65,11 @@ describe("Ollama gateway parity contracts", () => {
     expect(skipForwards.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("forwards Ollama min_p sampling through chat and generate routes", () => {
+    const forwards = source.match(/openaiBody\.min_p = opts\.min_p/g) || [];
+    expect(forwards.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("implements Ollama HEAD/root and version probes for strict clients", () => {
     expect(source).toContain('res.end("Ollama is running\\n")');
     expect(source).toContain('url === "/api/version"');

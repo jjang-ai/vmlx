@@ -10,10 +10,6 @@ import { v4 as uuidv4 } from 'uuid'
 import { db, Session } from './database'
 import { resolveImageModelFromDirectoryName } from '../shared/imageModels'
 import { dsv4EnvFromConfig } from '../shared/dsv4Env'
-import {
-  JANGTQ_MPP_NAX_SETTING_KEY,
-  normalizeJangtqMppNaxMode,
-} from '../shared/jangtqMppNax'
 
 export type { ServerConfig, DetectedProcess } from './server'
 import type { ServerConfig, DetectedProcess } from './server'
@@ -51,14 +47,11 @@ function shouldPassHfTokenToEngine(modelPath?: string): boolean {
 interface BundleStartupDefaults {
   defaultTemperature?: number
   defaultTopP?: number
+  defaultTopK?: number
+  defaultMinP?: number
   defaultRepetitionPenalty?: number
   maxTokens?: number
   source?: 'generation_config' | 'jang_config'
-}
-
-function isLingCrackModelPath(modelPath: string): boolean {
-  const name = basename(modelPath).toLowerCase()
-  return name.includes('ling') && name.includes('crack')
 }
 
 function normalizeReasoningMode(mode: unknown): 'auto' | 'on' | 'off' {
@@ -80,15 +73,6 @@ function isZayaCcaFamily(family?: string): boolean {
   return normalized === 'zaya' || normalized === 'zaya1-vl'
 }
 
-function topKOverrideBlockedByFamily(family?: string): boolean {
-  const normalized = normalizeDetectedFamilyName(family)
-  return normalized === 'zaya' || normalized === 'zaya1-vl' || normalized === 'ling'
-}
-
-function getGlobalJangtqMppNaxMode(): 'auto' | 'off' | 'on' {
-  return normalizeJangtqMppNaxMode(db.getSetting(JANGTQ_MPP_NAX_SETTING_KEY))
-}
-
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 
 function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
@@ -98,6 +82,8 @@ function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
     const gen = JSON.parse(readFileSync(join(modelPath, 'generation_config.json'), 'utf8'))
     if (typeof gen.temperature === 'number') out.defaultTemperature = Math.round(gen.temperature * 100)
     if (typeof gen.top_p === 'number') out.defaultTopP = Math.round(gen.top_p * 100)
+    if (typeof gen.top_k === 'number') out.defaultTopK = Math.max(0, Math.round(gen.top_k))
+    if (typeof gen.min_p === 'number') out.defaultMinP = Math.max(0, Math.round(gen.min_p * 100))
     if (typeof gen.repetition_penalty === 'number') out.defaultRepetitionPenalty = Math.round(gen.repetition_penalty * 100)
     if (typeof gen.max_new_tokens === 'number' && gen.max_new_tokens > 0) out.maxTokens = Math.round(gen.max_new_tokens)
     if (Object.keys(out).length > 0) out.source = 'generation_config'
@@ -109,11 +95,12 @@ function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
     if (sampling && typeof sampling === 'object') {
       if (typeof sampling.temperature === 'number') out.defaultTemperature = Math.round(sampling.temperature * 100)
       if (typeof sampling.top_p === 'number') out.defaultTopP = Math.round(sampling.top_p * 100)
+      if (typeof sampling.top_k === 'number') out.defaultTopK = Math.max(0, Math.round(sampling.top_k))
+      if (typeof sampling.min_p === 'number') out.defaultMinP = Math.max(0, Math.round(sampling.min_p * 100))
       // Pick mode-specific repetition penalty based on the bundle's
-      // default reasoning mode. Bundles split _thinking vs _chat because
-      // the right value differs (DSV4: 1.0 thinking to keep </think>
-      // closure, 1.05 chat to break degeneration loops). Falls back to
-      // the unified scalar if either side is missing.
+      // default reasoning mode. Bundles can split _thinking vs _chat because
+      // the correct value is part of the bundle's chat contract. Falls back
+      // to the unified scalar if either side is missing.
       const defaultMode = jang?.chat?.reasoning?.default_mode
       const repThinking = typeof sampling.repetition_penalty_thinking === 'number'
         ? sampling.repetition_penalty_thinking : undefined
@@ -129,11 +116,6 @@ function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
       out.source = 'jang_config'
     }
   } catch { /* jang_config.json is optional */ }
-
-  if (isLingCrackModelPath(modelPath)) {
-    out.defaultTemperature = 20
-    out.source = out.source ?? 'jang_config'
-  }
 
   return out
 }
@@ -158,8 +140,24 @@ function applyBundleStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
     config.defaultTopP = defs.defaultTopP
   }
   if (
+    defs.defaultTopK != null &&
+    ((config as any).defaultTopK == null || (config as any).defaultTopK === 0)
+  ) {
+    ;(config as any).defaultTopK = defs.defaultTopK
+  }
+  if (
+    defs.defaultMinP != null &&
+    ((config as any).defaultMinP == null || (config as any).defaultMinP === 0)
+  ) {
+    ;(config as any).defaultMinP = defs.defaultMinP
+  }
+  if (
     defs.defaultRepetitionPenalty != null &&
-    ((config as any).defaultRepetitionPenalty == null || (config as any).defaultRepetitionPenalty === 110)
+    (
+      (config as any).defaultRepetitionPenalty == null ||
+      (config as any).defaultRepetitionPenalty === 0 ||
+      (config as any).defaultRepetitionPenalty === 110
+    )
   ) {
     ;(config as any).defaultRepetitionPenalty = defs.defaultRepetitionPenalty
   }
@@ -870,14 +868,12 @@ export class SessionManager extends EventEmitter {
     // replaced with a different model (same folder name, different model_type).
     // User-set overrides (port, host, apiKey, etc.) are preserved.
     let freshDetectedFamily: string | undefined
-    let freshDetectedIsTurboQuant = false
     if (!isImageSession) {
       try {
         const freshConfig = detectModelConfigFromDir(config.modelPath)
         if (freshConfig) {
           const freshFamily = normalizeDetectedFamilyName(freshConfig.family)
           freshDetectedFamily = freshFamily
-          freshDetectedIsTurboQuant = !!freshConfig.isTurboQuant
           const oldFamily = config.toolCallParser
           const oldReasoningParser = config.reasoningParser
           // Update auto-detected fields only if user hasn't explicitly overridden them
@@ -1015,21 +1011,46 @@ export class SessionManager extends EventEmitter {
       }
     }
     delete spawnEnv.JANGTQ_TOPK_OVERRIDE
-    const jangtqTopKOverride = Number((config as any).jangtqTopKOverride || 0)
-    const topKOverrideAllowed = freshDetectedIsTurboQuant && !topKOverrideBlockedByFamily(freshDetectedFamily)
-    if (topKOverrideAllowed && Number.isFinite(jangtqTopKOverride) && jangtqTopKOverride > 0) {
-      spawnEnv.JANGTQ_TOPK_OVERRIDE = String(Math.floor(Math.min(64, Math.max(1, jangtqTopKOverride))))
-    } else if (!topKOverrideAllowed && Number.isFinite(jangtqTopKOverride) && jangtqTopKOverride > 0) {
-      this.pushLog(sessionId, `[INFO] Ignoring JANGTQ_TOPK_OVERRIDE=${Math.floor(jangtqTopKOverride)} for ${freshDetectedFamily || 'this model'}; trained routing is enforced for this family.`)
-    }
-    // DSV4 Flash runtime knobs (raw-max opt-in + finalizer budget + force-direct).
-    // Helper validates inputs and emits only the env vars the engine reads.
+    // Acceleration policy is internal and defaults to auto in the engine.
+    // Do not let stale/debug parent env values force packaged app sessions
+    // onto the legacy or strict experimental lane.
+    delete spawnEnv.JANGTQ_MPP_NAX
+    delete spawnEnv.JANGTQ_MPP_NAX_DISABLE
+    delete spawnEnv.JANGTQ_MPP_NAX_STRICT
+    delete spawnEnv.JANGTQ_MPP_DENSE
+    delete spawnEnv.JANGTQ_MPP_DENSE_STRICT
+    delete spawnEnv.JANGTQ_DISABLE_DSV4_STREAM_LOAD
+    delete spawnEnv.JANGTQ_DISABLE_DSV4_FAST_LOAD
+    delete spawnEnv.VMLX_DENSE_STRICT_LANE
+    delete spawnEnv.VMLX_DSV4_FAST_LOAD_DISABLE
+    delete spawnEnv.VMLINUX_DENSE_STRICT_LANE
+    delete spawnEnv.VMLINUX_DSV4_FAST_LOAD_DISABLE
+    // DSV4 Flash runtime knobs. Helper validates inputs and emits only the
+    // env vars the engine reads.
     const dsv4Env = dsv4EnvFromConfig(config as any, {
       dsv4Active: freshDetectedFamily === 'deepseek-v4',
     })
     for (const [key, value] of Object.entries(dsv4Env)) {
       spawnEnv[key] = value
     }
+    const scrubbedEnvProbeKeys = [
+      'JANGTQ_MPP_NAX',
+      'JANGTQ_MPP_NAX_DISABLE',
+      'JANGTQ_MPP_NAX_STRICT',
+      'JANGTQ_MPP_DENSE',
+      'JANGTQ_MPP_DENSE_STRICT',
+      'JANGTQ_DISABLE_DSV4_STREAM_LOAD',
+      'JANGTQ_DISABLE_DSV4_FAST_LOAD',
+      'VMLX_DENSE_STRICT_LANE',
+      'VMLX_DSV4_FAST_LOAD_DISABLE',
+      'VMLINUX_DENSE_STRICT_LANE',
+      'VMLINUX_DSV4_FAST_LOAD_DISABLE',
+    ]
+    const scrubbedEnvProbe: Record<string, string | null> = {}
+    for (const key of scrubbedEnvProbeKeys) {
+      scrubbedEnvProbe[key] = spawnEnv[key] ?? null
+    }
+    this.pushLog(sessionId, `[ENV] engine_child_probe=${JSON.stringify(scrubbedEnvProbe)}`)
     // NOTE: We previously set HF_HUB_OFFLINE=1 for image models to prevent mflux from
     // silently downloading multi-GB models. This was removed because it also blocks mflux
     // from reading already-cached files in ~/.cache/huggingface/hub/. Instead, we rely on
@@ -1307,7 +1328,7 @@ export class SessionManager extends EventEmitter {
     'enableBlockDiskCache', 'blockDiskCacheMaxGb', 'blockDiskCacheDir',
     'prefixCacheSize', 'prefixCacheMaxBytes', 'cacheTtlMinutes', 'isMultimodal',
     'toolCallParser', 'reasoningParser',
-    'dsv4RawMax', 'dsv4FinalizerTokens', 'dsv4ForceDirect', 'dsv4PoolQuant',
+    'dsv4PoolQuant',
     'maxNumSeqs', 'prefillBatchSize', 'prefillStepSize', 'completionBatchSize',
     'streamInterval', 'apiKey', 'rateLimit',
     // NOTE: 'timeout' intentionally omitted — client sends per-request timeout
@@ -1315,9 +1336,8 @@ export class SessionManager extends EventEmitter {
     'maxTokens', 'mcpConfig', 'servedModelName',
     'speculativeModel', 'numDraftTokens', 'smelt', 'smeltExperts',
     'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
-    'jangtqMppNax', 'jangtqTopKOverride',
     'distributedEnabled', 'distributedMode', 'distributedSecret',
-    'defaultTemperature', 'defaultTopP', 'defaultRepetitionPenalty',
+    'defaultTemperature', 'defaultTopP', 'defaultTopK', 'defaultMinP', 'defaultRepetitionPenalty',
     'embeddingModel', 'additionalArgs', 'mfluxClass',
     'enableAutoToolChoice', 'chatTemplate',
     'logLevel', 'corsOrigins',
@@ -1456,13 +1476,8 @@ export class SessionManager extends EventEmitter {
           cacheStackStartupDefaultsVersion: CACHE_STACK_STARTUP_DEFAULTS_VERSION,
           streamInterval: 1,
           maxTokens: 32768,
-          jangtqMppNax: getGlobalJangtqMppNaxMode(),
-          jangtqTopKOverride: 0,
           toolCallParser: 'auto',
           reasoningParser: 'auto',
-          dsv4RawMax: false,
-          dsv4FinalizerTokens: 4096,
-          dsv4ForceDirect: false,
           dsv4PoolQuant: false,
           defaultEnableThinking: isZayaCcaFamily(detected.family) ? false : undefined,
           enableAutoToolChoice: detected.enableAutoToolChoice
@@ -2376,8 +2391,6 @@ export class SessionManager extends EventEmitter {
     } else {
       args.push('--max-tokens', '1000000')
     }
-    args.push('--jangtq-mpp-nax', getGlobalJangtqMppNaxMode())
-
     // Tool integration (parsers and --enable-auto-tool-choice already pushed above)
     if (config.mcpConfig) args.push('--mcp-config', config.mcpConfig)
 
@@ -2450,20 +2463,33 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // Generation defaults (slider value is integer ×100, convert to float)
-    // Slider uses 0 as "Server default" sentinel (unlimitedValue=0), so > 0 is correct.
-    // The minimum real value on the slider is step=5 (temp=0.05).
-    if (config.defaultTemperature != null && config.defaultTemperature > 0) {
-      args.push('--default-temperature', (config.defaultTemperature / 100).toFixed(2))
+    // Generation defaults (slider value is integer ×100, convert to float).
+    // Emit user/bundle-declared defaults only. The old UI defaults of 0.70
+    // temperature and 0.95 top_p must not silently override a bundle that has
+    // no sampling metadata; the engine's neutral fallback should apply there.
+    const bundleDefsForSampling = readBundleStartupDefaults(config.modelPath)
+    const hasBundleTemp = bundleDefsForSampling.defaultTemperature != null
+    const hasBundleTopP = bundleDefsForSampling.defaultTopP != null
+    const temp = (config as any).defaultTemperature
+    const topP = (config as any).defaultTopP
+    if (temp != null && temp > 0 && (temp !== 70 || hasBundleTemp)) {
+      args.push('--default-temperature', (temp / 100).toFixed(2))
     }
-    if (config.defaultTopP != null && config.defaultTopP > 0) {
-      args.push('--default-top-p', (config.defaultTopP / 100).toFixed(2))
+    if (topP != null && topP > 0 && (topP !== 95 || hasBundleTopP)) {
+      args.push('--default-top-p', (topP / 100).toFixed(2))
     }
-    // Server-level default repetition penalty — stored as integer ×100
-    // (slider convention matching temp/top-p). Default 110 = 1.10, which
-    // prevents Gemma 4 word-loops and 2-bit quant dash-loops on external
-    // API clients (Ollama, OpenAI SDK, Anthropic SDK, raw curl).
-    if ((config as any).defaultRepetitionPenalty != null && (config as any).defaultRepetitionPenalty > 0) {
+    if ((config as any).defaultTopK != null && (config as any).defaultTopK > 0) {
+      args.push('--default-top-k', Math.round((config as any).defaultTopK).toString())
+    }
+    if ((config as any).defaultMinP != null && (config as any).defaultMinP > 0) {
+      args.push('--default-min-p', ((config as any).defaultMinP / 100).toFixed(2))
+    }
+    // Server-level default repetition penalty is explicit only. Historical
+    // 1.10 UI state is ignored unless the bundle declares that value; bundle
+    // metadata or per-request values should drive sampling.
+    const hasBundleRep = bundleDefsForSampling.defaultRepetitionPenalty != null
+    const rep = (config as any).defaultRepetitionPenalty
+    if (rep != null && rep > 0 && (rep !== 110 || hasBundleRep)) {
       args.push('--default-repetition-penalty', ((config as any).defaultRepetitionPenalty / 100).toFixed(2))
     }
 

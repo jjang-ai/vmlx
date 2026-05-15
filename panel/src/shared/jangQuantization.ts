@@ -37,7 +37,14 @@ export function formatJangQuantizationLabel(config: {
     return bits ? `JANGTQ ${bits}-bit${suffix}` : 'JANGTQ'
   }
 
-  if (format === 'jang' || format === 'jjqf' || format === 'mxq') {
+  if (
+    format === 'jang' ||
+    format === 'jjqf' ||
+    format === 'mxq' ||
+    weightFormat === 'jang' ||
+    weightFormat === 'jjqf' ||
+    weightFormat === 'mxq'
+  ) {
     if (profile) return explicitBits ? `${profile} (${explicitBits}b)` : profile
     return explicitBits ? `JANG ${explicitBits}-bit` : 'JANG'
   }

@@ -61,11 +61,6 @@ export interface GenerationDefaults {
   source?: "jang_config" | "generation_config";
 }
 
-function isLingCrackModelPath(modelPath: string): boolean {
-  const name = basename(modelPath).toLowerCase();
-  return name.includes("ling") && name.includes("crack");
-}
-
 /** Read bundle sampling defaults, preferring JANG chat metadata over generation_config. */
 export async function readGenerationDefaults(
   modelPath: string,
@@ -100,6 +95,8 @@ export async function readGenerationDefaults(
         if (typeof sampling.temperature === "number")
           defaults.temperature = sampling.temperature;
         if (typeof sampling.top_p === "number") defaults.topP = sampling.top_p;
+        if (typeof sampling.top_k === "number") defaults.topK = sampling.top_k;
+        if (typeof sampling.min_p === "number") defaults.minP = sampling.min_p;
         const defaultMode = jang?.chat?.reasoning?.default_mode;
         const repThinking =
           typeof sampling.repetition_penalty_thinking === "number"
@@ -124,11 +121,6 @@ export async function readGenerationDefaults(
       }
     } catch {
       // jang_config.json is optional for non-JANG bundles.
-    }
-
-    if (isLingCrackModelPath(modelPath)) {
-      defaults.temperature = 0.2;
-      defaults.source = defaults.source ?? "jang_config";
     }
 
     // Only return if at least one param was found

@@ -3,10 +3,6 @@ import { ArrowLeft } from 'lucide-react'
 import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG } from './SessionConfigForm'
 import { DownloadTab } from './DownloadTab'
 import { DirectoryManager } from './DirectoryManager'
-import {
-  JANGTQ_MPP_NAX_SETTING_KEY,
-  normalizeJangtqMppNaxMode,
-} from '../../../../shared/jangtqMppNax'
 
 interface ModelInfo {
   path: string
@@ -70,6 +66,8 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
       }
       if (gen?.temperature != null) next.defaultTemperature = Math.round(gen.temperature * 100)
       if (gen?.topP != null) next.defaultTopP = Math.round(gen.topP * 100)
+      if (gen?.topK != null) next.defaultTopK = Math.max(0, Math.round(gen.topK))
+      if (gen?.minP != null) next.defaultMinP = Math.max(0, Math.round(gen.minP * 100))
       if (gen?.repeatPenalty != null) next.defaultRepetitionPenalty = Math.round(gen.repeatPenalty * 100)
       if (gen?.maxNewTokens != null) next.maxTokens = gen.maxNewTokens
       return next
@@ -153,36 +151,12 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
     detect()
   }, [initialModelPath])
 
-  const handleJangtqMppNaxModeChange = (value: unknown) => {
-    const mode = normalizeJangtqMppNaxMode(value)
-    setConfig(prev => ({ ...prev, jangtqMppNax: mode }))
-    window.api.settings.set(JANGTQ_MPP_NAX_SETTING_KEY, mode).catch((err: unknown) => {
-      setLaunchError((err as Error).message)
-    })
-  }
-
   const handleChange = <K extends keyof SessionConfig>(key: K, value: SessionConfig[K]) => {
-    if (key === 'jangtqMppNax') {
-      handleJangtqMppNaxModeChange(value)
-      return
-    }
     setConfig(prev => ({ ...prev, [key]: value }))
   }
 
-  useEffect(() => {
-    window.api.settings.get(JANGTQ_MPP_NAX_SETTING_KEY)
-      .then((mode: string | null) => {
-        setConfig(prev => ({ ...prev, jangtqMppNax: normalizeJangtqMppNaxMode(mode) }))
-      })
-      .catch(() => {})
-    const unsubscribe = window.api.settings.onJangtqMppNaxChanged?.((data: { mode: 'auto' | 'off' | 'on' }) => {
-      setConfig(prev => ({ ...prev, jangtqMppNax: normalizeJangtqMppNaxMode(data?.mode) }))
-    })
-    return () => { unsubscribe?.() }
-  }, [])
-
   const handleReset = async () => {
-    const base = { ...DEFAULT_CONFIG, port: config.port, jangtqMppNax: normalizeJangtqMppNaxMode(await window.api.settings.get(JANGTQ_MPP_NAX_SETTING_KEY).catch(() => null)) }
+    const base = { ...DEFAULT_CONFIG, port: config.port }
     // Re-run model detection to get proper defaults for this model
     if (selectedModel) {
       try {
@@ -203,6 +177,8 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
         }
         if (gen?.temperature != null) base.defaultTemperature = Math.round(gen.temperature * 100)
         if (gen?.topP != null) base.defaultTopP = Math.round(gen.topP * 100)
+        if (gen?.topK != null) base.defaultTopK = Math.max(0, Math.round(gen.topK))
+        if (gen?.minP != null) base.defaultMinP = Math.max(0, Math.round(gen.minP * 100))
         if (gen?.repeatPenalty != null) base.defaultRepetitionPenalty = Math.round(gen.repeatPenalty * 100)
         if (gen?.maxNewTokens != null) base.maxTokens = gen.maxNewTokens
       } catch (_) {
@@ -576,7 +552,20 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
                                 if (gen?.topP != null && (stored.defaultTopP == null || stored.defaultTopP === 95)) {
                                   stored.defaultTopP = Math.round(gen.topP * 100)
                                 }
-                                if (gen?.repeatPenalty != null && (stored.defaultRepetitionPenalty == null || stored.defaultRepetitionPenalty === 110)) {
+                                if (gen?.topK != null && (stored.defaultTopK == null || stored.defaultTopK === 0)) {
+                                  stored.defaultTopK = Math.max(0, Math.round(gen.topK))
+                                }
+                                if (gen?.minP != null && (stored.defaultMinP == null || stored.defaultMinP === 0)) {
+                                  stored.defaultMinP = Math.max(0, Math.round(gen.minP * 100))
+                                }
+                                if (
+                                  gen?.repeatPenalty != null &&
+                                  (
+                                    stored.defaultRepetitionPenalty == null ||
+                                    stored.defaultRepetitionPenalty === 0 ||
+                                    stored.defaultRepetitionPenalty === 110
+                                  )
+                                ) {
                                   stored.defaultRepetitionPenalty = Math.round(gen.repeatPenalty * 100)
                                 }
                                 if (gen?.maxNewTokens != null && (stored.maxTokens == null || stored.maxTokens === 32768)) {

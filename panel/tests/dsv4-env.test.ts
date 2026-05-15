@@ -30,75 +30,23 @@ describe('dsv4EnvFromConfig', () => {
     expect(dsv4EnvFromConfig({ dsv4PoolQuant: true }, { dsv4Active: false })).toEqual({})
   })
 
-  it('maps dsv4RawMax=true to VMLX_DSV4_RAW_MAX=1', () => {
-    expect(dsv4EnvFromConfig({ dsv4RawMax: true })).toEqual({
-      VMLX_DSV4_RAW_MAX: '1',
-    })
-  })
-
-  it('does NOT set VMLX_DSV4_RAW_MAX when dsv4RawMax is false/missing', () => {
-    expect(dsv4EnvFromConfig({ dsv4RawMax: false })).toEqual({})
-    expect(dsv4EnvFromConfig({ dsv4RawMax: undefined })).toEqual({})
-  })
-
-  it('maps dsv4FinalizerTokens to VMLX_DSV4_FINALIZER_TOKENS', () => {
-    expect(dsv4EnvFromConfig({ dsv4FinalizerTokens: 4096 })).toEqual({
-      VMLX_DSV4_FINALIZER_TOKENS: '4096',
-    })
-  })
-
-  it('does NOT set finalizer when value is 0/negative/non-finite', () => {
-    expect(dsv4EnvFromConfig({ dsv4FinalizerTokens: 0 })).toEqual({})
-    expect(dsv4EnvFromConfig({ dsv4FinalizerTokens: -1 })).toEqual({})
-    expect(dsv4EnvFromConfig({ dsv4FinalizerTokens: NaN })).toEqual({})
-    expect(dsv4EnvFromConfig({ dsv4FinalizerTokens: Infinity })).toEqual({})
-  })
-
-  it('floors and clamps finalizer tokens to a sane integer', () => {
-    expect(dsv4EnvFromConfig({ dsv4FinalizerTokens: 4096.7 })).toEqual({
-      VMLX_DSV4_FINALIZER_TOKENS: '4096',
-    })
-  })
-
-  it('maps dsv4ForceDirect=true to VMLX_DSV4_FORCE_DIRECT_RAIL=1', () => {
-    expect(dsv4EnvFromConfig({ dsv4ForceDirect: true })).toEqual({
-      VMLX_DSV4_FORCE_DIRECT_RAIL: '1',
-    })
-  })
-
-  it('combines all DSV4 fields when set together', () => {
+  it('combines supported DSV4 fields when set together', () => {
     const env = dsv4EnvFromConfig({
-      dsv4RawMax: true,
-      dsv4FinalizerTokens: 4096,
-      dsv4ForceDirect: false,
-    })
+      dsv4PoolQuant: true,
+    }, { dsv4Active: true })
     expect(env).toEqual({
-      VMLX_DSV4_RAW_MAX: '1',
-      VMLX_DSV4_FINALIZER_TOKENS: '4096',
-    })
-  })
-
-  it('rawMax + forceDirect together is allowed (engine reconciles)', () => {
-    // Engine: forceDirect short-circuits before rawMax matters. Helper just
-    // emits both vars — engine logic decides precedence.
-    const env = dsv4EnvFromConfig({
-      dsv4RawMax: true,
-      dsv4ForceDirect: true,
-    })
-    expect(env).toEqual({
-      VMLX_DSV4_RAW_MAX: '1',
-      VMLX_DSV4_FORCE_DIRECT_RAIL: '1',
+      DSV4_LONG_CTX: '1',
+      DSV4_POOL_QUANT: '1',
     })
   })
 
   it('ignores unrelated config fields', () => {
     const env = dsv4EnvFromConfig({
-      dsv4RawMax: true,
       modelPath: '/some/path',
       port: 8080,
       host: '0.0.0.0',
     } as any)
-    expect(env).toEqual({ VMLX_DSV4_RAW_MAX: '1' })
+    expect(env).toEqual({})
   })
 })
 
@@ -119,13 +67,15 @@ describe('dsv4EnvFromConfig wired into sessions.ts spawnEnv', () => {
     expect(source).toContain('spawnEnv[key] = value')
   })
 
-  it('marks all DSV4 env controls as restart-required session config', () => {
+  it('marks DSV4 pool quant as restart-required session config', () => {
     const fs = require('node:fs')
     const path = require('node:path')
     const sessionsPath = path.resolve(__dirname, '../src/main/sessions.ts')
     const source = fs.readFileSync(sessionsPath, 'utf8')
 
-    expect(source).toContain("'dsv4RawMax', 'dsv4FinalizerTokens', 'dsv4ForceDirect', 'dsv4PoolQuant'")
+    expect(source).toContain("'dsv4PoolQuant'")
+    expect(source).not.toContain("'dsv4RawMax'")
+    expect(source).not.toContain("'dsv4ForceDirect'")
   })
 })
 
@@ -136,30 +86,22 @@ describe('DSV4 runtime controls in SessionConfigForm', () => {
     const formPath = path.resolve(__dirname, '../src/renderer/src/components/sessions/SessionConfigForm.tsx')
     const source = fs.readFileSync(formPath, 'utf8')
 
-    expect(source).toContain('dsv4RawMax?: boolean')
-    expect(source).toContain('dsv4FinalizerTokens?: number')
-    expect(source).toContain('dsv4ForceDirect?: boolean')
     expect(source).toContain('dsv4PoolQuant?: boolean')
-    expect(source).toContain('dsv4RawMax: false')
-    expect(source).toContain('dsv4FinalizerTokens: 4096')
-    expect(source).toContain('dsv4ForceDirect: false')
     expect(source).toContain('dsv4PoolQuant: false')
+    expect(source).not.toContain('dsv4FinalizerTokens')
   })
 
-  it('renders DSV4-only raw-max/finalizer controls in performance settings', () => {
+  it('renders only DSV4 pool quant control in performance settings', () => {
     const fs = require('node:fs')
     const path = require('node:path')
     const formPath = path.resolve(__dirname, '../src/renderer/src/components/sessions/SessionConfigForm.tsx')
     const source = fs.readFileSync(formPath, 'utf8')
 
     expect(source).toContain('{dsv4Active && (')
-    expect(source).toContain('DSV4 Raw Max Thinking')
-    expect(source).toContain("onChange={v => onChange('dsv4RawMax', v)}")
-    expect(source).toContain('DSV4 Finalizer Tokens')
-    expect(source).toContain("onChange={v => onChange('dsv4FinalizerTokens', v)}")
-    expect(source).toContain('DSV4 Force Direct Rail')
-    expect(source).toContain("onChange={v => onChange('dsv4ForceDirect', v)}")
     expect(source).toContain('DSV4 Pool Quantization')
     expect(source).toContain("onChange={v => onChange('dsv4PoolQuant', v)}")
+    expect(source).not.toContain('DSV4 Raw Max Thinking')
+    expect(source).not.toContain('DSV4 Force Direct Rail')
+    expect(source).not.toContain('DSV4 Finalizer Tokens')
   })
 })

@@ -28,6 +28,13 @@ describe('JANG quantization labels', () => {
     })).toBe('JANG_2L (2.73b)')
   })
 
+  it('keeps explicit JANG bits when bundles stamp weight_format instead of format', () => {
+    expect(formatJangQuantizationLabel({
+      weight_format: 'jang',
+      quantization: { profile: 'JANG_4M', actual_bits: 4.45, target_bits: 4 },
+    })).toBe('JANG_4M (4.45b)')
+  })
+
   it('falls back without leaking undefined when profile has no known bit mapping', () => {
     expect(formatJangQuantizationLabel({
       weight_format: 'mxtq',

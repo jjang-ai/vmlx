@@ -7,7 +7,7 @@ OpenAI-compatible image endpoint, records the output size/timing, then shuts
 the server down before the next row.
 
 The runner keeps image diffusion on the native mflux/MLX path. JANGTQ
-TurboQuant/MPP/NAX acceleration is only expected for text/VL JANGTQ bundles
+JANGTQ acceleration is only expected for text/VL JANGTQ bundles
 with `jang_config.json` / `*.tq_packed` weights, not for these diffusers/mflux
 image directories.
 """
@@ -275,7 +275,7 @@ def run_row(row: ImageRow, py: str, port: int, load_timeout: float, request_time
         "row": asdict(row),
         "path_exists": path.exists(),
         "path_size_gb": None,
-        "acceleration_expected": "mflux_native_not_jangtq_mpp_nax",
+        "acceleration_expected": "mflux_native_not_jangtq_acceleration",
         "started_at": started,
         "ok": False,
     }

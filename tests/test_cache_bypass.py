@@ -499,13 +499,13 @@ class TestServerForwarding:
         assert "tool_call_active = _stream_tools_available and not _suppress_tools" in src
         assert "(_enable_auto_tool_choice or _tool_call_parser is not None or _request_has_tools" not in src
 
-    def test_dsv4_bundle_repetition_penalty_overrides_generic_cli_default(self, tmp_path, monkeypatch):
+    def test_explicit_cli_repetition_penalty_wins_over_dsv4_bundle_default(self, tmp_path, monkeypatch):
         """DSV4 bundles carry calibrated sampling defaults.
 
-        The panel can still launch with generic --default-repetition-penalty
-        1.10. For DSV4 only, the bundle's thinking penalty must win because
-        the DSV4 converter documents that thinking mode fails to close
-        `</think>` when a higher generic floor is forced.
+        The engine must not secretly rewrite explicit server defaults. The
+        panel suppresses stale historical UI values before launch; once a
+        caller explicitly sets a CLI/session default, request > CLI > bundle
+        ordering must remain honest.
         """
         from vmlx_engine import server
 
@@ -529,7 +529,7 @@ class TestServerForwarding:
         monkeypatch.setattr(server, "_default_repetition_penalty", 1.10)
         server._jang_sampling_defaults_cache.clear()
 
-        assert server._resolve_repetition_penalty(None, str(tmp_path)) == 1.0
+        assert server._resolve_repetition_penalty(None, str(tmp_path)) == 1.10
 
     def test_dsv4_paged_block_disk_cache_is_not_force_disabled(self):
         """DSV4 paged cache must use the dedicated composite-state path.

@@ -40,13 +40,15 @@ afterEach(() => {
 })
 
 describe('readGenerationDefaults JANG sampling defaults', () => {
-  it('forces Ling CRACK startup temperature to 0.2 without changing other defaults', async () => {
+  it('uses Ling CRACK bundle metadata without filename temperature override', async () => {
     const dir = makeModelDir({
       'jang_config.json': {
         chat: {
           sampling_defaults: {
             temperature: 0.6,
             top_p: 0.95,
+            top_k: 40,
+            min_p: 0.05,
             repetition_penalty: 1.0,
           },
         },
@@ -54,8 +56,10 @@ describe('readGenerationDefaults JANG sampling defaults', () => {
     }, 'vmlx-generation-defaults-Ling-2.6-flash-JANGTQ2-CRACK-')
 
     await expect(readGenerationDefaults(dir)).resolves.toMatchObject({
-      temperature: 0.2,
+      temperature: 0.6,
       topP: 0.95,
+      topK: 40,
+      minP: 0.05,
       repeatPenalty: 1.0,
       source: 'jang_config',
     })

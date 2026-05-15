@@ -411,6 +411,7 @@ def check_packaged_bundled_import_version(
 REMOVED_ENV_VAR_FORCE_FLIPS = (
     "VMLX_DSV4_ALLOW_CHAT",
     "VMLX_DSV4_ALLOW_THINKING",
+    "VMLX_DSV4_FORCE_DIRECT_RAIL",
 )
 
 BUNDLED_SOURCE_HASH_PATHS = (

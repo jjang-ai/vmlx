@@ -441,14 +441,14 @@ def test_dsv4_max_mode_requires_visible_exact_answer_not_reasoning_mention():
     )
 
 
-def test_dsv4_live_gate_disables_hard_repetition_block_for_proof_rows():
+def test_dsv4_live_gate_does_not_use_hard_repetition_block_env():
     rows = {row.id: row for row in ROWS}
     env = audit_child_env_for_row(
         rows["dsv4_tq"],
         {"VMLX_DSV4_HARD_REP_BLOCK": "1"},
     )
 
-    assert env["VMLX_DSV4_HARD_REP_BLOCK"] == "0"
+    assert "VMLX_DSV4_HARD_REP_BLOCK" not in env
 
 
 def test_dsv4_live_gate_prefers_local_jang_source_when_available(tmp_path):

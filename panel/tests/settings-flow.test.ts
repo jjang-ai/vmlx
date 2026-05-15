@@ -60,10 +60,10 @@ interface SessionConfig {
     flashMoeIoSplit: number
     defaultTemperature: number
     defaultTopP: number
+    defaultTopK?: number
+    defaultMinP?: number
     defaultRepetitionPenalty: number
     defaultEnableThinking?: boolean
-    jangtqMppNax: 'auto' | 'off' | 'on'
-    jangtqTopKOverride: number
     embeddingModel: string
     additionalArgs: string
     enableJit: boolean
@@ -118,12 +118,12 @@ const DEFAULT_CONFIG: SessionConfig = {
     flashMoeSlotBank: 256,
     flashMoePrefetch: 'none',
     flashMoeIoSplit: 4,
-    defaultTemperature: 70,
-    defaultTopP: 95,
-    defaultRepetitionPenalty: 110,
+    defaultTemperature: 0,
+    defaultTopP: 0,
+    defaultTopK: 0,
+    defaultMinP: 0,
+    defaultRepetitionPenalty: 0,
     defaultEnableThinking: undefined,
-    jangtqMppNax: 'auto',
-    jangtqTopKOverride: 0,
     embeddingModel: '',
     additionalArgs: '',
     enableJit: true,
@@ -159,11 +159,6 @@ function isZayaCcaFamily(family?: string): boolean {
     return normalized === 'zaya' || normalized === 'zaya1-vl'
 }
 
-function topKOverrideBlockedByFamily(family?: string): boolean {
-    const normalized = normalizeDetectedFamilyName(family)
-    return normalized === 'zaya' || normalized === 'zaya1-vl' || normalized === 'ling'
-}
-
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 
 function buildCommandPreview(
@@ -173,12 +168,7 @@ function buildCommandPreview(
 ): string {
     const parts = ['vmlx-engine serve', modelPath]
     const detectedFamily = normalizeDetectedFamilyName(detected?.family)
-    const topKOverrideBlocked = topKOverrideBlockedByFamily(detectedFamily)
     const turboQuantActive = !!detected?.isTurboQuant
-    const jangtqTopKOverride = Number(config.jangtqTopKOverride || 0)
-    if (turboQuantActive && !topKOverrideBlocked && Number.isFinite(jangtqTopKOverride) && jangtqTopKOverride > 0) {
-        parts.unshift(`JANGTQ_TOPK_OVERRIDE=${Math.floor(Math.min(64, Math.max(1, jangtqTopKOverride)))}`)
-    }
     const isVLM = detected?.forceTextOnly ? false : (!!detected?.isMultimodal || config.isMultimodal === true)
     const dsv4Active = detectedFamily === 'deepseek-v4'
     const zayaCcaActive = isZayaCcaFamily(detectedFamily)
@@ -269,8 +259,6 @@ function buildCommandPreview(
     } else {
         parts.push('--max-tokens', '1000000')
     }
-    parts.push('--jangtq-mpp-nax', config.jangtqMppNax || 'auto')
-
     // Pass resolved parsers directly (mirrors buildArgs lines 1139-1150)
     if (effectiveToolParser) {
         parts.push('--tool-call-parser', effectiveToolParser)
@@ -294,14 +282,25 @@ function buildCommandPreview(
         }
     }
 
-    // Generation defaults
-    if (config.defaultTemperature && config.defaultTemperature > 0) {
+    // Generation defaults. No bundle metadata is available in this preview
+    // helper, so suppress stale historical UI defaults.
+    if (config.defaultTemperature && config.defaultTemperature > 0 && config.defaultTemperature !== 70) {
         parts.push('--default-temperature', (config.defaultTemperature / 100).toFixed(2))
     }
-    if (config.defaultTopP && config.defaultTopP > 0) {
+    if (config.defaultTopP && config.defaultTopP > 0 && config.defaultTopP !== 95) {
         parts.push('--default-top-p', (config.defaultTopP / 100).toFixed(2))
     }
-    if (config.defaultRepetitionPenalty && config.defaultRepetitionPenalty > 0) {
+    if (config.defaultTopK && config.defaultTopK > 0) {
+        parts.push('--default-top-k', Math.round(config.defaultTopK).toString())
+    }
+    if (config.defaultMinP && config.defaultMinP > 0) {
+        parts.push('--default-min-p', (config.defaultMinP / 100).toFixed(2))
+    }
+    if (
+        config.defaultRepetitionPenalty &&
+        config.defaultRepetitionPenalty > 0 &&
+        config.defaultRepetitionPenalty !== 110
+    ) {
         parts.push('--default-repetition-penalty', (config.defaultRepetitionPenalty / 100).toFixed(2))
     }
 
@@ -748,30 +747,8 @@ describe('Performance & Generation', () => {
         expect(getFlagValue(out, '--max-tokens')).toBe('4096')
     })
 
-    it('JANGTQ top-k override is shown as an explicit env prefix', () => {
-        const out = preview({ jangtqTopKOverride: 4 }, { family: 'minimax', isTurboQuant: true })
-        const normalized = out.replace(/\s*\\\n\s*/g, ' ')
-        expect(normalized.startsWith('JANGTQ_TOPK_OVERRIDE=4 vmlx-engine serve')).toBe(true)
-    })
-
-    it('JANGTQ MPP/NAX TensorOps mode is emitted as a restart CLI flag', () => {
-        expect(getFlagValue(preview(), '--jangtq-mpp-nax')).toBe('auto')
-        expect(getFlagValue(preview({ jangtqMppNax: 'off' }), '--jangtq-mpp-nax')).toBe('off')
-        expect(getFlagValue(preview({ jangtqMppNax: 'on' }), '--jangtq-mpp-nax')).toBe('on')
-    })
-
-    it('JANGTQ top-k trained default emits no override env', () => {
-        const out = preview({ jangtqTopKOverride: 0 }, { family: 'minimax', isTurboQuant: true })
-        expect(out.includes('JANGTQ_TOPK_OVERRIDE=')).toBe(false)
-    })
-
-    it('JANGTQ top-k override is suppressed for Ling group-routing models', () => {
-        const out = preview({ jangtqTopKOverride: 4 }, { family: 'ling', isTurboQuant: true })
-        expect(out.includes('JANGTQ_TOPK_OVERRIDE=')).toBe(false)
-    })
-
-    it('JANGTQ top-k override is suppressed for ZAYA typed-CCA models', () => {
-        const out = preview({ jangtqTopKOverride: 4 }, { family: 'zaya1-vl', isTurboQuant: true })
+    it('JANGTQ router top-k override is not emitted by the app', () => {
+        const out = preview({} as any, { family: 'minimax', isTurboQuant: true })
         expect(out.includes('JANGTQ_TOPK_OVERRIDE=')).toBe(false)
     })
 })
@@ -928,9 +905,14 @@ describe('Speculative Decoding', () => {
 })
 
 describe('Generation Defaults', () => {
-    it('sets default temperature (converted from ×100 integer)', () => {
+    it('sets explicit default temperature (converted from ×100 integer)', () => {
+        const out = preview({ defaultTemperature: 80 })
+        expect(getFlagValue(out, '--default-temperature')).toBe('0.80')
+    })
+
+    it('suppresses stale 0.70 temperature when no bundle declares it', () => {
         const out = preview({ defaultTemperature: 70 })
-        expect(getFlagValue(out, '--default-temperature')).toBe('0.70')
+        expect(hasFlag(out, '--default-temperature')).toBe(false)
     })
 
     it('omits default temperature when 0 (server default)', () => {
@@ -973,9 +955,24 @@ describe('Generation Defaults', () => {
         expect(getFlagValue(out, '--default-top-p')).toBe('1.00')
     })
 
-    it('sets default repetition penalty from ×100 integer', () => {
+    it('sets default top-k from bundle/session metadata', () => {
+        const out = preview({ defaultTopK: 40 })
+        expect(getFlagValue(out, '--default-top-k')).toBe('40')
+    })
+
+    it('sets default min-p from bundle/session metadata', () => {
+        const out = preview({ defaultMinP: 5 })
+        expect(getFlagValue(out, '--default-min-p')).toBe('0.05')
+    })
+
+    it('does not emit stale historical 1.10 repetition penalty', () => {
         const out = preview({ defaultRepetitionPenalty: 110 })
-        expect(getFlagValue(out, '--default-repetition-penalty')).toBe('1.10')
+        expect(hasFlag(out, '--default-repetition-penalty')).toBe(false)
+    })
+
+    it('sets explicit non-stale repetition penalty from ×100 integer', () => {
+        const out = preview({ defaultRepetitionPenalty: 115 })
+        expect(getFlagValue(out, '--default-repetition-penalty')).toBe('1.15')
     })
 
     it('sets server default thinking override only when explicit', () => {
@@ -1118,9 +1115,9 @@ describe('Default IP and New Settings', () => {
         expect(hasFlag(out, '--cache-memory-percent')).toBe(false)
         expect(hasFlag(out, '--use-paged-cache')).toBe(true)
         expect(hasFlag(out, '--enable-block-disk-cache')).toBe(true)
-        expect(getFlagValue(out, '--default-temperature')).toBe('0.70')
-        expect(getFlagValue(out, '--default-top-p')).toBe('0.95')
-        expect(getFlagValue(out, '--default-repetition-penalty')).toBe('1.10')
+        expect(hasFlag(out, '--default-temperature')).toBe(false)
+        expect(hasFlag(out, '--default-top-p')).toBe(false)
+        expect(hasFlag(out, '--default-repetition-penalty')).toBe(false)
         expect(hasFlag(out, '--enable-jit')).toBe(true)
     })
 
@@ -1253,11 +1250,11 @@ describe('Default IP and New Settings', () => {
         expect(DEFAULT_CONFIG.corsOrigins).toBe('*')
         expect(DEFAULT_CONFIG.maxContextLength).toBe(0)
         expect(DEFAULT_CONFIG.enableJit).toBe(true)
-        expect(DEFAULT_CONFIG.defaultTemperature).toBe(70)
-        expect(DEFAULT_CONFIG.defaultTopP).toBe(95)
-        expect(DEFAULT_CONFIG.defaultRepetitionPenalty).toBe(110)
-        expect(DEFAULT_CONFIG.jangtqMppNax).toBe('auto')
-        expect(DEFAULT_CONFIG.jangtqTopKOverride).toBe(0)
+        expect(DEFAULT_CONFIG.defaultTemperature).toBe(0)
+        expect(DEFAULT_CONFIG.defaultTopP).toBe(0)
+        expect(DEFAULT_CONFIG.defaultTopK).toBe(0)
+        expect(DEFAULT_CONFIG.defaultMinP).toBe(0)
+        expect(DEFAULT_CONFIG.defaultRepetitionPenalty).toBe(0)
         expect(DEFAULT_CONFIG.omniBackend).toBe('stage1')
     })
 })
@@ -1535,14 +1532,14 @@ describe('Feature Interaction', () => {
             speculativeModel: 'draft-model',
             numDraftTokens: 7,
             defaultTemperature: 80,
-            defaultTopP: 95,
+            defaultTopP: 90,
             embeddingModel: 'embed-model',
             servedModelName: 'my-model',
         })
         expect(getFlagValue(out, '--speculative-model')).toBe('draft-model')
         expect(getFlagValue(out, '--num-draft-tokens')).toBe('7')
         expect(getFlagValue(out, '--default-temperature')).toBe('0.80')
-        expect(getFlagValue(out, '--default-top-p')).toBe('0.95')
+        expect(getFlagValue(out, '--default-top-p')).toBe('0.90')
         expect(getFlagValue(out, '--embedding-model')).toBe('embed-model')
         expect(getFlagValue(out, '--served-model-name')).toBe('my-model')
     })
@@ -1674,14 +1671,14 @@ describe('Feature Interaction', () => {
             numDraftTokens: 4,
             continuousBatching: true,
             embeddingModel: 'embed-model',
-            defaultTemperature: 70,
+            defaultTemperature: 80,
             defaultTopP: 90,
         })
         expect(hasFlag(out, '--continuous-batching')).toBe(true)
         expect(getFlagValue(out, '--speculative-model')).toBe('draft-model')
         expect(getFlagValue(out, '--num-draft-tokens')).toBe('4')
         expect(getFlagValue(out, '--embedding-model')).toBe('embed-model')
-        expect(getFlagValue(out, '--default-temperature')).toBe('0.70')
+        expect(getFlagValue(out, '--default-temperature')).toBe('0.80')
         expect(getFlagValue(out, '--default-top-p')).toBe('0.90')
     })
 })
@@ -1824,8 +1821,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         'isMultimodal', 'servedModelName',
         'speculativeModel', 'numDraftTokens',
         'smelt', 'smeltExperts', 'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
-        'defaultTemperature', 'defaultTopP', 'defaultRepetitionPenalty', 'defaultEnableThinking',
-        'jangtqMppNax', 'jangtqTopKOverride',
+        'defaultTemperature', 'defaultTopP', 'defaultTopK', 'defaultMinP', 'defaultRepetitionPenalty', 'defaultEnableThinking',
         'embeddingModel', 'additionalArgs',
         'enableJit', 'logLevel', 'corsOrigins', 'maxContextLength',
     ]
@@ -1863,6 +1859,9 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized).not.toContain('--log-level')             // INFO is default (not emitted)
         expect(normalized).not.toContain('--allowed-origins')       // * is default (not emitted)
         expect(normalized).not.toContain('--max-context-length')    // reserved, never emitted
+        expect(normalized).not.toContain('--default-temperature')   // request/CLI/bundle metadata resolve sampling
+        expect(normalized).not.toContain('--default-top-p')         // do not poison bundles with generic UI defaults
+        expect(normalized).not.toContain('--default-repetition-penalty')
 
         // Defaults SHOULD produce these flags:
         expect(normalized).toContain('--host')
@@ -1872,9 +1871,6 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized).toContain('--continuous-batching')
         expect(normalized).toContain('--use-paged-cache')
         expect(normalized).toContain('--enable-block-disk-cache')
-        expect(normalized).toContain('--default-temperature')
-        expect(normalized).toContain('--default-top-p')
-        expect(normalized).toContain('--default-repetition-penalty')
         expect(normalized).toContain('--enable-jit')
     })
 
@@ -1885,33 +1881,43 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(source).toContain('defaultValue={DEFAULT_CONFIG.defaultRepetitionPenalty}')
     })
 
-    it('JANGTQ top-k override is wired through settings UI and launch env', () => {
+    it('JANGTQ router top-k override is not exposed through settings UI or launch env', () => {
         const formSource = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
         const settingsSource = readFileSync('src/renderer/src/components/sessions/SessionSettings.tsx', 'utf8')
         const sessionsSource = readFileSync('src/main/sessions.ts', 'utf8')
-        expect(formSource).toContain('JANGTQ Active Experts Override')
-        expect(formSource).toContain('jangtqTopKOverrideAllowed')
-        expect(settingsSource).toContain('JANGTQ_TOPK_OVERRIDE')
-        expect(settingsSource).toContain('jangtqTopKOverrideAllowed')
-        expect(settingsSource).toContain('topKOverrideBlockedByFamily')
+        expect(formSource).not.toContain('JANGTQ Active Experts Override')
+        expect(formSource).not.toContain('jangtqTopKOverrideAllowed')
+        expect(settingsSource).not.toContain('JANGTQ_TOPK_OVERRIDE')
+        expect(settingsSource).not.toContain('jangtqTopKOverrideAllowed')
+        expect(settingsSource).not.toContain('topKOverrideBlockedByFamily')
         expect(sessionsSource).toContain('delete spawnEnv.JANGTQ_TOPK_OVERRIDE')
-        expect(sessionsSource).toContain('topKOverrideAllowed')
-        expect(sessionsSource).toContain('topKOverrideBlockedByFamily')
-        expect(sessionsSource).toContain('spawnEnv.JANGTQ_TOPK_OVERRIDE')
+        expect(sessionsSource).not.toContain('spawnEnv.JANGTQ_TOPK_OVERRIDE =')
     })
 
-    it('JANGTQ MPP/NAX TensorOps toggle is wired through UI, launch, and performance health', () => {
+    it('JANGTQ acceleration toggle is not exposed as a user setting', () => {
         const formSource = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
         const settingsSource = readFileSync('src/renderer/src/components/sessions/SessionSettings.tsx', 'utf8')
         const sessionsSource = readFileSync('src/main/sessions.ts', 'utf8')
         const perfSource = readFileSync('src/renderer/src/components/sessions/PerformancePanel.tsx', 'utf8')
 
-        expect(formSource).toContain('JANGTQ MPP/NAX TensorOps')
-        expect(formSource).toContain("onChange('jangtqMppNax'")
-        expect(settingsSource).toContain('--jangtq-mpp-nax')
-        expect(sessionsSource).toContain('--jangtq-mpp-nax')
-        expect(perfSource).toContain('jangtq_mpp_nax?:')
-        expect(perfSource).toContain('JANGTQ MPP/NAX')
+        expect(formSource).not.toContain('JANGTQ MPP/NAX TensorOps')
+        expect(formSource).not.toContain("onChange('jangtqMppNax'")
+        expect(settingsSource).not.toContain('--jangtq-mpp-nax')
+        expect(sessionsSource).not.toContain('--jangtq-mpp-nax')
+        expect(sessionsSource).toContain('delete spawnEnv.JANGTQ_MPP_NAX')
+        expect(sessionsSource).toContain('delete spawnEnv.JANGTQ_MPP_NAX_DISABLE')
+        expect(sessionsSource).toContain('delete spawnEnv.JANGTQ_MPP_NAX_STRICT')
+        expect(sessionsSource).toContain('delete spawnEnv.JANGTQ_MPP_DENSE')
+        expect(sessionsSource).toContain('delete spawnEnv.JANGTQ_MPP_DENSE_STRICT')
+        expect(sessionsSource).toContain('delete spawnEnv.JANGTQ_DISABLE_DSV4_STREAM_LOAD')
+        expect(sessionsSource).toContain('delete spawnEnv.JANGTQ_DISABLE_DSV4_FAST_LOAD')
+        expect(sessionsSource).toContain('delete spawnEnv.VMLX_DENSE_STRICT_LANE')
+        expect(sessionsSource).toContain('delete spawnEnv.VMLX_DSV4_FAST_LOAD_DISABLE')
+        expect(sessionsSource).toContain('delete spawnEnv.VMLINUX_DENSE_STRICT_LANE')
+        expect(sessionsSource).toContain('delete spawnEnv.VMLINUX_DSV4_FAST_LOAD_DISABLE')
+        expect(sessionsSource).toContain('engine_child_probe=')
+        expect(perfSource).not.toContain('jangtq_mpp_nax?:')
+        expect(perfSource).not.toContain('JANGTQ MPP/NAX')
     })
 
     it('mutual exclusion: disk cache NOT emitted when paged cache is active', () => {

@@ -1076,6 +1076,8 @@ def audit_child_env_for_row(
     child_env["PYTHONDONTWRITEBYTECODE"] = "1"
     child_env["PYTHONNOUSERSITE"] = "1"
     child_env["PYTHONPATH"] = ""
+    child_env.pop("VMLX_DSV4_HARD_REP_BLOCK", None)
+    child_env.pop("VMLINUX_DSV4_HARD_REP_BLOCK", None)
     if child_env.get("VMLINUX_AUDIT_USE_SOURCE_VMLX") == "1":
         child_env["PYTHONPATH"] = str(ROOT)
     if row.cache_profile == "zaya_cca":
@@ -1083,10 +1085,6 @@ def audit_child_env_for_row(
         child_env["VMLX_DISABLE_TQ_KV"] = "1"
         child_env.pop("VMLX_FORCE_TQ_AUTO", None)
     if row.family == "deepseek_v4":
-        # Proof rows must measure DSV4 runtime/cache behavior, not the
-        # generator's repetition-blocking logit warp. Product defaults stay in
-        # the generator; this only affects the audit subprocess.
-        child_env["VMLX_DSV4_HARD_REP_BLOCK"] = "0"
         jang_source = Path(
             child_env.get(
                 "VMLINUX_JANG_TOOLS_SOURCE",

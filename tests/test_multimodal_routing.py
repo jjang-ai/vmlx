@@ -59,6 +59,7 @@ def test_mllm_extractor_accepts_responses_style_input_media_parts():
             "role": "user",
             "content": [
                 {"type": "image"},
+                {"type": "video"},
                 {"type": "text", "text": "what changed?", "content": "what changed?"},
             ],
         }

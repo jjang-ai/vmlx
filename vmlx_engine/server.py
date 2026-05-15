@@ -150,6 +150,8 @@ _default_max_tokens: int = 32768
 _default_timeout: float = 300.0  # Default request timeout in seconds (5 minutes)
 _default_temperature: float | None = None  # Set via --default-temperature
 _default_top_p: float | None = None  # Set via --default-top-p
+_default_top_k: int | None = None  # Set via --default-top-k
+_default_min_p: float | None = None  # Set via --default-min-p
 _default_repetition_penalty: float | None = None  # Set via --default-repetition-penalty
 _default_enable_thinking: bool | None = (
     None  # Set via --default-enable-thinking or --chat-template-kwargs
@@ -283,77 +285,13 @@ _distributed_enabled: bool = False  # --distributed: pipeline/tensor parallelism
 _distributed_mode: str = "pipeline"  # --distributed-mode: pipeline or tensor
 _distributed_coordinator = None  # Coordinator instance when distributed is active
 
-_FALLBACK_TEMPERATURE = 0.7
-_FALLBACK_TOP_P = 0.9
+_FALLBACK_TEMPERATURE = 0.0
+_FALLBACK_TOP_P = 1.0
 
-# Family-aware fallback overrides — applied when no request-level value AND
-# no --default-* CLI flag was supplied. Lets us bias defaults away from
-# pathological greedy-mode behaviour on families known to loop or contaminate
-# (e.g. DSV4-Flash 8-bit + 4-bit emit `<｜begin▁of▁sentence｜>` infinitely
-# under greedy decoding — see mlxstudio#99 + DSV-FAMILY-RUNTIME-GUIDE.md).
-# Per-family entries are (temperature, top_p, repetition_penalty); None
-# fields fall through to the generic _FALLBACK_*.
+# Family fallbacks are intentionally empty. Defaults come from explicit request
+# values, explicit CLI flags, bundle metadata, or generic server fallback.
+# Runtime correctness must not depend on hidden family-specific sampling guards.
 _FAMILY_FALLBACK_DEFAULTS: dict[str, tuple[float | None, float | None, float | None]] = {
-    # DSV4-Flash bundle fallback.
-    #
-    # Three independent loop sources converge on DSV4-Flash and any one
-    # of them is enough to produce a deterministic attractor at the
-    # default sampling parameters:
-    #
-    # (1) Chat-mode contamination — bundle's training data leaks
-    #     polite-assistant boilerplate; defended at the API layer by
-    #     `is not True` force-flip in the `_is_dsv4` blocks.
-    # (2) Cumulative pool-buffer leakage — `DeepseekV4Cache`
-    #     compressor/indexer pool buffers carry output-side state
-    #     across turns; defended at scheduler.py:768 by routing DSV4
-    #     through the hybrid cumulative-state path with rejected-
-    #     post-output-snapshot semantics, plus the SWA+CSA+HCA cache
-    #     truncation guard at scheduler.py:1964 (refuse store when
-    #     RotatingKVCache has wrapped).
-    # (3) Self-reinforcing token attractors at low temperature even
-    #     within a single turn (no cache reuse, no chat mode) — most
-    #     visible on short-query prompts. Defended here.
-    #
-    # The DSV4 converter documents the mode split: thinking rail must stay
-    # neutral (`repetition_penalty_thinking=1.0`) or the model can fail to
-    # close </think>. Chat/direct rail uses the bundle's chat default when
-    # jang_config is present.
-    "deepseek_v4": (0.6, 0.95, 1.0),
-
-    # MiniMax-M2.7 safety floor.
-    #
-    # Bundle defaults are repetition_penalty=1.0 in jang_config (via
-    # generation_config.json). At rep=1.0, MiniMax JANGTQ thinking-mode
-    # falls into a rumination attractor on certain prompts: produces
-    # 600+ tokens of "The user asks... This is a request... The user
-    # wants... The assistant can comply..." paraphrasing the analysis
-    # without ever closing the <think> block. Reproduces with
-    # cache_salt (full cache bypass) — model-level rumination, not
-    # cache contamination.
-    #
-    # Live sweep at temperature=0.6, prompt="Tell me a 2-sentence
-    # story about a project to see the birth of a star." mode=on:
-    #   rep=1.00 → loop_score=0.250 LOOP
-    #   rep=1.05 → loop_score=0.370 LOOP
-    #   rep=1.10 → loop_score=0.397 LOOP (borderline)
-    #   rep=1.15 → loop_score=0.400 OK   (sweet spot lower bound)
-    #   rep=1.20 → loop_score=0.442 OK
-    #   rep=1.30 → loop_score=0.346 LOOP (penalty fragments output)
-    #
-    # A later 2026-05-08 multi-turn temp-0 row showed 1.15 still loops
-    # inside reasoning before visible output. 1.20 closed the same row while
-    # preserving the intended visible answer. Per-request higher overrides
-    # still win.
-    # Note: MiniMax JANGTQ_K (mixed-bit) is markedly less prone to
-    # this issue (10/12 cells OK at default rep) so the floor is
-    # defensive rather than load-bearing for the K variant.
-    "minimax_m2": (0.6, 0.95, 1.20),
-    # Ling-2.6 production review item: a user reported the
-    # Russian Three.js prompt looping into a 👀 token (47681 → ' \xed\x9f\xae')
-    # on Ling-2.6-flash-JANGTQ2-CRACK at default rep_penalty (1.0). Floor
-    # follows the DSV4/MiniMax pattern — defensive 1.15. ling_hybrid covers
-    # both bailing_hybrid and bailing_moe_v2_5 model_types.
-    "ling": (0.6, 0.95, 1.15),
 }
 
 
@@ -530,52 +468,6 @@ def _nearly_equal(a: float, b: float, eps: float = 1e-6) -> bool:
     return abs(float(a) - float(b)) <= eps
 
 
-def _is_stale_dsv4_ui_default(key: str, value: float | None) -> bool:
-    """Was this explicit request value likely injected by an old UI default?
-
-    Existing DSV4 chats in the user's DB can carry generic or prior-bundle
-    defaults (temperature=0.7, top_p=1.0, repeat_penalty=1.05/1.10/1.15) as
-    explicit request fields. If honored literally, they bypass DSV4's neutral
-    repetition setting and cause thinking-mode failures where the model never
-    closes ``</think>``. Treat only those known defaults as stale; other
-    explicit user values still win.
-    """
-    if value is None:
-        return False
-    if key == "temperature":
-        return _nearly_equal(value, 0.7) or _nearly_equal(value, 1.0)
-    if key == "top_p":
-        return _nearly_equal(value, 0.9) or _nearly_equal(value, 1.0)
-    if key == "repetition_penalty":
-        return (
-            _nearly_equal(value, 1.0)
-            or _nearly_equal(value, 1.05)
-            or _nearly_equal(value, 1.1)
-            or _nearly_equal(value, 1.15)
-        )
-    return False
-
-
-def _is_ling_crack_bundle(model_name: str = "") -> bool:
-    """Whether the loaded bundle is a Ling/Bailing CRACK variant.
-
-    Scope is intentionally both name/path and registry family. The path/name
-    check prevents changing every Ling default; the family check prevents an
-    unrelated directory containing "ling" and "crack" from inheriting this.
-    """
-    bundle_path = _model_path or model_name
-    if not bundle_path:
-        return False
-    try:
-        from pathlib import Path as _P
-        name = _P(str(bundle_path)).name.lower()
-    except Exception:
-        name = str(bundle_path).lower()
-    if "ling" not in name or "crack" not in name:
-        return False
-    return _model_family_for_defaults(model_name) == "ling"
-
-
 def _jang_chat_sampling_default(model_name: str, key: str) -> float | None:
     """Read a numeric default from the loaded bundle's
     ``jang_config.json::chat.sampling_defaults.<key>``. Cached per-path.
@@ -655,11 +547,10 @@ def _bundle_repetition_penalty_keys(
     """Mode-aware lookup order for `_bundle_sampling_default`.
 
     Bundles split `repetition_penalty_thinking` vs `_chat` because the
-    right value differs by reasoning mode. DSV4 is special because the API
-    layer force-routes the default user path through the thinking rail even
-    when the bundle metadata says ``default_mode="chat"``; using the chat
-    penalty there is wrong, and forcing a higher generic floor prevents the
-    model from closing ``</think>`` on long prompts.
+    correct value can differ by reasoning mode. DSV4 routes explicit thinking
+    requests through the thinking rail even when bundle metadata declares a
+    chat default, so the lookup follows the resolved rail instead of applying
+    a generic family-level sampling policy.
     """
     family = _model_family_for_defaults(bundle_path)
     if family == "deepseek_v4":
@@ -707,6 +598,7 @@ def _bundle_sampling_default(model_name: str, key: str) -> float | None:
     gen_key = {
         "top_p": "top_p",
         "temperature": "temperature",
+        "min_p": "min_p",
         "repetition_penalty": "repetition_penalty",
         "max_new_tokens": "max_new_tokens",
     }.get(key, key)
@@ -742,45 +634,10 @@ def _model_family_for_defaults(model_name: str = "") -> str:
         return ""
 
 
-def _bundle_overrides_generic_cli_defaults(model_name: str = "") -> bool:
-    """Whether bundle chat defaults should beat generic CLI defaults.
-
-    The panel historically passes generic server defaults on every launch
-    (temperature=0.70, rep_penalty=1.10). DSV4 has audited per-bundle chat
-    defaults in ``jang_config`` and those generic values are known-bad for
-    reasoning mode. Per-request values still win; this only protects server
-    defaults for API/UI launches that did not explicitly set request sampling.
-    """
-    return _model_family_for_defaults(model_name) == "deepseek_v4"
-
-
 def _resolve_temperature(request_value: float | None, model_name: str = "") -> float:
-    """Resolve temperature.
-
-    Order: request > DSV4 bundle chat default > CLI default > bundle default >
-    family fallback > generic fallback.
-    """
+    """Resolve temperature: request > explicit CLI/session > bundle > fallback."""
     if request_value is not None:
-        if (
-            _bundle_overrides_generic_cli_defaults(model_name)
-            and _is_stale_dsv4_ui_default("temperature", request_value)
-        ):
-            v = _bundle_sampling_default(model_name, "temperature")
-            if v is not None:
-                return v
         return request_value
-    if _bundle_overrides_generic_cli_defaults(model_name):
-        v = _bundle_sampling_default(model_name, "temperature")
-        if v is not None:
-            return v
-    if _is_ling_crack_bundle(model_name):
-        # Ling CRACK was validated with a colder default. Preserve explicitly
-        # supplied request temperatures, and preserve non-generic CLI defaults,
-        # but treat the built-in 0.7 server default as unset for this bundle.
-        if _default_temperature is None or _nearly_equal(
-            _default_temperature, _FALLBACK_TEMPERATURE
-        ):
-            return 0.2
     if _default_temperature is not None:
         return _default_temperature
     v = _bundle_sampling_default(model_name, "temperature")
@@ -793,24 +650,9 @@ def _resolve_temperature(request_value: float | None, model_name: str = "") -> f
 
 
 def _resolve_top_p(request_value: float | None, model_name: str = "") -> float:
-    """Resolve top_p.
-
-    Order mirrors temperature: request > DSV4 bundle chat default > CLI default
-    > bundle default > family fallback > generic fallback.
-    """
+    """Resolve top_p: request > explicit CLI/session > bundle > fallback."""
     if request_value is not None:
-        if (
-            _bundle_overrides_generic_cli_defaults(model_name)
-            and _is_stale_dsv4_ui_default("top_p", request_value)
-        ):
-            v = _bundle_sampling_default(model_name, "top_p")
-            if v is not None:
-                return v
         return request_value
-    if _bundle_overrides_generic_cli_defaults(model_name):
-        v = _bundle_sampling_default(model_name, "top_p")
-        if v is not None:
-            return v
     if _default_top_p is not None:
         return _default_top_p
     v = _bundle_sampling_default(model_name, "top_p")
@@ -822,14 +664,61 @@ def _resolve_top_p(request_value: float | None, model_name: str = "") -> float:
     return _FALLBACK_TOP_P
 
 
+def _resolve_top_k(request_value: int | None, model_name: str = "") -> int:
+    """Resolve top_k: request > explicit CLI/session > bundle > disabled."""
+    if request_value is not None:
+        return max(0, int(request_value))
+    if _default_top_k is not None:
+        return max(0, int(_default_top_k))
+    v = _bundle_sampling_default(model_name, "top_k")
+    if v is not None:
+        return max(0, int(v))
+    return 0
+
+
+def _set_resolved_top_k(
+    target: dict,
+    request_value: int | None,
+    model_name: str = "",
+) -> None:
+    top_k = _resolve_top_k(request_value, model_name)
+    if top_k > 0:
+        target["top_k"] = top_k
+    else:
+        target.pop("top_k", None)
+
+
+def _resolve_min_p(request_value: float | None, model_name: str = "") -> float:
+    """Resolve min_p: request > explicit CLI/session > bundle > disabled."""
+    if request_value is not None:
+        return max(0.0, float(request_value))
+    if _default_min_p is not None:
+        return max(0.0, float(_default_min_p))
+    v = _bundle_sampling_default(model_name, "min_p")
+    if v is not None:
+        return max(0.0, float(v))
+    return 0.0
+
+
+def _set_resolved_min_p(
+    target: dict,
+    request_value: float | None,
+    model_name: str = "",
+) -> None:
+    min_p = _resolve_min_p(request_value, model_name)
+    if min_p > 0:
+        target["min_p"] = min_p
+    else:
+        target.pop("min_p", None)
+
+
 def _resolve_max_tokens(request_value: int | None, model_name: str = "") -> int:
-    """Resolve max output tokens from request, DSV4 bundle, then CLI default."""
+    """Resolve max output tokens from request, bundle, then server default."""
     if request_value is not None:
         return request_value
-    if _bundle_overrides_generic_cli_defaults(model_name):
-        v = _bundle_sampling_default(model_name, "max_new_tokens")
-        if v is not None and v > 0:
-            return int(v)
+    v = _bundle_sampling_default(model_name, "max_new_tokens")
+    if v is not None and v > 0:
+        return int(v)
     return _default_max_tokens
 
 
@@ -847,30 +736,12 @@ def _resolve_dsv4_thinking_policy(
     tools_present: bool,
     tool_choice: Any,
 ) -> _DSV4ThinkingDecision:
-    """Resolve DSV4's public thinking toggle to the currently safe rail.
-
-    DSV4 direct/chat rail is visible but can fail reasoning-dependent tasks.
-    The thinking rail is the correct rail when the caller asks for thinking or
-    sends a reasoning_effort. Long DSV4 thinking output can still stop before
-    ``</think>``; DSV4BatchGenerator owns the live-cache continuation finalizer
-    for that case.
-    """
+    """Resolve DSV4's public thinking toggle without hidden rail guards."""
     if tools_present and tool_choice != "none":
         return _DSV4ThinkingDecision(
             enable_thinking=False,
             reasoning_effort_allowed=False,
             reason="tool_call_direct_rail",
-        )
-    force_direct = os.environ.get("VMLX_DSV4_FORCE_DIRECT_RAIL", "0").lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-    if force_direct:
-        return _DSV4ThinkingDecision(
-            enable_thinking=False,
-            reasoning_effort_allowed=False,
-            reason="env_force_direct",
         )
     if requested_enable_thinking is True or effort_requested:
         return _DSV4ThinkingDecision(
@@ -885,65 +756,12 @@ def _resolve_dsv4_thinking_policy(
     )
 
 
-def _dsv4_raw_max_enabled() -> bool:
-    """Return True iff the user has opted in to DSV4's genuine raw-max
-    reasoning_effort template via env. Off by default for safety.
-
-    Combined with the bumped default finalizer budget (2048 visible tokens
-    after forced `</think>`), opt-in raw-max produces coherent long-form output
-    where high alone may truncate.
-    """
-    return os.environ.get("VMLX_DSV4_RAW_MAX", "0").lower() in {"1", "true", "yes"}
-
-
-def _dsv4_max_compat_warning() -> str | None:
-    """Emit a capability-side compat warning when max is silently downgraded.
-
-    Honest API: when the runtime would downgrade `reasoning_effort=max` to
-    `high`, surface that fact in `/v1/models/{id}/capabilities`. When the
-    user has opted into raw-max via `VMLX_DSV4_RAW_MAX=1`, no warning needed.
-    """
-    if _dsv4_raw_max_enabled():
-        return None
-    return (
-        "DSV4 reasoning_effort=max is downgraded to high by default for "
-        "stability (raw max can fail to emit </think>). To opt into the "
-        "genuine max rail, set VMLX_DSV4_RAW_MAX=1; combine with "
-        "VMLX_DSV4_FINALIZER_TOKENS for a larger visible-answer budget."
-    )
-
-
 def _normalize_dsv4_reasoning_effort(effort: str | None) -> str | None:
-    """Map public effort names onto the stable DSV4 encoder rail.
-
-    DSV4's bundled raw ``reasoning_effort="max"`` template asks for an
-    unbounded deliberation trace and live-probes length-cap without emitting
-    ``</think>``. By default the runtime normalizes max/medium/low onto the
-    stable standard-thinking rail (`high`).
-
-    Users who want the genuine max template can opt in via
-    ``VMLX_DSV4_RAW_MAX=1`` — combined with `VMLX_DSV4_FINALIZER_TOKENS`
-    they can tune the trade-off between deliberation depth and visible
-    answer length.
-    """
-    if effort == "max" and _dsv4_raw_max_enabled():
+    """Map public effort names onto the actual DSV4 encoder vocabulary."""
+    if effort == "max":
         return "max"
-    if effort in ("low", "medium", "high", "max"):
+    if effort in ("low", "medium", "high"):
         return "high"
-    return None
-
-
-def _dsv4_reasoning_effort_route_label(
-    requested_effort: str | None,
-    normalized_effort: str | None,
-) -> str | None:
-    """Classify DSV4 max-effort routing for honest logs."""
-    if requested_effort != "max":
-        return None
-    if normalized_effort == "max":
-        return "raw_max"
-    if normalized_effort == "high":
-        return "downgraded"
     return None
 
 
@@ -1030,99 +848,27 @@ def _resolve_repetition_penalty(
     *,
     enable_thinking: bool | None = None,
 ) -> float | None:
-    """Resolve repetition penalty: request > [DSV4 bundle override] >
-    CLI default > jang_config bundle default > family fallback > None.
+    """Resolve repetition penalty: request > explicit CLI/session > bundle > None.
 
     Returns None when nothing matches, which means "don't pass
     repetition_penalty at all to the engine" — mlx-lm then applies its
     implicit 1.0 (no penalty). When a value is returned, the caller should
     include it in chat_kwargs.
-
-    Special-case for DeepSeek V4 family: bundle-declared mode-specific chat
-    defaults win over generic CLI/UI defaults. Current DSV4 Flash metadata
-    deliberately splits ``repetition_penalty_thinking=1.0`` from
-    ``repetition_penalty_chat=1.05``; the converter documents that values
-    above 1.0 on the thinking rail make the model fail to close ``</think>``.
     """
-    # Resolve first, then apply the MiniMax/Ling floor at the end. DSV4 is
-    # intentionally excluded from that floor because its thinking rail has a
-    # stricter bundle-declared neutral penalty requirement.
     _bundle_path = _model_path or model_name
-    resolved: float | None = None
-    is_explicit_override = False  # retained for diagnostics; floors are mandatory
 
     if request_value is not None:
-        if (
-            _bundle_overrides_generic_cli_defaults(model_name)
-            and _is_stale_dsv4_ui_default("repetition_penalty", request_value)
-        ):
-            # Stale UI default — replace with bundle value (still goes
-            # through the floor below).
-            for _key in _bundle_repetition_penalty_keys(
-                model_name,
-                enable_thinking=enable_thinking,
-            ):
-                _v = _bundle_sampling_default(model_name, _key)
-                if _v is not None:
-                    resolved = _v
-                    break
-            if resolved is None:
-                resolved = request_value
-        else:
-            # Genuine non-stale explicit value (user override or non-DSV4
-            # path). Still goes through the family floor below for
-            # loop-prone runtimes; otherwise a panel-sent default 1.0
-            # bypasses the only protection Ling/MiniMax/DSV4 have.
-            resolved = request_value
-            is_explicit_override = True
-    else:
-        # DSV4-only: bundle calibrated value wins over CLI default.
-        if _bundle_overrides_generic_cli_defaults(model_name):
-            for _key in _bundle_repetition_penalty_keys(
-                _bundle_path,
-                enable_thinking=enable_thinking,
-            ):
-                _v = _bundle_sampling_default(_bundle_path, _key)
-                if _v is not None:
-                    resolved = _v
-                    break
-        if resolved is None and _default_repetition_penalty is not None:
-            resolved = _default_repetition_penalty
-        if resolved is None:
-            for _key in _bundle_repetition_penalty_keys(
-                _bundle_path,
-                enable_thinking=enable_thinking,
-            ):
-                _v = _bundle_sampling_default(_bundle_path, _key)
-                if _v is not None:
-                    resolved = _v
-                    break
-        if resolved is None:
-            _, _, fam_rep = _family_fallback_for(model_name)
-            resolved = fam_rep
-
-    # MIN-floor enforcement for safety-critical families.
-    #
-    # MiniMax and Ling still need a floor for known model-level rumination
-    # loops. DSV4 does NOT: its own bundle stamp says the thinking rail must
-    # stay neutral, and live matrix rows fail when a generic 1.15 floor is
-    # forced onto thinking mode.
-    _SAFETY_FLOORS = {"minimax_m2": 1.20, "ling": 1.15}
-    _family = _model_family_for_defaults(_bundle_path or model_name)
-    _floor = _SAFETY_FLOORS.get(_family)
-    if (
-        _floor is not None
-        and resolved is not None
-        and resolved < _floor
+        return request_value
+    if _default_repetition_penalty is not None:
+        return _default_repetition_penalty
+    for _key in _bundle_repetition_penalty_keys(
+        _bundle_path,
+        enable_thinking=enable_thinking,
     ):
-        logger.info(
-            f"MiniMax/Ling safety floor applied: rep_penalty="
-            f"{resolved} raised to family floor {_floor} "
-            f"(family={_family}, explicit_request={is_explicit_override})."
-        )
-        resolved = _floor
-
-    return resolved
+        _v = _bundle_sampling_default(_bundle_path, _key)
+        if _v is not None:
+            return _v
+    return None
 
 
 def _set_resolved_repetition_penalty(
@@ -1148,6 +894,34 @@ def _set_resolved_repetition_penalty(
         target["repetition_penalty"] = _rp
     else:
         target.pop("repetition_penalty", None)
+
+
+def _log_resolved_sampling_kwargs(route: str, model_name: str, kwargs: dict) -> None:
+    """Emit the live sampling kwargs that are about to enter generation."""
+    keys = (
+        "temperature",
+        "top_p",
+        "top_k",
+        "min_p",
+        "repetition_penalty",
+        "max_tokens",
+        "enable_thinking",
+        "reasoning_effort",
+    )
+    sample = {key: kwargs[key] for key in keys if key in kwargs}
+    ct_kwargs = kwargs.get("chat_template_kwargs")
+    if isinstance(ct_kwargs, dict) and ct_kwargs:
+        sample["chat_template_kwargs"] = {
+            key: ct_kwargs[key]
+            for key in ("reasoning_effort", "thinking_budget", "enable_thinking")
+            if key in ct_kwargs
+        }
+    logger.info(
+        "Resolved sampling kwargs route=%s model=%s kwargs=%s",
+        route,
+        model_name,
+        sample,
+    )
 
 
 def _compute_bypass_prefix_cache(request_obj) -> bool:
@@ -1349,6 +1123,15 @@ def _resolve_enable_thinking(
         # architecture-specific incompatible row, so it stays off by default
         # only when tools are present; explicit request/template values above
         # still win.
+        return False
+    if _family_l in ("minimax", "minimax_m2", "minimax_m2_5"):
+        # MiniMax M2/M2.5/M2.7 templates open `<think>` whenever
+        # enable_thinking is omitted. Live MiniMax-M2.7-JANGTQ_K proof showed
+        # omission can spend the full small response budget in reasoning-only
+        # output and can take minutes on a cold first turn, while explicit
+        # enable_thinking=false returns the same visible answer immediately.
+        # This is a default-policy correction, not a clamp: explicit
+        # enable_thinking=true above still opens the thinking rail.
         return False
     if _default_enable_thinking is True:
         return True
@@ -3747,13 +3530,8 @@ def _weight_matmul_dispatch_status(codec: str) -> dict:
 
 
 def _normalize_jangtq_mpp_nax_mode(raw: str | None = None) -> tuple[str, str | None]:
-    """Normalize the JANGTQ MPP/NAX TensorOps control env.
-
-    The new path is not MLX affine quantized_matmul; it is the JANGTQ custom
-    codebook kernel using MPP/NAX TensorOps directly. Keep the mode explicit so
-    health/UI can tell "disabled", "auto", and forced-on apart.
-    """
-    value = os.environ.get("JANGTQ_MPP_NAX") if raw is None else raw
+    """Normalize the internal JANGTQ acceleration env."""
+    value = os.environ.get("JANGTQ_MPP_NAX", "auto") if raw is None else raw
     text = str(value or "").strip().lower()
     if text in ("", "0", "false", "no", "off"):
         return "off", None
@@ -3761,7 +3539,7 @@ def _normalize_jangtq_mpp_nax_mode(raw: str | None = None) -> tuple[str, str | N
         return "auto", None
     if text in ("1", "true", "yes", "on"):
         return "on", None
-    return "off", f"invalid JANGTQ_MPP_NAX={value!r}; expected off/auto/on"
+    return "auto", f"invalid JANGTQ_MPP_NAX={value!r}; expected off/auto/on"
 
 
 @functools.lru_cache(maxsize=1)
@@ -3769,6 +3547,11 @@ def _jangtq_mpp_nax_available() -> tuple[bool, str | None]:
     try:
         from jang_tools.turboquant.mpp_nax_kernel import mpp_nax_tensorops_available
 
+        # This must stay a non-executing capability query. The implementation in
+        # jang-tools intentionally avoids a smoke Metal dispatch because /health
+        # can run after a large mmap-backed model has claimed most of the MLX
+        # working set. Real generation kernels still compile/dispatch on demand
+        # and fall back unless strict mode is enabled.
         return bool(mpp_nax_tensorops_available()), None
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
@@ -4074,7 +3857,7 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
         or q_cfg.get("format")
     )
     backend = q_jang.get("quantization_backend") or q_jang.get("backend")
-    profile = q_jang.get("profile")
+    profile = q_jang.get("profile") or jang_cfg.get("profile") or cfg.get("profile")
     mxtq_bits = (
         cfg.get("mxtq_bits")
         or jang_cfg.get("mxtq_bits")
@@ -4114,8 +3897,18 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
         )
     elif routed_expert_bits_raw is not None:
         routed_expert_bits = int(routed_expert_bits_raw)
-    target_bits = q_jang.get("target_bits") or routed_expert_bits or profile_bits or q_cfg.get("bits")
-    actual_bits = q_jang.get("actual_bits")
+    target_bits = (
+        q_jang.get("target_bits")
+        or q_jang.get("bits")
+        or routed_expert_bits
+        or profile_bits
+        or q_cfg.get("bits")
+    )
+    actual_bits = (
+        q_jang.get("actual_bits")
+        or q_jang.get("actual_bits_per_weight")
+        or jang_cfg.get("actual_bits")
+    )
     routed_layer_bits, routed_layer_bits_source = _find_routed_layer_bit_plan(
         cfg, jang_cfg, q_jang
     )
@@ -4138,6 +3931,8 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
     if normalized_format in ("mxtq", "jangtq") or has_jangtq_sidecar:
         codec = "turboquant_codebook"
     elif normalized_format in ("mxfp4", "mxfp8", "nvfp4", "fp4", "fp8"):
+        codec = "affine_quantized_matmul"
+    elif normalized_format in ("jang", "jjqf", "mxq"):
         codec = "affine_quantized_matmul"
     elif normalized_backend in ("mlx", "mlx_uniform", "affine"):
         codec = "affine_quantized_matmul"
@@ -4201,7 +3996,7 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
         "target_bits": target_bits,
         "actual_bits": actual_bits,
         "config_bits": q_cfg.get("bits"),
-        "group_size": q_cfg.get("group_size") or q_jang.get("group_size"),
+        "group_size": q_cfg.get("group_size") or q_jang.get("group_size") or q_jang.get("block_size"),
         "routed_layer_bits": routed_layer_bits,
         "routed_layer_bits_source": routed_layer_bits_source,
         "passthrough_bit_widths_used": q_jang.get("passthrough_bit_widths_used"),
@@ -4256,35 +4051,17 @@ def _model_routing_status(bundle_path: str | None) -> dict:
         ("n_routed_experts", "num_local_experts", "num_experts")
     )
 
-    override_env = os.environ.get("JANGTQ_TOPK_OVERRIDE")
-    override_k = None
-    override_issue = None
-    if override_env is not None and override_env.strip() and override_env.strip() != "0":
-        try:
-            parsed = int(override_env)
-            if parsed >= 1:
-                override_k = parsed
-            else:
-                override_issue = "JANGTQ_TOPK_OVERRIDE must be >= 1"
-        except ValueError:
-            override_issue = "JANGTQ_TOPK_OVERRIDE must be an integer"
-
-    if trained_k is None and routed_experts is None and override_k is None and override_issue is None:
+    if trained_k is None and routed_experts is None:
         return {}
 
     effective_k = trained_k
     effective_source = "trained_default" if trained_k is not None else None
-    if override_k is not None:
-        effective_k = override_k
-        effective_source = "JANGTQ_TOPK_OVERRIDE"
 
-    has_override_env = override_env is not None and bool(override_env.strip())
     result = {
         "trained_active_experts": trained_k,
         "trained_active_experts_source": trained_source,
         "n_routed_experts": routed_experts,
-        "override_env": override_env if has_override_env else None,
-        "override_issue": override_issue,
+        "override_env": None,
         "effective_active_experts": effective_k,
         "effective_active_experts_source": effective_source,
     }
@@ -4381,7 +4158,7 @@ def _model_acceleration_status(bundle_path: str | None = None) -> dict:
         mpp_nax = _jangtq_mpp_nax_runtime_status(host)
         active = bool(mpp_nax.get("active"))
         kernel_type = (
-            "turboquant_codebook_mpp_nax" if active else "turboquant_codebook"
+            "turboquant_codebook_accelerated" if active else "turboquant_codebook"
         )
         reason = None
         if not active:
@@ -4422,7 +4199,7 @@ def _model_acceleration_status(bundle_path: str | None = None) -> dict:
         "host": host,
     }
     if codec == "turboquant_codebook":
-        result["jangtq_mpp_nax"] = mpp_nax
+        result["jangtq_acceleration"] = mpp_nax
     return result
 
 
@@ -5920,6 +5697,8 @@ async def model_capabilities(model_id: str) -> dict:
         for key in (
             "temperature",
             "top_p",
+            "top_k",
+            "min_p",
             "max_new_tokens",
             "repetition_penalty",
             "repetition_penalty_chat",
@@ -5961,14 +5740,7 @@ async def model_capabilities(model_id: str) -> dict:
     mtp_status = _model_mtp_status(bundle_path)
     routing_status = _model_routing_status(bundle_path)
 
-    # Append family-specific runtime compat warnings on top of the
-    # quantization-derived ones. DSV4: surface the max-thinking downgrade
-    # so the API isn't silently lying about advertised reasoning_efforts.
     _capability_compat_warnings = list(quantization_status.get("compat_warnings", []))
-    if family == "deepseek_v4":
-        _dsv4_warning = _dsv4_max_compat_warning()
-        if _dsv4_warning:
-            _capability_compat_warnings.append(_dsv4_warning)
 
     return {
         "id": model_id,
@@ -6152,10 +5924,8 @@ async def create_anthropic_message(
         "top_p": _resolve_top_p(chat_req.top_p),
         "max_tokens": _resolve_max_tokens(chat_req.max_tokens, chat_req.model),
     }
-    if chat_req.top_k is not None:
-        _msg_kwargs["top_k"] = chat_req.top_k
-    if chat_req.min_p is not None:
-        _msg_kwargs["min_p"] = chat_req.min_p
+    _set_resolved_top_k(_msg_kwargs, chat_req.top_k, chat_req.model)
+    _set_resolved_min_p(_msg_kwargs, chat_req.min_p, chat_req.model)
     _rp = _resolve_repetition_penalty(chat_req.repetition_penalty)
     if _rp is not None:
         _msg_kwargs["repetition_penalty"] = _rp
@@ -6241,29 +6011,12 @@ async def create_anthropic_message(
             chat_req.model,
             enable_thinking=_msg_kwargs.get("enable_thinking"),
         )
-        # Pass DSV4's effort rail through after applying the raw-max opt-in
-        # policy. By default max still downgrades to high; with
-        # VMLX_DSV4_RAW_MAX=1 it reaches the bundle encoder as "max".
         _stable_effort = (
             _normalize_dsv4_reasoning_effort(_cur_effort)
             if _dsv4_thinking.reasoning_effort_allowed
             else None
         )
         if _stable_effort:
-            _effort_route = _dsv4_reasoning_effort_route_label(
-                _cur_effort,
-                _stable_effort,
-            )
-            if _effort_route == "raw_max":
-                logger.info(
-                    "DSV4: reasoning_effort=max requested; raw-max opt-in "
-                    "enabled, passing max to encoder."
-                )
-            elif _effort_route == "downgraded":
-                logger.info(
-                    "DSV4: reasoning_effort=max requested; using stable "
-                    "standard-thinking rail."
-                )
             _ct_kwargs["reasoning_effort"] = _stable_effort
         else:
             _ct_kwargs.pop("reasoning_effort", None)
@@ -6280,27 +6033,6 @@ async def create_anthropic_message(
             _msg_kwargs["chat_template_kwargs"] = extra_ct
 
     messages_dump = [m.model_dump(exclude_none=True) for m in chat_req.messages]
-
-    # DSV4 default-system-prompt injection (2026-04-26): per upstream
-    # ml-explore/mlx-lm PR #1195 testing instructions, DSV4-Flash REQUIRES a
-    # system prompt to anchor its conversational behavior. Without one, the
-    # model goes into reasoning-runaway on multi-turn chat (model never
-    # emits `</think>`, runs to max_tokens of stream-of-consciousness, then
-    # if interrupted leaves bad cache state that destabilizes the next turn).
-    # Symptom: `whats 10x10` → "First Statement (A): If I am a crocod then
-    # I am green... SHIT! 1000000000000000 let's go. NO YES LOL ?????Bel"
-    # Reference: research/DSV4-CHAT-TEMPLATE-INVESTIGATION-2026-04-25.md and
-    # the upstream PR's exact recommended prompt format.
-    if _is_dsv4 and messages_dump:
-        if not any(m.get("role") == "system" for m in messages_dump):
-            messages_dump.insert(0, {
-                "role": "system",
-                "content": "You are a helpful AI assistant. Respond directly and concisely.",
-            })
-            logger.info(
-                "DSV4: injected default system prompt (model requires anchor "
-                "to avoid reasoning-runaway on multi-turn chat)"
-            )
 
     # Strip <think> blocks from prior assistant messages when thinking is disabled.
     # Same logic as the OpenAI path — prevents model from mimicking prior reasoning.
@@ -6949,10 +6681,8 @@ async def ollama_chat(fastapi_request: Request):
     }
     if chat_req.stop:
         chat_kwargs["stop"] = chat_req.stop
-    if chat_req.top_k is not None and chat_req.top_k > 0:
-        chat_kwargs["top_k"] = chat_req.top_k
-    if chat_req.min_p is not None and chat_req.min_p > 0:
-        chat_kwargs["min_p"] = chat_req.min_p
+    _set_resolved_top_k(chat_kwargs, chat_req.top_k, chat_req.model)
+    _set_resolved_min_p(chat_kwargs, chat_req.min_p, chat_req.model)
     _rp = _resolve_repetition_penalty(chat_req.repetition_penalty)
     if _rp is not None:
         chat_kwargs["repetition_penalty"] = _rp
@@ -7036,20 +6766,6 @@ async def ollama_chat(fastapi_request: Request):
             else None
         )
         if _stable_effort_o:
-            _effort_route_o = _dsv4_reasoning_effort_route_label(
-                _cur_effort_o,
-                _stable_effort_o,
-            )
-            if _effort_route_o == "raw_max":
-                logger.info(
-                    "DSV4 (Ollama): reasoning_effort=max requested; "
-                    "raw-max opt-in enabled, passing max to encoder."
-                )
-            elif _effort_route_o == "downgraded":
-                logger.info(
-                    "DSV4 (Ollama): reasoning_effort=max requested; "
-                    "using stable standard-thinking rail."
-                )
             _ollama_ct_kwargs["reasoning_effort"] = _stable_effort_o
         else:
             _ollama_ct_kwargs.pop("reasoning_effort", None)
@@ -7059,6 +6775,12 @@ async def ollama_chat(fastapi_request: Request):
     _extra_o = {k: v for k, v in _ollama_ct_kwargs.items() if k != "enable_thinking"}
     if _extra_o:
         chat_kwargs["chat_template_kwargs"] = _extra_o
+
+    _log_resolved_sampling_kwargs(
+        "/api/chat",
+        _model_path or _model_name or chat_req.model,
+        chat_kwargs,
+    )
 
     # Pass tools to engine so batched.py knows not to inject <think></think>
     # when tool calling is active (model needs to think to decide on tools)
@@ -7078,17 +6800,6 @@ async def ollama_chat(fastapi_request: Request):
         from .api.utils import extract_multimodal_content
 
         messages, _, _ = extract_multimodal_content(chat_req.messages)
-
-    # DSV4 default-system-prompt injection (Ollama path). See
-    # /v1/chat/completions block for full rationale. DSV4 needs anchoring
-    # to avoid reasoning-runaway on multi-turn chat.
-    if _is_dsv4_o and messages:
-        if not any((m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) == "system" for m in messages):
-            messages.insert(0, {
-                "role": "system",
-                "content": "You are a helpful AI assistant. Respond directly and concisely.",
-            })
-            logger.info("DSV4 (Ollama): injected default system prompt")
 
     # mlxstudio#72: stateful Ollama NDJSON translation. vMLX's
     # stream_chat_completion emits tool calls across two SSE chunks:
@@ -8492,10 +8203,8 @@ async def create_completion(request: CompletionRequest):
                 "top_p": _resolve_top_p(request.top_p),
                 "stop": request.stop,
             }
-            if request.top_k is not None:
-                gen_kwargs["top_k"] = request.top_k
-            if request.min_p is not None:
-                gen_kwargs["min_p"] = request.min_p
+            _set_resolved_top_k(gen_kwargs, request.top_k, request.model)
+            _set_resolved_min_p(gen_kwargs, request.min_p, request.model)
             _rp = _resolve_repetition_penalty(request.repetition_penalty)
             if _rp is not None:
                 gen_kwargs["repetition_penalty"] = _rp
@@ -8795,33 +8504,6 @@ async def create_chat_completion(
     if has_media and not engine.is_mllm:
         _reject_unsupported_multimodal("/v1/chat/completions")
 
-    # DSV4 default-system-prompt injection (chat-completions main path).
-    # See research/DSV4-CHAT-TEMPLATE-INVESTIGATION-2026-04-25.md and upstream
-    # ml-explore/mlx-lm PR #1195 testing instructions. DSV4-Flash JANGTQ
-    # requires a system prompt to anchor multi-turn chat behavior; without
-    # one the model goes into reasoning-runaway (529+ token reasoning blocks
-    # never closed with </think>) and on interruption leaves bad cache state
-    # that destabilizes subsequent turns. We re-detect family_name here
-    # because the canonical _is_dsv4 variable is set later in this function.
-    try:
-        from .model_config_registry import get_model_config_registry
-        _mc_for_dsv4_msgs = get_model_config_registry().lookup(
-            _model_path or _model_name or getattr(request, "model", "") or ""
-        )
-        _is_dsv4_msgs = getattr(_mc_for_dsv4_msgs, "family_name", "") == "deepseek_v4"
-    except Exception:
-        _is_dsv4_msgs = False
-    if _is_dsv4_msgs and messages:
-        if not any((m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) == "system" for m in messages):
-            messages.insert(0, {
-                "role": "system",
-                "content": "You are a helpful AI assistant. Respond directly and concisely.",
-            })
-            logger.info(
-                "DSV4: injected default system prompt (model requires anchor "
-                "to avoid reasoning-runaway on multi-turn chat)"
-            )
-
     # Handle response_format - inject system prompt if needed
     response_format = request.response_format
     if response_format:
@@ -8871,10 +8553,8 @@ async def create_chat_completion(
     if request.stop:
         chat_kwargs["stop"] = request.stop
     # Extended sampling params (only pass if explicitly set)
-    if request.top_k is not None:
-        chat_kwargs["top_k"] = request.top_k
-    if request.min_p is not None:
-        chat_kwargs["min_p"] = request.min_p
+    _set_resolved_top_k(chat_kwargs, request.top_k, request.model)
+    _set_resolved_min_p(chat_kwargs, request.min_p, request.model)
     _rp = _resolve_repetition_penalty(request.repetition_penalty)
     if _rp is not None:
         chat_kwargs["repetition_penalty"] = _rp
@@ -9005,20 +8685,6 @@ async def create_chat_completion(
             else None
         )
         if _stable_effort:
-            _effort_route = _dsv4_reasoning_effort_route_label(
-                _cur_effort,
-                _stable_effort,
-            )
-            if _effort_route == "raw_max":
-                logger.info(
-                    "DSV4: reasoning_effort=max requested; raw-max opt-in "
-                    "enabled, passing max to encoder."
-                )
-            elif _effort_route == "downgraded":
-                logger.info(
-                    "DSV4: reasoning_effort=max requested; using stable "
-                    "standard-thinking rail."
-                )
             _ct_kwargs["reasoning_effort"] = _stable_effort
         else:
             _ct_kwargs.pop("reasoning_effort", None)
@@ -9028,6 +8694,12 @@ async def create_chat_completion(
         extra_ct = {k: v for k, v in _ct_kwargs.items() if k != "enable_thinking"}
         if extra_ct:
             chat_kwargs["chat_template_kwargs"] = extra_ct
+
+    _log_resolved_sampling_kwargs(
+        "/v1/chat/completions",
+        _model_path or _model_name or request.model,
+        chat_kwargs,
+    )
 
     # Add multimodal content
     if has_media:
@@ -10148,10 +9820,8 @@ async def create_response(
                 request.previous_response_id,
             )
 
-    # DSV4 default-system-prompt injection (Responses path). See
-    # /v1/chat/completions block for full rationale.
-    # _is_dsv4 is defined later in this function (line ~5367) so we
-    # re-detect locally here. This is cheap (cached registry lookup).
+    # Re-detect DSV4 for the Responses rail policy below. This is cheap
+    # (cached registry lookup) and does not mutate caller messages.
     try:
         from .model_config_registry import get_model_config_registry
         _mc_dsv4_resp_msgs = get_model_config_registry().lookup(
@@ -10160,13 +9830,6 @@ async def create_response(
         _is_dsv4_resp_msgs = getattr(_mc_dsv4_resp_msgs, "family_name", "") == "deepseek_v4"
     except Exception:
         _is_dsv4_resp_msgs = False
-    if _is_dsv4_resp_msgs and messages:
-        if not any((m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) == "system" for m in messages):
-            messages.insert(0, {
-                "role": "system",
-                "content": "You are a helpful AI assistant. Respond directly and concisely.",
-            })
-            logger.info("DSV4 (Responses): injected default system prompt")
 
     # Handle text format (json_object / json_schema) — translate to response_format
     if (
@@ -10222,10 +9885,8 @@ async def create_response(
     if request.stop:
         chat_kwargs["stop"] = request.stop
     # Extended sampling params (only pass if explicitly set)
-    if request.top_k is not None:
-        chat_kwargs["top_k"] = request.top_k
-    if request.min_p is not None:
-        chat_kwargs["min_p"] = request.min_p
+    _set_resolved_top_k(chat_kwargs, request.top_k, request.model)
+    _set_resolved_min_p(chat_kwargs, request.min_p, request.model)
     _rp = _resolve_repetition_penalty(request.repetition_penalty)
     if _rp is not None:
         chat_kwargs["repetition_penalty"] = _rp
@@ -10334,20 +9995,6 @@ async def create_response(
             else None
         )
         if _stable_resp_effort:
-            _effort_route_resp = _dsv4_reasoning_effort_route_label(
-                _cur_resp_effort,
-                _stable_resp_effort,
-            )
-            if _effort_route_resp == "raw_max":
-                logger.info(
-                    "DSV4 (/v1/responses): reasoning_effort=max requested; "
-                    "raw-max opt-in enabled, passing max to encoder."
-                )
-            elif _effort_route_resp == "downgraded":
-                logger.info(
-                    "DSV4 (/v1/responses): reasoning_effort=max requested; "
-                    "using stable standard-thinking rail."
-                )
             _ct_kwargs["reasoning_effort"] = _stable_resp_effort
         else:
             _ct_kwargs.pop("reasoning_effort", None)
@@ -10366,6 +10013,12 @@ async def create_response(
         extra_ct = {k: v for k, v in _ct_kwargs.items() if k != "enable_thinking"}
         if extra_ct:
             chat_kwargs["chat_template_kwargs"] = extra_ct
+
+    _log_resolved_sampling_kwargs(
+        "/v1/responses",
+        _model_path or _model_name or request.model,
+        chat_kwargs,
+    )
 
     # Video processing controls (MLLM models)
     if request.video_fps:
@@ -10950,10 +10603,8 @@ async def stream_completions_multi(
                 "stop": request.stop,
                 "request_id": prompt_request_id,
             }
-            if request.top_k is not None:
-                gen_kwargs["top_k"] = request.top_k
-            if request.min_p is not None:
-                gen_kwargs["min_p"] = request.min_p
+            _set_resolved_top_k(gen_kwargs, request.top_k, request.model)
+            _set_resolved_min_p(gen_kwargs, request.min_p, request.model)
             _rp = _resolve_repetition_penalty(request.repetition_penalty)
             if _rp is not None:
                 gen_kwargs["repetition_penalty"] = _rp
@@ -13060,15 +12711,27 @@ Examples:
         help="Default top_p for generation when not specified in request",
     )
     parser.add_argument(
+        "--default-top-k",
+        type=int,
+        default=None,
+        help="Default top_k for generation when not specified in request",
+    )
+    parser.add_argument(
+        "--default-min-p",
+        type=float,
+        default=None,
+        help="Default min_p for generation when not specified in request",
+    )
+    parser.add_argument(
         "--default-repetition-penalty",
         type=float,
         default=None,
         help=(
             "Default repetition penalty when not specified in request. "
-            "1.0 = no penalty, 1.1 = mild (prevents Gemma 4 word-loops / "
-            "2-bit quant dash-loops), higher = less repetition. "
+            "1.0 = no penalty, higher = less repetition. "
             "Without this flag, external API clients (curl, Ollama, OpenAI SDK, "
-            "Anthropic SDK) run at 1.0 by default."
+            "Anthropic SDK) use bundle metadata when present; otherwise no "
+            "server-wide repetition penalty is applied."
         ),
     )
     parser.add_argument(
@@ -13102,7 +12765,7 @@ Examples:
 
     # Set global configuration
     global _api_key, _default_timeout, _rate_limiter
-    global _default_temperature, _default_top_p, _default_repetition_penalty, _default_enable_thinking
+    global _default_temperature, _default_top_p, _default_top_k, _default_min_p, _default_repetition_penalty, _default_enable_thinking
     global _inference_endpoints, _wake_timeout
     global _smelt_enabled, _smelt_experts
 
@@ -13123,6 +12786,10 @@ Examples:
         _default_temperature = args.default_temperature
     if args.default_top_p is not None:
         _default_top_p = args.default_top_p
+    if getattr(args, "default_top_k", None) is not None:
+        _default_top_k = args.default_top_k
+    if getattr(args, "default_min_p", None) is not None:
+        _default_min_p = args.default_min_p
     if getattr(args, "default_repetition_penalty", None) is not None:
         _default_repetition_penalty = args.default_repetition_penalty
     if args.default_enable_thinking is not None:

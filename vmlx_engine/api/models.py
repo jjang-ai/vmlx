@@ -271,19 +271,16 @@ class ChatCompletionRequest(BaseModel):
                     self.enable_thinking = False
                 if self.reasoning_effort is None:
                     self.reasoning_effort = None
-            elif mode in ("reasoning", "thinking", "think", "on", "true", "medium", "high"):
-                # NOTE 2026-05-05: "high" was previously aliased to "max"
-                # which silently routed users into the experimental/
-                # unstable max-thinking path on DSV4 (verified to produce
-                # "Plan and Plan and Plan ... ( ( ( (" attractor on
-                # long-form prompts). "high" now maps to "medium" effort
-                # which is the verified-stable thinking path. Users who
-                # really want max must pass `reasoning_effort=max`
-                # explicitly.
+            elif mode in ("reasoning", "thinking", "think", "on", "true"):
                 if self.enable_thinking is None:
                     self.enable_thinking = True
                 if self.reasoning_effort is None:
                     self.reasoning_effort = "medium"
+            elif mode in ("medium", "high"):
+                if self.enable_thinking is None:
+                    self.enable_thinking = True
+                if self.reasoning_effort is None:
+                    self.reasoning_effort = mode
             elif mode in ("max", "max_thinking", "maximum"):
                 if self.enable_thinking is None:
                     self.enable_thinking = True
@@ -808,19 +805,16 @@ class ResponsesRequest(BaseModel):
                     self.enable_thinking = False
                 if self.reasoning_effort is None:
                     self.reasoning_effort = None
-            elif mode in ("reasoning", "thinking", "think", "on", "true", "medium", "high"):
-                # NOTE 2026-05-05: "high" was previously aliased to "max"
-                # which silently routed users into the experimental/
-                # unstable max-thinking path on DSV4 (verified to produce
-                # "Plan and Plan and Plan ... ( ( ( (" attractor on
-                # long-form prompts). "high" now maps to "medium" effort
-                # which is the verified-stable thinking path. Users who
-                # really want max must pass `reasoning_effort=max`
-                # explicitly.
+            elif mode in ("reasoning", "thinking", "think", "on", "true"):
                 if self.enable_thinking is None:
                     self.enable_thinking = True
                 if self.reasoning_effort is None:
                     self.reasoning_effort = "medium"
+            elif mode in ("medium", "high"):
+                if self.enable_thinking is None:
+                    self.enable_thinking = True
+                if self.reasoning_effort is None:
+                    self.reasoning_effort = mode
             elif mode in ("max", "max_thinking", "maximum"):
                 if self.enable_thinking is None:
                     self.enable_thinking = True

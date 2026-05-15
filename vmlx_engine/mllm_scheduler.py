@@ -1346,8 +1346,8 @@ class MLLMScheduler:
                         # window layers (e.g. Gemma 4's 25 sliding_attention
                         # layers). Demoting them to KVCache drops `keep` /
                         # `max_size` / `_idx`, so on the next turn the model
-                        # sees a non-rotating buffer with garbage window
-                        # state and generates word-loops.
+                        # sees a non-rotating buffer with invalid window
+                        # state on the next turn.
                         from mlx_lm.models.cache import KVCache
                         cls_name = type(layer_cache).__name__
                         new_cache = None

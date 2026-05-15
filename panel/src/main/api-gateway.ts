@@ -915,6 +915,7 @@ export class ApiGateway extends EventEmitter {
     if (opts.temperature != null) openaiBody.temperature = opts.temperature;
     if (opts.top_p != null) openaiBody.top_p = opts.top_p;
     if (opts.top_k != null) openaiBody.top_k = opts.top_k;
+    if (opts.min_p != null) openaiBody.min_p = opts.min_p;
     if (opts.stop) openaiBody.stop = opts.stop;
     if (opts.repeat_penalty != null)
       openaiBody.repetition_penalty = opts.repeat_penalty;
@@ -1211,6 +1212,7 @@ export class ApiGateway extends EventEmitter {
     if (opts.temperature != null) openaiBody.temperature = opts.temperature;
     if (opts.top_p != null) openaiBody.top_p = opts.top_p;
     if (opts.top_k != null) openaiBody.top_k = opts.top_k;
+    if (opts.min_p != null) openaiBody.min_p = opts.min_p;
     if (opts.stop) openaiBody.stop = opts.stop;
     if (opts.repeat_penalty != null)
       openaiBody.repetition_penalty = opts.repeat_penalty;

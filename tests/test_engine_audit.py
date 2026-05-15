@@ -216,8 +216,8 @@ class TestSamplingParams:
     def test_sampling_params_defaults(self):
         from vmlx_engine.request import SamplingParams
         sp = SamplingParams()
-        assert sp.temperature == 0.7
-        assert sp.top_p == 0.9
+        assert sp.temperature == 0.0
+        assert sp.top_p == 1.0
         assert sp.top_k == 0
         assert sp.min_p == 0.0
         assert sp.repetition_penalty == 1.0
@@ -2727,11 +2727,11 @@ class TestStartupCompatibilityGuards:
         ):
             assert f'"{rel}"' in verify_script
 
-    def test_bundled_python_import_gate_covers_jangtq_mpp_nax_kernel(self):
+    def test_bundled_python_import_gate_covers_jangtq_acceleration_kernel(self):
         verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
 
         assert '"jang_tools.turboquant.mpp_nax_kernel"' in verify_script
-        assert "MPP/NAX TensorOps kernel missing" in verify_script
+        assert "JANGTQ acceleration kernel missing" in verify_script
 
     def test_embeddings_and_rerank_endpoints_have_memory_pressure_guards(self):
         source = Path("./vmlx_engine/server.py").read_text()
@@ -3045,6 +3045,49 @@ class TestZayaCCACachePolicy:
             server._default_enable_thinking = old_default
 
         assert resolved is False
+
+    def test_minimax_auto_does_not_force_thinking_but_explicit_on_still_works(
+        self, tmp_path
+    ):
+        """MiniMax supports thinking, but omitted/Auto must not open it.
+
+        The native MiniMax template opens `<think>` when enable_thinking is
+        omitted. Normal app/API chat should stay on the visible rail unless
+        the user explicitly turns thinking on.
+        """
+        from vmlx_engine import server
+        from vmlx_engine.model_config_registry import get_model_config_registry
+
+        old_default = server._default_enable_thinking
+        server._default_enable_thinking = None
+        try:
+            model_dir = self._write_minimax_fixture(tmp_path)
+            registry = get_model_config_registry()
+            registry.clear_cache()
+            cfg = registry.lookup(str(model_dir))
+            auto_resolved = server._resolve_enable_thinking(
+                request_value=None,
+                ct_kwargs={},
+                tools_present=False,
+                model_key=str(model_dir),
+                engine=None,
+                auto_detect=True,
+            )
+            explicit_on = server._resolve_enable_thinking(
+                request_value=True,
+                ct_kwargs={},
+                tools_present=False,
+                model_key=str(model_dir),
+                engine=None,
+                auto_detect=True,
+            )
+        finally:
+            server._default_enable_thinking = old_default
+
+        assert cfg.supports_thinking is True
+        assert cfg.reasoning_parser == "qwen3"
+        assert auto_resolved is False
+        assert explicit_on is True
 
     def test_gemma4_tools_still_auto_disable_thinking(self):
         from vmlx_engine import server
@@ -3931,19 +3974,22 @@ class TestJangTqMppNaxCliPolicy:
         from vmlx_engine.cli import _apply_jangtq_mpp_nax_policy
 
         monkeypatch.delenv("JANGTQ_MPP_NAX", raising=False)
-        args = SimpleNamespace(jangtq_mpp_nax="auto")
+        monkeypatch.setenv("JANGTQ_TOPK_OVERRIDE", "4")
+        args = SimpleNamespace()
         logger = MagicMock()
 
         _apply_jangtq_mpp_nax_policy(args, logger)
 
         assert os.environ["JANGTQ_MPP_NAX"] == "auto"
+        assert "JANGTQ_TOPK_OVERRIDE" not in os.environ
         logger.info.assert_called_once()
+        logger.debug.assert_called_once()
 
     def test_jangtq_mpp_nax_cli_policy_can_force_off(self, monkeypatch):
         from vmlx_engine.cli import _apply_jangtq_mpp_nax_policy
 
-        monkeypatch.setenv("JANGTQ_MPP_NAX", "auto")
-        args = SimpleNamespace(jangtq_mpp_nax="off")
+        monkeypatch.setenv("JANGTQ_MPP_NAX", "off")
+        args = SimpleNamespace()
         logger = MagicMock()
 
         _apply_jangtq_mpp_nax_policy(args, logger)
@@ -3953,8 +3999,8 @@ class TestJangTqMppNaxCliPolicy:
     def test_jangtq_mpp_nax_cli_policy_can_force_on(self, monkeypatch):
         from vmlx_engine.cli import _apply_jangtq_mpp_nax_policy
 
-        monkeypatch.setenv("JANGTQ_MPP_NAX", "off")
-        args = SimpleNamespace(jangtq_mpp_nax="on")
+        monkeypatch.setenv("JANGTQ_MPP_NAX", "on")
+        args = SimpleNamespace()
         logger = MagicMock()
 
         mode = _apply_jangtq_mpp_nax_policy(args, logger)
@@ -3967,8 +4013,8 @@ class TestJangTqMppNaxCliPolicy:
     ):
         from vmlx_engine.cli import _apply_jangtq_mpp_nax_policy
 
-        monkeypatch.setenv("JANGTQ_MPP_NAX", "off")
-        args = SimpleNamespace(jangtq_mpp_nax="bogus")
+        monkeypatch.setenv("JANGTQ_MPP_NAX", "bogus")
+        args = SimpleNamespace()
         logger = MagicMock()
 
         mode = _apply_jangtq_mpp_nax_policy(args, logger)
@@ -3977,12 +4023,46 @@ class TestJangTqMppNaxCliPolicy:
         assert os.environ["JANGTQ_MPP_NAX"] == "auto"
         logger.warning.assert_called_once()
 
-    def test_jangtq_mpp_nax_serve_parser_exposes_toggle(self):
+    def test_jangtq_mpp_nax_serve_parser_does_not_expose_toggle(self):
         source = Path("vmlx_engine/cli.py").read_text()
 
-        assert '"--jangtq-mpp-nax"' in source
-        assert 'choices=["off", "auto", "on"]' in source
-        assert 'default=os.environ.get("JANGTQ_MPP_NAX", "auto")' in source
+        assert '"--jangtq-mpp-nax"' not in source
+        assert 'choices=["off", "auto", "on"]' not in source
+
+    def test_jangtq_mpp_nax_server_status_defaults_to_auto(self, monkeypatch):
+        import vmlx_engine.server as server
+
+        monkeypatch.delenv("JANGTQ_MPP_NAX", raising=False)
+
+        mode, issue = server._normalize_jangtq_mpp_nax_mode()
+
+        assert mode == "auto"
+        assert issue is None
+
+    def test_jangtq_mpp_nax_server_invalid_value_falls_back_to_auto(self):
+        import vmlx_engine.server as server
+
+        mode, issue = server._normalize_jangtq_mpp_nax_mode("bogus")
+
+        assert mode == "auto"
+        assert "invalid JANGTQ_MPP_NAX" in issue
+
+    def test_jangtq_mpp_nax_availability_status_does_not_eval_mlx(self, monkeypatch):
+        import vmlx_engine.server as server
+        import jang_tools.turboquant.mpp_nax_kernel as nax_kernel
+
+        nax_kernel.mpp_nax_tensorops_available.cache_clear()
+        server._jangtq_mpp_nax_available.cache_clear()
+
+        def fail_eval(*_args, **_kwargs):
+            raise AssertionError("status path must not run a smoke Metal eval")
+
+        monkeypatch.setattr(nax_kernel.mx, "eval", fail_eval)
+
+        available, error = server._jangtq_mpp_nax_available()
+
+        assert isinstance(available, bool)
+        assert error is None
 
 
 class TestDistributedStreamingUnicode:
@@ -4883,8 +4963,10 @@ class TestTurboQuantKVTelemetry:
         assert 'unlimitedLabel="Default (1)"' in session_form_source
         assert 'unlimitedLabel="Default (512)"' in session_form_source
         assert 'unlimitedLabel="Default (2048)"' in session_form_source
-        assert "isLingCrackModelPath" in sessions_source
-        assert "out.defaultTemperature = 20" in sessions_source
+        assert "isLingCrackModelPath" not in sessions_source
+        assert "out.defaultTemperature = 20" not in sessions_source
+        assert "'defaultMinP'" in sessions_source
+        assert "args.push('--default-min-p'" in sessions_source
         assert "args.push('--no-continuous-batching')" in sessions_source
         assert "Auto-enable continuous batching when prefix cache is on" not in sessions_source
         cli_source = Path("./vmlx_engine/cli.py").read_text()
@@ -5734,6 +5816,40 @@ class TestTurboQuantKVTelemetry:
             "reason": None,
         }
 
+    def test_quantization_status_treats_plain_jang_weight_format_as_affine_na_path(self, tmp_path):
+        """Plain JANG bundles must stay on MLX affine matmul, not JANGTQ TQ."""
+        from vmlx_engine.server import _model_quantization_status
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "minimax_m2",
+        }))
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "weight_format": "jang",
+            "profile": "JANG_2L",
+            "quantization": {
+                "method": "jang-importance",
+                "target_bits": 2,
+                "actual_bits": 2.73,
+                "block_size": 128,
+                "quantization_backend": "mx.quantize",
+            },
+        }))
+
+        status = _model_quantization_status(str(tmp_path))
+
+        assert status["codec"] == "affine_quantized_matmul"
+        assert status["weight_format"] == "jang"
+        assert status["profile"] == "JANG_2L"
+        assert status["target_bits"] == 2
+        assert status["actual_bits"] == 2.73
+        assert status["group_size"] == 128
+        assert status["weight_matmul_dispatch"] == {
+            "primary": "mlx_affine_quantized_matmul",
+            "uses_mlx_quantized_matmul": True,
+            "metal_na_eligible": True,
+            "reason": None,
+        }
+
     def test_quantization_status_treats_mxfp4_weight_format_as_affine_na_path(self, tmp_path):
         """MXFP4 bundles use the native MLX affine matmul lane, not JANGTQ TQ."""
         from vmlx_engine.server import _model_quantization_status
@@ -5775,7 +5891,7 @@ class TestTurboQuantKVTelemetry:
             "effective_active_experts_source": "trained_default",
         }
 
-    def test_routing_status_reports_jangtq_top_k_override(self, monkeypatch, tmp_path):
+    def test_routing_status_ignores_jangtq_top_k_override(self, monkeypatch, tmp_path):
         from vmlx_engine.server import _model_routing_status
 
         monkeypatch.setenv("JANGTQ_TOPK_OVERRIDE", "4")
@@ -5792,11 +5908,11 @@ class TestTurboQuantKVTelemetry:
         assert status["trained_active_experts"] == 8
         assert status["trained_active_experts_source"] == "config.text_config.num_experts_per_tok"
         assert status["n_routed_experts"] == 256
-        assert status["override_env"] == "4"
-        assert status["effective_active_experts"] == 4
-        assert status["effective_active_experts_source"] == "JANGTQ_TOPK_OVERRIDE"
+        assert status["override_env"] is None
+        assert status["effective_active_experts"] == 8
+        assert status["effective_active_experts_source"] == "trained_default"
 
-    def test_routing_status_reports_invalid_jangtq_top_k_override(
+    def test_routing_status_ignores_invalid_jangtq_top_k_override(
         self, monkeypatch, tmp_path
     ):
         from vmlx_engine.server import _model_routing_status
@@ -5811,8 +5927,8 @@ class TestTurboQuantKVTelemetry:
         status = _model_routing_status(str(tmp_path))
 
         assert status["trained_active_experts"] == 8
-        assert status["override_env"] == "abc"
-        assert status["override_issue"] == "JANGTQ_TOPK_OVERRIDE must be an integer"
+        assert status["override_env"] is None
+        assert "override_issue" not in status
         assert status["effective_active_experts"] == 8
         assert status["effective_active_experts_source"] == "trained_default"
 
@@ -5833,7 +5949,7 @@ class TestTurboQuantKVTelemetry:
     def test_acceleration_status_does_not_claim_metal_na_for_jangtq(self, monkeypatch, tmp_path):
         import vmlx_engine.server as server
 
-        monkeypatch.delenv("JANGTQ_MPP_NAX", raising=False)
+        monkeypatch.setenv("JANGTQ_MPP_NAX", "off")
         (tmp_path / "config.json").write_text(json.dumps({
             "weight_format": "mxtq",
             "mxtq_bits": 2,
@@ -5856,8 +5972,9 @@ class TestTurboQuantKVTelemetry:
         assert status["metal_na_capable"] is False
         assert status["metal_na_active_on_host"] is False
         assert status["reason"] == "turboquant_custom_kernels_do_not_use_mlx_na"
+        assert status["jangtq_acceleration"]["mode"] == "off"
 
-    def test_acceleration_status_reports_jangtq_mpp_nax_when_enabled(
+    def test_acceleration_status_reports_internal_jangtq_acceleration_when_enabled(
         self, monkeypatch, tmp_path
     ):
         import vmlx_engine.server as server
@@ -5893,11 +6010,11 @@ class TestTurboQuantKVTelemetry:
 
         status = server._model_acceleration_status(str(tmp_path))
 
-        assert status["kernel_type"] == "turboquant_codebook_mpp_nax"
+        assert status["kernel_type"] == "turboquant_codebook_accelerated"
         assert status["metal_na_capable"] is True
         assert status["metal_na_active_on_host"] is True
         assert status["reason"] is None
-        assert status["jangtq_mpp_nax"] == {
+        assert status["jangtq_acceleration"] == {
             "mode": "auto",
             "requested": True,
             "available": True,

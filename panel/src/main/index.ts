@@ -28,10 +28,6 @@ import { createTray, destroyTray, hasTray } from './tray'
 import { startMemoryEnforcer, stopMemoryEnforcer } from './memory-enforcer'
 import { registerModelSettingsHandlers } from './db/model-settings'
 import { registerImageHandlers } from './ipc/image'
-import {
-  JANGTQ_MPP_NAX_SETTING_KEY,
-  normalizeJangtqMppNaxMode,
-} from '../shared/jangtqMppNax'
 
 let mainWindow: BrowserWindow | null = null
 let downloadWindow: BrowserWindow | null = null
@@ -71,15 +67,6 @@ function broadcastGatewaySingleModelMode(): void {
       win.webContents.send('gateway:singleModelModeChanged', {
         singleModelMode: apiGateway.singleModelMode,
       })
-    }
-  } catch (_) {}
-}
-
-function broadcastJangtqMppNaxMode(mode: 'auto' | 'off' | 'on'): void {
-  try {
-    const win = mainWindow
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('runtime:jangtqMppNaxChanged', { mode })
     }
   } catch (_) {}
 }
@@ -227,31 +214,17 @@ function createWindow(): void {
 
     // App-level settings (API keys, preferences)
     ipcMain.handle('settings:get', (_e, key: string) => {
-      if (key === JANGTQ_MPP_NAX_SETTING_KEY) {
-        return normalizeJangtqMppNaxMode(db.getSetting(key))
-      }
       return db.getSetting(key) ?? null
     })
     ipcMain.handle('settings:has', (_e, key: string) => {
       return db.hasSetting(key)
     })
     ipcMain.handle('settings:set', (_e, key: string, value: string) => {
-      if (key === JANGTQ_MPP_NAX_SETTING_KEY) {
-        const mode = normalizeJangtqMppNaxMode(value)
-        db.setSetting(key, mode)
-        broadcastJangtqMppNaxMode(mode)
-        rebuildTrayMenu(processManager, () => mainWindow)
-        return { success: true, value: mode }
-      }
       db.setSetting(key, value)
       return { success: true }
     })
     ipcMain.handle('settings:delete', (_e, key: string) => {
       db.deleteSetting(key)
-      if (key === JANGTQ_MPP_NAX_SETTING_KEY) {
-        broadcastJangtqMppNaxMode('auto')
-        rebuildTrayMenu(processManager, () => mainWindow)
-      }
       return { success: true }
     })
 

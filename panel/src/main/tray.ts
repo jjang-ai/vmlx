@@ -16,11 +16,6 @@ import { db } from './database'
 import { sessionManager, connectHost } from './sessions'
 import { apiGateway } from './api-gateway'
 import { t } from './i18n'
-import {
-  JANGTQ_MPP_NAX_SETTING_KEY,
-  normalizeJangtqMppNaxMode,
-  type JangtqMppNaxMode,
-} from '../shared/jangtqMppNax'
 
 let tray: Tray | null = null
 let boundProcessManager: ProcessManager | null = null
@@ -28,18 +23,6 @@ const boundListeners: Array<{ event: string; fn: (...args: any[]) => void }> = [
 
 /** Track GPU memory per session (updated from session:health events) */
 const sessionMemoryMB: Map<string, number> = new Map()
-
-function sendJangtqMppNaxChanged(
-  getWindow: () => BrowserWindow | null,
-  mode: JangtqMppNaxMode,
-): void {
-  try {
-    const win = getWindow()
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('runtime:jangtqMppNaxChanged', { mode })
-    }
-  } catch (_) {}
-}
 
 /**
  * Create a colored circle icon for tray.
@@ -124,8 +107,6 @@ function buildMenu(
 
   const gwPort = db.getSetting('gateway_port') || '8080'
   const singleModelMode = db.getSetting('gateway_single_model_mode') === 'true'
-  const jangtqMppNaxMode = normalizeJangtqMppNaxMode(db.getSetting(JANGTQ_MPP_NAX_SETTING_KEY))
-
   const items: Electron.MenuItemConstructorOptions[] = [
     {
       label: t('main.tray.modelsLoaded', { n: totalRunning }),
@@ -154,19 +135,6 @@ function buildMenu(
         } catch (_) {}
         rebuildMenu(processManager, getWindow)
       },
-    },
-    {
-      label: t('main.tray.jangtqMppNax'),
-      submenu: (['auto', 'off', 'on'] as JangtqMppNaxMode[]).map((mode) => ({
-        label: t(`main.tray.jangtqMppNax${mode[0].toUpperCase()}${mode.slice(1)}`),
-        type: 'radio' as const,
-        checked: jangtqMppNaxMode === mode,
-        click: () => {
-          db.setSetting(JANGTQ_MPP_NAX_SETTING_KEY, mode)
-          sendJangtqMppNaxChanged(getWindow, mode)
-          rebuildMenu(processManager, getWindow)
-        },
-      })),
     },
     { type: 'separator' },
   ]

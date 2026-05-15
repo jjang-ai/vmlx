@@ -53,8 +53,8 @@ class SamplingParams:
     """Sampling parameters for text generation."""
 
     max_tokens: int = 256
-    temperature: float = 0.7
-    top_p: float = 0.9
+    temperature: float = 0.0
+    top_p: float = 1.0
     top_k: int = 0  # 0 means disabled
     min_p: float = 0.0
     repetition_penalty: float = 1.0

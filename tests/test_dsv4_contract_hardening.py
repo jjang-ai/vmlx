@@ -10,9 +10,8 @@ regressions of the DSV4 contract that landed across:
 Specifically:
 
 1. The removed env-var force-flips (``VMLX_DSV4_ALLOW_CHAT`` /
-   ``VMLX_DSV4_ALLOW_THINKING``) must not reappear anywhere under
-   ``vmlx_engine/``. The only DSV4 rail debug switch that is allowed today is
-   ``VMLX_DSV4_FORCE_DIRECT_RAIL``.
+   ``VMLX_DSV4_ALLOW_THINKING`` / ``VMLX_DSV4_FORCE_DIRECT_RAIL``) must not
+   reappear anywhere under ``vmlx_engine/``.
 2. The capabilities payload for ``family == "deepseek_v4"`` must report empty
    ``experimental_modes`` (no leftover ``raw-thinking`` shape).
 3. ``_native_cache_status`` for the DSV4 branch must report the
@@ -41,13 +40,17 @@ def _engine_python_files() -> list[Path]:
 
 
 def test_removed_dsv4_force_flip_env_vars_absent_from_vmlx_engine():
-    """``VMLX_DSV4_ALLOW_CHAT`` / ``VMLX_DSV4_ALLOW_THINKING`` must stay gone.
+    """Removed DSV4 rail force env vars must stay gone.
 
     Both env vars used to force-flip the DSV4 thinking rail. They were removed
     in favour of ``_resolve_dsv4_thinking_policy``. If they reappear, the new
     rail-resolution contract has been broken or shadowed.
     """
-    forbidden = ("VMLX_DSV4_ALLOW_CHAT", "VMLX_DSV4_ALLOW_THINKING")
+    forbidden = (
+        "VMLX_DSV4_ALLOW_CHAT",
+        "VMLX_DSV4_ALLOW_THINKING",
+        "VMLX_DSV4_FORCE_DIRECT_RAIL",
+    )
     offenders: list[tuple[Path, str]] = []
     for path in _engine_python_files():
         text = path.read_text(encoding="utf-8", errors="replace")

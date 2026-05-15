@@ -562,8 +562,7 @@ def register_all(registry=None):
     # Public reasoning modes per research/DSV4-RUNTIME-ARCHITECTURE.md §4:
     #   - chat          (instruct, thinking suppressed via trailing </think>)
     #   - thinking      (reasoning_effort=high)
-    #   - thinking max  (accepted for API/UI parity, normalized to high in the
-    #                    vMLX DSV4 encoder path until raw-max long-output gates pass)
+    #   - thinking max  (reasoning_effort=max, passed to the canonical encoder)
     # Multi-turn: jang_config.chat.reasoning.drop_earlier_reasoning=true →
     # strip prior <think>...</think> blocks from history when building next
     # prompt. Our deepseek_r1 reasoning parser handles the <think> tags;

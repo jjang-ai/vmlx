@@ -342,9 +342,6 @@ declare global {
         has: (key: string) => Promise<boolean>;
         set: (key: string, value: string) => Promise<{ success: boolean; value?: string }>;
         delete: (key: string) => Promise<{ success: boolean }>;
-        onJangtqMppNaxChanged: (
-          callback: (data: { mode: "auto" | "off" | "on" }) => void,
-        ) => () => void;
       };
       app: {
         getVersion: () => Promise<string>;

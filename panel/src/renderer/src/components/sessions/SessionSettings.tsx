@@ -2,10 +2,6 @@ import { useState, useEffect } from 'react'
 import { ArrowLeft, ChevronRight } from 'lucide-react'
 import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG } from './SessionConfigForm'
 import { useTranslation } from '../../i18n'
-import {
-  JANGTQ_MPP_NAX_SETTING_KEY,
-  normalizeJangtqMppNaxMode,
-} from '../../../../shared/jangtqMppNax'
 
 interface Session {
   id: string
@@ -37,11 +33,6 @@ function isZayaCcaFamily(family?: string): boolean {
   return normalized === 'zaya' || normalized === 'zaya1-vl'
 }
 
-function topKOverrideBlockedByFamily(family?: string): boolean {
-  const normalized = normalizeDetectedFamilyName(family)
-  return normalized === 'zaya' || normalized === 'zaya1-vl' || normalized === 'ling'
-}
-
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 
 /**
@@ -66,13 +57,7 @@ function buildCommandPreview(
   const detectedFamily = normalizeDetectedFamilyName(detected?.family)
   const dsv4Active = detectedFamily === 'deepseek-v4'
   const zayaCcaActive = isZayaCcaFamily(detectedFamily)
-  const topKOverrideBlocked = topKOverrideBlockedByFamily(detectedFamily)
   const turboQuantActive = !!detected?.isTurboQuant
-  const jangtqTopKOverrideAllowed = turboQuantActive && !topKOverrideBlocked
-  const jangtqTopKOverride = Number((config as any).jangtqTopKOverride || 0)
-  if (jangtqTopKOverrideAllowed && Number.isFinite(jangtqTopKOverride) && jangtqTopKOverride > 0) {
-    parts.unshift(`JANGTQ_TOPK_OVERRIDE=${Math.floor(Math.min(64, Math.max(1, jangtqTopKOverride)))}`)
-  }
   const effectiveDistributed = requestedDistributed
   const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed
   const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !zayaCcaActive && !turboQuantActive
@@ -175,8 +160,6 @@ function buildCommandPreview(
   } else {
     parts.push('--max-tokens', '1000000')
   }
-  parts.push('--jangtq-mpp-nax', normalizeJangtqMppNaxMode((config as any).jangtqMppNax))
-
   // Tool integration — mirrors buildArgs lines 1136-1147
   if (effectiveToolParser) {
     parts.push('--tool-call-parser', effectiveToolParser)
@@ -239,14 +222,22 @@ function buildCommandPreview(
     }
   }
 
-  // Generation defaults
-  if (config.defaultTemperature && config.defaultTemperature > 0) {
+  // Generation defaults. This renderer-side preview cannot read bundle files,
+  // so it mirrors the packaged-app spawn path by hiding stale historical UI
+  // defaults that would otherwise look like explicit server overrides.
+  if (config.defaultTemperature && config.defaultTemperature > 0 && config.defaultTemperature !== 70) {
     parts.push('--default-temperature', (config.defaultTemperature / 100).toFixed(2))
   }
-  if (config.defaultTopP && config.defaultTopP > 0) {
+  if (config.defaultTopP && config.defaultTopP > 0 && config.defaultTopP !== 95) {
     parts.push('--default-top-p', (config.defaultTopP / 100).toFixed(2))
   }
-  if ((config as any).defaultRepetitionPenalty != null && (config as any).defaultRepetitionPenalty > 0) {
+  if ((config as any).defaultTopK != null && (config as any).defaultTopK > 0) {
+    parts.push('--default-top-k', Math.round((config as any).defaultTopK).toString())
+  }
+  if ((config as any).defaultMinP != null && (config as any).defaultMinP > 0) {
+    parts.push('--default-min-p', ((config as any).defaultMinP / 100).toFixed(2))
+  }
+  if ((config as any).defaultRepetitionPenalty != null && (config as any).defaultRepetitionPenalty > 0 && (config as any).defaultRepetitionPenalty !== 110) {
     parts.push('--default-repetition-penalty', ((config as any).defaultRepetitionPenalty / 100).toFixed(2))
   }
 
@@ -305,8 +296,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         // Parse stored config JSON, merge with defaults
         try {
           const stored = JSON.parse(s.config)
-          const globalMppNax = normalizeJangtqMppNaxMode(await window.api.settings.get(JANGTQ_MPP_NAX_SETTING_KEY).catch(() => null))
-          setConfig({ ...DEFAULT_CONFIG, ...stored, jangtqMppNax: globalMppNax })
+          setConfig({ ...DEFAULT_CONFIG, ...stored })
         } catch {
           setConfig(DEFAULT_CONFIG)
           setMessage({ type: 'error', text: 'Stored configuration was corrupted and has been reset to defaults. Save to persist.' })
@@ -321,13 +311,6 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
     }
     load()
   }, [sessionId])
-
-  useEffect(() => {
-    const unsubscribe = window.api.settings.onJangtqMppNaxChanged?.((data: { mode: 'auto' | 'off' | 'on' }) => {
-      setConfig(prev => ({ ...prev, jangtqMppNax: normalizeJangtqMppNaxMode(data?.mode) }))
-    })
-    return () => { unsubscribe?.() }
-  }, [])
 
   // Listen for session status changes
   useEffect(() => {
@@ -358,23 +341,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
     }
   }, [sessionId])
 
-  const handleJangtqMppNaxModeChange = async (value: unknown) => {
-    const mode = normalizeJangtqMppNaxMode(value)
-    setConfig(prev => ({ ...prev, jangtqMppNax: mode }))
-    setDirty(true)
-    setMessage(null)
-    try {
-      await window.api.settings.set(JANGTQ_MPP_NAX_SETTING_KEY, mode)
-    } catch (e) {
-      setMessage({ type: 'error', text: (e as Error).message })
-    }
-  }
-
   const handleChange = <K extends keyof SessionConfig>(key: K, value: SessionConfig[K]) => {
-    if (key === 'jangtqMppNax') {
-      handleJangtqMppNaxModeChange(value)
-      return
-    }
     setConfig(prev => ({ ...prev, [key]: value }))
     setDirty(true)
     setMessage(null)
@@ -454,7 +421,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
   }
 
   const handleReset = async () => {
-    const base = { ...DEFAULT_CONFIG, host: config.host, port: config.port, jangtqMppNax: normalizeJangtqMppNaxMode(await window.api.settings.get(JANGTQ_MPP_NAX_SETTING_KEY).catch(() => null)) }
+    const base = { ...DEFAULT_CONFIG, host: config.host, port: config.port }
     // Re-run model detection to get proper defaults for this model
     if (session?.modelPath) {
       try {

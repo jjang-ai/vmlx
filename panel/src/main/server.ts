@@ -59,9 +59,8 @@ export interface ServerConfig {
   // Performance
   streamInterval: number
   maxTokens?: number
-  // JANGTQ MoE active-expert override. 0/undefined = trained model default.
-  jangtqMppNax?: 'auto' | 'off' | 'on'
-  jangtqTopKOverride?: number
+  defaultTopK?: number
+  defaultMinP?: number
 
   // Tool integration
   mcpConfig?: string
@@ -72,9 +71,6 @@ export interface ServerConfig {
   reasoningParser?: string
 
   // DSV4 Flash runtime env controls
-  dsv4RawMax?: boolean
-  dsv4FinalizerTokens?: number
-  dsv4ForceDirect?: boolean
   dsv4PoolQuant?: boolean
 
   // Custom API model name (--served-model-name)

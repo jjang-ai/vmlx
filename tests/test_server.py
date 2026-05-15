@@ -1260,7 +1260,7 @@ class TestDSV4RepetitionPenaltyDefaults:
 
         assert kwargs["repetition_penalty"] == 1.05
 
-    def test_stale_low_per_request_value_resolves_to_thinking_bundle_default(self, monkeypatch, tmp_path):
+    def test_explicit_per_request_repetition_penalty_is_honored(self, monkeypatch, tmp_path):
         srv = self._set_dsv4_path(monkeypatch, tmp_path, {
             "repetition_penalty_thinking": 1.0,
             "repetition_penalty_chat": 1.05,
@@ -1270,7 +1270,7 @@ class TestDSV4RepetitionPenaltyDefaults:
             str(tmp_path),
             enable_thinking=True,
         )
-        assert result == 1.0
+        assert result == 1.05
 
     def test_floor_does_not_affect_non_dsv4_families(self, monkeypatch, tmp_path):
         import json

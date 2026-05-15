@@ -303,11 +303,6 @@ const api = {
     has: (key: string) => ipcRenderer.invoke('settings:has', key),
     set: (key: string, value: string) => ipcRenderer.invoke('settings:set', key, value),
     delete: (key: string) => ipcRenderer.invoke('settings:delete', key),
-    onJangtqMppNaxChanged: (callback: (data: { mode: 'auto' | 'off' | 'on' }) => void) => {
-      const handler = (_: any, data: { mode: 'auto' | 'off' | 'on' }) => callback(data)
-      ipcRenderer.on('runtime:jangtqMppNaxChanged', handler)
-      return () => { ipcRenderer.removeListener('runtime:jangtqMppNaxChanged', handler) }
-    },
   },
 
   // Per-model settings

@@ -25,22 +25,24 @@ def _env_truthy(name: str) -> bool:
 
 
 def _apply_jangtq_mpp_nax_policy(args, logger):
-    """Apply JANGTQ MPP/NAX TensorOps startup mode.
+    """Apply internal JANGTQ acceleration policy.
 
-    This controls JANGTQ's own codebook kernels. It is separate from MLX
-    affine quantized_matmul: MXFP4/JANG affine models use MLX's native path,
-    while JANGTQ/MXTQ uses the custom TurboQuant path with optional direct
-    MPP/NAX kernels.
+    This is deliberately env-only. The app and CLI must not persist or expose a
+    user-facing switch that can force the prefill acceleration lane onto
+    single-token decode. Default auto lets the kernel's own dispatch gate use
+    acceleration for profitable M5 prefill shapes without making users tune it.
     """
-    raw_mode = getattr(args, "jangtq_mpp_nax", None)
-    if raw_mode is None:
-        raw_mode = os.environ.get("JANGTQ_MPP_NAX", "auto")
+    raw_mode = os.environ.get("JANGTQ_MPP_NAX", "auto")
     mode = str(raw_mode).strip().lower()
     if mode not in ("off", "auto", "on"):
-        logger.warning("Invalid --jangtq-mpp-nax=%r; using auto", raw_mode)
+        logger.warning("Invalid JANGTQ_MPP_NAX=%r; using auto", raw_mode)
         mode = "auto"
     os.environ["JANGTQ_MPP_NAX"] = "1" if mode == "on" else mode
-    logger.info("JANGTQ MPP/NAX TensorOps mode: %s", mode)
+    if os.environ.pop("JANGTQ_TOPK_OVERRIDE", None) is not None:
+        logger.info(
+            "Ignoring JANGTQ_TOPK_OVERRIDE; vMLX uses each bundle's trained router top-k."
+        )
+    logger.debug("JANGTQ acceleration mode: %s", mode)
     return mode
 
 
@@ -295,6 +297,16 @@ def serve_command(args):
             print(f"Error: --default-top-p must be between 0 (exclusive) and 1, got {args.default_top_p}")
             sys.exit(1)
         server._default_top_p = args.default_top_p
+    if getattr(args, 'default_top_k', None) is not None:
+        if args.default_top_k < 0:
+            print(f"Error: --default-top-k must be >= 0, got {args.default_top_k}")
+            sys.exit(1)
+        server._default_top_k = args.default_top_k
+    if getattr(args, 'default_min_p', None) is not None:
+        if not (0 <= args.default_min_p <= 1):
+            print(f"Error: --default-min-p must be between 0 and 1, got {args.default_min_p}")
+            sys.exit(1)
+        server._default_min_p = args.default_min_p
     if getattr(args, 'default_repetition_penalty', None) is not None:
         if not (0.5 <= args.default_repetition_penalty <= 2.0):
             print(
@@ -1779,16 +1791,6 @@ Examples:
         help="Group size for KV cache quantization. Smaller = better accuracy but larger "
              "metadata overhead. Only used when --kv-cache-quantization is q4 or q8. (default: 64)",
     )
-    serve_parser.add_argument(
-        "--jangtq-mpp-nax",
-        type=str,
-        default=os.environ.get("JANGTQ_MPP_NAX", "auto"),
-        choices=["off", "auto", "on"],
-        help="Enable JANGTQ/MXTQ custom TurboQuant MPP/NAX TensorOps kernels. "
-             "auto uses the M5 TensorOps path only for dispatch shapes that benchmark faster; "
-             "off keeps the legacy custom kernels; on forces the path for diagnostics. "
-             "(default: auto)",
-    )
     # Disk cache options
     serve_parser.add_argument(
         "--enable-disk-cache",
@@ -2064,6 +2066,20 @@ Examples:
              "Lower = more focused, higher = more diverse. Overridden by per-request 'top_p'. "
              "If not set, uses model default.",
     )
+    serve_parser.add_argument(
+        "--default-top-k",
+        type=int,
+        default=None,
+        help="Server-wide default top-k for generation. Overridden by per-request 'top_k'. "
+             "If not set, uses generation_config.json / jang_config metadata when present.",
+    )
+    serve_parser.add_argument(
+        "--default-min-p",
+        type=float,
+        default=None,
+        help="Server-wide default min-p for generation. Overridden by per-request 'min_p'. "
+             "If not set, uses generation_config.json / jang_config metadata when present.",
+    )
     # vmlx#75: reporter's `vmlx-engine serve ... --default-repetition-penalty
     # 1.10` failed with `unrecognized arguments` on older binaries. The flag
     # is registered here and validated in serve_command() (0.5..2.0 range
@@ -2073,11 +2089,9 @@ Examples:
         "--default-repetition-penalty",
         type=float,
         default=None,
-        help="Server-wide default repetition penalty for generation. 1.0 = no penalty, "
-             "1.1 = mild anti-loop (recommended — prevents Gemma 4 word-loops and 2-bit "
-             "quant dash-loops), higher = less repetition at the cost of fluency. "
-             "Overridden by per-request 'repetition_penalty'. If not set, no penalty is "
-             "applied server-wide.",
+        help="Server-wide default repetition penalty for generation. 1.0 = no penalty. "
+             "Overridden by per-request 'repetition_penalty'. If not set, bundle metadata "
+             "is used when present; otherwise no penalty is applied server-wide.",
     )
     serve_parser.add_argument(
         "--default-enable-thinking",
@@ -2276,14 +2290,6 @@ Examples:
         type=int,
         default=64,
         help="Group size for KV cache quantization (default: 64)",
-    )
-    bench_parser.add_argument(
-        "--jangtq-mpp-nax",
-        type=str,
-        default=os.environ.get("JANGTQ_MPP_NAX", "auto"),
-        choices=["off", "auto", "on"],
-        help="Enable JANGTQ/MXTQ custom TurboQuant MPP/NAX TensorOps kernels "
-             "(default: auto)",
     )
     # Disk cache options (bench)
     bench_parser.add_argument(

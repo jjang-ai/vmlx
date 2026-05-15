@@ -142,8 +142,8 @@ class TestSamplingParams:
         params = SamplingParams()
 
         assert params.max_tokens == 256
-        assert params.temperature == 0.7
-        assert params.top_p == 0.9
+        assert params.temperature == 0.0
+        assert params.top_p == 1.0
         assert params.stop == []
         assert params.stop_token_ids == []
 

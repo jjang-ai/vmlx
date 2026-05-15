@@ -586,8 +586,9 @@ def test_dsv4_cached_prefix_kickoff_avoids_cross_thread_mx_eval():
     assert sync_idx < fallback_idx
 
 
-def test_loop_prone_families_use_long_repetition_context():
-    """Ling/MiniMax/DSV4 phrase loops are longer than the old 20-token window."""
+def test_minimax_ling_do_not_use_long_repetition_context():
+    """MiniMax/Ling prompts contain EOS/turn sentinels that must not be
+    penalized through a widened 512-token repetition window."""
     import inspect
     from vmlx_engine.scheduler import Scheduler
 
@@ -600,6 +601,14 @@ def test_loop_prone_families_use_long_repetition_context():
     assert Scheduler._detect_model_type_for_runtime(LingModel()) == "bailing_hybrid"
     assert Scheduler._detect_model_type_for_runtime(MiniMaxModel()) == "minimax_m2"
 
+    source = inspect.getsource(Scheduler.__init__)
+    assignment = source.split("self._long_repetition_context =", 1)[1].split(
+        "self._tq_active", 1
+    )[0]
+    assert '"deepseek_v4"' in assignment
+    assert '"minimax_m2"' not in assignment
+    assert '"bailing_hybrid"' not in assignment
+    assert '"bailing_moe_v2_5"' not in assignment
     source = inspect.getsource(Scheduler._create_batch_generator)
     assert "_rep_context_size = 512 if self._long_repetition_context else 20" in source
 

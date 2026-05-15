@@ -30,6 +30,7 @@ import pytest
 MODEL_JANGTQ = Path("/Users/example/models/Qwen3.6-35B-A3B-JANGTQ2")
 MODEL_MXFP4 = Path("/Users/example/models/Qwen3.6-35B-A3B-MXFP4")
 HAS_JANGTQ = MODEL_JANGTQ.is_dir() and (MODEL_JANGTQ / "config.json").exists()
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
@@ -5370,9 +5371,7 @@ class TestMs75HuggingFaceMirrorEndpoint:
     def test_csp_allows_mirror_hosts(self):
         """Content Security Policy must whitelist hf-mirror.com and
         modelscope.cn or README images from those hosts render broken."""
-        src = Path(
-            "/private/tmp/vmlx-1.3.66-build/panel/src/main/index.ts"
-        ).read_text()
+        src = (REPO_ROOT / "panel/src/main/csp.ts").read_text()
         # Both mirror domains must appear in img-src AND connect-src
         img_src_idx = src.find("img-src")
         connect_src_idx = src.find("connect-src")
@@ -8282,7 +8281,7 @@ class TestBundledPythonVerifyScript:
     because the gemma4 cherry-pick was dropped during a routine
     mlx_vlm version bump. This script + test pair catches that."""
 
-    _SCRIPT = "/private/tmp/vmlx-1.3.66-build/panel/scripts/verify-bundled-python.sh"
+    _SCRIPT = str(REPO_ROOT / "panel/scripts/verify-bundled-python.sh")
 
     def test_verify_script_exists_and_executable(self):
         """Script must live at panel/scripts/verify-bundled-python.sh

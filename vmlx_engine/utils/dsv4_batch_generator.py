@@ -55,9 +55,6 @@ class _Request:
     matcher_state: Any = None
     finish_reason: Optional[str] = None
     prompt_processed: bool = False
-    forced_think_close: bool = False
-    forced_think_close_at: Optional[int] = None
-    finalizer_max_tokens: Optional[int] = None
     # Clean prompt-boundary cache snapshot, captured immediately after
     # prefill completes and BEFORE decode advances the live cache. Used
     # by scheduler to populate prefix cache / L2 disk store with state
@@ -356,96 +353,6 @@ class DSV4BatchGenerator:
             return None
         return snapshots
 
-    @staticmethod
-    def _hard_repetition_block(
-        logits, recent_tokens, *,
-        run_threshold=2, window=20, diversity_window=16, diversity_min=8,
-    ):
-        """Hard-block degenerate-repetition tokens.
-
-        Three layered detectors, generated-tokens-only:
-          (1) Single-token repeat: any token at >=`run_threshold` in last
-              `window` positions → -inf. Threshold lowered to 2 to catch
-              "Stanford...Stanford" pairs that rep_penalty<<2 can't beat.
-          (2) 2-gram + 3-gram extension: block tokens that would extend
-              an already-repeated bigram/trigram.
-          (3) DIVERSITY COLLAPSE: when the last `diversity_window` decoded
-              tokens contain fewer than `diversity_min` unique values,
-              the model is in a degenerate attractor that cycles N
-              variants (e.g. case/space variants of the same word:
-              "VC, VC, fund, fund, venture, venture, Ventures, Ventures").
-              Variant-cycling bypasses single-token threshold. Block ALL
-              tokens that have appeared at all in the last
-              `diversity_window` positions — forces the model to pick a
-              novel token and break the cycle.
-
-        Verified live 2026-05-05:
-          - "Stanford Stanford..." (single-token, 100+) — (1) catches
-          - "Plan and Plan and ( ( ( (" — (2) catches
-          - "hora horora hora era ara" — (1) catches with threshold=2
-          - "VC VC fund fund management management ventures ventures Ventures Ventures ((( (((" — (3) catches diversity collapse
-
-        This is sampling-layer band-aid. The REAL root cause is DSV4
-        long-context attention drift (compressor/indexer pool
-        accumulation). Documented in DSV4_FIX_NUANCES.md.
-        """
-        if not recent_tokens:
-            return logits
-        tail = recent_tokens[-window:] if len(recent_tokens) > window else list(recent_tokens)
-        from collections import Counter
-
-        # (1) Single-token repeats — threshold=2 (was 3)
-        counts = Counter(tail)
-        offenders = set(t for t, c in counts.items() if c >= run_threshold)
-
-        # (2) 2-gram extension
-        if len(recent_tokens) >= 2:
-            prev1 = recent_tokens[-1]
-            ngram2_counter: Counter = Counter()
-            history = recent_tokens[-window:] if len(recent_tokens) > window else list(recent_tokens)
-            for i in range(len(history) - 1):
-                ngram2_counter[(history[i], history[i + 1])] += 1
-            for (a, b), c in ngram2_counter.items():
-                if c >= 2 and a == prev1:
-                    offenders.add(b)
-
-        # (3) 3-gram extension
-        if len(recent_tokens) >= 3:
-            prev1, prev2 = recent_tokens[-1], recent_tokens[-2]
-            ngram3_counter: Counter = Counter()
-            history = recent_tokens[-window:] if len(recent_tokens) > window else list(recent_tokens)
-            for i in range(len(history) - 2):
-                ngram3_counter[(history[i], history[i + 1], history[i + 2])] += 1
-            for (a, b, x), c in ngram3_counter.items():
-                if c >= 2 and a == prev2 and b == prev1:
-                    offenders.add(x)
-
-        # (4) Diversity collapse — variant-cycling attractor
-        if len(recent_tokens) >= diversity_window:
-            div_tail = recent_tokens[-diversity_window:]
-            unique_count = len(set(div_tail))
-            if unique_count < diversity_min:
-                # All recent tokens are recyclable in the attractor.
-                # Block them all to force novel sampling.
-                offenders.update(set(div_tail))
-
-        if not offenders:
-            return logits
-        try:
-            logits_2d = logits if logits.ndim == 2 else logits[None, :]
-            updated = logits_2d
-            neg_inf = mx.array(-float("inf"), dtype=logits_2d.dtype)
-            offender_arr = mx.array(sorted(offenders), dtype=mx.int32)
-            arange = mx.arange(logits_2d.shape[-1])
-            mask = mx.zeros((logits_2d.shape[-1],), dtype=mx.bool_)
-            for tid in sorted(offenders):
-                if 0 <= tid < logits_2d.shape[-1]:
-                    mask = mask | (arange == tid)
-            updated = mx.where(mask, neg_inf, updated)
-            return updated if logits.ndim == 2 else updated[0]
-        except Exception:
-            return logits
-
     def _sample(self, logits, sampler, processors, recent_tokens, generated_tokens=None):
         """Apply logits processors then sample. logits: (1, vocab).
 
@@ -462,15 +369,6 @@ class DSV4BatchGenerator:
                 x = p(recent_tokens, x)
             except TypeError:
                 x = p(x)
-        # DSV4 hard n-gram dedup — final logit warp BEFORE softmax. ONLY
-        # uses generated tokens to avoid prompt-token poisoning of the
-        # dedup state. Without this, a prompt that
-        # legitimately repeats a word 3+ times would block that word for
-        # the entire generation. Disable via env
-        # VMLX_DSV4_HARD_REP_BLOCK=0 if it interferes (NOT recommended).
-        if os.environ.get("VMLX_DSV4_HARD_REP_BLOCK", "1") not in ("0", "false", "no"):
-            dedup_ctx = generated_tokens if generated_tokens is not None else recent_tokens
-            x = self._hard_repetition_block(x, dedup_ctx)
         # Convert log-probs via logsumexp normalization
         logprobs = x - mx.logsumexp(x, axis=-1, keepdims=True)
         # Sampler
@@ -587,58 +485,8 @@ class DSV4BatchGenerator:
             last_close = -1
         return last_open > last_close
 
-    def _finalizer_budget(self) -> int:
-        """Visible-answer budget after forced ``</think>`` injection.
-
-        Default bumped from 512 -> 2048 (2026-05-09) so long-form thinking
-        turns can still emit substantive visible content even when the model
-        spent most of its output budget reasoning. Tunable via
-        ``VMLX_DSV4_FINALIZER_TOKENS``.
-        """
-        try:
-            return max(1, int(os.environ.get("VMLX_DSV4_FINALIZER_TOKENS", "2048")))
-        except (TypeError, ValueError):
-            return 2048
-
     def _effective_max_tokens(self, req: _Request) -> int:
-        if req.finalizer_max_tokens is not None:
-            return req.finalizer_max_tokens
         return req.max_tokens
-
-    def _maybe_force_think_close(
-        self,
-        req: _Request,
-        token_id: int,
-    ) -> tuple[int, Optional[str]]:
-        """Inject </think> before DSV4 stops inside implicit thinking.
-
-        Earlier engine-level finalization re-prefilled ``prompt + reasoning`` to
-        continue after a missing close tag. On long prompts that duplicates the
-        DSV4 composite prefill and can OOM. This generator-level path keeps the
-        live SWA+CSA/HCA cache, emits the structural close token as the next
-        output token, then lets the model continue normally for a bounded
-        visible-answer budget.
-        """
-        if req.forced_think_close or not self._prompt_starts_in_think(req):
-            return token_id, None
-        if THINK_CLOSE_ID in req.out_tokens:
-            return token_id, None
-        would_stop = token_id == DSV4_EOS_ID or token_id in self.stop_tokens
-        would_length = len(req.out_tokens) + 1 >= req.max_tokens
-        if not would_stop and not would_length:
-            return token_id, None
-
-        req.forced_think_close = True
-        req.forced_think_close_at = len(req.out_tokens)
-        req.finalizer_max_tokens = len(req.out_tokens) + 1 + self._finalizer_budget()
-        logger.info(
-            "DSV4Gen: forcing </think> at generated token %d before %s; "
-            "continuing from live composite cache for up to %d extra tokens.",
-            len(req.out_tokens),
-            "stop" if would_stop else "length",
-            req.finalizer_max_tokens - (len(req.out_tokens) + 1),
-        )
-        return THINK_CLOSE_ID, None
 
     def _update_finish_reason_after_token(self, req: _Request, token_id: int) -> None:
         if token_id == DSV4_EOS_ID or token_id in self.stop_tokens:
@@ -754,13 +602,9 @@ class DSV4BatchGenerator:
                     )
                     self._sync()
                     tok_id = self._sampled_token_id(sampled)
-                    tok_id, forced_finish = self._maybe_force_think_close(r, tok_id)
                     r.out_tokens.append(tok_id)
                     r.prompt_processed = True
-                    if forced_finish is not None:
-                        r.finish_reason = forced_finish
-                    else:
-                        self._update_finish_reason_after_token(r, tok_id)
+                    self._update_finish_reason_after_token(r, tok_id)
                     prompt_resps.append(_Response(
                         uid=r.uid, token=tok_id, logprobs=logprobs,
                         finish_reason=r.finish_reason,
@@ -788,13 +632,9 @@ class DSV4BatchGenerator:
                     )
                     self._sync()
                     tok_id = self._sampled_token_id(sampled)
-                    tok_id, forced_finish = self._maybe_force_think_close(r, tok_id)
                     r.out_tokens.append(tok_id)
                     r.prompt_processed = True
-                    if forced_finish is not None:
-                        r.finish_reason = forced_finish
-                    else:
-                        self._update_finish_reason_after_token(r, tok_id)
+                    self._update_finish_reason_after_token(r, tok_id)
                     prompt_resps.append(_Response(
                         uid=r.uid, token=tok_id, logprobs=logprobs,
                         finish_reason=r.finish_reason,
@@ -819,12 +659,8 @@ class DSV4BatchGenerator:
                     )
                     self._sync()
                     tok_id = self._sampled_token_id(sampled)
-                    tok_id, forced_finish = self._maybe_force_think_close(r, tok_id)
                     r.out_tokens.append(tok_id)
-                    if forced_finish is not None:
-                        r.finish_reason = forced_finish
-                    else:
-                        self._update_finish_reason_after_token(r, tok_id)
+                    self._update_finish_reason_after_token(r, tok_id)
                     gen_resps.append(_Response(
                         uid=r.uid, token=tok_id, logprobs=logprobs,
                         finish_reason=r.finish_reason,

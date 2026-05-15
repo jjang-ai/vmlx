@@ -102,18 +102,17 @@ def test_no_cache_env_uses_standard_vmlx_prefix(monkeypatch):
     assert _cache_disabled_requested()
 
 
-def test_prepare_vector_probe_environment_disables_hard_rep_block(monkeypatch):
+def test_prepare_vector_probe_environment_has_no_hard_rep_block_env(monkeypatch):
     monkeypatch.delenv("VMLX_DSV4_HARD_REP_BLOCK", raising=False)
     monkeypatch.delenv("VMLINUX_DSV4_HARD_REP_BLOCK", raising=False)
 
     meta = _prepare_vector_probe_environment()
 
-    assert os.environ["VMLX_DSV4_HARD_REP_BLOCK"] == "0"
+    assert "VMLX_DSV4_HARD_REP_BLOCK" not in os.environ
     assert "VMLINUX_DSV4_HARD_REP_BLOCK" not in os.environ
     assert meta["runtime_path"] == "direct_model_call"
     assert meta["dsv4_batch_generator_used"] is False
-    assert meta["logit_warps"]["hard_repetition_block"] == "bypassed_by_direct_model_call"
-    assert meta["logit_warps"]["hard_repetition_block_env"] == "VMLX_DSV4_HARD_REP_BLOCK=0"
+    assert meta["logit_warps"]["hard_repetition_block"] == "removed"
 
 
 def test_parse_official_vec_rejects_malformed_top_count(tmp_path):

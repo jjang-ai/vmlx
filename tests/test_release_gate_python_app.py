@@ -242,7 +242,7 @@ def test_packaged_bundled_content_gate_passes_clean_engine_tree(tmp_path):
     gate = _FakeGate("")
     engine_dir = tmp_path / "vmlx_engine"
     engine_dir.mkdir()
-    (engine_dir / "server.py").write_text("DSV4_FORCE_DIRECT_RAIL = True\n")
+    (engine_dir / "server.py").write_text("DSV4_COMPOSITE_CACHE = True\n")
 
     gate_module.check_no_removed_env_var_force_flips(gate, engine_dir)
 
@@ -390,6 +390,7 @@ def test_verify_bundled_python_blocks_removed_dsv4_force_flags():
 
     assert "VMLX_DSV4_ALLOW_CHAT" in verifier
     assert "VMLX_DSV4_ALLOW_THINKING" in verifier
+    assert "VMLX_DSV4_FORCE_DIRECT_RAIL" in verifier
     assert "RELEASE BLOCKED — bundled-python contains removed DSV4 env-var force-flips" in verifier
 
 

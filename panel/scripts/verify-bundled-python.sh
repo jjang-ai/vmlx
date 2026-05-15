@@ -46,10 +46,10 @@ if [ -z "$BUNDLED_ENGINE_DIR" ] || [ ! -d "$BUNDLED_ENGINE_DIR" ]; then
   echo "   resolved path: ${BUNDLED_ENGINE_DIR:-<empty>}"
   exit 1
 fi
-if grep -R -n --include='*.py' -E 'VMLX_DSV4_ALLOW_CHAT|VMLX_DSV4_ALLOW_THINKING' "$BUNDLED_ENGINE_DIR"; then
+if grep -R -n --include='*.py' -E 'VMLX_DSV4_ALLOW_CHAT|VMLX_DSV4_ALLOW_THINKING|VMLX_DSV4_FORCE_DIRECT_RAIL' "$BUNDLED_ENGINE_DIR"; then
   echo
   echo "❌ RELEASE BLOCKED — bundled-python contains removed DSV4 env-var force-flips"
-  echo "   Forbidden flags: VMLX_DSV4_ALLOW_CHAT, VMLX_DSV4_ALLOW_THINKING"
+  echo "   Forbidden flags: VMLX_DSV4_ALLOW_CHAT, VMLX_DSV4_ALLOW_THINKING, VMLX_DSV4_FORCE_DIRECT_RAIL"
   echo "   Bundled package : $BUNDLED_ENGINE_DIR"
   echo
   echo "   Re-run ./scripts/bundle-python.sh from a clean source checkout."
@@ -223,7 +223,7 @@ REQUIRED = [
     ("jang_tools.turboquant.hadamard_kernel", "hadamard_kernel", "P3 Hadamard kernel missing"),
     ("jang_tools.turboquant.fused_gate_up_kernel", "fused_gate_up_kernel", "P17 fused kernel missing"),
     ("jang_tools.turboquant.gather_tq_kernel", "gather_tq_kernel", "P17 gather kernel missing"),
-    ("jang_tools.turboquant.mpp_nax_kernel", "mpp_nax_kernel", "MPP/NAX TensorOps kernel missing — JANGTQ_MPP_NAX cannot activate"),
+    ("jang_tools.turboquant.mpp_nax_kernel", "mpp_nax_kernel", "JANGTQ acceleration kernel missing"),
     # Kimi K2.6 runtime — research/KIMI-K2.6-VMLX-INTEGRATION.md §1.1
     ("jang_tools.load_jangtq_kimi_vlm", "jang_tools.load_jangtq_kimi_vlm", "Kimi VL loader missing (kimi_k25 remap + wired_limit + command-buffer split)"),
     ("jang_tools.kimi_prune.generate_vl", "jang_tools.kimi_prune.generate_vl", "Kimi chunked VL generate path missing — required by vmlx_engine.vlm.generate_vl"),

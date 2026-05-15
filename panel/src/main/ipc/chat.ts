@@ -491,23 +491,13 @@ export function registerChatHandlers(
             modelSettings.reasoning_mode,
           );
 
-          // Sensible defaults: many models ship with temperature=1.0 in
-          // generation_config.json which is too creative for most users and
-          // causes looping on low-bit JANG quants. Keep that cap for raw
-          // generation_config defaults, but trust jang_config.chat sampling
-          // defaults because those are bundle/runtime calibrated (DSV4 uses
-          // this to declare 0.6/0.95/1.15).
-          let temp =
-            modelSettings.temperature ?? genDefaults.temperature ?? 0.7;
-          if (genDefaults.source !== "jang_config" && temp > 0.7) temp = 0.7;
           db.setChatOverrides({
             chatId: chat.id,
-            temperature: temp,
+            temperature: modelSettings.temperature ?? genDefaults.temperature ?? 0.7,
             topP: modelSettings.top_p ?? genDefaults.topP ?? 0.9,
             topK: genDefaults.topK,
             minP: genDefaults.minP,
-            repeatPenalty:
-              genDefaults.repeatPenalty ?? 1.1, // mild anti-loop default
+            repeatPenalty: genDefaults.repeatPenalty,
             maxTokens: modelSettings.max_tokens ?? genDefaults.maxNewTokens,
             enableThinking,
           });

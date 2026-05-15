@@ -249,15 +249,11 @@ def _cache_disabled_requested() -> bool:
 
 def _prepare_vector_probe_environment() -> dict[str, Any]:
     """Prepare and report parity-critical environment state for vector probes."""
-    os.environ.setdefault("VMLX_DSV4_HARD_REP_BLOCK", "0")
     return {
         "runtime_path": "direct_model_call",
         "dsv4_batch_generator_used": False,
         "logit_warps": {
-            "hard_repetition_block": "bypassed_by_direct_model_call",
-            "hard_repetition_block_env": (
-                f"VMLX_DSV4_HARD_REP_BLOCK={os.environ.get('VMLX_DSV4_HARD_REP_BLOCK')}"
-            ),
+            "hard_repetition_block": "removed",
         },
     }
 

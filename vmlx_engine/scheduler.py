@@ -354,11 +354,13 @@ class Scheduler:
             or self._model_uses_zaya_cache(model)
         )
         self._is_hybrid = self._is_hybrid_model(model)
+        # Do not silently widen repetition-penalty history for families whose
+        # chat templates contain EOS/turn-boundary sentinels in the prompt.
+        # A 512-token lookback penalizes legitimate stop tokens on MiniMax/Ling
+        # multi-turn chats and can create the continuation loops it was meant
+        # to prevent.
         self._long_repetition_context = self._model_type_for_runtime in {
             "deepseek_v4",
-            "minimax_m2",
-            "bailing_hybrid",
-            "bailing_moe_v2_5",
         }
         self._tq_active = getattr(model, "make_cache", None) and getattr(
             model.make_cache, "__name__", ""

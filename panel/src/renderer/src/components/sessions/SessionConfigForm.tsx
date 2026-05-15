@@ -54,11 +54,10 @@ export interface SessionConfig {
   flashMoeIoSplit: number
   defaultTemperature: number
   defaultTopP: number
+  defaultTopK?: number
+  defaultMinP?: number
   defaultRepetitionPenalty: number
   defaultEnableThinking?: boolean
-  dsv4RawMax?: boolean
-  dsv4FinalizerTokens?: number
-  dsv4ForceDirect?: boolean
   dsv4PoolQuant?: boolean
   embeddingModel: string
   additionalArgs: string
@@ -80,11 +79,6 @@ export interface SessionConfig {
   distributedMode?: 'pipeline' | 'tensor'
   distributedSecret?: string
   distributedNodes?: Array<{ address: string; port: number; hostname?: string }>
-  // JANGTQ/MXTQ custom kernel TensorOps mode. Auto uses M5 MPP/NAX only for
-  // shapes that benchmark faster; off keeps legacy kernels; on forces it for diagnostics.
-  jangtqMppNax: 'auto' | 'off' | 'on'
-  // JANGTQ MoE active-expert override. 0 = trained model default.
-  jangtqTopKOverride: number
 }
 
 export const DEFAULT_CONFIG: SessionConfig = {
@@ -138,13 +132,12 @@ export const DEFAULT_CONFIG: SessionConfig = {
   flashMoeSlotBank: 256,
   flashMoePrefetch: 'none',
   flashMoeIoSplit: 4,
-  defaultTemperature: 70,
-  defaultTopP: 95,
-  defaultRepetitionPenalty: 110,
+  defaultTemperature: 0,
+  defaultTopP: 0,
+  defaultTopK: 0,
+  defaultMinP: 0,
+  defaultRepetitionPenalty: 0,
   defaultEnableThinking: undefined,
-  dsv4RawMax: false,
-  dsv4FinalizerTokens: 4096,
-  dsv4ForceDirect: false,
   dsv4PoolQuant: false,
   embeddingModel: '',
   additionalArgs: '',
@@ -158,8 +151,6 @@ export const DEFAULT_CONFIG: SessionConfig = {
   // temporal embedding capacity). mlx_vlm/models/mllm.py DEFAULT_FPS=2.0.
   videoFps: 2,
   videoMaxFrames: 8,
-  jangtqMppNax: 'auto',
-  jangtqTopKOverride: 0,
 }
 
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
@@ -174,11 +165,6 @@ function normalizeDetectedFamilyName(family?: string): string | undefined {
 function isZayaCcaFamily(family?: string): boolean {
   const normalized = normalizeDetectedFamilyName(family)
   return normalized === 'zaya' || normalized === 'zaya1-vl'
-}
-
-function topKOverrideBlockedByFamily(family?: string): boolean {
-  const normalized = normalizeDetectedFamilyName(family)
-  return normalized === 'zaya' || normalized === 'zaya1-vl' || normalized === 'ling'
 }
 
 // Expert = current defaults (backwards compatible, full control)
@@ -253,8 +239,6 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const dsv4Active = normalizedDetectedFamily === 'deepseek-v4'
   const zayaCcaActive = isZayaCcaFamily(normalizedDetectedFamily)
   const turboQuantActive = !!detectedIsTurboQuant
-  const topKOverrideBlocked = topKOverrideBlockedByFamily(normalizedDetectedFamily)
-  const jangtqTopKOverrideAllowed = turboQuantActive && !topKOverrideBlocked
   const multimodalActive = !detectedForceTextOnly && (!!detectedIsMultimodal || config.isMultimodal === true)
   const batchingOff = !config.continuousBatching
   const effectivelyNoBatching = batchingOff
@@ -870,79 +854,15 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             : "JIT is disabled while distributed mode is on. Distributed orchestration cannot safely compile the local coordinator graph."} />
         )}
 
-        {jangtqTopKOverrideAllowed && (
-          <>
-            <SliderField
-              label="JANGTQ Active Experts Override"
-              tooltip="Overrides the trained MoE top-k active expert count through JANGTQ_TOPK_OVERRIDE. Trained default preserves model quality. Lower values can improve decode speed on MiniMax/JANGTQ and must be quality-tested."
-              value={config.jangtqTopKOverride ?? 0}
-              onChange={v => onChange('jangtqTopKOverride', v)}
-              min={1}
-              max={16}
-              step={1}
-              defaultValue={DEFAULT_CONFIG.jangtqTopKOverride}
-              maxInput={64}
-              allowUnlimited
-              unlimitedValue={0}
-              unlimitedLabel="Trained default"
-            />
-            {(config.jangtqTopKOverride ?? 0) > 0 && (
-              <InfoNote text={`JANGTQ_TOPK_OVERRIDE=${Math.floor(config.jangtqTopKOverride)} is active. This is a real speed/quality tradeoff: current MiniMax M2.7 measured about 41 tok/s at K=4 versus about 37 tok/s at trained K=8.`} />
-            )}
-          </>
-        )}
-        {!jangtqTopKOverrideAllowed && turboQuantActive && topKOverrideBlocked && (config.jangtqTopKOverride ?? 0) > 0 && (
-          <InfoNote text="Saved JANGTQ_TOPK_OVERRIDE is ignored for this model family. Trained routing is enforced because this cache/runtime path has family-specific router semantics." />
-        )}
-
-        <SelectField
-          label="App-wide JANGTQ MPP/NAX TensorOps"
-          tooltip="Controls the app-wide custom TurboQuant MPP/NAX TensorOps path for JANGTQ/MXTQ routed-expert kernels on M5-class GPUs. Auto uses it only for shapes that benchmark faster. Requires restart for already-running sessions."
-          value={config.jangtqMppNax || 'auto'}
-          onChange={v => onChange('jangtqMppNax', v as SessionConfig['jangtqMppNax'])}
-          options={[
-            { value: 'auto', label: 'Auto' },
-            { value: 'off', label: 'Off' },
-            { value: 'on', label: 'On (diagnostic)' },
-          ]}
-        />
-
         {dsv4Active && (
           <>
             <InfoNote text="DeepSeek-V4 uses a native SWA+CSA/HCA composite cache. These controls map to DSV4-only engine env vars and require a restart." />
-            <CheckField
-              label="DSV4 Raw Max Thinking"
-              tooltip="Allows DSV4 reasoning_effort=max to reach the canonical encoder instead of being downgraded to the safer high-thinking rail. Use for long-form max-thinking tests after confirming memory headroom."
-              checked={!!config.dsv4RawMax}
-              onChange={v => onChange('dsv4RawMax', v)}
-              disabled={!!config.dsv4ForceDirect}
-            />
-            <SliderField
-              label="DSV4 Finalizer Tokens"
-              tooltip="Visible-answer budget after DSV4 is forced to close an unfinished thinking block. Larger values help long-form answers finish after max thinking, at the cost of longer generations."
-              value={config.dsv4FinalizerTokens ?? DEFAULT_CONFIG.dsv4FinalizerTokens ?? 4096}
-              onChange={v => onChange('dsv4FinalizerTokens', v)}
-              min={512}
-              max={8192}
-              step={512}
-              defaultValue={DEFAULT_CONFIG.dsv4FinalizerTokens ?? 4096}
-              maxInput={32768}
-            />
-            <CheckField
-              label="DSV4 Force Direct Rail"
-              tooltip="Forces DSV4 into visible-answer mode by setting VMLX_DSV4_FORCE_DIRECT_RAIL=1. This is a compatibility/debug escape hatch and takes precedence over raw max thinking."
-              checked={!!config.dsv4ForceDirect}
-              onChange={v => onChange('dsv4ForceDirect', v)}
-            />
             <CheckField
               label="DSV4 Pool Quantization"
               tooltip="Enables the experimental native CSA/HCA pool codec with DSV4_POOL_QUANT=1. Keep off for production correctness; use only for local memory/restore experiments."
               checked={!!config.dsv4PoolQuant}
               onChange={v => onChange('dsv4PoolQuant', v)}
             />
-            {config.dsv4ForceDirect && (
-              <IncompatWarning text="Direct rail is forced for this session; DSV4 raw max thinking will not be used until Force Direct Rail is turned off." />
-            )}
           </>
         )}
 
@@ -1005,8 +925,42 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           <InfoNote text={`Top-P: ${(config.defaultTopP / 100).toFixed(2)}`} />
         )}
         <SliderField
+          label="Default Top-K"
+          tooltip="Server-wide default top-k. Overridden by per-request top_k. Set to Server default to use generation_config.json or jang_config metadata."
+          value={config.defaultTopK ?? 0}
+          onChange={v => onChange('defaultTopK', v)}
+          min={1}
+          max={256}
+          step={1}
+          defaultValue={DEFAULT_CONFIG.defaultTopK ?? 0}
+          maxInput={1024}
+          allowUnlimited
+          unlimitedValue={0}
+          unlimitedLabel="Server default"
+        />
+        {(config.defaultTopK ?? 0) > 0 && (
+          <InfoNote text={`Top-K: ${Math.floor(config.defaultTopK ?? 0)}`} />
+        )}
+        <SliderField
+          label="Default Min-P"
+          tooltip="Server-wide default min-p. Overridden by per-request min_p. Set to Server default to use generation_config.json or jang_config metadata."
+          value={config.defaultMinP ?? 0}
+          onChange={v => onChange('defaultMinP', v)}
+          min={1}
+          max={100}
+          step={1}
+          defaultValue={DEFAULT_CONFIG.defaultMinP ?? 0}
+          maxInput={100}
+          allowUnlimited
+          unlimitedValue={0}
+          unlimitedLabel="Server default"
+        />
+        {(config.defaultMinP ?? 0) > 0 && (
+          <InfoNote text={`Min-P: ${((config.defaultMinP ?? 0) / 100).toFixed(2)}`} />
+        )}
+        <SliderField
           label="Default Repetition Penalty"
-          tooltip="Server-wide default repetition penalty. Values above 1.00 discourage repeated tokens and help stop loops in Gemma, MiniMax, and low-bit JANGTQ outputs. Overridden by per-request repetition_penalty when clients send one."
+          tooltip="Server-wide default repetition penalty. Overridden by per-request repetition_penalty. Set to Server default to use bundle metadata or no server-wide penalty."
           value={config.defaultRepetitionPenalty}
           onChange={v => onChange('defaultRepetitionPenalty', v)}
           min={80}
