@@ -2,6 +2,46 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.5.36] - 2026-05-16
+
+### Fixed
+- **Packaged engine assets now ship in the Python wheel and bundled app
+  `site-packages`**: `vmlx_engine/chat_templates/*.jinja`,
+  `vmlx_engine/config/*.yaml`, and `vmlx_engine/metal/*.metal` are declared as
+  setuptools package data. This fixes the 1.5.35 packaging gap where the
+  installed package had the Stream(gpu,0) runtime fix but omitted the Gemma 4
+  fallback chat template, default YAML config, and codebook Metal kernels.
+- **Release gates now cover non-Python engine assets**: both the bundled-Python
+  verifier and installed-app release gate hash the package-data files against
+  source so future releases cannot silently pass with a Python-only source hash.
+
+### Verified
+- Built wheel inspection confirms the package-data files are present before
+  upload.
+- Bundled-Python verification now fails if the app's installed `vmlx_engine`
+  copy is missing or drifting from these release-critical assets.
+
+## [1.5.35] - 2026-05-15
+
+### Fixed
+- **Single-active cache-hit Stream(gpu,0) crash**: q4/q8 memory-aware prefix,
+  legacy prefix, and disk L2 cache hits now defer stored-cache dequantization to
+  the scheduler worker stream instead of materializing MLX arrays on the API
+  thread.
+- **SingleBatchGenerator cache replay stream ownership**: replay tensors are
+  rehomed inside the generator-owned MLX stream before sampling/evaluation.
+  This fixes the MiniMax/JANG interleaved-reasoning reproduction where a second
+  cached request aborted with `RuntimeError: There is no Stream(gpu, 0) in
+  current thread.`
+
+### Verified
+- Focused regression suite passed for cache-hit worker dequantization,
+  single-active batch generation, and cache-bypass behavior.
+- Installed-app MiniMax-M2.7-JANG_2L-CRACK smoke passed Chat, Responses, and
+  streaming cache-hit paths with no Stream(gpu,0), engine-loop, traceback, or
+  invalid-resource errors.
+- DMG was signed, notarized, stapled, and accepted by Gatekeeper.
+
 ## [1.5.25] - 2026-05-07
 
 ### Fixed

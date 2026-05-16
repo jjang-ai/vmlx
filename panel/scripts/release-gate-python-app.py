@@ -435,6 +435,10 @@ BUNDLED_SOURCE_HASH_PATHS = (
     "utils/ssm_companion_cache.py",
     "utils/ssm_companion_disk_store.py",
     "utils/tokenizer.py",
+    "chat_templates/gemma4.jinja",
+    "config/defaults.yaml",
+    "metal/codebook_matvec.metal",
+    "metal/codebook_moe.metal",
 )
 
 JANG_TOOLS_SOURCE_HASH_PATHS = (

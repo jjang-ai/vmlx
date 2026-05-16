@@ -113,6 +113,10 @@ HASH_GATED_ENGINE_FILES=(
   "utils/ssm_companion_cache.py"
   "utils/ssm_companion_disk_store.py"
   "utils/tokenizer.py"
+  "chat_templates/gemma4.jinja"
+  "config/defaults.yaml"
+  "metal/codebook_matvec.metal"
+  "metal/codebook_moe.metal"
 )
 for rel in "${HASH_GATED_ENGINE_FILES[@]}"; do
   if [ ! -f "$SOURCE_ENGINE_DIR/$rel" ] || [ ! -f "$BUNDLED_ENGINE_DIR/$rel" ]; then

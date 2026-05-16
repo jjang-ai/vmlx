@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vmlx"
-version = "1.5.35"
+version = "1.5.36"
 description = "MLX inference server for Apple Silicon — Text, Image, Video & Audio generation"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -185,6 +185,13 @@ vmlx-worker = "vmlx_engine.distributed.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["vmlx_engine*"]
+
+[tool.setuptools.package-data]
+vmlx_engine = [
+    "chat_templates/*.jinja",
+    "config/*.yaml",
+    "metal/*.metal",
+]
 
 [tool.poetry]
 package-mode = false

@@ -1,5 +1,44 @@
 # Changelog
 
+## v1.5.36 — 2026-05-16 — Package Data Gate for App + Wheel
+
+### Fixed
+- **Engine package assets are included in the wheel and bundled app**:
+  `chat_templates/*.jinja`, `config/*.yaml`, and `metal/*.metal` now ship as
+  `vmlx_engine` package data. This corrects the 1.5.35 packaging gap where the
+  signed app's installed `site-packages` copy had the Python runtime fix but
+  missed the Gemma 4 fallback template, default YAML config, and codebook Metal
+  kernels.
+- **Release verification now hashes those non-Python assets**: the bundled
+  Python verifier and installed-app release gate both fail if the packaged app
+  omits or drifts from the release-critical package-data files.
+
+### Verified
+- Wheel contents are checked for the new package-data files before publishing.
+- Packaged app verification now compares those files from source to installed
+  `site-packages`, not only to the secondary `vmlx-engine-source` copy.
+
+## v1.5.35 — 2026-05-15 — Stream-Safe Cache-Hit Replay
+
+### Fixed
+- **Single-active cache-hit Stream(gpu,0) crash**: q4/q8 prefix, memory, and
+  disk cache hits now dequantize on the scheduler worker stream. Cached
+  MiniMax/JANG interleaved-reasoning requests no longer abort after the first
+  cache hit.
+- **SingleBatchGenerator replay ownership**: replay tensors are rehomed inside
+  the generator-owned MLX stream before `mx.async_eval`, fixing the
+  `There is no Stream(gpu, 0) in current thread` failure class across cached
+  single-active decode paths.
+
+### Verified
+- Installed app smoke passed Chat, Responses, and streaming cache-hit requests
+  against MiniMax-M2.7-JANG_2L-CRACK with no Stream(gpu,0), engine-loop,
+  traceback, or invalid-resource errors.
+- Full app release gate passed version, dist, panel request/type tests,
+  typecheck, bundled imports, source hash checks, codesign, Gatekeeper, GUI
+  launch, OpenAI/Responses/Anthropic/Ollama API checks, cross-request cache hit,
+  cache stats, and soft sleep/wake.
+
 ## v1.5.25 — 2026-05-07 — Reasoning Auto, ZAYA, Bundled Runtime Fixes
 
 ### Fixed
