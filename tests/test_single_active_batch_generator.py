@@ -144,6 +144,44 @@ class TestSingleActiveBatchGenerator:
         assert prompt_responses[0].finish_reason == "length"
         assert eval_calls
 
+    def test_eval_on_stream_rehomes_values_inside_owned_stream(self, monkeypatch):
+        """Rebinding has to happen inside the generator stream too.
+
+        Building the rebound graph outside the stream context can still attach
+        it to MLX's thread-default stream; cache-hit replay then fails when
+        mx.eval materializes that graph on the worker thread.
+        """
+        from vmlx_engine.utils import single_batch_generator as single
+
+        active_stream = {"value": False}
+
+        class FakeStreamContext:
+            def __init__(self, stream):
+                self.stream = stream
+
+            def __enter__(self):
+                active_stream["value"] = True
+
+            def __exit__(self, exc_type, exc, tb):
+                active_stream["value"] = False
+
+        monkeypatch.setattr(single.mx, "stream", lambda stream: FakeStreamContext(stream))
+
+        generator = single.SingleBatchGenerator(model=_TinyModel(), stream=object())
+        token = object()
+
+        def assert_rehome_inside_stream(value):
+            assert active_stream["value"]
+            return value
+
+        def assert_eval_inside_stream(*values):
+            assert active_stream["value"]
+
+        monkeypatch.setattr(generator, "_rehome_on_stream", assert_rehome_inside_stream)
+        monkeypatch.setattr(single.mx, "eval", assert_eval_inside_stream)
+
+        assert generator._eval_on_stream(token) == (token,)
+
     def test_scheduler_keeps_mlx_lm_batch_generator_for_real_multi_sequence(self):
         scheduler = Scheduler(
             _TinyModel(),

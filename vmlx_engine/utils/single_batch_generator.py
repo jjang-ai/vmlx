@@ -152,8 +152,8 @@ class SingleBatchGenerator:
     def _eval_on_stream(self, *values):
         if not values:
             return ()
-        rebound = tuple(self._rehome_on_stream(value) for value in values)
         with self._stream_context():
+            rebound = tuple(self._rehome_on_stream(value) for value in values)
             try:
                 mx.eval(*rebound)
             except TypeError:

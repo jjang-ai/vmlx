@@ -4155,10 +4155,12 @@ class Scheduler:
             if cache:
                 # Dequantize for BatchGenerator compatibility
                 if getattr(self, "_kv_cache_bits", 0):
-                    if self._uses_dsv4_cache:
-                        request._prompt_cache_needs_worker_dequant = True
-                    else:
-                        cache = self._dequantize_cache_for_use(cache)
+                    # Dequantization creates/evaluates MLX arrays. add_request()
+                    # runs on the API thread, while live decode runs on the
+                    # scheduler's llm-worker; doing this here can leave tensors
+                    # tied to the API thread's Stream(gpu, 0). Defer stored
+                    # q4/q8 cache dequant to _schedule_waiting() on the worker.
+                    request._prompt_cache_needs_worker_dequant = True
                 if cache is None:
                     # Dequantization failed — treat as cache miss
                     request.remaining_tokens = request.prompt_token_ids
@@ -4193,10 +4195,9 @@ class Scheduler:
             if cache:
                 # Dequantize for BatchGenerator compatibility
                 if getattr(self, "_kv_cache_bits", 0):
-                    if self._uses_dsv4_cache:
-                        request._prompt_cache_needs_worker_dequant = True
-                    else:
-                        cache = self._dequantize_cache_for_use(cache)
+                    # Defer q4/q8 cache dequant to the scheduler worker. See
+                    # the memory-aware branch above for the thread-stream reason.
+                    request._prompt_cache_needs_worker_dequant = True
                 if cache is None:
                     # Dequantization failed — treat as cache miss
                     request.remaining_tokens = request.prompt_token_ids
@@ -4243,11 +4244,13 @@ class Scheduler:
                 # Disk cache stores full-precision N-1 tokens (last prompt token re-fed on hit)
                 # Dequantize if KV cache quantization is active (disk stores full precision
                 # but may have been quantized before storage in some paths)
+                _disk_needs_worker_dequant = False
                 if getattr(self, "_kv_cache_bits", 0):
-                    if self._uses_dsv4_cache:
-                        request._prompt_cache_needs_worker_dequant = True
-                    else:
-                        disk_cache = self._dequantize_cache_for_use(disk_cache)
+                    # As with L1 memory/prefix hits, do not create/evaluate
+                    # dequantized MLX arrays on the API thread. Worker-side
+                    # scheduling owns the stream-safe replay path.
+                    request._prompt_cache_needs_worker_dequant = True
+                    _disk_needs_worker_dequant = True
                 if disk_cache is None:
                     # Dequantization failed — treat as full cache miss
                     logger.info(
@@ -4279,12 +4282,12 @@ class Scheduler:
                     # Also populate L1 memory cache for faster subsequent hits.
                     # Quantize for L1 if KV quant is enabled (disk stores full precision).
                     l1_data = disk_cache
-                    if getattr(self, "_kv_cache_bits", 0):
+                    if getattr(self, "_kv_cache_bits", 0) and not _disk_needs_worker_dequant:
                         try:
                             l1_data = self._quantize_cache_for_storage(disk_cache)
                         except Exception:
                             pass  # Store full-precision on quant failure
-                    if self.block_aware_cache is not None:
+                    if self.block_aware_cache is not None and not _disk_needs_worker_dequant:
                         try:
                             extracted = self._extract_cache_states(l1_data)
                             if extracted:
@@ -4340,7 +4343,7 @@ class Scheduler:
                                     )
                         except Exception:
                             pass
-                    elif self.memory_aware_cache is not None:
+                    elif self.memory_aware_cache is not None and not _disk_needs_worker_dequant:
                         try:
                             _l1_store_tokens = (
                                 _disk_fetch_tokens[:-1]
@@ -4354,7 +4357,7 @@ class Scheduler:
                             )
                         except Exception:
                             pass
-                    elif self.prefix_cache is not None:
+                    elif self.prefix_cache is not None and not _disk_needs_worker_dequant:
                         try:
                             _l1_store_tokens = (
                                 _disk_fetch_tokens[:-1]
