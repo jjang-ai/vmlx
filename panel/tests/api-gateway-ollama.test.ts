@@ -81,6 +81,16 @@ describe("Ollama gateway parity contracts", () => {
     expect(calls.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("preserves backend prompt_too_long status for Ollama gateway routes", () => {
+    expect(source).toContain("private sendOllamaBackendError");
+    const statusChecks = source.match(/proxyRes\.statusCode \|\| 200\) >= 400/g) || [];
+    expect(statusChecks.length).toBeGreaterThanOrEqual(4);
+    const errorForwards = source.match(/this\.sendOllamaBackendError\(res, proxyRes\.statusCode \|\| 502/g) || [];
+    expect(errorForwards.length).toBeGreaterThanOrEqual(4);
+    expect(source).toContain("error?.message");
+    expect(source).toContain("error?.code");
+  });
+
   it("implements Ollama HEAD/root and version probes for strict clients", () => {
     expect(source).toContain('res.end("Ollama is running\\n")');
     expect(source).toContain('url === "/api/version"');

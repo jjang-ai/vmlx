@@ -1907,6 +1907,32 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(source).not.toContain('label="Default Max Tokens"')
     })
 
+    it('Max Context Tokens can be manually typed while Auto is active', () => {
+        const source = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
+        const sliderStart = source.indexOf('export function SliderField')
+        const sliderEnd = source.indexOf('\nexport ', sliderStart + 1)
+        const sliderBody = source.slice(sliderStart, sliderEnd > 0 ? sliderEnd : undefined)
+        const numberInputStart = sliderBody.indexOf('type="number"')
+        const numberInputEnd = sliderBody.indexOf('/>', numberInputStart)
+        const numberInput = sliderBody.slice(numberInputStart, numberInputEnd)
+
+        expect(sliderBody).toContain('const isUnlimited = allowUnlimited && value === unlimitedValue')
+        expect(numberInput).not.toContain('disabled || isUnlimited')
+        expect(numberInput).toContain('disabled={disabled}')
+        expect(sliderBody).toContain('onChange(isUnlimited ? unlimitedValue : defaultValue)')
+    })
+
+    it('all local session settings surfaces pass detected model context to Max Context Tokens', () => {
+        const createSource = readFileSync('src/renderer/src/components/sessions/CreateSession.tsx', 'utf8')
+        const drawerSource = readFileSync('src/renderer/src/components/sessions/ServerSettingsDrawer.tsx', 'utf8')
+        const settingsSource = readFileSync('src/renderer/src/components/sessions/SessionSettings.tsx', 'utf8')
+
+        expect(createSource).toContain('detectedMaxContext={detectedMaxContext}')
+        expect(drawerSource).toContain('detectedMaxContext={detectedMaxContext}')
+        expect(settingsSource).toContain('detectedMaxContext={detectedConfig?.maxContextLength}')
+        expect(settingsSource).toContain('maxContextLength?: number')
+    })
+
     it('JANGTQ router top-k override is not exposed through settings UI or launch env', () => {
         const formSource = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
         const settingsSource = readFileSync('src/renderer/src/components/sessions/SessionSettings.tsx', 'utf8')

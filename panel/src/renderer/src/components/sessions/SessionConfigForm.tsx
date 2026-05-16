@@ -1534,7 +1534,7 @@ export function SliderField({
     const raw = localInput ?? ''
     setLocalInput(null)
     if (raw === '') {
-      onChange(defaultValue)
+      onChange(isUnlimited ? unlimitedValue : defaultValue)
       return
     }
     const num = Math.round(Number(raw))
@@ -1600,7 +1600,7 @@ export function SliderField({
           onFocus={handleInputFocus}
           onBlur={handleInputBlur}
           placeholder={isUnlimited ? unlimitedLabel : undefined}
-          disabled={disabled || isUnlimited}
+          disabled={disabled}
           min={min}
           step={step}
         />

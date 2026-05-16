@@ -974,6 +974,9 @@ export class ApiGateway extends EventEmitter {
         proxyRes.on("end", () => {
           try {
             const openai = JSON.parse(data);
+            if ((proxyRes.statusCode || 200) >= 400) {
+              return this.sendOllamaBackendError(res, proxyRes.statusCode || 502, openai);
+            }
             const choice = openai.choices?.[0];
             const response: any = {
               model: modelForResponse,
@@ -1004,6 +1007,16 @@ export class ApiGateway extends EventEmitter {
           }
         });
       } else {
+        if ((proxyRes.statusCode || 200) >= 400) {
+          let data = "";
+          proxyRes.on("data", (chunk: Buffer) => {
+            data += chunk.toString();
+          });
+          proxyRes.on("end", () => {
+            this.sendOllamaBackendError(res, proxyRes.statusCode || 502, data);
+          });
+          return;
+        }
         // Streaming: SSE → NDJSON
         res.writeHead(200, {
           "Content-Type": "application/x-ndjson",
@@ -1273,6 +1286,9 @@ export class ApiGateway extends EventEmitter {
         proxyRes.on("end", () => {
           try {
             const openai = JSON.parse(data);
+            if ((proxyRes.statusCode || 200) >= 400) {
+              return this.sendOllamaBackendError(res, proxyRes.statusCode || 502, openai);
+            }
             const choice = openai.choices?.[0];
             const text = useRawCompletion
               ? choice?.text || ""
@@ -1297,6 +1313,16 @@ export class ApiGateway extends EventEmitter {
           }
         });
       } else {
+        if ((proxyRes.statusCode || 200) >= 400) {
+          let data = "";
+          proxyRes.on("data", (chunk: Buffer) => {
+            data += chunk.toString();
+          });
+          proxyRes.on("end", () => {
+            this.sendOllamaBackendError(res, proxyRes.statusCode || 502, data);
+          });
+          return;
+        }
         // Streaming: SSE → NDJSON (same pattern as handleOllamaChat)
         res.writeHead(200, {
           "Content-Type": "application/x-ndjson",
@@ -1567,6 +1593,30 @@ export class ApiGateway extends EventEmitter {
       "Access-Control-Allow-Origin": "*",
     });
     res.end(json);
+  }
+
+  private sendOllamaBackendError(
+    res: ServerResponse,
+    status: number,
+    backendPayload: unknown,
+  ): void {
+    let payload = backendPayload;
+    if (typeof backendPayload === "string") {
+      try {
+        payload = JSON.parse(backendPayload);
+      } catch (_) {
+        payload = { error: backendPayload || "Backend request failed" };
+      }
+    }
+    const error = (payload as any)?.error;
+    const message =
+      typeof error === "string"
+        ? error
+        : error?.message || (payload as any)?.message || "Backend request failed";
+    this.sendJson(res, status, {
+      error: message,
+      ...(error?.code ? { code: error.code } : {}),
+    });
   }
 }
 
