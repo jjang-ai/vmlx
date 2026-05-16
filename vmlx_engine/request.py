@@ -241,6 +241,13 @@ class RequestOutput:
     completion_tokens: int = 0
     cached_tokens: int = 0
     cache_detail: str = ""  # e.g. "paged", "paged+ssm", "paged+disk", "disk"
+    # Optional structured error fields used by batch generators to surface
+    # prefill-time failures through API-specific HTTP/SSE error mapping.
+    error: Optional[str] = None
+    error_code: Optional[str] = None
+    error_prompt_tokens: Optional[int] = None
+    error_max_prompt_tokens: Optional[int] = None
+    error_source: Optional[str] = None
 
     @property
     def usage(self) -> Dict[str, int]:

@@ -325,6 +325,7 @@ class EngineCore:
         segment_boundaries: Optional[List[Any]] = None,
         bypass_prefix_cache: bool = False,
         encode_add_special_tokens: Optional[bool] = None,
+        max_prompt_tokens: Optional[int] = None,
     ) -> str:
         """
         Add a request for processing.
@@ -339,6 +340,8 @@ class EngineCore:
                 prefix cache key (prevents cache misses on thinking models)
             num_messages: Number of messages in the conversation (for cache
                 skip heuristic — multi-turn conversations keep cache)
+            max_prompt_tokens: Optional exact prompt/context cap enforced
+                after tokenization and before prefill/cache lookup
 
         Returns:
             The request ID
@@ -394,6 +397,9 @@ class EngineCore:
         # behavior; templated chat paths pass False explicitly.
         if encode_add_special_tokens is not None:
             request._encode_add_special_tokens = bool(encode_add_special_tokens)
+
+        if max_prompt_tokens is not None and int(max_prompt_tokens) > 0:
+            request._max_prompt_tokens = int(max_prompt_tokens)
 
         # Setup output collector with stream_interval from config
         self._output_collectors[request_id] = RequestOutputCollector(aggregate=True)

@@ -19,6 +19,7 @@ from typing import Any
 
 from ..api.tool_calling import check_and_inject_fallback_tools, convert_tools_for_template
 from ..api.utils import clean_output_text, extract_multimodal_content, is_mllm_model
+from ..errors import PromptTooLongError
 from ..model_config_registry import get_model_config_registry
 from ..utils.chat_template_kwargs import (
     build_chat_template_kwargs,
@@ -28,6 +29,18 @@ from ..utils.multi_eos import collect_multi_eos_ids
 from .base import BaseEngine, GenerationOutput
 
 logger = logging.getLogger(__name__)
+
+
+def _raise_prompt_too_long_from_output(output: Any) -> None:
+    """Convert structured scheduler prefill errors back into API-level errors."""
+    if getattr(output, "error_code", None) != "prompt_too_long":
+        return
+    raise PromptTooLongError(
+        int(getattr(output, "error_prompt_tokens", 0) or 0),
+        int(getattr(output, "error_max_prompt_tokens", 0) or 0),
+        source=getattr(output, "error_source", None) or "tokenized prompt",
+        request_id=getattr(output, "request_id", None),
+    )
 
 
 class MLLMModelWrapper:
@@ -969,6 +982,7 @@ class BatchedEngine(BaseEngine):
         # the scheduler can gate EVERY lookup and store site on it.
         bypass_prefix_cache = bool(kwargs.pop("_bypass_prefix_cache", False))
         request_id = kwargs.pop("request_id", None)
+        max_prompt_tokens = int(kwargs.pop("max_prompt_tokens", 0) or 0)
 
         if self._is_mllm and self._mllm_scheduler:
             # Use MLLM scheduler for all requests (text-only and multimodal)
@@ -990,7 +1004,9 @@ class BatchedEngine(BaseEngine):
                 gen_prompt_len=kwargs.get("gen_prompt_len", 0),
                 bypass_prefix_cache=bypass_prefix_cache,
                 request_id=request_id,
+                max_prompt_tokens=max_prompt_tokens,
             )
+            _raise_prompt_too_long_from_output(output)
 
             # Preserve raw (pre-clean) output so reasoning parsers on the
             # non-stream path can still see Gemma 4 `<|channel>thought\n...
@@ -1037,6 +1053,7 @@ class BatchedEngine(BaseEngine):
             segment_boundaries=segment_boundaries,
             bypass_prefix_cache=bypass_prefix_cache,
             encode_add_special_tokens=encode_add_special_tokens,
+            max_prompt_tokens=max_prompt_tokens,
         )
 
         raw = output.output_text
@@ -1090,6 +1107,7 @@ class BatchedEngine(BaseEngine):
         # BatchedEngine.chat for details). Pop out of kwargs so it doesn't
         # collide with downstream positional arguments.
         bypass_prefix_cache = bool(kwargs.pop("_bypass_prefix_cache", False))
+        max_prompt_tokens = int(kwargs.pop("max_prompt_tokens", 0) or 0)
 
         if self._is_mllm and self._mllm_scheduler:
             # Use MLLM scheduler for all requests (text-only and multimodal)
@@ -1111,9 +1129,11 @@ class BatchedEngine(BaseEngine):
                 num_messages=kwargs.get("num_messages", 1),
                 gen_prompt_len=kwargs.get("gen_prompt_len", 0),
                 bypass_prefix_cache=bypass_prefix_cache,
+                max_prompt_tokens=max_prompt_tokens,
             )
 
             async for output in self._mllm_scheduler.stream_outputs(request_id):
+                _raise_prompt_too_long_from_output(output)
                 yield GenerationOutput(
                     text=clean_output_text(output.output_text),
                     new_text=output.new_text,
@@ -1154,6 +1174,7 @@ class BatchedEngine(BaseEngine):
             segment_boundaries=segment_boundaries,
             bypass_prefix_cache=bypass_prefix_cache,
             encode_add_special_tokens=encode_add_special_tokens,
+            max_prompt_tokens=max_prompt_tokens,
         )
 
         async for output in self._engine.stream_outputs(request_id):

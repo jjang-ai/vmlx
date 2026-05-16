@@ -181,6 +181,9 @@ function buildCommandPreview(
   } else {
     parts.push('--max-tokens', '1000000')
   }
+  if (config.maxContextLength && config.maxContextLength > 0) {
+    parts.push('--max-prompt-tokens', config.maxContextLength.toString())
+  }
   // Tool integration — mirrors buildArgs lines 1136-1147
   if (effectiveToolParser) {
     parts.push('--tool-call-parser', effectiveToolParser)

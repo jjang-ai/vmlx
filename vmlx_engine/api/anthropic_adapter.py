@@ -77,6 +77,12 @@ class AnthropicRequest(BaseModel):
     tool_choice: dict | None = None
     thinking: AnthropicThinking | dict | None = None
     metadata: dict | None = None
+    # vMLX extension: per-request prompt/context admission cap. The engine
+    # treats this as a request-local cap and will not let it exceed the
+    # server/session --max-prompt-tokens ceiling.
+    max_prompt_tokens: int | None = None
+    max_context_tokens: int | None = None
+    max_context: int | None = None
     # Non-Anthropic passthrough for chat_template_kwargs (vMLX extension).
     # Clients targeting /v1/messages but unaware of Anthropic's
     # `thinking: {type}` schema can still forward enable_thinking, etc.
@@ -217,6 +223,13 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
         temperature=req.temperature,
         top_p=req.top_p,
         top_k=req.top_k,
+        max_prompt_tokens=(
+            req.max_prompt_tokens
+            if req.max_prompt_tokens is not None
+            else req.max_context_tokens
+            if req.max_context_tokens is not None
+            else req.max_context
+        ),
         stop=req.stop_sequences,
         stream=req.stream,
         # ms#79: always request usage in chunks. The non-streaming Anthropic

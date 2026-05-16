@@ -123,6 +123,7 @@ from .api.utils import (
     is_mllm_model,  # noqa: F401
 )
 from .engine import BaseEngine, BatchedEngine, GenerationOutput, SimpleEngine
+from .errors import PromptTooLongError
 from .logprobs import (
     format_chat_logprobs as _format_chat_logprobs,
     format_completion_logprobs as _format_completion_logprobs,
@@ -220,6 +221,208 @@ def _estimate_max_prompt_tokens() -> int:
         return 0
     except Exception:
         return 0
+
+
+def _resolve_max_prompt_tokens(
+    auto_estimate: int,
+    explicit_limit: int | None,
+) -> int:
+    """Resolve the prompt/context token cap enforced before prefill.
+
+    ``--max-tokens`` controls generated output length. This resolver is for
+    prompt/context length only: an explicit ``--max-prompt-tokens`` value wins;
+    otherwise the engine uses the automatic memory-safe estimate.
+    """
+    if explicit_limit is not None and explicit_limit > 0:
+        return int(explicit_limit)
+    return int(auto_estimate or 0)
+
+
+def _effective_max_prompt_tokens(request_or_value: Any | int | None = None) -> int:
+    """Return the prompt/context cap for one request.
+
+    The server/session cap from ``--max-prompt-tokens`` is the upper bound.
+    A per-request ``max_prompt_tokens``/``max_context*`` API value may lower
+    that cap for a single request, but it cannot raise above the session cap.
+    """
+    if isinstance(request_or_value, int):
+        request_value = request_or_value
+    else:
+        request_value = getattr(request_or_value, "max_prompt_tokens", None)
+    try:
+        request_limit = int(request_value or 0)
+    except (TypeError, ValueError):
+        request_limit = 0
+    session_limit = int(_max_prompt_tokens or 0)
+    if request_limit > 0 and session_limit > 0:
+        return min(request_limit, session_limit)
+    if request_limit > 0:
+        return request_limit
+    return session_limit
+
+
+def _text_prompt_token_estimate(text: str | None) -> int:
+    if not text:
+        return 0
+    return max(1, (len(str(text)) + 2) // 3)
+
+
+def _configured_media_prompt_token_floor(media_type: str) -> int:
+    """Best-effort pre-tokenization floor for media placeholders.
+
+    Exact VLM media token counts are processor-dependent and are only known
+    after the VLM processor expands the prompt. This guard is route-level
+    preflight, so it counts text exactly by character estimate and includes a
+    conservative media floor instead of treating images/videos/audio as zero.
+    """
+    media_type = (media_type or "").lower()
+    try:
+        cfg = getattr(get_engine(), "model", None)
+        cfg = getattr(cfg, "config", None) or cfg
+        candidates = [cfg]
+        text_cfg = getattr(cfg, "text_config", None) if cfg is not None else None
+        vision_cfg = getattr(cfg, "vision_config", None) if cfg is not None else None
+        candidates.extend([text_cfg, vision_cfg])
+        keys = (
+            "image_seq_length",
+            "image_token_length",
+            "num_image_tokens",
+            "image_tokens_per_image",
+            "tokens_per_image",
+        )
+        for obj in candidates:
+            if obj is None:
+                continue
+            for key in keys:
+                value = getattr(obj, key, None)
+                if isinstance(value, int) and value > 0:
+                    image_tokens = value
+                    if "video" in media_type:
+                        return max(image_tokens, image_tokens * 8)
+                    return image_tokens
+    except Exception:
+        pass
+    if "video" in media_type:
+        return 8192
+    return 1024
+
+
+def _prompt_content_token_estimate(content: Any) -> int:
+    if content is None:
+        return 0
+    if isinstance(content, str):
+        return _text_prompt_token_estimate(content)
+    if hasattr(content, "model_dump"):
+        try:
+            content = content.model_dump(exclude_none=True)
+        except Exception:
+            pass
+    if isinstance(content, list):
+        return sum(_prompt_content_token_estimate(part) for part in content)
+    if isinstance(content, dict):
+        part_type = str(content.get("type") or "").lower()
+        if part_type in {"text", "input_text", "output_text"}:
+            return _text_prompt_token_estimate(content.get("text"))
+        if part_type in {
+            "image",
+            "image_url",
+            "input_image",
+            "video",
+            "video_url",
+            "input_video",
+            "audio",
+            "audio_url",
+            "input_audio",
+        }:
+            return _configured_media_prompt_token_floor(part_type)
+        # Unknown dict-shaped content is rare. Count user-visible string values
+        # but do not count base64/media payload bytes as language tokens.
+        total = 0
+        for key, value in content.items():
+            if key in {"image", "image_url", "video", "video_url", "audio", "audio_url", "input_audio"}:
+                total += _configured_media_prompt_token_floor(key)
+            elif isinstance(value, str):
+                total += _text_prompt_token_estimate(value)
+            elif isinstance(value, (list, dict)):
+                total += _prompt_content_token_estimate(value)
+        return total
+    return _text_prompt_token_estimate(str(content))
+
+
+def _message_prompt_token_estimate(messages: list[Any] | None) -> int:
+    total = 0
+    for msg in messages or []:
+        if hasattr(msg, "model_dump"):
+            try:
+                msg = msg.model_dump(exclude_none=True)
+            except Exception:
+                pass
+        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+        total += _prompt_content_token_estimate(content)
+    return total
+
+
+def _prompt_too_long_response(
+    estimated_tokens: int,
+    *,
+    max_prompt_tokens: int | None = None,
+    source: str = "prompt",
+):
+    from starlette.responses import JSONResponse
+
+    limit = int(max_prompt_tokens or _max_prompt_tokens or 0)
+    _est_gb = (estimated_tokens * 0.4) / 1024  # ~0.4MB per token KV
+    return JSONResponse(
+        status_code=413,
+        content={
+            "error": {
+                "message": f"Prompt too long ({source}: ~{estimated_tokens:,} tokens). "
+                f"This would need ~{_est_gb:.1f}GB of KV cache memory, "
+                f"exceeding the configured prompt/context limit of "
+                f"~{limit:,} tokens. Shorten the prompt, raise "
+                "--max-prompt-tokens, or use a model/session with a larger "
+                "prompt/context cap.",
+                "type": "invalid_request_error",
+                "code": "prompt_too_long",
+            }
+        },
+    )
+
+
+def _prompt_too_long_response_from_error(exc: PromptTooLongError):
+    return _prompt_too_long_response(
+        exc.prompt_tokens,
+        max_prompt_tokens=exc.max_prompt_tokens,
+        source=exc.source,
+    )
+
+
+def _reject_if_prompt_too_long_for_messages(
+    messages: list[Any] | None,
+    *,
+    max_prompt_tokens: int | None = None,
+):
+    limit = int(_max_prompt_tokens if max_prompt_tokens is None else max_prompt_tokens)
+    if limit <= 0 or not messages:
+        return None
+    estimated_tokens = _message_prompt_token_estimate(messages)
+    if estimated_tokens > limit:
+        return _prompt_too_long_response(estimated_tokens, max_prompt_tokens=limit)
+    return None
+
+
+def _reject_if_prompt_too_long_for_prompts(
+    prompts: list[str] | None,
+    *,
+    max_prompt_tokens: int | None = None,
+):
+    limit = int(_max_prompt_tokens if max_prompt_tokens is None else max_prompt_tokens)
+    if limit <= 0 or not prompts:
+        return None
+    estimated_tokens = sum(_text_prompt_token_estimate(str(prompt)) for prompt in prompts)
+    if estimated_tokens > limit:
+        return _prompt_too_long_response(estimated_tokens, max_prompt_tokens=limit)
+    return None
 
 
 def _merge_ct_kwargs(request_kwargs: dict | None) -> dict:
@@ -1659,7 +1862,6 @@ _rate_limiter = RateLimiter(requests_per_minute=60, enabled=False)
 # Settings configured via CLI (set in cli.py serve_command)
 _log_level: str = "INFO"
 _allowed_origins: str = "*"
-_max_context_length: int = 0
 _enable_jit: bool = False
 _jang_metadata: dict | None = None  # Cached at model load time for /health
 _model_type: str = "text"  # "text" or "image" — auto-detected from model directory
@@ -2863,6 +3065,7 @@ def load_model(
     scheduler_config=None,
     stream_interval: int = 1,
     max_tokens: int = 32768,
+    max_prompt_tokens: int | None = None,
     force_mllm: bool = False,
     served_model_name: str | None = None,
     smelt: bool = False,
@@ -2885,6 +3088,8 @@ def load_model(
         scheduler_config: Scheduler config for batched mode
         stream_interval: Tokens to batch before streaming (batched mode only)
         max_tokens: Default max tokens for generation
+        max_prompt_tokens: Explicit prompt/context token cap before prefill.
+            If unset, vMLX uses the memory-safe estimate.
         force_mllm: Force loading as MLLM even if not auto-detected
         distributed: Enable distributed inference (coordinator mode)
         distributed_mode: 'pipeline' or 'tensor'
@@ -2920,6 +3125,7 @@ def load_model(
         "scheduler_config": scheduler_config,
         "stream_interval": stream_interval,
         "max_tokens": max_tokens,
+        "max_prompt_tokens": max_prompt_tokens,
         "force_mllm": force_mllm,
         "served_model_name": served_model_name,
         "smelt": smelt,
@@ -3205,12 +3411,22 @@ def load_model(
 
     # Compute max safe prompt token limit based on available GPU memory
     global _max_prompt_tokens
-    _max_prompt_tokens = _estimate_max_prompt_tokens()
+    _auto_max_prompt_tokens = _estimate_max_prompt_tokens()
+    _max_prompt_tokens = _resolve_max_prompt_tokens(
+        _auto_max_prompt_tokens,
+        max_prompt_tokens,
+    )
     if _max_prompt_tokens > 0:
-        logger.info(
-            f"Max safe prompt length: ~{_max_prompt_tokens:,} tokens "
-            f"(based on available GPU memory)"
-        )
+        if max_prompt_tokens is not None and max_prompt_tokens > 0:
+            logger.info(
+                f"Max prompt/context length: ~{_max_prompt_tokens:,} tokens "
+                "(explicit --max-prompt-tokens)"
+            )
+        else:
+            logger.info(
+                f"Max safe prompt length: ~{_max_prompt_tokens:,} tokens "
+                f"(based on available GPU memory)"
+            )
         # vmlx#85 @Benjamin-Wegener: advise user when their requested
         # max_tokens exceeds the memory-safe limit. This is the most
         # common question — "can I run <big model> at <large context>
@@ -3222,10 +3438,10 @@ def load_model(
                 f"{_default_max_tokens} exceeds the memory-safe limit "
                 f"(~{_max_prompt_tokens:,} tokens) for this model on "
                 f"this Mac. Prompts longer than ~{_max_prompt_tokens:,} "
-                f"tokens will be REJECTED with a 400 error to avoid "
+                f"tokens will be REJECTED with a 413 prompt_too_long error to avoid "
                 f"Metal OOM. Use a Mac with more RAM, a smaller model, "
-                f"or set --max-tokens={_max_prompt_tokens} explicitly "
-                f"to silence this warning."
+                f"or set --max-prompt-tokens={_max_prompt_tokens} explicitly "
+                f"to set the prompt/context cap."
             )
 
     # Cache JANG metadata at load time (avoids sync file IO in async /health handler)
@@ -5054,6 +5270,7 @@ async def admin_wake():
                     scheduler_config=_cli_args.get("scheduler_config"),
                     stream_interval=_cli_args.get("stream_interval", 1),
                     max_tokens=_cli_args.get("max_tokens", 32768),
+                    max_prompt_tokens=_cli_args.get("max_prompt_tokens"),
                     force_mllm=_cli_args.get("force_mllm", False),
                     served_model_name=_cli_args.get("served_model_name"),
                     smelt=_cli_args.get("smelt", False),
@@ -5879,6 +6096,14 @@ async def create_anthropic_message(
     resolved_name = _resolve_model_name()
     chat_req.model = resolved_name
 
+    _msg_max_prompt_tokens = _effective_max_prompt_tokens(chat_req)
+    prompt_limit_response = _reject_if_prompt_too_long_for_messages(
+        chat_req.messages,
+        max_prompt_tokens=_msg_max_prompt_tokens,
+    )
+    if prompt_limit_response is not None:
+        return prompt_limit_response
+
     # Nemotron-Omni multimodal dispatch (Anthropic /v1/messages parity
     # with /v1/chat/completions; live test 2026-04-30 surfaced that
     # image content blocks were converted to image_url correctly by the
@@ -5963,6 +6188,7 @@ async def create_anthropic_message(
         "temperature": _resolve_temperature(chat_req.temperature, chat_req.model),
         "top_p": _resolve_top_p(chat_req.top_p, chat_req.model),
         "max_tokens": _resolve_max_tokens(chat_req.max_tokens, chat_req.model),
+        "max_prompt_tokens": _msg_max_prompt_tokens,
     }
     _set_resolved_top_k(_msg_kwargs, chat_req.top_k, chat_req.model)
     _set_resolved_min_p(_msg_kwargs, chat_req.min_p, chat_req.model)
@@ -6140,6 +6366,19 @@ async def create_anthropic_message(
                 chunk = json.loads(data_str)
             except json.JSONDecodeError:
                 continue
+            if "error" in chunk:
+                err = chunk.get("error") or {}
+                status_code = 413 if err.get("code") == "prompt_too_long" else 500
+                return JSONResponse(
+                    status_code=status_code,
+                    content={
+                        "type": "error",
+                        "error": {
+                            "type": err.get("type", "server_error"),
+                            "message": err.get("message", "Generation failed"),
+                        },
+                    },
+                )
 
             choices = chunk.get("choices", [])
             if choices:
@@ -6694,6 +6933,13 @@ async def ollama_chat(fastapi_request: Request):
     from .api.models import ChatCompletionRequest
 
     chat_req = ChatCompletionRequest(**openai_req)
+    _ollama_max_prompt_tokens = _effective_max_prompt_tokens(chat_req)
+    prompt_limit_response = _reject_if_prompt_too_long_for_messages(
+        chat_req.messages,
+        max_prompt_tokens=_ollama_max_prompt_tokens,
+    )
+    if prompt_limit_response is not None:
+        return prompt_limit_response
 
     if not is_streaming:
         result = await create_chat_completion(chat_req, fastapi_request)
@@ -6718,6 +6964,7 @@ async def ollama_chat(fastapi_request: Request):
         "max_tokens": _resolve_max_tokens(chat_req.max_tokens, chat_req.model),
         "temperature": _resolve_temperature(chat_req.temperature, chat_req.model),
         "top_p": _resolve_top_p(chat_req.top_p, chat_req.model),
+        "max_prompt_tokens": _ollama_max_prompt_tokens,
     }
     if chat_req.stop:
         chat_kwargs["stop"] = chat_req.stop
@@ -6971,6 +7218,13 @@ async def ollama_generate(fastapi_request: Request):
         from .api.models import ChatCompletionRequest
 
         chat_req = ChatCompletionRequest(**openai_chat_req)
+        _ollama_gen_max_prompt_tokens = _effective_max_prompt_tokens(chat_req)
+        prompt_limit_response = _reject_if_prompt_too_long_for_messages(
+            chat_req.messages,
+            max_prompt_tokens=_ollama_gen_max_prompt_tokens,
+        )
+        if prompt_limit_response is not None:
+            return prompt_limit_response
         if not is_streaming:
             result = await create_chat_completion(chat_req, fastapi_request)
             if hasattr(result, "model_dump"):
@@ -7016,6 +7270,14 @@ async def ollama_generate(fastapi_request: Request):
     if not is_streaming:
         openai_req["stream"] = False
         comp_req = CompletionRequest(**openai_req)
+        prompts = [comp_req.prompt] if isinstance(comp_req.prompt, str) else comp_req.prompt
+        _ollama_raw_max_prompt_tokens = _effective_max_prompt_tokens(comp_req)
+        prompt_limit_response = _reject_if_prompt_too_long_for_prompts(
+            prompts,
+            max_prompt_tokens=_ollama_raw_max_prompt_tokens,
+        )
+        if prompt_limit_response is not None:
+            return prompt_limit_response
         # create_completion takes only the CompletionRequest — no
         # fastapi_request arg (unlike create_chat_completion which uses
         # it for disconnect detection). Pre-session regression from
@@ -7050,6 +7312,13 @@ async def ollama_generate(fastapi_request: Request):
 
     engine = get_engine()
     prompts = [comp_req.prompt] if isinstance(comp_req.prompt, str) else comp_req.prompt
+    _ollama_raw_max_prompt_tokens = _effective_max_prompt_tokens(comp_req)
+    prompt_limit_response = _reject_if_prompt_too_long_for_prompts(
+        prompts,
+        max_prompt_tokens=_ollama_raw_max_prompt_tokens,
+    )
+    if prompt_limit_response is not None:
+        return prompt_limit_response
 
     async def ndjson_stream():
         done_sent = False
@@ -8221,6 +8490,14 @@ async def create_completion(request: CompletionRequest):
     # Handle single prompt or list of prompts
     prompts = request.prompt if isinstance(request.prompt, list) else [request.prompt]
 
+    _completion_max_prompt_tokens = _effective_max_prompt_tokens(request)
+    prompt_limit_response = _reject_if_prompt_too_long_for_prompts(
+        prompts,
+        max_prompt_tokens=_completion_max_prompt_tokens,
+    )
+    if prompt_limit_response is not None:
+        return prompt_limit_response
+
     if request.stream:
         return StreamingResponse(
             stream_completions_multi(engine, prompts, request),
@@ -8242,6 +8519,7 @@ async def create_completion(request: CompletionRequest):
                 "temperature": _resolve_temperature(request.temperature, request.model),
                 "top_p": _resolve_top_p(request.top_p, request.model),
                 "stop": request.stop,
+                "max_prompt_tokens": _completion_max_prompt_tokens,
             }
             _set_resolved_top_k(gen_kwargs, request.top_k, request.model)
             _set_resolved_min_p(gen_kwargs, request.min_p, request.model)
@@ -8261,6 +8539,8 @@ async def create_completion(request: CompletionRequest):
             raise HTTPException(
                 status_code=504, detail=f"Request timed out after {timeout:.1f} seconds"
             )
+        except PromptTooLongError as e:
+            return _prompt_too_long_response_from_error(e)
         except Exception as e:
             logger.error(f"Completion failed: {e}", exc_info=True)
             raise HTTPException(
@@ -8383,6 +8663,14 @@ async def create_chat_completion(
     # Normalize response model field to the resolved name
     request.model = resolved_name
 
+    _chat_max_prompt_tokens = _effective_max_prompt_tokens(request)
+    prompt_limit_response = _reject_if_prompt_too_long_for_messages(
+        request.messages,
+        max_prompt_tokens=_chat_max_prompt_tokens,
+    )
+    if prompt_limit_response is not None:
+        return prompt_limit_response
+
     if request.logprobs:
         _logprobs_engine = get_engine()
         _reject_unsupported_logprobs_request(
@@ -8487,32 +8775,6 @@ async def create_chat_completion(
 
     engine = get_engine()
 
-    # Memory-safe prompt length check: estimate token count from message text
-    # and reject before prefill if it would likely OOM.
-    if _max_prompt_tokens > 0 and request.messages:
-        _est_chars = sum(
-            len(str(m.content)) if hasattr(m, "content") and m.content else 0
-            for m in request.messages
-        )
-        _est_tokens = _est_chars // 3  # conservative: ~3 chars per token
-        if _est_tokens > _max_prompt_tokens:
-            from starlette.responses import JSONResponse
-
-            _est_gb = (_est_tokens * 0.4) / 1024  # ~0.4MB per token KV
-            return JSONResponse(
-                status_code=413,
-                content={
-                    "error": {
-                        "message": f"Prompt too long (~{_est_tokens:,} tokens estimated). "
-                        f"This would need ~{_est_gb:.1f}GB of KV cache memory, "
-                        f"exceeding the safe limit of ~{_max_prompt_tokens:,} tokens. "
-                        f"Shorten your prompt or use a model with fewer layers/heads.",
-                        "type": "invalid_request_error",
-                        "code": "prompt_too_long",
-                    }
-                },
-            )
-
     # For MLLM models, keep original messages with embedded images
     # (MLLM.chat() extracts images from message content internally)
     if engine.is_mllm:
@@ -8588,6 +8850,7 @@ async def create_chat_completion(
         "max_tokens": _resolve_max_tokens(_request_max_tokens, request.model),
         "temperature": _resolve_temperature(request.temperature, request.model),
         "top_p": _resolve_top_p(request.top_p, request.model),
+        "max_prompt_tokens": _chat_max_prompt_tokens,
     }
     # Forward stop sequences from request to engine
     if request.stop:
@@ -8887,6 +9150,8 @@ async def create_chat_completion(
         raise HTTPException(
             status_code=504, detail=f"Request timed out after {timeout:.1f} seconds"
         )
+    except PromptTooLongError as e:
+        return _prompt_too_long_response_from_error(e)
     except ValueError as e:
         conv1d_detail = _grouped_conv1d_layout_error_detail(e)
         if conv1d_detail:
@@ -9898,6 +10163,14 @@ async def create_response(
             messages = _inject_json_instruction(messages, json_instruction)
     messages = _normalize_leading_system_messages(messages)
 
+    _responses_max_prompt_tokens = _effective_max_prompt_tokens(request)
+    prompt_limit_response = _reject_if_prompt_too_long_for_messages(
+        messages,
+        max_prompt_tokens=_responses_max_prompt_tokens,
+    )
+    if prompt_limit_response is not None:
+        return prompt_limit_response
+
     # Strip <think> blocks from history when thinking is OFF (same as Chat Completions path)
     _ct_kwargs = _merge_ct_kwargs(request.chat_template_kwargs)
     _explicit_thinking_off = request.enable_thinking is False or (
@@ -9926,6 +10199,7 @@ async def create_response(
         "max_tokens": _resolve_max_tokens(request.max_output_tokens, request.model),
         "temperature": _resolve_temperature(request.temperature, request.model),
         "top_p": _resolve_top_p(request.top_p, request.model),
+        "max_prompt_tokens": _responses_max_prompt_tokens,
     }
     # Forward stop sequences from request to engine
     if request.stop:
@@ -10299,6 +10573,8 @@ async def create_response(
         raise HTTPException(
             status_code=504, detail=f"Request timed out after {timeout:.1f} seconds"
         )
+    except PromptTooLongError as e:
+        return _prompt_too_long_response_from_error(e)
     except Exception as e:
         logger.error(f"Response generation failed: {e}", exc_info=True)
         raise HTTPException(
@@ -10654,6 +10930,7 @@ async def stream_completions_multi(
                 "top_p": _resolve_top_p(request.top_p, request.model),
                 "stop": request.stop,
                 "request_id": prompt_request_id,
+                "max_prompt_tokens": _effective_max_prompt_tokens(request),
             }
             _set_resolved_top_k(gen_kwargs, request.top_k, request.model)
             _set_resolved_min_p(gen_kwargs, request.min_p, request.model)
@@ -10697,6 +10974,19 @@ async def stream_completions_multi(
                 if output.finished:
                     data["usage"] = get_usage(output).model_dump(exclude_none=True)
                 yield f"data: {json.dumps(data, ensure_ascii=True)}\n\n"
+        except PromptTooLongError as e:
+            if hasattr(engine, "abort_request"):
+                await engine.abort_request(prompt_request_id)
+            error_data = {
+                "id": response_id,
+                "object": "text_completion",
+                "error": {
+                    "message": str(e),
+                    "type": "invalid_request_error",
+                    "code": "prompt_too_long",
+                },
+            }
+            yield f"data: {json.dumps(error_data)}\n\n"
         except Exception as e:
             logger.error(f"Stream error for {response_id}: {e}", exc_info=True)
             if hasattr(engine, "abort_request"):
@@ -11268,6 +11558,19 @@ async def stream_chat_completion(
                 # (progress-only engine chunk). Skip — don't emit empty delta.
                 continue
 
+    except PromptTooLongError as e:
+        if hasattr(engine, "abort_request"):
+            await engine.abort_request(response_id)
+        error_data = {
+            "id": response_id,
+            "object": "chat.completion.chunk",
+            "error": {
+                "message": str(e),
+                "type": "invalid_request_error",
+                "code": "prompt_too_long",
+            },
+        }
+        yield f"data: {json.dumps(error_data)}\n\n"
     except Exception as e:
         # On any error, abort the request and emit an error SSE event
         # so the client knows what happened instead of a silent EOF.
@@ -12097,6 +12400,20 @@ async def stream_responses_api(
                         "usage": usage_obj,
                     },
                 )
+    except PromptTooLongError as e:
+        if hasattr(engine, "abort_request"):
+            await engine.abort_request(response_id)
+        yield _sse(
+            "error",
+            {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": str(e),
+                    "code": "prompt_too_long",
+                },
+            },
+        )
     except Exception as e:
         # On any error, abort the request and emit an error SSE event
         # so the client knows what happened instead of a silent EOF.
@@ -12726,6 +13043,13 @@ Examples:
         help="Default max tokens for generation",
     )
     parser.add_argument(
+        "--max-prompt-tokens",
+        type=int,
+        default=None,
+        help="Maximum prompt/context tokens accepted before prefill. "
+        "If omitted, vMLX uses the automatic memory-safe prompt limit.",
+    )
+    parser.add_argument(
         "--api-key",
         type=str,
         default=None,
@@ -12965,6 +13289,7 @@ Examples:
         args.model,
         use_batching=args.continuous_batching,
         max_tokens=args.max_tokens,
+        max_prompt_tokens=args.max_prompt_tokens,
         force_mllm=args.mllm,
         served_model_name=args.served_model_name,
         smelt=getattr(args, "smelt", False),

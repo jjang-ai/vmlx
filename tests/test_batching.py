@@ -7,6 +7,7 @@ for the vLLM-style continuous batching implementation.
 """
 
 import asyncio
+import inspect
 import pytest
 from unittest.mock import MagicMock
 
@@ -447,6 +448,92 @@ class TestSchedulerBasic:
         assert scheduler.get_num_waiting() == 1
         assert scheduler.has_requests()
         assert scheduler.get_request("test-1") is not None
+
+    def test_add_request_rejects_exact_tokenized_prompt_over_context_limit(
+        self, mock_model, mock_tokenizer
+    ):
+        """The hard prompt cap is enforced after exact scheduler tokenization."""
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        request = Request(
+            request_id="test-over-limit",
+            prompt="one two three",
+            sampling_params=SamplingParams(max_tokens=1),
+        )
+        request._max_prompt_tokens = 2
+
+        with pytest.raises(ValueError, match="prompt_too_long"):
+            scheduler.add_request(request)
+
+    def test_mllm_exact_prompt_limit_counts_processor_expanded_media_tokens(self):
+        """VLM media prompts are capped after processor expansion, not estimates."""
+        import mlx.core as mx
+        from vmlx_engine.errors import PromptTooLongError
+        from vmlx_engine.mllm_batch_generator import (
+            MLLMBatchGenerator,
+            MLLMBatchRequest,
+        )
+
+        generator = object.__new__(MLLMBatchGenerator)
+        request = MLLMBatchRequest(
+            uid=1,
+            request_id="vl-over-limit",
+            prompt="describe image",
+            images=["file:///tmp/image.png"],
+            max_prompt_tokens=3,
+            input_ids=mx.array([[1, 2, 3, 4]]),
+        )
+
+        with pytest.raises(PromptTooLongError) as exc_info:
+            generator._raise_if_prompt_over_limit(
+                request,
+                source="tokenized VLM media prompt",
+            )
+
+        exc = exc_info.value
+        assert exc.prompt_tokens == 4
+        assert exc.max_prompt_tokens == 3
+        assert exc.source == "tokenized VLM media prompt"
+
+    def test_mllm_media_prompt_limit_runs_before_pixel_and_prefix_cache(self):
+        """Rejecting a VLM media prompt must not create pixel/prefix cache entries."""
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        preprocess_src = inspect.getsource(MLLMBatchGenerator._preprocess_request)
+        process_src = inspect.getsource(MLLMBatchGenerator._process_prompts)
+
+        assert preprocess_src.index(
+            'source="cached tokenized VLM media prompt"'
+        ) < preprocess_src.index("Pixel cache HIT")
+        assert preprocess_src.index(
+            'source="tokenized VLM media prompt"'
+        ) < preprocess_src.index("self.vision_cache.set_pixel_cache")
+        assert process_src.index("except PromptTooLongError") < process_src.index(
+            "req._cache_extra_keys = _mllm_media_cache_extra_keys(req)"
+        )
+
+    def test_mllm_prompt_limit_error_round_trips_to_api_error(self):
+        """Structured VLM prefill prompt errors become PromptTooLongError again."""
+        from vmlx_engine.engine.batched import _raise_prompt_too_long_from_output
+        from vmlx_engine.errors import PromptTooLongError
+        from vmlx_engine.request import RequestOutput
+
+        output = RequestOutput(
+            request_id="vl-over-limit",
+            finished=True,
+            finish_reason="error",
+            error="prompt_too_long",
+            error_code="prompt_too_long",
+            error_prompt_tokens=4097,
+            error_max_prompt_tokens=4096,
+            error_source="tokenized VLM media prompt",
+        )
+
+        with pytest.raises(PromptTooLongError) as exc_info:
+            _raise_prompt_too_long_from_output(output)
+
+        assert exc_info.value.prompt_tokens == 4097
+        assert exc_info.value.max_prompt_tokens == 4096
+        assert exc_info.value.request_id == "vl-over-limit"
 
     def test_memory_cache_exact_hit_with_generation_suffix_refeeds_last_key_token(
         self, mock_model, mock_tokenizer

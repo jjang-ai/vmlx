@@ -157,11 +157,13 @@ vmlx_engine/
 1. **API Request** → FastAPI endpoint (auth, rate limit)
 2. **Engine Selection** → Simple or Batched based on config
 3. **Sampling Resolution** → Request params > explicit CLI flags > model defaults (`jang_config.chat.sampling_defaults`, then `generation_config.json`) > family fallback
-4. **Template Application** → Chat template formatting (with tool definitions if enabled)
-5. **Generation** → mlx-lm, mlx-vlm, mlx-audio, or mlx-embeddings
-6. **Post-processing** → Tool call parsing, reasoning extraction
-7. **Streaming** → SSE response chunks
-8. **Caching** → KV cache storage for reuse
+4. **Prompt/context preflight** → `--max-prompt-tokens` / `_max_prompt_tokens` rejects obviously over-limit request bodies; `--max-tokens` remains output length only
+5. **Template Application** → Chat template formatting (with tool definitions if enabled)
+6. **Exact prompt admission** → rendered/tokenized prompts are checked against `_max_prompt_tokens` before cache lookup or prefill
+7. **Generation** → mlx-lm, mlx-vlm, mlx-audio, or mlx-embeddings
+8. **Post-processing** → Tool call parsing, reasoning extraction
+9. **Streaming** → SSE response chunks
+10. **Caching** → KV cache storage for reuse
 
 ## Sampling Parameter Resolution
 
@@ -182,6 +184,38 @@ Prefix, paged, and disk/L2 cache entries are compute reuse keyed by model and
 token/media content. Cache hits may be reused across identical prefixes, but
 cache hits do not carry sampling parameters, reasoning mode, or max-token policy
 between chats.
+
+## Prompt/Context Limit
+
+`--max-prompt-tokens` controls accepted prompt/context size before prefill. It
+is separate from `--max-tokens`, `max_tokens`, and `max_output_tokens`, which cap
+generated output length. If the user leaves Max Context Tokens on Auto, the
+engine uses the memory-safe estimate from `_estimate_max_prompt_tokens()`. If
+the user supplies a value, `_resolve_max_prompt_tokens()` stores it in the real
+enforced `_max_prompt_tokens` global.
+
+The old `_max_context_length` name is intentionally absent from the engine.
+Wiring a UI flag to that name is a no-op bug.
+
+Every generation surface must call the shared prompt guard before entering the
+engine:
+
+- `/v1/chat/completions`
+- `/v1/responses`
+- `/v1/completions`
+- `/v1/messages`
+- `/api/chat`
+- `/api/generate`
+
+The guard is family agnostic: Qwen, MiniMax, HY3, Nemotron/Nemo, DSV4, ZAYA,
+JANG, JANGTQ, MXFP4, MLX, and VLM sessions all reach it through their API route.
+It does not change model math, sampling, reasoning, cache keys, JIT, or
+TurboQuant. The engine also enforces the exact rendered/tokenized prompt length
+after chat templates add role markers, assistant prefixes, thinking tags, and
+tool schema tokens. For VLM requests, route-level preflight counts text plus a
+conservative media placeholder floor, then the MLLM processor path exact-checks
+the produced `input_ids` before pixel-cache writes, prefix/paged/disk cache
+lookup, or prefill. Cached pixel inputs are checked again before reuse.
 
 ## MLLM Batched Sampling
 

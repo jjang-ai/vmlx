@@ -48,6 +48,25 @@ def _apply_ollama_thinking(body: dict, req: dict[str, Any]) -> None:
         req["enable_thinking"] = True
 
 
+def _apply_ollama_prompt_context_limit(body: dict, req: dict[str, Any]) -> None:
+    """Forward Ollama/vMLX prompt context caps to the internal API shape."""
+    opts = body.get("options", {})
+    for key in (
+        "num_ctx",
+        "num_context",
+        "max_prompt_tokens",
+        "max_context_tokens",
+        "max_context",
+    ):
+        if opts.get(key) is not None:
+            req["max_prompt_tokens"] = opts[key]
+            return
+    for key in ("max_prompt_tokens", "max_context_tokens", "max_context"):
+        if body.get(key) is not None:
+            req["max_prompt_tokens"] = body[key]
+            return
+
+
 def ollama_chat_to_openai(body: dict) -> dict:
     """Convert Ollama /api/chat request to OpenAI /v1/chat/completions."""
     opts = body.get("options", {})
@@ -105,6 +124,7 @@ def ollama_chat_to_openai(body: dict) -> dict:
         req["stop"] = opts["stop"]
     if opts.get("repeat_penalty") is not None:
         req["repetition_penalty"] = opts["repeat_penalty"]
+    _apply_ollama_prompt_context_limit(body, req)
     # Forward tools if present (Ollama tool calling)
     if body.get("tools"):
         req["tools"] = body["tools"]
@@ -154,6 +174,7 @@ def ollama_generate_to_openai(body: dict) -> dict:
         req["top_p"] = opts["top_p"]
     if opts.get("stop"):
         req["stop"] = opts["stop"]
+    _apply_ollama_prompt_context_limit(body, req)
     # /api/generate also forwards format=json → response_format
     _fmt = body.get("format")
     if _fmt == "json":
@@ -198,6 +219,7 @@ def ollama_generate_to_openai_chat(body: dict) -> dict:
         req["stop"] = opts["stop"]
     if opts.get("repeat_penalty") is not None:
         req["repetition_penalty"] = opts["repeat_penalty"]
+    _apply_ollama_prompt_context_limit(body, req)
     _apply_ollama_thinking(body, req)
     if _should_forward_reasoning_effort(body, req):
         req["reasoning_effort"] = body["reasoning_effort"]

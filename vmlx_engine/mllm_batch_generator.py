@@ -112,6 +112,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import mlx.core as mx
 import mlx.nn as nn
 
+from .errors import PromptTooLongError
 from .vision_embedding_cache import VisionEmbeddingCache
 from .utils.memory_limits import (
     get_effective_metal_working_set_bytes,
@@ -139,6 +140,30 @@ def _positive_int_or_none(value: Any) -> Optional[int]:
         parsed = int(value)
         return parsed if parsed > 0 else None
     return None
+
+
+def _mllm_input_ids_token_count(input_ids: Any) -> int:
+    """Return the token count from one VLM processor ``input_ids`` payload."""
+    if input_ids is None:
+        return 0
+    shape = getattr(input_ids, "shape", None)
+    if shape is not None:
+        try:
+            if len(shape) == 0:
+                return int(getattr(input_ids, "size", 0) or 0)
+            return int(shape[-1])
+        except Exception:
+            pass
+    if hasattr(input_ids, "tolist"):
+        try:
+            input_ids = input_ids.tolist()
+        except Exception:
+            return int(getattr(input_ids, "size", 0) or 0)
+    if isinstance(input_ids, list):
+        if input_ids and isinstance(input_ids[0], list):
+            return len(input_ids[0])
+        return len(input_ids)
+    return int(getattr(input_ids, "size", 0) or 0)
 
 
 def _mllm_media_cache_extra_keys(request: Any) -> Optional[Dict[str, str]]:
@@ -1034,6 +1059,7 @@ class MLLMBatchRequest:
     top_k: int = 0
     min_p: float = 0.0
     repetition_penalty: float = 1.0
+    max_prompt_tokens: int = 0
 
     # Video processing parameters (per-request overrides)
     video_fps: Optional[float] = None
@@ -1090,6 +1116,10 @@ class MLLMBatchResponse:
     # Scheduler and server.py lift this into an HTTP error response so users
     # can see the actual mlx / mlx_vlm traceback instead of an empty 200.
     error: Optional[str] = None
+    error_code: Optional[str] = None
+    error_prompt_tokens: Optional[int] = None
+    error_max_prompt_tokens: Optional[int] = None
+    error_source: Optional[str] = None
 
 
 @dataclass
@@ -2025,6 +2055,10 @@ class MLLMBatchGenerator:
                 request.attention_mask = None
                 request.image_grid_thw = None
                 request.extra_kwargs = {}
+                self._raise_if_prompt_over_limit(
+                    request,
+                    source="tokenized VLM text prompt",
+                )
                 processing_time = time.perf_counter() - tic
                 logger.debug(
                     f"Text-only fast-path for {request.request_id}: "
@@ -2090,6 +2124,10 @@ class MLLMBatchGenerator:
             request.attention_mask = cached_pixels.attention_mask
             request.image_grid_thw = cached_pixels.image_grid_thw
             request.extra_kwargs = dict(cached_pixels.extra_kwargs)
+            self._raise_if_prompt_over_limit(
+                request,
+                source="cached tokenized VLM media prompt",
+            )
 
             logger.debug(
                 f"Pixel cache HIT for request {request.request_id}: "
@@ -2192,6 +2230,11 @@ class MLLMBatchGenerator:
                 request.extra_kwargs["video_grid_thw"], mx.int32
             )
 
+        self._raise_if_prompt_over_limit(
+            request,
+            source="tokenized VLM media prompt",
+        )
+
         processing_time = time.perf_counter() - tic
 
         # Store in pixel cache for future reuse
@@ -2220,6 +2263,24 @@ class MLLMBatchGenerator:
             f"{request.input_ids.size if request.input_ids is not None else 0} tokens "
             f"({processing_time:.2f}s)"
         )
+
+    def _raise_if_prompt_over_limit(
+        self,
+        request: MLLMBatchRequest,
+        *,
+        source: str,
+    ) -> None:
+        max_prompt_tokens = int(getattr(request, "max_prompt_tokens", 0) or 0)
+        if max_prompt_tokens <= 0:
+            return
+        prompt_tokens = _mllm_input_ids_token_count(request.input_ids)
+        if prompt_tokens > max_prompt_tokens:
+            raise PromptTooLongError(
+                prompt_tokens,
+                max_prompt_tokens,
+                source=source,
+                request_id=request.request_id,
+            )
 
     def _maybe_capture_clean_ssm_boundary(
         self,
@@ -2900,7 +2961,29 @@ class MLLMBatchGenerator:
         tic = time.perf_counter()
 
         for req in requests:
-            self._preprocess_request(req)
+            try:
+                self._preprocess_request(req)
+            except PromptTooLongError as prompt_err:
+                logger.info(
+                    "Rejected VLM prompt for %s before cache lookup/store: %s",
+                    req.request_id,
+                    prompt_err,
+                )
+                self._prefill_errors.append(
+                    MLLMBatchResponse(
+                        uid=req.uid,
+                        request_id=req.request_id,
+                        token=0,
+                        logprobs=mx.zeros((1,)),
+                        finish_reason="error",
+                        error=str(prompt_err),
+                        error_code="prompt_too_long",
+                        error_prompt_tokens=prompt_err.prompt_tokens,
+                        error_max_prompt_tokens=prompt_err.max_prompt_tokens,
+                        error_source=prompt_err.source,
+                    )
+                )
+                continue
             req._cache_extra_keys = _mllm_media_cache_extra_keys(req)
             # Save full token list BEFORE cache fetch can mutate req.input_ids.
             # Used later for SSM state cache keying (must be consistent with fetch key).

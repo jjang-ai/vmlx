@@ -38,6 +38,7 @@ from .prefix_cache import (
     compute_model_cache_key,
     runtime_cache_fingerprint,
 )
+from .errors import PromptTooLongError
 from .prompt_lookup import NgramIndex, find_draft_tokens, pld_stats
 from .request import Request, RequestOutput, RequestStatus, SamplingParams
 from .mllm_batch_generator import HybridSSMStateCache, _fix_hybrid_cache
@@ -4020,6 +4021,15 @@ class Scheduler:
             raise ValueError(
                 f"Request {request.request_id} has empty prompt tokens. "
                 "Cannot schedule a request with no input tokens."
+            )
+
+        max_prompt_tokens = int(getattr(request, "_max_prompt_tokens", 0) or 0)
+        if max_prompt_tokens > 0 and len(request.prompt_token_ids) > max_prompt_tokens:
+            raise PromptTooLongError(
+                len(request.prompt_token_ids),
+                max_prompt_tokens,
+                source="tokenized prompt",
+                request_id=request.request_id,
             )
 
         if self._uses_dsv4_cache:

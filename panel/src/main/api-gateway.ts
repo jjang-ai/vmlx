@@ -840,6 +840,21 @@ export class ApiGateway extends EventEmitter {
     }
   }
 
+  private applyOllamaPromptContextLimit(parsed: any, opts: any, openaiBody: any): void {
+    const value =
+      opts?.num_ctx ??
+      opts?.num_context ??
+      opts?.max_prompt_tokens ??
+      opts?.max_context_tokens ??
+      opts?.max_context ??
+      parsed?.max_prompt_tokens ??
+      parsed?.max_context_tokens ??
+      parsed?.max_context;
+    if (value !== undefined && value !== null) {
+      openaiBody.max_prompt_tokens = value;
+    }
+  }
+
   private openAIToolCallsToOllama(
     toolCalls: any[] | undefined | null,
   ): any[] | undefined {
@@ -919,6 +934,7 @@ export class ApiGateway extends EventEmitter {
     if (opts.stop) openaiBody.stop = opts.stop;
     if (opts.repeat_penalty != null)
       openaiBody.repetition_penalty = opts.repeat_penalty;
+    this.applyOllamaPromptContextLimit(parsed, opts, openaiBody);
     if (parsed.tools) openaiBody.tools = parsed.tools;
     if (parsed.cache_salt != null) openaiBody.cache_salt = parsed.cache_salt;
     if (parsed.skip_prefix_cache != null)
@@ -1216,6 +1232,7 @@ export class ApiGateway extends EventEmitter {
     if (opts.stop) openaiBody.stop = opts.stop;
     if (opts.repeat_penalty != null)
       openaiBody.repetition_penalty = opts.repeat_penalty;
+    this.applyOllamaPromptContextLimit(parsed, opts, openaiBody);
     if (parsed.cache_salt != null) openaiBody.cache_salt = parsed.cache_salt;
     if (parsed.skip_prefix_cache != null)
       openaiBody.skip_prefix_cache = parsed.skip_prefix_cache;

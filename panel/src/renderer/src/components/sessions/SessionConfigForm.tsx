@@ -214,7 +214,7 @@ interface SessionConfigFormProps {
   sessionId?: string
 }
 
-export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedFamily, detectedIsTurboQuant, detectedIsMultimodal, detectedForceTextOnly, modelType, imageMode, sessionId }: SessionConfigFormProps) {
+export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedFamily, detectedIsTurboQuant, detectedIsMultimodal, detectedForceTextOnly, detectedMaxContext, modelType, imageMode, sessionId }: SessionConfigFormProps) {
   const { t } = useTranslation()
   const isImage = modelType === 'image'
   const isImageEdit = isImage && (imageMode === 'edit' || config.imageMode === 'edit')
@@ -885,6 +885,19 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           max={100}
           step={1}
           defaultValue={DEFAULT_CONFIG.streamInterval}
+        />
+        <SliderField
+          label="Max Context Tokens"
+          tooltip="Maximum prompt/context tokens accepted by this server before prefill. This maps to --max-prompt-tokens and rejects over-limit prompts with prompt_too_long. It does not trim history and does not cap generated output; per-chat/API max_tokens controls output length."
+          value={config.maxContextLength}
+          onChange={v => onChange('maxContextLength', v)}
+          min={1}
+          max={1000000}
+          step={1024}
+          defaultValue={detectedMaxContext && detectedMaxContext > 0 ? detectedMaxContext : DEFAULT_CONFIG.maxContextLength}
+          allowUnlimited
+          unlimitedValue={0}
+          unlimitedLabel={detectedMaxContext && detectedMaxContext > 0 ? `Auto (${detectedMaxContext} model context)` : "Auto (memory-safe)"}
         />
         <InfoNote text={`Generation defaults are resolved by the engine from generation_config.json/jang_config when present${generationDefaultsSummary ? `. Current model-declared values: ${generationDefaultsSummary}` : ''}. The app does not synthesize missing sampling values; per-chat and API request parameters override model defaults.`} />
       </Section>

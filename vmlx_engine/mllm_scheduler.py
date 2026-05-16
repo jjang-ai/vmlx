@@ -163,6 +163,7 @@ from .mllm_batch_generator import (
     _mllm_media_cache_extra_keys,
     _model_uses_zaya_cache_contract,
 )
+from .errors import PromptTooLongError
 from .request import RequestOutput, RequestStatus, SamplingParams
 from .utils.head_dim_detection import (
     choose_supported_kv_group_size,
@@ -1848,6 +1849,22 @@ class MLLMScheduler:
             video_fps=kwargs.get("video_fps"),
             video_max_frames=kwargs.get("video_max_frames"),
         )
+        _max_prompt_tokens = int(kwargs.get("max_prompt_tokens", 0) or 0)
+        if _max_prompt_tokens > 0:
+            request._max_prompt_tokens = _max_prompt_tokens
+            if not images and not videos:
+                tokenizer = getattr(self.processor, "tokenizer", self.processor)
+                try:
+                    token_ids = tokenizer.encode(prompt, add_special_tokens=False)
+                except TypeError:
+                    token_ids = tokenizer.encode(prompt)
+                if len(token_ids) > _max_prompt_tokens:
+                    raise PromptTooLongError(
+                        len(token_ids),
+                        _max_prompt_tokens,
+                        source="tokenized VLM text prompt",
+                        request_id=request_id,
+                    )
         # Mark multi-turn requests for cache skip heuristic.
         # num_messages > 2 means at least system + user + assistant history.
         request._has_history = kwargs.get("num_messages", 1) > 2
@@ -2017,6 +2034,7 @@ class MLLMScheduler:
                 top_k=request.sampling_params.top_k,
                 min_p=request.sampling_params.min_p,
                 repetition_penalty=request.sampling_params.repetition_penalty,
+                max_prompt_tokens=int(getattr(request, "_max_prompt_tokens", 0) or 0),
                 video_fps=request.video_fps,
                 video_max_frames=request.video_max_frames,
             )
@@ -2224,6 +2242,17 @@ class MLLMScheduler:
                     _err = getattr(response, "error", None)
                     if _err:
                         request._prefill_error = _err
+                        output.error = _err
+                    _err_code = getattr(response, "error_code", None)
+                    if _err_code:
+                        output.error_code = _err_code
+                        output.error_prompt_tokens = getattr(
+                            response, "error_prompt_tokens", None
+                        )
+                        output.error_max_prompt_tokens = getattr(
+                            response, "error_max_prompt_tokens", None
+                        )
+                        output.error_source = getattr(response, "error_source", None)
 
                 output.finished = True
                 output.finish_reason = finish_reason

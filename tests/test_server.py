@@ -3,6 +3,7 @@
 
 import platform
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -174,6 +175,204 @@ class TestCompletionRequest:
 
 class TestHelperFunctions:
     """Test server helper functions."""
+
+    def test_resolve_max_prompt_tokens_uses_user_context_cap(self):
+        from vmlx_engine import server
+
+        assert server._resolve_max_prompt_tokens(64000, 8192) == 8192
+
+    def test_resolve_max_prompt_tokens_uses_auto_estimate_when_unset(self):
+        from vmlx_engine import server
+
+        assert server._resolve_max_prompt_tokens(4096, None) == 4096
+
+    def test_resolve_max_prompt_tokens_uses_auto_estimate_when_zero(self):
+        from vmlx_engine import server
+
+        assert server._resolve_max_prompt_tokens(4096, 0) == 4096
+
+    def test_effective_max_prompt_tokens_request_can_only_lower_session_cap(self, monkeypatch):
+        from types import SimpleNamespace
+        from vmlx_engine import server
+
+        monkeypatch.setattr(server, "_max_prompt_tokens", 8192)
+
+        assert server._effective_max_prompt_tokens(SimpleNamespace(max_prompt_tokens=None)) == 8192
+        assert server._effective_max_prompt_tokens(SimpleNamespace(max_prompt_tokens=4096)) == 4096
+        assert server._effective_max_prompt_tokens(SimpleNamespace(max_prompt_tokens=16384)) == 8192
+
+    def test_effective_max_prompt_tokens_request_can_cap_when_session_unbounded(self, monkeypatch):
+        from types import SimpleNamespace
+        from vmlx_engine import server
+
+        monkeypatch.setattr(server, "_max_prompt_tokens", 0)
+
+        assert server._effective_max_prompt_tokens(SimpleNamespace(max_prompt_tokens=2048)) == 2048
+
+    def test_api_request_max_context_aliases_normalize_to_max_prompt_tokens(self):
+        from vmlx_engine.api.models import (
+            ChatCompletionRequest,
+            CompletionRequest,
+            Message,
+            ResponsesRequest,
+        )
+
+        chat = ChatCompletionRequest(
+            model="m",
+            messages=[Message(role="user", content="hi")],
+            max_context_tokens=1234,
+        )
+        comp = CompletionRequest(model="m", prompt="hi", max_context=2345)
+        resp = ResponsesRequest(model="m", input="hi", max_prompt_tokens=3456)
+
+        assert chat.max_prompt_tokens == 1234
+        assert comp.max_prompt_tokens == 2345
+        assert resp.max_prompt_tokens == 3456
+
+    def test_ollama_num_ctx_maps_to_internal_max_prompt_tokens(self):
+        from vmlx_engine.api.ollama_adapter import (
+            ollama_chat_to_openai,
+            ollama_generate_to_openai,
+            ollama_generate_to_openai_chat,
+        )
+
+        chat = ollama_chat_to_openai({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "options": {"num_ctx": 2048},
+        })
+        raw = ollama_generate_to_openai({
+            "model": "m",
+            "prompt": "hi",
+            "options": {"num_ctx": 3072},
+        })
+        templated = ollama_generate_to_openai_chat({
+            "model": "m",
+            "prompt": "hi",
+            "options": {"num_ctx": 4096},
+        })
+
+        assert chat["max_prompt_tokens"] == 2048
+        assert raw["max_prompt_tokens"] == 3072
+        assert templated["max_prompt_tokens"] == 4096
+
+    def test_anthropic_max_context_extension_maps_to_chat_request(self):
+        from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
+
+        req = AnthropicRequest(
+            model="m",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=10,
+            max_context_tokens=2048,
+        )
+        chat = to_chat_completion(req)
+
+        assert chat.max_prompt_tokens == 2048
+
+    def test_dead_max_context_length_global_removed(self):
+        from pathlib import Path
+        import vmlx_engine.server as server
+
+        src = Path(server.__file__).read_text()
+        assert "_max_context_length" not in src
+
+    def test_prompt_limit_guard_rejects_chat_messages(self, monkeypatch):
+        from vmlx_engine import server
+        from vmlx_engine.api.models import Message
+
+        monkeypatch.setattr(server, "_max_prompt_tokens", 2)
+
+        response = server._reject_if_prompt_too_long_for_messages([
+            Message(role="user", content="x" * 30)
+        ])
+
+        assert response is not None
+        assert response.status_code == 413
+        assert b"prompt_too_long" in response.body
+
+    def test_prompt_limit_guard_allows_chat_messages_under_limit(self, monkeypatch):
+        from vmlx_engine import server
+        from vmlx_engine.api.models import Message
+
+        monkeypatch.setattr(server, "_max_prompt_tokens", 100)
+
+        assert server._reject_if_prompt_too_long_for_messages([
+            Message(role="user", content="hello")
+        ]) is None
+
+    def test_prompt_limit_guard_rejects_completion_prompt_list(self, monkeypatch):
+        from vmlx_engine import server
+
+        monkeypatch.setattr(server, "_max_prompt_tokens", 2)
+
+        response = server._reject_if_prompt_too_long_for_prompts([
+            "short",
+            "x" * 30,
+        ])
+
+        assert response is not None
+        assert response.status_code == 413
+        assert b"prompt_too_long" in response.body
+
+    def test_prompt_limit_guard_counts_vlm_media_parts(self, monkeypatch):
+        from vmlx_engine import server
+        from vmlx_engine.api.models import Message
+
+        monkeypatch.setattr(server, "_max_prompt_tokens", 100)
+
+        response = server._reject_if_prompt_too_long_for_messages([
+            Message(
+                role="user",
+                content=[
+                    {"type": "text", "text": "describe"},
+                    {"type": "image_url", "image_url": {"url": "file:///tmp/x.png"}},
+                ],
+            )
+        ])
+
+        assert response is not None
+        assert response.status_code == 413
+        assert b"prompt_too_long" in response.body
+
+    def test_prompt_limit_guard_is_used_by_all_generation_entrypoints(self):
+        import inspect
+        from vmlx_engine import server
+
+        completion_src = inspect.getsource(server.create_completion)
+        chat_src = inspect.getsource(server.create_chat_completion)
+        responses_src = inspect.getsource(server.create_response)
+        anthropic_src = inspect.getsource(server.create_anthropic_message)
+        ollama_chat_src = inspect.getsource(server.ollama_chat)
+        ollama_generate_src = inspect.getsource(server.ollama_generate)
+
+        assert "_completion_max_prompt_tokens = _effective_max_prompt_tokens(request)" in completion_src
+        assert "_chat_max_prompt_tokens = _effective_max_prompt_tokens(request)" in chat_src
+        assert "_responses_max_prompt_tokens = _effective_max_prompt_tokens(request)" in responses_src
+        assert "_msg_max_prompt_tokens = _effective_max_prompt_tokens(chat_req)" in anthropic_src
+        assert "_ollama_max_prompt_tokens = _effective_max_prompt_tokens(chat_req)" in ollama_chat_src
+        assert "_ollama_gen_max_prompt_tokens = _effective_max_prompt_tokens(chat_req)" in ollama_generate_src
+        assert "_ollama_raw_max_prompt_tokens = _effective_max_prompt_tokens(comp_req)" in ollama_generate_src
+
+    def test_prompt_limit_is_forwarded_to_engine_generation_kwargs(self):
+        source = Path("vmlx_engine/server.py").read_text()
+
+        assert "_effective_max_prompt_tokens(request)" in source
+        assert "max_prompt_tokens=_chat_max_prompt_tokens" in source
+        assert '"max_prompt_tokens": _chat_max_prompt_tokens' in source
+        assert '"max_prompt_tokens": _responses_max_prompt_tokens' in source
+        assert "except PromptTooLongError" in source
+
+    def test_streaming_routes_map_prompt_limit_to_prompt_too_long(self):
+        import inspect
+        from vmlx_engine import server
+
+        chat_stream_src = inspect.getsource(server.stream_chat_completion)
+        responses_stream_src = inspect.getsource(server.stream_responses_api)
+
+        assert chat_stream_src.count("except PromptTooLongError") == 1
+        assert "code\": \"prompt_too_long\"" in chat_stream_src
+        assert "except PromptTooLongError" in responses_stream_src
+        assert "code\": \"prompt_too_long\"" in responses_stream_src
 
     def test_is_mllm_model_detection(self, tmp_path):
         """Test MLLM model detection via config.json and force flag.
@@ -779,6 +978,93 @@ class TestOpenAILogprobsFormatting:
                 }
             ]
         }
+
+    @pytest.mark.asyncio
+    async def test_chat_endpoint_passes_max_prompt_tokens_to_engine(self, monkeypatch):
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            is_mllm = False
+            preserve_native_tool_format = False
+
+            def __init__(self):
+                self.kwargs = None
+
+            async def chat(self, *, messages, **kwargs):
+                self.kwargs = kwargs
+                return GenerationOutput(
+                    text="ok",
+                    prompt_tokens=3,
+                    completion_tokens=1,
+                    finish_reason="stop",
+                )
+
+        engine = _Engine()
+        monkeypatch.setattr(server, "_engine", engine)
+        monkeypatch.setattr(server, "_served_model_name", "loaded-model")
+        monkeypatch.setattr(server, "_model_name", "loaded-model")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_type", "llm")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+        monkeypatch.setattr(server, "_max_prompt_tokens", 64)
+
+        await server.create_chat_completion(
+            ChatCompletionRequest(
+                model="loaded-model",
+                messages=[Message(role="user", content="hi")],
+                max_tokens=1,
+            ),
+            fastapi_request=None,
+        )
+
+        assert engine.kwargs["max_prompt_tokens"] == 64
+
+    @pytest.mark.asyncio
+    async def test_chat_endpoint_request_max_prompt_tokens_lowers_session_cap(self, monkeypatch):
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            is_mllm = False
+            preserve_native_tool_format = False
+
+            def __init__(self):
+                self.kwargs = None
+
+            async def chat(self, *, messages, **kwargs):
+                self.kwargs = kwargs
+                return GenerationOutput(
+                    text="ok",
+                    prompt_tokens=3,
+                    completion_tokens=1,
+                    finish_reason="stop",
+                )
+
+        engine = _Engine()
+        monkeypatch.setattr(server, "_engine", engine)
+        monkeypatch.setattr(server, "_served_model_name", "loaded-model")
+        monkeypatch.setattr(server, "_model_name", "loaded-model")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_type", "llm")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+        monkeypatch.setattr(server, "_max_prompt_tokens", 64)
+
+        await server.create_chat_completion(
+            ChatCompletionRequest(
+                model="loaded-model",
+                messages=[Message(role="user", content="hi")],
+                max_tokens=1,
+                max_prompt_tokens=32,
+            ),
+            fastapi_request=None,
+        )
+
+        assert engine.kwargs["max_prompt_tokens"] == 32
 
     @pytest.mark.parametrize(
         "endpoint, stream, is_mllm, expected",

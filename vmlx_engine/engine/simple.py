@@ -15,6 +15,7 @@ from typing import Any
 
 from ..api.tool_calling import check_and_inject_fallback_tools, convert_tools_for_template
 from ..api.utils import clean_output_text, is_mllm_model
+from ..errors import PromptTooLongError
 from ..model_config_registry import get_model_config_registry
 from ..utils.chat_template_kwargs import (
     build_chat_template_kwargs,
@@ -223,6 +224,34 @@ class SimpleEngine(BaseEngine):
             executor.shutdown(wait=False, cancel_futures=True)
         logger.info("SimpleEngine stopped")
 
+    def _prompt_token_count(self, prompt: str) -> int:
+        tokenizer = getattr(getattr(self, "_model", None), "tokenizer", None)
+        if tokenizer is None:
+            return 0
+        try:
+            return len(tokenizer.encode(prompt, add_special_tokens=False))
+        except TypeError:
+            return len(tokenizer.encode(prompt))
+        except Exception:
+            return 0
+
+    def _raise_if_prompt_over_limit(
+        self,
+        prompt: str,
+        max_prompt_tokens: int,
+        *,
+        source: str,
+    ) -> None:
+        if max_prompt_tokens <= 0:
+            return
+        token_count = self._prompt_token_count(prompt)
+        if token_count > max_prompt_tokens:
+            raise PromptTooLongError(
+                token_count,
+                max_prompt_tokens,
+                source=source,
+            )
+
     async def generate(
         self,
         prompt: str,
@@ -251,6 +280,12 @@ class SimpleEngine(BaseEngine):
         # SimpleEngine has no prefix cache — eat the bypass kwarg so it
         # doesn't leak into self._model.generate which would reject it.
         kwargs.pop("_bypass_prefix_cache", None)
+        max_prompt_tokens = int(kwargs.pop("max_prompt_tokens", 0) or 0)
+        self._raise_if_prompt_over_limit(
+            prompt,
+            max_prompt_tokens,
+            source="tokenized prompt",
+        )
 
         async with self._generation_lock:
             output = await self._run_model_call(
@@ -310,6 +345,12 @@ class SimpleEngine(BaseEngine):
         # SimpleEngine has no prefix cache — eat the bypass kwarg so it
         # doesn't leak into self._model.generate which would reject it.
         kwargs.pop("_bypass_prefix_cache", None)
+        max_prompt_tokens = int(kwargs.pop("max_prompt_tokens", 0) or 0)
+        self._raise_if_prompt_over_limit(
+            prompt,
+            max_prompt_tokens,
+            source="tokenized prompt",
+        )
 
         async with self._generation_lock:
             accumulated_text = ""
@@ -459,6 +500,7 @@ class SimpleEngine(BaseEngine):
         thinking_enabled = kwargs.pop("enable_thinking", True)
         prompt_suffix = kwargs.pop("prompt_suffix", None)
         skip_gen_prompt = kwargs.pop("skip_generation_prompt", False)
+        max_prompt_tokens = int(kwargs.pop("max_prompt_tokens", 0) or 0)
 
         async with self._generation_lock:
             if self._is_mllm:
@@ -568,6 +610,12 @@ class SimpleEngine(BaseEngine):
                 if prompt_suffix:
                     prompt += prompt_suffix
 
+                self._raise_if_prompt_over_limit(
+                    prompt,
+                    max_prompt_tokens,
+                    source="rendered chat prompt",
+                )
+
                 # Generate inline (don't call self.generate() — we already hold
                 # _generation_lock and asyncio.Lock is not reentrant).
                 output = await self._run_model_call(
@@ -652,6 +700,7 @@ class SimpleEngine(BaseEngine):
         extra_ct_kwargs = kwargs.pop("chat_template_kwargs", None)
         prompt_suffix = kwargs.pop("prompt_suffix", None)
         skip_gen_prompt = kwargs.pop("skip_generation_prompt", False)
+        max_prompt_tokens = int(kwargs.pop("max_prompt_tokens", 0) or 0)
 
         # Build prompt using tokenizer
         if self._is_mllm:
@@ -869,6 +918,12 @@ class SimpleEngine(BaseEngine):
         if prompt_suffix:
             prompt += prompt_suffix
 
+        self._raise_if_prompt_over_limit(
+            prompt,
+            max_prompt_tokens,
+            source="rendered chat prompt",
+        )
+
         # Stream generate
         async for output in self.stream_generate(
             prompt=prompt,
@@ -876,6 +931,7 @@ class SimpleEngine(BaseEngine):
             temperature=temperature,
             top_p=top_p,
             request_id=request_id,
+            max_prompt_tokens=max_prompt_tokens,
             **kwargs,
         ):
             yield output

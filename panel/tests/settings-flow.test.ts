@@ -307,7 +307,7 @@ function buildCommandPreview(
     // CORS
     if (config.corsOrigins && config.corsOrigins !== '*') parts.push('--allowed-origins', config.corsOrigins)
 
-    // maxContextLength: reserved for future use, not yet wired to CLI
+    if (config.maxContextLength && config.maxContextLength > 0) parts.push('--max-prompt-tokens', config.maxContextLength.toString())
 
     if (config.additionalArgs?.trim()) parts.push(...config.additionalArgs.trim().split(/\s+/).filter(Boolean))
 
@@ -1107,11 +1107,9 @@ describe('No Hardcoded Values', () => {
         expect(getFlagValue(out, '--allowed-origins')).toBe('http://localhost:3000')
     })
 
-    it('maxContextLength is reserved but does not emit CLI flag yet', () => {
-        // maxContextLength is in the config interface but not wired to CLI
-        // (backend support not yet implemented)
+    it('maxContextLength emits max prompt/context CLI flag when explicitly set', () => {
         const out = preview({ maxContextLength: 8192 })
-        expect(hasFlag(out, '--max-context-length')).toBe(false)
+        expect(getFlagValue(out, '--max-prompt-tokens')).toBe('8192')
     })
 })
 
@@ -1263,9 +1261,9 @@ describe('Default IP and New Settings', () => {
         expect(getFlagValue(out, '--allowed-origins')).toBe('http://example.com')
     })
 
-    it('maxContextLength reserved but not emitted to CLI', () => {
+    it('maxContextLength emits max prompt/context CLI flag when set', () => {
         const out = preview({ maxContextLength: 32768 })
-        expect(hasFlag(out, '--max-context-length')).toBe(false)
+        expect(getFlagValue(out, '--max-prompt-tokens')).toBe('32768')
     })
 
     it('default config has all new fields', () => {
@@ -1881,7 +1879,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized).not.toContain('--embedding-model')       // empty
         expect(normalized).not.toContain('--log-level')             // INFO is default (not emitted)
         expect(normalized).not.toContain('--allowed-origins')       // * is default (not emitted)
-        expect(normalized).not.toContain('--max-context-length')    // reserved, never emitted
+        expect(normalized).not.toContain('--max-prompt-tokens')     // unset by default; explicit user value emits it
         expect(normalized).not.toContain('--default-temperature')   // request/CLI/bundle metadata resolve sampling
         expect(normalized).not.toContain('--default-top-p')         // do not poison bundles with generic UI defaults
         expect(normalized).not.toContain('--default-repetition-penalty')
@@ -1900,6 +1898,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
     it('server startup generation defaults are model-owned and not editable sliders', () => {
         const source = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
         expect(source).toContain('Generation defaults are resolved by the engine from generation_config.json/jang_config')
+        expect(source).toContain('label="Max Context Tokens"')
         expect(source).not.toContain('label="Default Temperature"')
         expect(source).not.toContain('label="Default Top-P"')
         expect(source).not.toContain('label="Default Top-K"')

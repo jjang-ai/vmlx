@@ -1285,7 +1285,7 @@ export class SessionManager extends EventEmitter {
     'streamInterval', 'apiKey', 'rateLimit',
     // NOTE: 'timeout' intentionally omitted — client sends per-request timeout
     // to server in the request body (chat.ts:818), so changes take effect immediately.
-    'maxTokens', 'mcpConfig', 'servedModelName',
+    'maxTokens', 'maxContextLength', 'mcpConfig', 'servedModelName',
     'speculativeModel', 'numDraftTokens', 'smelt', 'smeltExperts',
     'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
     'distributedEnabled', 'distributedMode', 'distributedSecret',
@@ -1427,6 +1427,7 @@ export class SessionManager extends EventEmitter {
           cacheStackStartupDefaultsVersion: CACHE_STACK_STARTUP_DEFAULTS_VERSION,
           streamInterval: 1,
           maxTokens: 32768,
+          maxContextLength: 0,
           toolCallParser: 'auto',
           reasoningParser: 'auto',
           dsv4PoolQuant: false,
@@ -2341,6 +2342,9 @@ export class SessionManager extends EventEmitter {
       args.push('--max-tokens', config.maxTokens.toString())
     } else {
       args.push('--max-tokens', '1000000')
+    }
+    if (config.maxContextLength && config.maxContextLength > 0) {
+      args.push('--max-prompt-tokens', config.maxContextLength.toString())
     }
     // Tool integration (parsers and --enable-auto-tool-choice already pushed above)
     if (config.mcpConfig) args.push('--mcp-config', config.mcpConfig)

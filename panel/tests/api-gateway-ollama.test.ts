@@ -70,6 +70,17 @@ describe("Ollama gateway parity contracts", () => {
     expect(forwards.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("forwards Ollama num_ctx/max context controls as max_prompt_tokens", () => {
+    expect(source).toContain("private applyOllamaPromptContextLimit");
+    expect(source).toContain("opts?.num_ctx");
+    expect(source).toContain("opts?.max_prompt_tokens");
+    expect(source).toContain("parsed?.max_context_tokens");
+    const forwards = source.match(/openaiBody\.max_prompt_tokens = value/g) || [];
+    expect(forwards.length).toBeGreaterThanOrEqual(1);
+    const calls = source.match(/this\.applyOllamaPromptContextLimit\(parsed, opts, openaiBody\)/g) || [];
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("implements Ollama HEAD/root and version probes for strict clients", () => {
     expect(source).toContain('res.end("Ollama is running\\n")');
     expect(source).toContain('url === "/api/version"');

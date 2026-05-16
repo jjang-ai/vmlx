@@ -682,6 +682,8 @@ def serve_command(args):
     if getattr(args, 'served_model_name', None):
         print(f"Served model name: {args.served_model_name}")
     print(f"Default max tokens: {args.max_tokens}")
+    if getattr(args, 'max_prompt_tokens', None):
+        print(f"Max prompt/context tokens: {args.max_prompt_tokens}")
 
     # Store MCP config path for FastAPI startup
     if args.mcp_config:
@@ -1026,6 +1028,7 @@ def serve_command(args):
             scheduler_config=scheduler_config,
             stream_interval=args.stream_interval if args.continuous_batching else 1,
             max_tokens=args.max_tokens,
+            max_prompt_tokens=getattr(args, 'max_prompt_tokens', None),
             served_model_name=getattr(args, 'served_model_name', None),
             force_mllm=getattr(args, 'is_mllm', False),
             smelt=getattr(args, 'smelt', False),
@@ -1720,6 +1723,14 @@ Examples:
         help="Default maximum number of tokens the model will generate per request. "
              "Can be overridden per-request via the 'max_tokens' API parameter. "
              "Higher values allow longer responses but use more memory. (default: 32768)",
+    )
+    serve_parser.add_argument(
+        "--max-prompt-tokens",
+        type=int,
+        default=None,
+        help="Maximum prompt/context tokens accepted before prefill. "
+             "If omitted, vMLX uses the automatic memory-safe prompt limit. "
+             "This is separate from --max-tokens, which caps generated output length.",
     )
     serve_parser.add_argument(
         "--continuous-batching",

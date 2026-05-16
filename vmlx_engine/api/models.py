@@ -22,6 +22,24 @@ def _is_no_reasoning_effort(value: str | None) -> bool:
     return isinstance(value, str) and value.strip().lower() in _NO_REASONING_EFFORTS
 
 
+def _normalize_prompt_context_aliases(obj):
+    """Normalize vMLX max prompt/context aliases onto max_prompt_tokens."""
+    if getattr(obj, "max_prompt_tokens", None) is not None:
+        return obj
+    for alias in ("max_context_tokens", "max_context"):
+        value = getattr(obj, alias, None)
+        if value is not None:
+            obj.max_prompt_tokens = value
+            break
+    return obj
+
+
+def _validate_prompt_context_limit(v):
+    if v is not None and v < 1:
+        raise ValueError("max prompt/context tokens must be at least 1")
+    return v
+
+
 # =============================================================================
 # Content Types (for multimodal messages)
 # =============================================================================
@@ -201,6 +219,12 @@ class ChatCompletionRequest(BaseModel):
     video_max_frames: int | None = None
     # Request timeout in seconds (None = use server default)
     timeout: float | None = None
+    # vMLX extension: per-request prompt/context admission cap. This can
+    # lower the server/session --max-prompt-tokens ceiling for one request,
+    # but server.py will not let it raise above the session ceiling.
+    max_prompt_tokens: int | None = None
+    max_context_tokens: int | None = None
+    max_context: int | None = None
     # Thinking/reasoning toggle (None = auto from model config, True/False = explicit)
     enable_thinking: bool | None = None
     # Reasoning effort level for models that support it (e.g., GPT-OSS: low/medium/high)
@@ -241,6 +265,7 @@ class ChatCompletionRequest(BaseModel):
 
     @model_validator(mode="after")
     def _normalize_reasoning_alias(self):
+        _normalize_prompt_context_aliases(self)
         # If caller sent `reasoning: {"effort": "..."}` and didn't set
         # `reasoning_effort`, lift real effort names up so downstream code
         # sees them. Treat explicit no-reasoning aliases (`none`, `off`, ...)
@@ -297,6 +322,11 @@ class ChatCompletionRequest(BaseModel):
             # request for logprobs instead of silently dropping it.
             self.logprobs = True
         return self
+
+    @field_validator("max_prompt_tokens", "max_context_tokens", "max_context")
+    @classmethod
+    def validate_prompt_context_limit(cls, v):
+        return _validate_prompt_context_limit(v)
 
     @field_validator("temperature")
     @classmethod
@@ -448,9 +478,16 @@ class CompletionRequest(BaseModel):
     logprobs: int | None = None
     # Request timeout in seconds (None = use server default)
     timeout: float | None = None
+    max_prompt_tokens: int | None = None
+    max_context_tokens: int | None = None
+    max_context: int | None = None
     # Cache bypass (see ChatCompletionRequest.cache_salt for semantics).
     cache_salt: str | None = None
     skip_prefix_cache: bool | None = None
+
+    @model_validator(mode="after")
+    def _normalize_prompt_context_alias(self):
+        return _normalize_prompt_context_aliases(self)
 
     @field_validator("temperature")
     @classmethod
@@ -472,6 +509,11 @@ class CompletionRequest(BaseModel):
         if v is not None and v < 1:
             raise ValueError("max_tokens must be at least 1")
         return v
+
+    @field_validator("max_prompt_tokens", "max_context_tokens", "max_context")
+    @classmethod
+    def validate_prompt_context_limit(cls, v):
+        return _validate_prompt_context_limit(v)
 
     @field_validator("top_k")
     @classmethod
@@ -771,6 +813,9 @@ class ResponsesRequest(BaseModel):
     chat_template_kwargs: dict | None = None
     # Request timeout in seconds (None = use server default)
     timeout: float | None = None
+    max_prompt_tokens: int | None = None
+    max_context_tokens: int | None = None
+    max_context: int | None = None
     # Video processing controls (MLLM models)
     video_fps: float | None = None
     video_max_frames: int | None = None
@@ -785,6 +830,7 @@ class ResponsesRequest(BaseModel):
 
     @model_validator(mode="after")
     def _normalize_reasoning_alias(self):
+        _normalize_prompt_context_aliases(self)
         if self.reasoning is not None and self.reasoning_effort is None:
             eff = self.reasoning.get("effort")
             if _is_no_reasoning_effort(eff):
@@ -825,6 +871,11 @@ class ResponsesRequest(BaseModel):
                     "thinking_mode must be one of: instruct, reasoning, max"
                 )
         return self
+
+    @field_validator("max_prompt_tokens", "max_context_tokens", "max_context")
+    @classmethod
+    def validate_prompt_context_limit(cls, v):
+        return _validate_prompt_context_limit(v)
 
     @field_validator("temperature")
     @classmethod
