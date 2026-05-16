@@ -156,7 +156,7 @@ vmlx_engine/
 
 1. **API Request** → FastAPI endpoint (auth, rate limit)
 2. **Engine Selection** → Simple or Batched based on config
-3. **Sampling Resolution** → Request params > CLI flags > model defaults (from `generation_config.json`)
+3. **Sampling Resolution** → Request params > explicit CLI flags > model defaults (`jang_config.chat.sampling_defaults`, then `generation_config.json`) > family fallback
 4. **Template Application** → Chat template formatting (with tool definitions if enabled)
 5. **Generation** → mlx-lm, mlx-vlm, mlx-audio, or mlx-embeddings
 6. **Post-processing** → Tool call parsing, reasoning extraction
@@ -168,10 +168,20 @@ vmlx_engine/
 Sampling parameters (temperature, top_p, top_k, min_p, repetition_penalty) follow a priority chain:
 
 1. **Request value** — Explicit parameter in API request body
-2. **CLI flag** — Server launch argument (e.g., `--temperature 0.7`)
-3. **Model default** — From `generation_config.json` in the model folder (read at chat creation in the panel app)
+2. **CLI flag** — Explicit server launch argument, when supplied by CLI users
+3. **Model default** — From `jang_config.chat.sampling_defaults`, then `generation_config.json` in the model folder
+4. **Family fallback** — Engine-owned compatibility fallback when the bundle declares no value
 
-The panel app reads `generation_config.json` via `readGenerationDefaults()` and stores values in `chat_overrides` (SQLite). These are sent in every API request body.
+The panel app may read those defaults for display, but it does not store them in
+`chat_overrides` and does not synthesize startup `--default-*` flags. A new chat
+starts with no sampling/reasoning overrides; Chat Settings writes only values the
+user explicitly saves for that chat. Blank max-output-token settings are omitted,
+so the engine resolves the model's `max_new_tokens` default.
+
+Prefix, paged, and disk/L2 cache entries are compute reuse keyed by model and
+token/media content. Cache hits may be reused across identical prefixes, but
+cache hits do not carry sampling parameters, reasoning mode, or max-token policy
+between chats.
 
 ## MLLM Batched Sampling
 

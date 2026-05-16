@@ -1728,6 +1728,18 @@ class MLLMBatchGenerator:
         self.max_tokens = max_tokens
         self.stop_tokens = stop_tokens or set()
         self.sampler = sampler or (lambda x: mx.argmax(x, axis=-1))
+        self._decode_trace = os.environ.get("VMLINUX_DECODE_TRACE", "").lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        self._decode_trace_every = max(
+            1, int(os.environ.get("VMLINUX_DECODE_TRACE_EVERY", "64") or "64")
+        )
+        self._decode_trace_count = 0
+        self._decode_trace_model_s = 0.0
+        self._decode_trace_sample_s = 0.0
 
         self.prefill_batch_size = prefill_batch_size
         self.completion_batch_size = max(completion_batch_size, prefill_batch_size)
@@ -4037,7 +4049,7 @@ class MLLMBatchGenerator:
         if cached is not None:
             return cached
 
-        from mlx_lm.sample_utils import make_sampler
+        from .sampling import make_sampler
         base_sampler = make_sampler(
             temp=request.temperature,
             top_p=request.top_p,
@@ -4097,8 +4109,15 @@ class MLLMBatchGenerator:
         # no-op when offset is already int (single-request path with raw KVCache).
         cache = _wrap_batch_caches(cache)
 
+        trace = self._decode_trace
+        model_t0 = time.perf_counter() if trace else 0.0
+
         # Run language model only (not full VLM)
         output = self.language_model(input_tokens, cache=cache)
+        if trace:
+            mx.synchronize()
+            model_s = time.perf_counter() - model_t0
+            sample_t0 = time.perf_counter()
 
         # Handle LanguageModelOutput or plain tensor
         if hasattr(output, "logits"):
@@ -4120,6 +4139,26 @@ class MLLMBatchGenerator:
             sampled = mx.concatenate(tokens, axis=0)
         else:
             sampled = self.sampler(logits)
+
+        if trace:
+            mx.synchronize()
+            sample_s = time.perf_counter() - sample_t0
+            self._decode_trace_count += 1
+            self._decode_trace_model_s += model_s
+            self._decode_trace_sample_s += sample_s
+            if self._decode_trace_count % self._decode_trace_every == 0:
+                n = self._decode_trace_count
+                logger.info(
+                    "VMLINUX_DECODE_TRACE mllm steps=%d avg_model_ms=%.2f "
+                    "avg_sample_ms=%.2f last_model_ms=%.2f last_sample_ms=%.2f "
+                    "batch=%d",
+                    n,
+                    (self._decode_trace_model_s / n) * 1000.0,
+                    (self._decode_trace_sample_s / n) * 1000.0,
+                    model_s * 1000.0,
+                    sample_s * 1000.0,
+                    int(logits.shape[0]),
+                )
 
         return sampled, [None] * int(logits.shape[0])
 

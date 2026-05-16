@@ -1,5 +1,36 @@
 # Changelog
 
+## v1.5.37 — 2026-05-16 — Chat Defaults, Parser Recovery, and Max-Token Semantics
+
+### Fixed
+- **New chats no longer inherit stale model/chat sampling settings**: the panel
+  no longer seeds new chats from per-model settings, starred profiles, sibling
+  chats, or bundle metadata. A clean chat sends only its own saved overrides;
+  otherwise the engine reads the model's `jang_config` / `generation_config`.
+- **Startup generation defaults are display-only**: the session form can show
+  model-declared temperature, top-p, top-k, min-p, repetition penalty, and max
+  output tokens, but startup does not convert those display values into
+  `--default-*` flags.
+- **Per-chat max output tokens are preserved as the user override surface**:
+  Chat Settings shows the model default as a placeholder and sends
+  `max_tokens` / `max_output_tokens` only after the user saves a value for that
+  chat. Explicit small values are no longer raised by hidden DSV4 floors.
+- **Old SQLite rows stop poisoning new requests**: generic historical sampling
+  values are reset once, and `model_settings` no longer stores sampling or
+  reasoning mode.
+- **ZAYA1-VL reasoning-on works through the VLM path**: explicit thinking-on
+  opens a qwen3 `<think>` rail for ZAYA1-VL bundles whose processor template is
+  otherwise plain.
+- **DSV4 DSML parser recovers degraded `<param>` arguments** instead of
+  accepting canonical parser output with `{}` required args or raw markup.
+
+### Verified
+- Full panel suite: 34 files, 1804 tests passed.
+- Focused Python gate: 117 tests passed for sampling, reasoning, DSML, cache
+  bypass, and worker-dequant.
+- Expanded Python gate: 473 passed, 2 environment skips across reasoning, DSML,
+  engine audit, cache bypass, and worker-dequant.
+
 ## v1.5.36 — 2026-05-16 — Package Data Gate for App + Wheel
 
 ### Fixed

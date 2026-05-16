@@ -57,6 +57,7 @@ export interface SessionConfig {
   defaultTopK?: number
   defaultMinP?: number
   defaultRepetitionPenalty: number
+  defaultMaxNewTokens?: number
   defaultEnableThinking?: boolean
   dsv4PoolQuant?: boolean
   embeddingModel: string
@@ -137,6 +138,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   defaultTopK: 0,
   defaultMinP: 0,
   defaultRepetitionPenalty: 0,
+  defaultMaxNewTokens: 0,
   defaultEnableThinking: undefined,
   dsv4PoolQuant: false,
   embeddingModel: '',
@@ -212,7 +214,7 @@ interface SessionConfigFormProps {
   sessionId?: string
 }
 
-export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedFamily, detectedIsTurboQuant, detectedIsMultimodal, detectedForceTextOnly, detectedMaxContext, modelType, imageMode, sessionId }: SessionConfigFormProps) {
+export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedFamily, detectedIsTurboQuant, detectedIsMultimodal, detectedForceTextOnly, modelType, imageMode, sessionId }: SessionConfigFormProps) {
   const { t } = useTranslation()
   const isImage = modelType === 'image'
   const isImageEdit = isImage && (imageMode === 'edit' || config.imageMode === 'edit')
@@ -250,6 +252,14 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     ? DSV4_PAGED_CACHE_BLOCK_SIZE
     : config.pagedCacheBlockSize
   const isMambaCache = detectedCacheType === 'mamba' || detectedCacheType === 'hybrid'
+  const generationDefaultsSummary = [
+    (config.defaultMaxNewTokens ?? 0) > 0 ? `max output tokens ${Math.floor(config.defaultMaxNewTokens ?? 0)}` : null,
+    config.defaultTemperature > 0 ? `temperature ${(config.defaultTemperature / 100).toFixed(2)}` : null,
+    config.defaultTopP > 0 ? `top-p ${(config.defaultTopP / 100).toFixed(2)}` : null,
+    (config.defaultTopK ?? 0) > 0 ? `top-k ${Math.floor(config.defaultTopK ?? 0)}` : null,
+    (config.defaultMinP ?? 0) > 0 ? `min-p ${((config.defaultMinP ?? 0) / 100).toFixed(2)}` : null,
+    config.defaultRepetitionPenalty > 0 ? `repetition ${(config.defaultRepetitionPenalty / 100).toFixed(2)}` : null,
+  ].filter(Boolean).join(', ')
 
   const toggleSection = (section: keyof typeof expandedSections) => {
     setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }))
@@ -876,105 +886,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           step={1}
           defaultValue={DEFAULT_CONFIG.streamInterval}
         />
-        <SliderField
-          label="Default Max Tokens"
-          tooltip={`Maximum number of tokens the model can generate per request. This is the server default - individual API requests can override this.${detectedMaxContext ? ` Model context window: ${detectedMaxContext.toLocaleString()} tokens.` : ' Set based on your model\'s context window.'}`}
-          value={config.maxTokens}
-          onChange={v => onChange('maxTokens', v)}
-          min={1}
-          max={detectedMaxContext || 262144}
-          step={1024}
-          defaultValue={Math.min(DEFAULT_CONFIG.maxTokens, detectedMaxContext || DEFAULT_CONFIG.maxTokens)}
-          maxInput={1000000}
-          allowUnlimited
-          unlimitedValue={0}
-          unlimitedLabel="No limit"
-        />
-        <SliderField
-          label="Default Temperature"
-          tooltip="Server-wide default temperature for generation. Controls randomness: 0.0 = deterministic, 1.0 = creative. Overridden by per-request 'temperature' parameter. Set to 'Server default' to use vmlx-engine's built-in default (0.7)."
-          value={config.defaultTemperature}
-          onChange={v => onChange('defaultTemperature', v)}
-          min={0}
-          max={200}
-          step={5}
-          defaultValue={DEFAULT_CONFIG.defaultTemperature}
-          maxInput={200}
-          allowUnlimited
-          unlimitedValue={0}
-          unlimitedLabel="Server default"
-        />
-        {config.defaultTemperature > 0 && (
-          <InfoNote text={`Temperature: ${(config.defaultTemperature / 100).toFixed(2)} — ${config.defaultTemperature < 30 ? 'very focused' : config.defaultTemperature < 70 ? 'balanced' : config.defaultTemperature < 120 ? 'creative' : 'very random'}`} />
-        )}
-        <SliderField
-          label="Default Top-P"
-          tooltip="Server-wide default nucleus sampling threshold. Only considers tokens whose cumulative probability ≤ this value. 0.9 = use top 90% of probability mass. Lower = more focused, higher = more diverse. Overridden by per-request 'top_p'. Set to 'Server default' to use vmlx-engine's built-in default."
-          value={config.defaultTopP}
-          onChange={v => onChange('defaultTopP', v)}
-          min={1}
-          max={100}
-          step={1}
-          defaultValue={DEFAULT_CONFIG.defaultTopP}
-          maxInput={100}
-          allowUnlimited
-          unlimitedValue={0}
-          unlimitedLabel="Server default"
-        />
-        {config.defaultTopP > 0 && (
-          <InfoNote text={`Top-P: ${(config.defaultTopP / 100).toFixed(2)}`} />
-        )}
-        <SliderField
-          label="Default Top-K"
-          tooltip="Server-wide default top-k. Overridden by per-request top_k. Set to Server default to use generation_config.json or jang_config metadata."
-          value={config.defaultTopK ?? 0}
-          onChange={v => onChange('defaultTopK', v)}
-          min={1}
-          max={256}
-          step={1}
-          defaultValue={DEFAULT_CONFIG.defaultTopK ?? 0}
-          maxInput={1024}
-          allowUnlimited
-          unlimitedValue={0}
-          unlimitedLabel="Server default"
-        />
-        {(config.defaultTopK ?? 0) > 0 && (
-          <InfoNote text={`Top-K: ${Math.floor(config.defaultTopK ?? 0)}`} />
-        )}
-        <SliderField
-          label="Default Min-P"
-          tooltip="Server-wide default min-p. Overridden by per-request min_p. Set to Server default to use generation_config.json or jang_config metadata."
-          value={config.defaultMinP ?? 0}
-          onChange={v => onChange('defaultMinP', v)}
-          min={1}
-          max={100}
-          step={1}
-          defaultValue={DEFAULT_CONFIG.defaultMinP ?? 0}
-          maxInput={100}
-          allowUnlimited
-          unlimitedValue={0}
-          unlimitedLabel="Server default"
-        />
-        {(config.defaultMinP ?? 0) > 0 && (
-          <InfoNote text={`Min-P: ${((config.defaultMinP ?? 0) / 100).toFixed(2)}`} />
-        )}
-        <SliderField
-          label="Default Repetition Penalty"
-          tooltip="Server-wide default repetition penalty. Overridden by per-request repetition_penalty. Set to Server default to use bundle metadata or no server-wide penalty."
-          value={config.defaultRepetitionPenalty}
-          onChange={v => onChange('defaultRepetitionPenalty', v)}
-          min={80}
-          max={200}
-          step={5}
-          defaultValue={DEFAULT_CONFIG.defaultRepetitionPenalty}
-          maxInput={300}
-          allowUnlimited
-          unlimitedValue={0}
-          unlimitedLabel="Server default"
-        />
-        {config.defaultRepetitionPenalty > 0 && (
-          <InfoNote text={`Repetition penalty: ${(config.defaultRepetitionPenalty / 100).toFixed(2)}`} />
-        )}
+        <InfoNote text={`Generation defaults are resolved by the engine from generation_config.json/jang_config when present${generationDefaultsSummary ? `. Current model-declared values: ${generationDefaultsSummary}` : ''}. The app does not synthesize missing sampling values; per-chat and API request parameters override model defaults.`} />
       </Section>
 
       {/* Tool Integration */}

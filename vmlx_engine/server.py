@@ -842,6 +842,40 @@ def _hy3_prompt_starts_in_reasoning(
     return effort in {"low", "high"}
 
 
+def _synthetic_mllm_think_prompt_starts(
+    *,
+    model_key: str,
+    enable_thinking: bool | None,
+    engine=None,
+) -> bool:
+    """Return True when vMLX opens a qwen3 think rail for a plain MLLM template.
+
+    ZAYA1-VL's processor template can end with ``assistant: `` even though the
+    model bundle declares qwen3 reasoning support. The MLLM wrapper opens
+    ``<think>`` only for explicit thinking-on requests, so the streaming and
+    non-streaming parsers must seed ``think_in_prompt`` for that same bounded
+    case. This is not a generic VLM heuristic.
+    """
+    if enable_thinking is not True:
+        return False
+    if engine is not None and not bool(getattr(engine, "is_mllm", False)):
+        return False
+    try:
+        from .model_config_registry import get_model_config_registry
+
+        cfg = get_model_config_registry().lookup(model_key)
+    except Exception:
+        return False
+    family = str(getattr(cfg, "family_name", "") or "").lower()
+    if family not in {"zaya", "zaya1_vl", "zaya1-vl"}:
+        return False
+    if getattr(cfg, "supports_thinking", None) is False:
+        return False
+    if getattr(cfg, "think_in_template", False):
+        return False
+    return str(getattr(cfg, "reasoning_parser", "") or "").lower() == "qwen3"
+
+
 def _resolve_repetition_penalty(
     request_value: float | None,
     model_name: str = "",
@@ -1088,7 +1122,7 @@ def _resolve_enable_thinking(
     Native API client defaults such as Ollama ``think:false`` must not force
     reasoning off globally. vMLX defaults reasoning on for supported families
     across API surfaces, while preserving explicit user opt-outs and hard
-    family contracts such as ZAYA's supports_thinking=False.
+    family contracts such as Ling/Bailing's supports_thinking=False.
 
     Returns a concrete bool so every API surface reaches the same effective
     thinking policy.
@@ -8935,6 +8969,12 @@ async def create_chat_completion(
                 ct_kwargs=chat_kwargs.get("chat_template_kwargs") or _ct_kwargs,
             ):
                 _think_in_prompt_ns = True
+            if _synthetic_mllm_think_prompt_starts(
+                model_key=_model_path or _model_name or request.model,
+                enable_thinking=_eff_thinking_ns,
+                engine=engine,
+            ):
+                _think_in_prompt_ns = True
         except Exception as _tpe:
             logger.debug(f"think_in_prompt derivation failed non-stream: {_tpe}")
             _think_in_prompt_ns = False
@@ -10334,6 +10374,12 @@ async def create_response(
                 ct_kwargs=chat_kwargs.get("chat_template_kwargs") or _ct_kwargs,
             ):
                 _think_in_prompt_ns = True
+            if _synthetic_mllm_think_prompt_starts(
+                model_key=_model_path or _model_name or request.model,
+                enable_thinking=_eff_thinking_ns,
+                engine=engine,
+            ):
+                _think_in_prompt_ns = True
         except Exception as _tpe:
             logger.debug(f"think_in_prompt derivation failed non-stream: {_tpe}")
             _think_in_prompt_ns = False
@@ -10826,6 +10872,13 @@ async def stream_chat_completion(
         model_key=_model_path or _model_name or request.model,
         enable_thinking=_effective_thinking,
         ct_kwargs=kwargs.get("chat_template_kwargs") or _ct_kwargs,
+    ):
+        think_in_template = True
+
+    if _synthetic_mllm_think_prompt_starts(
+        model_key=_model_path or _model_name or request.model,
+        enable_thinking=_effective_thinking,
+        engine=engine,
     ):
         think_in_template = True
 
@@ -11754,6 +11807,13 @@ async def stream_responses_api(
         model_key=_model_path or _model_name or request.model,
         enable_thinking=_effective_thinking,
         ct_kwargs=kwargs.get("chat_template_kwargs") or _ct_kwargs,
+    ):
+        think_in_template = True
+
+    if _synthetic_mllm_think_prompt_starts(
+        model_key=_model_path or _model_name or request.model,
+        enable_thinking=_effective_thinking,
+        engine=engine,
     ):
         think_in_template = True
 

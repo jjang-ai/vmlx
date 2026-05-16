@@ -11,6 +11,9 @@ mlx-lm's BatchGenerator.
 
 from __future__ import annotations
 
+import logging
+import os
+import time
 from collections import deque
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -22,6 +25,8 @@ from mlx_lm.models import cache as mlx_cache
 from mlx_lm.models.cache import TokenBuffer
 
 from .mamba_cache import _should_capture_generation_logprobs
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -108,6 +113,18 @@ class SingleBatchGenerator:
         self._request: Optional[_Request] = None
         self._device = mx.default_device()
         self._stream = stream or self._make_generation_stream()
+        self._decode_trace = os.environ.get("VMLINUX_DECODE_TRACE", "").lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        self._decode_trace_every = max(
+            1, int(os.environ.get("VMLINUX_DECODE_TRACE_EVERY", "64") or "64")
+        )
+        self._decode_trace_count = 0
+        self._decode_trace_model_s = 0.0
+        self._decode_trace_sample_s = 0.0
 
     def close(self):
         return None
@@ -359,13 +376,37 @@ class SingleBatchGenerator:
     ) -> None:
         with self._stream_context():
             input_tokens = self._rehome_on_stream(input_tokens)
+            trace = self._decode_trace
+            model_t0 = time.perf_counter() if trace else 0.0
             logits = self.model(input_tokens[:, None], cache=req.cache)
+            if trace:
+                self._sync()
+                model_s = time.perf_counter() - model_t0
+                sample_t0 = time.perf_counter()
             logits = logits[:, -1, :]
             req.next_token, req.next_logprobs = self._sample_from_logits(
                 logits,
                 req,
                 input_tokens,
             )
+            if trace:
+                self._sync()
+                sample_s = time.perf_counter() - sample_t0
+                self._decode_trace_count += 1
+                self._decode_trace_model_s += model_s
+                self._decode_trace_sample_s += sample_s
+                if self._decode_trace_count % self._decode_trace_every == 0:
+                    n = self._decode_trace_count
+                    logger.info(
+                        "VMLINUX_DECODE_TRACE single steps=%d avg_model_ms=%.2f "
+                        "avg_sample_ms=%.2f last_model_ms=%.2f "
+                        "last_sample_ms=%.2f",
+                        n,
+                        (self._decode_trace_model_s / n) * 1000.0,
+                        (self._decode_trace_sample_s / n) * 1000.0,
+                        model_s * 1000.0,
+                        sample_s * 1000.0,
+                    )
 
     def _compute_next_from_input(self, req: _Request, input_token: int) -> None:
         input_tokens = mx.array([input_token], dtype=mx.int32)

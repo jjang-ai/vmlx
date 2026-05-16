@@ -4,6 +4,31 @@ import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG } from './SessionConfi
 import { DownloadTab } from './DownloadTab'
 import { DirectoryManager } from './DirectoryManager'
 
+function applyGenerationDefaultsToConfig<T extends SessionConfig>(base: T, gen: any): T {
+  const next = { ...base }
+  if (gen?.temperature != null) next.defaultTemperature = Math.round(gen.temperature * 100)
+  else next.defaultTemperature = 0
+  if (gen?.topP != null) next.defaultTopP = Math.round(gen.topP * 100)
+  else next.defaultTopP = 0
+  next.defaultTopK = gen?.topK != null ? Math.max(0, Math.round(gen.topK)) : 0
+  if (gen?.minP != null) next.defaultMinP = Math.max(0, Math.round(gen.minP * 100))
+  else next.defaultMinP = 0
+  if (gen?.repeatPenalty != null) next.defaultRepetitionPenalty = Math.round(gen.repeatPenalty * 100)
+  else next.defaultRepetitionPenalty = 0
+  next.defaultMaxNewTokens = gen?.maxNewTokens != null ? Math.round(gen.maxNewTokens) : 0
+  return next
+}
+
+function applyGenerationDefaultsToStoredConfig(stored: any, gen: any): any {
+  stored.defaultTemperature = gen?.temperature != null ? Math.round(gen.temperature * 100) : 0
+  stored.defaultTopP = gen?.topP != null ? Math.round(gen.topP * 100) : 0
+  stored.defaultTopK = gen?.topK != null ? Math.max(0, Math.round(gen.topK)) : 0
+  stored.defaultMinP = gen?.minP != null ? Math.round(gen.minP * 100) : 0
+  stored.defaultRepetitionPenalty = gen?.repeatPenalty != null ? Math.round(gen.repeatPenalty * 100) : 0
+  stored.defaultMaxNewTokens = gen?.maxNewTokens != null ? Math.round(gen.maxNewTokens) : 0
+  return stored
+}
+
 interface ModelInfo {
   path: string
   name: string
@@ -64,13 +89,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
         reasoningParser: 'auto',
         usePagedCache: detected?.usePagedCache,
       }
-      if (gen?.temperature != null) next.defaultTemperature = Math.round(gen.temperature * 100)
-      if (gen?.topP != null) next.defaultTopP = Math.round(gen.topP * 100)
-      if (gen?.topK != null) next.defaultTopK = Math.max(0, Math.round(gen.topK))
-      if (gen?.minP != null) next.defaultMinP = Math.max(0, Math.round(gen.minP * 100))
-      if (gen?.repeatPenalty != null) next.defaultRepetitionPenalty = Math.round(gen.repeatPenalty * 100)
-      if (gen?.maxNewTokens != null) next.maxTokens = gen.maxNewTokens
-      return next
+      return applyGenerationDefaultsToConfig(next, gen)
     })
     if (detected?.cacheType) setDetectedCacheType(detected.cacheType)
     else setDetectedCacheType('kv')
@@ -175,12 +194,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
           setDetectedIsMultimodal(false)
           setDetectedForceTextOnly(false)
         }
-        if (gen?.temperature != null) base.defaultTemperature = Math.round(gen.temperature * 100)
-        if (gen?.topP != null) base.defaultTopP = Math.round(gen.topP * 100)
-        if (gen?.topK != null) base.defaultTopK = Math.max(0, Math.round(gen.topK))
-        if (gen?.minP != null) base.defaultMinP = Math.max(0, Math.round(gen.minP * 100))
-        if (gen?.repeatPenalty != null) base.defaultRepetitionPenalty = Math.round(gen.repeatPenalty * 100)
-        if (gen?.maxNewTokens != null) base.maxTokens = gen.maxNewTokens
+        Object.assign(base, applyGenerationDefaultsToConfig(base, gen))
       } catch (_) {
         setDetectedFamily(undefined)
         setDetectedIsTurboQuant(false)
@@ -543,34 +557,10 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
                               const stored = JSON.parse(existing.config)
 	                              // Migrate old default: enableAutoToolChoice: false was the broken default
 	                              // that blocked auto-detection. Convert to undefined (auto-detect).
-	                              if (stored.enableAutoToolChoice === false) delete stored.enableAutoToolChoice
+                              if (stored.enableAutoToolChoice === false) delete stored.enableAutoToolChoice
                               try {
                                 const gen = await window.api.models.getGenerationDefaults(model.path) as any
-                                if (gen?.temperature != null && (stored.defaultTemperature == null || stored.defaultTemperature === 70)) {
-                                  stored.defaultTemperature = Math.round(gen.temperature * 100)
-                                }
-                                if (gen?.topP != null && (stored.defaultTopP == null || stored.defaultTopP === 95)) {
-                                  stored.defaultTopP = Math.round(gen.topP * 100)
-                                }
-                                if (gen?.topK != null && (stored.defaultTopK == null || stored.defaultTopK === 0)) {
-                                  stored.defaultTopK = Math.max(0, Math.round(gen.topK))
-                                }
-                                if (gen?.minP != null && (stored.defaultMinP == null || stored.defaultMinP === 0)) {
-                                  stored.defaultMinP = Math.max(0, Math.round(gen.minP * 100))
-                                }
-                                if (
-                                  gen?.repeatPenalty != null &&
-                                  (
-                                    stored.defaultRepetitionPenalty == null ||
-                                    stored.defaultRepetitionPenalty === 0 ||
-                                    stored.defaultRepetitionPenalty === 110
-                                  )
-                                ) {
-                                  stored.defaultRepetitionPenalty = Math.round(gen.repeatPenalty * 100)
-                                }
-                                if (gen?.maxNewTokens != null && (stored.maxTokens == null || stored.maxTokens === 32768)) {
-                                  stored.maxTokens = gen.maxNewTokens
-                                }
+                                applyGenerationDefaultsToStoredConfig(stored, gen)
                               } catch (_) { }
 	                              setConfig(prev => ({ ...prev, ...stored, port: prev.port }))
                               // Still detect cache type for UI gating (Mamba vs KV, VLM)

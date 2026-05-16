@@ -1761,19 +1761,26 @@ class TestV3KvCacheBitsInit:
 
 
 class TestV4DiskCacheDequantizeGuard:
-    """Disk cache fetch must dequantize when KV quantization is active."""
+    """Disk cache fetch must defer dequantization to the scheduler worker."""
 
     def test_scheduler_disk_cache_dequantize(self):
-        """scheduler.py: disk_cache.fetch result must go through dequantize."""
+        """scheduler.py: disk_cache.fetch result must not dequantize on API thread."""
         import inspect
         from vmlx_engine.scheduler import Scheduler
         source = inspect.getsource(Scheduler.add_request)
-        # After disk_cache.fetch, there must be a dequantize call
         fetch_idx = source.find("disk_cache.fetch")
         assert fetch_idx != -1, "disk_cache.fetch not found in add_request"
-        after_fetch = source[fetch_idx:fetch_idx + 600]
-        assert "_dequantize_cache" in after_fetch, (
-            "Missing dequantize guard after disk_cache.fetch in scheduler.py"
+        after_fetch = source[fetch_idx:fetch_idx + 900]
+        assert "_prompt_cache_needs_worker_dequant = True" in after_fetch, (
+            "disk_cache.fetch must mark cache hits for worker-side dequantization"
+        )
+        assert "_dequantize_cache_for_use(" not in after_fetch, (
+            "disk_cache.fetch path must not dequantize MLX arrays on the API thread"
+        )
+        schedule_source = inspect.getsource(Scheduler._schedule_waiting)
+        assert "_prompt_cache_needs_worker_dequant" in schedule_source
+        assert "_dequantize_cache_for_use(cache_to_use)" in schedule_source, (
+            "worker schedule path must own stored-cache dequantization"
         )
 
     def test_mllm_disk_cache_dequantize(self):
@@ -4070,6 +4077,7 @@ class TestJangTqMppNaxCliPolicy:
         assert "invalid JANGTQ_MPP_NAX" in issue
 
     def test_jangtq_mpp_nax_availability_status_does_not_eval_mlx(self, monkeypatch):
+        pytest.importorskip("jang_tools.turboquant.mpp_nax_kernel")
         import vmlx_engine.server as server
         import jang_tools.turboquant.mpp_nax_kernel as nax_kernel
 
@@ -4987,8 +4995,8 @@ class TestTurboQuantKVTelemetry:
         assert 'unlimitedLabel="Default (2048)"' in session_form_source
         assert "isLingCrackModelPath" not in sessions_source
         assert "out.defaultTemperature = 20" not in sessions_source
-        assert "'defaultMinP'" in sessions_source
-        assert "args.push('--default-min-p'" in sessions_source
+        assert "defaultMinP = defs.defaultMinP ?? 0" in sessions_source
+        assert "args.push('--default-min-p'" not in sessions_source
         assert "args.push('--no-continuous-batching')" in sessions_source
         assert "Auto-enable continuous batching when prefix cache is on" not in sessions_source
         cli_source = Path("./vmlx_engine/cli.py").read_text()
@@ -5026,8 +5034,6 @@ class TestTurboQuantKVTelemetry:
             "--smelt",
             "--flash-moe",
             "--distributed",
-            "--default-repetition-penalty",
-            "--default-enable-thinking",
             "--enable-jit",
             "--omni-backend",
             "--log-level",
@@ -5035,6 +5041,12 @@ class TestTurboQuantKVTelemetry:
         ):
             assert flag in sessions_source
             assert flag in preview_source
+        for flag in (
+            "--default-repetition-penalty",
+            "--default-enable-thinking",
+        ):
+            assert flag not in sessions_source
+            assert flag not in preview_source
         assert "staleImageFlags" in sessions_source
         assert "staleImageFlags" in preview_source
 

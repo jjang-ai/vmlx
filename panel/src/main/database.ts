@@ -702,6 +702,56 @@ class DatabaseManager {
           .run(repeatPenaltyResetKey, String(Date.now()));
       }
 
+      // v1.5.37 stale sampling recovery:
+      // Older panel paths copied model/UI defaults into every new chat and
+      // then wrote chat edits back to per-model rows. These exact values are
+      // known historical app defaults, not reliable user intent. Clear them
+      // once so upgraded chats fall back to bundle generation_config/jang_config;
+      // non-generic explicit chat settings remain untouched.
+      const staleSamplingResetKey =
+        "migration_reset_stale_sampling_overrides_1_5_37";
+      const staleSamplingResetDone = this.db
+        .prepare("SELECT value FROM settings WHERE key = ?")
+        .get(staleSamplingResetKey) as { value: string } | undefined;
+      if (!staleSamplingResetDone) {
+        const affectedSamplingOverrides = this.db
+          .prepare(
+            `SELECT COUNT(*) as cnt FROM chat_overrides
+	             WHERE ABS(COALESCE(temperature, -999) - 0.7) < 0.000001
+	                OR ABS(COALESCE(top_p, -999) - 0.95) < 0.000001
+	                OR top_k = 40
+	                OR max_tokens IN (4096, 12000, 12068)`,
+          )
+          .get() as { cnt: number };
+        if (affectedSamplingOverrides.cnt > 0) {
+          this.db.exec(`
+            UPDATE chat_overrides
+            SET
+              temperature = CASE
+                WHEN ABS(COALESCE(temperature, -999) - 0.7) < 0.000001 THEN NULL
+                ELSE temperature
+              END,
+              top_p = CASE
+                WHEN ABS(COALESCE(top_p, -999) - 0.95) < 0.000001 THEN NULL
+                ELSE top_p
+              END,
+	              top_k = CASE WHEN top_k = 40 THEN NULL ELSE top_k END,
+	              max_tokens = CASE
+	                WHEN max_tokens IN (4096, 12000, 12068) THEN NULL
+	                ELSE max_tokens
+	              END
+          `);
+          console.log(
+            `[DB] v1.5.37 reset stale generic sampling fields in ${affectedSamplingOverrides.cnt} chat override row(s) to bundle defaults`,
+          );
+        }
+        this.db
+          .prepare(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+          )
+          .run(staleSamplingResetKey, String(Date.now()));
+      }
+
       // Clean up orphan benchmarks from deleted sessions
       this.db.exec(
         "DELETE FROM benchmarks WHERE session_id NOT IN (SELECT id FROM sessions)",
@@ -858,6 +908,36 @@ class DatabaseManager {
         reasoning_mode TEXT DEFAULT 'auto'
       )
     `);
+
+      const modelSamplingResetKey =
+        "migration_clear_model_settings_sampling_1_5_37";
+      const modelSamplingResetDone = this.db
+        .prepare("SELECT value FROM settings WHERE key = ?")
+        .get(modelSamplingResetKey) as { value: string } | undefined;
+      if (!modelSamplingResetDone) {
+        const affectedModelSampling = this.db
+          .prepare(
+            `SELECT COUNT(*) as cnt FROM model_settings
+             WHERE temperature IS NOT NULL
+                OR top_p IS NOT NULL
+                OR max_tokens IS NOT NULL
+                OR COALESCE(reasoning_mode, 'auto') <> 'auto'`,
+          )
+          .get() as { cnt: number };
+        if (affectedModelSampling.cnt > 0) {
+          this.db.exec(
+            "UPDATE model_settings SET temperature = NULL, top_p = NULL, max_tokens = NULL, reasoning_mode = 'auto'",
+          );
+          console.log(
+            `[DB] v1.5.37 cleared ${affectedModelSampling.cnt} per-model sampling/thinking setting(s); chat/API overrides remain per conversation`,
+          );
+        }
+        this.db
+          .prepare(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+          )
+          .run(modelSamplingResetKey, String(Date.now()));
+      }
 
       const modelReasoningResetKey =
         "migration_reset_model_reasoning_auto_1_5_25";
@@ -1822,15 +1902,15 @@ class DatabaseManager {
     stmt.run(
       modelPath,
       settings.alias ?? null,
-      settings.temperature ?? null,
-      settings.top_p ?? null,
-      settings.max_tokens ?? null,
+      null,
+      null,
+      null,
       settings.ttl_minutes ?? null,
       settings.pinned ? 1 : 0,
       settings.port ?? null,
       settings.cache_quant ?? null,
       settings.disk_cache_enabled ? 1 : 0,
-      settings.reasoning_mode ?? "auto",
+      "auto",
     );
   }
 

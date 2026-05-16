@@ -1238,7 +1238,6 @@ describe('Audit Fix: RESTART_REQUIRED_KEYS Completeness', () => {
     'timeout', 'streamInterval', 'apiKey', 'rateLimit',
     'maxTokens', 'mcpConfig', 'servedModelName',
     'speculativeModel', 'numDraftTokens',
-    'defaultTemperature', 'defaultTopP',
     'embeddingModel', 'additionalArgs',
     'enableAutoToolChoice',
   ])
@@ -1258,7 +1257,6 @@ describe('Audit Fix: RESTART_REQUIRED_KEYS Completeness', () => {
     'enableDiskCache', 'enableBlockDiskCache',
     'streamInterval', 'maxTokens', 'mcpConfig',
     'speculativeModel', 'numDraftTokens',
-    'defaultTemperature', 'defaultTopP',
     'embeddingModel', 'additionalArgs',
   ]
 
@@ -1269,8 +1267,8 @@ describe('Audit Fix: RESTART_REQUIRED_KEYS Completeness', () => {
   })
 
   it('has correct total count', () => {
-    // 34 keys total — if this changes, a key was added or removed
-    expect(RESTART_REQUIRED_KEYS.size).toBe(34)
+    // 32 keys total — if this changes, a key was added or removed
+    expect(RESTART_REQUIRED_KEYS.size).toBe(32)
   })
 
   it('includes server binding keys', () => {
@@ -1302,9 +1300,12 @@ describe('Audit Fix: RESTART_REQUIRED_KEYS Completeness', () => {
     expect(RESTART_REQUIRED_KEYS.has('numDraftTokens')).toBe(true)
   })
 
-  it('includes generation default keys', () => {
-    expect(RESTART_REQUIRED_KEYS.has('defaultTemperature')).toBe(true)
-    expect(RESTART_REQUIRED_KEYS.has('defaultTopP')).toBe(true)
+  it('does not expose model generation defaults as restartable user startup settings', () => {
+    expect(RESTART_REQUIRED_KEYS.has('defaultTemperature')).toBe(false)
+    expect(RESTART_REQUIRED_KEYS.has('defaultTopP')).toBe(false)
+    expect(RESTART_REQUIRED_KEYS.has('defaultTopK')).toBe(false)
+    expect(RESTART_REQUIRED_KEYS.has('defaultMinP')).toBe(false)
+    expect(RESTART_REQUIRED_KEYS.has('defaultRepetitionPenalty')).toBe(false)
   })
 
   it('includes tool integration keys', () => {

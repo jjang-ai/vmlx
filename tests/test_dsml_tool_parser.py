@@ -167,3 +167,141 @@ class TestDSMLToolParser:
                 )
                 assert "<" + DSML_PREFIX not in content
                 assert "</" + DSML_PREFIX not in content
+
+    def test_repairs_dsml_invoke_with_plain_param_tags(self, parser):
+        """Issue #165: DSV4 can emit a DSML invoke with plain <param> tags."""
+        text = (
+            f'<{DSML_PREFIX}invoke name="read_file">\n'
+            '    <param name="path">docs/vendor_memo.md</param>\n'
+            f'</{DSML_PREFIX}invoke>'
+        )
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        out = parser.extract_tool_calls(text, request=request)
+
+        assert out.tools_called is True
+        assert out.tool_calls[0]["name"] == "read_file"
+        assert json.loads(out.tool_calls[0]["arguments"]) == {
+            "path": "docs/vendor_memo.md"
+        }
+        assert out.content is None
+
+    def test_repairs_dsml_tool_calls_wrapper_with_truncated_plain_param_invokes(
+        self, parser
+    ):
+        """Issue #165: recover multiple plain-param invokes under DSML wrapper."""
+        text = (
+            f'<{DSML_PREFIX}tool_calls>\n'
+            f'<{DSML_PREFIX}invoke name="read_file">\n'
+            '    <param>\n'
+            '    <param name="path">docs/vendor_memo.md</param>\n'
+            '</inv>\n\n'
+            '<invoke name="read_file">\n'
+            '    <param name="path">docs/release_excerpt.md</param>\n'
+            '</inv>'
+        )
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        out = parser.extract_tool_calls(text, request=request)
+
+        assert out.tools_called is True
+        assert [call["name"] for call in out.tool_calls] == [
+            "read_file",
+            "read_file",
+        ]
+        assert [json.loads(call["arguments"]) for call in out.tool_calls] == [
+            {"path": "docs/vendor_memo.md"},
+            {"path": "docs/release_excerpt.md"},
+        ]
+        assert out.content is None
+
+    def test_canonical_encoder_empty_required_args_falls_through_to_repair(
+        self, parser, monkeypatch
+    ):
+        """Issue #165: canonical DSV4 parser can return names with empty args.
+
+        If the canonical bundle parser extracts a tool name but drops required
+        parameters, the DSML parser must treat that as unactionable and fall
+        through to the schema-gated degraded-DSML repair path.
+        """
+        from vmlx_engine.loaders import dsv4_chat_encoder
+
+        class FakeEncoding:
+            @staticmethod
+            def parse_message_from_completion_text(_text):
+                return {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "read_file",
+                                "arguments": {},
+                            }
+                        }
+                    ],
+                }
+
+        monkeypatch.setattr(
+            dsv4_chat_encoder,
+            "_load_encoding_dsv4_module",
+            lambda: FakeEncoding,
+        )
+
+        text = (
+            f'<{DSML_PREFIX}tool_calls>\n'
+            f'<{DSML_PREFIX}invoke name="read_file">\n'
+            '    <param name="path">docs/vendor_memo.md</param>\n'
+            '</inv>'
+        )
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        out = parser.extract_tool_calls(text, request=request)
+
+        assert out.tools_called is True
+        assert out.tool_calls[0]["name"] == "read_file"
+        assert json.loads(out.tool_calls[0]["arguments"]) == {
+            "path": "docs/vendor_memo.md"
+        }
+        assert out.content is None

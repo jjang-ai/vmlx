@@ -2,6 +2,40 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.5.37] - 2026-05-16
+
+### Fixed
+- **Model generation defaults are no longer copied into hidden session or
+  per-model state**: new chats start with no sampling/thinking overrides, and
+  startup no longer emits `--default-temperature`, `--default-top-p`,
+  `--default-top-k`, `--default-min-p`, `--default-repetition-penalty`, or
+  `--default-enable-thinking` from panel metadata. The engine resolves
+  `jang_config` / `generation_config.json` per request.
+- **Per-chat max output tokens remain user-controlled**: Chat Settings shows
+  the model-declared `max_new_tokens` as the default placeholder, but leaves the
+  field unset until the user saves a chat override. Explicit `max_tokens` /
+  `max_output_tokens` values are respected exactly; no family-specific hidden
+  floors are applied.
+- **Stale local SQLite sampling rows are cleared once**: historical generic
+  values such as temperature `0.7`, top-p `0.95`, top-k `40`, and max-token
+  caps `4096`, `12000`, or `12068` are reset to bundle defaults. Per-model
+  sampling/thinking write-back is removed.
+- **ZAYA1-VL explicit reasoning-on now opens the qwen3 think rail** when the
+  VLM processor template is plain and the bundle declares qwen3 reasoning
+  support. Auto/off remain unchanged.
+- **DSV4 DSML tool-call argument recovery**: canonical DSV4 parser results with
+  missing required arguments or raw DSML/HTML-ish markup now fall through to the
+  repair parser, which can recover plain `<param name="...">...</param>` bodies.
+- **Top-k sampling uses a compact logits path** for bounded top-k requests so
+  large-vocabulary models do not sample over a masked full vocabulary.
+
+### Verified
+- Python focused gate: sampling, reasoning modes, DSML parser, cache bypass,
+  and worker-dequant tests passed.
+- Python audit gate: reasoning modes, DSML parser, engine audit, cache bypass,
+  and worker-dequant tests passed.
+- Full panel Vitest suite passed.
+
 ## [1.5.36] - 2026-05-16
 
 ### Fixed

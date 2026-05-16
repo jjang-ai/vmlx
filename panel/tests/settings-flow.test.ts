@@ -63,6 +63,7 @@ interface SessionConfig {
     defaultTopK?: number
     defaultMinP?: number
     defaultRepetitionPenalty: number
+    defaultMaxNewTokens?: number
     defaultEnableThinking?: boolean
     embeddingModel: string
     additionalArgs: string
@@ -123,6 +124,7 @@ const DEFAULT_CONFIG: SessionConfig = {
     defaultTopK: 0,
     defaultMinP: 0,
     defaultRepetitionPenalty: 0,
+    defaultMaxNewTokens: 0,
     defaultEnableThinking: undefined,
     embeddingModel: '',
     additionalArgs: '',
@@ -282,33 +284,15 @@ function buildCommandPreview(
         }
     }
 
-    // Generation defaults. No bundle metadata is available in this preview
-    // helper, so suppress stale historical UI defaults.
-    if (config.defaultTemperature && config.defaultTemperature > 0 && config.defaultTemperature !== 70) {
-        parts.push('--default-temperature', (config.defaultTemperature / 100).toFixed(2))
-    }
-    if (config.defaultTopP && config.defaultTopP > 0 && config.defaultTopP !== 95) {
-        parts.push('--default-top-p', (config.defaultTopP / 100).toFixed(2))
-    }
-    if (config.defaultTopK && config.defaultTopK > 0) {
-        parts.push('--default-top-k', Math.round(config.defaultTopK).toString())
-    }
-    if (config.defaultMinP && config.defaultMinP > 0) {
-        parts.push('--default-min-p', (config.defaultMinP / 100).toFixed(2))
-    }
-    if (
-        config.defaultRepetitionPenalty &&
-        config.defaultRepetitionPenalty > 0 &&
-        config.defaultRepetitionPenalty !== 110
-    ) {
-        parts.push('--default-repetition-penalty', (config.defaultRepetitionPenalty / 100).toFixed(2))
-    }
+    // Generation defaults are resolved inside vmlx_engine.server from
+    // jang_config/generation_config. The panel preview must not synthesize
+    // --default-* flags that would override the engine's bundle lookup.
 
     // Embedding model
     if (config.embeddingModel) parts.push('--embedding-model', config.embeddingModel)
 
-    if (config.defaultEnableThinking === true) parts.push('--default-enable-thinking', 'true')
-    else if (config.defaultEnableThinking === false) parts.push('--default-enable-thinking', 'false')
+    // Thinking defaults are engine/model-owned. Chat/API requests carry
+    // explicit enable_thinking; startup preview must not emit a server default.
 
     // JIT compilation
     if (config.enableJit && !isVLM && !dsv4Active && !zayaCcaActive && !turboQuantActive) parts.push('--enable-jit')
@@ -905,97 +889,74 @@ describe('Speculative Decoding', () => {
 })
 
 describe('Generation Defaults', () => {
-    it('sets explicit default temperature (converted from ×100 integer)', () => {
-        const out = preview({ defaultTemperature: 80 })
-        expect(getFlagValue(out, '--default-temperature')).toBe('0.80')
-    })
-
-    it('suppresses stale 0.70 temperature when no bundle declares it', () => {
-        const out = preview({ defaultTemperature: 70 })
+    it('does not synthesize server --default sampling flags from UI/session config', () => {
+        const out = preview({
+            defaultTemperature: 80,
+            defaultTopP: 90,
+            defaultTopK: 40,
+            defaultMinP: 5,
+            defaultRepetitionPenalty: 110,
+        })
         expect(hasFlag(out, '--default-temperature')).toBe(false)
-    })
-
-    it('omits default temperature when 0 (server default)', () => {
-        const out = preview({ defaultTemperature: 0 })
-        expect(hasFlag(out, '--default-temperature')).toBe(false)
-    })
-
-    it('sets high temperature (1.50 from 150)', () => {
-        const out = preview({ defaultTemperature: 150 })
-        expect(getFlagValue(out, '--default-temperature')).toBe('1.50')
-    })
-
-    it('sets low temperature (0.05 from 5)', () => {
-        const out = preview({ defaultTemperature: 5 })
-        expect(getFlagValue(out, '--default-temperature')).toBe('0.05')
-    })
-
-    it('sets max temperature (2.00 from 200)', () => {
-        const out = preview({ defaultTemperature: 200 })
-        expect(getFlagValue(out, '--default-temperature')).toBe('2.00')
-    })
-
-    it('sets default top-p (converted from ×100 integer)', () => {
-        const out = preview({ defaultTopP: 90 })
-        expect(getFlagValue(out, '--default-top-p')).toBe('0.90')
-    })
-
-    it('omits default top-p when 0 (server default)', () => {
-        const out = preview({ defaultTopP: 0 })
         expect(hasFlag(out, '--default-top-p')).toBe(false)
-    })
-
-    it('sets low top-p (0.10 from 10)', () => {
-        const out = preview({ defaultTopP: 10 })
-        expect(getFlagValue(out, '--default-top-p')).toBe('0.10')
-    })
-
-    it('sets top-p 1.00 from 100', () => {
-        const out = preview({ defaultTopP: 100 })
-        expect(getFlagValue(out, '--default-top-p')).toBe('1.00')
-    })
-
-    it('sets default top-k from bundle/session metadata', () => {
-        const out = preview({ defaultTopK: 40 })
-        expect(getFlagValue(out, '--default-top-k')).toBe('40')
-    })
-
-    it('sets default min-p from bundle/session metadata', () => {
-        const out = preview({ defaultMinP: 5 })
-        expect(getFlagValue(out, '--default-min-p')).toBe('0.05')
-    })
-
-    it('does not emit stale historical 1.10 repetition penalty', () => {
-        const out = preview({ defaultRepetitionPenalty: 110 })
+        expect(hasFlag(out, '--default-top-k')).toBe(false)
+        expect(hasFlag(out, '--default-min-p')).toBe(false)
         expect(hasFlag(out, '--default-repetition-penalty')).toBe(false)
     })
 
-    it('sets explicit non-stale repetition penalty from ×100 integer', () => {
-        const out = preview({ defaultRepetitionPenalty: 115 })
-        expect(getFlagValue(out, '--default-repetition-penalty')).toBe('1.15')
+    it('does not copy model max_new_tokens into hidden startup maxTokens config', () => {
+        const sessionsSource = readFileSync('src/main/sessions.ts', 'utf8')
+        const createSource = readFileSync('src/renderer/src/components/sessions/CreateSession.tsx', 'utf8')
+        const sessionSettingsSource = readFileSync('src/renderer/src/components/sessions/SessionSettings.tsx', 'utf8')
+        const formSource = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
+
+        expect(sessionsSource).toContain('max_new_tokens is also bundle-owned')
+        expect(sessionsSource).toContain('defaultMaxNewTokens')
+        expect(createSource).toContain('next.defaultMaxNewTokens')
+        expect(createSource).toContain('stored.defaultMaxNewTokens')
+        expect(sessionSettingsSource).toContain('next.defaultMaxNewTokens')
+        expect(sessionsSource).not.toContain('config.maxTokens = defs.maxTokens')
+        expect(createSource).not.toContain('next.maxTokens = gen.maxNewTokens')
+        expect(createSource).not.toContain('stored.maxTokens = gen.maxNewTokens')
+        expect(sessionSettingsSource).not.toContain('next.maxTokens = gen.maxNewTokens')
+        expect(formSource).not.toContain('`max tokens ${config.maxTokens}`')
+        expect(formSource).toContain('max output tokens')
     })
 
     it('chat settings default to neutral repeat penalty when bundle has no value', () => {
         const source = readFileSync('src/renderer/src/components/chat/ChatSettings.tsx', 'utf8')
-        expect(source).toContain('value={overrides.repeatPenalty ?? 1.0}')
+        expect(source).toContain('value={overrides.repeatPenalty ?? modelDefaults.repeatPenalty ?? 1.0}')
         expect(source).toContain("onChange={v => update('repeatPenalty', v === 1.0 ? undefined : v)}")
         expect(source).not.toContain('value={overrides.repeatPenalty ?? 1.1}')
     })
 
-    it('new chat sibling inheritance does not copy stale sampling params', () => {
-        const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
-        const start = source.indexOf('const inheritedKeys = [')
-        const end = source.indexOf('] as const', start)
-        const block = source.slice(start, end)
+    it('chat settings expose per-chat max tokens without hidden DSV4 floors', () => {
+        const chatSettings = readFileSync('src/renderer/src/components/chat/ChatSettings.tsx', 'utf8')
+        const chatIpc = readFileSync('src/main/ipc/chat.ts', 'utf8')
+        expect(chatSettings).toContain("onChange={v => update('maxTokens', v)}")
+        expect(chatSettings).toContain('model default')
+        expect(chatSettings).not.toContain('next.maxTokens = Math.max')
+        expect(chatSettings).not.toContain('4096')
+        expect(chatIpc).toContain('function explicitOutputBudget')
+        expect(chatIpc).not.toContain('function dsv4OutputBudget')
+        expect(chatIpc).not.toContain('Math.max(parsed ?? 0, 4096)')
+    })
 
-        expect(block).not.toContain('"temperature"')
-        expect(block).not.toContain('"topP"')
-        expect(block).not.toContain('"topK"')
-        expect(block).not.toContain('"minP"')
-        expect(block).not.toContain('"maxTokens"')
-        expect(block).not.toContain('"repeatPenalty"')
-        expect(block).toContain('"builtinToolsEnabled"')
-        expect(block).toContain('"workingDirectory"')
+    it('new chat creation does not inherit stale sampling or tool prompt baggage', () => {
+        const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+        const createHandler = source.slice(
+            source.indexOf('"chat:create"'),
+            source.indexOf('ipcMain.handle("chat:getByModel"'),
+        )
+
+        expect(source).toContain('clean chat starts with no overrides')
+        expect(createHandler).not.toContain('getDefaultChatProfile')
+        expect(createHandler).not.toContain('setChatOverrides')
+        expect(source).not.toContain('enableThinkingFromReasoningMode')
+        expect(source).not.toContain('readGenerationDefaults')
+        expect(source).not.toContain('const inheritedKeys = [')
+        expect(source).not.toContain('Inherited tool/search settings from last chat')
+        expect(source).not.toContain('Applied global model settings / generation defaults')
     })
 
     it('database migrates historical repeatPenalty 1.10 back to bundle defaults', () => {
@@ -1005,10 +966,41 @@ describe('Generation Defaults', () => {
         expect(source).toContain('delete parsed.repeatPenalty')
     })
 
-    it('sets server default thinking override only when explicit', () => {
+    it('database clears historical generic sampling/model-setting rows once', () => {
+        const source = readFileSync('src/main/database.ts', 'utf8')
+        expect(source).toContain('migration_reset_stale_sampling_overrides_1_5_37')
+        expect(source).toContain('temperature = CASE')
+        expect(source).toContain('top_k = CASE WHEN top_k = 40 THEN NULL ELSE top_k END')
+        expect(source).toContain('max_tokens IN (4096, 12000, 12068)')
+        expect(source).toContain('migration_clear_model_settings_sampling_1_5_37')
+        expect(source).toContain("reasoning_mode = 'auto'")
+    })
+
+    it('saving chat overrides never syncs sampling or thinking back to model_settings', () => {
+        const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+        expect(source).not.toContain('Synced ${chatId} inference overrides back to global model_settings')
+        expect(source).not.toContain('existingModelConfig.temperature')
+        expect(source).not.toContain('existingModelConfig.top_p')
+        expect(source).not.toContain('existingModelConfig.max_tokens')
+        expect(source).not.toContain('existingModelConfig.reasoning_mode')
+        expect(source).not.toContain('db.saveModelSettings(chat.modelPath')
+    })
+
+    it('model-settings IPC exposes launch metadata only, not reasoning or sampling rails', () => {
+        const source = readFileSync('src/main/db/model-settings.ts', 'utf8')
+        expect(source).toContain('Sampling and thinking')
+        expect(source).not.toContain('reasoning_mode:')
+        expect(source).not.toContain('settings.reasoning_mode')
+        expect(source).not.toContain('sanitized.reasoning_mode')
+        expect(source).not.toContain('temperature')
+        expect(source).not.toContain('top_p')
+        expect(source).not.toContain('max_tokens')
+    })
+
+    it('never emits server default thinking override from session startup', () => {
         expect(hasFlag(preview({ defaultEnableThinking: undefined }), '--default-enable-thinking')).toBe(false)
-        expect(getFlagValue(preview({ defaultEnableThinking: true }), '--default-enable-thinking')).toBe('true')
-        expect(getFlagValue(preview({ defaultEnableThinking: false }), '--default-enable-thinking')).toBe('false')
+        expect(hasFlag(preview({ defaultEnableThinking: true }), '--default-enable-thinking')).toBe(false)
+        expect(hasFlag(preview({ defaultEnableThinking: false }), '--default-enable-thinking')).toBe(false)
     })
 })
 
@@ -1091,9 +1083,9 @@ describe('No Hardcoded Values', () => {
         expect(getFlagValue(preview({ enablePrefixCache: true, maxCacheBlocks: 5000 }), '--max-cache-blocks')).toBe('5000')
     })
 
-    it('changing defaultTemperature produces different CLI output', () => {
-        expect(getFlagValue(preview({ defaultTemperature: 50 }), '--default-temperature')).toBe('0.50')
-        expect(getFlagValue(preview({ defaultTemperature: 100 }), '--default-temperature')).toBe('1.00')
+    it('changing startup generation defaults does not change CLI output', () => {
+        expect(preview({ defaultTemperature: 50 })).toBe(preview({ defaultTemperature: 100 }))
+        expect(preview({ defaultTopK: 40 })).toBe(preview({ defaultTopK: 0 }))
     })
 
     it('changing speculativeModel produces different CLI output', () => {
@@ -1240,13 +1232,14 @@ describe('Default IP and New Settings', () => {
         expect(block).toContain("config.kvCacheQuantization === 'none'")
     })
 
-    it('ZAYA sessions force stale default thinking off on startup', () => {
+    it('ZAYA sessions keep the qwen3 reasoning parser without startup thinking defaults', () => {
         const source = readFileSync('src/main/sessions.ts', 'utf8')
         expect(source).toContain('function isZayaCcaFamily')
         expect(source).toContain('if (isZayaCcaFamily(freshFamily))')
-        expect(source).toContain('config.defaultEnableThinking !== false')
-        expect(source).toContain('config.defaultEnableThinking = false')
-        expect(source).toContain('defaultEnableThinking: isZayaCcaFamily(detected.family) ? false : undefined')
+        expect(source).toContain("config.reasoningParser = freshConfig.reasoningParser || 'auto'")
+        expect(source).toContain('delete config.defaultEnableThinking')
+        expect(source).not.toContain('ZAYA default thinking reset from stale on to off')
+        expect(source).not.toContain('--default-enable-thinking')
     })
 
     it('logLevel INFO (default) does not emit --log-level flag', () => {
@@ -1568,8 +1561,8 @@ describe('Feature Interaction', () => {
         })
         expect(getFlagValue(out, '--speculative-model')).toBe('draft-model')
         expect(getFlagValue(out, '--num-draft-tokens')).toBe('7')
-        expect(getFlagValue(out, '--default-temperature')).toBe('0.80')
-        expect(getFlagValue(out, '--default-top-p')).toBe('0.90')
+        expect(hasFlag(out, '--default-temperature')).toBe(false)
+        expect(hasFlag(out, '--default-top-p')).toBe(false)
         expect(getFlagValue(out, '--embedding-model')).toBe('embed-model')
         expect(getFlagValue(out, '--served-model-name')).toBe('my-model')
     })
@@ -1661,9 +1654,9 @@ describe('Feature Interaction', () => {
         expect(hasFlag(out, '--cache-memory-percent')).toBe(false)
     })
 
-    it('defaultTopP minimum boundary 1 emits 0.01', () => {
+    it('defaultTopP minimum boundary stays out of startup CLI', () => {
         const out = preview({ defaultTopP: 1 })
-        expect(getFlagValue(out, '--default-top-p')).toBe('0.01')
+        expect(hasFlag(out, '--default-top-p')).toBe(false)
     })
 
     it('numDraftTokens 0 with speculative model omits draft tokens flag', () => {
@@ -1708,8 +1701,8 @@ describe('Feature Interaction', () => {
         expect(getFlagValue(out, '--speculative-model')).toBe('draft-model')
         expect(getFlagValue(out, '--num-draft-tokens')).toBe('4')
         expect(getFlagValue(out, '--embedding-model')).toBe('embed-model')
-        expect(getFlagValue(out, '--default-temperature')).toBe('0.80')
-        expect(getFlagValue(out, '--default-top-p')).toBe('0.90')
+        expect(hasFlag(out, '--default-temperature')).toBe(false)
+        expect(hasFlag(out, '--default-top-p')).toBe(false)
     })
 })
 
@@ -1851,7 +1844,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         'isMultimodal', 'servedModelName',
         'speculativeModel', 'numDraftTokens',
         'smelt', 'smeltExperts', 'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
-        'defaultTemperature', 'defaultTopP', 'defaultTopK', 'defaultMinP', 'defaultRepetitionPenalty', 'defaultEnableThinking',
+        'defaultTemperature', 'defaultTopP', 'defaultTopK', 'defaultMinP', 'defaultRepetitionPenalty', 'defaultMaxNewTokens', 'defaultEnableThinking',
         'embeddingModel', 'additionalArgs',
         'enableJit', 'logLevel', 'corsOrigins', 'maxContextLength',
     ]
@@ -1904,11 +1897,15 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized).toContain('--enable-jit')
     })
 
-    it('generation slider reset defaults match DEFAULT_CONFIG', () => {
+    it('server startup generation defaults are model-owned and not editable sliders', () => {
         const source = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
-        expect(source).toContain('defaultValue={DEFAULT_CONFIG.defaultTemperature}')
-        expect(source).toContain('defaultValue={DEFAULT_CONFIG.defaultTopP}')
-        expect(source).toContain('defaultValue={DEFAULT_CONFIG.defaultRepetitionPenalty}')
+        expect(source).toContain('Generation defaults are resolved by the engine from generation_config.json/jang_config')
+        expect(source).not.toContain('label="Default Temperature"')
+        expect(source).not.toContain('label="Default Top-P"')
+        expect(source).not.toContain('label="Default Top-K"')
+        expect(source).not.toContain('label="Default Min-P"')
+        expect(source).not.toContain('label="Default Repetition Penalty"')
+        expect(source).not.toContain('label="Default Max Tokens"')
     })
 
     it('JANGTQ router top-k override is not exposed through settings UI or launch env', () => {

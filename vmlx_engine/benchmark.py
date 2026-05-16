@@ -346,7 +346,7 @@ def benchmark_single_prompt(
         BenchmarkResult with timing metrics
     """
     from mlx_lm import stream_generate
-    from mlx_lm.sample_utils import make_sampler
+    from .sampling import make_sampler
 
     try:
         # Tokenize the prompt to count tokens

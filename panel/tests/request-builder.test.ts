@@ -40,9 +40,7 @@ function buildRequestBody(
         !!overrides?.reasoningEffort &&
         overrides.enableThinking !== false &&
         (sessionHasReasoningParser || detectedFamily === 'deepseek-v4')
-    const outputBudget = detectedFamily === 'deepseek-v4' && overrides?.enableThinking !== false
-        ? Math.max(overrides?.maxTokens ?? 0, 4096)
-        : overrides?.maxTokens
+    const outputBudget = overrides?.maxTokens
     const effectiveEnableThinkingOverride =
         !isRemote &&
         !sessionHasReasoningParser &&
@@ -58,16 +56,17 @@ function buildRequestBody(
             model: modelName,
             input: inputMessages,
             instructions,
-            temperature: overrides?.temperature ?? 0.7,
-            top_p: overrides?.topP ?? 0.9,
-            max_output_tokens: outputBudget ?? 4096,
             stream: true,
             stream_options: { include_usage: true }
         }
+        if (overrides?.temperature != null) obj.temperature = overrides.temperature
+        if (overrides?.topP != null) obj.top_p = overrides.topP
+        if (outputBudget) obj.max_output_tokens = outputBudget
         if (stopSequences) obj.stop = stopSequences
-        if (overrides?.topK != null && overrides.topK > 0) obj.top_k = overrides.topK
+        const effectiveTopK = overrides?.topK
+        if (effectiveTopK != null && effectiveTopK > 0) obj.top_k = effectiveTopK
         if (overrides?.minP != null && overrides.minP > 0) obj.min_p = overrides.minP
-        if (overrides?.repeatPenalty != null && overrides.repeatPenalty !== 1.0) obj.repetition_penalty = overrides.repeatPenalty
+        if (overrides?.repeatPenalty != null) obj.repetition_penalty = overrides.repeatPenalty
         if (tools) {
             obj.tools = tools.map(t => ({
                 type: 'function',
@@ -88,16 +87,17 @@ function buildRequestBody(
         const obj: Record<string, any> = {
             model: modelName,
             messages: requestMessages,
-            temperature: overrides?.temperature ?? 0.7,
-            top_p: overrides?.topP ?? 0.9,
-            max_tokens: outputBudget ?? 4096,
             stream: true,
             stream_options: { include_usage: true }
         }
+        if (overrides?.temperature != null) obj.temperature = overrides.temperature
+        if (overrides?.topP != null) obj.top_p = overrides.topP
+        if (outputBudget) obj.max_tokens = outputBudget
         if (stopSequences) obj.stop = stopSequences
-        if (overrides?.topK != null && overrides.topK > 0) obj.top_k = overrides.topK
+        const effectiveTopK = overrides?.topK
+        if (effectiveTopK != null && effectiveTopK > 0) obj.top_k = effectiveTopK
         if (overrides?.minP != null && overrides.minP > 0) obj.min_p = overrides.minP
-        if (overrides?.repeatPenalty != null && overrides.repeatPenalty !== 1.0) obj.repetition_penalty = overrides.repeatPenalty
+        if (overrides?.repeatPenalty != null) obj.repetition_penalty = overrides.repeatPenalty
         if (tools) {
             obj.tools = tools
         }
@@ -120,13 +120,13 @@ describe('buildRequestBody — Chat Completions API', () => {
         { role: 'user', content: 'Hello' }
     ]
 
-    it('includes all basic parameters with defaults', () => {
+    it('omits sampling and token defaults when unset so the engine resolves bundle metadata', () => {
         const body = buildRequestBody('completions', 'gpt-4', messages, undefined, false, false)
         expect(body.model).toBe('gpt-4')
         expect(body.messages).toBe(messages)
-        expect(body.temperature).toBe(0.7)
-        expect(body.top_p).toBe(0.9)
-        expect(body.max_tokens).toBe(4096)
+        expect(body.temperature).toBeUndefined()
+        expect(body.top_p).toBeUndefined()
+        expect(body.max_tokens).toBeUndefined()
         expect(body.stream).toBe(true)
         expect(body.stream_options).toEqual({ include_usage: true })
     })
@@ -142,8 +142,18 @@ describe('buildRequestBody — Chat Completions API', () => {
         expect(body.top_k).toBe(40)
     })
 
-    it('omits top_k when 0 or undefined', () => {
+    it('omits top_k when explicitly 0', () => {
         const body = buildRequestBody('completions', 'gpt-4', messages, { topK: 0 }, false, false)
+        expect(body.top_k).toBeUndefined()
+    })
+
+    it('omits top_k when unset so the engine uses bundle metadata or disabled fallback', () => {
+        const body = buildRequestBody('completions', 'local-model', messages, {}, false, false)
+        expect(body.top_k).toBeUndefined()
+    })
+
+    it('does not default remote requests to top_k', () => {
+        const body = buildRequestBody('completions', 'gpt-4', messages, {}, true, false)
         expect(body.top_k).toBeUndefined()
     })
 
@@ -157,9 +167,9 @@ describe('buildRequestBody — Chat Completions API', () => {
         expect(body.repetition_penalty).toBe(1.2)
     })
 
-    it('omits repetition_penalty when exactly 1.0', () => {
+    it('forwards repetition_penalty when exactly 1.0 because it is an explicit per-chat override', () => {
         const body = buildRequestBody('completions', 'gpt-4', messages, { repeatPenalty: 1.0 }, false, false)
-        expect(body.repetition_penalty).toBeUndefined()
+        expect(body.repetition_penalty).toBe(1.0)
     })
 
     it('includes stop sequences when provided', () => {
@@ -193,9 +203,9 @@ describe('buildRequestBody — Chat Completions API', () => {
         expect(body.reasoning_effort).toBeUndefined()
     })
 
-    it('floors DSV4 thinking max_tokens so stale tiny caps do not strand output in reasoning', () => {
+    it('respects explicit DSV4 thinking max_tokens instead of hidden flooring', () => {
         const body = buildRequestBody('completions', 'dsv4', messages, { maxTokens: 128, reasoningEffort: 'max' }, false, true, undefined, 'deepseek-v4')
-        expect(body.max_tokens).toBe(4096)
+        expect(body.max_tokens).toBe(128)
         expect(body.reasoning_effort).toBe('max')
     })
 
@@ -220,10 +230,16 @@ describe('buildRequestBody — Remote vs Local gating', () => {
         expect(body.chat_template_kwargs).toEqual({ enable_thinking: true })
     })
 
-    it('suppresses stale explicit local thinking override when the model has no reasoning parser', () => {
-        const body = buildRequestBody('completions', 'zaya-k', messages, { enableThinking: true }, false, false)
+    it('suppresses explicit local thinking override when a plain model has no reasoning parser', () => {
+        const body = buildRequestBody('completions', 'plain-model', messages, { enableThinking: true }, false, false)
         expect(body.enable_thinking).toBeUndefined()
         expect(body.chat_template_kwargs).toBeUndefined()
+    })
+
+    it('forwards explicit ZAYA thinking override when registry detection provides qwen3 parser', () => {
+        const body = buildRequestBody('completions', 'zaya-k', messages, { enableThinking: true }, false, true, undefined, 'zaya')
+        expect(body.enable_thinking).toBe(true)
+        expect(body.chat_template_kwargs).toEqual({ enable_thinking: true })
     })
 
     it('EXCLUDES chat_template_kwargs for remote sessions', () => {
@@ -250,7 +266,7 @@ describe('buildRequestBody — Responses API', () => {
 
     it('uses max_output_tokens instead of max_tokens', () => {
         const body = buildRequestBody('responses', 'gpt-4', messages, undefined, false, false)
-        expect(body.max_output_tokens).toBe(4096)
+        expect(body.max_output_tokens).toBeUndefined()
         expect(body.max_tokens).toBeUndefined()
     })
 
@@ -275,9 +291,9 @@ describe('buildRequestBody — Responses API', () => {
         expect(body.chat_template_kwargs).toBeUndefined()
     })
 
-    it('floors DSV4 Responses max_output_tokens for Auto/On thinking', () => {
+    it('respects explicit DSV4 Responses max_output_tokens for Auto/On thinking', () => {
         const body = buildRequestBody('responses', 'dsv4', messages, { maxTokens: 300 }, false, true, undefined, 'deepseek-v4')
-        expect(body.max_output_tokens).toBe(4096)
+        expect(body.max_output_tokens).toBe(300)
     })
 
     it('suppresses stale Responses reasoning_effort when thinking is explicitly off', () => {
@@ -286,10 +302,16 @@ describe('buildRequestBody — Responses API', () => {
         expect(body.reasoning_effort).toBeUndefined()
     })
 
-    it('suppresses stale Responses enable_thinking when a local model has no reasoning parser', () => {
-        const body = buildRequestBody('responses', 'zaya-vl-k', messages, { enableThinking: true }, false, false)
+    it('suppresses Responses enable_thinking when a plain local model has no reasoning parser', () => {
+        const body = buildRequestBody('responses', 'plain-model', messages, { enableThinking: true }, false, false)
         expect(body.enable_thinking).toBeUndefined()
         expect(body.chat_template_kwargs).toBeUndefined()
+    })
+
+    it('forwards explicit ZAYA-VL thinking override when registry detection provides qwen3 parser', () => {
+        const body = buildRequestBody('responses', 'zaya-vl-k', messages, { enableThinking: true }, false, true, undefined, 'zaya1-vl')
+        expect(body.enable_thinking).toBe(true)
+        expect(body.chat_template_kwargs).toEqual({ enable_thinking: true })
     })
 })
 

@@ -522,7 +522,7 @@ describe('chat overrides reset behavior', () => {
   interface ChatOverrides {
     temperature?: number
     topP?: number
-    topK?: number
+    topK?: number | null
     minP?: number
     repeatPenalty?: number
     maxTokens?: number
@@ -553,7 +553,7 @@ describe('chat overrides reset behavior', () => {
     if (overrides.webSearchEnabled != null) preserved.webSearchEnabled = overrides.webSearchEnabled
     if (overrides.braveSearchEnabled != null) preserved.braveSearchEnabled = overrides.braveSearchEnabled
 
-    // Apply generation defaults
+    // Apply only model-declared defaults; missing values stay unset.
     const result: ChatOverrides = { ...preserved }
     if (genDefaults.temperature != null) result.temperature = genDefaults.temperature
     if (genDefaults.topP != null) result.topP = genDefaults.topP
@@ -561,6 +561,16 @@ describe('chat overrides reset behavior', () => {
     if (genDefaults.minP != null) result.minP = genDefaults.minP
     if (genDefaults.repeatPenalty != null) result.repeatPenalty = genDefaults.repeatPenalty
     return result
+  }
+
+  function mergeSavedOverrides(
+    modelDefaults: ChatOverrides,
+    saved: ChatOverrides | null
+  ): ChatOverrides {
+    const savedExplicit = Object.fromEntries(
+      Object.entries(saved || {}).filter(([, v]) => v !== null && v !== undefined),
+    ) as ChatOverrides
+    return { ...modelDefaults, ...savedExplicit }
   }
 
   it('preserves system prompt on reset', () => {
@@ -596,9 +606,19 @@ describe('chat overrides reset behavior', () => {
     )
     expect(result.temperature).toBe(0.7)
     expect(result.topP).toBe(0.9)
-    expect(result.topK).toBe(undefined) // Not in model defaults → cleared
+    expect(result.topK).toBe(undefined)
     expect(result.minP).toBe(undefined)
     expect(result.repeatPenalty).toBe(undefined)
+  })
+
+  it('treats stored SQL NULL topK as unset so model defaults still apply', () => {
+    const result = mergeSavedOverrides(
+      { temperature: 0.7, topP: 0.9, topK: 40 },
+      { temperature: null as any, topK: null }
+    )
+    expect(result.temperature).toBe(0.7)
+    expect(result.topP).toBe(0.9)
+    expect(result.topK).toBe(40)
   })
 
   it('clears maxTokens on reset (not preserved)', () => {
@@ -703,7 +723,6 @@ describe('session restart-required detection', () => {
     'timeout', 'streamInterval', 'apiKey', 'rateLimit',
     'maxTokens', 'mcpConfig', 'servedModelName',
     'speculativeModel', 'numDraftTokens',
-    'defaultTemperature', 'defaultTopP',
     'embeddingModel', 'additionalArgs',
     'enableAutoToolChoice',
   ])
@@ -1065,12 +1084,12 @@ describe('version comparison edge cases', () => {
 })
 
 // =============================================================================
-// Session Default Temperature Slider Logic
+// Session generation metadata flag logic
 // =============================================================================
 
-describe('session default temperature slider', () => {
-  // Mirrors the buildArgs logic: slider value 0 = "Server default" (don't pass flag)
-  // Slider range: 0-200, step=5, unlimitedValue=0
+describe('session default temperature metadata', () => {
+  // Startup generation values are model-owned metadata. Zero means no bundle
+  // value was available, so no server-wide temperature flag should be emitted.
   function shouldPassTemperature(value: number | null | undefined): boolean {
     return value != null && value > 0
   }

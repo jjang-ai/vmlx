@@ -11,29 +11,12 @@ import {
   AGENTIC_SYSTEM_PROMPT,
 } from "../tools/registry";
 import { executeBuiltinTool } from "../tools/executor";
-import { readGenerationDefaults } from "./models";
 import { detectModelConfigFromDir } from "../model-config-registry";
 import { getAuthHeaders } from "./utils";
 import { extractResponsesWarnings } from "../../shared/responsesWarnings";
 
 // Default connection config (fallback values)
 const DEFAULT_PORT = 8000;
-
-function normalizeReasoningMode(mode: unknown): "auto" | "on" | "off" {
-  const m = String(mode ?? "auto").toLowerCase();
-  if (m === "on" || m === "always" || m === "true" || m === "reasoning")
-    return "on";
-  if (m === "off" || m === "never" || m === "false" || m === "instruct")
-    return "off";
-  return "auto";
-}
-
-function enableThinkingFromReasoningMode(mode: unknown): boolean | undefined {
-  const normalized = normalizeReasoningMode(mode);
-  if (normalized === "on") return true;
-  if (normalized === "off") return false;
-  return undefined;
-}
 
 function shouldForwardReasoningEffort(
   reasoningEffort: unknown,
@@ -46,19 +29,10 @@ function shouldForwardReasoningEffort(
   return sessionHasReasoningParser || detectedFamily === "deepseek-v4";
 }
 
-function dsv4OutputBudget(
-  maxTokens: unknown,
-  enableThinking: unknown,
-  detectedFamily?: string,
-): number | undefined {
-  const parsed =
-    typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0
-      ? Math.floor(maxTokens)
-      : undefined;
-  if (detectedFamily === "deepseek-v4" && enableThinking !== false) {
-    return Math.max(parsed ?? 0, 4096);
-  }
-  return parsed;
+function explicitOutputBudget(maxTokens: unknown): number | undefined {
+  return typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0
+    ? Math.floor(maxTokens)
+    : undefined;
 }
 
 /**
@@ -478,107 +452,12 @@ export function registerChatHandlers(
       };
       db.createChat(chat);
 
-      // Apply model defaults from model_settings (app-global), fallback to generation_config.json
-      if (modelPath) {
-        try {
-          const genDefaults = (await readGenerationDefaults(modelPath)) || {};
-          const modelSettings = db.getModelSettings(modelPath) || {};
-
-          // Default to Auto. Reasoning-capable models such as Qwen/MiniMax
-          // should be able to think on first message without users editing a
-          // hidden server flag; explicit per-model On/Off still wins.
-          const enableThinking = enableThinkingFromReasoningMode(
-            modelSettings.reasoning_mode,
-          );
-
-          db.setChatOverrides({
-            chatId: chat.id,
-            temperature: modelSettings.temperature ?? genDefaults.temperature ?? 0.7,
-            topP: modelSettings.top_p ?? genDefaults.topP ?? 0.9,
-            topK: genDefaults.topK,
-            minP: genDefaults.minP,
-            repeatPenalty: genDefaults.repeatPenalty,
-            maxTokens: modelSettings.max_tokens ?? genDefaults.maxNewTokens,
-            enableThinking,
-          });
-          console.log(
-            `[CHAT] Applied global model settings / generation defaults for ${chat.id}`,
-          );
-        } catch (e) {
-          console.error("[CHAT] Failed to read generation/model defaults:", e);
-        }
-      }
-
-      // Apply default profile (starred profile) on top of generation defaults.
-      // If no profile is starred, auto-inherit tool/search settings from the most
-      // recent chat of the same model — so users don't have to re-enable tools every time.
-      try {
-        const defaultProfile = db.getDefaultChatProfile();
-        if (defaultProfile) {
-          const existing = db.getChatOverrides(chat.id) || { chatId: chat.id };
-          // Profile overrides generation defaults, but only for fields the profile has set
-          const merged = { ...existing };
-          for (const [k, v] of Object.entries(defaultProfile)) {
-            if (v !== undefined && v !== null) {
-              (merged as any)[k] = v;
-            }
-          }
-          merged.chatId = chat.id;
-          db.setChatOverrides(merged as any);
-          console.log(`[CHAT] Applied default profile to new chat ${chat.id}`);
-        } else if (modelPath) {
-          // No starred profile — inherit settings from last chat of same model
-          const siblingChats = db.getChatsByModelPath(modelPath);
-          // Find the most recent OTHER chat (not this one) that has overrides
-          const lastSibling = siblingChats.find((c) => c.id !== chat.id);
-          if (lastSibling) {
-            const lastOverrides = db.getChatOverrides(lastSibling.id);
-            if (lastOverrides) {
-              const existing = db.getChatOverrides(chat.id) || {
-                chatId: chat.id,
-              };
-              // Inherit tool/search/session ergonomics from the last sibling
-              // chat, but never copy sampling parameters. Temperature/top_p/
-              // top_k/min_p/max_tokens/repeat_penalty must come from the
-              // model's generation_config/jang_config unless the current chat
-              // explicitly changes them.
-              const inheritedKeys = [
-                "stopSequences",
-                "wireApi",
-                "builtinToolsEnabled",
-                "webSearchEnabled",
-                "braveSearchEnabled",
-                "fetchUrlEnabled",
-                "fileToolsEnabled",
-                "searchToolsEnabled",
-                "shellEnabled",
-                "gitEnabled",
-                "utilityToolsEnabled",
-                "maxToolIterations",
-                "workingDirectory",
-                "enableThinking",
-                "reasoningEffort",
-                "hideToolStatus",
-                "systemPrompt",
-                "toolResultMaxChars",
-              ] as const;
-              const merged: any = { ...existing };
-              for (const key of inheritedKeys) {
-                if ((lastOverrides as any)[key] !== undefined) {
-                  merged[key] = (lastOverrides as any)[key];
-                }
-              }
-              merged.chatId = chat.id;
-              db.setChatOverrides(merged);
-              console.log(
-                `[CHAT] Inherited tool/search settings from last chat ${lastSibling.id.slice(0, 8)}`,
-              );
-            }
-          }
-        }
-      } catch (e) {
-        console.error("[CHAT] Failed to apply default profile:", e);
-      }
+      // Do not seed new chats from per-model settings or sibling chats. A
+      // clean chat starts with no overrides; the engine resolves bundle
+      // defaults and explicit chat/API settings are stored only per chat.
+      // Chat profiles remain manual presets. They are not auto-applied here
+      // because even a starred profile can carry stale sampling, reasoning,
+      // tools, system prompt, or working-directory state into a clean chat.
 
       return chat;
     },
@@ -1440,11 +1319,7 @@ export function registerChatHandlers(
 
         // Build request body — shared between initial request and tool follow-ups
         const buildRequestBody = (): Record<string, any> => {
-          const resolvedOutputBudget = dsv4OutputBudget(
-            overrides?.maxTokens,
-            overrides?.enableThinking,
-            chatDetectedFamily,
-          );
+          const resolvedOutputBudget = explicitOutputBudget(overrides?.maxTokens);
           const effectiveEnableThinkingOverride =
             !isRemote &&
             !sessionHasReasoningParser &&
@@ -1468,7 +1343,7 @@ export function registerChatHandlers(
               input: inputMessages,
               instructions,
               // Only send temperature/top_p when explicitly set in chat overrides.
-              // When omitted, the server uses its --default-temperature/--default-top-p CLI args.
+              // When omitted, the server resolves bundle metadata/family fallback.
               ...(overrides?.temperature != null
                 ? { temperature: overrides.temperature }
                 : {}),
@@ -1480,13 +1355,13 @@ export function registerChatHandlers(
               stream_options: { include_usage: true },
             };
             if (stopSequences) obj.stop = stopSequences;
-            if (overrides?.topK != null && overrides.topK > 0)
-              obj.top_k = overrides.topK;
+            const effectiveTopK = overrides?.topK;
+            if (effectiveTopK != null && effectiveTopK > 0)
+              obj.top_k = effectiveTopK;
             if (overrides?.minP != null && overrides.minP > 0)
               obj.min_p = overrides.minP;
-            // Always send when explicitly set — don't short-circuit on 1.0,
-            // because the server may now have a --default-repetition-penalty
-            // flag that would otherwise override the user's explicit 1.0.
+            // Always send when explicitly set; 1.0 can be an intentional
+            // per-chat override of a bundle repetition penalty.
             if (overrides?.repeatPenalty != null)
               obj.repetition_penalty = overrides.repeatPenalty;
             if (overrides?.builtinToolsEnabled) {
@@ -1540,7 +1415,7 @@ export function registerChatHandlers(
               model: modelName,
               messages: requestMessages,
               // Only send temperature/top_p when explicitly set in chat overrides.
-              // When omitted, the server uses its --default-temperature/--default-top-p CLI args.
+              // When omitted, the server resolves bundle metadata/family fallback.
               ...(overrides?.temperature != null
                 ? { temperature: overrides.temperature }
                 : {}),
@@ -1550,13 +1425,13 @@ export function registerChatHandlers(
               stream_options: { include_usage: true },
             };
             if (stopSequences) obj.stop = stopSequences;
-            if (overrides?.topK != null && overrides.topK > 0)
-              obj.top_k = overrides.topK;
+            const effectiveTopK = overrides?.topK;
+            if (effectiveTopK != null && effectiveTopK > 0)
+              obj.top_k = effectiveTopK;
             if (overrides?.minP != null && overrides.minP > 0)
               obj.min_p = overrides.minP;
-            // Always send when explicitly set — don't short-circuit on 1.0,
-            // because the server may now have a --default-repetition-penalty
-            // flag that would otherwise override the user's explicit 1.0.
+            // Always send when explicitly set; 1.0 can be an intentional
+            // per-chat override of a bundle repetition penalty.
             if (overrides?.repeatPenalty != null)
               obj.repetition_penalty = overrides.repeatPenalty;
             if (overrides?.builtinToolsEnabled) {
@@ -3550,54 +3425,6 @@ export function registerChatHandlers(
           500000,
         );
       db.setChatOverrides({ chatId, ...sanitized });
-
-      // QoL sync: also sync inference bounds to the root model instances
-      const chat = db.getChat(chatId);
-      if (chat && chat.modelPath) {
-        const existingModelConfig = db.getModelSettings(chat.modelPath) || {};
-        let syncNeeded = false;
-
-        if (
-          sanitized.temperature != null &&
-          sanitized.temperature !== existingModelConfig.temperature
-        ) {
-          existingModelConfig.temperature = sanitized.temperature;
-          syncNeeded = true;
-        }
-        if (
-          sanitized.topP != null &&
-          sanitized.topP !== existingModelConfig.top_p
-        ) {
-          existingModelConfig.top_p = sanitized.topP;
-          syncNeeded = true;
-        }
-        if (
-          sanitized.maxTokens != null &&
-          sanitized.maxTokens !== existingModelConfig.max_tokens
-        ) {
-          existingModelConfig.max_tokens = sanitized.maxTokens;
-          syncNeeded = true;
-        }
-        if (Object.prototype.hasOwnProperty.call(sanitized, "enableThinking")) {
-          const reasoningMode =
-            sanitized.enableThinking === true
-              ? "on"
-              : sanitized.enableThinking === false
-                ? "off"
-                : "auto";
-          if (reasoningMode !== existingModelConfig.reasoning_mode) {
-            existingModelConfig.reasoning_mode = reasoningMode;
-            syncNeeded = true;
-          }
-        }
-
-        if (syncNeeded) {
-          db.saveModelSettings(chat.modelPath, existingModelConfig);
-          console.log(
-            `[CHAT] Synced ${chatId} inference overrides back to global model_settings for ${chat.modelPath}`,
-          );
-        }
-      }
 
       return { success: true };
     },

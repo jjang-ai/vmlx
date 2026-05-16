@@ -63,6 +63,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   const { showToast } = useToast()
   const { t } = useTranslation()
   const [overrides, setOverrides] = useState<ChatOverrides>({})
+  const [modelDefaults, setModelDefaults] = useState<Partial<ChatOverrides>>({})
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [profiles, setProfiles] = useState<ChatProfile[]>([])
@@ -99,24 +100,21 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
         setSavedChatModelPath(undefined)
         setMessageCount(0)
       }
-      // Pull recommended defaults from the model's own generation_config.json
-      // so the UI shows what the model author recommends — not hardcoded fallbacks
-      // like 0.7 / 0.9 that have no relation to the loaded model. This is display-only
-      // until the user edits + clicks Save (we don't flag dirty, so closing the panel
-      // without editing preserves the NULL state in the DB).
-      let modelDefaults: Partial<ChatOverrides> = {}
+      // Pull recommended defaults from model metadata. If the bundle does not
+      // declare a value, leave it unset so the engine resolves its own fallback.
+      let detectedModelDefaults: Partial<ChatOverrides> = {}
       if (session.modelPath) {
         try {
           const gen = await window.api.models.getGenerationDefaults(session.modelPath)
           if (gen) {
-            if (gen.temperature != null) modelDefaults.temperature = gen.temperature
-            if (gen.topP != null) modelDefaults.topP = gen.topP
-            if (gen.topK != null) modelDefaults.topK = gen.topK
-            if (gen.minP != null) modelDefaults.minP = gen.minP
-            if (gen.repeatPenalty != null) modelDefaults.repeatPenalty = gen.repeatPenalty
-            if (gen.maxNewTokens != null) modelDefaults.maxTokens = gen.maxNewTokens
+            if (gen.temperature != null) detectedModelDefaults.temperature = gen.temperature
+            if (gen.topP != null) detectedModelDefaults.topP = gen.topP
+            if (gen.topK != null) detectedModelDefaults.topK = gen.topK
+            if (gen.minP != null) detectedModelDefaults.minP = gen.minP
+            if (gen.repeatPenalty != null) detectedModelDefaults.repeatPenalty = gen.repeatPenalty
+            if (gen.maxNewTokens != null) detectedModelDefaults.maxTokens = gen.maxNewTokens
           }
-        } catch (_) {/* no generation_config.json — fall back to hardcoded placeholders */}
+        } catch (_) {/* no generation_config.json / jang_config sampling defaults */}
         try {
           const detected = await window.api.models.detectConfig(session.modelPath)
           setDetectedFamily(detected?.family)
@@ -126,9 +124,13 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
           setDetectedToolParser(undefined)
         }
       }
-      // Saved overrides win over model defaults for any field the user has explicitly set.
-      const merged: ChatOverrides = { ...modelDefaults, ...(saved || {}) }
-      setOverrides(merged)
+      // Saved non-null overrides win over model defaults. SQL NULL means the
+      // field is unset, not an explicit request to mask the model/app default.
+      const savedExplicit = Object.fromEntries(
+        Object.entries(saved || {}).filter(([, v]) => v !== null && v !== undefined),
+      ) as ChatOverrides
+      setModelDefaults(detectedModelDefaults)
+      setOverrides(savedExplicit)
       setDirty(false)
     })()
     loadProfiles()
@@ -143,17 +145,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
     enableThinking: boolean,
     reasoningEffort?: ChatOverrides['reasoningEffort']
   ) => {
-    setOverrides(prev => {
-      const next: ChatOverrides = { ...prev, enableThinking, reasoningEffort }
-      if (detectedFamily === 'deepseek-v4' && enableThinking) {
-        // DSV4's own jang_config declares 4096 as the chat/thinking budget.
-        // Older chats can carry stale 300/900/1024 caps; those strand output
-        // inside <think> and make Reasoning/Max look broken even when the
-        // encoder/runtime is correct.
-        next.maxTokens = Math.max(prev.maxTokens ?? 0, 4096)
-      }
-      return next
-    })
+    setOverrides(prev => ({ ...prev, enableThinking, reasoningEffort }))
     setDirty(true)
   }
 
@@ -188,20 +180,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
     if (overrides.gitEnabled != null) preserved.gitEnabled = overrides.gitEnabled
     if (overrides.utilityToolsEnabled != null) preserved.utilityToolsEnabled = overrides.utilityToolsEnabled
 
-    // Re-read model's generation_config.json for recommended inference defaults
-    // Use atomic upsert (INSERT OR REPLACE) instead of clear-then-set
     const defaults: ChatOverrides = { ...preserved }
-    try {
-      const gen = await window.api.models.getGenerationDefaults(session.modelPath)
-      if (gen) {
-        if (gen.temperature != null) defaults.temperature = gen.temperature
-        if (gen.topP != null) defaults.topP = gen.topP
-        if (gen.topK != null) defaults.topK = gen.topK
-        if (gen.minP != null) defaults.minP = gen.minP
-        if (gen.repeatPenalty != null) defaults.repeatPenalty = gen.repeatPenalty
-        if (gen.maxNewTokens != null) defaults.maxTokens = gen.maxNewTokens
-      }
-    } catch (_) {}
     await window.api.chat.setOverrides(chatId, defaults)
     setOverrides(defaults)
     setDirty(false)
@@ -568,14 +547,14 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
             </div>
             <SliderField
               label={t('chat.settings.temperature')}
-              value={overrides.temperature ?? 0.7}
+              value={overrides.temperature ?? modelDefaults.temperature ?? 0}
               onChange={v => update('temperature', v)}
               min={0} max={2} step={0.05}
               help={t('chat.settings.temperatureHelp')}
             />
             <SliderField
               label={t('chat.settings.topP')}
-              value={overrides.topP ?? 0.9}
+              value={overrides.topP ?? modelDefaults.topP ?? 1}
               onChange={v => update('topP', v)}
               min={0} max={1} step={0.05}
               help={t('chat.settings.topPHelp')}
@@ -584,12 +563,12 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
               label={t('chat.settings.maxTokens')}
               value={overrides.maxTokens}
               onChange={v => update('maxTokens', v)}
-              placeholder={t('chat.settings.maxTokensPlaceholder')}
+              placeholder={modelDefaults.maxTokens ? `${modelDefaults.maxTokens} (model default)` : t('chat.settings.maxTokensPlaceholder')}
               help={t('chat.settings.maxTokensHelp')}
             />
             <SliderField
               label={t('chat.settings.topK')}
-              value={overrides.topK ?? 0}
+              value={overrides.topK ?? modelDefaults.topK ?? 0}
               onChange={v => update('topK', v === 0 ? undefined : v)}
               min={0} max={200} step={1}
               help={t('chat.settings.topKHelp')}
@@ -597,14 +576,14 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
             />
             <SliderField
               label={t('chat.settings.minP')}
-              value={overrides.minP ?? 0}
+              value={overrides.minP ?? modelDefaults.minP ?? 0}
               onChange={v => update('minP', v === 0 ? undefined : v)}
               min={0} max={1} step={0.01}
               help={t('chat.settings.minPHelp')}
             />
             <SliderField
               label={t('chat.settings.repetitionPenalty')}
-              value={overrides.repeatPenalty ?? 1.0}
+              value={overrides.repeatPenalty ?? modelDefaults.repeatPenalty ?? 1.0}
               onChange={v => update('repeatPenalty', v === 1.0 ? undefined : v)}
               min={1.0} max={2.0} step={0.05}
               help={t('chat.settings.repetitionPenaltyHelp')}

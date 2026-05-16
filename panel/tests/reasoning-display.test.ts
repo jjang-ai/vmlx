@@ -555,17 +555,18 @@ describe('emitDelta state machine — reasoning→content transitions', () => {
 function deriveEnableThinking(
     overridesEnableThinking: boolean | undefined,
     sessionHasReasoningParser: boolean
-): boolean {
-    return overridesEnableThinking ?? sessionHasReasoningParser
+): boolean | undefined {
+    void sessionHasReasoningParser
+    return overridesEnableThinking
 }
 
 describe('enable_thinking derivation', () => {
-    it('Auto mode with qwen3 parser → true', () => {
-        expect(deriveEnableThinking(undefined, true)).toBe(true)
+    it('Auto mode with qwen3 parser → omitted so engine resolves model default', () => {
+        expect(deriveEnableThinking(undefined, true)).toBeUndefined()
     })
 
-    it('Auto mode without parser → false', () => {
-        expect(deriveEnableThinking(undefined, false)).toBe(false)
+    it('Auto mode without parser → omitted so engine registry/fallback resolves', () => {
+        expect(deriveEnableThinking(undefined, false)).toBeUndefined()
     })
 
     it('Explicit On overrides no-parser → true', () => {

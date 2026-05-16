@@ -59,6 +59,7 @@ export interface ServerConfig {
   // Performance
   streamInterval: number
   maxTokens?: number
+  defaultMaxNewTokens?: number
   defaultTopK?: number
   defaultMinP?: number
 
@@ -96,7 +97,8 @@ export interface ServerConfig {
   // Additional
   additionalArgs?: string
 
-  // Server-level default for enable_thinking (from model_settings.reasoning_mode)
+  // Display-only legacy field; session startup does not pass enable_thinking.
+  // Chat/API requests carry explicit values and the engine resolves model defaults.
   defaultEnableThinking?: boolean
 
   // JIT compilation (mx.compile)

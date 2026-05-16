@@ -1407,6 +1407,63 @@ class MLXMultimodalLM:
 
         return bool(getattr(family_config, "think_in_template", False))
 
+    def _synthesizes_thinking_prompt_when_enabled(self) -> bool:
+        """Return True for MLLM families whose template needs an explicit open rail.
+
+        ZAYA1-VL bundles declare qwen3 reasoning support in the registry but
+        their mlx-vlm chat template can be a plain ``assistant: `` suffix. In
+        that case an explicit per-chat/API ``enable_thinking=true`` must open
+        the qwen3 rail in the prompt. This is intentionally family-gated; most
+        VLM templates either own their think rail or do not support reasoning.
+        """
+
+        config = getattr(self, "config", None)
+        if not isinstance(config, dict):
+            config = {}
+
+        caps = config.get("capabilities")
+        caps = caps if isinstance(caps, dict) else {}
+        if caps.get("supports_thinking") is False:
+            return False
+
+        model_type = config.get("model_type")
+        text_config = config.get("text_config")
+        if not model_type and isinstance(text_config, dict):
+            model_type = text_config.get("model_type")
+
+        family_names = {
+            str(v).lower()
+            for v in (caps.get("family"), model_type)
+            if isinstance(v, str) and v
+        }
+        reasoning_parser = caps.get("reasoning_parser")
+        supports_thinking = caps.get("supports_thinking")
+        think_in_template = caps.get("think_in_template")
+
+        try:
+            from vmlx_engine.model_config_registry import get_model_config_registry
+
+            registry = get_model_config_registry()
+            family_config = registry.lookup(str(getattr(self, "model_name", "") or ""))
+            if getattr(family_config, "family_name", None):
+                family_names.add(str(family_config.family_name).lower())
+            if getattr(family_config, "reasoning_parser", None):
+                reasoning_parser = family_config.reasoning_parser
+            if getattr(family_config, "supports_thinking", None) is not None:
+                supports_thinking = family_config.supports_thinking
+            if getattr(family_config, "think_in_template", None) is not None:
+                think_in_template = family_config.think_in_template
+        except Exception:
+            pass
+
+        if supports_thinking is False:
+            return False
+        if think_in_template is True:
+            return False
+        if str(reasoning_parser or "").lower() != "qwen3":
+            return False
+        return bool(family_names & {"zaya", "zaya1_vl", "zaya1-vl"})
+
     def _apply_chat_template(
         self,
         chat_messages: list[dict],
@@ -1467,6 +1524,23 @@ class MLXMultimodalLM:
                     formatted_prompt = formatted_prompt[:last_think + 7] + "</think>\n"
             elif "<think>" not in formatted_prompt and self._prompt_template_supports_thinking():
                 formatted_prompt = formatted_prompt.rstrip() + "\n<think>\n</think>\n"
+
+        # ZAYA1-VL's processor template can be plain while the model is still
+        # qwen3-reasoning capable. Honor explicit thinking-on by opening the
+        # rail in the assistant generation prompt; Auto/Off remain plain.
+        if (
+            enable_thinking is True
+            and formatted_prompt
+            and self._synthesizes_thinking_prompt_when_enabled()
+        ):
+            last_think = formatted_prompt.rfind("<think>")
+            has_open_unclosed = last_think >= 0 and "</think>" not in formatted_prompt[last_think:]
+            if not has_open_unclosed:
+                stripped = formatted_prompt.rstrip()
+                if stripped.endswith("assistant:"):
+                    formatted_prompt = stripped + " <think>\n"
+                else:
+                    formatted_prompt = stripped + "\n<think>\n"
 
         if formatted_prompt is None:
             # Fallback to last user message if template fails
@@ -2097,7 +2171,7 @@ class MLXMultimodalLM:
         top_k = kwargs.pop("top_k", 0)
         min_p = kwargs.pop("min_p", 0.0)
         if (top_k and top_k > 0) or (min_p and min_p > 0.0):
-            from mlx_lm.sample_utils import make_sampler
+            from ..sampling import make_sampler
             top_p = kwargs.pop("top_p", 1.0)
             kwargs["sampler"] = make_sampler(
                 temp=temperature, top_p=top_p, min_p=min_p, top_k=top_k
@@ -2355,7 +2429,7 @@ class MLXMultimodalLM:
         top_k = kwargs.pop("top_k", 0)
         min_p = kwargs.pop("min_p", 0.0)
         if (top_k and top_k > 0) or (min_p and min_p > 0.0):
-            from mlx_lm.sample_utils import make_sampler
+            from ..sampling import make_sampler
             top_p = kwargs.pop("top_p", 1.0)
             kwargs["sampler"] = make_sampler(
                 temp=temperature, top_p=top_p, min_p=min_p, top_k=top_k

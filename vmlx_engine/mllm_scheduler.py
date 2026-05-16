@@ -1725,7 +1725,7 @@ class MLLMScheduler:
         because cache objects contain tensor references tied to the old generator.
         Passes all cache objects and quantization settings to the new generator.
         """
-        from mlx_lm.sample_utils import make_sampler
+        from .sampling import make_sampler
 
         # If no sampling params provided and generator exists, keep current
         if sampling_params is None and self.batch_generator is not None:

@@ -26,7 +26,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from mlx_lm.generate import BatchGenerator, generation_stream
-from mlx_lm.sample_utils import make_sampler
+from .sampling import make_sampler
 from .block_disk_store import BlockDiskStore
 from .disk_cache import DiskCacheManager
 from .memory_cache import MemoryAwarePrefixCache, MemoryCacheConfig

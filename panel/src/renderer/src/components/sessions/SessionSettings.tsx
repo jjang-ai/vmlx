@@ -35,6 +35,27 @@ function isZayaCcaFamily(family?: string): boolean {
 
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 
+async function applyBundleGenerationDefaults(config: SessionConfig, modelPath: string): Promise<SessionConfig> {
+  const next: SessionConfig = { ...config }
+  try {
+    const gen = await window.api.models.getGenerationDefaults(modelPath) as any
+    next.defaultTemperature = gen?.temperature != null ? Math.round(gen.temperature * 100) : 0
+    next.defaultTopP = gen?.topP != null ? Math.round(gen.topP * 100) : 0
+    next.defaultTopK = gen?.topK != null ? Math.max(0, Math.round(gen.topK)) : 0
+    next.defaultMinP = gen?.minP != null ? Math.round(gen.minP * 100) : 0
+    next.defaultRepetitionPenalty = gen?.repeatPenalty != null ? Math.round(gen.repeatPenalty * 100) : 0
+    next.defaultMaxNewTokens = gen?.maxNewTokens != null ? Math.round(gen.maxNewTokens) : 0
+  } catch (_) {
+    next.defaultTemperature = 0
+    next.defaultTopP = 0
+    next.defaultTopK = 0
+    next.defaultMinP = 0
+    next.defaultRepetitionPenalty = 0
+    next.defaultMaxNewTokens = 0
+  }
+  return next
+}
+
 /**
  * Build a preview of the CLI command from config.
  * This MUST mirror the logic in sessions.ts buildArgs() exactly.
@@ -222,30 +243,14 @@ function buildCommandPreview(
     }
   }
 
-  // Generation defaults. This renderer-side preview cannot read bundle files,
-  // so it mirrors the packaged-app spawn path by hiding stale historical UI
-  // defaults that would otherwise look like explicit server overrides.
-  if (config.defaultTemperature && config.defaultTemperature > 0 && config.defaultTemperature !== 70) {
-    parts.push('--default-temperature', (config.defaultTemperature / 100).toFixed(2))
-  }
-  if (config.defaultTopP && config.defaultTopP > 0 && config.defaultTopP !== 95) {
-    parts.push('--default-top-p', (config.defaultTopP / 100).toFixed(2))
-  }
-  if ((config as any).defaultTopK != null && (config as any).defaultTopK > 0) {
-    parts.push('--default-top-k', Math.round((config as any).defaultTopK).toString())
-  }
-  if ((config as any).defaultMinP != null && (config as any).defaultMinP > 0) {
-    parts.push('--default-min-p', ((config as any).defaultMinP / 100).toFixed(2))
-  }
-  if ((config as any).defaultRepetitionPenalty != null && (config as any).defaultRepetitionPenalty > 0 && (config as any).defaultRepetitionPenalty !== 110) {
-    parts.push('--default-repetition-penalty', ((config as any).defaultRepetitionPenalty / 100).toFixed(2))
-  }
+  // Generation defaults are resolved inside vmlx_engine.server from
+  // jang_config/generation_config. The panel preview must not synthesize
+  // --default-* flags that would override the engine's bundle lookup.
 
   // Embedding model
   if (config.embeddingModel) parts.push('--embedding-model', config.embeddingModel)
 
-  if (config.defaultEnableThinking === true) parts.push('--default-enable-thinking', 'true')
-  else if (config.defaultEnableThinking === false) parts.push('--default-enable-thinking', 'false')
+  // Thinking defaults are resolved by the engine and explicit chat/API requests.
 
   if (effectiveEnableJit) parts.push('--enable-jit')
 
@@ -296,7 +301,8 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         // Parse stored config JSON, merge with defaults
         try {
           const stored = JSON.parse(s.config)
-          setConfig({ ...DEFAULT_CONFIG, ...stored })
+          const hydrated = await applyBundleGenerationDefaults({ ...DEFAULT_CONFIG, ...stored }, s.modelPath)
+          setConfig(hydrated)
         } catch {
           setConfig(DEFAULT_CONFIG)
           setMessage({ type: 'error', text: 'Stored configuration was corrupted and has been reset to defaults. Save to persist.' })
@@ -435,6 +441,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
             base.isMultimodal = true
           }
         }
+        Object.assign(base, await applyBundleGenerationDefaults(base, session.modelPath))
       } catch (_) { }
     }
     setConfig(base)

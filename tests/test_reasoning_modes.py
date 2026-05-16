@@ -1,6 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Reasoning-mode request normalization tests."""
 
+import json
+import sys
+import types
+from types import SimpleNamespace
+
 import pytest
 from pydantic import ValidationError
 
@@ -498,13 +503,16 @@ def test_missing_bundle_sampling_defaults_do_not_force_sampler(tmp_path, monkeyp
     monkeypatch.setattr(server, "_model_name", "zaya-vl")
     monkeypatch.setattr(server, "_default_temperature", None)
     monkeypatch.setattr(server, "_default_top_p", None)
+    monkeypatch.setattr(server, "_default_top_k", None)
     server._jang_sampling_defaults_cache.clear()
     server._generation_defaults_cache.clear()
 
     assert server._resolve_temperature(None) == 0.0
     assert server._resolve_top_p(None) == 1.0
+    assert server._resolve_top_k(None) == 0
     assert server._resolve_temperature(0.7) == 0.7
     assert server._resolve_top_p(0.95) == 0.95
+    assert server._resolve_top_k(40) == 40
 
 
 @pytest.mark.parametrize("model_type", ["bailing_hybrid", "bailing_moe_v2_5"])
@@ -802,6 +810,95 @@ def test_template_starts_reasoning_is_request_dependent_for_zaya_style_template(
     ) is True
     assert server._template_starts_reasoning(
         ZayaStyleTokenizer(), "zaya-test", False
+    ) is False
+
+
+def test_zaya_vl_mllm_thinking_on_synthesizes_open_think_for_plain_template(
+    tmp_path, monkeypatch
+):
+    """ZAYA1-VL is reasoning-capable even when the processor template is plain.
+
+    Some ZAYA1-VL/JANGTQ and MXFP4 bundles declare qwen3 reasoning in
+    jang_config, but their mlx-vlm processor template only emits
+    ``assistant: ``. An explicit per-chat/API thinking-on request must open
+    the qwen3 rail in the prompt, while thinking-off must stay plain.
+    """
+    from vmlx_engine.models.mllm import MLXMultimodalLM
+
+    bundle = tmp_path / "zaya-vl"
+    bundle.mkdir()
+    (bundle / "config.json").write_text(json.dumps({"model_type": "zaya1_vl"}))
+    (bundle / "jang_config.json").write_text(
+        json.dumps(
+            {
+                "capabilities": {
+                    "family": "zaya1_vl",
+                    "reasoning_parser": "qwen3",
+                    "supports_thinking": True,
+                    "think_in_template": False,
+                }
+            }
+        )
+    )
+
+    pkg = types.ModuleType("mlx_vlm")
+    pkg.__path__ = []
+    prompt_utils = types.ModuleType("mlx_vlm.prompt_utils")
+    prompt_utils.get_chat_template = (
+        lambda processor, messages, add_generation_prompt=True, **kwargs: "user: hi\nassistant: "
+    )
+    monkeypatch.setitem(sys.modules, "mlx_vlm", pkg)
+    monkeypatch.setitem(sys.modules, "mlx_vlm.prompt_utils", prompt_utils)
+
+    lm = object.__new__(MLXMultimodalLM)
+    lm.processor = object()
+    lm.config = {"model_type": "zaya1_vl"}
+    lm.model_name = str(bundle)
+
+    messages = [{"role": "user", "content": "hi"}]
+    assert lm._apply_chat_template(messages, enable_thinking=True).endswith(
+        "assistant: <think>\n"
+    )
+    assert "<think>" not in lm._apply_chat_template(messages, enable_thinking=False)
+
+
+def test_zaya_vl_synthetic_mllm_think_prompt_seed_is_request_dependent(
+    tmp_path,
+):
+    """Server reasoning parser seeding must match the synthetic MLLM prompt."""
+    from vmlx_engine import server
+
+    bundle = tmp_path / "zaya-vl"
+    bundle.mkdir()
+    (bundle / "config.json").write_text(json.dumps({"model_type": "zaya1_vl"}))
+    (bundle / "jang_config.json").write_text(
+        json.dumps(
+            {
+                "capabilities": {
+                    "family": "zaya1_vl",
+                    "reasoning_parser": "qwen3",
+                    "supports_thinking": True,
+                    "think_in_template": False,
+                }
+            }
+        )
+    )
+
+    engine = SimpleNamespace(is_mllm=True)
+    assert server._synthetic_mllm_think_prompt_starts(
+        model_key=str(bundle),
+        enable_thinking=True,
+        engine=engine,
+    ) is True
+    assert server._synthetic_mllm_think_prompt_starts(
+        model_key=str(bundle),
+        enable_thinking=False,
+        engine=engine,
+    ) is False
+    assert server._synthetic_mllm_think_prompt_starts(
+        model_key=str(bundle),
+        enable_thinking=True,
+        engine=SimpleNamespace(is_mllm=False),
     ) is False
 
 

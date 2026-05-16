@@ -54,13 +54,6 @@ interface BundleStartupDefaults {
   source?: 'generation_config' | 'jang_config'
 }
 
-function normalizeReasoningMode(mode: unknown): 'auto' | 'on' | 'off' {
-  const m = String(mode ?? 'auto').toLowerCase()
-  if (m === 'on' || m === 'always' || m === 'true' || m === 'reasoning') return 'on'
-  if (m === 'off' || m === 'never' || m === 'false' || m === 'instruct') return 'off'
-  return 'auto'
-}
-
 function normalizeDetectedFamilyName(family?: string): string | undefined {
   if (!family) return undefined
   if (family === 'zaya1_vl') return 'zaya1-vl'
@@ -122,50 +115,28 @@ function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
 
 function applyBundleStartupDefaults(config: Partial<ServerConfig>, modelPath?: string): void {
   const defs = readBundleStartupDefaults(modelPath)
-  if (!defs.source) return
 
-  // Treat the built-in generic slider values as "unset" for model-specific
-  // startup. This lets DSV4/Nemotron/etc. launch with bundle-calibrated CLI
-  // defaults while preserving explicit non-generic user edits.
-  if (
-    defs.defaultTemperature != null &&
-    (config.defaultTemperature == null || config.defaultTemperature === 70)
-  ) {
-    config.defaultTemperature = defs.defaultTemperature
-  }
-  if (
-    defs.defaultTopP != null &&
-    (config.defaultTopP == null || config.defaultTopP === 95)
-  ) {
-    config.defaultTopP = defs.defaultTopP
-  }
-  if (
-    defs.defaultTopK != null &&
-    ((config as any).defaultTopK == null || (config as any).defaultTopK === 0)
-  ) {
-    ;(config as any).defaultTopK = defs.defaultTopK
-  }
-  if (
-    defs.defaultMinP != null &&
-    ((config as any).defaultMinP == null || (config as any).defaultMinP === 0)
-  ) {
-    ;(config as any).defaultMinP = defs.defaultMinP
-  }
-  if (
-    defs.defaultRepetitionPenalty != null &&
-    (
-      (config as any).defaultRepetitionPenalty == null ||
-      (config as any).defaultRepetitionPenalty === 0 ||
-      (config as any).defaultRepetitionPenalty === 110
-    )
-  ) {
-    ;(config as any).defaultRepetitionPenalty = defs.defaultRepetitionPenalty
-  }
-  if (
-    defs.maxTokens != null &&
-    (config.maxTokens == null || config.maxTokens === 32768)
-  ) {
-    config.maxTokens = defs.maxTokens
+  // Startup generation defaults are model-owned. Keep the saved/display config
+  // aligned with bundle sampling metadata and clear old generic startup
+  // overrides; buildArgs intentionally does not turn these values into
+  // --default-* flags. max_new_tokens is also bundle-owned, but it must not be
+  // copied into a hidden session-level --max-tokens default. Users change
+  // output length per chat or per API request.
+  config.defaultTemperature = defs.defaultTemperature ?? 0
+  config.defaultTopP = defs.defaultTopP ?? 0
+  ;(config as any).defaultTopK = defs.defaultTopK ?? 0
+  ;(config as any).defaultMinP = defs.defaultMinP ?? 0
+  ;(config as any).defaultRepetitionPenalty = defs.defaultRepetitionPenalty ?? 0
+  ;(config as any).defaultMaxNewTokens = defs.maxTokens ?? 0
+  const migrationKey = 'generationStartupDefaultsVersion'
+  if ((config as any)[migrationKey] !== 2) {
+    const oldHiddenMaxTokens =
+      defs.maxTokens != null && Number(config.maxTokens) === Number(defs.maxTokens)
+    const oldGenericMaxTokens = [4096, 12000].includes(Number(config.maxTokens))
+    if (oldHiddenMaxTokens || oldGenericMaxTokens) {
+      config.maxTokens = 32768
+    }
+    ;(config as any)[migrationKey] = 2
   }
 }
 
@@ -809,15 +780,10 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // Apply model_settings.reasoning_mode as server-level default for external API clients.
-    // Auto must not serialize as false: local/API requests should then fall
-    // through to model-family detection instead of forcing Qwen/MiniMax/etc.
-    // into instruct mode.
-    const modelSettings = db.getModelSettings(session.modelPath)
-    const reasoningMode = normalizeReasoningMode(modelSettings?.reasoning_mode)
-    if (reasoningMode === 'on') config.defaultEnableThinking = true
-    else if (reasoningMode === 'off') config.defaultEnableThinking = false
-    else delete config.defaultEnableThinking
+    // Server startup must not carry per-chat thinking choices. The engine
+    // resolves model defaults from its registry/bundle; explicit chat/API
+    // requests pass enable_thinking per request.
+    delete config.defaultEnableThinking
 
     const engineResult = this.findEnginePath()
     if (!engineResult) throw new Error('vmlx-engine not found. Please install it first.')
@@ -885,29 +851,15 @@ export class SessionManager extends EventEmitter {
             config.reasoningParser = freshConfig.reasoningParser || 'auto'
           }
           // v1.5.25 ZAYA recovery: early ZAYA builds were misdetected as Qwen
-          // reasoning models and persisted `toolCallParser=qwen` /
-          // `reasoningParser=qwen3` in session configs. Those stale values look
-          // like user overrides on the next launch, so the generic "preserve
-          // explicit overrides" rule keeps poisoning the runtime even after
-          // registry detection is fixed. ZAYA/ZAYA1-VL's current product
-          // contract is explicit: native XML tools, no reasoning default.
-          // Existing rows with `defaultEnableThinking=true` must also be reset;
-          // otherwise the installed app launches ZAYA JANGTQ2 into a hidden
-          // thinking rail and the first user turn can appear stuck as "Thinking".
-          // Preserve only explicit "None" (`''`) choices.
+          // tool parsers. Preserve only explicit "None" (`''`) choices, but
+          // keep reasoning on the registry path because ZAYA/ZAYA1-VL declare a
+          // qwen3-compatible thinking rail and per-chat On/Off must work.
           if (isZayaCcaFamily(freshFamily)) {
             if (config.toolCallParser !== '') {
               config.toolCallParser = freshConfig.toolParser || 'auto'
             }
             if (config.reasoningParser !== '') {
-              config.reasoningParser = 'auto'
-            }
-            const oldDefaultEnableThinking = config.defaultEnableThinking
-            if (config.defaultEnableThinking !== false) {
-              config.defaultEnableThinking = false
-            }
-            if (oldDefaultEnableThinking === true) {
-              this.pushLog(sessionId, '[INFO] ZAYA default thinking reset from stale on to off')
+              config.reasoningParser = freshConfig.reasoningParser || 'auto'
             }
           }
           // Refresh multimodal detection from disk. A detected VLM must win
@@ -1337,7 +1289,6 @@ export class SessionManager extends EventEmitter {
     'speculativeModel', 'numDraftTokens', 'smelt', 'smeltExperts',
     'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
     'distributedEnabled', 'distributedMode', 'distributedSecret',
-    'defaultTemperature', 'defaultTopP', 'defaultTopK', 'defaultMinP', 'defaultRepetitionPenalty',
     'embeddingModel', 'additionalArgs', 'mfluxClass',
     'enableAutoToolChoice', 'chatTemplate',
     'logLevel', 'corsOrigins',
@@ -1479,7 +1430,7 @@ export class SessionManager extends EventEmitter {
           toolCallParser: 'auto',
           reasoningParser: 'auto',
           dsv4PoolQuant: false,
-          defaultEnableThinking: isZayaCcaFamily(detected.family) ? false : undefined,
+          defaultEnableThinking: undefined,
           enableAutoToolChoice: detected.enableAutoToolChoice
         }
         session = {
@@ -2463,44 +2414,18 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // Generation defaults (slider value is integer ×100, convert to float).
-    // Emit user/bundle-declared defaults only. The old UI defaults of 0.70
-    // temperature and 0.95 top_p must not silently override a bundle that has
-    // no sampling metadata; the engine's neutral fallback should apply there.
-    const bundleDefsForSampling = readBundleStartupDefaults(config.modelPath)
-    const hasBundleTemp = bundleDefsForSampling.defaultTemperature != null
-    const hasBundleTopP = bundleDefsForSampling.defaultTopP != null
-    const temp = (config as any).defaultTemperature
-    const topP = (config as any).defaultTopP
-    if (temp != null && temp > 0 && (temp !== 70 || hasBundleTemp)) {
-      args.push('--default-temperature', (temp / 100).toFixed(2))
-    }
-    if (topP != null && topP > 0 && (topP !== 95 || hasBundleTopP)) {
-      args.push('--default-top-p', (topP / 100).toFixed(2))
-    }
-    if ((config as any).defaultTopK != null && (config as any).defaultTopK > 0) {
-      args.push('--default-top-k', Math.round((config as any).defaultTopK).toString())
-    }
-    if ((config as any).defaultMinP != null && (config as any).defaultMinP > 0) {
-      args.push('--default-min-p', ((config as any).defaultMinP / 100).toFixed(2))
-    }
-    // Server-level default repetition penalty is explicit only. Historical
-    // 1.10 UI state is ignored unless the bundle declares that value; bundle
-    // metadata or per-request values should drive sampling.
-    const hasBundleRep = bundleDefsForSampling.defaultRepetitionPenalty != null
-    const rep = (config as any).defaultRepetitionPenalty
-    if (rep != null && rep > 0 && (rep !== 110 || hasBundleRep)) {
-      args.push('--default-repetition-penalty', ((config as any).defaultRepetitionPenalty / 100).toFixed(2))
-    }
+    // Generation defaults are intentionally not passed as --default-* from the
+    // panel. The engine resolves request > explicit API/chat value > bundle
+    // jang_config/generation_config > family fallback in vmlx_engine.server.
 
     // Embedding model
     if (config.embeddingModel) {
       args.push('--embedding-model', config.embeddingModel)
     }
 
-    // Server-level default for enable_thinking (applies to all API clients)
-    if (config.defaultEnableThinking === true) args.push('--default-enable-thinking', 'true')
-    else if (config.defaultEnableThinking === false) args.push('--default-enable-thinking', 'false')
+    // Do not pass server-level enable_thinking defaults from the panel. The
+    // engine resolves model defaults, and chat/API requests carry explicit
+    // enable_thinking per request.
 
     // JIT compilation
     if (effectiveEnableJit) args.push('--enable-jit')

@@ -97,6 +97,18 @@ class DSMLToolParser(ToolParser):
         r'<param\s+name=["\']?([A-Za-z_][A-Za-z0-9_]*)["\']?[^>]*>([^<]*)',
         re.DOTALL,
     )
+    _PLAIN_PARAM_RE = re.compile(
+        r'<(?:param|parameter)\s+name=["\']?([A-Za-z_][A-Za-z0-9_]*)["\']?[^>]*>(.*?)</(?:param|parameter)>',
+        re.DOTALL,
+    )
+    _DEGRADED_INVOKE_START_RE = re.compile(
+        rf'(?:<{re.escape(DSML_PREFIX)}invoke|<invoke)\s+name=["\']([^"\']+)["\']\s*>',
+        re.DOTALL,
+    )
+    _DEGRADED_INVOKE_CLOSE_RE = re.compile(
+        rf'</(?:{re.escape(DSML_PREFIX)})?inv(?:oke)?>',
+        re.DOTALL,
+    )
 
     def _has_dsml(self, text: str) -> bool:
         return self.INVOKE_OPEN_PREFIX in text
@@ -117,6 +129,59 @@ class DSMLToolParser(ToolParser):
                 except Exception:
                     out[name] = raw
         return out
+
+    def _schema_props_required(
+        self, schema: dict[str, Any] | None
+    ) -> tuple[dict[str, Any], list[str]]:
+        if not isinstance(schema, dict):
+            return {}, []
+        params_schema = schema.get("parameters") or {}
+        if not isinstance(params_schema, dict):
+            return {}, []
+        props = params_schema.get("properties") or {}
+        required = params_schema.get("required") or []
+        return (
+            props if isinstance(props, dict) else {},
+            required if isinstance(required, list) else [],
+        )
+
+    def _coerce_plain_param_value(
+        self, raw: str, prop_schema: dict[str, Any] | None
+    ) -> Any:
+        value = re.sub(r"<br\s*/?>", "", raw, flags=re.IGNORECASE).strip()
+        if not isinstance(prop_schema, dict):
+            return value
+        schema_type = prop_schema.get("type")
+        if isinstance(schema_type, list):
+            schema_type = next((t for t in schema_type if t != "null"), None)
+        if schema_type in {"integer", "number", "boolean", "array", "object"}:
+            try:
+                return json.loads(value)
+            except Exception:
+                return value
+        return value
+
+    def _parse_plain_params(
+        self, body: str, schema: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        props, _ = self._schema_props_required(schema)
+        if not props:
+            return {}
+        args: dict[str, Any] = {}
+        for m in self._PLAIN_PARAM_RE.finditer(body):
+            name, raw = m.group(1), m.group(2)
+            if name not in props:
+                continue
+            value = self._coerce_plain_param_value(raw, props.get(name))
+            if value != "":
+                args[name] = value
+        return args
+
+    def _required_satisfied(
+        self, args: dict[str, Any], schema: dict[str, Any] | None
+    ) -> bool:
+        _, required = self._schema_props_required(schema)
+        return all(p in args for p in required)
 
     def _tool_schemas(self, request: Any | None) -> dict[str, dict[str, Any]]:
         """Return available tool schemas keyed by function name.
@@ -312,7 +377,91 @@ class DSMLToolParser(ToolParser):
             )
         ]
 
-    def _try_encoding_dsv4_parse(self, model_output: str):
+    def _repair_degraded_dsml_invokes(
+        self, text: str, request: Any | None
+    ) -> list[dict[str, Any]]:
+        """Repair DSML wrapper/invoke blocks that degraded to plain params.
+
+        DSV4 JANGTQ2 can keep the DSML invoke marker but emit MiniMax-style
+        ``<param name="...">`` children and a shortened ``</inv>`` close. This
+        fallback is schema-gated and only reads parameters declared by the
+        request tool schema, so prose containing DSML-like text does not become
+        an arbitrary function call.
+        """
+        if DSML_PREFIX not in text:
+            return []
+        schemas = self._tool_schemas(request)
+        if not schemas:
+            return []
+        starts = list(self._DEGRADED_INVOKE_START_RE.finditer(text))
+        if not starts:
+            return []
+
+        calls: list[dict[str, Any]] = []
+        for index, match in enumerate(starts):
+            name = match.group(1)
+            schema = schemas.get(name)
+            if not schema:
+                continue
+            next_start = (
+                starts[index + 1].start() if index + 1 < len(starts) else len(text)
+            )
+            close = self._DEGRADED_INVOKE_CLOSE_RE.search(text, match.end())
+            end = min(next_start, close.start() if close is not None else len(text))
+            body = text[match.end() : end]
+            args = self._parse_plain_params(body, schema)
+            if not self._required_satisfied(args, schema):
+                continue
+            calls.append(
+                self._make_tool_call(
+                    name=name,
+                    arguments=json.dumps(args, ensure_ascii=False),
+                    id_=generate_tool_id(),
+                )
+            )
+        return calls
+
+    def _canonical_arguments_actionable(
+        self,
+        *,
+        name: str,
+        arguments: str,
+        schemas: dict[str, dict[str, Any]],
+    ) -> bool:
+        """Validate canonical DSV4 parser output before accepting it.
+
+        The bundled encoder is the preferred parser when it returns complete
+        arguments. Older DSV4/JANGTQ2 outputs can make it recover names while
+        dropping required parameters or leaking raw DSML/HTML-ish markup into
+        argument strings. In that case the regex repair paths below have more
+        information and should run.
+        """
+        raw_markers = (
+            f"<{DSML_PREFIX}",
+            f"</{DSML_PREFIX}",
+            "<param",
+            "</param",
+            "<parameter",
+            "</parameter",
+            "<invoke",
+            "</inv",
+        )
+        if any(marker in arguments for marker in raw_markers):
+            return False
+        if schemas and name not in schemas:
+            return False
+        schema = schemas.get(name)
+        if not schema:
+            return True
+        try:
+            decoded = json.loads(arguments)
+        except Exception:
+            return False
+        if not isinstance(decoded, dict):
+            return False
+        return self._required_satisfied(decoded, schema)
+
+    def _try_encoding_dsv4_parse(self, model_output: str, request: Any | None = None):
         """Route DSML extraction through the canonical DSV4 chat-template
         encoder when it's loaded. Returns ExtractedToolCallInformation on
         success, None when encoding_dsv4 isn't available or the parse
@@ -339,6 +488,7 @@ class DSMLToolParser(ToolParser):
         raw_calls = parsed.get("tool_calls") or []
         if not raw_calls:
             return None
+        schemas = self._tool_schemas(request)
         tool_calls = []
         for tc in raw_calls:
             if not isinstance(tc, dict):
@@ -354,6 +504,12 @@ class DSMLToolParser(ToolParser):
                 args_str = args
             else:
                 args_str = json.dumps(args or {}, ensure_ascii=False)
+            if not self._canonical_arguments_actionable(
+                name=name,
+                arguments=args_str,
+                schemas=schemas,
+            ):
+                return None
             tool_calls.append(
                 self._make_tool_call(
                     name=name, arguments=args_str, id_=generate_tool_id()
@@ -392,15 +548,21 @@ class DSMLToolParser(ToolParser):
                 tools_called=False, tool_calls=[], content=model_output
             )
 
-        canonical = self._try_encoding_dsv4_parse(model_output)
+        canonical = self._try_encoding_dsv4_parse(model_output, request=request)
         if canonical is not None:
             return canonical
 
         tool_calls = []
+        schemas = self._tool_schemas(request)
         for m in self._INVOKE_RE.finditer(model_output):
             name = m.group(1)
             body = m.group(2)
             args = self._parse_params(body)
+            schema = schemas.get(name)
+            if not args and schema:
+                plain_args = self._parse_plain_params(body, schema)
+                if plain_args and self._required_satisfied(plain_args, schema):
+                    args = plain_args
             tool_calls.append(
                 self._make_tool_call(
                     name=name,
@@ -417,6 +579,9 @@ class DSMLToolParser(ToolParser):
 
         if not tool_calls:
             tool_calls = self._repair_htmlish_invoke(model_output, request)
+
+        if not tool_calls:
+            tool_calls = self._repair_degraded_dsml_invokes(model_output, request)
 
         # Residue content = everything OUTSIDE the invoke blocks. Strip the
         # matched spans and collapse surrounding whitespace so the chat UI

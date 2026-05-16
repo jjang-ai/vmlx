@@ -39,6 +39,74 @@ afterEach(() => {
   }
 })
 
+describe('readGenerationDefaults generation_config defaults', () => {
+  it('uses standard MLX generation_config.json for non-JANG and VLM bundles', async () => {
+    const dir = makeModelDir({
+      'generation_config.json': {
+        temperature: 0.8,
+        top_p: 0.9,
+        top_k: 40,
+        min_p: 0.02,
+        repetition_penalty: 1.05,
+        max_new_tokens: 8192,
+      },
+    }, 'vmlx-generation-defaults-mlx-vl-')
+
+    await expect(readGenerationDefaults(dir)).resolves.toMatchObject({
+      temperature: 0.8,
+      topP: 0.9,
+      topK: 40,
+      minP: 0.02,
+      repeatPenalty: 1.05,
+      maxNewTokens: 8192,
+      source: 'generation_config',
+    })
+  })
+
+  it('lets JANG chat sampling metadata override generation_config.json', async () => {
+    const dir = makeModelDir({
+      'generation_config.json': {
+        temperature: 0.7,
+        top_p: 0.95,
+        top_k: 20,
+        repetition_penalty: 1.1,
+      },
+      'jang_config.json': {
+        chat: {
+          sampling_defaults: {
+            temperature: 0.55,
+            top_p: 0.92,
+            top_k: 64,
+            repetition_penalty: 1.0,
+          },
+        },
+      },
+    }, 'vmlx-generation-defaults-jang-override-')
+
+    await expect(readGenerationDefaults(dir)).resolves.toMatchObject({
+      temperature: 0.55,
+      topP: 0.92,
+      topK: 64,
+      repeatPenalty: 1.0,
+      source: 'jang_config',
+    })
+  })
+
+  it('returns null when neither metadata file defines sampling defaults', async () => {
+    const dir = makeModelDir({
+      'generation_config.json': {
+        bos_token_id: 1,
+        eos_token_id: 2,
+      },
+      'config.json': {
+        model_type: 'qwen3',
+      },
+    }, 'vmlx-generation-defaults-empty-')
+
+    await expect(readGenerationDefaults(dir)).resolves.toBeNull()
+  })
+})
+
 describe('readGenerationDefaults JANG sampling defaults', () => {
   it('uses Ling CRACK bundle metadata without filename temperature override', async () => {
     const dir = makeModelDir({
