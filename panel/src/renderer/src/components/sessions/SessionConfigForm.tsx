@@ -159,6 +159,7 @@ const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 
 function normalizeDetectedFamilyName(family?: string): string | undefined {
   if (!family) return undefined
+  if (family === 'deepseek_v4') return 'deepseek-v4'
   if (family === 'zaya1_vl') return 'zaya1-vl'
   if (family === 'bailing_hybrid') return 'ling'
   return family
@@ -253,6 +254,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const effectivePagedCacheBlockSize = dsv4CompositeRequiresPaged
     ? DSV4_PAGED_CACHE_BLOCK_SIZE
     : config.pagedCacheBlockSize
+  const effectiveStoredCacheQuantization = dsv4Active ? 'auto' : config.kvCacheQuantization
+  const effectiveMaxNumSeqs = dsv4Active ? 1 : config.maxNumSeqs
+  const effectivePrefillBatchSize = dsv4Active ? 1 : config.prefillBatchSize
+  const effectiveCompletionBatchSize = dsv4Active ? 1 : config.completionBatchSize
   const generationDefaultsSummary = [
     (config.defaultMaxNewTokens ?? 0) > 0 ? `max output tokens ${Math.floor(config.defaultMaxNewTokens ?? 0)}` : null,
     config.defaultTemperature > 0 ? `temperature ${(config.defaultTemperature / 100).toFixed(2)}` : null,
@@ -352,7 +357,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <SliderField
           label="Max Concurrent Sequences"
           tooltip="Maximum number of sequences (requests) that can be processed simultaneously. Higher values allow more parallel users but consume more memory. For single-user local use, 1-4 is sufficient. For multi-user servers, 16-256 depending on available RAM."
-          value={config.maxNumSeqs}
+          value={effectiveMaxNumSeqs}
           onChange={v => onChange('maxNumSeqs', v)}
           min={1}
           max={1024}
@@ -361,11 +366,12 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           allowUnlimited
           unlimitedValue={0}
           unlimitedLabel="Default (1)"
+          disabled={dsv4Active}
         />
         <SliderField
           label="Prefill Batch Size"
           tooltip="Maximum number of concurrent prompts processed in parallel during the prefill (prompt processing) phase. Higher = more parallelism for multi-user workloads, more memory pressure during prompt ingest."
-          value={config.prefillBatchSize}
+          value={effectivePrefillBatchSize}
           onChange={v => onChange('prefillBatchSize', v)}
           min={1}
           max={4096}
@@ -374,6 +380,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           allowUnlimited
           unlimitedValue={0}
           unlimitedLabel="Default (512)"
+          disabled={dsv4Active}
         />
         <SliderField
           label="Prefill Step Size"
@@ -387,11 +394,12 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           allowUnlimited
           unlimitedValue={0}
           unlimitedLabel="Default (2048)"
+          disabled={dsv4Active}
         />
         <SliderField
           label="Completion Batch Size"
           tooltip="Maximum number of tokens to generate in a single completion (token generation) step. Similar to prefill batch size but for the generation phase. Larger values can improve throughput for multi-user scenarios."
-          value={config.completionBatchSize}
+          value={effectiveCompletionBatchSize}
           onChange={v => onChange('completionBatchSize', v)}
           min={1}
           max={4096}
@@ -400,6 +408,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           allowUnlimited
           unlimitedValue={0}
           unlimitedLabel="Default (512)"
+          disabled={dsv4Active}
         />
         <CheckField
           label="Smelt Mode"
@@ -700,6 +709,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {batchingOff && <IncompatWarning text="KV cache quantization requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
         {!batchingOff && prefixOff && <IncompatWarning text="KV cache quantization requires prefix cache. Enable 'Prefix Cache' above to use KV cache quantization." />}
         {!effectivelyNoBatching && !prefixOff && isMambaCache && <PerformanceHint text="Hybrid stateful cache detected — the engine keeps SSM/GLA state native and only uses cache codecs proven for that architecture. Generic TurboQuant KV is disabled unless a tested override exists." />}
+        {!effectivelyNoBatching && !prefixOff && dsv4Active && <PerformanceHint text="DeepSeek-V4 keeps generic KV q4/q8 disabled. Prefix reuse uses native SWA+CSA/HCA records with optional DSV4-only pool quantization below." />}
 
         {/* Live/native cache codec — automatic per architecture. */}
         <div className="block">
@@ -719,14 +729,14 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             Stored Cache Quantization
             <Tooltip text="Controls how completed prompt states are stored in the prefix cache. Auto keeps the engine's production codec choice. None explicitly disables stored-cache quantization. q8/q4 force the generic stored-cache codec and also disable calibrated live TurboQuant so the explicit choice is honored." />
           </span>
-          <select value={config.kvCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching || prefixOff}>
+          <select value={effectiveStoredCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching || prefixOff || dsv4Active}>
             <option value="auto">Auto (engine-selected: native/TurboQuant + stored fallback)</option>
             <option value="none">{t('sessions.config.kvQuantNone')}</option>
             <option value="q8">q8 (8-bit, ~2x stored cache savings)</option>
             <option value="q4">q4 (4-bit, ~4x stored cache savings)</option>
           </select>
         </div>
-        {config.kvCacheQuantization !== 'auto' && config.kvCacheQuantization !== 'none' && (
+        {effectiveStoredCacheQuantization !== 'auto' && effectiveStoredCacheQuantization !== 'none' && (
           <SliderField
             label="Group Size"
             tooltip="Number of elements quantized together. Smaller groups preserve more precision but use slightly more memory for scale/zero-point metadata. Default 64 is optimal for most models."

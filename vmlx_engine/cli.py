@@ -122,6 +122,58 @@ def _apply_dsv4_cache_policy(args, logger):
     return tuple(changed)
 
 
+def _apply_dsv4_runtime_policy(args, logger, *, clamp_max_num_seqs: bool = False):
+    """Apply DSV4 Flash runtime gates shared by serve and bench CLI paths."""
+
+    changes = []
+    try:
+        from .loaders.load_jangtq_dsv4 import (
+            _configure_dsv4_pool_quant_default,
+        )
+
+        dsv4_pool_quant = _configure_dsv4_pool_quant_default()
+    except Exception:
+        os.environ["DSV4_LONG_CTX"] = "1"
+        os.environ.setdefault("DSV4_POOL_QUANT", "0")
+        dsv4_pool_quant = os.environ.get("DSV4_POOL_QUANT", "0")
+
+    if getattr(args, "kv_cache_quantization", "none") != "none":
+        old_kvq = args.kv_cache_quantization
+        args.kv_cache_quantization = "none"
+        args.kv_cache_quantization_explicit = True
+        os.environ["VMLX_DISABLE_TQ_KV"] = "1"
+        os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
+        changes.append(f"kv_quant={old_kvq}->none")
+        logger.info(
+            "DSV4-Flash native SWA+CSA/HCA cache owns cache compression; "
+            "forcing generic --kv-cache-quantization %s -> none. "
+            "DSV4_POOL_QUANT=%s controls the DeepseekV4Cache-compatible "
+            "CSA/HCA pool codec.",
+            old_kvq,
+            dsv4_pool_quant,
+        )
+
+    changes.extend(_apply_dsv4_cache_policy(args, logger))
+
+    if clamp_max_num_seqs and getattr(args, "max_num_seqs", 1) != 1:
+        old_max = args.max_num_seqs
+        args.max_num_seqs = 1
+        changes.append(f"max_num_seqs={old_max}->1")
+        logger.warning(
+            "DSV4-Flash detected — overriding --max-num-seqs %s to 1 "
+            "because DSV4BatchGenerator is single-batch only.",
+            old_max,
+        )
+
+    logger.info(
+        "DSV4-Flash detected — DSV4_LONG_CTX=1 (tri-mode SWA+CSA/HCA), "
+        "DSV4_POOL_QUANT=%s. Native JANG attention contract is verified by "
+        "load_jangtq_dsv4 before inference.",
+        dsv4_pool_quant,
+    )
+    return True, tuple(changes)
+
+
 def _env_int(name: str, default: int, legacy_name: str | None = None) -> int:
     value = os.environ.get(name)
     if value is None and legacy_name:
@@ -391,30 +443,7 @@ def serve_command(args):
         # debug/bisect.
         if _mc.family_name == "deepseek_v4":
             _is_dsv4_model = True
-            try:
-                from .loaders.load_jangtq_dsv4 import (
-                    _configure_dsv4_pool_quant_default,
-                )
-                _dsv4_pool_quant = _configure_dsv4_pool_quant_default()
-            except Exception:
-                os.environ["DSV4_LONG_CTX"] = "1"
-                os.environ.setdefault("DSV4_POOL_QUANT", "0")
-                _dsv4_pool_quant = os.environ.get("DSV4_POOL_QUANT", "0")
-            if getattr(args, "kv_cache_quantization", "none") != "none":
-                _old_kvq = args.kv_cache_quantization
-                args.kv_cache_quantization = "none"
-                args.kv_cache_quantization_explicit = True
-                os.environ["VMLX_DISABLE_TQ_KV"] = "1"
-                os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
-                logger.info(
-                    "DSV4-Flash native SWA+CSA/HCA cache owns cache "
-                    "compression; forcing generic --kv-cache-quantization "
-                    "%s -> none. DSV4_POOL_QUANT=%s controls the "
-                    "DeepseekV4Cache-compatible CSA/HCA pool codec.",
-                    _old_kvq,
-                    _dsv4_pool_quant,
-                )
-            _apply_dsv4_cache_policy(args, logger)
+            _apply_dsv4_runtime_policy(args, logger)
             # The DSV4-aware paged schema (scheduler.py: deepseek_v4_v7
             # nested-state serialization) handles the mixed KVCache /
             # DeepseekV4Cache layer layout after load_jangtq_dsv4 verifies
@@ -422,11 +451,6 @@ def serve_command(args):
             # contract. Short prompts store composite prompt-boundary state
             # with N-1 prompt keys; stale 64-token app defaults are upgraded
             # to 256-token DSV4 pages at CLI entry.
-            logger.info(
-                "DSV4-Flash detected — DSV4_LONG_CTX=1 (tri-mode SWA+CSA/HCA), "
-                f"DSV4_POOL_QUANT={_dsv4_pool_quant}. Native JANG attention "
-                "contract is verified by load_jangtq_dsv4 before inference."
-            )
         elif (
             _mc.family_name == "zaya"
             or getattr(_mc, "cache_subtype", None) == "zaya_cca"
@@ -1088,7 +1112,8 @@ def bench_command(args):
     from .scheduler import SchedulerConfig
     import logging
 
-    _apply_jangtq_mpp_nax_policy(args, logging.getLogger(__name__))
+    logger = logging.getLogger(__name__)
+    _apply_jangtq_mpp_nax_policy(args, logger)
 
     # mlxstudio#138: mirror serve_command's explicit-pass detection so bench
     # also disables JANG-calibrated TurboQuant when the user passes
@@ -1108,6 +1133,15 @@ def bench_command(args):
     else:
         args.kv_cache_quantization_explicit = True
         os.environ["VMLX_DISABLE_TQ_KV"] = "1"
+
+    try:
+        from .model_config_registry import get_model_config_registry
+
+        _mc = get_model_config_registry().lookup(args.model)
+        if _mc.family_name == "deepseek_v4":
+            _apply_dsv4_runtime_policy(args, logger, clamp_max_num_seqs=True)
+    except Exception as exc:
+        logger.debug("Bench model runtime policy lookup failed: %s", exc)
 
     # Smelt mode: set server globals
     if getattr(args, 'smelt', False):

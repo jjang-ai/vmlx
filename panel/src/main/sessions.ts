@@ -56,6 +56,7 @@ interface BundleStartupDefaults {
 
 function normalizeDetectedFamilyName(family?: string): string | undefined {
   if (!family) return undefined
+  if (family === 'deepseek_v4') return 'deepseek-v4'
   if (family === 'zaya1_vl') return 'zaya1-vl'
   if (family === 'bailing_hybrid') return 'ling'
   return family
@@ -2168,24 +2169,26 @@ export class SessionManager extends EventEmitter {
     // happen before concurrency flags because DSV4's custom generator is
     // single-batch even though the generic session profile defaults higher.
     const detected = detectModelConfigFromDir(config.modelPath)
+    const detectedFamily = normalizeDetectedFamilyName(detected.family)
+    const dsv4Active = detectedFamily === 'deepseek-v4'
 
     // Concurrent processing
     // When value is 0 ("No limit" in UI), omit the flag so backend uses its default.
     // When value > 0, pass it explicitly to override the backend default.
-    const effectiveMaxNumSeqs = detected.family === 'deepseek-v4' ? 1 : config.maxNumSeqs
-    if (detected.family === 'deepseek-v4' && config.maxNumSeqs && config.maxNumSeqs !== 1) {
+    const effectiveMaxNumSeqs = dsv4Active ? 1 : config.maxNumSeqs
+    if (dsv4Active && config.maxNumSeqs && config.maxNumSeqs !== 1) {
       console.log(`[SESSION] DSV4-Flash detected: overriding maxNumSeqs ${config.maxNumSeqs} -> 1 (DSV4BatchGenerator is single-batch only)`)
     }
     if (effectiveMaxNumSeqs && effectiveMaxNumSeqs > 0) {
       args.push('--max-num-seqs', effectiveMaxNumSeqs.toString())
     }
-    if (config.prefillBatchSize && config.prefillBatchSize > 0) {
+    if (!dsv4Active && config.prefillBatchSize && config.prefillBatchSize > 0) {
       args.push('--prefill-batch-size', config.prefillBatchSize.toString())
     }
-    if (config.prefillStepSize && config.prefillStepSize > 0) {
+    if (!dsv4Active && config.prefillStepSize && config.prefillStepSize > 0) {
       args.push('--prefill-step-size', config.prefillStepSize.toString())
     }
-    if (config.completionBatchSize && config.completionBatchSize > 0) {
+    if (!dsv4Active && config.completionBatchSize && config.completionBatchSize > 0) {
       args.push('--completion-batch-size', config.completionBatchSize.toString())
     }
 
@@ -2260,7 +2263,6 @@ export class SessionManager extends EventEmitter {
     // without prefix cache each follow-up re-processes the entire prompt (~16s).
     const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
     const prefixCacheOff = !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
-    const detectedFamily = normalizeDetectedFamilyName(detected.family)
     const zayaCcaActive = isZayaCcaFamily(detectedFamily)
     const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
     const dsv4CompositeRequiresPaged = detectedFamily === 'deepseek-v4' && !prefixCacheOff
@@ -2317,7 +2319,10 @@ export class SessionManager extends EventEmitter {
     // KV cache quantization for stored prefix cache entries
     // TurboQuant handles live generation cache compression (always active).
     // q8/q4 here is ADDITIONAL compression for stored cache entries.
-    if (!prefixCacheOff && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
+    if (!prefixCacheOff && detectedFamily === 'deepseek-v4' && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
+      console.log(`[SESSION] DSV4-Flash detected: ignoring generic kvCacheQuantization=${config.kvCacheQuantization}; native SWA+CSA/HCA cache policy owns compression`)
+    }
+    if (!prefixCacheOff && detectedFamily !== 'deepseek-v4' && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
       args.push('--kv-cache-quantization', config.kvCacheQuantization)
       if (config.kvCacheQuantization !== 'none' && config.kvCacheGroupSize && config.kvCacheGroupSize !== 64) {
         args.push('--kv-cache-group-size', config.kvCacheGroupSize.toString())
@@ -2369,7 +2374,6 @@ export class SessionManager extends EventEmitter {
 
     const requestedDistributed = !!(config as any).distributedEnabled
     const requestedFlashMoe = !!(config as any).flashMoe
-    const dsv4Active = detected.family === 'deepseek-v4'
     const turboQuantActive = !!(detected as any).isTurboQuant
     const effectiveDistributed = requestedDistributed
     const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed

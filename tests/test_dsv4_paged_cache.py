@@ -117,6 +117,83 @@ def test_dsv4_cli_cache_policy_uses_ds4_page_sized_blocks(caplog):
     assert "block_size=64->256" in changed
 
 
+def test_dsv4_runtime_policy_applies_to_bench_like_cli_args(tmp_path, monkeypatch):
+    """Bench/CLI paths must not bypass the serve-time DSV4 cache gates."""
+    from vmlx_engine.cli import _apply_dsv4_runtime_policy
+
+    (tmp_path / "config.json").write_text('{"model_type":"deepseek_v4"}')
+    args = SimpleNamespace(
+        model=str(tmp_path),
+        enable_prefix_cache=True,
+        disable_prefix_cache=False,
+        use_paged_cache=False,
+        paged_cache_block_size=64,
+        enable_block_disk_cache=True,
+        kv_cache_quantization="q4",
+        kv_cache_quantization_explicit=True,
+        max_num_seqs=9,
+    )
+    monkeypatch.delenv("DSV4_LONG_CTX", raising=False)
+    monkeypatch.delenv("DSV4_POOL_QUANT", raising=False)
+    monkeypatch.setenv("VMLX_FORCE_TQ_AUTO", "1")
+
+    applied, changes = _apply_dsv4_runtime_policy(
+        args,
+        logger=__import__("logging").getLogger("test"),
+        clamp_max_num_seqs=True,
+    )
+
+    assert applied is True
+    assert args.use_paged_cache is True
+    assert args.paged_cache_block_size == 256
+    assert args.kv_cache_quantization == "none"
+    assert args.kv_cache_quantization_explicit is True
+    assert args.max_num_seqs == 1
+    assert os.environ["DSV4_LONG_CTX"] == "1"
+    assert os.environ["DSV4_POOL_QUANT"] == "0"
+    assert os.environ["VMLX_DISABLE_TQ_KV"] == "1"
+    assert "VMLINUX_FORCE_TQ_AUTO" not in os.environ
+    assert "paged=required_for_dsv4_composite" in changes
+    assert "block_size=64->256" in changes
+    assert "max_num_seqs=9->1" in changes
+
+
+def test_panel_suppresses_generic_kv_quantization_controls_for_dsv4():
+    """The app UI/launch preview must not advertise generic KV q4/q8 for DSV4."""
+    from pathlib import Path
+
+    form = Path("panel/src/renderer/src/components/sessions/SessionConfigForm.tsx").read_text()
+    settings = Path("panel/src/renderer/src/components/sessions/SessionSettings.tsx").read_text()
+    sessions = Path("panel/src/main/sessions.ts").read_text()
+
+    assert "const effectiveStoredCacheQuantization = dsv4Active ? 'auto'" in form
+    assert "disabled={effectivelyNoBatching || prefixOff || dsv4Active}" in form
+    assert "!dsv4Active && config.kvCacheQuantization" in settings
+    assert "detectedFamily !== 'deepseek-v4' && config.kvCacheQuantization" in sessions
+    assert "if (family === 'deepseek_v4') return 'deepseek-v4'" in form
+    assert "if (family === 'deepseek_v4') return 'deepseek-v4'" in settings
+    assert "if (family === 'deepseek_v4') return 'deepseek-v4'" in sessions
+
+
+def test_panel_suppresses_generic_batch_and_chunk_controls_for_dsv4():
+    """DSV4 app launches must not pass misleading generic batch/chunk flags."""
+    from pathlib import Path
+
+    form = Path("panel/src/renderer/src/components/sessions/SessionConfigForm.tsx").read_text()
+    settings = Path("panel/src/renderer/src/components/sessions/SessionSettings.tsx").read_text()
+    sessions = Path("panel/src/main/sessions.ts").read_text()
+
+    assert "const effectiveMaxNumSeqs = dsv4Active ? 1 : config.maxNumSeqs" in form
+    assert "const effectivePrefillBatchSize = dsv4Active ? 1 : config.prefillBatchSize" in form
+    assert "const effectiveCompletionBatchSize = dsv4Active ? 1 : config.completionBatchSize" in form
+    assert "if (!dsv4Active && config.prefillBatchSize" in sessions
+    assert "if (!dsv4Active && config.prefillStepSize" in sessions
+    assert "if (!dsv4Active && config.completionBatchSize" in sessions
+    assert "if (!dsv4Active && config.prefillBatchSize" in settings
+    assert "if (!dsv4Active && config.prefillStepSize" in settings
+    assert "if (!dsv4Active && config.completionBatchSize" in settings
+
+
 def test_dsv4_block_l2_namespace_includes_paged_block_size():
     """DSV4 L2 namespaces must not mix 64-token and 256-token block records."""
     import inspect
@@ -564,11 +641,13 @@ def test_dsv4_serve_path_forces_generic_kv_quantization_off():
     import inspect
     from vmlx_engine import cli
 
-    src = inspect.getsource(cli.serve_command)
+    serve_src = inspect.getsource(cli.serve_command)
+    policy_src = inspect.getsource(cli._apply_dsv4_runtime_policy)
 
-    assert 'args.kv_cache_quantization = "none"' in src
-    assert "DSV4-Flash native SWA+CSA/HCA cache owns cache" in src
-    assert 'os.environ["VMLX_DISABLE_TQ_KV"] = "1"' in src
+    assert "_apply_dsv4_runtime_policy(args, logger)" in serve_src
+    assert 'args.kv_cache_quantization = "none"' in policy_src
+    assert "DSV4-Flash native SWA+CSA/HCA cache owns cache" in policy_src
+    assert 'os.environ["VMLX_DISABLE_TQ_KV"] = "1"' in policy_src
 
 
 def test_dsv4_cached_prefix_kickoff_avoids_cross_thread_mx_eval():

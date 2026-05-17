@@ -5988,6 +5988,50 @@ class TestTurboQuantKVTelemetry:
             "jang_config.quantization.routed_experts.bit_plan.routed_layer_bits"
         )
 
+    def test_quantization_status_reports_affine_dsv4_projection_and_down_layer_plans(
+        self, tmp_path
+    ):
+        """Pure affine DSV4 K/Down4 artifacts need exact mixed-bit visibility."""
+        from vmlx_engine.server import _model_quantization_status
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "deepseek_v4",
+            "weight_format": "affine",
+            "quantization": {"bits": 2, "group_size": 128},
+        }))
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "weight_format": "affine",
+            "quantization": {
+                "method": "affine",
+                "routed_experts": {
+                    "bits": 2,
+                    "codec": "affine",
+                    "group_size": 128,
+                    "bit_plan": {
+                        "routed_projection_bits": {"w2": 4},
+                        "routed_down_layer_bits": {"7": 4, "8": 4, "12": 4},
+                    },
+                },
+                "non_routed": {
+                    "bits": 8,
+                    "codec": "affine",
+                    "group_size": 64,
+                },
+            },
+        }))
+
+        status = _model_quantization_status(str(tmp_path))
+
+        assert status["codec"] == "affine_quantized_matmul"
+        assert status["routed_projection_bits"] == {"w2": 4}
+        assert status["routed_projection_bits_source"] == (
+            "jang_config.quantization.routed_experts.bit_plan.routed_projection_bits"
+        )
+        assert status["routed_down_layer_bits"] == {"7": 4, "8": 4, "12": 4}
+        assert status["routed_down_layer_bits_source"] == (
+            "jang_config.quantization.routed_experts.bit_plan.routed_down_layer_bits"
+        )
+
     def test_quantization_status_reports_affine_dispatch_path(self, tmp_path):
         from vmlx_engine.server import _model_quantization_status
 

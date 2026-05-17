@@ -3853,6 +3853,98 @@ def _find_routed_layer_bit_plan(cfg: dict, jang_cfg: dict, q_jang: dict) -> tupl
     return None, None
 
 
+def _coerce_routed_projection_bits(raw) -> dict[str, int] | None:
+    if not isinstance(raw, dict):
+        return None
+    projection_bits: dict[str, int] = {}
+    for key, value in raw.items():
+        try:
+            projection_bits[str(key)] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return projection_bits or None
+
+
+def _find_routed_projection_bit_plan(
+    cfg: dict, jang_cfg: dict, q_jang: dict
+) -> tuple[dict[str, int] | None, str | None]:
+    routed_experts = q_jang.get("routed_experts")
+    bit_plan = routed_experts.get("bit_plan") if isinstance(routed_experts, dict) else None
+    q_cfg = cfg.get("quantization") if isinstance(cfg.get("quantization"), dict) else {}
+    cfg_bit_plan = (
+        q_cfg.get("routed_expert_bit_plan")
+        if isinstance(q_cfg.get("routed_expert_bit_plan"), dict)
+        else {}
+    )
+    candidates = (
+        (
+            "jang_config.quantization.routed_experts.bit_plan.routed_projection_bits",
+            bit_plan.get("routed_projection_bits") if isinstance(bit_plan, dict) else None,
+        ),
+        (
+            "jang_config.quantization.routed_projection_bits",
+            q_jang.get("routed_projection_bits"),
+        ),
+        (
+            "jang_config.routed_projection_bits",
+            jang_cfg.get("routed_projection_bits"),
+        ),
+        (
+            "config.quantization.routed_expert_bit_plan.routed_projection_bits",
+            cfg_bit_plan.get("routed_projection_bits"),
+        ),
+        (
+            "config.routed_projection_bits",
+            cfg.get("routed_projection_bits"),
+        ),
+    )
+    for source, raw in candidates:
+        projection_bits = _coerce_routed_projection_bits(raw)
+        if projection_bits:
+            return projection_bits, source
+    return None, None
+
+
+def _find_routed_down_layer_bit_plan(
+    cfg: dict, jang_cfg: dict, q_jang: dict
+) -> tuple[dict[str, int] | None, str | None]:
+    routed_experts = q_jang.get("routed_experts")
+    bit_plan = routed_experts.get("bit_plan") if isinstance(routed_experts, dict) else None
+    q_cfg = cfg.get("quantization") if isinstance(cfg.get("quantization"), dict) else {}
+    cfg_bit_plan = (
+        q_cfg.get("routed_expert_bit_plan")
+        if isinstance(q_cfg.get("routed_expert_bit_plan"), dict)
+        else {}
+    )
+    candidates = (
+        (
+            "jang_config.quantization.routed_experts.bit_plan.routed_down_layer_bits",
+            bit_plan.get("routed_down_layer_bits") if isinstance(bit_plan, dict) else None,
+        ),
+        (
+            "jang_config.quantization.routed_down_layer_bits",
+            q_jang.get("routed_down_layer_bits"),
+        ),
+        (
+            "jang_config.routed_down_layer_bits",
+            jang_cfg.get("routed_down_layer_bits"),
+        ),
+        (
+            "config.quantization.routed_expert_bit_plan.routed_down_layer_bits",
+            cfg_bit_plan.get("routed_down_layer_bits"),
+        ),
+        (
+            "config.routed_down_layer_bits",
+            cfg.get("routed_down_layer_bits"),
+        ),
+    )
+    for source, raw in candidates:
+        down_layer_bits = _coerce_routed_layer_bits(raw)
+        if down_layer_bits:
+            return down_layer_bits, source
+    return None, None
+
+
 def _weight_matmul_dispatch_status(codec: str) -> dict:
     if codec == "turboquant_codebook":
         return {
@@ -4298,6 +4390,12 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
     routed_layer_bits, routed_layer_bits_source = _find_routed_layer_bit_plan(
         cfg, jang_cfg, q_jang
     )
+    routed_projection_bits, routed_projection_bits_source = (
+        _find_routed_projection_bit_plan(cfg, jang_cfg, q_jang)
+    )
+    routed_down_layer_bits, routed_down_layer_bits_source = (
+        _find_routed_down_layer_bit_plan(cfg, jang_cfg, q_jang)
+    )
     weight_index = _bundle_weight_index_status(bundle_path)
 
     try:
@@ -4416,6 +4514,10 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
         "group_size": q_cfg.get("group_size") or q_jang.get("group_size") or q_jang.get("block_size"),
         "routed_layer_bits": routed_layer_bits,
         "routed_layer_bits_source": routed_layer_bits_source,
+        "routed_projection_bits": routed_projection_bits,
+        "routed_projection_bits_source": routed_projection_bits_source,
+        "routed_down_layer_bits": routed_down_layer_bits,
+        "routed_down_layer_bits_source": routed_down_layer_bits_source,
         "passthrough_bit_widths_used": q_jang.get("passthrough_bit_widths_used"),
         "passthrough_tensor_count": q_jang.get("passthrough_tensor_count"),
         "weight_index": weight_index,

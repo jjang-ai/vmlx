@@ -23,6 +23,7 @@ interface SessionSettingsProps {
 
 function normalizeDetectedFamilyName(family?: string): string | undefined {
   if (!family) return undefined
+  if (family === 'deepseek_v4') return 'deepseek-v4'
   if (family === 'zaya1_vl') return 'zaya1-vl'
   if (family === 'bailing_hybrid') return 'ling'
   return family
@@ -98,9 +99,9 @@ function buildCommandPreview(
   // Concurrent processing
   const effectiveMaxNumSeqs = dsv4Active ? 1 : config.maxNumSeqs
   if (effectiveMaxNumSeqs && effectiveMaxNumSeqs > 0) parts.push('--max-num-seqs', effectiveMaxNumSeqs.toString())
-  if (config.prefillBatchSize && config.prefillBatchSize > 0) parts.push('--prefill-batch-size', config.prefillBatchSize.toString())
-  if (config.prefillStepSize && config.prefillStepSize > 0) parts.push('--prefill-step-size', config.prefillStepSize.toString())
-  if (config.completionBatchSize && config.completionBatchSize > 0) parts.push('--completion-batch-size', config.completionBatchSize.toString())
+  if (!dsv4Active && config.prefillBatchSize && config.prefillBatchSize > 0) parts.push('--prefill-batch-size', config.prefillBatchSize.toString())
+  if (!dsv4Active && config.prefillStepSize && config.prefillStepSize > 0) parts.push('--prefill-step-size', config.prefillStepSize.toString())
+  if (!dsv4Active && config.completionBatchSize && config.completionBatchSize > 0) parts.push('--completion-batch-size', config.completionBatchSize.toString())
 
   if (isVLM) parts.push('--is-mllm')
   const cacheStackActive = config.continuousBatching !== false
@@ -158,7 +159,7 @@ function buildCommandPreview(
 
   // KV cache quantization — requires prefix cache ON (works for both LLM and VLM)
   // Hybrid/Mamba models allowed — Python scheduler only quantizes KVCache layers
-  if (!prefixCacheOff && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
+  if (!prefixCacheOff && !dsv4Active && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
     parts.push('--kv-cache-quantization', config.kvCacheQuantization)
     if (config.kvCacheQuantization !== 'none' && config.kvCacheGroupSize && config.kvCacheGroupSize !== 64) {
       parts.push('--kv-cache-group-size', config.kvCacheGroupSize.toString())
