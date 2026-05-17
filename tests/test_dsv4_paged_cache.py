@@ -124,6 +124,7 @@ def test_dsv4_runtime_policy_applies_to_bench_like_cli_args(tmp_path, monkeypatc
     (tmp_path / "config.json").write_text('{"model_type":"deepseek_v4"}')
     args = SimpleNamespace(
         model=str(tmp_path),
+        continuous_batching=False,
         enable_prefix_cache=True,
         disable_prefix_cache=False,
         use_paged_cache=False,
@@ -132,6 +133,16 @@ def test_dsv4_runtime_policy_applies_to_bench_like_cli_args(tmp_path, monkeypatc
         kv_cache_quantization="q4",
         kv_cache_quantization_explicit=True,
         max_num_seqs=9,
+        prefill_batch_size=2048,
+        prefill_step_size=4096,
+        completion_batch_size=99,
+        no_memory_aware_cache=True,
+        enable_disk_cache=True,
+        enable_jit=True,
+        smelt=True,
+        flash_moe=True,
+        distributed=True,
+        speculative_model="draft",
     )
     monkeypatch.delenv("DSV4_LONG_CTX", raising=False)
     monkeypatch.delenv("DSV4_POOL_QUANT", raising=False)
@@ -149,13 +160,34 @@ def test_dsv4_runtime_policy_applies_to_bench_like_cli_args(tmp_path, monkeypatc
     assert args.kv_cache_quantization == "none"
     assert args.kv_cache_quantization_explicit is True
     assert args.max_num_seqs == 1
+    assert args.continuous_batching is True
+    assert args.disable_prefix_cache is False
+    assert args.prefill_batch_size == 1
+    assert args.completion_batch_size == 1
+    assert args.no_memory_aware_cache is False
+    assert args.enable_disk_cache is False
+    assert args.enable_jit is False
+    assert args.smelt is False
+    assert args.flash_moe is False
+    assert args.distributed is False
+    assert args.speculative_model is None
     assert os.environ["DSV4_LONG_CTX"] == "1"
     assert os.environ["DSV4_POOL_QUANT"] == "0"
     assert os.environ["VMLX_DISABLE_TQ_KV"] == "1"
     assert "VMLINUX_FORCE_TQ_AUTO" not in os.environ
+    assert "continuous_batching=off->on" in changes
     assert "paged=required_for_dsv4_composite" in changes
     assert "block_size=64->256" in changes
     assert "max_num_seqs=9->1" in changes
+    assert "prefill_batch_size=2048->1" in changes
+    assert "completion_batch_size=99->1" in changes
+    assert "no_memory_aware_cache=off" in changes
+    assert "legacy_disk_cache=off" in changes
+    assert "enable_jit=off" in changes
+    assert "smelt=off" in changes
+    assert "flash_moe=off" in changes
+    assert "distributed=off" in changes
+    assert "speculative_model=off" in changes
 
 
 def test_panel_suppresses_generic_kv_quantization_controls_for_dsv4():
@@ -192,6 +224,49 @@ def test_panel_suppresses_generic_batch_and_chunk_controls_for_dsv4():
     assert "if (!dsv4Active && config.prefillBatchSize" in settings
     assert "if (!dsv4Active && config.prefillStepSize" in settings
     assert "if (!dsv4Active && config.completionBatchSize" in settings
+
+
+def test_dsv4_ui_forces_native_cache_stack_and_hides_unsafe_runtime_controls():
+    """DSV4 settings must show only production-safe controls or disabled values."""
+    from pathlib import Path
+
+    form = Path("panel/src/renderer/src/components/sessions/SessionConfigForm.tsx").read_text()
+
+    assert "const effectiveContinuousBatching = dsv4Active ? true : config.continuousBatching" in form
+    assert "const prefixOff = dsv4Active ? false : !config.enablePrefixCache" in form
+    assert "checked={effectiveContinuousBatching}" in form
+    assert "checked={dsv4Active ? true : config.enablePrefixCache}" in form
+    assert "hidden={isImage || dsv4Active}" in form
+    assert "const showVideoControls = !dsv4Active" in form
+    assert "checked={effectiveSmeltActive}" in form
+    assert "disabled={dsv4Active || effectiveFlashMoeActive}" in form
+    assert "checked={effectiveFlashMoeActive}" in form
+    assert "disabled={dsv4Active || effectiveSmeltActive || effectiveDistributedActive}" in form
+
+
+def test_dsv4_launch_filters_stale_saved_and_additional_args():
+    """Saved sessions and raw additionalArgs must not reintroduce invalid DSV4 flags."""
+    from pathlib import Path
+
+    settings = Path("panel/src/renderer/src/components/sessions/SessionSettings.tsx").read_text()
+    sessions = Path("panel/src/main/sessions.ts").read_text()
+
+    for source in (settings, sessions):
+        assert "const cacheStackActive = dsv4Active ? true : config.continuousBatching !== false" in source
+        assert "const prefixCacheOff = dsv4Active ? false" in source
+        assert "const effectiveSmelt = !!(config as any).smelt && !dsv4Active" in source
+        assert "const effectiveDistributed = requestedDistributed && !dsv4Active" in source
+        assert "const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed && !dsv4Active" in source
+        assert "if (!dsv4Active && config.speculativeModel)" in source
+        assert "DSV4_ADDITIONAL_ARG_BLOCKLIST" in source
+        assert "--no-continuous-batching" in source
+        assert "--disable-prefix-cache" in source
+        assert "--kv-cache-quantization" in source
+        assert "--enable-jit" in source
+        assert "--smelt" in source
+        assert "--flash-moe" in source
+        assert "--distributed" in source
+        assert "--speculative-model" in source
 
 
 def test_dsv4_block_l2_namespace_includes_paged_block_size():

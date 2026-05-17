@@ -137,6 +137,25 @@ def _apply_dsv4_runtime_policy(args, logger, *, clamp_max_num_seqs: bool = False
         os.environ.setdefault("DSV4_POOL_QUANT", "0")
         dsv4_pool_quant = os.environ.get("DSV4_POOL_QUANT", "0")
 
+    if getattr(args, "continuous_batching", True) is False:
+        args.continuous_batching = True
+        changes.append("continuous_batching=off->on")
+        logger.warning(
+            "DSV4-Flash detected — forcing continuous batching on because "
+            "the production path depends on the DSV4BatchGenerator cache stack."
+        )
+
+    if getattr(args, "disable_prefix_cache", False):
+        args.disable_prefix_cache = False
+        changes.append("disable_prefix_cache=off")
+        logger.warning(
+            "DSV4-Flash detected — ignoring --disable-prefix-cache so the "
+            "native SWA+CSA/HCA composite cache can use the paged prefix path."
+        )
+    if getattr(args, "enable_prefix_cache", True) is False:
+        args.enable_prefix_cache = True
+        changes.append("enable_prefix_cache=on")
+
     if getattr(args, "kv_cache_quantization", "none") != "none":
         old_kvq = args.kv_cache_quantization
         args.kv_cache_quantization = "none"
@@ -151,6 +170,57 @@ def _apply_dsv4_runtime_policy(args, logger, *, clamp_max_num_seqs: bool = False
             "CSA/HCA pool codec.",
             old_kvq,
             dsv4_pool_quant,
+        )
+
+    if getattr(args, "prefill_batch_size", 1) != 1:
+        old_prefill = args.prefill_batch_size
+        args.prefill_batch_size = 1
+        changes.append(f"prefill_batch_size={old_prefill}->1")
+    if getattr(args, "completion_batch_size", 1) != 1:
+        old_completion = args.completion_batch_size
+        args.completion_batch_size = 1
+        changes.append(f"completion_batch_size={old_completion}->1")
+    if getattr(args, "no_memory_aware_cache", False):
+        args.no_memory_aware_cache = False
+        changes.append("no_memory_aware_cache=off")
+    if getattr(args, "enable_disk_cache", False):
+        args.enable_disk_cache = False
+        changes.append("legacy_disk_cache=off")
+
+    if getattr(args, "enable_jit", False):
+        args.enable_jit = False
+        changes.append("enable_jit=off")
+        logger.warning(
+            "DSV4-Flash detected — ignoring --enable-jit. DSV4 cache state is "
+            "path-dependent and must stay on the uncompiled scheduler path."
+        )
+    if getattr(args, "smelt", False):
+        args.smelt = False
+        changes.append("smelt=off")
+        logger.warning(
+            "DSV4-Flash detected — ignoring --smelt. DSV4 JANG affine expert "
+            "hydration must use the verified native loader."
+        )
+    if getattr(args, "flash_moe", False):
+        args.flash_moe = False
+        changes.append("flash_moe=off")
+        logger.warning(
+            "DSV4-Flash detected — ignoring --flash-moe. DSV4 composite cache "
+            "and native expert hydration are not compatible with SSD expert streaming."
+        )
+    if getattr(args, "distributed", False):
+        args.distributed = False
+        changes.append("distributed=off")
+        logger.warning(
+            "DSV4-Flash detected — ignoring --distributed. DSV4BatchGenerator "
+            "is a single-process native cache path."
+        )
+    if getattr(args, "speculative_model", None):
+        args.speculative_model = None
+        changes.append("speculative_model=off")
+        logger.warning(
+            "DSV4-Flash detected — ignoring --speculative-model. Use the "
+            "DSV4 native decode path until its own drafter/verifier exists."
         )
 
     changes.extend(_apply_dsv4_cache_policy(args, logger))

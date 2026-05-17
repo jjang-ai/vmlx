@@ -40,6 +40,100 @@ function cacheTypeRequiresPaged(cacheType?: string): boolean {
 
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 
+const ADDITIONAL_ARG_VALUE_FLAGS = new Set([
+  '--block-disk-cache-dir',
+  '--block-disk-cache-max-gb',
+  '--cache-memory-mb',
+  '--cache-memory-percent',
+  '--cache-ttl-minutes',
+  '--cluster-secret',
+  '--completion-batch-size',
+  '--distributed-mode',
+  '--disk-cache-dir',
+  '--disk-cache-max-gb',
+  '--flash-moe-io-split',
+  '--flash-moe-prefetch',
+  '--flash-moe-slot-bank',
+  '--image-mode',
+  '--image-quantize',
+  '--kv-cache-group-size',
+  '--kv-cache-quantization',
+  '--max-cache-blocks',
+  '--max-num-seqs',
+  '--mflux-class',
+  '--num-draft-tokens',
+  '--paged-cache-block-size',
+  '--prefill-batch-size',
+  '--prefill-step-size',
+  '--prefix-cache-max-bytes',
+  '--prefix-cache-size',
+  '--served-model-name',
+  '--smelt-experts',
+  '--speculative-model',
+  '--worker-nodes',
+])
+
+const IMAGE_ADDITIONAL_ARG_BLOCKLIST = new Set([
+  '--image-mode',
+  '--image-quantize',
+  '--served-model-name',
+  '--mflux-class',
+])
+
+const DSV4_ADDITIONAL_ARG_BLOCKLIST = new Set([
+  '--continuous-batching',
+  '--no-continuous-batching',
+  '--enable-prefix-cache',
+  '--disable-prefix-cache',
+  '--use-paged-cache',
+  '--paged-cache-block-size',
+  '--max-cache-blocks',
+  '--kv-cache-quantization',
+  '--kv-cache-group-size',
+  '--max-num-seqs',
+  '--prefill-batch-size',
+  '--prefill-step-size',
+  '--completion-batch-size',
+  '--enable-jit',
+  '--no-memory-aware-cache',
+  '--prefix-cache-size',
+  '--prefix-cache-max-bytes',
+  '--cache-memory-mb',
+  '--cache-memory-percent',
+  '--cache-ttl-minutes',
+  '--enable-disk-cache',
+  '--disk-cache-dir',
+  '--disk-cache-max-gb',
+  '--smelt',
+  '--smelt-experts',
+  '--flash-moe',
+  '--flash-moe-slot-bank',
+  '--flash-moe-prefetch',
+  '--flash-moe-io-split',
+  '--distributed',
+  '--distributed-mode',
+  '--worker-nodes',
+  '--cluster-secret',
+  '--speculative-model',
+  '--num-draft-tokens',
+  '--is-mllm',
+])
+
+function filterAdditionalArgs(raw: string | undefined, blockedFlags: Set<string>): string[] {
+  if (!raw?.trim()) return []
+  const extra = raw.trim().split(/\s+/).filter(Boolean)
+  const filtered: string[] = []
+  for (let i = 0; i < extra.length; i++) {
+    const flag = extra[i]
+    if (blockedFlags.has(flag)) {
+      if (ADDITIONAL_ARG_VALUE_FLAGS.has(flag)) i++
+      continue
+    }
+    filtered.push(flag)
+  }
+  return filtered
+}
+
 async function applyBundleGenerationDefaults(config: SessionConfig, modelPath: string): Promise<SessionConfig> {
   const next: SessionConfig = { ...config }
   try {
@@ -72,20 +166,20 @@ function buildCommandPreview(
   detected?: { toolParser?: string; reasoningParser?: string; isMultimodal?: boolean; forceTextOnly?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; cacheType?: string; family?: string } | null
 ): string {
   const parts = ['vmlx-engine serve', modelPath]
-  const smeltActive = !!(config as any).smelt
-  const isVLM = smeltActive || detected?.forceTextOnly ? false
-    : detected?.isMultimodal ? true
-      : config.isMultimodal === true ? true
-        : config.isMultimodal === false ? false
-          : false
   const requestedDistributed = !!(config as any).distributedEnabled
   const requestedFlashMoe = !!(config as any).flashMoe
   const detectedFamily = normalizeDetectedFamilyName(detected?.family)
   const dsv4Active = detectedFamily === 'deepseek-v4'
+  const effectiveSmelt = !!(config as any).smelt && !dsv4Active
+  const isVLM = effectiveSmelt || detected?.forceTextOnly ? false
+    : detected?.isMultimodal ? true
+      : config.isMultimodal === true ? true
+        : config.isMultimodal === false ? false
+          : false
   const zayaCcaActive = isZayaCcaFamily(detectedFamily)
   const turboQuantActive = !!detected?.isTurboQuant
-  const effectiveDistributed = requestedDistributed
-  const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed
+  const effectiveDistributed = requestedDistributed && !dsv4Active
+  const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed && !dsv4Active
   const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !zayaCcaActive && !turboQuantActive
 
   // Server settings
@@ -104,7 +198,7 @@ function buildCommandPreview(
   if (!dsv4Active && config.completionBatchSize && config.completionBatchSize > 0) parts.push('--completion-batch-size', config.completionBatchSize.toString())
 
   if (isVLM) parts.push('--is-mllm')
-  const cacheStackActive = config.continuousBatching !== false
+  const cacheStackActive = dsv4Active ? true : config.continuousBatching !== false
   if (cacheStackActive) {
     parts.push('--continuous-batching')
   } else {
@@ -125,7 +219,7 @@ function buildCommandPreview(
 
   // Prefix cache (mirrors buildArgs lines 1077-1114)
   const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
-  const prefixCacheOff = !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
+  const prefixCacheOff = dsv4Active ? false : !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
   const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
   const dsv4CompositeRequiresPaged = dsv4Active && !prefixCacheOff
   const nativeCacheRequiresPaged = cacheTypeRequiresPaged(detected?.cacheType) && detected?.usePagedCache === true && !prefixCacheOff
@@ -135,7 +229,7 @@ function buildCommandPreview(
 
   if (prefixCacheOff) {
     parts.push('--disable-prefix-cache')
-  } else {
+  } else if (!dsv4Active) {
     if (config.noMemoryAwareCache) {
       parts.push('--no-memory-aware-cache')
       if (config.prefixCacheSize && config.prefixCacheSize > 0) parts.push('--prefix-cache-size', config.prefixCacheSize.toString())
@@ -204,7 +298,7 @@ function buildCommandPreview(
   if (config.mcpConfig) parts.push('--mcp-config', config.mcpConfig)
 
   // Smelt mode (partial expert loading)
-  if ((config as any).smelt) {
+  if (effectiveSmelt) {
     parts.push('--smelt')
     const pct = (config as any).smeltExperts ?? 50
     if (pct !== 50) {
@@ -245,7 +339,7 @@ function buildCommandPreview(
   if ((config as any).chatTemplate) parts.push('--chat-template', '"..."')
 
   // Speculative decoding
-  if (config.speculativeModel) {
+  if (!dsv4Active && config.speculativeModel) {
     parts.push('--speculative-model', config.speculativeModel)
     if (config.numDraftTokens && config.numDraftTokens !== 3) {
       parts.push('--num-draft-tokens', config.numDraftTokens.toString())
@@ -275,16 +369,10 @@ function buildCommandPreview(
   }
 
   if (config.additionalArgs && config.additionalArgs.trim()) {
-    const staleImageFlags = new Set(['--mflux-class', '--image-mode', '--image-quantize'])
-    const extra = config.additionalArgs.trim().split(/\s+/).filter(Boolean)
-    const filtered: string[] = []
-    for (let i = 0; i < extra.length; i++) {
-      if (staleImageFlags.has(extra[i])) {
-        i++
-      } else {
-        filtered.push(extra[i])
-      }
-    }
+    const filtered = filterAdditionalArgs(
+      config.additionalArgs,
+      dsv4Active ? DSV4_ADDITIONAL_ARG_BLOCKLIST : IMAGE_ADDITIONAL_ARG_BLOCKLIST,
+    )
     if (filtered.length) parts.push(filtered.join(' '))
   }
 

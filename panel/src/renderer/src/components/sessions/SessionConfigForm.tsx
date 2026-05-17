@@ -235,17 +235,21 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
   const [showCachingHelp, setShowCachingHelp] = useState(false)
 
-  const smeltActive = !!config.smelt
-  const flashMoeActive = !!config.flashMoe
-  const distributedActive = !!config.distributedEnabled
   const normalizedDetectedFamily = normalizeDetectedFamilyName(detectedFamily)
   const dsv4Active = normalizedDetectedFamily === 'deepseek-v4'
+  const effectiveSmeltActive = !!config.smelt && !dsv4Active
+  const effectiveFlashMoeActive = !!config.flashMoe && !dsv4Active
+  const effectiveDistributedActive = !!config.distributedEnabled && !dsv4Active
+  const smeltActive = effectiveSmeltActive
+  const flashMoeActive = effectiveFlashMoeActive
+  const distributedActive = effectiveDistributedActive
   const zayaCcaActive = isZayaCcaFamily(normalizedDetectedFamily)
   const turboQuantActive = !!detectedIsTurboQuant
   const multimodalActive = !detectedForceTextOnly && (!!detectedIsMultimodal || config.isMultimodal === true)
-  const batchingOff = !config.continuousBatching
+  const effectiveContinuousBatching = dsv4Active ? true : config.continuousBatching
+  const batchingOff = !effectiveContinuousBatching
   const effectivelyNoBatching = batchingOff
-  const prefixOff = !config.enablePrefixCache
+  const prefixOff = dsv4Active ? false : !config.enablePrefixCache
   const isMambaCache = detectedCacheType === 'mamba' || detectedCacheType === 'hybrid'
   const zayaTypedCacheRequiresPaged = zayaCcaActive && !batchingOff && !prefixOff
   const dsv4CompositeRequiresPaged = dsv4Active && !batchingOff && !prefixOff
@@ -258,6 +262,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const effectiveMaxNumSeqs = dsv4Active ? 1 : config.maxNumSeqs
   const effectivePrefillBatchSize = dsv4Active ? 1 : config.prefillBatchSize
   const effectiveCompletionBatchSize = dsv4Active ? 1 : config.completionBatchSize
+  const showVideoControls = !dsv4Active && !detectedForceTextOnly && multimodalActive
   const generationDefaultsSummary = [
     (config.defaultMaxNewTokens ?? 0) > 0 ? `max output tokens ${Math.floor(config.defaultMaxNewTokens ?? 0)}` : null,
     config.defaultTemperature > 0 ? `temperature ${(config.defaultTemperature / 100).toFixed(2)}` : null,
@@ -413,14 +418,17 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <CheckField
           label="Smelt Mode"
           tooltip="Partial expert loading for MoE models. Loads backbone + N% of experts from SSD, reducing RAM by ~50% while maintaining ~97% baseline speed via cache-biased routing and native SwitchGLU kernels."
-          checked={config.smelt}
+          checked={effectiveSmeltActive}
           onChange={v => {
             onChange('smelt', v)
             // Mutual exclusion: disable Flash MoE if enabling Smelt
             if (v && flashMoeActive) onChange('flashMoe', false)
           }}
-          disabled={flashMoeActive}
+          disabled={dsv4Active || effectiveFlashMoeActive}
         />
+        {dsv4Active && (
+          <IncompatWarning text="Smelt is disabled for DSV4 Flash. DSV4 uses the verified native JANG affine loader and composite cache path." />
+        )}
         {flashMoeActive && (
           <IncompatWarning text="Smelt is disabled while Flash MoE is on. They both modify MoE expert layers — use one or the other." />
         )}
@@ -432,7 +440,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <CheckField
           label="Flash MoE (SSD Streaming)"
           tooltip="Streams MoE expert weights from SSD on-demand instead of keeping them all in RAM. Enables massive MoE models (35B-397B) to run on machines with limited RAM by caching only recently-used experts in a slot-bank cache. Incompatible with Smelt, Distributed, and JIT. ~50% slower than full-RAM mode due to on-demand disk loading."
-          checked={config.flashMoe}
+          checked={effectiveFlashMoeActive}
           onChange={v => {
             onChange('flashMoe', v)
             // Mutual exclusion: disable conflicting features
@@ -442,8 +450,11 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               if (config.enableJit) onChange('enableJit', false)
             }
           }}
-          disabled={smeltActive || distributedActive}
+          disabled={dsv4Active || effectiveSmeltActive || effectiveDistributedActive}
         />
+        {dsv4Active && (
+          <IncompatWarning text="Flash MoE is disabled for DSV4 Flash. DSV4 native expert hydration and SWA+CSA/HCA cache restore are not compatible with SSD expert streaming." />
+        )}
         {(smeltActive || distributedActive) && !flashMoeActive && (
           <IncompatWarning text={`Flash MoE is disabled while ${smeltActive ? 'Smelt' : 'Distributed'} is on. Turn it off to enable Flash MoE.`} />
         )}
@@ -472,12 +483,13 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             <PerformanceHint text={`Streaming experts from SSD with ${config.flashMoeSlotBank}-slot LRU cache. Non-MoE models automatically pass through (no effect). JIT disabled (incompatible with on-demand loading).`} />
           </>
         )}
-        <CheckField label="Continuous Batching" tooltip="Keep ON for best performance. This is the master switch for prefix cache, paged KV cache, block disk L2, and stored-cache codecs. Turning it off uses the direct single-request engine and disables the cache features below." checked={config.continuousBatching} onChange={v => onChange('continuousBatching', v)} />
+        <CheckField label="Continuous Batching" tooltip="Keep ON for best performance. This is the master switch for prefix cache, paged KV cache, block disk L2, and stored-cache codecs. Turning it off uses the direct single-request engine and disables the cache features below." checked={effectiveContinuousBatching} onChange={v => onChange('continuousBatching', v)} disabled={dsv4Active} />
         <PerformanceHint text="Keep ON for best overall behavior: it enables prefix reuse, paged cache, block disk L2, and architecture-specific cache restore while the default max sequence count stays at one for local chat." />
-        {!config.continuousBatching && config.enablePrefixCache && (
+        {dsv4Active && <InfoNote text="DSV4 Flash uses the continuous-batching DSV4BatchGenerator path for native SWA+CSA/HCA cache correctness." />}
+        {!effectiveContinuousBatching && config.enablePrefixCache && (
           <InfoNote text="Cache flags will be omitted at launch while continuous batching is off. Turn it back on to use prefix cache, paged KV cache, block disk L2, and stored-cache codecs." />
         )}
-        {!config.continuousBatching && (
+        {!effectiveContinuousBatching && (
           <InfoNote text="Turning this off disables: prefix caching, paged KV cache, KV cache quantization, and disk caching. Enable it to unlock these features." />
         )}
       </Section>
@@ -486,10 +498,14 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       <Section title={t('sessions.config.prefixCache')} expanded={expandedSections.prefixCache} onToggle={() => toggleSection('prefixCache')} hidden={isImage}>
         {!effectivelyNoBatching && <PerformanceHint text="Speeds up repeated conversations by remembering previous prompts. Makes follow-up messages much faster (lower time-to-first-token)." />}
         {batchingOff && <IncompatWarning text="Prefix cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable prefix caching." />}
-        <CheckField label="Enable Prefix Cache" tooltip="Caches prompt prefixes in memory. If you send the same system prompt or document multiple times, the server reuses the cached internal states instead of recomputing them, drastically reducing Time-To-First-Token (TTFT) and saving GPU compute. Highly recommended for agents and tool calling." checked={config.enablePrefixCache} onChange={v => onChange('enablePrefixCache', v)} />
-        {config.enablePrefixCache && (
+        <CheckField label="Enable Prefix Cache" tooltip="Caches prompt prefixes in memory. If you send the same system prompt or document multiple times, the server reuses the cached internal states instead of recomputing them, drastically reducing Time-To-First-Token (TTFT) and saving GPU compute. Highly recommended for agents and tool calling." checked={dsv4Active ? true : config.enablePrefixCache} onChange={v => onChange('enablePrefixCache', v)} disabled={dsv4Active} />
+        {(dsv4Active || config.enablePrefixCache) && (
           <>
-            <CheckField label="Legacy Entry-Count Cache" tooltip="Switches from memory-aware cache (which uses Cache Memory %, Cache Memory Limit, and Cache TTL controls) to a simpler entry-count cache. When ON: you control cache by max entries only. When OFF: you get fine-grained memory budget controls (% of RAM, MB limit, TTL expiration). Memory-aware mode is recommended for most users." checked={config.noMemoryAwareCache} onChange={v => onChange('noMemoryAwareCache', v)} />
+            {dsv4Active ? (
+              <InfoNote text="DSV4 Flash stores native SWA+CSA/HCA prompt-boundary state through the paged prefix path. Generic memory-aware and legacy entry-count prefix-cache controls are not used." />
+            ) : (
+            <>
+            <CheckField label="Legacy Entry-Count Cache" tooltip="Switches from memory-aware cache (which uses Cache Memory %, Cache Memory Limit, and Cache TTL controls) to a simpler entry-count cache. When ON: you control cache by max entries only. When OFF: you get fine-grained memory budget controls (% of RAM, MB limit, TTL expiration). Memory-aware mode is recommended for most users." checked={config.noMemoryAwareCache} onChange={v => onChange('noMemoryAwareCache', v)} disabled={dsv4Active} />
             {config.noMemoryAwareCache ? (
               <>
                 <InfoNote text="Legacy mode active — Cache Memory %, Cache Memory Limit, and Cache TTL are hidden. Turn off 'Legacy Entry-Count Cache' above to use memory-aware caching with those controls." />
@@ -567,6 +583,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                   disabled={config.usePagedCache}
                 />
               </>
+            )}
+            </>
             )}
 
             {/* Caching Help Modal */}
@@ -951,15 +969,18 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <SelectField
           label="Multimodal Support (VLM)"
           tooltip="Vision-Language Model mode for models like Qwen2-VL, Qwen3-VL, Pixtral, InternVL, or LLaVA. Auto-detected VLMs launch with the MLLM scheduler even if an older saved session says off. Smelt and documented unsafe runtimes force text-only loading."
-          value={smeltActive || detectedForceTextOnly ? 'off' : config.isMultimodal === true ? 'on' : config.isMultimodal === false ? 'off' : 'auto'}
+          value={dsv4Active || smeltActive || detectedForceTextOnly ? 'off' : config.isMultimodal === true ? 'on' : config.isMultimodal === false ? 'off' : 'auto'}
           onChange={v => onChange('isMultimodal', v === 'on' ? true : v === 'off' ? false : undefined)}
           options={[
             { value: 'auto', label: 'Auto (detect from model)' },
             { value: 'on', label: 'Force On' },
             { value: 'off', label: 'Force Off' },
           ]}
-          disabled={smeltActive || detectedForceTextOnly}
+          disabled={dsv4Active || smeltActive || detectedForceTextOnly}
         />
+        {dsv4Active && (
+          <InfoNote text="DSV4 Flash is served through the text runtime. Image/video controls stay hidden because this bundle has no VL processor path." />
+        )}
         {smeltActive && (
           <IncompatWarning text="VLM is disabled when Smelt Mode is active. Smelt forces text-only loading for partial expert support." />
         )}
@@ -975,7 +996,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {/* Video sampling — only relevant for VL models that accept video_url.
             Qwen 3.6 / Qwen3.5-VL both have native video understanding via
             temporal position embeddings, so 2 fps × 8 frames is typical. */}
-        {!detectedForceTextOnly && config.isMultimodal !== false && (
+        {showVideoControls && (
           <>
             <SliderField
               label="Video Frames/Second"
@@ -1002,7 +1023,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Speculative Decoding */}
-      <Section title={t('sessions.config.specDecoding')} expanded={expandedSections.specDecode} onToggle={() => toggleSection('specDecode')} hidden={isImage}>
+      <Section title={t('sessions.config.specDecoding')} expanded={expandedSections.specDecode} onToggle={() => toggleSection('specDecode')} hidden={isImage || dsv4Active}>
         <PerformanceHint text="Use a small draft model to propose tokens, then verify them in a single target model pass. Can give 20-90% speedup with zero quality loss." />
         {config.continuousBatching && <IncompatWarning text="Speculative decoding is incompatible with continuous batching. The draft model will only be used in SimpleEngine (non-batched) mode. Batched requests will use standard generation." />}
         {config.isMultimodal === true && <IncompatWarning text="Speculative decoding is incompatible with multimodal (VLM) models. The draft model will be ignored for VLM requests." />}
@@ -1025,7 +1046,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Distributed Compute */}
-      <Section title={t('sessions.config.distributed')} expanded={expandedSections.distributed} onToggle={() => toggleSection('distributed')} hidden={isImage}>
+      <Section title={t('sessions.config.distributed')} expanded={expandedSections.distributed} onToggle={() => toggleSection('distributed')} hidden={isImage || dsv4Active}>
         <div className="mx-4 mt-3 mb-2 rounded-md border-2 border-amber-500 bg-amber-500/15 px-3 py-3 text-xs text-amber-800 dark:text-amber-100">
           <div className="font-bold uppercase tracking-wide text-[11px] mb-1.5 text-amber-900 dark:text-amber-50">
             ⚠ Pre-Alpha — localhost loopback only

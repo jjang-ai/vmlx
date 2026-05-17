@@ -73,6 +73,100 @@ function cacheTypeRequiresPaged(cacheType?: string): boolean {
 
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 
+const ADDITIONAL_ARG_VALUE_FLAGS = new Set([
+  '--block-disk-cache-dir',
+  '--block-disk-cache-max-gb',
+  '--cache-memory-mb',
+  '--cache-memory-percent',
+  '--cache-ttl-minutes',
+  '--completion-batch-size',
+  '--cluster-secret',
+  '--distributed-mode',
+  '--disk-cache-dir',
+  '--disk-cache-max-gb',
+  '--flash-moe-io-split',
+  '--flash-moe-prefetch',
+  '--flash-moe-slot-bank',
+  '--image-mode',
+  '--image-quantize',
+  '--kv-cache-group-size',
+  '--kv-cache-quantization',
+  '--max-cache-blocks',
+  '--max-num-seqs',
+  '--mflux-class',
+  '--num-draft-tokens',
+  '--paged-cache-block-size',
+  '--prefill-batch-size',
+  '--prefill-step-size',
+  '--prefix-cache-max-bytes',
+  '--prefix-cache-size',
+  '--served-model-name',
+  '--smelt-experts',
+  '--speculative-model',
+  '--worker-nodes',
+])
+
+const IMAGE_ADDITIONAL_ARG_BLOCKLIST = new Set([
+  '--image-mode',
+  '--image-quantize',
+  '--served-model-name',
+  '--mflux-class',
+])
+
+const DSV4_ADDITIONAL_ARG_BLOCKLIST = new Set([
+  '--continuous-batching',
+  '--no-continuous-batching',
+  '--enable-prefix-cache',
+  '--disable-prefix-cache',
+  '--use-paged-cache',
+  '--paged-cache-block-size',
+  '--max-cache-blocks',
+  '--kv-cache-quantization',
+  '--kv-cache-group-size',
+  '--max-num-seqs',
+  '--prefill-batch-size',
+  '--prefill-step-size',
+  '--completion-batch-size',
+  '--enable-jit',
+  '--no-memory-aware-cache',
+  '--prefix-cache-size',
+  '--prefix-cache-max-bytes',
+  '--cache-memory-mb',
+  '--cache-memory-percent',
+  '--cache-ttl-minutes',
+  '--enable-disk-cache',
+  '--disk-cache-dir',
+  '--disk-cache-max-gb',
+  '--smelt',
+  '--smelt-experts',
+  '--flash-moe',
+  '--flash-moe-slot-bank',
+  '--flash-moe-prefetch',
+  '--flash-moe-io-split',
+  '--distributed',
+  '--distributed-mode',
+  '--worker-nodes',
+  '--cluster-secret',
+  '--speculative-model',
+  '--num-draft-tokens',
+  '--is-mllm',
+])
+
+function filterAdditionalArgs(raw: string | undefined, blockedFlags: Set<string>): string[] {
+  if (!raw?.trim()) return []
+  const extra = raw.trim().split(/\s+/).filter(Boolean)
+  const filtered: string[] = []
+  for (let i = 0; i < extra.length; i++) {
+    const flag = extra[i]
+    if (blockedFlags.has(flag)) {
+      if (ADDITIONAL_ARG_VALUE_FLAGS.has(flag)) i++
+      continue
+    }
+    filtered.push(flag)
+  }
+  return filtered
+}
+
 function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
   if (!modelPath) return {}
   const out: BundleStartupDefaults = {}
@@ -865,6 +959,38 @@ export class SessionManager extends EventEmitter {
             }
             if (config.reasoningParser !== '') {
               config.reasoningParser = freshConfig.reasoningParser || 'auto'
+            }
+          }
+          if (freshFamily === 'deepseek-v4') {
+            const dsv4Changed =
+              config.continuousBatching !== true ||
+              config.enablePrefixCache !== true ||
+              config.usePagedCache !== true ||
+              config.pagedCacheBlockSize !== DSV4_PAGED_CACHE_BLOCK_SIZE ||
+              config.maxNumSeqs !== 1 ||
+              config.kvCacheQuantization !== 'auto' ||
+              config.enableJit === true ||
+              (config as any).smelt === true ||
+              (config as any).flashMoe === true ||
+              (config as any).distributedEnabled === true ||
+              !!config.speculativeModel
+            config.continuousBatching = true
+            config.enablePrefixCache = true
+            config.usePagedCache = true
+            config.pagedCacheBlockSize = DSV4_PAGED_CACHE_BLOCK_SIZE
+            config.maxNumSeqs = 1
+            config.prefillBatchSize = 1
+            config.completionBatchSize = 1
+            config.kvCacheQuantization = 'auto'
+            config.noMemoryAwareCache = false
+            config.enableDiskCache = false
+            config.enableJit = false
+            ;(config as any).smelt = false
+            ;(config as any).flashMoe = false
+            ;(config as any).distributedEnabled = false
+            config.speculativeModel = ''
+            if (dsv4Changed) {
+              this.pushLog(sessionId, '[INFO] DSV4-Flash detected; stale generic runtime settings were reset to the native SWA+CSA/HCA cache policy')
             }
           }
           // Refresh multimodal detection from disk. A detected VLM must win
@@ -2148,16 +2274,7 @@ export class SessionManager extends EventEmitter {
       // Strip image-specific flags from additionalArgs to prevent duplication
       // (stale additionalArgs may survive config merge from a previous session)
       if (config.additionalArgs?.trim()) {
-        const imageFlags = new Set(['--image-mode', '--image-quantize', '--served-model-name', '--mflux-class'])
-        const extra = config.additionalArgs.trim().split(/\s+/).filter(Boolean)
-        const filtered: string[] = []
-        for (let i = 0; i < extra.length; i++) {
-          if (imageFlags.has(extra[i])) {
-            i++ // skip the flag's value argument too
-          } else {
-            filtered.push(extra[i])
-          }
-        }
+        const filtered = filterAdditionalArgs(config.additionalArgs, IMAGE_ADDITIONAL_ARG_BLOCKLIST)
         if (filtered.length) args.push(...filtered)
       }
       return args
@@ -2200,15 +2317,15 @@ export class SessionManager extends EventEmitter {
     // doing it here prevents misleading "Force MLLM mode enabled" log lines and
     // avoids the edge case where a saved session has isMultimodal=true from
     // before smelt was turned on.
-    const smeltActive = !!(config as any).smelt
-    const isVLM = smeltActive || detected.forceTextOnly ? false
+    const effectiveSmelt = !!(config as any).smelt && !dsv4Active
+    const isVLM = effectiveSmelt || detected.forceTextOnly ? false
       : detected.isMultimodal ? true
         : config.isMultimodal === true ? true
           : config.isMultimodal === false ? false
             : false
     if (isVLM) args.push('--is-mllm')
 
-    const cacheStackActive = config.continuousBatching !== false
+    const cacheStackActive = dsv4Active ? true : config.continuousBatching !== false
     if (cacheStackActive) {
       args.push('--continuous-batching')
     } else {
@@ -2262,7 +2379,7 @@ export class SessionManager extends EventEmitter {
     // Tool follow-up requests share most of the prompt with the original request;
     // without prefix cache each follow-up re-processes the entire prompt (~16s).
     const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
-    const prefixCacheOff = !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
+    const prefixCacheOff = dsv4Active ? false : !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
     const zayaCcaActive = isZayaCcaFamily(detectedFamily)
     const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
     const dsv4CompositeRequiresPaged = detectedFamily === 'deepseek-v4' && !prefixCacheOff
@@ -2276,7 +2393,7 @@ export class SessionManager extends EventEmitter {
 
     if (prefixCacheOff) {
       args.push('--disable-prefix-cache')
-    } else {
+    } else if (!dsv4Active) {
       if (config.noMemoryAwareCache) {
         args.push('--no-memory-aware-cache')
         if (config.prefixCacheSize && config.prefixCacheSize > 0) {
@@ -2375,11 +2492,14 @@ export class SessionManager extends EventEmitter {
     const requestedDistributed = !!(config as any).distributedEnabled
     const requestedFlashMoe = !!(config as any).flashMoe
     const turboQuantActive = !!(detected as any).isTurboQuant
-    const effectiveDistributed = requestedDistributed
-    const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed
+    const effectiveDistributed = requestedDistributed && !dsv4Active
+    const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed && !dsv4Active
     const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !zayaCcaActive && !turboQuantActive
+    if (dsv4Active && ((config as any).smelt || requestedFlashMoe || requestedDistributed || config.speculativeModel)) {
+      console.warn('[SESSION] DSV4-Flash detected: ignoring stale Smelt/Flash MoE/distributed/speculative flags; native DSV4 cache and expert hydration own this runtime')
+    }
     if (requestedFlashMoe && !effectiveFlashMoe) {
-      console.warn('[SESSION] Ignoring stale Flash MoE flag because distributed mode is active')
+      console.warn(`[SESSION] Ignoring stale Flash MoE flag because ${dsv4Active ? 'DSV4-Flash is active' : 'distributed mode is active'}`)
     }
     if (config.enableJit && !effectiveEnableJit) {
       const reason = dsv4Active
@@ -2395,7 +2515,7 @@ export class SessionManager extends EventEmitter {
     }
 
     // Smelt mode (partial expert loading)
-    if ((config as any).smelt) {
+    if (effectiveSmelt) {
       args.push('--smelt')
       const pct = (config as any).smeltExperts ?? 50
       if (pct !== 50) {
@@ -2433,7 +2553,7 @@ export class SessionManager extends EventEmitter {
     }
 
     // Speculative decoding
-    if (config.speculativeModel) {
+    if (!dsv4Active && config.speculativeModel) {
       args.push('--speculative-model', config.speculativeModel)
       if (config.numDraftTokens && config.numDraftTokens !== 3) {
         args.push('--num-draft-tokens', config.numDraftTokens.toString())
@@ -2476,16 +2596,10 @@ export class SessionManager extends EventEmitter {
 
     // Additional arguments — strip stale image-only flags from old session configs
     if (config.additionalArgs?.trim()) {
-      const staleImageFlags = new Set(['--mflux-class', '--image-mode', '--image-quantize'])
-      const extra = config.additionalArgs.trim().split(/\s+/).filter(Boolean)
-      const filtered: string[] = []
-      for (let i = 0; i < extra.length; i++) {
-        if (staleImageFlags.has(extra[i])) {
-          i++ // skip the flag's value too
-        } else {
-          filtered.push(extra[i])
-        }
-      }
+      const filtered = filterAdditionalArgs(
+        config.additionalArgs,
+        dsv4Active ? DSV4_ADDITIONAL_ARG_BLOCKLIST : IMAGE_ADDITIONAL_ARG_BLOCKLIST,
+      )
       if (filtered.length) args.push(...filtered)
     }
 
