@@ -1854,7 +1854,7 @@ def _load_jang_v2(
             f"  Upgraded {_upg} modules to Quantized variants (post-load fixup)"
         )
 
-    _fix_quantized_bits(model)
+    _fix_quantized_bits(model, _q_cfg)
 
     if not hasattr(model, "config"):
         model.config = config
@@ -2713,7 +2713,7 @@ def _load_jang_v2_vlm(
         del shard_weights
         gc.collect()
 
-    _fix_quantized_bits(model)
+    _fix_quantized_bits(model, config.get("quantization", {}))
 
     if not hasattr(model, "config"):
         model.config = model_config
@@ -3017,7 +3017,7 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
             del weights
             gc.collect()
 
-        _fix_quantized_bits(model)
+        _fix_quantized_bits(model, config.get("quantization", {}))
     finally:
         if tmp_dir:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -3996,11 +3996,18 @@ def _pre_fix_bits_from_metadata(model, shape_map, block_size):
         )
 
 
-def _fix_quantized_bits(model):
+def _fix_quantized_bits(model, quantization_overrides: dict | None = None):
     """Fix per-layer bits AND group_size for JANG mixed-precision models.
 
     Matches jang-tools 2.1.0 logic: router/gate tensors prefer gs=64 (precision-critical),
     everything else prefers the module's initialized gs (from config.json).
+
+    When quant_shape_inference has already produced per-module overrides, trust
+    those first. DSV4 affine prestacked routed tensors are ambiguous from shape
+    alone: for example a packed ``(..., 2048, 256)`` switch projection can be
+    either 2-bit g128 over 4096 columns or 4-bit g64 over 2048 columns. The
+    post-load heuristic must not reinterpret a proven override into the shorter
+    matrix, or the first routed expert gather_qmm crashes at decode time.
     """
     import mlx.nn as nn
 
@@ -4021,6 +4028,20 @@ def _fix_quantized_bits(model):
     except ImportError:
         pass
 
+    overrides = quantization_overrides if isinstance(quantization_overrides, dict) else {}
+
+    def _override_for_name(name: str) -> dict | None:
+        candidates = [name]
+        if name.startswith("model."):
+            candidates.append(name[len("model."):])
+        else:
+            candidates.append(f"model.{name}")
+        for cand in candidates:
+            value = overrides.get(cand)
+            if isinstance(value, dict) and "bits" in value and "group_size" in value:
+                return value
+        return None
+
     for name, module in model.named_modules():
         if not isinstance(module, quant_types):
             continue
@@ -4030,6 +4051,23 @@ def _fix_quantized_bits(model):
             w_cols = module.weight.shape[-1]
             s_cols = module.scales.shape[-1]
             fixed = False
+
+            override = _override_for_name(name)
+            if override is not None:
+                try_bits = int(override["bits"])
+                try_gs = int(override["group_size"])
+                in_dim = s_cols * try_gs
+                if (
+                    in_dim > 0
+                    and (w_cols * 32) % in_dim == 0
+                    and (w_cols * 32) // in_dim == try_bits
+                    and try_bits in (2, 3, 4, 5, 6, 8)
+                ):
+                    if try_bits != module.bits:
+                        module.bits = try_bits
+                    if try_gs != module.group_size:
+                        module.group_size = try_gs
+                    continue
 
             # Router/gate tensors prefer gs=64 (precision-critical in JANG)
             name_lower = name.lower()

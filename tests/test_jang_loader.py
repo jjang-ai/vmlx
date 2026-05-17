@@ -101,6 +101,65 @@ class TestTreeFlattenImport:
         assert "mx.utils.tree_flatten" not in source
 
 
+class TestFixQuantizedBits:
+    """Post-load bit repair must honor proven per-module overrides."""
+
+    def test_dsv4_prestacked_switch_override_wins_over_shape_ambiguity(self):
+        import mlx.core as mx
+        import mlx.nn as nn
+        from mlx_lm.models.switch_layers import QuantizedSwitchLinear
+        from vmlx_engine.utils.jang_loader import _fix_quantized_bits
+
+        class _Switch(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.up_proj = QuantizedSwitchLinear(
+                    64, 4, 2, bias=False, group_size=64, bits=4
+                )
+
+        class _MLP(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.switch_mlp = _Switch()
+
+        class _Layer(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.mlp = _MLP()
+
+        class _Inner(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layers = [_Layer()]
+
+        class _Model(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.model = _Inner()
+
+        model = _Model()
+        proj = model.model.layers[0].mlp.switch_mlp.up_proj
+        proj.weight = mx.zeros((2, 4, 8), dtype=mx.uint32)
+        proj.scales = mx.zeros((2, 4, 1), dtype=mx.float16)
+        proj.biases = mx.zeros((2, 4, 1), dtype=mx.float16)
+        assert proj.bits == 4
+        assert proj.group_size == 64
+
+        _fix_quantized_bits(
+            model,
+            {
+                "model.layers.0.mlp.switch_mlp.up_proj": {
+                    "bits": 2,
+                    "group_size": 128,
+                }
+            },
+        )
+
+        assert proj.bits == 2
+        assert proj.group_size == 128
+        assert proj.input_dims == 128
+
+
 class TestPreFixBitsFromShard:
     """Test _pre_fix_bits_from_shard fixes QuantizedLinear bits before load_weights.
 
