@@ -477,6 +477,52 @@ function isAffineJangQwenHybridVlm(parsedConfig: any, jangCfg: any): boolean {
   return !isMxtqJangConfig(jangCfg)
 }
 
+function qwenNativeMtpVlArtifactReady(
+  parsedConfig: any,
+  jangCfg: any,
+  modelPath: string,
+): boolean {
+  if (!parsedConfig || typeof parsedConfig !== 'object') return false
+  if (!jangCfg || typeof jangCfg !== 'object') return false
+  if (!configDeclaresMedia(parsedConfig)) return false
+
+  const qwenFamilies = new Set(['qwen3_5', 'qwen3_5_text', 'qwen3_5_moe', 'qwen3_5_moe_text'])
+  const modelTypes = [
+    parsedConfig.model_type,
+    parsedConfig.text_config?.model_type,
+    jangCfg.capabilities?.family,
+  ].map(value => String(value || '').toLowerCase())
+  if (!modelTypes.some(value => qwenFamilies.has(value))) return false
+
+  const configMtpLayers = [
+    parsedConfig.num_nextn_predict_layers,
+    parsedConfig.mtp_num_hidden_layers,
+    parsedConfig.text_config?.num_nextn_predict_layers,
+    parsedConfig.text_config?.mtp_num_hidden_layers,
+    jangCfg.runtime?.mtp_layers,
+    jangCfg.mtp?.num_layers,
+  ].some(value => Number.isFinite(Number(value)) && Number(value) > 0)
+  if (!configMtpLayers) return false
+  if (jangCfg.drop_mtp === true || jangCfg.mtp?.enabled === false || jangCfg.mtp?.kept === false) {
+    return false
+  }
+
+  try {
+    const raw = readFileSync(join(modelPath, 'model.safetensors.index.json'), 'utf-8')
+    const index = JSON.parse(raw)
+    const weightMap = index?.weight_map
+    if (!weightMap || typeof weightMap !== 'object') return false
+    const keys = Object.keys(weightMap)
+    const hasMtp = keys.some(key => /(^|\.)mtp(\.|$)/.test(key))
+    const hasVision = keys.some(key =>
+      /(^|\.)(vision_tower|vision_model|visual|patch_embed|multi_modal_projector|mm_projector|image_newline)(\.|$)/.test(key),
+    )
+    return hasMtp && hasVision
+  } catch {
+    return false
+  }
+}
+
 function configDeclaresLinearAttention(config: any): boolean {
   if (!config || typeof config !== 'object') return false
   const containers = [config]
@@ -684,7 +730,8 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
             try {
               const jangCfg = JSON.parse(readFileSync(jangConfigPath, 'utf-8'))
               detected = applyJangCapabilities(detected, jangCfg)
-              if (isAffineJangQwenHybridVlm(parsed, jangCfg)) {
+              const nativeMtpVlReady = qwenNativeMtpVlArtifactReady(parsed, jangCfg, modelPath)
+              if (isAffineJangQwenHybridVlm(parsed, jangCfg) && !nativeMtpVlReady) {
                 detected.forceTextOnly = true
               }
               detected.isMultimodal = resolveJangMultimodal(jangCfg, parsed)

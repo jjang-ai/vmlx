@@ -433,6 +433,45 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.forceTextOnly).toBe(true)
   })
 
+  it('keeps affine-JANG Qwen native-MTP VL artifacts multimodal when indexed MTP and vision tensors exist', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'qwen3_5',
+        text_config: {
+          model_type: 'qwen3_5_text',
+          mtp_num_hidden_layers: 1,
+          layer_types: ['linear_attention', 'full_attention'],
+        },
+        vision_config: { hidden_size: 1024 },
+        image_token_id: 151665,
+        video_token_id: 151666,
+      },
+      {
+        format: 'jang',
+        architecture: { has_vision: true },
+        runtime: { mtp_layers: 1 },
+        mtp: { kept: true, enabled: true, num_layers: 1 },
+        capabilities: { family: 'qwen3_5', modality: 'vision', cache_type: 'hybrid' },
+      },
+    )
+    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
+      weight_map: {
+        'model.embed_tokens.weight': 'model-00001-of-00001.safetensors',
+        'vision_tower.patch_embed.proj.weight': 'model-00001-of-00001.safetensors',
+        'mtp.layers.0.self_attn.q_proj.weight': 'model-00001-of-00001.safetensors',
+        'mtp.norm.weight': 'model-00001-of-00001.safetensors',
+      },
+    }, null, 2))
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('qwen3.5')
+    expect(detected.cacheType).toBe('hybrid')
+    expect(detected.usePagedCache).toBe(true)
+    expect(detected.isMultimodal).toBe(true)
+    expect(detected.forceTextOnly).toBeUndefined()
+  })
+
   it('keeps MXTQ/JANGTQ Qwen hybrid VLM multimodal', () => {
     const dir = makeModelDir(
       {

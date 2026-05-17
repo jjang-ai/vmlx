@@ -1,5 +1,41 @@
 # Changelog
 
+## v1.5.39 — 2026-05-17 — Native MTP Detection and Runtime Settings
+
+### Added
+- **MTP status in the app performance panel**: model health now exposes native
+  MTP availability, effective depth, runtime scope, preserved tensor counts,
+  and explicit disabled/blocking reasons.
+- **D3-by-default native MTP policy**: supported Qwen MTP artifacts launch at
+  depth 3 unless the user explicitly sets a native-MTP depth or opts into a
+  local tuning sidecar.
+- **Native cache visibility for hybrid families**: session health surfaces
+  native cache schema/components and whether generic TurboQuant KV is forced
+  off by the model family.
+
+### Fixed
+- **Session launch settings respect model-family runtime policy**: stale
+  speculative, cache, and incompatible runtime options are reset or omitted
+  rather than carried into MTP/Qwen or native-cache families.
+- **Chat settings remain per-chat overrides**: model defaults remain display
+  hints unless the user explicitly saves an override, so MTP and generation
+  config metadata do not silently become persisted request flags.
+- **API/request wiring stays coherent across Chat, Responses, Anthropic, and
+  Ollama gateway paths**: compatibility fields are preserved while model
+  runtime gates decide what can actually launch.
+- **Qwen 3.6 MTP+VL model detection stays multimodal**: app/session detection
+  now mirrors the engine's artifact-backed exception for affine-JANG Qwen
+  native-MTP VL bundles with indexed MTP and vision tensors.
+- **Source-runtime Kimi/Gemma parity**: source/PyPI runs now receive the same
+  Kimi K2.6 MLA and Gemma 4 pixel-value guards that the packaged app applies
+  during bundled-Python build.
+
+### Verified
+- Focused panel tests cover settings flow, chat settings compatibility,
+  model-config registry behavior, and request construction.
+- Bundled runtime verification for this release must prove the packaged app
+  imports `vmlx_engine 1.5.39` from inside the signed app bundle.
+
 ## v1.5.37 — 2026-05-16 — Chat Defaults, Parser Recovery, and Max-Token Semantics
 
 ### Fixed

@@ -38,6 +38,9 @@ from importlib import import_module
 from importlib.util import find_spec
 from pathlib import Path
 from typing import Optional
+import hashlib
+import shutil
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +93,10 @@ def install() -> bool:
             target,
         )
         return False
+    local_patch_source = _local_patch_source()
+    if local_patch_source is not None:
+        return _apply_local_patch(target, local_patch_source)
+
     if not _runtime_patch_source_available():
         logger.debug(
             "Kimi MLA file patch skipped: optional patched source is not "
@@ -107,6 +114,44 @@ def install() -> bool:
         return False
     rc = _apply(dry_run=False)
     return rc == 0
+
+
+def _local_patch_source() -> Optional[Path]:
+    """Return vMLX-shipped patched source for PyPI/source installs."""
+    path = Path(__file__).with_name("deepseek_v3_patched.py")
+    return path if path.is_file() else None
+
+
+def _target_has_patch(path: Path) -> bool:
+    try:
+        return PATCH_MARKER in path.read_text(errors="replace")
+    except Exception:
+        return False
+
+
+def _apply_local_patch(target: Path, source: Path) -> bool:
+    if _target_has_patch(target):
+        return True
+    try:
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        backup = target.with_name(target.name + f".vmlx-backup-{ts}")
+        shutil.copy2(target, backup)
+        shutil.copy2(source, target)
+        import importlib
+        import mlx_lm.models.deepseek_v3 as _d3  # noqa: WPS433
+
+        importlib.reload(_d3)
+        digest = hashlib.md5(target.read_bytes()).hexdigest()
+        logger.info(
+            "Applied Kimi MLA fp32-SDPA patch to %s (source=%s md5=%s)",
+            target,
+            source,
+            digest,
+        )
+        return is_patched()
+    except Exception as exc:
+        logger.warning("Kimi MLA local patch failed for %s: %s", target, exc)
+        return False
 
 
 def install_file(dry_run: bool = False) -> int:

@@ -2,6 +2,47 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.5.39] - 2026-05-17
+
+### Added
+- **Native MTP artifact autodetection and health reporting**: Qwen 3.6 text/VL
+  bundles with preserved `mtp.*` tensors now report MTP availability, depth,
+  scope, tensor counts, and gating reasons through health/status surfaces.
+- **Production MTP runtime gates**: native-MTP launch policy now fail-closes
+  unless the bundle metadata, tensor evidence, loader route, and cache safety
+  checks agree. Supported artifacts default to D3; model-local tuning sidecars
+  are opt-in only via `VMLINUX_NATIVE_MTP_USE_TUNING=1`. Preserved-only
+  artifacts stay autoregressive unless explicitly verified for native
+  self-spec.
+
+### Fixed
+- **MTP/settings wiring across CLI, API, and app launch**: stale speculative
+  settings are stripped for incompatible families, model-driven defaults stay
+  authoritative, and runtime flags are not persisted into unrelated sessions.
+- **Qwen 3.6 text+VL loader/runtime parity**: text and vision-capable Qwen
+  artifacts share the same MTP detection path while preserving VL assets and
+  hybrid cache requirements.
+- **Qwen 3.6 MTP+VL app detection parity**: the panel/session detector now
+  keeps artifact-backed affine-JANG Qwen MTP+VL bundles on the multimodal path
+  when indexed MTP and vision tensors are present, instead of applying the
+  older text-only affine hybrid guard.
+- **Cache and status visibility**: native cache and MTP status details are
+  surfaced without enabling generic TurboQuant KV paths for incompatible
+  model-family cache schemas.
+- **Source-runtime safety for Kimi/Gemma VLMs**: PyPI/source installs now apply
+  the Kimi K2.6 DeepSeek-V3 MLA patch and Gemma 4 mixed `pixel_values` coercion
+  at runtime, matching the protections already applied to bundled DMGs.
+- **DSV4/JANG guard hardening on main**: current main also includes defensive
+  settings and metadata gates for DSV4 affine/JANG artifacts, but DSV4 quant
+  research artifacts are not part of this release claim.
+
+### Verified
+- Focused Python tests cover native MTP autodetect, MTP policy, bench harness,
+  sampler/research helpers, JANG loader metadata, JIT toggles, DSV4 contract
+  hardening, SSM companion cache, and multimodal routing surfaces.
+- Focused panel tests cover model-config registry, session/settings flow,
+  chat settings compatibility, and MTP/native-cache performance display.
+
 ## [1.5.37] - 2026-05-16
 
 ### Fixed

@@ -15,12 +15,15 @@ never corrupts the bundle.
 Registered patches (auto-installed on ``import vmlx_engine.runtime_patches``):
   * ``kimi_k25_mla``          — Kimi K2.6 fp32 MLA L==1 SDPA cast
   * ``deepseek_v4_register``  — DSV4 mlx_lm.models.deepseek_v4 registration
+  * ``gemma4_vision``         — Gemma 4 mixed pixel_values list coercion
 """
 
 # Eagerly install every patch on first import so they land before any
 # model load path walks config.json.model_type. Safe: each installer guards
 # against already-patched state internally.
 from . import deepseek_v4_register  # noqa: F401
+from . import gemma4_vision as _gemma4_vision
 from . import kimi_k25_mla as _kimi_k25_mla
 
+_gemma4_vision.install()
 _kimi_k25_mla.install()

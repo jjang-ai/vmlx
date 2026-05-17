@@ -1289,7 +1289,14 @@ describe('Default IP and New Settings', () => {
         expect(source).toContain("config.reasoningParser = freshConfig.reasoningParser || 'auto'")
         expect(source).toContain('delete config.defaultEnableThinking')
         expect(source).not.toContain('ZAYA default thinking reset from stale on to off')
-        expect(source).not.toContain('--default-enable-thinking')
+
+        const out = preview(
+            { defaultEnableThinking: true },
+            { family: 'zaya', cacheType: 'hybrid', usePagedCache: true, reasoningParser: 'qwen3' }
+        )
+        expect(hasFlag(out, '--reasoning-parser')).toBe(true)
+        expect(getFlagValue(out, '--reasoning-parser')).toBe('qwen3')
+        expect(hasFlag(out, '--default-enable-thinking')).toBe(false)
     })
 
     it('logLevel INFO (default) does not emit --log-level flag', () => {

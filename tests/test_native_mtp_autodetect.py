@@ -1076,13 +1076,40 @@ class TestNativeMtpAutodetect:
         assert depth == 3
         assert source == "default"
 
-    def test_native_mtp_depth_uses_model_tuning_sidecar_when_env_unset(
+    def test_native_mtp_depth_ignores_model_tuning_sidecar_by_default(
         self, monkeypatch, tmp_path
     ):
         from vmlx_engine.native_mtp import native_mtp_effective_depth
 
         monkeypatch.delenv("VMLINUX_NATIVE_MTP_DEPTH", raising=False)
         monkeypatch.delenv("VMLX_NATIVE_MTP_DEPTH", raising=False)
+        monkeypatch.delenv("VMLINUX_NATIVE_MTP_USE_TUNING", raising=False)
+        monkeypatch.delenv("VMLX_NATIVE_MTP_USE_TUNING", raising=False)
+        (tmp_path / "vmlx_mtp_tuning.json").write_text(
+            json.dumps(
+                {
+                    "native_mtp": {
+                        "best_depth": 2,
+                        "validated": True,
+                        "output_equivalent": True,
+                    }
+                }
+            )
+        )
+
+        depth, source = native_mtp_effective_depth(tmp_path)
+
+        assert depth == 3
+        assert source == "default"
+
+    def test_native_mtp_depth_uses_model_tuning_sidecar_when_opted_in(
+        self, monkeypatch, tmp_path
+    ):
+        from vmlx_engine.native_mtp import native_mtp_effective_depth
+
+        monkeypatch.delenv("VMLINUX_NATIVE_MTP_DEPTH", raising=False)
+        monkeypatch.delenv("VMLX_NATIVE_MTP_DEPTH", raising=False)
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP_USE_TUNING", "1")
         (tmp_path / "vmlx_mtp_tuning.json").write_text(
             json.dumps(
                 {
@@ -1120,6 +1147,7 @@ class TestNativeMtpAutodetect:
 
         monkeypatch.delenv("VMLINUX_NATIVE_MTP_DEPTH", raising=False)
         monkeypatch.delenv("VMLX_NATIVE_MTP_DEPTH", raising=False)
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP_USE_TUNING", "1")
         (tmp_path / "vmlx_mtp_tuning.json").write_text(
             json.dumps(
                 {
@@ -1145,6 +1173,7 @@ class TestNativeMtpAutodetect:
 
         monkeypatch.delenv("VMLINUX_NATIVE_MTP_DEPTH", raising=False)
         monkeypatch.delenv("VMLX_NATIVE_MTP_DEPTH", raising=False)
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP_USE_TUNING", "1")
         _write_qwen36_mxfp4_mtp_bundle(tmp_path)
         (tmp_path / "vmlx_mtp_tuning.json").write_text(
             json.dumps(
@@ -1170,6 +1199,7 @@ class TestNativeMtpAutodetect:
 
         monkeypatch.delenv("VMLINUX_NATIVE_MTP_DEPTH", raising=False)
         monkeypatch.delenv("VMLX_NATIVE_MTP_DEPTH", raising=False)
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP_USE_TUNING", "1")
         monkeypatch.setattr(native_mtp, "_apply_mlx_lm_mtp_patch", lambda: True)
         monkeypatch.setattr(native_mtp, "_set_mtp_active", lambda _active: None)
         monkeypatch.setattr(native_mtp, "_ACTIVE_NATIVE_MTP_MODEL_PATH", None, raising=False)

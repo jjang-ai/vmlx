@@ -364,6 +364,11 @@ def native_mtp_effective_depth(
     Qwen3.6 ships one trained MTP head; depth here means recursive runtime
     drafting through that head, clamped to the verifier implementation's D3
     support.
+
+    Production default is deliberately D3 for all supported MTP artifacts.
+    Model-local tuning files are research artifacts; they are honored only
+    when explicitly enabled so a copied benchmark note cannot silently change
+    the release runtime policy for users.
     """
     env_name = None
     raw = None
@@ -385,10 +390,11 @@ def native_mtp_effective_depth(
     if raw is not None and source != "default":
         return max(1, min(3, depth)), source
 
-    tuned_path = model_path or _ACTIVE_NATIVE_MTP_MODEL_PATH
-    tuned_depth, tuned_source = _model_tuning_depth(tuned_path)
-    if tuned_depth is not None and tuned_source is not None:
-        return tuned_depth, tuned_source
+    if _env_enabled("VMLINUX_NATIVE_MTP_USE_TUNING", "VMLX_NATIVE_MTP_USE_TUNING"):
+        tuned_path = model_path or _ACTIVE_NATIVE_MTP_MODEL_PATH
+        tuned_depth, tuned_source = _model_tuning_depth(tuned_path)
+        if tuned_depth is not None and tuned_source is not None:
+            return tuned_depth, tuned_source
     return max(1, min(3, depth)), source
 
 

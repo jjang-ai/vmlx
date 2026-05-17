@@ -5201,10 +5201,15 @@ class TestTurboQuantKVTelemetry:
             "--default-repetition-penalty",
             "--default-enable-thinking",
         ):
-            assert flag not in sessions_source
-            assert flag not in preview_source
-        assert "staleImageFlags" in sessions_source
-        assert "staleImageFlags" in preview_source
+            # The literals may appear in sanitizer/blocklist tables so stale
+            # additionalArgs can be stripped. They must not be emitted as
+            # startup launch flags from the real session command or preview.
+            assert f"args.push('{flag}'" not in sessions_source
+            assert f"parts.push('{flag}'" not in preview_source
+        assert "IMAGE_ADDITIONAL_ARG_BLOCKLIST" in sessions_source
+        assert "IMAGE_ADDITIONAL_ARG_BLOCKLIST" in preview_source
+        assert "DSV4_ADDITIONAL_ARG_BLOCKLIST" in sessions_source
+        assert "DSV4_ADDITIONAL_ARG_BLOCKLIST" in preview_source
 
     def test_panel_startup_defaults_sanitize_incompatible_saved_modes(self):
         sessions_source = Path("./panel/src/main/sessions.ts").read_text()

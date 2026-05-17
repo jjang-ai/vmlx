@@ -10,7 +10,8 @@
 
 <p align="center">
   Self-hosted inference server for LLMs, VLMs, and image generation on Apple Silicon.<br>
-  OpenAI + Anthropic + Ollama compatible HTTP API. Self-hosted; no third-party API keys required.
+  OpenAI + Anthropic + Ollama compatible HTTP API. Self-hosted; no third-party API keys required.<br>
+  Native MTP artifact detection and family-specific cache policy gates keep speculative/cache settings explicit and model-safe.
 </p>
 
 <p align="center">
