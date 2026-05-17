@@ -105,9 +105,9 @@ import logging
 import inspect
 import os
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -213,6 +213,9 @@ def _mllm_media_cache_extra_keys(request: Any) -> Optional[Dict[str, str]]:
         _hash_text("image", source)
     for source in getattr(request, "videos", None) or []:
         _hash_text("video", source)
+    if getattr(request, "videos", None):
+        _hash_text("video_fps", getattr(request, "video_fps", None))
+        _hash_text("video_max_frames", getattr(request, "video_max_frames", None))
     _hash_array("image_grid_thw", getattr(request, "image_grid_thw", None))
     if not media_sources:
         # Fallback for callers that hand us preprocessed pixel tensors without
@@ -1040,6 +1043,682 @@ from .utils.ssm_companion_cache import HybridSSMStateCache, SSMCompanionCache  #
 
 
 @dataclass
+class MLLMNativeMTPStats:
+    cycles: int = 0
+    accepts: int = 0
+    rejects: int = 0
+    init_emits: int = 0
+    draft_emits: int = 0
+    bonus_emits: int = 0
+    verify_emits: int = 0
+    drafted_tokens: int = 0
+    accepted_tokens: int = 0
+    verify_ms: float = 0.0
+    sample_ms: float = 0.0
+    draft_ms: float = 0.0
+    snapshot_ms: float = 0.0
+    restore_ms: float = 0.0
+    replay_ms: float = 0.0
+    materialize_ms: float = 0.0
+    accepted_by_depth: List[int] = field(default_factory=lambda: [0, 0, 0])
+    drafted_by_depth: List[int] = field(default_factory=lambda: [0, 0, 0])
+    seed_main_forwards: int = 0
+    verify_main_forwards: int = 0
+    replay_main_forwards: int = 0
+    mtp_forwards: int = 0
+
+
+@dataclass
+class MLLMNativeMTPState:
+    """Private draft/verify state for one native-MTP MLLM request."""
+
+    queue: Deque[Tuple[int, Any, str]] = field(default_factory=deque)
+    mtp_cache: Optional[List[Any]] = None
+    next_main: Optional[Any] = None
+    drafts: List[Any] = field(default_factory=list)
+    draft_lps: List[Any] = field(default_factory=list)
+    draft_ids: List[int] = field(default_factory=list)
+    depth: int = 1
+    stats: MLLMNativeMTPStats = field(default_factory=MLLMNativeMTPStats)
+    ar_fallback_pending: bool = False
+    ar_fallback_reason: Optional[str] = None
+
+
+@dataclass
+class _NativeMTPCacheObjectSnapshot:
+    obj: Any
+    attrs: Dict[str, Any]
+
+
+def _native_mtp_depth() -> int:
+    from .native_mtp import native_mtp_effective_depth
+
+    depth, _source = native_mtp_effective_depth()
+    return depth
+
+
+def _native_mtp_logprobs(logits_2d: mx.array) -> mx.array:
+    return logits_2d - mx.logsumexp(logits_2d, axis=-1, keepdims=True)
+
+
+def _native_mtp_sampler_accepts_logits(sampler: Callable[[mx.array], mx.array]) -> bool:
+    return bool(getattr(sampler, "_vmlx_accepts_logits", False))
+
+
+def _native_mtp_sample_one(
+    logits_2d: mx.array,
+    sampler: Callable[[mx.array], mx.array],
+) -> Tuple[mx.array, Optional[mx.array]]:
+    if _native_mtp_sampler_accepts_logits(sampler):
+        token = _native_mtp_ensure_uint32(sampler(logits_2d))
+        return token, None
+    logprobs = _native_mtp_logprobs(logits_2d)
+    token = _native_mtp_ensure_uint32(sampler(logprobs))
+    return token, logprobs.squeeze(0)
+
+
+def _native_mtp_sample_rows(
+    logits_2d: mx.array,
+    sampler: Callable[[mx.array], mx.array],
+) -> Tuple[List[mx.array], List[Optional[mx.array]], List[int]]:
+    if _native_mtp_sampler_accepts_logits(sampler):
+        sampled = _native_mtp_ensure_uint32(sampler(logits_2d))
+        mx.eval(sampled)
+        sampled_ids = [int(value) for value in sampled.tolist()]
+        rows = int(sampled.shape[0])
+        return [sampled[i : i + 1] for i in range(rows)], [None] * rows, sampled_ids
+    logprobs = _native_mtp_logprobs(logits_2d)
+    sampled = _native_mtp_ensure_uint32(sampler(logprobs))
+    mx.eval(sampled)
+    sampled_ids = [int(value) for value in sampled.tolist()]
+    rows = int(sampled.shape[0])
+    return [sampled[i : i + 1] for i in range(rows)], [
+        logprobs[i] for i in range(rows)
+    ], sampled_ids
+
+
+def _sample_mllm_prefill_logits(
+    logits_2d: mx.array,
+    sampler: Callable[[mx.array], mx.array],
+) -> Tuple[mx.array, Optional[mx.array]]:
+    """Sample the first MLLM decode token without logprobs when possible."""
+    if _native_mtp_sampler_accepts_logits(sampler):
+        sampled = _native_mtp_ensure_uint32(sampler(logits_2d))
+        return sampled, None
+    logprobs = logits_2d - mx.logsumexp(logits_2d, axis=-1, keepdims=True)
+    sampled = _native_mtp_ensure_uint32(sampler(logprobs))
+    return sampled, logprobs
+
+
+def _native_mtp_trace_enabled() -> bool:
+    return os.environ.get("VMLINUX_NATIVE_MTP_TRACE", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _native_mtp_trace_start() -> float:
+    if not _native_mtp_trace_enabled():
+        return 0.0
+    try:
+        mx.synchronize()
+    except Exception:
+        pass
+    return time.perf_counter()
+
+
+def _native_mtp_trace_stop(
+    stats: MLLMNativeMTPStats,
+    attr: str,
+    start: float,
+) -> None:
+    if start <= 0.0:
+        return
+    try:
+        mx.synchronize()
+    except Exception:
+        pass
+    setattr(stats, attr, getattr(stats, attr) + (time.perf_counter() - start) * 1000.0)
+
+
+def _native_mtp_trace_eval(*arrays: Any) -> None:
+    if not _native_mtp_trace_enabled():
+        return
+    arrays = tuple(array for array in arrays if array is not None)
+    if not arrays:
+        return
+    try:
+        mx.eval(*arrays)
+    except Exception:
+        pass
+
+
+def _native_mtp_async_eval(*arrays: Any) -> None:
+    arrays = tuple(array for array in arrays if array is not None)
+    if not arrays:
+        return
+    try:
+        mx.async_eval(*arrays)
+    except Exception:
+        mx.eval(*arrays)
+
+
+def _native_mtp_ensure_uint32(token: mx.array) -> mx.array:
+    return token if token.dtype == mx.uint32 else token.astype(mx.uint32)
+
+
+def _native_mtp_model_has_head(language_model: Any) -> bool:
+    return bool(
+        language_model is not None
+        and callable(getattr(language_model, "mtp_forward", None))
+        and callable(getattr(language_model, "make_mtp_cache", None))
+        and getattr(language_model, "mtp", None) is not None
+    )
+
+
+def _native_mtp_clear_rollback(cache: List[Any]) -> None:
+    for layer in cache:
+        if hasattr(layer, "rollback_state") and layer.rollback_state is not None:
+            layer.rollback_state = None
+
+
+def _native_mtp_snapshot_value(value: Any) -> Any:
+    if isinstance(value, mx.array):
+        return value
+    if isinstance(value, list):
+        return [_native_mtp_snapshot_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_native_mtp_snapshot_value(item) for item in value)
+    if isinstance(value, dict):
+        return {
+            key: _native_mtp_snapshot_value(item)
+            for key, item in value.items()
+        }
+    if hasattr(value, "__dict__") and (
+        hasattr(value, "state")
+        or hasattr(value, "is_trimmable")
+        or value.__class__.__module__.startswith("mlx_lm.models.cache")
+    ):
+        return _native_mtp_snapshot_object(value)
+    return value
+
+
+def _native_mtp_restore_value(value: Any) -> Any:
+    if isinstance(value, _NativeMTPCacheObjectSnapshot):
+        _native_mtp_restore_object(value)
+        return value.obj
+    if isinstance(value, list):
+        return [_native_mtp_restore_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_native_mtp_restore_value(item) for item in value)
+    if isinstance(value, dict):
+        return {
+            key: _native_mtp_restore_value(item)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _native_mtp_snapshot_object(obj: Any) -> _NativeMTPCacheObjectSnapshot:
+    attrs = {
+        key: _native_mtp_snapshot_value(value)
+        for key, value in getattr(obj, "__dict__", {}).items()
+    }
+    return _NativeMTPCacheObjectSnapshot(obj=obj, attrs=attrs)
+
+
+def _native_mtp_restore_object(snapshot: _NativeMTPCacheObjectSnapshot) -> None:
+    attrs = getattr(snapshot.obj, "__dict__", None)
+    if attrs is None:
+        return
+    attrs.clear()
+    attrs.update(
+        {
+            key: _native_mtp_restore_value(value)
+            for key, value in snapshot.attrs.items()
+        }
+    )
+
+
+def _native_mtp_should_snapshot_layer(layer: Any) -> bool:
+    if layer is None:
+        return False
+    if hasattr(layer, "rollback_state"):
+        return True
+    is_trimmable = getattr(layer, "is_trimmable", None)
+    if callable(is_trimmable):
+        try:
+            return not bool(is_trimmable())
+        except Exception:
+            return True
+    return hasattr(layer, "__dict__")
+
+
+def _native_mtp_snapshot_replay_cache(
+    cache: List[Any],
+) -> List[Optional[_NativeMTPCacheObjectSnapshot]]:
+    return [
+        _native_mtp_snapshot_object(layer)
+        if _native_mtp_should_snapshot_layer(layer)
+        else None
+        for layer in cache
+    ]
+
+
+def _native_mtp_restore_replay_cache(
+    cache: List[Any],
+    snapshot: List[Optional[_NativeMTPCacheObjectSnapshot]],
+    token_count: int,
+) -> bool:
+    """Restore cache to the pre-verify point before replaying confirmed tokens."""
+    for layer, layer_snapshot in zip(cache, snapshot):
+        if layer_snapshot is not None:
+            _native_mtp_restore_object(layer_snapshot)
+            continue
+        if hasattr(layer, "is_trimmable") and layer.is_trimmable():
+            layer.trim(max(1, int(token_count)))
+        elif token_count > 0:
+            return False
+    return True
+
+
+def _native_mtp_restore_or_trim(cache: List[Any], draft_count: int) -> bool:
+    """Rollback unaccepted native-MTP draft tokens after verifier rejection."""
+    for layer in cache:
+        rollback = getattr(layer, "rollback_state", None)
+        if rollback is not None:
+            conv_snap, ssm_snap = rollback
+            layer.conv_state = conv_snap
+            layer.ssm_state = ssm_snap
+            layer.rollback_state = None
+        elif hasattr(layer, "is_trimmable") and layer.is_trimmable():
+            layer.trim(max(1, int(draft_count)))
+        elif draft_count > 0:
+            return False
+    return True
+
+
+def _native_mtp_bump_emit(state: MLLMNativeMTPState, source: str) -> None:
+    if source == "init":
+        state.stats.init_emits += 1
+    elif source == "draft":
+        state.stats.draft_emits += 1
+    elif source == "bonus":
+        state.stats.bonus_emits += 1
+    elif source == "verify":
+        state.stats.verify_emits += 1
+
+
+def _native_mtp_log_stats(request_id: str, stats: MLLMNativeMTPStats, reason: str) -> None:
+    rate = (stats.accepted_tokens / stats.drafted_tokens * 100.0) if stats.drafted_tokens else 0.0
+    logger.info(
+        "MLLM MTP[%s] finish=%s cycles=%d accepted=%d/%d (%.1f%%) "
+        "emits[init=%d,draft=%d,bonus=%d,verify=%d]",
+        request_id,
+        reason,
+        stats.cycles,
+        stats.accepted_tokens,
+        stats.drafted_tokens,
+        rate,
+        stats.init_emits,
+        stats.draft_emits,
+        stats.bonus_emits,
+        stats.verify_emits,
+    )
+    if any(stats.drafted_by_depth) or any(stats.accepted_by_depth):
+        logger.info(
+            "MLLM MTP[%s] accept_by_depth[d1=%d/%d,d2=%d/%d,d3=%d/%d] "
+            "forwards[seed_main=%d,verify_main=%d,replay_main=%d,mtp=%d]",
+            request_id,
+            stats.accepted_by_depth[0],
+            stats.drafted_by_depth[0],
+            stats.accepted_by_depth[1],
+            stats.drafted_by_depth[1],
+            stats.accepted_by_depth[2],
+            stats.drafted_by_depth[2],
+            stats.seed_main_forwards,
+            stats.verify_main_forwards,
+            stats.replay_main_forwards,
+            stats.mtp_forwards,
+        )
+    total_ms = (
+        stats.verify_ms
+        + stats.sample_ms
+        + stats.draft_ms
+        + stats.snapshot_ms
+        + stats.restore_ms
+        + stats.replay_ms
+        + stats.materialize_ms
+    )
+    if total_ms > 0.0:
+        avg_cycle = total_ms / max(1, stats.cycles)
+        logger.info(
+            "MLLM MTP[%s] timings_ms[verify=%.2f sample=%.2f draft=%.2f "
+            "snapshot=%.2f restore=%.2f replay=%.2f materialize=%.2f "
+            "avg_cycle=%.2f]",
+            request_id,
+            stats.verify_ms,
+            stats.sample_ms,
+            stats.draft_ms,
+            stats.snapshot_ms,
+            stats.restore_ms,
+            stats.replay_ms,
+            stats.materialize_ms,
+            avg_cycle,
+        )
+
+
+def _native_mtp_debug_enabled() -> bool:
+    return os.environ.get("VMLINUX_NATIVE_MTP_DEBUG_TOKENS", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _native_mtp_burst_enabled() -> bool:
+    return os.environ.get("VMLINUX_NATIVE_MTP_BURST", "1") not in {
+        "0",
+        "false",
+        "FALSE",
+        "no",
+        "NO",
+        "off",
+        "OFF",
+    }
+
+
+def _native_mtp_env_value(*names: str) -> Optional[str]:
+    for name in names:
+        if name in os.environ:
+            return os.environ.get(name)
+    return None
+
+
+def _native_mtp_env_flag(default: bool, *names: str) -> bool:
+    raw = _native_mtp_env_value(*names)
+    if raw is None:
+        return default
+    return str(raw) not in {
+        "0",
+        "false",
+        "FALSE",
+        "no",
+        "NO",
+        "off",
+        "OFF",
+    }
+
+
+def _native_mtp_env_int(default: int, *names: str, minimum: int = 0) -> int:
+    raw = _native_mtp_env_value(*names)
+    if raw is None:
+        return max(minimum, int(default))
+    try:
+        return max(minimum, int(raw))
+    except (TypeError, ValueError):
+        return max(minimum, int(default))
+
+
+def _native_mtp_env_float(default: float, *names: str) -> float:
+    raw = _native_mtp_env_value(*names)
+    if raw is None:
+        return float(default)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _native_mtp_depth_rate(stats: MLLMNativeMTPStats, depth: int) -> Optional[float]:
+    index = int(depth) - 1
+    if index < 0 or index >= len(stats.drafted_by_depth):
+        return None
+    drafted = int(stats.drafted_by_depth[index])
+    if drafted <= 0:
+        return None
+    accepted = int(stats.accepted_by_depth[index])
+    return accepted / drafted
+
+
+def _native_mtp_timing_total_ms(stats: MLLMNativeMTPStats) -> float:
+    return (
+        float(stats.verify_ms)
+        + float(stats.sample_ms)
+        + float(stats.draft_ms)
+        + float(stats.snapshot_ms)
+        + float(stats.restore_ms)
+        + float(stats.replay_ms)
+        + float(stats.materialize_ms)
+    )
+
+
+def _native_mtp_confirmed_tokens_from_cycles(stats: MLLMNativeMTPStats) -> int:
+    # Every verify cycle emits one verifier token plus the accepted draft prefix.
+    return max(0, int(stats.cycles)) + max(0, int(stats.accepted_tokens))
+
+
+def _native_mtp_cost_ratio(
+    stats: MLLMNativeMTPStats,
+    ar_step_ms: float,
+) -> Optional[Tuple[float, float]]:
+    if ar_step_ms <= 0.0:
+        return None
+    mtp_ms = _native_mtp_timing_total_ms(stats)
+    if mtp_ms <= 0.0:
+        return None
+    confirmed = _native_mtp_confirmed_tokens_from_cycles(stats)
+    if confirmed <= 0:
+        return None
+    mtp_ms_per_token = mtp_ms / confirmed
+    return mtp_ms_per_token / ar_step_ms, mtp_ms_per_token
+
+
+def _native_mtp_maybe_cost_fallback(
+    request_id: str,
+    state: MLLMNativeMTPState,
+    current_depth: int,
+) -> bool:
+    if not _native_mtp_env_flag(
+        False,
+        "VMLINUX_NATIVE_MTP_COST_FALLBACK",
+        "VMLX_NATIVE_MTP_COST_FALLBACK",
+    ):
+        return False
+    ar_step_ms = _native_mtp_env_float(
+        0.0,
+        "VMLINUX_NATIVE_MTP_AR_STEP_MS",
+        "VMLX_NATIVE_MTP_AR_STEP_MS",
+        "VMLINUX_NATIVE_MTP_COST_AR_STEP_MS",
+        "VMLX_NATIVE_MTP_COST_AR_STEP_MS",
+    )
+    ratio_and_cost = _native_mtp_cost_ratio(state.stats, ar_step_ms)
+    if ratio_and_cost is None:
+        return False
+    ratio, mtp_ms_per_token = ratio_and_cost
+    threshold = _native_mtp_env_float(
+        1.0,
+        "VMLINUX_NATIVE_MTP_COST_RATIO_THRESHOLD",
+        "VMLX_NATIVE_MTP_COST_RATIO_THRESHOLD",
+    )
+    if ratio < threshold:
+        return False
+
+    state.depth = 1
+    state.ar_fallback_pending = True
+    state.ar_fallback_reason = (
+        f"cost_ratio={ratio:.3f}>=threshold={threshold:.3f} "
+        f"mtp_ms_per_token={mtp_ms_per_token:.2f} ar_step_ms={ar_step_ms:.2f}"
+    )
+    logger.info(
+        "MLLM MTP[%s] adaptive depth D%d -> AR after cycles=%d "
+        "cost_ratio=%.3f threshold=%.3f mtp_ms_per_token=%.2f "
+        "ar_step_ms=%.2f",
+        request_id,
+        current_depth,
+        state.stats.cycles,
+        ratio,
+        threshold,
+        mtp_ms_per_token,
+        ar_step_ms,
+    )
+    return True
+
+
+def _native_mtp_maybe_adapt_depth(request_id: str, state: MLLMNativeMTPState) -> None:
+    """Lower future recursive draft depth when measured acceptance is poor.
+
+    The current verify cycle always finishes at the depth it started with.
+    This only changes the next draft suffix, so it cannot invalidate the
+    current verifier cache state.
+    """
+    if not _native_mtp_env_flag(
+        True,
+        "VMLINUX_NATIVE_MTP_ADAPTIVE_DEPTH",
+        "VMLX_NATIVE_MTP_ADAPTIVE_DEPTH",
+    ):
+        return
+    current = max(1, int(state.depth or 1))
+
+    warmup = _native_mtp_env_int(
+        12,
+        "VMLINUX_NATIVE_MTP_ADAPTIVE_WARMUP_CYCLES",
+        "VMLX_NATIVE_MTP_ADAPTIVE_WARMUP_CYCLES",
+        minimum=1,
+    )
+    if int(state.stats.cycles) < warmup:
+        return
+
+    target = current
+    if target >= 3:
+        drafted_d3 = int(state.stats.drafted_by_depth[2]) if len(state.stats.drafted_by_depth) > 2 else 0
+        rate_d3 = _native_mtp_depth_rate(state.stats, 3)
+        min_d3 = _native_mtp_env_float(
+            0.85,
+            "VMLINUX_NATIVE_MTP_D3_MIN_ACCEPT",
+            "VMLX_NATIVE_MTP_D3_MIN_ACCEPT",
+        )
+        if drafted_d3 >= warmup and rate_d3 is not None and rate_d3 < min_d3:
+            target = 2
+    if target >= 2:
+        drafted_d2 = int(state.stats.drafted_by_depth[1]) if len(state.stats.drafted_by_depth) > 1 else 0
+        rate_d2 = _native_mtp_depth_rate(state.stats, 2)
+        min_d2 = _native_mtp_env_float(
+            0.75,
+            "VMLINUX_NATIVE_MTP_D2_MIN_ACCEPT",
+            "VMLX_NATIVE_MTP_D2_MIN_ACCEPT",
+        )
+        if drafted_d2 >= warmup and rate_d2 is not None and rate_d2 < min_d2:
+            target = 1
+
+    if _native_mtp_maybe_cost_fallback(request_id, state, current):
+        return
+
+    if target <= 1 and _native_mtp_env_flag(
+        False,
+        "VMLINUX_NATIVE_MTP_AR_FALLBACK",
+        "VMLX_NATIVE_MTP_AR_FALLBACK",
+    ):
+        drafted_d1 = int(state.stats.drafted_by_depth[0]) if state.stats.drafted_by_depth else 0
+        rate_d1 = _native_mtp_depth_rate(state.stats, 1)
+        min_d1 = _native_mtp_env_float(
+            0.65,
+            "VMLINUX_NATIVE_MTP_D1_MIN_ACCEPT",
+            "VMLX_NATIVE_MTP_D1_MIN_ACCEPT",
+        )
+        if drafted_d1 >= warmup and rate_d1 is not None and rate_d1 < min_d1:
+            state.depth = 1
+            state.ar_fallback_pending = True
+            state.ar_fallback_reason = (
+                f"d1_acceptance={rate_d1:.3f}<min={min_d1:.3f}"
+            )
+            logger.info(
+                "MLLM MTP[%s] adaptive depth D%d -> AR after cycles=%d "
+                "acceptance[d1=%.3f,d2=%s,d3=%s]",
+                request_id,
+                current,
+                state.stats.cycles,
+                rate_d1,
+                (
+                    f"{_native_mtp_depth_rate(state.stats, 2):.3f}"
+                    if _native_mtp_depth_rate(state.stats, 2) is not None
+                    else "n/a"
+                ),
+                (
+                    f"{_native_mtp_depth_rate(state.stats, 3):.3f}"
+                    if _native_mtp_depth_rate(state.stats, 3) is not None
+                    else "n/a"
+                ),
+            )
+            return
+
+    if target < current:
+        logger.info(
+            "MLLM MTP[%s] adaptive depth D%d -> D%d after cycles=%d "
+            "acceptance[d2=%s,d3=%s]",
+            request_id,
+            current,
+            target,
+            state.stats.cycles,
+            (
+                f"{_native_mtp_depth_rate(state.stats, 2):.3f}"
+                if _native_mtp_depth_rate(state.stats, 2) is not None
+                else "n/a"
+            ),
+            (
+                f"{_native_mtp_depth_rate(state.stats, 3):.3f}"
+                if _native_mtp_depth_rate(state.stats, 3) is not None
+                else "n/a"
+            ),
+        )
+        state.depth = target
+
+
+def _native_mtp_materialize_draft_ids(state: MLLMNativeMTPState) -> None:
+    if len(state.draft_ids) == len(state.drafts):
+        return
+    if state.drafts:
+        mx.eval(*state.drafts)
+    state.draft_ids = [int(draft_tok.tolist()[0]) for draft_tok in state.drafts]
+
+
+def _native_mtp_scalar_id(token: Any) -> Optional[int]:
+    try:
+        if isinstance(token, int):
+            return int(token)
+        value = token.tolist() if hasattr(token, "tolist") else token
+        while isinstance(value, list):
+            if len(value) != 1:
+                return None
+            value = value[0]
+        return int(value)
+    except Exception:
+        return None
+
+
+def _native_mtp_ar_fallback_ready(
+    cache: List[Any],
+    state: MLLMNativeMTPState,
+    last_token_id: int,
+) -> Tuple[bool, str]:
+    """Check the cycle-boundary invariants required for MTP -> AR handoff."""
+    if state.queue:
+        return False, "pending_queue"
+    next_id = _native_mtp_scalar_id(state.next_main)
+    if next_id is None:
+        return False, "missing_next_main"
+    if next_id != int(last_token_id):
+        return False, "next_main_mismatch"
+    for layer in cache:
+        if getattr(layer, "rollback_state", None) is not None:
+            return False, "pending_rollback_state"
+    return True, "ready"
+
+
+@dataclass
 class MLLMBatchRequest:
     """
     Request data for MLLM batch processing.
@@ -1134,7 +1813,7 @@ class MLLMBatch:
     uids: List[int]
     request_ids: List[str]
     y: mx.array  # Current token(s) for each request [batch_size]
-    logprobs: List[mx.array]  # Log probs for each request
+    logprobs: List[Optional[mx.array]]  # Log probs for each request
     max_tokens: List[int]  # Max tokens per request
     num_tokens: List[int]  # Tokens generated per request
     cache: List[Any]  # BatchKVCache for language model
@@ -1738,7 +2417,7 @@ class MLLMBatchGenerator:
         # (no active requests). The clean prefill processes just prompt[:-gpl]
         # tokens so the captured state matches its key — future fetches hit
         # with is_complete=True. Capped at 20 entries.
-        self._ssm_rederive_queue: List[Tuple[List[int], int, str]] = []
+        self._ssm_rederive_queue: List[Tuple[Any, ...]] = []
         self._ssm_rederive_queue_max = 20
 
         # Get language model for text generation
@@ -2561,6 +3240,26 @@ class MLLMBatchGenerator:
             token_ids and self._tokens_contain_media_placeholders(list(token_ids))
         )
 
+    def _media_prefix_cache_allowed(
+        self,
+        request: "MLLMBatchRequest",
+        token_ids: Optional[List[int]] = None,
+    ) -> bool:
+        """Return True when media prompts may use media-keyed KV+SSM cache."""
+        enabled = os.environ.get("VMLINUX_MLLM_MEDIA_PREFIX_CACHE", "").strip()
+        if enabled not in ("1", "true", "True", "yes", "on"):
+            return False
+        unsafe_ack = os.environ.get(
+            "VMLINUX_MLLM_MEDIA_PREFIX_CACHE_UNSAFE_ACK", ""
+        ).strip()
+        if unsafe_ack not in ("1", "true", "True", "yes", "on"):
+            return False
+        if getattr(request, "_bypass_prefix_cache", False):
+            return False
+        if not getattr(request, "_cache_extra_keys", None):
+            return False
+        return self._request_has_media_cache_context(request, token_ids)
+
     def _run_vision_encoding(self, request: MLLMBatchRequest, cache: Optional[List[Any]] = None) -> mx.array:
         """
         Run the initial VLM forward pass to encode vision and get first logits.
@@ -3028,11 +3727,14 @@ class MLLMBatchGenerator:
             # fresh execution without pollution from prior multimodal requests.
             _mllm_bypass = bool(getattr(req, "_bypass_prefix_cache", False))
             _media_context = self._request_has_media_cache_context(req)
+            _media_cache_allowed = (
+                _media_context and self._media_prefix_cache_allowed(req)
+            )
             if (
                 self._prefix_cache_enabled
                 and self.block_aware_cache is not None
                 and req.prompt_cache is None
-                and not _media_context
+                and (not _media_context or _media_cache_allowed)
                 and not _mllm_bypass
             ):
                 if req.input_ids is not None:
@@ -3112,8 +3814,15 @@ class MLLMBatchGenerator:
                                     # is_complete unused here (live MLLM fetch path, not the trie
                                     # path) — Agent 1's PrefixCacheManager consumes it.
                                     _fetch_num = block_table.num_tokens
+                                    _ssm_extra_keys = (
+                                        _cache_extra_keys
+                                        if _media_cache_allowed
+                                        else None
+                                    )
                                     _entry = self._ssm_state_cache.fetch(
-                                        token_list, _fetch_num
+                                        token_list,
+                                        _fetch_num,
+                                        cache_extra_keys=_ssm_extra_keys,
                                     ) if _fetch_num > 0 else None
                                     if _entry is None:
                                         ssm_states = None
@@ -3153,7 +3862,11 @@ class MLLMBatchGenerator:
                                         )
                                         if _enable_resume and _fn is not None and _fetch_num > 0:
                                             try:
-                                                _missed_ck = _fn(token_list, _fetch_num)
+                                                _missed_ck = _fn(
+                                                    token_list,
+                                                    _fetch_num,
+                                                    cache_extra_keys=_ssm_extra_keys,
+                                                )
                                             except Exception:
                                                 _missed_ck = None
 
@@ -3768,11 +4481,11 @@ class MLLMBatchGenerator:
                     mx.eval(last_logits)
                     del logits
                     mx.clear_cache()
-                    logprobs = last_logits - mx.logsumexp(
-                        last_logits, axis=-1, keepdims=True
-                    )
                     req_sampler = self._make_request_sampler(req)
-                    sampled = req_sampler(logprobs)
+                    sampled, logprobs = _sample_mllm_prefill_logits(
+                        last_logits,
+                        req_sampler,
+                    )
 
                     # Async submit cache states to GPU for CPU/GPU overlap
                     try:
@@ -3786,14 +4499,14 @@ class MLLMBatchGenerator:
                                     cache_states.append(st)
                             elif hasattr(c, 'cache'):
                                 cache_states.extend(x for x in c.cache if x is not None)
-                        mx.async_eval(sampled, logprobs, *cache_states)
+                        _native_mtp_async_eval(sampled, logprobs, *cache_states)
                     except Exception as e:
                         logger.warning(f"Cache state submission error (non-fatal): {e}")
-                        mx.async_eval(sampled, logprobs)
+                        _native_mtp_async_eval(sampled, logprobs)
 
                     _sampled_value = sampled.item()
                 first_tokens.append(_sampled_value)
-                all_logprobs.append(logprobs.squeeze(0))
+                all_logprobs.append(logprobs.squeeze(0) if logprobs is not None else None)
                 succeeded_requests.append(req)
 
                 # Capture SSM state at prompt boundary for hybrid models.
@@ -3805,10 +4518,25 @@ class MLLMBatchGenerator:
                     # Guard: skip SSM capture+rederive on tokens containing
                     # image/video context. Rederive's text-only forward pass
                     # would produce wrong state at vision positions, corrupting
-                    # text-only follow-up resume.
+                    # text-only follow-up resume. Explicit media-prefix cache
+                    # experiments carry a media side-key through both KV and
+                    # SSM companion hashes, so they may store media-conditioned
+                    # state without aliasing token-only entries.
                     _tp = getattr(req, '_original_token_ids', None) or input_ids_list[i]
-                    if self._request_has_media_cache_context(req, _tp):
+                    _media_context_for_ssm = self._request_has_media_cache_context(
+                        req, _tp
+                    )
+                    _media_cache_allowed_for_ssm = (
+                        _media_context_for_ssm
+                        and self._media_prefix_cache_allowed(req, _tp)
+                    )
+                    if _media_context_for_ssm and not _media_cache_allowed_for_ssm:
                         continue
+                    _ssm_extra_keys = (
+                        getattr(req, "_cache_extra_keys", None)
+                        if _media_cache_allowed_for_ssm
+                        else None
+                    )
                     # vmlx#109: if capture-during-prefill already snapshotted
                     # a clean SSM state at the gpl boundary, store it now
                     # with is_complete=True and skip the deferred re-derive
@@ -3832,6 +4560,7 @@ class MLLMBatchGenerator:
                                     _inline_boundary,
                                     _inline_layers,
                                     is_complete=True,
+                                    cache_extra_keys=_ssm_extra_keys,
                                 )
                                 logger.info(
                                     "vmlx#109: stored inline-captured SSM for %s "
@@ -3892,8 +4621,68 @@ class MLLMBatchGenerator:
                                     self._ssm_state_cache.store(
                                         all_tokens, prompt_len, ssm_layers,
                                         is_complete=True,
+                                        cache_extra_keys=_ssm_extra_keys,
                                     )
                                 else:
+                                    if _media_cache_allowed_for_ssm:
+                                        clean_media_cache = (
+                                            self._prefill_for_clean_media_prefix_cache(
+                                                req, list(all_tokens[:prompt_len])
+                                            )
+                                        )
+                                        if clean_media_cache is not None:
+                                            req._media_clean_prefix_cache = clean_media_cache  # type: ignore[attr-defined]
+                                            kv_set = set(self._hybrid_kv_positions or [])
+                                            clean_ssm_layers: List[Any] = []
+                                            for layer_idx, c in enumerate(clean_media_cache):
+                                                if layer_idx in kv_set:
+                                                    continue
+                                                if hasattr(c, "cache") and isinstance(c.cache, list):
+                                                    from copy import deepcopy
+
+                                                    cloned = deepcopy(c)
+                                                    cloned.cache = [
+                                                        mx.contiguous(a) if a is not None else None
+                                                        for a in c.cache
+                                                    ]
+                                                    clean_ssm_layers.append(cloned)
+                                                else:
+                                                    clean_ssm_layers.append(c)
+                                            if clean_ssm_layers:
+                                                self._ssm_state_cache.store(
+                                                    list(all_tokens[:prompt_len]),
+                                                    prompt_len,
+                                                    clean_ssm_layers,
+                                                    is_complete=True,
+                                                    cache_extra_keys=_ssm_extra_keys,
+                                                )
+                                                logger.info(
+                                                    "MLLM media prefix cache: stored clean "
+                                                    "media SSM companion for %s "
+                                                    "(%d layers, %d-token key)",
+                                                    req.request_id,
+                                                    len(clean_ssm_layers),
+                                                    prompt_len,
+                                                )
+                                        if clean_media_cache is not None:
+                                            logger.info(
+                                                "MLLM media prefix cache: clean media "
+                                                "prefix cache prepared for %s (%d-token key)",
+                                                req.request_id,
+                                                prompt_len,
+                                            )
+                                        # Never queue text-only rederive for media prompts:
+                                        # it would rebuild SSM without pixel/video embeddings.
+                                        if clean_media_cache is not None:
+                                            pass
+                                        else:
+                                            logger.info(
+                                                "MLLM media prefix cache: no clean media "
+                                                "prefix cache for %s; media row will remain "
+                                                "KV-only/full-prefill on repeat",
+                                                req.request_id,
+                                            )
+                                        continue
                                     # gpl>0 (thinking models): queue deferred
                                     # clean re-prefill. Queue the FIRST
                                     # prompt_len tokens (not the full
@@ -3909,7 +4698,12 @@ class MLLMBatchGenerator:
                                     if len(_rq) >= self._ssm_rederive_queue_max:
                                         _rq.pop(0)
                                     _rq.append(
-                                        (list(all_tokens[:prompt_len]), prompt_len, req.request_id)
+                                        (
+                                            list(all_tokens[:prompt_len]),
+                                            prompt_len,
+                                            req.request_id,
+                                            _ssm_extra_keys,
+                                        )
                                     )
                                 logger.info(
                                     f"Captured SSM state for "
@@ -3982,13 +4776,15 @@ class MLLMBatchGenerator:
                             mx.eval(last_logits)
                             del logits
                             mx.clear_cache()
-                            logprobs = last_logits - mx.logsumexp(last_logits, axis=-1, keepdims=True)
                             req_sampler = self._make_request_sampler(req)
-                            sampled = req_sampler(logprobs)
-                            mx.async_eval(sampled, logprobs)
+                            sampled, logprobs = _sample_mllm_prefill_logits(
+                                last_logits,
+                                req_sampler,
+                            )
+                            _native_mtp_async_eval(sampled, logprobs)
                             _sampled_value = sampled.item()
                         first_tokens.append(_sampled_value)
-                        all_logprobs.append(logprobs.squeeze(0))
+                        all_logprobs.append(logprobs.squeeze(0) if logprobs is not None else None)
                         succeeded_requests.append(req)
                         continue  # Successfully retried
                     except Exception as retry_err:
@@ -4028,13 +4824,15 @@ class MLLMBatchGenerator:
                                     mx.eval(last_logits)
                                     del logits
                                     mx.clear_cache()
-                                    logprobs = last_logits - mx.logsumexp(last_logits, axis=-1, keepdims=True)
                                     req_sampler = self._make_request_sampler(req)
-                                    sampled = req_sampler(logprobs)
-                                    mx.async_eval(sampled, logprobs)
+                                    sampled, logprobs = _sample_mllm_prefill_logits(
+                                        last_logits,
+                                        req_sampler,
+                                    )
+                                    _native_mtp_async_eval(sampled, logprobs)
                                     _sampled_value = sampled.item()
                                 first_tokens.append(_sampled_value)
-                                all_logprobs.append(logprobs.squeeze(0))
+                                all_logprobs.append(logprobs.squeeze(0) if logprobs is not None else None)
                                 succeeded_requests.append(req)
                                 continue
                             except Exception as nuclear_err:
@@ -4110,7 +4908,7 @@ class MLLMBatchGenerator:
 
         self._stats.prompt_time += time.perf_counter() - tic
 
-        return MLLMBatch(
+        batch = MLLMBatch(
             uids=[req.uid for req in requests],
             request_ids=[req.request_id for req in requests],
             y=y,
@@ -4120,6 +4918,23 @@ class MLLMBatchGenerator:
             cache=batch_cache,
             requests=requests,
         )
+        if len(requests) == 1 and not force_batch_cache:
+            try:
+                self._seed_native_mtp_from_prefill(
+                    requests[0],
+                    batch.cache,
+                    batch.y,
+                    batch.logprobs,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "MLLM native MTP seed skipped for %s: %s",
+                    requests[0].request_id,
+                    exc,
+                )
+                if hasattr(requests[0], "_native_mtp_state"):
+                    delattr(requests[0], "_native_mtp_state")
+        return batch
 
     def _make_request_sampler(self, request: MLLMBatchRequest) -> Callable[[mx.array], mx.array]:
         """Create a sampler for a specific request's sampling parameters.
@@ -4161,11 +4976,354 @@ class MLLMBatchGenerator:
                 for proc in logits_procs:
                     processed = proc(all_tokens, processed)
                 return base_sampler(processed)
+            if _native_mtp_sampler_accepts_logits(base_sampler):
+                sampler_with_penalty._vmlx_accepts_logits = True
             request._cached_sampler = sampler_with_penalty
             return sampler_with_penalty
 
         request._cached_sampler = base_sampler
         return base_sampler
+
+    def _native_mtp_enabled_for_request(self, request: MLLMBatchRequest) -> bool:
+        """Return true when vMLX can run native MTP on this MLLM request."""
+        if os.environ.get("VMLINUX_NATIVE_MTP", "1") in (
+            "0",
+            "false",
+            "FALSE",
+            "no",
+            "NO",
+            "off",
+            "OFF",
+        ):
+            return False
+        if not _native_mtp_model_has_head(self.language_model):
+            return False
+        if float(getattr(request, "temperature", 0.0) or 0.0) != 0.0:
+            return False
+        if float(getattr(request, "repetition_penalty", 1.0) or 1.0) != 1.0:
+            return False
+        return request is not None
+
+    def _step_native_mtp_head(
+        self,
+        request: MLLMBatchRequest,
+        hidden_state: mx.array,
+        next_token: mx.array,
+        mtp_cache: List[Any],
+        *,
+        return_hidden: bool = False,
+    ) -> Tuple[mx.array, mx.array, Optional[mx.array]]:
+        """Run one MTP-head prediction and return sampled token/logprobs/hidden."""
+        sampler = self._make_request_sampler(request)
+        try:
+            mtp_output = self.language_model.mtp_forward(
+                hidden_state,
+                _native_mtp_ensure_uint32(next_token).reshape(1, 1),
+                mtp_cache,
+                return_hidden=return_hidden,
+            )
+        except TypeError:
+            mtp_output = self.language_model.mtp_forward(
+                hidden_state,
+                _native_mtp_ensure_uint32(next_token).reshape(1, 1),
+                mtp_cache,
+            )
+        if isinstance(mtp_output, tuple):
+            mtp_logits, mtp_hidden = mtp_output
+        elif hasattr(mtp_output, "logits") and hasattr(mtp_output, "hidden_states"):
+            mtp_logits, mtp_hidden = mtp_output.logits, mtp_output.hidden_states
+        else:
+            mtp_logits, mtp_hidden = mtp_output, None
+        draft_tok, draft_lp = _native_mtp_sample_one(mtp_logits[:, -1, :], sampler)
+        return draft_tok, draft_lp, mtp_hidden
+
+    def _draft_native_mtp_tokens(
+        self,
+        request: MLLMBatchRequest,
+        hidden_state: mx.array,
+        start_token: mx.array,
+        mtp_cache: List[Any],
+        depth: int,
+        stats: Optional[MLLMNativeMTPStats] = None,
+    ) -> Tuple[List[mx.array], List[mx.array], List[int]]:
+        trace_t0 = _native_mtp_trace_start() if stats is not None else 0.0
+        drafts: List[mx.array] = []
+        draft_lps: List[mx.array] = []
+        current_hidden = hidden_state
+        current_token = start_token
+        for level in range(max(1, int(depth))):
+            if stats is not None:
+                stats.mtp_forwards += 1
+            draft_tok, draft_lp, mtp_hidden = self._step_native_mtp_head(
+                request,
+                current_hidden,
+                current_token,
+                mtp_cache,
+                return_hidden=level + 1 < depth,
+            )
+            drafts.append(draft_tok)
+            draft_lps.append(draft_lp)
+            current_token = draft_tok
+            if mtp_hidden is None:
+                current_hidden = current_hidden
+            else:
+                current_hidden = mtp_hidden[:, -1:, :]
+        _native_mtp_async_eval(*drafts)
+        if stats is not None:
+            _native_mtp_trace_stop(stats, "draft_ms", trace_t0)
+        return drafts, draft_lps, []
+
+    def _seed_native_mtp_from_prefill(
+        self,
+        request: MLLMBatchRequest,
+        cache: List[Any],
+        first_tokens: mx.array,
+        first_logprobs: List[mx.array],
+    ) -> bool:
+        """Seed native MTP after prompt prefill produced the first token."""
+        if not self._native_mtp_enabled_for_request(request):
+            return False
+        if request.max_tokens <= 1:
+            return False
+        if first_tokens is None or int(first_tokens.shape[0]) != 1:
+            return False
+
+        first_tok = _native_mtp_ensure_uint32(first_tokens)
+        first_id = int(first_tok.tolist()[0])
+        if first_id in self.stop_tokens:
+            return False
+
+        sampler = self._make_request_sampler(request)
+        seed_main_forwards = 1
+        output = self.language_model(
+            first_tok[:, None],
+            cache=cache,
+            return_hidden=True,
+        )
+        if isinstance(output, tuple):
+            logits, hidden = output
+        elif hasattr(output, "logits") and hasattr(output, "hidden_states"):
+            logits, hidden = output.logits, output.hidden_states
+        else:
+            logger.debug("Native MTP seed skipped: model did not return hidden states")
+            return False
+
+        next_tok, next_lp = _native_mtp_sample_one(logits[:, -1, :], sampler)
+        mtp_cache = self.language_model.make_mtp_cache()
+        depth = _native_mtp_depth()
+        drafts, draft_lps, draft_ids = self._draft_native_mtp_tokens(
+            request,
+            hidden[:, -1:, :],
+            next_tok,
+            mtp_cache,
+            depth,
+        )
+        mx.eval(first_tok, next_tok)
+
+        state = MLLMNativeMTPState(
+            mtp_cache=mtp_cache,
+            next_main=next_tok,
+            drafts=drafts,
+            draft_lps=draft_lps,
+            draft_ids=draft_ids,
+            depth=depth,
+        )
+        state.stats.seed_main_forwards += seed_main_forwards
+        state.stats.mtp_forwards += len(drafts)
+        if first_logprobs:
+            first_lp = first_logprobs[0]
+        elif _native_mtp_sampler_accepts_logits(sampler):
+            first_lp = None
+        else:
+            first_lp = _native_mtp_logprobs(logits[:, -1, :]).squeeze(0)
+        state.queue.append((first_id, first_lp, "init"))
+        state.queue.append((int(next_tok.tolist()[0]), next_lp, "init"))
+        request._native_mtp_state = state
+        logger.info(
+            "MLLM native MTP path activated for request=%s depth=%d",
+            request.request_id,
+            depth,
+        )
+        return True
+
+    def _replay_native_mtp_confirmed_tokens(
+        self,
+        request: MLLMBatchRequest,
+        cache: List[Any],
+        confirmed_tokens: List[mx.array],
+    ) -> mx.array:
+        replay_tokens = [_native_mtp_ensure_uint32(tok) for tok in confirmed_tokens]
+        replay_input = mx.concatenate(replay_tokens).reshape(1, len(replay_tokens))
+        output = self.language_model(
+            replay_input,
+            cache=cache,
+            return_hidden=True,
+        )
+        if isinstance(output, tuple):
+            _logits, hidden = output
+        elif hasattr(output, "hidden_states"):
+            hidden = output.hidden_states
+        else:
+            raise RuntimeError("native MTP replay did not return hidden states")
+        return hidden[:, -1:, :]
+
+    def _run_native_mtp_verify_cycle(
+        self,
+        request: MLLMBatchRequest,
+        cache: List[Any],
+        state: MLLMNativeMTPState,
+    ) -> None:
+        if state.next_main is None or not state.drafts:
+            raise RuntimeError("native MTP verify entered without pending drafts")
+
+        sampler = self._make_request_sampler(request)
+        verify_inputs = [state.next_main] + list(state.drafts)
+        trace_t0 = _native_mtp_trace_start()
+        replay_snapshot = _native_mtp_snapshot_replay_cache(cache)
+        _native_mtp_trace_stop(state.stats, "snapshot_ms", trace_t0)
+        inputs = mx.concatenate(
+            [_native_mtp_ensure_uint32(tok) for tok in verify_inputs]
+        )
+        trace_t0 = _native_mtp_trace_start()
+        state.stats.verify_main_forwards += 1
+        output = self.language_model(
+            inputs[None, :],
+            cache=cache,
+            return_hidden=True,
+        )
+        if isinstance(output, tuple):
+            logits, hidden = output
+        elif hasattr(output, "logits") and hasattr(output, "hidden_states"):
+            logits, hidden = output.logits, output.hidden_states
+        else:
+            raise RuntimeError("native MTP verify did not return hidden states")
+        _native_mtp_trace_eval(logits, hidden)
+        _native_mtp_trace_stop(state.stats, "verify_ms", trace_t0)
+
+        depth = len(state.drafts)
+        trace_t0 = _native_mtp_trace_start()
+        target_tokens, target_lps, target_ids = _native_mtp_sample_rows(
+            logits[:, -(depth + 1) :, :].reshape(depth + 1, -1),
+            sampler,
+        )
+        _native_mtp_trace_stop(state.stats, "sample_ms", trace_t0)
+        trace_t0 = _native_mtp_trace_start()
+        _native_mtp_materialize_draft_ids(state)
+        _native_mtp_trace_stop(state.stats, "materialize_ms", trace_t0)
+
+        accepted = 0
+        for idx, draft_id in enumerate(state.draft_ids):
+            if int(target_ids[idx]) != int(draft_id):
+                break
+            accepted += 1
+
+        state.stats.cycles += 1
+        state.stats.drafted_tokens += depth
+        state.stats.accepted_tokens += accepted
+        for level in range(min(depth, len(state.stats.drafted_by_depth))):
+            state.stats.drafted_by_depth[level] += 1
+            if level < accepted:
+                state.stats.accepted_by_depth[level] += 1
+        if _native_mtp_debug_enabled():
+            logger.info(
+                "MLLM MTP[%s] cycle=%d next=%s drafts=%s targets=%s accepted=%d/%d",
+                request.request_id,
+                state.stats.cycles,
+                int(state.next_main.tolist()[0]),
+                list(state.draft_ids),
+                list(target_ids),
+                accepted,
+                depth,
+            )
+        _native_mtp_maybe_adapt_depth(request.request_id, state)
+        if accepted == depth:
+            state.stats.accepts += 1
+            _native_mtp_clear_rollback(cache)
+            for draft_id, draft_lp in zip(state.draft_ids, state.draft_lps):
+                state.queue.append((draft_id, draft_lp, "draft"))
+            bonus_tok = target_tokens[depth]
+            bonus_id = int(target_ids[depth])
+            state.queue.append((bonus_id, target_lps[depth], "bonus"))
+            next_hidden = hidden[:, depth : depth + 1, :]
+            state.next_main = bonus_tok
+            if state.ar_fallback_pending:
+                state.mtp_cache = None
+                state.drafts = []
+                state.draft_lps = []
+                state.draft_ids = []
+                return
+            state.mtp_cache = state.mtp_cache or self.language_model.make_mtp_cache()
+            state.drafts, state.draft_lps, state.draft_ids = self._draft_native_mtp_tokens(
+                request,
+                next_hidden,
+                bonus_tok,
+                state.mtp_cache,
+                state.depth,
+                state.stats,
+            )
+            return
+
+        state.stats.rejects += 1
+        trace_t0 = _native_mtp_trace_start()
+        if not _native_mtp_restore_replay_cache(
+            cache,
+            replay_snapshot,
+            depth + 1,
+        ):
+            raise RuntimeError("native MTP cache rejected rollback")
+        _native_mtp_trace_stop(state.stats, "restore_ms", trace_t0)
+        accepted_drafts = state.drafts[:accepted]
+        for draft_id, draft_lp in zip(state.draft_ids[:accepted], state.draft_lps[:accepted]):
+            state.queue.append((draft_id, draft_lp, "draft"))
+        correction = target_tokens[accepted]
+        correction_id = int(target_ids[accepted])
+        state.queue.append((correction_id, target_lps[accepted], "verify"))
+        confirmed_tokens = [state.next_main] + accepted_drafts
+        trace_t0 = _native_mtp_trace_start()
+        state.stats.replay_main_forwards += 1
+        replay_hidden = self._replay_native_mtp_confirmed_tokens(
+            request,
+            cache,
+            confirmed_tokens,
+        )
+        _native_mtp_trace_stop(state.stats, "replay_ms", trace_t0)
+        state.next_main = correction
+        if state.ar_fallback_pending:
+            state.mtp_cache = None
+            state.drafts = []
+            state.draft_lps = []
+            state.draft_ids = []
+            return
+        state.mtp_cache = self.language_model.make_mtp_cache()
+        state.drafts, state.draft_lps, state.draft_ids = self._draft_native_mtp_tokens(
+            request,
+            replay_hidden,
+            correction,
+            state.mtp_cache,
+            state.depth,
+            state.stats,
+        )
+
+    def _next_native_mtp_token(
+        self,
+        request: MLLMBatchRequest,
+        cache: List[Any],
+        state: MLLMNativeMTPState,
+    ) -> Tuple[int, Any]:
+        if not state.queue:
+            self._run_native_mtp_verify_cycle(request, cache, state)
+        if not state.queue:
+            raise RuntimeError("native MTP verify produced no emit token")
+        token, logprobs, source = state.queue.popleft()
+        _native_mtp_bump_emit(state, source)
+        if _native_mtp_debug_enabled():
+            logger.info(
+                "MLLM MTP[%s] emit source=%s token=%s",
+                request.request_id,
+                source,
+                token,
+            )
+        return token, logprobs
 
     def _step(
         self, input_tokens: mx.array, cache: List[Any]
@@ -4265,6 +5423,16 @@ class MLLMBatchGenerator:
         batch = self.active_batch
         num_active = len(batch) if batch else 0
         num_to_add = self.completion_batch_size - num_active
+        if (
+            batch is not None
+            and any(
+                getattr(req, "_native_mtp_state", None) is not None
+                for req in batch.requests
+            )
+        ):
+            # Native MTP owns private per-row draft/verify state. Keep standard
+            # continuous-batch admission closed until this row finishes.
+            num_to_add = 0
 
         # Process new prompts — fresh batch or extend into active one
         if num_to_add > 0 and self.unprocessed_requests:
@@ -4318,11 +5486,78 @@ class MLLMBatchGenerator:
         if batch is None:
             return prefill_errors
 
-        y, logprobs = batch.y, batch.logprobs
-        batch.y, batch.logprobs = self._step(y[:, None], batch.cache)
-        mx.async_eval(batch.y)
+        mtp_state = None
+        if len(batch.requests) == 1:
+            mtp_state = getattr(batch.requests[0], "_native_mtp_state", None)
+        if mtp_state is not None:
+            try:
+                token, lp = self._next_native_mtp_token(
+                    batch.requests[0],
+                    batch.cache,
+                    mtp_state,
+                )
+                y = [token]
+                logprobs = [lp]
+                batch.y = mx.array([token], dtype=mx.uint32)
+                batch.logprobs = [lp]
+                if (
+                    getattr(mtp_state, "ar_fallback_pending", False)
+                    and not mtp_state.queue
+                ):
+                    ready, fallback_reason = _native_mtp_ar_fallback_ready(
+                        batch.cache,
+                        mtp_state,
+                        token,
+                    )
+                    if not ready:
+                        raise RuntimeError(
+                            f"native MTP AR fallback unsafe: {fallback_reason}"
+                        )
+                    batch.y, batch.logprobs = self._step(batch.y[:, None], batch.cache)
+                    mx.async_eval(batch.y)
+                    _native_mtp_log_stats(
+                        batch.requests[0].request_id,
+                        mtp_state.stats,
+                        "fallback_to_ar",
+                    )
+                    logger.info(
+                        "MLLM MTP[%s] fallback to AR after queue drain: %s",
+                        batch.requests[0].request_id,
+                        mtp_state.ar_fallback_reason or "adaptive policy",
+                    )
+                    if hasattr(batch.requests[0], "_native_mtp_state"):
+                        delattr(batch.requests[0], "_native_mtp_state")
+            except Exception as exc:
+                logger.error(
+                    "MLLM native MTP decode failed for %s: %s",
+                    batch.requests[0].request_id,
+                    exc,
+                )
+                _native_mtp_log_stats(
+                    batch.requests[0].request_id,
+                    mtp_state.stats,
+                    "error",
+                )
+                if hasattr(batch.requests[0], "_native_mtp_state"):
+                    delattr(batch.requests[0], "_native_mtp_state")
+                self.active_batch = None
+                return prefill_errors + [
+                    MLLMBatchResponse(
+                        uid=batch.uids[0],
+                        request_id=batch.request_ids[0],
+                        token=0,
+                        logprobs=mx.zeros((1,)),
+                        finish_reason="error",
+                        error=f"NativeMTPError: {exc}",
+                    )
+                ]
+        else:
+            y, logprobs = batch.y, batch.logprobs
+            batch.y, batch.logprobs = self._step(y[:, None], batch.cache)
+            mx.async_eval(batch.y)
 
-        y = y.tolist()
+        if hasattr(y, "tolist"):
+            y = y.tolist()
         toc = time.perf_counter()
 
         # Note: prompt_time is already counted in _process_prompts().
@@ -4363,10 +5598,23 @@ class MLLMBatchGenerator:
                 keep_idx.append(i)
 
             if finish_reason is not None:
+                mtp_state_for_finish = getattr(req, "_native_mtp_state", None)
+                if mtp_state_for_finish is not None:
+                    _native_mtp_log_stats(
+                        request_id,
+                        mtp_state_for_finish.stats,
+                        finish_reason,
+                    )
+                    try:
+                        delattr(req, "_native_mtp_state")
+                    except AttributeError:
+                        pass
                 # Extract cache NOW before batch.filter() invalidates indices.
                 # Do NOT TQ-compress here — the scheduler needs original float16
                 # for block extraction. TQ recompress happens on the fetch path.
-                captured_cache = batch.extract_cache(i)
+                captured_cache = getattr(req, "_media_clean_prefix_cache", None)
+                if captured_cache is None:
+                    captured_cache = batch.extract_cache(i)
                 cache_fn = lambda c=captured_cache: c
 
             responses.append(
@@ -4416,6 +5664,52 @@ class MLLMBatchGenerator:
         """
         with mx.stream(MLLMBatchGenerator._stream):
             return self._next()
+
+    def _can_native_mtp_burst(self) -> bool:
+        if not _native_mtp_burst_enabled():
+            return False
+        batch = self.active_batch
+        if batch is None or len(batch.requests) != 1:
+            return False
+        req = batch.requests[0]
+        if getattr(req, "_native_mtp_state", None) is None:
+            return False
+        if getattr(req, "_stop_strings", None):
+            # Scheduler-level string stop matching must see one token at a time
+            # so it can remove the row before later queued MTP tokens leak.
+            return False
+        return True
+
+    def next_burst(self) -> List[MLLMBatchResponse]:
+        """Generate one step, then drain already verified native-MTP tokens.
+
+        ``next()`` keeps the traditional one-response-per-active-request
+        contract. The async MLLM scheduler can use this method to amortize
+        executor/queue overhead for native MTP without launching extra verifier
+        work: after the first token, only tokens already present in the private
+        verified MTP queue are drained.
+        """
+        with mx.stream(MLLMBatchGenerator._stream):
+            responses = self._next()
+            if not responses or any(resp.finish_reason is not None for resp in responses):
+                return responses
+            if not self._can_native_mtp_burst():
+                return responses
+
+            while self._can_native_mtp_burst():
+                batch = self.active_batch
+                if batch is None:
+                    break
+                state = getattr(batch.requests[0], "_native_mtp_state", None)
+                if state is None or not state.queue:
+                    break
+                more = self._next()
+                if not more:
+                    break
+                responses.extend(more)
+                if any(resp.finish_reason is not None for resp in more):
+                    break
+            return responses
 
     def stats(self) -> MLLMBatchStats:
         """
@@ -4537,6 +5831,82 @@ class MLLMBatchGenerator:
         """Compatibility alias for hybrid SSM callers."""
         return self._prefill_for_clean_path_dependent_cache(tokens)
 
+    def _prefill_for_clean_media_prefix_cache(
+        self,
+        request: "MLLMBatchRequest",
+        tokens: List[int],
+    ) -> Optional[List[Any]]:
+        """Run a media-conditioned clean prefill for a media prefix key.
+
+        Unlike `_prefill_for_clean_path_dependent_cache`, this keeps the VLM
+        wrapper and pixel/video tensors in the forward path. It is used only
+        for explicit media-prefix-cache experiments because it adds an extra
+        prefill on the first request but is the minimal safe way to create SSM
+        state at the same media-keyed N-1 boundary as the paged KV blocks.
+        """
+        if not tokens or self.language_model is None:
+            return None
+        try:
+            fresh_cache = (
+                self.language_model.make_cache()
+                if hasattr(self.language_model, "make_cache")
+                else None
+            )
+            if fresh_cache is None:
+                from mlx_lm.models.cache import KVCache
+
+                fresh_cache = [
+                    KVCache() for _ in range(len(self.language_model.layers))
+                ]
+            from copy import copy
+
+            clean_req = copy(request)
+            clean_req.input_ids = mx.array([tokens])
+            if request.attention_mask is not None:
+                try:
+                    clean_req.attention_mask = request.attention_mask[:, : len(tokens)]
+                except Exception:
+                    clean_req.attention_mask = request.attention_mask
+            clean_req.vision_encoded = False
+            _ = self._run_vision_encoding(clean_req, cache=fresh_cache)
+            materialize: List[Any] = []
+
+            def _collect_cache_arrays(cache_obj: Any) -> None:
+                if hasattr(cache_obj, "keys") and cache_obj.keys is not None:
+                    if isinstance(cache_obj.keys, tuple):
+                        materialize.extend(cache_obj.keys)
+                        materialize.extend(cache_obj.values)
+                    else:
+                        materialize.extend([cache_obj.keys, cache_obj.values])
+                elif hasattr(cache_obj, "caches") and isinstance(
+                    getattr(cache_obj, "caches", None), (list, tuple)
+                ):
+                    for sub_cache in cache_obj.caches:
+                        _collect_cache_arrays(sub_cache)
+                elif hasattr(cache_obj, "cache") and isinstance(cache_obj.cache, list):
+                    for arr in cache_obj.cache:
+                        if hasattr(arr, "shape"):
+                            materialize.append(arr)
+
+            for c in fresh_cache:
+                _collect_cache_arrays(c)
+            if materialize:
+                try:
+                    mx.eval(materialize)
+                except RuntimeError as _eval_err:
+                    if "Stream" in str(_eval_err):
+                        mx.synchronize()
+                    else:
+                        raise
+            return fresh_cache
+        except Exception as ex:
+            logger.warning(
+                "MLLM clean media prefix prefill failed for %s (non-fatal): %s",
+                getattr(request, "request_id", "?"),
+                ex,
+            )
+            return None
+
     def run_idle_rederive(self) -> bool:
         """Process one SSM rederive task from the queue (scheduler idle tick).
 
@@ -4548,7 +5918,12 @@ class MLLMBatchGenerator:
         if not self._hybrid_kv_positions:
             self._ssm_rederive_queue.clear()
             return False
-        tokens, prompt_len, orig_rid = self._ssm_rederive_queue.pop(0)
+        item = self._ssm_rederive_queue.pop(0)
+        if len(item) == 4:
+            tokens, prompt_len, orig_rid, cache_extra_keys = item
+        else:
+            tokens, prompt_len, orig_rid = item
+            cache_extra_keys = None
         logger.info(
             f"MLLM SSM re-derive: clean prefill for {orig_rid} "
             f"({prompt_len} prompt tokens, {len(self._ssm_rederive_queue)} remaining)"
@@ -4574,7 +5949,11 @@ class MLLMBatchGenerator:
                     ssm_layers.append(c)
             if ssm_layers:
                 self._ssm_state_cache.store(
-                    tokens, prompt_len, ssm_layers, is_complete=True,
+                    tokens,
+                    prompt_len,
+                    ssm_layers,
+                    is_complete=True,
+                    cache_extra_keys=cache_extra_keys,
                 )
                 logger.info(
                     f"MLLM SSM re-derive: stored clean companion for {orig_rid}: "

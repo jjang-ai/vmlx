@@ -187,7 +187,7 @@ if [ -f "$JANG_LOCAL/pyproject.toml" ]; then
 else
   if [ "${VMLINUX_ALLOW_PYPI_JANG:-0}" = "1" ]; then
     echo "    local jang-tools missing; VMLX_ALLOW_PYPI_JANG=1 so using PyPI fallback"
-    "$PYTHON" -m pip install --no-deps "jang>=2.5.27"
+    "$PYTHON" -m pip install --no-deps "jang>=2.5.29"
   else
     echo "ERROR: RELEASE BLOCKED — local jang-tools source missing: $JANG_LOCAL" >&2
     echo "       vMLX release builds must bundle the checked-out JANG runtime," >&2

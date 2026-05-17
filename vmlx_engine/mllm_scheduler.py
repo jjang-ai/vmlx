@@ -914,6 +914,34 @@ class MLLMScheduler:
         except Exception:
             return False
 
+    def _mllm_media_prefix_cache_allowed(
+        self,
+        request: Any,
+        token_ids: Optional[List[int]] = None,
+    ) -> bool:
+        """Return True when a media prompt may use media-keyed prefix cache.
+
+        This is intentionally opt-in while Qwen3.6 VL cache gates are being
+        expanded. ZAYA CCA remains excluded: its clean store path re-prefills
+        from text tokens and would lose image-conditioned state.
+        """
+        enabled = os.environ.get("VMLINUX_MLLM_MEDIA_PREFIX_CACHE", "").strip()
+        if enabled not in ("1", "true", "True", "yes", "on"):
+            return False
+        unsafe_ack = os.environ.get(
+            "VMLINUX_MLLM_MEDIA_PREFIX_CACHE_UNSAFE_ACK", ""
+        ).strip()
+        if unsafe_ack not in ("1", "true", "True", "yes", "on"):
+            return False
+        if request is None or getattr(request, "_bypass_prefix_cache", False):
+            return False
+        if getattr(self, "_uses_zaya_cache", False):
+            return False
+        extra = getattr(request, "_cache_extra_keys", None)
+        if not extra:
+            return False
+        return self._mllm_request_has_media_cache_context(request, token_ids)
+
     def _detect_mla(self) -> bool:
         """Detect if model uses Multi-head Latent Attention (MLA).
 
@@ -2045,6 +2073,8 @@ class MLLMScheduler:
                 batch_req._gen_prompt_len = _gpl
             if getattr(request, '_bypass_prefix_cache', False):
                 batch_req._bypass_prefix_cache = True
+            if request.sampling_params.stop:
+                batch_req._stop_strings = list(request.sampling_params.stop)
             batch_requests.append(batch_req)
 
             request.status = RequestStatus.RUNNING
@@ -2095,13 +2125,141 @@ class MLLMScheduler:
             else self.processor
         )
 
-        for response in responses:
+        def _has_pending_gen_prefix(req: MLLMRequest, resp: MLLMBatchResponse) -> bool:
+            if hasattr(req, "_gen_prefix_tokens"):
+                return bool(getattr(req, "_gen_prefix_tokens", None))
+            return bool(getattr(resp, "gen_prefix_tokens", None) or [])
+
+        def _can_coalesce(req: MLLMRequest, resp: MLLMBatchResponse) -> bool:
+            if getattr(req.sampling_params, "stop", None):
+                return False
+            if _has_pending_gen_prefix(req, resp):
+                return False
+            if resp.finish_reason == "error" or getattr(resp, "error", None):
+                return False
+            if getattr(resp, "logprobs", None) is not None:
+                return False
+            return True
+
+        def _coalesce_until(start: int, req: MLLMRequest, uid: int) -> int:
+            end = start
+            while end < len(responses):
+                candidate = responses[end]
+                if candidate.uid != uid:
+                    break
+                if not _can_coalesce(req, candidate):
+                    break
+                end += 1
+                if candidate.finish_reason is not None:
+                    break
+            return end
+
+        def _process_coalesced(
+            request_id: str,
+            request: MLLMRequest,
+            burst: List[MLLMBatchResponse],
+        ) -> RequestOutput:
+            for resp in burst:
+                cache_extra_keys = getattr(resp, "cache_extra_keys", None)
+                if cache_extra_keys:
+                    request._cache_extra_keys = dict(cache_extra_keys)
+
+            if request.num_prompt_tokens == 0:
+                for resp in burst:
+                    prompt_ids = getattr(resp, "prompt_token_ids", None)
+                    if prompt_ids:
+                        request.num_prompt_tokens = len(prompt_ids)
+                        break
+
+            tokens = [int(resp.token) for resp in burst]
+            request.output_tokens.extend(tokens)
+            request.num_output_tokens = len(request.output_tokens)
+
+            detok = self._get_detokenizer(request_id, tokenizer)
+            for resp in burst:
+                if resp.finish_reason != "stop":
+                    detok.add_token(resp.token)
+            new_text = detok.last_segment
+
+            finish_response = next(
+                (resp for resp in reversed(burst) if resp.finish_reason is not None),
+                None,
+            )
+            response_for_usage = finish_response or burst[-1]
+            output = RequestOutput(
+                request_id=request_id,
+                new_token_ids=tokens,
+                new_text=new_text,
+                output_token_ids=list(request.output_tokens),
+                prompt_tokens=request.num_prompt_tokens,
+                completion_tokens=request.num_output_tokens,
+                cached_tokens=max(
+                    int(getattr(resp, "cached_tokens", 0) or 0) for resp in burst
+                ),
+                cache_detail=(
+                    next(
+                        (
+                            getattr(resp, "cache_detail", "")
+                            for resp in reversed(burst)
+                            if getattr(resp, "cache_detail", "")
+                        ),
+                        "",
+                    )
+                    or ""
+                ),
+            )
+
+            if finish_response is not None:
+                if getattr(finish_response, "prompt_cache", None) is not None:
+                    request._extracted_cache = finish_response.prompt_cache
+                    request._extracted_tokens = getattr(
+                        finish_response, "prompt_token_ids", []
+                    )
+
+                finish_reason = finish_response.finish_reason
+                if finish_reason == "stop":
+                    request.status = RequestStatus.FINISHED_STOPPED
+                elif finish_reason == "length":
+                    request.status = RequestStatus.FINISHED_LENGTH_CAPPED
+
+                output.finished = True
+                output.finish_reason = finish_reason
+                detok.finalize()
+                output.output_text = detok.text
+                request.output_text = output.output_text
+                request.finish_reason = finish_reason
+
+                self.total_prompt_tokens += request.num_prompt_tokens
+                self.total_completion_tokens += request.num_output_tokens
+                self.num_requests_processed += 1
+                self._record_cache_hit(response_for_usage, request)
+
+            return output
+
+        idx = 0
+        while idx < len(responses):
+            response = responses[idx]
             request_id = self.uid_to_request_id.get(response.uid)
             if request_id is None:
+                idx += 1
                 continue
 
             request = self.running.get(request_id)
             if request is None:
+                idx += 1
+                continue
+
+            coalesced_end = _coalesce_until(idx, request, response.uid)
+            if coalesced_end - idx > 1:
+                output = _process_coalesced(
+                    request_id,
+                    request,
+                    responses[idx:coalesced_end],
+                )
+                outputs.append(output)
+                if output.finished:
+                    finished_ids.add(request_id)
+                idx = coalesced_end
                 continue
 
             cache_extra_keys = getattr(response, "cache_extra_keys", None)
@@ -2288,6 +2446,7 @@ class MLLMScheduler:
                 )
 
             outputs.append(output)
+            idx += 1
 
         return outputs, finished_ids
 
@@ -2374,7 +2533,13 @@ class MLLMScheduler:
                             media_context = self._mllm_request_has_media_cache_context(
                                 request, token_list
                             )
-                            if media_context:
+                            media_cache_allowed = (
+                                media_context
+                                and self._mllm_media_prefix_cache_allowed(
+                                    request, token_list
+                                )
+                            )
+                            if media_context and not media_cache_allowed:
                                 logger.info(
                                     "Skipping VLM prefix cache store for %s: "
                                     "prompt contains media context/placeholders; "
@@ -2486,12 +2651,17 @@ class MLLMScheduler:
                                                 request_id,
                                                 truncated_tokens,
                                                 cache_states,
-                                                cache_extra_keys=None,
+                                                cache_extra_keys=(
+                                                    getattr(request, "_cache_extra_keys", None)
+                                                    if media_cache_allowed
+                                                    else None
+                                                ),
                                             )
                                             logger.info(
                                                 f"VLM Scheduler stored paged Prefix Cache for "
                                                 f"{request_id}: {len(cache_states)} layers, "
                                                 f"truncated to {len(truncated_tokens)} tokens"
+                                                f"{' with media side-key' if media_cache_allowed else ''}"
                                             )
                     except Exception as e:
                         logger.warning(f"Failed to store VLM paged cache for {request_id}: {e}", exc_info=True)
@@ -2730,7 +2900,15 @@ class MLLMScheduler:
         if has_running:
             try:
                 with self._batch_lock:
-                    responses = self.batch_generator.next()
+                    next_fn = (
+                        getattr(self.batch_generator, "next_burst", None)
+                        if getattr(type(self.batch_generator), "next_burst", None) is not None
+                        else None
+                    )
+                    if callable(next_fn):
+                        responses = next_fn()
+                    else:
+                        responses = self.batch_generator.next()
             except Exception as step_err:
                 # Cache corruption or GPU error — recover by clearing state
                 # and rescheduling (matching LLM scheduler pattern).

@@ -54,6 +54,8 @@ interface ModelConfig {
   cacheType: 'kv' | 'mamba' | 'hybrid' | 'rotating_kv'
   toolParser?: string
   reasoningParser?: string
+  supportsThinking?: boolean
+  thinkInTemplate?: boolean
   usePagedCache?: boolean
   enableAutoToolChoice?: boolean
   isMultimodal?: boolean
@@ -65,6 +67,8 @@ export interface DetectedConfig {
   family: string
   toolParser?: string
   reasoningParser?: string
+  supportsThinking?: boolean
+  thinkInTemplate?: boolean
   cacheType: string
   usePagedCache: boolean
   enableAutoToolChoice: boolean
@@ -173,7 +177,7 @@ registerFamily('minimax', { cacheType: 'kv', toolParser: 'minimax', reasoningPar
 // companion state. Eric directive 2026-05-11: treat Ling chat output as plain
 // content. Keep DeepSeek tool parsing, but do not advertise a reasoning parser
 // or thinking capability even when stale JANG sidecars claim deepseek_r1.
-registerFamily('ling', { cacheType: 'hybrid', toolParser: 'deepseek', usePagedCache: true, enableAutoToolChoice: true, description: 'Ling / Bailing hybrid', priority: 20 })
+registerFamily('ling', { cacheType: 'hybrid', toolParser: 'deepseek', supportsThinking: false, thinkInTemplate: false, usePagedCache: true, enableAutoToolChoice: true, description: 'Ling / Bailing hybrid', priority: 20 })
 
 // Tencent Hy3-preview: text-only dense GQA KV + MoE. The chat template uses
 // reasoning_effort=no_think|low|high, so Python normalizes the UI thinking
@@ -517,6 +521,8 @@ function configToDetected(family: string, config: Omit<ModelConfig, 'pattern' | 
     family: family,
     toolParser: config.toolParser,
     reasoningParser: config.reasoningParser,
+    supportsThinking: config.supportsThinking,
+    thinkInTemplate: config.thinkInTemplate,
     cacheType: config.cacheType,
     usePagedCache: config.usePagedCache ?? true,
     enableAutoToolChoice: config.enableAutoToolChoice ?? false,
@@ -545,15 +551,36 @@ function applyJangCapabilities(
   }
   if (next.family === 'zaya' || next.family === 'zaya1-vl') {
     next.reasoningParser = 'qwen3'
+    next.supportsThinking = true
+    next.thinkInTemplate = false
   } else if (next.family === 'hy3') {
     next.reasoningParser = 'qwen3'
+    next.supportsThinking = true
+    next.thinkInTemplate = false
   } else if (next.family === 'ling') {
     next.reasoningParser = undefined
+    next.supportsThinking = false
+    next.thinkInTemplate = false
   } else if (caps.supports_thinking === false) {
     next.reasoningParser = undefined
+    next.supportsThinking = false
+    next.thinkInTemplate = false
   } else if (typeof caps.reasoning_parser === 'string') {
     next.reasoningParser =
       caps.reasoning_parser === 'none' ? undefined : caps.reasoning_parser
+  }
+  if (
+    next.family !== 'zaya' &&
+    next.family !== 'zaya1-vl' &&
+    next.family !== 'hy3' &&
+    next.family !== 'ling'
+  ) {
+    if (typeof caps.supports_thinking === 'boolean') {
+      next.supportsThinking = caps.supports_thinking
+    }
+    if (typeof caps.think_in_template === 'boolean' && next.supportsThinking !== false) {
+      next.thinkInTemplate = caps.think_in_template
+    }
   }
   if (typeof caps.cache_type === 'string') {
     const cacheType = caps.cache_type

@@ -2639,6 +2639,16 @@ class TestStartupCompatibilityGuards:
         assert '("mflux", "mflux image runtime"' in verify_script
         assert '"mflux.models.common.config.model_config"' in verify_script
 
+    def test_python_dependency_floor_covers_current_jang_family_runtimes(self):
+        pyproject = Path("./pyproject.toml").read_text()
+
+        # Hy3 registration lives in jang_tools.hy3 as of the 2.5.29 public wheel
+        # and the newer local 2.5.30 app bundle;
+        # Ling/Bailing hybrid needs the mlx-lm runtime floor that the bundle
+        # uses before the local bailing_hybrid vendor file is applied.
+        assert '"mlx-lm>=0.31.3"' in pyproject
+        assert pyproject.count('"jang>=2.5.29"') >= 3
+
     def test_bundled_python_installs_distutils_version_shim_for_radio(self):
         bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
 
@@ -2665,7 +2675,7 @@ class TestStartupCompatibilityGuards:
 
         assert "VMLINUX_ALLOW_PYPI_JANG" in bundle_script
         assert "RELEASE BLOCKED — local jang-tools source missing" in bundle_script
-        assert "pip install --no-deps \"jang>=" in bundle_script
+        assert 'pip install --no-deps "jang>=2.5.29"' in bundle_script
         assert "VMLINUX_ALLOW_MISSING_JANG_SOURCE_HASH" in verify_script
         assert "RELEASE BLOCKED — local jang_tools source unavailable for hash parity" in verify_script
 
@@ -2761,6 +2771,66 @@ class TestStartupCompatibilityGuards:
 
         assert '"jang_tools.turboquant.mpp_nax_kernel"' in verify_script
         assert "JANGTQ acceleration kernel missing" in verify_script
+
+    def test_bundled_python_import_gate_covers_hy3_and_ling_registration(self):
+        verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
+
+        assert '("jang_tools.hy3", "jang_tools.hy3"' in verify_script
+        assert '"mlx_lm.models.hy_v3"' in verify_script
+        assert '"mlx_lm.models.bailing_hybrid"' in verify_script
+        assert "Hy3 model-family mlx-lm registration missing" in verify_script
+        assert "Ling/Bailing hybrid mlx-lm runtime missing" in verify_script
+
+    def test_jang_loader_registers_hy3_and_ling_before_mlx_lm_resolution(
+        self, monkeypatch
+    ):
+        from vmlx_engine.utils import jang_loader
+
+        seen = []
+
+        def fake_import_module(name):
+            seen.append(name)
+            return SimpleNamespace()
+
+        monkeypatch.setattr(jang_loader.importlib, "import_module", fake_import_module)
+
+        jang_loader._ensure_jang_family_runtime_supported(
+            Path("/models/Hy3-preview-JANGTQ2"), {"model_type": "hy_v3"}
+        )
+        assert seen[:2] == ["jang_tools.hy3", "mlx_lm.models.hy_v3"]
+
+        seen.clear()
+        jang_loader._ensure_jang_family_runtime_supported(
+            Path("/models/Ling-2.6-flash-JANGTQ"),
+            {"model_type": "bailing_hybrid"},
+        )
+        assert seen == ["mlx_lm.models.bailing_hybrid"]
+
+    def test_jang_loader_failure_message_names_required_runtime_floor(
+        self, monkeypatch
+    ):
+        from vmlx_engine.utils import jang_loader
+
+        def fake_import_module(name):
+            raise ImportError(f"missing {name}")
+
+        monkeypatch.setattr(jang_loader.importlib, "import_module", fake_import_module)
+        monkeypatch.setattr(
+            jang_loader,
+            "_register_bailing_hybrid_from_repo_patch",
+            lambda: (_ for _ in ()).throw(ImportError("missing bailing patch")),
+        )
+
+        with pytest.raises(RuntimeError, match="jang>=2.5.29"):
+            jang_loader._ensure_jang_family_runtime_supported(
+                Path("/models/Hy3-preview-JANGTQ2"), {"model_type": "hy_v3"}
+            )
+
+        with pytest.raises(RuntimeError, match="mlx-lm>=0.31.3"):
+            jang_loader._ensure_jang_family_runtime_supported(
+                Path("/models/Ling-2.6-flash-JANGTQ"),
+                {"model_type": "bailing_hybrid"},
+            )
 
     def test_embeddings_and_rerank_endpoints_have_memory_pressure_guards(self):
         source = Path("./vmlx_engine/server.py").read_text()
@@ -2946,6 +3016,46 @@ class TestZayaCCACachePolicy:
         }))
         return tmp_path
 
+    def _write_qwen36_fixture(self, tmp_path, *, model_type="qwen3_5_moe"):
+        text_model_type = (
+            "qwen3_5_moe_text" if model_type == "qwen3_5_moe" else "qwen3_5_text"
+        )
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": model_type,
+            "text_config": {
+                "model_type": text_model_type,
+                "layer_types": ["full_attention", "linear_attention"],
+            },
+            "vision_config": {"model_type": "qwen3_vl"},
+            "image_token_id": 248056,
+            "video_token_id": 248057,
+        }))
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "version": 2,
+            "weight_format": "mxfp8",
+            "cache_type": "hybrid",
+            "source_model": {
+                "name": "Qwen3.6-Test",
+                "architecture": model_type,
+            },
+            "capabilities": {
+                "family": model_type,
+                "reasoning_parser": "qwen3",
+                "think_in_template": True,
+                "supports_thinking": True,
+                "cache_type": "hybrid",
+                "modality": "vl",
+                "supports_tools": True,
+            },
+            "chat": {
+                "reasoning": {
+                    "supported": True,
+                    "parser": "qwen3",
+                }
+            },
+        }))
+        return tmp_path
+
     def _write_zaya_fixture(self, tmp_path, *, weight_format="mxtq"):
         (tmp_path / "config.json").write_text(json.dumps({
             "model_type": "zaya",
@@ -3113,6 +3223,52 @@ class TestZayaCCACachePolicy:
         finally:
             server._default_enable_thinking = old_default
 
+        assert cfg.supports_thinking is True
+        assert cfg.reasoning_parser == "qwen3"
+        assert auto_resolved is False
+        assert explicit_on is True
+
+    @pytest.mark.parametrize("model_type", ["qwen3_5", "qwen3_5_moe"])
+    def test_qwen36_auto_does_not_force_thinking_but_explicit_on_still_works(
+        self, tmp_path, model_type
+    ):
+        """Qwen3.6 supports thinking, but omitted/Auto must stay visible.
+
+        Live Qwen3.6 MXFP8-MTP proof showed short omitted/default requests can
+        spend the whole response in the reasoning rail. Normal app/API chat
+        should produce visible content unless the user explicitly enables
+        thinking.
+        """
+        from vmlx_engine import server
+        from vmlx_engine.model_config_registry import get_model_config_registry
+
+        old_default = server._default_enable_thinking
+        server._default_enable_thinking = None
+        try:
+            model_dir = self._write_qwen36_fixture(tmp_path, model_type=model_type)
+            registry = get_model_config_registry()
+            registry.clear_cache()
+            cfg = registry.lookup(str(model_dir))
+            auto_resolved = server._resolve_enable_thinking(
+                request_value=None,
+                ct_kwargs={},
+                tools_present=False,
+                model_key=str(model_dir),
+                engine=None,
+                auto_detect=True,
+            )
+            explicit_on = server._resolve_enable_thinking(
+                request_value=True,
+                ct_kwargs={},
+                tools_present=False,
+                model_key=str(model_dir),
+                engine=None,
+                auto_detect=True,
+            )
+        finally:
+            server._default_enable_thinking = old_default
+
+        assert cfg.family_name == model_type
         assert cfg.supports_thinking is True
         assert cfg.reasoning_parser == "qwen3"
         assert auto_resolved is False
@@ -6094,7 +6250,9 @@ class TestTurboQuantKVTelemetry:
             '{"weight_map":{"model.embed.weight":"model-00001-of-00001.safetensors"}}'
         )
 
-        assert _model_mtp_status(str(tmp_path)) == {
+        status = _model_mtp_status(str(tmp_path))
+
+        expected = {
             "config_num_nextn_predict_layers": 0,
             "jang_drop_mtp": True,
             "index_has_mtp_tensors": False,
@@ -6106,6 +6264,8 @@ class TestTurboQuantKVTelemetry:
             "status": "dropped",
             "issues": [],
         }
+        for key, value in expected.items():
+            assert status[key] == value
 
     def test_mtp_status_flags_missing_weights_when_config_expects_mtp(self, tmp_path):
         from vmlx_engine.server import _model_mtp_status

@@ -95,11 +95,17 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
           // Skip filesystem detection for remote sessions (remote:// paths don't exist on disk)
           try {
             const cfg = s.config ? JSON.parse(s.config) : {}
-            if (cfg.reasoningParser && cfg.reasoningParser !== 'auto') {
-              setEffectiveReasoningParser(cfg.reasoningParser)
-            } else if (!s.modelPath.startsWith('remote://')) {
+            if (!s.modelPath.startsWith('remote://')) {
               const detected = await window.api.models.detectConfig(s.modelPath)
-              setEffectiveReasoningParser(detected?.reasoningParser || undefined)
+              if (detected?.supportsThinking === false || !detected?.reasoningParser) {
+                setEffectiveReasoningParser(undefined)
+              } else if (cfg.reasoningParser && cfg.reasoningParser !== 'auto') {
+                setEffectiveReasoningParser(cfg.reasoningParser)
+              } else {
+                setEffectiveReasoningParser(detected.reasoningParser)
+              }
+            } else if (cfg.reasoningParser && cfg.reasoningParser !== 'auto') {
+              setEffectiveReasoningParser(cfg.reasoningParser)
             }
           } catch (_) { /* ignore detection errors */ }
 

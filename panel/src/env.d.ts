@@ -25,6 +25,8 @@ declare global {
           family: string;
           toolParser?: string;
           reasoningParser?: string;
+          supportsThinking?: boolean;
+          thinkInTemplate?: boolean;
           cacheType: string;
           usePagedCache: boolean;
           enableAutoToolChoice: boolean;

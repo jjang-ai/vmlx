@@ -71,16 +71,19 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   const [showProfileSave, setShowProfileSave] = useState(false)
   const [detectedFamily, setDetectedFamily] = useState<string | undefined>(undefined)
   const [detectedToolParser, setDetectedToolParser] = useState<string | undefined>(undefined)
+  const [detectedReasoningParser, setDetectedReasoningParser] = useState<string | undefined>(undefined)
+  const [detectedSupportsThinking, setDetectedSupportsThinking] = useState<boolean | undefined>(undefined)
   const [savedChatModelPath, setSavedChatModelPath] = useState<string | undefined>(undefined)
   const [messageCount, setMessageCount] = useState(0)
   const isRemote = session.type === 'remote'
   const effectiveWireApi = overrides.wireApi ?? (isRemote ? 'completions' : 'responses')
-  const thinkingSupported = detectedFamily === 'deepseek-v4' || !!reasoningParser
+  const effectiveReasoningParser = detectedSupportsThinking === false ? undefined : (detectedReasoningParser ?? reasoningParser)
+  const thinkingSupported = detectedFamily === 'deepseek-v4' || detectedSupportsThinking === true || (detectedSupportsThinking !== false && !!effectiveReasoningParser)
   const displayedEnableThinking = thinkingSupported ? overrides.enableThinking : undefined
   const thinkingDisabledClass = thinkingSupported ? '' : ' opacity-50 cursor-not-allowed'
-  const showReasoningEffort = detectedFamily === 'hy3' || reasoningParser === 'openai_gptoss' || reasoningParser === 'mistral'
-  const showLowEffort = reasoningParser !== 'mistral'
-  const showMediumEffort = reasoningParser !== 'mistral' && detectedFamily !== 'hy3'
+  const showReasoningEffort = detectedFamily === 'hy3' || effectiveReasoningParser === 'openai_gptoss' || effectiveReasoningParser === 'mistral'
+  const showLowEffort = effectiveReasoningParser !== 'mistral'
+  const showMediumEffort = effectiveReasoningParser !== 'mistral' && detectedFamily !== 'hy3'
 
   const loadProfiles = useCallback(() => {
     window.api.chat.getProfiles().then((p: ChatProfile[]) => setProfiles(p))
@@ -119,9 +122,13 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
           const detected = await window.api.models.detectConfig(session.modelPath)
           setDetectedFamily(detected?.family)
           setDetectedToolParser(detected?.toolParser)
+          setDetectedReasoningParser(detected?.reasoningParser)
+          setDetectedSupportsThinking(detected?.supportsThinking)
         } catch (_) {
           setDetectedFamily(undefined)
           setDetectedToolParser(undefined)
+          setDetectedReasoningParser(undefined)
+          setDetectedSupportsThinking(undefined)
         }
       }
       // Saved non-null overrides win over model defaults. SQL NULL means the
@@ -226,7 +233,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
     savedChatModelPath,
     currentModelPath: session.modelPath,
     overrides,
-    reasoningParser,
+    reasoningParser: effectiveReasoningParser,
     toolParser: detectedToolParser,
     detectedFamily,
   })
@@ -538,7 +545,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
                     </button>
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
-                    {reasoningParser === 'mistral'
+                    {effectiveReasoningParser === 'mistral'
                       ? t('chat.settings.effortHelpMistral')
                       : t('chat.settings.effortHelpGeneric')}
                   </p>

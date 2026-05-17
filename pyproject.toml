@@ -28,9 +28,11 @@ classifiers = [
 
 dependencies = [
     "mlx>=0.29.0",
-    "mlx-lm>=0.31.2",  # 0.31.2 ships ArraysCache.lengths/advance, SequenceStateMachine,
-                       # LRUPromptCache, and native Gemma 4 text MoE — vMLX audit 2026-04-07
-                       # ports each. NOTE: mlx-audio 0.4.1 hard-pins 0.31.1; audio support
+    "mlx-lm>=0.31.3",  # 0.31.3 is the release-bundle floor for current JANG
+                       # families: ArraysCache.lengths/advance, SequenceStateMachine,
+                       # LRUPromptCache, native Gemma 4 text MoE, and the baseline
+                       # model registry that vMLX patches with bailing_hybrid for
+                       # Ling. NOTE: mlx-audio 0.4.1 hard-pins 0.31.1; audio support
                        # is opt-in via [audio] extra and not in the main bundle.
     "mlx-vlm>=0.4.3",  # Gemma 4 model class added in 0.4.3
     "transformers>=4.40.0",
@@ -64,7 +66,7 @@ dependencies = [
     # promotion from optional [mxtq] to a hard dependency. The PyPI package
     # is named `jang` (not `jang-tools` — that's the local repo dir name);
     # `import jang_tools` works because that's the package import name.
-    "jang>=2.5.27",
+    "jang>=2.5.29",
     # PyTorch — REQUIRED for Nemotron-3-Nano-Omni multimodal dispatch.
     # `jang_tools.nemotron_omni_chat._import_torch()` lazy-imports torch on
     # the FIRST image / audio / video request to an Omni bundle; without
@@ -109,7 +111,7 @@ ui = [
 # pinning `vmlx[mxtq]` in their requirements; the real install is now a
 # hard dependency above so plain `pip install vmlx` works for all bundles.
 mxtq = [
-    "jang>=2.5.27",
+    "jang>=2.5.29",
 ]
 dev = [
     "pytest>=7.0.0",
@@ -157,7 +159,7 @@ audio = [
 # (intentionally same pin) so `pip install vmlx[jang]` is a
 # friendly alias. Pin tracks the hard dep above — bump in lockstep.
 jang = [
-    "jang>=2.5.27",
+    "jang>=2.5.29",
 ]
 # Image generation dependencies (Flux, Z-Image-Turbo via mflux)
 image = [

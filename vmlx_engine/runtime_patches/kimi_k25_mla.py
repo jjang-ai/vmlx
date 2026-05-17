@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from importlib import import_module
 from importlib.util import find_spec
 from pathlib import Path
 from typing import Optional
@@ -89,6 +90,12 @@ def install() -> bool:
             target,
         )
         return False
+    if not _runtime_patch_source_available():
+        logger.debug(
+            "Kimi MLA file patch skipped: optional patched source is not "
+            "available in this environment"
+        )
+        return False
     try:
         from jang_tools.kimi_prune.runtime_patch import apply as _apply
     except ImportError:
@@ -117,6 +124,17 @@ def install_file(dry_run: bool = False) -> int:
             "`jang_tools.kimi_prune` in the active Python environment."
         ) from _ie
     return _apply(dry_run=dry_run)
+
+
+def _runtime_patch_source_available() -> bool:
+    try:
+        runtime_patch = import_module("jang_tools.kimi_prune.runtime_patch")
+    except ImportError:
+        return True
+    patch_src = getattr(runtime_patch, "PATCH_SRC", None)
+    if patch_src is None:
+        return True
+    return Path(patch_src).exists()
 
 
 def _locate_target() -> Optional[Path]:

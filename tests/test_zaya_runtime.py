@@ -1678,6 +1678,152 @@ def test_zaya_mllm_media_paged_store_skips_prefix_cache():
     assert scheduler.disk_cache.stores == []
 
 
+def test_qwen_mllm_media_paged_store_fails_closed_without_unsafe_ack(monkeypatch):
+    """The media cache flag alone must not enable the incoherent hit path."""
+
+    from vmlx_engine.mllm_scheduler import MLLMScheduler
+
+    class FakeBlockAwareCache:
+        def __init__(self):
+            self.stores = []
+            self._request_tables = {}
+
+        def store_cache(
+            self,
+            request_id,
+            token_ids,
+            cache_states,
+            cache_extra_keys=None,
+        ):
+            self.stores.append(
+                (request_id, list(token_ids), list(cache_states), cache_extra_keys)
+            )
+
+    class FakePagedCacheManager:
+        def __init__(self):
+            self.detached = []
+
+        def detach_request(self, request_id):
+            self.detached.append(request_id)
+
+    media_key = {"mllm_media": "sha256:blue"}
+    scheduler = MLLMScheduler.__new__(MLLMScheduler)
+    scheduler.block_aware_cache = FakeBlockAwareCache()
+    scheduler.paged_cache_manager = FakePagedCacheManager()
+    scheduler.memory_aware_cache = None
+    scheduler.prefix_cache = None
+    scheduler.disk_cache = None
+    scheduler.batch_generator = SimpleNamespace(stop_tokens=set())
+    scheduler.stop_tokens = set()
+    scheduler.running = {
+        "qwen-vl-media": SimpleNamespace(
+            request_id="qwen-vl-media",
+            images=["data:image/png;base64,AAAA"],
+            videos=None,
+            _cache_extra_keys=media_key,
+            _extracted_tokens=[10, 248056, 11, 12],
+            _extracted_cache=lambda: ["clean-media-cache"],
+            _added_stop_tokens=set(),
+            num_output_tokens=1,
+        )
+    }
+    scheduler.request_id_to_uid = {"qwen-vl-media": 3}
+    scheduler.uid_to_request_id = {3: "qwen-vl-media"}
+    scheduler.requests = dict(scheduler.running)
+    scheduler.finished_req_ids = set()
+    scheduler._is_hybrid = True
+    scheduler._uses_zaya_cache = False
+    scheduler._kv_cache_bits = 0
+    scheduler._cleanup_detokenizer = lambda _request_id: None
+    scheduler._mllm_request_has_media_cache_context = lambda _request, _tokens: True
+    scheduler._truncate_hybrid_cache = lambda cache, prompt_len: cache
+    scheduler._validate_cache = lambda _cache, source: True
+    scheduler._extract_cache_states = lambda cache: [
+        {"class_name": "KVCache", "state": cache[0]}
+    ]
+    monkeypatch.setenv("VMLINUX_MLLM_MEDIA_PREFIX_CACHE", "1")
+    monkeypatch.delenv("VMLINUX_MLLM_MEDIA_PREFIX_CACHE_UNSAFE_ACK", raising=False)
+
+    scheduler._cleanup_finished({"qwen-vl-media"})
+
+    assert scheduler.block_aware_cache.stores == []
+
+
+def test_qwen_mllm_media_paged_store_uses_media_side_key_with_unsafe_ack(monkeypatch):
+    """The broken media-cache experiment is doubly gated after live negative proof."""
+
+    from vmlx_engine.mllm_scheduler import MLLMScheduler
+
+    class FakeBlockAwareCache:
+        def __init__(self):
+            self.stores = []
+            self._request_tables = {}
+
+        def store_cache(
+            self,
+            request_id,
+            token_ids,
+            cache_states,
+            cache_extra_keys=None,
+        ):
+            self.stores.append(
+                (request_id, list(token_ids), list(cache_states), cache_extra_keys)
+            )
+
+    class FakePagedCacheManager:
+        def detach_request(self, request_id):
+            pass
+
+    media_key = {"mllm_media": "sha256:blue"}
+    scheduler = MLLMScheduler.__new__(MLLMScheduler)
+    scheduler.block_aware_cache = FakeBlockAwareCache()
+    scheduler.paged_cache_manager = FakePagedCacheManager()
+    scheduler.memory_aware_cache = None
+    scheduler.prefix_cache = None
+    scheduler.disk_cache = None
+    scheduler.batch_generator = SimpleNamespace(stop_tokens=set())
+    scheduler.stop_tokens = set()
+    scheduler.running = {
+        "qwen-vl-media": SimpleNamespace(
+            request_id="qwen-vl-media",
+            images=["data:image/png;base64,AAAA"],
+            videos=None,
+            _cache_extra_keys=media_key,
+            _extracted_tokens=[10, 248056, 11, 12],
+            _extracted_cache=lambda: ["clean-media-cache"],
+            _added_stop_tokens=set(),
+            num_output_tokens=1,
+        )
+    }
+    scheduler.request_id_to_uid = {"qwen-vl-media": 3}
+    scheduler.uid_to_request_id = {3: "qwen-vl-media"}
+    scheduler.requests = dict(scheduler.running)
+    scheduler.finished_req_ids = set()
+    scheduler._is_hybrid = True
+    scheduler._uses_zaya_cache = False
+    scheduler._kv_cache_bits = 0
+    scheduler._cleanup_detokenizer = lambda _request_id: None
+    scheduler._mllm_request_has_media_cache_context = lambda _request, _tokens: True
+    scheduler._truncate_hybrid_cache = lambda cache, prompt_len: cache
+    scheduler._validate_cache = lambda _cache, source: True
+    scheduler._extract_cache_states = lambda cache: [
+        {"class_name": "KVCache", "state": cache[0]}
+    ]
+    monkeypatch.setenv("VMLINUX_MLLM_MEDIA_PREFIX_CACHE", "1")
+    monkeypatch.setenv("VMLINUX_MLLM_MEDIA_PREFIX_CACHE_UNSAFE_ACK", "1")
+
+    scheduler._cleanup_finished({"qwen-vl-media"})
+
+    assert scheduler.block_aware_cache.stores == [
+        (
+            "qwen-vl-media",
+            [10, 248056, 11],
+            [{"class_name": "KVCache", "state": "clean-media-cache"}],
+            media_key,
+        )
+    ]
+
+
 def test_mllm_media_cache_key_ignores_prompt_attention_mask_length():
     """Same media must keep the same cache side-key across longer chat turns."""
 
@@ -1707,6 +1853,31 @@ def test_mllm_media_cache_key_ignores_prompt_attention_mask_length():
 
     assert _mllm_media_cache_extra_keys(short) == _mllm_media_cache_extra_keys(longer)
     assert _mllm_media_cache_extra_keys(short) != _mllm_media_cache_extra_keys(other_image)
+
+
+def test_mllm_media_cache_key_includes_video_frame_settings():
+    from vmlx_engine.mllm_batch_generator import _mllm_media_cache_extra_keys
+
+    same_video_fps2 = SimpleNamespace(
+        images=None,
+        videos=["data:video/mp4;base64,AAAA"],
+        image_grid_thw=mx.array([[1, 2, 2]]),
+        pixel_values=None,
+        video_fps=2,
+        video_max_frames=4,
+    )
+    same_video_fps1 = SimpleNamespace(
+        images=None,
+        videos=["data:video/mp4;base64,AAAA"],
+        image_grid_thw=mx.array([[1, 2, 2]]),
+        pixel_values=None,
+        video_fps=1,
+        video_max_frames=2,
+    )
+
+    assert _mllm_media_cache_extra_keys(same_video_fps2) != _mllm_media_cache_extra_keys(
+        same_video_fps1
+    )
 
 
 def test_mllm_paged_fetch_uses_request_cache_extra_keys_without_stale_name():

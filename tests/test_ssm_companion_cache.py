@@ -462,6 +462,40 @@ def test_bug001_model_key_property_immutable_after_construct():
     assert c._model_key == "abc"
 
 
+def test_media_extra_keys_partition_ssm_companion_namespace():
+    """Media-bearing VLM prefixes need the same side-key as paged KV blocks."""
+
+    cache = SSMCompanionCache(model_key="qwen36-vl")
+    tokens = [11, 22, 33, 44, 55]
+    blue = {"mllm_media": "blue-image"}
+    red = {"mllm_media": "red-image"}
+
+    cache.store(tokens, 4, [_FakeSSMLayer(1.0)], cache_extra_keys=blue)
+
+    assert cache.fetch(tokens, 4, cache_extra_keys=red) is None
+    assert cache.fetch(tokens, 4) is None
+    assert cache.fetch(tokens, 4, cache_extra_keys=blue) is not None
+
+
+def test_media_extra_keys_partition_longest_prefix_index():
+    cache = SSMCompanionCache(model_key="qwen36-vl")
+    tokens = list(range(128))
+    blue = {"mllm_media": "blue-video", "video_fps": "2", "video_max_frames": "4"}
+    changed_settings = {
+        "mllm_media": "blue-video",
+        "video_fps": "1",
+        "video_max_frames": "2",
+    }
+
+    cache.store(tokens, 64, [_FakeSSMLayer(2.0)], cache_extra_keys=blue)
+
+    assert cache.fetch_longest_prefix(tokens, 96, cache_extra_keys=changed_settings) is None
+    hit = cache.fetch_longest_prefix(tokens, 96, cache_extra_keys=blue)
+    assert hit is not None
+    checkpoint_len, _, _ = hit
+    assert checkpoint_len == 64
+
+
 # ----------------------------------------------------------------------
 # is_hybrid_ssm_model helper (Agent 1 F2 dependency)
 # ----------------------------------------------------------------------

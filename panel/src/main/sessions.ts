@@ -66,6 +66,10 @@ function isZayaCcaFamily(family?: string): boolean {
   return normalized === 'zaya' || normalized === 'zaya1-vl'
 }
 
+function cacheTypeRequiresPaged(cacheType?: string): boolean {
+  return cacheType === 'hybrid' || cacheType === 'mamba'
+}
+
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 
 function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
@@ -874,6 +878,16 @@ export class SessionManager extends EventEmitter {
             config.isMultimodal = true
           } else if (config.isMultimodal === undefined) {
             config.isMultimodal = freshConfig.isMultimodal
+          }
+          if (
+            freshConfig.usePagedCache === true &&
+            cacheTypeRequiresPaged(freshConfig.cacheType) &&
+            config.continuousBatching !== false &&
+            config.enablePrefixCache !== false &&
+            config.usePagedCache === false
+          ) {
+            config.usePagedCache = true
+            this.pushLog(sessionId, `[INFO] ${freshConfig.family} ${freshConfig.cacheType} cache requires paged cache; stale saved Use Paged Cache=false was reset to auto-safe true`)
           }
           // Log if model type changed
           if (oldFamily && oldFamily !== 'auto' && freshConfig.toolParser && oldFamily !== freshConfig.toolParser) {
@@ -2250,9 +2264,13 @@ export class SessionManager extends EventEmitter {
     const zayaCcaActive = isZayaCcaFamily(detectedFamily)
     const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
     const dsv4CompositeRequiresPaged = detectedFamily === 'deepseek-v4' && !prefixCacheOff
-    const usePagedCache = zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged
+    const nativeCacheRequiresPaged = cacheTypeRequiresPaged(detected.cacheType) && detected.usePagedCache === true && !prefixCacheOff
+    const usePagedCache = zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged || nativeCacheRequiresPaged
       ? true
       : (config.usePagedCache ?? detected.usePagedCache)
+    if (nativeCacheRequiresPaged && config.usePagedCache === false) {
+      console.log(`[SESSION] ${detected.family} ${detected.cacheType} cache requires paged cache; ignoring stale saved usePagedCache=false`)
+    }
 
     if (prefixCacheOff) {
       args.push('--disable-prefix-cache')

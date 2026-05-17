@@ -222,6 +222,8 @@ REQUIRED = [
     ("jang_tools", "jang-tools", "bundled jang-tools package missing"),
     ("jang_tools.capabilities", "jang_tools.capabilities", "JANG capability stamping/verification helpers missing from bundled jang-tools"),
     ("jang_tools.hy3", "jang_tools.hy3", "Hy3 model-family registration missing from bundled jang-tools"),
+    ("mlx_lm.models.hy_v3", "mlx_lm.models.hy_v3", "Hy3 model-family mlx-lm registration missing after importing jang_tools.hy3"),
+    ("mlx_lm.models.bailing_hybrid", "mlx_lm.models.bailing_hybrid", "Ling/Bailing hybrid mlx-lm runtime missing — bundle-python.sh must install bailing_hybrid.patched.py"),
     ("jang_tools.hy3.runtime", "jang_tools.hy3.runtime", "Hy3 runtime loader missing from bundled jang-tools"),
     ("jang_tools.load_jangtq", "jang_tools.load_jangtq", "JANGTQ fast-path loader missing from bundled jang-tools"),
     ("jang_tools.topk_override", "jang_tools.topk_override", "JANGTQ top-k runtime override helper missing from bundled jang-tools"),

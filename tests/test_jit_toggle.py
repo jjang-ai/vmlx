@@ -349,6 +349,64 @@ class TestJitToggle:
         assert compiled.saw_cache is True
         assert vlm_wrapper.language_model.model is original_inner
 
+    def test_jit_skips_vlm_hybrid_arrays_cache_before_compile(self, caplog):
+        """Hybrid MLLM cache objects should skip mx.compile before rollback work.
+
+        Qwen3.6 native-MTP/VL models use mlx_lm cache containers such as
+        ArraysCache for hybrid SSM/Vision paths. mx.compile cannot trace those
+        Python cache objects, so startup should detect the shape and avoid the
+        compile/warmup/rollback churn entirely.
+        """
+        from vmlx_engine import server
+
+        class ArraysCache:
+            pass
+
+        class KVCache:
+            pass
+
+        class InnerTransformer:
+            layers = ["l0", "l1"]
+
+            def __call__(self, *args, **kwargs):
+                return args[0]
+
+        class LanguageModel:
+            def __init__(self):
+                self.model = InnerTransformer()
+
+            @property
+            def layers(self):
+                return self.model.layers
+
+            def make_cache(self):
+                return [KVCache(), ArraysCache()]
+
+            def __call__(self, *args, **kwargs):
+                return self.model(*args, **kwargs)
+
+        class VlmWrapper:
+            def __init__(self):
+                self.language_model = LanguageModel()
+
+        vlm_wrapper = VlmWrapper()
+        original_inner = vlm_wrapper.language_model.model
+
+        mock_engine = MagicMock()
+        mock_engine._model = vlm_wrapper
+        mock_engine.is_mllm = True
+        mock_engine._is_mllm = True
+
+        with caplog.at_level("INFO"), \
+             patch.object(server, "_engine", mock_engine), \
+             patch.object(mx, "compile") as mock_compile:
+            server._apply_jit_compilation()
+
+        mock_compile.assert_not_called()
+        assert vlm_wrapper.language_model.model is original_inner
+        assert "Skipping mx.compile" in caplog.text
+        assert "ArraysCache" in caplog.text
+
     def test_jit_skips_when_model_not_callable(self):
         """When inner model is not callable, should log warning and skip."""
         from vmlx_engine import server

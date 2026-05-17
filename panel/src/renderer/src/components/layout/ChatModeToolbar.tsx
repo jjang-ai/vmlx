@@ -58,12 +58,18 @@ export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange
       if (s) {
         try {
           const cfg = s.config ? JSON.parse(s.config) : {}
-          if (cfg.reasoningParser && cfg.reasoningParser !== 'auto') {
-            setEffectiveReasoningParser(cfg.reasoningParser)
-          } else if (!s.modelPath.startsWith('remote://')) {
+          if (!s.modelPath.startsWith('remote://')) {
             window.api.models.detectConfig(s.modelPath).then((detected: any) => {
-              setEffectiveReasoningParser(detected?.reasoningParser || undefined)
+              if (detected?.supportsThinking === false || !detected?.reasoningParser) {
+                setEffectiveReasoningParser(undefined)
+              } else if (cfg.reasoningParser && cfg.reasoningParser !== 'auto') {
+                setEffectiveReasoningParser(cfg.reasoningParser)
+              } else {
+                setEffectiveReasoningParser(detected.reasoningParser)
+              }
             }).catch((err) => console.error('Failed to load session info:', err))
+          } else if (cfg.reasoningParser && cfg.reasoningParser !== 'auto') {
+            setEffectiveReasoningParser(cfg.reasoningParser)
           }
         } catch { /* ignore */ }
       }

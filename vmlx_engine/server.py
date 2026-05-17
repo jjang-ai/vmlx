@@ -1251,7 +1251,7 @@ def _loaded_omni_modalities() -> list[str] | None:
         if _omni_path:
             status = omni_multimodal_component_status(_omni_path)
             if status.get("bundle_compatible"):
-                return list(status.get("modalities") or ["text", "image", "audio", "video"])
+                return list(status.get("modalities") or ["text", "audio", "image"])
     except Exception:
         pass
     return None
@@ -1369,6 +1369,13 @@ def _resolve_enable_thinking(
         # enable_thinking=false returns the same visible answer immediately.
         # This is a default-policy correction, not a clamp: explicit
         # enable_thinking=true above still opens the thinking rail.
+        return False
+    if _family_l in ("qwen3_5", "qwen3_5_moe"):
+        # Qwen3.6 / Qwen3.5 templates support a reasoning rail, but live
+        # Qwen3.6-35B MXFP8-MTP proof showed omitted/default chat requests can
+        # spend the whole short response budget in reasoning-only output. Keep
+        # normal app/API chat on the visible rail unless the request or chat
+        # template kwargs explicitly enable thinking above.
         return False
     if _default_enable_thinking is True:
         return True
@@ -1888,6 +1895,78 @@ class _CompiledModuleProxy:
         setattr(self._original, name, value)
 
 
+_JIT_UNTRACEABLE_CACHE_CLASS_NAMES = frozenset(
+    {
+        "ArraysCache",
+        "BatchMambaCache",
+        "MambaCache",
+    }
+)
+
+
+def _jit_untraceable_cache_class_names(cache_obj):
+    """Return known Python cache containers that mx.compile cannot trace."""
+    found: set[str] = set()
+    seen: set[int] = set()
+
+    def visit(obj):
+        if obj is None:
+            return
+        obj_id = id(obj)
+        if obj_id in seen:
+            return
+        seen.add(obj_id)
+
+        class_name = type(obj).__name__
+        if class_name in _JIT_UNTRACEABLE_CACHE_CLASS_NAMES:
+            found.add(class_name)
+
+        if isinstance(obj, dict):
+            children = obj.values()
+        elif isinstance(obj, (list, tuple, set, frozenset)):
+            children = obj
+        else:
+            children = []
+
+        for child in children:
+            visit(child)
+
+        try:
+            concrete_attrs = vars(obj)
+        except TypeError:
+            concrete_attrs = {}
+
+        for attr in ("caches", "cache", "kv_cache", "ssm_cache", "mamba_cache"):
+            if attr not in concrete_attrs:
+                continue
+            child = concrete_attrs[attr]
+            if child is not obj:
+                visit(child)
+
+    visit(cache_obj)
+    return tuple(sorted(found))
+
+
+def _jit_probe_untraceable_cache_names(*owners):
+    for owner in owners:
+        if owner is None:
+            continue
+        make_cache = getattr(owner, "make_cache", None)
+        if make_cache is None:
+            continue
+        try:
+            names = _jit_untraceable_cache_class_names(make_cache())
+        except Exception as cache_probe_err:
+            logger.debug(
+                f"JIT: cache-shape probe failed for {type(owner).__name__} "
+                f"({cache_probe_err}) - proceeding"
+            )
+            continue
+        if names:
+            return names
+    return ()
+
+
 def _apply_jit_compilation():
     """Apply mx.compile to the model forward pass for JIT-optimized inference.
 
@@ -1987,6 +2066,18 @@ def _apply_jit_compilation():
             inner_transformer = getattr(language_model, "model", None) if language_model is not None else None
             if inner_transformer is None or not callable(inner_transformer):
                 logger.info("JIT: MLLM model has no inner language_model.model to compile — skipping JIT safely")
+                return
+            untraceable_cache_names = _jit_probe_untraceable_cache_names(
+                language_model,
+                vlm_model,
+                model_obj,
+            )
+            if untraceable_cache_names:
+                logger.info(
+                    "JIT: Skipping mx.compile - MLLM hybrid cache contains "
+                    f"{', '.join(untraceable_cache_names)}. mx.compile() cannot "
+                    "trace these Python cache objects."
+                )
                 return
             logger.info("JIT: Applying mx.compile to language_model.model (VLM wrapper preserved for .config access)")
             # vmlx#83: mx.compile() is LAZY — it returns a wrapper that only
@@ -3877,6 +3968,12 @@ def _bundle_index_mtp_layer_count(bundle_path: str | None) -> int | None:
     weights doesn't silently report ``artifact_available=True`` with a wrong
     layer count.
     """
+    try:
+        from .native_mtp import bundle_index_mtp_layer_count
+
+        return bundle_index_mtp_layer_count(bundle_path)
+    except Exception:
+        pass
     if not bundle_path:
         return None
     try:
@@ -3959,6 +4056,12 @@ def _bundle_mtp_runtime_supported(family: str | None) -> bool:
 
 def _model_mtp_status(bundle_path: str | None) -> dict:
     """Describe whether a bundle contains usable multi-token prediction heads."""
+    try:
+        from .native_mtp import inspect_native_mtp_bundle
+
+        return inspect_native_mtp_bundle(bundle_path)
+    except Exception:
+        pass
     cfg = _read_bundle_json(bundle_path, "config.json")
     jang_cfg = _read_bundle_json(bundle_path, "jang_config.json")
     family = _bundle_mtp_family(bundle_path)
@@ -4087,6 +4190,33 @@ def _model_mtp_status(bundle_path: str | None) -> dict:
         "status": status,
         "issues": issues,
     }
+
+
+def _model_mtp_status_with_loaded_runtime(bundle_path: str | None) -> dict:
+    """MTP artifact status plus the currently loaded runtime activation bit."""
+    status = dict(_model_mtp_status(bundle_path))
+    try:
+        from .native_mtp import model_has_native_mtp_runtime
+
+        model = _get_raw_model_from_engine()
+        active = bool(model is not None and model_has_native_mtp_runtime(model))
+        status["runtime_active"] = active
+        if active and status.get("runtime_available"):
+            status["status"] = "native_runtime_active"
+            scope = status.get("runtime_scope") or "text"
+            status["runtime_reason"] = f"native MTP runtime is active for {scope}"
+            if status.get("effective_depth") is None:
+                try:
+                    from .native_mtp import native_mtp_effective_depth
+
+                    depth, source = native_mtp_effective_depth()
+                    status["effective_depth"] = depth
+                    status["effective_depth_source"] = source
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return status
 
 
 def _model_quantization_status(bundle_path: str | None) -> dict:
@@ -5001,7 +5131,7 @@ async def health():
         bundle_key = _model_path or _model_name
         result["quantization"] = _model_quantization_status(bundle_key)
         result["acceleration"] = _model_acceleration_status(bundle_key)
-        result["mtp"] = _model_mtp_status(bundle_key)
+        result["mtp"] = _model_mtp_status_with_loaded_runtime(bundle_key)
         routing_status = _model_routing_status(bundle_key)
         if routing_status:
             result["routing"] = routing_status
@@ -5025,7 +5155,7 @@ async def health():
                 "bundle_compatible": True,
                 "backend": OmniMultimodalDispatcher._pick_backend(),
                 "modalities": _omni_status.get("modalities")
-                or ["text", "audio", "image", "video"],
+                or ["text", "audio", "image"],
                 "components": {
                     "radio": bool(_omni_status.get("has_radio_weights")),
                     "parakeet": bool(_omni_status.get("has_parakeet_weights")),
@@ -5994,7 +6124,7 @@ async def model_capabilities(model_id: str) -> dict:
     native_cache = _native_cache_status(scheduler, family=family, cfg=cfg)
     quantization_status = _model_quantization_status(bundle_path)
     acceleration_status = _model_acceleration_status(bundle_path)
-    mtp_status = _model_mtp_status(bundle_path)
+    mtp_status = _model_mtp_status_with_loaded_runtime(bundle_path)
     routing_status = _model_routing_status(bundle_path)
 
     _capability_compat_warnings = list(quantization_status.get("compat_warnings", []))

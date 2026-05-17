@@ -122,6 +122,12 @@ interface HealthData {
     family?: string
     schema?: string
     cache_type?: string
+    components?: string[]
+    prefix?: boolean
+    paged?: boolean
+    block_disk_l2?: boolean
+    ssm_entries?: number | null
+    kv_layer_indices?: number[]
     generic_turboquant_kv?: {
       enabled?: boolean
       reason?: string
@@ -179,7 +185,16 @@ interface HealthData {
     index_has_mtp_tensors?: boolean
     artifact_available?: boolean
     runtime_available?: boolean
+    runtime_supported?: boolean
+    runtime_active?: boolean
+    effective_depth?: number | null
+    effective_depth_source?: string | null
     runtime_reason?: string
+    runtime_scope?: string
+    vl_runtime_available?: boolean
+    family?: string | null
+    mtp_tensor_count?: number
+    vision_tensor_count?: number
     status?: string
     issues?: string[]
   }
@@ -300,12 +315,32 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
               <InfoCard
                 label="MTP"
                 value={
-                  health.mtp.runtime_available
+                  health.mtp.runtime_active
                     ? 'active'
+                    : health.mtp.runtime_available
+                      ? 'ready'
                     : health.mtp.artifact_available
                       ? 'weights present; runtime unwired'
                       : health.mtp.status.replace(/_/g, ' ')
                 }
+              />
+            )}
+            {health.mtp?.effective_depth && health.mtp.runtime_available && (
+              <InfoCard
+                label="MTP Depth"
+                value={`D${health.mtp.effective_depth}${health.mtp.effective_depth_source === 'default' ? ' default' : ''}`}
+              />
+            )}
+            {health.mtp?.runtime_scope && health.mtp.runtime_available && (
+              <InfoCard
+                label="MTP Scope"
+                value={health.mtp.vl_runtime_available ? health.mtp.runtime_scope : `${health.mtp.runtime_scope} only`}
+              />
+            )}
+            {(health.mtp?.mtp_tensor_count != null || health.mtp?.vision_tensor_count != null) && (
+              <InfoCard
+                label="MTP Tensors"
+                value={`${health.mtp?.mtp_tensor_count ?? 0} mtp / ${health.mtp?.vision_tensor_count ?? 0} vision`}
               />
             )}
             {health.kv_cache_quantization?.enabled && (
@@ -313,6 +348,21 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
             )}
             {health.native_cache?.cache_type && (
               <InfoCard label="Native Cache" value={health.native_cache.cache_type} />
+            )}
+            {health.native_cache && (health.native_cache.paged != null || health.native_cache.block_disk_l2 != null) && (
+              <InfoCard
+                label="Cache Stack"
+                value={`${health.native_cache.paged ? 'paged' : health.native_cache.prefix ? 'prefix' : 'no-prefix'}${health.native_cache.block_disk_l2 ? ' + block L2' : ''}`}
+              />
+            )}
+            {health.native_cache?.components?.length ? (
+              <InfoCard
+                label="Cache Components"
+                value={health.native_cache.components.join(', ')}
+              />
+            ) : null}
+            {health.native_cache?.ssm_entries != null && (
+              <InfoCard label="SSM Entries" value={String(health.native_cache.ssm_entries || 0)} />
             )}
             {health.turboquant_kv_cache && (
               <InfoCard

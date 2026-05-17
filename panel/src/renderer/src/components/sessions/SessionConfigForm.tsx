@@ -245,13 +245,14 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const batchingOff = !config.continuousBatching
   const effectivelyNoBatching = batchingOff
   const prefixOff = !config.enablePrefixCache
+  const isMambaCache = detectedCacheType === 'mamba' || detectedCacheType === 'hybrid'
   const zayaTypedCacheRequiresPaged = zayaCcaActive && !batchingOff && !prefixOff
   const dsv4CompositeRequiresPaged = dsv4Active && !batchingOff && !prefixOff
-  const effectiveUsePagedCache = zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged || config.usePagedCache
+  const nativeCacheRequiresPaged = isMambaCache && !batchingOff && !prefixOff
+  const effectiveUsePagedCache = nativeCacheRequiresPaged || dsv4CompositeRequiresPaged || config.usePagedCache
   const effectivePagedCacheBlockSize = dsv4CompositeRequiresPaged
     ? DSV4_PAGED_CACHE_BLOCK_SIZE
     : config.pagedCacheBlockSize
-  const isMambaCache = detectedCacheType === 'mamba' || detectedCacheType === 'hybrid'
   const generationDefaultsSummary = [
     (config.defaultMaxNewTokens ?? 0) > 0 ? `max output tokens ${Math.floor(config.defaultMaxNewTokens ?? 0)}` : null,
     config.defaultTemperature > 0 ? `temperature ${(config.defaultTemperature / 100).toFixed(2)}` : null,
@@ -619,8 +620,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {config.enableDiskCache && <IncompatWarning text="Paged cache and legacy Disk Cache cannot run simultaneously. Enabling paged cache will auto-disable legacy Disk Cache. For persistent caching with paged cache, use 'Block Disk Cache (L2)' below instead." />}
         {!batchingOff && prefixOff && <IncompatWarning text="Paged cache requires prefix cache. Enable 'Prefix Cache' above to use paged KV cache." />}
         {zayaTypedCacheRequiresPaged && <InfoNote text="ZAYA typed CCA cache requires paged cache while prefix cache is enabled. Turn off Prefix Cache to disable this cache stack for ZAYA." />}
+        {nativeCacheRequiresPaged && !zayaTypedCacheRequiresPaged && !dsv4CompositeRequiresPaged && <InfoNote text="Hybrid/Mamba cache models require paged cache while prefix cache is enabled so KV blocks and path-dependent state stay in the same cache contract." />}
         {dsv4CompositeRequiresPaged && <InfoNote text="DSV4 uses native SWA+CSA/HCA composite cache snapshots, so paged cache stays on and block size is fixed to 256 tokens for production decode compatibility." />}
-        <CheckField label="Use Paged KV Cache" tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations." checked={effectiveUsePagedCache} onChange={v => { onChange('usePagedCache', v); if (v && config.enableDiskCache) onChange('enableDiskCache', false) }} disabled={batchingOff || prefixOff || zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged} />
+        <CheckField label="Use Paged KV Cache" tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations." checked={effectiveUsePagedCache} onChange={v => { onChange('usePagedCache', v); if (v && config.enableDiskCache) onChange('enableDiskCache', false) }} disabled={batchingOff || prefixOff || nativeCacheRequiresPaged || dsv4CompositeRequiresPaged} />
         {effectiveUsePagedCache && (
           <>
             <SliderField

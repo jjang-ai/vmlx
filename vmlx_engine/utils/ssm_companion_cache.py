@@ -219,22 +219,48 @@ class SSMCompanionCache:
         """
         self._disk = disk_store
 
-    def _key(self, token_ids: List[int], num_tokens: int) -> str:
+    @staticmethod
+    def _extra_key_bytes(cache_extra_keys: Optional[Any]) -> bytes:
+        if cache_extra_keys is None:
+            return b""
+        try:
+            encoded = json.dumps(
+                cache_extra_keys,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+        except Exception:
+            encoded = repr(cache_extra_keys)
+        return b"\x00extra=" + encoded.encode("utf-8")
+
+    def _key(
+        self,
+        token_ids: List[int],
+        num_tokens: int,
+        cache_extra_keys: Optional[Any] = None,
+    ) -> str:
         """Deterministic SHA-256 hash key.
 
         Mixes ``self._model_key`` into the hash so different model loads
-        cannot collide on identical token prefixes (A3-BUG-001).
+        cannot collide on identical token prefixes (A3-BUG-001). Optional
+        cache_extra_keys partition media-conditioned VLM states in the same
+        way paged KV block hashes partition image/video prompts.
         """
         data = (
             self._model_key.encode()
             + b"\x00"
             + json.dumps(token_ids[:num_tokens], separators=(",", ":")).encode()
+            + self._extra_key_bytes(cache_extra_keys)
         )
         h = hashlib.sha256(data).hexdigest()
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "SSM key: N=%d hash=%s tokens[-8:]=%s",
-                num_tokens, h[:12], token_ids[max(0,num_tokens-8):num_tokens]
+                "SSM key: N=%d hash=%s extra=%s tokens[-8:]=%s",
+                num_tokens,
+                h[:12],
+                bool(cache_extra_keys),
+                token_ids[max(0,num_tokens-8):num_tokens],
             )
         return h
 
@@ -244,6 +270,7 @@ class SSMCompanionCache:
         num_tokens: int,
         ssm_states: List[Any],
         is_complete: bool = True,
+        cache_extra_keys: Optional[Any] = None,
     ) -> None:
         """Store SSM layer states for a prompt prefix.
 
@@ -285,8 +312,10 @@ class SSMCompanionCache:
                 self._max_bytes / (1024 * 1024),
             )
             return
-        key = self._key(token_ids, num_tokens)
-        prefix_hash = self._prefix_hash(token_ids, num_tokens)
+        key = self._key(token_ids, num_tokens, cache_extra_keys=cache_extra_keys)
+        prefix_hash = self._prefix_hash(
+            token_ids, num_tokens, cache_extra_keys=cache_extra_keys
+        )
         # Remove existing entry to update its LRU position
         if key in self._store:
             self._drop_key(key)
@@ -347,7 +376,12 @@ class SSMCompanionCache:
                 return None
         return cloned_states
 
-    def _prefix_hash(self, token_ids: List[int], num_tokens: int) -> str:
+    def _prefix_hash(
+        self,
+        token_ids: List[int],
+        num_tokens: int,
+        cache_extra_keys: Optional[Any] = None,
+    ) -> str:
         """Stable family identifier: same sha256 for any (longer) token list
         whose first ``num_tokens`` match. Used to confirm a shorter stored
         checkpoint is a true prefix of the new query before resuming."""
@@ -355,6 +389,7 @@ class SSMCompanionCache:
             self._model_key.encode()
             + b"\x00"
             + json.dumps(token_ids[:num_tokens], separators=(",", ":")).encode()
+            + self._extra_key_bytes(cache_extra_keys)
         )
         return hashlib.sha256(data).hexdigest()
 
@@ -367,7 +402,12 @@ class SSMCompanionCache:
             if not mapping:
                 del self._length_index[length]
 
-    def fetch(self, token_ids: List[int], num_tokens: int) -> SSMCompanionEntry:
+    def fetch(
+        self,
+        token_ids: List[int],
+        num_tokens: int,
+        cache_extra_keys: Optional[Any] = None,
+    ) -> SSMCompanionEntry:
         """Fetch SSM states for a matching prompt prefix.
 
         Returns:
@@ -389,7 +429,7 @@ class SSMCompanionCache:
         """
         if num_tokens <= 0:
             return None
-        key = self._key(token_ids, num_tokens)
+        key = self._key(token_ids, num_tokens, cache_extra_keys=cache_extra_keys)
         entry = self._store.get(key)
         if entry is None:
             logger.info(
@@ -432,7 +472,9 @@ class SSMCompanionCache:
                 self._store[key] = (disk_states, disk_complete)
                 self._entry_nbytes[key] = disk_nbytes
                 self._total_nbytes += disk_nbytes
-                prefix_hash = self._prefix_hash(token_ids, num_tokens)
+                prefix_hash = self._prefix_hash(
+                    token_ids, num_tokens, cache_extra_keys=cache_extra_keys
+                )
                 self._length_index.setdefault(num_tokens, {})[prefix_hash] = key
                 self._evict_if_needed()
                 # Disk fetch already performed deepcopy + materialize. Mirror
@@ -455,7 +497,10 @@ class SSMCompanionCache:
         return (copied, is_complete)
 
     def fetch_longest_prefix(
-        self, token_ids: List[int], max_len: int
+        self,
+        token_ids: List[int],
+        max_len: int,
+        cache_extra_keys: Optional[Any] = None,
     ) -> Optional[Tuple[int, List[Any], bool]]:
         """vmlx#91: find the longest stored checkpoint whose key tokens are
         a prefix of ``token_ids[:max_len]``, allowing the caller to resume
@@ -502,12 +547,14 @@ class SSMCompanionCache:
         # Compute the prefix_hash for each candidate length against the
         # query's own tokens and compare. First match wins.
         for n in candidate_lengths:
-            query_ph = self._prefix_hash(token_ids, n)
+            query_ph = self._prefix_hash(
+                token_ids, n, cache_extra_keys=cache_extra_keys
+            )
             stored_key = self._length_index.get(n, {}).get(query_ph)
             if stored_key is None:
                 continue
             # Delegate to fetch() so deep-copy discipline is uniform.
-            result = self.fetch(token_ids, n)
+            result = self.fetch(token_ids, n, cache_extra_keys=cache_extra_keys)
             if result is None:
                 # deepcopy failed — treat as miss per existing contract
                 continue

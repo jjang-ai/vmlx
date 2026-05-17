@@ -270,6 +270,26 @@ def _is_affine_jang_qwen_hybrid_vlm_path(local_path: str) -> bool:
         return False
 
 
+def _has_native_mtp_vl_artifact(local_path: str) -> bool:
+    """Return True for real artifact-backed Qwen native-MTP VL bundles.
+
+    The runtime may be disabled for an A/B baseline, but VL routing should stay
+    on the same loader so the only comparison variable is MTP drafting.
+    """
+    try:
+        from ..native_mtp import inspect_native_mtp_bundle
+
+        status = inspect_native_mtp_bundle(local_path)
+        return bool(
+            status.get("artifact_available")
+            and status.get("runtime_supported")
+            and status.get("has_vision_config")
+            and status.get("has_vision_weights")
+        )
+    except Exception:
+        return False
+
+
 def _is_mllm_cache_key(model_name: str, local_path: str) -> tuple:
     """Build a cache key that invalidates on config.json / jang_config.json edits."""
     try:
@@ -341,6 +361,13 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     # Resolve HF repo IDs (e.g. "Org/Model") to local cache path so that
     # file-based checks (jang_config.json, config.json) actually find the files.
     local_path = resolve_to_local_path(model_name)
+
+    if _has_native_mtp_vl_artifact(local_path):
+        _logger.info(
+            "is_mllm_model(%s): tier=native_mtp_vl_artifact result=True",
+            model_name,
+        )
+        return True
 
     # Nemotron-3-Nano-Omni: bundle has vision_config (would route through MLLM
     # path → mlx_vlm.get_model_and_args → ValueError "nemotron_h not supported"),

@@ -45,6 +45,8 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.usePagedCache).toBe(true)
     expect(detected.toolParser).toBe('zaya_xml')
     expect(detected.reasoningParser).toBe('qwen3')
+    expect(detected.supportsThinking).toBe(true)
+    expect(detected.thinkInTemplate).toBe(false)
   })
 
   it('detects ZAYA1-VL as multimodal CCA hybrid with qwen3 reasoning parser', () => {
@@ -238,6 +240,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.usePagedCache).toBe(true)
     expect(detected.toolParser).toBe('deepseek')
     expect(detected.reasoningParser).toBeUndefined()
+    expect(detected.supportsThinking).toBe(false)
     expect(detected.isMultimodal).toBe(false)
   })
 
@@ -257,6 +260,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.usePagedCache).toBe(true)
     expect(detected.toolParser).toBe('deepseek')
     expect(detected.reasoningParser).toBeUndefined()
+    expect(detected.supportsThinking).toBe(false)
     expect(detected.isMultimodal).toBe(false)
   })
 
@@ -560,6 +564,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.usePagedCache).toBe(true)
     expect(detected.toolParser).toBe('qwen')
     expect(detected.reasoningParser).toBe('qwen3')
+    expect(detected.supportsThinking).toBeUndefined()
     expect(detected.enableAutoToolChoice).toBe(true)
     expect(detected.isMultimodal).toBe(true)
     expect(detected.isTurboQuant).toBe(true)

@@ -2376,6 +2376,28 @@ class Scheduler:
         except Exception as _dsv4_err:
             logger.debug(f"DSV4 generator detection failed: {_dsv4_err}")
 
+        try:
+            from .native_mtp import model_has_native_mtp_runtime
+
+            if model_has_native_mtp_runtime(self.model):
+                logger.info(
+                    "Native MTP head detected — using mlx_lm.BatchGenerator "
+                    "even with max_num_seqs=1 so the draft/verify runtime and "
+                    "SSM rollback path are active."
+                )
+                return BatchGenerator(
+                    model=self.model,
+                    max_tokens=sampling_params.max_tokens,
+                    stop_tokens=stop_tokens,
+                    sampler=sampler,
+                    logits_processors=None,
+                    prefill_batch_size=self.config.prefill_batch_size,
+                    completion_batch_size=self.config.completion_batch_size,
+                    prefill_step_size=self.config.prefill_step_size,
+                )
+        except Exception as _mtp_gen_err:
+            logger.debug(f"Native MTP generator detection failed: {_mtp_gen_err}")
+
         if int(getattr(self.config, "max_num_seqs", 1) or 1) <= 1:
             logger.info(
                 "max_num_seqs=1 — using vMLX SingleBatchGenerator "

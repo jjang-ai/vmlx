@@ -161,6 +161,10 @@ function isZayaCcaFamily(family?: string): boolean {
     return normalized === 'zaya' || normalized === 'zaya1-vl'
 }
 
+function cacheTypeRequiresPaged(cacheType?: string): boolean {
+    return cacheType === 'hybrid' || cacheType === 'mamba'
+}
+
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 
 function buildCommandPreview(
@@ -209,7 +213,8 @@ function buildCommandPreview(
     const prefixCacheOff = !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
     const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
     const dsv4CompositeRequiresPaged = dsv4Active && !prefixCacheOff
-    const usePagedCache = zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged
+    const nativeCacheRequiresPaged = cacheTypeRequiresPaged(detected?.cacheType) && detected?.usePagedCache === true && !prefixCacheOff
+    const usePagedCache = zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged || nativeCacheRequiresPaged
         ? true
         : (config.usePagedCache ?? detected?.usePagedCache)
 
@@ -640,9 +645,19 @@ describe('KV Cache Quantization', () => {
         expect(perfPanel).toContain('artifact_available')
         expect(perfPanel).toContain('runtime_available')
         expect(perfPanel).toContain('runtime_reason')
+        expect(perfPanel).toContain('effective_depth')
+        expect(perfPanel).toContain('MTP Depth')
+        expect(perfPanel).toContain('runtime_scope')
+        expect(perfPanel).toContain('vl_runtime_available')
+        expect(perfPanel).toContain('mtp_tensor_count')
+        expect(perfPanel).toContain('vision_tensor_count')
+        expect(perfPanel).toContain('MTP Scope')
+        expect(perfPanel).toContain('MTP Tensors')
         expect(perfPanel).toContain('weights present; runtime unwired')
         expect(perfPanel).toContain('not used by JANGTQ')
         expect(perfPanel).toContain('Generic TQ-KV')
+        expect(perfPanel).toContain('Cache Stack')
+        expect(perfPanel).toContain('Cache Components')
         expect(perfPanel).toContain('single_sequence_only')
         expect(perfPanel).toContain('scheduler?:')
         expect(perfPanel).toContain('Queue')
@@ -1076,6 +1091,43 @@ describe('No Hardcoded Values', () => {
 
         expect(hasFlag(out, '--use-paged-cache')).toBe(true)
         expect(getFlagValue(out, '--paged-cache-block-size')).toBe('256')
+    })
+
+    it('detected Qwen3.6 hybrid cache forces paged cache over stale saved false', () => {
+        const out = preview(
+            {
+                enablePrefixCache: true,
+                usePagedCache: false,
+                enableBlockDiskCache: true,
+                cacheMemoryPercent: 15,
+            },
+            {
+                family: 'qwen3.5-moe',
+                cacheType: 'hybrid',
+                usePagedCache: true,
+                isMultimodal: true,
+                reasoningParser: 'qwen3',
+            },
+        )
+
+        expect(hasFlag(out, '--is-mllm')).toBe(true)
+        expect(hasFlag(out, '--use-paged-cache')).toBe(true)
+        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(true)
+        expect(hasFlag(out, '--cache-memory-percent')).toBe(false)
+    })
+
+    it('detected Mamba cache forces paged cache while regular KV respects saved false', () => {
+        const mambaOut = preview(
+            { enablePrefixCache: true, usePagedCache: false },
+            { family: 'qwen3-next', cacheType: 'mamba', usePagedCache: true },
+        )
+        const kvOut = preview(
+            { enablePrefixCache: true, usePagedCache: false },
+            { family: 'qwen3', cacheType: 'kv', usePagedCache: true },
+        )
+
+        expect(hasFlag(mambaOut, '--use-paged-cache')).toBe(true)
+        expect(hasFlag(kvOut, '--use-paged-cache')).toBe(false)
     })
 
     it('changing maxCacheBlocks produces different CLI output', () => {

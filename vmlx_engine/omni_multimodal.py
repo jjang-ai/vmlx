@@ -83,10 +83,13 @@ def omni_multimodal_component_status(model_path: str | Path) -> dict[str, Any]:
     omni_cfg = p / "config_omni.json"
     idx = p / "model.safetensors.index.json"
     radio_cfg = p / "configuration_radio.py"
+    video_processor_cfg = p / "video_preprocessor_config.json"
     status["has_config"] = cfg.is_file()
     status["has_config_omni"] = omni_cfg.is_file()
     status["has_index"] = idx.is_file()
     status["has_radio_config"] = radio_cfg.is_file()
+    status["has_video_preprocessor_config"] = video_processor_cfg.is_file()
+    status["video_bridge_supported"] = False
     for name, present in (
         ("config.json", status["has_config"]),
         ("config_omni.json", status["has_config_omni"]),
@@ -120,7 +123,13 @@ def omni_multimodal_component_status(model_path: str | Path) -> dict[str, Any]:
             for k in key_list
         )
         if status["has_radio_weights"]:
-            status["modalities"].extend(["image", "video"])
+            status["modalities"].append("image")
+            # The current Stage-1 bridge calls processor.video_processor.
+            # Nemotron bundles with only the image processor can still process
+            # images, but advertising video turns into a runtime 500.
+            status["video_bridge_supported"] = bool(status["has_video_preprocessor_config"])
+            if status["video_bridge_supported"]:
+                status["modalities"].append("video")
         if status["has_parakeet_weights"]:
             status["modalities"].append("audio")
         requirements = {
@@ -147,14 +156,24 @@ def is_omni_multimodal_bundle(model_path: str | Path) -> bool:
 
 def request_has_multimodal(messages: List[Dict[str, Any]]) -> bool:
     """True iff any message's content includes image/audio/video parts."""
+    return bool(request_modalities(messages))
+
+
+def request_modalities(messages: List[Dict[str, Any]]) -> set[str]:
+    """Return normalized media modality names used by a chat request."""
+    modalities: set[str] = set()
     for msg in messages or []:
         content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
         if isinstance(content, list):
             for part in content:
                 ptype = part.get("type") if isinstance(part, dict) else getattr(part, "type", None)
-                if ptype in _IMAGE_TYPES or ptype in _AUDIO_TYPES or ptype in _VIDEO_TYPES:
-                    return True
-    return False
+                if ptype in _IMAGE_TYPES:
+                    modalities.add("image")
+                elif ptype in _AUDIO_TYPES:
+                    modalities.add("audio")
+                elif ptype in _VIDEO_TYPES:
+                    modalities.add("video")
+    return modalities
 
 
 def _decode_data_url(data_url: str) -> Tuple[bytes, str]:
@@ -607,8 +626,6 @@ async def dispatch_omni_chat_completion(request, bundle_path: str):
     from fastapi import HTTPException
     from starlette.responses import StreamingResponse
 
-    dispatcher = OmniMultimodalDispatcher.get(bundle_path)
-
     msgs_dump: list[dict] = []
     for m in (request.messages or []):
         if hasattr(m, "model_dump"):
@@ -617,6 +634,22 @@ async def dispatch_omni_chat_completion(request, bundle_path: str):
             msgs_dump.append(m)
         else:
             msgs_dump.append(dict(m))
+
+    status = omni_multimodal_component_status(bundle_path)
+    supported_modalities = set(status.get("modalities") or ["text"])
+    requested_modalities = request_modalities(msgs_dump)
+    unsupported = sorted(requested_modalities - supported_modalities)
+    if unsupported:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Omni bundle does not support requested media modality "
+                f"{', '.join(unsupported)}. Supported modalities: "
+                f"{', '.join(sorted(supported_modalities))}."
+            ),
+        )
+
+    dispatcher = OmniMultimodalDispatcher.get(bundle_path)
 
     _max_tokens = (
         getattr(request, "max_tokens", None)

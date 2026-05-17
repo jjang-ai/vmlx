@@ -33,6 +33,10 @@ function isZayaCcaFamily(family?: string): boolean {
   return normalized === 'zaya' || normalized === 'zaya1-vl'
 }
 
+function cacheTypeRequiresPaged(cacheType?: string): boolean {
+  return cacheType === 'hybrid' || cacheType === 'mamba'
+}
+
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 
 async function applyBundleGenerationDefaults(config: SessionConfig, modelPath: string): Promise<SessionConfig> {
@@ -123,7 +127,8 @@ function buildCommandPreview(
   const prefixCacheOff = !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
   const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
   const dsv4CompositeRequiresPaged = dsv4Active && !prefixCacheOff
-  const usePagedCache = zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged
+  const nativeCacheRequiresPaged = cacheTypeRequiresPaged(detected?.cacheType) && detected?.usePagedCache === true && !prefixCacheOff
+  const usePagedCache = zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged || nativeCacheRequiresPaged
     ? true
     : (config.usePagedCache ?? detected?.usePagedCache)
 

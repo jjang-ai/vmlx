@@ -10,9 +10,11 @@ so existing models on HuggingFace continue to work.
 """
 
 import gc
+import importlib
 import json
 import logging
 import shutil
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -32,7 +34,7 @@ JANG_CONFIG_FILENAMES = [
     "mxq_config.json",
 ]
 JANG_FORMAT_VALUES = ["jang", "jjqf", "mxq"]
-JANG_WEIGHT_FORMAT_VALUES = {"mxtq", "mxfp4"}
+JANG_WEIGHT_FORMAT_VALUES = {"mxtq", "mxfp4", "mxfp8"}
 
 
 def _jang_quant_block_size(jang_cfg: dict, default: int = 64) -> int:
@@ -56,6 +58,28 @@ def _jang_default_bits(jang_cfg: dict, fallback: list[int] | None = None) -> int
     return int(min(bit_widths))
 
 
+def _jang_quant_mode(jang_cfg: dict, config: dict | None = None) -> str:
+    """Return the MLX quantization mode declared by JANG metadata."""
+    cfg_quant = (config or {}).get("quantization") or {}
+    jang_quant = jang_cfg.get("quantization") or {}
+    candidates = (
+        cfg_quant.get("mode"),
+        cfg_quant.get("method"),
+        cfg_quant.get("format"),
+        cfg_quant.get("weight_format"),
+        jang_quant.get("mode"),
+        jang_quant.get("method"),
+        jang_quant.get("format"),
+        jang_quant.get("weight_format"),
+        jang_cfg.get("weight_format"),
+    )
+    for candidate in candidates:
+        value = str(candidate or "").strip().lower()
+        if value in {"mxfp4", "mxfp8"}:
+            return value
+    return "affine"
+
+
 def _vlm_quant_module_path_candidates(module_path: str, model_type: str = "") -> set[str]:
     """Return on-disk quant module paths that may correspond to a VLM module."""
     candidates = {module_path, f"model.{module_path}"}
@@ -63,6 +87,9 @@ def _vlm_quant_module_path_candidates(module_path: str, model_type: str = "") ->
         candidates.add(
             module_path.replace("language_model.model.", "model.language_model.", 1)
         )
+    if module_path.startswith("language_model.mtp."):
+        candidates.add(module_path[len("language_model.") :])
+        candidates.add(f"model.{module_path}")
     if module_path.endswith("lm_head") or "language_model.lm_head" in module_path:
         candidates.add("lm_head")
 
@@ -85,12 +112,62 @@ def _vlm_model_type_from_config(config) -> str:
     return str(getattr(config, "model_type", "") or "").lower()
 
 
+def _resolve_vlm_processor_eos_token_ids(path: Path, model) -> list[int]:
+    """Return deduped VLM EOS ids from generation/config/model metadata."""
+
+    resolved: list[int] = []
+
+    def _add(value) -> None:
+        if value is None:
+            return
+        values = value if isinstance(value, list) else [value]
+        for item in values:
+            try:
+                token_id = int(item)
+            except Exception:
+                continue
+            if token_id not in resolved:
+                resolved.append(token_id)
+
+    try:
+        gen_path = path / "generation_config.json"
+        if gen_path.is_file():
+            _add(json.loads(gen_path.read_text()).get("eos_token_id"))
+    except Exception:
+        pass
+
+    try:
+        cfg_path = path / "config.json"
+        if cfg_path.is_file():
+            cfg = json.loads(cfg_path.read_text())
+            _add(cfg.get("eos_token_id"))
+            text_cfg = cfg.get("text_config")
+            if isinstance(text_cfg, dict):
+                _add(text_cfg.get("eos_token_id"))
+    except Exception:
+        pass
+
+    try:
+        _add(getattr(getattr(model, "config", None), "eos_token_id", None))
+    except Exception:
+        pass
+
+    return resolved
+
+
 def _load_jang_vlm_processor(path: Path, model):
     """Load a VLM processor while preserving local model-family overrides."""
     from mlx_vlm.utils import load_image_processor, load_processor
 
     image_processor = load_image_processor(path)
-    eos_token_id = getattr(model.config, "eos_token_id", None)
+    eos_token_ids = _resolve_vlm_processor_eos_token_ids(path, model)
+    eos_token_id = (
+        eos_token_ids
+        if len(eos_token_ids) > 1
+        else eos_token_ids[0]
+        if eos_token_ids
+        else getattr(model.config, "eos_token_id", None)
+    )
     model_type = _vlm_model_type_from_config(getattr(model, "config", None))
 
     if model_type == "zaya1_vl":
@@ -303,6 +380,126 @@ def _ensure_zaya_runtime_supported(path: Path, jang_cfg: dict) -> None:
             f"to load {path} through a generic JANG path. Original import "
             f"error: {err}"
         ) from err
+
+
+def _config_model_types(config: dict | None) -> set[str]:
+    if not isinstance(config, dict):
+        return set()
+    model_types = {
+        str(config.get("model_type") or "").strip().lower(),
+    }
+    text_config = config.get("text_config")
+    if isinstance(text_config, dict):
+        model_types.add(str(text_config.get("model_type") or "").strip().lower())
+    return {model_type for model_type in model_types if model_type}
+
+
+def _import_required_jang_runtime(
+    module_name: str,
+    *,
+    path: Path,
+    family: str,
+    remediation: str,
+):
+    try:
+        return importlib.import_module(module_name)
+    except Exception as err:
+        raise RuntimeError(
+            f"{family} JANG model at {path} requires runtime module "
+            f"{module_name!r}. {remediation}. Original import error: "
+            f"{type(err).__name__}: {err}"
+        ) from err
+
+
+def _register_bailing_hybrid_from_repo_patch():
+    """Register the vendored Ling/Bailing runtime during source-tree runs.
+
+    Release bundles copy this file into ``mlx_lm.models`` during
+    ``bundle-python.sh``. Source-tree/uv runs do not execute that bundle step,
+    so load the same checked-in file under the exact module name mlx-lm will
+    resolve. Relative imports inside the vendored file then continue to resolve
+    against ``mlx_lm.models``.
+    """
+    module_name = "mlx_lm.models.bailing_hybrid"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+
+    repo_root = Path(__file__).resolve().parents[2]
+    patch_path = repo_root / "panel" / "scripts" / "patches" / "bailing_hybrid.patched.py"
+    if not patch_path.is_file():
+        raise ImportError(f"missing vendored bailing_hybrid patch: {patch_path}")
+
+    spec = importlib.util.spec_from_file_location(module_name, patch_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot create import spec for {patch_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+def _ensure_jang_family_runtime_supported(path: Path, config: dict | None) -> None:
+    """Register non-upstream JANG family runtimes before mlx-lm resolution.
+
+    mlx-lm resolves model classes from ``config.json::model_type`` before
+    weights are loaded. Families such as Hy3 and Ling/Bailing are not covered
+    by older generic mlx-lm/jang wheels, so a stale dev or bundled Python env
+    raises ``ValueError: Model type ... not supported`` late in the load. Fail
+    here with the exact missing runtime and keep Hy3's registration import
+    before ``mlx_lm.models.hy_v3`` is resolved.
+    """
+    model_types = _config_model_types(config)
+
+    if "hy_v3" in model_types:
+        _import_required_jang_runtime(
+            "jang_tools.hy3",
+            path=path,
+            family="Hy3/hy_v3",
+            remediation=(
+                "Install jang>=2.5.29 or bundle the current local "
+                "~/jang/jang-tools checkout"
+            ),
+        )
+        _import_required_jang_runtime(
+            "mlx_lm.models.hy_v3",
+            path=path,
+            family="Hy3/hy_v3",
+            remediation=(
+                "Importing jang_tools.hy3 must register mlx_lm.models.hy_v3; "
+                "use jang>=2.5.29 and do not strip the hy3 runtime from the bundle"
+            ),
+        )
+
+    if "bailing_hybrid" in model_types:
+        try:
+            _import_required_jang_runtime(
+                "mlx_lm.models.bailing_hybrid",
+                path=path,
+                family="Ling/Bailing bailing_hybrid",
+                remediation=(
+                    "Install mlx-lm>=0.31.3 with the vMLX bailing_hybrid "
+                    "vendor file applied by panel/scripts/bundle-python.sh"
+                ),
+            )
+        except RuntimeError as import_err:
+            try:
+                _register_bailing_hybrid_from_repo_patch()
+            except Exception as fallback_err:
+                raise RuntimeError(
+                    f"Ling/Bailing bailing_hybrid JANG model at {path} "
+                    "requires runtime module 'mlx_lm.models.bailing_hybrid'. "
+                    "Install mlx-lm>=0.31.3 and keep the vMLX "
+                    "bailing_hybrid vendor file in panel/scripts/patches/ or "
+                    "re-run panel/scripts/bundle-python.sh so the bundled "
+                    "mlx_lm package contains it. Original import error: "
+                    f"{import_err}; source-tree fallback error: "
+                    f"{type(fallback_err).__name__}: {fallback_err}"
+                ) from fallback_err
 
 
 def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
@@ -774,6 +971,14 @@ def _load_jang_v2(
 
     start = time.perf_counter()
     config = load_config(path)
+    _ensure_jang_family_runtime_supported(path, config)
+
+    try:
+        from ..native_mtp import maybe_apply_native_mtp
+
+        maybe_apply_native_mtp(path, allow_runtime=True)
+    except Exception as _mtp_err:
+        logger.debug(f"Native MTP pre-load autodetect skipped: {_mtp_err}")
 
     # Runtime quantization-shape repair (vmlx#config-repair): some older
     # JANG/JANGTQ converter revisions wrote the wrong per-module
@@ -821,6 +1026,7 @@ def _load_jang_v2(
             if _kk in config and _kk not in _flat:
                 _flat[_kk] = config[_kk]
         config = _flat
+        _ensure_jang_family_runtime_supported(path, config)
 
     # Always read the quantization group size from jang_config (needed by
     # _pre_fix_bits_from_shard and other per-shard fixups). Older sidecars used
@@ -834,6 +1040,7 @@ def _load_jang_v2(
             "group_size": block_size,
             "bits": _jang_default_bits(jang_cfg, [4]),
         }
+    config["quantization"].setdefault("mode", _jang_quant_mode(jang_cfg, config))
 
     # MXTQ / JANGTQ fast path ─────────────────────────────────────────────
     # Detect tq_packed keys in the first shard. If present, delegate loading
@@ -1505,7 +1712,8 @@ def _load_jang_v2(
     _q_cfg = config.get("quantization", {}) if isinstance(config, dict) else {}
     _q_bits = _q_cfg.get("bits", min((jang_cfg.get("quantization") or {}).get("bit_widths_used", [4])))
     _q_gs = _q_cfg.get("group_size", block_size)
-    _upg = _upgrade_modules_with_uint32_weights(model, _q_bits, _q_gs)
+    _q_mode = _q_cfg.get("mode") or _jang_quant_mode(jang_cfg, config)
+    _upg = _upgrade_modules_with_uint32_weights(model, _q_bits, _q_gs, _q_mode)
     if _upg > 0:
         logger.info(
             f"  Upgraded {_upg} modules to Quantized variants (post-load fixup)"
@@ -1593,6 +1801,7 @@ def _load_jang_v2_vlm(
         logger.debug(f"LatentMoE patch skipped: {_lmoe_e}")
 
     config = vlm_load_config(path)
+    _ensure_jang_family_runtime_supported(path, config)
 
     # Runtime quantization-shape repair (vmlx#config-repair). See
     # `_load_jang_v2` for the full rationale.
@@ -1601,6 +1810,25 @@ def _load_jang_v2_vlm(
         config = infer_quant_overrides_for_bundle(path, config)
     except Exception as _qsi_err:
         logger.debug(f"quant_shape_inference (VLM): skipped ({_qsi_err})")
+    if "quantization" not in config:
+        config["quantization"] = {"group_size": block_size, "bits": default_bits}
+    config["quantization"].setdefault("mode", _jang_quant_mode(jang_cfg, config))
+    quant_mode = str(config["quantization"].get("mode") or "affine")
+
+    _native_mtp_vl_ready = False
+    try:
+        from ..native_mtp import inspect_native_mtp_bundle, maybe_apply_native_mtp
+
+        _mtp_status = inspect_native_mtp_bundle(path)
+        _native_mtp_vl_ready = bool(
+            _mtp_status.get("artifact_available")
+            and _mtp_status.get("runtime_supported")
+            and _mtp_status.get("has_vision_config")
+            and _mtp_status.get("has_vision_weights")
+        )
+        maybe_apply_native_mtp(path, allow_runtime=True)
+    except Exception as _mtp_err:
+        logger.debug(f"Native MTP VLM pre-load autodetect skipped: {_mtp_err}")
 
     _tc = config.get("text_config") or {}
     _qwen_types = {
@@ -1644,7 +1872,7 @@ def _load_jang_v2_vlm(
         or "mxtq_bits" in jang_cfg
         or "mxtq_bits" in _quant
     )
-    if _is_qwen_hybrid and _has_media and not _is_mxtq:
+    if _is_qwen_hybrid and _has_media and not _is_mxtq and not _native_mtp_vl_ready:
         logger.warning(
             "  Qwen3.5/3.6 affine-JANG VLM is routed text-only: current "
             "mlx_vlm qwen3_5 M-RoPE text path corrupts logits. MXTQ/JANGTQ "
@@ -1657,6 +1885,11 @@ def _load_jang_v2_vlm(
             jang_cfg,
             skip_eval=skip_eval,
             filter_expert_keys=filter_expert_keys,
+        )
+    if _is_qwen_hybrid and _has_media and not _is_mxtq and _native_mtp_vl_ready:
+        logger.info(
+            "  Qwen3.5/3.6 native-MTP VL artifact detected by tensor metadata; "
+            "using the real mlx-vlm loader with vMLX MTP/VL runtime adapters."
         )
 
     # Mistral 4 VLM fallback: the outer config has model_type=mistral3 (the VLM
@@ -1740,6 +1973,15 @@ def _load_jang_v2_vlm(
     ]
     model_config = update_module_configs(model_config, model_class, config, modules)
     model = model_class.Model(model_config)
+    _is_mxfp_mode = quant_mode in {"mxfp4", "mxfp8"}
+    setattr(model, "_vmlx_norms_are_mlx_ready", _is_mxfp_mode)
+    _lang_for_rope = getattr(model, "language_model", None)
+    if _lang_for_rope is not None:
+        force_text_rope_1d = bool(
+            _is_mxfp_mode
+            or (_native_mtp_vl_ready and _is_qwen_hybrid and _has_media and not _is_mxtq)
+        )
+        setattr(_lang_for_rope, "_vmlx_force_text_rope_1d", force_text_rope_1d)
 
     # Collect all weight keys to determine which layers to quantize
     weight_files = _get_v2_weight_files(path)
@@ -1897,6 +2139,7 @@ def _load_jang_v2_vlm(
         model,
         group_size=block_size,
         bits=default_bits,
+        mode=quant_mode,
         class_predicate=get_class_predicate,
     )
 
@@ -2446,6 +2689,7 @@ def load_jang_vlm_model(
 
     jang_cfg = json.loads(config_path.read_text())
     _ensure_zaya_runtime_supported(path, jang_cfg)
+    _ensure_jang_family_runtime_supported(path, _read_hf_config(path))
     # Modern JANG writers emit {"version": 2, "weight_format": "...", ...} and
     # omit the legacy `format` field entirely. Accept native JANG weight formats
     # in addition to the {"format": "jang"|"jjqf"|"mxq"} legacy envelope.
@@ -2501,6 +2745,7 @@ def load_jang_model(
 
     jang_cfg = json.loads(config_path.read_text())
     _ensure_zaya_runtime_supported(path, jang_cfg)
+    _ensure_jang_family_runtime_supported(path, _read_hf_config(path))
     # Modern JANG writers emit {"version": 2, "weight_format": "...", ...} and
     # omit the legacy `format` field entirely. Accept native JANG weight formats
     # in addition to the {"format": "jang"|"jjqf"|"mxq"} legacy envelope.
@@ -3298,7 +3543,12 @@ def _upgrade_switch_to_quantized(model, bits, group_size):
             setattr(parent, parts[1], ql)
 
 
-def _upgrade_modules_with_uint32_weights(model, default_bits: int, default_group_size: int) -> int:
+def _upgrade_modules_with_uint32_weights(
+    model,
+    default_bits: int,
+    default_group_size: int,
+    default_mode: str = "affine",
+) -> int:
     """Walk the model and replace any nn.Linear / nn.Embedding whose weight is
     uint32 (i.e. JANG-packed quantized) with the matching Quantized variant.
 
@@ -3364,6 +3614,7 @@ def _upgrade_modules_with_uint32_weights(model, default_bits: int, default_group
                     bias=hasattr(module, "bias") and getattr(module, "bias", None) is not None,
                     group_size=gs,
                     bits=bits,
+                    mode=default_mode,
                 )
             else:  # Embedding
                 # Embedding stores (num_embeddings, packed) for QuantizedEmbedding
@@ -3374,6 +3625,7 @@ def _upgrade_modules_with_uint32_weights(model, default_bits: int, default_group
                     dims=emb_dim,
                     group_size=gs,
                     bits=bits,
+                    mode=default_mode,
                 )
             # Move the loaded uint32 weight + scales + biases into the new module
             qmod.weight = w
@@ -3389,6 +3641,11 @@ def _upgrade_modules_with_uint32_weights(model, default_bits: int, default_group
         # Splice into the parent module
         parts = name.rsplit(".", 1)
         if len(parts) != 2:
+            try:
+                setattr(model, name, qmod)
+                upgraded += 1
+            except Exception:
+                continue
             continue
         parent = model
         try:
