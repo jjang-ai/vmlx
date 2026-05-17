@@ -75,6 +75,12 @@ export interface DetectedConfig {
   isMultimodal: boolean
   forceTextOnly?: boolean
   isTurboQuant?: boolean
+  nativeMtp?: {
+    supported: boolean
+    depth: number
+    runtimeScope: 'text' | 'text+vl'
+    requiresDeterministicSampling: boolean
+  }
   description: string
   maxContextLength?: number
 }
@@ -523,6 +529,69 @@ function qwenNativeMtpVlArtifactReady(
   }
 }
 
+function configuredNativeMtpLayers(parsedConfig: any, jangCfg: any): number {
+  const candidates = [
+    parsedConfig?.num_nextn_predict_layers,
+    parsedConfig?.mtp_num_hidden_layers,
+    parsedConfig?.text_config?.num_nextn_predict_layers,
+    parsedConfig?.text_config?.mtp_num_hidden_layers,
+    jangCfg?.runtime?.mtp_layers,
+    jangCfg?.mtp?.num_layers,
+  ]
+  for (const value of candidates) {
+    const n = Number(value)
+    if (Number.isFinite(n) && n > 0) return Math.floor(n)
+  }
+  return 0
+}
+
+function detectNativeMtpCapability(
+  parsedConfig: any,
+  jangCfg: any,
+  modelPath: string,
+): DetectedConfig['nativeMtp'] | undefined {
+  if (!parsedConfig || typeof parsedConfig !== 'object') return undefined
+  if (jangCfg?.drop_mtp === true || jangCfg?.mtp?.enabled === false || jangCfg?.mtp?.kept === false) {
+    return undefined
+  }
+
+  const qwenFamilies = new Set([
+    'qwen3_5',
+    'qwen3_5_text',
+    'qwen3_5_moe',
+    'qwen3_5_moe_text',
+  ])
+  const modelTypes = [
+    parsedConfig.model_type,
+    parsedConfig.text_config?.model_type,
+    jangCfg?.capabilities?.family,
+  ].map(value => String(value || '').toLowerCase())
+  if (!modelTypes.some(value => qwenFamilies.has(value))) return undefined
+
+  if (configuredNativeMtpLayers(parsedConfig, jangCfg) <= 0) return undefined
+
+  try {
+    const raw = readFileSync(join(modelPath, 'model.safetensors.index.json'), 'utf-8')
+    const index = JSON.parse(raw)
+    const weightMap = index?.weight_map
+    if (!weightMap || typeof weightMap !== 'object') return undefined
+    const keys = Object.keys(weightMap)
+    const hasMtp = keys.some(key => /(^|\.)mtp(\.|$)/.test(key))
+    if (!hasMtp) return undefined
+    const hasVisionWeights = keys.some(key =>
+      /(^|\.)(vision_tower|vision_model|visual|patch_embed|multi_modal_projector|mm_projector|image_newline)(\.|$)/.test(key),
+    )
+    return {
+      supported: true,
+      depth: 3,
+      runtimeScope: configDeclaresMedia(parsedConfig) && hasVisionWeights ? 'text+vl' : 'text',
+      requiresDeterministicSampling: true,
+    }
+  } catch {
+    return undefined
+  }
+}
+
 function configDeclaresLinearAttention(config: any): boolean {
   if (!config || typeof config !== 'object') return false
   const containers = [config]
@@ -730,6 +799,10 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
             try {
               const jangCfg = JSON.parse(readFileSync(jangConfigPath, 'utf-8'))
               detected = applyJangCapabilities(detected, jangCfg)
+              const nativeMtp = detectNativeMtpCapability(parsed, jangCfg, modelPath)
+              if (nativeMtp) {
+                detected.nativeMtp = nativeMtp
+              }
               const nativeMtpVlReady = qwenNativeMtpVlArtifactReady(parsed, jangCfg, modelPath)
               if (isAffineJangQwenHybridVlm(parsed, jangCfg) && !nativeMtpVlReady) {
                 detected.forceTextOnly = true

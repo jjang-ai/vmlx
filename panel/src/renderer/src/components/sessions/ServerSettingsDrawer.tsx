@@ -36,6 +36,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
   const [detectedIsMultimodal, setDetectedIsMultimodal] = useState<boolean>(false)
   const [detectedForceTextOnly, setDetectedForceTextOnly] = useState<boolean>(false)
   const [detectedMaxContext, setDetectedMaxContext] = useState<number | undefined>()
+  const [detectedNativeMtp, setDetectedNativeMtp] = useState<any>(undefined)
   const [singleModelMode, setSingleModelMode] = useState(false)
   const restartingRef = useRef(false)
   restartingRef.current = restarting
@@ -60,6 +61,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
           setDetectedIsTurboQuant(!!det?.isTurboQuant)
           setDetectedIsMultimodal(!!det?.isMultimodal)
           setDetectedForceTextOnly(!!det?.forceTextOnly)
+          setDetectedNativeMtp(det?.nativeMtp)
           if (det?.maxContextLength) setDetectedMaxContext(det.maxContextLength)
         })
         .catch((err) => console.error('Failed to detect model config:', err))
@@ -291,7 +293,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
             />
           </div>
         ) : (
-          <SessionConfigForm config={config} onChange={handleChange} detectedCacheType={detectedCacheType} detectedFamily={detectedFamily} detectedIsTurboQuant={detectedIsTurboQuant} detectedIsMultimodal={detectedIsMultimodal} detectedForceTextOnly={detectedForceTextOnly} detectedMaxContext={detectedMaxContext} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} imageMode={(() => { try { return JSON.parse(session.config || '{}').imageMode } catch { return undefined } })()} sessionId={session.id} />
+          <SessionConfigForm config={config} onChange={handleChange} detectedCacheType={detectedCacheType} detectedFamily={detectedFamily} detectedIsTurboQuant={detectedIsTurboQuant} detectedIsMultimodal={detectedIsMultimodal} detectedForceTextOnly={detectedForceTextOnly} detectedMaxContext={detectedMaxContext} detectedNativeMtp={detectedNativeMtp} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} imageMode={(() => { try { return JSON.parse(session.config || '{}').imageMode } catch { return undefined } })()} sessionId={session.id} />
         )}
       </div>
 

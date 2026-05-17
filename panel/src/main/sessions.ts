@@ -111,6 +111,8 @@ const ADDITIONAL_ARG_VALUE_FLAGS = new Set([
   '--mcp-config',
   '--mflux-class',
   '--num-draft-tokens',
+  '--native-mtp-depth',
+  '--native-mtp-sampling-policy',
   '--paged-cache-block-size',
   '--pld-summary-interval',
   '--port',
@@ -187,6 +189,9 @@ const DSV4_ADDITIONAL_ARG_BLOCKLIST = new Set([
   '--cluster-secret',
   '--speculative-model',
   '--num-draft-tokens',
+  '--native-mtp-depth',
+  '--native-mtp-sampling-policy',
+  '--disable-native-mtp',
   '--enable-pld',
   '--pld-summary-interval',
   '--is-mllm',
@@ -1483,6 +1488,7 @@ export class SessionManager extends EventEmitter {
     // to server in the request body (chat.ts:818), so changes take effect immediately.
     'maxTokens', 'maxContextLength', 'mcpConfig', 'servedModelName',
     'speculativeModel', 'numDraftTokens', 'smelt', 'smeltExperts',
+    'nativeMtpMode', 'nativeMtpDepth',
     'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
     'distributedEnabled', 'distributedMode', 'distributedSecret',
     'embeddingModel', 'additionalArgs', 'mfluxClass',
@@ -1628,6 +1634,8 @@ export class SessionManager extends EventEmitter {
           reasoningParser: 'auto',
           dsv4PoolQuant: false,
           defaultEnableThinking: undefined,
+          nativeMtpMode: 'deterministic',
+          nativeMtpDepth: 3,
           enableAutoToolChoice: detected.enableAutoToolChoice
         }
         session = {
@@ -2615,6 +2623,31 @@ export class SessionManager extends EventEmitter {
       }
     }
 
+    // Native in-model MTP. This is separate from external speculative decoding:
+    // Qwen3.6 preserved-MTP bundles carry their own draft head and the current
+    // verified path is deterministic. The default app mode therefore launches
+    // native-MTP bundles with D3 plus deterministic startup sampling so normal
+    // app/API requests actually reach the D3 runtime instead of silently taking
+    // autoregressive decode through generation_config temperature=1.0.
+    const nativeMtp = (detected as any).nativeMtp
+    if (!dsv4Active && nativeMtp?.supported) {
+      const mode = (config as any).nativeMtpMode || 'deterministic'
+      if (mode === 'off') {
+        args.push('--disable-native-mtp')
+      } else {
+        const depth = Math.max(1, Math.min(3, Math.round(Number((config as any).nativeMtpDepth || nativeMtp.depth || 3))))
+        args.push('--native-mtp-depth', depth.toString())
+        args.push('--native-mtp-sampling-policy', mode === 'deterministic' ? 'deterministic-defaults' : 'compatible-only')
+        if (mode === 'deterministic') {
+          args.push('--default-temperature', '0')
+          args.push('--default-top-p', '1')
+          args.push('--default-top-k', '0')
+          args.push('--default-min-p', '0')
+          args.push('--default-repetition-penalty', '1')
+        }
+      }
+    }
+
     // Generation defaults are intentionally not passed as --default-* from the
     // panel. The engine resolves request > explicit API/chat value > bundle
     // jang_config/generation_config > family fallback in vmlx_engine.server.
@@ -2662,6 +2695,29 @@ export class SessionManager extends EventEmitter {
   }
 
   findEnginePath(): EnginePath | null {
+    const findProjectVenvEngine = (): EnginePath | null => {
+      try {
+        const sourceDir = join(__dirname, '..', '..', '..')
+        const venvPython = join(sourceDir, '.venv', 'bin', 'python3')
+        if (!existsSync(venvPython)) return null
+
+        execFileSync(venvPython, ['-B', '-s', '-c', 'import vmlx_engine'], {
+          encoding: 'utf-8',
+          timeout: 10000,
+          env: {
+            ...process.env,
+            PYTHONDONTWRITEBYTECODE: '1',
+            PYTHONNOUSERSITE: '1',
+            PYTHONPATH: '',
+          },
+        })
+        console.log(`[SESSIONS] Using project venv: ${venvPython}`)
+        return { type: 'bundled', pythonPath: venvPython }
+      } catch (_) {
+        return null
+      }
+    }
+
     // Bundled Python: use python3 -m vmlx_engine.cli instead of vmlx-engine binary.
     // This avoids shebang path issues in relocatable Python builds.
     //
@@ -2697,6 +2753,14 @@ export class SessionManager extends EventEmitter {
         return null
       }
       console.log('[SESSIONS] Bundled Python missing vmlx_engine dist-info; trying system (dev mode)')
+    }
+
+    // Development builds must exercise the source tree they were launched
+    // from. Prefer the project venv before any globally installed vmlx-engine,
+    // otherwise UI smoke tests can silently run an old user binary.
+    if (!electronApp.isPackaged) {
+      const projectVenvEngine = findProjectVenvEngine()
+      if (projectVenvEngine) return projectVenvEngine
     }
 
     // System binary search
@@ -2740,28 +2804,6 @@ export class SessionManager extends EventEmitter {
     try {
       const result = execSync('which vmlx-engine', { encoding: 'utf-8', timeout: 3000 }).trim()
       if (result && existsSync(result)) return { type: 'system', binaryPath: result }
-    } catch (_) { }
-
-    // Development fallback: project .venv relative to source directory
-    try {
-      const sourceDir = join(__dirname, '..', '..', '..')
-      const venvPython = join(sourceDir, '.venv', 'bin', 'python3')
-      if (existsSync(venvPython)) {
-        try {
-          execFileSync(venvPython, ['-B', '-s', '-c', 'import vmlx_engine'], {
-            encoding: 'utf-8',
-            timeout: 10000,
-            env: {
-              ...process.env,
-              PYTHONDONTWRITEBYTECODE: '1',
-              PYTHONNOUSERSITE: '1',
-              PYTHONPATH: '',
-            },
-          })
-          console.log(`[SESSIONS] Using project venv: ${venvPython}`)
-          return { type: 'bundled', pythonPath: venvPython }
-        } catch (_) { }
-      }
     } catch (_) { }
 
     return null

@@ -24,6 +24,54 @@ afterEach(() => {
 })
 
 describe('detectModelConfigFromDir JANG multimodal detection', () => {
+  it('marks Qwen3.6 VL JANG bundles with indexed MTP tensors as native MTP capable', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'qwen3_5',
+        vision_config: { model_type: 'qwen3_5_vl' },
+        text_config: {
+          model_type: 'qwen3_5_text',
+          mtp_num_hidden_layers: 1,
+        },
+      },
+      {
+        format: 'jang',
+        runtime: {
+          bundle_has_mtp: true,
+          mtp_layers: 1,
+          mtp_mode: 'preserved_enabled',
+        },
+        mtp: { kept: true, enabled: true, num_layers: 1 },
+        capabilities: {
+          family: 'qwen3_5',
+          modality: 'vision',
+          cache_type: 'hybrid',
+        },
+      },
+    )
+    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
+      weight_map: {
+        'language_model.model.embed_tokens.weight': 'model.safetensors',
+        'vision_tower.patch_embed.proj.weight': 'model.safetensors',
+        'mtp.fc.weight': 'model.safetensors',
+        'mtp.layers.0.self_attn.q_proj.weight': 'model.safetensors',
+        'mtp.norm.weight': 'model.safetensors',
+      },
+    }))
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('qwen3.5')
+    expect(detected.cacheType).toBe('hybrid')
+    expect(detected.isMultimodal).toBe(true)
+    expect(detected.nativeMtp).toMatchObject({
+      supported: true,
+      depth: 3,
+      runtimeScope: 'text+vl',
+      requiresDeterministicSampling: true,
+    })
+  })
+
   it('detects text ZAYA as CCA hybrid with opt-in qwen3 reasoning parser', () => {
     const dir = makeModelDir(
       { model_type: 'zaya' },

@@ -87,6 +87,10 @@ export interface ServerConfig {
   speculativeModel?: string
   numDraftTokens?: number
 
+  // Native in-model MTP (Qwen3.6 preserved-MTP bundles)
+  nativeMtpMode?: 'deterministic' | 'auto' | 'off'
+  nativeMtpDepth?: number
+
   // Generation defaults
   defaultTemperature?: number
   defaultTopP?: number

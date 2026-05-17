@@ -144,6 +144,7 @@ interface HealthData {
     weight_format?: string
     backend?: string
     profile?: string
+    group_size?: number
     mxtq_bits?: number
     mxtq_bits_by_role?: Record<string, number>
     routed_expert_bits?: number
@@ -192,6 +193,8 @@ interface HealthData {
     runtime_reason?: string
     runtime_scope?: string
     vl_runtime_available?: boolean
+    request_policy?: string
+    request_gate?: string
     family?: string | null
     mtp_tensor_count?: number
     vision_tensor_count?: number
@@ -259,10 +262,10 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
             <InfoCard label="Status" value={health.status} />
             <InfoCard label="Engine" value={health.engine_type || 'unknown'} />
             <InfoCard label="Model Type" value={health.model_type || '-'} />
-            {health.quantization_format && (
+            {(health.quantization_format || health.quantization) && (
               <InfoCard
                 label="Weight Quant"
-                value={`${(health.quantization_format.type || 'JANG').toUpperCase()} ${health.quantization_format.actual_bits ?? health.quantization_format.target_bits}-bit`}
+                value={formatWeightQuant(health)}
               />
             )}
             {health.quantization?.codec && (
@@ -335,6 +338,18 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
               <InfoCard
                 label="MTP Scope"
                 value={health.mtp.vl_runtime_available ? health.mtp.runtime_scope : `${health.mtp.runtime_scope} only`}
+              />
+            )}
+            {health.mtp?.request_policy && health.mtp.runtime_available && (
+              <InfoCard
+                label="MTP Policy"
+                value={health.mtp.request_policy === 'deterministic-defaults' ? 'deterministic defaults' : health.mtp.request_policy}
+              />
+            )}
+            {health.mtp?.request_gate && health.mtp.runtime_available && (
+              <InfoCard
+                label="MTP Gate"
+                value={health.mtp.request_gate.replace(',', ', ')}
               />
             )}
             {(health.mtp?.mtp_tensor_count != null || health.mtp?.vision_tensor_count != null) && (
@@ -575,6 +590,28 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
       )}
     </div>
   )
+}
+
+function formatWeightQuant(health: HealthData): string {
+  const q = health.quantization
+  const qf = health.quantization_format
+  const bits =
+    q?.actual_bits ??
+    q?.target_bits ??
+    q?.config_bits ??
+    q?.routed_expert_bits ??
+    q?.mxtq_bits ??
+    qf?.actual_bits ??
+    qf?.target_bits
+  const group = q?.group_size ?? qf?.block_size
+
+  if (q?.profile) return `${q.profile}${bits != null ? ` ${bits}-bit` : ''}${group != null ? ` g${group}` : ''}`
+  if (q?.weight_format) return `${q.weight_format.toUpperCase()}${bits != null ? ` ${bits}-bit` : ''}${group != null ? ` g${group}` : ''}`
+  if (q?.codec === 'turboquant_codebook') {
+    return q.routed_expert_bits_label || `JANGTQ${bits != null ? ` ${bits}-bit` : ''}${group != null ? ` g${group}` : ''}`
+  }
+  if (qf?.type) return `${qf.type.toUpperCase()}${bits != null ? ` ${bits}-bit` : ''}${group != null ? ` g${group}` : ''}`
+  return bits != null ? `${bits}-bit` : 'unknown'
 }
 
 function InfoCard({ label, value }: { label: string; value: string }) {

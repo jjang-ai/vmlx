@@ -170,6 +170,21 @@ def _write_qwen36_jang2k_mtp_bundle(path):
 
 
 class TestNativeMtpAutodetect:
+    def test_cli_exposes_native_mtp_runtime_flags(self):
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [sys.executable, "-m", "vmlx_engine.cli", "serve", "--help"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        assert "--native-mtp-depth" in result.stdout
+        assert "--native-mtp-sampling-policy" in result.stdout
+        assert "--disable-native-mtp" in result.stdout
+
     def test_qwen36_nested_config_and_layered_tensors_are_native_ready(self, tmp_path):
         from vmlx_engine.server import _model_mtp_status
 

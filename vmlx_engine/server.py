@@ -157,6 +157,7 @@ _default_repetition_penalty: float | None = None  # Set via --default-repetition
 _default_enable_thinking: bool | None = (
     None  # Set via --default-enable-thinking or --chat-template-kwargs
 )
+_native_mtp_sampling_policy: str = "compatible-only"
 _default_chat_template_kwargs: dict | None = None  # Set via --chat-template-kwargs
 _custom_chat_template: str | None = None  # Set via --chat-template
 _max_prompt_tokens: int = 0  # Set at startup based on available memory (0 = no limit)
@@ -4287,13 +4288,31 @@ def _model_mtp_status(bundle_path: str | None) -> dict:
 def _model_mtp_status_with_loaded_runtime(bundle_path: str | None) -> dict:
     """MTP artifact status plus the currently loaded runtime activation bit."""
     status = dict(_model_mtp_status(bundle_path))
+    native_disabled = os.environ.get("VMLINUX_NATIVE_MTP", "1") in (
+        "0",
+        "false",
+        "FALSE",
+        "no",
+        "NO",
+        "off",
+        "OFF",
+    )
+    status["request_policy"] = (
+        "disabled" if native_disabled else os.environ.get(
+            "VMLINUX_NATIVE_MTP_SAMPLING_POLICY",
+            _native_mtp_sampling_policy,
+        )
+    )
+    status["request_gate"] = "temperature=0,repetition_penalty=1.0"
     try:
         from .native_mtp import model_has_native_mtp_runtime
 
         model = _get_raw_model_from_engine()
         active = bool(model is not None and model_has_native_mtp_runtime(model))
-        status["runtime_active"] = active
-        if active and status.get("runtime_available"):
+        status["runtime_active"] = False if native_disabled else active
+        if native_disabled and status.get("runtime_available"):
+            status["runtime_reason"] = "native MTP disabled by --disable-native-mtp/VMLINUX_NATIVE_MTP=0"
+        if (not native_disabled) and active and status.get("runtime_available"):
             status["status"] = "native_runtime_active"
             scope = status.get("runtime_scope") or "text"
             status["runtime_reason"] = f"native MTP runtime is active for {scope}"
@@ -13444,6 +13463,24 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--native-mtp-depth",
+        type=int,
+        default=None,
+        help="Depth for native in-model MTP heads on preserved-MTP bundles (1-3).",
+    )
+    parser.add_argument(
+        "--native-mtp-sampling-policy",
+        choices=["compatible-only", "deterministic-defaults"],
+        default="compatible-only",
+        help="Native MTP request policy for startup diagnostics and app defaults.",
+    )
+    parser.add_argument(
+        "--disable-native-mtp",
+        action="store_true",
+        default=False,
+        help="Disable native in-model MTP even when bundle metadata is available.",
+    )
+    parser.add_argument(
         "--default-enable-thinking",
         type=str,
         default=None,
@@ -13475,6 +13512,7 @@ Examples:
     # Set global configuration
     global _api_key, _default_timeout, _rate_limiter
     global _default_temperature, _default_top_p, _default_top_k, _default_min_p, _default_repetition_penalty, _default_enable_thinking
+    global _native_mtp_sampling_policy
     global _inference_endpoints, _wake_timeout
     global _smelt_enabled, _smelt_experts
 
@@ -13501,6 +13539,23 @@ Examples:
         _default_min_p = args.default_min_p
     if getattr(args, "default_repetition_penalty", None) is not None:
         _default_repetition_penalty = args.default_repetition_penalty
+    if getattr(args, "disable_native_mtp", False):
+        os.environ["VMLINUX_NATIVE_MTP"] = "0"
+    if getattr(args, "native_mtp_depth", None) is not None:
+        os.environ["VMLINUX_NATIVE_MTP_DEPTH"] = str(max(1, min(3, int(args.native_mtp_depth))))
+    _native_mtp_sampling_policy = getattr(args, "native_mtp_sampling_policy", "compatible-only")
+    os.environ["VMLINUX_NATIVE_MTP_SAMPLING_POLICY"] = _native_mtp_sampling_policy
+    if _native_mtp_sampling_policy == "deterministic-defaults":
+        if _default_temperature is None:
+            _default_temperature = 0.0
+        if _default_top_p is None:
+            _default_top_p = 1.0
+        if _default_top_k is None:
+            _default_top_k = 0
+        if _default_min_p is None:
+            _default_min_p = 0.0
+        if _default_repetition_penalty is None:
+            _default_repetition_penalty = 1.0
     if args.default_enable_thinking is not None:
         _default_enable_thinking = args.default_enable_thinking == "true"
 

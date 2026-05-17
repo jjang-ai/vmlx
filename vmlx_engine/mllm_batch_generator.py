@@ -4984,8 +4984,8 @@ class MLLMBatchGenerator:
         request._cached_sampler = base_sampler
         return base_sampler
 
-    def _native_mtp_enabled_for_request(self, request: MLLMBatchRequest) -> bool:
-        """Return true when vMLX can run native MTP on this MLLM request."""
+    def _native_mtp_disabled_reason_for_request(self, request: MLLMBatchRequest) -> Optional[str]:
+        """Return a per-request native-MTP gate reason, or None when enabled."""
         if os.environ.get("VMLINUX_NATIVE_MTP", "1") in (
             "0",
             "false",
@@ -4995,14 +4995,32 @@ class MLLMBatchGenerator:
             "off",
             "OFF",
         ):
-            return False
+            return "disabled by VMLINUX_NATIVE_MTP=0/--disable-native-mtp"
         if not _native_mtp_model_has_head(self.language_model):
-            return False
+            return "loaded language model has no native MTP head"
         if float(getattr(request, "temperature", 0.0) or 0.0) != 0.0:
-            return False
+            return f"temperature={getattr(request, 'temperature', None)!r} is not deterministic"
         if float(getattr(request, "repetition_penalty", 1.0) or 1.0) != 1.0:
-            return False
-        return request is not None
+            return f"repetition_penalty={getattr(request, 'repetition_penalty', None)!r} is not 1.0"
+        if request is None:
+            return "request missing"
+        return None
+
+    def _native_mtp_enabled_for_request(self, request: MLLMBatchRequest) -> bool:
+        """Return true when vMLX can run native MTP on this MLLM request."""
+        reason = self._native_mtp_disabled_reason_for_request(request)
+        if reason is None:
+            return True
+        if request is not None:
+            last_reason = getattr(request, "_native_mtp_gate_logged", None)
+            if last_reason != reason:
+                request._native_mtp_gate_logged = reason
+                logger.info(
+                    "MLLM native MTP skipped for request=%s: %s",
+                    getattr(request, "request_id", "unknown"),
+                    reason,
+                )
+        return False
 
     def _step_native_mtp_head(
         self,

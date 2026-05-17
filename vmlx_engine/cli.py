@@ -438,6 +438,28 @@ def serve_command(args):
             sys.exit(1)
         server._default_repetition_penalty = args.default_repetition_penalty
 
+    if getattr(args, "disable_native_mtp", False):
+        os.environ["VMLINUX_NATIVE_MTP"] = "0"
+    if getattr(args, "native_mtp_depth", None) is not None:
+        if args.native_mtp_depth < 1 or args.native_mtp_depth > 3:
+            print(f"Error: --native-mtp-depth must be between 1 and 3, got {args.native_mtp_depth}")
+            sys.exit(1)
+        os.environ["VMLINUX_NATIVE_MTP_DEPTH"] = str(args.native_mtp_depth)
+    if getattr(args, "native_mtp_sampling_policy", None):
+        os.environ["VMLINUX_NATIVE_MTP_SAMPLING_POLICY"] = args.native_mtp_sampling_policy
+        server._native_mtp_sampling_policy = args.native_mtp_sampling_policy
+        if args.native_mtp_sampling_policy == "deterministic-defaults":
+            if server._default_temperature is None:
+                server._default_temperature = 0.0
+            if server._default_top_p is None:
+                server._default_top_p = 1.0
+            if server._default_top_k is None:
+                server._default_top_k = 0
+            if server._default_min_p is None:
+                server._default_min_p = 0.0
+            if server._default_repetition_penalty is None:
+                server._default_repetition_penalty = 1.0
+
     # Apply default enable_thinking
     _det = getattr(args, 'default_enable_thinking', None)
     if _det is not None:
@@ -761,11 +783,35 @@ def serve_command(args):
         print("  Reasoning: Use --reasoning-parser to enable")
     spec_model = getattr(args, 'speculative_model', None)
     if spec_model:
-        print(f"  Speculative decoding: ENABLED")
+        print(f"  External speculative decoding: ENABLED")
         print(f"    Draft model: {spec_model}")
         print(f"    Draft tokens per step: {getattr(args, 'num_draft_tokens', 3)}")
     else:
-        print("  Speculative decoding: Use --speculative-model to enable")
+        print("  External speculative decoding: Use --speculative-model to enable")
+    try:
+        mtp_status = server._model_mtp_status_with_loaded_runtime(args.model)
+        if mtp_status.get("status") and mtp_status.get("status") != "not_configured":
+            if getattr(args, "disable_native_mtp", False):
+                mtp_display = "DISABLED (--disable-native-mtp)"
+            elif mtp_status.get("runtime_active"):
+                mtp_display = "ACTIVE"
+            elif mtp_status.get("runtime_available"):
+                mtp_display = "READY"
+            elif mtp_status.get("artifact_available"):
+                mtp_display = "weights present; runtime unwired"
+            else:
+                mtp_display = str(mtp_status.get("status")).replace("_", " ")
+            depth = mtp_status.get("effective_depth") or getattr(args, "native_mtp_depth", None)
+            depth_suffix = f" D{depth}" if depth else ""
+            scope = mtp_status.get("runtime_scope") or "text"
+            policy = getattr(args, "native_mtp_sampling_policy", "compatible-only")
+            print(f"  Native MTP: {mtp_display}{depth_suffix} (scope: {scope}, policy: {policy})")
+            if policy == "compatible-only" and mtp_status.get("runtime_available"):
+                print("    Request gate: temperature=0 and repetition_penalty=1.0 required")
+            elif policy == "deterministic-defaults" and mtp_status.get("runtime_available"):
+                print("    Startup defaults: temperature=0, top_p=1, top_k=0, min_p=0, repetition=1")
+    except Exception:
+        pass
     if getattr(args, 'chat_template', None):
         print(f"  Chat template: CUSTOM ({len(args.chat_template)} chars)")
     if getattr(args, 'chat_template_kwargs', None):
@@ -2260,6 +2306,29 @@ Examples:
         help="Number of tokens the draft model proposes per speculative decoding step. "
              "Higher values = more potential speedup but lower acceptance rate. "
              "Typical sweet spot is 2-5. (default: 3)",
+    )
+    serve_parser.add_argument(
+        "--native-mtp-depth",
+        type=int,
+        default=None,
+        help="Depth for native in-model MTP heads on preserved-MTP bundles. "
+             "D3 is the current Qwen3.6 default; overridden by VMLX_NATIVE_MTP_DEPTH.",
+    )
+    serve_parser.add_argument(
+        "--native-mtp-sampling-policy",
+        choices=["compatible-only", "deterministic-defaults"],
+        default="compatible-only",
+        help="Native MTP request policy. compatible-only leaves sampling defaults alone and "
+             "uses MTP only for deterministic requests. deterministic-defaults is used by "
+             "the app for native-MTP sessions together with --default-temperature 0, "
+             "--default-top-p 1, --default-top-k 0, --default-min-p 0, and "
+             "--default-repetition-penalty 1.",
+    )
+    serve_parser.add_argument(
+        "--disable-native-mtp",
+        action="store_true",
+        default=False,
+        help="Disable native in-model MTP even when the loaded bundle has MTP tensors.",
     )
 
     # Prompt Lookup Decoding (PLD)

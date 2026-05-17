@@ -46,6 +46,8 @@ export interface SessionConfig {
   servedModelName: string
   speculativeModel: string
   numDraftTokens: number
+  nativeMtpMode?: 'deterministic' | 'auto' | 'off'
+  nativeMtpDepth?: number
   smelt: boolean
   smeltExperts: number
   flashMoe: boolean
@@ -127,6 +129,8 @@ export const DEFAULT_CONFIG: SessionConfig = {
   servedModelName: '',
   speculativeModel: '',
   numDraftTokens: 3,
+  nativeMtpMode: 'deterministic',
+  nativeMtpDepth: 3,
   smelt: false,
   smeltExperts: 50,
   flashMoe: false,
@@ -207,6 +211,13 @@ interface SessionConfigFormProps {
   detectedForceTextOnly?: boolean
   /** Detected model max context length from config.json (max_position_embeddings) */
   detectedMaxContext?: number
+  /** Native MTP capability from config/index metadata */
+  detectedNativeMtp?: {
+    supported?: boolean
+    depth?: number
+    runtimeScope?: string
+    requiresDeterministicSampling?: boolean
+  }
   /** Model type — image models show minimal settings */
   modelType?: 'text' | 'image'
   /** Image mode — 'edit' or 'generate' (only relevant when modelType is 'image') */
@@ -215,7 +226,7 @@ interface SessionConfigFormProps {
   sessionId?: string
 }
 
-export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedFamily, detectedIsTurboQuant, detectedIsMultimodal, detectedForceTextOnly, detectedMaxContext, modelType, imageMode, sessionId }: SessionConfigFormProps) {
+export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedFamily, detectedIsTurboQuant, detectedIsMultimodal, detectedForceTextOnly, detectedMaxContext, detectedNativeMtp, modelType, imageMode, sessionId }: SessionConfigFormProps) {
   const { t } = useTranslation()
   const isImage = modelType === 'image'
   const isImageEdit = isImage && (imageMode === 'edit' || config.imageMode === 'edit')
@@ -230,7 +241,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     power: false,
     performance: false,
     tools: false,
-    specDecode: false
+    specDecode: false,
+    nativeMtp: true,
   })
 
   const [showCachingHelp, setShowCachingHelp] = useState(false)
@@ -263,6 +275,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const effectivePrefillBatchSize = dsv4Active ? 1 : config.prefillBatchSize
   const effectiveCompletionBatchSize = dsv4Active ? 1 : config.completionBatchSize
   const showVideoControls = !dsv4Active && !detectedForceTextOnly && multimodalActive
+  const nativeMtpSupported = !!detectedNativeMtp?.supported
+  const nativeMtpMode = config.nativeMtpMode || DEFAULT_CONFIG.nativeMtpMode || 'deterministic'
+  const nativeMtpDepth = config.nativeMtpDepth || detectedNativeMtp?.depth || DEFAULT_CONFIG.nativeMtpDepth || 3
   const generationDefaultsSummary = [
     (config.defaultMaxNewTokens ?? 0) > 0 ? `max output tokens ${Math.floor(config.defaultMaxNewTokens ?? 0)}` : null,
     config.defaultTemperature > 0 ? `temperature ${(config.defaultTemperature / 100).toFixed(2)}` : null,
@@ -1020,6 +1035,40 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             />
           </>
         )}
+      </Section>
+
+      {/* Native in-model MTP */}
+      <Section title="Native MTP" expanded={expandedSections.nativeMtp} onToggle={() => toggleSection('nativeMtp')} hidden={isImage || dsv4Active || !nativeMtpSupported}>
+        <PerformanceHint text="Uses the model's own preserved MTP heads. Current Qwen3.6 runtime is deterministic: D3 is used when startup defaults are temperature 0, top-p 1, top-k 0, min-p 0, repetition 1." />
+        {nativeMtpMode === 'auto' && (
+          <InfoNote text="Auto mode only activates MTP for API/chat requests that already use deterministic sampling. Sampled requests fall back to autoregressive decode and the server logs the reason." />
+        )}
+        {nativeMtpMode === 'deterministic' && (
+          <InfoNote text={`Default mode applies D${nativeMtpDepth} and deterministic startup sampling so normal app chats actually enter the native MTP path. Explicit API sampling parameters still win per request.`} />
+        )}
+        <SelectField
+          label="Native MTP Mode"
+          tooltip="Deterministic D3 is the production default for preserved-MTP Qwen3.6 bundles. Auto leaves sampling defaults alone and only uses MTP when a request is already compatible. Off disables the in-model MTP runtime."
+          value={nativeMtpMode}
+          onChange={v => onChange('nativeMtpMode', v as 'deterministic' | 'auto' | 'off')}
+          options={[
+            { value: 'deterministic', label: 'Deterministic D3 default' },
+            { value: 'auto', label: 'Auto gate only' },
+            { value: 'off', label: 'Off' },
+          ]}
+        />
+        <SliderField
+          label="Native MTP Depth"
+          tooltip="Number of tokens drafted per native-MTP verification cycle. D3 is the current Qwen3.6 default; lower values are useful for controlled speed/coherency comparisons."
+          value={nativeMtpDepth}
+          onChange={v => onChange('nativeMtpDepth', v)}
+          min={1}
+          max={3}
+          step={1}
+          defaultValue={3}
+          disabled={nativeMtpMode === 'off'}
+        />
+        <InfoNote text={`Detected scope: ${detectedNativeMtp?.runtimeScope || 'text'}. Paged cache remains forced for hybrid cache bundles while prefix cache is enabled so KV blocks and SSM state stay in one cache contract.`} />
       </Section>
 
       {/* Speculative Decoding */}

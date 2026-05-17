@@ -65,6 +65,8 @@ interface SessionConfig {
     defaultRepetitionPenalty: number
     defaultMaxNewTokens?: number
     defaultEnableThinking?: boolean
+    nativeMtpMode?: 'deterministic' | 'auto' | 'off'
+    nativeMtpDepth?: number
     embeddingModel: string
     additionalArgs: string
     enableJit: boolean
@@ -126,6 +128,8 @@ const DEFAULT_CONFIG: SessionConfig = {
     defaultRepetitionPenalty: 0,
     defaultMaxNewTokens: 0,
     defaultEnableThinking: undefined,
+    nativeMtpMode: 'deterministic',
+    nativeMtpDepth: 3,
     embeddingModel: '',
     additionalArgs: '',
     enableJit: true,
@@ -147,6 +151,12 @@ type DetectedConfig = {
     cacheType?: string
     family?: string
     isTurboQuant?: boolean
+    nativeMtp?: {
+        supported?: boolean
+        depth?: number
+        runtimeScope?: string
+        requiresDeterministicSampling?: boolean
+    }
 } | null
 
 function normalizeDetectedFamilyName(family?: string): string | undefined {
@@ -286,6 +296,23 @@ function buildCommandPreview(
         parts.push('--speculative-model', config.speculativeModel)
         if (config.numDraftTokens && config.numDraftTokens !== 3) {
             parts.push('--num-draft-tokens', config.numDraftTokens.toString())
+        }
+    }
+
+    if (detected?.nativeMtp?.supported) {
+        const mode = config.nativeMtpMode || 'deterministic'
+        if (mode === 'off') {
+            parts.push('--disable-native-mtp')
+        } else {
+            parts.push('--native-mtp-depth', String(config.nativeMtpDepth || detected.nativeMtp.depth || 3))
+            parts.push('--native-mtp-sampling-policy', mode === 'deterministic' ? 'deterministic-defaults' : 'compatible-only')
+            if (mode === 'deterministic') {
+                parts.push('--default-temperature', '0')
+                parts.push('--default-top-p', '1')
+                parts.push('--default-top-k', '0')
+                parts.push('--default-min-p', '0')
+                parts.push('--default-repetition-penalty', '1')
+            }
         }
     }
 
@@ -900,6 +927,63 @@ describe('Speculative Decoding', () => {
     it('sets --num-draft-tokens=20 (maximum)', () => {
         const out = preview({ speculativeModel: 'draft-model', numDraftTokens: 20 })
         expect(getFlagValue(out, '--num-draft-tokens')).toBe('20')
+    })
+})
+
+describe('Native MTP', () => {
+    const qwenMtpDetected: DetectedConfig = {
+        family: 'qwen3.5',
+        cacheType: 'hybrid',
+        usePagedCache: true,
+        isMultimodal: true,
+        reasoningParser: 'qwen3',
+        toolParser: 'qwen',
+        enableAutoToolChoice: true,
+        nativeMtp: {
+            supported: true,
+            depth: 3,
+            runtimeScope: 'text+vl',
+            requiresDeterministicSampling: true,
+        },
+    }
+
+    it('defaults native-MTP bundles to deterministic D3 launch settings', () => {
+        const out = preview({}, qwenMtpDetected)
+
+        expect(getFlagValue(out, '--native-mtp-depth')).toBe('3')
+        expect(getFlagValue(out, '--native-mtp-sampling-policy')).toBe('deterministic-defaults')
+        expect(getFlagValue(out, '--default-temperature')).toBe('0')
+        expect(getFlagValue(out, '--default-top-p')).toBe('1')
+        expect(getFlagValue(out, '--default-top-k')).toBe('0')
+        expect(getFlagValue(out, '--default-min-p')).toBe('0')
+        expect(getFlagValue(out, '--default-repetition-penalty')).toBe('1')
+    })
+
+    it('lets users disable native MTP without leaving deterministic sampling overrides behind', () => {
+        const out = preview({ nativeMtpMode: 'off' }, qwenMtpDetected)
+
+        expect(hasFlag(out, '--disable-native-mtp')).toBe(true)
+        expect(hasFlag(out, '--native-mtp-depth')).toBe(false)
+        expect(hasFlag(out, '--default-temperature')).toBe(false)
+    })
+
+    it('keeps non-MTP models on bundle-owned generation defaults', () => {
+        const out = preview({ nativeMtpMode: 'deterministic', nativeMtpDepth: 3 }, { family: 'qwen3.5', cacheType: 'kv' })
+
+        expect(hasFlag(out, '--native-mtp-depth')).toBe(false)
+        expect(hasFlag(out, '--default-temperature')).toBe(false)
+    })
+
+    it('real session launcher and settings form expose native MTP controls', () => {
+        const sessionsSource = readFileSync('src/main/sessions.ts', 'utf8')
+        const formSource = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
+
+        expect(sessionsSource).toContain('--native-mtp-depth')
+        expect(sessionsSource).toContain('--native-mtp-sampling-policy')
+        expect(sessionsSource).toContain('--disable-native-mtp')
+        expect(formSource).toContain('Native MTP')
+        expect(formSource).toContain('nativeMtpMode')
+        expect(formSource).toContain('nativeMtpDepth')
     })
 })
 
@@ -1902,6 +1986,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         'speculativeModel', 'numDraftTokens',
         'smelt', 'smeltExperts', 'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
         'defaultTemperature', 'defaultTopP', 'defaultTopK', 'defaultMinP', 'defaultRepetitionPenalty', 'defaultMaxNewTokens', 'defaultEnableThinking',
+        'nativeMtpMode', 'nativeMtpDepth',
         'embeddingModel', 'additionalArgs',
         'enableJit', 'logLevel', 'corsOrigins', 'maxContextLength',
     ]

@@ -58,6 +58,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
   const [detectedIsMultimodal, setDetectedIsMultimodal] = useState<boolean>(false)
   const [detectedForceTextOnly, setDetectedForceTextOnly] = useState<boolean>(false)
   const [detectedMaxContext, setDetectedMaxContext] = useState<number | undefined>()
+  const [detectedNativeMtp, setDetectedNativeMtp] = useState<any>(undefined)
   const [launching, setLaunching] = useState(false)
   const [launchError, setLaunchError] = useState<string | null>(null)
   const [logs, setLogs] = useState<string[]>([])
@@ -98,6 +99,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
     setDetectedIsTurboQuant(!!detected?.isTurboQuant)
     setDetectedIsMultimodal(!!detected?.isMultimodal)
     setDetectedForceTextOnly(!!detected?.forceTextOnly)
+    setDetectedNativeMtp(detected?.nativeMtp)
     if (detected?.maxContextLength) setDetectedMaxContext(detected.maxContextLength)
   }
 
@@ -188,11 +190,13 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
           setDetectedIsTurboQuant(!!detected.isTurboQuant)
           setDetectedIsMultimodal(!!detected.isMultimodal)
           setDetectedForceTextOnly(!!detected.forceTextOnly)
+          setDetectedNativeMtp(detected.nativeMtp)
         } else {
           setDetectedFamily(undefined)
           setDetectedIsTurboQuant(false)
           setDetectedIsMultimodal(false)
           setDetectedForceTextOnly(false)
+          setDetectedNativeMtp(undefined)
         }
         Object.assign(base, applyGenerationDefaultsToConfig(base, gen))
       } catch (_) {
@@ -200,6 +204,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
         setDetectedIsTurboQuant(false)
         setDetectedIsMultimodal(false)
         setDetectedForceTextOnly(false)
+        setDetectedNativeMtp(undefined)
       }
     }
     setConfig(base)
@@ -803,7 +808,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
             </p>
           </div>
         ) : (
-          <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedCacheType} detectedFamily={detectedFamily} detectedIsTurboQuant={detectedIsTurboQuant} detectedIsMultimodal={detectedIsMultimodal} detectedForceTextOnly={detectedForceTextOnly} detectedMaxContext={detectedMaxContext} />
+          <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedCacheType} detectedFamily={detectedFamily} detectedIsTurboQuant={detectedIsTurboQuant} detectedIsMultimodal={detectedIsMultimodal} detectedForceTextOnly={detectedForceTextOnly} detectedMaxContext={detectedMaxContext} detectedNativeMtp={detectedNativeMtp} />
         )}
 
         {/* Launch */}
