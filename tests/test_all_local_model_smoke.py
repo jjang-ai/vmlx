@@ -222,6 +222,138 @@ def test_summarize_cache_reports_real_hits_and_hybrid_miss_fallbacks():
     assert summary["hybrid_kv_without_ssm_tokens"] == 12
 
 
+def test_validate_probe_response_rejects_dsv4_control_fragment_garbage():
+    mod = load_module()
+
+    failures = mod.validate_probe_response(
+        "text_cache_repeat_1",
+        200,
+        "}<?}<?}<?promcodeline}<?prep}<?",
+        "",
+    )
+
+    reasons = {failure["reason"] for failure in failures}
+    assert "incoherent_visible_text" in reasons
+    assert "expected_ack_missing" in reasons
+
+
+def test_validate_probe_response_accepts_ack_probe():
+    mod = load_module()
+
+    failures = mod.validate_probe_response("text_cache_repeat_2", 200, "ACK", "")
+
+    assert failures == []
+
+
+def test_validate_probe_response_requires_multiturn_recall_terms():
+    mod = load_module()
+
+    failures = mod.validate_probe_response("text_multiturn_recall", 200, "blue", "")
+
+    assert failures == [
+        {
+            "label": "text_multiturn_recall",
+            "reason": "expected_recall_missing",
+            "missing": ["cat"],
+        }
+    ]
+
+
+def test_validate_probe_response_requires_reasoning_visible_final_answer():
+    mod = load_module()
+
+    failures = mod.validate_probe_response("reasoning_on", 200, "I thought about it.", "hidden")
+
+    assert failures == [
+        {
+            "label": "reasoning_on",
+            "reason": "expected_final_ok_missing",
+            "missing": ["FINAL=OK"],
+        }
+    ]
+
+
+def test_validate_probe_response_checks_media_color_and_no_media_carryover():
+    mod = load_module()
+
+    assert mod.validate_probe_response("vl_blue_image", 200, "blue", "") == []
+    assert mod.validate_probe_response("vl_red_image_changed", 200, "red", "") == []
+    assert mod.validate_probe_response("text_no_media_after_image", 200, "No.", "") == []
+
+    failures = mod.validate_probe_response("vl_blue_video", 200, "red", "")
+    assert failures == [
+        {
+            "label": "vl_blue_video",
+            "reason": "expected_color_missing",
+            "expected": "blue",
+        }
+    ]
+
+
+def test_collect_probe_failures_uses_semantic_validation():
+    mod = load_module()
+    requests = [
+        {
+            "label": "text_cache_repeat_1",
+            "code": 200,
+            "content": "}<?}<?codeline}<?",
+            "reasoning_chars": 0,
+        },
+        {
+            "label": "text_cache_repeat_2",
+            "code": 200,
+            "content": "ACK",
+            "reasoning_chars": 0,
+        },
+    ]
+
+    failures = mod.collect_probe_failures(requests)
+
+    assert len(failures) == 2
+    assert {failure["reason"] for failure in failures} == {
+        "incoherent_visible_text",
+        "expected_ack_missing",
+    }
+
+
+def test_main_returns_nonzero_when_any_model_probe_fails(monkeypatch, tmp_path):
+    mod = load_module()
+    row = {
+        "path": str(tmp_path / "DeepSeek-V4-Flash-JANG_2L-MTP"),
+        "served_name": "deepseek-v4-flash-jang-2l-mtp",
+        "name": "DeepSeek-V4-Flash-JANG_2L-MTP",
+        "model_type": "deepseek_v4",
+        "namespace": "JANGQ",
+        "is_mllm": False,
+        "supports_video": False,
+        "supports_thinking": True,
+    }
+    monkeypatch.setattr(mod, "discover_model_dirs", lambda _root: [row])
+    monkeypatch.setattr(
+        mod,
+        "run_model_row",
+        lambda *args, **kwargs: {
+            "row": row,
+            "status": "probe_failed",
+            "failures": [{"label": "text_cache_repeat_1", "reason": "incoherent_visible_text"}],
+        },
+    )
+    monkeypatch.setattr(
+        mod.sys,
+        "argv",
+        [
+            "all_local_model_smoke.py",
+            "--models-root",
+            str(tmp_path),
+            "--out",
+            str(tmp_path / "out"),
+            "--no-media",
+        ],
+    )
+
+    assert mod.main() == 1
+
+
 def test_probe_options_obey_live_text_only_capabilities():
     mod = load_module()
     row = {"is_mllm": True, "supports_video": True}

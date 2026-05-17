@@ -477,6 +477,101 @@ def extract_text(resp: Any) -> tuple[str, str, dict[str, Any]]:
     return "", "", usage
 
 
+_CONTROL_FRAGMENT_RE = re.compile(r"(?:}<\?|<\?){2,}")
+_TEMPLATE_FRAGMENT_RE = re.compile(
+    r"(?i)(?:^|[^a-z0-9_])(?:codeline|promcodeline|prep|instructions)(?:[^a-z0-9_]|$)"
+)
+
+
+def _word_set(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def validate_probe_response(
+    label: str,
+    code: int,
+    content: str,
+    reasoning: str = "",
+) -> list[dict[str, Any]]:
+    """Apply semantic gates so nonempty incoherent output cannot pass."""
+    visible = str(content or "")
+    stripped = visible.strip()
+    failures: list[dict[str, Any]] = []
+    if code != 200:
+        failures.append({"label": label, "reason": "http_status", "code": code})
+    if not stripped:
+        failures.append(
+            {
+                "label": label,
+                "reason": "empty_visible",
+                "reasoning_chars": len(str(reasoning or "")),
+            }
+        )
+        return failures
+
+    control_fragments = len(re.findall(r"}<\?|<\?", stripped))
+    if control_fragments >= 2 or _CONTROL_FRAGMENT_RE.search(stripped) or _TEMPLATE_FRAGMENT_RE.search(stripped):
+        failures.append(
+            {
+                "label": label,
+                "reason": "incoherent_visible_text",
+                "content_head": stripped[:160],
+            }
+        )
+
+    lower = stripped.lower()
+    compact_lower = re.sub(r"\s+", "", lower)
+    words = _word_set(stripped)
+    if label.startswith("text_cache_repeat") and "ack" not in words:
+        failures.append({"label": label, "reason": "expected_ack_missing", "missing": ["ACK"]})
+    elif label == "text_multiturn_recall":
+        missing = [term for term in ("blue", "cat") if term not in words]
+        if missing:
+            failures.append(
+                {
+                    "label": label,
+                    "reason": "expected_recall_missing",
+                    "missing": missing,
+                }
+            )
+    elif label == "reasoning_on":
+        has_final_ok = "final=ok" in compact_lower or ("final" in words and "ok" in words)
+        if not has_final_ok:
+            failures.append(
+                {
+                    "label": label,
+                    "reason": "expected_final_ok_missing",
+                    "missing": ["FINAL=OK"],
+                }
+            )
+    elif label in {"vl_blue_image", "vl_blue_image_repeat", "vl_blue_video"}:
+        if "blue" not in words:
+            failures.append({"label": label, "reason": "expected_color_missing", "expected": "blue"})
+    elif label == "vl_red_image_changed":
+        if "red" not in words:
+            failures.append({"label": label, "reason": "expected_color_missing", "expected": "red"})
+    elif label in {"text_no_media_after_image", "text_no_media_after_video"}:
+        says_no = "no" in words or "do not" in lower or "don't" in lower
+        if not says_no:
+            failures.append({"label": label, "reason": "expected_no_media_missing", "expected": "no"})
+    return failures
+
+
+def collect_probe_failures(requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    failures: list[dict[str, Any]] = []
+    for req in requests:
+        label = str(req.get("label") or "unknown")
+        code = int(req.get("code") or 0)
+        content = str(req.get("content") or "")
+        reasoning = str(req.get("reasoning") or req.get("reasoning_head") or "")
+        for failure in validate_probe_response(label, code, content, reasoning):
+            failure.setdefault("content_head", req.get("content_head", content[:280]))
+            if "reasoning_chars" not in failure and "reasoning_chars" in req:
+                failure["reasoning_chars"] = req["reasoning_chars"]
+            failures.append(failure)
+    return failures
+
+
 def write_json(path: Path, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -646,6 +741,9 @@ def run_model_row(
                 "cache_stats_code": code_stats,
                 "cache_summary": summarize_cache(cache_stats),
             }
+            request_record["validation_failures"] = validate_probe_response(
+                label, code, content, reasoning
+            )
             result["requests"].append(request_record)
             write_json(
                 row_dir / f"{sanitize_name(label)}.json",
@@ -661,17 +759,7 @@ def run_model_row(
         code_cache, cache_after, _ = request_json("GET", f"{base_url}/v1/cache/stats", timeout=30.0)
         result["health_after"] = {"code": code, "body": health_after}
         result["cache_after"] = {"code": code_cache, "body": cache_after, "summary": summarize_cache(cache_after)}
-        failures = [
-            {
-                "label": req["label"],
-                "reason": "http_or_empty_visible",
-                "code": req["code"],
-                "content_head": req["content_head"],
-                "reasoning_chars": req["reasoning_chars"],
-            }
-            for req in result["requests"]
-            if req["code"] != 200 or not str(req["content"]).strip()
-        ]
+        failures = collect_probe_failures(result["requests"])
         result["status"] = "pass" if not failures else "probe_failed"
         result["failures"] = failures
         result["server_log_tail"] = log_path.read_text(errors="replace")[-6000:]
@@ -767,6 +855,7 @@ def main() -> int:
         return 0
 
     results = []
+    any_failed = False
     for index, row in enumerate(rows):
         result = run_model_row(
             row,
@@ -779,6 +868,8 @@ def main() -> int:
             include_video=not args.no_video,
         )
         results.append(result)
+        if result.get("status") != "pass":
+            any_failed = True
         write_json(
             out_root / "summary.json",
             {
@@ -799,7 +890,7 @@ def main() -> int:
             ),
             flush=True,
         )
-    return 0
+    return 1 if any_failed else 0
 
 
 if __name__ == "__main__":

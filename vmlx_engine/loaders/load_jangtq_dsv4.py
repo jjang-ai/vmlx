@@ -82,6 +82,32 @@ def _is_dsv4_bundle(model_path: str | Path) -> bool:
     return cfg.get("model_type") == "deepseek_v4"
 
 
+def _dsv4_uses_jangtq_hydration(model_path: str | Path) -> bool:
+    """Return True only for DSV4 artifacts that need TurboQuant hydration."""
+    bundle = Path(model_path)
+    config = _read_json(bundle / "config.json")
+    jang = _read_json(bundle / "jang_config.json")
+    formats = {
+        str(value or "").strip().lower()
+        for value in (
+            config.get("weight_format"),
+            jang.get("weight_format"),
+            (config.get("quantization") or {}).get("weight_format"),
+            (jang.get("quantization") or {}).get("weight_format"),
+            (config.get("quantization") or {}).get("method"),
+            (jang.get("quantization") or {}).get("method"),
+        )
+    }
+    if formats & {"mxtq", "jangtq"}:
+        return True
+    if (bundle / "jangtq_runtime.safetensors").is_file():
+        return True
+    try:
+        return any(key.endswith(".tq_packed") for key in _dsv4_weight_map(bundle))
+    except Exception:
+        return False
+
+
 def _dsv4_weight_map(model_path: str | Path) -> dict[str, str]:
     """Return tensor-key -> safetensors filename for a DSV4 bundle."""
     bundle = Path(model_path)
@@ -1201,19 +1227,34 @@ def load_jangtq_dsv4_model(model_path: str, *, skip_params_eval: bool = True) ->
     # Eagerly register mlx_lm.models.deepseek_v4 so the underlying loader
     # can resolve the model_type. Safe to call multiple times (idempotent).
     from jang_tools.dsv4 import mlx_register  # noqa: F401
-    from jang_tools.load_jangtq import load_jangtq_model
 
     # Verify the native JANG DSV4 attention contract BEFORE the model gets
     # called for warmup/inference.
     _verify_dsv4_attention_contract()
 
-    # Install the instant-load patch BEFORE the underlying loader runs so
-    # the sidecar fast-path can short-circuit the 129-group streaming hydrate
-    # on subsequent launches.
-    _install_dsv4_instant_load_patch()
+    if _dsv4_uses_jangtq_hydration(model_path):
+        from jang_tools.load_jangtq import load_jangtq_model
 
-    model, tokenizer = load_jangtq_model(model_path, skip_params_eval=skip_params_eval)
-    _audit_dsv4_switchglu_contract(model)
+        # Install the instant-load patch BEFORE the underlying loader runs so
+        # the sidecar fast-path can short-circuit the 129-group streaming hydrate
+        # on subsequent launches.
+        _install_dsv4_instant_load_patch()
+
+        model, tokenizer = load_jangtq_model(
+            model_path, skip_params_eval=skip_params_eval
+        )
+        _audit_dsv4_switchglu_contract(model)
+    else:
+        _log.info(
+            "DSV4 affine/MXFP JANG bundle detected — using affine JANG "
+            "hydration under the DSV4 runtime wrapper."
+        )
+        from ..utils.jang_loader import load_jang_model
+
+        model, tokenizer = load_jang_model(
+            model_path,
+            skip_eval=skip_params_eval,
+        )
 
     # 2026-05-03 (F17): install canonical-encoder shim on
     # tokenizer.apply_chat_template. The bundle ships a Jinja chat_template

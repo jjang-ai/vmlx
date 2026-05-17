@@ -934,15 +934,9 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
             _inject_chat_template_if_missing(_t, local_model_path)
             return _m, _t
 
-        # Route DeepSeek V4 bundles to the dedicated JANGTQ-DSV4 loader.
-        # DSV4-Flash bundles ship `weight_format=bf16` (NOT mxtq) plus a
-        # `jangtq_runtime.safetensors` sidecar with the quantization
-        # codebooks. The generic JANG text loader rejects this layout
-        # ("missing 'format'/'weight_format'"). The dedicated loader at
-        # `vmlx_engine.loaders.load_jangtq_dsv4` delegates to
-        # `jang_tools.load_jangtq.load_jangtq_model` which knows how to
-        # ingest bf16 weights + the JANGTQ runtime sidecar and registers
-        # the deepseek_v4 model class via `jang_tools.dsv4.mlx_register`.
+        # Route DeepSeek V4 bundles to the dedicated DSV4 runtime wrapper.
+        # The wrapper keeps DSV4_LONG_CTX/pool/chat safeguards centralized,
+        # then chooses affine JANG vs JANGTQ hydration by artifact evidence.
         _is_dsv4_bundle = False
         try:
             import json as _json
@@ -955,7 +949,7 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
                     _is_dsv4_bundle = True
                     logger.info(
                         f"DSV4 bundle detected — routing through "
-                        f"load_jangtq_dsv4 instead of generic JANG loader."
+                        f"load_jangtq_dsv4 runtime wrapper."
                     )
                     from ..loaders.load_jangtq_dsv4 import load_jangtq_dsv4_model
                     _m, _t = load_jangtq_dsv4_model(

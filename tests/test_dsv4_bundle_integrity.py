@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -204,6 +205,60 @@ def test_dsv4_control_tensor_validator_skips_non_dsv4(tmp_path):
     _validate_dsv4_control_tensors(bundle)
     report = _audit_dsv4_control_tensor_dtypes(bundle)
     assert report["checked"] is False
+
+
+def test_dsv4_hydration_mode_separates_affine_from_jangtq(tmp_path):
+    from vmlx_engine.loaders.load_jangtq_dsv4 import (
+        _dsv4_uses_jangtq_hydration,
+    )
+
+    affine = tmp_path / "affine"
+    affine.mkdir()
+    (affine / "config.json").write_text(
+        json.dumps({"model_type": "deepseek_v4", "weight_format": "affine"})
+    )
+    (affine / "jang_config.json").write_text(
+        json.dumps({"weight_format": "affine"})
+    )
+
+    tq = _write_dsv4_tq_artifact(tmp_path / "tq")
+
+    assert _dsv4_uses_jangtq_hydration(affine) is False
+    assert _dsv4_uses_jangtq_hydration(tq) is True
+
+
+def test_dsv4_affine_loader_uses_generic_jang_hydration(monkeypatch, tmp_path):
+    import vmlx_engine.loaders.load_jangtq_dsv4 as loader
+    import vmlx_engine.utils.jang_loader as jang_loader
+
+    bundle = tmp_path / "DeepSeek-V4-Flash-JANG_2L-MTP"
+    bundle.mkdir()
+    (bundle / "config.json").write_text(
+        json.dumps({"model_type": "deepseek_v4", "weight_format": "affine"})
+    )
+    (bundle / "jang_config.json").write_text(
+        json.dumps({"weight_format": "affine"})
+    )
+    expected = (object(), SimpleNamespace(apply_chat_template=lambda *a, **k: []))
+    calls = []
+
+    monkeypatch.setattr(loader, "_validate_dsv4_control_tensors", lambda path: None)
+    monkeypatch.setattr(loader, "_verify_dsv4_attention_contract", lambda: None)
+    monkeypatch.setattr(loader, "_install_dsv4_memory_defaults", lambda: None)
+    monkeypatch.setattr(
+        loader, "_configure_dsv4_pool_quant_default", lambda: "0"
+    )
+    monkeypatch.setattr(
+        jang_loader,
+        "load_jang_model",
+        lambda path, **kwargs: calls.append((path, kwargs)) or expected,
+    )
+
+    loaded = loader.load_jangtq_dsv4_model(str(bundle), skip_params_eval=True)
+
+    assert loaded[0] is expected[0]
+    assert loaded[1] is expected[1]
+    assert calls == [(str(bundle), {"skip_eval": True})]
 
 
 def test_dsv4_artifact_bit_plan_audit_reads_actual_tq_bits_and_sidecar(tmp_path):

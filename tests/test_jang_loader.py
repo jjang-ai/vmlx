@@ -28,6 +28,48 @@ class TestJangDetection:
         from vmlx_engine.utils.jang_loader import is_jang_model
         assert is_jang_model("/this/does/not/exist") is False
 
+    def test_load_jang_model_accepts_affine_weight_format(
+        self, tmp_path, monkeypatch
+    ):
+        from vmlx_engine.utils import jang_loader
+
+        (tmp_path / "config.json").write_text('{"model_type":"deepseek_v4"}')
+        (tmp_path / "jang_config.json").write_text(
+            '{"version":2,"weight_format":"affine","quantization":{}}'
+        )
+        expected = (object(), object())
+
+        monkeypatch.setattr(jang_loader, "_is_v2_model", lambda path: True)
+        monkeypatch.setattr(
+            jang_loader,
+            "_load_jang_v2",
+            lambda path, jang_cfg, **kwargs: expected,
+        )
+        monkeypatch.setattr(
+            jang_loader,
+            "_ensure_jang_family_runtime_supported",
+            lambda path, config: None,
+        )
+
+        assert jang_loader.load_jang_model(tmp_path, skip_eval=True) is expected
+
+    def test_jang_routed_group_size_reads_nested_mixed_affine_metadata(self):
+        from vmlx_engine.utils.jang_loader import _jang_routed_expert_group_size
+
+        assert (
+            _jang_routed_expert_group_size(
+                {
+                    "quantization": {
+                        "top_level_default": {"bits": 2, "group_size": 128},
+                        "routed_experts": {"bits": 2, "group_size": 128},
+                        "non_routed": {"bits": 8, "group_size": 64},
+                    }
+                },
+                default=64,
+            )
+            == 128
+        )
+
 
 class TestTreeFlattenImport:
     """Verify the tree_flatten fix uses correct import path."""
@@ -237,6 +279,135 @@ class TestPreFixBitsFromShard:
         assert model.layer.bits == 4
 
 
+class TestQuantShapeInference:
+    def test_deepseek_v4_adds_sanitized_quant_aliases_for_jang_keys(self, tmp_path):
+        import numpy as np
+        from safetensors.numpy import save_file
+
+        from vmlx_engine.utils.quant_shape_inference import (
+            infer_quant_overrides_for_bundle,
+        )
+
+        def qweight(out_features: int, in_features: int, bits: int):
+            return np.zeros(
+                (out_features, in_features * bits // 32), dtype=np.uint32
+            )
+
+        def scales(out_features: int, in_features: int, group_size: int):
+            return np.ones(
+                (out_features, in_features // group_size), dtype=np.float16
+            )
+
+        save_file(
+            {
+                "embed.weight": qweight(8, 64, 8),
+                "embed.scales": scales(8, 64, 64),
+                "head.weight": qweight(8, 64, 8),
+                "head.scales": scales(8, 64, 64),
+                "layers.0.attn.wkv.weight": qweight(8, 64, 8),
+                "layers.0.attn.wkv.scales": scales(8, 64, 64),
+                "layers.0.ffn.shared_experts.w1.weight": qweight(8, 64, 8),
+                "layers.0.ffn.shared_experts.w1.scales": scales(8, 64, 64),
+            },
+            str(tmp_path / "model.safetensors"),
+        )
+        config = {
+            "model_type": "deepseek_v4",
+            "quantization": {
+                "bits": 2,
+                "group_size": 128,
+                "embed": {"bits": 8, "group_size": 64},
+                "head": {"bits": 8, "group_size": 64},
+                "layers.0.attn.wkv": {"bits": 8, "group_size": 64},
+                "layers.0.ffn.shared_experts.w1": {
+                    "bits": 8,
+                    "group_size": 64,
+                },
+            },
+        }
+
+        patched = infer_quant_overrides_for_bundle(tmp_path, config)
+        qcfg = patched["quantization"]
+
+        assert qcfg["model.embed"] == {"bits": 8, "group_size": 64}
+        assert qcfg["lm_head"] == {"bits": 8, "group_size": 64}
+        assert qcfg["model.layers.0.self_attn.wkv"] == {
+            "bits": 8,
+            "group_size": 64,
+        }
+        assert qcfg[
+            "model.layers.0.mlp.shared_experts.gate_proj"
+        ] == {"bits": 8, "group_size": 64}
+
+
+class TestDeepseekV4ShardExpertStacking:
+    def test_stages_dsv4_routed_experts_across_shards(self):
+        import mlx.core as mx
+
+        from vmlx_engine.utils import jang_loader
+
+        pending = {}
+        shard_a = {
+            "layers.0.ffn.experts.0.w1.weight": mx.array([[1]], dtype=mx.uint32),
+            "layers.0.ffn.experts.0.w1.scales": mx.array([[1.0]], dtype=mx.float16),
+            "layers.0.attn_norm.weight": mx.array([1.0], dtype=mx.float16),
+        }
+        non_expert_a, expert_a = jang_loader._split_dsv4_routed_expert_weights(
+            shard_a
+        )
+
+        assert list(non_expert_a) == ["layers.0.attn_norm.weight"]
+        jang_loader._stage_dsv4_routed_expert_weights(pending, expert_a)
+        assert jang_loader._pop_complete_dsv4_routed_expert_stacks(
+            pending, n_experts=2
+        ) == {}
+
+        shard_b = {
+            "layers.0.ffn.experts.1.w1.weight": mx.array([[2]], dtype=mx.uint32),
+            "layers.0.ffn.experts.1.w1.scales": mx.array([[2.0]], dtype=mx.float16),
+        }
+        _non_expert_b, expert_b = jang_loader._split_dsv4_routed_expert_weights(
+            shard_b
+        )
+        jang_loader._stage_dsv4_routed_expert_weights(pending, expert_b)
+
+        ready = jang_loader._pop_complete_dsv4_routed_expert_stacks(
+            pending, n_experts=2
+        )
+
+        assert set(ready) == {
+            "model.layers.0.mlp.switch_mlp.gate_proj.weight",
+            "model.layers.0.mlp.switch_mlp.gate_proj.scales",
+        }
+        assert ready[
+            "model.layers.0.mlp.switch_mlp.gate_proj.weight"
+        ].tolist() == [[[1]], [[2]]]
+        assert pending == {}
+
+    def test_dsv4_regular_sanitize_keeps_rmsnorm_weights_unshifted(self):
+        import mlx.core as mx
+
+        from vmlx_engine.utils import jang_loader
+
+        weights = {
+            "model.layers.0.input_layernorm.weight": mx.array([0.125], dtype=mx.float16),
+            "model.layers.0.post_attention_layernorm.weight": mx.array([0.25], dtype=mx.float16),
+            "model.layers.0.self_attn.q_norm.weight": mx.array([0.5], dtype=mx.float16),
+            "model.layers.0.self_attn.k_norm.weight": mx.array([0.75], dtype=mx.float16),
+            "model.norm.weight": mx.array([1.0], dtype=mx.float16),
+            "model.layers.0.self_attn.wq_a.weight": mx.array([[1]], dtype=mx.uint32),
+        }
+
+        fixed = jang_loader._sanitize_deepseek_v4_regular_layout(weights)
+
+        assert fixed["model.layers.0.input_layernorm.weight"].tolist() == [0.125]
+        assert fixed["model.layers.0.post_attention_layernorm.weight"].tolist() == [0.25]
+        assert fixed["model.layers.0.self_attn.q_norm.weight"].tolist() == [0.5]
+        assert fixed["model.layers.0.self_attn.k_norm.weight"].tolist() == [0.75]
+        assert fixed["model.norm.weight"].tolist() == [1.0]
+        assert fixed["model.layers.0.self_attn.wq_a.weight"].tolist() == [[1]]
+
+
 class TestQwen3NextConv1dLayout:
     """Qwen3-Next/GatedDeltaNet conv1d weights must load in MLX Conv1d layout."""
 
@@ -414,11 +585,21 @@ class TestBailingHybridFlatSwitchMlpRepair:
     elements match exactly so the data is byte-identical.
     """
 
+    def _bailing_model_classes(self):
+        from vmlx_engine.utils.jang_loader import (
+            _register_bailing_hybrid_from_repo_patch,
+        )
+
+        _register_bailing_hybrid_from_repo_patch()
+        from mlx_lm.models.bailing_hybrid import Model, ModelArgs
+
+        return Model, ModelArgs
+
     def test_sanitize_repairs_flat_2d_switch_mlp_to_3d(self):
         # Build a tiny bailing_hybrid model fixture with feeding flat 2D
         # switch_mlp tensors and confirm sanitize emits 3D output.
         import mlx.core as mx
-        from mlx_lm.models.bailing_hybrid import Model, ModelArgs
+        Model, ModelArgs = self._bailing_model_classes()
         # Tiny config (4 layers, 4 experts) sized to match real Ling axis ratios:
         # hidden=64, moe_intermediate=16. Per-expert weight (out=16, in=64), 4-bit
         # packed → packed_in_per_row = 64 * 4 / 32 = 8 → 3D (n_exp=4, 16, 8).
@@ -462,7 +643,7 @@ class TestBailingHybridFlatSwitchMlpRepair:
     def test_sanitize_no_op_on_correct_3d_shape(self):
         # JANGTQ bundles ship 3D already; sanitize must not touch them.
         import mlx.core as mx
-        from mlx_lm.models.bailing_hybrid import Model, ModelArgs
+        Model, ModelArgs = self._bailing_model_classes()
         args = ModelArgs(
             model_type='bailing_hybrid', hidden_size=64, intermediate_size=128,
             moe_intermediate_size=16, num_experts=4, num_shared_experts=1,
@@ -488,7 +669,7 @@ class TestBailingHybridFlatSwitchMlpRepair:
         and consume the split keys instead of relying on strict=False.
         """
         import mlx.core as mx
-        from mlx_lm.models.bailing_hybrid import Model, ModelArgs
+        Model, ModelArgs = self._bailing_model_classes()
 
         args = ModelArgs(
             model_type='bailing_hybrid', hidden_size=128, intermediate_size=256,
@@ -534,7 +715,7 @@ class TestBailingHybridFlatSwitchMlpRepair:
         skips MTP, so sanitizer removes the absent tail modules before strict
         weight loading.
         """
-        from mlx_lm.models.bailing_hybrid import Model, ModelArgs
+        Model, ModelArgs = self._bailing_model_classes()
 
         args = ModelArgs(
             model_type='bailing_hybrid', hidden_size=64, intermediate_size=128,

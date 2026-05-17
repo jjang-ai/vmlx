@@ -4368,6 +4368,37 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
             "metadata; vMLX applies a runtime grouped-Conv1d layout backstop, "
             "but direct mlx_lm users should re-convert with a newer jang build."
         )
+    routed_experts_cfg = (
+        q_jang.get("routed_experts")
+        if isinstance(q_jang.get("routed_experts"), dict)
+        else {}
+    )
+    runtime_cfg = (
+        jang_cfg.get("runtime")
+        if isinstance(jang_cfg.get("runtime"), dict)
+        else {}
+    )
+    affine_dsv4_routed = (
+        "deepseek_v4" in model_types
+        and codec == "affine_quantized_matmul"
+        and (
+            normalized_format == "affine"
+            or str(q_jang.get("method") or "").lower() == "affine"
+            or str(routed_experts_cfg.get("codec") or "").lower() == "affine"
+        )
+        and routed_experts_cfg
+    )
+    dsv4_affine_verified = bool(
+        jang_cfg.get("coherency_verified")
+        or jang_cfg.get("runtime_verified")
+        or runtime_cfg.get("coherency_verified")
+        or runtime_cfg.get("ar_coherency_verified")
+    )
+    if affine_dsv4_routed and not dsv4_affine_verified:
+        compat_warnings.append(
+            "DSV4 affine routed JANG runtime is loaded but not coherency-verified; "
+            "require a live DeepSeek-V4 AR logits/decode gate before production use."
+        )
 
     result = {
         "codec": codec,
@@ -4675,7 +4706,44 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
             "yes",
             "on",
         )
-        return {
+        layout: dict[str, Any] = {}
+        try:
+            model = getattr(scheduler, "model", None)
+            cache_layers = model.make_cache() if model is not None else None
+            if cache_layers:
+                ratios: list[int | None] = []
+                windows: list[int] = []
+                for layer_cache in cache_layers:
+                    ratio = getattr(layer_cache, "compress_ratio", None)
+                    try:
+                        ratios.append(int(ratio) if ratio is not None else None)
+                    except (TypeError, ValueError):
+                        ratios.append(None)
+                    local_cache = getattr(layer_cache, "local", None)
+                    window = getattr(local_cache, "max_size", None)
+                    if window is not None:
+                        try:
+                            windows.append(int(window))
+                        except (TypeError, ValueError):
+                            pass
+                ratio_counts: dict[str, int] = {}
+                for ratio in ratios:
+                    key = "unknown" if ratio is None else str(ratio)
+                    ratio_counts[key] = ratio_counts.get(key, 0) + 1
+                layout = {
+                    "layers": len(cache_layers),
+                    "compress_ratios": [
+                        "unknown" if ratio is None else ratio for ratio in ratios
+                    ],
+                    "compress_ratio_counts": ratio_counts,
+                }
+                if windows:
+                    layout["sliding_window"] = windows[0]
+                    if len(set(windows)) > 1:
+                        layout["sliding_windows"] = windows
+        except Exception:
+            layout = {}
+        status = {
             "family": "deepseek_v4",
             "schema": "deepseek_v4_v7",
             "cache_type": "native_composite",
@@ -4690,10 +4758,29 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
                 "enabled": pool_quant_enabled,
                 "env": os.environ.get("DSV4_POOL_QUANT", "0"),
             },
+            "layer_cache_roles": {
+                "ratio_0": "swa_local_only",
+                "ratio_4": "csa_overlap_compressed_pool_plus_indexer",
+                "ratio_128": "hca_compressed_pool",
+            },
+            "cache_store_policy": {
+                "prompt_boundary_snapshot": "preferred",
+                "post_generation_trim": "disabled_unless_explicit_unsafe_override",
+                "generic_kv_quantization": "forced_off",
+            },
+            "decode_activation_order": [
+                "make_cache_builds_per_layer_swa_or_composite_cache",
+                "prefill_updates_local_swa_and_compressor_indexer_pools",
+                "prompt_boundary_snapshot_or_clean_reprefill_is_stored_for_prefix",
+                "decode_appends_new_tokens_to_live_composite_cache",
+                "cache_hit_restores_full_nested_state_and_refeeds_last_prompt_token",
+            ],
             "prefix": bool(block_aware_cache is not None),
             "paged": bool(block_aware_cache is not None and paged_cache_manager is not None),
             "block_disk_l2": bool(block_disk_store is not None),
         }
+        status.update(layout)
+        return status
 
     if (
         family_name == "zaya"

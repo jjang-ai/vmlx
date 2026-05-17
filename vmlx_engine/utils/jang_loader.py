@@ -34,7 +34,7 @@ JANG_CONFIG_FILENAMES = [
     "mxq_config.json",
 ]
 JANG_FORMAT_VALUES = ["jang", "jjqf", "mxq"]
-JANG_WEIGHT_FORMAT_VALUES = {"mxtq", "mxfp4", "mxfp8"}
+JANG_WEIGHT_FORMAT_VALUES = {"affine", "mxtq", "mxfp4", "mxfp8"}
 
 
 def _jang_quant_block_size(jang_cfg: dict, default: int = 64) -> int:
@@ -47,6 +47,18 @@ def _jang_quant_block_size(jang_cfg: dict, default: int = 64) -> int:
     """
     quant = jang_cfg.get("quantization") or {}
     return int(quant.get("block_size") or quant.get("group_size") or default)
+
+
+def _jang_routed_expert_group_size(jang_cfg: dict, default: int = 64) -> int:
+    """Return the routed-expert group size for mixed JANG affine bundles."""
+    quant = jang_cfg.get("quantization") or {}
+    routed = quant.get("routed_experts") if isinstance(quant, dict) else {}
+    top_default = quant.get("top_level_default") if isinstance(quant, dict) else {}
+    if isinstance(routed, dict) and routed.get("group_size") is not None:
+        return int(routed["group_size"])
+    if isinstance(top_default, dict) and top_default.get("group_size") is not None:
+        return int(top_default["group_size"])
+    return _jang_quant_block_size(jang_cfg, default)
 
 
 def _jang_default_bits(jang_cfg: dict, fallback: list[int] | None = None) -> int:
@@ -210,6 +222,16 @@ def _sanitize_grouped_conv1d_layout(weights: dict) -> dict:
                 fixed = dict(weights)
             fixed[key] = mx.transpose(value, axes=(0, 2, 1))
     return weights if fixed is None else fixed
+
+
+def _sanitize_deepseek_v4_regular_layout(weights: dict) -> dict:
+    """Apply DSV4 regular-weight fixups after ``Model.sanitize``.
+
+    DSV4 RMSNorm tensors are source-scale weights, not the Qwen/SSM
+    pre-shift convention. Keep them unchanged; layer-0 source parity depends on
+    `attn_norm.weight` staying around 0.03 rather than being shifted to 1.03.
+    """
+    return _sanitize_grouped_conv1d_layout(weights)
 
 
 def _sanitize_qwen3_next_conv1d_layout(weights: dict) -> dict:
@@ -907,11 +929,80 @@ def _is_expert_key(k: str) -> bool:
     Used by smelt mode to filter out expert weights during backbone-only loading.
     Expert weights are loaded separately via ExpertIndex + _load_expert_subset.
     """
-    return "switch_mlp" in k or "switch_glu" in k
+    return "switch_mlp" in k or "switch_glu" in k or ".ffn.experts." in k
 
 
 import re as _re
 _LAYER_INDEX_RE = _re.compile(r"(?:layers|backbone\.layers)\.(\d+)\.")
+_DSV4_ROUTED_EXPERT_RE = _re.compile(
+    r"^layers\.(\d+)\.ffn\.experts\.(\d+)\.(w[123])\.(weight|scales|biases)$"
+)
+_DSV4_W_TO_SWITCH = {
+    "w1": "gate_proj",
+    "w2": "down_proj",
+    "w3": "up_proj",
+}
+
+
+def _split_dsv4_routed_expert_weights(weights: dict) -> tuple[dict, dict]:
+    """Split raw DSV4 routed expert tensors from a shard.
+
+    ``jang_tools.dsv4.Model.sanitize()`` stacks all 256 routed experts for a
+    layer/projection at once. vMLX streams safetensor shards one at a time, and
+    DSV4 shards can split a single layer's experts across multiple files, so
+    partial expert groups must be staged outside sanitize().
+    """
+    non_expert = {}
+    expert = {}
+    for key, value in weights.items():
+        if _DSV4_ROUTED_EXPERT_RE.match(key):
+            expert[key] = value
+        else:
+            non_expert[key] = value
+    return non_expert, expert
+
+
+def _stage_dsv4_routed_expert_weights(pending: dict, expert_weights: dict) -> None:
+    for key, value in expert_weights.items():
+        match = _DSV4_ROUTED_EXPERT_RE.match(key)
+        if not match:
+            continue
+        layer_idx = int(match.group(1))
+        expert_idx = int(match.group(2))
+        proj = _DSV4_W_TO_SWITCH[match.group(3)]
+        suffix = match.group(4)
+        pending.setdefault((layer_idx, proj, suffix), {})[expert_idx] = value
+
+
+def _pop_complete_dsv4_routed_expert_stacks(
+    pending: dict, n_experts: int
+) -> dict:
+    ready = {}
+    complete = [
+        group_key
+        for group_key, by_expert in pending.items()
+        if len(by_expert) == n_experts
+        and all(idx in by_expert for idx in range(n_experts))
+    ]
+    for layer_idx, proj, suffix in complete:
+        by_expert = pending.pop((layer_idx, proj, suffix))
+        ready[
+            f"model.layers.{layer_idx}.mlp.switch_mlp.{proj}.{suffix}"
+        ] = mx.stack([by_expert[idx] for idx in range(n_experts)])
+    return ready
+
+
+def _describe_dsv4_pending_experts(pending: dict, limit: int = 5) -> str:
+    parts = []
+    for (layer_idx, proj, suffix), by_expert in list(sorted(pending.items()))[:limit]:
+        parts.append(
+            f"layer={layer_idx} proj={proj} suffix={suffix} "
+            f"count={len(by_expert)}"
+        )
+    extra = len(pending) - len(parts)
+    if extra > 0:
+        parts.append(f"+{extra} more")
+    return "; ".join(parts)
 
 
 def _filter_by_layer_range(weights: dict, start: int, end: int) -> dict:
@@ -1032,6 +1123,7 @@ def _load_jang_v2(
     # _pre_fix_bits_from_shard and other per-shard fixups). Older sidecars used
     # block_size; newer MXFP/JANG sidecars use MLX's group_size key.
     block_size = _jang_quant_block_size(jang_cfg)
+    routed_block_size = _jang_routed_expert_group_size(jang_cfg, block_size)
 
     # config.json already has quantization key (written by v2 converter)
     # but ensure it exists for older v2 models
@@ -1398,6 +1490,10 @@ def _load_jang_v2(
     _pre_fix_bits_from_metadata(model, _shape_map_xshard, block_size)
     del _shape_map_xshard
 
+    _is_dsv4_model = str(config.get("model_type") or "") == "deepseek_v4"
+    _dsv4_expert_pending = {}
+    _dsv4_n_experts = int(config.get("n_routed_experts") or 0)
+
     for sf in weight_files:
         weights = mx.load(str(sf))
 
@@ -1575,9 +1671,28 @@ def _load_jang_v2(
                     k = k.replace(".switch_mlp.", ".experts.switch_glu.")
                 g4_remapped[k] = v
             weights = g4_remapped
-        if hasattr(model, "sanitize"):
+
+        _dsv4_ready_expert_weights = {}
+        if _is_dsv4_model and not filter_expert_keys and _dsv4_n_experts > 0:
+            weights, _dsv4_expert_weights = _split_dsv4_routed_expert_weights(
+                weights
+            )
+            if _dsv4_expert_weights:
+                _stage_dsv4_routed_expert_weights(
+                    _dsv4_expert_pending, _dsv4_expert_weights
+                )
+                _dsv4_ready_expert_weights = (
+                    _pop_complete_dsv4_routed_expert_stacks(
+                        _dsv4_expert_pending, _dsv4_n_experts
+                    )
+                )
+
+        if weights and hasattr(model, "sanitize"):
             weights = model.sanitize(weights)
-        weights = _sanitize_qwen3_next_conv1d_layout(weights)
+        if _is_dsv4_model:
+            weights = _sanitize_deepseek_v4_regular_layout(weights)
+        else:
+            weights = _sanitize_qwen3_next_conv1d_layout(weights)
         # MoE gate dequant + optional Nemotron fc rename
         if _needs_gate_dequant:
             renamed = {}
@@ -1695,10 +1810,30 @@ def _load_jang_v2(
             weights = _filter_by_layer_range(weights, layer_range[0], layer_range[1])
         # Pre-fix per-layer bits before load to prevent shape mismatch
         # ValueError on JANG mixed-precision models (fixes #62, #63).
-        _pre_fix_bits_from_shard(model, weights, block_size)
-        model.load_weights(list(weights.items()), strict=False)
+        if weights:
+            _pre_fix_bits_from_shard(model, weights, block_size)
+            model.load_weights(list(weights.items()), strict=False)
+        if _dsv4_ready_expert_weights:
+            if layer_range is not None:
+                _dsv4_ready_expert_weights = _filter_by_layer_range(
+                    _dsv4_ready_expert_weights, layer_range[0], layer_range[1]
+                )
+            if _dsv4_ready_expert_weights:
+                _pre_fix_bits_from_shard(
+                    model, _dsv4_ready_expert_weights, routed_block_size
+                )
+                model.load_weights(
+                    list(_dsv4_ready_expert_weights.items()), strict=False
+                )
         del weights
+        del _dsv4_ready_expert_weights
         gc.collect()
+
+    if _dsv4_expert_pending:
+        raise RuntimeError(
+            "DSV4 routed expert shard staging ended with incomplete expert "
+            f"groups: {_describe_dsv4_pending_experts(_dsv4_expert_pending)}"
+        )
 
     # Mistral-Small-4-119B + any future model_type-promoted text load: the
     # internal nn.quantize predicate in mlx_lm.utils.load_model could not see

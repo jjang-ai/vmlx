@@ -363,6 +363,58 @@ def _config_claim_for_module(
     return None
 
 
+def _deepseek_v4_sanitized_aliases(module_name: str) -> List[str]:
+    """Return mlx-lm module paths produced by jang_tools DSV4 sanitize().
+
+    DeepSeek-V4 JANG metadata is keyed with source names such as ``embed`` and
+    ``layers.N.attn.wkv``. The runtime model receives weights after
+    ``Model.sanitize()``, where those paths become ``model.embed`` and
+    ``model.layers.N.self_attn.wkv``. mlx-lm quantizes modules after sanitize,
+    so per-module overrides must exist under the sanitized names too.
+    """
+    if module_name == "embed":
+        return ["model.embed"]
+    if module_name == "head":
+        return ["lm_head"]
+
+    match = re.match(r"^layers\.(\d+)\.(.+)$", module_name)
+    if not match:
+        return []
+
+    layer_idx, rest = match.group(1), match.group(2)
+    layer_prefix = f"model.layers.{layer_idx}"
+
+    if rest.startswith("attn."):
+        return [f"{layer_prefix}.self_attn.{rest[len('attn.') :]}"]
+
+    shared = re.match(r"^ffn\.shared_experts\.(w[123])$", rest)
+    if shared:
+        proj = {
+            "w1": "gate_proj",
+            "w2": "down_proj",
+            "w3": "up_proj",
+        }[shared.group(1)]
+        return [f"{layer_prefix}.mlp.shared_experts.{proj}"]
+
+    routed = re.match(r"^ffn\.experts\.\d+\.(w[123])$", rest)
+    if routed:
+        proj = {
+            "w1": "gate_proj",
+            "w2": "down_proj",
+            "w3": "up_proj",
+        }[routed.group(1)]
+        return [f"{layer_prefix}.mlp.switch_mlp.{proj}"]
+
+    return []
+
+
+def _sanitized_aliases_for_config(config: Dict[str, Any], module_name: str) -> List[str]:
+    model_type = str(config.get("model_type") or "")
+    if model_type == "deepseek_v4":
+        return _deepseek_v4_sanitized_aliases(module_name)
+    return []
+
+
 def infer_quant_overrides_for_bundle(
     bundle_path: Path | str, config: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -425,26 +477,33 @@ def infer_quant_overrides_for_bundle(
         # answer for any bundle whose config matches its weights, and
         # also covers the "ambiguous shape ratio + correct config" case.
         claim = _config_claim_for_module(qcfg, mod)
+        effective: Optional[Tuple[int, int]] = None
         if claim is not None and claim in candidates:
-            continue
+            effective = claim
+        else:
+            # Config is provably wrong (claim not viable for this shape) OR
+            # config has no claim. Pick from candidates using the bundle's
+            # detected uniform gsz first (when available + viable for this
+            # shape), then the module-name tiebreaker.
+            inferred: Optional[Tuple[int, int]] = None
+            if uniform_gsz is not None:
+                inferred = next(
+                    ((b, g) for b, g in candidates if g == uniform_gsz), None
+                )
+            if inferred is None:
+                inferred = _resolve_ambiguous_candidates(candidates, mod)
+            effective = inferred
 
-        # Config is provably wrong (claim not viable for this shape) OR
-        # config has no claim. Pick from candidates using the bundle's
-        # detected uniform gsz first (when available + viable for this
-        # shape), then the module-name tiebreaker.
-        inferred: Optional[Tuple[int, int]] = None
-        if uniform_gsz is not None:
-            inferred = next(
-                ((b, g) for b, g in candidates if g == uniform_gsz), None
-            )
-        if inferred is None:
-            inferred = _resolve_ambiguous_candidates(candidates, mod)
+            # No-op if our inference happens to match a (silent) claim.
+            if claim != inferred:
+                patched[mod] = inferred
 
-        # No-op if our inference happens to match a (silent) claim.
-        if claim == inferred:
-            continue
-
-        patched[mod] = inferred
+        for alias in _sanitized_aliases_for_config(config, mod):
+            if alias == mod:
+                continue
+            alias_claim = _config_claim_for_module(qcfg, alias)
+            if alias_claim != effective:
+                patched[alias] = effective
 
     if not patched:
         return config  # No overrides needed — config was good for every module

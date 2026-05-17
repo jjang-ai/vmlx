@@ -148,6 +148,52 @@ def test_dsv4_native_cache_status_reports_native_composite_v7_schema():
     assert expected_components.issubset(set(status["components"]))
 
 
+def test_dsv4_native_cache_status_reports_ratio_and_window_contract():
+    from vmlx_engine import server
+
+    class _Local:
+        max_size = 128
+
+    class _DSV4Cache:
+        local = _Local()
+
+        def __init__(self, ratio):
+            self.compress_ratio = ratio
+
+    fake_scheduler = SimpleNamespace(
+        _model_type_for_runtime="deepseek_v4",
+        _uses_dsv4_cache=True,
+        block_aware_cache=None,
+        paged_cache_manager=None,
+        model=SimpleNamespace(
+            make_cache=lambda: [
+                _DSV4Cache(0),
+                _DSV4Cache(0),
+                _DSV4Cache(4),
+                _DSV4Cache(128),
+                _DSV4Cache(4),
+                _DSV4Cache(0),
+            ]
+        ),
+    )
+
+    status = server._native_cache_status(fake_scheduler, family="deepseek_v4", cfg=None)
+
+    assert status["sliding_window"] == 128
+    assert status["layers"] == 6
+    assert status["compress_ratio_counts"] == {"0": 3, "4": 2, "128": 1}
+    assert status["layer_cache_roles"] == {
+        "ratio_0": "swa_local_only",
+        "ratio_4": "csa_overlap_compressed_pool_plus_indexer",
+        "ratio_128": "hca_compressed_pool",
+    }
+    assert status["cache_store_policy"] == {
+        "prompt_boundary_snapshot": "preferred",
+        "post_generation_trim": "disabled_unless_explicit_unsafe_override",
+        "generic_kv_quantization": "forced_off",
+    }
+
+
 def test_dsv4_capability_runner_check_accepts_current_contract_only():
     """Mirror of the runner shape check; guards against the stale shape passing.
 
