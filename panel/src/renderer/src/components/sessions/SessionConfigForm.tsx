@@ -245,7 +245,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const distributedActive = effectiveDistributedActive
   const zayaCcaActive = isZayaCcaFamily(normalizedDetectedFamily)
   const turboQuantActive = !!detectedIsTurboQuant
-  const multimodalActive = !detectedForceTextOnly && (!!detectedIsMultimodal || config.isMultimodal === true)
+  const multimodalActive = !dsv4Active && !detectedForceTextOnly && (!!detectedIsMultimodal || config.isMultimodal === true)
   const effectiveContinuousBatching = dsv4Active ? true : config.continuousBatching
   const batchingOff = !effectiveContinuousBatching
   const effectivelyNoBatching = batchingOff
@@ -987,10 +987,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {detectedForceTextOnly && (
           <IncompatWarning text="This model has media metadata, but vMLX is using the text runtime because its current VLM language path is not production-safe. Use an MXFP4 or JANGTQ/MXTQ variant for image/video input." />
         )}
-        {!smeltActive && !detectedForceTextOnly && config.isMultimodal === true && (
+        {!dsv4Active && !smeltActive && !detectedForceTextOnly && config.isMultimodal === true && (
           <InfoNote text="VLM mode forced ON — the MLLM scheduler handles image/video processing with full prefix cache, paged KV cache, and KV quantization support." />
         )}
-        {!smeltActive && !detectedForceTextOnly && config.isMultimodal === false && (
+        {!dsv4Active && !smeltActive && !detectedForceTextOnly && config.isMultimodal === false && (
           <InfoNote text="VLM mode is off only when the model is not auto-detected as multimodal. Detected VLM bundles launch with image/video support." />
         )}
         {/* Video sampling — only relevant for VL models that accept video_url.

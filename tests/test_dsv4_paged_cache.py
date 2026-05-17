@@ -234,6 +234,7 @@ def test_dsv4_ui_forces_native_cache_stack_and_hides_unsafe_runtime_controls():
 
     assert "const effectiveContinuousBatching = dsv4Active ? true : config.continuousBatching" in form
     assert "const prefixOff = dsv4Active ? false : !config.enablePrefixCache" in form
+    assert "const multimodalActive = !dsv4Active" in form
     assert "checked={effectiveContinuousBatching}" in form
     assert "checked={dsv4Active ? true : config.enablePrefixCache}" in form
     assert "hidden={isImage || dsv4Active}" in form
@@ -242,6 +243,8 @@ def test_dsv4_ui_forces_native_cache_stack_and_hides_unsafe_runtime_controls():
     assert "disabled={dsv4Active || effectiveFlashMoeActive}" in form
     assert "checked={effectiveFlashMoeActive}" in form
     assert "disabled={dsv4Active || effectiveSmeltActive || effectiveDistributedActive}" in form
+    assert "!dsv4Active && !smeltActive && !detectedForceTextOnly && config.isMultimodal === true" in form
+    assert "!dsv4Active && !smeltActive && !detectedForceTextOnly && config.isMultimodal === false" in form
 
 
 def test_dsv4_launch_filters_stale_saved_and_additional_args():
@@ -255,6 +258,7 @@ def test_dsv4_launch_filters_stale_saved_and_additional_args():
         assert "const cacheStackActive = dsv4Active ? true : config.continuousBatching !== false" in source
         assert "const prefixCacheOff = dsv4Active ? false" in source
         assert "const effectiveSmelt = !!(config as any).smelt && !dsv4Active" in source
+        assert "const isVLM = dsv4Active || effectiveSmelt" in source
         assert "const effectiveDistributed = requestedDistributed && !dsv4Active" in source
         assert "const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed && !dsv4Active" in source
         assert "if (!dsv4Active && config.speculativeModel)" in source
@@ -267,6 +271,10 @@ def test_dsv4_launch_filters_stale_saved_and_additional_args():
         assert "--flash-moe" in source
         assert "--distributed" in source
         assert "--speculative-model" in source
+        assert "--stream-interval" in source
+        assert "--tool-call-parser" in source
+        assert "--reasoning-parser" in source
+    assert "config.isMultimodal = false" in sessions
 
 
 def test_dsv4_block_l2_namespace_includes_paged_block_size():
