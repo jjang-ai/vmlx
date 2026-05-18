@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 
-ROOT = Path("/Users/example/mlx/vllm-mlx")
+ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PY = Path(
     "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
 )

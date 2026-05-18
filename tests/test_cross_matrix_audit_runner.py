@@ -161,6 +161,13 @@ def test_live_audit_can_opt_into_source_vmlx_imports():
     assert env["PYTHONNOUSERSITE"] == "1"
 
 
+def test_live_audit_root_points_at_current_checkout():
+    """Worktree gates must not import modules from the stale main checkout."""
+    expected = audit_harness.Path(__file__).resolve().parents[1]
+
+    assert audit_harness.ROOT == expected
+
+
 def test_dsv4_row_points_at_current_sub80_upload_candidate_bundle():
     rows = {row.id: row for row in ROWS}
 
@@ -197,6 +204,18 @@ def test_dsv4_long_context_gate_defaults_to_pure_affine_keeper():
     assert run_dsv4_long_context_gate.DEFAULT_MODEL.endswith(
         "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
     )
+
+
+def test_dsv4_long_context_gate_compares_cached_followup_to_no_cache():
+    """Live DSV4 gate must separate cache corruption from artifact quality."""
+    import inspect
+    from tests.cross_matrix import run_dsv4_long_context_gate
+
+    src = inspect.getsource(run_dsv4_long_context_gate.run)
+
+    assert "follow_no_cache" in src
+    assert '"skip_prefix_cache": True' in src
+    assert "cached_vs_no_cache" in src
 
 
 def test_mistral_medium_jangtq_path_matches_current_drive_layout():

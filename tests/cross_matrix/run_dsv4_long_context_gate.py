@@ -335,6 +335,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             },
             timeout=600,
         )
+        follow_no_cache = chat(
+            url,
+            model_name,
+            {
+                "messages": follow_messages,
+                "max_tokens": 192,
+                "temperature": 0.0,
+                "top_p": 1.0,
+                "top_k": 0,
+                "enable_thinking": False,
+                "chat_template_kwargs": {"enable_thinking": False},
+                "skip_prefix_cache": True,
+            },
+            timeout=600,
+        )
 
         reasoning_max = chat(
             url,
@@ -370,6 +385,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "cold_no_cache": cold_no_cache,
                 "store_turn": store,
                 "follow_cached": follow_cached,
+                "follow_no_cache": follow_no_cache,
                 "reasoning_max": reasoning_max,
             },
         }
@@ -381,6 +397,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 case["has_cerulean"] and case["has_45"] and case["has_ada"]
             ):
                 notes.append(f"{name}: missing anchor")
+        if follow_cached["content"].strip() != follow_no_cache["content"].strip():
+            notes.append(
+                "cached_vs_no_cache: follow-up output differs; inspect "
+                "cache_detail and log terminal-block state"
+            )
         if reasoning_max["reasoning"] and not reasoning_max["content"]:
             notes.append("reasoning_max: reasoning-only visible output")
         if notes:
