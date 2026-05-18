@@ -6204,6 +6204,28 @@ class TestTurboQuantKVTelemetry:
             "effective_active_experts_source": "trained_default",
         }
 
+    def test_dsv4_routing_status_reports_trained_top_k_six(self, monkeypatch, tmp_path):
+        """DSV4 MoE top-k is trained routing metadata, not sampler top_k."""
+        from vmlx_engine.server import _model_routing_status
+
+        monkeypatch.delenv("JANGTQ_TOPK_OVERRIDE", raising=False)
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "deepseek_v4",
+            "n_routed_experts": 256,
+            "num_experts_per_tok": 6,
+        }))
+
+        status = _model_routing_status(str(tmp_path))
+
+        assert status == {
+            "trained_active_experts": 6,
+            "trained_active_experts_source": "config.num_experts_per_tok",
+            "n_routed_experts": 256,
+            "override_env": None,
+            "effective_active_experts": 6,
+            "effective_active_experts_source": "trained_default",
+        }
+
     def test_routing_status_ignores_jangtq_top_k_override(self, monkeypatch, tmp_path):
         from vmlx_engine.server import _model_routing_status
 
