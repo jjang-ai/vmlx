@@ -108,6 +108,7 @@ HASH_GATED_ENGINE_FILES=(
   "omni_multimodal.py"
   "paged_cache.py"
   "prefix_cache.py"
+  "runtime_patches/gemma4_processing.py"
   "scheduler.py"
   "utils/head_dim_detection.py"
   "utils/ssm_companion_cache.py"

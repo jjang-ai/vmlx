@@ -2738,6 +2738,7 @@ class TestStartupCompatibilityGuards:
             "mllm_scheduler.py",
             "omni_multimodal.py",
             "prefix_cache.py",
+            "runtime_patches/gemma4_processing.py",
             "scheduler.py",
         ):
             assert f'"{rel}"' in verify_script
