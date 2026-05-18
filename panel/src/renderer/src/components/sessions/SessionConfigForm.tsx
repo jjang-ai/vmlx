@@ -48,6 +48,7 @@ export interface SessionConfig {
   numDraftTokens: number
   nativeMtpMode?: 'deterministic' | 'auto' | 'off'
   nativeMtpDepth?: number
+  nativeMtpDepthOverride?: boolean
   smelt: boolean
   smeltExperts: number
   flashMoe: boolean
@@ -131,6 +132,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   numDraftTokens: 3,
   nativeMtpMode: 'deterministic',
   nativeMtpDepth: 3,
+  nativeMtpDepthOverride: false,
   smelt: false,
   smeltExperts: 50,
   flashMoe: false,
@@ -215,6 +217,7 @@ interface SessionConfigFormProps {
   detectedNativeMtp?: {
     supported?: boolean
     depth?: number
+    depthSource?: string
     runtimeScope?: string
     requiresDeterministicSampling?: boolean
   }
@@ -277,7 +280,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const showVideoControls = !dsv4Active && !detectedForceTextOnly && multimodalActive
   const nativeMtpSupported = !!detectedNativeMtp?.supported
   const nativeMtpMode = config.nativeMtpMode || DEFAULT_CONFIG.nativeMtpMode || 'deterministic'
-  const nativeMtpDepth = config.nativeMtpDepth || detectedNativeMtp?.depth || DEFAULT_CONFIG.nativeMtpDepth || 3
+  const nativeMtpDepth = config.nativeMtpDepthOverride === true
+    ? (config.nativeMtpDepth || detectedNativeMtp?.depth || 3)
+    : (detectedNativeMtp?.depth || config.nativeMtpDepth || 3)
   const generationDefaultsSummary = [
     (config.defaultMaxNewTokens ?? 0) > 0 ? `max output tokens ${Math.floor(config.defaultMaxNewTokens ?? 0)}` : null,
     config.defaultTemperature > 0 ? `temperature ${(config.defaultTemperature / 100).toFixed(2)}` : null,
@@ -1039,7 +1044,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* Native in-model MTP */}
       <Section title="Native MTP" expanded={expandedSections.nativeMtp} onToggle={() => toggleSection('nativeMtp')} hidden={isImage || dsv4Active || !nativeMtpSupported}>
-        <PerformanceHint text="Uses the model's own preserved MTP heads. Current Qwen3.6 runtime is deterministic: D3 is used when startup defaults are temperature 0, top-p 1, top-k 0, min-p 0, repetition 1." />
+        <PerformanceHint text="Uses the model's own preserved MTP heads. Current Qwen3.6 runtime is deterministic and uses measured model-local depth when present, with D3 as the generic fallback." />
         {nativeMtpMode === 'auto' && (
           <InfoNote text="Auto mode only activates MTP for API/chat requests that already use deterministic sampling. Sampled requests fall back to autoregressive decode and the server logs the reason." />
         )}
@@ -1048,27 +1053,30 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         )}
         <SelectField
           label="Native MTP Mode"
-          tooltip="Deterministic D3 is the production default for preserved-MTP Qwen3.6 bundles. Auto leaves sampling defaults alone and only uses MTP when a request is already compatible. Off disables the in-model MTP runtime."
+          tooltip="Deterministic mode uses the bundle's measured MTP depth when available, otherwise D3. Auto leaves sampling defaults alone and only uses MTP when a request is already compatible. Off disables the in-model MTP runtime."
           value={nativeMtpMode}
           onChange={v => onChange('nativeMtpMode', v as 'deterministic' | 'auto' | 'off')}
           options={[
-            { value: 'deterministic', label: 'Deterministic D3 default' },
+            { value: 'deterministic', label: 'Deterministic tuned default' },
             { value: 'auto', label: 'Auto gate only' },
             { value: 'off', label: 'Off' },
           ]}
         />
         <SliderField
           label="Native MTP Depth"
-          tooltip="Number of tokens drafted per native-MTP verification cycle. D3 is the current Qwen3.6 default; lower values are useful for controlled speed/coherency comparisons."
+          tooltip="Number of tokens drafted per native-MTP verification cycle. Model-local tuning picks the measured default; changing this slider creates a manual override."
           value={nativeMtpDepth}
-          onChange={v => onChange('nativeMtpDepth', v)}
+          onChange={v => {
+            onChange('nativeMtpDepth', v)
+            onChange('nativeMtpDepthOverride', true)
+          }}
           min={1}
           max={3}
           step={1}
           defaultValue={3}
           disabled={nativeMtpMode === 'off'}
         />
-        <InfoNote text={`Detected scope: ${detectedNativeMtp?.runtimeScope || 'text'}. Paged cache remains forced for hybrid cache bundles while prefix cache is enabled so KV blocks and SSM state stay in one cache contract.`} />
+        <InfoNote text={`Detected scope: ${detectedNativeMtp?.runtimeScope || 'text'}; depth source: ${detectedNativeMtp?.depthSource || 'default'}. Paged cache remains forced for hybrid cache bundles while prefix cache is enabled so KV blocks and SSM state stay in one cache contract.`} />
       </Section>
 
       {/* Speculative Decoding */}

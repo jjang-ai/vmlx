@@ -90,6 +90,7 @@ export interface ServerConfig {
   // Native in-model MTP (Qwen3.6 preserved-MTP bundles)
   nativeMtpMode?: 'deterministic' | 'auto' | 'off'
   nativeMtpDepth?: number
+  nativeMtpDepthOverride?: boolean
 
   // Generation defaults
   defaultTemperature?: number

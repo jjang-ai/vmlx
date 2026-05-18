@@ -67,6 +67,7 @@ interface SessionConfig {
     defaultEnableThinking?: boolean
     nativeMtpMode?: 'deterministic' | 'auto' | 'off'
     nativeMtpDepth?: number
+    nativeMtpDepthOverride?: boolean
     embeddingModel: string
     additionalArgs: string
     enableJit: boolean
@@ -130,6 +131,7 @@ const DEFAULT_CONFIG: SessionConfig = {
     defaultEnableThinking: undefined,
     nativeMtpMode: 'deterministic',
     nativeMtpDepth: 3,
+    nativeMtpDepthOverride: false,
     embeddingModel: '',
     additionalArgs: '',
     enableJit: true,
@@ -154,6 +156,7 @@ type DetectedConfig = {
     nativeMtp?: {
         supported?: boolean
         depth?: number
+        depthSource?: string
         runtimeScope?: string
         requiresDeterministicSampling?: boolean
     }
@@ -304,7 +307,10 @@ function buildCommandPreview(
         if (mode === 'off') {
             parts.push('--disable-native-mtp')
         } else {
-            parts.push('--native-mtp-depth', String(config.nativeMtpDepth || detected.nativeMtp.depth || 3))
+            const configuredDepth = config.nativeMtpDepthOverride === true
+                ? config.nativeMtpDepth
+                : detected.nativeMtp.depth
+            parts.push('--native-mtp-depth', String(configuredDepth || detected.nativeMtp.depth || 3))
             parts.push('--native-mtp-sampling-policy', mode === 'deterministic' ? 'deterministic-defaults' : 'compatible-only')
             if (mode === 'deterministic') {
                 parts.push('--default-temperature', '0')
@@ -952,22 +958,29 @@ describe('Native MTP', () => {
         enableAutoToolChoice: true,
         nativeMtp: {
             supported: true,
-            depth: 3,
+            depth: 2,
+            depthSource: 'vmlx_mtp_tuning.json:native_mtp.best_depth',
             runtimeScope: 'text+vl',
             requiresDeterministicSampling: true,
         },
     }
 
-    it('defaults native-MTP bundles to deterministic D3 launch settings', () => {
+    it('defaults native-MTP bundles to deterministic measured-depth launch settings', () => {
         const out = preview({}, qwenMtpDetected)
 
-        expect(getFlagValue(out, '--native-mtp-depth')).toBe('3')
+        expect(getFlagValue(out, '--native-mtp-depth')).toBe('2')
         expect(getFlagValue(out, '--native-mtp-sampling-policy')).toBe('deterministic-defaults')
         expect(getFlagValue(out, '--default-temperature')).toBe('0')
         expect(getFlagValue(out, '--default-top-p')).toBe('1')
         expect(getFlagValue(out, '--default-top-k')).toBe('0')
         expect(getFlagValue(out, '--default-min-p')).toBe('0')
         expect(getFlagValue(out, '--default-repetition-penalty')).toBe('1')
+    })
+
+    it('lets a manual native-MTP depth override win over the measured default', () => {
+        const out = preview({ nativeMtpDepth: 3, nativeMtpDepthOverride: true }, qwenMtpDetected)
+
+        expect(getFlagValue(out, '--native-mtp-depth')).toBe('3')
     })
 
     it('lets users disable native MTP without leaving deterministic sampling overrides behind', () => {
@@ -1997,7 +2010,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         'speculativeModel', 'numDraftTokens',
         'smelt', 'smeltExperts', 'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
         'defaultTemperature', 'defaultTopP', 'defaultTopK', 'defaultMinP', 'defaultRepetitionPenalty', 'defaultMaxNewTokens', 'defaultEnableThinking',
-        'nativeMtpMode', 'nativeMtpDepth',
+        'nativeMtpMode', 'nativeMtpDepth', 'nativeMtpDepthOverride',
         'embeddingModel', 'additionalArgs',
         'enableJit', 'logLevel', 'corsOrigins', 'maxContextLength',
     ]

@@ -326,6 +326,10 @@ def _env_enabled(*names: str) -> bool:
     return any(os.environ.get(name, "") in _ENABLE_ENV_VALUES for name in names)
 
 
+def _env_disabled(*names: str) -> bool:
+    return any(os.environ.get(name, "") in _DISABLE_ENV_VALUES for name in names)
+
+
 def _runtime_validation_block_reason(jang_cfg: dict[str, Any]) -> str | None:
     """Block native MTP for artifact profiles that failed live validation.
 
@@ -365,10 +369,9 @@ def native_mtp_effective_depth(
     drafting through that head, clamped to the verifier implementation's D3
     support.
 
-    Production default is deliberately D3 for all supported MTP artifacts.
-    Model-local tuning files are research artifacts; they are honored only
-    when explicitly enabled so a copied benchmark note cannot silently change
-    the release runtime policy for users.
+    Validated model-local tuning files are honored before the generic D3
+    fallback. That lets measured bundles such as 27B MXFP4 use their proven
+    D2 policy while preserving D3 for artifacts without a sidecar.
     """
     env_name = None
     raw = None
@@ -390,7 +393,7 @@ def native_mtp_effective_depth(
     if raw is not None and source != "default":
         return max(1, min(3, depth)), source
 
-    if _env_enabled("VMLINUX_NATIVE_MTP_USE_TUNING", "VMLX_NATIVE_MTP_USE_TUNING"):
+    if not _env_disabled("VMLINUX_NATIVE_MTP_USE_TUNING", "VMLX_NATIVE_MTP_USE_TUNING"):
         tuned_path = model_path or _ACTIVE_NATIVE_MTP_MODEL_PATH
         tuned_depth, tuned_source = _model_tuning_depth(tuned_path)
         if tuned_depth is not None and tuned_source is not None:

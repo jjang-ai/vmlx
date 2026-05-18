@@ -1488,7 +1488,7 @@ export class SessionManager extends EventEmitter {
     // to server in the request body (chat.ts:818), so changes take effect immediately.
     'maxTokens', 'maxContextLength', 'mcpConfig', 'servedModelName',
     'speculativeModel', 'numDraftTokens', 'smelt', 'smeltExperts',
-    'nativeMtpMode', 'nativeMtpDepth',
+    'nativeMtpMode', 'nativeMtpDepth', 'nativeMtpDepthOverride',
     'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
     'distributedEnabled', 'distributedMode', 'distributedSecret',
     'embeddingModel', 'additionalArgs', 'mfluxClass',
@@ -1635,7 +1635,8 @@ export class SessionManager extends EventEmitter {
           dsv4PoolQuant: false,
           defaultEnableThinking: undefined,
           nativeMtpMode: 'deterministic',
-          nativeMtpDepth: 3,
+          nativeMtpDepth: (detected as any).nativeMtp?.depth ?? 3,
+          nativeMtpDepthOverride: false,
           enableAutoToolChoice: detected.enableAutoToolChoice
         }
         session = {
@@ -2635,7 +2636,10 @@ export class SessionManager extends EventEmitter {
       if (mode === 'off') {
         args.push('--disable-native-mtp')
       } else {
-        const depth = Math.max(1, Math.min(3, Math.round(Number((config as any).nativeMtpDepth || nativeMtp.depth || 3))))
+        const configuredDepth = (config as any).nativeMtpDepthOverride === true
+          ? (config as any).nativeMtpDepth
+          : nativeMtp.depth
+        const depth = Math.max(1, Math.min(3, Math.round(Number(configuredDepth || nativeMtp.depth || 3))))
         args.push('--native-mtp-depth', depth.toString())
         args.push('--native-mtp-sampling-policy', mode === 'deterministic' ? 'deterministic-defaults' : 'compatible-only')
         if (mode === 'deterministic') {

@@ -78,6 +78,7 @@ export interface DetectedConfig {
   nativeMtp?: {
     supported: boolean
     depth: number
+    depthSource?: string
     runtimeScope: 'text' | 'text+vl'
     requiresDeterministicSampling: boolean
   }
@@ -545,6 +546,43 @@ function configuredNativeMtpLayers(parsedConfig: any, jangCfg: any): number {
   return 0
 }
 
+function coerceNativeMtpDepth(raw: unknown): number | undefined {
+  const value = Number(raw)
+  if (!Number.isFinite(value)) return undefined
+  return Math.max(1, Math.min(3, Math.round(value)))
+}
+
+function readNativeMtpTuningDepth(modelPath: string): { depth: number; source: string } | undefined {
+  try {
+    const tuningPath = join(modelPath, 'vmlx_mtp_tuning.json')
+    if (!existsSync(tuningPath)) return undefined
+    const tuning = JSON.parse(readFileSync(tuningPath, 'utf-8'))
+    const nativeMtp = tuning?.native_mtp
+    if (nativeMtp && typeof nativeMtp === 'object') {
+      const allowed =
+        nativeMtp.blocked !== true &&
+        nativeMtp.validated !== false &&
+        nativeMtp.output_equivalent !== false
+      const depth = allowed ? coerceNativeMtpDepth(nativeMtp.best_depth) : undefined
+      if (depth) {
+        return { depth, source: 'vmlx_mtp_tuning.json:native_mtp.best_depth' }
+      }
+    }
+    const sweep = tuning?.best_native_mtp_depth
+    if (sweep && typeof sweep === 'object') {
+      const depth = coerceNativeMtpDepth(sweep.best_depth)
+      if (depth) {
+        return { depth, source: 'vmlx_mtp_tuning.json:best_native_mtp_depth.best_depth' }
+      }
+    }
+    const depth = coerceNativeMtpDepth(tuning?.best_depth)
+    if (depth) return { depth, source: 'vmlx_mtp_tuning.json:best_depth' }
+  } catch {
+    return undefined
+  }
+  return undefined
+}
+
 function detectNativeMtpCapability(
   parsedConfig: any,
   jangCfg: any,
@@ -581,9 +619,11 @@ function detectNativeMtpCapability(
     const hasVisionWeights = keys.some(key =>
       /(^|\.)(vision_tower|vision_model|visual|patch_embed|multi_modal_projector|mm_projector|image_newline)(\.|$)/.test(key),
     )
+    const tuningDepth = readNativeMtpTuningDepth(modelPath)
     return {
       supported: true,
-      depth: 3,
+      depth: tuningDepth?.depth ?? 3,
+      depthSource: tuningDepth?.source ?? 'default',
       runtimeScope: configDeclaresMedia(parsedConfig) && hasVisionWeights ? 'text+vl' : 'text',
       requiresDeterministicSampling: true,
     }

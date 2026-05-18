@@ -216,7 +216,7 @@ async function applyBundleGenerationDefaults(config: SessionConfig, modelPath: s
 function buildCommandPreview(
   modelPath: string,
   config: SessionConfig,
-  detected?: { toolParser?: string; reasoningParser?: string; isMultimodal?: boolean; forceTextOnly?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; cacheType?: string; family?: string; nativeMtp?: { supported?: boolean; depth?: number } } | null
+  detected?: { toolParser?: string; reasoningParser?: string; isMultimodal?: boolean; forceTextOnly?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; cacheType?: string; family?: string; nativeMtp?: { supported?: boolean; depth?: number; depthSource?: string } } | null
 ): string {
   const parts = ['vmlx-engine serve', modelPath]
   const requestedDistributed = !!(config as any).distributedEnabled
@@ -407,7 +407,10 @@ function buildCommandPreview(
     if (mode === 'off') {
       parts.push('--disable-native-mtp')
     } else {
-      const depth = Math.max(1, Math.min(3, Math.round(Number((config as any).nativeMtpDepth || nativeMtp.depth || 3))))
+      const configuredDepth = (config as any).nativeMtpDepthOverride === true
+        ? (config as any).nativeMtpDepth
+        : nativeMtp.depth
+      const depth = Math.max(1, Math.min(3, Math.round(Number(configuredDepth || nativeMtp.depth || 3))))
       parts.push('--native-mtp-depth', depth.toString())
       parts.push('--native-mtp-sampling-policy', mode === 'deterministic' ? 'deterministic-defaults' : 'compatible-only')
       if (mode === 'deterministic') {
@@ -462,7 +465,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
   const [restarting, setRestarting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [showPreview, setShowPreview] = useState(false)
-  const [detectedConfig, setDetectedConfig] = useState<{ toolParser?: string; reasoningParser?: string; cacheType?: string; isMultimodal?: boolean; forceTextOnly?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; family?: string; maxContextLength?: number; nativeMtp?: { supported?: boolean; depth?: number } } | null>(null)
+  const [detectedConfig, setDetectedConfig] = useState<{ toolParser?: string; reasoningParser?: string; cacheType?: string; isMultimodal?: boolean; forceTextOnly?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; family?: string; maxContextLength?: number; nativeMtp?: { supported?: boolean; depth?: number; depthSource?: string } } | null>(null)
 
   useEffect(() => {
     const load = async () => {

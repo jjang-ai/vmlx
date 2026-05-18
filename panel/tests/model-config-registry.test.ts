@@ -67,8 +67,51 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.nativeMtp).toMatchObject({
       supported: true,
       depth: 3,
+      depthSource: 'default',
       runtimeScope: 'text+vl',
       requiresDeterministicSampling: true,
+    })
+  })
+
+  it('uses validated model-local MTP tuning depth when present', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'qwen3_5',
+        text_config: {
+          model_type: 'qwen3_5_text',
+          mtp_num_hidden_layers: 1,
+        },
+      },
+      {
+        format: 'mxfp4',
+        mtp: { kept: true, enabled: true, num_layers: 1 },
+        capabilities: {
+          family: 'qwen3_5',
+          cache_type: 'hybrid',
+        },
+      },
+    )
+    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
+      weight_map: {
+        'model.embed_tokens.weight': 'model.safetensors',
+        'mtp.fc.weight': 'model.safetensors',
+        'mtp.layers.0.self_attn.q_proj.weight': 'model.safetensors',
+      },
+    }))
+    writeFileSync(join(dir, 'vmlx_mtp_tuning.json'), JSON.stringify({
+      native_mtp: {
+        best_depth: 2,
+        validated: true,
+        output_equivalent: true,
+      },
+    }))
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.nativeMtp).toMatchObject({
+      supported: true,
+      depth: 2,
+      depthSource: 'vmlx_mtp_tuning.json:native_mtp.best_depth',
     })
   })
 

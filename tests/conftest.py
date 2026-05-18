@@ -55,7 +55,11 @@ def pytest_sessionstart(session):
         Path("/tmp/vmlx-1.3.66-build"),
     ):
         try:
-            if legacy_root.exists() or legacy_root.is_symlink():
+            if legacy_root.is_symlink():
+                if legacy_root.resolve() == repo_root:
+                    continue
+                legacy_root.unlink()
+            elif legacy_root.exists():
                 continue
             legacy_root.parent.mkdir(parents=True, exist_ok=True)
             legacy_root.symlink_to(repo_root, target_is_directory=True)

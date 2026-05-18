@@ -3532,8 +3532,9 @@ def load_model(
                 f"this Mac. Prompts longer than ~{_max_prompt_tokens:,} "
                 f"tokens will be REJECTED with a 413 prompt_too_long error to avoid "
                 f"Metal OOM. Use a Mac with more RAM, a smaller model, "
-                f"or set --max-prompt-tokens={_max_prompt_tokens} explicitly "
-                f"to set the prompt/context cap."
+                f"or set --max-tokens={_max_prompt_tokens} to silence this warning. "
+                f"Use --max-prompt-tokens={_max_prompt_tokens} only when you want "
+                f"to set the prompt/context cap explicitly."
             )
 
     # Cache JANG metadata at load time (avoids sync file IO in async /health handler)
