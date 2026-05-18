@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.5.40 — 2026-05-17 — Tuned Native MTP Defaults and Packaged Gate Proof
+
+### Fixed
+- **Native MTP depth follows validated model-local tuning sidecars by default**
+  while still allowing explicit user overrides in the session settings UI.
+  Qwen3.6-27B-MXFP4-MTP now launches with its measured D2 policy instead of a
+  stale blanket D3 default.
+- **Unsupported or unvalidated native-MTP artifacts are hidden/blocked in the
+  app**: blocked sidecars and JANG_2K diagnostic artifacts no longer present a
+  normal native-MTP launch path.
+- **Hybrid SSM cache telemetry separates live KV patching from stored cache
+  codecs** so the UI/API can show that generic TurboQuant KV is off for hybrid
+  correctness while q4 attention-KV storage is active at prefix/paged/L2
+  boundaries with SSM companion state.
+
+### Verified
+- Packaged release gate passed from the built app with Qwen3.6-27B-MXFP4-MTP:
+  GUI launch, Chat, Responses, Anthropic, Ollama, multi-turn recall,
+  cross-request cache hit, cache stats, and soft wake.
+- Focused packaged media/speed gate passed with native MTP D2, red image,
+  red video, no-media follow-ups, deep sleep/wake reload, and 50.78 wall tok/s
+  on a 260-token count row.
+
 ## v1.5.39 — 2026-05-17 — Native MTP Detection and Runtime Settings
 
 ### Added

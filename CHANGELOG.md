@@ -2,6 +2,32 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.5.40] - 2026-05-17
+
+### Fixed
+- **Native MTP now honors validated model-local tuning by default**:
+  `vmlx_mtp_tuning.json` sidecars select the measured depth before falling
+  back to D3, while explicit CLI/UI overrides still win. This fixes
+  Qwen3.6-27B-MXFP4-MTP launching at D3 when the validated local sweep selects
+  D2.
+- **Unvalidated native-MTP profiles fail closed in the app**: blocked sidecars
+  and Qwen3.6 JANG_2K diagnostic artifacts no longer expose native-MTP launch
+  controls unless explicitly force-enabled for research.
+- **Hybrid SSM cache reporting is explicit**: live generic TurboQuant KV remains
+  disabled for path-dependent hybrid models, while q4/q8 attention-KV storage
+  quantization is reported separately for prefix/paged/L2 cache boundaries with
+  SSM companion state and async clean-prefill rederive.
+
+### Verified
+- Packaged app release gate passed on Qwen3.6-27B-MXFP4-MTP from bundled
+  Python: GUI launch, OpenAI Chat, Responses, Anthropic, Ollama, multi-turn
+  recall, cross-request cache hit, cache stats, and soft wake.
+- Focused packaged media/speed gate passed: native MTP D2 text+VL detection,
+  260-token count row at 50.78 wall tok/s with 171/174 accepted draft tokens,
+  red image then no-image text follow-up, red video then no-video text
+  follow-up, q4 attention-KV storage telemetry, SSM companion L2 state, and deep
+  sleep/wake reload.
+
 ## [1.5.39] - 2026-05-17
 
 ### Added
