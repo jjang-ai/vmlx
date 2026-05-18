@@ -59,6 +59,7 @@ from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import uvicorn
@@ -1216,6 +1217,108 @@ def _content_has_multimodal(content) -> bool:
     return False
 
 
+def _content_multimodal_summary(content) -> dict:
+    """Return redacted media counts for a message/content-part list.
+
+    This intentionally never logs URL strings or base64 payloads. The goal is
+    to make exported user logs answer whether media reached the server and what
+    route/runtime saw it, without leaking image/audio/video contents.
+    """
+    summary = {
+        "total": 0,
+        "types": {},
+        "data_url": 0,
+        "url_or_path": 0,
+        "missing_source": 0,
+    }
+    if not isinstance(content, list):
+        return summary
+
+    def _as_clean_dict(obj):
+        if hasattr(obj, "model_dump"):
+            return obj.model_dump(exclude_none=True)
+        if hasattr(obj, "dict"):
+            return {k: v for k, v in obj.dict().items() if v is not None}
+        return obj if isinstance(obj, dict) else None
+
+    def _source_for_part(part: dict):
+        ptype = part.get("type")
+        if ptype in ("image_url", "image"):
+            src = part.get("image_url") or part.get("image")
+            return src.get("url") if isinstance(src, dict) else src
+        if ptype in ("video_url", "video"):
+            src = part.get("video_url") or part.get("video")
+            return src.get("url") if isinstance(src, dict) else src
+        if ptype in ("input_image",):
+            src = part.get("image_url") or part.get("url") or part.get("file_id")
+            return src.get("url") if isinstance(src, dict) else src
+        if ptype in ("input_video",):
+            src = part.get("video_url") or part.get("url") or part.get("file_id")
+            return src.get("url") if isinstance(src, dict) else src
+        if ptype in ("input_audio", "audio"):
+            src = part.get("input_audio") or part.get("audio")
+            if isinstance(src, dict):
+                return src.get("url") or ("<inline_audio_data>" if src.get("data") else None)
+            return src
+        return None
+
+    for raw_part in content:
+        part = _as_clean_dict(raw_part)
+        if not isinstance(part, dict):
+            continue
+        ptype = part.get("type")
+        if ptype not in _MULTIMODAL_CONTENT_TYPES:
+            continue
+        summary["total"] += 1
+        summary["types"][ptype] = int(summary["types"].get(ptype, 0)) + 1
+        src = _source_for_part(part)
+        if isinstance(src, str) and src.startswith("data:"):
+            summary["data_url"] += 1
+        elif src:
+            summary["url_or_path"] += 1
+        else:
+            summary["missing_source"] += 1
+    return summary
+
+
+def _merge_multimodal_summaries(target: dict, child: dict) -> None:
+    target["total"] += int(child.get("total") or 0)
+    target["data_url"] += int(child.get("data_url") or 0)
+    target["url_or_path"] += int(child.get("url_or_path") or 0)
+    target["missing_source"] += int(child.get("missing_source") or 0)
+    for key, value in (child.get("types") or {}).items():
+        target["types"][key] = int(target["types"].get(key, 0)) + int(value)
+
+
+def _messages_multimodal_summary(messages) -> dict:
+    summary = {
+        "total": 0,
+        "types": {},
+        "data_url": 0,
+        "url_or_path": 0,
+        "missing_source": 0,
+        "roles": {},
+        "messages": 0,
+        "content_arrays": 0,
+    }
+    for msg in messages or []:
+        if hasattr(msg, "model_dump"):
+            msg = msg.model_dump(exclude_none=True)
+        elif hasattr(msg, "dict"):
+            msg = {k: v for k, v in msg.dict().items() if v is not None}
+        role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+        if isinstance(content, list):
+            summary["content_arrays"] += 1
+        child = _content_multimodal_summary(content)
+        if child.get("total"):
+            summary["messages"] += 1
+            role_key = str(role or "unknown")
+            summary["roles"][role_key] = int(summary["roles"].get(role_key, 0)) + 1
+            _merge_multimodal_summaries(summary, child)
+    return summary
+
+
 def _messages_have_multimodal(messages) -> bool:
     for msg in messages or []:
         if hasattr(msg, "model_dump"):
@@ -1226,6 +1329,41 @@ def _messages_have_multimodal(messages) -> bool:
         if _content_has_multimodal(content):
             return True
     return False
+
+
+def _responses_input_multimodal_summary(input_data) -> dict:
+    summary = {
+        "total": 0,
+        "types": {},
+        "data_url": 0,
+        "url_or_path": 0,
+        "missing_source": 0,
+        "items": 0,
+        "content_arrays": 0,
+    }
+    if isinstance(input_data, str):
+        return summary
+    for item in input_data or []:
+        if hasattr(item, "model_dump"):
+            item = item.model_dump(exclude_none=True)
+        elif hasattr(item, "dict"):
+            item = {k: v for k, v in item.dict().items() if v is not None}
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if item_type in _MULTIMODAL_CONTENT_TYPES:
+            child = _content_multimodal_summary([item])
+            if child.get("total"):
+                summary["items"] += 1
+                _merge_multimodal_summaries(summary, child)
+        content = item.get("content")
+        if isinstance(content, list):
+            summary["content_arrays"] += 1
+            child = _content_multimodal_summary(content)
+            if child.get("total"):
+                summary["items"] += 1
+                _merge_multimodal_summaries(summary, child)
+    return summary
 
 
 def _responses_input_has_multimodal(input_data) -> bool:
@@ -1243,6 +1381,34 @@ def _responses_input_has_multimodal(input_data) -> bool:
         if _content_has_multimodal(item.get("content")):
             return True
     return False
+
+
+def _log_multimodal_request_shape(route: str, model_name: str, summary: dict) -> None:
+    """Log redacted media request shape for user-exported diagnostics."""
+    if not summary or int(summary.get("total") or 0) <= 0:
+        return
+    try:
+        from .model_config_registry import get_model_config_registry
+
+        cfg = get_model_config_registry().lookup(_model_path or model_name or "")
+        family = getattr(cfg, "family_name", None)
+        registry_is_mllm = bool(getattr(cfg, "is_mllm", False))
+    except Exception:
+        family = None
+        registry_is_mllm = False
+    engine_is_mllm = bool(
+        getattr(_engine, "is_mllm", False) or getattr(_engine, "_is_mllm", False)
+    ) if _engine is not None else None
+    payload = {
+        "route": route,
+        "model": Path(str(model_name)).name if model_name else None,
+        "family": family,
+        "engine_is_mllm": engine_is_mllm,
+        "registry_is_mllm": registry_is_mllm,
+        "omni_modalities": _loaded_omni_modalities(),
+        "media": summary,
+    }
+    logger.info("[MEDIA_DIAG] request_shape=%s", json.dumps(payload, sort_keys=True))
 
 
 def _loaded_omni_modalities() -> list[str] | None:
@@ -9043,6 +9209,11 @@ async def create_chat_completion(
             )
     # Normalize response model field to the resolved name
     request.model = resolved_name
+    _log_multimodal_request_shape(
+        "/v1/chat/completions",
+        _model_path or _model_name or request.model,
+        _messages_multimodal_summary(request.messages),
+    )
 
     _chat_max_prompt_tokens = _effective_max_prompt_tokens(request)
     prompt_limit_response = _reject_if_prompt_too_long_for_messages(
@@ -10468,6 +10639,11 @@ async def create_response(
 
     engine = get_engine()
     _responses_has_media = _responses_input_has_multimodal(request.input)
+    _log_multimodal_request_shape(
+        "/v1/responses",
+        _model_path or _model_name or request.model,
+        _responses_input_multimodal_summary(request.input),
+    )
     if (
         _responses_has_media
         and not engine.is_mllm

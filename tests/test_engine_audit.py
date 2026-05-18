@@ -1336,6 +1336,100 @@ class TestH3VideoExtractionFailures:
         )
 
 
+class TestMediaDiagnostics:
+    """Redacted media diagnostics for user logs when image requests fail."""
+
+    def test_messages_multimodal_summary_redacts_data_urls(self):
+        from vmlx_engine.server import _messages_multimodal_summary
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what color?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "data:image/png;base64,SECRET_IMAGE_BYTES"
+                        },
+                    },
+                    {
+                        "type": "video_url",
+                        "video_url": {"url": "/tmp/example.mp4"},
+                    },
+                ],
+            }
+        ]
+
+        summary = _messages_multimodal_summary(messages)
+
+        assert summary["total"] == 2
+        assert summary["types"] == {"image_url": 1, "video_url": 1}
+        assert summary["data_url"] == 1
+        assert summary["url_or_path"] == 1
+        assert "SECRET_IMAGE_BYTES" not in json.dumps(summary)
+
+    def test_responses_multimodal_summary_handles_input_image_without_payload(self):
+        from vmlx_engine.server import _responses_input_multimodal_summary
+
+        response_input = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "describe"},
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,SECRET_RESPONSE_IMAGE",
+                    },
+                ],
+            }
+        ]
+
+        summary = _responses_input_multimodal_summary(response_input)
+
+        assert summary["total"] == 1
+        assert summary["types"] == {"input_image": 1}
+        assert summary["data_url"] == 1
+        assert "SECRET_RESPONSE_IMAGE" not in json.dumps(summary)
+
+    def test_server_media_diag_log_includes_route_runtime_and_redacts_payload(
+        self, caplog, monkeypatch
+    ):
+        import logging
+        import vmlx_engine.server as server
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_model_path", "/models/Brooklyn-VLM")
+        monkeypatch.setattr(server, "_model_name", "Brooklyn-VLM")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+        summary = {
+            "total": 1,
+            "types": {"image_url": 1},
+            "data_url": 1,
+            "url_or_path": 0,
+            "missing_source": 0,
+            "roles": {"user": 1},
+            "messages": 1,
+            "content_arrays": 1,
+        }
+
+        caplog.set_level(logging.INFO, logger="vmlx_engine.server")
+        server._log_multimodal_request_shape(
+            "/v1/chat/completions",
+            "/models/Brooklyn-VLM",
+            summary,
+        )
+
+        text = caplog.text
+        assert "[MEDIA_DIAG] request_shape=" in text
+        assert '"/v1/chat/completions"' in text
+        assert '"engine_is_mllm": true' in text
+        assert '"total": 1' in text
+        assert "SECRET" not in text
+        assert "data:image" not in text
+
+
 class TestH4JsonSchemaStreaming:
     """H4: JSON schema/object validation must happen at end of streaming."""
 
