@@ -1607,6 +1607,7 @@ _TOOL_CALL_MARKERS = [
     "<|tool_call_begin|>",
     "<\uff5ctool\u2581calls\u2581begin\uff5c>",  # DeepSeek Unicode variant (U+FF5C, U+2581)
     "<\uff5ctool\u2581call\u2581begin\uff5c>",  # DeepSeek singular begin (GLM-5.1 emits this)
+    "<｜DSML｜tool_c",  # DSV4 DSML wrapper prefix before inner invoke
     "<｜DSML｜invoke",  # DSV4 native tool-call format
     "<|python_tag|>",  # Llama 3.1+ code interpreter / tool call
     "```tool_code",  # Gemma 3 / 3n function-call code block (Google docs format)
@@ -12058,6 +12059,33 @@ async def stream_chat_completion(
                     emit_reasoning = delta_msg.reasoning
                     emit_content = delta_msg.content
 
+                # Tool-call-only streams often start with harmless whitespace
+                # before the native marker (DSV4 commonly emits "\n\n<｜DSML｜…").
+                # Do not send that whitespace as visible content until we know
+                # the turn is not a tool call; otherwise clients see a blank
+                # assistant message before the structured tool_calls delta.
+                if (
+                    tool_call_active
+                    and not content_was_emitted
+                    and emit_content
+                    and not emit_content.strip()
+                ):
+                    if include_usage:
+                        heartbeat = ChatCompletionChunk(
+                            id=response_id,
+                            created=_created_ts,
+                            model=request.model,
+                            choices=[
+                                ChatCompletionChunkChoice(
+                                    delta=ChatCompletionChunkDelta(content=None),
+                                    finish_reason=None,
+                                )
+                            ],
+                            usage=get_usage(output),
+                        )
+                        yield f"data: {_dump_sse_json(heartbeat)}\n\n"
+                    continue
+
                 if _suppress_tools and emit_content:
                     emit_content = _suppressed_tool_display_delta(
                         accumulated_content,
@@ -12123,6 +12151,29 @@ async def stream_chat_completion(
                         if not tool_call_buffering_notified:
                             tool_call_buffering_notified = True
                         yield f"data: {_dump_sse_json(buf_chunk)}\n\n"
+                    continue
+
+                # Same leading-whitespace guard as the reasoning-parser path.
+                if (
+                    tool_call_active
+                    and not content_was_emitted
+                    and content
+                    and not content.strip()
+                ):
+                    if include_usage:
+                        heartbeat = ChatCompletionChunk(
+                            id=response_id,
+                            created=_created_ts,
+                            model=request.model,
+                            choices=[
+                                ChatCompletionChunkChoice(
+                                    delta=ChatCompletionChunkDelta(content=None),
+                                    finish_reason=None,
+                                )
+                            ],
+                            usage=get_usage(output),
+                        )
+                        yield f"data: {_dump_sse_json(heartbeat)}\n\n"
                     continue
 
                 # Add <think> prefix on first content chunk for thinking models

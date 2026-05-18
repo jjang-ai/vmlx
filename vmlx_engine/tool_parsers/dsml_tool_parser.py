@@ -64,6 +64,7 @@ class DSMLToolParser(ToolParser):
     # and stop emitting content between the opening `<｜DSML｜invoke` and its close.
     INVOKE_OPEN_PREFIX = f"<{DSML_PREFIX}invoke "
     INVOKE_CLOSE = f"</{DSML_PREFIX}invoke>"
+    DSML_OPEN_PREFIX = f"<{DSML_PREFIX}"
 
     # Top-level regex: find every <｜DSML｜invoke name="…">…</｜DSML｜invoke> block.
     _INVOKE_RE = re.compile(
@@ -109,9 +110,13 @@ class DSMLToolParser(ToolParser):
         rf'</(?:{re.escape(DSML_PREFIX)})?inv(?:oke)?>',
         re.DOTALL,
     )
+    _WRAPPER_RESIDUE_RE = re.compile(
+        rf'</?{re.escape(DSML_PREFIX)}(?:tool_calls?|tool_call_type|tool_c)[^>]*>?',
+        re.DOTALL,
+    )
 
     def _has_dsml(self, text: str) -> bool:
-        return self.INVOKE_OPEN_PREFIX in text
+        return self.DSML_OPEN_PREFIX in text
 
     def _parse_params(self, body: str) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -182,6 +187,18 @@ class DSMLToolParser(ToolParser):
     ) -> bool:
         _, required = self._schema_props_required(schema)
         return all(p in args for p in required)
+
+    def _clean_residue(self, text: str | None) -> str | None:
+        """Remove DSML wrapper/invoke residue from visible content."""
+        if not text:
+            return None
+        residue = self._INVOKE_RE.sub("", text)
+        residue = self._WRAPPER_RESIDUE_RE.sub("", residue)
+        residue = residue.strip()
+        if DSML_PREFIX in residue:
+            # Any remaining DSML token is malformed wrapper noise, not prose.
+            residue = ""
+        return residue or None
 
     def _tool_schemas(self, request: Any | None) -> dict[str, dict[str, Any]]:
         """Return available tool schemas keyed by function name.
@@ -522,7 +539,7 @@ class DSMLToolParser(ToolParser):
             residue = "".join(
                 p.get("text", "") if isinstance(p, dict) else str(p) for p in residue
             )
-        residue = (residue or "").strip() or None
+        residue = self._clean_residue(residue)
         return ExtractedToolCallInformation(
             tools_called=True,
             tool_calls=tool_calls,
@@ -586,7 +603,7 @@ class DSMLToolParser(ToolParser):
         # Residue content = everything OUTSIDE the invoke blocks. Strip the
         # matched spans and collapse surrounding whitespace so the chat UI
         # doesn't show a blank paragraph where the tool call used to be.
-        residue = self._INVOKE_RE.sub("", model_output).strip()
+        residue = self._clean_residue(model_output) or ""
         if tool_calls and residue == model_output.strip():
             # Repaired malformed DSML: hide the malformed raw marker from the
             # client once we successfully emitted a structured tool call.
@@ -625,12 +642,18 @@ class DSMLToolParser(ToolParser):
 
         if len(curr_blocks) == len(prev_blocks):
             # We're mid-invoke (opening tag emitted but close not seen yet),
-            # OR we're in plain content between invokes. Suppress the delta
-            # while inside an unclosed invoke; otherwise pass through.
+            # inside a wrapper like <｜DSML｜tool_calls>, OR we're in plain
+            # content between invokes. Suppress the delta while inside DSML
+            # markup; otherwise pass through.
             open_tail = current_text.rsplit(self.INVOKE_OPEN_PREFIX, 1)
             if len(open_tail) == 2 and self.INVOKE_CLOSE not in open_tail[1]:
                 # We're inside an unclosed invoke — buffer silently.
                 return None
+            dsml_tail = current_text.rsplit(self.DSML_OPEN_PREFIX, 1)
+            if len(dsml_tail) == 2:
+                tail = dsml_tail[1]
+                if self.INVOKE_CLOSE not in tail:
+                    return None
             return self._default_content_delta(delta_text)
 
         # A new invoke block just closed. Emit tool calls for each block

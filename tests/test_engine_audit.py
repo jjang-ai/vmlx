@@ -834,6 +834,17 @@ class TestToolParserConcurrency:
         finally:
             srv._enable_auto_tool_choice = old_val
 
+    def test_stream_chat_buffers_leading_whitespace_before_tool_marker(self):
+        """Tool-call-only streams must not leak whitespace before tool_calls."""
+        import inspect
+
+        from vmlx_engine.server import _TOOL_CALL_MARKERS, stream_chat_completion
+
+        source = inspect.getsource(stream_chat_completion)
+        assert "<｜DSML｜tool_c" in _TOOL_CALL_MARKERS
+        assert "not emit_content.strip()" in source
+        assert "not content.strip()" in source
+
 
 class TestCacheTruncation:
     """Test N-1 token truncation logic for cache storage."""
