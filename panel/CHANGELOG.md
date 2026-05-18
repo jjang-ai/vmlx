@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.5.42 — 2026-05-18 — DeepSeek R1 Reasoning Rail Regression Fix
+
+### Fixed
+- **DeepSeek-R1 parser direct-rail and implicit-reasoning modes are separated**
+  so standalone parser/default output still treats `reasoning</think>answer`
+  as implicit reasoning, while server requests that explicitly disable thinking
+  strip stray close tags without hiding visible content.
+
+### Verified
+- Targeted parser gate passed for DeepSeek-R1 implicit reasoning, explicit
+  direct rail, orphan close tags, and closed-think VL regression coverage.
+- Broad multimodal/reasoning/tool/cache contract suite passed across MLLM
+  routing, video, ZAYA, Gemma 4, DSML tools, native MTP policy, hybrid SSM
+  prefix cache, and TurboQuant cache contracts.
+
 ## v1.5.41 — 2026-05-18 — DSV4 DSML Tool Calls and Packaged Cache Gates
 
 ### Fixed
