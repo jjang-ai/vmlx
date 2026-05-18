@@ -252,6 +252,49 @@ def test_dsv4_responses_cache_gate_uses_previous_response_and_no_cache_control()
     assert "native_cache" in src
 
 
+def test_dsv4_responses_cache_gate_records_stream_ttft_and_usage():
+    """Streaming TTFT must be measured from first real model delta, not SSE setup events."""
+    import inspect
+    from tests.cross_matrix import run_dsv4_responses_cache_gate
+
+    events = [
+        b'event: response.created\n',
+        b'data: {"type":"response.created"}\n',
+        b"\n",
+        b'event: response.output_item.added\n',
+        b'data: {"type":"response.output_item.added"}\n',
+        b"\n",
+        b'event: response.output_text.delta\n',
+        b'data: {"type":"response.output_text.delta","delta":"CERULEAN / "}\n',
+        b"\n",
+        b'event: response.usage\n',
+        b'data: {"type":"response.usage","usage":{"input_tokens":10,"output_tokens":1,"input_tokens_details":{"cached_tokens":9,"cache_detail":"paged+dsv4"}}}\n',
+        b"\n",
+        b'event: response.completed\n',
+        b'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":10,"output_tokens":3,"input_tokens_details":{"cached_tokens":9,"cache_detail":"paged+dsv4"}}}}\n',
+        b"\n",
+    ]
+
+    parsed = list(run_dsv4_responses_cache_gate.iter_sse_json_lines(events))
+    assert [event["type"] for event in parsed] == [
+        "response.created",
+        "response.output_item.added",
+        "response.output_text.delta",
+        "response.usage",
+        "response.completed",
+    ]
+
+    module_src = inspect.getsource(run_dsv4_responses_cache_gate)
+    run_src = inspect.getsource(run_dsv4_responses_cache_gate.run)
+    assert "stream_previous_response_follow" in run_src
+    assert '"stream": True' in run_src
+    assert '"stream_options": {"include_usage": True}' in run_src
+    assert "ttft_seconds" in module_src
+    assert "response.output_text.delta" in module_src
+    assert "stream_previous_response_follow: missing TTFT" in run_src
+    assert "stream_previous_response_follow: missing dsv4 cache_detail" in run_src
+
+
 def test_mistral_medium_jangtq_path_matches_current_drive_layout():
     rows = {row.id: row for row in ROWS}
 

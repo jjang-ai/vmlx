@@ -21,7 +21,7 @@ import subprocess
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -44,6 +44,101 @@ def post_json(url: str, payload: dict[str, Any], timeout: int = 600) -> dict[str
     )
     with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.loads(response.read())
+
+
+def iter_sse_json_lines(lines: Iterable[bytes | str]) -> Iterable[dict[str, Any]]:
+    """Yield JSON payloads from an SSE byte/string line iterator."""
+    data_lines: list[str] = []
+    for raw_line in lines:
+        line = (
+            raw_line.decode("utf-8", errors="replace")
+            if isinstance(raw_line, (bytes, bytearray))
+            else str(raw_line)
+        )
+        line = line.rstrip("\r\n")
+        if line.startswith(":"):
+            continue
+        if line.startswith("data:"):
+            data = line[5:].lstrip()
+            if data == "[DONE]":
+                continue
+            data_lines.append(data)
+            continue
+        if line == "" and data_lines:
+            payload = "\n".join(data_lines)
+            data_lines = []
+            yield json.loads(payload)
+    if data_lines:
+        yield json.loads("\n".join(data_lines))
+
+
+def stream_responses(url: str, payload: dict[str, Any], timeout: int = 600) -> dict[str, Any]:
+    """Run a streaming Responses request and capture real TTFT plus final usage."""
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    t0 = time.perf_counter()
+    ttft: float | None = None
+    content_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    usage_obj: dict[str, Any] = {}
+    completed_status: str | None = None
+    event_count = 0
+    error_events: list[dict[str, Any]] = []
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        for event in iter_sse_json_lines(response):
+            event_count += 1
+            event_type = str(event.get("type") or "")
+            delta = ""
+            if event_type == "response.output_text.delta":
+                delta = str(event.get("delta") or "")
+                if delta:
+                    content_parts.append(delta)
+            elif event_type == "response.reasoning_summary_text.delta":
+                delta = str(event.get("delta") or "")
+                if delta:
+                    reasoning_parts.append(delta)
+            elif event_type == "response.usage":
+                usage_obj = event.get("usage") or usage_obj
+            elif event_type == "response.completed":
+                completed = event.get("response") or {}
+                completed_status = completed.get("status")
+                usage_obj = completed.get("usage") or usage_obj
+                if not content_parts and isinstance(completed.get("output_text"), str):
+                    content_parts.append(completed["output_text"])
+            elif event_type == "error":
+                error_events.append(event)
+
+            if ttft is None and delta:
+                ttft = time.perf_counter() - t0
+
+    wall = time.perf_counter() - t0
+    text = "".join(content_parts)
+    reasoning = "".join(reasoning_parts)
+    out_tokens = int(usage_obj.get("output_tokens") or usage_obj.get("completion_tokens") or 0)
+    return {
+        "status": completed_status or ("error" if error_events else None),
+        "wall_seconds": wall,
+        "ttft_seconds": ttft,
+        "output_tokens": out_tokens,
+        "tok_s_wall": out_tokens / wall if wall else 0.0,
+        "content": text,
+        "reasoning": reasoning,
+        "content_head": text[:900],
+        "content_tail": text[-900:],
+        "reasoning_head": reasoning[:900],
+        "reasoning_tail": reasoning[-900:],
+        "has_cerulean": "CERULEAN" in text.upper(),
+        "has_45": "45" in text,
+        "has_ada": "ADA" in text.upper() and "LOVELACE" in text.upper(),
+        "loopish": re.search(r"(.{24,160})\1\1", text + "\n" + reasoning, re.S)
+        is not None,
+        "usage": usage_obj,
+        "event_count": event_count,
+        "errors": error_events,
+    }
 
 
 def get_json(url: str, timeout: int = 5) -> dict[str, Any]:
@@ -320,6 +415,25 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             },
             timeout=600,
         )
+        stream_previous_response_follow = stream_responses(
+            url,
+            {
+                "model": model_name,
+                "input": follow_prompt,
+                "previous_response_id": store_turn["id"],
+                "store": False,
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                "max_output_tokens": 192,
+                "temperature": 0.0,
+                "top_p": 1.0,
+                "top_k": 0,
+                "repetition_penalty": 1.0,
+                "enable_thinking": False,
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
+            timeout=600,
+        )
         explicit_no_cache_full_prompt = responses(
             url,
             {
@@ -356,6 +470,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "cases": {
                 "store_turn": store_turn,
                 "previous_response_follow": previous_response_follow,
+                "stream_previous_response_follow": stream_previous_response_follow,
                 "explicit_no_cache_full_prompt": explicit_no_cache_full_prompt,
             },
         }
@@ -382,6 +497,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             notes.append("previous_response_follow: missing cached_tokens evidence")
         if "dsv4" not in cache_detail(previous_response_follow):
             notes.append("previous_response_follow: missing dsv4 cache_detail")
+        if stream_previous_response_follow.get("ttft_seconds") is None:
+            notes.append("stream_previous_response_follow: missing TTFT")
+        if cached_tokens(stream_previous_response_follow) <= 0:
+            notes.append("stream_previous_response_follow: missing cached_tokens evidence")
+        if "dsv4" not in cache_detail(stream_previous_response_follow):
+            notes.append("stream_previous_response_follow: missing dsv4 cache_detail")
         if cached_tokens(explicit_no_cache_full_prompt) or cache_detail(
             explicit_no_cache_full_prompt
         ):
