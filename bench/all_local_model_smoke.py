@@ -70,6 +70,12 @@ def _positive_int_recursive(obj: Any, key_names: set[str]) -> bool:
     return False
 
 
+def _index_has_mtp_tensors(model_dir: Path) -> bool:
+    index = read_json(model_dir / "model.safetensors.index.json")
+    weight_map = index.get("weight_map") if isinstance(index.get("weight_map"), dict) else {}
+    return any(str(key).startswith("mtp.") for key in weight_map)
+
+
 def classify_model_dir(model_dir: Path) -> dict[str, Any]:
     config = read_json(model_dir / "config.json")
     jang = read_json(model_dir / "jang_config.json")
@@ -84,11 +90,17 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
         or "omni" in name.lower()
         or model_type in {"gemma4", "zaya1_vl", "qwen2_5_vl", "qwen3_5_vl"}
     )
+    name_lower = name.lower()
+    name_has_mtp = "mtp" in name_lower and "nomtp" not in name_lower and "no-mtp" not in name_lower
     has_mtp = (
-        "mtp" in name.lower()
-        or _positive_int_recursive(
-            config,
-            {"mtp_num_hidden_layers", "num_nextn_predict_layers", "num_nextn_predict_layers"},
+        jang.get("drop_mtp") is not True
+        and (
+            name_has_mtp
+            or _index_has_mtp_tensors(model_dir)
+            or _positive_int_recursive(
+                config,
+                {"mtp_num_hidden_layers", "num_nextn_predict_layers", "num_nextn_predict_layers"},
+            )
         )
     )
     supports_video = bool(is_mllm and ("video" in lower_blob or "qwen" in lower_blob or "vl" in lower_blob or "omni" in lower_blob))

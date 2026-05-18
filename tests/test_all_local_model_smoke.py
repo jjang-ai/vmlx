@@ -61,6 +61,29 @@ def test_classify_model_marks_deepseek_v4_composite_cache(tmp_path):
     assert row["has_mtp"] is True
 
 
+def test_classify_model_does_not_mark_explicit_nomtp_bundle(tmp_path):
+    mod = load_module()
+    model_dir = tmp_path / "DeepSeek-V4-Flash-JANG_DQ2-NoMTP"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text(
+        '{"model_type":"deepseek_v4","num_nextn_predict_layers":0}',
+        encoding="utf-8",
+    )
+    (model_dir / "jang_config.json").write_text(
+        '{"weight_format":"affine"}',
+        encoding="utf-8",
+    )
+    (model_dir / "model.safetensors.index.json").write_text(
+        '{"weight_map":{"model.embed_tokens.weight":"model.safetensors"}}',
+        encoding="utf-8",
+    )
+
+    row = mod.classify_model_dir(model_dir)
+
+    assert row["cache_family"] == "deepseek_v4_composite"
+    assert row["has_mtp"] is False
+
+
 def test_build_serve_command_uses_production_auto_cache(tmp_path):
     mod = load_module()
     row = {
