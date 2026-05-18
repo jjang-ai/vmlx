@@ -117,6 +117,7 @@ describe('Responses warnings panel wiring', () => {
     expect(source).toContain('currentEventType === "response.warning"')
     expect(source).toContain('const eventWarnings = extractResponsesWarnings(parsed)')
     expect(source).toContain('const completedWarnings = extractResponsesWarnings(')
+    expect(source).toContain('const chatWarnings = extractResponsesWarnings(parsed)')
     expect(source).toContain('assistantMessage.warningsJson = JSON.stringify(finalResponseWarnings)')
     expect(source).toContain('warnings: finalResponseWarnings || undefined')
   })

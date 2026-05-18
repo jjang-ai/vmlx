@@ -2180,6 +2180,12 @@ export function registerChatHandlers(
               }
             } else {
               // ── Chat Completions SSE parsing ──
+              const chatWarnings = extractResponsesWarnings(parsed);
+              if (chatWarnings) {
+                responseWarnings = Array.from(
+                  new Set([...(responseWarnings || []), ...chatWarnings]),
+                );
+              }
               const choice = parsed.choices?.[0]?.delta;
 
               // Track response ID for server-side cancel

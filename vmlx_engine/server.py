@@ -9936,6 +9936,12 @@ async def create_chat_completion(
 
     # Determine finish reason
     finish_reason = "tool_calls" if tool_calls else output.finish_reason
+    response_content = clean_output_text(cleaned_text) if cleaned_text else None
+    response_warnings = _chat_completion_warnings_for_reasoning_only(
+        response_content,
+        reasoning_text,
+        tool_calls,
+    )
 
     response = ChatCompletionResponse(
         id=response_id,
@@ -9943,7 +9949,7 @@ async def create_chat_completion(
         choices=[
             ChatCompletionChoice(
                 message=AssistantMessage(
-                    content=clean_output_text(cleaned_text) if cleaned_text else None,
+                    content=response_content,
                     reasoning=reasoning_text,
                     tool_calls=tool_calls,
                 ),
@@ -9957,6 +9963,7 @@ async def create_chat_completion(
             )
         ],
         usage=get_usage(output),
+        warnings=response_warnings,
     )
 
     # When tool_calls are present, serialize manually to ensure content:null is
@@ -10189,6 +10196,19 @@ def _current_response_warnings_for_reasoning_only(
         "is empty. Consider raising max_output_tokens or sending "
         "enable_thinking=false for the final synthesis turn."
     ]
+
+
+def _chat_completion_warnings_for_reasoning_only(
+    content: str | None,
+    reasoning: str | None,
+    tool_calls: list | None,
+) -> list[str] | None:
+    has_visible_content = bool((content or "").strip())
+    has_reasoning = bool((reasoning or "").strip())
+    has_tool_calls = bool(tool_calls)
+    return _current_response_warnings_for_reasoning_only(
+        has_reasoning and not has_visible_content and not has_tool_calls
+    )
 
 
 def _merge_responses_warnings(*warning_lists: list[str] | None) -> list[str] | None:
@@ -12426,6 +12446,7 @@ async def stream_chat_completion(
                         finish_reason="tool_calls",
                     )],
                 )
+                tool_calls_emitted = True
                 yield f"data: {_dump_sse_json(tc_chunk)}\n\n"
             else:
                 logger.info(f"Request {response_id}: tool markers found but parsing failed — emitting reasoning as content fallback")
@@ -12449,6 +12470,28 @@ async def stream_chat_completion(
                 )],
             )
             yield f"data: {_dump_sse_json(diag_chunk)}\n\n"
+
+    _stream_chat_warnings = None
+    if (
+        accumulated_reasoning
+        and not content_was_emitted
+        and not tool_calls_emitted
+        and (suppress_reasoning or reasoning_was_streamed)
+    ):
+        _stream_chat_warnings = _chat_completion_warnings_for_reasoning_only(
+            content=None,
+            reasoning=accumulated_reasoning,
+            tool_calls=None,
+        )
+    if _stream_chat_warnings:
+        warning_chunk = ChatCompletionChunk(
+            id=response_id,
+            created=_created_ts,
+            model=request.model,
+            choices=[],
+            warnings=_stream_chat_warnings,
+        )
+        yield f"data: {_dump_sse_json(warning_chunk)}\n\n"
 
     # Safeguard: if model generated zero tokens (empty stream), finish the stream
     # without injecting diagnostic prose as assistant output. The warning belongs

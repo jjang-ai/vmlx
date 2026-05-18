@@ -466,6 +466,29 @@ def test_current_response_warning_for_reasoning_only_output():
     assert _current_response_warnings_for_reasoning_only(False) is None
 
 
+def test_chat_completion_warning_for_reasoning_only_message():
+    from vmlx_engine.server import _chat_completion_warnings_for_reasoning_only
+
+    warnings = _chat_completion_warnings_for_reasoning_only(
+        content=None,
+        reasoning="internal analysis",
+        tool_calls=None,
+    )
+
+    assert warnings is not None
+    assert any("produced reasoning only" in w for w in warnings)
+    assert _chat_completion_warnings_for_reasoning_only(
+        content="visible answer",
+        reasoning="internal analysis",
+        tool_calls=None,
+    ) is None
+    assert _chat_completion_warnings_for_reasoning_only(
+        content=None,
+        reasoning="internal analysis",
+        tool_calls=[{"id": "call_1"}],
+    ) is None
+
+
 def test_empty_output_does_NOT_emit_placeholder():
     """An empty output_items list means the model truly produced nothing.
     Do not invent an assistant turn — that's different from reasoning-only."""

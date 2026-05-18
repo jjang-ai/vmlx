@@ -358,6 +358,30 @@ class TestChatCompletion:
         assert before <= resp.created <= after
         assert resp.usage.prompt_tokens == 0
 
+    def test_chat_completion_response_supports_warnings_field(self):
+        resp = ChatCompletionResponse(
+            model="test",
+            choices=[
+                ChatCompletionChoice(
+                    message=AssistantMessage(content=None, reasoning="thinking")
+                )
+            ],
+            warnings=["reasoning-only output"],
+        )
+        data = resp.model_dump(exclude_none=True)
+
+        assert resp.warnings == ["reasoning-only output"]
+        assert data["warnings"] == ["reasoning-only output"]
+
+    def test_chat_completion_response_warnings_default_none(self):
+        resp = ChatCompletionResponse(
+            model="test",
+            choices=[ChatCompletionChoice(message=AssistantMessage(content="x"))],
+        )
+
+        assert resp.warnings is None
+        assert "warnings" not in resp.model_dump(exclude_none=True)
+
 
 class TestTextCompletion:
     """Tests for text completion models."""
@@ -644,6 +668,17 @@ class TestStreamingModels:
             usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
         )
         assert chunk.usage.total_tokens == 15
+
+    def test_chat_completion_chunk_supports_warnings_field(self):
+        chunk = ChatCompletionChunk(
+            model="test-model",
+            choices=[],
+            warnings=["reasoning-only output"],
+        )
+        data = chunk.model_dump(exclude_none=True)
+
+        assert chunk.warnings == ["reasoning-only output"]
+        assert data["warnings"] == ["reasoning-only output"]
 
 
 class TestModelSerialization:
