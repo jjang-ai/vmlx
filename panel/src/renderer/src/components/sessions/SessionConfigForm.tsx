@@ -261,6 +261,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const zayaCcaActive = isZayaCcaFamily(normalizedDetectedFamily)
   const turboQuantActive = !!detectedIsTurboQuant
   const multimodalActive = !dsv4Active && !detectedForceTextOnly && (!!detectedIsMultimodal || config.isMultimodal === true)
+  const hybridCacheActive = detectedCacheType === 'hybrid' || detectedCacheType === 'mamba'
   const effectiveContinuousBatching = dsv4Active ? true : config.continuousBatching
   const batchingOff = !effectiveContinuousBatching
   const effectivelyNoBatching = batchingOff
@@ -887,12 +888,12 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <PerformanceHint text="Controls how tokens stream to you and the max response length. For chat, keep stream interval at 1. Max tokens limits how long a single reply can be." />
         {/* JIT is not available for image models or VLM chat models. */}
         <Field label="JIT Compile (mx.compile)" tooltip="Enable Metal kernel fusion via mx.compile on the model forward pass. This optimizes GPU operations for faster inference after a one-time warmup on the first request. May not work with all models — falls back gracefully if compilation fails. Requires restart.">
-          <label className={`flex items-center gap-2 ${flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
+          <label className={`flex items-center gap-2 ${flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive || hybridCacheActive ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
             <input
               type="checkbox"
-              checked={!!config.enableJit && !flashMoeActive && !distributedActive && !dsv4Active && !zayaCcaActive && !turboQuantActive && !multimodalActive}
+              checked={!!config.enableJit && !flashMoeActive && !distributedActive && !dsv4Active && !zayaCcaActive && !turboQuantActive && !multimodalActive && !hybridCacheActive}
               onChange={e => onChange('enableJit', e.target.checked)}
-              disabled={flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive}
+              disabled={flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive || hybridCacheActive}
               className="rounded border-input"
             />
             <span className="text-xs text-muted-foreground">
@@ -900,11 +901,13 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             </span>
           </label>
         </Field>
-        {(flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive) && (
+        {(flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive || hybridCacheActive) && (
           <IncompatWarning text={dsv4Active
             ? "JIT is disabled for DeepSeek-V4 native composite cache. DSV4 uses path-dependent SWA+CSA/HCA state that must stay on the uncompiled scheduler path."
             : zayaCcaActive
             ? "JIT is disabled for ZAYA typed CCA cache. CCA state is path-dependent and the full cache stack benchmarks faster on the uncompiled scheduler path."
+            : hybridCacheActive
+            ? "JIT is disabled for hybrid SSM/Mamba cache models. Their path-dependent Python cache objects are not mx.compile safe."
             : multimodalActive
             ? "JIT is disabled for multimodal/VLM models. The mlx-vlm streaming path owns image/video preprocessing and stream context state that is not safe to trace with mx.compile."
             : turboQuantActive
@@ -1082,10 +1085,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       {/* Speculative Decoding */}
       <Section title={t('sessions.config.specDecoding')} expanded={expandedSections.specDecode} onToggle={() => toggleSection('specDecode')} hidden={isImage || dsv4Active}>
         <PerformanceHint text="Use a small draft model to propose tokens, then verify them in a single target model pass. Can give 20-90% speedup with zero quality loss." />
-        {config.continuousBatching && <IncompatWarning text="Speculative decoding is incompatible with continuous batching. The draft model will only be used in SimpleEngine (non-batched) mode. Batched requests will use standard generation." />}
-        {config.isMultimodal === true && <IncompatWarning text="Speculative decoding is incompatible with multimodal (VLM) models. The draft model will be ignored for VLM requests." />}
+        {config.continuousBatching && <IncompatWarning text="Speculative decoding is incompatible with continuous batching. The draft model is omitted at launch while the cache-stack scheduler is active." />}
+        {multimodalActive && <IncompatWarning text="Speculative decoding is incompatible with multimodal (VLM) models. The draft model is omitted at launch for VLM requests." />}
         <Field label="Draft Model" tooltip="Path or HuggingFace name of a small draft model. Must use the same tokenizer as the main model. Example: mlx-community/Llama-3.2-1B-Instruct-4bit for a Llama 3 target model. Leave empty to disable speculative decoding.">
-          <input type="text" value={config.speculativeModel} onChange={e => onChange('speculativeModel', e.target.value)} placeholder={t('sessions.config.specModelPlaceholder')} className="cfg-input" disabled={false} />
+          <input type="text" value={config.speculativeModel} onChange={e => onChange('speculativeModel', e.target.value)} placeholder={t('sessions.config.specModelPlaceholder')} className="cfg-input" disabled={config.continuousBatching || multimodalActive || dsv4Active} />
         </Field>
         {config.speculativeModel && (
           <SliderField
@@ -1097,7 +1100,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             max={20}
             step={1}
             defaultValue={DEFAULT_CONFIG.numDraftTokens}
-            disabled={false}
+            disabled={config.continuousBatching || multimodalActive || dsv4Active}
           />
         )}
       </Section>

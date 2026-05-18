@@ -21,6 +21,7 @@ Tests cover:
 import argparse
 import unittest
 import warnings
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, PropertyMock
 import sys
 import os
@@ -470,6 +471,38 @@ class TestCLIArgs(unittest.TestCase):
         source = inspect.getsource(cli_module)
         self.assertIn("--speculative-model", source)
         self.assertIn("--num-draft-tokens", source)
+
+    def test_cli_suppresses_external_speculative_for_continuous_batching(self):
+        """Draft models should not load for the default cache-stack scheduler."""
+        from vmlx_engine.cli import _speculative_incompatibility_reason
+
+        args = SimpleNamespace(
+            speculative_model="draft",
+            continuous_batching=True,
+            model="target",
+            is_mllm=False,
+        )
+
+        self.assertEqual(
+            _speculative_incompatibility_reason(args),
+            "--continuous-batching",
+        )
+
+    def test_cli_suppresses_external_speculative_for_vlm(self):
+        """Unsupported VLM draft models should not crash startup before load."""
+        from vmlx_engine.cli import _speculative_incompatibility_reason
+
+        args = SimpleNamespace(
+            speculative_model="draft",
+            continuous_batching=False,
+            model="vlm-target",
+            is_mllm=True,
+        )
+
+        self.assertEqual(
+            _speculative_incompatibility_reason(args),
+            "multimodal (VLM)",
+        )
 
 
 # ---------------------------------------------------------------------------

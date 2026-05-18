@@ -167,6 +167,38 @@ def test_dsv4_row_points_at_current_sub80_upload_candidate_bundle():
     assert rows["dsv4_tq"].path.endswith("DeepSeek-V4-Flash-JANGTQ-K")
 
 
+def test_dsv4_pure_affine_keeper_is_in_production_audit_matrix():
+    rows = {row.id: row for row in ROWS}
+
+    row = rows["dsv4_jang_dq2_gate3math6"]
+    assert row.path == (
+        "/Users/example/models/JANGQ/"
+        "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
+    )
+    assert row.family == "deepseek_v4"
+    assert row.cache_profile == "dsv4_composite"
+    assert row.expect_tool_parser == "dsml"
+
+
+def test_dsv4_decode_speed_gate_tracks_jangtq_and_pure_affine_lanes():
+    from tests.cross_matrix import run_decode_speed_gate
+
+    assert run_decode_speed_gate.ROWS["dsv4_k"].path.endswith(
+        "DeepSeek-V4-Flash-JANGTQ-K"
+    )
+    assert run_decode_speed_gate.ROWS["dsv4_jang_dq2_gate3math6"].path.endswith(
+        "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
+    )
+
+
+def test_dsv4_long_context_gate_defaults_to_pure_affine_keeper():
+    from tests.cross_matrix import run_dsv4_long_context_gate
+
+    assert run_dsv4_long_context_gate.DEFAULT_MODEL.endswith(
+        "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
+    )
+
+
 def test_mistral_medium_jangtq_path_matches_current_drive_layout():
     rows = {row.id: row for row in ROWS}
 

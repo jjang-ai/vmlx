@@ -2445,6 +2445,7 @@ export class SessionManager extends EventEmitter {
     const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
     const prefixCacheOff = dsv4Active ? false : !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
     const zayaCcaActive = isZayaCcaFamily(detectedFamily)
+    const hybridCacheActive = detected.cacheType === 'hybrid' || detected.cacheType === 'mamba'
     const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
     const dsv4CompositeRequiresPaged = detectedFamily === 'deepseek-v4' && !prefixCacheOff
     const nativeCacheRequiresPaged = cacheTypeRequiresPaged(detected.cacheType) && detected.usePagedCache === true && !prefixCacheOff
@@ -2558,7 +2559,7 @@ export class SessionManager extends EventEmitter {
     const turboQuantActive = !!(detected as any).isTurboQuant
     const effectiveDistributed = requestedDistributed && !dsv4Active
     const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed && !dsv4Active
-    const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !zayaCcaActive && !turboQuantActive
+    const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !zayaCcaActive && !turboQuantActive && !hybridCacheActive
     if (dsv4Active && ((config as any).smelt || requestedFlashMoe || requestedDistributed || config.speculativeModel)) {
       console.warn('[SESSION] DSV4-Flash detected: ignoring stale Smelt/Flash MoE/distributed/speculative flags; native DSV4 cache and expert hydration own this runtime')
     }
@@ -2574,6 +2575,8 @@ export class SessionManager extends EventEmitter {
         ? 'multimodal/VLM models use the mlx-vlm streaming path, which is not mx.compile safe'
         : turboQuantActive
         ? 'TurboQuantKVCache uses custom cache objects that mx.compile cannot trace'
+        : hybridCacheActive
+        ? 'hybrid SSM/Mamba cache uses path-dependent Python cache objects that mx.compile cannot trace'
         : 'Flash MoE or distributed mode is active'
       console.warn(`[SESSION] Ignoring stale JIT flag because ${reason}`)
     }
@@ -2617,8 +2620,20 @@ export class SessionManager extends EventEmitter {
     }
 
     // Speculative decoding
-    if (!dsv4Active && config.speculativeModel) {
-      args.push('--speculative-model', config.speculativeModel)
+    const externalSpeculativeModel = config.speculativeModel || ''
+    const compatibleExternalSpeculative = !dsv4Active && !isVLM && !cacheStackActive && !!externalSpeculativeModel
+    if (externalSpeculativeModel && !compatibleExternalSpeculative) {
+      const reason = dsv4Active
+        ? 'DSV4-Flash has a native composite-cache runtime'
+        : isVLM
+        ? 'multimodal/VLM generation has no external draft verifier path'
+        : cacheStackActive
+        ? 'continuous batching is active'
+        : 'this runtime does not support external draft decoding'
+      console.warn(`[SESSION] Ignoring stale speculative model because ${reason}`)
+    }
+    if (compatibleExternalSpeculative) {
+      args.push('--speculative-model', externalSpeculativeModel)
       if (config.numDraftTokens && config.numDraftTokens !== 3) {
         args.push('--num-draft-tokens', config.numDraftTokens.toString())
       }

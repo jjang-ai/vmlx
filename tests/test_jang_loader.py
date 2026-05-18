@@ -104,11 +104,50 @@ class TestTreeFlattenImport:
 class TestFixQuantizedBits:
     """Post-load bit repair must honor proven per-module overrides."""
 
+    def test_non_dsv4_qwen_ambiguous_overrides_are_not_trusted(self):
+        from vmlx_engine.utils.jang_loader import (
+            _post_load_quantization_overrides,
+        )
+
+        config = {
+            "model_type": "qwen3_5",
+            "text_config": {
+                "model_type": "qwen3_5_text",
+                "hidden_size": 5120,
+            },
+            "quantization": {
+                "bits": 8,
+                "group_size": 32,
+                "language_model.model.embed_tokens": {
+                    "bits": 8,
+                    "group_size": 32,
+                },
+            },
+        }
+        jang_cfg = {
+            "format": "jang",
+            "quantization": {
+                "profile": "JANG_4M",
+                "block_size": 64,
+                "bit_widths_used": [4, 8],
+            },
+            "architecture": {
+                "type": "hybrid_ssm_dense",
+                "has_vision": True,
+                "has_ssm": True,
+            },
+        }
+
+        assert _post_load_quantization_overrides(config, jang_cfg) is None
+
     def test_dsv4_prestacked_switch_override_wins_over_shape_ambiguity(self):
         import mlx.core as mx
         import mlx.nn as nn
         from mlx_lm.models.switch_layers import QuantizedSwitchLinear
-        from vmlx_engine.utils.jang_loader import _fix_quantized_bits
+        from vmlx_engine.utils.jang_loader import (
+            _fix_quantized_bits,
+            _post_load_quantization_overrides,
+        )
 
         class _Switch(nn.Module):
             def __init__(self):
@@ -145,15 +184,20 @@ class TestFixQuantizedBits:
         assert proj.bits == 4
         assert proj.group_size == 64
 
-        _fix_quantized_bits(
-            model,
-            {
+        q_overrides = {
+            "model_type": "deepseek_v4",
+            "quantization": {
                 "model.layers.0.mlp.switch_mlp.up_proj": {
                     "bits": 2,
                     "group_size": 128,
                 }
             },
-        )
+        }
+
+        trusted = _post_load_quantization_overrides(q_overrides, {})
+        assert trusted is q_overrides["quantization"]
+
+        _fix_quantized_bits(model, trusted)
 
         assert proj.bits == 2
         assert proj.group_size == 128

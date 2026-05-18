@@ -1854,7 +1854,10 @@ def _load_jang_v2(
             f"  Upgraded {_upg} modules to Quantized variants (post-load fixup)"
         )
 
-    _fix_quantized_bits(model, _q_cfg)
+    _fix_quantized_bits(
+        model,
+        _post_load_quantization_overrides(config, jang_cfg),
+    )
 
     if not hasattr(model, "config"):
         model.config = config
@@ -2713,7 +2716,10 @@ def _load_jang_v2_vlm(
         del shard_weights
         gc.collect()
 
-    _fix_quantized_bits(model, config.get("quantization", {}))
+    _fix_quantized_bits(
+        model,
+        _post_load_quantization_overrides(config, jang_cfg),
+    )
 
     if not hasattr(model, "config"):
         model.config = model_config
@@ -3017,7 +3023,10 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
             del weights
             gc.collect()
 
-        _fix_quantized_bits(model, config.get("quantization", {}))
+        _fix_quantized_bits(
+            model,
+            _post_load_quantization_overrides(config, jang_cfg),
+        )
     finally:
         if tmp_dir:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -3994,6 +4003,36 @@ def _pre_fix_bits_from_metadata(model, shape_map, block_size):
             f"  Pre-fixed {fixed_count} module(s) cross-shard "
             f"(jjang-ai/vmlx#114 — would have been silently skipped per-shard)"
         )
+
+
+def _post_load_quantization_overrides(
+    config: dict | None,
+    jang_cfg: dict | None,
+) -> dict | None:
+    """Return trusted post-load per-module quantization overrides.
+
+    DSV4 affine/prestacked switch tensors are shape-ambiguous enough that the
+    post-load shape heuristic can reinterpret a valid 2b_g128 tensor as a
+    shorter 4b_g64 tensor. For that family, config/JANG metadata is the source
+    of truth after the loader has proved the artifact layout.
+
+    Qwen/Gemma-style JANG_4M bundles can have the opposite ambiguity:
+    4b_g64 and 8b_g32 produce identical packed/scales shapes. Some public
+    configs stamped the latter as a broad default while the JANG sidecar and
+    safetensor shapes are mixed 4/8-bit. Trusting those generic overrides cuts
+    hidden width in half and crashes at RMSNorm. Keep non-DSV4 on the
+    shape-and-block-size repair path.
+    """
+    if not isinstance(config, dict):
+        return None
+    quantization = config.get("quantization")
+    if not isinstance(quantization, dict):
+        return None
+    text_config = config.get("text_config") if isinstance(config.get("text_config"), dict) else {}
+    model_type = str(config.get("model_type") or text_config.get("model_type") or "")
+    if model_type == "deepseek_v4":
+        return quantization
+    return None
 
 
 def _fix_quantized_bits(model, quantization_overrides: dict | None = None):

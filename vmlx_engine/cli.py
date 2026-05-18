@@ -24,6 +24,21 @@ def _env_truthy(name: str) -> bool:
     return os.environ.get(name, "").lower() in ("1", "true", "yes", "on")
 
 
+def _speculative_incompatibility_reason(args) -> str | None:
+    if not getattr(args, "speculative_model", None):
+        return None
+    if getattr(args, "continuous_batching", False):
+        return "--continuous-batching"
+    try:
+        from .api.utils import is_mllm_model
+
+        if is_mllm_model(args.model, force_mllm=getattr(args, "is_mllm", False)):
+            return "multimodal (VLM)"
+    except Exception:
+        return None
+    return None
+
+
 def _apply_jangtq_mpp_nax_policy(args, logger):
     """Apply internal JANGTQ acceleration policy.
 
@@ -742,6 +757,25 @@ def serve_command(args):
             "will include raw <think> blocks in content. See the "
             "THINKING MODEL WARNING printed above for one-line fixes."
         )
+
+    _spec_incompat = _speculative_incompatibility_reason(args)
+    if _spec_incompat:
+        print(
+            f"  WARNING: --speculative-model is incompatible with {_spec_incompat}.",
+            file=sys.stderr,
+        )
+        print(
+            "     Draft model loading is disabled for this launch; requests "
+            "will use standard (non-speculative) generation.",
+            file=sys.stderr,
+        )
+        if _spec_incompat == "multimodal (VLM)":
+            print(
+                "     Without this guard the draft model would be ignored for "
+                "VLM requests after wasting memory at startup.",
+                file=sys.stderr,
+            )
+        args.speculative_model = None
 
     # Security summary at startup
     print("=" * 60)

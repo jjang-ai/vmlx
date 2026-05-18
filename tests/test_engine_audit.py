@@ -5244,17 +5244,21 @@ class TestTurboQuantKVTelemetry:
             assert "effectiveFlashMoe" in source
             assert "effectiveDistributed" in source
             assert "dsv4Active" in source
+            assert "hybridCacheActive" in source
             assert "effectiveEnableJit" in source
             assert "if (effectiveFlashMoe)" in source
             assert "if (effectiveDistributed)" in source
+            assert "compatibleExternalSpeculative" in source
             assert "if (effectiveEnableJit)" in source
+            assert "if (compatibleExternalSpeculative)" in source
             assert "if (config.enableJit) args.push('--enable-jit')" not in source
 
         assert "normalizedDetectedFamily === 'deepseek-v4'" in form_source
         # JIT incompat list expanded 2026-05-09 to include TurboQuant
         # (engine skips mx.compile for TurboQuantKVCache; UI now matches).
-        assert "disabled={flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive}" in form_source
-        assert "checked={!!config.enableJit && !flashMoeActive && !distributedActive && !dsv4Active && !zayaCcaActive && !turboQuantActive && !multimodalActive}" in form_source
+        assert "disabled={flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive || hybridCacheActive}" in form_source
+        assert "checked={!!config.enableJit && !flashMoeActive && !distributedActive && !dsv4Active && !zayaCcaActive && !turboQuantActive && !multimodalActive && !hybridCacheActive}" in form_source
+        assert "disabled={config.continuousBatching || multimodalActive || dsv4Active}" in form_source
 
     def test_responses_long_context_tool_cache_gate_script_pins_artifacts(self):
         gate_source = Path(
@@ -6796,8 +6800,8 @@ class TestJitTurboQuantSymmetricGuard:
 
         assert "turboQuantActive" in form
         assert "detectedIsTurboQuant" in form
-        # disabled prop covers turboQuantActive
-        assert "disabled={flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive}" in form
+        # disabled prop covers turboQuantActive and hybrid path-dependent caches.
+        assert "disabled={flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive || hybridCacheActive}" in form
 
     def test_detect_config_stamps_isTurboQuant_flag(self):
         """detectModelConfigFromDir must set isTurboQuant when bundle is TQ.

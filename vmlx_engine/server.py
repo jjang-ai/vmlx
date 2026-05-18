@@ -2101,6 +2101,17 @@ def _apply_jit_compilation():
             if inner is None or not callable(inner):
                 logger.warning("JIT: Model object is not callable — skipping")
                 return
+            untraceable_cache_names = _jit_probe_untraceable_cache_names(
+                inner,
+                model_obj,
+            )
+            if untraceable_cache_names:
+                logger.info(
+                    "JIT: Skipping mx.compile - text hybrid cache contains "
+                    f"{', '.join(untraceable_cache_names)}. mx.compile() cannot "
+                    "trace these Python cache objects."
+                )
+                return
 
             logger.info("JIT: Applying mx.compile to model forward pass...")
             # vmlx#83: stash the pre-compile references so the warmup-failure

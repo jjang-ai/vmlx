@@ -31,7 +31,10 @@ DEFAULT_PY = (
     REPO
     / "panel/release/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
 )
-DEFAULT_MODEL = "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K"
+DEFAULT_MODEL = (
+    "/Users/example/models/JANGQ/"
+    "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
+)
 DEFAULT_OUT = REPO / "docs/internal/release-gates/dsv4_long_context_gate_latest.json"
 
 

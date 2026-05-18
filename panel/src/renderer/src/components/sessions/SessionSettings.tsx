@@ -231,9 +231,10 @@ function buildCommandPreview(
           : false
   const zayaCcaActive = isZayaCcaFamily(detectedFamily)
   const turboQuantActive = !!detected?.isTurboQuant
+  const hybridCacheActive = detected?.cacheType === 'hybrid' || detected?.cacheType === 'mamba'
   const effectiveDistributed = requestedDistributed && !dsv4Active
   const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed && !dsv4Active
-  const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !zayaCcaActive && !turboQuantActive
+  const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !zayaCcaActive && !turboQuantActive && !hybridCacheActive
 
   // Server settings
   parts.push('--host', config.host)
@@ -392,7 +393,8 @@ function buildCommandPreview(
   if ((config as any).chatTemplate) parts.push('--chat-template', '"..."')
 
   // Speculative decoding
-  if (!dsv4Active && config.speculativeModel) {
+  const compatibleExternalSpeculative = !dsv4Active && !isVLM && !cacheStackActive && !!config.speculativeModel
+  if (compatibleExternalSpeculative) {
     parts.push('--speculative-model', config.speculativeModel)
     if (config.numDraftTokens && config.numDraftTokens !== 3) {
       parts.push('--num-draft-tokens', config.numDraftTokens.toString())

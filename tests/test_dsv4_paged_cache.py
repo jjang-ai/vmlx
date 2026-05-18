@@ -261,7 +261,8 @@ def test_dsv4_launch_filters_stale_saved_and_additional_args():
         assert "const isVLM = dsv4Active || effectiveSmelt" in source
         assert "const effectiveDistributed = requestedDistributed && !dsv4Active" in source
         assert "const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed && !dsv4Active" in source
-        assert "if (!dsv4Active && config.speculativeModel)" in source
+        assert "compatibleExternalSpeculative" in source
+        assert "if (compatibleExternalSpeculative)" in source
         assert "DSV4_ADDITIONAL_ARG_BLOCKLIST" in source
         assert "--no-continuous-batching" in source
         assert "--disable-prefix-cache" in source
