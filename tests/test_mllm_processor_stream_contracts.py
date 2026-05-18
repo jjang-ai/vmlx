@@ -4,6 +4,24 @@
 from pathlib import Path
 
 
+def test_gemma4_processor_accepts_tiny_rgb_image():
+    """Gemma4 image preprocessing must not misread 1x1 RGB as channel-first."""
+    import vmlx_engine  # noqa: F401 - installs runtime patches
+    from PIL import Image
+    from mlx_vlm.models.gemma4.processing_gemma4 import Gemma4ImageProcessor
+
+    processor = Gemma4ImageProcessor()
+    data, soft_tokens = processor([Image.new("RGB", (1, 1), (255, 0, 0))])
+
+    pixel_values = data["pixel_values"]
+    assert pixel_values.shape[0] == 1
+    assert pixel_values.shape[1] == 3
+    assert pixel_values.shape[-2] > 0
+    assert pixel_values.shape[-1] > 0
+    assert len(soft_tokens) == 1
+    assert soft_tokens[0] > 0
+
+
 def test_processor_direct_bypasses_noncallable_process_attr():
     from vmlx_engine.mllm_batch_generator import _call_processor_direct
 
