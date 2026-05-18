@@ -771,6 +771,19 @@ def test_dsv4_cli_cache_summary_names_native_composite_cache():
     assert "Paged cache:" not in joined
 
 
+def test_dsv4_scheduler_log_names_native_composite_block_index():
+    """Scheduler log should not call DSV4's typed block transport generic paged KV."""
+    import inspect
+
+    from vmlx_engine.scheduler import Scheduler
+
+    source = inspect.getsource(Scheduler.__init__)
+    assert "DSV4 native composite block index enabled" in source
+    assert "not generic paged KV" in source
+    assert "deepseek_v4_v7" in source
+    assert 'f"Paged cache enabled: block_size=' in source
+
+
 def test_dsv4_cached_prefix_kickoff_avoids_cross_thread_mx_eval():
     """DSV4 cache-hit kickoff must not use mx.eval on worker-thread tensors."""
     import inspect
