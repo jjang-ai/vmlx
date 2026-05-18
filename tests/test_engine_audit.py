@@ -2874,8 +2874,8 @@ class TestStartupCompatibilityGuards:
         assert 'os.environ["VMLX_DISABLE_TQ_KV"] = "1"' in cli_source
         assert "VMLINUX_DISABLE_TQ_KV" not in cli_source
 
-    def test_hybrid_auto_mode_skips_kv_only_quant_codecs(self):
-        """Hybrid/path-dependent auto mode must not use KV-only quant codecs."""
+    def test_hybrid_auto_mode_keeps_stored_kv_quant_but_skips_live_tq(self):
+        """Hybrid auto mode must live-disable TQ while keeping attention-KV storage q4."""
         cli_source = Path("./vmlx_engine/cli.py").read_text()
         scheduler_source = Path("./vmlx_engine/scheduler.py").read_text()
         tokenizer_source = Path("./vmlx_engine/utils/tokenizer.py").read_text()
@@ -2883,14 +2883,14 @@ class TestStartupCompatibilityGuards:
         assert 'getattr(_mc, "cache_type", None) == "hybrid"' in cli_source
         assert "Hybrid/path-dependent cache model detected" in cli_source
         assert "os.environ.pop(\"VMLX_FORCE_TQ_AUTO\", None)" in cli_source
-        assert 'args.kv_cache_quantization = "none"' in cli_source
         hybrid_idx = cli_source.index('getattr(_mc, "cache_type", None) == "hybrid"')
         hybrid_block = cli_source[hybrid_idx : cli_source.index("if _mc.family_name !=", hybrid_idx)]
-        assert "args.kv_cache_quantization_explicit = True" in hybrid_block
+        assert 'args.kv_cache_quantization = "none"' not in hybrid_block
+        assert "args.kv_cache_quantization_explicit = True" not in hybrid_block
+        assert "stored attention-KV" in hybrid_block
 
-        assert "VMLX_ALLOW_HYBRID_KV_QUANT" in scheduler_source
-        assert "disabling generic KV cache" in scheduler_source
-        assert 'self.config.kv_cache_quantization = "none"' in scheduler_source
+        assert "Hybrid/path-dependent cache model detected — using q4/q8 only at cache storage boundaries" in scheduler_source
+        assert "non-KV state is preserved full precision" in scheduler_source
         assert "TurboQuant skipped: hybrid/path-dependent cache detected" in tokenizer_source
         assert "model.make_cache()" in tokenizer_source
 
@@ -5152,7 +5152,14 @@ class TestTurboQuantKVTelemetry:
         assert "isLingCrackModelPath" not in sessions_source
         assert "out.defaultTemperature = 20" not in sessions_source
         assert "defaultMinP = defs.defaultMinP ?? 0" in sessions_source
-        assert "args.push('--default-min-p'" not in sessions_source
+        native_mtp_idx = sessions_source.index("// Native in-model MTP")
+        generation_defaults_idx = sessions_source.index("// Generation defaults", native_mtp_idx)
+        native_mtp_launch_block = sessions_source[native_mtp_idx:generation_defaults_idx]
+        sessions_outside_native_mtp = (
+            sessions_source[:native_mtp_idx] + sessions_source[generation_defaults_idx:]
+        )
+        assert "args.push('--default-min-p', '0')" in native_mtp_launch_block
+        assert "args.push('--default-min-p'" not in sessions_outside_native_mtp
         assert "args.push('--no-continuous-batching')" in sessions_source
         assert "Auto-enable continuous batching when prefix cache is on" not in sessions_source
         cli_source = Path("./vmlx_engine/cli.py").read_text()
@@ -5197,15 +5204,28 @@ class TestTurboQuantKVTelemetry:
         ):
             assert flag in sessions_source
             assert flag in preview_source
-        for flag in (
-            "--default-repetition-penalty",
-            "--default-enable-thinking",
-        ):
+        for flag in ("--default-enable-thinking",):
             # The literals may appear in sanitizer/blocklist tables so stale
             # additionalArgs can be stripped. They must not be emitted as
             # startup launch flags from the real session command or preview.
             assert f"args.push('{flag}'" not in sessions_source
             assert f"parts.push('{flag}'" not in preview_source
+        sessions_native_idx = sessions_source.index("// Native in-model MTP")
+        sessions_gen_idx = sessions_source.index("// Generation defaults", sessions_native_idx)
+        sessions_native_block = sessions_source[sessions_native_idx:sessions_gen_idx]
+        sessions_outside_native = (
+            sessions_source[:sessions_native_idx] + sessions_source[sessions_gen_idx:]
+        )
+        preview_native_idx = preview_source.index("// Native in-model MTP mirrors sessions.ts")
+        preview_gen_idx = preview_source.index("// Generation defaults", preview_native_idx)
+        preview_native_block = preview_source[preview_native_idx:preview_gen_idx]
+        preview_outside_native = (
+            preview_source[:preview_native_idx] + preview_source[preview_gen_idx:]
+        )
+        assert "args.push('--default-repetition-penalty', '1')" in sessions_native_block
+        assert "parts.push('--default-repetition-penalty', '1')" in preview_native_block
+        assert "args.push('--default-repetition-penalty'" not in sessions_outside_native
+        assert "parts.push('--default-repetition-penalty'" not in preview_outside_native
         assert "IMAGE_ADDITIONAL_ARG_BLOCKLIST" in sessions_source
         assert "IMAGE_ADDITIONAL_ARG_BLOCKLIST" in preview_source
         assert "DSV4_ADDITIONAL_ARG_BLOCKLIST" in sessions_source
@@ -5672,11 +5692,14 @@ class TestTurboQuantKVTelemetry:
         from vmlx_engine.server import _native_cache_status
 
         scheduler = SimpleNamespace(
+            config=SimpleNamespace(kv_cache_quantization="q4"),
             _model_type_for_runtime="bailing_hybrid",
             _is_hybrid=True,
             _uses_dsv4_cache=False,
             _uses_zaya_cache=False,
             _hybrid_kv_positions=[7, 15, 23, 31],
+            _kv_cache_bits=4,
+            _kv_cache_group_size=64,
             _ssm_state_cache=SimpleNamespace(_store={"a": object()}),
             block_aware_cache=object(),
             paged_cache_manager=SimpleNamespace(_disk_store=object()),
@@ -5687,6 +5710,15 @@ class TestTurboQuantKVTelemetry:
         assert status["schema"] == "hybrid_ssm_v1"
         assert status["cache_type"] == "hybrid_ssm_typed"
         assert status["generic_turboquant_kv"]["enabled"] is False
+        assert status["attention_kv_storage_quantization"] == {
+            "enabled": True,
+            "mode": "storage_boundary",
+            "bits": 4,
+            "group_size": 64,
+            "applies_to": "attention_kv_layers_only",
+            "ssm_policy": "native_companion_state",
+            "rederive": "async_clean_prefill_on_miss_or_warm_pass",
+        }
         assert status["ssm_entries"] == 1
         assert status["kv_layer_indices"] == [7, 15, 23, 31]
 

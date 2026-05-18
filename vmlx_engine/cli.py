@@ -322,6 +322,7 @@ def serve_command(args):
     elif _kv_quant_explicit:
         args.kv_cache_quantization_explicit = True
         os.environ["VMLX_DISABLE_TQ_KV"] = "1"
+        os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
         logger.info(
             f"--kv-cache-quantization={args.kv_cache_quantization} explicit; "
             f"VMLX_DISABLE_TQ_KV=1 set so JANG-calibrated TurboQuant KV is "
@@ -555,18 +556,19 @@ def serve_command(args):
             # Hybrid/path-dependent models carry cumulative non-KV state in
             # addition to attention KV. This includes SSM/Mamba caches and
             # Qwen3.5/3.6 GatedDelta ArraysCache layers. Live TurboQuantKVCache
-            # currently compresses only positional KV slots; do not patch or
-            # quantize the model's cache contract until a typed hybrid TQ codec
-            # covers KV + non-KV state end to end.
+            # currently replaces the model cache object globally, so keep that
+            # loader patch off. The scheduler's q4/q8 stored-cache codec is
+            # different: it quantizes only KVCache layers at prefix/paged/L2
+            # storage boundaries and preserves SSM/ArraysCache companions for
+            # async clean-prefill rederive.
             _old_kvq = args.kv_cache_quantization
-            args.kv_cache_quantization = "none"
-            args.kv_cache_quantization_explicit = True
             os.environ["VMLX_DISABLE_TQ_KV"] = "1"
             os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
             logger.info(
                 "Hybrid/path-dependent cache model detected — disabling live "
-                "TurboQuant KV and generic KV quantization for correctness "
-                "(was: %s).",
+                "TurboQuant KV patch while preserving stored attention-KV "
+                "quantization=%s for prefix/paged/L2; SSM companions stay "
+                "full precision with async clean-prefill rederive.",
                 _old_kvq,
             )
         if _mc.family_name != "unknown":
@@ -1249,6 +1251,7 @@ def bench_command(args):
     else:
         args.kv_cache_quantization_explicit = True
         os.environ["VMLX_DISABLE_TQ_KV"] = "1"
+        os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
 
     try:
         from .model_config_registry import get_model_config_registry

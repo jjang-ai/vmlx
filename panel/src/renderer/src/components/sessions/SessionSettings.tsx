@@ -216,7 +216,7 @@ async function applyBundleGenerationDefaults(config: SessionConfig, modelPath: s
 function buildCommandPreview(
   modelPath: string,
   config: SessionConfig,
-  detected?: { toolParser?: string; reasoningParser?: string; isMultimodal?: boolean; forceTextOnly?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; cacheType?: string; family?: string } | null
+  detected?: { toolParser?: string; reasoningParser?: string; isMultimodal?: boolean; forceTextOnly?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; cacheType?: string; family?: string; nativeMtp?: { supported?: boolean; depth?: number } } | null
 ): string {
   const parts = ['vmlx-engine serve', modelPath]
   const requestedDistributed = !!(config as any).distributedEnabled
@@ -399,6 +399,27 @@ function buildCommandPreview(
     }
   }
 
+  // Native in-model MTP mirrors sessions.ts: deterministic mode owns the
+  // startup sampling override needed for Qwen3.6 MTP to enter the native path.
+  const nativeMtp = detected?.nativeMtp
+  if (!dsv4Active && nativeMtp?.supported) {
+    const mode = (config as any).nativeMtpMode || 'deterministic'
+    if (mode === 'off') {
+      parts.push('--disable-native-mtp')
+    } else {
+      const depth = Math.max(1, Math.min(3, Math.round(Number((config as any).nativeMtpDepth || nativeMtp.depth || 3))))
+      parts.push('--native-mtp-depth', depth.toString())
+      parts.push('--native-mtp-sampling-policy', mode === 'deterministic' ? 'deterministic-defaults' : 'compatible-only')
+      if (mode === 'deterministic') {
+        parts.push('--default-temperature', '0')
+        parts.push('--default-top-p', '1')
+        parts.push('--default-top-k', '0')
+        parts.push('--default-min-p', '0')
+        parts.push('--default-repetition-penalty', '1')
+      }
+    }
+  }
+
   // Generation defaults are resolved inside vmlx_engine.server from
   // jang_config/generation_config. The panel preview must not synthesize
   // --default-* flags that would override the engine's bundle lookup.
@@ -441,7 +462,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
   const [restarting, setRestarting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [showPreview, setShowPreview] = useState(false)
-  const [detectedConfig, setDetectedConfig] = useState<{ toolParser?: string; reasoningParser?: string; cacheType?: string; isMultimodal?: boolean; forceTextOnly?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; family?: string; maxContextLength?: number } | null>(null)
+  const [detectedConfig, setDetectedConfig] = useState<{ toolParser?: string; reasoningParser?: string; cacheType?: string; isMultimodal?: boolean; forceTextOnly?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; family?: string; maxContextLength?: number; nativeMtp?: { supported?: boolean; depth?: number } } | null>(null)
 
   useEffect(() => {
     const load = async () => {

@@ -418,8 +418,6 @@ class Scheduler:
                     f"{self.config.kv_cache_quantization} when applicable."
                 )
 
-        _hybrid_kvq_env = os.environ.get("VMLX_ALLOW_HYBRID_KV_QUANT")
-        _allow_hybrid_kvq = _hybrid_kvq_env in ("1", "true", "True", "yes", "on")
         if (
             self._uses_zaya_cache
             and self.config.kv_cache_quantization != "none"
@@ -437,29 +435,12 @@ class Scheduler:
             and not self._uses_dsv4_cache
             and not self._uses_zaya_cache
             and self.config.kv_cache_quantization != "none"
-            and not _allow_hybrid_kvq
         ):
             logger.info(
-                "Hybrid/path-dependent cache model detected — disabling generic "
-                "KV cache quantization (was: %s). Hybrid models have cumulative "
-                "non-KV state (SSM/Mamba or GatedDelta ArraysCache) in addition "
-                "to attention KV; q4/q8 KV-only quantization is not "
-                "production-safe for this cache contract. Set "
-                "VMLX_ALLOW_HYBRID_KV_QUANT=1 only for explicit bisects.",
-                self.config.kv_cache_quantization,
-            )
-            self.config.kv_cache_quantization = "none"
-        elif (
-            self._is_hybrid
-            and not self._uses_dsv4_cache
-            and not self._uses_zaya_cache
-            and self.config.kv_cache_quantization != "none"
-            and _allow_hybrid_kvq
-        ):
-            logger.warning(
-                "Hybrid/path-dependent model + KV cache quantization='%s' requested via "
-                "VMLX_ALLOW_HYBRID_KV_QUANT=1. This is a diagnostic override; "
-                "watch full output for loops or token drift.",
+                "Hybrid/path-dependent cache model detected — using q4/q8 only at cache storage boundaries "
+                "(attention KVCache layers). Hybrid non-KV state is preserved full precision "
+                "and restored through the SSM companion cache or clean-prefill rederive "
+                "(stored_kv_quantization=%s).",
                 self.config.kv_cache_quantization,
             )
 

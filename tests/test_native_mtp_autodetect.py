@@ -1339,7 +1339,8 @@ class TestNativeMtpAutodetect:
 
         assert generator.__class__.__name__ == "BatchGenerator"
         assert scheduler.config.max_num_seqs == 2
-        assert scheduler.config.kv_cache_quantization == "none"
+        assert scheduler.config.kv_cache_quantization == "q4"
+        assert scheduler._kv_cache_bits == 4
         assert scheduler.block_aware_cache is not None
         assert scheduler.paged_cache_manager is not None
         assert scheduler._ssm_state_cache is not None

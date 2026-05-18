@@ -34,6 +34,76 @@ import json
 import pytest
 
 
+def test_native_mtp_stats_snapshot_exposes_acceptance_depth_and_timings():
+    from vmlx_engine.mllm_batch_generator import MLLMNativeMTPStats
+
+    stats = MLLMNativeMTPStats()
+    stats.cycles = 10
+    stats.accepts = 6
+    stats.rejects = 4
+    stats.drafted_tokens = 27
+    stats.accepted_tokens = 21
+    stats.accepted_by_depth = [10, 8, 3]
+    stats.drafted_by_depth = [10, 10, 7]
+    stats.seed_main_forwards = 1
+    stats.verify_main_forwards = 10
+    stats.replay_main_forwards = 4
+    stats.mtp_forwards = 31
+    stats.verify_ms = 120.0
+    stats.sample_ms = 6.0
+    stats.draft_ms = 40.0
+    stats.snapshot_ms = 5.0
+    stats.restore_ms = 3.0
+    stats.replay_ms = 22.0
+    stats.materialize_ms = 4.0
+
+    snapshot = stats.to_dict(
+        request_id="req-test",
+        finish_reason="length",
+        final_depth=2,
+        fallback_reason="d3_acceptance=0.429<min=0.850",
+    )
+
+    assert snapshot["request_id"] == "req-test"
+    assert snapshot["finish_reason"] == "length"
+    assert snapshot["final_depth"] == 2
+    assert snapshot["cycles"] == 10
+    assert snapshot["accepted_tokens"] == 21
+    assert snapshot["drafted_tokens"] == 27
+    assert snapshot["acceptance_rate"] == pytest.approx(21 / 27)
+    assert snapshot["depth_acceptance_rates"] == {
+        "d1": pytest.approx(1.0),
+        "d2": pytest.approx(0.8),
+        "d3": pytest.approx(3 / 7),
+    }
+    assert snapshot["forwards"] == {
+        "seed_main": 1,
+        "verify_main": 10,
+        "replay_main": 4,
+        "mtp": 31,
+    }
+    assert snapshot["timings_ms"]["total"] == pytest.approx(200.0)
+    assert snapshot["timings_ms"]["avg_cycle"] == pytest.approx(20.0)
+    assert snapshot["fallback_reason"] == "d3_acceptance=0.429<min=0.850"
+
+
+def test_native_mtp_light_timing_records_without_sync_trace(monkeypatch):
+    from vmlx_engine.mllm_batch_generator import (
+        MLLMNativeMTPStats,
+        _native_mtp_trace_start,
+        _native_mtp_trace_stop,
+    )
+
+    monkeypatch.delenv("VMLINUX_NATIVE_MTP_TRACE", raising=False)
+    stats = MLLMNativeMTPStats()
+    start = _native_mtp_trace_start()
+    assert start > 0
+
+    _native_mtp_trace_stop(stats, "draft_ms", start)
+
+    assert stats.draft_ms > 0
+
+
 class TestMtpTelemetryEdgeCases:
     def test_negative_layer_count_flagged_metadata_inconsistent(self, tmp_path):
         from vmlx_engine.server import _model_mtp_status

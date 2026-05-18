@@ -6659,8 +6659,9 @@ class TestTurboQuantDefaultAndSpeed:
 
     Cache codecs are stricter than weight decode: standard-KV JANGTQ can use
     live TurboQuant KV / stored q4 when compatible, DSV4 uses its native
-    SWA+CSA/HCA compression, and hybrid SSM auto mode disables live TQ-KV until
-    a typed codec covers both positional KV and companion SSM state.
+    SWA+CSA/HCA compression, and hybrid SSM auto mode disables the live
+    full-cache TQ patch while keeping q4/q8 storage-boundary encoding for
+    attention KV layers.
 
     Live-verified iter 6 against Qwen3.6-35B-A3B-JANGTQ2 from
     ~/.mlxstudio/models/MLXModels/dealignai/:
@@ -6705,15 +6706,15 @@ class TestTurboQuantDefaultAndSpeed:
         # but no opt-IN required
 
     def test_hybrid_ssm_auto_mode_disables_live_tq_kv(self):
-        """Hybrid/path-dependent cache state must not be partially TQ-quantized."""
+        """Hybrid/path-dependent cache state must not use live full-cache TQ."""
         cli_src = Path("/private/tmp/vmlx-1.3.66-build/vmlx_engine/cli.py").read_text()
         sched_src = Path("/private/tmp/vmlx-1.3.66-build/vmlx_engine/scheduler.py").read_text()
 
         assert "Hybrid/path-dependent cache model detected" in cli_src
         assert 'os.environ["VMLX_DISABLE_TQ_KV"] = "1"' in cli_src
-        assert 'args.kv_cache_quantization = "none"' in cli_src
-        assert "VMLX_ALLOW_HYBRID_KV_QUANT" in sched_src
-        assert "disabling generic KV cache" in sched_src
+        assert "stored attention-KV" in cli_src
+        assert "using q4/q8 only at cache storage boundaries" in sched_src
+        assert "non-KV state is preserved full precision" in sched_src
 
     def test_l2_disk_persists_turboquant_blocks(self):
         """The safetensors __metadata__ collision (fixed 686aae56) was

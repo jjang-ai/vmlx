@@ -1067,6 +1067,76 @@ class MLLMNativeMTPStats:
     replay_main_forwards: int = 0
     mtp_forwards: int = 0
 
+    def to_dict(
+        self,
+        *,
+        request_id: str,
+        finish_reason: str,
+        final_depth: int,
+        fallback_reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        def _rate(accepted: int, drafted: int) -> Optional[float]:
+            if drafted <= 0:
+                return None
+            return accepted / drafted
+
+        timings = {
+            "verify": self.verify_ms,
+            "sample": self.sample_ms,
+            "draft": self.draft_ms,
+            "snapshot": self.snapshot_ms,
+            "restore": self.restore_ms,
+            "replay": self.replay_ms,
+            "materialize": self.materialize_ms,
+        }
+        total_ms = sum(float(value or 0.0) for value in timings.values())
+        timings["total"] = total_ms
+        timings["avg_cycle"] = total_ms / max(1, int(self.cycles or 0))
+
+        depth_rates = {}
+        for index, label in enumerate(("d1", "d2", "d3")):
+            accepted = (
+                int(self.accepted_by_depth[index])
+                if index < len(self.accepted_by_depth)
+                else 0
+            )
+            drafted = (
+                int(self.drafted_by_depth[index])
+                if index < len(self.drafted_by_depth)
+                else 0
+            )
+            depth_rates[label] = _rate(accepted, drafted)
+
+        return {
+            "request_id": request_id,
+            "finish_reason": finish_reason,
+            "final_depth": int(final_depth or 1),
+            "cycles": int(self.cycles),
+            "accepts": int(self.accepts),
+            "rejects": int(self.rejects),
+            "init_emits": int(self.init_emits),
+            "draft_emits": int(self.draft_emits),
+            "bonus_emits": int(self.bonus_emits),
+            "verify_emits": int(self.verify_emits),
+            "drafted_tokens": int(self.drafted_tokens),
+            "accepted_tokens": int(self.accepted_tokens),
+            "acceptance_rate": _rate(
+                int(self.accepted_tokens),
+                int(self.drafted_tokens),
+            ),
+            "accepted_by_depth": list(self.accepted_by_depth),
+            "drafted_by_depth": list(self.drafted_by_depth),
+            "depth_acceptance_rates": depth_rates,
+            "forwards": {
+                "seed_main": int(self.seed_main_forwards),
+                "verify_main": int(self.verify_main_forwards),
+                "replay_main": int(self.replay_main_forwards),
+                "mtp": int(self.mtp_forwards),
+            },
+            "timings_ms": timings,
+            "fallback_reason": fallback_reason,
+        }
+
 
 @dataclass
 class MLLMNativeMTPState:
@@ -1160,12 +1230,11 @@ def _native_mtp_trace_enabled() -> bool:
 
 
 def _native_mtp_trace_start() -> float:
-    if not _native_mtp_trace_enabled():
-        return 0.0
-    try:
-        mx.synchronize()
-    except Exception:
-        pass
+    if _native_mtp_trace_enabled():
+        try:
+            mx.synchronize()
+        except Exception:
+            pass
     return time.perf_counter()
 
 
@@ -1176,10 +1245,11 @@ def _native_mtp_trace_stop(
 ) -> None:
     if start <= 0.0:
         return
-    try:
-        mx.synchronize()
-    except Exception:
-        pass
+    if _native_mtp_trace_enabled():
+        try:
+            mx.synchronize()
+        except Exception:
+            pass
     setattr(stats, attr, getattr(stats, attr) + (time.perf_counter() - start) * 1000.0)
 
 
@@ -1948,6 +2018,23 @@ class MLLMBatchStats:
         self.hybrid_kv_without_ssm_hits: int = 0
         self.hybrid_kv_without_ssm_tokens: int = 0
         self.last_hybrid_kv_without_ssm: Optional[Dict[str, Any]] = None
+        self.last_native_mtp: Optional[Dict[str, Any]] = None
+
+    def record_native_mtp(
+        self,
+        *,
+        request_id: str,
+        stats: MLLMNativeMTPStats,
+        finish_reason: str,
+        final_depth: int,
+        fallback_reason: Optional[str] = None,
+    ) -> None:
+        self.last_native_mtp = stats.to_dict(
+            request_id=request_id,
+            finish_reason=finish_reason,
+            final_depth=final_depth,
+            fallback_reason=fallback_reason,
+        )
 
     @property
     def prompt_tps(self) -> float:
@@ -1975,6 +2062,7 @@ class MLLMBatchStats:
             "hybrid_kv_without_ssm_hits": self.hybrid_kv_without_ssm_hits,
             "hybrid_kv_without_ssm_tokens": self.hybrid_kv_without_ssm_tokens,
             "last_hybrid_kv_without_ssm": self.last_hybrid_kv_without_ssm,
+            "last_native_mtp": self.last_native_mtp,
         }
 
 
@@ -5538,6 +5626,13 @@ class MLLMBatchGenerator:
                         mtp_state.stats,
                         "fallback_to_ar",
                     )
+                    self._stats.record_native_mtp(
+                        request_id=batch.requests[0].request_id,
+                        stats=mtp_state.stats,
+                        finish_reason="fallback_to_ar",
+                        final_depth=mtp_state.depth,
+                        fallback_reason=mtp_state.ar_fallback_reason,
+                    )
                     logger.info(
                         "MLLM MTP[%s] fallback to AR after queue drain: %s",
                         batch.requests[0].request_id,
@@ -5555,6 +5650,13 @@ class MLLMBatchGenerator:
                     batch.requests[0].request_id,
                     mtp_state.stats,
                     "error",
+                )
+                self._stats.record_native_mtp(
+                    request_id=batch.requests[0].request_id,
+                    stats=mtp_state.stats,
+                    finish_reason="error",
+                    final_depth=mtp_state.depth,
+                    fallback_reason=mtp_state.ar_fallback_reason,
                 )
                 if hasattr(batch.requests[0], "_native_mtp_state"):
                     delattr(batch.requests[0], "_native_mtp_state")
@@ -5622,6 +5724,13 @@ class MLLMBatchGenerator:
                         request_id,
                         mtp_state_for_finish.stats,
                         finish_reason,
+                    )
+                    self._stats.record_native_mtp(
+                        request_id=request_id,
+                        stats=mtp_state_for_finish.stats,
+                        finish_reason=finish_reason,
+                        final_depth=mtp_state_for_finish.depth,
+                        fallback_reason=mtp_state_for_finish.ar_fallback_reason,
                     )
                     try:
                         delattr(req, "_native_mtp_state")

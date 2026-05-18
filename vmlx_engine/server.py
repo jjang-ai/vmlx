@@ -4943,6 +4943,14 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
             and getattr(getattr(scheduler, "config", None), "kv_cache_quantization", "none")
             != "none"
         )
+        try:
+            stored_kv_bits = int(getattr(scheduler, "_kv_cache_bits", 0) or 0)
+        except (TypeError, ValueError):
+            stored_kv_bits = 0
+        try:
+            stored_kv_group = int(getattr(scheduler, "_kv_cache_group_size", 64) or 64)
+        except (TypeError, ValueError):
+            stored_kv_group = 64
         return {
             "family": family_name or scheduler_family or "hybrid",
             "schema": "hybrid_ssm_v1",
@@ -4959,6 +4967,15 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
                     if hybrid_tq_enabled
                     else "hybrid_ssm_state"
                 ),
+            },
+            "attention_kv_storage_quantization": {
+                "enabled": stored_kv_bits > 0,
+                "mode": "storage_boundary",
+                "bits": stored_kv_bits if stored_kv_bits > 0 else None,
+                "group_size": stored_kv_group if stored_kv_bits > 0 else None,
+                "applies_to": "attention_kv_layers_only",
+                "ssm_policy": "native_companion_state",
+                "rederive": "async_clean_prefill_on_miss_or_warm_pass",
             },
             "prefix": bool(block_aware_cache is not None),
             "paged": bool(block_aware_cache is not None and paged_cache_manager is not None),

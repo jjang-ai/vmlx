@@ -99,6 +99,7 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
   const nativeCache = stats?.native_cache
   const turboQuantKv = stats?.turboquant_kv_cache
   const cacheTotals = stats?.cache_totals
+  const attentionKvStorage = nativeCache?.attention_kv_storage_quantization
 
   return (
     <div className="space-y-4">
@@ -374,6 +375,22 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
                     ? 'enabled'
                     : `off (${nativeCache.generic_turboquant_kv.reason || 'native'})`
                 }
+              />
+            )}
+            {attentionKvStorage && (
+              <StatCard
+                label="Attention KV L2"
+                value={
+                  attentionKvStorage.enabled
+                    ? `q${attentionKvStorage.bits} / group ${attentionKvStorage.group_size ?? 64}`
+                    : 'disabled'
+                }
+              />
+            )}
+            {attentionKvStorage?.ssm_policy && (
+              <StatCard
+                label="SSM Policy"
+                value={`${attentionKvStorage.ssm_policy}${attentionKvStorage.rederive ? ' + rederive' : ''}`}
               />
             )}
             {kvQuant && (

@@ -19,6 +19,32 @@ interface HealthData {
   scheduler?: {
     num_waiting?: number
     num_running?: number
+    batch_generator?: {
+      last_native_mtp?: {
+        request_id?: string
+        finish_reason?: string
+        final_depth?: number
+        cycles?: number
+        accepted_tokens?: number
+        drafted_tokens?: number
+        acceptance_rate?: number | null
+        depth_acceptance_rates?: Record<string, number | null>
+        forwards?: {
+          seed_main?: number
+          verify_main?: number
+          replay_main?: number
+          mtp?: number
+        }
+        timings_ms?: {
+          total?: number
+          avg_cycle?: number
+          verify?: number
+          draft?: number
+          replay?: number
+        }
+        fallback_reason?: string | null
+      } | null
+    }
     ewma_ttft_seconds?: number
     cache_hit_requests?: number
     cache_hit_tokens?: number
@@ -132,6 +158,15 @@ interface HealthData {
       enabled?: boolean
       reason?: string
     }
+    attention_kv_storage_quantization?: {
+      enabled?: boolean
+      mode?: string
+      bits?: number | null
+      group_size?: number | null
+      applies_to?: string
+      ssm_policy?: string
+      rederive?: string
+    }
   }
   quantization_format?: {
     type: string
@@ -208,6 +243,8 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
   const [history, setHistory] = useState<Array<{ time: number; active: number; peak: number }>>([])
   const [error, setError] = useState<string | null>(null)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
+  const lastNativeMtp = health?.scheduler?.batch_generator?.last_native_mtp
+  const attentionKvStorage = health?.native_cache?.attention_kv_storage_quantization
 
   useEffect(() => {
     if (sessionStatus !== 'running') {
@@ -358,6 +395,30 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
                 value={`${health.mtp?.mtp_tensor_count ?? 0} mtp / ${health.mtp?.vision_tensor_count ?? 0} vision`}
               />
             )}
+            {lastNativeMtp && (
+              <InfoCard
+                label="MTP Accept"
+                value={`${lastNativeMtp.accepted_tokens ?? 0}/${lastNativeMtp.drafted_tokens ?? 0} (${formatPercent(lastNativeMtp.acceptance_rate)})`}
+              />
+            )}
+            {lastNativeMtp?.depth_acceptance_rates && (
+              <InfoCard
+                label="MTP Depth Rates"
+                value={formatMtpDepthRates(lastNativeMtp.depth_acceptance_rates, lastNativeMtp.final_depth)}
+              />
+            )}
+            {lastNativeMtp?.forwards && (
+              <InfoCard
+                label="MTP Forwards"
+                value={`v${lastNativeMtp.forwards.verify_main ?? 0} / r${lastNativeMtp.forwards.replay_main ?? 0} / m${lastNativeMtp.forwards.mtp ?? 0}`}
+              />
+            )}
+            {lastNativeMtp?.timings_ms && (
+              <InfoCard
+                label="MTP Timing"
+                value={`${Number(lastNativeMtp.timings_ms.avg_cycle ?? 0).toFixed(1)} ms/cyc`}
+              />
+            )}
             {health.kv_cache_quantization?.enabled && (
               <InfoCard label="KV Quant" value={`${health.kv_cache_quantization.bits}-bit`} />
             )}
@@ -407,6 +468,22 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
                 }
               />
             )}
+            {attentionKvStorage && (
+              <InfoCard
+                label="Attention KV L2"
+                value={
+                  attentionKvStorage.enabled
+                    ? `q${attentionKvStorage.bits} / g${attentionKvStorage.group_size ?? 64}`
+                    : 'disabled'
+                }
+              />
+            )}
+            {attentionKvStorage?.ssm_policy && (
+              <InfoCard
+                label="SSM Policy"
+                value={`${attentionKvStorage.ssm_policy}${attentionKvStorage.rederive ? ' + rederive' : ''}`}
+              />
+            )}
           </div>
           {health.quantization?.compat_warnings?.length ? (
             <div className="mt-2 text-xs bg-warning/10 border border-warning/30 text-warning px-3 py-2 rounded space-y-1">
@@ -420,6 +497,11 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
               {health.mtp.issues.map((issue, index) => (
                 <div key={index}>{issue}</div>
               ))}
+            </div>
+          ) : null}
+          {lastNativeMtp?.fallback_reason ? (
+            <div className="mt-2 text-xs bg-warning/10 border border-warning/30 text-warning px-3 py-2 rounded">
+              Native MTP fallback: {lastNativeMtp.fallback_reason}
             </div>
           ) : null}
         </div>
@@ -612,6 +694,19 @@ function formatWeightQuant(health: HealthData): string {
   }
   if (qf?.type) return `${qf.type.toUpperCase()}${bits != null ? ` ${bits}-bit` : ''}${group != null ? ` g${group}` : ''}`
   return bits != null ? `${bits}-bit` : 'unknown'
+}
+
+function formatPercent(value?: number | null): string {
+  if (value == null || Number.isNaN(Number(value))) return 'n/a'
+  return `${(Number(value) * 100).toFixed(1)}%`
+}
+
+function formatMtpDepthRates(
+  rates: Record<string, number | null>,
+  finalDepth?: number,
+): string {
+  const depth = finalDepth ? ` D${finalDepth}` : ''
+  return `D1 ${formatPercent(rates.d1)} / D2 ${formatPercent(rates.d2)} / D3 ${formatPercent(rates.d3)}${depth}`
 }
 
 function InfoCard({ label, value }: { label: string; value: string }) {
