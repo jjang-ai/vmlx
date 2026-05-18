@@ -9288,7 +9288,7 @@ async def create_chat_completion(
                     txt = getattr(p, "text", None) or (p.get("text") if isinstance(p, dict) else None)
                     if txt and str(txt).strip():
                         return True
-                elif t in ("image_url", "video_url", "image", "input_audio"):
+                elif t in _MULTIMODAL_CONTENT_TYPES:
                     return True
             return False
         return bool(c)

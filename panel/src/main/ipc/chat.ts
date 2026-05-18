@@ -44,7 +44,7 @@ type ComposerAttachment = {
   text?: string;
 };
 
-function inferAttachmentKind(a: ComposerAttachment): "image" | "video" | "audio" | "text" {
+function inferKind(a: ComposerAttachment): "image" | "video" | "audio" | "text" {
   if (a.kind) return a.kind;
   if (a.text !== undefined) return "text";
   if (a.dataUrl.startsWith("data:audio/")) return "audio";
@@ -135,7 +135,7 @@ function summarizeAttachmentsForLog(attachments?: ComposerAttachment[]): Record<
   const counts = { image: 0, video: 0, audio: 0, text: 0 };
   const files: Array<Record<string, any>> = [];
   for (const attachment of attachments || []) {
-    const kind = inferAttachmentKind(attachment);
+    const kind = inferKind(attachment);
     counts[kind] += 1;
     files.push({
       kind,
@@ -974,7 +974,7 @@ export function registerChatHandlers(
       // handle media, which is far better than silently dropping it. Text-file
       // attachments are plain text context and do not need multimodal routing.
       const hasMediaAttachments =
-        hasAttachments && attachments!.some((a) => inferAttachmentKind(a) !== "text");
+        hasAttachments && attachments!.some((a) => inferKind(a) !== "text");
       const modelForceTextOnly = (() => {
         try {
           return !!chat.modelPath &&
@@ -984,16 +984,16 @@ export function registerChatHandlers(
         }
       })();
       if (hasMediaAttachments && modelForceTextOnly) {
-        const imgs = attachments!.filter((a) => inferAttachmentKind(a) === "image").length;
-        const vids = attachments!.filter((a) => inferAttachmentKind(a) === "video").length;
-        const auds = attachments!.filter((a) => inferAttachmentKind(a) === "audio").length;
+        const imgs = attachments!.filter((a) => inferKind(a) === "image").length;
+        const vids = attachments!.filter((a) => inferKind(a) === "video").length;
+        const auds = attachments!.filter((a) => inferKind(a) === "audio").length;
         console.log(
           `[CHAT] Keeping multimodal=false for ${chatId} — model is forceTextOnly and user attached ${imgs} image(s), ${vids} video(s), ${auds} audio file(s)`,
         );
       } else if (hasMediaAttachments && !chatIsMultimodal) {
-        const imgs = attachments!.filter((a) => inferAttachmentKind(a) === "image").length;
-        const vids = attachments!.filter((a) => inferAttachmentKind(a) === "video").length;
-        const auds = attachments!.filter((a) => inferAttachmentKind(a) === "audio").length;
+        const imgs = attachments!.filter((a) => inferKind(a) === "image").length;
+        const vids = attachments!.filter((a) => inferKind(a) === "video").length;
+        const auds = attachments!.filter((a) => inferKind(a) === "audio").length;
         console.log(
           `[CHAT] Forcing multimodal=true for ${chatId} — user attached ${imgs} image(s), ${vids} video(s), ${auds} audio file(s)`,
         );
@@ -1026,7 +1026,7 @@ export function registerChatHandlers(
         ? JSON.stringify([
             ...(content.trim() ? [{ type: "text", text: content }] : []),
             ...attachments.map((a) => {
-              const kind = inferAttachmentKind(a);
+              const kind = inferKind(a);
               if (kind === "audio") {
                 return {
                   type: "input_audio",

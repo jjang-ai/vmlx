@@ -8807,6 +8807,31 @@ class TestEmptyContentReturns400:
             f"got {r.status_code}: {r.json()}"
         )
 
+    def test_content_with_input_image_but_empty_text_is_valid(self):
+        """Responses-style input_image parts are also media prompts.
+
+        Some clients reuse Responses API content-part names when calling
+        /v1/chat/completions. The server should route/diagnose the media shape,
+        not reject the request as an empty text prompt before media handling.
+        """
+        c = self._client()
+        r = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "default",
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": ""},
+                    {"type": "input_image", "image_url": "http://x/y.png"},
+                ]}],
+                "max_tokens": 5,
+            },
+        )
+        assert r.status_code != 400, (
+            f"Message with input_image content-part must NOT be 400-rejected "
+            f"(the empty text is fine when media is present); "
+            f"got {r.status_code}: {r.json()}"
+        )
+
     def test_assistant_tool_calls_only_message_passes_validation(self):
         """Assistant message with tool_calls array + null content is
         valid for multi-turn tool flows (see iter 24). The guard must

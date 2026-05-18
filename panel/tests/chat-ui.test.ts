@@ -1234,7 +1234,7 @@ describe('Media attachment product path', () => {
 
   it('text-file attachments stay plain text instead of forcing multimodal routing', () => {
     const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
-    expect(source).toContain('inferAttachmentKind(a) !== "text"')
+    expect(source).toContain('inferKind(a) !== "text"')
     expect(source).toContain('if (kind === "text")')
     expect(source).toContain('[Attached file: ${a.name}]')
   })
