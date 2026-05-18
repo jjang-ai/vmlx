@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.5.41 — 2026-05-18 — DSV4 DSML Tool Calls and Packaged Cache Gates
+
+### Fixed
+- **DSV4 Flash DSML streaming tool calls no longer leak raw wrapper markers**
+  before the structured tool-call delta. The parser now treats
+  `<｜DSML｜tool_calls>` as part of the buffered tool-call envelope and suppresses
+  leading whitespace while waiting for the marker to complete.
+- **Packaged native-cache policy checks were refreshed** for DSV4 Flash,
+  Qwen3.6 native-MTP hybrid SSM, and ZAYA CCA so the app UI/API reflect native
+  cache schemas instead of generic TurboQuant KV controls on incompatible
+  models.
+
+### Verified
+- Live DSV4 Flash DSML gate passed non-streaming tool calls, tool-result
+  roundtrip, and streaming `tool_choice=required` with no DSML content leak.
+- Packaged smoke gates passed for DSV4 Flash, Qwen3.6 native-MTP, and ZAYA CCA
+  cache lifecycle behavior.
+
 ## v1.5.40 — 2026-05-17 — Tuned Native MTP Defaults and Packaged Gate Proof
 
 ### Fixed
