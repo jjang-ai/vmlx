@@ -583,6 +583,35 @@ function readNativeMtpTuningDepth(modelPath: string): { depth: number; source: s
   return undefined
 }
 
+function nativeMtpBlockedByTuning(modelPath: string): boolean {
+  try {
+    const tuningPath = join(modelPath, 'vmlx_mtp_tuning.json')
+    if (!existsSync(tuningPath)) return false
+    const tuning = JSON.parse(readFileSync(tuningPath, 'utf-8'))
+    const nativeMtp = tuning?.native_mtp
+    if (!nativeMtp || typeof nativeMtp !== 'object') return false
+    return (
+      nativeMtp.blocked === true ||
+      nativeMtp.validated === false ||
+      nativeMtp.output_equivalent === false
+    )
+  } catch {
+    return false
+  }
+}
+
+function nativeMtpBlockedByProfile(jangCfg: any): boolean {
+  const profile = String(
+    jangCfg?.quantization?.profile ??
+    jangCfg?.profile ??
+    '',
+  ).trim().toUpperCase()
+  if (profile !== 'JANG_2K') return false
+  return !['1', 'true', 'yes', 'on'].includes(
+    String(process.env.VMLINUX_NATIVE_MTP_ALLOW_JANG2K ?? process.env.VMLX_NATIVE_MTP_ALLOW_JANG2K ?? '').toLowerCase(),
+  )
+}
+
 function detectNativeMtpCapability(
   parsedConfig: any,
   jangCfg: any,
@@ -592,6 +621,7 @@ function detectNativeMtpCapability(
   if (jangCfg?.drop_mtp === true || jangCfg?.mtp?.enabled === false || jangCfg?.mtp?.kept === false) {
     return undefined
   }
+  if (nativeMtpBlockedByTuning(modelPath) || nativeMtpBlockedByProfile(jangCfg)) return undefined
 
   const qwenFamilies = new Set([
     'qwen3_5',

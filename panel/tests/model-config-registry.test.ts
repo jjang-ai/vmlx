@@ -115,6 +115,81 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     })
   })
 
+  it('does not expose Native MTP when model-local tuning blocks the runtime', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'qwen3_5_moe',
+        text_config: {
+          model_type: 'qwen3_5_moe_text',
+          mtp_num_hidden_layers: 1,
+        },
+      },
+      {
+        format: 'jang',
+        mtp: { kept: true, enabled: true, num_layers: 1 },
+        capabilities: {
+          family: 'qwen3_5_moe',
+          cache_type: 'hybrid',
+          modality: 'vision',
+        },
+      },
+    )
+    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
+      weight_map: {
+        'model.embed_tokens.weight': 'model.safetensors',
+        'model.visual.patch_embed.proj.weight': 'model.safetensors',
+        'mtp.fc.weight': 'model.safetensors',
+        'mtp.layers.0.self_attn.q_proj.weight': 'model.safetensors',
+      },
+    }))
+    writeFileSync(join(dir, 'vmlx_mtp_tuning.json'), JSON.stringify({
+      native_mtp: {
+        blocked: true,
+        validated: false,
+        output_equivalent: false,
+        reason: 'failed runtime validation',
+      },
+    }))
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.nativeMtp).toBeUndefined()
+  })
+
+  it('keeps JANG_2K Native MTP blocked by default to match Python runtime policy', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'qwen3_5_moe',
+        text_config: {
+          model_type: 'qwen3_5_moe_text',
+          mtp_num_hidden_layers: 1,
+        },
+      },
+      {
+        format: 'jang',
+        mtp: { kept: true, enabled: true, num_layers: 1 },
+        quantization: { profile: 'JANG_2K' },
+        capabilities: {
+          family: 'qwen3_5_moe',
+          cache_type: 'hybrid',
+          modality: 'vision',
+        },
+      },
+    )
+    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
+      weight_map: {
+        'model.embed_tokens.weight': 'model.safetensors',
+        'model.visual.patch_embed.proj.weight': 'model.safetensors',
+        'mtp.fc.weight': 'model.safetensors',
+        'mtp.layers.0.self_attn.q_proj.weight': 'model.safetensors',
+      },
+    }))
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.nativeMtp).toBeUndefined()
+  })
+
   it('detects text ZAYA as CCA hybrid with opt-in qwen3 reasoning parser', () => {
     const dir = makeModelDir(
       { model_type: 'zaya' },
