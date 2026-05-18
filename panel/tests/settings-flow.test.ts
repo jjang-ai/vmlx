@@ -188,8 +188,8 @@ function buildCommandPreview(
     const parts = ['vmlx-engine serve', modelPath]
     const detectedFamily = normalizeDetectedFamilyName(detected?.family)
     const turboQuantActive = !!detected?.isTurboQuant
-    const isVLM = detected?.forceTextOnly ? false : (!!detected?.isMultimodal || config.isMultimodal === true)
     const dsv4Active = detectedFamily === 'deepseek-v4'
+    const isVLM = dsv4Active || detected?.forceTextOnly ? false : (!!detected?.isMultimodal || config.isMultimodal === true)
     const zayaCcaActive = isZayaCcaFamily(detectedFamily)
 
     parts.push('--host', config.host)
@@ -201,12 +201,12 @@ function buildCommandPreview(
 
     const effectiveMaxNumSeqs = dsv4Active ? 1 : config.maxNumSeqs
     if (effectiveMaxNumSeqs && effectiveMaxNumSeqs > 0) parts.push('--max-num-seqs', effectiveMaxNumSeqs.toString())
-    if (config.prefillBatchSize && config.prefillBatchSize > 0) parts.push('--prefill-batch-size', config.prefillBatchSize.toString())
-    if (config.prefillStepSize && config.prefillStepSize > 0) parts.push('--prefill-step-size', config.prefillStepSize.toString())
-    if (config.completionBatchSize && config.completionBatchSize > 0) parts.push('--completion-batch-size', config.completionBatchSize.toString())
+    if (!dsv4Active && config.prefillBatchSize && config.prefillBatchSize > 0) parts.push('--prefill-batch-size', config.prefillBatchSize.toString())
+    if (!dsv4Active && config.prefillStepSize && config.prefillStepSize > 0) parts.push('--prefill-step-size', config.prefillStepSize.toString())
+    if (!dsv4Active && config.completionBatchSize && config.completionBatchSize > 0) parts.push('--completion-batch-size', config.completionBatchSize.toString())
 
     if (isVLM) parts.push('--is-mllm')
-    const cacheStackActive = config.continuousBatching !== false
+    const cacheStackActive = dsv4Active ? true : config.continuousBatching !== false
     if (cacheStackActive) parts.push('--continuous-batching')
     else parts.push('--no-continuous-batching')
 
@@ -223,7 +223,7 @@ function buildCommandPreview(
             : detected?.reasoningParser)
 
     const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
-    const prefixCacheOff = !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
+    const prefixCacheOff = dsv4Active ? false : !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
     const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
     const dsv4CompositeRequiresPaged = dsv4Active && !prefixCacheOff
     const nativeCacheRequiresPaged = cacheTypeRequiresPaged(detected?.cacheType) && detected?.usePagedCache === true && !prefixCacheOff
@@ -233,7 +233,7 @@ function buildCommandPreview(
 
     if (prefixCacheOff) {
         parts.push('--disable-prefix-cache')
-    } else {
+    } else if (!dsv4Active) {
         if (config.noMemoryAwareCache) {
             parts.push('--no-memory-aware-cache')
             if (config.prefixCacheSize && config.prefixCacheSize > 0) parts.push('--prefix-cache-size', config.prefixCacheSize.toString())
@@ -254,7 +254,7 @@ function buildCommandPreview(
         if (config.maxCacheBlocks && config.maxCacheBlocks > 0) parts.push('--max-cache-blocks', config.maxCacheBlocks.toString())
     }
 
-    if (!prefixCacheOff && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
+    if (!prefixCacheOff && !dsv4Active && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
         parts.push('--kv-cache-quantization', config.kvCacheQuantization)
         if (config.kvCacheQuantization !== 'none' && config.kvCacheGroupSize && config.kvCacheGroupSize !== 64) {
             parts.push('--kv-cache-group-size', config.kvCacheGroupSize.toString())
@@ -295,14 +295,14 @@ function buildCommandPreview(
     if (config.servedModelName) parts.push('--served-model-name', config.servedModelName)
 
     // Speculative decoding
-    if (config.speculativeModel) {
+    if (!dsv4Active && config.speculativeModel) {
         parts.push('--speculative-model', config.speculativeModel)
         if (config.numDraftTokens && config.numDraftTokens !== 3) {
             parts.push('--num-draft-tokens', config.numDraftTokens.toString())
         }
     }
 
-    if (detected?.nativeMtp?.supported) {
+    if (!dsv4Active && detected?.nativeMtp?.supported) {
         const mode = config.nativeMtpMode || 'deterministic'
         if (mode === 'off') {
             parts.push('--disable-native-mtp')
@@ -1193,12 +1193,35 @@ describe('No Hardcoded Values', () => {
 
     it('deepseek-v4 uses DS4 page-sized blocks even when stale config has generic 64', () => {
         const out = preview(
-            { enablePrefixCache: true, usePagedCache: false, pagedCacheBlockSize: 64 },
+            {
+                enablePrefixCache: false,
+                continuousBatching: false,
+                usePagedCache: false,
+                pagedCacheBlockSize: 64,
+                prefillBatchSize: 512,
+                prefillStepSize: 2048,
+                completionBatchSize: 512,
+                kvCacheQuantization: 'q4',
+                speculativeModel: '/tmp/draft',
+                isMultimodal: true,
+                nativeMtpDepth: 3,
+            },
             { family: 'deepseek-v4', usePagedCache: false },
         )
 
         expect(hasFlag(out, '--use-paged-cache')).toBe(true)
         expect(getFlagValue(out, '--paged-cache-block-size')).toBe('256')
+        expect(getFlagValue(out, '--max-num-seqs')).toBe('1')
+        expect(hasFlag(out, '--no-continuous-batching')).toBe(false)
+        expect(hasFlag(out, '--continuous-batching')).toBe(true)
+        expect(hasFlag(out, '--disable-prefix-cache')).toBe(false)
+        expect(hasFlag(out, '--prefill-batch-size')).toBe(false)
+        expect(hasFlag(out, '--prefill-step-size')).toBe(false)
+        expect(hasFlag(out, '--completion-batch-size')).toBe(false)
+        expect(hasFlag(out, '--kv-cache-quantization')).toBe(false)
+        expect(hasFlag(out, '--speculative-model')).toBe(false)
+        expect(hasFlag(out, '--is-mllm')).toBe(false)
+        expect(hasFlag(out, '--native-mtp-depth')).toBe(false)
     })
 
     it('detected Qwen3.6 hybrid cache forces paged cache over stale saved false', () => {

@@ -222,6 +222,36 @@ def test_dsv4_long_context_gate_compares_cached_followup_to_no_cache():
     assert "cached_vs_no_cache" in src
 
 
+def test_dsv4_responses_cache_gate_defaults_to_pure_affine_keeper():
+    from tests.cross_matrix import run_dsv4_responses_cache_gate
+
+    assert run_dsv4_responses_cache_gate.DEFAULT_MODEL.endswith(
+        "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
+    )
+
+
+def test_dsv4_responses_cache_gate_uses_previous_response_and_no_cache_control():
+    """DSV4 Responses cache proof must separate previous_response_id reuse from cold quality."""
+    import inspect
+    from tests.cross_matrix import run_dsv4_responses_cache_gate
+
+    src = inspect.getsource(run_dsv4_responses_cache_gate.run)
+    module_src = inspect.getsource(run_dsv4_responses_cache_gate)
+
+    assert "/v1/responses" in src
+    assert "previous_response_id" in src
+    assert "explicit_no_cache_full_prompt" in src
+    assert '"skip_prefix_cache": True' in src
+    assert '"repetition_penalty": 1.0' in src
+    assert "GATE RUN ID" in src
+    assert "previous_response_follow: missing cached_tokens evidence" in src
+    assert "previous_response_follow: missing dsv4 cache_detail" in src
+    assert "store_turn: unexpected prefix cache hit" in src
+    assert "explicit_no_cache_full_prompt: unexpected cache usage" in src
+    assert "input_tokens_details" in module_src
+    assert "native_cache" in src
+
+
 def test_mistral_medium_jangtq_path_matches_current_drive_layout():
     rows = {row.id: row for row in ROWS}
 
