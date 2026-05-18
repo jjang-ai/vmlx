@@ -5594,6 +5594,23 @@ async def health():
     return result
 
 
+@app.get("/health.mtp")
+async def health_mtp():
+    """Direct native-MTP health alias for tools that only need MTP status."""
+    snapshot = await health()
+    mtp = snapshot.get("mtp")
+    if mtp is not None:
+        return mtp
+    return {
+        "status": "not_configured",
+        "artifact_available": False,
+        "runtime_available": False,
+        "runtime_active": False,
+        "runtime_reason": "no model bundle loaded",
+        "issues": [],
+    }
+
+
 def _get_scheduler():
     """Get the scheduler from the engine, or None if not available."""
     if _engine is None:

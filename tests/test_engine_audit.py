@@ -6907,10 +6907,13 @@ class TestTurboQuantKVTelemetry:
         monkeypatch.setattr(server, "_mcp_manager", None)
 
         health = await server.health()
+        mtp_alias = await server.health_mtp()
         capabilities = await server.model_capabilities("dsv4-test")
 
         assert health["mtp"]["status"] == "dropped"
         assert health["mtp"]["runtime_available"] is False
+        assert mtp_alias["status"] == "dropped"
+        assert mtp_alias["runtime_available"] is False
         assert health["routing"]["trained_active_experts"] == 6
         assert health["routing"]["effective_active_experts_source"] == "trained_default"
         assert capabilities["mtp"]["status"] == "dropped"

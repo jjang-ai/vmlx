@@ -26,6 +26,12 @@ def _run(coro):
 class TestHealthEndpoint:
     """Tests for the health() async handler."""
 
+    def test_health_mtp_route_is_registered(self):
+        """MTP diagnostics should have a stable direct health route alias."""
+        from vmlx_engine.server import app
+
+        assert "/health.mtp" in {route.path for route in app.routes}
+
     def test_health_no_model_loaded(self):
         """When _engine is None, health returns status='no_model'."""
         from vmlx_engine import server
