@@ -170,6 +170,21 @@ def extract(obj: dict[str, Any], wall: float) -> dict[str, Any]:
     }
 
 
+def cached_tokens(case: dict[str, Any]) -> int:
+    usage = case.get("usage") or {}
+    details = usage.get("prompt_tokens_details") or {}
+    try:
+        return int(details.get("cached_tokens") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def cache_detail(case: dict[str, Any]) -> str:
+    usage = case.get("usage") or {}
+    details = usage.get("prompt_tokens_details") or {}
+    return str(details.get("cache_detail") or "")
+
+
 def chat(url: str, model: str, payload: dict[str, Any], timeout: int = 600) -> dict[str, Any]:
     t0 = time.perf_counter()
     obj = post_json(url, {"model": model, "stream": False, **payload}, timeout=timeout)
@@ -252,7 +267,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     try:
         health0 = wait_health(args.port, proc, args.timeout)
         url = f"http://127.0.0.1:{args.port}/v1/chat/completions"
-        long_context = make_long_context(args.words)
+        run_id = f"dsv4-gate-{int(time.time() * 1000)}-{os.getpid()}"
+        long_context = (
+            make_long_context(args.words)
+            + f"\n\nGATE RUN ID = {run_id}. "
+            "This nonce is diagnostic-only and does not modify the anchor facts."
+        )
 
         cold_messages = [
             {
@@ -381,6 +401,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "DSV4_POOL_QUANT": env["DSV4_POOL_QUANT"],
                 "VMLX_METAL_WS_REJECT_PCT": env.get("VMLX_METAL_WS_REJECT_PCT"),
             },
+            "run_id": run_id,
             "log_path": str(log_path),
             "health_before": health0,
             "health_after": health1,
@@ -401,6 +422,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 case["has_cerulean"] and case["has_45"] and case["has_ada"]
             ):
                 notes.append(f"{name}: missing anchor")
+        if cached_tokens(store) or cache_detail(store):
+            notes.append(
+                "store_turn: unexpected prefix cache hit; per-run nonce should "
+                "make the store prefill fresh"
+            )
+        if cached_tokens(follow_cached) <= 0:
+            notes.append("follow_cached: missing cached_tokens evidence")
+        if "dsv4" not in cache_detail(follow_cached):
+            notes.append("follow_cached: missing dsv4 cache_detail")
+        if cached_tokens(follow_no_cache) or cache_detail(follow_no_cache):
+            notes.append("follow_no_cache: unexpected prefix cache usage")
         if follow_cached["content"].strip() != follow_no_cache["content"].strip():
             notes.append(
                 "cached_vs_no_cache: follow-up output differs; inspect "

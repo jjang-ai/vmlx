@@ -216,6 +216,9 @@ def test_dsv4_long_context_gate_compares_cached_followup_to_no_cache():
     assert "follow_no_cache" in src
     assert '"skip_prefix_cache": True' in src
     assert '"repetition_penalty": 1.0' in src
+    assert "GATE RUN ID" in src
+    assert "follow_cached: missing cached_tokens evidence" in src
+    assert "store_turn: unexpected prefix cache hit" in src
     assert "cached_vs_no_cache" in src
 
 
