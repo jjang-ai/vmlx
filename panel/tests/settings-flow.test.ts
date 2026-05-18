@@ -1642,6 +1642,21 @@ describe('JIT Toggle', () => {
         expect(sessions).toContain('native SWA+CSA/HCA composite cache')
     })
 
+    it('settings form hides generic paged-cache warnings in the DSV4 native cache section', () => {
+        const fs = require('fs')
+        const form = fs.readFileSync(
+            'src/renderer/src/components/sessions/SessionConfigForm.tsx',
+            'utf-8',
+        )
+
+        expect(form).toContain('{!dsv4CompositeRequiresPaged && config.enableDiskCache &&')
+        expect(form).toContain('{!dsv4CompositeRequiresPaged && !batchingOff && prefixOff &&')
+        expect(form).toContain('DSV4 Flash stores persistent prefix state through Block Disk Cache (L2) in the native cache section.')
+        expect(form).toContain('{!dsv4Active && !effectivelyNoBatching && effectiveUsePagedCache &&')
+        expect(form).toContain('This is not generic paged KV')
+        expect(form).toContain('Native Composite Prefix Cache')
+    })
+
     it('enableJit does not affect other flags', () => {
         const without = preview({ enableJit: false })
         const withJit = preview({ enableJit: true })
