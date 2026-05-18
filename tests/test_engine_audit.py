@@ -1393,6 +1393,30 @@ class TestMediaDiagnostics:
         assert summary["data_url"] == 1
         assert "SECRET_RESPONSE_IMAGE" not in json.dumps(summary)
 
+    def test_chat_multimodal_summary_handles_input_image_shape(self):
+        from vmlx_engine.server import _messages_multimodal_summary
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": ""},
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,SECRET_CHAT_INPUT_IMAGE",
+                    },
+                ],
+            }
+        ]
+
+        summary = _messages_multimodal_summary(messages)
+
+        assert summary["total"] == 1
+        assert summary["types"] == {"input_image": 1}
+        assert summary["data_url"] == 1
+        assert summary["roles"] == {"user": 1}
+        assert "SECRET_CHAT_INPUT_IMAGE" not in json.dumps(summary)
+
     def test_server_media_diag_log_includes_route_runtime_and_redacts_payload(
         self, caplog, monkeypatch
     ):
