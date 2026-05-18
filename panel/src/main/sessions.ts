@@ -2642,8 +2642,9 @@ export class SessionManager extends EventEmitter {
     // Native in-model MTP. This is separate from external speculative decoding:
     // Qwen3.6 preserved-MTP bundles carry their own draft head and the current
     // verified path is deterministic. The default app mode therefore launches
-    // native-MTP bundles with D3 plus deterministic startup sampling so normal
-    // app/API requests actually reach the D3 runtime instead of silently taking
+    // native-MTP bundles with the measured model-local depth when present
+    // (D3 fallback) plus deterministic startup sampling so normal app/API
+    // requests actually reach the native MTP runtime instead of silently taking
     // autoregressive decode through generation_config temperature=1.0.
     const nativeMtp = (detected as any).nativeMtp
     if (!dsv4Active && nativeMtp?.supported) {
