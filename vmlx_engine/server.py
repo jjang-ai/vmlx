@@ -6642,6 +6642,11 @@ async def create_anthropic_message(
     # Resolve model name
     resolved_name = _resolve_model_name()
     chat_req.model = resolved_name
+    _log_multimodal_request_shape(
+        "/v1/messages",
+        _model_path or _model_name or chat_req.model,
+        _messages_multimodal_summary(chat_req.messages),
+    )
 
     _msg_max_prompt_tokens = _effective_max_prompt_tokens(chat_req)
     prompt_limit_response = _reject_if_prompt_too_long_for_messages(
@@ -6729,6 +6734,8 @@ async def create_anthropic_message(
         )
 
     engine = get_engine()
+    if _messages_have_multimodal(chat_req.messages) and not engine.is_mllm:
+        _reject_unsupported_multimodal("/v1/messages")
 
     # Build generation kwargs from the converted chat request (shared by streaming + non-streaming)
     _msg_kwargs: dict = {
@@ -7480,6 +7487,11 @@ async def ollama_chat(fastapi_request: Request):
     from .api.models import ChatCompletionRequest
 
     chat_req = ChatCompletionRequest(**openai_req)
+    _log_multimodal_request_shape(
+        "/api/chat",
+        _model_path or _model_name or chat_req.model,
+        _messages_multimodal_summary(chat_req.messages),
+    )
     _ollama_max_prompt_tokens = _effective_max_prompt_tokens(chat_req)
     prompt_limit_response = _reject_if_prompt_too_long_for_messages(
         chat_req.messages,
@@ -7507,6 +7519,8 @@ async def ollama_chat(fastapi_request: Request):
     from starlette.responses import StreamingResponse as _SR
 
     engine = get_engine()
+    if _messages_have_multimodal(chat_req.messages) and not engine.is_mllm:
+        _reject_unsupported_multimodal("/api/chat")
     chat_kwargs = {
         "max_tokens": _resolve_max_tokens(chat_req.max_tokens, chat_req.model),
         "temperature": _resolve_temperature(chat_req.temperature, chat_req.model),

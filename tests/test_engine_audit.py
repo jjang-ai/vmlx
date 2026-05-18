@@ -1417,6 +1417,120 @@ class TestMediaDiagnostics:
         assert summary["roles"] == {"user": 1}
         assert "SECRET_CHAT_INPUT_IMAGE" not in json.dumps(summary)
 
+    def test_anthropic_image_conversion_reaches_media_summary(self):
+        from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
+        from vmlx_engine.server import _messages_multimodal_summary
+
+        anthropic = AnthropicRequest(
+            model="vl",
+            max_tokens=32,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "SECRET_ANTHROPIC_IMAGE",
+                            },
+                        },
+                        {"type": "text", "text": "describe"},
+                    ],
+                }
+            ],
+        )
+
+        chat = to_chat_completion(anthropic)
+        summary = _messages_multimodal_summary(chat.messages)
+
+        assert summary["total"] == 1
+        assert summary["types"] == {"image_url": 1}
+        assert summary["data_url"] == 1
+        assert summary["roles"] == {"user": 1}
+        assert "SECRET_ANTHROPIC_IMAGE" not in json.dumps(summary)
+
+    def test_media_diag_hooks_cover_anthropic_and_ollama_streaming_ingress(self):
+        import inspect
+        import vmlx_engine.server as server
+
+        anthropic_source = inspect.getsource(server.create_anthropic_message)
+        ollama_source = inspect.getsource(server.ollama_chat)
+
+        assert '"/v1/messages"' in anthropic_source
+        assert "_log_multimodal_request_shape" in anthropic_source
+        assert "_messages_multimodal_summary(chat_req.messages)" in anthropic_source
+        assert '_reject_unsupported_multimodal("/v1/messages")' in anthropic_source
+
+        assert '"/api/chat"' in ollama_source
+        assert "_log_multimodal_request_shape" in ollama_source
+        assert "_messages_multimodal_summary(chat_req.messages)" in ollama_source
+        assert '_reject_unsupported_multimodal("/api/chat")' in ollama_source
+
+    def test_anthropic_media_on_text_runtime_rejects_instead_of_dropping(
+        self, monkeypatch
+    ):
+        from fastapi.testclient import TestClient
+        import vmlx_engine.server as server
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=False))
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_name", "text-runtime")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        response = TestClient(server.app).post(
+            "/v1/messages",
+            json={
+                "model": "claude",
+                "max_tokens": 8,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": "aGVsbG8=",
+                                },
+                            },
+                            {"type": "text", "text": ""},
+                        ],
+                    }
+                ],
+            },
+        )
+
+        assert response.status_code == 400
+        assert "text-only" in response.text
+
+    def test_ollama_streaming_media_on_text_runtime_rejects_instead_of_dropping(
+        self, monkeypatch
+    ):
+        from fastapi.testclient import TestClient
+        import vmlx_engine.server as server
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=False))
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_name", "text-runtime")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        response = TestClient(server.app).post(
+            "/api/chat",
+            json={
+                "model": "text-runtime",
+                "stream": True,
+                "messages": [
+                    {"role": "user", "content": "", "images": ["aGVsbG8="]}
+                ],
+            },
+        )
+
+        assert response.status_code == 400
+        assert "text-only" in response.text
+
     def test_server_media_diag_log_includes_route_runtime_and_redacts_payload(
         self, caplog, monkeypatch
     ):
