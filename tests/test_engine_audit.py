@@ -5985,6 +5985,11 @@ class TestTurboQuantKVTelemetry:
         assert status["weight_index"]["suffix_counts"]["tq_norms"] == 1
         assert status["weight_index"]["suffix_counts"]["tq_bits"] == 1
         assert status["weight_index"]["tq_target_counts"]["routed_expert"] == 3
+        assert status["weight_index"]["mtp_tensor_count"] == 0
+        assert status["weight_index"]["routed_layout_counts"] == {
+            "prestacked_switch": 3,
+            "split_expert": 0,
+        }
         assert status["weight_index"]["sample_tq_packed_targets"] == [
             "model.layers.0.mlp.switch_mlp.gate_proj"
         ]
@@ -5994,6 +5999,131 @@ class TestTurboQuantKVTelemetry:
             "metal_na_eligible": False,
             "reason": "turboquant_codebook_uses_custom_tq_kernels",
         }
+
+    def test_dsv4_keeper_identity_reports_no_mtp_and_prestacked_layout(
+        self, tmp_path
+    ):
+        """Pin the final DSV4 no-MTP keeper shape without local model paths."""
+        from vmlx_engine.server import _model_mtp_status, _model_quantization_status
+
+        pure_jang = tmp_path / "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
+        pure_jang.mkdir()
+        (pure_jang / "config.json").write_text(json.dumps({
+            "model_type": "deepseek_v4",
+            "weight_format": "affine",
+            "num_nextn_predict_layers": 0,
+            "n_routed_experts": 256,
+            "num_experts_per_tok": 6,
+            "quantization": {"bits": 4, "group_size": 64},
+        }))
+        (pure_jang / "jang_config.json").write_text(json.dumps({
+            "weight_format": "affine",
+            "quantization": {
+                "method": "affine",
+                "routed_experts": {
+                    "bits": 2,
+                    "codec": "affine",
+                    "group_size": 64,
+                    "bit_plan": {
+                        "routed_projection_group_sizes": {
+                            "w1": 32,
+                            "w2": 32,
+                            "w3": 64,
+                        },
+                    },
+                },
+                "non_routed": {"bits": 4, "codec": "affine", "group_size": 64},
+            },
+        }))
+        (pure_jang / "model.safetensors.index.json").write_text(json.dumps({
+            "weight_map": {
+                "model.embed_tokens.weight": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.gate_proj.weight": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.gate_proj.scales": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.gate_proj.biases": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.down_proj.weight": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.down_proj.scales": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.down_proj.biases": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.up_proj.weight": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.up_proj.scales": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.up_proj.biases": "model.safetensors",
+            }
+        }))
+
+        pure_quant = _model_quantization_status(str(pure_jang))
+        pure_mtp = _model_mtp_status(str(pure_jang))
+
+        assert pure_quant["codec"] == "affine_quantized_matmul"
+        assert pure_quant["weight_format"] == "affine"
+        assert pure_quant["weight_index"]["total_tensors"] == 10
+        assert pure_quant["weight_index"]["mtp_tensor_count"] == 0
+        assert pure_quant["weight_index"]["routed_layout_counts"] == {
+            "prestacked_switch": 9,
+            "split_expert": 0,
+        }
+        assert pure_mtp["status"] == "not_configured"
+        assert pure_mtp["config_num_nextn_predict_layers"] == 0
+        assert pure_mtp["index_has_mtp_tensors"] is False
+
+        jangtq = tmp_path / "DeepSeek-V4-Flash-JANGTQ-K"
+        jangtq.mkdir()
+        (jangtq / "config.json").write_text(json.dumps({
+            "model_type": "deepseek_v4",
+            "weight_format": "mxtq",
+            "num_nextn_predict_layers": 0,
+            "n_routed_experts": 256,
+            "num_experts_per_tok": 6,
+            "mxtq_bits": {
+                "routed_expert": 2,
+                "attention": 8,
+                "shared_expert": 8,
+                "embed_tokens": 8,
+                "lm_head": 8,
+            },
+        }))
+        (jangtq / "jang_config.json").write_text(json.dumps({
+            "weight_format": "mxtq",
+            "drop_mtp": True,
+            "quantization": {
+                "profile": "JANGTQ-K",
+                "quantization_backend": "turboquant",
+            },
+        }))
+        (jangtq / "jangtq_runtime.safetensors").write_bytes(b"sidecar")
+        (jangtq / "model.safetensors.index.json").write_text(json.dumps({
+            "weight_map": {
+                "model.layers.0.mlp.switch_mlp.gate_proj.tq_packed": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.gate_proj.tq_norms": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.gate_proj.tq_bits": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.down_proj.tq_packed": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.down_proj.tq_norms": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.down_proj.tq_bits": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.up_proj.tq_packed": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.up_proj.tq_norms": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.up_proj.tq_bits": "model.safetensors",
+                "model.lm_head.weight": "model.safetensors",
+            }
+        }))
+
+        jangtq_quant = _model_quantization_status(str(jangtq))
+        jangtq_mtp = _model_mtp_status(str(jangtq))
+
+        assert jangtq_quant["codec"] == "turboquant_codebook"
+        assert jangtq_quant["weight_format"] == "mxtq"
+        assert jangtq_quant["weight_index"]["total_tensors"] == 10
+        assert jangtq_quant["weight_index"]["suffix_counts"]["tq_packed"] == 3
+        assert jangtq_quant["weight_index"]["suffix_counts"]["tq_norms"] == 3
+        assert jangtq_quant["weight_index"]["suffix_counts"]["tq_bits"] == 3
+        assert jangtq_quant["weight_index"]["tq_target_counts"]["routed_expert"] == 9
+        assert jangtq_quant["weight_index"]["mtp_tensor_count"] == 0
+        assert jangtq_quant["weight_index"]["routed_layout_counts"] == {
+            "prestacked_switch": 9,
+            "split_expert": 0,
+        }
+        assert jangtq_mtp["status"] == "dropped"
+        assert jangtq_mtp["jang_drop_mtp"] is True
+        assert jangtq_mtp["config_num_nextn_predict_layers"] == 0
+        assert jangtq_mtp["index_has_mtp_tensors"] is False
 
     def test_quantization_status_reports_routed_layer_bit_plan(self, tmp_path):
         """Layer-specific routed bits must be visible for speed/quality audits."""

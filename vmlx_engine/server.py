@@ -3791,7 +3791,9 @@ def _bundle_weight_index_status(bundle_path: str | None) -> dict | None:
 
         suffix_counts: dict[str, int] = defaultdict(int)
         tq_target_counts: dict[str, int] = defaultdict(int)
+        routed_layout_counts: dict[str, int] = defaultdict(int)
         sample_tq_packed_targets: list[str] = []
+        mtp_tensor_count = 0
         suffixes = (
             "tq_packed",
             "tq_norms",
@@ -3803,6 +3805,7 @@ def _bundle_weight_index_status(bundle_path: str | None) -> dict | None:
 
         for raw_key in weight_map:
             key = str(raw_key)
+            lowered = key.lower()
             suffix = next(
                 (candidate for candidate in suffixes if key.endswith(f".{candidate}")),
                 None,
@@ -3813,12 +3816,23 @@ def _bundle_weight_index_status(bundle_path: str | None) -> dict | None:
                 tq_target_counts[_weight_index_role_for_key(key)] += 1
             if suffix == "tq_packed" and len(sample_tq_packed_targets) < 12:
                 sample_tq_packed_targets.append(key[: -len(".tq_packed")])
+            if key.startswith("mtp.") or ".mtp." in lowered:
+                mtp_tensor_count += 1
+            if ".switch_mlp." in lowered:
+                routed_layout_counts["prestacked_switch"] += 1
+            if re.search(r"(?:^|\.)layers\.\d+\.(?:mlp|ffn)\.experts\.\d+\.", lowered):
+                routed_layout_counts["split_expert"] += 1
 
         result = {
             "index_file": str(index_path),
             "total_tensors": len(weight_map),
             "suffix_counts": dict(sorted(suffix_counts.items())),
             "tq_target_counts": dict(sorted(tq_target_counts.items())),
+            "routed_layout_counts": {
+                "prestacked_switch": routed_layout_counts.get("prestacked_switch", 0),
+                "split_expert": routed_layout_counts.get("split_expert", 0),
+            },
+            "mtp_tensor_count": mtp_tensor_count,
             "sample_tq_packed_targets": sample_tq_packed_targets or None,
         }
         return {k: v for k, v in result.items() if v is not None}
