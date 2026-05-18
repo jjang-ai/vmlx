@@ -36,6 +36,21 @@ class DeepSeekR1ReasoningParser(BaseThinkingReasoningParser):
     def end_token(self) -> str:
         return "</think>"
 
+    def __init__(self, tokenizer=None):
+        super().__init__(tokenizer)
+        # Base parser defaults _think_in_prompt to False, but DeepSeek-R1 has
+        # a historical lenient complete-output contract: a bare </think> with
+        # text before it is implicit reasoning unless the request explicitly
+        # configured the direct rail via reset_state(think_in_prompt=False).
+        self._think_in_prompt_explicit = False
+
+    def reset_state(self, think_in_prompt: bool = False, **kwargs):
+        super().reset_state(think_in_prompt=think_in_prompt, **kwargs)
+        self._think_in_prompt_explicit = True
+
+    def _explicit_direct_rail(self) -> bool:
+        return self._think_in_prompt_explicit and not self._think_in_prompt
+
     def extract_reasoning(
         self,
         model_output: str,
@@ -51,17 +66,18 @@ class DeepSeekR1ReasoningParser(BaseThinkingReasoningParser):
         Returns:
             (reasoning, content) tuple.
         """
-        # If the prompt opened the thinking rail, DeepSeek-R1 may omit the
-        # opening tag in generated text; in that mode a bare close token means
-        # everything before it is reasoning. In direct/chat rail the prompt did
-        # not start in reasoning mode, so a stray close marker is display
-        # markup only and the prefix must remain visible content.
+        # DeepSeek-R1 may omit the opening tag in generated text. Preserve the
+        # lenient parser contract for standalone/default use, while letting the
+        # server explicitly mark direct-rail requests where a stray close marker
+        # must not hide visible content as reasoning.
         if self.end_token in model_output and self.start_token not in model_output:
-            if not getattr(self, "_think_in_prompt", False):
-                return None, model_output.replace(self.end_token, "").strip() or None
             reasoning, _, content = model_output.partition(self.end_token)
+            if self._explicit_direct_rail():
+                return None, model_output.replace(self.end_token, "").strip() or None
             reasoning = reasoning.strip() or None
             content = content.strip() or None
+            if reasoning is None:
+                return None, content
             return reasoning, content
 
         # If neither token present:
@@ -70,7 +86,7 @@ class DeepSeekR1ReasoningParser(BaseThinkingReasoningParser):
         #     output is unclosed reasoning — return it as reasoning, empty content.
         #   - otherwise: plain content (model chose not to think).
         if self.end_token not in model_output and self.start_token not in model_output:
-            if getattr(self, "_think_in_prompt", False):
+            if self._think_in_prompt:
                 return (model_output.strip() or None), None
             return None, model_output
 
@@ -107,13 +123,13 @@ class DeepSeekR1ReasoningParser(BaseThinkingReasoningParser):
             start_in_delta = self.start_token in delta_text
             end_in_delta = self.end_token in delta_text
 
-            # If end token in delta but we never saw start token. Only route
-            # the prefix to reasoning when the prompt itself opened the
-            # reasoning rail; otherwise this is a stray direct-rail close
-            # marker and should be stripped from visible content.
+            # If end token in delta but we never saw start token. Route the
+            # prefix to reasoning in DeepSeek-R1's lenient/default mode, but
+            # keep it visible when the request explicitly configured the direct
+            # rail.
             if not start_in_prev and not start_in_delta and end_in_delta:
                 idx = delta_text.find(self.end_token)
-                if not getattr(self, "_think_in_prompt", False):
+                if self._explicit_direct_rail():
                     content_part = (
                         delta_text[:idx] + delta_text[idx + len(self.end_token) :]
                     )
@@ -122,6 +138,10 @@ class DeepSeekR1ReasoningParser(BaseThinkingReasoningParser):
                     )
                 reasoning_part = delta_text[:idx]
                 content_part = delta_text[idx + len(self.end_token) :]
+                if not reasoning_part:
+                    return DeltaMessage(
+                        content=content_part if content_part else None,
+                    )
                 return DeltaMessage(
                     reasoning=reasoning_part if reasoning_part else None,
                     content=content_part if content_part else None,
