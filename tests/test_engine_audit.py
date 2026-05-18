@@ -6545,6 +6545,43 @@ class TestTurboQuantKVTelemetry:
             for warning in warnings
         )
 
+    def test_quantization_status_trusts_dsv4_affine_runtime_coherency_stamp(
+        self, tmp_path
+    ):
+        from vmlx_engine.server import _model_quantization_status
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "deepseek_v4",
+            "weight_format": "affine",
+            "quantization": {"bits": 2, "group_size": 64},
+        }))
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "weight_format": "affine",
+            "runtime": {
+                "coherency_verified": True,
+                "ar_coherency_verified": True,
+                "verified_with": "packaged-live-gate",
+            },
+            "quantization": {
+                "method": "affine",
+                "routed_experts": {
+                    "bits": 2,
+                    "codec": "affine",
+                    "group_size": 64,
+                },
+            },
+        }))
+
+        status = _model_quantization_status(str(tmp_path))
+
+        assert status["codec"] == "affine_quantized_matmul"
+        warnings = status.get("compat_warnings") or []
+        assert not any(
+            "DSV4 affine routed JANG runtime is loaded but not coherency-verified"
+            in warning
+            for warning in warnings
+        )
+
     def test_routing_status_reports_trained_top_k_without_override(self, monkeypatch, tmp_path):
         from vmlx_engine.server import _model_routing_status
 
