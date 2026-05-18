@@ -1234,9 +1234,22 @@ describe('Media attachment product path', () => {
 
   it('text-file attachments stay plain text instead of forcing multimodal routing', () => {
     const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
-    expect(source).toContain('inferKind(a) !== "text"')
+    expect(source).toContain('inferAttachmentKind(a) !== "text"')
     expect(source).toContain('if (kind === "text")')
     expect(source).toContain('[Attached file: ${a.name}]')
+  })
+
+  it('exported session logs include redacted image request diagnostics', () => {
+    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    expect(source).toContain('[CHAT_DIAG] attachment_route=')
+    expect(source).toContain('[CHAT_DIAG] request_shape=')
+    expect(source).toContain('[CHAT_DIAG] request_error=')
+    expect(source).toContain('summarizeAttachmentsForLog(attachments)')
+    expect(source).toContain('summarizeRequestForLog(requestBody, useResponsesApi)')
+    expect(source).toContain('url: "<redacted>"')
+    expect(source).toContain('data_url_chars')
+    expect(source).toContain('sessionManager.pushLog(sessionId, data)')
+    expect(source).toContain('sessionManager.emit("session:log", { sessionId, data })')
   })
 
   it('message rendering includes audio controls for persisted audio parts', () => {
