@@ -2357,18 +2357,24 @@ class TestVmlx81JangtqSmeltFlashMoeIncompat:
         class _LH(logging.Handler):
             def emit(self, r): logs.append(r.getMessage())
 
-        srv.logger.addHandler(_LH())
+        handler = _LH()
+        prior_level = srv.logger.level
+        srv.logger.addHandler(handler)
         srv.logger.setLevel(logging.WARNING)
-        srv._flash_moe_enabled = True
-        srv._flash_moe_loader = None
-        srv._model_path = str(tmp_path)
-        srv._model_name = str(tmp_path)
-        srv._cli_args = {}
-        srv._engine = MagicMock()
-        srv._distributed_enabled = False
-        srv._distributed_coordinator = None
-        with patch.object(srv, "_get_raw_model_from_engine", return_value=MagicMock()):
-            srv._apply_flash_moe_patching()
+        try:
+            srv._flash_moe_enabled = True
+            srv._flash_moe_loader = None
+            srv._model_path = str(tmp_path)
+            srv._model_name = str(tmp_path)
+            srv._cli_args = {}
+            srv._engine = MagicMock()
+            srv._distributed_enabled = False
+            srv._distributed_coordinator = None
+            with patch.object(srv, "_get_raw_model_from_engine", return_value=MagicMock()):
+                srv._apply_flash_moe_patching()
+        finally:
+            srv.logger.removeHandler(handler)
+            srv.logger.setLevel(prior_level)
         hits = [l for l in logs if "vmlx#81" in l]
         assert hits, f"expected vmlx#81 clean skip log, got: {logs}"
         assert srv._flash_moe_loader is None, (
