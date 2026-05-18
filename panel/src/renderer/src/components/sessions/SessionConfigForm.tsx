@@ -274,6 +274,12 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const effectivePagedCacheBlockSize = dsv4CompositeRequiresPaged
     ? DSV4_PAGED_CACHE_BLOCK_SIZE
     : config.pagedCacheBlockSize
+  const pagedCacheSectionTitle = dsv4CompositeRequiresPaged
+    ? 'DSV4 Native Cache'
+    : t('sessions.config.pagedKVCache')
+  const pagedCacheToggleLabel = dsv4CompositeRequiresPaged
+    ? 'Native Composite Prefix Cache'
+    : 'Use Paged KV Cache'
   const effectiveStoredCacheQuantization = dsv4Active ? 'auto' : config.kvCacheQuantization
   const effectiveMaxNumSeqs = dsv4Active ? 1 : config.maxNumSeqs
   const effectivePrefillBatchSize = dsv4Active ? 1 : config.prefillBatchSize
@@ -662,15 +668,16 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Paged Cache */}
-      <Section title={t('sessions.config.pagedKVCache')} expanded={expandedSections.pagedCache} onToggle={() => toggleSection('pagedCache')} hidden={isImage}>
-        {!effectivelyNoBatching && <PerformanceHint text="Reduces memory waste by splitting the KV cache into small blocks instead of one big chunk. Lets the server handle longer conversations without running out of RAM." />}
+      <Section title={pagedCacheSectionTitle} expanded={expandedSections.pagedCache} onToggle={() => toggleSection('pagedCache')} hidden={isImage}>
+        {!effectivelyNoBatching && !dsv4CompositeRequiresPaged && <PerformanceHint text="Reduces memory waste by splitting the KV cache into small blocks instead of one big chunk. Lets the server handle longer conversations without running out of RAM." />}
+        {dsv4CompositeRequiresPaged && <PerformanceHint text="DSV4 Flash stores native SWA+CSA/HCA prompt-boundary snapshots for prefix reuse. This is not generic paged KV; the internal paged path is only the block index and L2 transport for DeepseekV4Cache state." />}
         {batchingOff && <IncompatWarning text="Paged cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable paged cache." />}
         {config.enableDiskCache && <IncompatWarning text="Paged cache and legacy Disk Cache cannot run simultaneously. Enabling paged cache will auto-disable legacy Disk Cache. For persistent caching with paged cache, use 'Block Disk Cache (L2)' below instead." />}
         {!batchingOff && prefixOff && <IncompatWarning text="Paged cache requires prefix cache. Enable 'Prefix Cache' above to use paged KV cache." />}
         {zayaTypedCacheRequiresPaged && <InfoNote text="ZAYA typed CCA cache requires paged cache while prefix cache is enabled. Turn off Prefix Cache to disable this cache stack for ZAYA." />}
         {nativeCacheRequiresPaged && !zayaTypedCacheRequiresPaged && !dsv4CompositeRequiresPaged && <InfoNote text="Hybrid/Mamba cache models require paged cache while prefix cache is enabled so KV blocks and path-dependent state stay in the same cache contract." />}
-        {dsv4CompositeRequiresPaged && <InfoNote text="DSV4 uses native SWA+CSA/HCA composite cache snapshots, so paged cache stays on and block size is fixed to 256 tokens for production decode compatibility." />}
-        <CheckField label="Use Paged KV Cache" tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations." checked={effectiveUsePagedCache} onChange={v => { onChange('usePagedCache', v); if (v && config.enableDiskCache) onChange('enableDiskCache', false) }} disabled={batchingOff || prefixOff || nativeCacheRequiresPaged || dsv4CompositeRequiresPaged} />
+        {dsv4CompositeRequiresPaged && <InfoNote text="DSV4 uses native SWA+CSA/HCA composite cache snapshots, so the native cache stays on and block size is fixed to 256 tokens for production decode compatibility." />}
+        <CheckField label={pagedCacheToggleLabel} tooltip={dsv4CompositeRequiresPaged ? "Required for DSV4 Flash prefix reuse. Stores native DeepseekV4Cache SWA+CSA/HCA state in typed composite records, not generic paged KV tensors." : "Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations."} checked={effectiveUsePagedCache} onChange={v => { onChange('usePagedCache', v); if (v && config.enableDiskCache) onChange('enableDiskCache', false) }} disabled={batchingOff || prefixOff || nativeCacheRequiresPaged || dsv4CompositeRequiresPaged} />
         {effectiveUsePagedCache && (
           <>
             <SliderField

@@ -259,6 +259,39 @@ def _apply_dsv4_runtime_policy(args, logger, *, clamp_max_num_seqs: bool = False
     return True, tuple(changes)
 
 
+def _cache_stack_summary_lines(args, *, dsv4_model: bool = False) -> list[str]:
+    """Return user-facing cache startup summary lines for the active runtime."""
+
+    if not getattr(args, "use_paged_cache", False):
+        return []
+
+    if dsv4_model:
+        lines = [
+            (
+                "DSV4 native composite prefix cache: schema=deepseek_v4_v7, "
+                f"block_size={args.paged_cache_block_size}, "
+                f"max_blocks={args.max_cache_blocks} (not generic paged KV)"
+            )
+        ]
+        if getattr(args, "enable_block_disk_cache", False):
+            lines.append(
+                "DSV4 composite block disk L2: "
+                f"max={args.block_disk_cache_max_gb}GB"
+            )
+        return lines
+
+    lines = [
+        (
+            "Paged cache: "
+            f"block_size={args.paged_cache_block_size}, "
+            f"max_blocks={args.max_cache_blocks}"
+        )
+    ]
+    if getattr(args, "enable_block_disk_cache", False):
+        lines.append(f"Block disk cache: max={args.block_disk_cache_max_gb}GB")
+    return lines
+
+
 def _env_int(name: str, default: int, legacy_name: str | None = None) -> int:
     value = os.environ.get(name)
     if value is None and legacy_name:
@@ -1055,12 +1088,13 @@ def serve_command(args):
 
         print("Mode: Continuous batching (for multiple concurrent users)")
         print(f"Stream interval: {args.stream_interval} tokens")
-        if args.use_paged_cache:
-            print(
-                f"Paged cache: block_size={args.paged_cache_block_size}, max_blocks={args.max_cache_blocks}"
-            )
-            if args.enable_block_disk_cache:
-                print(f"Block disk cache: max={args.block_disk_cache_max_gb}GB")
+        cache_summary_lines = _cache_stack_summary_lines(
+            args,
+            dsv4_model=_is_dsv4_model,
+        )
+        if cache_summary_lines:
+            for line in cache_summary_lines:
+                print(line)
         elif enable_prefix_cache and not args.no_memory_aware_cache:
             cache_info = (
                 f"{args.cache_memory_mb}MB"
@@ -1287,11 +1321,13 @@ def bench_command(args):
         os.environ["VMLX_DISABLE_TQ_KV"] = "1"
         os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
 
+    _is_dsv4_model = False
     try:
         from .model_config_registry import get_model_config_registry
 
         _mc = get_model_config_registry().lookup(args.model)
         if _mc.family_name == "deepseek_v4":
+            _is_dsv4_model = True
             _apply_dsv4_runtime_policy(args, logger, clamp_max_num_seqs=True)
     except Exception as exc:
         logger.debug("Bench model runtime policy lookup failed: %s", exc)
@@ -1391,10 +1427,8 @@ def bench_command(args):
             scheduler_config=scheduler_config,
         )
 
-        if args.use_paged_cache:
-            print(
-                f"Paged cache: block_size={args.paged_cache_block_size}, max_blocks={args.max_cache_blocks}"
-            )
+        for line in _cache_stack_summary_lines(args, dsv4_model=_is_dsv4_model):
+            print(line)
 
         # Generate prompts
         prompts = [

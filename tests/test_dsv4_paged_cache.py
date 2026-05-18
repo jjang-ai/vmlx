@@ -207,6 +207,19 @@ def test_panel_suppresses_generic_kv_quantization_controls_for_dsv4():
     assert "if (family === 'deepseek_v4') return 'deepseek-v4'" in sessions
 
 
+def test_panel_names_dsv4_cache_as_native_composite_not_generic_paged_kv():
+    """DSV4 UI must not make the internal paged-prefix path look like generic KV."""
+    from pathlib import Path
+
+    form = Path("panel/src/renderer/src/components/sessions/SessionConfigForm.tsx").read_text()
+
+    assert "const pagedCacheSectionTitle = dsv4CompositeRequiresPaged" in form
+    assert "DSV4 Native Cache" in form
+    assert "const pagedCacheToggleLabel = dsv4CompositeRequiresPaged" in form
+    assert "Native Composite Prefix Cache" in form
+    assert "not generic paged KV" in form
+
+
 def test_panel_suppresses_generic_batch_and_chunk_controls_for_dsv4():
     """DSV4 app launches must not pass misleading generic batch/chunk flags."""
     from pathlib import Path
@@ -732,6 +745,30 @@ def test_dsv4_serve_path_forces_generic_kv_quantization_off():
     assert 'args.kv_cache_quantization = "none"' in policy_src
     assert "DSV4-Flash native SWA+CSA/HCA cache owns cache" in policy_src
     assert 'os.environ["VMLX_DISABLE_TQ_KV"] = "1"' in policy_src
+
+
+def test_dsv4_cli_cache_summary_names_native_composite_cache():
+    """Startup summary should say DSV4 composite cache, not generic paged KV."""
+    from types import SimpleNamespace
+
+    from vmlx_engine.cli import _cache_stack_summary_lines
+
+    lines = _cache_stack_summary_lines(
+        SimpleNamespace(
+            use_paged_cache=True,
+            paged_cache_block_size=256,
+            max_cache_blocks=1000,
+            enable_block_disk_cache=True,
+            block_disk_cache_max_gb=10,
+        ),
+        dsv4_model=True,
+    )
+
+    joined = "\n".join(lines)
+    assert "DSV4 native composite prefix cache" in joined
+    assert "deepseek_v4_v7" in joined
+    assert "generic paged KV" in joined
+    assert "Paged cache:" not in joined
 
 
 def test_dsv4_cached_prefix_kickoff_avoids_cross_thread_mx_eval():
