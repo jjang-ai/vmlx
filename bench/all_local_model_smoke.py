@@ -212,6 +212,17 @@ def build_serve_command(
     return cmd
 
 
+def build_server_env() -> dict[str, str]:
+    env = dict(os.environ)
+    env["PYTHONUNBUFFERED"] = "1"
+    if env.get("VMLINUX_BENCH_ISOLATED") == "1":
+        env.pop("PYTHONPATH", None)
+        env["PYTHONNOUSERSITE"] = "1"
+    else:
+        env["PYTHONPATH"] = str(ROOT)
+    return env
+
+
 def solid_png_base64(width: int, height: int, rgb: tuple[int, int, int]) -> str:
     raw = b"".join(b"\x00" + bytes(rgb) * width for _ in range(height))
 
@@ -534,7 +545,7 @@ def validate_probe_response(
     lower = stripped.lower()
     compact_lower = re.sub(r"\s+", "", lower)
     words = _word_set(stripped)
-    if label.startswith("text_cache_repeat") and "ack" not in words:
+    if label.startswith("text_cache_repeat") and not ({"ack", "acknowledged"} & words):
         failures.append({"label": label, "reason": "expected_ack_missing", "missing": ["ACK"]})
     elif label == "text_multiturn_recall":
         missing = [term for term in ("blue", "cat") if term not in words]
@@ -686,9 +697,7 @@ def run_model_row(
     }
     write_json(row_dir / "start.json", result)
 
-    env = dict(os.environ)
-    env["PYTHONUNBUFFERED"] = "1"
-    env["PYTHONPATH"] = str(ROOT)
+    env = build_server_env()
     with log_path.open("w") as log:
         proc = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, text=True)
     base_url = f"http://127.0.0.1:{port}"

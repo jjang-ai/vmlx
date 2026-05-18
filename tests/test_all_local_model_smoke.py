@@ -156,6 +156,18 @@ def test_request_json_returns_status_body_and_elapsed(monkeypatch):
     assert elapsed >= 0
 
 
+def test_build_server_env_can_isolate_packaged_python(monkeypatch):
+    mod = load_module()
+    monkeypatch.setenv("PYTHONPATH", "/tmp/source")
+    monkeypatch.setenv("VMLINUX_BENCH_ISOLATED", "1")
+
+    env = mod.build_server_env()
+
+    assert env["PYTHONUNBUFFERED"] == "1"
+    assert "PYTHONPATH" not in env
+    assert env["PYTHONNOUSERSITE"] == "1"
+
+
 def test_filter_rows_skips_auxiliary_dirs_by_default():
     mod = load_module()
     rows = [
@@ -264,6 +276,14 @@ def test_validate_probe_response_accepts_ack_probe():
     mod = load_module()
 
     failures = mod.validate_probe_response("text_cache_repeat_2", 200, "ACK", "")
+
+    assert failures == []
+
+
+def test_validate_probe_response_accepts_semantic_acknowledgement():
+    mod = load_module()
+
+    failures = mod.validate_probe_response("text_cache_repeat_2", 200, "Acknowledged.", "")
 
     assert failures == []
 
