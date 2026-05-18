@@ -1043,6 +1043,22 @@ def test_deepseek_r1_reasoning_parser_orphan_close_is_not_visible():
     assert "</think>" not in content
 
 
+def test_deepseek_r1_direct_rail_stray_close_preserves_visible_prefix():
+    """DSV4 chat/direct rail may emit a stray </think>; prefix is not hidden reasoning."""
+    from vmlx_engine.reasoning.deepseek_r1_parser import DeepSeekR1ReasoningParser
+
+    parser = DeepSeekR1ReasoningParser()
+    parser.reset_state(think_in_prompt=False)
+
+    reasoning, content = parser.extract_reasoning(
+        "The anchor is ADA LOVELACE.</think>**CERULEAN, 45, ADA LOVELACE**"
+    )
+
+    assert reasoning is None
+    assert content == "The anchor is ADA LOVELACE.**CERULEAN, 45, ADA LOVELACE**"
+    assert "</think>" not in content
+
+
 def test_gemma4_reasoning_parser_no_thought_does_not_leak_markers():
     """Gemma 4 closed thought rail must produce visible content only."""
     from vmlx_engine.reasoning.gemma4_parser import Gemma4ReasoningParser

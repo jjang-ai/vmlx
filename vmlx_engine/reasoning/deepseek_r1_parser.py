@@ -51,8 +51,14 @@ class DeepSeekR1ReasoningParser(BaseThinkingReasoningParser):
         Returns:
             (reasoning, content) tuple.
         """
-        # If we have end token but no start token, treat beginning as reasoning
+        # If the prompt opened the thinking rail, DeepSeek-R1 may omit the
+        # opening tag in generated text; in that mode a bare close token means
+        # everything before it is reasoning. In direct/chat rail the prompt did
+        # not start in reasoning mode, so a stray close marker is display
+        # markup only and the prefix must remain visible content.
         if self.end_token in model_output and self.start_token not in model_output:
+            if not getattr(self, "_think_in_prompt", False):
+                return None, model_output.replace(self.end_token, "").strip() or None
             reasoning, _, content = model_output.partition(self.end_token)
             reasoning = reasoning.strip() or None
             content = content.strip() or None
@@ -101,10 +107,19 @@ class DeepSeekR1ReasoningParser(BaseThinkingReasoningParser):
             start_in_delta = self.start_token in delta_text
             end_in_delta = self.end_token in delta_text
 
-            # If end token in delta but we never saw start token
+            # If end token in delta but we never saw start token. Only route
+            # the prefix to reasoning when the prompt itself opened the
+            # reasoning rail; otherwise this is a stray direct-rail close
+            # marker and should be stripped from visible content.
             if not start_in_prev and not start_in_delta and end_in_delta:
-                # Everything before end token is reasoning
                 idx = delta_text.find(self.end_token)
+                if not getattr(self, "_think_in_prompt", False):
+                    content_part = (
+                        delta_text[:idx] + delta_text[idx + len(self.end_token) :]
+                    )
+                    return DeltaMessage(
+                        content=content_part if content_part else None,
+                    )
                 reasoning_part = delta_text[:idx]
                 content_part = delta_text[idx + len(self.end_token) :]
                 return DeltaMessage(
