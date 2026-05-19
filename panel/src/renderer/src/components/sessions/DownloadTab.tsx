@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useToast } from '../Toast'
+import { normalizeHfEndpointSetting } from '../../../../shared/hfSettings'
 
 interface HFModel {
   id: string
@@ -299,12 +300,14 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   // with https:// so a typo like "hf-mirror.com" (no scheme) doesn't
   // silently break all downloads when HF_ENDPOINT is mis-configured.
   const handleSaveHfEndpoint = async (endpoint: string) => {
-    const trimmed = endpoint.trim().replace(/\/+$/, '')
-    if (trimmed && !/^https?:\/\//.test(trimmed)) {
+    const raw = endpoint.trim()
+    const normalized = normalizeHfEndpointSetting(raw)
+    if (raw && !normalized) {
       showToast('error', 'Invalid mirror URL',
-        'Endpoint must start with https:// or http://')
+        'Endpoint must be an http:// or https:// URL')
       return
     }
+    const trimmed = normalized ?? ''
     setHfEndpointSaving(true)
     try {
       if (trimmed) {

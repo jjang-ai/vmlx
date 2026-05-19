@@ -7398,3 +7398,33 @@ class TestStreamUsagePropagatesCacheDetail:
         source = Path("./vmlx_engine/server.py").read_text()
         # Responses uses dict-builder shape, not PromptTokensDetails class.
         assert '"cache_detail": _cache_detail' in source
+
+
+class TestHuggingFaceDownloadRegression:
+    """Issue #118: stale saved HF mirrors or tokens must not poison public GUI
+    downloads. The panel should normalize persisted settings and keep the
+    Python worker's endpoint selection app-owned so it can fall back cleanly.
+    """
+
+    def test_panel_download_worker_does_not_inherit_raw_hf_endpoint(self):
+        from pathlib import Path
+
+        source = Path("./panel/src/main/ipc/models.ts").read_text()
+
+        assert "normalizeHfEndpointSetting" in source
+        assert "HF_ENDPOINT: undefined" in source
+        assert "endpoint = sys.argv[3] or None" in source
+        assert "endpoint=active_endpoint" in source
+        assert "https://huggingface.co" in source
+        assert "'type':'fallback'" in source
+
+    def test_panel_hf_api_retries_public_requests_without_stale_auth(self):
+        from pathlib import Path
+
+        source = Path("./panel/src/main/ipc/models.ts").read_text()
+
+        assert "normalizeHfTokenSetting" in source
+        assert "delete baseHeaders.Authorization" in source
+        assert "retrying ${baseUrl} without auth" in source
+        assert "HuggingFace mirror failed" in source
+        assert "fetchHfPath(`/api/models?${params}`" in source

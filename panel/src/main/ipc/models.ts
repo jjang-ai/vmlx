@@ -24,6 +24,12 @@ import {
 } from "../../shared/imageModels";
 import { formatJangQuantizationLabel } from "../../shared/jangQuantization";
 import { hubRepoIdFromSnapshotPath } from "../../shared/hfHubLayout";
+import {
+  buildHfAuthHeaders,
+  HF_CANONICAL_ENDPOINT,
+  normalizeHfEndpointSetting,
+  normalizeHfTokenSetting,
+} from "../../shared/hfSettings";
 
 /**
  * ms#75: resolve the HuggingFace-compatible base URL for API calls
@@ -34,20 +40,99 @@ import { hubRepoIdFromSnapshotPath } from "../../shared/hfHubLayout";
  * as huggingface.co — which hf-mirror.com does (it's a transparent
  * proxy, not a different service).
  *
- * Returns a URL string WITHOUT trailing slash. Falls back to the
- * canonical `https://huggingface.co` when the setting is empty.
+ * Returns a URL string WITHOUT trailing slash. Invalid persisted settings are
+ * ignored so a stale backup URL cannot poison every GUI download/search.
  */
-export function getHfBaseUrl(): string {
+function getConfiguredHfEndpoint(): string | null {
   try {
-    const v = db.getSetting("hf_endpoint");
-    if (v && v.trim()) {
-      // Strip trailing slash so concatenation with `/api/...` stays clean
-      return v.trim().replace(/\/+$/, "");
-    }
+    return normalizeHfEndpointSetting(db.getSetting("hf_endpoint"));
   } catch {
-    // db access failures are non-fatal — fall through to default
+    return null;
   }
-  return "https://huggingface.co";
+}
+
+function getConfiguredHfToken(): string | null {
+  try {
+    return normalizeHfTokenSetting(db.getSetting("hf_api_key"));
+  } catch {
+    return null;
+  }
+}
+
+export function getHfBaseUrl(): string {
+  return getConfiguredHfEndpoint() ?? HF_CANONICAL_ENDPOINT;
+}
+
+function isHfAuthStatus(status: number): boolean {
+  return status === 401 || status === 403;
+}
+
+async function fetchHfPath(
+  path: string,
+  init: RequestInit = {},
+  options: { timeoutMs?: number; retryWithoutAuth?: boolean } = {},
+): Promise<{ response: Response; baseUrl: string }> {
+  const configuredBase = getConfiguredHfEndpoint();
+  const bases =
+    configuredBase && configuredBase !== HF_CANONICAL_ENDPOINT
+      ? [configuredBase, HF_CANONICAL_ENDPOINT]
+      : [HF_CANONICAL_ENDPOINT];
+  const token = getConfiguredHfToken();
+  const pathWithSlash = path.startsWith("/") ? path : `/${path}`;
+  const timeoutMs = options.timeoutMs ?? 15000;
+  const retryWithoutAuth = options.retryWithoutAuth !== false;
+  let lastResponse: { response: Response; baseUrl: string } | null = null;
+  let lastError: unknown = null;
+
+  const runFetch = (baseUrl: string, headers: Record<string, string>) =>
+    fetch(`${baseUrl}${pathWithSlash}`, {
+      ...init,
+      headers,
+      signal: init.signal ?? AbortSignal.timeout(timeoutMs),
+    });
+
+  for (const baseUrl of bases) {
+    const baseHeaders = { ...((init.headers as Record<string, string>) ?? {}) };
+    delete baseHeaders.Authorization;
+    delete baseHeaders.authorization;
+    try {
+      let response = await runFetch(baseUrl, {
+        ...baseHeaders,
+        ...buildHfAuthHeaders(token),
+      });
+      if (response.ok) return { response, baseUrl };
+
+      if (retryWithoutAuth && token && isHfAuthStatus(response.status)) {
+        console.log(
+          `[MODELS] HuggingFace returned ${response.status} with token; retrying ${baseUrl} without auth`,
+        );
+        response = await runFetch(baseUrl, baseHeaders);
+        if (response.ok) return { response, baseUrl };
+      }
+
+      lastResponse = { response, baseUrl };
+      if (baseUrl !== HF_CANONICAL_ENDPOINT) {
+        console.warn(
+          `[MODELS] HuggingFace mirror failed (${response.status}); retrying huggingface.co`,
+        );
+        continue;
+      }
+      return lastResponse;
+    } catch (error) {
+      lastError = error;
+      if (baseUrl !== HF_CANONICAL_ENDPOINT) {
+        console.warn(
+          `[MODELS] HuggingFace mirror request failed; retrying huggingface.co:`,
+          error,
+        );
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  if (lastResponse) return lastResponse;
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 /** Generation defaults read from a model's generation_config.json */
@@ -1103,6 +1188,7 @@ export function registerModelHandlers(): void {
       "from huggingface_hub.utils import GatedRepoError, RepositoryNotFoundError",
       "repo_id = sys.argv[1]",
       "local_dir = sys.argv[2]",
+      "endpoint = sys.argv[3] or None",
       'token = os.environ.get("HF_TOKEN") or None',
       "",
       "# Shared state for per-byte progress tracking",
@@ -1132,9 +1218,26 @@ export function registerModelHandlers(): void {
       "    def set_description(self, *a, **k): pass",
       "    def set_postfix(self, *a, **k): pass",
       "",
-      "try:",
-      "    api = HfApi()",
-      "    tree = list(api.list_repo_tree(repo_id, token=token, recursive=True))",
+      "def _is_auth_error(e):",
+      "    status = getattr(getattr(e, 'response', None), 'status_code', None)",
+      "    text = str(e).lower()",
+      "    return status in (401, 403) or '401' in text or '403' in text or 'invalid token' in text or 'unauthorized' in text or 'forbidden' in text or 'authentication' in text",
+      "",
+      "def _attempts():",
+      "    endpoints = [endpoint] + ([None] if endpoint else [])",
+      "    tokens = [token] + ([None] if token else [])",
+      "    seen = set()",
+      "    for active_endpoint in endpoints:",
+      "        for active_token in tokens:",
+      "            key = (active_endpoint or '', bool(active_token))",
+      "            if key in seen:",
+      "                continue",
+      "            seen.add(key)",
+      "            yield active_endpoint, active_token",
+      "",
+      "def _run_download(active_endpoint, active_token):",
+      "    api = HfApi(endpoint=active_endpoint)",
+      "    tree = list(api.list_repo_tree(repo_id, token=active_token, recursive=True))",
       '    files = [f for f in tree if hasattr(f, "rfilename") and not f.rfilename.startswith(".")]',
       '    total_bytes = sum(getattr(f, "size", 0) or 0 for f in files)',
       "    downloaded_bytes = 0",
@@ -1149,7 +1252,7 @@ export function registerModelHandlers(): void {
       '        pstate["done_bytes"] = downloaded_bytes',
       '        print(json.dumps({"type":"file_start","file":f.rfilename,"file_num":i+1,"total_files":total_files,"downloaded_bytes":downloaded_bytes,"total_bytes":total_bytes}), flush=True)',
       "        t0 = time.time()",
-      "        dl_path = hf_hub_download(repo_id, f.rfilename, local_dir=local_dir, token=token, local_dir_use_symlinks=False, tqdm_class=ProgressTqdm)",
+      "        dl_path = hf_hub_download(repo_id, f.rfilename, local_dir=local_dir, token=active_token, endpoint=active_endpoint, local_dir_use_symlinks=False, tqdm_class=ProgressTqdm)",
       "        actual_size = os.path.getsize(dl_path) if os.path.exists(dl_path) else est_size",
       "        downloaded_bytes += actual_size",
       "        elapsed = time.time() - t0",
@@ -1157,6 +1260,33 @@ export function registerModelHandlers(): void {
       "        pct = int(downloaded_bytes * 100 / total_bytes) if total_bytes > 0 else int((i+1) * 100 / total_files)",
       '        print(json.dumps({"type":"file_done","file":f.rfilename,"file_num":i+1,"total_files":total_files,"downloaded_bytes":downloaded_bytes,"total_bytes":total_bytes,"speed":speed,"percent":pct}), flush=True)',
       '    print(json.dumps({"status":"complete","path":local_dir}), flush=True)',
+      "",
+      "try:",
+      "    last_error = None",
+      "    for active_endpoint, active_token in _attempts():",
+      "        try:",
+      "            if active_endpoint != endpoint or active_token != token:",
+      "                print(json.dumps({'type':'fallback','endpoint':active_endpoint or 'https://huggingface.co','auth':bool(active_token)}), flush=True)",
+      "            _run_download(active_endpoint, active_token)",
+      "            sys.exit(0)",
+      "        except KeyboardInterrupt:",
+      "            raise",
+      "        except (GatedRepoError, RepositoryNotFoundError) as e:",
+      "            last_error = e",
+      "            if active_endpoint is not None:",
+      "                continue",
+      "            if active_token is not None and _is_auth_error(e):",
+      "                continue",
+      "            raise",
+      "        except Exception as e:",
+      "            last_error = e",
+      "            if active_token is not None and _is_auth_error(e):",
+      "                continue",
+      "            if active_endpoint is not None:",
+      "                continue",
+      "            raise",
+      "    if last_error is not None:",
+      "        raise last_error",
       "except KeyboardInterrupt:",
       '    print(json.dumps({"status":"cancelled"}), flush=True)',
       "    sys.exit(0)",
@@ -1185,25 +1315,21 @@ export function registerModelHandlers(): void {
       PYTHONDONTWRITEBYTECODE: "1",
       PYTHONNOUSERSITE: "1",
       PYTHONPATH: undefined,
+      HF_ENDPOINT: undefined,
     };
-    const hfToken = db.getSetting("hf_api_key");
+    const hfToken = getConfiguredHfToken();
     if (hfToken) {
       downloadEnv.HF_TOKEN = hfToken;
     }
-    // ms#75: allow users in mainland China (or anyone behind a
-    // restrictive network) to route downloads through an HF-protocol-
-    // compatible mirror. huggingface_hub reads HF_ENDPOINT and rewrites
-    // all repo URLs — so a one-line passthrough here reroutes the
-    // entire download pipeline. Default mirror = hf-mirror.com (the
-    // standard China-based mirror; no new client library required).
-    const hfEndpoint = db.getSetting("hf_endpoint");
-    if (hfEndpoint && hfEndpoint.trim()) {
-      downloadEnv.HF_ENDPOINT = hfEndpoint.trim();
-    }
+    // ms#75/ms#118: do not let a stale shell or persisted HF_ENDPOINT
+    // poison GUI downloads. The Python worker receives the normalized
+    // endpoint explicitly and can fall back to huggingface.co if a mirror
+    // or backup URL fails.
+    const hfEndpoint = getConfiguredHfEndpoint() ?? "";
 
     const proc = spawn(
       pythonPath,
-      ["-B", "-s", "-u", "-c", script, job.repoId, job.modelDir],
+      ["-B", "-s", "-u", "-c", script, job.repoId, job.modelDir, hfEndpoint],
       {
         stdio: ["pipe", "pipe", "pipe"],
         env: downloadEnv,
@@ -1720,12 +1846,9 @@ export function registerModelHandlers(): void {
         limit: "30",
         "expand[]": "safetensors", // Get safetensors size data for model GB display
       });
-      // Build headers — include HF token if configured (shows gated models in results)
-      const searchHeaders: Record<string, string> = {};
-      const hfSearchToken = db.getSetting("hf_api_key");
-      if (hfSearchToken) {
-        searchHeaders["Authorization"] = `Bearer ${hfSearchToken}`;
-      }
+      // Build headers — include HF token if configured (shows gated models in results).
+      // fetchHfPath retries public HF API requests without auth if the saved token is stale.
+      const searchHeaders = buildHfAuthHeaders(getConfiguredHfToken());
       // Filter by model type: 'image' searches both text-to-image AND image-to-image (for edit models),
       // default searches MLX text models
       const wantAsc = sortDir === "asc";
@@ -1749,18 +1872,12 @@ export function registerModelHandlers(): void {
         console.log(
           `[MODELS] Searching HuggingFace image models: ${query} (sort=${sortBy || "downloads"} dir=${sortDir || "desc"})`,
         );
-        // ms#75: mirror-aware base URL
-        const hfBase = getHfBaseUrl();
-        const [r1, r2] = await Promise.all([
-          fetch(`${hfBase}/api/models?${p1}`, {
-            headers: searchHeaders,
-            signal: AbortSignal.timeout(15000),
-          }),
-          fetch(`${hfBase}/api/models?${p2}`, {
-            headers: searchHeaders,
-            signal: AbortSignal.timeout(15000),
-          }),
+        const [r1Result, r2Result] = await Promise.all([
+          fetchHfPath(`/api/models?${p1}`, { headers: searchHeaders }),
+          fetchHfPath(`/api/models?${p2}`, { headers: searchHeaders }),
         ]);
+        const r1 = r1Result.response;
+        const r2 = r2Result.response;
         if (!r1.ok) throw new Error(`HuggingFace API error: ${r1.status}`);
         const m1 = await r1.json();
         const m2 = r2.ok ? await r2.json() : [];
@@ -1775,14 +1892,11 @@ export function registerModelHandlers(): void {
         }
       } else {
         params.set("filter", "mlx");
-        // ms#75: mirror-aware base URL
-        const url = `${getHfBaseUrl()}/api/models?${params}`;
         console.log(
           `[MODELS] Searching HuggingFace: ${query} (sort=${sortBy || "downloads"} dir=${sortDir || "desc"})`,
         );
-        const response = await fetch(url, {
+        const { response } = await fetchHfPath(`/api/models?${params}`, {
           headers: searchHeaders,
-          signal: AbortSignal.timeout(15000),
         });
         if (!response.ok)
           throw new Error(`HuggingFace API error: ${response.status}`);
@@ -1817,17 +1931,12 @@ export function registerModelHandlers(): void {
   // Fetch model README from HuggingFace
   ipcMain.handle("models:fetchReadme", async (_, repoId: string) => {
     try {
-      const readmeHeaders: Record<string, string> = {};
-      const readmeToken = db.getSetting("hf_api_key");
-      if (readmeToken) readmeHeaders["Authorization"] = `Bearer ${readmeToken}`;
+      const readmeHeaders = buildHfAuthHeaders(getConfiguredHfToken());
       // ms#75: mirror-aware base URL for the README fetch + relative-URL rewrites
-      const hfBase = getHfBaseUrl();
-      const res = await fetch(
-        `${hfBase}/${repoId}/raw/main/README.md`,
-        {
-          headers: readmeHeaders,
-          signal: AbortSignal.timeout(10000),
-        },
+      const { response: res, baseUrl: hfBase } = await fetchHfPath(
+        `/${repoId}/raw/main/README.md`,
+        { headers: readmeHeaders },
+        { timeoutMs: 10000 },
       );
       if (!res.ok) return null;
       const text = await res.text();
@@ -1861,14 +1970,12 @@ export function registerModelHandlers(): void {
     console.log("[MODELS] Fetching JANGQ-AI recommended models");
     // ms#75: mirror-aware
     const urls = [
-      `${getHfBaseUrl()}/api/models?author=JANGQ-AI&sort=downloads&direction=-1&expand[]=safetensors`,
+      `/api/models?author=JANGQ-AI&sort=downloads&direction=-1&expand[]=safetensors`,
     ];
     const allModels: any[] = [];
     for (const url of urls) {
       try {
-        const response = await fetch(url, {
-          signal: AbortSignal.timeout(15000),
-        });
+        const { response } = await fetchHfPath(url);
         if (response.ok) {
           const models = await response.json();
           allModels.push(...models);
@@ -1900,27 +2007,11 @@ export function registerModelHandlers(): void {
     "models:getCollectionModels",
     async (_, collectionSlug: string) => {
       console.log(`[MODELS] Fetching HF collection: ${collectionSlug}`);
-      const collectionToken = db.getSetting("hf_api_key");
-      const collectionHeaders: Record<string, string> = {};
-      if (collectionToken)
-        collectionHeaders["Authorization"] = `Bearer ${collectionToken}`;
+      const collectionToken = getConfiguredHfToken();
+      const collectionHeaders = buildHfAuthHeaders(collectionToken);
       // ms#75: mirror-aware base URL
-      const url = `${getHfBaseUrl()}/api/collections/${collectionSlug}`;
-      let response = await fetch(url, {
-        headers: collectionHeaders,
-        signal: AbortSignal.timeout(15000),
-      });
-      // If token causes 401/403 (expired/invalid), retry without auth — public collections don't need it
-      if (
-        !response.ok &&
-        (response.status === 401 || response.status === 403) &&
-        collectionToken
-      ) {
-        console.log(
-          `[MODELS] HF collection returned ${response.status} with token, retrying without auth`,
-        );
-        response = await fetch(url, { signal: AbortSignal.timeout(15000) });
-      }
+      const url = `/api/collections/${collectionSlug}`;
+      let { response } = await fetchHfPath(url, { headers: collectionHeaders });
       if (!response.ok)
         throw new Error(`Failed to fetch collection: ${response.status}`);
       const collection = await response.json();
