@@ -287,15 +287,16 @@ def _build_omni_turn_prompt_with_thinking(
     n_video_tokens: int = 0,
     n_audio_tokens: int = 0,
     is_first: bool = False,
-    enable_thinking: bool = True,
+    enable_thinking: Optional[bool] = None,
 ) -> str:
     """Build an OmniSession turn prompt while preserving the API thinking rail.
 
     `jang_tools.nemotron_omni_session.OmniSession` renders the tokenizer chat
     template without forwarding `enable_thinking`, so Nemotron-Omni media
-    requests default to `<think>\n` even when the HTTP request explicitly set
-    thinking off. Keep the same per-turn/cache semantics, but pass the template
-    variable so the bundle's native `<think></think>` branch is used.
+    requests can ignore explicit thinking-on/off requests. Keep the same
+    per-turn/cache semantics, but pass the template variable only when the
+    caller explicitly supplied one so the bundle's native default remains
+    untouched.
     """
     media = ""
     if n_image_tokens > 0:
@@ -308,52 +309,29 @@ def _build_omni_turn_prompt_with_thinking(
         media += "<sound>" + ("<so_embedding>" * n_audio_tokens) + "</sound>\n"
     msg_content = media + user_text
     messages = [{"role": "user", "content": msg_content}]
-    if not enable_thinking and (n_image_tokens > 0 or n_video_tokens > 0 or n_audio_tokens > 0):
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Answer directly with only the final visible response. "
-                    "Do not include analysis, reasoning, scratchpad steps, or drafts."
-                ),
-            },
-            *messages,
-        ]
+    template_kwargs = {
+        "tokenize": False,
+        "add_generation_prompt": True,
+    }
+    if enable_thinking is not None:
+        template_kwargs["enable_thinking"] = bool(enable_thinking)
 
     if is_first:
-        return tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-            enable_thinking=enable_thinking,
-        )
+        return tokenizer.apply_chat_template(messages, **template_kwargs)
 
     followup_messages = [
         {"role": "user", "content": "__PREV_USER__"},
         {"role": "assistant", "content": "__PREV_ASST__"},
         {"role": "user", "content": msg_content},
     ]
-    if not enable_thinking and (n_image_tokens > 0 or n_video_tokens > 0 or n_audio_tokens > 0):
-        followup_messages[-1]["content"] = (
-            "Answer directly with only the final visible response. "
-            "Do not include analysis, reasoning, scratchpad steps, or drafts.\n"
-            + msg_content
-        )
     prev_then_now = tokenizer.apply_chat_template(
         followup_messages,
-        tokenize=False,
-        add_generation_prompt=True,
-        enable_thinking=enable_thinking,
+        **template_kwargs,
     )
     marker = "__PREV_ASST__"
     idx = prev_then_now.find(marker)
     if idx < 0:
-        return tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-            enable_thinking=enable_thinking,
-        )
+        return tokenizer.apply_chat_template(messages, **template_kwargs)
     return prev_then_now[idx + len(marker):]
 
 
@@ -521,7 +499,7 @@ class OmniMultimodalDispatcher:
                     n_video_tokens=n_video_tokens,
                     n_audio_tokens=n_audio_tokens,
                     is_first=is_first,
-                    enable_thinking=getattr(self, "_vmlx_enable_thinking", True),
+                    enable_thinking=getattr(self, "_vmlx_enable_thinking", None),
                 )
 
         logger.info(
@@ -540,12 +518,16 @@ class OmniMultimodalDispatcher:
         temperature: float = 0.6,
         top_p: float = 0.95,
         force_reset: bool = False,
-        enable_thinking: bool = True,
+        enable_thinking: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Run one OmniSession turn and return an OpenAI-shaped response."""
         with self._lock:
             self._ensure_session()
-            setattr(self._session, "_vmlx_enable_thinking", bool(enable_thinking))
+            setattr(
+                self._session,
+                "_vmlx_enable_thinking",
+                None if enable_thinking is None else bool(enable_thinking),
+            )
             # Cumulative-prefix signature: hash all USER texts EXCLUDING the
             # current (last) one. If it matches the hash we stored after the
             # previous turn (= hash of all user texts including the one we
@@ -669,7 +651,7 @@ async def dispatch_omni_chat_completion(request, bundle_path: str):
     elif isinstance(_ct_kwargs, dict) and "enable_thinking" in _ct_kwargs:
         _enable_thinking = bool(_ct_kwargs["enable_thinking"])
     else:
-        _enable_thinking = True
+        _enable_thinking = None
 
     loop = asyncio.get_running_loop()
     t_start = _time.time()
@@ -694,7 +676,7 @@ async def dispatch_omni_chat_completion(request, bundle_path: str):
     raw = result["content"] or ""
     reasoning_content: Optional[str] = None
     content = raw
-    _explicit_thinking_off = not _enable_thinking
+    _explicit_thinking_off = _enable_thinking is False
     if "<think>" in raw and "</think>" in raw:
         a = raw.index("<think>")
         b = raw.index("</think>") + len("</think>")

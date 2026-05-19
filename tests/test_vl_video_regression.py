@@ -10043,14 +10043,14 @@ class TestFixCohesiveness:
 
 
 class TestAnthropicThinkingSpecDefault:
-    """vMLX's local Anthropic-compatible endpoint defaults reasoning-capable
-    models to thinking ON, matching the other API surfaces. Native
-    thinking={type:disabled} and explicit enable_thinking=False remain the
-    opt-out paths."""
+    """vMLX's local Anthropic-compatible endpoint preserves Auto when
+    clients omit thinking controls. Native thinking={type:disabled} and
+    explicit enable_thinking=False remain opt-out paths; explicit enabled
+    requests still opt in."""
 
     ADAPTER = "/tmp/vmlx-1.3.66-build/vmlx_engine/api/anthropic_adapter.py"
 
-    def test_anthropic_adapter_defaults_thinking_true_when_absent(self):
+    def test_anthropic_adapter_preserves_auto_when_absent(self):
         from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
         req = AnthropicRequest(
             model="test",
@@ -10059,10 +10059,7 @@ class TestAnthropicThinkingSpecDefault:
         )
         # No req.thinking, no req.enable_thinking, no chat_template_kwargs
         chat = to_chat_completion(req)
-        assert chat.enable_thinking is True, (
-            "vMLX Anthropic-compatible adapter must default reasoning ON "
-            "when client sends no thinking opt-out"
-        )
+        assert chat.enable_thinking is None
 
     def test_anthropic_adapter_honors_thinking_enabled(self):
         from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
@@ -10114,10 +10111,10 @@ class TestAnthropicThinkingSpecDefault:
 
     def test_adapter_source_documents_wire_default(self):
         src = Path(self.ADAPTER).read_text()
-        assert "vMLX policy: default reasoning ON" in src, (
+        assert "Omitted thinking controls stay Auto" in src, (
             "fix must be self-documenting so future reviewer knows WHY"
         )
-        assert "enable_thinking = True" in src
+        assert "enable_thinking: bool | None = None" in src
 
 
 class TestGenPrefixEchoSuppression:
