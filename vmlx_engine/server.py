@@ -1541,6 +1541,11 @@ _template_starts_reasoning_cache: dict[tuple[str, bool], bool] = {}
 # Tool call markers to detect in streaming output for buffering
 _TOOL_CALL_MARKERS = [
     "<tool_call",
+    "<tool_calls>",
+    "<tool_call>",
+    "<tool_sep>",
+    "<arg_key>",
+    "<arg_value>",
     "<zyphra_tool_call",
     "<|tool_call>",  # Gemma 4 native tool call format
     "<|tool_call|>",
@@ -1554,11 +1559,50 @@ _TOOL_CALL_MARKERS = [
     "<|tool_call_begin|>",
     "<\uff5ctool\u2581calls\u2581begin\uff5c>",  # DeepSeek Unicode variant (U+FF5C, U+2581)
     "<\uff5ctool\u2581call\u2581begin\uff5c>",  # DeepSeek singular begin (GLM-5.1 emits this)
+    "<｜DSML｜tool",  # DSV4 can flush this short prefix before `_c...`
     "<｜DSML｜tool_c",  # DSV4 DSML wrapper prefix before inner invoke
     "<｜DSML｜invoke",  # DSV4 native tool-call format
     "<|python_tag|>",  # Llama 3.1+ code interpreter / tool call
     "```tool_code",  # Gemma 3 / 3n function-call code block (Google docs format)
 ]
+
+_TOOL_MARKUP_RESIDUE_RE = re.compile(
+    r"</?｜DSML｜(?:tool_calls?|tool_call_type|tool_c|tool|invoke|parameter)?[^>\n]*>?"
+    r"|</?tool_calls?>?"
+    r"|<tool_sep>"
+    r"|</?arg_key>?"
+    r"|</?arg_value>?",
+    re.DOTALL,
+)
+
+
+def _strip_tool_markup_residue_for_display(text: str) -> str:
+    """Remove native tool wrapper fragments from visible fallback text.
+
+    This is intentionally used only after tool-call buffering/cleanup has
+    identified a tool-markup path. It catches short mid-stream fragments like
+    DSV4's ``<｜DSML｜tool`` and Hy3 envelope tags without changing ordinary
+    assistant prose globally.
+    """
+    if not text:
+        return text
+    cleaned = _TOOL_MARKUP_RESIDUE_RE.sub("", text)
+    return re.sub(r"[ \t]*\n[ \t]*\n[ \t]*", "\n", cleaned).strip()
+
+
+def _has_tool_marker_or_partial_suffix(text: str) -> bool:
+    """Return True for full native tool markers or a marker split at stream tail."""
+    if not text:
+        return False
+    for marker in _TOOL_CALL_MARKERS:
+        if marker in text:
+            return True
+    for marker in _TOOL_CALL_MARKERS:
+        max_prefix = min(len(marker) - 1, len(text))
+        for n in range(max_prefix, 0, -1):
+            if text.endswith(marker[:n]):
+                return True
+    return False
 
 
 def _rendered_prompt_starts_in_reasoning(rendered: str, marker: str = "__test__") -> bool:
@@ -2872,7 +2916,7 @@ def _clean_suppressed_tool_markup_for_display(
         logger.debug("Suppressed tool-markup cleanup failed: %s", exc)
         return output_text
     if tool_calls:
-        return re.sub(r"[ \t]*\n[ \t]*\n[ \t]*", "\n", cleaned_text or "").strip()
+        return _strip_tool_markup_residue_for_display(cleaned_text or "")
     return output_text
 
 
@@ -2901,6 +2945,7 @@ def _suppressed_tool_display_delta(
                         partial_len = max(partial_len, n)
                         break
             cleaned = accumulated_text[:-partial_len] if partial_len else accumulated_text
+    cleaned = _strip_tool_markup_residue_for_display(cleaned)
     if not cleaned:
         return None
     if streamed_display_text and cleaned.startswith(streamed_display_text):
@@ -11961,10 +12006,9 @@ async def stream_chat_completion(
                 #   tool formats like "<function=")
                 if tool_call_active and not tool_call_buffering:
                     if delta_msg.content and accumulated_content:
-                        for marker in _TOOL_CALL_MARKERS:
-                            if marker in accumulated_content:
-                                tool_call_buffering = True
-                                break
+                        tool_call_buffering = _has_tool_marker_or_partial_suffix(
+                            accumulated_content
+                        )
                     if not tool_call_buffering and delta_msg.reasoning:
                         # Use trailing window (last 30 chars covers longest marker)
                         _reasoning_tail = (
@@ -11972,10 +12016,9 @@ async def stream_chat_completion(
                             if len(accumulated_reasoning) > 30
                             else accumulated_reasoning
                         )
-                        for marker in _TOOL_CALL_MARKERS:
-                            if marker in _reasoning_tail:
-                                tool_call_buffering = True
-                                break
+                        tool_call_buffering = _has_tool_marker_or_partial_suffix(
+                            _reasoning_tail
+                        )
                     # GPT-OSS/Harmony native tool format: to=<name> code{...}
                     # Uses regex for specificity (plain "to=" is too broad for markers list)
                     if not tool_call_buffering:
@@ -12110,10 +12153,9 @@ async def stream_chat_completion(
 
                 # Check for tool call markers — start buffering when detected
                 if tool_call_active and not tool_call_buffering and content:
-                    for marker in _TOOL_CALL_MARKERS:
-                        if marker in accumulated_text:
-                            tool_call_buffering = True
-                            break
+                    tool_call_buffering = _has_tool_marker_or_partial_suffix(
+                        accumulated_text
+                    )
 
                 if tool_call_buffering:
                     # Suppress content but emit usage-only chunks for TPS tracking
@@ -12396,6 +12438,8 @@ async def stream_chat_completion(
                 remainder = full[len(already_sent) :].strip()
             else:
                 remainder = full if not content_was_emitted else ""
+            if remainder:
+                remainder = _strip_tool_markup_residue_for_display(remainder)
             if remainder:
                 # Use the engine's actual finish_reason (e.g., "length" if max_tokens
                 # was hit) instead of hardcoding "stop"
@@ -12900,20 +12944,18 @@ async def stream_responses_api(
                         # Check for tool call markers in content and reasoning
                         if tool_call_active and not tool_call_buffering:
                             if delta_msg.content and accumulated_content:
-                                for marker in _TOOL_CALL_MARKERS:
-                                    if marker in accumulated_content:
-                                        tool_call_buffering = True
-                                        break
+                                tool_call_buffering = _has_tool_marker_or_partial_suffix(
+                                    accumulated_content
+                                )
                             if not tool_call_buffering and delta_msg.reasoning:
                                 _reasoning_tail = (
                                     accumulated_reasoning[-30:]
                                     if len(accumulated_reasoning) > 30
                                     else accumulated_reasoning
                                 )
-                                for marker in _TOOL_CALL_MARKERS:
-                                    if marker in _reasoning_tail:
-                                        tool_call_buffering = True
-                                        break
+                                tool_call_buffering = _has_tool_marker_or_partial_suffix(
+                                    _reasoning_tail
+                                )
                             # GPT-OSS/Harmony native tool format: to=<name> code{...}
                             if not tool_call_buffering:
                                 _tc_check = (
@@ -12998,10 +13040,9 @@ async def stream_responses_api(
 
                     # Check for tool call markers
                     if tool_call_active and not tool_call_buffering:
-                        for marker in _TOOL_CALL_MARKERS:
-                            if marker in full_text:
-                                tool_call_buffering = True
-                                break
+                        tool_call_buffering = _has_tool_marker_or_partial_suffix(
+                            full_text
+                        )
 
                     if tool_call_buffering:
                         # Emit heartbeat during tool call buffering (standard path)

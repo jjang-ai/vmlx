@@ -905,6 +905,14 @@ describe('Tool Integration', () => {
         expect(getFlagValue(out, '--tool-call-parser')).toBe('llama')
     })
 
+    it('tool parser dropdown exposes DSV4 DSML and Hy3 parsers', () => {
+        const formSource = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
+        expect(formSource).toContain("value: 'deepseek_v4'")
+        expect(formSource).toContain("value: 'hy_v3'")
+        expect(formSource).toContain('DeepSeek V4')
+        expect(formSource).toContain('Hy3')
+    })
+
     it('manual tool parser takes priority over detected', () => {
         const out = preview({ enableAutoToolChoice: true, toolCallParser: 'llama' }, { toolParser: 'qwen' })
         expect(getFlagValue(out, '--tool-call-parser')).toBe('llama')
@@ -2282,6 +2290,13 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(settingsSource).not.toContain('topKOverrideBlockedByFamily')
         expect(sessionsSource).toContain('delete spawnEnv.JANGTQ_TOPK_OVERRIDE')
         expect(sessionsSource).not.toContain('spawnEnv.JANGTQ_TOPK_OVERRIDE =')
+    })
+
+    it('chat settings renders disabled top-k sentinel as Off instead of raw 0 or -1', () => {
+        const source = readFileSync('src/renderer/src/components/chat/ChatSettings.tsx', 'utf8')
+        expect(source).toContain('formatTopK')
+        expect(source).toContain("return 'Off'")
+        expect(source).toContain('format={formatTopK}')
     })
 
     it('JANGTQ acceleration toggle is not exposed as a user setting', () => {

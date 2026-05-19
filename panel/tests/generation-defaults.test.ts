@@ -63,6 +63,23 @@ describe('readGenerationDefaults generation_config defaults', () => {
     })
   })
 
+  it('normalizes disabled top_k sentinels to Off/0 for UI and requests', async () => {
+    const dir = makeModelDir({
+      'generation_config.json': {
+        temperature: 1.0,
+        top_p: 1.0,
+        top_k: -1,
+      },
+    }, 'vmlx-generation-defaults-disabled-topk-')
+
+    await expect(readGenerationDefaults(dir)).resolves.toMatchObject({
+      temperature: 1.0,
+      topP: 1.0,
+      topK: 0,
+      source: 'generation_config',
+    })
+  })
+
   it('lets JANG chat sampling metadata override generation_config.json', async () => {
     const dir = makeModelDir({
       'generation_config.json': {

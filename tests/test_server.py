@@ -1282,6 +1282,173 @@ class TestOpenAILogprobsFormatting:
             ]
         }
 
+    @pytest.mark.asyncio
+    async def test_streaming_chat_suppresses_mid_text_dsml_partial_marker(
+        self, monkeypatch
+    ):
+        """DSV4 can flush `<｜DSML｜tool` before the full wrapper name.
+
+        That partial can land in the middle of the accumulated stream when the
+        model resumes prose after a tool attempt. It must never be emitted as
+        visible assistant text.
+        """
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            tokenizer = SimpleNamespace(has_thinking=False)
+
+            async def stream_chat(self, *, messages, **kwargs):
+                yield GenerationOutput(
+                    text="<",
+                    new_text="<",
+                    tokens=[10],
+                    prompt_tokens=3,
+                    completion_tokens=1,
+                    finished=False,
+                    finish_reason=None,
+                )
+                yield GenerationOutput(
+                    text="<｜DSML｜",
+                    new_text="｜DSML｜",
+                    tokens=[10, 11],
+                    prompt_tokens=3,
+                    completion_tokens=2,
+                    finished=False,
+                    finish_reason=None,
+                )
+                yield GenerationOutput(
+                    text='<｜DSML｜tool_call_type type="list_directory" "attributes":"."',
+                    new_text='tool_call_type type="list_directory" "attributes":"."',
+                    tokens=[10, 11],
+                    prompt_tokens=3,
+                    completion_tokens=3,
+                    finished=True,
+                    finish_reason="stop",
+                )
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "dsv4-test")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_tool_call_parser", "deepseek_v4")
+
+        request = ChatCompletionRequest(
+            model="dsv4-test",
+            messages=[Message(role="user", content="read files and help me fix")],
+            stream=True,
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                        },
+                    },
+                }
+            ],
+        )
+
+        chunks = []
+        async for line in server.stream_chat_completion(
+            _Engine(),
+            [m.model_dump(exclude_none=True) for m in request.messages],
+            request,
+            fastapi_request=None,
+        ):
+            if line.startswith("data: ") and line.strip() != "data: [DONE]":
+                chunks.append(json.loads(line.removeprefix("data: ")))
+
+        visible = "".join(
+            choice.get("delta", {}).get("content") or ""
+            for chunk in chunks
+            for choice in chunk.get("choices", [])
+        )
+        assert "<｜DSML｜" not in visible
+        assert "<tool" not in visible
+
+    @pytest.mark.asyncio
+    async def test_streaming_chat_flushes_literal_less_than_after_tool_buffer_probe(
+        self, monkeypatch
+    ):
+        """A literal `<` prefix probe must not swallow normal visible text."""
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            tokenizer = SimpleNamespace(has_thinking=False)
+
+            async def stream_chat(self, *, messages, **kwargs):
+                yield GenerationOutput(
+                    text="2 <",
+                    new_text="2 <",
+                    tokens=[10],
+                    prompt_tokens=3,
+                    completion_tokens=1,
+                    finished=False,
+                    finish_reason=None,
+                )
+                yield GenerationOutput(
+                    text="2 < 3",
+                    new_text=" 3",
+                    tokens=[10, 11],
+                    prompt_tokens=3,
+                    completion_tokens=2,
+                    finished=True,
+                    finish_reason="stop",
+                )
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "dsv4-test")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_tool_call_parser", "deepseek_v4")
+
+        request = ChatCompletionRequest(
+            model="dsv4-test",
+            messages=[Message(role="user", content="is 2 < 3?")],
+            stream=True,
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                        },
+                    },
+                }
+            ],
+        )
+
+        chunks = []
+        async for line in server.stream_chat_completion(
+            _Engine(),
+            [m.model_dump(exclude_none=True) for m in request.messages],
+            request,
+            fastapi_request=None,
+        ):
+            if line.startswith("data: ") and line.strip() != "data: [DONE]":
+                chunks.append(json.loads(line.removeprefix("data: ")))
+
+        visible = "".join(
+            choice.get("delta", {}).get("content") or ""
+            for chunk in chunks
+            for choice in chunk.get("choices", [])
+        )
+        assert visible == "2 < 3"
+
 
 class TestAPIKeyVerification:
     """Test API key verification with timing attack prevention."""

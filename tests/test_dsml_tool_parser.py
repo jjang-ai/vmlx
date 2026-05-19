@@ -439,4 +439,5 @@ class TestDSMLToolParser:
         """Server marker list must catch DSV4 wrapper chunks before invoke."""
         from vmlx_engine.server import _TOOL_CALL_MARKERS
 
+        assert "<｜DSML｜tool" in _TOOL_CALL_MARKERS
         assert "<｜DSML｜tool_c" in _TOOL_CALL_MARKERS

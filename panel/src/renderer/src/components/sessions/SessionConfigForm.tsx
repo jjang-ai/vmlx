@@ -1383,6 +1383,18 @@ const TOOL_PARSER_OPTIONS: ParserOption[] = [
     ]
   },
   {
+    value: 'deepseek_v4', label: 'DeepSeek V4 / DSV4-Flash — DSML', format: '<｜DSML｜invoke name="fn"><｜DSML｜parameter name="arg" string="true">val</｜DSML｜parameter></｜DSML｜invoke>', models: [
+      'DeepSeek-V4-Flash / DSV4-Flash JANG, JANGTQ, and DQ bundles',
+      'Use this for deepseek_v4 model_type; DeepSeek V3/R1 use the DeepSeek parser above',
+    ]
+  },
+  {
+    value: 'hy_v3', label: 'Hy3 / Hunyuan — Tencent XML tools', format: '<tool_calls><tool_call>fn<tool_sep><arg_key>arg</arg_key><arg_value>val</arg_value></tool_call></tool_calls>', models: [
+      'Hy3-preview / Hunyuan model_type=hy_v3 bundles',
+      'Hunyuan/Tencent XML tool-call contract',
+    ]
+  },
+  {
     value: 'nemotron', label: 'Nemotron — Nemotron / Qwen3-Next', format: '<tool_call><function=fn><parameter=p>val</parameter></function></tool_call>', models: [
       'Nemotron-H (8B/47B/56B)', 'Nemotron-4 Nano/Super/Ultra',
       'Qwen3-Next / Qwen3-Coder-Next (hybrid Mamba)',

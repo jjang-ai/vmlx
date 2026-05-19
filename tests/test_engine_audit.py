@@ -1002,8 +1002,12 @@ class TestToolParserConcurrency:
 
         from vmlx_engine.server import _TOOL_CALL_MARKERS, stream_chat_completion
 
+        assert "<｜DSML｜tool" in _TOOL_CALL_MARKERS
         source = inspect.getsource(stream_chat_completion)
         assert "<｜DSML｜tool_c" in _TOOL_CALL_MARKERS
+        assert "<tool_calls>" in _TOOL_CALL_MARKERS
+        assert "<tool_call>" in _TOOL_CALL_MARKERS
+        assert "<tool_sep>" in _TOOL_CALL_MARKERS
         assert "<function" in _TOOL_CALL_MARKERS
         assert "<zyphra_tool_call" in _TOOL_CALL_MARKERS
         assert "not emit_content.strip()" in source

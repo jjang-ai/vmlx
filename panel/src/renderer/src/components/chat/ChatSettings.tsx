@@ -61,6 +61,12 @@ interface ChatSettingsProps {
   onOverridesChanged?: () => void
 }
 
+function formatTopK(value: number): string {
+  const rounded = Math.round(value)
+  if (rounded <= 0) return 'Off'
+  return rounded.toString()
+}
+
 export function ChatSettings({ chatId, session, reasoningParser, onClose, onOverridesChanged }: ChatSettingsProps) {
   const { showToast } = useToast()
   const { t } = useTranslation()
@@ -569,11 +575,11 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
             />
             <SliderField
               label={t('chat.settings.topK')}
-              value={overrides.topK ?? modelDefaults.topK ?? 0}
+              value={Math.max(0, overrides.topK ?? modelDefaults.topK ?? 0)}
               onChange={v => update('topK', v === 0 ? undefined : v)}
               min={0} max={200} step={1}
               help={t('chat.settings.topKHelp')}
-              format={v => Math.round(v).toString()}
+              format={formatTopK}
             />
             <SliderField
               label={t('chat.settings.minP')}

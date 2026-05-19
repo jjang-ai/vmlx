@@ -993,7 +993,7 @@ export class ApiGateway extends EventEmitter {
     if (opts.num_predict != null) openaiBody.max_tokens = opts.num_predict;
     if (opts.temperature != null) openaiBody.temperature = opts.temperature;
     if (opts.top_p != null) openaiBody.top_p = opts.top_p;
-    if (opts.top_k != null) openaiBody.top_k = opts.top_k;
+    if (opts.top_k != null && Number(opts.top_k) > 0) openaiBody.top_k = opts.top_k;
     if (opts.min_p != null) openaiBody.min_p = opts.min_p;
     if (opts.stop) openaiBody.stop = opts.stop;
     if (opts.repeat_penalty != null)
@@ -1304,7 +1304,7 @@ export class ApiGateway extends EventEmitter {
     if (opts.num_predict != null) openaiBody.max_tokens = opts.num_predict;
     if (opts.temperature != null) openaiBody.temperature = opts.temperature;
     if (opts.top_p != null) openaiBody.top_p = opts.top_p;
-    if (opts.top_k != null) openaiBody.top_k = opts.top_k;
+    if (opts.top_k != null && Number(opts.top_k) > 0) openaiBody.top_k = opts.top_k;
     if (opts.min_p != null) openaiBody.min_p = opts.min_p;
     if (opts.stop) openaiBody.stop = opts.stop;
     if (opts.repeat_penalty != null)

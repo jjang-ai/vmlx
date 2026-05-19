@@ -161,7 +161,8 @@ export async function readGenerationDefaults(
       if (typeof config.temperature === "number")
         defaults.temperature = config.temperature;
       if (typeof config.top_p === "number") defaults.topP = config.top_p;
-      if (typeof config.top_k === "number") defaults.topK = config.top_k;
+      if (typeof config.top_k === "number")
+        defaults.topK = Math.max(0, Math.round(config.top_k));
       if (typeof config.min_p === "number") defaults.minP = config.min_p;
       if (typeof config.repetition_penalty === "number")
         defaults.repeatPenalty = config.repetition_penalty;
@@ -180,7 +181,8 @@ export async function readGenerationDefaults(
         if (typeof sampling.temperature === "number")
           defaults.temperature = sampling.temperature;
         if (typeof sampling.top_p === "number") defaults.topP = sampling.top_p;
-        if (typeof sampling.top_k === "number") defaults.topK = sampling.top_k;
+        if (typeof sampling.top_k === "number")
+          defaults.topK = Math.max(0, Math.round(sampling.top_k));
         if (typeof sampling.min_p === "number") defaults.minP = sampling.min_p;
         const defaultMode = jang?.chat?.reasoning?.default_mode;
         const repThinking =
