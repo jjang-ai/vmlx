@@ -363,6 +363,75 @@ def _config_claim_for_module(
     return None
 
 
+def _per_module_claim_for_module(
+    config_quant: Dict[str, Any], module_name: str
+) -> Optional[Tuple[int, int]]:
+    """Lookup only an explicit per-module quantization claim."""
+    if not isinstance(config_quant, dict):
+        return None
+    override = config_quant.get(module_name)
+    if isinstance(override, dict):
+        b = override.get("bits")
+        g = override.get("group_size")
+        if isinstance(b, int) and isinstance(g, int):
+            return (b, g)
+    return None
+
+
+def _top_level_claim(config_quant: Dict[str, Any]) -> Optional[Tuple[int, int]]:
+    if not isinstance(config_quant, dict):
+        return None
+    b = config_quant.get("bits")
+    g = config_quant.get("group_size")
+    if isinstance(b, int) and isinstance(g, int):
+        return (b, g)
+    return None
+
+
+def _has_per_module_quant_overrides(config_quant: Dict[str, Any]) -> bool:
+    if not isinstance(config_quant, dict):
+        return False
+    return any(isinstance(value, dict) for value in config_quant.values())
+
+
+def _sidecar_reports_mixed_affine_bits(bundle_path: Path) -> bool:
+    """Return True when jang_config says this is a mixed-bit affine bundle.
+
+    Some Qwen3.6 JANG-MTP rebundles preserved correct tensor bytes but lost the
+    large per-module override map from config.json, leaving only a stale global
+    ``bits=4/group_size=64`` claim. That claim is shape-compatible with 8b/g32
+    tensors, so ordinary config-trust logic cannot detect the mismatch.
+    """
+    try:
+        data = json.loads((bundle_path / "jang_config.json").read_text())
+    except Exception:
+        return False
+    quant = data.get("quantization")
+    if not isinstance(quant, dict):
+        return False
+    values = quant.get("bit_widths_used")
+    if not isinstance(values, list):
+        return False
+    bits: set[int] = set()
+    for value in values:
+        try:
+            bits.add(int(value))
+        except Exception:
+            continue
+    return len(bits) > 1 and 8 in bits
+
+
+def _qwen_hybrid_without_module_overrides(config: Dict[str, Any]) -> bool:
+    model_type = str(config.get("model_type") or "").lower()
+    text_type = str((config.get("text_config") or {}).get("model_type") or "").lower()
+    if model_type not in {"qwen3_5", "qwen3_5_vl"} and text_type not in {
+        "qwen3_5",
+        "qwen3_5_text",
+    }:
+        return False
+    return bool(config.get("vision_config"))
+
+
 def _deepseek_v4_sanitized_aliases(module_name: str) -> List[str]:
     """Return mlx-lm module paths produced by jang_tools DSV4 sanitize().
 
@@ -447,6 +516,11 @@ def infer_quant_overrides_for_bundle(
     cfg = dict(config)
     qcfg_raw = cfg.get("quantization")
     qcfg = dict(qcfg_raw) if isinstance(qcfg_raw, dict) else {}
+    distrust_ambiguous_global_claim = (
+        _qwen_hybrid_without_module_overrides(cfg)
+        and not _has_per_module_quant_overrides(qcfg)
+        and _sidecar_reports_mixed_affine_bits(bp)
+    )
 
     patched: Dict[str, Tuple[int, int]] = {}
     skipped_count = 0
@@ -476,11 +550,24 @@ def infer_quant_overrides_for_bundle(
         # for this shape ratio, trust the config. This is the correct
         # answer for any bundle whose config matches its weights, and
         # also covers the "ambiguous shape ratio + correct config" case.
-        claim = _config_claim_for_module(qcfg, mod)
+        per_module_claim = _per_module_claim_for_module(qcfg, mod)
+        top_claim = _top_level_claim(qcfg)
+        claim = per_module_claim if per_module_claim is not None else top_claim
+        claim_is_only_global = per_module_claim is None and top_claim is not None
         effective: Optional[Tuple[int, int]] = None
         if claim is not None and claim in candidates:
-            effective = claim
+            if (
+                distrust_ambiguous_global_claim
+                and claim_is_only_global
+                and len(candidates) > 1
+            ):
+                effective = None
+            else:
+                effective = claim
         else:
+            effective = None
+
+        if effective is None:
             # Config is provably wrong (claim not viable for this shape) OR
             # config has no claim. Pick from candidates using the bundle's
             # detected uniform gsz first (when available + viable for this

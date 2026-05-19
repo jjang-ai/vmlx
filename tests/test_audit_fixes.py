@@ -7,6 +7,7 @@ Anthropic adapter parity, MCP content limits, disk cache safety.
 """
 
 import json
+import struct
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -440,6 +441,10 @@ class TestDiskCacheSafety:
 class TestJANGLoader:
     """Tests for JANG format detection, loading, and shape inference."""
 
+    def _write_fake_safetensors_header(self, path, tensors):
+        header = json.dumps(tensors).encode("utf-8")
+        path.write_bytes(struct.pack("<Q", len(header)) + header)
+
     def test_is_jang_detects_jang_config(self, tmp_path):
         (tmp_path / "jang_config.json").write_text('{"format": "jang"}')
         from vmlx_engine.utils.jang_loader import is_jang_model
@@ -554,6 +559,94 @@ class TestJANGLoader:
         config = {"hidden_size": 4096, "intermediate_size": 14336}
         assert _infer_weight_shape("layers.0.mlp.w1", config, 14336 * 4096) == (14336, 4096)
         assert _infer_weight_shape("layers.0.mlp.w2", config, 4096 * 14336) == (4096, 14336)
+
+    def test_qwen_mixed_jang_without_module_overrides_distrusts_stale_global_claim(self, tmp_path):
+        """Qwen3.6 JANG-MTP rebundles can lose the real per-module bit map.
+
+        The stale top-level 4b/g64 claim is shape-compatible with 8b/g32
+        tensors, so shape inference must use the mixed-bit sidecar and module
+        class instead of blindly trusting the global config claim.
+        """
+        config = {
+            "model_type": "qwen3_5",
+            "vision_config": {"hidden_size": 128},
+            "text_config": {"model_type": "qwen3_5_text"},
+            "quantization": {"bits": 4, "group_size": 64},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "quantization": {
+                        "profile": "JANG_4M",
+                        "bit_widths_used": [4, 8],
+                    },
+                }
+            )
+        )
+        weight_map = {
+            "language_model.model.layers.0.mlp.gate_proj.weight": "model.safetensors",
+            "language_model.model.layers.0.mlp.gate_proj.scales": "model.safetensors",
+            "language_model.model.layers.3.self_attn.q_proj.weight": "model.safetensors",
+            "language_model.model.layers.3.self_attn.q_proj.scales": "model.safetensors",
+            "language_model.lm_head.weight": "model.safetensors",
+            "language_model.lm_head.scales": "model.safetensors",
+        }
+        (tmp_path / "model.safetensors.index.json").write_text(
+            json.dumps({"weight_map": weight_map})
+        )
+        self._write_fake_safetensors_header(
+            tmp_path / "model.safetensors",
+            {
+                # ratio_x32=256: valid as 8/g32, 4/g64, or 2/g128.
+                "language_model.model.layers.0.mlp.gate_proj.weight": {
+                    "dtype": "U32",
+                    "shape": [17408, 640],
+                },
+                "language_model.model.layers.0.mlp.gate_proj.scales": {
+                    "dtype": "F16",
+                    "shape": [17408, 80],
+                },
+                # ratio_x32=512: valid as 8/g64, 4/g128, or 2/g256.
+                "language_model.model.layers.3.self_attn.q_proj.weight": {
+                    "dtype": "U32",
+                    "shape": [12288, 1280],
+                },
+                "language_model.model.layers.3.self_attn.q_proj.scales": {
+                    "dtype": "F16",
+                    "shape": [12288, 80],
+                },
+                "language_model.lm_head.weight": {
+                    "dtype": "U32",
+                    "shape": [248320, 1280],
+                },
+                "language_model.lm_head.scales": {
+                    "dtype": "F16",
+                    "shape": [248320, 80],
+                },
+            },
+        )
+
+        from vmlx_engine.utils.quant_shape_inference import (
+            infer_quant_overrides_for_bundle,
+        )
+
+        repaired = infer_quant_overrides_for_bundle(tmp_path, config)
+        quant = repaired["quantization"]
+
+        assert quant["language_model.model.layers.0.mlp.gate_proj"] == {
+            "bits": 8,
+            "group_size": 32,
+        }
+        assert quant["language_model.model.layers.3.self_attn.q_proj"] == {
+            "bits": 8,
+            "group_size": 64,
+        }
+        assert quant["language_model.lm_head"] == {
+            "bits": 8,
+            "group_size": 64,
+        }
 
     def test_infer_shape_fallback_known_dim(self):
         """Fallback works when inferred dim matches a known config dimension."""
