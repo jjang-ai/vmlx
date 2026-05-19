@@ -1405,20 +1405,13 @@ class TestReasoningOnOffRegressions:
         )
 
     def test_section_15_suppress_reasoning_routing_present(self):
-        """server.py must contain the §15 suppress→content routing.
-        If someone removes it, thinking-ignoring models leave empty bubbles."""
+        """server.py must keep suppressed reasoning out of visible content."""
         src = Path(
             "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
-        assert "§15" in src, (
-            "§15 anchor comments must stay in server.py — removing them is a "
-            "signal of silent regression"
-        )
-        # The actual routing: reasoning piped into content when suppressed
-        assert "accumulated_content += delta_msg.reasoning" in src, (
-            "§15 suppress-reasoning must route reasoning into content "
-            "(UI regression #1 per NO-REGRESSION-CHECKLIST)"
-        )
+        assert "accumulated_content += delta_msg.reasoning" not in src
+        assert "Suppressed reasoning is never redirected into visible content" in src
+        assert "suppress_reasoning and not content_was_emitted and accumulated_reasoning" in src
 
     def test_mistral4_reasoning_effort_auto_map(self):
         """Mistral 4 needs enable_thinking → reasoning_effort auto-map."""
@@ -1436,19 +1429,12 @@ class TestReasoningOnOffRegressions:
         )
 
     def test_gemma4_tools_auto_disable_thinking(self):
-        """mlxstudio#71: Gemma 4 with tools must auto-disable thinking.
-
-        After iter 8 consolidation, the precedence chain + Gemma 4
-        override live in the shared _resolve_enable_thinking helper,
-        which is called from all 3 API paths. Guard the helper
-        contains the Gemma 4 branch AND all 3 paths call it.
-        """
+        """mlxstudio#71 follow-up: Gemma 4 tools preserve thinking policy."""
         src = Path(
             "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
-        # The Gemma 4 branch lives inside _resolve_enable_thinking now
-        assert 'in ("gemma4", "gemma4_text")' in src, (
-            "Gemma 4 family check must still exist (mlxstudio#71)"
+        assert 'in ("gemma4", "gemma4_text")' not in src, (
+            "Gemma 4 tools must not silently force the reasoning rail off"
         )
         # All 3 API paths route through _resolve_enable_thinking
         calls = src.count("_resolve_enable_thinking(")
@@ -3137,24 +3123,19 @@ class TestReasoningContractEndToEnd:
         ).read_text()
         assert "ReasoningBox" in src
         assert "reasoningContent" in src
-        # The guard that hides ReasoningBox when content == reasoningContent
-        # (prevents double-render when suppress_reasoning routed reasoning
-        # to content field)
-        assert "reasoningContent.trim() === message.content.trim()" in src
+        # The guard that hides ReasoningBox when content equals the only
+        # reasoning segment prevents accidental double-rendering without
+        # redirecting reasoning into visible content.
+        assert "displayedReasoningSegments[0].trim() === message.content.trim()" in src
 
     def test_server_suppress_reasoning_routes_to_content(self):
-        """§15: when thinking is off and model leaks <think>, the server
-        routes reasoning delta → content delta so the user sees
-        something instead of empty SSE."""
+        """When thinking is off, leaked reasoning must not become content."""
         src = Path(
             "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
-        # The §15 anchor
-        assert "§15" in src
-        # Concat pattern: parts = [reasoning, content]
-        assert "_parts.append(delta_msg.reasoning)" in src, (
-            "§15 must concatenate reasoning into the content emit path"
-        )
+        assert "_parts.append(delta_msg.reasoning)" not in src
+        assert "Suppressed reasoning is never redirected into" in src
+        assert "reasoning_only_no_content" in src
 
     def test_database_schema_has_reasoning_content_column(self):
         """Panel database must persist reasoningContent across sessions."""
@@ -5876,9 +5857,8 @@ class TestPanelUIContractFull:
             "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/chat.ts"
         ).read_text()
         assert "reasoning_content" in src
-        assert "reasoningContent +=" in src, (
-            "panel must accumulate reasoning deltas across stream chunks"
-        )
+        assert "appendReasoningDelta(reasoningSegments, delta)" in src
+        assert "joinReasoningSegments(reasoningSegments)" in src
 
     def test_db_persists_reasoning_column(self):
         src = Path(

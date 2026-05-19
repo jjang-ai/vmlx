@@ -5,6 +5,7 @@ import { formatJson } from './chat-utils'
 export interface ToolStatus {
   phase: 'calling' | 'executing' | 'result' | 'error' | 'processing' | 'done' | 'generating' | 'asking'
   toolName: string
+  toolCallId?: string
   detail?: string
   iteration?: number
   timestamp: number
@@ -35,10 +36,20 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
   const groups: { name: string; statuses: ToolStatus[] }[] = []
   let current: { name: string; statuses: ToolStatus[] } | null = null
   let lastProcessingIdx = -1
+  const groupIds = new Map<string, { name: string; statuses: ToolStatus[] }>()
+  const isOpen = (group: { statuses: ToolStatus[] }) => {
+    const last = group.statuses[group.statuses.length - 1]
+    return last && last.phase !== 'result' && last.phase !== 'error' && last.phase !== 'done'
+  }
+  const findOpenGroup = (s: ToolStatus) => {
+    if (s.toolCallId && groupIds.has(s.toolCallId)) return groupIds.get(s.toolCallId)!
+    return [...groups].reverse().find(g => g.name === s.toolName && isOpen(g)) || current
+  }
 
   for (const s of statuses) {
     if (s.phase === 'calling') {
       current = { name: s.toolName, statuses: [s] }
+      if (s.toolCallId) groupIds.set(s.toolCallId, current)
       groups.push(current)
       lastProcessingIdx = -1
     } else if (s.phase === 'generating') {
@@ -61,10 +72,10 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
       groups.push({ name: '', statuses: [s] })
       current = null
       lastProcessingIdx = -1
-    } else if (current) {
-      current.statuses.push(s)
     } else {
-      groups.push({ name: s.toolName, statuses: [s] })
+      const target = findOpenGroup(s)
+      if (target) target.statuses.push(s)
+      else groups.push({ name: s.toolName, statuses: [s] })
     }
   }
 

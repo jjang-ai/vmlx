@@ -5,6 +5,10 @@
  * process exit handling, tray icon generation, audio validation.
  */
 import { describe, it, expect } from 'vitest'
+import {
+  buildChatSettingsResetOverrides,
+  type ChatSettingsResetOverrides,
+} from '../src/shared/chatSettingsResetPolicy'
 
 // =============================================================================
 // Update Checker URL Validation
@@ -518,67 +522,29 @@ describe('enableThinking tri-state', () => {
 // =============================================================================
 
 describe('chat overrides reset behavior', () => {
-  // Mirrors ChatSettings.tsx:83-118
-  interface ChatOverrides {
-    temperature?: number
-    topP?: number
-    topK?: number | null
-    minP?: number
-    repeatPenalty?: number
-    maxTokens?: number
-    stopSequences?: string
-    systemPrompt?: string
-    workingDirectory?: string
-    builtinToolsEnabled?: boolean
-    enableThinking?: boolean
-    reasoningEffort?: string
-    wireApi?: string
-    maxToolIterations?: number
-    hideToolStatus?: boolean
-    webSearchEnabled?: boolean
-    braveSearchEnabled?: boolean
-  }
-
   function simulateReset(
-    overrides: ChatOverrides,
-    genDefaults: { temperature?: number; topP?: number; topK?: number; minP?: number; repeatPenalty?: number }
-  ): ChatOverrides {
-    // Preserve agent config
-    const preserved: ChatOverrides = {}
-    if (overrides.systemPrompt) preserved.systemPrompt = overrides.systemPrompt
-    if (overrides.workingDirectory) preserved.workingDirectory = overrides.workingDirectory
-    if (overrides.builtinToolsEnabled != null) preserved.builtinToolsEnabled = overrides.builtinToolsEnabled
-    if (overrides.wireApi) preserved.wireApi = overrides.wireApi
-    if (overrides.hideToolStatus != null) preserved.hideToolStatus = overrides.hideToolStatus
-    if (overrides.webSearchEnabled != null) preserved.webSearchEnabled = overrides.webSearchEnabled
-    if (overrides.braveSearchEnabled != null) preserved.braveSearchEnabled = overrides.braveSearchEnabled
-
-    // Apply only model-declared defaults; missing values stay unset.
-    const result: ChatOverrides = { ...preserved }
-    if (genDefaults.temperature != null) result.temperature = genDefaults.temperature
-    if (genDefaults.topP != null) result.topP = genDefaults.topP
-    if (genDefaults.topK != null) result.topK = genDefaults.topK
-    if (genDefaults.minP != null) result.minP = genDefaults.minP
-    if (genDefaults.repeatPenalty != null) result.repeatPenalty = genDefaults.repeatPenalty
-    return result
+    overrides: ChatSettingsResetOverrides,
+    genDefaults: { temperature?: number; topP?: number; topK?: number; minP?: number; repeatPenalty?: number; maxNewTokens?: number }
+  ): Partial<ChatSettingsResetOverrides> {
+    return buildChatSettingsResetOverrides(overrides, genDefaults)
   }
 
   function mergeSavedOverrides(
-    modelDefaults: ChatOverrides,
-    saved: ChatOverrides | null
-  ): ChatOverrides {
+    modelDefaults: ChatSettingsResetOverrides,
+    saved: ChatSettingsResetOverrides | null
+  ): ChatSettingsResetOverrides {
     const savedExplicit = Object.fromEntries(
       Object.entries(saved || {}).filter(([, v]) => v !== null && v !== undefined),
-    ) as ChatOverrides
+    ) as ChatSettingsResetOverrides
     return { ...modelDefaults, ...savedExplicit }
   }
 
-  it('preserves system prompt on reset', () => {
+  it('clears system prompt on reset', () => {
     const result = simulateReset(
       { systemPrompt: 'You are a pirate', temperature: 1.5 },
       { temperature: 0.7 }
     )
-    expect(result.systemPrompt).toBe('You are a pirate')
+    expect(result.systemPrompt).toBeUndefined()
     expect(result.temperature).toBe(0.7)
   })
 
@@ -645,12 +611,12 @@ describe('chat overrides reset behavior', () => {
     expect(result.enableThinking).toBe(undefined)
   })
 
-  it('preserves wireApi on reset', () => {
+  it('clears wireApi on reset', () => {
     const result = simulateReset(
       { wireApi: 'responses', temperature: 1.0 },
       { temperature: 0.7 }
     )
-    expect(result.wireApi).toBe('responses')
+    expect(result.wireApi).toBeUndefined()
   })
 
   it('handles empty model defaults gracefully', () => {
@@ -658,7 +624,7 @@ describe('chat overrides reset behavior', () => {
       { temperature: 1.0, systemPrompt: 'test' },
       {}
     )
-    expect(result.systemPrompt).toBe('test')
+    expect(result.systemPrompt).toBeUndefined()
     expect(result.temperature).toBe(undefined)
   })
 })

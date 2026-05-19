@@ -4,7 +4,7 @@ import { parseToolArgs, getToolSummary, formatJson } from './chat-utils'
 
 export interface InlineToolGroup {
   name: string
-  statuses: Array<{ phase: string; toolName: string; detail?: string; iteration?: number }>
+  statuses: Array<{ phase: string; toolName: string; toolCallId?: string; detail?: string; iteration?: number }>
 }
 
 interface InlineToolCallProps {

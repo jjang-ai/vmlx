@@ -103,6 +103,24 @@ describe('chat settings cross-family compatibility warnings', () => {
     expect(source).toContain("const showMediumEffort = effectiveReasoningParser !== 'mistral' && detectedFamily !== 'hy3'")
   })
 
+  it('exposes DSV4 Max without consulting legacy force-direct session state', () => {
+    const source = readFileSync('src/renderer/src/components/chat/ChatSettings.tsx', 'utf8')
+
+    expect(source).toContain('const dsv4MaxEnabled =')
+    expect(source).not.toContain("sessionConfig?.dsv4ForceDirect")
+    expect(source).not.toContain("sessionConfig?.dsv4RawMax === true")
+    expect(source).toContain("disabled={!dsv4MaxEnabled}")
+    expect(source).toContain("overrides.reasoningEffort !== 'max' || !dsv4MaxEnabled")
+  })
+
+  it('does not silently mutate DSV4 output budgets when the user changes reasoning mode', () => {
+    const source = readFileSync('src/renderer/src/components/chat/ChatSettings.tsx', 'utf8')
+
+    expect(source).not.toContain('DSV4_THINKING_MIN_TOKENS')
+    expect(source).not.toContain('DSV4_MAX_MIN_TOKENS')
+    expect(source).not.toContain('next.maxTokens = Math.max')
+  })
+
   it('main IPC refuses stale local Thinking On when fresh detection has no reasoning parser', () => {
     const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
 

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { ArrowLeft, ChevronRight } from 'lucide-react'
 import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG } from './SessionConfigForm'
 import { useTranslation } from '../../i18n'
+import { resolveCacheLaunchPolicy } from '../../../../shared/cacheControlPolicy'
 
 interface Session {
   id: string
@@ -39,6 +40,18 @@ function cacheTypeRequiresPaged(cacheType?: string): boolean {
 }
 
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
+const GENERIC_DEFAULT_TIMEOUT_SECONDS = 300
+const DSV4_DEFAULT_TIMEOUT_SECONDS = 900
+
+function effectiveSessionTimeoutSeconds(config: Partial<SessionConfig>, family?: string): number {
+  const configured = config.timeout
+  if (configured != null && configured <= 0) return 86400
+  const normalizedFamily = normalizeDetectedFamilyName(family)
+  if (normalizedFamily === 'deepseek-v4' && (configured == null || configured === GENERIC_DEFAULT_TIMEOUT_SECONDS)) {
+    return DSV4_DEFAULT_TIMEOUT_SECONDS
+  }
+  return configured != null && configured > 0 ? configured : GENERIC_DEFAULT_TIMEOUT_SECONDS
+}
 
 const ADDITIONAL_ARG_VALUE_FLAGS = new Set([
   '--block-disk-cache-dir',
@@ -238,7 +251,7 @@ function buildCommandPreview(
   // Server settings
   parts.push('--host', config.host)
   parts.push('--port', config.port.toString())
-  parts.push('--timeout', (config.timeout != null && config.timeout > 0 ? config.timeout : 86400).toString())
+  parts.push('--timeout', effectiveSessionTimeoutSeconds(config, detectedFamily).toString())
 
   if (config.apiKey) parts.push('# VLLM_API_KEY=*** (env var)')
   if (config.rateLimit && config.rateLimit > 0) parts.push('--rate-limit', config.rateLimit.toString())
@@ -273,13 +286,21 @@ function buildCommandPreview(
   // Prefix cache (mirrors buildArgs): explicit user opt-out stays off even
   // when tools are configured. Tool sessions benefit from cache but do not
   // silently own the cache toggle.
-  const prefixCacheOff = !cacheStackActive || config.enablePrefixCache === false
-  const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
-  const dsv4CompositeRequiresPaged = dsv4Active && !prefixCacheOff
-  const nativeCacheRequiresPaged = cacheTypeRequiresPaged(detected?.cacheType) && detected?.usePagedCache === true && !prefixCacheOff
-  const usePagedCache = zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged || nativeCacheRequiresPaged
-    ? true
-    : (config.usePagedCache ?? detected?.usePagedCache)
+  const zayaTypedCacheRequiresPaged = zayaCcaActive
+  const architectureRequiresPagedCache =
+    zayaTypedCacheRequiresPaged ||
+    dsv4Active ||
+    (cacheTypeRequiresPaged(detected?.cacheType) && detected?.usePagedCache === true)
+  const cacheLaunchPolicy = resolveCacheLaunchPolicy({
+    continuousBatching: cacheStackActive,
+    enablePrefixCache: config.enablePrefixCache !== false,
+    usePagedCache: config.usePagedCache ?? detected?.usePagedCache ?? false,
+    enableDiskCache: !!config.enableDiskCache,
+    enableBlockDiskCache: !!config.enableBlockDiskCache,
+    architectureRequiresPagedCache,
+  })
+  const prefixCacheOff = cacheLaunchPolicy.prefixCacheOff
+  const usePagedCache = cacheLaunchPolicy.effectiveUsePagedCache
 
   if (prefixCacheOff) {
     parts.push('--disable-prefix-cache')
@@ -315,14 +336,14 @@ function buildCommandPreview(
   }
 
   // Disk cache (L2 persistent cache) — mirrors sessions.ts buildArgs().
-  if (!prefixCacheOff && config.enableDiskCache && !usePagedCache) {
+  if (cacheLaunchPolicy.enableLegacyDiskCache) {
     parts.push('--enable-disk-cache')
     if (config.diskCacheDir) parts.push('--disk-cache-dir', config.diskCacheDir)
     if (config.diskCacheMaxGb != null && config.diskCacheMaxGb >= 0) parts.push('--disk-cache-max-gb', config.diskCacheMaxGb.toString())
   }
 
   // Block-level disk cache (L2 for paged cache blocks) — mirrors sessions.ts buildArgs().
-  if (!prefixCacheOff && usePagedCache && config.enableBlockDiskCache) {
+  if (cacheLaunchPolicy.enableBlockDiskCache) {
     parts.push('--enable-block-disk-cache')
     if (config.blockDiskCacheDir) parts.push('--block-disk-cache-dir', config.blockDiskCacheDir)
     if (config.blockDiskCacheMaxGb != null && config.blockDiskCacheMaxGb >= 0) parts.push('--block-disk-cache-max-gb', config.blockDiskCacheMaxGb.toString())

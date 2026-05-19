@@ -6,15 +6,23 @@
  * this helper normalizes them to the env dict that gets merged into spawnEnv.
  *
  * Knobs:
+ *   - `dsv4FinalizerTokens` and `dsv4ForceDirect` are retained only for
+ *     migration compatibility with older saved sessions. They intentionally
+ *     do not emit env vars: the runtime must not inject thinking tags or
+ *     silently flip requested reasoning rails.
  *   - `dsv4PoolQuant` -> `DSV4_POOL_QUANT=1` — experimental native CSA/HCA
  *     pool codec. Production DSV4 launches explicitly set `DSV4_POOL_QUANT=0`
  *     unless this is enabled.
  *
- * Helper only emits runtime cache/diagnostic env vars. Reasoning mode is
- * carried by the normal request/API path.
+ * Natural model behavior wins: bundle chat/generation config plus explicit
+ * per-request controls are the only model-behavior inputs.
  */
 
 export interface Dsv4EnvConfig {
+  /** Kept for config migration compatibility; raw max is no longer env-gated. */
+  dsv4RawMax?: boolean
+  dsv4FinalizerTokens?: number
+  dsv4ForceDirect?: boolean
   dsv4PoolQuant?: boolean
 }
 

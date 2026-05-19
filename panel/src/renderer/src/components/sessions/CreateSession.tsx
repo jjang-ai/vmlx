@@ -186,6 +186,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
         if (detected && detected.family !== 'unknown') {
           base.enableAutoToolChoice = detected.enableAutoToolChoice
           base.usePagedCache = detected.usePagedCache
+          if (detected.family === 'deepseek-v4') base.timeout = 900
           setDetectedFamily(detected.family)
           setDetectedIsTurboQuant(!!detected.isTurboQuant)
           setDetectedIsMultimodal(!!detected.isMultimodal)

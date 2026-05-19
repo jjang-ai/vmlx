@@ -131,6 +131,28 @@ describe('buildRequestBody — Chat Completions API', () => {
         expect(body.stream_options).toEqual({ include_usage: true })
     })
 
+    it('does not invent sampler or output-budget values when chat overrides are absent', () => {
+        const body = buildRequestBody('completions', 'qwen-mtp', messages, undefined, false, true)
+        expect(body.temperature).toBeUndefined()
+        expect(body.top_p).toBeUndefined()
+        expect(body.max_tokens).toBeUndefined()
+        expect(body.repetition_penalty).toBeUndefined()
+    })
+
+    it('forwards explicit greedy MTP-compatible sampler values including neutral repeat penalty', () => {
+        const body = buildRequestBody(
+            'completions',
+            'qwen-mtp',
+            messages,
+            { temperature: 0, topP: 1, repeatPenalty: 1.0 },
+            false,
+            true,
+        )
+        expect(body.temperature).toBe(0)
+        expect(body.top_p).toBe(1)
+        expect(body.repetition_penalty).toBe(1.0)
+    })
+
     it('forwards custom temperature and top_p', () => {
         const body = buildRequestBody('completions', 'gpt-4', messages, { temperature: 0.3, topP: 0.5 }, false, false)
         expect(body.temperature).toBe(0.3)
@@ -167,7 +189,7 @@ describe('buildRequestBody — Chat Completions API', () => {
         expect(body.repetition_penalty).toBe(1.2)
     })
 
-    it('forwards repetition_penalty when exactly 1.0 because it is an explicit per-chat override', () => {
+    it('forwards repetition_penalty when explicitly set to neutral 1.0', () => {
         const body = buildRequestBody('completions', 'gpt-4', messages, { repeatPenalty: 1.0 }, false, false)
         expect(body.repetition_penalty).toBe(1.0)
     })
@@ -203,15 +225,23 @@ describe('buildRequestBody — Chat Completions API', () => {
         expect(body.reasoning_effort).toBeUndefined()
     })
 
-    it('respects explicit DSV4 thinking max_tokens instead of hidden flooring', () => {
+    it('preserves explicit DSV4 standard thinking max_tokens', () => {
+        const body = buildRequestBody('completions', 'dsv4', messages, { maxTokens: 128 }, false, true, undefined, 'deepseek-v4')
+        expect(body.max_tokens).toBe(128)
+        expect(body.dsv4_finalizer_tokens).toBeUndefined()
+    })
+
+    it('preserves explicit DSV4 Max thinking max_tokens', () => {
         const body = buildRequestBody('completions', 'dsv4', messages, { maxTokens: 128, reasoningEffort: 'max' }, false, true, undefined, 'deepseek-v4')
         expect(body.max_tokens).toBe(128)
         expect(body.reasoning_effort).toBe('max')
+        expect(body.dsv4_finalizer_tokens).toBeUndefined()
     })
 
     it('does not floor DSV4 max_tokens when thinking is explicitly off', () => {
         const body = buildRequestBody('completions', 'dsv4', messages, { enableThinking: false, maxTokens: 128 }, false, true, undefined, 'deepseek-v4')
         expect(body.max_tokens).toBe(128)
+        expect(body.dsv4_finalizer_tokens).toBeUndefined()
     })
 })
 
@@ -265,9 +295,17 @@ describe('buildRequestBody — Responses API', () => {
     ]
 
     it('uses max_output_tokens instead of max_tokens', () => {
-        const body = buildRequestBody('responses', 'gpt-4', messages, undefined, false, false)
-        expect(body.max_output_tokens).toBeUndefined()
+        const body = buildRequestBody('responses', 'gpt-4', messages, { maxTokens: 4096 }, false, false)
+        expect(body.max_output_tokens).toBe(4096)
         expect(body.max_tokens).toBeUndefined()
+    })
+
+    it('does not invent Responses sampler or output-budget values when chat overrides are absent', () => {
+        const body = buildRequestBody('responses', 'qwen-mtp', messages, undefined, false, true)
+        expect(body.temperature).toBeUndefined()
+        expect(body.top_p).toBeUndefined()
+        expect(body.max_output_tokens).toBeUndefined()
+        expect(body.repetition_penalty).toBeUndefined()
     })
 
     it('uses input instead of messages', () => {
@@ -291,15 +329,24 @@ describe('buildRequestBody — Responses API', () => {
         expect(body.chat_template_kwargs).toBeUndefined()
     })
 
-    it('respects explicit DSV4 Responses max_output_tokens for Auto/On thinking', () => {
+    it('preserves DSV4 Responses max_output_tokens for Auto/On thinking', () => {
         const body = buildRequestBody('responses', 'dsv4', messages, { maxTokens: 300 }, false, true, undefined, 'deepseek-v4')
         expect(body.max_output_tokens).toBe(300)
+        expect(body.dsv4_finalizer_tokens).toBeUndefined()
+    })
+
+    it('preserves DSV4 Responses max_output_tokens for Max thinking', () => {
+        const body = buildRequestBody('responses', 'dsv4', messages, { maxTokens: 300, reasoningEffort: 'max' }, false, true, undefined, 'deepseek-v4')
+        expect(body.max_output_tokens).toBe(300)
+        expect(body.reasoning_effort).toBe('max')
+        expect(body.dsv4_finalizer_tokens).toBeUndefined()
     })
 
     it('suppresses stale Responses reasoning_effort when thinking is explicitly off', () => {
         const body = buildRequestBody('responses', 'dsv4', messages, { enableThinking: false, reasoningEffort: 'max', maxTokens: 300 }, false, true, undefined, 'deepseek-v4')
         expect(body.max_output_tokens).toBe(300)
         expect(body.reasoning_effort).toBeUndefined()
+        expect(body.dsv4_finalizer_tokens).toBeUndefined()
     })
 
     it('suppresses Responses enable_thinking when a plain local model has no reasoning parser', () => {

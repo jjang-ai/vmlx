@@ -1769,33 +1769,28 @@ class TestV3SuppressReasoningNoFallback:
 
 
 class TestV3ReasoningDoubleAccumulation:
-    """v1.3.56 §15 SUPERSEDES V3-H1: under suppress_reasoning the parser's
-    reasoning delta is routed into emit_content and MUST also mirror into
-    accumulated_content so content_was_emitted + tool-call marker detection
-    stay truthful. V3-H1's 'no double accumulation' assertion is no longer
-    applicable.
+    """Suppressed reasoning must stay out of visible content/history.
 
-    These tests now verify that the accumulated_content mirror exists AND
-    is guarded by suppress_reasoning so non-suppressed requests don't get
-    polluted. See NO-REGRESSION-CHECKLIST.md §18.
+    The panel now keeps reasoning in the dedicated reasoning channel and
+    surfaces reasoning-only cases as warnings/placeholders instead of
+    redirecting parser output into normal assistant content.
     """
 
     def test_chat_accumulated_content_mirror_under_suppress(self):
         import inspect
         from vmlx_engine.server import stream_chat_completion
         source = inspect.getsource(stream_chat_completion)
-        assert "accumulated_content += delta_msg.reasoning" in source
-        # Under suppress only — not unconditional — so non-suppressed flows
-        # keep accumulated_content content-only (for clean tool-call marker
-        # detection when the user wants to see reasoning).
-        assert "if suppress_reasoning:" in source
+        assert "accumulated_content += delta_msg.reasoning" not in source
+        assert "Suppressed reasoning is never redirected into visible content" in source
+        assert "suppress_reasoning and not content_was_emitted and accumulated_reasoning" in source
 
     def test_responses_accumulated_content_mirror_under_suppress(self):
         import inspect
         from vmlx_engine.server import stream_responses_api
         source = inspect.getsource(stream_responses_api)
-        assert "accumulated_content += delta_msg.reasoning" in source
-        assert "if suppress_reasoning:" in source
+        assert "accumulated_content += delta_msg.reasoning" not in source
+        assert "Suppressed reasoning is never redirected into" in source
+        assert "reasoning_only_no_content" in source
 
 
 class TestV3KvCacheBitsInit:

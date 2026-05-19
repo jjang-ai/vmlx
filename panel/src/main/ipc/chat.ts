@@ -14,9 +14,30 @@ import { executeBuiltinTool } from "../tools/executor";
 import { detectModelConfigFromDir } from "../model-config-registry";
 import { getAuthHeaders } from "./utils";
 import { extractResponsesWarnings } from "../../shared/responsesWarnings";
+import {
+  appendReasoningDelta,
+  joinReasoningSegments,
+  markReasoningToolBoundary,
+  visibleReasoningSegments,
+} from "../../shared/interleavedReasoning";
+import { shouldAutoContinueAfterToolUse } from "../../shared/toolAutoContinue";
+import { buildToolMediaFollowupContent } from "../../shared/toolMediaFollowup";
+import { dsv4OutputBudget } from "../../shared/dsv4RequestBudget";
+import { buildNewChatInheritedOverrides } from "../chat-override-policy";
 
 // Default connection config (fallback values)
 const DEFAULT_PORT = 8000;
+const GENERIC_DEFAULT_TIMEOUT_SECONDS = 300;
+const DSV4_DEFAULT_TIMEOUT_SECONDS = 900;
+
+function effectiveDsv4RequestTimeoutSeconds(
+  timeoutSeconds: number,
+  detectedFamily?: string,
+): number {
+  return detectedFamily === "deepseek-v4" && timeoutSeconds === GENERIC_DEFAULT_TIMEOUT_SECONDS
+    ? DSV4_DEFAULT_TIMEOUT_SECONDS
+    : timeoutSeconds;
+}
 
 function shouldForwardReasoningEffort(
   reasoningEffort: unknown,
@@ -27,12 +48,6 @@ function shouldForwardReasoningEffort(
   if (typeof reasoningEffort !== "string" || !reasoningEffort) return false;
   if (enableThinking === false) return false;
   return sessionHasReasoningParser || detectedFamily === "deepseek-v4";
-}
-
-function explicitOutputBudget(maxTokens: unknown): number | undefined {
-  return typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0
-    ? Math.floor(maxTokens)
-    : undefined;
 }
 
 /**
@@ -253,6 +268,7 @@ const FILE_TOOLS = new Set([
   "replace_lines",
   "apply_regex",
   "read_image",
+  "read_video",
 ]);
 const SEARCH_TOOLS = new Set([
   "search_files",
@@ -455,9 +471,49 @@ export function registerChatHandlers(
       // Do not seed new chats from per-model settings or sibling chats. A
       // clean chat starts with no overrides; the engine resolves bundle
       // defaults and explicit chat/API settings are stored only per chat.
-      // Chat profiles remain manual presets. They are not auto-applied here
-      // because even a starred profile can carry stale sampling, reasoning,
-      // tools, system prompt, or working-directory state into a clean chat.
+      // Default profiles / sibling chats may carry tool and workspace
+      // ergonomics into a clean chat, but sampling/reasoning/system prompts are
+      // intentionally excluded so bundle generation defaults stay authoritative.
+      try {
+        const defaultProfile = db.getDefaultChatProfile();
+        if (defaultProfile) {
+          const existing = db.getChatOverrides(chat.id) || { chatId: chat.id };
+          // Default profiles are auto-applied at chat creation time, so treat
+          // them as coding/tool presets. Manual profile loads can still apply
+          // full sampler/reasoning/prompt settings after the user chooses them.
+          const merged = buildNewChatInheritedOverrides(
+            existing as any,
+            defaultProfile as any,
+          );
+          db.setChatOverrides(merged as any);
+          console.log(
+            `[CHAT] Applied default profile coding/tool settings to new chat ${chat.id}; generation/reasoning defaults stayed model-derived`,
+          );
+        } else if (modelPath) {
+          // No starred profile — inherit settings from last chat of same model
+          const siblingChats = db.getChatsByModelPath(modelPath);
+          // Find the most recent OTHER chat (not this one) that has overrides
+          const lastSibling = siblingChats.find((c) => c.id !== chat.id);
+          if (lastSibling) {
+            const lastOverrides = db.getChatOverrides(lastSibling.id);
+            if (lastOverrides) {
+              const existing = db.getChatOverrides(chat.id) || {
+                chatId: chat.id,
+              };
+              const merged = buildNewChatInheritedOverrides(
+                existing as any,
+                lastOverrides as any,
+              );
+              db.setChatOverrides(merged);
+              console.log(
+                `[CHAT] Inherited coding/tool settings from last chat ${lastSibling.id.slice(0, 8)}; generation/reasoning defaults stayed model-derived`,
+              );
+            }
+          }
+        }
+      } catch (e) {
+        console.error("[CHAT] Failed to apply default profile:", e);
+      }
 
       return chat;
     },
@@ -662,6 +718,10 @@ export function registerChatHandlers(
             // Check if model has a reasoning parser (for enable_thinking default)
             const detected = detectModelConfigFromDir(chat.modelPath);
             chatDetectedFamily = detected.family;
+            timeoutSeconds = effectiveDsv4RequestTimeoutSeconds(
+              timeoutSeconds,
+              chatDetectedFamily,
+            );
             const smeltActive = !!sessionConfig.smelt;
             chatIsMultimodal =
               smeltActive || detected.forceTextOnly
@@ -1224,6 +1284,11 @@ export function registerChatHandlers(
       // (thinkingTimer removed — "Thinking silently" indicator disabled)
       let fullContent = "";
       let reasoningContent = "";
+      let reasoningSegments: string[] = [];
+      const currentReasoningContent = () =>
+        joinReasoningSegments(reasoningSegments) || reasoningContent;
+      const currentReasoningSegments = () =>
+        visibleReasoningSegments(reasoningSegments);
       let responseWarnings: string[] | null = null;
       // Accumulates content across tool iterations so abort during tool execution can recover
       // earlier content that would otherwise be lost when fullContent is reset between iterations
@@ -1240,10 +1305,12 @@ export function registerChatHandlers(
       const collectedToolStatuses: Array<{
         phase: string;
         toolName: string;
+        toolCallId?: string;
         detail?: string;
         iteration?: number;
         contentOffset?: number;
       }> = [];
+      let toolStatusNeedsFlush = false;
       // Declared outside try so catch block can access them for error recovery
       let isReasoning = false;
       let lastFinishReason: string | undefined;
@@ -1262,12 +1329,16 @@ export function registerChatHandlers(
               ? allGeneratedContent + "\n\n" + fullContent.trim()
               : allGeneratedContent
             : fullContent;
-          if (saveContent || reasoningContent) {
+          const saveReasoning = currentReasoningContent();
+          if (saveContent || saveReasoning) {
             try {
               db.updateMessageContent(
                 assistantMessage.id,
                 saveContent,
-                reasoningContent || undefined,
+                saveReasoning || undefined,
+                currentReasoningSegments().length > 0
+                  ? JSON.stringify(currentReasoningSegments())
+                  : undefined,
               );
             } catch (_) {}
           }
@@ -1319,7 +1390,12 @@ export function registerChatHandlers(
 
         // Build request body — shared between initial request and tool follow-ups
         const buildRequestBody = (): Record<string, any> => {
-          const resolvedOutputBudget = explicitOutputBudget(overrides?.maxTokens);
+          const resolvedOutputBudget = dsv4OutputBudget(
+            overrides?.maxTokens,
+            overrides?.enableThinking,
+            chatDetectedFamily,
+            overrides?.reasoningEffort,
+          );
           const effectiveEnableThinkingOverride =
             !isRemote &&
             !sessionHasReasoningParser &&
@@ -1373,7 +1449,8 @@ export function registerChatHandlers(
               }));
             }
             // enable_thinking: explicit user override sent to both local and remote.
-            // When undefined (auto), local server auto-detects from model config; remote gets sessionHasReasoningParser as hint.
+            // When undefined (auto), local omits the field so the native
+            // model/template default decides; remote gets sessionHasReasoningParser as hint.
             if (effectiveEnableThinkingOverride !== undefined) {
               obj.enable_thinking = effectiveEnableThinkingOverride;
             } else if (isRemote) {
@@ -1440,7 +1517,8 @@ export function registerChatHandlers(
               obj.tools = filterTools(overrides);
             }
             // enable_thinking: explicit user override sent to both local and remote.
-            // When undefined (auto), local server auto-detects from model config; remote gets sessionHasReasoningParser as hint.
+            // When undefined (auto), local omits the field so the native
+            // model/template default decides; remote gets sessionHasReasoningParser as hint.
             // STRICT ENV: Filter out enable_thinking for strict generic 3rd-party API hosts that throw 400 Bad Request.
             const isStrictApi =
               isRemote &&
@@ -1574,6 +1652,7 @@ export function registerChatHandlers(
           toolName: string,
           detail?: string,
           iteration?: number,
+          toolCallId?: string,
         ) => {
           const contentOffset =
             phase === "calling" ? lastEmittedContentLength : undefined;
@@ -1588,10 +1667,12 @@ export function registerChatHandlers(
           collectedToolStatuses.push({
             phase,
             toolName,
+            toolCallId,
             iteration,
             contentOffset,
             detail: persistDetail,
           });
+          toolStatusNeedsFlush = true;
           try {
             const win = getWindow();
             if (win && !win.isDestroyed()) {
@@ -1600,12 +1681,18 @@ export function registerChatHandlers(
                 messageId: assistantMessage.id,
                 phase,
                 toolName,
+                toolCallId,
                 detail,
                 iteration,
                 contentOffset,
               });
             }
           } catch (_) {}
+        };
+        const flushToolStatusToRenderer = async () => {
+          if (!toolStatusNeedsFlush) return;
+          toolStatusNeedsFlush = false;
+          await new Promise<void>((resolve) => setImmediate(resolve));
         };
 
         // Client-side tool call buffering: suppress content when leaked tool call XML detected.
@@ -1688,7 +1775,12 @@ export function registerChatHandlers(
 
           if (isReasoningDelta) {
             isReasoning = true;
-            reasoningContent += delta;
+            reasoningSegments = appendReasoningDelta(reasoningSegments, delta);
+            const visibleSegments = currentReasoningSegments();
+            reasoningContent =
+              visibleSegments.length > 0
+                ? visibleSegments[visibleSegments.length - 1]
+                : "";
           } else {
             if (isReasoning) {
               isReasoning = false;
@@ -1698,7 +1790,8 @@ export function registerChatHandlers(
                   win.webContents.send("chat:reasoningDone", {
                     chatId,
                     messageId: assistantMessage.id,
-                    reasoningContent,
+                    reasoningContent: currentReasoningContent(),
+                    reasoningSegments: currentReasoningSegments(),
                   });
                 }
               } catch (_) {}
@@ -1767,13 +1860,16 @@ export function registerChatHandlers(
                 !isReasoningDelta && allGeneratedContent
                   ? allGeneratedContent + "\n\n" + fullContent
                   : isReasoningDelta
-                    ? reasoningContent
+                    ? currentReasoningContent()
                     : fullContent;
               win.webContents.send("chat:stream", {
                 chatId,
                 messageId: assistantMessage.id,
                 fullContent: displayContent,
                 isReasoning: isReasoningDelta,
+                reasoningSegments: isReasoningDelta
+                  ? currentReasoningSegments()
+                  : undefined,
                 metrics: {
                   tokenCount: cumulativeTokenOffset + iterationTokenCount,
                   promptTokens,
@@ -1855,7 +1951,8 @@ export function registerChatHandlers(
                       win.webContents.send("chat:reasoningDone", {
                         chatId,
                         messageId: assistantMessage.id,
-                        reasoningContent,
+                        reasoningContent: currentReasoningContent(),
+                        reasoningSegments: currentReasoningSegments(),
                       });
                     }
                   } catch (_) {}
@@ -1930,10 +2027,11 @@ export function registerChatHandlers(
                 parsed.item?.type === "function_call"
               ) {
                 const item = parsed.item;
+                const toolCallId =
+                  item.call_id ||
+                  `call_${uuidv4().replace(/-/g, "").slice(0, 16)}`;
                 receivedToolCalls.push({
-                  id:
-                    item.call_id ||
-                    `call_${uuidv4().replace(/-/g, "").slice(0, 16)}`,
+                  id: toolCallId,
                   function: {
                     name: item.name,
                     arguments: item.arguments || "{}",
@@ -1944,6 +2042,7 @@ export function registerChatHandlers(
                   item.name,
                   item.arguments || "{}",
                   toolIteration,
+                  toolCallId,
                 );
               }
 
@@ -2265,7 +2364,7 @@ export function registerChatHandlers(
                     );
                     // Don't emit arguments here — during incremental streaming,
                     // arguments may be empty/partial. Final args shown after execution.
-                    emitToolStatus("calling", fn.name, "", toolIteration);
+                    emitToolStatus("calling", fn.name, "", toolIteration, toolCall.id);
                   } else if (fn?.arguments && idx >= 0) {
                     // Incremental argument chunk: accumulate arguments for existing tool call
                     if (receivedToolCalls[idx]) {
@@ -2313,6 +2412,9 @@ export function registerChatHandlers(
             for (let li = 0; li < lines.length; li++) {
               if (abortController.signal.aborted) break;
               processLine(lines[li].trim());
+              if (toolStatusNeedsFlush) {
+                await flushToolStatusToRenderer();
+              }
             }
           }
           if (abortController.signal.aborted) return;
@@ -2322,7 +2424,12 @@ export function registerChatHandlers(
           if (buf.trim()) {
             for (const line of buf.split("\n")) {
               if (abortController.signal.aborted) break;
-              if (line.trim()) processLine(line.trim());
+              if (line.trim()) {
+                processLine(line.trim());
+                if (toolStatusNeedsFlush) {
+                  await flushToolStatusToRenderer();
+                }
+              }
             }
           }
         };
@@ -2400,6 +2507,7 @@ export function registerChatHandlers(
           }
 
           const pendingImageDataUrls: string[] = [];
+          const pendingVideoDataUrls: string[] = [];
           for (const tc of receivedToolCalls) {
             // Check abort between each tool — don't make user wait for all tools to finish
             if (abortController.signal.aborted)
@@ -2418,6 +2526,7 @@ export function registerChatHandlers(
                   tc.function.name,
                   resultText,
                   toolIteration,
+                  tc.id,
                 );
                 requestMessages.push(
                   useResponsesApi
@@ -2439,13 +2548,15 @@ export function registerChatHandlers(
                 tc.function.name,
                 undefined,
                 toolIteration,
+                tc.id,
               );
+              await flushToolStatusToRenderer();
 
               if (tc.function.name === "ask_user") {
                 // Special handling: ask_user needs IPC to renderer, not executor
                 const question =
                   toolArgs.question || "What would you like to do?";
-                emitToolStatus("asking", "ask_user", question, toolIteration);
+                emitToolStatus("asking", "ask_user", question, toolIteration, tc.id);
                 resultText = await new Promise<string>((resolve) => {
                   const win = getWindow();
                   if (!win || win.isDestroyed()) {
@@ -2482,7 +2593,7 @@ export function registerChatHandlers(
                     resolve("(User did not respond within 5 minutes)");
                   }, 300000);
                 });
-                emitToolStatus("result", "ask_user", resultText, toolIteration);
+                emitToolStatus("result", "ask_user", resultText, toolIteration, tc.id);
               } else if (isBuiltinTool(tc.function.name)) {
                 // Enforce tool category toggles at execution time (defense-in-depth:
                 // filterTools removes disabled tools from definitions sent to model,
@@ -2495,6 +2606,7 @@ export function registerChatHandlers(
                     tc.function.name,
                     resultText,
                     toolIteration,
+                    tc.id,
                   );
                 } else if (!overrides?.workingDirectory) {
                   resultText =
@@ -2504,6 +2616,7 @@ export function registerChatHandlers(
                     tc.function.name,
                     resultText,
                     toolIteration,
+                    tc.id,
                   );
                 } else {
                   const workDir = overrides.workingDirectory;
@@ -2515,15 +2628,32 @@ export function registerChatHandlers(
                     overrides?.toolResultMaxChars,
                   );
                   resultText = result.content;
-                  // For read_image: inject image as multimodal content for VLM follow-ups
-                  if (result.imageDataUrl) {
-                    pendingImageDataUrls.push(result.imageDataUrl);
+                  // For read_image/read_video: inject media as multimodal
+                  // content for VLM follow-ups. Tool result text is not enough
+                  // for vision models to actually inspect local media bytes.
+                  // Keep local text-only models on text; vmlx-engine will
+                  // reject image_url/video_url content when the loaded runtime
+                  // is not multimodal. Remote endpoints may be multimodal even
+                  // when the local session registry cannot infer it.
+                  if ((result.imageDataUrl || result.videoDataUrl) && !(chatIsMultimodal || isRemote)) {
+                    resultText += "\n\n[Media bytes were not sent because this local session is text-only. Use a VL-compatible model/session to inspect the file visually.]";
+                    console.log(
+                      `[CHAT] Skipping tool media bytes for text-only local session (${tc.function.name})`,
+                    );
+                  } else {
+                    if (result.imageDataUrl) {
+                      pendingImageDataUrls.push(result.imageDataUrl);
+                    }
+                    if (result.videoDataUrl) {
+                      pendingVideoDataUrls.push(result.videoDataUrl);
+                    }
                   }
                   emitToolStatus(
                     result.is_error ? "error" : "result",
                     tc.function.name,
                     resultText,
                     toolIteration,
+                    tc.id,
                   );
                 }
               } else if (isRemote) {
@@ -2534,6 +2664,7 @@ export function registerChatHandlers(
                   tc.function.name,
                   resultText,
                   toolIteration,
+                  tc.id,
                 );
               } else {
                 const execRes = await fetch(`${baseUrl}/v1/mcp/execute`, {
@@ -2556,6 +2687,7 @@ export function registerChatHandlers(
                     tc.function.name,
                     resultText,
                     toolIteration,
+                    tc.id,
                   );
                 } else {
                   const result = await execRes.json();
@@ -2566,6 +2698,7 @@ export function registerChatHandlers(
                       tc.function.name,
                       resultText,
                       toolIteration,
+                      tc.id,
                     );
                   } else {
                     resultText =
@@ -2584,6 +2717,7 @@ export function registerChatHandlers(
                       tc.function.name,
                       resultText,
                       toolIteration,
+                      tc.id,
                     );
                   }
                 }
@@ -2596,8 +2730,10 @@ export function registerChatHandlers(
                 tc.function.name,
                 err.message,
                 toolIteration,
+                tc.id,
               );
             }
+            await flushToolStatusToRenderer();
 
             requestMessages.push(
               useResponsesApi
@@ -2610,23 +2746,18 @@ export function registerChatHandlers(
             );
           }
 
-          // Inject images from read_image tool results as multimodal content parts.
-          // VL models can only process images in content arrays, not in tool result strings.
-          // Text FIRST, then images — Qwen3.5-VL expects this order.
-          if (pendingImageDataUrls.length > 0) {
-            const contentParts: any[] = [
-              {
-                type: "text",
-                text: "Here are the images from the tool results above.",
-              },
-              ...pendingImageDataUrls.map((url) => ({
-                type: "image_url",
-                image_url: { url },
-              })),
-            ];
+          // Inject media from read_image/read_video tool results as multimodal
+          // content parts. VL models can only process media in content arrays,
+          // not in tool result strings. Text FIRST, then media — Qwen VL
+          // expects this order.
+          const contentParts = buildToolMediaFollowupContent(
+            pendingImageDataUrls,
+            pendingVideoDataUrls,
+          );
+          if (contentParts) {
             requestMessages.push({ role: "user", content: contentParts });
             console.log(
-              `[CHAT] Injected ${pendingImageDataUrls.length} image(s) as multimodal content for VLM`,
+              `[CHAT] Injected ${pendingImageDataUrls.length} image(s), ${pendingVideoDataUrls.length} video(s) as multimodal content for VLM`,
             );
           }
         };
@@ -2721,13 +2852,16 @@ export function registerChatHandlers(
                   win.webContents.send("chat:reasoningDone", {
                     chatId,
                     messageId: assistantMessage.id,
-                    reasoningContent,
+                    reasoningContent: currentReasoningContent(),
+                    reasoningSegments: currentReasoningSegments(),
                   });
                 }
               } catch (_) {}
             }
+            // chat:reasoningDone emitted above before resetting for the next segment.
             isReasoning = false; // Reset reasoning state for new iteration
-            reasoningContent = ""; // Reset so next iteration's reasoning doesn't accumulate with previous
+            reasoningSegments = markReasoningToolBoundary(reasoningSegments);
+            reasoningContent = ""; // Start a fresh reasoning segment for the next iteration
             // (thinking indicator removed)
             emitToolStatus("processing", "", undefined, toolIteration);
             // Reset idle timer before follow-up — tools may have consumed minutes
@@ -2736,13 +2870,17 @@ export function registerChatHandlers(
           } else if (
             toolIteration > 0 &&
             autoContinueCount < MAX_AUTO_CONTINUES &&
-            (fullContent.trim().length === 0 ||
-              iterationTokenCount < AUTO_CONTINUE_TOKEN_THRESHOLD)
+            shouldAutoContinueAfterToolUse({
+              content: fullContent,
+              iterationTokenCount,
+              finishReason: lastFinishReason,
+              thresholdTokens: AUTO_CONTINUE_TOKEN_THRESHOLD,
+            })
           ) {
             // ── Auto-continue: model stopped without a substantive response after tool use ──
             // This handles two cases:
             // 1. Model generated ZERO content after tool results (just stopped)
-            // 2. Model generated a brief/incomplete response (< threshold tokens)
+            // 2. Model hit the length limit with a brief/incomplete response
             autoContinueCount++;
             const hasContent = fullContent.trim().length > 0;
             console.log(
@@ -2799,13 +2937,16 @@ export function registerChatHandlers(
                   win.webContents.send("chat:reasoningDone", {
                     chatId,
                     messageId: assistantMessage.id,
-                    reasoningContent,
+                    reasoningContent: currentReasoningContent(),
+                    reasoningSegments: currentReasoningSegments(),
                   });
                 }
               } catch (_) {}
             }
+            // chat:reasoningDone emitted above before resetting for the next segment.
             isReasoning = false; // Reset reasoning state for new iteration
-            reasoningContent = ""; // Reset so next iteration's reasoning doesn't accumulate with previous
+            reasoningSegments = markReasoningToolBoundary(reasoningSegments);
+            reasoningContent = ""; // Start a fresh reasoning segment for the next iteration
             // (thinking indicator removed)
             emitToolStatus(
               "processing",
@@ -2838,7 +2979,8 @@ export function registerChatHandlers(
               win.webContents.send("chat:reasoningDone", {
                 chatId,
                 messageId: assistantMessage.id,
-                reasoningContent,
+                reasoningContent: currentReasoningContent(),
+                reasoningSegments: currentReasoningSegments(),
               });
             }
           } catch (_) {}
@@ -2933,9 +3075,11 @@ export function registerChatHandlers(
         // Reasoning stays in reasoningContent for the reasoning box; content stays empty.
         // (Previously this did fullContent = reasoningContent which triggered the anti-dup
         // check in MessageBubble, hiding the reasoning box.)
-        if (!fullContent && reasoningContent) {
+        const finalReasoningContent = currentReasoningContent();
+        const finalReasoningSegments = currentReasoningSegments();
+        if (!fullContent && finalReasoningContent) {
           console.log(
-            `[CHAT] No main content — reasoning only (${reasoningContent.length} chars)`,
+            `[CHAT] No main content — reasoning only (${finalReasoningContent.length} chars)`,
           );
         }
         assistantMessage.content = fullContent;
@@ -2955,8 +3099,13 @@ export function registerChatHandlers(
             collectedToolStatuses,
           );
         }
-        if (reasoningContent) {
-          assistantMessage.reasoningContent = reasoningContent;
+        if (finalReasoningContent) {
+          assistantMessage.reasoningContent = finalReasoningContent;
+        }
+        if (finalReasoningSegments.length > 0) {
+          assistantMessage.reasoningSegmentsJson = JSON.stringify(
+            finalReasoningSegments,
+          );
         }
         const finalResponseWarnings = responseWarnings as string[] | null;
         if (finalResponseWarnings && finalResponseWarnings.length > 0) {
@@ -3079,7 +3228,11 @@ export function registerChatHandlers(
               chatId,
               messageId: assistantMessage.id,
               content: fullContent,
-              reasoningContent: reasoningContent || undefined,
+              reasoningContent: finalReasoningContent || undefined,
+              reasoningSegments:
+                finalReasoningSegments.length > 0
+                  ? finalReasoningSegments
+                  : undefined,
               warnings: finalResponseWarnings || undefined,
               finishReason: lastFinishReason,
               metrics: {
@@ -3129,7 +3282,8 @@ export function registerChatHandlers(
               win.webContents.send("chat:reasoningDone", {
                 chatId,
                 messageId: assistantMessage.id,
-                reasoningContent,
+                reasoningContent: currentReasoningContent(),
+                reasoningSegments: currentReasoningSegments(),
               });
             }
           } catch (_) {}
@@ -3188,9 +3342,11 @@ export function registerChatHandlers(
         // tool call displays that the user already saw on screen.
         const wasAborted = abortController.signal.aborted;
         const abortTotalTokens = cumulativeTokenOffset + iterationTokenCount;
+        const abortReasoningContent = currentReasoningContent();
+        const abortReasoningSegments = currentReasoningSegments();
         const hadVisibleActivity =
           partialContent ||
-          reasoningContent.trim() ||
+          abortReasoningContent.trim() ||
           collectedToolStatuses.length > 0 ||
           abortTotalTokens > 0;
 
@@ -3240,8 +3396,13 @@ export function registerChatHandlers(
               collectedToolStatuses,
             );
           }
-          if (reasoningContent) {
-            assistantMessage.reasoningContent = reasoningContent;
+          if (abortReasoningContent) {
+            assistantMessage.reasoningContent = abortReasoningContent;
+          }
+          if (abortReasoningSegments.length > 0) {
+            assistantMessage.reasoningSegmentsJson = JSON.stringify(
+              abortReasoningSegments,
+            );
           }
           db.addMessage(assistantMessage);
 
@@ -3252,7 +3413,11 @@ export function registerChatHandlers(
                 chatId,
                 messageId: assistantMessage.id,
                 content: assistantMessage.content,
-                reasoningContent: reasoningContent || undefined,
+                reasoningContent: abortReasoningContent || undefined,
+                reasoningSegments:
+                  abortReasoningSegments.length > 0
+                    ? abortReasoningSegments
+                    : undefined,
                 finishReason: abortFinishReason,
                 metrics: abortMetrics,
               });

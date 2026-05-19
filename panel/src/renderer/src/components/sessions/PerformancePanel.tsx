@@ -44,6 +44,10 @@ interface HealthData {
         }
         fallback_reason?: string | null
       } | null
+      last_native_mtp_skip?: {
+        request_id?: string
+        reason?: string
+      } | null
     }
     ewma_ttft_seconds?: number
     cache_hit_requests?: number
@@ -356,9 +360,9 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
                 label="MTP"
                 value={
                   health.mtp.runtime_active
-                    ? 'active'
+                    ? `active${health.mtp.effective_depth ? ` D${health.mtp.effective_depth}` : ''}${health.mtp.runtime_scope ? ` (${health.mtp.runtime_scope})` : ''}`
                     : health.mtp.runtime_available
-                      ? 'ready'
+                      ? 'weights present; runtime ready'
                     : health.mtp.artifact_available
                       ? 'weights present; runtime unwired'
                       : health.mtp.status.replace(/_/g, ' ')
@@ -567,6 +571,22 @@ export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelPr
                 value={(health.scheduler.cache_reuse_partial_tokens || 0).toLocaleString()}
               />
             )}
+            {health.scheduler.batch_generator?.last_native_mtp && (
+              <InfoCard
+                label="MTP Last"
+                value={`D${health.scheduler.batch_generator.last_native_mtp.final_depth ?? '?'}${
+                  health.scheduler.batch_generator.last_native_mtp.acceptance_rate != null
+                    ? ` ${Math.round((health.scheduler.batch_generator.last_native_mtp.acceptance_rate || 0) * 100)}% accept`
+                    : ''
+                }`}
+              />
+            )}
+            {health.scheduler.batch_generator?.last_native_mtp_skip && (
+              <InfoCard
+                label="MTP Skip"
+                value={health.scheduler.batch_generator.last_native_mtp_skip.reason || 'skipped'}
+              />
+            )}
           </div>
           {health.scheduler.last_cache_reuse_partial && (
             <div className="mt-2 text-xs bg-accent/10 border border-accent/30 text-foreground px-3 py-2 rounded">
@@ -713,7 +733,7 @@ function InfoCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="bg-background px-2 py-1.5 rounded border border-border">
       <div className="text-[10px] text-muted-foreground">{label}</div>
-      <div className="font-mono text-xs">{value}</div>
+      <div className="font-mono text-xs break-words">{value}</div>
     </div>
   )
 }

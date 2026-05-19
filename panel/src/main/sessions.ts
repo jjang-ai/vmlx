@@ -10,6 +10,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { db, Session } from './database'
 import { resolveImageModelFromDirectoryName } from '../shared/imageModels'
 import { dsv4EnvFromConfig } from '../shared/dsv4Env'
+import { resolveCacheLaunchPolicy } from '../shared/cacheControlPolicy'
 
 export type { ServerConfig, DetectedProcess } from './server'
 import type { ServerConfig, DetectedProcess } from './server'
@@ -72,6 +73,33 @@ function cacheTypeRequiresPaged(cacheType?: string): boolean {
 }
 
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
+const GENERIC_DEFAULT_TIMEOUT_SECONDS = 300
+const DSV4_DEFAULT_TIMEOUT_SECONDS = 900
+
+function effectiveSessionTimeoutSeconds(config: Partial<ServerConfig>, family?: string): number {
+  const configured = config.timeout
+  if (configured != null && configured <= 0) return 86400
+  const normalizedFamily = normalizeDetectedFamilyName(family)
+  if (normalizedFamily === 'deepseek-v4' && (configured == null || configured === GENERIC_DEFAULT_TIMEOUT_SECONDS)) {
+    return DSV4_DEFAULT_TIMEOUT_SECONDS
+  }
+  return configured != null && configured > 0 ? configured : GENERIC_DEFAULT_TIMEOUT_SECONDS
+}
+
+function applyFamilyStartupDefaults(config: Partial<ServerConfig>, modelPath?: string): void {
+  if (!modelPath) return
+  try {
+    const detected = detectModelConfigFromDir(modelPath)
+    if (
+      normalizeDetectedFamilyName(detected.family) === 'deepseek-v4' &&
+      (config.timeout == null || config.timeout === GENERIC_DEFAULT_TIMEOUT_SECONDS)
+    ) {
+      config.timeout = DSV4_DEFAULT_TIMEOUT_SECONDS
+    }
+  } catch {
+    /* family defaults are best-effort; launch-time buildArgs repeats the guard */
+  }
+}
 
 const ADDITIONAL_ARG_VALUE_FLAGS = new Set([
   '--block-disk-cache-dir',
@@ -796,6 +824,7 @@ export class SessionManager extends EventEmitter {
     // Normalize path to prevent trailing-slash mismatches
     modelPath = normalizePath(modelPath)
     applyBundleStartupDefaults(config, modelPath)
+    applyFamilyStartupDefaults(config, modelPath)
     markCacheStackStartupDefaultsCurrent(config)
 
     // Check if session already exists for this model path
@@ -809,6 +838,7 @@ export class SessionManager extends EventEmitter {
       applyCacheStackStartupDefaultMigration(existingConfig, modelPath)
       const merged = { ...existingConfig, ...config, modelPath, host, port }
       applyBundleStartupDefaults(merged, modelPath)
+      applyFamilyStartupDefaults(merged, modelPath)
       markCacheStackStartupDefaultsCurrent(merged)
       db.updateSession(existing.id, {
         config: JSON.stringify(merged),
@@ -1608,7 +1638,9 @@ export class SessionManager extends EventEmitter {
           modelPath: proc.modelPath,
           host: '127.0.0.1',
           port: proc.port,
-          timeout: 300,
+          timeout: normalizeDetectedFamilyName(detected.family) === 'deepseek-v4'
+            ? DSV4_DEFAULT_TIMEOUT_SECONDS
+            : GENERIC_DEFAULT_TIMEOUT_SECONDS,
           maxNumSeqs: 1,
           prefillBatchSize: 512,
           prefillStepSize: 2048,
@@ -2298,11 +2330,12 @@ export class SessionManager extends EventEmitter {
   buildArgs(config: ServerConfig): string[] {
     const args = ['serve', config.modelPath]
     const isImage = config.modelType === 'image'
+    const detected = detectModelConfigFromDir(config.modelPath)
 
     // Server settings — always pass explicitly (both text and image)
     args.push('--host', config.host)
     args.push('--port', config.port.toString())
-    args.push('--timeout', (config.timeout != null && config.timeout > 0 ? config.timeout : 86400).toString())
+    args.push('--timeout', effectiveSessionTimeoutSeconds(config, detected.family).toString())
 
     if (config.rateLimit && config.rateLimit > 0) args.push('--rate-limit', config.rateLimit.toString())
     // API key passed via VLLM_API_KEY env var in spawn (not CLI arg) to avoid exposure in ps aux
@@ -2349,7 +2382,6 @@ export class SessionManager extends EventEmitter {
     // Auto-detect tool/reasoning/cache behavior from config.json. This must
     // happen before concurrency flags because DSV4's custom generator is
     // single-batch even though the generic session profile defaults higher.
-    const detected = detectModelConfigFromDir(config.modelPath)
     const detectedFamily = normalizeDetectedFamilyName(detected.family)
     const dsv4Active = detectedFamily === 'deepseek-v4'
 
@@ -2438,20 +2470,24 @@ export class SessionManager extends EventEmitter {
 
     console.log(`[SESSION] Model family: ${detected.family} | tool: ${effectiveToolParser || 'none'} (user=${userToolParser}, detected=${detected.toolParser || 'none'}) | reasoning: ${effectiveReasoningParser || 'none'} (user=${userReasoningParser}, detected=${detected.reasoningParser || 'none'}) | autoTool: ${effectiveAutoTool} | VLM: ${isVLM}`)
 
-    // Prefix cache — requires --continuous-batching to take effect in vmlx-engine.
+    // Prefix cache — requires --continuous-batching to take effect in vmlx-engine
     // Tool sessions benefit from prefix reuse, but an explicit user opt-out must
     // stay an opt-out; do not silently re-enable cache because tools are present.
-    const prefixCacheOff = !cacheStackActive || config.enablePrefixCache === false
     const zayaCcaActive = isZayaCcaFamily(detectedFamily)
-    const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
-    const dsv4CompositeRequiresPaged = detectedFamily === 'deepseek-v4' && !prefixCacheOff
-    const nativeCacheRequiresPaged = cacheTypeRequiresPaged(detected.cacheType) && detected.usePagedCache === true && !prefixCacheOff
-    const usePagedCache = zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged || nativeCacheRequiresPaged
-      ? true
-      : (config.usePagedCache ?? detected.usePagedCache)
-    if (nativeCacheRequiresPaged && config.usePagedCache === false) {
-      console.log(`[SESSION] ${detected.family} ${detected.cacheType} cache requires paged cache; ignoring stale saved usePagedCache=false`)
-    }
+    const architectureRequiresPagedCache =
+      zayaCcaActive ||
+      dsv4Active ||
+      (cacheTypeRequiresPaged(detected.cacheType) && detected.usePagedCache === true)
+    const cacheLaunchPolicy = resolveCacheLaunchPolicy({
+      continuousBatching: cacheStackActive,
+      enablePrefixCache: config.enablePrefixCache !== false,
+      usePagedCache: config.usePagedCache ?? detected.usePagedCache ?? false,
+      enableDiskCache: !!config.enableDiskCache,
+      enableBlockDiskCache: !!config.enableBlockDiskCache,
+      architectureRequiresPagedCache,
+    })
+    const prefixCacheOff = cacheLaunchPolicy.prefixCacheOff
+    const usePagedCache = cacheLaunchPolicy.effectiveUsePagedCache
 
     if (prefixCacheOff) {
       args.push('--disable-prefix-cache')
@@ -2512,7 +2548,7 @@ export class SessionManager extends EventEmitter {
     // TQ-native serialization stores 3-bit compressed data directly (26x smaller).
     // Metal crash fix: all mx.save_safetensors calls now happen on main thread;
     // background writer only does atomic rename + SQLite update.
-    if (!prefixCacheOff && config.enableDiskCache && !usePagedCache) {
+    if (cacheLaunchPolicy.enableLegacyDiskCache) {
       args.push('--enable-disk-cache')
       if (config.diskCacheDir) {
         args.push('--disk-cache-dir', config.diskCacheDir)
@@ -2525,7 +2561,7 @@ export class SessionManager extends EventEmitter {
     // Block-level disk cache (L2 for paged cache blocks) — RE-ENABLED in v1.3.15
     // All serialization happens on main thread (same Metal safety as above).
     // Background writer only does atomic rename + SQLite index update.
-    if (!prefixCacheOff && usePagedCache && config.enableBlockDiskCache) {
+    if (cacheLaunchPolicy.enableBlockDiskCache) {
       args.push('--enable-block-disk-cache')
       if (config.blockDiskCacheDir) {
         args.push('--block-disk-cache-dir', config.blockDiskCacheDir)

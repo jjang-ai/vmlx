@@ -486,6 +486,20 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'read_video',
+      description: 'Read a local video file and attach it for VL model analysis. Supports mp4, mov, m4v, webm, mkv. Max 50MB.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Video file path relative to working directory' }
+        },
+        required: ['path']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'spawn_process',
       description: 'Start a long-running background process (e.g., dev server, watcher). Returns a process ID for checking output later. Auto-kills after 5 minutes.',
       parameters: {

@@ -215,7 +215,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.thinkInTemplate).toBe(false)
   })
 
-  it('detects ZAYA1-VL as multimodal CCA hybrid with qwen3 reasoning parser', () => {
+  it('detects ZAYA1-VL as multimodal CCA hybrid with opt-in qwen3 reasoning parser', () => {
     const dir = makeModelDir(
       {
         model_type: 'zaya1_vl',
@@ -242,10 +242,12 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.usePagedCache).toBe(true)
     expect(detected.toolParser).toBe('zaya_xml')
     expect(detected.reasoningParser).toBe('qwen3')
+    expect(detected.supportsThinking).toBe(true)
+    expect(detected.thinkInTemplate).toBe(false)
     expect(detected.isMultimodal).toBe(true)
   })
 
-  it('keeps ZAYA1-VL JANGTQ_K reasoning parser enabled while preserving VL and typed CCA detection', () => {
+  it('keeps ZAYA1-VL JANGTQ_K on the opt-in qwen3 reasoning rail while preserving VL and typed CCA detection', () => {
     const dir = makeModelDir(
       {
         model_type: 'zaya1_vl',
@@ -281,11 +283,13 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.usePagedCache).toBe(true)
     expect(detected.toolParser).toBe('zaya_xml')
     expect(detected.reasoningParser).toBe('qwen3')
+    expect(detected.supportsThinking).toBe(true)
+    expect(detected.thinkInTemplate).toBe(false)
     expect(detected.isMultimodal).toBe(true)
     expect(detected.isTurboQuant).toBe(true)
   })
 
-  it('keeps ZAYA1-VL JANGTQ2 reasoning parser enabled because bit profiles are not runtime-clamped', () => {
+  it('keeps ZAYA1-VL JANGTQ2 on the opt-in qwen3 reasoning rail', () => {
     const dir = makeModelDir(
       {
         model_type: 'zaya1_vl',
@@ -314,11 +318,13 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
 
     expect(detected.family).toBe('zaya1-vl')
     expect(detected.reasoningParser).toBe('qwen3')
+    expect(detected.supportsThinking).toBe(true)
+    expect(detected.thinkInTemplate).toBe(false)
     expect(detected.isMultimodal).toBe(true)
     expect(detected.isTurboQuant).toBe(true)
   })
 
-  it('keeps ZAYA1-VL JANGTQ4 reasoning parser enabled', () => {
+  it('keeps ZAYA1-VL JANGTQ4 on the opt-in qwen3 reasoning rail', () => {
     const dir = makeModelDir(
       {
         model_type: 'zaya1_vl',
@@ -347,6 +353,8 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
 
     expect(detected.family).toBe('zaya1-vl')
     expect(detected.reasoningParser).toBe('qwen3')
+    expect(detected.supportsThinking).toBe(true)
+    expect(detected.thinkInTemplate).toBe(false)
     expect(detected.isMultimodal).toBe(true)
     expect(detected.isTurboQuant).toBe(true)
   })
@@ -378,6 +386,8 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.usePagedCache).toBe(true)
     expect(detected.toolParser).toBe('zaya_xml')
     expect(detected.reasoningParser).toBe('qwen3')
+    expect(detected.supportsThinking).toBe(true)
+    expect(detected.thinkInTemplate).toBe(false)
     expect(detected.isMultimodal).toBe(true)
   })
 
@@ -656,6 +666,31 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detectModelConfigFromDir(dir).isMultimodal).toBe(true)
   })
 
+  it.each(['mxfp4', 'mxfp8'])('keeps %s Qwen hybrid VLM multimodal', (weightFormat) => {
+    const dir = makeModelDir(
+      {
+        model_type: 'qwen3_5',
+        text_config: {
+          model_type: 'qwen3_5_text',
+          layer_types: ['linear_attention', 'full_attention'],
+        },
+        vision_config: { hidden_size: 1024 },
+        video_token_id: 151666,
+        video_token_index: 151666,
+      },
+      {
+        format: 'jang',
+        weight_format: weightFormat,
+        quantization: { method: weightFormat },
+        architecture: { has_vision: true },
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+    expect(detected.isMultimodal).toBe(true)
+    expect(detected.forceTextOnly).toBeUndefined()
+  })
+
   it('marks non-JANG Qwen 3.6 MoE bundles with vision/video metadata as multimodal', () => {
     const dir = makeModelDir({
       model_type: 'qwen3_5_moe',
@@ -726,6 +761,30 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     const detected = detectModelConfigFromDir(dir)
     expect(detected.family).toBe('minimax')
     expect(detected.isTurboQuant).toBe(true)
+    expect(detected.reasoningParser).toBe('minimax_m2')
+  })
+
+  it('keeps MiniMax reasoning parser when stale JANG sidecar says qwen3', () => {
+    const dir = makeModelDir(
+      { model_type: 'minimax_m2' },
+      {
+        weight_format: 'mxtq',
+        capabilities: {
+          family: 'minimax',
+          cache_type: 'kv',
+          tool_parser: 'minimax',
+          reasoning_parser: 'qwen3',
+          think_in_template: true,
+          supports_thinking: true,
+        },
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+    expect(detected.family).toBe('minimax')
+    expect(detected.toolParser).toBe('minimax')
+    expect(detected.reasoningParser).toBe('minimax_m2')
+    expect(detected.enableAutoToolChoice).toBe(true)
   })
 
   it('detects TurboQuant from config.json quantization when jang_config is malformed', () => {

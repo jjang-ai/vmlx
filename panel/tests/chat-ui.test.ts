@@ -170,10 +170,20 @@ function groupToolStatuses(statuses: any[]): { groups: InlineToolGroup[]; hasOff
   let current: InlineToolGroup | null = null
   let hasOffsets = false
   let processingStatus: any = null
+  const groupIds = new Map<string, InlineToolGroup>()
+  const isOpen = (group: InlineToolGroup) => {
+    const last = group.statuses[group.statuses.length - 1]
+    return last && last.phase !== 'result' && last.phase !== 'error' && last.phase !== 'done'
+  }
+  const findOpenGroup = (s: any) => {
+    if (s.toolCallId && groupIds.has(s.toolCallId)) return groupIds.get(s.toolCallId)!
+    return [...groups].reverse().find(g => g.name === s.toolName && isOpen(g)) || current
+  }
 
   for (const s of statuses) {
     if (s.phase === 'calling') {
       current = { name: s.toolName, statuses: [s] }
+      if (s.toolCallId) groupIds.set(s.toolCallId, current)
       if (s.contentOffset !== undefined) hasOffsets = true
       groups.push(current)
     } else if (s.phase === 'generating') {
@@ -184,8 +194,9 @@ function groupToolStatuses(statuses: any[]): { groups: InlineToolGroup[]; hasOff
       current = null
     } else if (s.phase === 'done') {
       current = null
-    } else if (current) {
-      current.statuses.push(s)
+    } else {
+      const target = findOpenGroup(s)
+      if (target) target.statuses.push(s)
     }
   }
 
@@ -512,6 +523,23 @@ describe('Tool Status Grouping', () => {
     expect(result.groups).toHaveLength(2)
     expect(result.groups[0].name).toBe('read_file')
     expect(result.groups[1].name).toBe('edit_file')
+  })
+
+  it('groups parallel tool calls by toolCallId so earlier calls do not look interrupted', () => {
+    const result = groupToolStatuses([
+      { phase: 'calling', toolName: 'list_directory', toolCallId: 'call_list', contentOffset: 0 },
+      { phase: 'calling', toolName: 'read_image', toolCallId: 'call_image', contentOffset: 0 },
+      { phase: 'executing', toolName: 'list_directory', toolCallId: 'call_list' },
+      { phase: 'result', toolName: 'list_directory', toolCallId: 'call_list' },
+      { phase: 'executing', toolName: 'read_image', toolCallId: 'call_image' },
+      { phase: 'result', toolName: 'read_image', toolCallId: 'call_image' },
+    ])
+
+    expect(result.groups).toHaveLength(2)
+    expect(result.groups[0].name).toBe('list_directory')
+    expect(result.groups[0].statuses.map(s => s.phase)).toEqual(['calling', 'executing', 'result'])
+    expect(result.groups[1].name).toBe('read_image')
+    expect(result.groups[1].statuses.map(s => s.phase)).toEqual(['calling', 'executing', 'result'])
   })
 
   it('detects contentOffset presence', () => {

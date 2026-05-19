@@ -1427,6 +1427,38 @@ class MLXMultimodalLM:
             return False
         return bool(family_names & {"zaya", "zaya1_vl", "zaya1-vl"})
 
+    def _prompt_template_supports_thinking(self) -> bool:
+        """Return whether the native VLM prompt template owns the think rail.
+
+        Capability stamps are the source of truth here. A model can support a
+        qwen-style reasoning parser while its VLM chat template remains plain;
+        those families must not receive template-sentinel assumptions when
+        ``enable_thinking=false``.
+        """
+
+        config = getattr(self, "config", None)
+        caps = config.get("capabilities") if isinstance(config, dict) else None
+        caps = caps if isinstance(caps, dict) else {}
+        if caps.get("supports_thinking") is False:
+            return False
+        if caps.get("think_in_template") is not None:
+            return bool(caps.get("think_in_template"))
+
+        try:
+            from vmlx_engine.model_config_registry import get_model_config_registry
+
+            family_config = get_model_config_registry().lookup(
+                str(getattr(self, "model_name", "") or "")
+            )
+            if getattr(family_config, "supports_thinking", None) is False:
+                return False
+            if getattr(family_config, "think_in_template", None) is not None:
+                return bool(family_config.think_in_template)
+        except Exception:
+            pass
+
+        return False
+
     def _apply_chat_template(
         self,
         chat_messages: list[dict],

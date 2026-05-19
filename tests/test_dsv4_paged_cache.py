@@ -301,7 +301,10 @@ def test_dsv4_launch_filters_stale_saved_and_additional_args():
 
     for source in (settings, sessions):
         assert "const cacheStackActive = dsv4Active ? true : config.continuousBatching !== false" in source
-        assert "const prefixCacheOff = !cacheStackActive || config.enablePrefixCache === false" in source
+        assert "resolveCacheLaunchPolicy" in source
+        assert "architectureRequiresPagedCache" in source
+        assert "const prefixCacheOff = cacheLaunchPolicy.prefixCacheOff" in source
+        assert "const usePagedCache = cacheLaunchPolicy.effectiveUsePagedCache" in source
         assert "const prefixCacheOff = dsv4Active ? false" not in source
         assert "const effectiveSmelt = !!(config as any).smelt && !dsv4Active" in source
         assert "const isVLM = dsv4Active || effectiveSmelt" in source

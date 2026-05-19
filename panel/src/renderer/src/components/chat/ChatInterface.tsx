@@ -31,6 +31,7 @@ interface Message {
   warningsJson?: string
   toolCallsJson?: string
   reasoningContent?: string
+  reasoningSegmentsJson?: string
   reasoningDone?: boolean
 }
 
@@ -115,9 +116,10 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
   const [currentMetrics, setCurrentMetrics] = useState<MessageMetrics | null>(null)
   // Reasoning state: track per-message reasoning content and done status
   const [reasoningMap, setReasoningMap] = useState<Record<string, string>>({})
+  const [reasoningSegmentMap, setReasoningSegmentMap] = useState<Record<string, string[]>>({})
   const [reasoningDoneMap, setReasoningDoneMap] = useState<Record<string, boolean>>({})
   // Tool call status: track per-message tool call phases
-  const [toolStatusMap, setToolStatusMap] = useState<Record<string, Array<{ phase: string; toolName: string; detail?: string; iteration?: number; contentOffset?: number; timestamp: number }>>>({})
+  const [toolStatusMap, setToolStatusMap] = useState<Record<string, Array<{ phase: string; toolName: string; toolCallId?: string; detail?: string; iteration?: number; contentOffset?: number; timestamp: number }>>>({})
   // Per-chat setting: hide tool status display
   const [hideToolStatus, setHideToolStatus] = useState(false)
   // ask_user tool: question from model and input state
@@ -128,6 +130,9 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
   useEffect(() => {
     if (!chatId) {
       setMessages([])
+      setReasoningMap({})
+      setReasoningSegmentMap({})
+      setReasoningDoneMap({})
       return
     }
 
@@ -143,6 +148,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
       // Hydrate tool status map from persisted tool_calls_json
       const restoredTools: Record<string, any[]> = {}
       const restoredReasoning: Record<string, string> = {}
+      const restoredReasoningSegments: Record<string, string[]> = {}
       const restoredReasoningDone: Record<string, boolean> = {}
       for (const m of msgs) {
         if (m.toolCallsJson) {
@@ -156,9 +162,20 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
             }
           } catch { /* ignore bad json */ }
         }
+        if (m.reasoningSegmentsJson) {
+          try {
+            const parsed = JSON.parse(m.reasoningSegmentsJson)
+            if (Array.isArray(parsed) && parsed.some((s: any) => typeof s === 'string' && s.trim())) {
+              restoredReasoningSegments[m.id] = parsed.filter((s: any) => typeof s === 'string')
+            }
+          } catch { /* ignore bad json */ }
+        }
         if (m.reasoningContent) {
           restoredReasoning[m.id] = m.reasoningContent
           restoredReasoningDone[m.id] = true
+          if (!restoredReasoningSegments[m.id]) {
+            restoredReasoningSegments[m.id] = [m.reasoningContent]
+          }
         }
       }
       if (Object.keys(restoredTools).length > 0) {
@@ -167,6 +184,9 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
       if (Object.keys(restoredReasoning).length > 0) {
         setReasoningMap(restoredReasoning)
         setReasoningDoneMap(restoredReasoningDone)
+      }
+      if (Object.keys(restoredReasoningSegments).length > 0) {
+        setReasoningSegmentMap(restoredReasoningSegments)
       }
     })
 
@@ -206,6 +226,13 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
           ...prev,
           [data.messageId]: data.fullContent
         }))
+        setReasoningDoneMap(prev => ({ ...prev, [data.messageId]: false }))
+        if (Array.isArray(data.reasoningSegments)) {
+          setReasoningSegmentMap(prev => ({
+            ...prev,
+            [data.messageId]: data.reasoningSegments
+          }))
+        }
         // Ensure the message exists in the list (for rendering reasoning box)
         setMessages(prev => {
           const existing = prev.find(m => m.id === data.messageId)
@@ -272,6 +299,9 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
         setReasoningMap(prev => ({ ...prev, [data.messageId]: data.reasoningContent }))
         setReasoningDoneMap(prev => ({ ...prev, [data.messageId]: true }))
       }
+      if (Array.isArray(data.reasoningSegments)) {
+        setReasoningSegmentMap(prev => ({ ...prev, [data.messageId]: data.reasoningSegments }))
+      }
       setStreamingMessageId(null)
       setCurrentMetrics(null)
     }
@@ -282,6 +312,9 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
       // Also store the final reasoning content
       if (data.reasoningContent) {
         setReasoningMap(prev => ({ ...prev, [data.messageId]: data.reasoningContent }))
+      }
+      if (Array.isArray(data.reasoningSegments)) {
+        setReasoningSegmentMap(prev => ({ ...prev, [data.messageId]: data.reasoningSegments }))
       }
     }
 
@@ -294,6 +327,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
           {
             phase: data.phase,
             toolName: data.toolName || '',
+            toolCallId: data.toolCallId,
             detail: data.detail,
             iteration: data.iteration,
             contentOffset: data.contentOffset,
@@ -329,6 +363,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
       cleanupToolStatus()
       cleanupAskUser()
       setReasoningMap({})
+      setReasoningSegmentMap({})
       setReasoningDoneMap({})
       setToolStatusMap({})
       setAskUserQuestion(null)
@@ -567,6 +602,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
         streamingMessageId={streamingMessageId}
         currentMetrics={currentMetrics}
         reasoningMap={reasoningMap}
+        reasoningSegmentMap={reasoningSegmentMap}
         reasoningDoneMap={reasoningDoneMap}
         toolStatusMap={toolStatusMap}
         hideToolStatus={hideToolStatus}

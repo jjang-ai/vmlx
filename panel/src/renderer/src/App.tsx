@@ -57,7 +57,7 @@ function App() {
         if (detail.mode === 'tools') {
           dispatch({ type: 'SET_TOOLS_PANEL', panel: detail.panel, modelPath: detail.modelPath })
         } else {
-          dispatch({ type: 'SET_SERVER_PANEL', panel: detail.panel, modelPath: detail.modelPath })
+          dispatch({ type: 'SET_SERVER_PANEL', panel: detail.panel, sessionId: detail.sessionId, modelPath: detail.modelPath })
         }
       }
     }

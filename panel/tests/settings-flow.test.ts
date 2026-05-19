@@ -9,6 +9,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { describe, it, expect } from 'vitest'
+import { resolveCacheLaunchPolicy } from '../src/shared/cacheControlPolicy'
 
 // ─── SessionConfig replica (from SessionConfigForm.tsx) ──────────────────────
 
@@ -180,6 +181,18 @@ function cacheTypeRequiresPaged(cacheType?: string): boolean {
 }
 
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
+const GENERIC_DEFAULT_TIMEOUT_SECONDS = 300
+const DSV4_DEFAULT_TIMEOUT_SECONDS = 900
+
+function effectiveSessionTimeoutSeconds(config: Partial<SessionConfig>, family?: string): number {
+    const configured = config.timeout
+    if (configured != null && configured <= 0) return 86400
+    const normalizedFamily = normalizeDetectedFamilyName(family)
+    if (normalizedFamily === 'deepseek-v4' && (configured == null || configured === GENERIC_DEFAULT_TIMEOUT_SECONDS)) {
+        return DSV4_DEFAULT_TIMEOUT_SECONDS
+    }
+    return configured != null && configured > 0 ? configured : GENERIC_DEFAULT_TIMEOUT_SECONDS
+}
 
 function buildCommandPreview(
     modelPath: string,
@@ -195,7 +208,7 @@ function buildCommandPreview(
 
     parts.push('--host', config.host)
     parts.push('--port', config.port.toString())
-    parts.push('--timeout', (config.timeout != null && config.timeout > 0 ? config.timeout : 86400).toString())
+    parts.push('--timeout', effectiveSessionTimeoutSeconds(config, detectedFamily).toString())
 
     if (config.apiKey) parts.push('# VLLM_API_KEY=*** (env var)')
     if (config.rateLimit && config.rateLimit > 0) parts.push('--rate-limit', config.rateLimit.toString())
@@ -223,13 +236,19 @@ function buildCommandPreview(
         : (config.reasoningParser && config.reasoningParser !== 'auto' ? config.reasoningParser
             : detected?.reasoningParser)
 
-    const prefixCacheOff = !cacheStackActive || config.enablePrefixCache === false
-    const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
-    const dsv4CompositeRequiresPaged = dsv4Active && !prefixCacheOff
-    const nativeCacheRequiresPaged = cacheTypeRequiresPaged(detected?.cacheType) && detected?.usePagedCache === true && !prefixCacheOff
-    const usePagedCache = zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged || nativeCacheRequiresPaged
-        ? true
-        : (config.usePagedCache ?? detected?.usePagedCache)
+    const cacheLaunchPolicy = resolveCacheLaunchPolicy({
+        continuousBatching: cacheStackActive,
+        enablePrefixCache: config.enablePrefixCache !== false,
+        usePagedCache: config.usePagedCache ?? detected?.usePagedCache ?? false,
+        enableDiskCache: !!config.enableDiskCache,
+        enableBlockDiskCache: !!config.enableBlockDiskCache,
+        architectureRequiresPagedCache:
+            zayaCcaActive ||
+            dsv4Active ||
+            (cacheTypeRequiresPaged(detected?.cacheType) && detected?.usePagedCache === true),
+    })
+    const prefixCacheOff = cacheLaunchPolicy.prefixCacheOff
+    const usePagedCache = cacheLaunchPolicy.effectiveUsePagedCache
 
     if (prefixCacheOff) {
         parts.push('--disable-prefix-cache')
@@ -261,13 +280,13 @@ function buildCommandPreview(
         }
     }
 
-    if (!prefixCacheOff && config.enableDiskCache && !usePagedCache) {
+    if (cacheLaunchPolicy.enableLegacyDiskCache) {
         parts.push('--enable-disk-cache')
         if (config.diskCacheDir) parts.push('--disk-cache-dir', config.diskCacheDir)
         if (config.diskCacheMaxGb != null && config.diskCacheMaxGb >= 0) parts.push('--disk-cache-max-gb', config.diskCacheMaxGb.toString())
     }
 
-    if (!prefixCacheOff && usePagedCache && config.enableBlockDiskCache) {
+    if (cacheLaunchPolicy.enableBlockDiskCache) {
         parts.push('--enable-block-disk-cache')
         if (config.blockDiskCacheDir) parts.push('--block-disk-cache-dir', config.blockDiskCacheDir)
         if (config.blockDiskCacheMaxGb != null && config.blockDiskCacheMaxGb >= 0) parts.push('--block-disk-cache-max-gb', config.blockDiskCacheMaxGb.toString())
@@ -388,6 +407,16 @@ describe('Server Settings', () => {
     it('uses 86400 for timeout when 0 (unlimited)', () => {
         const out = preview({ timeout: 0 })
         expect(getFlagValue(out, '--timeout')).toBe('86400')
+    })
+
+    it('deepseek-v4 uses a 900s default timeout for long reasoning turns', () => {
+        const out = preview({ timeout: 300 }, { family: 'deepseek-v4' })
+        expect(getFlagValue(out, '--timeout')).toBe('900')
+    })
+
+    it('deepseek-v4 preserves explicit non-default timeout values', () => {
+        const out = preview({ timeout: 600 }, { family: 'deepseek-v4' })
+        expect(getFlagValue(out, '--timeout')).toBe('600')
     })
 
     it('includes API key comment when set', () => {
@@ -574,7 +603,7 @@ describe('Paged KV Cache', () => {
             {
                 enablePrefixCache: false,
                 usePagedCache: false,
-                enableBlockDiskCache: true,
+                enableBlockDiskCache: false,
             },
             { family: 'zaya1-vl', usePagedCache: false },
         )
@@ -619,7 +648,7 @@ describe('KV Cache Quantization', () => {
         expect(source).not.toContain('TurboQuant only')
     })
 
-    it('chat reasoning Auto copy matches the engine default-on policy', () => {
+    it('chat reasoning Auto copy avoids force-language', () => {
         const fs = require('fs')
         const locale = JSON.parse(
             fs.readFileSync('src/renderer/src/i18n/locales/en.json', 'utf-8'),
@@ -627,8 +656,10 @@ describe('KV Cache Quantization', () => {
         const help = locale.chat.settings.thinkingHelp
 
         expect(help).toContain('local vMLX')
-        expect(help).toContain('default reasoning on')
+        expect(help).toContain('model/runtime reasoning default')
+        expect(help).toContain('request thinking')
         expect(help).toContain('Off')
+        expect(help).not.toContain('force thinking')
         expect(help).not.toContain("others don't")
     })
 
@@ -679,6 +710,7 @@ describe('KV Cache Quantization', () => {
         expect(perfPanel).toContain('MTP')
         expect(perfPanel).toContain('artifact_available')
         expect(perfPanel).toContain('runtime_available')
+        expect(perfPanel).toContain('runtime_active')
         expect(perfPanel).toContain('runtime_reason')
         expect(perfPanel).toContain('effective_depth')
         expect(perfPanel).toContain('MTP Depth')
@@ -693,6 +725,11 @@ describe('KV Cache Quantization', () => {
         expect(perfPanel).toContain('MTP Depth Rates')
         expect(perfPanel).toContain('MTP Forwards')
         expect(perfPanel).toContain('MTP Timing')
+        expect(perfPanel).toContain('effective_depth_source')
+        expect(perfPanel).toContain('last_native_mtp_skip')
+        expect(perfPanel).toContain('MTP Skip')
+        expect(perfPanel).toContain('MTP Last')
+        expect(perfPanel).toContain('weights present; runtime ready')
         expect(perfPanel).toContain('weights present; runtime unwired')
         expect(perfPanel).toContain('not used by JANGTQ')
         expect(perfPanel).toContain('Generic TQ-KV')
@@ -740,24 +777,41 @@ describe('Disk Cache', () => {
         expect(getFlagValue(out, '--disk-cache-max-gb')).toBe('50')
     })
 
-    it('omits disk cache when prefix cache is off', () => {
-        const out = preview({ enablePrefixCache: false, enableDiskCache: true })
+    it('omits legacy disk cache when the disk toggle is off', () => {
+        const out = preview({
+            enablePrefixCache: false,
+            usePagedCache: false,
+            enableDiskCache: false,
+            enableBlockDiskCache: false,
+        })
         expect(hasFlag(out, '--enable-disk-cache')).toBe(false)
     })
 
-    it('settings UI can enable legacy disk cache from prefix/paged off state', () => {
-        const source = readFileSync(
-            'src/renderer/src/components/sessions/SessionConfigForm.tsx',
-            'utf-8',
-        )
-        const diskStart = source.indexOf('label="Enable Disk Cache"')
-        const diskEnd = source.indexOf('{config.enableDiskCache &&', diskStart)
-        const diskBlock = source.slice(diskStart, diskEnd)
+    it('prefix cache off suppresses stale legacy disk cache at launch', () => {
+        const out = preview({
+            enablePrefixCache: false,
+            usePagedCache: false,
+            enableDiskCache: true,
+            enableBlockDiskCache: false,
+        })
 
-        expect(diskBlock).toContain("onChange('enablePrefixCache', true)")
-        expect(diskBlock).toContain("onChange('usePagedCache', false)")
-        expect(diskBlock).toContain('legacyDiskCacheBlockedByPaged')
-        expect(diskBlock).not.toContain('disabled={batchingOff || prefixOff || effectiveUsePagedCache}')
+        expect(hasFlag(out, '--disable-prefix-cache')).toBe(true)
+        expect(hasFlag(out, '--enable-disk-cache')).toBe(false)
+        expect(hasFlag(out, '--use-paged-cache')).toBe(false)
+        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(false)
+    })
+
+    it('session cache controls use shared policy so stale paged state cannot grey out disk cache', () => {
+        const source = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
+        expect(source).toContain('resolveCacheControlPolicy')
+        expect(source).toContain('cacheControlUpdatesForDiskToggle')
+        expect(source).toContain('cacheControlUpdatesForPagedToggle')
+        expect(source).toContain('cacheControlUpdatesForBlockDiskToggle')
+        expect(source).toContain('disabled={cachePolicy.pagedCacheDisabled}')
+        expect(source).toContain('disabled={cachePolicy.legacyDiskCacheDisabled}')
+        expect(source).toContain('checked={cachePolicy.legacyDiskCacheChecked}')
+        expect(source).not.toContain('disabled={batchingOff || prefixOff || zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged}')
+        expect(source).not.toContain('disabled={batchingOff || prefixOff || effectiveUsePagedCache}')
     })
 })
 
@@ -777,28 +831,23 @@ describe('Block Disk Cache', () => {
         expect(getFlagValue(out, '--block-disk-cache-max-gb')).toBe('20')
     })
 
-    it('omits block disk cache when paged cache is off', () => {
-        const out = preview({ enablePrefixCache: true, usePagedCache: false, enableBlockDiskCache: true })
+    it('omits block disk cache when the block-disk toggle is off', () => {
+        const out = preview({ enablePrefixCache: true, usePagedCache: true, enableBlockDiskCache: false })
         expect(hasFlag(out, '--enable-block-disk-cache')).toBe(false)
     })
 
-    it('settings UI can enable paged and block disk caches from prefix-off state', () => {
-        const source = readFileSync(
-            'src/renderer/src/components/sessions/SessionConfigForm.tsx',
-            'utf-8',
-        )
-        const pagedStart = source.indexOf('label="Use Paged KV Cache"')
-        const pagedEnd = source.indexOf('{pagedCacheActive &&', pagedStart)
-        const pagedBlock = source.slice(pagedStart, pagedEnd)
-        const blockStart = source.indexOf('label="Block Disk Cache (L2)"')
-        const blockEnd = source.indexOf('{config.enableBlockDiskCache &&', blockStart)
-        const blockDiskBlock = source.slice(blockStart, blockEnd)
+    it('prefix cache off suppresses stale block-disk cache at launch', () => {
+        const out = preview({
+            enablePrefixCache: false,
+            usePagedCache: false,
+            enableDiskCache: true,
+            enableBlockDiskCache: true,
+        })
 
-        expect(pagedBlock).toContain("onChange('enablePrefixCache', true)")
-        expect(pagedBlock).not.toContain('disabled={batchingOff || prefixOff || nativeCacheRequiresPaged || dsv4CompositeRequiresPaged}')
-        expect(blockDiskBlock).toContain("onChange('enablePrefixCache', true)")
-        expect(blockDiskBlock).toContain("onChange('usePagedCache', true)")
-        expect(blockDiskBlock).not.toContain('disabled={batchingOff || prefixOff}')
+        expect(hasFlag(out, '--disable-prefix-cache')).toBe(true)
+        expect(hasFlag(out, '--use-paged-cache')).toBe(false)
+        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(false)
+        expect(hasFlag(out, '--enable-disk-cache')).toBe(false)
     })
 })
 
@@ -1093,25 +1142,28 @@ describe('Generation Defaults', () => {
         expect(chatSettings).toContain('model default')
         expect(chatSettings).not.toContain('next.maxTokens = Math.max')
         expect(chatSettings).not.toContain('4096')
-        expect(chatIpc).toContain('function explicitOutputBudget')
-        expect(chatIpc).not.toContain('function dsv4OutputBudget')
+        expect(chatIpc).toContain('dsv4OutputBudget(')
+        expect(chatIpc).not.toContain('dsv4_finalizer_tokens')
         expect(chatIpc).not.toContain('Math.max(parsed ?? 0, 4096)')
     })
 
-    it('new chat creation does not inherit stale sampling or tool prompt baggage', () => {
+    it('new chat creation inherits only tool/workspace ergonomics, not stale sampling or prompts', () => {
         const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+        const policy = readFileSync('src/main/chat-override-policy.ts', 'utf8')
         const createHandler = source.slice(
             source.indexOf('"chat:create"'),
             source.indexOf('ipcMain.handle("chat:getByModel"'),
         )
 
-        expect(source).toContain('clean chat starts with no overrides')
-        expect(createHandler).not.toContain('getDefaultChatProfile')
-        expect(createHandler).not.toContain('setChatOverrides')
+        expect(source).toContain('bundle generation defaults stay authoritative')
+        expect(createHandler).toContain('getDefaultChatProfile')
+        expect(createHandler).toContain('buildNewChatInheritedOverrides')
+        expect(policy).toContain('NEW_CHAT_TOOL_INHERIT_KEYS')
+        expect(policy).not.toContain("'systemPrompt'")
+        expect(policy).not.toContain("'temperature'")
+        expect(policy).not.toContain("'enableThinking'")
         expect(source).not.toContain('enableThinkingFromReasoningMode')
         expect(source).not.toContain('readGenerationDefaults')
-        expect(source).not.toContain('const inheritedKeys = [')
-        expect(source).not.toContain('Inherited tool/search settings from last chat')
         expect(source).not.toContain('Applied global model settings / generation defaults')
     })
 
@@ -1495,6 +1547,22 @@ describe('Default IP and New Settings', () => {
         expect(DEFAULT_CONFIG.defaultRepetitionPenalty).toBe(0)
         expect(DEFAULT_CONFIG.omniBackend).toBe('stage1')
     })
+
+    it('source defaults leave global sampling unset so bundle defaults can win', () => {
+        const source = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
+        expect(source).toContain('defaultTemperature: 0')
+        expect(source).toContain('defaultTopP: 0')
+        expect(source).toContain('defaultRepetitionPenalty: 0')
+    })
+
+    it('database migration resets only exact old generic sampling defaults', () => {
+        const source = readFileSync('src/main/database.ts', 'utf8')
+        expect(source).toContain('migration_reset_generic_sampling_defaults_1_5_39')
+        expect(source).toContain('parsed.defaultTemperature === 70')
+        expect(source).toContain('parsed.defaultTopP === 95')
+        expect(source).toContain('parsed.defaultRepetitionPenalty === 110')
+        expect(source).toContain('parsed.defaultRepetitionPenalty = 0')
+    })
 })
 
 describe('JIT Toggle', () => {
@@ -1647,7 +1715,9 @@ describe('JIT Toggle', () => {
         expect(form).toContain('zayaTypedCacheRequiresPaged')
         expect(form).toContain('ZAYA typed CCA cache requires paged cache while prefix cache is enabled')
         expect(settings).toContain('zayaTypedCacheRequiresPaged')
-        expect(sessions).toContain('zayaTypedCacheRequiresPaged')
+        expect(sessions).toContain('resolveCacheLaunchPolicy')
+        expect(sessions).toContain('architectureRequiresPagedCache')
+        expect(sessions).toContain('zayaCcaActive ||')
     })
 
     it('settings form and launch code surface DSV4 composite paged-cache policy', () => {
@@ -2112,6 +2182,9 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized).toContain('--continuous-batching')
         expect(normalized).toContain('--use-paged-cache')
         expect(normalized).toContain('--enable-block-disk-cache')
+        expect(normalized).not.toContain('--default-temperature')
+        expect(normalized).not.toContain('--default-top-p')
+        expect(normalized).not.toContain('--default-repetition-penalty')
         expect(normalized).toContain('--enable-jit')
     })
 
@@ -2192,6 +2265,17 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(perfSource).not.toContain('JANGTQ MPP/NAX')
     })
 
+    it('DSV4 timeout default is wired through launch, chat IPC, and gateway proxy', () => {
+        const sessionsSource = readFileSync('src/main/sessions.ts', 'utf8')
+        const chatSource = readFileSync('src/main/ipc/chat.ts', 'utf8')
+        const gatewaySource = readFileSync('src/main/api-gateway.ts', 'utf8')
+
+        expect(sessionsSource).toContain('DSV4_DEFAULT_TIMEOUT_SECONDS = 900')
+        expect(sessionsSource).toContain('effectiveSessionTimeoutSeconds')
+        expect(chatSource).toContain('effectiveDsv4RequestTimeoutSeconds')
+        expect(gatewaySource).toContain('effectiveGatewayProxyTimeoutMs')
+    })
+
     it('mutual exclusion: disk cache NOT emitted when paged cache is active', () => {
         // enableDiskCache is gated by !(usePagedCache) in buildCommandPreview
         const out = preview({
@@ -2222,7 +2306,8 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized).toContain('--enable-block-disk-cache')
         expect(normalized).toContain('--block-disk-cache-dir')
 
-        // Without paged cache, block disk cache should NOT appear
+        // Without paged cache, block disk cache should NOT appear. The UI
+        // toggle writes paged=true before launch when the user turns block L2 on.
         const out2 = preview({
             enablePrefixCache: true,
             enableBlockDiskCache: true,

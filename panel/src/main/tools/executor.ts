@@ -26,6 +26,8 @@ export interface ToolResult {
   is_error: boolean
   /** For read_image: base64 data URL to inject as a multimodal content part in VLM follow-ups */
   imageDataUrl?: string
+  /** For read_video: base64 data URL to inject as a multimodal content part in VLM follow-ups */
+  videoDataUrl?: string
 }
 
 // ─── Security ────────────────────────────────────────────────────────────────
@@ -121,6 +123,8 @@ export async function executeBuiltinTool(
         result = applyRegex(args.pattern, args.replacement, args.path, args.glob, workingDir); break
       case 'read_image':
         result = readImage(args.path, workingDir); break
+      case 'read_video':
+        result = readVideo(args.path, workingDir); break
       case 'spawn_process':
         result = spawnProcess(args.command, workingDir); break
       case 'get_process_output':
@@ -1131,6 +1135,36 @@ function readImage(path: string, workingDir: string): ToolResult {
     content: `Image loaded: ${path} (${mime}, ${formatBytes(stat.size)}). The image has been attached for visual analysis.`,
     is_error: false,
     imageDataUrl: dataUrl
+  }
+}
+
+// ─── Video Reading ───────────────────────────────────────────────────────────
+
+function readVideo(path: string, workingDir: string): ToolResult {
+  if (!path) return { content: 'Missing required parameter: path', is_error: true }
+  const fullPath = resolvePath(workingDir, path)
+  if (!existsSync(fullPath)) return { content: `File not found: ${path}`, is_error: true }
+
+  const ext = path.toLowerCase().split('.').pop()
+  const mimeTypes: Record<string, string> = {
+    mp4: 'video/mp4',
+    m4v: 'video/mp4',
+    mov: 'video/quicktime',
+    webm: 'video/webm',
+    mkv: 'video/x-matroska'
+  }
+  const mime = mimeTypes[ext || '']
+  if (!mime) return { content: `Unsupported video format: .${ext}. Supported: mp4, mov, m4v, webm, mkv`, is_error: true }
+
+  const stat = statSync(fullPath)
+  if (stat.size > 50 * 1024 * 1024) return { content: `Video too large: ${formatBytes(stat.size)} (max 50MB)`, is_error: true }
+
+  const base64 = readFileSync(fullPath).toString('base64')
+  const dataUrl = `data:${mime};base64,${base64}`
+  return {
+    content: `Video loaded: ${path} (${mime}, ${formatBytes(stat.size)}). The video has been attached for visual analysis.`,
+    is_error: false,
+    videoDataUrl: dataUrl
   }
 }
 

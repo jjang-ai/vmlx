@@ -108,7 +108,7 @@ describe('readGenerationDefaults generation_config defaults', () => {
 })
 
 describe('readGenerationDefaults JANG sampling defaults', () => {
-  it('uses Ling CRACK bundle metadata without filename temperature override', async () => {
+  it('uses Ling CRACK bundle startup defaults without hidden temperature override', async () => {
     const dir = makeModelDir({
       'jang_config.json': {
         chat: {
