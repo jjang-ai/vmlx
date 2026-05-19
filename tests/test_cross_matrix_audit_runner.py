@@ -9,14 +9,17 @@ from tests.cross_matrix.run_production_family_audit import (
     ModelRow,
     ROWS,
     audit_child_env_for_row,
+    cache_probe_content_ok,
     cache_exact_hit_probe,
     cache_exact_hit_required,
     capability_endpoint_contract_ok,
+    chat_basic_turn_ok,
     dsv4_thinking_mode_max_ok,
     dsv4_long_context_full_output_ok,
     extract_anthropic_text_and_stop,
     extract_ollama_visible_text_and_stop,
     is_non_length_stop,
+    normalize_python_executable,
     normalize_short_answer,
     simple_loop_score,
     static_audit,
@@ -155,6 +158,53 @@ def test_zaya_cca_rows_require_typed_exact_hit_cache_probe():
     assert cache_exact_hit_required(rows["dsv4_tq"])
 
 
+def test_live_basic_turn_accepts_coherent_non_exact_acknowledgement():
+    row = next(row for row in ROWS if row.id == "zaya_mxfp4")
+
+    assert chat_basic_turn_ok(
+        row,
+        code=200,
+        finish="stop",
+        content="blue; cat",
+        reasoning="",
+    )
+
+
+def test_live_basic_turn_rejects_reasoning_leak_for_non_reasoning_row():
+    row = next(row for row in ROWS if row.id == "zaya_mxfp4")
+
+    assert not chat_basic_turn_ok(
+        row,
+        code=200,
+        finish="stop",
+        content="blue; cat",
+        reasoning="I should answer with the stored facts.",
+    )
+
+
+def test_cache_probe_accepts_coherent_non_exact_cached_answer():
+    row = next(row for row in ROWS if row.id == "zaya_jangtq2")
+
+    assert cache_probe_content_ok(
+        row=row,
+        expected="blue",
+        first_content="The phrase repeats the color word blue.",
+        repeat_content="The phrase repeats the color word blue.",
+        strict_short_answer=True,
+        min_count=1,
+    )
+
+
+def test_responses_tool_choice_rejects_visible_tool_markup_leak():
+    assert not audit_harness.responses_tool_choice_output_ok(
+        "<zyphra_tool_call>\n<function=list_directory>"
+    )
+    assert not audit_harness.responses_tool_choice_output_ok(
+        "For a request to list files:\n<py>\ndef list_directory(path): pass"
+    )
+    assert audit_harness.responses_tool_choice_output_ok("")
+
+
 def test_live_audit_can_opt_into_source_vmlx_imports():
     row = next(row for row in ROWS if row.id == "zaya_vl_jangtq4")
 
@@ -166,6 +216,31 @@ def test_live_audit_can_opt_into_source_vmlx_imports():
     assert env["PYTHONPATH"] == str(audit_harness.ROOT)
     assert env["PYTHONDONTWRITEBYTECODE"] == "1"
     assert env["PYTHONNOUSERSITE"] == "1"
+
+
+def test_live_audit_preserves_venv_python_symlink_for_subprocess_launch(tmp_path):
+    py = normalize_python_executable(".venv/bin/python", cwd=tmp_path)
+
+    assert py == tmp_path / ".venv/bin/python"
+
+
+def test_live_audit_deferred_rows_keep_failure_details():
+    row = next(row for row in ROWS if row.id == "zaya_vl_jangtq_k")
+    result = {
+        "checks": [
+            {
+                "name": "responses_tool_history_continuation",
+                "ok": False,
+                "detail": {"text": "<|box_start|>[100,100,188,188]<|box_end|>"},
+            }
+        ]
+    }
+
+    audit_harness.finalize_live_status(row, result)
+
+    assert result["status"] == "DEFERRED"
+    assert "Responses tool-history" in result["reason"]
+    assert result["failures"][0]["name"] == "responses_tool_history_continuation"
 
 
 def test_dsv4_row_points_at_current_sub80_upload_candidate_bundle():

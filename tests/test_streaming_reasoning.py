@@ -21,6 +21,49 @@ import pytest
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+class TestEnginePromptReasoningSeed:
+    class _MiniMaxLikeTokenizer:
+        def apply_chat_template(self, messages, **kwargs):
+            user = messages[-1]["content"]
+            return f"]~b]user\n{user}[e~[\n]~b]ai\n<think>\n"
+
+    def test_minimax_thinking_off_closed_prompt_starts_in_content(self):
+        """The streaming parser seed must match the engine-rendered prompt.
+
+        MiniMax templates open ``<think>`` even with ``enable_thinking=False``.
+        The engine then closes that block for no-tool thinking-off requests, so
+        the first generated token is visible content. Seeding the parser as
+        still inside reasoning suppresses valid Anthropic/text streams.
+        """
+        from vmlx_engine import server
+
+        assert (
+            server._engine_prompt_starts_in_reasoning(
+                self._MiniMaxLikeTokenizer(),
+                model_name="MiniMax-M2.7-Small-JANGTQ",
+                enable_thinking=False,
+                family_name="minimax",
+                tools_present=False,
+            )
+            is False
+        )
+
+    def test_minimax_tool_prompt_keeps_reasoning_seed(self):
+        """Tool requests intentionally do not get the closed thought sentinel."""
+        from vmlx_engine import server
+
+        assert (
+            server._engine_prompt_starts_in_reasoning(
+                self._MiniMaxLikeTokenizer(),
+                model_name="MiniMax-M2.7-Small-JANGTQ",
+                enable_thinking=False,
+                family_name="minimax",
+                tools_present=True,
+            )
+            is True
+        )
+
+
 class TestThinkInPromptStreaming:
     """Tests for BaseThinkingReasoningParser with think_in_prompt=True.
 

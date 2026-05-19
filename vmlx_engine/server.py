@@ -1393,6 +1393,15 @@ _TOOL_CALL_MARKERS = [
 ]
 
 
+def _rendered_prompt_starts_in_reasoning(rendered: str, marker: str = "__test__") -> bool:
+    """Return whether a rendered assistant prefix leaves ``<think>`` open."""
+    after_user = str(rendered).rsplit(marker, 1)[-1]
+    # A closed sentinel (`<think></think>`) means "thinking produced
+    # nothing; visible answer starts now", not "parser starts in reasoning".
+    cleaned = re.sub(r"<think>\s*</think>", "", after_user)
+    return "<think>" in cleaned and "</think>" not in cleaned.split("<think>", 1)[1]
+
+
 def _template_always_thinks(tokenizer, model_name: str) -> bool:
     """Check if model's template injects <think> even when enable_thinking=False.
 
@@ -1484,14 +1493,7 @@ def _template_starts_reasoning(
                 add_generation_prompt=True,
                 tokenize=False,
             )
-        after_user = str(rendered).rsplit("__test__", 1)[-1]
-        # A closed sentinel (`<think></think>`) means "thinking produced
-        # nothing; visible answer starts now", not "parser starts in reasoning".
-        cleaned = re.sub(r"<think>\s*</think>", "", after_user)
-        result = (
-            "<think>" in cleaned
-            and "</think>" not in cleaned.split("<think>", 1)[1]
-        )
+        result = _rendered_prompt_starts_in_reasoning(rendered)
     except Exception as exc:
         logger.debug(
             "_template_starts_reasoning check failed for %s: %s",
@@ -1501,6 +1503,57 @@ def _template_starts_reasoning(
 
     _template_starts_reasoning_cache[key] = result
     return result
+
+
+def _engine_prompt_starts_in_reasoning(
+    tokenizer,
+    *,
+    model_name: str,
+    enable_thinking: bool,
+    family_name: str | None = None,
+    tools_present: bool = False,
+) -> bool:
+    """Check the parser seed against the engine's final prompt contract.
+
+    Some tokenizers, notably MiniMax M2.x, render an open ``<think>`` even when
+    ``enable_thinking=False``. The engine then closes that block for no-tool
+    thinking-off requests before generation. Streaming parsers must seed from
+    that post-render contract; otherwise visible tokens like ``Paris`` are
+    misclassified as hidden reasoning and suppressed.
+    """
+    test_msgs = [{"role": "user", "content": "__test__"}]
+    try:
+        rendered = tokenizer.apply_chat_template(
+            test_msgs,
+            enable_thinking=bool(enable_thinking),
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+    except TypeError:
+        rendered = tokenizer.apply_chat_template(
+            test_msgs,
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+
+    if enable_thinking is False:
+        try:
+            from .utils.chat_template_kwargs import ensure_thinking_off_sentinel
+
+            rendered = ensure_thinking_off_sentinel(
+                str(rendered),
+                family_name=family_name,
+                model_name=model_name,
+                tools_present=tools_present,
+            )
+        except Exception as exc:
+            logger.debug(
+                "thinking-off prompt contract check failed for %s: %s",
+                model_name,
+                exc,
+            )
+
+    return _rendered_prompt_starts_in_reasoning(str(rendered))
 
 
 # Cache: does a model's template complete thinking in the generation prompt?
@@ -9526,21 +9579,21 @@ async def create_chat_completion(
                 engine.tokenizer, _model_name or request.model
             ):
                 _think_in_prompt_ns = False
-            # User asked thinking off + template actually respects it → no think prefix
             _eff_thinking_ns = chat_kwargs.get("enable_thinking")
-            if _template_starts_reasoning(
+            _prompt_enable_ns = (
+                True if _eff_thinking_ns is None else bool(_eff_thinking_ns)
+            )
+            _tools_present_ns = bool(getattr(request, "tools", None) or chat_kwargs.get("tools"))
+            if _engine_prompt_starts_in_reasoning(
                 engine.tokenizer,
-                _model_name or request.model,
-                bool(_eff_thinking_ns),
+                model_name=_model_name or request.model,
+                enable_thinking=_prompt_enable_ns,
+                family_name=getattr(_mc_nonstream, "family_name", None),
+                tools_present=_tools_present_ns,
             ):
                 _think_in_prompt_ns = True
-            elif not getattr(_mc_nonstream, "think_in_template", False):
+            else:
                 _think_in_prompt_ns = False
-            if _eff_thinking_ns is False and _think_in_prompt_ns:
-                if not _template_always_thinks(
-                    engine.tokenizer, _model_name or request.model
-                ):
-                    _think_in_prompt_ns = False
             if _hy3_prompt_starts_in_reasoning(
                 model_key=_model_path or _model_name or request.model,
                 enable_thinking=_eff_thinking_ns,
@@ -10942,21 +10995,21 @@ async def create_response(
                 engine.tokenizer, _model_name or request.model
             ):
                 _think_in_prompt_ns = False
-            # User asked thinking off + template actually respects it → no think prefix
             _eff_thinking_ns = chat_kwargs.get("enable_thinking")
-            if _template_starts_reasoning(
+            _prompt_enable_ns = (
+                True if _eff_thinking_ns is None else bool(_eff_thinking_ns)
+            )
+            _tools_present_ns = bool(getattr(request, "tools", None) or chat_kwargs.get("tools"))
+            if _engine_prompt_starts_in_reasoning(
                 engine.tokenizer,
-                _model_name or request.model,
-                bool(_eff_thinking_ns),
+                model_name=_model_name or request.model,
+                enable_thinking=_prompt_enable_ns,
+                family_name=getattr(_mc_nonstream, "family_name", None),
+                tools_present=_tools_present_ns,
             ):
                 _think_in_prompt_ns = True
-            elif not getattr(_mc_nonstream, "think_in_template", False):
+            else:
                 _think_in_prompt_ns = False
-            if _eff_thinking_ns is False and _think_in_prompt_ns:
-                if not _template_always_thinks(
-                    engine.tokenizer, _model_name or request.model
-                ):
-                    _think_in_prompt_ns = False
             if _hy3_prompt_starts_in_reasoning(
                 model_key=_model_path or _model_name or request.model,
                 enable_thinking=_eff_thinking_ns,
@@ -11453,22 +11506,25 @@ async def stream_chat_completion(
             think_in_template = False
 
     # When user explicitly disables thinking, check if template actually respects it.
-    # Templates like Qwen3 honor enable_thinking=False (no <think> injected).
-    # Templates like MiniMax ignore it (always inject <think>).
-    # For templates that ignore it, keep think_in_template=True so the parser
-    # correctly classifies reasoning, and suppress_reasoning hides it.
+    # This is only a raw-template precheck. The parser seed below uses the
+    # engine's final prompt contract, including MiniMax's closed no-thinking
+    # sentinel for no-tool direct-chat requests.
     if _effective_thinking is False and think_in_template:
         if not _template_always_thinks(engine.tokenizer, _model_name or request.model):
             think_in_template = False
 
     if _reasoning_parser:
-        if _template_starts_reasoning(
+        _prompt_enable = True if _effective_thinking is None else bool(_effective_thinking)
+        _tools_present_for_prompt = bool(getattr(request, "tools", None) or kwargs.get("tools"))
+        if _engine_prompt_starts_in_reasoning(
             engine.tokenizer,
-            _model_name or request.model,
-            bool(_effective_thinking),
+            model_name=_model_name or request.model,
+            enable_thinking=_prompt_enable,
+            family_name=getattr(_model_config, "family_name", None),
+            tools_present=_tools_present_for_prompt,
         ):
             think_in_template = True
-        elif not _model_config.think_in_template:
+        else:
             think_in_template = False
 
     if _hy3_prompt_starts_in_reasoning(
@@ -11485,20 +11541,9 @@ async def stream_chat_completion(
     ):
         think_in_template = True
 
-    # Keep think_in_prompt active even when tool results are present.
-    # Models like Qwen3/Qwen3.5-VL DO produce <think> blocks on follow-up
-    # requests after tool execution. The parser's streaming extraction handles
-    # <think>→</think>→content transitions correctly. Disabling think_in_prompt
-    # here caused reasoning text to leak as visible content before the <think>
-    # token accumulated in the stream.
-    #
-    # After the _template_always_thinks() check above, think_in_template already
-    # correctly reflects reality:
-    # - Template respects enable_thinking=False → think_in_template is False
-    # - Template always injects <think> (e.g., MiniMax) → think_in_template stays True
-    # We MUST NOT override it to False here — the parser needs think_in_prompt=True
-    # to correctly classify implicit reasoning from always-thinking templates.
-    # suppress_reasoning (below) handles hiding reasoning from the user.
+    # The parser seed must match the final prompt the engine renders. Tool
+    # requests may intentionally leave reasoning open; no-tool thinking-off
+    # requests may close it before decode.
     effective_think_in_template = think_in_template
 
     # Track if we need to add <think> prefix for thinking models (when no reasoning parser)
@@ -12387,19 +12432,24 @@ async def stream_responses_api(
         if _template_completes_thinking(engine.tokenizer, _model_name or request.model):
             think_in_template = False
 
-    # When user explicitly disables thinking, check if template actually respects it
+    # When user explicitly disables thinking, check if template actually respects it.
+    # The final parser seed below uses the engine's post-render prompt contract.
     if _effective_thinking is False and think_in_template:
         if not _template_always_thinks(engine.tokenizer, _model_name or request.model):
             think_in_template = False
 
     if _reasoning_parser:
-        if _template_starts_reasoning(
+        _prompt_enable = True if _effective_thinking is None else bool(_effective_thinking)
+        _tools_present_for_prompt = bool(getattr(request, "tools", None) or kwargs.get("tools"))
+        if _engine_prompt_starts_in_reasoning(
             engine.tokenizer,
-            _model_name or request.model,
-            bool(_effective_thinking),
+            model_name=_model_name or request.model,
+            enable_thinking=_prompt_enable,
+            family_name=getattr(_model_config, "family_name", None),
+            tools_present=_tools_present_for_prompt,
         ):
             think_in_template = True
-        elif not _model_config.think_in_template:
+        else:
             think_in_template = False
 
     if _hy3_prompt_starts_in_reasoning(
@@ -12416,10 +12466,9 @@ async def stream_responses_api(
     ):
         think_in_template = True
 
-    # Keep think_in_prompt active even when tool results are present.
-    # (Same rationale as Chat Completions path — see stream_chat_completion.)
-    # After _template_always_thinks() above, think_in_template already correctly
-    # reflects reality — do NOT override to False for always-thinking templates.
+    # The parser seed must match the final prompt the engine renders. Tool
+    # requests may intentionally leave reasoning open; no-tool thinking-off
+    # requests may close it before decode.
     effective_think_in_template = think_in_template
 
     # For thinking models without reasoning parser, prepend <think>
