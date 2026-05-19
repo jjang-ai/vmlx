@@ -339,6 +339,117 @@ class TestPreFixBitsFromShard:
 
 
 class TestQuantShapeInference:
+    def test_runtime_supported_inference_rewrites_unsupported_group_size_from_shapes(
+        self, tmp_path
+    ):
+        import numpy as np
+        from safetensors.numpy import save_file
+
+        from vmlx_engine.utils.quant_shape_inference import (
+            infer_quant_overrides_for_bundle,
+        )
+
+        save_file(
+            {
+                # Shape ratio is compatible with 8b/g64, 4b/g128, or 2b/g256.
+                # Runtime cannot construct g256 modules, so the loader must not
+                # trust the unsupported config claim.
+                "model.layers.0.mlp.experts.0.down_proj.weight": np.zeros(
+                    (8, 128), dtype=np.uint32
+                ),
+                "model.layers.0.mlp.experts.0.down_proj.scales": np.ones(
+                    (8, 8), dtype=np.float16
+                ),
+            },
+            str(tmp_path / "model.safetensors"),
+        )
+        config = {"quantization": {"bits": 2, "group_size": 256}}
+
+        patched = infer_quant_overrides_for_bundle(
+            tmp_path,
+            config,
+            runtime_supported_only=True,
+            error_on_unsupported=True,
+        )
+
+        qcfg = patched["quantization"]
+        assert qcfg["bits"] == 4
+        assert qcfg["group_size"] == 128
+        assert qcfg["model.layers.0.mlp.experts.0.down_proj"] == {
+            "bits": 4,
+            "group_size": 128,
+        }
+
+    def test_runtime_supported_inference_errors_when_shape_requires_group_size_256(
+        self, tmp_path
+    ):
+        import numpy as np
+        import pytest
+        from safetensors.numpy import save_file
+
+        from vmlx_engine.utils.quant_shape_inference import (
+            infer_quant_overrides_for_bundle,
+        )
+
+        save_file(
+            {
+                # Shape ratio only maps to 8b/g256 in the converter table.
+                "model.layers.0.self_attn.q_proj.weight": np.zeros(
+                    (8, 512), dtype=np.uint32
+                ),
+                "model.layers.0.self_attn.q_proj.scales": np.ones(
+                    (8, 8), dtype=np.float16
+                ),
+            },
+            str(tmp_path / "model.safetensors"),
+        )
+        config = {"quantization": {"bits": 8, "group_size": 256}}
+
+        with pytest.raises(ValueError, match="group_size 256.*MLX supports only"):
+            infer_quant_overrides_for_bundle(
+                tmp_path,
+                config,
+                runtime_supported_only=True,
+                error_on_unsupported=True,
+            )
+
+    def test_loader_runtime_quant_defaults_use_shape_repaired_group_size(
+        self, tmp_path
+    ):
+        import numpy as np
+        from safetensors.numpy import save_file
+
+        from vmlx_engine.utils.jang_loader import (
+            _prepare_runtime_weight_quantization,
+        )
+
+        save_file(
+            {
+                "model.layers.0.mlp.experts.0.down_proj.weight": np.zeros(
+                    (8, 128), dtype=np.uint32
+                ),
+                "model.layers.0.mlp.experts.0.down_proj.scales": np.ones(
+                    (8, 8), dtype=np.float16
+                ),
+            },
+            str(tmp_path / "model.safetensors"),
+        )
+        config = {"quantization": {"bits": 2, "group_size": 256}}
+        jang_cfg = {"quantization": {"bits": 2, "group_size": 256}}
+
+        repaired, bits, group_size = _prepare_runtime_weight_quantization(
+            tmp_path,
+            config,
+            jang_cfg,
+            fallback_bits=[4],
+            context="unit-test",
+        )
+
+        assert bits == 4
+        assert group_size == 128
+        assert repaired["quantization"]["bits"] == 4
+        assert repaired["quantization"]["group_size"] == 128
+
     def test_deepseek_v4_adds_sanitized_quant_aliases_for_jang_keys(self, tmp_path):
         import numpy as np
         from safetensors.numpy import save_file

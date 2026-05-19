@@ -93,6 +93,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -121,10 +122,16 @@ _RATIO_CANDIDATES: Dict[int, List[Tuple[int, int]]] = {
 
 # Bits values that any major JANG/JANGTQ converter actually emits.
 # Anything else means we mis-inferred and should fall back.
-_VALID_BITS = {2, 3, 4, 6, 8}
+_VALID_BITS = {2, 3, 4, 5, 6, 8}
 
 # Group-size values the converters use.
 _VALID_GSZ = {16, 32, 64, 96, 128, 256}
+
+# Group sizes MLX model-weight quantization can construct at runtime.
+# KV-cache quantization has separate head-dim constraints; this table is only
+# for model weights passed to nn.quantize / mx.quantize.
+_MLX_SUPPORTED_WEIGHT_GSZ = {32, 64, 128}
+_MLX_SUPPORTED_WEIGHT_BITS = {2, 3, 4, 5, 6, 8}
 
 
 # Module-name pattern hints used as the ambiguous-product tiebreaker.
@@ -485,7 +492,11 @@ def _sanitized_aliases_for_config(config: Dict[str, Any], module_name: str) -> L
 
 
 def infer_quant_overrides_for_bundle(
-    bundle_path: Path | str, config: Dict[str, Any]
+    bundle_path: Path | str,
+    config: Dict[str, Any],
+    *,
+    runtime_supported_only: bool = False,
+    error_on_unsupported: bool = False,
 ) -> Dict[str, Any]:
     """Scan the bundle and return a patched config with corrected per-module
     quantization overrides.
@@ -495,10 +506,12 @@ def infer_quant_overrides_for_bundle(
     disagree with the config in a provable way, returns a deep copy with
     `quantization.<module>` entries patched in.
 
-    The function never raises — on read failure or unexpected layout it
-    logs a debug message and returns the input config unchanged. Worst
-    case is the model loads with the original (potentially bad) config,
-    same as the pre-patcher behavior.
+    By default the function never raises — on read failure or unexpected
+    layout it logs a debug message and returns the input config unchanged.
+    When ``runtime_supported_only=True`` it filters inferred candidates to
+    MLX's model-weight runtime support ({32,64,128} group sizes). In that
+    mode, ``error_on_unsupported=True`` raises a clear bundle-level error
+    when tensor shapes prove the weights require an unsupported group size.
     """
     bp = Path(bundle_path)
     try:
@@ -511,6 +524,8 @@ def infer_quant_overrides_for_bundle(
 
     # Pre-flight: detect uniform group_size across the entire bundle.
     uniform_gsz = _infer_uniform_gsz(modules)
+    if runtime_supported_only and uniform_gsz not in _MLX_SUPPORTED_WEIGHT_GSZ:
+        uniform_gsz = None
 
     # Pull out config.quantization (the per-module override block).
     cfg = dict(config)
@@ -523,6 +538,8 @@ def infer_quant_overrides_for_bundle(
     )
 
     patched: Dict[str, Tuple[int, int]] = {}
+    effective_by_module: Dict[str, Tuple[int, int]] = {}
+    unsupported_modules: List[Tuple[str, List[Tuple[int, int]]]] = []
     skipped_count = 0
 
     for mod, d in modules.items():
@@ -541,8 +558,18 @@ def infer_quant_overrides_for_bundle(
         # bundles with ambiguous ratios shouldn't get artificially
         # constrained by uniform_gsz inference (which can over-pick when
         # there isn't enough cross-module variance to fix gsz).
-        candidates = _candidates_for_ratio(ratio_x32)
+        all_candidates = _candidates_for_ratio(ratio_x32)
+        candidates = all_candidates
+        if runtime_supported_only:
+            candidates = [
+                (b, g)
+                for b, g in all_candidates
+                if b in _MLX_SUPPORTED_WEIGHT_BITS
+                and g in _MLX_SUPPORTED_WEIGHT_GSZ
+            ]
         if not candidates:
+            if runtime_supported_only and all_candidates:
+                unsupported_modules.append((mod, all_candidates))
             skipped_count += 1
             continue
 
@@ -584,6 +611,7 @@ def infer_quant_overrides_for_bundle(
             # No-op if our inference happens to match a (silent) claim.
             if claim != inferred:
                 patched[mod] = inferred
+        effective_by_module[mod] = effective
 
         for alias in _sanitized_aliases_for_config(config, mod):
             if alias == mod:
@@ -592,12 +620,59 @@ def infer_quant_overrides_for_bundle(
             if alias_claim != effective:
                 patched[alias] = effective
 
-    if not patched:
+    if unsupported_modules and error_on_unsupported:
+        first_mod, first_candidates = unsupported_modules[0]
+        group_sizes = sorted({g for _, g in first_candidates})
+        declared = _top_level_claim(qcfg)
+        declared_text = (
+            f"declared bits={declared[0]} group_size={declared[1]}; "
+            if declared is not None
+            else ""
+        )
+        raise ValueError(
+            f"{bp}: quantized tensor shapes for {first_mod} require unsupported "
+            f"model weight group_size {group_sizes[-1]}; {declared_text}"
+            "MLX supports only group sizes 32, 64, and 128 for model weights. "
+            "Re-quantize the bundle with a supported group_size."
+        )
+
+    top_claim = _top_level_claim(qcfg)
+    top_level_runtime_override: Optional[Tuple[int, int]] = None
+    if runtime_supported_only:
+        top_supported = (
+            top_claim is not None
+            and top_claim[0] in _MLX_SUPPORTED_WEIGHT_BITS
+            and top_claim[1] in _MLX_SUPPORTED_WEIGHT_GSZ
+        )
+        if not top_supported:
+            if effective_by_module:
+                counts = Counter(effective_by_module.values())
+                top_level_runtime_override = max(
+                    counts,
+                    key=lambda pair: (counts[pair], pair[0], -pair[1]),
+                )
+            elif error_on_unsupported:
+                declared = (
+                    f"bits={top_claim[0]} group_size={top_claim[1]}"
+                    if top_claim is not None
+                    else "missing quantization bits/group_size"
+                )
+                raise ValueError(
+                    f"{bp}: {declared} is not supported for MLX model-weight "
+                    "quantization, and no safetensors affine shapes were "
+                    "available to infer a supported value. MLX supports only "
+                    "bits 2/3/4/5/6/8 and group sizes 32/64/128."
+                )
+
+    if not patched and top_level_runtime_override is None:
         return config  # No overrides needed — config was good for every module
 
     # Build the patched config (deep copy so we don't mutate the caller's dict)
     new_cfg = json.loads(json.dumps(config))  # safe deep copy via JSON roundtrip
     new_qcfg = new_cfg.setdefault("quantization", {})
+    if top_level_runtime_override is not None:
+        new_qcfg["bits"] = top_level_runtime_override[0]
+        new_qcfg["group_size"] = top_level_runtime_override[1]
     for mod, (bits, gsz) in patched.items():
         new_qcfg[mod] = {"bits": bits, "group_size": gsz}
         # CRACK-bundle key-prefix normalization (Gemma-4-31B-JANG_4M-CRACK
@@ -640,12 +715,19 @@ def infer_quant_overrides_for_bundle(
         "bits=%s group_size=%s; per-module overrides corrected from shape). "
         "Most common cause: an older JANG/JANGTQ converter wrote uniform "
         "bits=%s into config.json while actual weights were stored with "
-        "mixed precision per layer.",
+        "mixed precision per layer.%s",
         len(patched),
         bp.name,
         qcfg.get("bits"),
         qcfg.get("group_size"),
         qcfg.get("bits"),
+        (
+            " Runtime default was also rewritten to MLX-supported "
+            f"bits={top_level_runtime_override[0]} "
+            f"group_size={top_level_runtime_override[1]}."
+            if top_level_runtime_override is not None
+            else ""
+        ),
     )
     if skipped_count:
         logger.debug(
