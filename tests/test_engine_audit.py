@@ -2894,16 +2894,15 @@ class TestStartupCompatibilityGuards:
         assert '@app.post(\n    "/api/embed",\n    dependencies=[\n        Depends(verify_api_key),\n        Depends(check_memory_pressure),\n        Depends(check_metal_working_set_pressure),' in source
 
     def test_bundle_selects_native_mlx_wheels_with_compat_override(self):
-        """M5/Tahoe builds need native MLX wheels; compat builds stay explicit."""
+        """Public builds stay Sequoia-compatible; Tahoe native is opt-in."""
         bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
         assert 'MLX_VERSION="0.31.2"' in bundle_script
         assert 'MLX_LM_VERSION="0.31.3"' in bundle_script
         assert 'MLX_VLM_VERSION="0.4.4"' in bundle_script
         assert 'detect_mlx_wheel_platform()' in bundle_script
-        assert 'VMLINUX_BUNDLE_MLX_PLATFORM:-auto' in bundle_script
-        assert 'sw_vers -productVersion' in bundle_script
+        assert 'VMLINUX_BUNDLE_MLX_PLATFORM:-compat' in bundle_script
         assert 'echo "macosx_26_0_arm64"' in bundle_script
-        assert 'compat|sonoma|sequoia)' in bundle_script
+        assert 'auto|compat|sonoma|sequoia|"")' in bundle_script
         assert 'echo "macosx_14_0_arm64"' in bundle_script
         assert 'MLX_WHEEL_PLATFORM="$(detect_mlx_wheel_platform)"' in bundle_script
         assert '--platform "$MLX_WHEEL_PLATFORM"' in bundle_script
