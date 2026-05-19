@@ -92,14 +92,15 @@ function registerFamily(familyName: string, config: Omit<ModelConfig, 'familyNam
   CONFIG_BY_FAMILY.set(familyName, config)
 }
 
-// ZAYA / Zyphra: CCA attention + top-1 MoE. ZAYA is reasoning-capable with a
-// qwen3-compatible <think> rail, but default/no-thinking prompts must start in
-// visible content, so the backend keeps think_in_template=false.
-registerFamily('zaya', { cacheType: 'hybrid', toolParser: 'zaya_xml', reasoningParser: 'qwen3', usePagedCache: true, enableAutoToolChoice: true, description: 'ZAYA CCA hybrid MoE', priority: 3 })
+// ZAYA / Zyphra: CCA attention + top-1 MoE. Live 2026-05-18 gates showed
+// thinking-on can stay in an open <think> rail without a visible answer, so
+// auto-detection keeps reasoning disabled while preserving zaya_xml tools and
+// the typed CCA cache contract.
+registerFamily('zaya', { cacheType: 'hybrid', toolParser: 'zaya_xml', usePagedCache: true, enableAutoToolChoice: true, description: 'ZAYA CCA hybrid MoE', priority: 3 })
 // ZAYA1-VL is detected separately so the UI does not fall through to generic
 // VLM defaults. The Python runtime uses a typed CCA cache contract, so panel
 // sessions must start on paged cache instead of the legacy prefix-cache backend.
-registerFamily('zaya1-vl', { cacheType: 'hybrid', toolParser: 'zaya_xml', reasoningParser: 'qwen3', usePagedCache: true, enableAutoToolChoice: true, isMultimodal: true, description: 'ZAYA1-VL CCA hybrid vision-language', priority: 3 })
+registerFamily('zaya1-vl', { cacheType: 'hybrid', toolParser: 'zaya_xml', usePagedCache: true, enableAutoToolChoice: true, isMultimodal: true, description: 'ZAYA1-VL CCA hybrid vision-language', priority: 3 })
 
 // Qwen
 // Qwen 3.5 dense and MoE share model_types with VL variants — VL detection
@@ -178,7 +179,7 @@ registerFamily('granite', { cacheType: 'kv', toolParser: 'granite', enableAutoTo
 registerFamily('functionary', { cacheType: 'kv', toolParser: 'functionary', enableAutoToolChoice: true, description: 'Functionary', priority: 20 })
 
 // MiniMax
-registerFamily('minimax', { cacheType: 'kv', toolParser: 'minimax', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'MiniMax', priority: 20 })
+registerFamily('minimax', { cacheType: 'kv', toolParser: 'minimax', reasoningParser: 'minimax_m2', enableAutoToolChoice: true, description: 'MiniMax', priority: 20 })
 
 // Ling / Bailing hybrid: MLA softmax layers plus linear-attention/SSM-style
 // companion state. Eric directive 2026-05-11: treat Ling chat output as plain
@@ -455,6 +456,9 @@ function isExplicitAffineJangConfig(jangCfg: any): boolean {
     quant.method,
     quant.profile,
   ].map(value => String(value || '').toLowerCase())
+  if (values.some(value => value.includes('mxfp') || value.includes('mxtq') || value.includes('jangtq'))) {
+    return false
+  }
   return values.some(value =>
     value === 'jang' ||
     value === 'jang_v2' ||
@@ -742,6 +746,8 @@ function applyJangCapabilities(
     next.reasoningParser = 'qwen3'
     next.supportsThinking = true
     next.thinkInTemplate = false
+  } else if (next.family === 'minimax') {
+    next.reasoningParser = 'minimax_m2'
   } else if (next.family === 'ling') {
     next.reasoningParser = undefined
     next.supportsThinking = false

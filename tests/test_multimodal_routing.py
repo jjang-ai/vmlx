@@ -66,6 +66,38 @@ def test_mllm_extractor_accepts_responses_style_input_media_parts():
     ]
 
 
+def test_mllm_thinking_off_does_not_synthesize_empty_think_block(monkeypatch):
+    import mlx_vlm.prompt_utils as prompt_utils
+
+    from vmlx_engine.models.mllm import MLXMultimodalLM
+
+    def fake_get_chat_template(_processor, _messages, **kwargs):
+        assert kwargs["enable_thinking"] is False
+        assert kwargs["add_generation_prompt"] is True
+        return "user: describe image\nassistant:"
+
+    monkeypatch.setattr(prompt_utils, "get_chat_template", fake_get_chat_template)
+
+    model = MLXMultimodalLM.__new__(MLXMultimodalLM)
+    model.processor = object()
+    model.model_name = "Qwen3.6-VL"
+    model.config = {
+        "model_type": "qwen3_5_vl",
+        "capabilities": {
+            "supports_thinking": True,
+            "think_in_template": True,
+        },
+    }
+
+    prompt = model._apply_chat_template(
+        [{"role": "user", "content": [{"type": "text", "text": "describe image"}]}],
+        enable_thinking=False,
+    )
+
+    assert prompt == "user: describe image\nassistant:"
+    assert "<think>" not in prompt
+
+
 def test_server_detects_media_before_text_only_responses_flattening():
     import vmlx_engine.server as server
 

@@ -3,6 +3,7 @@ import { AlertTriangle, X, Save, Trash2, Star } from 'lucide-react'
 import { useToast } from '../Toast'
 import { useTranslation } from '../../i18n'
 import { buildChatSettingsCompatibilityWarnings } from './chatSettingsCompatibility'
+import { buildChatSettingsResetOverrides } from '../../../../shared/chatSettingsResetPolicy'
 
 interface ChatProfile {
   id: string
@@ -49,6 +50,7 @@ interface SessionInfo {
   type?: 'local' | 'remote'
   remoteUrl?: string
   modelType?: 'text' | 'image'
+  config?: string
 }
 
 interface ChatSettingsProps {
@@ -84,6 +86,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   const showReasoningEffort = detectedFamily === 'hy3' || effectiveReasoningParser === 'openai_gptoss' || effectiveReasoningParser === 'mistral'
   const showLowEffort = effectiveReasoningParser !== 'mistral'
   const showMediumEffort = effectiveReasoningParser !== 'mistral' && detectedFamily !== 'hy3'
+  const dsv4MaxEnabled = detectedFamily === 'deepseek-v4'
 
   const loadProfiles = useCallback(() => {
     window.api.chat.getProfiles().then((p: ChatProfile[]) => setProfiles(p))
@@ -170,24 +173,13 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   }
 
   const handleReset = async () => {
-    // Reset only inference parameters — preserve agent config (working dir, system prompt, tool toggles)
-    const preserved: ChatOverrides = {}
-    if (overrides.systemPrompt) preserved.systemPrompt = overrides.systemPrompt
-    if (overrides.workingDirectory) preserved.workingDirectory = overrides.workingDirectory
-    if (overrides.builtinToolsEnabled != null) preserved.builtinToolsEnabled = overrides.builtinToolsEnabled
-    if (overrides.webSearchEnabled != null) preserved.webSearchEnabled = overrides.webSearchEnabled
-    if (overrides.braveSearchEnabled != null) preserved.braveSearchEnabled = overrides.braveSearchEnabled
-    if (overrides.fetchUrlEnabled != null) preserved.fetchUrlEnabled = overrides.fetchUrlEnabled
-    if (overrides.fileToolsEnabled != null) preserved.fileToolsEnabled = overrides.fileToolsEnabled
-    if (overrides.searchToolsEnabled != null) preserved.searchToolsEnabled = overrides.searchToolsEnabled
-    if (overrides.shellEnabled != null) preserved.shellEnabled = overrides.shellEnabled
-    if (overrides.wireApi) preserved.wireApi = overrides.wireApi
-    if (overrides.hideToolStatus != null) preserved.hideToolStatus = overrides.hideToolStatus
-    if (overrides.toolResultMaxChars != null) preserved.toolResultMaxChars = overrides.toolResultMaxChars
-    if (overrides.gitEnabled != null) preserved.gitEnabled = overrides.gitEnabled
-    if (overrides.utilityToolsEnabled != null) preserved.utilityToolsEnabled = overrides.utilityToolsEnabled
-
-    const defaults: ChatOverrides = { ...preserved }
+    // Re-read model's generation_config.json for recommended inference defaults
+    // Use atomic upsert (INSERT OR REPLACE) instead of clear-then-set
+    let genDefaults: Awaited<ReturnType<typeof window.api.models.getGenerationDefaults>> | null = null
+    try {
+      genDefaults = await window.api.models.getGenerationDefaults(session.modelPath)
+    } catch (_) {}
+    const defaults: ChatOverrides = buildChatSettingsResetOverrides(overrides, genDefaults) as ChatOverrides
     await window.api.chat.setOverrides(chatId, defaults)
     setOverrides(defaults)
     setDirty(false)
@@ -433,7 +425,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
                   <button
                     onClick={() => updateThinkingMode(true, undefined)}
                     className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
-                      overrides.enableThinking === true && overrides.reasoningEffort !== 'max'
+                      overrides.enableThinking === true && (overrides.reasoningEffort !== 'max' || !dsv4MaxEnabled)
                         ? 'bg-primary text-primary-foreground'
                         : 'hover:bg-accent text-muted-foreground'
                     }`}
@@ -441,11 +433,13 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
                     Reasoning
                   </button>
                   <button
+                    disabled={!dsv4MaxEnabled}
+                    title={undefined}
                     onClick={() => updateThinkingMode(true, 'max')}
                     className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
-                      overrides.enableThinking === true && overrides.reasoningEffort === 'max'
+                      overrides.enableThinking === true && overrides.reasoningEffort === 'max' && dsv4MaxEnabled
                         ? 'bg-primary text-primary-foreground'
-                        : 'hover:bg-accent text-muted-foreground'
+                        : dsv4MaxEnabled ? 'hover:bg-accent text-muted-foreground' : 'text-muted-foreground opacity-50 cursor-not-allowed'
                     }`}
                   >
                     Max

@@ -2,6 +2,74 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.5.43] - 2026-05-19
+
+### Fixed
+- **Native Qwen3.6 MTP app/API wiring is release-gated on real runtime state**:
+  Qwen3.6 MTP artifacts now expose native-MTP status through health and UI
+  surfaces, preserve the text+VL loader path, and use validated model-local
+  depth tuning when present instead of a blanket depth override.
+- **Chat settings, cache controls, and tool auto-continue are integrated across
+  the panel and engine**: cache policy controls remain user-visible and
+  user-controlled, interleaved reasoning segments are preserved separately from
+  visible text, media follow-up payloads keep image/video content, and tool
+  auto-continue no longer leaks raw think or tool tags into the chat.
+- **Sampling defaults stay model-owned until users override them**: DSV4 JANG
+  chat defaults, Qwen generation defaults, MiniMax generation defaults, and
+  request-level OpenAI/Responses/Ollama kwargs resolve at request time without
+  hidden per-session sampler writes.
+- **Model-family cache policy is explicit and fail-closed**: standard KV
+  families can use live TurboQuant KV, DSV4 keeps generic KV quantization off
+  for its native SWA/CSA/HCA composite cache, ZAYA uses typed CCA state, and
+  Qwen3.6 hybrid SSM now uses live TurboQuant KV only for attention layers while
+  SSM/ArraysCache companion state remains native full precision. The prior
+  global hybrid make-cache patch stays disabled because it cannot preserve
+  path-dependent companion state.
+- **Hugging Face GUI downloads recover from stale backup endpoints and stale
+  tokens**: the bundled worker can fall back to unauthenticated metadata and
+  direct Hub resolution when user credentials or cached endpoint state are bad.
+- **macOS packaging lanes are split by platform compatibility**: release scripts
+  now keep Sequoia/Sonoma-compatible and Tahoe-native DMG lanes separate, with
+  startup checks that fail before MLX import when the wrong wheel tag is bundled.
+
+### Verified
+- Current-head live gates covered Qwen3.6-27B MXFP4-MTP, MXFP8-MTP, and
+  JANG_4M-MTP native-MTP generation, acceptance telemetry, text+VL detection,
+  hybrid SSM cache handling, selective live attention TQ-KV, and stored q4
+  attention-KV snapshots.
+- Task 8 parity gates covered MXFP4, MXFP8, and JANG_4M hybrid live TQ-KV:
+  selective attention-layer TurboQuant exactly matched full-precision live KV
+  on deterministic probes while preserving 48 native companion layers.
+- Task 8 MTP/VL reruns covered MXFP4 D2, MXFP8 D3, and JANG_4M D3 with native
+  MTP active, text+VL scope, visible non-empty output, and selective live
+  attention TQ-KV active.
+- Real Electron/CDP chat proof covered reasoning streaming, run/list/image/video
+  tool calls, tool auto-continue, media follow-up content, cache UI toggles, and
+  absence of raw think/tool-tag leakage.
+- Focused Python and panel tests cover DSV4 cache policy, DSV4 reasoning
+  defaults, Qwen native-MTP controls, generation defaults, request-builder
+  sampler passthrough, Ollama options mapping, Hugging Face fallback downloads,
+  and macOS wheel-tag startup guards.
+
+## [1.5.41] - 2026-05-18
+
+### Fixed
+- **DSV4 DSML streaming tool calls no longer leak wrapper text**: streaming
+  requests now buffer the full DSV4 `<｜DSML｜tool_calls>` envelope before
+  emitting structured tool-call deltas, including the leading-whitespace case
+  that previously surfaced raw DSML marker text as assistant content.
+- **DSV4, Qwen native-MTP, and ZAYA native-cache release gates were refreshed
+  against packaged bundled-Python builds**: the fixed app reports the correct
+  native cache schemas, keeps generic TurboQuant KV disabled for incompatible
+  composite/hybrid caches, and preserves storage-boundary cache telemetry.
+
+### Verified
+- Live DSV4 Flash DSML parser gate passed for non-streaming tool calls,
+  tool-result roundtrip, and streaming `tool_choice=required` with no raw DSML
+  leakage.
+- Packaged smoke gates passed for DSV4 Flash native cache, Qwen3.6 native-MTP
+  hybrid cache, and ZAYA CCA cache lifecycle paths.
+
 ## [1.5.40] - 2026-05-17
 
 ### Fixed

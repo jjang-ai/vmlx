@@ -30,6 +30,7 @@ interface MessageListProps {
   streamingMessageId: string | null
   currentMetrics?: MessageMetrics | null
   reasoningMap?: Record<string, string>
+  reasoningSegmentMap?: Record<string, string[]>
   reasoningDoneMap?: Record<string, boolean>
   toolStatusMap?: Record<string, any[]>
   hideToolStatus?: boolean
@@ -39,7 +40,7 @@ interface MessageListProps {
   onEdit?: (messageId: string, newContent: string) => void
 }
 
-export function MessageList({ messages, streamingMessageId, currentMetrics, reasoningMap, reasoningDoneMap, toolStatusMap, hideToolStatus, sessionId, sessionEndpoint, onRegenerate, onEdit }: MessageListProps) {
+export function MessageList({ messages, streamingMessageId, currentMetrics, reasoningMap, reasoningSegmentMap, reasoningDoneMap, toolStatusMap, hideToolStatus, sessionId, sessionEndpoint, onRegenerate, onEdit }: MessageListProps) {
   const { t } = useTranslation()
   const bottomRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -83,7 +84,13 @@ export function MessageList({ messages, streamingMessageId, currentMetrics, reas
   // smooth-scroll stutter; 'smooth' only when a brand-new message appears.
   const prevMsgCountRef = useRef(messages.length)
   // Derive a cheap change signal from reasoning/tool maps without deep-comparing objects
-  const reasoningVersion = useMemo(() => reasoningMap ? Object.values(reasoningMap).reduce((n, s) => n + s.length, 0) : 0, [reasoningMap])
+  const reasoningVersion = useMemo(() => {
+    const textVersion = reasoningMap ? Object.values(reasoningMap).reduce((n, s) => n + s.length, 0) : 0
+    const segmentVersion = reasoningSegmentMap
+      ? Object.values(reasoningSegmentMap).reduce((n, segments) => n + segments.reduce((m, s) => m + s.length, 0), 0)
+      : 0
+    return textVersion + segmentVersion
+  }, [reasoningMap, reasoningSegmentMap])
   const toolStatusVersion = useMemo(() => toolStatusMap ? Object.values(toolStatusMap).reduce((n, arr) => n + arr.length, 0) : 0, [toolStatusMap])
   useEffect(() => {
     const isNewMessage = messages.length !== prevMsgCountRef.current
@@ -123,6 +130,7 @@ export function MessageList({ messages, streamingMessageId, currentMetrics, reas
               isStreaming={message.id === streamingMessageId}
               metrics={message.id === streamingMessageId ? currentMetrics : message.metrics}
               reasoningContent={reasoningMap?.[message.id]}
+              reasoningSegments={reasoningSegmentMap?.[message.id]}
               reasoningDone={reasoningDoneMap?.[message.id] ?? false}
               toolStatuses={hideToolStatus ? undefined : toolStatusMap?.[message.id]}
               warnings={message.warnings}

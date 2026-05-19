@@ -24,7 +24,9 @@ import { extractGatewayModelFromBody } from "./gateway-body";
 const DEFAULT_PORT = 8080;
 const JIT_TIMEOUT_MS = 120_000;
 const HEALTH_POLL_MS = 2_000;
-const PROXY_TIMEOUT_MS = 300_000; // 5 min max for a single proxied request
+const GENERIC_DEFAULT_TIMEOUT_SECONDS = 300;
+const DSV4_DEFAULT_TIMEOUT_SECONDS = 900;
+const PROXY_TIMEOUT_MS = GENERIC_DEFAULT_TIMEOUT_SECONDS * 1000; // generic 5 min max for a single proxied request
 const SINGLE_MODEL_MODE_KEY = "gateway_single_model_mode";
 
 interface ResolvedSession {
@@ -37,6 +39,19 @@ interface ResolvedSession {
   config?: string;
   servedModelName?: string;
   embeddingModel?: string;
+}
+
+function parsePositiveTimeoutSeconds(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function timeoutSecondsToMs(timeoutSeconds: number): number {
+  return timeoutSeconds <= 0 ? 86_400_000 : timeoutSeconds * 1000;
 }
 
 export class ApiGateway extends EventEmitter {
@@ -63,6 +78,56 @@ export class ApiGateway extends EventEmitter {
   setSingleModelMode(enabled: boolean): void {
     db.setSetting(SINGLE_MODEL_MODE_KEY, enabled ? "true" : "false");
     this.emit("singleModelModeChanged", enabled);
+  }
+
+  private effectiveGatewayProxyTimeoutMs(
+    session: ResolvedSession,
+    body?: Buffer | Record<string, any>,
+  ): number {
+    let sessionTimeout: number | undefined;
+    try {
+      const cfg = session.config ? JSON.parse(session.config) : {};
+      sessionTimeout = parsePositiveTimeoutSeconds(cfg.timeout);
+    } catch (_) {
+      sessionTimeout = undefined;
+    }
+
+    let requestTimeout: number | undefined;
+    try {
+      const parsed =
+        Buffer.isBuffer(body)
+          ? JSON.parse(body.toString("utf8") || "{}")
+          : body;
+      requestTimeout = parsePositiveTimeoutSeconds(
+        parsed?.timeout ?? parsed?.options?.timeout,
+      );
+    } catch (_) {
+      requestTimeout = undefined;
+    }
+    if (requestTimeout != null) return timeoutSecondsToMs(requestTimeout);
+
+    let detectedFamily: string | undefined;
+    try {
+      detectedFamily = session.modelPath
+        ? detectModelConfigFromDir(session.modelPath)?.family
+        : undefined;
+    } catch (_) {
+      detectedFamily = undefined;
+    }
+
+    if (sessionTimeout == null && detectedFamily !== "deepseek-v4") {
+      return PROXY_TIMEOUT_MS;
+    }
+
+    const effectiveSeconds =
+      detectedFamily === "deepseek-v4" &&
+      (sessionTimeout == null ||
+        sessionTimeout === GENERIC_DEFAULT_TIMEOUT_SECONDS)
+        ? DSV4_DEFAULT_TIMEOUT_SECONDS
+        : sessionTimeout != null
+          ? sessionTimeout
+          : GENERIC_DEFAULT_TIMEOUT_SECONDS;
+    return timeoutSecondsToMs(effectiveSeconds);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -527,7 +592,7 @@ export class ApiGateway extends EventEmitter {
         ...clientReq.headers,
         host: `${session.host}:${session.port}`,
       },
-      timeout: PROXY_TIMEOUT_MS,
+      timeout: this.effectiveGatewayProxyTimeoutMs(session, body),
     };
 
     const proxyReq = httpRequest(options, (proxyRes) => {
@@ -816,9 +881,9 @@ export class ApiGateway extends EventEmitter {
   }
 
   private applyOllamaThinking(parsed: any, openaiBody: any): void {
-    // Omitted thinking controls default on for capable vMLX chat models.
-    // Native Ollama `think:false` is an explicit opt-out and must not be
-    // overwritten by that default.
+    // Omitted thinking controls stay omitted so the model's native
+    // tokenizer/template/runtime default decides. Native Ollama `think:false`
+    // is an explicit opt-out and must not be overwritten.
     if (typeof parsed?.think === "boolean") {
       openaiBody.enable_thinking = parsed.think;
     } else if (
@@ -836,7 +901,6 @@ export class ApiGateway extends EventEmitter {
       ) {
         return;
       }
-      openaiBody.enable_thinking = true;
     }
   }
 
@@ -961,7 +1025,7 @@ export class ApiGateway extends EventEmitter {
       path: "/v1/chat/completions",
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      timeout: PROXY_TIMEOUT_MS,
+      timeout: this.effectiveGatewayProxyTimeoutMs(session, parsed),
     };
 
     const proxyReq = httpRequest(proxyOpts, (proxyRes) => {
@@ -1273,7 +1337,7 @@ export class ApiGateway extends EventEmitter {
       path: backendPath,
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      timeout: PROXY_TIMEOUT_MS,
+      timeout: this.effectiveGatewayProxyTimeoutMs(session, parsed),
     };
 
     const proxyReq = httpRequest(proxyOpts, (proxyRes) => {

@@ -141,17 +141,20 @@ def _apply_turboquant_to_model(model, model_path: str):
                 for t in native_cache_types
             ]
 
-        if "ssm" in layer_types and os.environ.get("VMLX_ALLOW_HYBRID_KV_QUANT") not in (
-            "1",
-            "true",
-            "TRUE",
-            "yes",
-            "on",
-        ):
+        from .hybrid_tq_cache import (
+            build_hybrid_turboquant_make_cache,
+            is_qwen36_hybrid_tq_supported,
+        )
+
+        _is_hybrid = "ssm" in layer_types
+        _supports_selective_hybrid_tq = is_qwen36_hybrid_tq_supported(
+            config, layer_types
+        )
+        if _is_hybrid and not _supports_selective_hybrid_tq:
             logger.info(
                 "  TurboQuant skipped: hybrid/path-dependent cache detected; "
-                "native KV + non-KV state is required until the typed hybrid "
-                "TQ cache codec lands"
+                "only Qwen3.6 selective attention-KV live TQ is supported. "
+                "Native KV + non-KV state remains active for this family."
             )
             return
 
@@ -168,10 +171,21 @@ def _apply_turboquant_to_model(model, model_path: str):
 
         n_cache = len(layer_types)
 
-        def _tq_make_cache(
-            _cfg=tq_config, _n=n_cache, _kd=key_dim, _vd=val_dim, _lt=layer_types
-        ):
-            return make_turboquant_cache(_cfg, _n, [_kd] * _n, [_vd] * _n, _lt)
+        if _is_hybrid:
+            _native_make_cache = model.make_cache
+            _tq_make_cache = build_hybrid_turboquant_make_cache(
+                _native_make_cache,
+                tq_config,
+                key_dim,
+                val_dim,
+                layer_types,
+            )
+        else:
+
+            def _tq_make_cache(
+                _cfg=tq_config, _n=n_cache, _kd=key_dim, _vd=val_dim, _lt=layer_types
+            ):
+                return make_turboquant_cache(_cfg, _n, [_kd] * _n, [_vd] * _n, _lt)
 
         model.make_cache = _tq_make_cache
 

@@ -211,7 +211,7 @@ const FAMILY_CONFIGS: Record<string, Partial<DetectedConfig>> = {
   minimax: {
     cacheType: "kv",
     toolParser: "minimax",
-    reasoningParser: "qwen3",
+    reasoningParser: "minimax_m2",
     enableAutoToolChoice: true,
   },
   "kimi-k2": {
@@ -1691,7 +1691,7 @@ describe("Phase 6: Tool & Reasoning Parsers", () => {
         phi4_reasoning: "deepseek_r1",
         gpt_oss: "openai_gptoss",
         glm4_moe: "openai_gptoss",
-        minimax: "qwen3",
+        minimax: "minimax_m2",
       };
       return mapping[modelType];
     }
@@ -1720,8 +1720,8 @@ describe("Phase 6: Tool & Reasoning Parsers", () => {
       expect(detectReasoningParser("gpt_oss")).toBe("openai_gptoss");
     });
 
-    it("MiniMax uses qwen3 parser", () => {
-      expect(detectReasoningParser("minimax")).toBe("qwen3");
+    it("MiniMax uses minimax_m2 parser", () => {
+      expect(detectReasoningParser("minimax")).toBe("minimax_m2");
     });
 
     it("unknown model returns undefined", () => {

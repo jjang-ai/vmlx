@@ -9,6 +9,7 @@ import { ToolCallStatus } from './ToolCallStatus'
 import { InlineToolCall, InlineToolGroup } from './InlineToolCall'
 import { TTSPlayer } from './VoiceChat'
 import { formatTimestamp, parseContentArray, getMetricsItems, type MessageMetrics } from './chat-utils'
+import { visibleReasoningSegments } from '../../../../shared/interleavedReasoning'
 
 interface Message {
   id: string
@@ -23,6 +24,7 @@ interface MessageBubbleProps {
   isStreaming?: boolean
   metrics?: MessageMetrics | null
   reasoningContent?: string
+  reasoningSegments?: string[]
   reasoningDone?: boolean
   toolStatuses?: any[]
   warnings?: string[]
@@ -72,10 +74,20 @@ function groupToolStatuses(statuses: any[]): { groups: InlineToolGroup[]; hasOff
   let current: InlineToolGroup | null = null
   let hasOffsets = false
   let processingStatus: any = null
+  const groupIds = new Map<string, InlineToolGroup>()
+  const isOpen = (group: InlineToolGroup) => {
+    const last = group.statuses[group.statuses.length - 1]
+    return last && last.phase !== 'result' && last.phase !== 'error' && last.phase !== 'done'
+  }
+  const findOpenGroup = (s: any) => {
+    if (s.toolCallId && groupIds.has(s.toolCallId)) return groupIds.get(s.toolCallId)!
+    return [...groups].reverse().find(g => g.name === s.toolName && isOpen(g)) || current
+  }
 
   for (const s of statuses) {
     if (s.phase === 'calling') {
       current = { name: s.toolName, statuses: [s] }
+      if (s.toolCallId) groupIds.set(s.toolCallId, current)
       if (s.contentOffset !== undefined) hasOffsets = true
       groups.push(current)
     } else if (s.phase === 'generating') {
@@ -86,8 +98,9 @@ function groupToolStatuses(statuses: any[]): { groups: InlineToolGroup[]; hasOff
       current = null
     } else if (s.phase === 'done') {
       current = null
-    } else if (current) {
-      current.statuses.push(s)
+    } else {
+      const target = findOpenGroup(s)
+      if (target) target.statuses.push(s)
     }
   }
 
@@ -142,7 +155,7 @@ function useTypewriter(fullContent: string, isStreaming: boolean): string {
   return displayed
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, isStreaming, metrics, reasoningContent, reasoningDone, toolStatuses, warnings, sessionId, sessionEndpoint, isLastAssistant, onRegenerate, onEdit }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, isStreaming, metrics, reasoningContent, reasoningSegments, reasoningDone, toolStatuses, warnings, sessionId, sessionEndpoint, isLastAssistant, onRegenerate, onEdit }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false)
   const [zoomedImage, setZoomedImage] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
@@ -174,8 +187,23 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
 
   // Typewriter: smooth character-by-character reveal during streaming
   const displayedContent = useTypewriter(message.content, !!isStreaming)
-  // Same for reasoning content (separate stream, same TCP batching problem)
-  const displayedReasoning = useTypewriter(reasoningContent || '', !!isStreaming && !(reasoningDone ?? false))
+  const reasoningSegmentsForDisplay = useMemo(() => {
+    const segments = Array.isArray(reasoningSegments) && reasoningSegments.length > 0
+      ? reasoningSegments
+      : reasoningContent
+        ? [reasoningContent]
+        : []
+    return visibleReasoningSegments(segments)
+  }, [reasoningContent, reasoningSegments])
+  const latestReasoningSegment = reasoningSegmentsForDisplay[reasoningSegmentsForDisplay.length - 1] || ''
+  // Same for the active reasoning segment (separate stream, same TCP batching problem)
+  const displayedLatestReasoning = useTypewriter(latestReasoningSegment, !!isStreaming && !(reasoningDone ?? false))
+  const displayedReasoningSegments = useMemo(() => {
+    if (reasoningSegmentsForDisplay.length === 0) return []
+    return reasoningSegmentsForDisplay.map((segment, index) =>
+      index === reasoningSegmentsForDisplay.length - 1 ? displayedLatestReasoning : segment
+    )
+  }, [displayedLatestReasoning, reasoningSegmentsForDisplay])
 
   // Render a DOMPurify-sanitized markdown segment
   const renderMarkdownSegment = useCallback((text: string, key: string) => {
@@ -462,14 +490,22 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
           )}
         </div>
 
-        {/* Reasoning box */}
-        {reasoningContent &&
-         !(message.content && reasoningContent.trim() === message.content.trim()) && (
-          <ReasoningBox
-            content={displayedReasoning}
-            isStreaming={!!isStreaming}
-            isDone={reasoningDone ?? false}
-          />
+        {/* Reasoning boxes */}
+        {displayedReasoningSegments.length > 0 &&
+         !(displayedReasoningSegments.length === 1 && message.content && displayedReasoningSegments[0].trim() === message.content.trim()) && (
+          <div className="mb-3 space-y-2">
+            {displayedReasoningSegments.map((segment, index) => {
+              const isLast = index === displayedReasoningSegments.length - 1
+              return (
+                <ReasoningBox
+                  key={`${message.id}-reasoning-${index}`}
+                  content={segment}
+                  isStreaming={!!isStreaming && isLast}
+                  isDone={isLast ? (reasoningDone ?? false) : true}
+                />
+              )
+            })}
+          </div>
         )}
 
         {/* Main content */}
@@ -499,7 +535,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
         )}
 
         {/* Typing indicator */}
-        {isStreaming && !message.content && !reasoningContent && !(toolStatuses && toolStatuses.length > 0) && (
+        {isStreaming && !message.content && displayedReasoningSegments.length === 0 && !(toolStatuses && toolStatuses.length > 0) && (
           <div className="flex items-center gap-2 text-muted-foreground text-sm py-1">
             <span className="flex gap-1">
               <span className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />

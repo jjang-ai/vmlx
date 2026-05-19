@@ -9,19 +9,29 @@ from tests.cross_matrix.run_production_family_audit import (
     ModelRow,
     ROWS,
     audit_child_env_for_row,
+    cache_probe_content_ok,
     cache_exact_hit_probe,
     cache_exact_hit_required,
     capability_endpoint_contract_ok,
+    chat_basic_turn_ok,
     dsv4_thinking_mode_max_ok,
     dsv4_long_context_full_output_ok,
     extract_anthropic_text_and_stop,
     extract_ollama_visible_text_and_stop,
     is_non_length_stop,
+    normalize_python_executable,
     normalize_short_answer,
     simple_loop_score,
     static_audit,
 )
 from tests.cross_matrix import run_production_family_audit as audit_harness
+
+
+def test_live_audit_root_is_this_checkout_not_stale_absolute_path():
+    expected_root = audit_harness.Path(audit_harness.__file__).resolve().parents[2]
+
+    assert audit_harness.ROOT == expected_root
+    assert audit_harness.ROOT != audit_harness.Path("/Users/example/mlx/vllm-mlx")
 
 
 def test_anthropic_exact_probe_ignores_reasoning_blocks():
@@ -148,6 +158,53 @@ def test_zaya_cca_rows_require_typed_exact_hit_cache_probe():
     assert cache_exact_hit_required(rows["dsv4_tq"])
 
 
+def test_live_basic_turn_accepts_coherent_non_exact_acknowledgement():
+    row = next(row for row in ROWS if row.id == "zaya_mxfp4")
+
+    assert chat_basic_turn_ok(
+        row,
+        code=200,
+        finish="stop",
+        content="blue; cat",
+        reasoning="",
+    )
+
+
+def test_live_basic_turn_rejects_reasoning_leak_for_non_reasoning_row():
+    row = next(row for row in ROWS if row.id == "zaya_mxfp4")
+
+    assert not chat_basic_turn_ok(
+        row,
+        code=200,
+        finish="stop",
+        content="blue; cat",
+        reasoning="I should answer with the stored facts.",
+    )
+
+
+def test_cache_probe_accepts_coherent_non_exact_cached_answer():
+    row = next(row for row in ROWS if row.id == "zaya_jangtq2")
+
+    assert cache_probe_content_ok(
+        row=row,
+        expected="blue",
+        first_content="The phrase repeats the color word blue.",
+        repeat_content="The phrase repeats the color word blue.",
+        strict_short_answer=True,
+        min_count=1,
+    )
+
+
+def test_responses_tool_choice_rejects_visible_tool_markup_leak():
+    assert not audit_harness.responses_tool_choice_output_ok(
+        "<zyphra_tool_call>\n<function=list_directory>"
+    )
+    assert not audit_harness.responses_tool_choice_output_ok(
+        "For a request to list files:\n<py>\ndef list_directory(path): pass"
+    )
+    assert audit_harness.responses_tool_choice_output_ok("")
+
+
 def test_live_audit_can_opt_into_source_vmlx_imports():
     row = next(row for row in ROWS if row.id == "zaya_vl_jangtq4")
 
@@ -161,10 +218,162 @@ def test_live_audit_can_opt_into_source_vmlx_imports():
     assert env["PYTHONNOUSERSITE"] == "1"
 
 
+def test_live_audit_preserves_venv_python_symlink_for_subprocess_launch(tmp_path):
+    py = normalize_python_executable(".venv/bin/python", cwd=tmp_path)
+
+    assert py == tmp_path / ".venv/bin/python"
+
+
+def test_live_audit_deferred_rows_keep_failure_details():
+    row = next(row for row in ROWS if row.id == "zaya_vl_jangtq_k")
+    result = {
+        "checks": [
+            {
+                "name": "responses_tool_history_continuation",
+                "ok": False,
+                "detail": {"text": "<|box_start|>[100,100,188,188]<|box_end|>"},
+            }
+        ]
+    }
+
+    audit_harness.finalize_live_status(row, result)
+
+    assert result["status"] == "DEFERRED"
+    assert "Responses tool-history" in result["reason"]
+    assert result["failures"][0]["name"] == "responses_tool_history_continuation"
+
+def test_live_audit_root_points_at_current_checkout():
+    """Worktree gates must not import modules from the stale main checkout."""
+    expected = audit_harness.Path(__file__).resolve().parents[1]
+
+    assert audit_harness.ROOT == expected
+
+
 def test_dsv4_row_points_at_current_sub80_upload_candidate_bundle():
     rows = {row.id: row for row in ROWS}
 
     assert rows["dsv4_tq"].path.endswith("DeepSeek-V4-Flash-JANGTQ-K")
+
+
+def test_dsv4_pure_affine_keeper_is_in_production_audit_matrix():
+    rows = {row.id: row for row in ROWS}
+
+    row = rows["dsv4_jang_dq2_gate3math6"]
+    assert row.path == (
+        "/Users/example/models/JANGQ/"
+        "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
+    )
+    assert row.family == "deepseek_v4"
+    assert row.cache_profile == "dsv4_composite"
+    assert row.expect_tool_parser == "dsml"
+
+
+def test_dsv4_decode_speed_gate_tracks_jangtq_and_pure_affine_lanes():
+    from tests.cross_matrix import run_decode_speed_gate
+
+    assert run_decode_speed_gate.ROWS["dsv4_k"].path.endswith(
+        "DeepSeek-V4-Flash-JANGTQ-K"
+    )
+    assert run_decode_speed_gate.ROWS["dsv4_jang_dq2_gate3math6"].path.endswith(
+        "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
+    )
+
+
+def test_dsv4_long_context_gate_defaults_to_pure_affine_keeper():
+    from tests.cross_matrix import run_dsv4_long_context_gate
+
+    assert run_dsv4_long_context_gate.DEFAULT_MODEL.endswith(
+        "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
+    )
+
+
+def test_dsv4_long_context_gate_compares_cached_followup_to_no_cache():
+    """Live DSV4 gate must separate cache corruption from artifact quality."""
+    import inspect
+    from tests.cross_matrix import run_dsv4_long_context_gate
+
+    src = inspect.getsource(run_dsv4_long_context_gate.run)
+
+    assert "follow_no_cache" in src
+    assert '"skip_prefix_cache": True' in src
+    assert '"repetition_penalty": 1.0' in src
+    assert "GATE RUN ID" in src
+    assert "follow_cached: missing cached_tokens evidence" in src
+    assert "store_turn: unexpected prefix cache hit" in src
+    assert "cached_vs_no_cache" in src
+
+
+def test_dsv4_responses_cache_gate_defaults_to_pure_affine_keeper():
+    from tests.cross_matrix import run_dsv4_responses_cache_gate
+
+    assert run_dsv4_responses_cache_gate.DEFAULT_MODEL.endswith(
+        "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
+    )
+
+
+def test_dsv4_responses_cache_gate_uses_previous_response_and_no_cache_control():
+    """DSV4 Responses cache proof must separate previous_response_id reuse from cold quality."""
+    import inspect
+    from tests.cross_matrix import run_dsv4_responses_cache_gate
+
+    src = inspect.getsource(run_dsv4_responses_cache_gate.run)
+    module_src = inspect.getsource(run_dsv4_responses_cache_gate)
+
+    assert "/v1/responses" in src
+    assert "previous_response_id" in src
+    assert "explicit_no_cache_full_prompt" in src
+    assert '"skip_prefix_cache": True' in src
+    assert '"repetition_penalty": 1.0' in src
+    assert "GATE RUN ID" in src
+    assert "previous_response_follow: missing cached_tokens evidence" in src
+    assert "previous_response_follow: missing dsv4 cache_detail" in src
+    assert "store_turn: unexpected prefix cache hit" in src
+    assert "explicit_no_cache_full_prompt: unexpected cache usage" in src
+    assert "input_tokens_details" in module_src
+    assert "native_cache" in src
+
+
+def test_dsv4_responses_cache_gate_records_stream_ttft_and_usage():
+    """Streaming TTFT must be measured from first real model delta, not SSE setup events."""
+    import inspect
+    from tests.cross_matrix import run_dsv4_responses_cache_gate
+
+    events = [
+        b'event: response.created\n',
+        b'data: {"type":"response.created"}\n',
+        b"\n",
+        b'event: response.output_item.added\n',
+        b'data: {"type":"response.output_item.added"}\n',
+        b"\n",
+        b'event: response.output_text.delta\n',
+        b'data: {"type":"response.output_text.delta","delta":"CERULEAN / "}\n',
+        b"\n",
+        b'event: response.usage\n',
+        b'data: {"type":"response.usage","usage":{"input_tokens":10,"output_tokens":1,"input_tokens_details":{"cached_tokens":9,"cache_detail":"paged+dsv4"}}}\n',
+        b"\n",
+        b'event: response.completed\n',
+        b'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":10,"output_tokens":3,"input_tokens_details":{"cached_tokens":9,"cache_detail":"paged+dsv4"}}}}\n',
+        b"\n",
+    ]
+
+    parsed = list(run_dsv4_responses_cache_gate.iter_sse_json_lines(events))
+    assert [event["type"] for event in parsed] == [
+        "response.created",
+        "response.output_item.added",
+        "response.output_text.delta",
+        "response.usage",
+        "response.completed",
+    ]
+
+    module_src = inspect.getsource(run_dsv4_responses_cache_gate)
+    run_src = inspect.getsource(run_dsv4_responses_cache_gate.run)
+    assert "stream_previous_response_follow" in run_src
+    assert '"stream": True' in run_src
+    assert '"stream_options": {"include_usage": True}' in run_src
+    assert "ttft_seconds" in module_src
+    assert "response.output_text.delta" in module_src
+    assert "stream_previous_response_follow: missing TTFT" in run_src
+    assert "stream_previous_response_follow: missing dsv4 cache_detail" in run_src
 
 
 def test_mistral_medium_jangtq_path_matches_current_drive_layout():
@@ -341,7 +550,7 @@ def test_dsv4_capability_contract_uses_native_cache_not_experimental_mode():
         "supports_thinking": True,
         "supported_modes": ["instruct", "reasoning"],
         "experimental_modes": [],
-        "reasoning_efforts": ["low", "medium", "high", "max"],
+        "reasoning_efforts": ["high", "max"],
         "cache": {
             "native": {
                 "family": "deepseek_v4",
@@ -494,3 +703,21 @@ def test_live_gate_server_command_does_not_import_from_repo_cwd(tmp_path):
     assert cmd[:4] == [str(tmp_path / "python3"), "-B", "-s", "-P"]
     assert "-m" in cmd
     assert cmd[cmd.index("-m") + 1] == "vmlx_engine.cli"
+
+
+def test_live_gate_server_command_does_not_force_sampling_defaults(tmp_path):
+    cmd = audit_harness.live_server_command(
+        tmp_path / "python3",
+        tmp_path / "model",
+        8123,
+        tmp_path / "block-cache",
+    )
+
+    for flag in (
+        "--default-temperature",
+        "--default-top-p",
+        "--default-top-k",
+        "--default-min-p",
+        "--default-repetition-penalty",
+    ):
+        assert flag not in cmd

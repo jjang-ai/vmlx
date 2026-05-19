@@ -24,6 +24,7 @@ DeepSeek's other special tokens (`<｜begin▁of▁sentence｜>`, `<｜User｜>`
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -272,7 +273,7 @@ class TestDSMLToolParser:
         monkeypatch.setattr(
             dsv4_chat_encoder,
             "_load_encoding_dsv4_module",
-            lambda: FakeEncoding,
+            lambda **_kwargs: FakeEncoding,
         )
 
         text = (
@@ -305,3 +306,137 @@ class TestDSMLToolParser:
             "path": "docs/vendor_memo.md"
         }
         assert out.content is None
+
+    def test_canonical_encoder_uses_request_model_path(
+        self, parser, monkeypatch, tmp_path
+    ):
+        """DSML canonical parsing must use the loaded bundle encoder."""
+        from vmlx_engine.loaders import dsv4_chat_encoder
+
+        captured = {}
+
+        class FakeEncoding:
+            @staticmethod
+            def parse_message_from_completion_text(_text):
+                return {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "read_file",
+                                "arguments": {"path": "docs/vendor_memo.md"},
+                            }
+                        }
+                    ],
+                }
+
+        def fake_loader(**kwargs):
+            captured.update(kwargs)
+            return FakeEncoding
+
+        monkeypatch.setattr(
+            dsv4_chat_encoder,
+            "_load_encoding_dsv4_module",
+            fake_loader,
+        )
+
+        request = {
+            "model_path": str(tmp_path),
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"],
+                        },
+                    },
+                }
+            ],
+        }
+
+        out = parser.extract_tool_calls(
+            f'<{DSML_PREFIX}invoke name="read_file"></{DSML_PREFIX}invoke>',
+            request=request,
+        )
+
+        assert Path(captured["model_path"]) == tmp_path
+        assert out.tools_called is True
+        assert json.loads(out.tool_calls[0]["arguments"]) == {
+            "path": "docs/vendor_memo.md"
+        }
+
+    def test_canonical_parser_strips_wrapper_residue(self, parser, monkeypatch):
+        """Canonical parser can return a valid call plus leftover wrapper text."""
+        from vmlx_engine.loaders import dsv4_chat_encoder
+
+        class FakeEncoding:
+            @staticmethod
+            def parse_message_from_completion_text(_text):
+                return {
+                    "content": f"<{DSML_PREFIX}tool_calls>\n\n</{DSML_PREFIX}tool_c>",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": {"city": "Tokyo"},
+                            }
+                        }
+                    ],
+                }
+
+        monkeypatch.setattr(
+            dsv4_chat_encoder,
+            "_load_encoding_dsv4_module",
+            lambda **_kwargs: FakeEncoding,
+        )
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"city": {"type": "string"}},
+                            "required": ["city"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        out = parser.extract_tool_calls(
+            f"<{DSML_PREFIX}tool_calls>...</{DSML_PREFIX}tool_c>",
+            request=request,
+        )
+
+        assert out.tools_called is True
+        assert out.tool_calls[0]["name"] == "get_weather"
+        assert json.loads(out.tool_calls[0]["arguments"]) == {"city": "Tokyo"}
+        assert out.content is None
+
+    def test_streaming_buffers_dsml_tool_calls_wrapper_before_invoke(self, parser):
+        """DSV4 may stream <｜DSML｜tool_calls> before the inner invoke.
+
+        The streaming parser must not surface that wrapper as content while
+        waiting for the complete invoke block.
+        """
+        first = f"\n\n<{DSML_PREFIX}tool_calls>\n<{DSML_PREFIX}tool_c"
+        out = parser.extract_tool_calls_streaming(
+            previous_text="",
+            current_text=first,
+            delta_text=first,
+            previous_token_ids=[],
+            current_token_ids=[],
+            delta_token_ids=[],
+        )
+        assert out is None
+
+    def test_server_buffers_dsml_wrapper_marker_before_invoke(self):
+        """Server marker list must catch DSV4 wrapper chunks before invoke."""
+        from vmlx_engine.server import _TOOL_CALL_MARKERS
+
+        assert "<｜DSML｜tool_c" in _TOOL_CALL_MARKERS

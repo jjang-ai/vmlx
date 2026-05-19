@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { ArrowLeft, ChevronRight } from 'lucide-react'
 import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG } from './SessionConfigForm'
 import { useTranslation } from '../../i18n'
+import { resolveCacheLaunchPolicy } from '../../../../shared/cacheControlPolicy'
 
 interface Session {
   id: string
@@ -39,6 +40,18 @@ function cacheTypeRequiresPaged(cacheType?: string): boolean {
 }
 
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
+const GENERIC_DEFAULT_TIMEOUT_SECONDS = 300
+const DSV4_DEFAULT_TIMEOUT_SECONDS = 900
+
+function effectiveSessionTimeoutSeconds(config: Partial<SessionConfig>, family?: string): number {
+  const configured = config.timeout
+  if (configured != null && configured <= 0) return 86400
+  const normalizedFamily = normalizeDetectedFamilyName(family)
+  if (normalizedFamily === 'deepseek-v4' && (configured == null || configured === GENERIC_DEFAULT_TIMEOUT_SECONDS)) {
+    return DSV4_DEFAULT_TIMEOUT_SECONDS
+  }
+  return configured != null && configured > 0 ? configured : GENERIC_DEFAULT_TIMEOUT_SECONDS
+}
 
 const ADDITIONAL_ARG_VALUE_FLAGS = new Set([
   '--block-disk-cache-dir',
@@ -231,14 +244,15 @@ function buildCommandPreview(
           : false
   const zayaCcaActive = isZayaCcaFamily(detectedFamily)
   const turboQuantActive = !!detected?.isTurboQuant
+  const hybridCacheActive = detected?.cacheType === 'hybrid' || detected?.cacheType === 'mamba'
   const effectiveDistributed = requestedDistributed && !dsv4Active
   const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed && !dsv4Active
-  const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !zayaCcaActive && !turboQuantActive
+  const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !zayaCcaActive && !turboQuantActive && !hybridCacheActive
 
   // Server settings
   parts.push('--host', config.host)
   parts.push('--port', config.port.toString())
-  parts.push('--timeout', (config.timeout != null && config.timeout > 0 ? config.timeout : 86400).toString())
+  parts.push('--timeout', effectiveSessionTimeoutSeconds(config, detectedFamily).toString())
 
   if (config.apiKey) parts.push('# VLLM_API_KEY=*** (env var)')
   if (config.rateLimit && config.rateLimit > 0) parts.push('--rate-limit', config.rateLimit.toString())
@@ -270,15 +284,24 @@ function buildCommandPreview(
     : (config.reasoningParser && config.reasoningParser !== 'auto' ? config.reasoningParser
       : detected?.reasoningParser)
 
-  // Prefix cache (mirrors buildArgs lines 1077-1114)
-  const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
-  const prefixCacheOff = dsv4Active ? false : !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
-  const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
-  const dsv4CompositeRequiresPaged = dsv4Active && !prefixCacheOff
-  const nativeCacheRequiresPaged = cacheTypeRequiresPaged(detected?.cacheType) && detected?.usePagedCache === true && !prefixCacheOff
-  const usePagedCache = zayaTypedCacheRequiresPaged || dsv4CompositeRequiresPaged || nativeCacheRequiresPaged
-    ? true
-    : (config.usePagedCache ?? detected?.usePagedCache)
+  // Prefix cache (mirrors buildArgs): explicit user opt-out stays off even
+  // when tools are configured. Tool sessions benefit from cache but do not
+  // silently own the cache toggle.
+  const zayaTypedCacheRequiresPaged = zayaCcaActive
+  const architectureRequiresPagedCache =
+    zayaTypedCacheRequiresPaged ||
+    dsv4Active ||
+    (cacheTypeRequiresPaged(detected?.cacheType) && detected?.usePagedCache === true)
+  const cacheLaunchPolicy = resolveCacheLaunchPolicy({
+    continuousBatching: cacheStackActive,
+    enablePrefixCache: config.enablePrefixCache !== false,
+    usePagedCache: config.usePagedCache ?? detected?.usePagedCache ?? false,
+    enableDiskCache: !!config.enableDiskCache,
+    enableBlockDiskCache: !!config.enableBlockDiskCache,
+    architectureRequiresPagedCache,
+  })
+  const prefixCacheOff = cacheLaunchPolicy.prefixCacheOff
+  const usePagedCache = cacheLaunchPolicy.effectiveUsePagedCache
 
   if (prefixCacheOff) {
     parts.push('--disable-prefix-cache')
@@ -314,14 +337,14 @@ function buildCommandPreview(
   }
 
   // Disk cache (L2 persistent cache) — mirrors sessions.ts buildArgs().
-  if (!prefixCacheOff && config.enableDiskCache && !usePagedCache) {
+  if (cacheLaunchPolicy.enableLegacyDiskCache) {
     parts.push('--enable-disk-cache')
     if (config.diskCacheDir) parts.push('--disk-cache-dir', config.diskCacheDir)
     if (config.diskCacheMaxGb != null && config.diskCacheMaxGb >= 0) parts.push('--disk-cache-max-gb', config.diskCacheMaxGb.toString())
   }
 
   // Block-level disk cache (L2 for paged cache blocks) — mirrors sessions.ts buildArgs().
-  if (!prefixCacheOff && usePagedCache && config.enableBlockDiskCache) {
+  if (cacheLaunchPolicy.enableBlockDiskCache) {
     parts.push('--enable-block-disk-cache')
     if (config.blockDiskCacheDir) parts.push('--block-disk-cache-dir', config.blockDiskCacheDir)
     if (config.blockDiskCacheMaxGb != null && config.blockDiskCacheMaxGb >= 0) parts.push('--block-disk-cache-max-gb', config.blockDiskCacheMaxGb.toString())
@@ -392,7 +415,8 @@ function buildCommandPreview(
   if ((config as any).chatTemplate) parts.push('--chat-template', '"..."')
 
   // Speculative decoding
-  if (!dsv4Active && config.speculativeModel) {
+  const compatibleExternalSpeculative = !dsv4Active && !isVLM && !cacheStackActive && !!config.speculativeModel
+  if (compatibleExternalSpeculative) {
     parts.push('--speculative-model', config.speculativeModel)
     if (config.numDraftTokens && config.numDraftTokens !== 3) {
       parts.push('--num-draft-tokens', config.numDraftTokens.toString())
@@ -413,13 +437,6 @@ function buildCommandPreview(
       const depth = Math.max(1, Math.min(3, Math.round(Number(configuredDepth || nativeMtp.depth || 3))))
       parts.push('--native-mtp-depth', depth.toString())
       parts.push('--native-mtp-sampling-policy', mode === 'deterministic' ? 'deterministic-defaults' : 'compatible-only')
-      if (mode === 'deterministic') {
-        parts.push('--default-temperature', '0')
-        parts.push('--default-top-p', '1')
-        parts.push('--default-top-k', '0')
-        parts.push('--default-min-p', '0')
-        parts.push('--default-repetition-penalty', '1')
-      }
     }
   }
 

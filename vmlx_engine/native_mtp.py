@@ -639,6 +639,10 @@ def maybe_apply_native_mtp(
                 )
         else:
             _ACTIVE_NATIVE_MTP_MODEL_PATH = None
+            try:
+                _set_mtp_active(False)
+            except Exception:
+                pass
             status["runtime_available"] = False
             status["runtime_active"] = False
             status["status"] = "runtime_patch_failed"

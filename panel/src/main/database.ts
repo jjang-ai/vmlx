@@ -84,6 +84,7 @@ export interface Message {
   // up in the renderer and violate older SQLite CHECK constraints.
   toolResultsOaiJson?: string;
   reasoningContent?: string; // Reasoning/thinking content (from <think> tags or similar)
+  reasoningSegmentsJson?: string; // JSON array of interleaved reasoning segments split by tool boundaries
 }
 
 export interface Folder {
@@ -360,6 +361,11 @@ class DatabaseManager {
       }
       if (!msgColumns.find((c) => c.name === "reasoning_content")) {
         this.db.exec("ALTER TABLE messages ADD COLUMN reasoning_content TEXT");
+      }
+      if (!msgColumns.find((c) => c.name === "reasoning_segments_json")) {
+        this.db.exec(
+          "ALTER TABLE messages ADD COLUMN reasoning_segments_json TEXT",
+        );
       }
       // 2026-05-03: persist OpenAI-format tool_calls + tool_call_id
       // separately from the UI-display tool-status array. Existing
@@ -700,6 +706,62 @@ class DatabaseManager {
             "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
           )
           .run(repeatPenaltyResetKey, String(Date.now()));
+      }
+
+      // v1.5.39 natural sampling recovery:
+      // Older app defaults persisted generic server-level sampling overrides
+      // into every session (temperature=0.70, top_p=0.95, repetition=1.10).
+      // Reset only the exact old generic tuple values; non-generic user edits
+      // are preserved.
+      const samplingResetKey =
+        "migration_reset_generic_sampling_defaults_1_5_39";
+      const samplingResetDone = this.db
+        .prepare("SELECT value FROM settings WHERE key = ?")
+        .get(samplingResetKey) as { value: string } | undefined;
+      if (!samplingResetDone) {
+        const sessions = this.db
+          .prepare("SELECT id, config FROM sessions")
+          .all() as { id: string; config: string }[];
+        const updateSession = this.db.prepare(
+          "UPDATE sessions SET config = ?, updated_at = ? WHERE id = ?",
+        );
+        let samplingSessionCount = 0;
+        for (const session of sessions) {
+          try {
+            const parsed = JSON.parse(session.config || "{}");
+            if (!parsed || typeof parsed !== "object") continue;
+            let changed = false;
+            if (parsed.defaultTemperature === 70) {
+              parsed.defaultTemperature = 0;
+              changed = true;
+            }
+            if (parsed.defaultTopP === 95) {
+              parsed.defaultTopP = 0;
+              changed = true;
+            }
+            if (parsed.defaultRepetitionPenalty === 110) {
+              parsed.defaultRepetitionPenalty = 0;
+              changed = true;
+            }
+            if (changed) {
+              updateSession.run(JSON.stringify(parsed), Date.now(), session.id);
+              samplingSessionCount += 1;
+            }
+          } catch {
+            // Leave malformed session JSON untouched; normal session loading
+            // already handles parse failures defensively.
+          }
+        }
+        if (samplingSessionCount > 0) {
+          console.log(
+            `[DB] v1.5.39 reset generic sampling defaults in ${samplingSessionCount} session config(s) to Server default`,
+          );
+        }
+        this.db
+          .prepare(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+          )
+          .run(samplingResetKey, String(Date.now()));
       }
 
       // v1.5.37 stale sampling recovery:
@@ -1354,9 +1416,10 @@ class DatabaseManager {
         INSERT OR REPLACE INTO messages (
           id, chat_id, role, content, timestamp, tokens,
           metrics_json, warnings_json, tool_calls_json, reasoning_content,
-          tool_calls_oai_json, tool_call_id, tool_results_oai_json
+          reasoning_segments_json, tool_calls_oai_json, tool_call_id,
+          tool_results_oai_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       stmt.run(
         message.id,
@@ -1369,6 +1432,7 @@ class DatabaseManager {
         message.warningsJson,
         message.toolCallsJson,
         message.reasoningContent,
+        message.reasoningSegmentsJson,
         message.toolCallsOaiJson,
         message.toolCallId,
         message.toolResultsOaiJson,
@@ -1385,12 +1449,20 @@ class DatabaseManager {
     messageId: string,
     content: string,
     reasoningContent?: string,
+    reasoningSegmentsJson?: string,
   ): void {
     this.ensureOpen();
     const stmt = this.db.prepare(`
-      UPDATE messages SET content = ?, reasoning_content = ? WHERE id = ?
+      UPDATE messages
+      SET content = ?, reasoning_content = ?, reasoning_segments_json = ?
+      WHERE id = ?
     `);
-    stmt.run(content, reasoningContent || null, messageId);
+    stmt.run(
+      content,
+      reasoningContent || null,
+      reasoningSegmentsJson || null,
+      messageId,
+    );
   }
 
   /** Delete a message by ID (used to clean up empty pre-inserted placeholders on error) */
@@ -1421,6 +1493,7 @@ class DatabaseManager {
       warningsJson: row.warnings_json,
       toolCallsJson: row.tool_calls_json,
       reasoningContent: row.reasoning_content,
+      reasoningSegmentsJson: row.reasoning_segments_json,
       toolCallsOaiJson: row.tool_calls_oai_json,
       toolCallId: row.tool_call_id,
       toolResultsOaiJson: row.tool_results_oai_json,

@@ -2,6 +2,13 @@ import { useState, useRef } from 'react'
 import { Modal } from '../ui/Modal'
 import { DistributedNodeList } from './DistributedNodeList'
 import { useTranslation } from '../../i18n'
+import {
+  cacheControlUpdatesForBlockDiskToggle,
+  cacheControlUpdatesForDiskToggle,
+  cacheControlUpdatesForPagedToggle,
+  resolveCacheControlPolicy,
+  type CacheControlUpdate,
+} from '../../../../shared/cacheControlPolicy'
 export interface SessionConfig {
   host: string
   port: number
@@ -261,18 +268,35 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const zayaCcaActive = isZayaCcaFamily(normalizedDetectedFamily)
   const turboQuantActive = !!detectedIsTurboQuant
   const multimodalActive = !dsv4Active && !detectedForceTextOnly && (!!detectedIsMultimodal || config.isMultimodal === true)
+  const hybridCacheActive = detectedCacheType === 'hybrid' || detectedCacheType === 'mamba'
   const effectiveContinuousBatching = dsv4Active ? true : config.continuousBatching
   const batchingOff = !effectiveContinuousBatching
   const effectivelyNoBatching = batchingOff
-  const prefixOff = dsv4Active ? false : !config.enablePrefixCache
+  const prefixOff = !config.enablePrefixCache
   const isMambaCache = detectedCacheType === 'mamba' || detectedCacheType === 'hybrid'
+  const architectureRequiresPagedCache = zayaCcaActive || dsv4Active || isMambaCache
   const zayaTypedCacheRequiresPaged = zayaCcaActive && !batchingOff && !prefixOff
   const dsv4CompositeRequiresPaged = dsv4Active && !batchingOff && !prefixOff
   const nativeCacheRequiresPaged = isMambaCache && !batchingOff && !prefixOff
-  const effectiveUsePagedCache = nativeCacheRequiresPaged || dsv4CompositeRequiresPaged || config.usePagedCache
+  const cacheControlState = {
+    continuousBatching: effectiveContinuousBatching,
+    enablePrefixCache: config.enablePrefixCache,
+    usePagedCache: config.usePagedCache,
+    enableDiskCache: config.enableDiskCache,
+    enableBlockDiskCache: config.enableBlockDiskCache,
+    architectureRequiresPagedCache,
+  }
+  const cachePolicy = resolveCacheControlPolicy(cacheControlState)
+  const effectiveUsePagedCache = cachePolicy.effectiveUsePagedCache
   const effectivePagedCacheBlockSize = dsv4CompositeRequiresPaged
     ? DSV4_PAGED_CACHE_BLOCK_SIZE
     : config.pagedCacheBlockSize
+  const pagedCacheSectionTitle = dsv4CompositeRequiresPaged
+    ? 'DSV4 Native Cache'
+    : t('sessions.config.pagedKVCache')
+  const pagedCacheToggleLabel = dsv4CompositeRequiresPaged
+    ? 'Native Composite Prefix Cache'
+    : 'Use Paged KV Cache'
   const effectiveStoredCacheQuantization = dsv4Active ? 'auto' : config.kvCacheQuantization
   const effectiveMaxNumSeqs = dsv4Active ? 1 : config.maxNumSeqs
   const effectivePrefillBatchSize = dsv4Active ? 1 : config.prefillBatchSize
@@ -294,6 +318,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
   const toggleSection = (section: keyof typeof expandedSections) => {
     setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }))
+  }
+
+  const applyCacheControlUpdates = (updates: CacheControlUpdate[]) => {
+    updates.forEach(([key, value]) => onChange(key, value))
   }
 
   return (
@@ -518,8 +546,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       <Section title={t('sessions.config.prefixCache')} expanded={expandedSections.prefixCache} onToggle={() => toggleSection('prefixCache')} hidden={isImage}>
         {!effectivelyNoBatching && <PerformanceHint text="Speeds up repeated conversations by remembering previous prompts. Makes follow-up messages much faster (lower time-to-first-token)." />}
         {batchingOff && <IncompatWarning text="Prefix cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable prefix caching." />}
-        <CheckField label="Enable Prefix Cache" tooltip="Caches prompt prefixes in memory. If you send the same system prompt or document multiple times, the server reuses the cached internal states instead of recomputing them, drastically reducing Time-To-First-Token (TTFT) and saving GPU compute. Highly recommended for agents and tool calling." checked={dsv4Active ? true : config.enablePrefixCache} onChange={v => onChange('enablePrefixCache', v)} disabled={dsv4Active} />
-        {(dsv4Active || config.enablePrefixCache) && (
+        <CheckField label="Enable Prefix Cache" tooltip="Caches prompt prefixes in memory. If you send the same system prompt or document multiple times, the server reuses the cached internal states instead of recomputing them, drastically reducing Time-To-First-Token (TTFT) and saving GPU compute. Highly recommended for agents and tool calling." checked={config.enablePrefixCache} onChange={v => onChange('enablePrefixCache', v)} />
+        {config.enablePrefixCache && (
           <>
             {dsv4Active ? (
               <InfoNote text="DSV4 Flash stores native SWA+CSA/HCA prompt-boundary state through the paged prefix path. Generic memory-aware and legacy entry-count prefix-cache controls are not used." />
@@ -558,7 +586,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               </>
             ) : (
               <>
-                {config.usePagedCache && (
+                {effectiveUsePagedCache && (
                   <IncompatWarning text="Cache Memory Limit and Cache Memory % only apply to memory-aware non-paged prefix cache. With paged cache on, use Max Cache Blocks for L1 RAM capacity and Block Cache Max for L2 disk capacity." />
                 )}
                 <SliderField
@@ -573,7 +601,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                   allowUnlimited
                   unlimitedValue={0}
                   unlimitedLabel="Auto-detect"
-                  disabled={config.usePagedCache}
+                  disabled={effectiveUsePagedCache}
                 />
                 <SliderField
                   label="Cache Memory %"
@@ -585,9 +613,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                   step={1}
                   defaultValue={DEFAULT_CONFIG.cacheMemoryPercent}
                   maxInput={100}
-                  disabled={config.usePagedCache}
+                  disabled={effectiveUsePagedCache}
                 />
-                {config.usePagedCache && <IncompatWarning text="Cache TTL has no effect when paged cache is enabled — paged cache uses block-count LRU eviction instead. To control paged cache size, adjust 'Max Cache Blocks' in the Paged KV Cache section below. To use time-based TTL, disable 'Use Paged KV Cache' in the Paged KV Cache section." />}
+                {effectiveUsePagedCache && <IncompatWarning text="Cache TTL has no effect when paged cache is enabled — paged cache uses block-count LRU eviction instead. To control paged cache size, adjust 'Max Cache Blocks' in the Paged KV Cache section below. To use time-based TTL, disable 'Use Paged KV Cache' in the Paged KV Cache section." />}
                 <SliderField
                   label="Cache TTL (minutes)"
                   tooltip="Time-to-live for memory-aware cache entries. Entries not accessed within this window are evicted to free memory. 'No expiration' means entries are only evicted by memory pressure. Note: this setting has no effect when Paged KV Cache is enabled (paged cache uses its own LRU eviction based on Max Cache Blocks)."
@@ -600,7 +628,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                   allowUnlimited
                   unlimitedValue={0}
                   unlimitedLabel="No expiration"
-                  disabled={config.usePagedCache}
+                  disabled={effectiveUsePagedCache}
                 />
               </>
             )}
@@ -636,7 +664,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                     </p>
                     <ul className="list-disc pl-5 space-y-2 text-muted-foreground">
                       <li><strong>KV Quantization:</strong> vMLX securely isolates Mamba layers. If you turn on KV Quantization (e.g. q8), it will safely compress the Attention layers while leaving the internal Mamba/SSM memory at full precision, ensuring no corruption or quality loss.</li>
-                      <li><strong>Paged Cache Requirement:</strong> Since cumulative SSM states cannot be safely stored as continuous memory-aware blocks, the engine automatically forces <code>--use-paged-cache</code> internally for these models.</li>
+                      <li><strong>Paged Cache Requirement:</strong> Since cumulative SSM states cannot be safely stored as continuous memory-aware blocks, the engine uses <code>--use-paged-cache</code> for these models when prefix caching is enabled.</li>
                     </ul>
                   </div>
 
@@ -661,15 +689,17 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       </Section>
 
       {/* Paged Cache */}
-      <Section title={t('sessions.config.pagedKVCache')} expanded={expandedSections.pagedCache} onToggle={() => toggleSection('pagedCache')} hidden={isImage}>
-        {!effectivelyNoBatching && <PerformanceHint text="Reduces memory waste by splitting the KV cache into small blocks instead of one big chunk. Lets the server handle longer conversations without running out of RAM." />}
+      <Section title={pagedCacheSectionTitle} expanded={expandedSections.pagedCache} onToggle={() => toggleSection('pagedCache')} hidden={isImage}>
+        {!effectivelyNoBatching && !dsv4CompositeRequiresPaged && <PerformanceHint text="Reduces memory waste by splitting the KV cache into small blocks instead of one big chunk. Lets the server handle longer conversations without running out of RAM." />}
+        {dsv4CompositeRequiresPaged && <PerformanceHint text="DSV4 Flash stores native SWA+CSA/HCA prompt-boundary snapshots for prefix reuse. This is not generic paged KV; the internal paged path is only the block index and L2 transport for DeepseekV4Cache state." />}
         {batchingOff && <IncompatWarning text="Paged cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable paged cache." />}
-        {config.enableDiskCache && <IncompatWarning text="Paged cache and legacy Disk Cache cannot run simultaneously. Enabling paged cache will auto-disable legacy Disk Cache. For persistent caching with paged cache, use 'Block Disk Cache (L2)' below instead." />}
-        {!batchingOff && prefixOff && <IncompatWarning text="Paged cache requires prefix cache. Enable 'Prefix Cache' above to use paged KV cache." />}
+        {!dsv4CompositeRequiresPaged && config.enableDiskCache && <IncompatWarning text="Paged cache and legacy Disk Cache cannot run simultaneously. Enabling paged cache will auto-disable legacy Disk Cache. For persistent caching with paged cache, use 'Block Disk Cache (L2)' below instead." />}
+        {!dsv4CompositeRequiresPaged && !batchingOff && prefixOff && !cachePolicy.architectureRequiresPagedCache && <InfoNote text="Paged cache is a prefix-cache backend. Turning it on will enable Prefix Cache." />}
+        {!batchingOff && prefixOff && cachePolicy.architectureRequiresPagedCache && <IncompatWarning text="This model uses native/paged cache when Prefix Cache is enabled. Enable Prefix Cache above to activate the architecture-specific cache stack." />}
         {zayaTypedCacheRequiresPaged && <InfoNote text="ZAYA typed CCA cache requires paged cache while prefix cache is enabled. Turn off Prefix Cache to disable this cache stack for ZAYA." />}
         {nativeCacheRequiresPaged && !zayaTypedCacheRequiresPaged && !dsv4CompositeRequiresPaged && <InfoNote text="Hybrid/Mamba cache models require paged cache while prefix cache is enabled so KV blocks and path-dependent state stay in the same cache contract." />}
         {dsv4CompositeRequiresPaged && <InfoNote text="DSV4 uses native SWA+CSA/HCA composite cache snapshots, so paged cache stays on and block size is fixed to 256 tokens for production decode compatibility." />}
-        <CheckField label="Use Paged KV Cache" tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations." checked={effectiveUsePagedCache} onChange={v => { onChange('usePagedCache', v); if (v && config.enableDiskCache) onChange('enableDiskCache', false) }} disabled={batchingOff || prefixOff || nativeCacheRequiresPaged || dsv4CompositeRequiresPaged} />
+        <CheckField label={pagedCacheToggleLabel} tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations." checked={effectiveUsePagedCache} onChange={v => applyCacheControlUpdates(cacheControlUpdatesForPagedToggle(v, cacheControlState))} disabled={cachePolicy.pagedCacheDisabled} />
         {effectiveUsePagedCache && (
           <>
             <SliderField
@@ -696,43 +726,44 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               unlimitedValue={0}
               unlimitedLabel="Default (1000)"
             />
-            <CheckField
-              label="Block Disk Cache (L2)"
-              tooltip="Persist individual paged cache blocks to SSD. When a block is evicted from RAM, it's saved to disk and can be reloaded later without recomputation. Dramatically speeds up cache warm-up for repeated system prompts and common prefixes. Uses content-addressable storage with background writes so disk I/O doesn't block inference. Compatible runtimes store compressed blocks in their native codec; path-dependent architectures use typed cache records instead of generic TurboQuant."
-              checked={config.enableBlockDiskCache && !batchingOff && !prefixOff}
-              onChange={v => onChange('enableBlockDiskCache', v)}
-              disabled={batchingOff || prefixOff}
+          </>
+        )}
+        {!batchingOff && !effectiveUsePagedCache && <InfoNote text="Block Disk Cache is SSD L2 for paged/native cache blocks. Turning it on will enable Prefix Cache and Paged KV Cache." />}
+        <CheckField
+          label="Block Disk Cache (L2)"
+          tooltip="Persist individual paged cache blocks to SSD. When a block is evicted from RAM, it's saved to disk and can be reloaded later without recomputation. Dramatically speeds up cache warm-up for repeated system prompts and common prefixes. Uses content-addressable storage with background writes so disk I/O doesn't block inference. Compatible runtimes store compressed blocks in their native codec; path-dependent architectures use typed cache records instead of generic TurboQuant."
+          checked={cachePolicy.blockDiskCacheChecked}
+          onChange={v => applyCacheControlUpdates(cacheControlUpdatesForBlockDiskToggle(v, cacheControlState))}
+          disabled={!cachePolicy.blockDiskCacheVisible || cachePolicy.blockDiskCacheDisabled}
+        />
+        {cachePolicy.blockDiskCacheChecked && (
+          <>
+            <SliderField
+              label="Block Cache Max (GB)"
+              tooltip="Maximum disk space for cached blocks. Oldest blocks are evicted when exceeded. Each block is small (~100KB-1MB), so 10GB can hold tens of thousands of blocks. Set to 0 for unlimited."
+              value={config.blockDiskCacheMaxGb}
+              onChange={v => onChange('blockDiskCacheMaxGb', v)}
+              min={0}
+              max={100}
+              step={1}
+              defaultValue={10}
+              allowUnlimited
+              unlimitedValue={0}
+              unlimitedLabel="Unlimited"
             />
-            {config.enableBlockDiskCache && (
-              <>
-                <SliderField
-                  label="Block Cache Max (GB)"
-                  tooltip="Maximum disk space for cached blocks. Oldest blocks are evicted when exceeded. Each block is small (~100KB-1MB), so 10GB can hold tens of thousands of blocks. Set to 0 for unlimited."
-                  value={config.blockDiskCacheMaxGb}
-                  onChange={v => onChange('blockDiskCacheMaxGb', v)}
-                  min={0}
-                  max={100}
-                  step={1}
-                  defaultValue={10}
-                  allowUnlimited
-                  unlimitedValue={0}
-                  unlimitedLabel="Unlimited"
-                />
-                <div className="block">
-                  <span className="text-xs font-medium text-muted-foreground">
-                    Block Cache Directory
-                    <Tooltip text="Directory for block-level disk cache files. A model-specific subdirectory is created automatically. Leave empty for default (~/.cache/vmlx-engine/block-cache/<model_hash>/)." />
-                  </span>
-                  <input
-                    type="text"
-                    value={config.blockDiskCacheDir || ''}
-                    onChange={e => onChange('blockDiskCacheDir', e.target.value)}
-                    placeholder={t('sessions.config.blockCachePlaceholder')}
-                    className="cfg-input text-xs"
-                  />
-                </div>
-              </>
-            )}
+            <div className="block">
+              <span className="text-xs font-medium text-muted-foreground">
+                Block Cache Directory
+                <Tooltip text="Directory for block-level disk cache files. A model-specific subdirectory is created automatically. Leave empty for default (~/.cache/vmlx-engine/block-cache/<model_hash>/)." />
+              </span>
+              <input
+                type="text"
+                value={config.blockDiskCacheDir || ''}
+                onChange={e => onChange('blockDiskCacheDir', e.target.value)}
+                placeholder={t('sessions.config.blockCachePlaceholder')}
+                className="cfg-input text-xs"
+              />
+            </div>
           </>
         )}
       </Section>
@@ -791,18 +822,23 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       {/* Disk Cache (L2 Persistent) */}
       <Section title={t('sessions.config.diskCachePersistent')} expanded={expandedSections.diskCache} onToggle={() => toggleSection('diskCache')} hidden={isImage}>
         {!effectivelyNoBatching && <PerformanceHint text="Saves cached prompts to your SSD so they survive server restarts. Next time you load the same model, previous conversations warm up instantly." />}
-        <InfoNote text="Legacy disk cache works with memory-aware prefix cache. Block disk cache (in the Paged KV Cache section) works with paged cache. Only one can be active at a time." />
+        {dsv4Active ? (
+          <InfoNote text="DSV4 Flash stores persistent prefix state through Block Disk Cache (L2) in the native cache section. Legacy disk cache is disabled because DSV4 restores typed SWA+CSA/HCA composite records, not generic KV entries." />
+        ) : (
+          <InfoNote text="Legacy disk cache works with memory-aware prefix cache. Block disk cache (in the Paged KV Cache section) works with paged cache. Only one can be active at a time." />
+        )}
         {batchingOff && <IncompatWarning text="Disk cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
-        {!effectivelyNoBatching && effectiveUsePagedCache && <IncompatWarning text="Legacy disk cache is not compatible with paged cache. To use disk-based persistence with paged cache, use 'Block Disk Cache (L2)' in the Paged KV Cache section instead. To use this legacy disk cache, disable 'Use Paged KV Cache' first." />}
-        {!batchingOff && prefixOff && <IncompatWarning text="Disk cache requires prefix cache. Enable 'Prefix Cache' above to use disk caching." />}
+        {!effectivelyNoBatching && cachePolicy.legacyDiskCacheUnavailableReason === 'paged-cache-active' && <IncompatWarning text="Legacy disk cache is not compatible with paged cache. To use disk-based persistence with paged cache, use 'Block Disk Cache (L2)' in the Paged KV Cache section instead. To use this legacy disk cache, disable 'Use Paged KV Cache' first." />}
+        {!effectivelyNoBatching && cachePolicy.legacyDiskCacheUnavailableReason === 'architecture-requires-paged-cache' && <IncompatWarning text="This architecture requires native/paged cache when Prefix Cache is enabled. Use 'Block Disk Cache (L2)' in the Paged KV Cache section for persistent cache storage." />}
+        {!batchingOff && prefixOff && !cachePolicy.legacyDiskCacheDisabled && <InfoNote text="Disk cache is persistent L2 behind Prefix Cache. Turning it on will enable Prefix Cache and disable paged/block cache." />}
         <CheckField
           label="Enable Disk Cache"
           tooltip="Persist prompt caches to disk for reuse across server restarts. Acts as L2 cache behind the in-memory prefix cache — when a prompt isn't found in memory, it's loaded from disk instead of recomputing. Dramatically speeds up repeated prompts (system prompts, common prefixes). Compatible runtimes store compressed cache data in their native format; path-dependent caches use typed restore records. Requires prefix cache to be enabled. Note: not compatible with paged cache (uses different storage format)."
-          checked={config.enableDiskCache && !batchingOff && !prefixOff && !effectiveUsePagedCache}
-          onChange={v => onChange('enableDiskCache', v)}
-          disabled={batchingOff || prefixOff || effectiveUsePagedCache}
+          checked={cachePolicy.legacyDiskCacheChecked}
+          onChange={v => applyCacheControlUpdates(cacheControlUpdatesForDiskToggle(v, cacheControlState))}
+          disabled={cachePolicy.legacyDiskCacheDisabled}
         />
-        {config.enableDiskCache && (
+        {cachePolicy.legacyDiskCacheChecked && (
           <>
             <SliderField
               label="Max Cache Size (GB)"
@@ -887,12 +923,12 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <PerformanceHint text="Controls how tokens stream to you and the max response length. For chat, keep stream interval at 1. Max tokens limits how long a single reply can be." />
         {/* JIT is not available for image models or VLM chat models. */}
         <Field label="JIT Compile (mx.compile)" tooltip="Enable Metal kernel fusion via mx.compile on the model forward pass. This optimizes GPU operations for faster inference after a one-time warmup on the first request. May not work with all models — falls back gracefully if compilation fails. Requires restart.">
-          <label className={`flex items-center gap-2 ${flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
+          <label className={`flex items-center gap-2 ${flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive || hybridCacheActive ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
             <input
               type="checkbox"
-              checked={!!config.enableJit && !flashMoeActive && !distributedActive && !dsv4Active && !zayaCcaActive && !turboQuantActive && !multimodalActive}
+              checked={!!config.enableJit && !flashMoeActive && !distributedActive && !dsv4Active && !zayaCcaActive && !turboQuantActive && !multimodalActive && !hybridCacheActive}
               onChange={e => onChange('enableJit', e.target.checked)}
-              disabled={flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive}
+              disabled={flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive || hybridCacheActive}
               className="rounded border-input"
             />
             <span className="text-xs text-muted-foreground">
@@ -900,11 +936,13 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             </span>
           </label>
         </Field>
-        {(flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive) && (
+        {(flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive || hybridCacheActive) && (
           <IncompatWarning text={dsv4Active
             ? "JIT is disabled for DeepSeek-V4 native composite cache. DSV4 uses path-dependent SWA+CSA/HCA state that must stay on the uncompiled scheduler path."
             : zayaCcaActive
             ? "JIT is disabled for ZAYA typed CCA cache. CCA state is path-dependent and the full cache stack benchmarks faster on the uncompiled scheduler path."
+            : hybridCacheActive
+            ? "JIT is disabled for hybrid SSM/Mamba cache models. Their path-dependent Python cache objects are not mx.compile safe."
             : multimodalActive
             ? "JIT is disabled for multimodal/VLM models. The mlx-vlm streaming path owns image/video preprocessing and stream context state that is not safe to trace with mx.compile."
             : turboQuantActive
@@ -988,7 +1026,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         </Field>
         <SelectField
           label="Multimodal Support (VLM)"
-          tooltip="Vision-Language Model mode for models like Qwen2-VL, Qwen3-VL, Pixtral, InternVL, or LLaVA. Auto-detected VLMs launch with the MLLM scheduler even if an older saved session says off. Smelt and documented unsafe runtimes force text-only loading."
+          tooltip="Vision-Language Model mode for models like Qwen2-VL, Qwen3-VL, Pixtral, InternVL, or LLaVA. Auto-detected VLMs launch with the MLLM scheduler even if an older saved session says off. Smelt and documented unsafe runtimes use text-only loading."
           value={dsv4Active || smeltActive || detectedForceTextOnly ? 'off' : config.isMultimodal === true ? 'on' : config.isMultimodal === false ? 'off' : 'auto'}
           onChange={v => onChange('isMultimodal', v === 'on' ? true : v === 'off' ? false : undefined)}
           options={[
@@ -1002,13 +1040,13 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           <InfoNote text="DSV4 Flash is served through the text runtime. Image/video controls stay hidden because this bundle has no VL processor path." />
         )}
         {smeltActive && (
-          <IncompatWarning text="VLM is disabled when Smelt Mode is active. Smelt forces text-only loading for partial expert support." />
+          <IncompatWarning text="VLM is disabled when Smelt Mode is active. Smelt uses text-only loading for partial expert support." />
         )}
         {detectedForceTextOnly && (
           <IncompatWarning text="This model has media metadata, but vMLX is using the text runtime because its current VLM language path is not production-safe. Use an MXFP4 or JANGTQ/MXTQ variant for image/video input." />
         )}
         {!dsv4Active && !smeltActive && !detectedForceTextOnly && config.isMultimodal === true && (
-          <InfoNote text="VLM mode forced ON — the MLLM scheduler handles image/video processing with full prefix cache, paged KV cache, and KV quantization support." />
+          <InfoNote text="VLM mode is active — the MLLM scheduler handles image/video processing with full prefix cache, paged KV cache, and KV quantization support." />
         )}
         {!dsv4Active && !smeltActive && !detectedForceTextOnly && config.isMultimodal === false && (
           <InfoNote text="VLM mode is off only when the model is not auto-detected as multimodal. Detected VLM bundles launch with image/video support." />
@@ -1076,16 +1114,16 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           defaultValue={3}
           disabled={nativeMtpMode === 'off'}
         />
-        <InfoNote text={`Detected scope: ${detectedNativeMtp?.runtimeScope || 'text'}; depth source: ${detectedNativeMtp?.depthSource || 'default'}. Paged cache remains forced for hybrid cache bundles while prefix cache is enabled so KV blocks and SSM state stay in one cache contract.`} />
+        <InfoNote text={`Detected scope: ${detectedNativeMtp?.runtimeScope || 'text'}; depth source: ${detectedNativeMtp?.depthSource || 'default'}. Hybrid cache bundles use paged cache while prefix cache is enabled so KV blocks and SSM state stay in one cache contract.`} />
       </Section>
 
       {/* Speculative Decoding */}
       <Section title={t('sessions.config.specDecoding')} expanded={expandedSections.specDecode} onToggle={() => toggleSection('specDecode')} hidden={isImage || dsv4Active}>
         <PerformanceHint text="Use a small draft model to propose tokens, then verify them in a single target model pass. Can give 20-90% speedup with zero quality loss." />
-        {config.continuousBatching && <IncompatWarning text="Speculative decoding is incompatible with continuous batching. The draft model will only be used in SimpleEngine (non-batched) mode. Batched requests will use standard generation." />}
-        {config.isMultimodal === true && <IncompatWarning text="Speculative decoding is incompatible with multimodal (VLM) models. The draft model will be ignored for VLM requests." />}
+        {config.continuousBatching && <IncompatWarning text="Speculative decoding is incompatible with continuous batching. The draft model is omitted at launch while the cache-stack scheduler is active." />}
+        {multimodalActive && <IncompatWarning text="Speculative decoding is incompatible with multimodal (VLM) models. The draft model is omitted at launch for VLM requests." />}
         <Field label="Draft Model" tooltip="Path or HuggingFace name of a small draft model. Must use the same tokenizer as the main model. Example: mlx-community/Llama-3.2-1B-Instruct-4bit for a Llama 3 target model. Leave empty to disable speculative decoding.">
-          <input type="text" value={config.speculativeModel} onChange={e => onChange('speculativeModel', e.target.value)} placeholder={t('sessions.config.specModelPlaceholder')} className="cfg-input" disabled={false} />
+          <input type="text" value={config.speculativeModel} onChange={e => onChange('speculativeModel', e.target.value)} placeholder={t('sessions.config.specModelPlaceholder')} className="cfg-input" disabled={config.continuousBatching || multimodalActive || dsv4Active} />
         </Field>
         {config.speculativeModel && (
           <SliderField
@@ -1097,7 +1135,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             max={20}
             step={1}
             defaultValue={DEFAULT_CONFIG.numDraftTokens}
-            disabled={false}
+            disabled={config.continuousBatching || multimodalActive || dsv4Active}
           />
         )}
       </Section>

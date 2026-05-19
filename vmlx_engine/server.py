@@ -59,6 +59,7 @@ from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import uvicorn
@@ -941,12 +942,6 @@ def _resolve_dsv4_thinking_policy(
     tool_choice: Any,
 ) -> _DSV4ThinkingDecision:
     """Resolve DSV4's public thinking toggle without hidden rail guards."""
-    if tools_present and tool_choice != "none":
-        return _DSV4ThinkingDecision(
-            enable_thinking=False,
-            reasoning_effort_allowed=False,
-            reason="tool_call_direct_rail",
-        )
     if requested_enable_thinking is True or effort_requested:
         return _DSV4ThinkingDecision(
             enable_thinking=True,
@@ -1216,6 +1211,108 @@ def _content_has_multimodal(content) -> bool:
     return False
 
 
+def _content_multimodal_summary(content) -> dict:
+    """Return redacted media counts for a message/content-part list.
+
+    This intentionally never logs URL strings or base64 payloads. The goal is
+    to make exported user logs answer whether media reached the server and what
+    route/runtime saw it, without leaking image/audio/video contents.
+    """
+    summary = {
+        "total": 0,
+        "types": {},
+        "data_url": 0,
+        "url_or_path": 0,
+        "missing_source": 0,
+    }
+    if not isinstance(content, list):
+        return summary
+
+    def _as_clean_dict(obj):
+        if hasattr(obj, "model_dump"):
+            return obj.model_dump(exclude_none=True)
+        if hasattr(obj, "dict"):
+            return {k: v for k, v in obj.dict().items() if v is not None}
+        return obj if isinstance(obj, dict) else None
+
+    def _source_for_part(part: dict):
+        ptype = part.get("type")
+        if ptype in ("image_url", "image"):
+            src = part.get("image_url") or part.get("image")
+            return src.get("url") if isinstance(src, dict) else src
+        if ptype in ("video_url", "video"):
+            src = part.get("video_url") or part.get("video")
+            return src.get("url") if isinstance(src, dict) else src
+        if ptype in ("input_image",):
+            src = part.get("image_url") or part.get("url") or part.get("file_id")
+            return src.get("url") if isinstance(src, dict) else src
+        if ptype in ("input_video",):
+            src = part.get("video_url") or part.get("url") or part.get("file_id")
+            return src.get("url") if isinstance(src, dict) else src
+        if ptype in ("input_audio", "audio"):
+            src = part.get("input_audio") or part.get("audio")
+            if isinstance(src, dict):
+                return src.get("url") or ("<inline_audio_data>" if src.get("data") else None)
+            return src
+        return None
+
+    for raw_part in content:
+        part = _as_clean_dict(raw_part)
+        if not isinstance(part, dict):
+            continue
+        ptype = part.get("type")
+        if ptype not in _MULTIMODAL_CONTENT_TYPES:
+            continue
+        summary["total"] += 1
+        summary["types"][ptype] = int(summary["types"].get(ptype, 0)) + 1
+        src = _source_for_part(part)
+        if isinstance(src, str) and src.startswith("data:"):
+            summary["data_url"] += 1
+        elif src:
+            summary["url_or_path"] += 1
+        else:
+            summary["missing_source"] += 1
+    return summary
+
+
+def _merge_multimodal_summaries(target: dict, child: dict) -> None:
+    target["total"] += int(child.get("total") or 0)
+    target["data_url"] += int(child.get("data_url") or 0)
+    target["url_or_path"] += int(child.get("url_or_path") or 0)
+    target["missing_source"] += int(child.get("missing_source") or 0)
+    for key, value in (child.get("types") or {}).items():
+        target["types"][key] = int(target["types"].get(key, 0)) + int(value)
+
+
+def _messages_multimodal_summary(messages) -> dict:
+    summary = {
+        "total": 0,
+        "types": {},
+        "data_url": 0,
+        "url_or_path": 0,
+        "missing_source": 0,
+        "roles": {},
+        "messages": 0,
+        "content_arrays": 0,
+    }
+    for msg in messages or []:
+        if hasattr(msg, "model_dump"):
+            msg = msg.model_dump(exclude_none=True)
+        elif hasattr(msg, "dict"):
+            msg = {k: v for k, v in msg.dict().items() if v is not None}
+        role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+        if isinstance(content, list):
+            summary["content_arrays"] += 1
+        child = _content_multimodal_summary(content)
+        if child.get("total"):
+            summary["messages"] += 1
+            role_key = str(role or "unknown")
+            summary["roles"][role_key] = int(summary["roles"].get(role_key, 0)) + 1
+            _merge_multimodal_summaries(summary, child)
+    return summary
+
+
 def _messages_have_multimodal(messages) -> bool:
     for msg in messages or []:
         if hasattr(msg, "model_dump"):
@@ -1226,6 +1323,41 @@ def _messages_have_multimodal(messages) -> bool:
         if _content_has_multimodal(content):
             return True
     return False
+
+
+def _responses_input_multimodal_summary(input_data) -> dict:
+    summary = {
+        "total": 0,
+        "types": {},
+        "data_url": 0,
+        "url_or_path": 0,
+        "missing_source": 0,
+        "items": 0,
+        "content_arrays": 0,
+    }
+    if isinstance(input_data, str):
+        return summary
+    for item in input_data or []:
+        if hasattr(item, "model_dump"):
+            item = item.model_dump(exclude_none=True)
+        elif hasattr(item, "dict"):
+            item = {k: v for k, v in item.dict().items() if v is not None}
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if item_type in _MULTIMODAL_CONTENT_TYPES:
+            child = _content_multimodal_summary([item])
+            if child.get("total"):
+                summary["items"] += 1
+                _merge_multimodal_summaries(summary, child)
+        content = item.get("content")
+        if isinstance(content, list):
+            summary["content_arrays"] += 1
+            child = _content_multimodal_summary(content)
+            if child.get("total"):
+                summary["items"] += 1
+                _merge_multimodal_summaries(summary, child)
+    return summary
 
 
 def _responses_input_has_multimodal(input_data) -> bool:
@@ -1243,6 +1375,34 @@ def _responses_input_has_multimodal(input_data) -> bool:
         if _content_has_multimodal(item.get("content")):
             return True
     return False
+
+
+def _log_multimodal_request_shape(route: str, model_name: str, summary: dict) -> None:
+    """Log redacted media request shape for user-exported diagnostics."""
+    if not summary or int(summary.get("total") or 0) <= 0:
+        return
+    try:
+        from .model_config_registry import get_model_config_registry
+
+        cfg = get_model_config_registry().lookup(_model_path or model_name or "")
+        family = getattr(cfg, "family_name", None)
+        registry_is_mllm = bool(getattr(cfg, "is_mllm", False))
+    except Exception:
+        family = None
+        registry_is_mllm = False
+    engine_is_mllm = bool(
+        getattr(_engine, "is_mllm", False) or getattr(_engine, "_is_mllm", False)
+    ) if _engine is not None else None
+    payload = {
+        "route": route,
+        "model": Path(str(model_name)).name if model_name else None,
+        "family": family,
+        "engine_is_mllm": engine_is_mllm,
+        "registry_is_mllm": registry_is_mllm,
+        "omni_modalities": _loaded_omni_modalities(),
+        "media": summary,
+    }
+    logger.info("[MEDIA_DIAG] request_shape=%s", json.dumps(payload, sort_keys=True))
 
 
 def _loaded_omni_modalities() -> list[str] | None:
@@ -1319,22 +1479,15 @@ def _resolve_enable_thinking(
 ) -> bool | None:
     """Resolve enable_thinking using the shared precedence chain.
 
-    Precedence: per-request > chat_template_kwargs > incompatible family guard >
-    unsupported-family guard > server default true > model/template auto-detect
-    > true.
+    Precedence: unsupported-family guard > per-request > chat_template_kwargs >
+    explicit server default > Auto.
 
     Native API client defaults such as Ollama ``think:false`` must not force
-    reasoning off globally. vMLX defaults reasoning on for supported families
-    across API surfaces, while preserving explicit user opt-outs and hard
-    family contracts such as Ling/Bailing's supports_thinking=False.
-
-    Returns a concrete bool so every API surface reaches the same effective
-    thinking policy.
-
-    auto_detect=True mirrors the OpenAI path which, after the three
-    upstream layers miss, inspects registry.think_in_template,
-    registry.reasoning_parser, and tokenizer.has_thinking to infer a
-    default.
+    reasoning off globally. Omitted controls must also not force reasoning on:
+    Auto is represented as ``None`` so the native tokenizer/template/runtime
+    default decides. Explicit user/default settings and hard family contracts
+    such as Ling/Bailing's supports_thinking=False still produce a concrete
+    bool.
     """
     _mc = None
     try:
@@ -1355,53 +1508,12 @@ def _resolve_enable_thinking(
         return request_value
     if "enable_thinking" in ct_kwargs:
         return bool(ct_kwargs["enable_thinking"])
-    if tools_present and _family_l in ("gemma4", "gemma4_text"):
-        # mlxstudio#71: Gemma 4 emits a native thought channel before tools and
-        # can truncate the actual tool call under small budgets. This is an
-        # architecture-specific incompatible row, so it stays off by default
-        # only when tools are present; explicit request/template values above
-        # still win.
-        return False
-    if _family_l in ("minimax", "minimax_m2", "minimax_m2_5"):
-        # MiniMax M2/M2.5/M2.7 templates open `<think>` whenever
-        # enable_thinking is omitted. Live MiniMax-M2.7-JANGTQ_K proof showed
-        # omission can spend the full small response budget in reasoning-only
-        # output and can take minutes on a cold first turn, while explicit
-        # enable_thinking=false returns the same visible answer immediately.
-        # This is a default-policy correction, not a clamp: explicit
-        # enable_thinking=true above still opens the thinking rail.
-        return False
-    if _family_l in ("qwen3_5", "qwen3_5_moe"):
-        # Qwen3.6 / Qwen3.5 templates support a reasoning rail, but live
-        # Qwen3.6-35B MXFP8-MTP proof showed omitted/default chat requests can
-        # spend the whole short response budget in reasoning-only output. Keep
-        # normal app/API chat on the visible rail unless the request or chat
-        # template kwargs explicitly enable thinking above.
-        return False
     if _default_enable_thinking is True:
         return True
     if _default_enable_thinking is False:
-        # vMLX's production default is reasoning-on for unknown models to
-        # avoid accidentally breaking first-run behavior. A stale
-        # --default-enable-thinking=false from older profiles should *not*
-        # override known model configs, but can still fall back to on for
-        # genuinely unknown models.
-        return False if getattr(_mc, "family_name", None) not in (None, "unknown") else True
+        return False
 
-    if auto_detect:
-        _enable = bool(getattr(_mc, "think_in_template", False)) if _mc else False
-        if not _enable and _mc is not None and getattr(_mc, "reasoning_parser", None):
-            _enable = True
-        if not _enable and engine is not None:
-            try:
-                if getattr(engine.tokenizer, "has_thinking", False):
-                    _enable = True
-            except Exception:
-                pass
-        if _enable:
-            return True
-
-    return True
+    return None
 
 
 # Global MCP manager
@@ -1441,10 +1553,20 @@ _TOOL_CALL_MARKERS = [
     "<|tool_call_begin|>",
     "<\uff5ctool\u2581calls\u2581begin\uff5c>",  # DeepSeek Unicode variant (U+FF5C, U+2581)
     "<\uff5ctool\u2581call\u2581begin\uff5c>",  # DeepSeek singular begin (GLM-5.1 emits this)
+    "<｜DSML｜tool_c",  # DSV4 DSML wrapper prefix before inner invoke
     "<｜DSML｜invoke",  # DSV4 native tool-call format
     "<|python_tag|>",  # Llama 3.1+ code interpreter / tool call
     "```tool_code",  # Gemma 3 / 3n function-call code block (Google docs format)
 ]
+
+
+def _rendered_prompt_starts_in_reasoning(rendered: str, marker: str = "__test__") -> bool:
+    """Return whether a rendered assistant prefix leaves ``<think>`` open."""
+    after_user = str(rendered).rsplit(marker, 1)[-1]
+    # A closed sentinel (`<think></think>`) means "thinking produced
+    # nothing; visible answer starts now", not "parser starts in reasoning".
+    cleaned = re.sub(r"<think>\s*</think>", "", after_user)
+    return "<think>" in cleaned and "</think>" not in cleaned.split("<think>", 1)[1]
 
 
 def _template_always_thinks(tokenizer, model_name: str) -> bool:
@@ -1538,14 +1660,7 @@ def _template_starts_reasoning(
                 add_generation_prompt=True,
                 tokenize=False,
             )
-        after_user = str(rendered).rsplit("__test__", 1)[-1]
-        # A closed sentinel (`<think></think>`) means "thinking produced
-        # nothing; visible answer starts now", not "parser starts in reasoning".
-        cleaned = re.sub(r"<think>\s*</think>", "", after_user)
-        result = (
-            "<think>" in cleaned
-            and "</think>" not in cleaned.split("<think>", 1)[1]
-        )
+        result = _rendered_prompt_starts_in_reasoning(rendered)
     except Exception as exc:
         logger.debug(
             "_template_starts_reasoning check failed for %s: %s",
@@ -1555,6 +1670,59 @@ def _template_starts_reasoning(
 
     _template_starts_reasoning_cache[key] = result
     return result
+
+
+def _engine_prompt_starts_in_reasoning(
+    tokenizer,
+    *,
+    model_name: str,
+    enable_thinking: bool,
+    family_name: str | None = None,
+    tools_present: bool = False,
+) -> bool:
+    """Check the parser seed against the engine's final prompt contract.
+
+    Some tokenizers, notably MiniMax M2.x, render an open ``<think>`` even when
+    ``enable_thinking=False``. The engine then closes that block for no-tool
+    thinking-off requests before generation. Streaming parsers must seed from
+    that post-render contract; otherwise visible tokens like ``Paris`` are
+    misclassified as hidden reasoning and suppressed.
+    """
+    test_msgs = [{"role": "user", "content": "__test__"}]
+    if not hasattr(tokenizer, "apply_chat_template"):
+        return False
+    try:
+        rendered = tokenizer.apply_chat_template(
+            test_msgs,
+            enable_thinking=bool(enable_thinking),
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+    except TypeError:
+        rendered = tokenizer.apply_chat_template(
+            test_msgs,
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+
+    if enable_thinking is False:
+        try:
+            from .utils.chat_template_kwargs import ensure_thinking_off_sentinel
+
+            rendered = ensure_thinking_off_sentinel(
+                str(rendered),
+                family_name=family_name,
+                model_name=model_name,
+                tools_present=tools_present,
+            )
+        except Exception as exc:
+            logger.debug(
+                "thinking-off prompt contract check failed for %s: %s",
+                model_name,
+                exc,
+            )
+
+    return _rendered_prompt_starts_in_reasoning(str(rendered))
 
 
 # Cache: does a model's template complete thinking in the generation prompt?
@@ -2101,6 +2269,17 @@ def _apply_jit_compilation():
             if inner is None or not callable(inner):
                 logger.warning("JIT: Model object is not callable — skipping")
                 return
+            untraceable_cache_names = _jit_probe_untraceable_cache_names(
+                inner,
+                model_obj,
+            )
+            if untraceable_cache_names:
+                logger.info(
+                    "JIT: Skipping mx.compile - text hybrid cache contains "
+                    f"{', '.join(untraceable_cache_names)}. mx.compile() cannot "
+                    "trace these Python cache objects."
+                )
+                return
 
             logger.info("JIT: Applying mx.compile to model forward pass...")
             # vmlx#83: stash the pre-compile references so the warmup-failure
@@ -2644,7 +2823,12 @@ def _parse_tool_calls_with_parser(
         # Convert request to dict format for parsers that need schema info (e.g., Step3p5 type coercion)
         parser_request = None
         if request and request.tools:
-            parser_request = {"tools": convert_tools_for_template(request.tools)}
+            parser_request = {
+                "tools": convert_tools_for_template(request.tools),
+                "model_path": (
+                    _model_path or _model_name or getattr(request, "model", None)
+                ),
+            }
         result = parser_instance.extract_tool_calls(output_text, request=parser_request)
         if result.tools_called:
             tool_calls = [
@@ -3780,7 +3964,9 @@ def _bundle_weight_index_status(bundle_path: str | None) -> dict | None:
 
         suffix_counts: dict[str, int] = defaultdict(int)
         tq_target_counts: dict[str, int] = defaultdict(int)
+        routed_layout_counts: dict[str, int] = defaultdict(int)
         sample_tq_packed_targets: list[str] = []
+        mtp_tensor_count = 0
         suffixes = (
             "tq_packed",
             "tq_norms",
@@ -3792,6 +3978,7 @@ def _bundle_weight_index_status(bundle_path: str | None) -> dict | None:
 
         for raw_key in weight_map:
             key = str(raw_key)
+            lowered = key.lower()
             suffix = next(
                 (candidate for candidate in suffixes if key.endswith(f".{candidate}")),
                 None,
@@ -3802,12 +3989,23 @@ def _bundle_weight_index_status(bundle_path: str | None) -> dict | None:
                 tq_target_counts[_weight_index_role_for_key(key)] += 1
             if suffix == "tq_packed" and len(sample_tq_packed_targets) < 12:
                 sample_tq_packed_targets.append(key[: -len(".tq_packed")])
+            if key.startswith("mtp.") or ".mtp." in lowered:
+                mtp_tensor_count += 1
+            if ".switch_mlp." in lowered:
+                routed_layout_counts["prestacked_switch"] += 1
+            if re.search(r"(?:^|\.)layers\.\d+\.(?:mlp|ffn)\.experts\.\d+\.", lowered):
+                routed_layout_counts["split_expert"] += 1
 
         result = {
             "index_file": str(index_path),
             "total_tensors": len(weight_map),
             "suffix_counts": dict(sorted(suffix_counts.items())),
             "tq_target_counts": dict(sorted(tq_target_counts.items())),
+            "routed_layout_counts": {
+                "prestacked_switch": routed_layout_counts.get("prestacked_switch", 0),
+                "split_expert": routed_layout_counts.get("split_expert", 0),
+            },
+            "mtp_tensor_count": mtp_tensor_count,
             "sample_tq_packed_targets": sample_tq_packed_targets or None,
         }
         return {k: v for k, v in result.items() if v is not None}
@@ -4936,13 +5134,18 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
             ssm_entries = len(getattr(ssm_cache, "_store", {}) or {})
         except Exception:
             pass
-        hybrid_tq_override = str(
-            os.environ.get("VMLX_ALLOW_HYBRID_KV_QUANT", "")
-        ).lower() in ("1", "true", "yes", "on")
+        hybrid_live_tq_policy = getattr(
+            scheduler, "_hybrid_live_tq_policy", None
+        )
         hybrid_tq_enabled = bool(
-            hybrid_tq_override
-            and getattr(getattr(scheduler, "config", None), "kv_cache_quantization", "none")
-            != "none"
+            getattr(scheduler, "_tq_active", False)
+            and hybrid_live_tq_policy == "attention_kv_only"
+        )
+        hybrid_tq_attention_layers = list(
+            getattr(scheduler, "_hybrid_live_tq_attention_layers", []) or []
+        )
+        hybrid_tq_companion_layers = list(
+            getattr(scheduler, "_hybrid_live_tq_companion_layers", []) or []
         )
         try:
             stored_kv_bits = int(getattr(scheduler, "_kv_cache_bits", 0) or 0)
@@ -4964,10 +5167,18 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
             "generic_turboquant_kv": {
                 "enabled": hybrid_tq_enabled,
                 "reason": (
-                    "hybrid_ssm_state_override"
+                    "hybrid_attention_kv_only"
                     if hybrid_tq_enabled
                     else "hybrid_ssm_state"
                 ),
+            },
+            "live_attention_tq_kv": {
+                "enabled": hybrid_tq_enabled,
+                "mode": "live_decode" if hybrid_tq_enabled else None,
+                "applies_to": "attention_kv_layers_only",
+                "ssm_policy": "native_full_precision_companion_state",
+                "attention_layers": hybrid_tq_attention_layers,
+                "companion_layers": hybrid_tq_companion_layers,
             },
             "attention_kv_storage_quantization": {
                 "enabled": stored_kv_bits > 0,
@@ -5401,6 +5612,12 @@ async def health():
             result["native_cache"] = native_cache
 
     return result
+
+
+@app.get("/health.mtp")
+async def health_mtp():
+    """Native MTP status endpoint used by the app and release gates."""
+    return _model_mtp_status_with_loaded_runtime(_model_path or _model_name)
 
 
 def _get_scheduler():
@@ -6291,7 +6508,7 @@ async def model_capabilities(model_id: str) -> dict:
     if family == "deepseek_v4":
         supports_thinking = True
         supported_modes = ["instruct", "reasoning"]
-        reasoning_efforts = ["low", "medium", "high", "max"]
+        reasoning_efforts = ["high", "max"]
     elif supports_thinking:
         supported_modes = ["instruct", "reasoning"]
         if family == "hy_v3":
@@ -6451,6 +6668,11 @@ async def create_anthropic_message(
     # Resolve model name
     resolved_name = _resolve_model_name()
     chat_req.model = resolved_name
+    _log_multimodal_request_shape(
+        "/v1/messages",
+        _model_path or _model_name or chat_req.model,
+        _messages_multimodal_summary(chat_req.messages),
+    )
 
     _msg_max_prompt_tokens = _effective_max_prompt_tokens(chat_req)
     prompt_limit_response = _reject_if_prompt_too_long_for_messages(
@@ -6538,6 +6760,8 @@ async def create_anthropic_message(
         )
 
     engine = get_engine()
+    if _messages_have_multimodal(chat_req.messages) and not engine.is_mllm:
+        _reject_unsupported_multimodal("/v1/messages")
 
     # Build generation kwargs from the converted chat request (shared by streaming + non-streaming)
     _msg_kwargs: dict = {
@@ -7289,6 +7513,11 @@ async def ollama_chat(fastapi_request: Request):
     from .api.models import ChatCompletionRequest
 
     chat_req = ChatCompletionRequest(**openai_req)
+    _log_multimodal_request_shape(
+        "/api/chat",
+        _model_path or _model_name or chat_req.model,
+        _messages_multimodal_summary(chat_req.messages),
+    )
     _ollama_max_prompt_tokens = _effective_max_prompt_tokens(chat_req)
     prompt_limit_response = _reject_if_prompt_too_long_for_messages(
         chat_req.messages,
@@ -7316,6 +7545,8 @@ async def ollama_chat(fastapi_request: Request):
     from starlette.responses import StreamingResponse as _SR
 
     engine = get_engine()
+    if _messages_have_multimodal(chat_req.messages) and not engine.is_mllm:
+        _reject_unsupported_multimodal("/api/chat")
     chat_kwargs = {
         "max_tokens": _resolve_max_tokens(chat_req.max_tokens, chat_req.model),
         "temperature": _resolve_temperature(chat_req.temperature, chat_req.model),
@@ -9018,6 +9249,11 @@ async def create_chat_completion(
             )
     # Normalize response model field to the resolved name
     request.model = resolved_name
+    _log_multimodal_request_shape(
+        "/v1/chat/completions",
+        _model_path or _model_name or request.model,
+        _messages_multimodal_summary(request.messages),
+    )
 
     _chat_max_prompt_tokens = _effective_max_prompt_tokens(request)
     prompt_limit_response = _reject_if_prompt_too_long_for_messages(
@@ -9092,7 +9328,7 @@ async def create_chat_completion(
                     txt = getattr(p, "text", None) or (p.get("text") if isinstance(p, dict) else None)
                     if txt and str(txt).strip():
                         return True
-                elif t in ("image_url", "video_url", "image", "input_audio"):
+                elif t in _MULTIMODAL_CONTENT_TYPES:
                     return True
             return False
         return bool(c)
@@ -9569,21 +9805,21 @@ async def create_chat_completion(
                 engine.tokenizer, _model_name or request.model
             ):
                 _think_in_prompt_ns = False
-            # User asked thinking off + template actually respects it → no think prefix
             _eff_thinking_ns = chat_kwargs.get("enable_thinking")
-            if _template_starts_reasoning(
+            _prompt_enable_ns = (
+                True if _eff_thinking_ns is None else bool(_eff_thinking_ns)
+            )
+            _tools_present_ns = bool(getattr(request, "tools", None) or chat_kwargs.get("tools"))
+            if _engine_prompt_starts_in_reasoning(
                 engine.tokenizer,
-                _model_name or request.model,
-                bool(_eff_thinking_ns),
+                model_name=_model_name or request.model,
+                enable_thinking=_prompt_enable_ns,
+                family_name=getattr(_mc_nonstream, "family_name", None),
+                tools_present=_tools_present_ns,
             ):
                 _think_in_prompt_ns = True
-            elif not getattr(_mc_nonstream, "think_in_template", False):
+            else:
                 _think_in_prompt_ns = False
-            if _eff_thinking_ns is False and _think_in_prompt_ns:
-                if not _template_always_thinks(
-                    engine.tokenizer, _model_name or request.model
-                ):
-                    _think_in_prompt_ns = False
             if _hy3_prompt_starts_in_reasoning(
                 model_key=_model_path or _model_name or request.model,
                 enable_thinking=_eff_thinking_ns,
@@ -9709,6 +9945,12 @@ async def create_chat_completion(
 
     # Determine finish reason
     finish_reason = "tool_calls" if tool_calls else output.finish_reason
+    response_content = clean_output_text(cleaned_text) if cleaned_text else None
+    response_warnings = _chat_completion_warnings_for_reasoning_only(
+        response_content,
+        reasoning_text,
+        tool_calls,
+    )
 
     response = ChatCompletionResponse(
         id=response_id,
@@ -9716,7 +9958,7 @@ async def create_chat_completion(
         choices=[
             ChatCompletionChoice(
                 message=AssistantMessage(
-                    content=clean_output_text(cleaned_text) if cleaned_text else None,
+                    content=response_content,
                     reasoning=reasoning_text,
                     tool_calls=tool_calls,
                 ),
@@ -9730,6 +9972,7 @@ async def create_chat_completion(
             )
         ],
         usage=get_usage(output),
+        warnings=response_warnings,
     )
 
     # When tool_calls are present, serialize manually to ensure content:null is
@@ -9962,6 +10205,19 @@ def _current_response_warnings_for_reasoning_only(
         "is empty. Consider raising max_output_tokens or sending "
         "enable_thinking=false for the final synthesis turn."
     ]
+
+
+def _chat_completion_warnings_for_reasoning_only(
+    content: str | None,
+    reasoning: str | None,
+    tool_calls: list | None,
+) -> list[str] | None:
+    has_visible_content = bool((content or "").strip())
+    has_reasoning = bool((reasoning or "").strip())
+    has_tool_calls = bool(tool_calls)
+    return _current_response_warnings_for_reasoning_only(
+        has_reasoning and not has_visible_content and not has_tool_calls
+    )
 
 
 def _merge_responses_warnings(*warning_lists: list[str] | None) -> list[str] | None:
@@ -10443,6 +10699,11 @@ async def create_response(
 
     engine = get_engine()
     _responses_has_media = _responses_input_has_multimodal(request.input)
+    _log_multimodal_request_shape(
+        "/v1/responses",
+        _model_path or _model_name or request.model,
+        _responses_input_multimodal_summary(request.input),
+    )
     if (
         _responses_has_media
         and not engine.is_mllm
@@ -10985,21 +11246,21 @@ async def create_response(
                 engine.tokenizer, _model_name or request.model
             ):
                 _think_in_prompt_ns = False
-            # User asked thinking off + template actually respects it → no think prefix
             _eff_thinking_ns = chat_kwargs.get("enable_thinking")
-            if _template_starts_reasoning(
+            _prompt_enable_ns = (
+                True if _eff_thinking_ns is None else bool(_eff_thinking_ns)
+            )
+            _tools_present_ns = bool(getattr(request, "tools", None) or chat_kwargs.get("tools"))
+            if _engine_prompt_starts_in_reasoning(
                 engine.tokenizer,
-                _model_name or request.model,
-                bool(_eff_thinking_ns),
+                model_name=_model_name or request.model,
+                enable_thinking=_prompt_enable_ns,
+                family_name=getattr(_mc_nonstream, "family_name", None),
+                tools_present=_tools_present_ns,
             ):
                 _think_in_prompt_ns = True
-            elif not getattr(_mc_nonstream, "think_in_template", False):
+            else:
                 _think_in_prompt_ns = False
-            if _eff_thinking_ns is False and _think_in_prompt_ns:
-                if not _template_always_thinks(
-                    engine.tokenizer, _model_name or request.model
-                ):
-                    _think_in_prompt_ns = False
             if _hy3_prompt_starts_in_reasoning(
                 model_key=_model_path or _model_name or request.model,
                 enable_thinking=_eff_thinking_ns,
@@ -11496,22 +11757,25 @@ async def stream_chat_completion(
             think_in_template = False
 
     # When user explicitly disables thinking, check if template actually respects it.
-    # Templates like Qwen3 honor enable_thinking=False (no <think> injected).
-    # Templates like MiniMax ignore it (always inject <think>).
-    # For templates that ignore it, keep think_in_template=True so the parser
-    # correctly classifies reasoning, and suppress_reasoning hides it.
+    # This is only a raw-template precheck. The parser seed below uses the
+    # engine's final prompt contract, including MiniMax's closed no-thinking
+    # sentinel for no-tool direct-chat requests.
     if _effective_thinking is False and think_in_template:
         if not _template_always_thinks(engine.tokenizer, _model_name or request.model):
             think_in_template = False
 
     if _reasoning_parser:
-        if _template_starts_reasoning(
+        _prompt_enable = True if _effective_thinking is None else bool(_effective_thinking)
+        _tools_present_for_prompt = bool(getattr(request, "tools", None) or kwargs.get("tools"))
+        if _engine_prompt_starts_in_reasoning(
             engine.tokenizer,
-            _model_name or request.model,
-            bool(_effective_thinking),
+            model_name=_model_name or request.model,
+            enable_thinking=_prompt_enable,
+            family_name=getattr(_model_config, "family_name", None),
+            tools_present=_tools_present_for_prompt,
         ):
             think_in_template = True
-        elif not _model_config.think_in_template:
+        else:
             think_in_template = False
 
     if _hy3_prompt_starts_in_reasoning(
@@ -11528,20 +11792,9 @@ async def stream_chat_completion(
     ):
         think_in_template = True
 
-    # Keep think_in_prompt active even when tool results are present.
-    # Models like Qwen3/Qwen3.5-VL DO produce <think> blocks on follow-up
-    # requests after tool execution. The parser's streaming extraction handles
-    # <think>→</think>→content transitions correctly. Disabling think_in_prompt
-    # here caused reasoning text to leak as visible content before the <think>
-    # token accumulated in the stream.
-    #
-    # After the _template_always_thinks() check above, think_in_template already
-    # correctly reflects reality:
-    # - Template respects enable_thinking=False → think_in_template is False
-    # - Template always injects <think> (e.g., MiniMax) → think_in_template stays True
-    # We MUST NOT override it to False here — the parser needs think_in_prompt=True
-    # to correctly classify implicit reasoning from always-thinking templates.
-    # suppress_reasoning (below) handles hiding reasoning from the user.
+    # The parser seed must match the final prompt the engine renders. Tool
+    # requests may intentionally leave reasoning open; no-tool thinking-off
+    # requests may close it before decode.
     effective_think_in_template = think_in_template
 
     # Track if we need to add <think> prefix for thinking models (when no reasoning parser)
@@ -11692,19 +11945,12 @@ async def stream_chat_completion(
                     )
 
                 # Accumulate for marker detection (before buffering check).
-                # §15 NO-REGRESSION: when suppress_reasoning is on, reasoning
-                # is redirected to emit_content below — mirror that here so
-                # accumulated_content reflects what the client actually sees
-                # (keeps marker detection + content_was_emitted honest).
-                # Mirror UNCONDITIONALLY under suppress so the boundary delta
-                # case ("reason</think>answer" → delta with BOTH fields set)
-                # doesn't drop the reasoning half that emit_content will stream.
+                # Suppressed reasoning stays internal and must not be mirrored
+                # into accumulated_content or next-turn visible history.
                 if delta_msg.content:
                     accumulated_content += delta_msg.content
                 if delta_msg.reasoning:
                     accumulated_reasoning += delta_msg.reasoning
-                    if suppress_reasoning:
-                        accumulated_content += delta_msg.reasoning
 
                 # Check for tool call markers — separate logic for content vs reasoning:
                 # - Content: check accumulated_content (markers can span deltas)
@@ -11768,24 +12014,11 @@ async def stream_chat_completion(
                 # Include usage in every chunk when include_usage is on (for real-time metrics)
                 chunk_usage = get_usage(output) if include_usage else None
 
-                # §15 NO-REGRESSION: when reasoning is suppressed AND the model
-                # thinks anyway (ignores enable_thinking=False — Flor1an-B style
-                # vmlx#80 follow-up), we MUST route reasoning → content so the
-                # UI never shows "N tokens generated" with an empty body. Empty
-                # heartbeats alone leave the chat blank at end-of-stream.
-                #
-                # Boundary delta case: the parser can return BOTH reasoning AND
-                # content in a single chunk when `</think>answer` lands inside
-                # one delta (think_parser.py lines 200–203, 220–223, 246–249).
-                # Concatenate in natural order (reasoning → content) instead of
-                # `or`, which would drop the content half.
+                # Suppressed reasoning is never redirected into visible content.
+                # If a boundary delta carries both reasoning and content, only
+                # the content half is user-visible.
                 if suppress_reasoning:
-                    _parts = []
-                    if delta_msg.reasoning:
-                        _parts.append(delta_msg.reasoning)
-                    if delta_msg.content:
-                        _parts.append(delta_msg.content)
-                    emit_content = "".join(_parts) if _parts else None
+                    emit_content = delta_msg.content
                     emit_reasoning = None
                     if not emit_content and not output.finished:
                         heartbeat = ChatCompletionChunk(
@@ -11805,6 +12038,33 @@ async def stream_chat_completion(
                 else:
                     emit_reasoning = delta_msg.reasoning
                     emit_content = delta_msg.content
+
+                # Tool-call-only streams often start with harmless whitespace
+                # before the native marker (DSV4 commonly emits "\n\n<｜DSML｜…").
+                # Do not send that whitespace as visible content until we know
+                # the turn is not a tool call; otherwise clients see a blank
+                # assistant message before the structured tool_calls delta.
+                if (
+                    tool_call_active
+                    and not content_was_emitted
+                    and emit_content
+                    and not emit_content.strip()
+                ):
+                    if include_usage:
+                        heartbeat = ChatCompletionChunk(
+                            id=response_id,
+                            created=_created_ts,
+                            model=request.model,
+                            choices=[
+                                ChatCompletionChunkChoice(
+                                    delta=ChatCompletionChunkDelta(content=None),
+                                    finish_reason=None,
+                                )
+                            ],
+                            usage=get_usage(output),
+                        )
+                        yield f"data: {_dump_sse_json(heartbeat)}\n\n"
+                    continue
 
                 if _suppress_tools and emit_content:
                     emit_content = _suppressed_tool_display_delta(
@@ -11871,6 +12131,29 @@ async def stream_chat_completion(
                         if not tool_call_buffering_notified:
                             tool_call_buffering_notified = True
                         yield f"data: {_dump_sse_json(buf_chunk)}\n\n"
+                    continue
+
+                # Same leading-whitespace guard as the reasoning-parser path.
+                if (
+                    tool_call_active
+                    and not content_was_emitted
+                    and content
+                    and not content.strip()
+                ):
+                    if include_usage:
+                        heartbeat = ChatCompletionChunk(
+                            id=response_id,
+                            created=_created_ts,
+                            model=request.model,
+                            choices=[
+                                ChatCompletionChunkChoice(
+                                    delta=ChatCompletionChunkDelta(content=None),
+                                    finish_reason=None,
+                                )
+                            ],
+                            usage=get_usage(output),
+                        )
+                        yield f"data: {_dump_sse_json(heartbeat)}\n\n"
                     continue
 
                 # Add <think> prefix on first content chunk for thinking models
@@ -12194,13 +12477,17 @@ async def stream_chat_completion(
                         finish_reason="tool_calls",
                     )],
                 )
+                tool_calls_emitted = True
                 yield f"data: {_dump_sse_json(tc_chunk)}\n\n"
             else:
-                logger.info(f"Request {response_id}: tool markers found but parsing failed — emitting reasoning as content fallback")
+                logger.info(
+                    f"Request {response_id}: tool markers found in suppressed "
+                    "reasoning but parsing failed — preserving hidden reasoning"
+                )
                 diag_chunk = ChatCompletionChunk(
                     id=response_id, created=_created_ts, model=request.model,
                     choices=[ChatCompletionChunkChoice(
-                        delta=ChatCompletionChunkDelta(content=accumulated_reasoning),
+                        delta=ChatCompletionChunkDelta(),
                         finish_reason="stop",
                     )],
                 )
@@ -12217,6 +12504,28 @@ async def stream_chat_completion(
                 )],
             )
             yield f"data: {_dump_sse_json(diag_chunk)}\n\n"
+
+    _stream_chat_warnings = None
+    if (
+        accumulated_reasoning
+        and not content_was_emitted
+        and not tool_calls_emitted
+        and (suppress_reasoning or reasoning_was_streamed)
+    ):
+        _stream_chat_warnings = _chat_completion_warnings_for_reasoning_only(
+            content=None,
+            reasoning=accumulated_reasoning,
+            tool_calls=None,
+        )
+    if _stream_chat_warnings:
+        warning_chunk = ChatCompletionChunk(
+            id=response_id,
+            created=_created_ts,
+            model=request.model,
+            choices=[],
+            warnings=_stream_chat_warnings,
+        )
+        yield f"data: {_dump_sse_json(warning_chunk)}\n\n"
 
     # Safeguard: if model generated zero tokens (empty stream), finish the stream
     # without injecting diagnostic prose as assistant output. The warning belongs
@@ -12447,19 +12756,24 @@ async def stream_responses_api(
         if _template_completes_thinking(engine.tokenizer, _model_name or request.model):
             think_in_template = False
 
-    # When user explicitly disables thinking, check if template actually respects it
+    # When user explicitly disables thinking, check if template actually respects it.
+    # The final parser seed below uses the engine's post-render prompt contract.
     if _effective_thinking is False and think_in_template:
         if not _template_always_thinks(engine.tokenizer, _model_name or request.model):
             think_in_template = False
 
     if _reasoning_parser:
-        if _template_starts_reasoning(
+        _prompt_enable = True if _effective_thinking is None else bool(_effective_thinking)
+        _tools_present_for_prompt = bool(getattr(request, "tools", None) or kwargs.get("tools"))
+        if _engine_prompt_starts_in_reasoning(
             engine.tokenizer,
-            _model_name or request.model,
-            bool(_effective_thinking),
+            model_name=_model_name or request.model,
+            enable_thinking=_prompt_enable,
+            family_name=getattr(_model_config, "family_name", None),
+            tools_present=_tools_present_for_prompt,
         ):
             think_in_template = True
-        elif not _model_config.think_in_template:
+        else:
             think_in_template = False
 
     if _hy3_prompt_starts_in_reasoning(
@@ -12476,10 +12790,9 @@ async def stream_responses_api(
     ):
         think_in_template = True
 
-    # Keep think_in_prompt active even when tool results are present.
-    # (Same rationale as Chat Completions path — see stream_chat_completion.)
-    # After _template_always_thinks() above, think_in_template already correctly
-    # reflects reality — do NOT override to False for always-thinking templates.
+    # The parser seed must match the final prompt the engine renders. Tool
+    # requests may intentionally leave reasoning open; no-tool thinking-off
+    # requests may close it before decode.
     effective_think_in_template = think_in_template
 
     # For thinking models without reasoning parser, prepend <think>
@@ -12574,18 +12887,12 @@ async def stream_responses_api(
                         if delta_msg.reasoning:
                             delta_msg.reasoning = strip_marker_tokens_delta(delta_msg.reasoning)
                         # Accumulate for marker detection (before buffering check).
-                        # §15: when suppress_reasoning redirects reasoning → content
-                        # via emit below, mirror it here so accumulated_content
-                        # matches client-visible output (Responses API parity).
-                        # Mirror UNCONDITIONALLY under suppress so the boundary
-                        # delta case ("reason</think>answer" with both fields set)
-                        # doesn't drop half the output.
+                        # Suppressed reasoning stays internal and must not be
+                        # mirrored into visible output_text/history.
                         if delta_msg.content:
                             accumulated_content += delta_msg.content
                         if delta_msg.reasoning:
                             accumulated_reasoning += delta_msg.reasoning
-                            if suppress_reasoning:
-                                accumulated_content += delta_msg.reasoning
 
                         # Check for tool call markers in content and reasoning
                         if tool_call_active and not tool_call_buffering:
@@ -12630,21 +12937,12 @@ async def stream_responses_api(
                             continue
 
                         if not tool_call_buffering:
-                            # §15 NO-REGRESSION: when suppress_reasoning is on
-                            # and the model still thinks (ignores enable_thinking
-                            # =False), route reasoning → content so the Response
-                            # API never finishes with zero visible output. See
-                            # vmlx#80 follow-up / Flor1an-B report 2026-04-15.
-                            # Concatenate BOTH fields (reasoning first, then
-                            # content) so boundary deltas like "reason</think>answer"
-                            # don't drop the content half.
+                            # Suppressed reasoning is never redirected into
+                            # visible output_text. Boundary deltas can still
+                            # carry post-</think> content, which remains
+                            # visible.
                             if suppress_reasoning:
-                                _parts_r = []
-                                if delta_msg.reasoning:
-                                    _parts_r.append(delta_msg.reasoning)
-                                if delta_msg.content:
-                                    _parts_r.append(delta_msg.content)
-                                emit_content = "".join(_parts_r) if _parts_r else None
+                                emit_content = delta_msg.content
                                 emit_reasoning = None
                                 if not emit_content and not output.finished:
                                     yield _sse(
@@ -13572,8 +13870,6 @@ Examples:
             _default_top_k = 0
         if _default_min_p is None:
             _default_min_p = 0.0
-        if _default_repetition_penalty is None:
-            _default_repetition_penalty = 1.0
     if args.default_enable_thinking is not None:
         _default_enable_thinking = args.default_enable_thinking == "true"
 

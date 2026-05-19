@@ -69,19 +69,9 @@ MLX_VLM_VERSION="0.4.4"
 MFLUX_VERSION="0.17.5"
 
 detect_mlx_wheel_platform() {
-  local requested="${VMLINUX_BUNDLE_MLX_PLATFORM:-auto}"
+  local requested="${VMLINUX_BUNDLE_MLX_PLATFORM:-compat}"
   case "$requested" in
-    auto|"")
-      local product_version major
-      product_version="$(sw_vers -productVersion 2>/dev/null || true)"
-      major="${product_version%%.*}"
-      if [[ "$major" =~ ^[0-9]+$ ]] && [ "$major" -ge 26 ]; then
-        echo "macosx_26_0_arm64"
-      else
-        echo "macosx_14_0_arm64"
-      fi
-      ;;
-    compat|sonoma|sequoia)
+    auto|compat|sonoma|sequoia|"")
       echo "macosx_14_0_arm64"
       ;;
     tahoe|native|m5)
@@ -99,10 +89,12 @@ detect_mlx_wheel_platform() {
 }
 
 # MLX publishes multiple macOS-tagged wheels for the same version. The older
-# macosx_14 wheel preserves Sonoma/Sequoia compatibility but lacks the M5/Tahoe
-# Metal kernels that make prompt processing fast. Default to the current host's
-# native wheel, while still allowing compatibility builds via:
-#   VMLX_BUNDLE_MLX_PLATFORM=compat ./panel/scripts/bundle-python.sh
+# macosx_14 wheel preserves Sonoma/Sequoia compatibility; the macosx_26 wheel
+# carries newer Metal kernels but cannot be loaded on macOS 15 (#169). The
+# release DMG script builds both flavors explicitly; this lower-level bundler
+# defaults to compat so ad-hoc packaging from Tahoe/M5 hardware is not
+# accidentally Sequoia-hostile. Native/Tahoe wheels stay explicit opt-in:
+#   VMLX_BUNDLE_MLX_PLATFORM=native ./panel/scripts/bundle-python.sh
 MLX_WHEEL_PLATFORM="$(detect_mlx_wheel_platform)"
 WHEELHOUSE="$BUNDLE_DIR/wheelhouse"
 mkdir -p "$WHEELHOUSE"

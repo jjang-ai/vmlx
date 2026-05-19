@@ -104,6 +104,41 @@ class TestJitToggle:
 
         mock_compile.assert_not_called()
 
+    def test_jit_skips_text_hybrid_arrays_cache_before_compile(self, caplog):
+        """Text-only hybrid Qwen/Ling-style caches are not mx.compile-safe.
+
+        A force-text runtime can still use ArraysCache/MambaCache under the
+        LLM scheduler. Startup must skip compile before warmup instead of
+        tracing a graph that fails on the first real prefill.
+        """
+        from vmlx_engine import server
+
+        class ArraysCache:
+            pass
+
+        class HybridTextModel:
+            def __call__(self, *args, **kwargs):
+                return args[0]
+
+            def make_cache(self):
+                return [ArraysCache()]
+
+        model_wrapper = HybridTextModel()
+
+        mock_engine = MagicMock()
+        mock_engine._model = model_wrapper
+        mock_engine.is_mllm = False
+        mock_engine._is_mllm = False
+
+        with caplog.at_level("INFO"), \
+             patch.object(server, "_engine", mock_engine), \
+             patch.object(mx, "compile") as mock_compile:
+            server._apply_jit_compilation()
+
+        mock_compile.assert_not_called()
+        assert "Skipping mx.compile" in caplog.text
+        assert "ArraysCache" in caplog.text
+
     def test_jit_verifies_replacement(self):
         """After compile (LLM path), the compiled object replaces model.model.
         MLLM path replaces language_model.model instead — tested separately.

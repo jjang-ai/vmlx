@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useToast } from '../Toast'
+import { normalizeHfEndpointSetting } from '../../../../shared/hfSettings'
 
 interface HFModel {
   id: string
@@ -78,8 +79,9 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   // behind a restrictive network) can point this at hf-mirror.com or
   // any HF-protocol-compatible proxy to fix slow/failed downloads.
   // Empty = default to https://huggingface.co. Applies to downloads
-  // (via HF_ENDPOINT env var) AND all HF API calls (search, collection
-  // fetch, README fetch) via getHfBaseUrl() in the main process.
+  // (via an explicit worker endpoint argument) AND all HF API calls
+  // (search, collection fetch, README fetch) via fetchHfPath() in the
+  // main process.
   const [hfEndpoint, setHfEndpoint] = useState('')
   const [hfEndpointSaving, setHfEndpointSaving] = useState(false)
 
@@ -299,12 +301,14 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   // with https:// so a typo like "hf-mirror.com" (no scheme) doesn't
   // silently break all downloads when HF_ENDPOINT is mis-configured.
   const handleSaveHfEndpoint = async (endpoint: string) => {
-    const trimmed = endpoint.trim().replace(/\/+$/, '')
-    if (trimmed && !/^https?:\/\//.test(trimmed)) {
+    const raw = endpoint.trim()
+    const normalized = normalizeHfEndpointSetting(raw)
+    if (raw && !normalized) {
       showToast('error', 'Invalid mirror URL',
-        'Endpoint must start with https:// or http://')
+        'Endpoint must be an http:// or https:// URL')
       return
     }
+    const trimmed = normalized ?? ''
     setHfEndpointSaving(true)
     try {
       if (trimmed) {

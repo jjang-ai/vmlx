@@ -23,6 +23,7 @@ tests immediately.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -910,7 +911,10 @@ class TestDeepseekV32AbsorbFp32Patch:
     """
 
     def _read(self, path: str) -> str:
-        with open(path) as f:
+        file_path = Path(path)
+        if not file_path.exists():
+            pytest.skip(f"bundled Python file not present in source worktree: {path}")
+        with open(file_path) as f:
             return f.read()
 
     def test_bundled_deepseek_v32_has_fp32_absorb_fix(self):
@@ -953,6 +957,8 @@ class TestDeepseekV32AbsorbFp32Patch:
         bundled_python = (
             "panel/bundled-python/python/bin/python3"
         )
+        if not Path(bundled_python).exists():
+            pytest.skip("bundled Python is not present in this source worktree")
         code = """
 import inspect
 import mlx_lm.models.deepseek_v32 as mod

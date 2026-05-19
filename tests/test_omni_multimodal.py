@@ -117,12 +117,27 @@ def test_omni_prompt_builder_forwards_enable_thinking_false_on_first_turn():
         enable_thinking=False,
     )
 
-    assert tok.calls[0][0][0]["role"] == "system"
-    assert "Answer directly" in tok.calls[0][0][0]["content"]
-    assert tok.calls[0][0][1]["role"] == "user"
-    assert "<img><image><image></img>" in tok.calls[0][0][1]["content"]
+    assert [m["role"] for m in tok.calls[0][0]] == ["user"]
+    assert "<img><image><image></img>" in tok.calls[0][0][0]["content"]
+    assert "Answer directly" not in tok.calls[0][0][0]["content"]
     assert tok.calls[0][1]["enable_thinking"] is False
     assert prompt.endswith("<think></think>")
+
+
+def test_omni_prompt_builder_omits_enable_thinking_when_request_is_auto():
+    tok = _FakeTokenizer()
+
+    _build_omni_turn_prompt_with_thinking(
+        tok,
+        "Describe the image naturally.",
+        n_image_tokens=1,
+        is_first=True,
+        enable_thinking=None,
+    )
+
+    assert [m["role"] for m in tok.calls[0][0]] == ["user"]
+    assert "Answer directly" not in tok.calls[0][0][0]["content"]
+    assert "enable_thinking" not in tok.calls[0][1]
 
 
 def test_omni_prompt_builder_forwards_enable_thinking_false_on_followup_turn():
@@ -136,6 +151,7 @@ def test_omni_prompt_builder_forwards_enable_thinking_false_on_followup_turn():
     )
 
     assert tok.calls[0][1]["enable_thinking"] is False
+    assert "Answer directly" not in tok.calls[0][0][-1]["content"]
 
 
 def test_omni_prompt_builder_uses_image_placeholders_for_video_tokens():
@@ -149,7 +165,7 @@ def test_omni_prompt_builder_uses_image_placeholders_for_video_tokens():
         enable_thinking=False,
     )
 
-    content = tok.calls[0][0][1]["content"]
+    content = tok.calls[0][0][-1]["content"]
     assert "<img><image><image><image></img>" in content
     assert "<video>" not in content
 

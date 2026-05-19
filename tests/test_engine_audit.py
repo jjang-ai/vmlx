@@ -351,6 +351,114 @@ class TestServerSamplingResolution:
                 "so bundle generation_config.json and jang_config sampling defaults apply."
             )
 
+    def test_chat_and_responses_log_and_forward_supported_sampling_kwargs(
+        self,
+        monkeypatch,
+        caplog,
+    ):
+        """Supported text sampling kwargs must reach the engine unchanged."""
+        import logging
+
+        from fastapi.testclient import TestClient
+
+        import vmlx_engine.server as server
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class FakeTokenizer:
+            has_thinking = False
+
+        class FakeEngine:
+            is_mllm = False
+            tokenizer = FakeTokenizer()
+            preserve_native_tool_format = False
+
+        captured: list[dict] = []
+
+        async def fake_await_chat(*args, **kwargs):
+            captured.append(dict(kwargs["chat_kwargs"]))
+            return GenerationOutput(
+                text="ok",
+                prompt_tokens=3,
+                completion_tokens=1,
+            )
+
+        monkeypatch.setattr(server, "_engine", FakeEngine())
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_name", "kwarg-model")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+        monkeypatch.setattr(server, "_api_key", None, raising=False)
+        monkeypatch.setattr(server, "_default_temperature", None)
+        monkeypatch.setattr(server, "_default_top_p", None)
+        monkeypatch.setattr(server, "_default_top_k", None)
+        monkeypatch.setattr(server, "_default_min_p", None)
+        monkeypatch.setattr(server, "_default_repetition_penalty", None)
+        monkeypatch.setattr(
+            server,
+            "_await_chat_with_disconnect_abort",
+            fake_await_chat,
+        )
+        server._jang_sampling_defaults_cache.clear()
+        server._generation_defaults_cache.clear()
+
+        client = TestClient(server.app)
+        caplog.set_level(logging.INFO, logger="vmlx_engine.server")
+
+        chat_resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "kwarg-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+                "max_tokens": 17,
+                "temperature": 0.23,
+                "top_p": 0.77,
+                "top_k": 42,
+                "min_p": 0.03,
+                "repetition_penalty": 1.11,
+            },
+        )
+        responses_resp = client.post(
+            "/v1/responses",
+            json={
+                "model": "kwarg-model",
+                "input": "hi",
+                "stream": False,
+                "max_output_tokens": 19,
+                "temperature": 0.31,
+                "top_p": 0.88,
+                "top_k": 24,
+                "min_p": 0.04,
+                "repetition_penalty": 1.07,
+            },
+        )
+
+        assert chat_resp.status_code == 200
+        assert responses_resp.status_code == 200
+        assert captured[0] == {
+            "max_tokens": 17,
+            "temperature": 0.23,
+            "top_p": 0.77,
+            "max_prompt_tokens": 0,
+            "top_k": 42,
+            "min_p": 0.03,
+            "repetition_penalty": 1.11,
+        }
+        assert captured[1] == {
+            "max_tokens": 19,
+            "temperature": 0.31,
+            "top_p": 0.88,
+            "max_prompt_tokens": 0,
+            "top_k": 24,
+            "min_p": 0.04,
+            "repetition_penalty": 1.07,
+        }
+        log_text = "\n".join(record.getMessage() for record in caplog.records)
+        assert "Resolved sampling kwargs route=/v1/chat/completions" in log_text
+        assert "Resolved sampling kwargs route=/v1/responses" in log_text
+        assert "'top_k': 42" in log_text
+        assert "'min_p': 0.04" in log_text
+
 
 # ===========================================================================
 # D. Settings & Config
@@ -833,6 +941,71 @@ class TestToolParserConcurrency:
             assert result[1] is None or result[1] == []
         finally:
             srv._enable_auto_tool_choice = old_val
+
+    def test_dsml_issue_165_server_tool_call_arguments_are_not_empty_or_raw(self):
+        """DSV4 DSML repair must survive the server's OpenAI ToolCall wrapper."""
+        import json
+
+        import vmlx_engine.server as srv
+        from vmlx_engine.tool_parsers.dsml_tool_parser import DSML_PREFIX
+
+        request = srv.ChatCompletionRequest(
+            model="dsv4-test",
+            messages=[
+                srv.Message(
+                    role="user",
+                    content="Use read_file for docs/vendor_memo.md.",
+                )
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"],
+                        },
+                    },
+                }
+            ],
+        )
+        output = (
+            f'<{DSML_PREFIX}tool_calls>\n'
+            f'<{DSML_PREFIX}invoke name="read_file">\n'
+            '    <param name="path">docs/vendor_memo.md</param>\n'
+            '</inv>'
+        )
+
+        old_auto = srv._enable_auto_tool_choice
+        old_parser = srv._tool_call_parser
+        try:
+            srv._enable_auto_tool_choice = True
+            srv._tool_call_parser = "deepseek_v4"
+            cleaned, tool_calls = srv._parse_tool_calls_with_parser(output, request)
+        finally:
+            srv._enable_auto_tool_choice = old_auto
+            srv._tool_call_parser = old_parser
+
+        assert cleaned == ""
+        assert tool_calls and len(tool_calls) == 1
+        assert tool_calls[0].function.name == "read_file"
+        assert json.loads(tool_calls[0].function.arguments) == {
+            "path": "docs/vendor_memo.md"
+        }
+        assert DSML_PREFIX not in tool_calls[0].function.arguments
+
+    def test_stream_chat_buffers_leading_whitespace_before_tool_marker(self):
+        """Tool-call-only streams must not leak whitespace before tool_calls."""
+        import inspect
+
+        from vmlx_engine.server import _TOOL_CALL_MARKERS, stream_chat_completion
+
+        source = inspect.getsource(stream_chat_completion)
+        assert "<｜DSML｜tool_c" in _TOOL_CALL_MARKERS
+        assert "not emit_content.strip()" in source
+        assert "not content.strip()" in source
 
 
 class TestCacheTruncation:
@@ -1336,6 +1509,238 @@ class TestH3VideoExtractionFailures:
         )
 
 
+class TestMediaDiagnostics:
+    """Redacted media diagnostics for user logs when image requests fail."""
+
+    def test_messages_multimodal_summary_redacts_data_urls(self):
+        from vmlx_engine.server import _messages_multimodal_summary
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what color?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "data:image/png;base64,SECRET_IMAGE_BYTES"
+                        },
+                    },
+                    {
+                        "type": "video_url",
+                        "video_url": {"url": "/tmp/example.mp4"},
+                    },
+                ],
+            }
+        ]
+
+        summary = _messages_multimodal_summary(messages)
+
+        assert summary["total"] == 2
+        assert summary["types"] == {"image_url": 1, "video_url": 1}
+        assert summary["data_url"] == 1
+        assert summary["url_or_path"] == 1
+        assert "SECRET_IMAGE_BYTES" not in json.dumps(summary)
+
+    def test_responses_multimodal_summary_handles_input_image_without_payload(self):
+        from vmlx_engine.server import _responses_input_multimodal_summary
+
+        response_input = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "describe"},
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,SECRET_RESPONSE_IMAGE",
+                    },
+                ],
+            }
+        ]
+
+        summary = _responses_input_multimodal_summary(response_input)
+
+        assert summary["total"] == 1
+        assert summary["types"] == {"input_image": 1}
+        assert summary["data_url"] == 1
+        assert "SECRET_RESPONSE_IMAGE" not in json.dumps(summary)
+
+    def test_chat_multimodal_summary_handles_input_image_shape(self):
+        from vmlx_engine.server import _messages_multimodal_summary
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": ""},
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,SECRET_CHAT_INPUT_IMAGE",
+                    },
+                ],
+            }
+        ]
+
+        summary = _messages_multimodal_summary(messages)
+
+        assert summary["total"] == 1
+        assert summary["types"] == {"input_image": 1}
+        assert summary["data_url"] == 1
+        assert summary["roles"] == {"user": 1}
+        assert "SECRET_CHAT_INPUT_IMAGE" not in json.dumps(summary)
+
+    def test_anthropic_image_conversion_reaches_media_summary(self):
+        from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
+        from vmlx_engine.server import _messages_multimodal_summary
+
+        anthropic = AnthropicRequest(
+            model="vl",
+            max_tokens=32,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "SECRET_ANTHROPIC_IMAGE",
+                            },
+                        },
+                        {"type": "text", "text": "describe"},
+                    ],
+                }
+            ],
+        )
+
+        chat = to_chat_completion(anthropic)
+        summary = _messages_multimodal_summary(chat.messages)
+
+        assert summary["total"] == 1
+        assert summary["types"] == {"image_url": 1}
+        assert summary["data_url"] == 1
+        assert summary["roles"] == {"user": 1}
+        assert "SECRET_ANTHROPIC_IMAGE" not in json.dumps(summary)
+
+    def test_media_diag_hooks_cover_anthropic_and_ollama_streaming_ingress(self):
+        import inspect
+        import vmlx_engine.server as server
+
+        anthropic_source = inspect.getsource(server.create_anthropic_message)
+        ollama_source = inspect.getsource(server.ollama_chat)
+
+        assert '"/v1/messages"' in anthropic_source
+        assert "_log_multimodal_request_shape" in anthropic_source
+        assert "_messages_multimodal_summary(chat_req.messages)" in anthropic_source
+        assert '_reject_unsupported_multimodal("/v1/messages")' in anthropic_source
+
+        assert '"/api/chat"' in ollama_source
+        assert "_log_multimodal_request_shape" in ollama_source
+        assert "_messages_multimodal_summary(chat_req.messages)" in ollama_source
+        assert '_reject_unsupported_multimodal("/api/chat")' in ollama_source
+
+    def test_anthropic_media_on_text_runtime_rejects_instead_of_dropping(
+        self, monkeypatch
+    ):
+        from fastapi.testclient import TestClient
+        import vmlx_engine.server as server
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=False))
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_name", "text-runtime")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        response = TestClient(server.app).post(
+            "/v1/messages",
+            json={
+                "model": "claude",
+                "max_tokens": 8,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": "aGVsbG8=",
+                                },
+                            },
+                            {"type": "text", "text": ""},
+                        ],
+                    }
+                ],
+            },
+        )
+
+        assert response.status_code == 400
+        assert "text-only" in response.text
+
+    def test_ollama_streaming_media_on_text_runtime_rejects_instead_of_dropping(
+        self, monkeypatch
+    ):
+        from fastapi.testclient import TestClient
+        import vmlx_engine.server as server
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=False))
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_name", "text-runtime")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        response = TestClient(server.app).post(
+            "/api/chat",
+            json={
+                "model": "text-runtime",
+                "stream": True,
+                "messages": [
+                    {"role": "user", "content": "", "images": ["aGVsbG8="]}
+                ],
+            },
+        )
+
+        assert response.status_code == 400
+        assert "text-only" in response.text
+
+    def test_server_media_diag_log_includes_route_runtime_and_redacts_payload(
+        self, caplog, monkeypatch
+    ):
+        import logging
+        import vmlx_engine.server as server
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_model_path", "/models/Brooklyn-VLM")
+        monkeypatch.setattr(server, "_model_name", "Brooklyn-VLM")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+        summary = {
+            "total": 1,
+            "types": {"image_url": 1},
+            "data_url": 1,
+            "url_or_path": 0,
+            "missing_source": 0,
+            "roles": {"user": 1},
+            "messages": 1,
+            "content_arrays": 1,
+        }
+
+        caplog.set_level(logging.INFO, logger="vmlx_engine.server")
+        server._log_multimodal_request_shape(
+            "/v1/chat/completions",
+            "/models/Brooklyn-VLM",
+            summary,
+        )
+
+        text = caplog.text
+        assert "[MEDIA_DIAG] request_shape=" in text
+        assert '"/v1/chat/completions"' in text
+        assert '"engine_is_mllm": true' in text
+        assert '"total": 1' in text
+        assert "SECRET" not in text
+        assert "data:image" not in text
+
+
 class TestH4JsonSchemaStreaming:
     """H4: JSON schema/object validation must happen at end of streaming."""
 
@@ -1715,33 +2120,28 @@ class TestV3SuppressReasoningNoFallback:
 
 
 class TestV3ReasoningDoubleAccumulation:
-    """v1.3.56 §15 SUPERSEDES V3-H1: under suppress_reasoning the parser's
-    reasoning delta is routed into emit_content and MUST also mirror into
-    accumulated_content so content_was_emitted + tool-call marker detection
-    stay truthful. V3-H1's 'no double accumulation' assertion is no longer
-    applicable.
+    """Suppressed reasoning must stay out of visible content/history.
 
-    These tests now verify that the accumulated_content mirror exists AND
-    is guarded by suppress_reasoning so non-suppressed requests don't get
-    polluted. See NO-REGRESSION-CHECKLIST.md §18.
+    The panel now keeps reasoning in the dedicated reasoning channel and
+    surfaces reasoning-only cases as warnings/placeholders instead of
+    redirecting parser output into normal assistant content.
     """
 
     def test_chat_accumulated_content_mirror_under_suppress(self):
         import inspect
         from vmlx_engine.server import stream_chat_completion
         source = inspect.getsource(stream_chat_completion)
-        assert "accumulated_content += delta_msg.reasoning" in source
-        # Under suppress only — not unconditional — so non-suppressed flows
-        # keep accumulated_content content-only (for clean tool-call marker
-        # detection when the user wants to see reasoning).
-        assert "if suppress_reasoning:" in source
+        assert "accumulated_content += delta_msg.reasoning" not in source
+        assert "Suppressed reasoning is never redirected into visible content" in source
+        assert "suppress_reasoning and not content_was_emitted and accumulated_reasoning" in source
 
     def test_responses_accumulated_content_mirror_under_suppress(self):
         import inspect
         from vmlx_engine.server import stream_responses_api
         source = inspect.getsource(stream_responses_api)
-        assert "accumulated_content += delta_msg.reasoning" in source
-        assert "if suppress_reasoning:" in source
+        assert "accumulated_content += delta_msg.reasoning" not in source
+        assert "Suppressed reasoning is never redirected into" in source
+        assert "reasoning_only_no_content" in source
 
 
 class TestV3KvCacheBitsInit:
@@ -2738,6 +3138,7 @@ class TestStartupCompatibilityGuards:
             "mllm_scheduler.py",
             "omni_multimodal.py",
             "prefix_cache.py",
+            "runtime_patches/gemma4_processing.py",
             "scheduler.py",
         ):
             assert f'"{rel}"' in verify_script
@@ -2845,21 +3246,43 @@ class TestStartupCompatibilityGuards:
         assert '@app.post(\n    "/api/embed",\n    dependencies=[\n        Depends(verify_api_key),\n        Depends(check_memory_pressure),\n        Depends(check_metal_working_set_pressure),' in source
 
     def test_bundle_selects_native_mlx_wheels_with_compat_override(self):
-        """M5/Tahoe builds need native MLX wheels; compat builds stay explicit."""
+        """Bundling can select Sequoia-compatible or Tahoe-native MLX wheels."""
         bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
         assert 'MLX_VERSION="0.31.2"' in bundle_script
         assert 'MLX_LM_VERSION="0.31.3"' in bundle_script
         assert 'MLX_VLM_VERSION="0.4.4"' in bundle_script
         assert 'detect_mlx_wheel_platform()' in bundle_script
-        assert 'VMLINUX_BUNDLE_MLX_PLATFORM:-auto' in bundle_script
-        assert 'sw_vers -productVersion' in bundle_script
+        assert 'VMLINUX_BUNDLE_MLX_PLATFORM:-compat' in bundle_script
         assert 'echo "macosx_26_0_arm64"' in bundle_script
-        assert 'compat|sonoma|sequoia)' in bundle_script
+        assert 'auto|compat|sonoma|sequoia|"")' in bundle_script
         assert 'echo "macosx_14_0_arm64"' in bundle_script
         assert 'MLX_WHEEL_PLATFORM="$(detect_mlx_wheel_platform)"' in bundle_script
         assert '--platform "$MLX_WHEEL_PLATFORM"' in bundle_script
         assert '"mlx==$MLX_VERSION"' in bundle_script
         assert '"mlx-metal==$MLX_VERSION"' in bundle_script
+
+    def test_release_build_declares_sequoia_and_tahoe_dmg_flavors(self):
+        """vmlx#169 release packaging must build both wheel-tag variants."""
+        script = Path("./panel/scripts/build-release-dmgs.sh")
+
+        assert script.is_file()
+        source = script.read_text()
+        assert 'build_one "sequoia" "compat"' in source
+        assert 'build_one "tahoe" "native"' in source
+        assert 'VMLINUX_BUNDLE_MLX_PLATFORM="$platform"' in source
+        assert 'vMLX-\\${version}-${flavor}-\\${arch}.\\${ext}' in source
+        assert "electron-builder --mac" in source
+        assert "gh release" not in source
+        assert "latest.json" not in source
+
+    def test_macos_compat_error_points_to_sequoia_dmg_for_tahoe_wheels(self):
+        """Wrong-DMG installs should fail before MLX import with actionable text."""
+        cli_source = Path("./vmlx_engine/cli.py").read_text()
+        check_idx = cli_source.index("def _check_macos_compat")
+        check_block = cli_source[check_idx: cli_source.index("def _check_no_duplicate_mlx", check_idx)]
+
+        assert "download the Sequoia-compatible vMLX DMG" in check_block
+        assert "Tahoe-native DMG requires macOS 26" in check_block
 
     def test_turboquant_disable_env_is_honored_by_jang_loader(self):
         """Explicit/off-family cache choices must stop loader-level live TQ-KV."""
@@ -2874,15 +3297,16 @@ class TestStartupCompatibilityGuards:
         assert 'os.environ["VMLX_DISABLE_TQ_KV"] = "1"' in cli_source
         assert "VMLINUX_DISABLE_TQ_KV" not in cli_source
 
-    def test_hybrid_auto_mode_keeps_stored_kv_quant_but_skips_live_tq(self):
-        """Hybrid auto mode must live-disable TQ while keeping attention-KV storage q4."""
+    def test_hybrid_auto_mode_enables_qwen_selective_live_tq_only(self):
+        """Qwen3.6 hybrid auto mode TQs attention KV while preserving SSM state."""
         cli_source = Path("./vmlx_engine/cli.py").read_text()
         scheduler_source = Path("./vmlx_engine/scheduler.py").read_text()
         tokenizer_source = Path("./vmlx_engine/utils/tokenizer.py").read_text()
 
         assert 'getattr(_mc, "cache_type", None) == "hybrid"' in cli_source
-        assert "Hybrid/path-dependent cache model detected" in cli_source
-        assert "os.environ.pop(\"VMLX_FORCE_TQ_AUTO\", None)" in cli_source
+        assert "Qwen3.6 hybrid/path-dependent cache model detected" in cli_source
+        assert "attention KVCache" in cli_source
+        assert "Only Qwen3.6 has a selective live" in cli_source
         hybrid_idx = cli_source.index('getattr(_mc, "cache_type", None) == "hybrid"')
         hybrid_block = cli_source[hybrid_idx : cli_source.index("if _mc.family_name !=", hybrid_idx)]
         assert 'args.kv_cache_quantization = "none"' not in hybrid_block
@@ -2891,7 +3315,8 @@ class TestStartupCompatibilityGuards:
 
         assert "Hybrid/path-dependent cache model detected — using q4/q8 only at cache storage boundaries" in scheduler_source
         assert "non-KV state is preserved full precision" in scheduler_source
-        assert "TurboQuant skipped: hybrid/path-dependent cache detected" in tokenizer_source
+        assert "build_hybrid_turboquant_make_cache" in tokenizer_source
+        assert "is_qwen36_hybrid_tq_supported" in tokenizer_source
         assert "model.make_cache()" in tokenizer_source
 
     def test_generic_turboquant_patcher_honors_disable_env(self, tmp_path, monkeypatch):
@@ -3114,7 +3539,7 @@ class TestZayaCCACachePolicy:
         assert cfg.think_in_template is False
         assert cfg.supports_thinking is True
 
-    def test_zaya_auto_thinking_enabled_but_no_think_prompt_stays_safe(self, tmp_path):
+    def test_zaya_auto_thinking_stays_unset_but_no_think_prompt_stays_safe(self, tmp_path):
         from vmlx_engine import server
 
         model_dir = self._write_zaya_fixture(tmp_path)
@@ -3132,9 +3557,9 @@ class TestZayaCCACachePolicy:
         finally:
             server._default_enable_thinking = old_default
 
-        assert resolved is True
+        assert resolved is None
 
-    def test_server_default_false_does_not_override_reasoning_on_runtime_default(self):
+    def test_server_default_false_is_explicit_and_request_off_still_wins(self):
         from vmlx_engine import server
 
         old_default = server._default_enable_thinking
@@ -3159,7 +3584,7 @@ class TestZayaCCACachePolicy:
         finally:
             server._default_enable_thinking = old_default
 
-        assert resolved is True
+        assert resolved is False
         assert explicit_off is False
 
     def test_server_default_false_respected_for_known_reasoning_model(self, tmp_path):
@@ -3185,14 +3610,13 @@ class TestZayaCCACachePolicy:
 
         assert resolved is False
 
-    def test_minimax_auto_does_not_force_thinking_but_explicit_on_still_works(
+    def test_minimax_auto_stays_unset_and_explicit_thinking_still_works(
         self, tmp_path
     ):
-        """MiniMax supports thinking, but omitted/Auto must not open it.
+        """MiniMax supports thinking, but omitted/Auto must stay unset.
 
-        The native MiniMax template opens `<think>` when enable_thinking is
-        omitted. Normal app/API chat should stay on the visible rail unless
-        the user explicitly turns thinking on.
+        The engine must not hide runtime/template issues behind a family-level
+        forced off rail. Explicit user thinking controls still win.
         """
         from vmlx_engine import server
         from vmlx_engine.model_config_registry import get_model_config_registry
@@ -3225,19 +3649,17 @@ class TestZayaCCACachePolicy:
 
         assert cfg.supports_thinking is True
         assert cfg.reasoning_parser == "qwen3"
-        assert auto_resolved is False
+        assert auto_resolved is None
         assert explicit_on is True
 
     @pytest.mark.parametrize("model_type", ["qwen3_5", "qwen3_5_moe"])
-    def test_qwen36_auto_does_not_force_thinking_but_explicit_on_still_works(
+    def test_qwen36_auto_stays_unset_and_explicit_thinking_still_works(
         self, tmp_path, model_type
     ):
-        """Qwen3.6 supports thinking, but omitted/Auto must stay visible.
+        """Qwen3.6 supports thinking, but omitted/Auto must stay unset.
 
-        Live Qwen3.6 MXFP8-MTP proof showed short omitted/default requests can
-        spend the whole response in the reasoning rail. Normal app/API chat
-        should produce visible content unless the user explicitly enables
-        thinking.
+        Visibility/coherency issues must be fixed in template/runtime handling,
+        not by converting Auto into a hidden off rail.
         """
         from vmlx_engine import server
         from vmlx_engine.model_config_registry import get_model_config_registry
@@ -3271,10 +3693,10 @@ class TestZayaCCACachePolicy:
         assert cfg.family_name == model_type
         assert cfg.supports_thinking is True
         assert cfg.reasoning_parser == "qwen3"
-        assert auto_resolved is False
+        assert auto_resolved is None
         assert explicit_on is True
 
-    def test_gemma4_tools_still_auto_disable_thinking(self):
+    def test_gemma4_tools_auto_stays_unset_and_explicit_thinking_still_works(self):
         from vmlx_engine import server
 
         old_default = server._default_enable_thinking
@@ -3299,7 +3721,7 @@ class TestZayaCCACachePolicy:
         finally:
             server._default_enable_thinking = old_default
 
-        assert resolved is False
+        assert resolved is None
         assert explicit_on is True
 
     def test_gemma4_supports_thinking_is_explicit_not_implicit(self):
@@ -5158,7 +5580,8 @@ class TestTurboQuantKVTelemetry:
         sessions_outside_native_mtp = (
             sessions_source[:native_mtp_idx] + sessions_source[generation_defaults_idx:]
         )
-        assert "args.push('--default-min-p', '0')" in native_mtp_launch_block
+        assert "args.push('--native-mtp-sampling-policy'" in native_mtp_launch_block
+        assert "args.push('--default-min-p'" not in native_mtp_launch_block
         assert "args.push('--default-min-p'" not in sessions_outside_native_mtp
         assert "args.push('--no-continuous-batching')" in sessions_source
         assert "Auto-enable continuous batching when prefix cache is on" not in sessions_source
@@ -5222,14 +5645,26 @@ class TestTurboQuantKVTelemetry:
         preview_outside_native = (
             preview_source[:preview_native_idx] + preview_source[preview_gen_idx:]
         )
-        assert "args.push('--default-repetition-penalty', '1')" in sessions_native_block
-        assert "parts.push('--default-repetition-penalty', '1')" in preview_native_block
+        for flag in (
+            "--default-temperature",
+            "--default-top-p",
+            "--default-top-k",
+            "--default-min-p",
+            "--default-repetition-penalty",
+        ):
+            assert f"args.push('{flag}'" not in sessions_native_block
+            assert f"parts.push('{flag}'" not in preview_native_block
         assert "args.push('--default-repetition-penalty'" not in sessions_outside_native
         assert "parts.push('--default-repetition-penalty'" not in preview_outside_native
         assert "IMAGE_ADDITIONAL_ARG_BLOCKLIST" in sessions_source
         assert "IMAGE_ADDITIONAL_ARG_BLOCKLIST" in preview_source
         assert "DSV4_ADDITIONAL_ARG_BLOCKLIST" in sessions_source
         assert "DSV4_ADDITIONAL_ARG_BLOCKLIST" in preview_source
+
+        cli_source = Path("./vmlx_engine/cli.py").read_text()
+        server_source = Path("./vmlx_engine/server.py").read_text()
+        assert "server._default_repetition_penalty = 1.0" not in cli_source
+        assert "_default_repetition_penalty = 1.0" not in server_source
 
     def test_panel_startup_defaults_sanitize_incompatible_saved_modes(self):
         sessions_source = Path("./panel/src/main/sessions.ts").read_text()
@@ -5244,17 +5679,21 @@ class TestTurboQuantKVTelemetry:
             assert "effectiveFlashMoe" in source
             assert "effectiveDistributed" in source
             assert "dsv4Active" in source
+            assert "hybridCacheActive" in source
             assert "effectiveEnableJit" in source
             assert "if (effectiveFlashMoe)" in source
             assert "if (effectiveDistributed)" in source
+            assert "compatibleExternalSpeculative" in source
             assert "if (effectiveEnableJit)" in source
+            assert "if (compatibleExternalSpeculative)" in source
             assert "if (config.enableJit) args.push('--enable-jit')" not in source
 
         assert "normalizedDetectedFamily === 'deepseek-v4'" in form_source
         # JIT incompat list expanded 2026-05-09 to include TurboQuant
         # (engine skips mx.compile for TurboQuantKVCache; UI now matches).
-        assert "disabled={flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive}" in form_source
-        assert "checked={!!config.enableJit && !flashMoeActive && !distributedActive && !dsv4Active && !zayaCcaActive && !turboQuantActive && !multimodalActive}" in form_source
+        assert "disabled={flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive || hybridCacheActive}" in form_source
+        assert "checked={!!config.enableJit && !flashMoeActive && !distributedActive && !dsv4Active && !zayaCcaActive && !turboQuantActive && !multimodalActive && !hybridCacheActive}" in form_source
+        assert "disabled={config.continuousBatching || multimodalActive || dsv4Active}" in form_source
 
     def test_responses_long_context_tool_cache_gate_script_pins_artifacts(self):
         gate_source = Path(
@@ -5722,7 +6161,7 @@ class TestTurboQuantKVTelemetry:
         assert status["ssm_entries"] == 1
         assert status["kv_layer_indices"] == [7, 15, 23, 31]
 
-    def test_native_cache_status_reports_hybrid_tq_override(self, monkeypatch):
+    def test_native_cache_status_ignores_legacy_hybrid_tq_override(self, monkeypatch):
         from types import SimpleNamespace
         from vmlx_engine.server import _native_cache_status
 
@@ -5742,9 +6181,10 @@ class TestTurboQuantKVTelemetry:
         status = _native_cache_status(scheduler)
 
         assert status["generic_turboquant_kv"] == {
-            "enabled": True,
-            "reason": "hybrid_ssm_state_override",
+            "enabled": False,
+            "reason": "hybrid_ssm_state",
         }
+        assert status["live_attention_tq_kv"]["enabled"] is False
 
     def test_quantization_status_detects_jangtq_sidecar_and_bits(self, tmp_path):
         from vmlx_engine.server import _model_quantization_status
@@ -5980,6 +6420,11 @@ class TestTurboQuantKVTelemetry:
         assert status["weight_index"]["suffix_counts"]["tq_norms"] == 1
         assert status["weight_index"]["suffix_counts"]["tq_bits"] == 1
         assert status["weight_index"]["tq_target_counts"]["routed_expert"] == 3
+        assert status["weight_index"]["mtp_tensor_count"] == 0
+        assert status["weight_index"]["routed_layout_counts"] == {
+            "prestacked_switch": 3,
+            "split_expert": 0,
+        }
         assert status["weight_index"]["sample_tq_packed_targets"] == [
             "model.layers.0.mlp.switch_mlp.gate_proj"
         ]
@@ -5989,6 +6434,131 @@ class TestTurboQuantKVTelemetry:
             "metal_na_eligible": False,
             "reason": "turboquant_codebook_uses_custom_tq_kernels",
         }
+
+    def test_dsv4_keeper_identity_reports_no_mtp_and_prestacked_layout(
+        self, tmp_path
+    ):
+        """Pin the final DSV4 no-MTP keeper shape without local model paths."""
+        from vmlx_engine.server import _model_mtp_status, _model_quantization_status
+
+        pure_jang = tmp_path / "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
+        pure_jang.mkdir()
+        (pure_jang / "config.json").write_text(json.dumps({
+            "model_type": "deepseek_v4",
+            "weight_format": "affine",
+            "num_nextn_predict_layers": 0,
+            "n_routed_experts": 256,
+            "num_experts_per_tok": 6,
+            "quantization": {"bits": 4, "group_size": 64},
+        }))
+        (pure_jang / "jang_config.json").write_text(json.dumps({
+            "weight_format": "affine",
+            "quantization": {
+                "method": "affine",
+                "routed_experts": {
+                    "bits": 2,
+                    "codec": "affine",
+                    "group_size": 64,
+                    "bit_plan": {
+                        "routed_projection_group_sizes": {
+                            "w1": 32,
+                            "w2": 32,
+                            "w3": 64,
+                        },
+                    },
+                },
+                "non_routed": {"bits": 4, "codec": "affine", "group_size": 64},
+            },
+        }))
+        (pure_jang / "model.safetensors.index.json").write_text(json.dumps({
+            "weight_map": {
+                "model.embed_tokens.weight": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.gate_proj.weight": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.gate_proj.scales": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.gate_proj.biases": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.down_proj.weight": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.down_proj.scales": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.down_proj.biases": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.up_proj.weight": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.up_proj.scales": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.up_proj.biases": "model.safetensors",
+            }
+        }))
+
+        pure_quant = _model_quantization_status(str(pure_jang))
+        pure_mtp = _model_mtp_status(str(pure_jang))
+
+        assert pure_quant["codec"] == "affine_quantized_matmul"
+        assert pure_quant["weight_format"] == "affine"
+        assert pure_quant["weight_index"]["total_tensors"] == 10
+        assert pure_quant["weight_index"]["mtp_tensor_count"] == 0
+        assert pure_quant["weight_index"]["routed_layout_counts"] == {
+            "prestacked_switch": 9,
+            "split_expert": 0,
+        }
+        assert pure_mtp["status"] == "not_configured"
+        assert pure_mtp["config_num_nextn_predict_layers"] == 0
+        assert pure_mtp["index_has_mtp_tensors"] is False
+
+        jangtq = tmp_path / "DeepSeek-V4-Flash-JANGTQ-K"
+        jangtq.mkdir()
+        (jangtq / "config.json").write_text(json.dumps({
+            "model_type": "deepseek_v4",
+            "weight_format": "mxtq",
+            "num_nextn_predict_layers": 0,
+            "n_routed_experts": 256,
+            "num_experts_per_tok": 6,
+            "mxtq_bits": {
+                "routed_expert": 2,
+                "attention": 8,
+                "shared_expert": 8,
+                "embed_tokens": 8,
+                "lm_head": 8,
+            },
+        }))
+        (jangtq / "jang_config.json").write_text(json.dumps({
+            "weight_format": "mxtq",
+            "drop_mtp": True,
+            "quantization": {
+                "profile": "JANGTQ-K",
+                "quantization_backend": "turboquant",
+            },
+        }))
+        (jangtq / "jangtq_runtime.safetensors").write_bytes(b"sidecar")
+        (jangtq / "model.safetensors.index.json").write_text(json.dumps({
+            "weight_map": {
+                "model.layers.0.mlp.switch_mlp.gate_proj.tq_packed": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.gate_proj.tq_norms": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.gate_proj.tq_bits": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.down_proj.tq_packed": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.down_proj.tq_norms": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.down_proj.tq_bits": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.up_proj.tq_packed": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.up_proj.tq_norms": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.up_proj.tq_bits": "model.safetensors",
+                "model.lm_head.weight": "model.safetensors",
+            }
+        }))
+
+        jangtq_quant = _model_quantization_status(str(jangtq))
+        jangtq_mtp = _model_mtp_status(str(jangtq))
+
+        assert jangtq_quant["codec"] == "turboquant_codebook"
+        assert jangtq_quant["weight_format"] == "mxtq"
+        assert jangtq_quant["weight_index"]["total_tensors"] == 10
+        assert jangtq_quant["weight_index"]["suffix_counts"]["tq_packed"] == 3
+        assert jangtq_quant["weight_index"]["suffix_counts"]["tq_norms"] == 3
+        assert jangtq_quant["weight_index"]["suffix_counts"]["tq_bits"] == 3
+        assert jangtq_quant["weight_index"]["tq_target_counts"]["routed_expert"] == 9
+        assert jangtq_quant["weight_index"]["mtp_tensor_count"] == 0
+        assert jangtq_quant["weight_index"]["routed_layout_counts"] == {
+            "prestacked_switch": 9,
+            "split_expert": 0,
+        }
+        assert jangtq_mtp["status"] == "dropped"
+        assert jangtq_mtp["jang_drop_mtp"] is True
+        assert jangtq_mtp["config_num_nextn_predict_layers"] == 0
+        assert jangtq_mtp["index_has_mtp_tensors"] is False
 
     def test_quantization_status_reports_routed_layer_bit_plan(self, tmp_path):
         """Layer-specific routed bits must be visible for speed/quality audits."""
@@ -6178,6 +6748,43 @@ class TestTurboQuantKVTelemetry:
             for warning in warnings
         )
 
+    def test_quantization_status_trusts_dsv4_affine_runtime_coherency_stamp(
+        self, tmp_path
+    ):
+        from vmlx_engine.server import _model_quantization_status
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "deepseek_v4",
+            "weight_format": "affine",
+            "quantization": {"bits": 2, "group_size": 64},
+        }))
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "weight_format": "affine",
+            "runtime": {
+                "coherency_verified": True,
+                "ar_coherency_verified": True,
+                "verified_with": "packaged-live-gate",
+            },
+            "quantization": {
+                "method": "affine",
+                "routed_experts": {
+                    "bits": 2,
+                    "codec": "affine",
+                    "group_size": 64,
+                },
+            },
+        }))
+
+        status = _model_quantization_status(str(tmp_path))
+
+        assert status["codec"] == "affine_quantized_matmul"
+        warnings = status.get("compat_warnings") or []
+        assert not any(
+            "DSV4 affine routed JANG runtime is loaded but not coherency-verified"
+            in warning
+            for warning in warnings
+        )
+
     def test_routing_status_reports_trained_top_k_without_override(self, monkeypatch, tmp_path):
         from vmlx_engine.server import _model_routing_status
 
@@ -6196,6 +6803,28 @@ class TestTurboQuantKVTelemetry:
             "n_routed_experts": 256,
             "override_env": None,
             "effective_active_experts": 8,
+            "effective_active_experts_source": "trained_default",
+        }
+
+    def test_dsv4_routing_status_reports_trained_top_k_six(self, monkeypatch, tmp_path):
+        """DSV4 MoE top-k is trained routing metadata, not sampler top_k."""
+        from vmlx_engine.server import _model_routing_status
+
+        monkeypatch.delenv("JANGTQ_TOPK_OVERRIDE", raising=False)
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "deepseek_v4",
+            "n_routed_experts": 256,
+            "num_experts_per_tok": 6,
+        }))
+
+        status = _model_routing_status(str(tmp_path))
+
+        assert status == {
+            "trained_active_experts": 6,
+            "trained_active_experts_source": "config.num_experts_per_tok",
+            "n_routed_experts": 256,
+            "override_env": None,
+            "effective_active_experts": 6,
             "effective_active_experts_source": "trained_default",
         }
 
@@ -6518,16 +7147,45 @@ class TestTurboQuantKVTelemetry:
         monkeypatch.setattr(server, "_mcp_manager", None)
 
         health = await server.health()
+        mtp_alias = await server.health_mtp()
         capabilities = await server.model_capabilities("dsv4-test")
 
         assert health["mtp"]["status"] == "dropped"
         assert health["mtp"]["runtime_available"] is False
+        assert mtp_alias["status"] == "dropped"
+        assert mtp_alias["runtime_available"] is False
         assert health["routing"]["trained_active_experts"] == 6
         assert health["routing"]["effective_active_experts_source"] == "trained_default"
         assert capabilities["mtp"]["status"] == "dropped"
         assert capabilities["mtp"]["runtime_available"] is False
         assert capabilities["routing"]["trained_active_experts"] == 6
         assert capabilities["routing"]["effective_active_experts_source"] == "trained_default"
+
+    @pytest.mark.asyncio
+    async def test_health_mtp_endpoint_returns_loaded_runtime_status(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "qwen-mtp-test")
+        monkeypatch.setattr(
+            server,
+            "_model_mtp_status_with_loaded_runtime",
+            lambda bundle_path: {
+                "status": "native_runtime_active",
+                "runtime_active": True,
+                "runtime_scope": "text+vl",
+                "bundle_path": bundle_path,
+            },
+        )
+
+        payload = await server.health_mtp()
+
+        assert payload["status"] == "native_runtime_active"
+        assert payload["runtime_active"] is True
+        assert payload["runtime_scope"] == "text+vl"
+        assert payload["bundle_path"] == str(tmp_path)
 
     def test_mlx_metal_na_status_handles_namespace_mlx_package(self, monkeypatch, tmp_path):
         """MLX can be a namespace package with mlx.__file__ == None.
@@ -6796,8 +7454,8 @@ class TestJitTurboQuantSymmetricGuard:
 
         assert "turboQuantActive" in form
         assert "detectedIsTurboQuant" in form
-        # disabled prop covers turboQuantActive
-        assert "disabled={flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive}" in form
+        # disabled prop covers turboQuantActive and hybrid path-dependent caches.
+        assert "disabled={flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive || hybridCacheActive}" in form
 
     def test_detect_config_stamps_isTurboQuant_flag(self):
         """detectModelConfigFromDir must set isTurboQuant when bundle is TQ.
@@ -6851,3 +7509,33 @@ class TestStreamUsagePropagatesCacheDetail:
         source = Path("./vmlx_engine/server.py").read_text()
         # Responses uses dict-builder shape, not PromptTokensDetails class.
         assert '"cache_detail": _cache_detail' in source
+
+
+class TestHuggingFaceDownloadRegression:
+    """Issue #118: stale saved HF mirrors or tokens must not poison public GUI
+    downloads. The panel should normalize persisted settings and keep the
+    Python worker's endpoint selection app-owned so it can fall back cleanly.
+    """
+
+    def test_panel_download_worker_does_not_inherit_raw_hf_endpoint(self):
+        from pathlib import Path
+
+        source = Path("./panel/src/main/ipc/models.ts").read_text()
+
+        assert "normalizeHfEndpointSetting" in source
+        assert "HF_ENDPOINT: undefined" in source
+        assert "endpoint = sys.argv[3] or None" in source
+        assert "endpoint=active_endpoint" in source
+        assert "https://huggingface.co" in source
+        assert "'type':'fallback'" in source
+
+    def test_panel_hf_api_retries_public_requests_without_stale_auth(self):
+        from pathlib import Path
+
+        source = Path("./panel/src/main/ipc/models.ts").read_text()
+
+        assert "normalizeHfTokenSetting" in source
+        assert "delete baseHeaders.Authorization" in source
+        assert "retrying ${baseUrl} without auth" in source
+        assert "HuggingFace mirror failed" in source
+        assert "fetchHfPath(`/api/models?${params}`" in source

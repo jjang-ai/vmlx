@@ -1370,43 +1370,6 @@ class MLXMultimodalLM:
 
         return chat_messages, all_image_urls, videos
 
-    def _prompt_template_supports_thinking(self) -> bool:
-        """Return True only when the prompt template owns a think rail.
-
-        ``supports_thinking`` means a model can reason when the API enables
-        that rail. It does not mean a direct SimpleEngine MLLM prompt should
-        synthesize ``<think></think>`` when thinking is off. ZAYA/Hy3/Gemma
-        are reasoning-capable but their prompt contract is not "assistant
-        starts inside <think>" in the default/off path.
-        """
-
-        config = getattr(self, "config", None)
-        if not isinstance(config, dict):
-            return False
-
-        caps = config.get("capabilities")
-        if isinstance(caps, dict):
-            if caps.get("supports_thinking") is False:
-                return False
-            if isinstance(caps.get("think_in_template"), bool):
-                return bool(caps["think_in_template"])
-
-        model_type = config.get("model_type")
-        text_config = config.get("text_config")
-        if not model_type and isinstance(text_config, dict):
-            model_type = text_config.get("model_type")
-        try:
-            from vmlx_engine.model_config_registry import get_model_config_registry
-
-            registry = get_model_config_registry()
-            family_config = registry.lookup(str(getattr(self, "model_name", "") or ""))
-            if family_config.family_name == "unknown" and model_type:
-                family_config = registry.lookup(str(model_type))
-        except Exception:
-            return False
-
-        return bool(getattr(family_config, "think_in_template", False))
-
     def _synthesizes_thinking_prompt_when_enabled(self) -> bool:
         """Return True for MLLM families whose template needs an explicit open rail.
 
@@ -1464,6 +1427,38 @@ class MLXMultimodalLM:
             return False
         return bool(family_names & {"zaya", "zaya1_vl", "zaya1-vl"})
 
+    def _prompt_template_supports_thinking(self) -> bool:
+        """Return whether the native VLM prompt template owns the think rail.
+
+        Capability stamps are the source of truth here. A model can support a
+        qwen-style reasoning parser while its VLM chat template remains plain;
+        those families must not receive template-sentinel assumptions when
+        ``enable_thinking=false``.
+        """
+
+        config = getattr(self, "config", None)
+        caps = config.get("capabilities") if isinstance(config, dict) else None
+        caps = caps if isinstance(caps, dict) else {}
+        if caps.get("supports_thinking") is False:
+            return False
+        if caps.get("think_in_template") is not None:
+            return bool(caps.get("think_in_template"))
+
+        try:
+            from vmlx_engine.model_config_registry import get_model_config_registry
+
+            family_config = get_model_config_registry().lookup(
+                str(getattr(self, "model_name", "") or "")
+            )
+            if getattr(family_config, "supports_thinking", None) is False:
+                return False
+            if getattr(family_config, "think_in_template", None) is not None:
+                return bool(family_config.think_in_template)
+        except Exception:
+            pass
+
+        return False
+
     def _apply_chat_template(
         self,
         chat_messages: list[dict],
@@ -1472,9 +1467,10 @@ class MLXMultimodalLM:
         """
         Apply chat template to structured messages with enable_thinking support.
 
-        Handles TypeError fallback (for processors that don't support
-        enable_thinking), general exception fallback to last user message,
-        and stripping of forced reasoning loops for abliterated models.
+        Handles TypeError fallback for processors that don't support
+        enable_thinking and general exception fallback to last user message.
+        The wrapper preserves the native template output; family-specific
+        no-thinking prompt sentinels must live in explicit renderer contracts.
 
         Args:
             chat_messages: Structured chat messages from _extract_multimodal_messages()
@@ -1514,16 +1510,6 @@ class MLXMultimodalLM:
             logger.warning(
                 f"Failed to apply chat template: {e}, using last user message"
             )
-
-        # When thinking is OFF, close any unclosed <think> in the prompt.
-        if enable_thinking is False and formatted_prompt:
-            last_think = formatted_prompt.rfind("<think>")
-            if last_think >= 0:
-                after = formatted_prompt[last_think + 7:]
-                if "</think>" not in after:
-                    formatted_prompt = formatted_prompt[:last_think + 7] + "</think>\n"
-            elif "<think>" not in formatted_prompt and self._prompt_template_supports_thinking():
-                formatted_prompt = formatted_prompt.rstrip() + "\n<think>\n</think>\n"
 
         # ZAYA1-VL's processor template can be plain while the model is still
         # qwen3-reasoning capable. Honor explicit thinking-on by opening the

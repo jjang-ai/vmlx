@@ -21,6 +21,49 @@ import pytest
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+class TestEnginePromptReasoningSeed:
+    class _MiniMaxLikeTokenizer:
+        def apply_chat_template(self, messages, **kwargs):
+            user = messages[-1]["content"]
+            return f"]~b]user\n{user}[e~[\n]~b]ai\n<think>\n"
+
+    def test_minimax_thinking_off_closed_prompt_starts_in_content(self):
+        """The streaming parser seed must match the engine-rendered prompt.
+
+        MiniMax templates open ``<think>`` even with ``enable_thinking=False``.
+        The engine then closes that block for no-tool thinking-off requests, so
+        the first generated token is visible content. Seeding the parser as
+        still inside reasoning suppresses valid Anthropic/text streams.
+        """
+        from vmlx_engine import server
+
+        assert (
+            server._engine_prompt_starts_in_reasoning(
+                self._MiniMaxLikeTokenizer(),
+                model_name="MiniMax-M2.7-Small-JANGTQ",
+                enable_thinking=False,
+                family_name="minimax",
+                tools_present=False,
+            )
+            is False
+        )
+
+    def test_minimax_tool_prompt_keeps_reasoning_seed(self):
+        """Tool requests intentionally do not get the closed thought sentinel."""
+        from vmlx_engine import server
+
+        assert (
+            server._engine_prompt_starts_in_reasoning(
+                self._MiniMaxLikeTokenizer(),
+                model_name="MiniMax-M2.7-Small-JANGTQ",
+                enable_thinking=False,
+                family_name="minimax",
+                tools_present=True,
+            )
+            is True
+        )
+
+
 class TestThinkInPromptStreaming:
     """Tests for BaseThinkingReasoningParser with think_in_prompt=True.
 
@@ -203,30 +246,21 @@ class TestSuppressReasoningDrop:
     """
 
     def test_suppress_reasoning_drop_in_source(self):
-        """v1.3.56 §15: verify reasoning REDIRECTS to emit_content under suppress.
-        (Not a drop — a redirect, so the UI never shows empty body when the model
-        ignores enable_thinking=False.)"""
+        """Suppressed reasoning must not be redirected into visible content."""
         import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         assert "suppress_reasoning" in source
         assert "emit_reasoning = None" in source
-        # v1.3.56 boundary-delta fix: parts-based concat so BOTH reasoning and
-        # content get emitted when a single delta carries both (see §15 /
-        # §18 and think_parser.py:200-203 boundary case).
-        assert "_parts.append(delta_msg.reasoning)" in source
-        assert "_parts.append(delta_msg.content)" in source
+        assert "emit_content = delta_msg.content" in source
+        assert "_parts.append(delta_msg.reasoning)" not in source
 
-    def test_suppress_reasoning_mirrors_into_accumulated_content(self):
-        """v1.3.56 §15.3: under suppress_reasoning, reasoning MUST mirror into
-        accumulated_content so content_was_emitted and tool-call marker
-        detection stay honest with what the client actually saw after the
-        reasoning → content redirect."""
+    def test_suppress_reasoning_does_not_mirror_into_accumulated_content(self):
+        """Suppressed reasoning must not pollute visible content/history."""
         import vmlx_engine.server as server_mod
         source = inspect.getsource(server_mod.stream_chat_completion)
 
-        # The mirror line is what makes §15 safe for marker detection.
-        assert "accumulated_content += delta_msg.reasoning" in source
+        assert "accumulated_content += delta_msg.reasoning" not in source
         assert "delta_msg.reasoning" in source
 
 
@@ -723,12 +757,12 @@ class TestCleanOutputText:
         assert "<think>" in result
         assert "</think>" in result
 
-    def test_adds_missing_opening_think(self):
-        """When only </think> is present, <think> should be prepended."""
+    def test_does_not_add_missing_opening_think(self):
+        """Output cleanup must not invent reasoning markup."""
         from vmlx_engine.api.utils import clean_output_text
         text = "reasoning content</think>final answer"
         result = clean_output_text(text)
-        assert result.startswith("<think>")
+        assert not result.startswith("<think>")
         assert "</think>" in result
 
     def test_does_not_double_add_think(self):
@@ -1355,11 +1389,10 @@ class TestQwen35ThinkingScenarios:
         assert "".join(content_parts) == "42"
 
     def test_suppress_reasoning_concept(self, parser):
-        """When suppress_reasoning=True, reasoning should be redirected to content.
+        """When suppress_reasoning=True, only parsed content should be visible.
 
-        This tests the concept (the actual redirect happens in server.py).
-        We verify the parser still correctly classifies tokens even when
-        the server will redirect them.
+        This tests the parser classification that server suppression consumes:
+        reasoning stays internal and content after </think> remains visible.
         """
         parser.reset_state(think_in_prompt=True)
 
@@ -1382,10 +1415,7 @@ class TestQwen35ThinkingScenarios:
         assert "Reasoning text" in "".join(reasoning_parts)
         assert "Content" in "".join(content_parts)
 
-        # The server's suppress_reasoning logic would then redirect:
-        # emit_content = delta_msg.reasoning or delta_msg.content
-        # emit_reasoning = None
-        # This is tested structurally in TestSuppressReasoningRedirect
+        # The server's suppress_reasoning logic emits only delta_msg.content.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -40,6 +40,11 @@ function compareVersions(current: string, latest: string): boolean {
 }
 
 export function checkForUpdates(getWindow: () => BrowserWindow | null, currentVersion: string): void {
+  if (process.env.VMLX_SKIP_UPDATE_CHECK === '1') {
+    console.log('[UPDATE] Skipping update check because VMLX_SKIP_UPDATE_CHECK=1')
+    return
+  }
+
   setTimeout(async () => {
     // Fetch ALL sources in parallel and pick the highest version — prevents a
     // stale mirror from silently suppressing updates on newer clients.

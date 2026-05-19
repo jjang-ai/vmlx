@@ -250,15 +250,12 @@ class TestThinkingConversion:
         assert chat_req.enable_thinking is False
 
     def test_thinking_not_specified(self):
-        # vMLX's local Anthropic-compatible endpoint defaults reasoning on for
-        # capable models. Native thinking={type:disabled} and vMLX
-        # enable_thinking=False remain explicit opt-outs.
         req = AnthropicRequest(
             model="test-model",
             messages=[{"role": "user", "content": "Hi"}],
         )
         chat_req = to_chat_completion(req)
-        assert chat_req.enable_thinking is True
+        assert chat_req.enable_thinking is None
 
 
 # ─── Image / Multimodal Tests ────────────────────────────────────────

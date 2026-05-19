@@ -32,9 +32,9 @@ def _should_forward_reasoning_effort(body: dict, req: dict[str, Any]) -> bool:
 def _apply_ollama_thinking(body: dict, req: dict[str, Any]) -> None:
     """Normalize Ollama thinking controls into vMLX's canonical field.
 
-    Omitted thinking controls default on for capable vMLX chat models. Native
-    Ollama ``think:false`` is an explicit opt-out and must not be overwritten
-    by that default.
+    Omitted thinking controls stay omitted so the model's native
+    tokenizer/template/runtime default decides. Native Ollama ``think:false``
+    is an explicit opt-out and must not be overwritten.
     """
     if isinstance(body.get("think"), bool):
         req["enable_thinking"] = body["think"]
@@ -44,8 +44,6 @@ def _apply_ollama_thinking(body: dict, req: dict[str, Any]) -> None:
         body["chat_template_kwargs"].get("enable_thinking") is False
     ):
         return
-    else:
-        req["enable_thinking"] = True
 
 
 def _apply_ollama_prompt_context_limit(body: dict, req: dict[str, Any]) -> None:

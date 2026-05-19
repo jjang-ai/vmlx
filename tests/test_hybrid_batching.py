@@ -1100,6 +1100,26 @@ class TestSuppressReasoningDiagnostic:
         assert "reasoning_only_no_content" in source
         assert "Model produced only internal reasoning" not in source
 
+    def test_chat_completions_nonstream_reasoning_only_warning_is_wired(self):
+        """Non-stream chat must surface warnings out-of-band too."""
+        import inspect
+        from vmlx_engine.server import create_chat_completion
+
+        source = inspect.getsource(create_chat_completion)
+
+        assert "_chat_completion_warnings_for_reasoning_only" in source
+        assert "warnings=response_warnings" in source
+
+    def test_chat_completions_streaming_reasoning_only_warning_is_wired(self):
+        """Streaming chat must surface warnings out-of-band too."""
+        import inspect
+        from vmlx_engine.server import stream_chat_completion
+
+        source = inspect.getsource(stream_chat_completion)
+
+        assert "_chat_completion_warnings_for_reasoning_only" in source
+        assert "warnings=_stream_chat_warnings" in source
+
 
 class TestQwen3NextToolParser:
     """Regression: qwen3_next must use 'qwen' tool parser, not 'nemotron'."""

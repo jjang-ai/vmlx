@@ -1405,20 +1405,13 @@ class TestReasoningOnOffRegressions:
         )
 
     def test_section_15_suppress_reasoning_routing_present(self):
-        """server.py must contain the §15 suppress→content routing.
-        If someone removes it, thinking-ignoring models leave empty bubbles."""
+        """server.py must keep suppressed reasoning out of visible content."""
         src = Path(
             "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
-        assert "§15" in src, (
-            "§15 anchor comments must stay in server.py — removing them is a "
-            "signal of silent regression"
-        )
-        # The actual routing: reasoning piped into content when suppressed
-        assert "accumulated_content += delta_msg.reasoning" in src, (
-            "§15 suppress-reasoning must route reasoning into content "
-            "(UI regression #1 per NO-REGRESSION-CHECKLIST)"
-        )
+        assert "accumulated_content += delta_msg.reasoning" not in src
+        assert "Suppressed reasoning is never redirected into visible content" in src
+        assert "suppress_reasoning and not content_was_emitted and accumulated_reasoning" in src
 
     def test_mistral4_reasoning_effort_auto_map(self):
         """Mistral 4 needs enable_thinking → reasoning_effort auto-map."""
@@ -1436,19 +1429,12 @@ class TestReasoningOnOffRegressions:
         )
 
     def test_gemma4_tools_auto_disable_thinking(self):
-        """mlxstudio#71: Gemma 4 with tools must auto-disable thinking.
-
-        After iter 8 consolidation, the precedence chain + Gemma 4
-        override live in the shared _resolve_enable_thinking helper,
-        which is called from all 3 API paths. Guard the helper
-        contains the Gemma 4 branch AND all 3 paths call it.
-        """
+        """mlxstudio#71 follow-up: Gemma 4 tools preserve thinking policy."""
         src = Path(
             "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
-        # The Gemma 4 branch lives inside _resolve_enable_thinking now
-        assert 'in ("gemma4", "gemma4_text")' in src, (
-            "Gemma 4 family check must still exist (mlxstudio#71)"
+        assert 'in ("gemma4", "gemma4_text")' not in src, (
+            "Gemma 4 tools must not silently force the reasoning rail off"
         )
         # All 3 API paths route through _resolve_enable_thinking
         calls = src.count("_resolve_enable_thinking(")
@@ -1579,8 +1565,9 @@ class TestMiniMaxThinkInPromptNonStream:
         assert nonstream_marker in src, (
             "Non-stream think_in_prompt derivation block is missing"
         )
-        # Both helper functions must be called from the non-stream derivation
-        # (use a generous substring so minor reformatting doesn't break)
+        # The non-stream path now uses the same rendered-prompt contract helper
+        # as the streaming path, instead of maintaining a second direct
+        # _template_always_thinks branch.
         # Find the derivation block
         idx = src.find(nonstream_marker)
         assert idx > 0
@@ -1588,8 +1575,8 @@ class TestMiniMaxThinkInPromptNonStream:
         assert "_template_completes_thinking(" in window, (
             "Non-stream must consult _template_completes_thinking"
         )
-        assert "_template_always_thinks(" in window, (
-            "Non-stream must consult _template_always_thinks"
+        assert "_engine_prompt_starts_in_reasoning(" in window, (
+            "Non-stream must consult rendered prompt start semantics"
         )
 
 
@@ -1774,28 +1761,20 @@ class TestEnableThinkingPriorityChain:
 class TestToolsReasoningInteraction:
     """Tools + reasoning must interact correctly:
 
-    - Gemma 4 + tools → auto enable_thinking=False (mlxstudio#71)
+    - Gemma 4 + tools → preserve model/request thinking policy
     - Other families + tools → keep default thinking (unless user override)
     - Mistral 4 + tools + thinking=True → reasoning_effort=high auto-map
     - Prior assistant messages with <think>…</think>+tool_calls: strip must
       NOT drop tool_calls (NO-REGRESSION-CHECKLIST line 996)
     """
 
-    def test_gemma4_tools_sets_thinking_false_three_paths(self):
-        """After iter 8 consolidation, Gemma4+tools auto-off lives in
-        _resolve_enable_thinking — called from all 3 API paths. Verify
-        both the branch exists and the helper is wired up."""
+    def test_gemma4_tools_preserve_reasoning_policy_three_paths(self):
+        """Gemma4+tools must not have a family branch that flips thinking off."""
         src = Path("vmlx_engine/server.py").read_text()
-        import re as _re
-        # Branch still exists (inside the helper now)
-        branch = _re.search(
-            r'_family_l\s+in\s+\(\s*["\']gemma4["\'],\s*["\']gemma4_text["\']\s*\)',
-            src,
+        assert 'in ("gemma4", "gemma4_text")' not in src, (
+            "Gemma 4 tools must not silently force the reasoning rail off"
         )
-        assert branch is not None, (
-            "Gemma 4 family branch missing from _resolve_enable_thinking"
-        )
-        # Helper is called from ≥3 sites (definition + Anthropic/Ollama/OpenAI)
+        # Helper is called from >=3 sites (definition + Anthropic/Ollama/OpenAI).
         helper_calls = src.count("_resolve_enable_thinking(")
         assert helper_calls >= 4, (
             f"_resolve_enable_thinking must be called from 3 API paths, "
@@ -2740,12 +2719,8 @@ class TestMlxstudio76UnrecognizedArgHint:
     def test_unknown_flag_triggers_hint(self, capsys):
         """Running cli with a garbage flag triggers the hint."""
         import subprocess
-        bpy = (
-            "/private/tmp/vmlx-1.3.66-build/panel/bundled-python/"
-            "python/bin/python3.12"
-        )
         r = subprocess.run(
-            [bpy, "-m", "vmlx_engine.cli", "serve",
+            [sys.executable, "-m", "vmlx_engine.cli", "serve",
              "/nonexistent", "--nonexistent-flag-xyz-1-2-3"],
             capture_output=True, text=True, timeout=30,
         )
@@ -2811,13 +2786,9 @@ class TestVmlx75DefaultRepetitionPenaltyArg:
         argparse rejecting any flag. Model-load fails (expected) but
         argparse returncode must not be 2 (which is "unrecognized args")."""
         import subprocess
-        bpy = (
-            "/private/tmp/vmlx-1.3.66-build/panel/bundled-python/"
-            "python/bin/python3.12"
-        )
         # Reporter's full flag set from the issue body
         r = subprocess.run(
-            [bpy, "-m", "vmlx_engine.cli", "serve",
+            [sys.executable, "-m", "vmlx_engine.cli", "serve",
              "/nonexistent/model",
              "--host", "127.0.0.1", "--port", "8000", "--timeout", "300",
              "--max-num-seqs", "5",
@@ -3145,24 +3116,19 @@ class TestReasoningContractEndToEnd:
         ).read_text()
         assert "ReasoningBox" in src
         assert "reasoningContent" in src
-        # The guard that hides ReasoningBox when content == reasoningContent
-        # (prevents double-render when suppress_reasoning routed reasoning
-        # to content field)
-        assert "reasoningContent.trim() === message.content.trim()" in src
+        # The guard that hides ReasoningBox when content equals the only
+        # reasoning segment prevents accidental double-rendering without
+        # redirecting reasoning into visible content.
+        assert "displayedReasoningSegments[0].trim() === message.content.trim()" in src
 
     def test_server_suppress_reasoning_routes_to_content(self):
-        """§15: when thinking is off and model leaks <think>, the server
-        routes reasoning delta → content delta so the user sees
-        something instead of empty SSE."""
+        """When thinking is off, leaked reasoning must not become content."""
         src = Path(
             "/private/tmp/vmlx-1.3.66-build/vmlx_engine/server.py"
         ).read_text()
-        # The §15 anchor
-        assert "§15" in src
-        # Concat pattern: parts = [reasoning, content]
-        assert "_parts.append(delta_msg.reasoning)" in src, (
-            "§15 must concatenate reasoning into the content emit path"
-        )
+        assert "_parts.append(delta_msg.reasoning)" not in src
+        assert "Suppressed reasoning is never redirected into" in src
+        assert "reasoning_only_no_content" in src
 
     def test_database_schema_has_reasoning_content_column(self):
         """Panel database must persist reasoningContent across sessions."""
@@ -5325,16 +5291,18 @@ class TestMs75HuggingFaceMirrorEndpoint:
             "trailing-slash strip required — otherwise concatenation "
             "with '/api/...' produces '//api/...'"
         )
-        # Must fall back to the canonical URL when unset
-        assert 'return "https://huggingface.co"' in src
+        # Must fall back to the canonical URL when unset.
+        assert "HF_CANONICAL_ENDPOINT" in src
 
     def test_download_passes_hf_endpoint_env(self):
         src = Path(
             "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/models.ts"
         ).read_text()
-        assert 'downloadEnv.HF_ENDPOINT = hfEndpoint.trim()' in src, (
-            "HF_ENDPOINT must be forwarded to the download subprocess — "
-            "that's the env var huggingface_hub reads"
+        assert "HF_ENDPOINT: undefined" in src, (
+            "Stale shell HF_ENDPOINT must be cleared so it cannot poison GUI downloads"
+        )
+        assert "job.repoId, job.modelDir, hfEndpoint" in src, (
+            "Normalized HF endpoint must be passed explicitly to the download worker"
         )
         assert 'db.getSetting("hf_endpoint")' in src
 
@@ -5367,11 +5335,13 @@ class TestMs75HuggingFaceMirrorEndpoint:
             f"Still have {len(url_literals)} hardcoded HF API URL strings — "
             f"they bypass the mirror setting"
         )
-        # getHfBaseUrl() must be USED, not just defined
-        usages = src.count("getHfBaseUrl()")
-        assert usages >= 5, (
-            f"getHfBaseUrl() must be called ≥ 5 times (search × 2 + "
-            f"recommended + collection + README); found {usages}"
+        # fetchHfPath must be USED, not just defined: search x2, recommended,
+        # README, and collection should all route through the mirror-aware
+        # helper with stale-token fallback.
+        usages = src.count("fetchHfPath(")
+        assert usages >= 6, (
+            f"fetchHfPath() must be called >= 6 times (definition + search x2 + "
+            f"recommended + README + collection); found {usages}"
         )
 
     def test_csp_allows_mirror_hosts(self):
@@ -5396,10 +5366,11 @@ class TestMs75HuggingFaceMirrorEndpoint:
         assert "const [hfEndpoint, setHfEndpoint]" in src
         assert "handleSaveHfEndpoint" in src
         # Validation — typo "hf-mirror.com" (no scheme) must not silently break
-        assert "https?:\\/\\/" in src, (
-            "save handler must validate scheme — otherwise a typo "
-            "silently corrupts HF_ENDPOINT and kills all downloads"
+        assert "normalizeHfEndpointSetting" in src, (
+            "save handler must normalize and validate the endpoint — otherwise "
+            "a typo silently corrupts HF routing and kills all downloads"
         )
+        assert "http:// or https:// URL" in src
         # One-click preset button for the standard China mirror
         assert "hf-mirror.com" in src
         assert "Use hf-mirror" in src
@@ -5884,9 +5855,8 @@ class TestPanelUIContractFull:
             "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/chat.ts"
         ).read_text()
         assert "reasoning_content" in src
-        assert "reasoningContent +=" in src, (
-            "panel must accumulate reasoning deltas across stream chunks"
-        )
+        assert "appendReasoningDelta(reasoningSegments, delta)" in src
+        assert "joinReasoningSegments(reasoningSegments)" in src
 
     def test_db_persists_reasoning_column(self):
         src = Path(
@@ -6968,11 +6938,11 @@ class TestZombieCodeConsolidation:
             request_value=None, ct_kwargs={"enable_thinking": False},
             tools_present=False, model_key="x",
         ) is False
-        # None everywhere → reasoning-on vMLX API default
+        # None everywhere → leave Auto unset so native template/runtime decides.
         assert _resolve_enable_thinking(
             request_value=None, ct_kwargs={},
             tools_present=False, model_key="x",
-        ) is True
+        ) is None
 
     def test_enable_thinking_duplicates_eliminated(self):
         """Guard: fail if server.py grows back the 4-way copy-pasted
@@ -8311,6 +8281,8 @@ class TestBundledPythonVerifyScript:
         import subprocess, os
         if not os.path.isfile(self._SCRIPT):
             pytest.skip("verify-bundled-python.sh not present")
+        if not os.path.isfile(REPO_ROOT / "panel/bundled-python/python/bin/python3"):
+            pytest.skip("bundled Python is not present in this source worktree")
         # Must check bundled python is present; if not, script
         # exits early — still a useful signal (not a test failure
         # since the test doesn't own the bundle).
@@ -8804,6 +8776,31 @@ class TestEmptyContentReturns400:
         assert r.status_code != 400, (
             f"Message with image content-part must NOT be 400-rejected "
             f"(the empty text is fine when an image is present); "
+            f"got {r.status_code}: {r.json()}"
+        )
+
+    def test_content_with_input_image_but_empty_text_is_valid(self):
+        """Responses-style input_image parts are also media prompts.
+
+        Some clients reuse Responses API content-part names when calling
+        /v1/chat/completions. The server should route/diagnose the media shape,
+        not reject the request as an empty text prompt before media handling.
+        """
+        c = self._client()
+        r = c.post(
+            "/v1/chat/completions",
+            json={
+                "model": "default",
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": ""},
+                    {"type": "input_image", "image_url": "http://x/y.png"},
+                ]}],
+                "max_tokens": 5,
+            },
+        )
+        assert r.status_code != 400, (
+            f"Message with input_image content-part must NOT be 400-rejected "
+            f"(the empty text is fine when media is present); "
             f"got {r.status_code}: {r.json()}"
         )
 
@@ -10043,14 +10040,14 @@ class TestFixCohesiveness:
 
 
 class TestAnthropicThinkingSpecDefault:
-    """vMLX's local Anthropic-compatible endpoint defaults reasoning-capable
-    models to thinking ON, matching the other API surfaces. Native
-    thinking={type:disabled} and explicit enable_thinking=False remain the
-    opt-out paths."""
+    """vMLX's local Anthropic-compatible endpoint preserves Auto when
+    clients omit thinking controls. Native thinking={type:disabled} and
+    explicit enable_thinking=False remain opt-out paths; explicit enabled
+    requests still opt in."""
 
     ADAPTER = "/tmp/vmlx-1.3.66-build/vmlx_engine/api/anthropic_adapter.py"
 
-    def test_anthropic_adapter_defaults_thinking_true_when_absent(self):
+    def test_anthropic_adapter_preserves_auto_when_absent(self):
         from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
         req = AnthropicRequest(
             model="test",
@@ -10059,10 +10056,7 @@ class TestAnthropicThinkingSpecDefault:
         )
         # No req.thinking, no req.enable_thinking, no chat_template_kwargs
         chat = to_chat_completion(req)
-        assert chat.enable_thinking is True, (
-            "vMLX Anthropic-compatible adapter must default reasoning ON "
-            "when client sends no thinking opt-out"
-        )
+        assert chat.enable_thinking is None
 
     def test_anthropic_adapter_honors_thinking_enabled(self):
         from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
@@ -10114,10 +10108,10 @@ class TestAnthropicThinkingSpecDefault:
 
     def test_adapter_source_documents_wire_default(self):
         src = Path(self.ADAPTER).read_text()
-        assert "vMLX policy: default reasoning ON" in src, (
+        assert "Omitted thinking controls stay Auto" in src, (
             "fix must be self-documenting so future reviewer knows WHY"
         )
-        assert "enable_thinking = True" in src
+        assert "enable_thinking: bool | None = None" in src
 
 
 class TestGenPrefixEchoSuppression:

@@ -172,10 +172,10 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
     #   2. req.thinking (Anthropic-native {type: enabled/disabled})
     #   3. req.chat_template_kwargs.enable_thinking (vMLX extension fallback)
     #
-    # vMLX policy: default reasoning ON for capable local models across API
-    # surfaces. Native Anthropic `thinking: {type:"disabled"}` and vMLX
-    # `enable_thinking:false` remain explicit opt-outs.
-    enable_thinking = True
+    # Omitted thinking controls stay Auto. The shared server resolver leaves
+    # enable_thinking unset so the model's native tokenizer/template/runtime
+    # default decides; explicit Anthropic/vMLX controls still opt in/out.
+    enable_thinking: bool | None = None
     chat_template_kwargs = None
     _thinking_source_seen = False
     # Start with the client's chat_template_kwargs passthrough (lowest prio)
@@ -212,8 +212,8 @@ def to_chat_completion(req: AnthropicRequest) -> ChatCompletionRequest:
     if req.enable_thinking is not None:
         enable_thinking = req.enable_thinking
         _thinking_source_seen = True
-    # If client asserted any thinking intent, honour it. Otherwise the vMLX
-    # local API default stays reasoning-on.
+    # If client asserted any thinking intent, honour it. Otherwise preserve
+    # Auto and let the shared server/runtime path decide.
     _ = _thinking_source_seen  # (retained for debuggability / future logging)
 
     return ChatCompletionRequest(

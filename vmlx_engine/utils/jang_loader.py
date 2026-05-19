@@ -35,6 +35,8 @@ JANG_CONFIG_FILENAMES = [
 ]
 JANG_FORMAT_VALUES = ["jang", "jjqf", "mxq"]
 JANG_WEIGHT_FORMAT_VALUES = {"affine", "mxtq", "mxfp4", "mxfp8"}
+_MLX_WEIGHT_QUANT_BITS = {2, 3, 4, 5, 6, 8}
+_MLX_WEIGHT_QUANT_GROUP_SIZES = {32, 64, 128}
 
 
 def _jang_quant_block_size(jang_cfg: dict, default: int = 64) -> int:
@@ -90,6 +92,82 @@ def _jang_quant_mode(jang_cfg: dict, config: dict | None = None) -> str:
         if value in {"mxfp4", "mxfp8"}:
             return value
     return "affine"
+
+
+def _apply_runtime_quant_shape_repair(
+    path: Path,
+    config: dict,
+    *,
+    context: str,
+) -> dict:
+    """Patch quantization metadata from tensor shapes with MLX runtime limits."""
+    try:
+        from .quant_shape_inference import infer_quant_overrides_for_bundle
+
+        return infer_quant_overrides_for_bundle(
+            path,
+            config,
+            runtime_supported_only=True,
+            error_on_unsupported=True,
+        )
+    except ValueError:
+        raise
+    except Exception as _qsi_err:
+        logger.debug(f"quant_shape_inference ({context}): skipped ({_qsi_err})")
+        return config
+
+
+def _prepare_runtime_weight_quantization(
+    path: Path,
+    config: dict,
+    jang_cfg: dict,
+    *,
+    fallback_bits: list[int],
+    context: str,
+) -> tuple[dict, int, int]:
+    """Return ``(config, bits, group_size)`` safe for MLX model quantization."""
+    qcfg = config.setdefault("quantization", {})
+    qcfg.setdefault("group_size", _jang_quant_block_size(jang_cfg))
+    qcfg.setdefault("bits", _jang_default_bits(jang_cfg, fallback_bits))
+
+    config = _apply_runtime_quant_shape_repair(path, config, context=context)
+    qcfg = config.setdefault("quantization", {})
+    bits = int(qcfg.get("bits") or _jang_default_bits(jang_cfg, fallback_bits))
+    group_size = int(qcfg.get("group_size") or _jang_quant_block_size(jang_cfg))
+
+    if bits not in _MLX_WEIGHT_QUANT_BITS or group_size not in _MLX_WEIGHT_QUANT_GROUP_SIZES:
+        raise ValueError(
+            f"{path}: {context} declared bits={bits} group_size={group_size}, "
+            "but MLX model-weight quantization supports only bits "
+            "2/3/4/5/6/8 and group sizes 32/64/128. Re-quantize the bundle "
+            "or fix the stale quantization metadata."
+        )
+
+    qcfg["bits"] = bits
+    qcfg["group_size"] = group_size
+    return config, bits, group_size
+
+
+def _supported_routed_group_size(
+    path: Path,
+    jang_cfg: dict,
+    default_group_size: int,
+    *,
+    context: str,
+) -> int:
+    """Return a routed-expert group size that can be applied to MLX modules."""
+    group_size = _jang_routed_expert_group_size(jang_cfg, default_group_size)
+    if group_size in _MLX_WEIGHT_QUANT_GROUP_SIZES:
+        return group_size
+    logger.warning(
+        "%s: routed expert group_size=%s is unsupported by MLX model-weight "
+        "quantization; using validated default group_size=%s from tensor-shape "
+        "repair",
+        context,
+        group_size,
+        default_group_size,
+    )
+    return default_group_size
 
 
 def _vlm_quant_module_path_candidates(module_path: str, model_type: str = "") -> set[str]:
@@ -592,6 +670,10 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
     except ImportError:
         logger.warning("  TurboQuant config found but turboquant module not available")
         return
+    from .hybrid_tq_cache import (
+        build_hybrid_turboquant_make_cache,
+        is_qwen36_hybrid_tq_supported,
+    )
 
     # Use the model's native cache contract, not `len(model.layers)`.
     # Ling/Bailing appends MTP layers to `model.layers` but intentionally
@@ -668,10 +750,28 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
             + " layers"
         )
 
-    def _turboquant_make_cache(
-        _cfg=tq_config, _n=_n_cache, _kd=_key_dim, _vd=_val_dim, _lt=_layer_types
-    ):
-        return make_turboquant_cache(_cfg, _n, [_kd] * _n, [_vd] * _n, _lt)
+    if _n_ssm > 0:
+        if not is_qwen36_hybrid_tq_supported(model_config, _layer_types):
+            logger.info(
+                "  TurboQuant KV skipped: hybrid/path-dependent cache family "
+                "is not on the Qwen3.6 selective attention-KV allow-list; "
+                "native KV + non-KV companion state remains active."
+            )
+            return
+        _native_make_cache = model.make_cache
+        _turboquant_make_cache = build_hybrid_turboquant_make_cache(
+            _native_make_cache,
+            tq_config,
+            _key_dim,
+            _val_dim,
+            _layer_types,
+        )
+    else:
+
+        def _turboquant_make_cache(
+            _cfg=tq_config, _n=_n_cache, _kd=_key_dim, _vd=_val_dim, _lt=_layer_types
+        ):
+            return make_turboquant_cache(_cfg, _n, [_kd] * _n, [_vd] * _n, _lt)
 
     model.make_cache = _turboquant_make_cache
     logger.info(
@@ -1080,11 +1180,11 @@ def _load_jang_v2(
     # bundle's safetensors here, infer the real (bits, gsz) per quantized
     # Linear from shape ratios, and patch the in-memory config when it
     # disagrees. Idempotent on already-good bundles.
-    try:
-        from .quant_shape_inference import infer_quant_overrides_for_bundle
-        config = infer_quant_overrides_for_bundle(path, config)
-    except Exception as _qsi_err:
-        logger.debug(f"quant_shape_inference: skipped ({_qsi_err})")
+    config = _apply_runtime_quant_shape_repair(
+        path,
+        config,
+        context="JANG v2 pre-load",
+    )
 
     # Mistral-Small-4-119B mismatch: HF config.json has top model_type="mistral3"
     # (the VLM wrapper class) but text_config.model_type="mistral4" (the inner
@@ -1119,19 +1219,23 @@ def _load_jang_v2(
         config = _flat
         _ensure_jang_family_runtime_supported(path, config)
 
-    # Always read the quantization group size from jang_config (needed by
-    # _pre_fix_bits_from_shard and other per-shard fixups). Older sidecars used
-    # block_size; newer MXFP/JANG sidecars use MLX's group_size key.
-    block_size = _jang_quant_block_size(jang_cfg)
-    routed_block_size = _jang_routed_expert_group_size(jang_cfg, block_size)
-
-    # config.json already has quantization key (written by v2 converter)
-    # but ensure it exists for older v2 models
-    if "quantization" not in config:
-        config["quantization"] = {
-            "group_size": block_size,
-            "bits": _jang_default_bits(jang_cfg, [4]),
-        }
+    # Resolve model-weight quantization through tensor-shape inference before
+    # any nn.quantize/mx.quantize call. Some bundles declare stale unsupported
+    # group sizes (for example 256) while the stored tensor shapes imply a
+    # supported MLX layout.
+    config, default_bits, block_size = _prepare_runtime_weight_quantization(
+        path,
+        config,
+        jang_cfg,
+        fallback_bits=[4],
+        context="JANG v2",
+    )
+    routed_block_size = _supported_routed_group_size(
+        path,
+        jang_cfg,
+        block_size,
+        context="JANG v2",
+    )
     config["quantization"].setdefault("mode", _jang_quant_mode(jang_cfg, config))
 
     # MXTQ / JANGTQ fast path ─────────────────────────────────────────────
@@ -1854,7 +1958,10 @@ def _load_jang_v2(
             f"  Upgraded {_upg} modules to Quantized variants (post-load fixup)"
         )
 
-    _fix_quantized_bits(model, _q_cfg)
+    _fix_quantized_bits(
+        model,
+        _post_load_quantization_overrides(config, jang_cfg),
+    )
 
     if not hasattr(model, "config"):
         model.config = config
@@ -1922,9 +2029,6 @@ def _load_jang_v2_vlm(
 
     start = time.perf_counter()
 
-    block_size = _jang_quant_block_size(jang_cfg)
-    default_bits = _jang_default_bits(jang_cfg, [4])
-
     # Nemotron-H LatentMoE patch — see _load_jang_v2 for rationale. Must run
     # BEFORE model_class.Model(model_config) instantiates any NemotronHBlock.
     # No-op on mlx-lm 0.31.2+ (native support). Defensive: covers any future
@@ -1940,13 +2044,13 @@ def _load_jang_v2_vlm(
 
     # Runtime quantization-shape repair (vmlx#config-repair). See
     # `_load_jang_v2` for the full rationale.
-    try:
-        from .quant_shape_inference import infer_quant_overrides_for_bundle
-        config = infer_quant_overrides_for_bundle(path, config)
-    except Exception as _qsi_err:
-        logger.debug(f"quant_shape_inference (VLM): skipped ({_qsi_err})")
-    if "quantization" not in config:
-        config["quantization"] = {"group_size": block_size, "bits": default_bits}
+    config, default_bits, block_size = _prepare_runtime_weight_quantization(
+        path,
+        config,
+        jang_cfg,
+        fallback_bits=[4],
+        context="JANG v2 VLM",
+    )
     config["quantization"].setdefault("mode", _jang_quant_mode(jang_cfg, config))
     quant_mode = str(config["quantization"].get("mode") or "affine")
 
@@ -2713,7 +2817,10 @@ def _load_jang_v2_vlm(
         del shard_weights
         gc.collect()
 
-    _fix_quantized_bits(model, config.get("quantization", {}))
+    _fix_quantized_bits(
+        model,
+        _post_load_quantization_overrides(config, jang_cfg),
+    )
 
     if not hasattr(model, "config"):
         model.config = model_config
@@ -2961,7 +3068,10 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
     default_bits = _jang_default_bits(jang_cfg, [2, 4, 6, 8])
     config.pop("quantization", None)
     config.pop("quantization_config", None)
-    config["quantization"] = {"group_size": block_size, "bits": default_bits}
+    config["quantization"] = {
+        "group_size": _jang_quant_block_size(jang_cfg),
+        "bits": default_bits,
+    }
 
     # Runtime quantization-shape repair (vmlx#config-repair). The legacy
     # JANG v1 path constructs a uniform-bits config above from
@@ -2969,11 +3079,13 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
     # overrides for modules that aren't `default_bits`. The patcher scans
     # safetensors shapes and adds the correct overrides. See
     # `_load_jang_v2` for the full rationale.
-    try:
-        from .quant_shape_inference import infer_quant_overrides_for_bundle
-        config = infer_quant_overrides_for_bundle(path, config)
-    except Exception as _qsi_err:
-        logger.debug(f"quant_shape_inference (legacy v1): skipped ({_qsi_err})")
+    config, default_bits, block_size = _prepare_runtime_weight_quantization(
+        path,
+        config,
+        jang_cfg,
+        fallback_bits=[2, 4, 6, 8],
+        context="legacy JANG v1",
+    )
 
     # Nemotron-H LatentMoE patch — see _load_jang_v2 for rationale.
     try:
@@ -3017,7 +3129,10 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
             del weights
             gc.collect()
 
-        _fix_quantized_bits(model, config.get("quantization", {}))
+        _fix_quantized_bits(
+            model,
+            _post_load_quantization_overrides(config, jang_cfg),
+        )
     finally:
         if tmp_dir:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -3085,11 +3200,13 @@ def _load_jang_v1_vlm(
 
     config = vlm_load_config(path)
     # Runtime quantization-shape repair (vmlx#config-repair).
-    try:
-        from .quant_shape_inference import infer_quant_overrides_for_bundle
-        config = infer_quant_overrides_for_bundle(path, config)
-    except Exception as _qsi_err:
-        logger.debug(f"quant_shape_inference (v1 VLM): skipped ({_qsi_err})")
+    config, default_bits, block_size = _prepare_runtime_weight_quantization(
+        path,
+        config,
+        jang_cfg,
+        fallback_bits=[2, 4, 6, 8],
+        context="legacy JANG v1 VLM",
+    )
     model_class, _ = get_model_and_args(config=config)
 
     config.setdefault("text_config", {})
@@ -3994,6 +4111,36 @@ def _pre_fix_bits_from_metadata(model, shape_map, block_size):
             f"  Pre-fixed {fixed_count} module(s) cross-shard "
             f"(jjang-ai/vmlx#114 — would have been silently skipped per-shard)"
         )
+
+
+def _post_load_quantization_overrides(
+    config: dict | None,
+    jang_cfg: dict | None,
+) -> dict | None:
+    """Return trusted post-load per-module quantization overrides.
+
+    DSV4 affine/prestacked switch tensors are shape-ambiguous enough that the
+    post-load shape heuristic can reinterpret a valid 2b_g128 tensor as a
+    shorter 4b_g64 tensor. For that family, config/JANG metadata is the source
+    of truth after the loader has proved the artifact layout.
+
+    Qwen/Gemma-style JANG_4M bundles can have the opposite ambiguity:
+    4b_g64 and 8b_g32 produce identical packed/scales shapes. Some public
+    configs stamped the latter as a broad default while the JANG sidecar and
+    safetensor shapes are mixed 4/8-bit. Trusting those generic overrides cuts
+    hidden width in half and crashes at RMSNorm. Keep non-DSV4 on the
+    shape-and-block-size repair path.
+    """
+    if not isinstance(config, dict):
+        return None
+    quantization = config.get("quantization")
+    if not isinstance(quantization, dict):
+        return None
+    text_config = config.get("text_config") if isinstance(config.get("text_config"), dict) else {}
+    model_type = str(config.get("model_type") or text_config.get("model_type") or "")
+    if model_type == "deepseek_v4":
+        return quantization
+    return None
 
 
 def _fix_quantized_bits(model, quantization_overrides: dict | None = None):

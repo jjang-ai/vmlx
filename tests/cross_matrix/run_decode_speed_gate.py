@@ -276,6 +276,19 @@ ROWS: dict[str, Row] = {
         expected_min_pp=250.0,
         pp_targets=[1024, 4096],
     ),
+    "dsv4_jang_dq2_gate3math6": Row(
+        "dsv4_jang_dq2_gate3math6",
+        (
+            "/Users/example/models/JANGQ/"
+            "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
+        ),
+        tool_parser="deepseek",
+        reasoning_parser="deepseek-r1",
+        max_tokens=128,
+        expected_min_tps=20.0,
+        expected_min_pp=250.0,
+        pp_targets=[1024, 4096],
+    ),
 }
 
 

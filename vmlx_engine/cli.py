@@ -24,6 +24,21 @@ def _env_truthy(name: str) -> bool:
     return os.environ.get(name, "").lower() in ("1", "true", "yes", "on")
 
 
+def _speculative_incompatibility_reason(args) -> str | None:
+    if not getattr(args, "speculative_model", None):
+        return None
+    if getattr(args, "continuous_batching", False):
+        return "--continuous-batching"
+    try:
+        from .api.utils import is_mllm_model
+
+        if is_mllm_model(args.model, force_mllm=getattr(args, "is_mllm", False)):
+            return "multimodal (VLM)"
+    except Exception:
+        return None
+    return None
+
+
 def _apply_jangtq_mpp_nax_policy(args, logger):
     """Apply internal JANGTQ acceleration policy.
 
@@ -97,6 +112,9 @@ def _apply_dsv4_cache_policy(args, logger):
         and not getattr(args, "disable_prefix_cache", False)
     )
     if not prefix_active:
+        if getattr(args, "use_paged_cache", False):
+            args.use_paged_cache = False
+            changed.append("paged=disabled_without_prefix")
         if getattr(args, "enable_block_disk_cache", False):
             args.enable_block_disk_cache = False
             changed.append("L2 disk=disabled_without_prefix")
@@ -144,17 +162,6 @@ def _apply_dsv4_runtime_policy(args, logger, *, clamp_max_num_seqs: bool = False
             "DSV4-Flash detected — forcing continuous batching on because "
             "the production path depends on the DSV4BatchGenerator cache stack."
         )
-
-    if getattr(args, "disable_prefix_cache", False):
-        args.disable_prefix_cache = False
-        changes.append("disable_prefix_cache=off")
-        logger.warning(
-            "DSV4-Flash detected — ignoring --disable-prefix-cache so the "
-            "native SWA+CSA/HCA composite cache can use the paged prefix path."
-        )
-    if getattr(args, "enable_prefix_cache", True) is False:
-        args.enable_prefix_cache = True
-        changes.append("enable_prefix_cache=on")
 
     if getattr(args, "kv_cache_quantization", "none") != "none":
         old_kvq = args.kv_cache_quantization
@@ -242,6 +249,39 @@ def _apply_dsv4_runtime_policy(args, logger, *, clamp_max_num_seqs: bool = False
         dsv4_pool_quant,
     )
     return True, tuple(changes)
+
+
+def _cache_stack_summary_lines(args, *, dsv4_model: bool = False) -> list[str]:
+    """Return user-facing cache startup summary lines for the active runtime."""
+
+    if not getattr(args, "use_paged_cache", False):
+        return []
+
+    if dsv4_model:
+        lines = [
+            (
+                "DSV4 native composite prefix cache: schema=deepseek_v4_v7, "
+                f"block_size={args.paged_cache_block_size}, "
+                f"max_blocks={args.max_cache_blocks} (not generic paged KV)"
+            )
+        ]
+        if getattr(args, "enable_block_disk_cache", False):
+            lines.append(
+                "DSV4 composite block disk L2: "
+                f"max={args.block_disk_cache_max_gb}GB"
+            )
+        return lines
+
+    lines = [
+        (
+            "Paged cache: "
+            f"block_size={args.paged_cache_block_size}, "
+            f"max_blocks={args.max_cache_blocks}"
+        )
+    ]
+    if getattr(args, "enable_block_disk_cache", False):
+        lines.append(f"Block disk cache: max={args.block_disk_cache_max_gb}GB")
+    return lines
 
 
 def _env_int(name: str, default: int, legacy_name: str | None = None) -> int:
@@ -458,8 +498,6 @@ def serve_command(args):
                 server._default_top_k = 0
             if server._default_min_p is None:
                 server._default_min_p = 0.0
-            if server._default_repetition_penalty is None:
-                server._default_repetition_penalty = 1.0
 
     # Apply default enable_thinking
     _det = getattr(args, 'default_enable_thinking', None)
@@ -553,24 +591,30 @@ def serve_command(args):
             getattr(_mc, "cache_type", None) == "hybrid"
             and not getattr(args, "kv_cache_quantization_explicit", False)
         ):
-            # Hybrid/path-dependent models carry cumulative non-KV state in
-            # addition to attention KV. This includes SSM/Mamba caches and
-            # Qwen3.5/3.6 GatedDelta ArraysCache layers. Live TurboQuantKVCache
-            # currently replaces the model cache object globally, so keep that
-            # loader patch off. The scheduler's q4/q8 stored-cache codec is
-            # different: it quantizes only KVCache layers at prefix/paged/L2
-            # storage boundaries and preserves SSM/ArraysCache companions for
-            # async clean-prefill rederive.
             _old_kvq = args.kv_cache_quantization
-            os.environ["VMLX_DISABLE_TQ_KV"] = "1"
-            os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
-            logger.info(
-                "Hybrid/path-dependent cache model detected — disabling live "
-                "TurboQuant KV patch while preserving stored attention-KV "
-                "quantization=%s for prefix/paged/L2; SSM companions stay "
-                "full precision with async clean-prefill rederive.",
-                _old_kvq,
-            )
+            if _mc.family_name in {"qwen3_5", "qwen3_5_moe"}:
+                logger.info(
+                    "Qwen3.6 hybrid/path-dependent cache model detected — "
+                    "keeping auto live TurboQuant enabled for attention KVCache "
+                    "layers only; SSM/GatedDelta companion state remains native "
+                    "full precision. Stored attention-KV quantization=%s remains "
+                    "active for prefix/paged/L2 boundaries.",
+                    _old_kvq,
+                )
+            else:
+                # Hybrid/path-dependent models carry cumulative non-KV state in
+                # addition to attention KV. Only Qwen3.6 has a selective live
+                # TQ path; other hybrid families keep the generic loader patch
+                # disabled until their typed partial codec is parity-proven.
+                os.environ["VMLX_DISABLE_TQ_KV"] = "1"
+                os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
+                logger.info(
+                    "Hybrid/path-dependent cache model detected — disabling live "
+                    "TurboQuant KV patch while preserving stored attention-KV "
+                    "quantization=%s for prefix/paged/L2; SSM companions stay "
+                    "full precision with async clean-prefill rederive.",
+                    _old_kvq,
+                )
         if _mc.family_name != "unknown":
             # Auto-apply tool parser
             if (
@@ -743,6 +787,25 @@ def serve_command(args):
             "THINKING MODEL WARNING printed above for one-line fixes."
         )
 
+    _spec_incompat = _speculative_incompatibility_reason(args)
+    if _spec_incompat:
+        print(
+            f"  WARNING: --speculative-model is incompatible with {_spec_incompat}.",
+            file=sys.stderr,
+        )
+        print(
+            "     Draft model loading is disabled for this launch; requests "
+            "will use standard (non-speculative) generation.",
+            file=sys.stderr,
+        )
+        if _spec_incompat == "multimodal (VLM)":
+            print(
+                "     Without this guard the draft model would be ignored for "
+                "VLM requests after wasting memory at startup.",
+                file=sys.stderr,
+            )
+        args.speculative_model = None
+
     # Security summary at startup
     print("=" * 60)
     print("SECURITY CONFIGURATION")
@@ -811,7 +874,7 @@ def serve_command(args):
             if policy == "compatible-only" and mtp_status.get("runtime_available"):
                 print("    Request gate: temperature=0 and repetition_penalty=1.0 required")
             elif policy == "deterministic-defaults" and mtp_status.get("runtime_available"):
-                print("    Startup defaults: temperature=0, top_p=1, top_k=0, min_p=0, repetition=1")
+                print("    Startup defaults: temperature=0, top_p=1, top_k=0, min_p=0")
     except Exception:
         pass
     if getattr(args, 'chat_template', None):
@@ -1021,12 +1084,13 @@ def serve_command(args):
 
         print("Mode: Continuous batching (for multiple concurrent users)")
         print(f"Stream interval: {args.stream_interval} tokens")
-        if args.use_paged_cache:
-            print(
-                f"Paged cache: block_size={args.paged_cache_block_size}, max_blocks={args.max_cache_blocks}"
-            )
-            if args.enable_block_disk_cache:
-                print(f"Block disk cache: max={args.block_disk_cache_max_gb}GB")
+        cache_summary_lines = _cache_stack_summary_lines(
+            args,
+            dsv4_model=_is_dsv4_model,
+        )
+        if cache_summary_lines:
+            for line in cache_summary_lines:
+                print(line)
         elif enable_prefix_cache and not args.no_memory_aware_cache:
             cache_info = (
                 f"{args.cache_memory_mb}MB"
@@ -1253,11 +1317,13 @@ def bench_command(args):
         os.environ["VMLX_DISABLE_TQ_KV"] = "1"
         os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
 
+    _is_dsv4_model = False
     try:
         from .model_config_registry import get_model_config_registry
 
         _mc = get_model_config_registry().lookup(args.model)
         if _mc.family_name == "deepseek_v4":
+            _is_dsv4_model = True
             _apply_dsv4_runtime_policy(args, logger, clamp_max_num_seqs=True)
     except Exception as exc:
         logger.debug("Bench model runtime policy lookup failed: %s", exc)
@@ -1357,10 +1423,8 @@ def bench_command(args):
             scheduler_config=scheduler_config,
         )
 
-        if args.use_paged_cache:
-            print(
-                f"Paged cache: block_size={args.paged_cache_block_size}, max_blocks={args.max_cache_blocks}"
-            )
+        for line in _cache_stack_summary_lines(args, dsv4_model=_is_dsv4_model):
+            print(line)
 
         # Generate prompts
         prompts = [
@@ -1606,8 +1670,9 @@ def _check_macos_compat():
                     "This wheel can fail during Metal initialization with:\n"
                     "  Failed to load the default metallib. This library is "
                     "using language version 4.0 which is not supported on this OS.\n"
-                    "Install a vMLX build whose bundled MLX wheel tag matches "
-                    "your macOS version, or upgrade macOS.\n"
+                    "If this is the Tahoe-native DMG, download the Sequoia-compatible vMLX DMG instead. "
+                    "The Tahoe-native DMG requires macOS 26+. "
+                    "You can also upgrade macOS and retry.\n"
                 )
                 sys.exit(2)
 
@@ -2323,9 +2388,8 @@ Examples:
         default="compatible-only",
         help="Native MTP request policy. compatible-only leaves sampling defaults alone and "
              "uses MTP only for deterministic requests. deterministic-defaults is used by "
-             "the app for native-MTP sessions together with --default-temperature 0, "
-             "--default-top-p 1, --default-top-k 0, --default-min-p 0, and "
-             "--default-repetition-penalty 1.",
+             "the app for native-MTP sessions to set deterministic temperature/top-p/top-k/min-p "
+             "without applying repetition-penalty guards.",
     )
     serve_parser.add_argument(
         "--disable-native-mtp",
