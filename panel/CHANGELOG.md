@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.5.44 - 2026-05-19 - Hardening Sweep, Tool Streaming, and VLM Fixes
+
+### Fixed
+- Mistral Small 4 VLM sessions keep the real multimodal runtime instead of
+  falling back to text-only routing.
+- ZAYA/Zyphra-style native XML tool calls stream as a live tool-status state
+  without leaking partial `<function` markup into visible chat content.
+- Interleaved reasoning display uses live replacement while streaming and
+  preserves all visible reasoning segments after completion.
+- Coding-tool config save actions create backups, derive model/provider names
+  from the active server model, and keep config files private.
+- Sequoia/Tahoe bundle lanes pass the intended MLX wheel platform setting.
+
+### Verified
+- Panel settings, gateway, coding-tool save, tool-status, and reasoning-display
+  test slices passed before merge.
+- Bundled Python verification and Electron main/preload/renderer build passed
+  after the hardening commit was pushed to main.
+
 ## v1.5.42 — 2026-05-18 — DeepSeek R1 Reasoning Rail Regression Fix
 
 ### Fixed

@@ -2,6 +2,45 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.5.44] - 2026-05-19
+
+### Fixed
+- **Mistral Small 4 VLM loads through the real multimodal path again**:
+  Mistral3/Mistral4 wrapper detection now preserves vision routing, keeps the
+  VLM loader from stripping the active `kv_b_proj`, preserves image token
+  templates when processors lack an inline chat template, and sends local image
+  paths in the nested shape Mistral/Pixtral processors expect.
+- **ZAYA native XML tool streaming no longer leaks raw partial tool markup**:
+  Chat Completions and Responses streams now signal tool-call generation while
+  buffering partial `<function` / `<tool_call` / Zyphra XML markers, and the
+  panel suppresses raw markup while showing an immediate tool status.
+- **Interleaved reasoning display handles live replacement and final show-all
+  separately**: live streaming shows the latest active reasoning segment while
+  completed messages can still expose all visible reasoning segments.
+- **Coding-tool config saves are durable and model-derived**: config writers
+  preserve backups and force private config file permissions after writing.
+- **macOS MLX wheel platform selection is explicit for release packaging**:
+  Sequoia-compatible and Tahoe-native bundle lanes pass the intended
+  `VMLX_BUNDLE_MLX_PLATFORM` value, while the legacy misspelling remains
+  accepted for compatibility.
+
+### Verified
+- Live ZAYA1-8B-JANGTQ_K source-server tool-stream proof returned a parsed
+  `read_file` tool call with `tool_call_generating` streaming status and no
+  visible raw tool XML.
+- Live Mistral Small 4 VLM source-server proof returned correct text, red-image,
+  and blue-image responses through the multimodal path.
+- Live MiniMax-M2.7-JANGTQ_K and DSV4 tool-call probes passed during the
+  hardening sweep, including cache-detail and native-cache checks.
+- Focused C2 regression gates covered closed GH regressions for hybrid
+  TurboQuant KV policy, explicit KV quantization, VLM JIT wrapper preservation,
+  Kimi MLA patching, MLLM thread-local stream handling, DSV4 EOS/paged cache,
+  Responses system-message normalization, reasoning policy, Nemotron Omni
+  packaging, Mistral Small 4 VLM, and Sequoia/Tahoe wheel selection.
+- API/cache/MTP/server and panel settings/tool/reasoning/gateway matrices
+  passed, and the bundled Python/Electron build verified source parity and
+  critical runtime imports.
+
 ## [1.5.43] - 2026-05-19
 
 ### Fixed
