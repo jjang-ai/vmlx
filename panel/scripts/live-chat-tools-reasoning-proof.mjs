@@ -340,14 +340,19 @@ async function evaluate(cdp, expression) {
 function assertResult(result) {
   const failures = []
   const b = result.chatBOverrides || {}
+  const g = result.generationDefaults || {}
   const expectEq = (actual, expected, label) => {
     if (actual !== expected) failures.push(`${label}: expected ${expected}, got ${actual}`)
   }
-  expectEq(b.temperature, 0.42, 'generation default temperature')
-  expectEq(b.topP, 0.77, 'generation default topP')
-  expectEq(b.topK, 33, 'generation default topK')
-  expectEq(b.maxTokens, 2048, 'generation default maxTokens')
-  expectEq(b.repeatPenalty, 1.07, 'generation default repeatPenalty')
+  expectEq(g.temperature, 0.42, 'generation default temperature')
+  expectEq(g.topP, 0.77, 'generation default topP')
+  expectEq(g.topK, 33, 'generation default topK')
+  expectEq(g.maxNewTokens, 2048, 'generation default maxNewTokens')
+  expectEq(g.repeatPenalty, 1.07, 'generation default repeatPenalty')
+  expectEq(g.source, 'generation_config', 'generation default source')
+  for (const key of ['temperature', 'topP', 'topK', 'minP', 'maxTokens', 'repeatPenalty']) {
+    if (b[key] != null) failures.push(`sampler override carried over ${key}: ${b[key]}`)
+  }
   expectEq(b.builtinToolsEnabled, true, 'tool top-level toggle')
   expectEq(b.shellEnabled, true, 'shell toggle')
   expectEq(b.fileToolsEnabled, false, 'file tools disabled toggle')
@@ -550,6 +555,7 @@ async function main() {
           });
           const chatB = await window.api.chat.create('Settings B', 'live-local-model', undefined, modelDir);
           const chatBOverrides = await window.api.chat.getOverrides(chatB.id);
+          const generationDefaults = await window.api.models.getGenerationDefaults(modelDir);
 
           const remote = await window.api.sessions.createRemote({
             remoteUrl: 'http://127.0.0.1:' + mockPort,
@@ -617,6 +623,7 @@ async function main() {
             remoteSessionId: remote.session.id,
             uiChatId: uiChat.id,
             chatBOverrides,
+            generationDefaults,
             assistantId: assistant?.id,
             finalAssistantContent: rawFinal,
             persistedReasoningSegments,
