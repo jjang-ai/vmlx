@@ -1000,6 +1000,30 @@ class TestNativeMtpAutodetect:
         assert status["runtime_active"] is False
         assert status["status"] == "runtime_disabled"
 
+    def test_pre_load_activation_failure_deactivates_stale_runtime_flag(
+        self, tmp_path, monkeypatch
+    ):
+        from vmlx_engine import native_mtp
+
+        _write_qwen36_jang_mtp_bundle(tmp_path)
+        calls = []
+
+        monkeypatch.setattr(native_mtp, "_ACTIVE_NATIVE_MTP_MODEL_PATH", tmp_path)
+        monkeypatch.setattr(native_mtp, "_apply_mlx_lm_mtp_patch", lambda: False)
+        monkeypatch.setattr(
+            native_mtp,
+            "_set_mtp_active",
+            lambda active: calls.append(("active", active)),
+        )
+
+        status = native_mtp.maybe_apply_native_mtp(str(tmp_path), allow_runtime=True)
+
+        assert calls == [("active", False)]
+        assert native_mtp._ACTIVE_NATIVE_MTP_MODEL_PATH is None
+        assert status["runtime_available"] is False
+        assert status["runtime_active"] is False
+        assert status["status"] == "runtime_patch_failed"
+
     def test_runtime_active_model_detector_unwraps_engine_wrappers(self):
         from vmlx_engine.native_mtp import model_has_native_mtp_runtime
 
