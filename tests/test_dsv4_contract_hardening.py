@@ -109,7 +109,7 @@ def test_dsv4_capabilities_endpoint_emits_current_contract(monkeypatch):
     assert payload["supports_thinking"] is True
     assert payload["supported_modes"] == ["instruct", "reasoning"]
     assert payload["experimental_modes"] == []
-    assert payload["reasoning_efforts"] == ["low", "medium", "high", "max"]
+    assert payload["reasoning_efforts"] == ["high", "max"]
     assert payload["cache"]["native"]["family"] == "deepseek_v4"
     assert payload["cache"]["native"]["schema"] == "deepseek_v4_v7"
     assert payload["cache"]["native"]["cache_type"] == "native_composite"
@@ -212,7 +212,7 @@ def test_dsv4_capability_runner_check_accepts_current_contract_only():
         "supports_thinking": True,
         "supported_modes": ["instruct", "reasoning"],
         "experimental_modes": [],
-        "reasoning_efforts": ["low", "medium", "high", "max"],
+        "reasoning_efforts": ["high", "max"],
         "cache": {
             "native": {
                 "family": "deepseek_v4",

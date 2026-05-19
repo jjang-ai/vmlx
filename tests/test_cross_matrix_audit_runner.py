@@ -348,7 +348,7 @@ def test_dsv4_capability_contract_uses_native_cache_not_experimental_mode():
         "supports_thinking": True,
         "supported_modes": ["instruct", "reasoning"],
         "experimental_modes": [],
-        "reasoning_efforts": ["low", "medium", "high", "max"],
+        "reasoning_efforts": ["high", "max"],
         "cache": {
             "native": {
                 "family": "deepseek_v4",

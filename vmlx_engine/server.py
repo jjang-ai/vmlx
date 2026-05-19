@@ -6237,7 +6237,7 @@ async def model_capabilities(model_id: str) -> dict:
     if family == "deepseek_v4":
         supports_thinking = True
         supported_modes = ["instruct", "reasoning"]
-        reasoning_efforts = ["low", "medium", "high", "max"]
+        reasoning_efforts = ["high", "max"]
     elif supports_thinking:
         supported_modes = ["instruct", "reasoning"]
         if family == "hy_v3":
