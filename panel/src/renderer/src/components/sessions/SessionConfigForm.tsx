@@ -270,6 +270,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const dsv4CompositeRequiresPaged = dsv4Active && !batchingOff && !prefixOff
   const nativeCacheRequiresPaged = isMambaCache && !batchingOff && !prefixOff
   const effectiveUsePagedCache = nativeCacheRequiresPaged || dsv4CompositeRequiresPaged || config.usePagedCache
+  const pagedCacheActive = !prefixOff && effectiveUsePagedCache
+  const legacyDiskCacheBlockedByPaged = dsv4Active || isMambaCache || (!prefixOff && effectiveUsePagedCache)
+  const legacyDiskCacheActive = config.enableDiskCache && !batchingOff && !prefixOff && !legacyDiskCacheBlockedByPaged
+  const blockDiskCacheActive = config.enableBlockDiskCache && !batchingOff && pagedCacheActive
   const effectivePagedCacheBlockSize = dsv4CompositeRequiresPaged
     ? DSV4_PAGED_CACHE_BLOCK_SIZE
     : config.pagedCacheBlockSize
@@ -558,7 +562,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
               </>
             ) : (
               <>
-                {config.usePagedCache && (
+                {pagedCacheActive && (
                   <IncompatWarning text="Cache Memory Limit and Cache Memory % only apply to memory-aware non-paged prefix cache. With paged cache on, use Max Cache Blocks for L1 RAM capacity and Block Cache Max for L2 disk capacity." />
                 )}
                 <SliderField
@@ -573,7 +577,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                   allowUnlimited
                   unlimitedValue={0}
                   unlimitedLabel="Auto-detect"
-                  disabled={config.usePagedCache}
+                  disabled={pagedCacheActive}
                 />
                 <SliderField
                   label="Cache Memory %"
@@ -585,9 +589,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                   step={1}
                   defaultValue={DEFAULT_CONFIG.cacheMemoryPercent}
                   maxInput={100}
-                  disabled={config.usePagedCache}
+                  disabled={pagedCacheActive}
                 />
-                {config.usePagedCache && <IncompatWarning text="Cache TTL has no effect when paged cache is enabled — paged cache uses block-count LRU eviction instead. To control paged cache size, adjust 'Max Cache Blocks' in the Paged KV Cache section below. To use time-based TTL, disable 'Use Paged KV Cache' in the Paged KV Cache section." />}
+                {pagedCacheActive && <IncompatWarning text="Cache TTL has no effect when paged cache is enabled — paged cache uses block-count LRU eviction instead. To control paged cache size, adjust 'Max Cache Blocks' in the Paged KV Cache section below. To use time-based TTL, disable 'Use Paged KV Cache' in the Paged KV Cache section." />}
                 <SliderField
                   label="Cache TTL (minutes)"
                   tooltip="Time-to-live for memory-aware cache entries. Entries not accessed within this window are evicted to free memory. 'No expiration' means entries are only evicted by memory pressure. Note: this setting has no effect when Paged KV Cache is enabled (paged cache uses its own LRU eviction based on Max Cache Blocks)."
@@ -600,7 +604,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                   allowUnlimited
                   unlimitedValue={0}
                   unlimitedLabel="No expiration"
-                  disabled={config.usePagedCache}
+                  disabled={pagedCacheActive}
                 />
               </>
             )}
@@ -669,8 +673,20 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {zayaTypedCacheRequiresPaged && <InfoNote text="ZAYA typed CCA cache requires paged cache while prefix cache is enabled. Turn off Prefix Cache to disable this cache stack for ZAYA." />}
         {nativeCacheRequiresPaged && !zayaTypedCacheRequiresPaged && !dsv4CompositeRequiresPaged && <InfoNote text="Hybrid/Mamba cache models require paged cache while prefix cache is enabled so KV blocks and path-dependent state stay in the same cache contract." />}
         {dsv4CompositeRequiresPaged && <InfoNote text="DSV4 uses native SWA+CSA/HCA composite cache snapshots, so paged cache stays on and block size is fixed to 256 tokens for production decode compatibility." />}
-        <CheckField label="Use Paged KV Cache" tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations." checked={effectiveUsePagedCache} onChange={v => { onChange('usePagedCache', v); if (v && config.enableDiskCache) onChange('enableDiskCache', false) }} disabled={batchingOff || prefixOff || nativeCacheRequiresPaged || dsv4CompositeRequiresPaged} />
-        {effectiveUsePagedCache && (
+        <CheckField
+          label="Use Paged KV Cache"
+          tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations."
+          checked={pagedCacheActive}
+          onChange={v => {
+            onChange('usePagedCache', v)
+            if (v) {
+              onChange('enablePrefixCache', true)
+              if (config.enableDiskCache) onChange('enableDiskCache', false)
+            }
+          }}
+          disabled={batchingOff || nativeCacheRequiresPaged || dsv4CompositeRequiresPaged}
+        />
+        {pagedCacheActive && (
           <>
             <SliderField
               label="Block Size (tokens)"
@@ -699,9 +715,16 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             <CheckField
               label="Block Disk Cache (L2)"
               tooltip="Persist individual paged cache blocks to SSD. When a block is evicted from RAM, it's saved to disk and can be reloaded later without recomputation. Dramatically speeds up cache warm-up for repeated system prompts and common prefixes. Uses content-addressable storage with background writes so disk I/O doesn't block inference. Compatible runtimes store compressed blocks in their native codec; path-dependent architectures use typed cache records instead of generic TurboQuant."
-              checked={config.enableBlockDiskCache && !batchingOff && !prefixOff}
-              onChange={v => onChange('enableBlockDiskCache', v)}
-              disabled={batchingOff || prefixOff}
+              checked={blockDiskCacheActive}
+              onChange={v => {
+                onChange('enableBlockDiskCache', v)
+                if (v) {
+                  onChange('enablePrefixCache', true)
+                  onChange('usePagedCache', true)
+                  if (config.enableDiskCache) onChange('enableDiskCache', false)
+                }
+              }}
+              disabled={batchingOff}
             />
             {config.enableBlockDiskCache && (
               <>
@@ -793,14 +816,21 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {!effectivelyNoBatching && <PerformanceHint text="Saves cached prompts to your SSD so they survive server restarts. Next time you load the same model, previous conversations warm up instantly." />}
         <InfoNote text="Legacy disk cache works with memory-aware prefix cache. Block disk cache (in the Paged KV Cache section) works with paged cache. Only one can be active at a time." />
         {batchingOff && <IncompatWarning text="Disk cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
-        {!effectivelyNoBatching && effectiveUsePagedCache && <IncompatWarning text="Legacy disk cache is not compatible with paged cache. To use disk-based persistence with paged cache, use 'Block Disk Cache (L2)' in the Paged KV Cache section instead. To use this legacy disk cache, disable 'Use Paged KV Cache' first." />}
-        {!batchingOff && prefixOff && <IncompatWarning text="Disk cache requires prefix cache. Enable 'Prefix Cache' above to use disk caching." />}
+        {!effectivelyNoBatching && legacyDiskCacheBlockedByPaged && <IncompatWarning text="Legacy disk cache is not compatible with paged or native typed cache. For persistent caching with paged/native cache, use 'Block Disk Cache (L2)' in the Paged KV Cache section instead." />}
+        {!batchingOff && prefixOff && <InfoNote text="Legacy disk cache is an L2 behind prefix cache. Turning it on also enables Prefix Cache and keeps Paged KV Cache off." />}
         <CheckField
           label="Enable Disk Cache"
           tooltip="Persist prompt caches to disk for reuse across server restarts. Acts as L2 cache behind the in-memory prefix cache — when a prompt isn't found in memory, it's loaded from disk instead of recomputing. Dramatically speeds up repeated prompts (system prompts, common prefixes). Compatible runtimes store compressed cache data in their native format; path-dependent caches use typed restore records. Requires prefix cache to be enabled. Note: not compatible with paged cache (uses different storage format)."
-          checked={config.enableDiskCache && !batchingOff && !prefixOff && !effectiveUsePagedCache}
-          onChange={v => onChange('enableDiskCache', v)}
-          disabled={batchingOff || prefixOff || effectiveUsePagedCache}
+          checked={legacyDiskCacheActive}
+          onChange={v => {
+            onChange('enableDiskCache', v)
+            if (v) {
+              onChange('enablePrefixCache', true)
+              onChange('usePagedCache', false)
+              if (config.enableBlockDiskCache) onChange('enableBlockDiskCache', false)
+            }
+          }}
+          disabled={batchingOff || legacyDiskCacheBlockedByPaged}
         />
         {config.enableDiskCache && (
           <>

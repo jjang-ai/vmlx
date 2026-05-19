@@ -270,9 +270,10 @@ function buildCommandPreview(
     : (config.reasoningParser && config.reasoningParser !== 'auto' ? config.reasoningParser
       : detected?.reasoningParser)
 
-  // Prefix cache (mirrors buildArgs lines 1077-1114)
-  const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
-  const prefixCacheOff = dsv4Active ? false : !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
+  // Prefix cache (mirrors buildArgs): explicit user opt-out stays off even
+  // when tools are configured. Tool sessions benefit from cache but do not
+  // silently own the cache toggle.
+  const prefixCacheOff = dsv4Active ? false : !cacheStackActive || config.enablePrefixCache === false
   const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
   const dsv4CompositeRequiresPaged = dsv4Active && !prefixCacheOff
   const nativeCacheRequiresPaged = cacheTypeRequiresPaged(detected?.cacheType) && detected?.usePagedCache === true && !prefixCacheOff

@@ -222,8 +222,7 @@ function buildCommandPreview(
         : (config.reasoningParser && config.reasoningParser !== 'auto' ? config.reasoningParser
             : detected?.reasoningParser)
 
-    const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
-    const prefixCacheOff = !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
+    const prefixCacheOff = dsv4Active ? false : !cacheStackActive || config.enablePrefixCache === false
     const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
     const dsv4CompositeRequiresPaged = dsv4Active && !prefixCacheOff
     const nativeCacheRequiresPaged = cacheTypeRequiresPaged(detected?.cacheType) && detected?.usePagedCache === true && !prefixCacheOff
@@ -494,9 +493,15 @@ describe('Prefix Cache', () => {
         expect(hasFlag(out, '--disable-prefix-cache')).toBe(true)
     })
 
-    it('does not disable prefix cache when tools need it', () => {
+    it('honors prefix cache off even when tools are configured', () => {
         const out = preview({ enablePrefixCache: false, enableAutoToolChoice: true, mcpConfig: '/path/mcp.json' })
-        expect(hasFlag(out, '--disable-prefix-cache')).toBe(false)
+        expect(hasFlag(out, '--disable-prefix-cache')).toBe(true)
+    })
+
+    it('does not contain a hidden tool-driven prefix cache override', () => {
+        const source = readFileSync('src/main/sessions.ts', 'utf-8')
+        expect(source).not.toContain('toolsNeedCache')
+        expect(source).not.toContain('force prefix cache ON')
     })
 
     it('legacy mode: sets --no-memory-aware-cache and --prefix-cache-size', () => {
@@ -745,6 +750,21 @@ describe('Disk Cache', () => {
         const out = preview({ enablePrefixCache: false, enableDiskCache: true })
         expect(hasFlag(out, '--enable-disk-cache')).toBe(false)
     })
+
+    it('settings UI can enable legacy disk cache from prefix/paged off state', () => {
+        const source = readFileSync(
+            'src/renderer/src/components/sessions/SessionConfigForm.tsx',
+            'utf-8',
+        )
+        const diskStart = source.indexOf('label="Enable Disk Cache"')
+        const diskEnd = source.indexOf('{config.enableDiskCache &&', diskStart)
+        const diskBlock = source.slice(diskStart, diskEnd)
+
+        expect(diskBlock).toContain("onChange('enablePrefixCache', true)")
+        expect(diskBlock).toContain("onChange('usePagedCache', false)")
+        expect(diskBlock).toContain('legacyDiskCacheBlockedByPaged')
+        expect(diskBlock).not.toContain('disabled={batchingOff || prefixOff || effectiveUsePagedCache}')
+    })
 })
 
 describe('Block Disk Cache', () => {
@@ -766,6 +786,25 @@ describe('Block Disk Cache', () => {
     it('omits block disk cache when paged cache is off', () => {
         const out = preview({ enablePrefixCache: true, usePagedCache: false, enableBlockDiskCache: true })
         expect(hasFlag(out, '--enable-block-disk-cache')).toBe(false)
+    })
+
+    it('settings UI can enable paged and block disk caches from prefix-off state', () => {
+        const source = readFileSync(
+            'src/renderer/src/components/sessions/SessionConfigForm.tsx',
+            'utf-8',
+        )
+        const pagedStart = source.indexOf('label="Use Paged KV Cache"')
+        const pagedEnd = source.indexOf('{pagedCacheActive &&', pagedStart)
+        const pagedBlock = source.slice(pagedStart, pagedEnd)
+        const blockStart = source.indexOf('label="Block Disk Cache (L2)"')
+        const blockEnd = source.indexOf('{config.enableBlockDiskCache &&', blockStart)
+        const blockDiskBlock = source.slice(blockStart, blockEnd)
+
+        expect(pagedBlock).toContain("onChange('enablePrefixCache', true)")
+        expect(pagedBlock).not.toContain('disabled={batchingOff || prefixOff || nativeCacheRequiresPaged || dsv4CompositeRequiresPaged}')
+        expect(blockDiskBlock).toContain("onChange('enablePrefixCache', true)")
+        expect(blockDiskBlock).toContain("onChange('usePagedCache', true)")
+        expect(blockDiskBlock).not.toContain('disabled={batchingOff || prefixOff}')
     })
 })
 
@@ -1761,15 +1800,14 @@ describe('Feature Interaction', () => {
         expect(hasFlag(out, '--enable-auto-tool-choice')).toBe(false)
     })
 
-    it('MCP tools force prefix cache even when disabled', () => {
+    it('MCP tools honor explicit prefix cache disable', () => {
         const out = preview({
             enablePrefixCache: false,
             enableAutoToolChoice: true,
             mcpConfig: '/path/mcp.json',
             toolCallParser: 'hermes',
         })
-        // Tools need cache → prefix cache NOT disabled
-        expect(hasFlag(out, '--disable-prefix-cache')).toBe(false)
+        expect(hasFlag(out, '--disable-prefix-cache')).toBe(true)
         expect(hasFlag(out, '--mcp-config')).toBe(true)
     })
 

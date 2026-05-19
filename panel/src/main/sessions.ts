@@ -2438,12 +2438,10 @@ export class SessionManager extends EventEmitter {
 
     console.log(`[SESSION] Model family: ${detected.family} | tool: ${effectiveToolParser || 'none'} (user=${userToolParser}, detected=${detected.toolParser || 'none'}) | reasoning: ${effectiveReasoningParser || 'none'} (user=${userReasoningParser}, detected=${detected.reasoningParser || 'none'}) | autoTool: ${effectiveAutoTool} | VLM: ${isVLM}`)
 
-    // Prefix cache — requires --continuous-batching to take effect in vmlx-engine
-    // When MCP tools + auto-tool-choice are enabled, force prefix cache ON.
-    // Tool follow-up requests share most of the prompt with the original request;
-    // without prefix cache each follow-up re-processes the entire prompt (~16s).
-    const toolsNeedCache = !!(effectiveAutoTool && config.mcpConfig)
-    const prefixCacheOff = dsv4Active ? false : !cacheStackActive || (config.enablePrefixCache === false && !toolsNeedCache)
+    // Prefix cache — requires --continuous-batching to take effect in vmlx-engine.
+    // Tool sessions benefit from prefix reuse, but an explicit user opt-out must
+    // stay an opt-out; do not silently re-enable cache because tools are present.
+    const prefixCacheOff = dsv4Active ? false : !cacheStackActive || config.enablePrefixCache === false
     const zayaCcaActive = isZayaCcaFamily(detectedFamily)
     const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
     const dsv4CompositeRequiresPaged = detectedFamily === 'deepseek-v4' && !prefixCacheOff
