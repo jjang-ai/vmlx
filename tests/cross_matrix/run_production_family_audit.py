@@ -32,7 +32,9 @@ from pathlib import Path
 from typing import Any
 
 
-ROOT = Path("/Users/example/mlx/vllm-mlx")
+ROOT = Path(
+    os.environ.get("VMLINUX_AUDIT_ROOT", Path(__file__).resolve().parents[2])
+).resolve()
 DEFAULT_PY = Path(
     "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
 )
@@ -1148,12 +1150,6 @@ def live_server_command(
         "1",
         "--max-tokens",
         "32768",
-        "--default-temperature",
-        "0.6",
-        "--default-top-p",
-        "0.95",
-        "--default-repetition-penalty",
-        "1.10",
         "--enable-prefix-cache",
         "--use-paged-cache",
         "--paged-cache-block-size",

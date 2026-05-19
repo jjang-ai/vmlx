@@ -24,6 +24,13 @@ from tests.cross_matrix.run_production_family_audit import (
 from tests.cross_matrix import run_production_family_audit as audit_harness
 
 
+def test_live_audit_root_is_this_checkout_not_stale_absolute_path():
+    expected_root = audit_harness.Path(audit_harness.__file__).resolve().parents[2]
+
+    assert audit_harness.ROOT == expected_root
+    assert audit_harness.ROOT != audit_harness.Path("/Users/example/mlx/vllm-mlx")
+
+
 def test_anthropic_exact_probe_ignores_reasoning_blocks():
     resp = {
         "content": [
@@ -494,3 +501,21 @@ def test_live_gate_server_command_does_not_import_from_repo_cwd(tmp_path):
     assert cmd[:4] == [str(tmp_path / "python3"), "-B", "-s", "-P"]
     assert "-m" in cmd
     assert cmd[cmd.index("-m") + 1] == "vmlx_engine.cli"
+
+
+def test_live_gate_server_command_does_not_force_sampling_defaults(tmp_path):
+    cmd = audit_harness.live_server_command(
+        tmp_path / "python3",
+        tmp_path / "model",
+        8123,
+        tmp_path / "block-cache",
+    )
+
+    for flag in (
+        "--default-temperature",
+        "--default-top-p",
+        "--default-top-k",
+        "--default-min-p",
+        "--default-repetition-penalty",
+    ):
+        assert flag not in cmd
