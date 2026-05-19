@@ -273,7 +273,7 @@ function buildCommandPreview(
   // Prefix cache (mirrors buildArgs): explicit user opt-out stays off even
   // when tools are configured. Tool sessions benefit from cache but do not
   // silently own the cache toggle.
-  const prefixCacheOff = dsv4Active ? false : !cacheStackActive || config.enablePrefixCache === false
+  const prefixCacheOff = !cacheStackActive || config.enablePrefixCache === false
   const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
   const dsv4CompositeRequiresPaged = dsv4Active && !prefixCacheOff
   const nativeCacheRequiresPaged = cacheTypeRequiresPaged(detected?.cacheType) && detected?.usePagedCache === true && !prefixCacheOff

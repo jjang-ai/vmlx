@@ -190,6 +190,50 @@ def test_dsv4_runtime_policy_applies_to_bench_like_cli_args(tmp_path, monkeypatc
     assert "speculative_model=off" in changes
 
 
+def test_dsv4_runtime_policy_respects_explicit_prefix_cache_disable(monkeypatch):
+    """DSV4 defaults to the composite paged path, but explicit prefix off wins."""
+    from vmlx_engine.cli import _apply_dsv4_runtime_policy
+
+    args = SimpleNamespace(
+        continuous_batching=True,
+        enable_prefix_cache=True,
+        disable_prefix_cache=True,
+        use_paged_cache=True,
+        paged_cache_block_size=64,
+        enable_block_disk_cache=True,
+        kv_cache_quantization="none",
+        kv_cache_quantization_explicit=False,
+        max_num_seqs=1,
+        prefill_batch_size=1,
+        completion_batch_size=1,
+        no_memory_aware_cache=False,
+        enable_disk_cache=False,
+        enable_jit=False,
+        smelt=False,
+        flash_moe=False,
+        distributed=False,
+        speculative_model=None,
+    )
+    monkeypatch.delenv("DSV4_LONG_CTX", raising=False)
+    monkeypatch.delenv("DSV4_POOL_QUANT", raising=False)
+
+    applied, changes = _apply_dsv4_runtime_policy(
+        args,
+        logger=__import__("logging").getLogger("test"),
+        clamp_max_num_seqs=True,
+    )
+
+    assert applied is True
+    assert args.disable_prefix_cache is True
+    assert args.use_paged_cache is False
+    assert args.enable_block_disk_cache is False
+    assert args.paged_cache_block_size == 64
+    assert "disable_prefix_cache=off" not in changes
+    assert "paged=disabled_without_prefix" in changes
+    assert "L2 disk=disabled_without_prefix" in changes
+    assert not any(str(c).startswith("block_size=") for c in changes)
+
+
 def test_panel_suppresses_generic_kv_quantization_controls_for_dsv4():
     """The app UI/launch preview must not advertise generic KV q4/q8 for DSV4."""
     from pathlib import Path
@@ -226,17 +270,18 @@ def test_panel_suppresses_generic_batch_and_chunk_controls_for_dsv4():
     assert "if (!dsv4Active && config.completionBatchSize" in settings
 
 
-def test_dsv4_ui_forces_native_cache_stack_and_hides_unsafe_runtime_controls():
-    """DSV4 settings must show only production-safe controls or disabled values."""
+def test_dsv4_ui_defaults_native_cache_stack_but_keeps_prefix_toggle_user_controlled():
+    """DSV4 settings default to native cache, but explicit prefix off is allowed."""
     from pathlib import Path
 
     form = Path("panel/src/renderer/src/components/sessions/SessionConfigForm.tsx").read_text()
 
     assert "const effectiveContinuousBatching = dsv4Active ? true : config.continuousBatching" in form
-    assert "const prefixOff = dsv4Active ? false : !config.enablePrefixCache" in form
+    assert "const prefixOff = !config.enablePrefixCache" in form
     assert "const multimodalActive = !dsv4Active" in form
     assert "checked={effectiveContinuousBatching}" in form
-    assert "checked={dsv4Active ? true : config.enablePrefixCache}" in form
+    assert "checked={config.enablePrefixCache}" in form
+    assert "checked={dsv4Active ? true : config.enablePrefixCache}" not in form
     assert "hidden={isImage || dsv4Active}" in form
     assert "const showVideoControls = !dsv4Active" in form
     assert "checked={effectiveSmeltActive}" in form
@@ -256,7 +301,8 @@ def test_dsv4_launch_filters_stale_saved_and_additional_args():
 
     for source in (settings, sessions):
         assert "const cacheStackActive = dsv4Active ? true : config.continuousBatching !== false" in source
-        assert "const prefixCacheOff = dsv4Active ? false" in source
+        assert "const prefixCacheOff = !cacheStackActive || config.enablePrefixCache === false" in source
+        assert "const prefixCacheOff = dsv4Active ? false" not in source
         assert "const effectiveSmelt = !!(config as any).smelt && !dsv4Active" in source
         assert "const isVLM = dsv4Active || effectiveSmelt" in source
         assert "const effectiveDistributed = requestedDistributed && !dsv4Active" in source

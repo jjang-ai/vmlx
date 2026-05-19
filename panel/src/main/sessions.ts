@@ -2441,7 +2441,7 @@ export class SessionManager extends EventEmitter {
     // Prefix cache — requires --continuous-batching to take effect in vmlx-engine.
     // Tool sessions benefit from prefix reuse, but an explicit user opt-out must
     // stay an opt-out; do not silently re-enable cache because tools are present.
-    const prefixCacheOff = dsv4Active ? false : !cacheStackActive || config.enablePrefixCache === false
+    const prefixCacheOff = !cacheStackActive || config.enablePrefixCache === false
     const zayaCcaActive = isZayaCcaFamily(detectedFamily)
     const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
     const dsv4CompositeRequiresPaged = detectedFamily === 'deepseek-v4' && !prefixCacheOff

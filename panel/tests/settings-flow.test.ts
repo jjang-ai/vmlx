@@ -164,6 +164,7 @@ type DetectedConfig = {
 
 function normalizeDetectedFamilyName(family?: string): string | undefined {
     if (!family) return undefined
+    if (family === 'deepseek_v4') return 'deepseek-v4'
     if (family === 'zaya1_vl') return 'zaya1-vl'
     if (family === 'bailing_hybrid') return 'ling'
     return family
@@ -222,7 +223,7 @@ function buildCommandPreview(
         : (config.reasoningParser && config.reasoningParser !== 'auto' ? config.reasoningParser
             : detected?.reasoningParser)
 
-    const prefixCacheOff = dsv4Active ? false : !cacheStackActive || config.enablePrefixCache === false
+    const prefixCacheOff = !cacheStackActive || config.enablePrefixCache === false
     const zayaTypedCacheRequiresPaged = zayaCcaActive && !prefixCacheOff
     const dsv4CompositeRequiresPaged = dsv4Active && !prefixCacheOff
     const nativeCacheRequiresPaged = cacheTypeRequiresPaged(detected?.cacheType) && detected?.usePagedCache === true && !prefixCacheOff
@@ -1240,6 +1241,23 @@ describe('No Hardcoded Values', () => {
         expect(getFlagValue(out, '--paged-cache-block-size')).toBe('256')
     })
 
+    it('deepseek-v4 respects explicit prefix cache disable', () => {
+        const out = preview(
+            {
+                enablePrefixCache: false,
+                usePagedCache: true,
+                enableBlockDiskCache: true,
+                kvCacheQuantization: 'q8',
+            },
+            { family: 'deepseek-v4', usePagedCache: true },
+        )
+
+        expect(hasFlag(out, '--disable-prefix-cache')).toBe(true)
+        expect(hasFlag(out, '--use-paged-cache')).toBe(false)
+        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(false)
+        expect(hasFlag(out, '--kv-cache-quantization')).toBe(false)
+    })
+
     it('detected Qwen3.6 hybrid cache forces paged cache over stale saved false', () => {
         const out = preview(
             {
@@ -1653,9 +1671,12 @@ describe('JIT Toggle', () => {
 
         expect(form).toContain('dsv4CompositeRequiresPaged')
         expect(form).toContain('block size is fixed to 256 tokens')
+        expect(form).toContain('checked={config.enablePrefixCache}')
+        expect(form).not.toContain('checked={dsv4Active ? true : config.enablePrefixCache}')
         expect(settings).toContain('DSV4_PAGED_CACHE_BLOCK_SIZE = 256')
         expect(sessions).toContain('DSV4_PAGED_CACHE_BLOCK_SIZE = 256')
         expect(sessions).toContain('native SWA+CSA/HCA composite cache')
+        expect(sessions).not.toContain('const prefixCacheOff = dsv4Active ? false')
     })
 
     it('enableJit does not affect other flags', () => {

@@ -97,6 +97,9 @@ def _apply_dsv4_cache_policy(args, logger):
         and not getattr(args, "disable_prefix_cache", False)
     )
     if not prefix_active:
+        if getattr(args, "use_paged_cache", False):
+            args.use_paged_cache = False
+            changed.append("paged=disabled_without_prefix")
         if getattr(args, "enable_block_disk_cache", False):
             args.enable_block_disk_cache = False
             changed.append("L2 disk=disabled_without_prefix")
@@ -144,17 +147,6 @@ def _apply_dsv4_runtime_policy(args, logger, *, clamp_max_num_seqs: bool = False
             "DSV4-Flash detected — forcing continuous batching on because "
             "the production path depends on the DSV4BatchGenerator cache stack."
         )
-
-    if getattr(args, "disable_prefix_cache", False):
-        args.disable_prefix_cache = False
-        changes.append("disable_prefix_cache=off")
-        logger.warning(
-            "DSV4-Flash detected — ignoring --disable-prefix-cache so the "
-            "native SWA+CSA/HCA composite cache can use the paged prefix path."
-        )
-    if getattr(args, "enable_prefix_cache", True) is False:
-        args.enable_prefix_cache = True
-        changes.append("enable_prefix_cache=on")
 
     if getattr(args, "kv_cache_quantization", "none") != "none":
         old_kvq = args.kv_cache_quantization

@@ -264,7 +264,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const effectiveContinuousBatching = dsv4Active ? true : config.continuousBatching
   const batchingOff = !effectiveContinuousBatching
   const effectivelyNoBatching = batchingOff
-  const prefixOff = dsv4Active ? false : !config.enablePrefixCache
+  const prefixOff = !config.enablePrefixCache
   const isMambaCache = detectedCacheType === 'mamba' || detectedCacheType === 'hybrid'
   const zayaTypedCacheRequiresPaged = zayaCcaActive && !batchingOff && !prefixOff
   const dsv4CompositeRequiresPaged = dsv4Active && !batchingOff && !prefixOff
@@ -522,8 +522,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       <Section title={t('sessions.config.prefixCache')} expanded={expandedSections.prefixCache} onToggle={() => toggleSection('prefixCache')} hidden={isImage}>
         {!effectivelyNoBatching && <PerformanceHint text="Speeds up repeated conversations by remembering previous prompts. Makes follow-up messages much faster (lower time-to-first-token)." />}
         {batchingOff && <IncompatWarning text="Prefix cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable prefix caching." />}
-        <CheckField label="Enable Prefix Cache" tooltip="Caches prompt prefixes in memory. If you send the same system prompt or document multiple times, the server reuses the cached internal states instead of recomputing them, drastically reducing Time-To-First-Token (TTFT) and saving GPU compute. Highly recommended for agents and tool calling." checked={dsv4Active ? true : config.enablePrefixCache} onChange={v => onChange('enablePrefixCache', v)} disabled={dsv4Active} />
-        {(dsv4Active || config.enablePrefixCache) && (
+        <CheckField label="Enable Prefix Cache" tooltip="Caches prompt prefixes in memory. If you send the same system prompt or document multiple times, the server reuses the cached internal states instead of recomputing them, drastically reducing Time-To-First-Token (TTFT) and saving GPU compute. Highly recommended for agents and tool calling." checked={config.enablePrefixCache} onChange={v => onChange('enablePrefixCache', v)} />
+        {config.enablePrefixCache && (
           <>
             {dsv4Active ? (
               <InfoNote text="DSV4 Flash stores native SWA+CSA/HCA prompt-boundary state through the paged prefix path. Generic memory-aware and legacy entry-count prefix-cache controls are not used." />
