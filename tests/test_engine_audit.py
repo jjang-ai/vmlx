@@ -351,6 +351,114 @@ class TestServerSamplingResolution:
                 "so bundle generation_config.json and jang_config sampling defaults apply."
             )
 
+    def test_chat_and_responses_log_and_forward_supported_sampling_kwargs(
+        self,
+        monkeypatch,
+        caplog,
+    ):
+        """Supported text sampling kwargs must reach the engine unchanged."""
+        import logging
+
+        from fastapi.testclient import TestClient
+
+        import vmlx_engine.server as server
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class FakeTokenizer:
+            has_thinking = False
+
+        class FakeEngine:
+            is_mllm = False
+            tokenizer = FakeTokenizer()
+            preserve_native_tool_format = False
+
+        captured: list[dict] = []
+
+        async def fake_await_chat(*args, **kwargs):
+            captured.append(dict(kwargs["chat_kwargs"]))
+            return GenerationOutput(
+                text="ok",
+                prompt_tokens=3,
+                completion_tokens=1,
+            )
+
+        monkeypatch.setattr(server, "_engine", FakeEngine())
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_name", "kwarg-model")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+        monkeypatch.setattr(server, "_api_key", None, raising=False)
+        monkeypatch.setattr(server, "_default_temperature", None)
+        monkeypatch.setattr(server, "_default_top_p", None)
+        monkeypatch.setattr(server, "_default_top_k", None)
+        monkeypatch.setattr(server, "_default_min_p", None)
+        monkeypatch.setattr(server, "_default_repetition_penalty", None)
+        monkeypatch.setattr(
+            server,
+            "_await_chat_with_disconnect_abort",
+            fake_await_chat,
+        )
+        server._jang_sampling_defaults_cache.clear()
+        server._generation_defaults_cache.clear()
+
+        client = TestClient(server.app)
+        caplog.set_level(logging.INFO, logger="vmlx_engine.server")
+
+        chat_resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "kwarg-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+                "max_tokens": 17,
+                "temperature": 0.23,
+                "top_p": 0.77,
+                "top_k": 42,
+                "min_p": 0.03,
+                "repetition_penalty": 1.11,
+            },
+        )
+        responses_resp = client.post(
+            "/v1/responses",
+            json={
+                "model": "kwarg-model",
+                "input": "hi",
+                "stream": False,
+                "max_output_tokens": 19,
+                "temperature": 0.31,
+                "top_p": 0.88,
+                "top_k": 24,
+                "min_p": 0.04,
+                "repetition_penalty": 1.07,
+            },
+        )
+
+        assert chat_resp.status_code == 200
+        assert responses_resp.status_code == 200
+        assert captured[0] == {
+            "max_tokens": 17,
+            "temperature": 0.23,
+            "top_p": 0.77,
+            "max_prompt_tokens": 0,
+            "top_k": 42,
+            "min_p": 0.03,
+            "repetition_penalty": 1.11,
+        }
+        assert captured[1] == {
+            "max_tokens": 19,
+            "temperature": 0.31,
+            "top_p": 0.88,
+            "max_prompt_tokens": 0,
+            "top_k": 24,
+            "min_p": 0.04,
+            "repetition_penalty": 1.07,
+        }
+        log_text = "\n".join(record.getMessage() for record in caplog.records)
+        assert "Resolved sampling kwargs route=/v1/chat/completions" in log_text
+        assert "Resolved sampling kwargs route=/v1/responses" in log_text
+        assert "'top_k': 42" in log_text
+        assert "'min_p': 0.04" in log_text
+
 
 # ===========================================================================
 # D. Settings & Config

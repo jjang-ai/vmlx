@@ -79,8 +79,9 @@ export function DownloadTab({ onDownloadComplete }: DownloadTabProps) {
   // behind a restrictive network) can point this at hf-mirror.com or
   // any HF-protocol-compatible proxy to fix slow/failed downloads.
   // Empty = default to https://huggingface.co. Applies to downloads
-  // (via HF_ENDPOINT env var) AND all HF API calls (search, collection
-  // fetch, README fetch) via getHfBaseUrl() in the main process.
+  // (via an explicit worker endpoint argument) AND all HF API calls
+  // (search, collection fetch, README fetch) via fetchHfPath() in the
+  // main process.
   const [hfEndpoint, setHfEndpoint] = useState('')
   const [hfEndpointSaving, setHfEndpointSaving] = useState(false)
 

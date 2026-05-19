@@ -126,7 +126,9 @@ describe("image model autodetection path", () => {
     expect(src).toContain('PYTHONDONTWRITEBYTECODE: "1"');
     expect(src).toContain('PYTHONNOUSERSITE: "1"');
     expect(src).toContain("PYTHONPATH: undefined");
-    expect(src).toContain('["-B", "-s", "-u", "-c", script, job.repoId, job.modelDir]');
+    expect(src).toContain(
+      '["-B", "-s", "-u", "-c", script, job.repoId, job.modelDir, hfEndpoint]',
+    );
   });
 
   it("image startServer falls back to existing downloaded repo directories before failing", () => {

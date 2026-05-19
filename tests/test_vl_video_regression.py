@@ -1565,8 +1565,9 @@ class TestMiniMaxThinkInPromptNonStream:
         assert nonstream_marker in src, (
             "Non-stream think_in_prompt derivation block is missing"
         )
-        # Both helper functions must be called from the non-stream derivation
-        # (use a generous substring so minor reformatting doesn't break)
+        # The non-stream path now uses the same rendered-prompt contract helper
+        # as the streaming path, instead of maintaining a second direct
+        # _template_always_thinks branch.
         # Find the derivation block
         idx = src.find(nonstream_marker)
         assert idx > 0
@@ -1574,8 +1575,8 @@ class TestMiniMaxThinkInPromptNonStream:
         assert "_template_completes_thinking(" in window, (
             "Non-stream must consult _template_completes_thinking"
         )
-        assert "_template_always_thinks(" in window, (
-            "Non-stream must consult _template_always_thinks"
+        assert "_engine_prompt_starts_in_reasoning(" in window, (
+            "Non-stream must consult rendered prompt start semantics"
         )
 
 
@@ -2718,12 +2719,8 @@ class TestMlxstudio76UnrecognizedArgHint:
     def test_unknown_flag_triggers_hint(self, capsys):
         """Running cli with a garbage flag triggers the hint."""
         import subprocess
-        bpy = (
-            "/private/tmp/vmlx-1.3.66-build/panel/bundled-python/"
-            "python/bin/python3.12"
-        )
         r = subprocess.run(
-            [bpy, "-m", "vmlx_engine.cli", "serve",
+            [sys.executable, "-m", "vmlx_engine.cli", "serve",
              "/nonexistent", "--nonexistent-flag-xyz-1-2-3"],
             capture_output=True, text=True, timeout=30,
         )
@@ -2789,13 +2786,9 @@ class TestVmlx75DefaultRepetitionPenaltyArg:
         argparse rejecting any flag. Model-load fails (expected) but
         argparse returncode must not be 2 (which is "unrecognized args")."""
         import subprocess
-        bpy = (
-            "/private/tmp/vmlx-1.3.66-build/panel/bundled-python/"
-            "python/bin/python3.12"
-        )
         # Reporter's full flag set from the issue body
         r = subprocess.run(
-            [bpy, "-m", "vmlx_engine.cli", "serve",
+            [sys.executable, "-m", "vmlx_engine.cli", "serve",
              "/nonexistent/model",
              "--host", "127.0.0.1", "--port", "8000", "--timeout", "300",
              "--max-num-seqs", "5",
@@ -5298,16 +5291,18 @@ class TestMs75HuggingFaceMirrorEndpoint:
             "trailing-slash strip required — otherwise concatenation "
             "with '/api/...' produces '//api/...'"
         )
-        # Must fall back to the canonical URL when unset
-        assert 'return "https://huggingface.co"' in src
+        # Must fall back to the canonical URL when unset.
+        assert "HF_CANONICAL_ENDPOINT" in src
 
     def test_download_passes_hf_endpoint_env(self):
         src = Path(
             "/private/tmp/vmlx-1.3.66-build/panel/src/main/ipc/models.ts"
         ).read_text()
-        assert 'downloadEnv.HF_ENDPOINT = hfEndpoint.trim()' in src, (
-            "HF_ENDPOINT must be forwarded to the download subprocess — "
-            "that's the env var huggingface_hub reads"
+        assert "HF_ENDPOINT: undefined" in src, (
+            "Stale shell HF_ENDPOINT must be cleared so it cannot poison GUI downloads"
+        )
+        assert "job.repoId, job.modelDir, hfEndpoint" in src, (
+            "Normalized HF endpoint must be passed explicitly to the download worker"
         )
         assert 'db.getSetting("hf_endpoint")' in src
 
@@ -5340,11 +5335,13 @@ class TestMs75HuggingFaceMirrorEndpoint:
             f"Still have {len(url_literals)} hardcoded HF API URL strings — "
             f"they bypass the mirror setting"
         )
-        # getHfBaseUrl() must be USED, not just defined
-        usages = src.count("getHfBaseUrl()")
-        assert usages >= 5, (
-            f"getHfBaseUrl() must be called ≥ 5 times (search × 2 + "
-            f"recommended + collection + README); found {usages}"
+        # fetchHfPath must be USED, not just defined: search x2, recommended,
+        # README, and collection should all route through the mirror-aware
+        # helper with stale-token fallback.
+        usages = src.count("fetchHfPath(")
+        assert usages >= 6, (
+            f"fetchHfPath() must be called >= 6 times (definition + search x2 + "
+            f"recommended + README + collection); found {usages}"
         )
 
     def test_csp_allows_mirror_hosts(self):
@@ -5369,10 +5366,11 @@ class TestMs75HuggingFaceMirrorEndpoint:
         assert "const [hfEndpoint, setHfEndpoint]" in src
         assert "handleSaveHfEndpoint" in src
         # Validation — typo "hf-mirror.com" (no scheme) must not silently break
-        assert "https?:\\/\\/" in src, (
-            "save handler must validate scheme — otherwise a typo "
-            "silently corrupts HF_ENDPOINT and kills all downloads"
+        assert "normalizeHfEndpointSetting" in src, (
+            "save handler must normalize and validate the endpoint — otherwise "
+            "a typo silently corrupts HF routing and kills all downloads"
         )
+        assert "http:// or https:// URL" in src
         # One-click preset button for the standard China mirror
         assert "hf-mirror.com" in src
         assert "Use hf-mirror" in src
@@ -8283,6 +8281,8 @@ class TestBundledPythonVerifyScript:
         import subprocess, os
         if not os.path.isfile(self._SCRIPT):
             pytest.skip("verify-bundled-python.sh not present")
+        if not os.path.isfile(REPO_ROOT / "panel/bundled-python/python/bin/python3"):
+            pytest.skip("bundled Python is not present in this source worktree")
         # Must check bundled python is present; if not, script
         # exits early — still a useful signal (not a test failure
         # since the test doesn't own the bundle).

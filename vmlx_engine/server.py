@@ -1689,6 +1689,8 @@ def _engine_prompt_starts_in_reasoning(
     misclassified as hidden reasoning and suppressed.
     """
     test_msgs = [{"role": "user", "content": "__test__"}]
+    if not hasattr(tokenizer, "apply_chat_template"):
+        return False
     try:
         rendered = tokenizer.apply_chat_template(
             test_msgs,
