@@ -27,6 +27,7 @@ in model_configs.py.
 import json
 import re
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from .abstract_tool_parser import (
@@ -473,7 +474,10 @@ class DSMLToolParser(ToolParser):
         except Exception:
             return None
         try:
-            enc = _load_encoding_dsv4_module()
+            model_path = request.get("model_path") if isinstance(request, dict) else None
+            enc = _load_encoding_dsv4_module(
+                model_path=Path(model_path) if model_path else None
+            )
         except Exception:
             return None
         parse_fn = getattr(enc, "parse_message_from_completion_text", None)

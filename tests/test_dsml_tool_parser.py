@@ -24,6 +24,7 @@ DeepSeek's other special tokens (`<｜begin▁of▁sentence｜>`, `<｜User｜>`
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -272,7 +273,7 @@ class TestDSMLToolParser:
         monkeypatch.setattr(
             dsv4_chat_encoder,
             "_load_encoding_dsv4_module",
-            lambda: FakeEncoding,
+            lambda **_kwargs: FakeEncoding,
         )
 
         text = (
@@ -305,3 +306,64 @@ class TestDSMLToolParser:
             "path": "docs/vendor_memo.md"
         }
         assert out.content is None
+
+    def test_canonical_encoder_uses_request_model_path(
+        self, parser, monkeypatch, tmp_path
+    ):
+        """DSML canonical parsing must use the loaded bundle encoder."""
+        from vmlx_engine.loaders import dsv4_chat_encoder
+
+        captured = {}
+
+        class FakeEncoding:
+            @staticmethod
+            def parse_message_from_completion_text(_text):
+                return {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "read_file",
+                                "arguments": {"path": "docs/vendor_memo.md"},
+                            }
+                        }
+                    ],
+                }
+
+        def fake_loader(**kwargs):
+            captured.update(kwargs)
+            return FakeEncoding
+
+        monkeypatch.setattr(
+            dsv4_chat_encoder,
+            "_load_encoding_dsv4_module",
+            fake_loader,
+        )
+
+        request = {
+            "model_path": str(tmp_path),
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"],
+                        },
+                    },
+                }
+            ],
+        }
+
+        out = parser.extract_tool_calls(
+            f'<{DSML_PREFIX}invoke name="read_file"></{DSML_PREFIX}invoke>',
+            request=request,
+        )
+
+        assert Path(captured["model_path"]) == tmp_path
+        assert out.tools_called is True
+        assert json.loads(out.tool_calls[0]["arguments"]) == {
+            "path": "docs/vendor_memo.md"
+        }

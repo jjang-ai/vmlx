@@ -2590,7 +2590,12 @@ def _parse_tool_calls_with_parser(
         # Convert request to dict format for parsers that need schema info (e.g., Step3p5 type coercion)
         parser_request = None
         if request and request.tools:
-            parser_request = {"tools": convert_tools_for_template(request.tools)}
+            parser_request = {
+                "tools": convert_tools_for_template(request.tools),
+                "model_path": (
+                    _model_path or _model_name or getattr(request, "model", None)
+                ),
+            }
         result = parser_instance.extract_tool_calls(output_text, request=parser_request)
         if result.tools_called:
             tool_calls = [
