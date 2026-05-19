@@ -4,7 +4,7 @@ import { ipcMain } from 'electron'
 import { execFileSync } from 'child_process'
 import { homedir } from 'os'
 import { join } from 'path'
-import { existsSync, readFileSync, writeFileSync, copyFileSync, mkdirSync } from 'fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 
 const MLXSTUDIO_TAG = '_mlxstudio'  // Tag to identify our entries
 
@@ -39,6 +39,7 @@ function safeWriteTOML(path: string, content: string): void {
   const dir = path.substring(0, path.lastIndexOf('/'))
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   writeFileSync(path, content, { encoding: 'utf-8', mode: 0o600 })
+  try { chmodSync(path, 0o600) } catch {}
 }
 
 function safeWriteJSON(path: string, data: any): void {
@@ -49,6 +50,7 @@ function safeWriteJSON(path: string, data: any): void {
   const dir = path.substring(0, path.lastIndexOf('/'))
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   writeFileSync(path, JSON.stringify(data, null, 2) + '\n', { encoding: 'utf-8', mode: 0o600 })
+  try { chmodSync(path, 0o600) } catch {}
 }
 
 function commandExists(cmd: string): boolean {

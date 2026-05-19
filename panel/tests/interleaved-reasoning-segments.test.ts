@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   appendReasoningDelta,
   markReasoningToolBoundary,
+  reasoningSegmentsForDisplay,
   visibleReasoningSegments,
 } from '../src/shared/interleavedReasoning'
 
@@ -29,6 +30,20 @@ describe('interleaved reasoning segments', () => {
 
     expect(segments).toEqual(['Need shell.', ''])
     expect(visibleReasoningSegments(segments)).toEqual(['Need shell.'])
+  })
+
+  it('replaces old reasoning segments during live interleaved streaming, then can show all after completion', () => {
+    let segments = appendReasoningDelta([], 'First plan before tools.')
+    segments = markReasoningToolBoundary(segments)
+    segments = appendReasoningDelta(segments, 'Second plan after tool results.')
+
+    expect(reasoningSegmentsForDisplay(segments, { liveReplace: true })).toEqual([
+      'Second plan after tool results.',
+    ])
+    expect(reasoningSegmentsForDisplay(segments, { liveReplace: false })).toEqual([
+      'First plan before tools.',
+      'Second plan after tool results.',
+    ])
   })
 
   it('marks a resumed reasoning segment as active again in the renderer', () => {

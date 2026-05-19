@@ -1030,3 +1030,4 @@ class ChatCompletionChunk(BaseModel):
     choices: list[ChatCompletionChunkChoice]
     usage: Usage | None = None  # Included when stream_options.include_usage=true
     warnings: list[str] | None = None
+    tool_call_generating: bool | None = None  # vMLX UI hint while native XML is buffered

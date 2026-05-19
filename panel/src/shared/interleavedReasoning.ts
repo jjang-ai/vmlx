@@ -32,6 +32,17 @@ export function visibleReasoningSegments(
   return (segments || []).filter((segment) => segment.trim().length > 0)
 }
 
+export function reasoningSegmentsForDisplay(
+  segments?: ReasoningSegments | null,
+  options?: { liveReplace?: boolean },
+): ReasoningSegments {
+  const visible = visibleReasoningSegments(segments)
+  if (options?.liveReplace && visible.length > 1) {
+    return [visible[visible.length - 1]]
+  }
+  return visible
+}
+
 export function joinReasoningSegments(
   segments?: ReasoningSegments | null,
 ): string {

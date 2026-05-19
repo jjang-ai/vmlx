@@ -9,7 +9,7 @@ import { ToolCallStatus } from './ToolCallStatus'
 import { InlineToolCall, InlineToolGroup } from './InlineToolCall'
 import { TTSPlayer } from './VoiceChat'
 import { formatTimestamp, parseContentArray, getMetricsItems, type MessageMetrics } from './chat-utils'
-import { visibleReasoningSegments } from '../../../../shared/interleavedReasoning'
+import { reasoningSegmentsForDisplay as getReasoningSegmentsForDisplay } from '../../../../shared/interleavedReasoning'
 
 interface Message {
   id: string
@@ -193,8 +193,10 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
       : reasoningContent
         ? [reasoningContent]
         : []
-    return visibleReasoningSegments(segments)
-  }, [reasoningContent, reasoningSegments])
+    return getReasoningSegmentsForDisplay(segments, {
+      liveReplace: !!isStreaming && !(reasoningDone ?? false),
+    })
+  }, [isStreaming, reasoningContent, reasoningDone, reasoningSegments])
   const latestReasoningSegment = reasoningSegmentsForDisplay[reasoningSegmentsForDisplay.length - 1] || ''
   // Same for the active reasoning segment (separate stream, same TCP batching problem)
   const displayedLatestReasoning = useTypewriter(latestReasoningSegment, !!isStreaming && !(reasoningDone ?? false))

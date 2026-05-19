@@ -621,6 +621,27 @@ def _as_input_mapping(inputs: Any) -> Dict[str, Any]:
     return out
 
 
+def _shape_images_for_processor_call(
+    processor: Any, images: Optional[List[str]]
+) -> Optional[List[Any]]:
+    """Normalize image argument shape for processors with conversation nesting.
+
+    Mistral3/Pixtral processors expect ``images`` as a list of per-sample image
+    lists. The API path stores data URLs as local temp file paths, and passing
+    ``["/tmp/image.png"]`` directly makes those processors iterate the path
+    string and hand ``"/"`` to Transformers' image loader.
+    """
+    if not images:
+        return images
+    proc_type = type(processor)
+    proc_key = f"{proc_type.__module__}.{proc_type.__name__}".lower()
+    if not any(name in proc_key for name in ("mistral3", "pixtral")):
+        return images
+    if all(isinstance(image, str) and image.startswith("/") for image in images):
+        return [list(images)]
+    return images
+
+
 def _call_processor_direct(
     processor: Any,
     *,
@@ -665,7 +686,7 @@ def _call_processor_direct(
         "add_special_tokens": add_special_tokens,
     }
     if images:
-        kwargs["images"] = images
+        kwargs["images"] = _shape_images_for_processor_call(processor, images)
     if videos:
         kwargs["videos"] = videos
     try:

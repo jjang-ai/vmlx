@@ -1857,15 +1857,16 @@ export function registerChatHandlers(
           // Skip emission if abort already fired — prevents stale tokens from reaching renderer
           if (abortController.signal.aborted) return;
           // Track raw content BEFORE stripping for tool call marker detection
+          let suppressVisibleToolDelta = false;
           if (!isReasoningDelta) {
             rawAccumulated += delta;
             // Only activate buffering when tool call markers appear at the start of a line,
             // not when the model is explaining tool syntax in prose (e.g., "I'll use <tool_call>...")
             if (!clientToolCallBuffering) {
-              // Catch real tool call formats AND hallucinated Claude-style tool calls
+              // Catch real tool call formats and common hallucinated tool-call tags.
               // Use trailing window (last 200 chars) to avoid O(n) regex on full response
               const lineStartPattern =
-                /(?:^|\n)\s*(?:<minimax:tool_call|<tool_call>|\[Calling tool:|<invoke name=|<read_file\b|<write_file\b|<run_command\b|<search_files\b|<edit_file\b|<list_directory\b|<execute_command\b|<bash\b)/;
+                /(?:^|\n)\s*(?:<zyphra_tool_call\b|<function(?:=|\b)|<minimax:tool_call|<tool_call\b|\[Calling tool:|<invoke name=|<read_file\b|<write_file\b|<run_command\b|<search_files\b|<edit_file\b|<list_directory\b|<execute_command\b|<bash\b)/;
               const searchWindow =
                 rawAccumulated.length > 200
                   ? rawAccumulated.slice(-200)
@@ -1873,8 +1874,15 @@ export function registerChatHandlers(
               if (lineStartPattern.test(searchWindow)) {
                 clientToolCallBuffering = true;
                 console.log(`[CHAT] Client-side tool call buffering activated`);
+                emitToolStatus(
+                  "generating",
+                  "",
+                  "Generating tool call...",
+                  toolIteration,
+                );
               }
             }
+            suppressVisibleToolDelta = clientToolCallBuffering;
           }
 
           // Strip any leaked chat template tokens from the delta
@@ -1937,11 +1945,13 @@ export function registerChatHandlers(
                 }
               } catch (_) {}
             }
-            fullContent += delta;
-            // Update content offset immediately (not throttled) for accurate tool call positioning
-            lastEmittedContentLength = allGeneratedContent
-              ? allGeneratedContent.length + 2 + fullContent.length
-              : fullContent.length;
+            if (!suppressVisibleToolDelta) {
+              fullContent += delta;
+              // Update content offset immediately (not throttled) for accurate tool call positioning
+              lastEmittedContentLength = allGeneratedContent
+                ? allGeneratedContent.length + 2 + fullContent.length
+                : fullContent.length;
+            }
           }
           // Client-side counting (fallback when server doesn't send usage in each chunk).
           // Must happen BEFORE TPS snapshot so the rolling window uses accurate counts.
@@ -1971,7 +1981,7 @@ export function registerChatHandlers(
           }
 
           // Suppress rendering (but not counting/TPS) when tool call content is detected
-          if (!isReasoningDelta && clientToolCallBuffering) return;
+          if (!isReasoningDelta && suppressVisibleToolDelta) return;
 
           // === IPC emission — every token emitted immediately ===
           // Renderer-side useTypewriter handles smooth character reveal via rAF.
@@ -2065,6 +2075,19 @@ export function registerChatHandlers(
                   entry.responseId = respId;
                   entry.endpoint = { host: resolved.host, port: resolved.port };
                 }
+              }
+
+              if (
+                currentEventType === "response.heartbeat" &&
+                parsed.tool_call_generating
+              ) {
+                if (!clientToolCallBuffering) clientToolCallBuffering = true;
+                emitToolStatus(
+                  "generating",
+                  "",
+                  "Generating tool call...",
+                  toolIteration,
+                );
               }
 
               // Reasoning delta from OpenAI Responses reasoning-summary events.
@@ -3181,6 +3204,10 @@ export function registerChatHandlers(
         );
         // Strip leaked tool call blocks that server didn't parse (various model formats)
         fullContent = fullContent.replace(
+          /<zyphra_tool_call>[\s\S]*?<\/zyphra_tool_call>/g,
+          "",
+        );
+        fullContent = fullContent.replace(
           /<minimax:tool_call>[\s\S]*?<\/minimax:tool_call>/g,
           "",
         );
@@ -3194,6 +3221,10 @@ export function registerChatHandlers(
         );
         fullContent = fullContent.replace(
           /<invoke\b[^>]*>[\s\S]*?<\/invoke>/g,
+          "",
+        );
+        fullContent = fullContent.replace(
+          /<function(?:=|\b)[\s\S]*?(?:<\/function>|$)/g,
           "",
         );
         fullContent = fullContent.replace(
@@ -3463,6 +3494,10 @@ export function registerChatHandlers(
         if (partialContent) {
           partialContent = partialContent.replace(TEMPLATE_TOKEN_REGEX, "");
           partialContent = partialContent.replace(
+            /<zyphra_tool_call>[\s\S]*?<\/zyphra_tool_call>/g,
+            "",
+          );
+          partialContent = partialContent.replace(
             /<minimax:tool_call>[\s\S]*?<\/minimax:tool_call>/g,
             "",
           );
@@ -3476,6 +3511,10 @@ export function registerChatHandlers(
           );
           partialContent = partialContent.replace(
             /<invoke\b[^>]*>[\s\S]*?<\/invoke>/g,
+            "",
+          );
+          partialContent = partialContent.replace(
+            /<function(?:=|\b)[\s\S]*?(?:<\/function>|$)/g,
             "",
           );
           partialContent = partialContent.replace(

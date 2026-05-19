@@ -381,15 +381,14 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     except Exception:
         pass
 
-    # Mistral wrapper exceptions:
+    # Mistral wrapper exception:
     # - Mistral-Medium-3.5: outer mistral3 wrapper + inner ministral3 has
     #   Pixtral metadata, but jang_tools.mistral3.runtime currently strips
     #   vision_tower / multi_modal_projector and runs text-only.
-    # - Mistral 4: outer mistral3 wrapper + inner mistral4 has no supported
-    #   mlx_vlm VLM class; the JANG loader promotes to the text-only inner
-    #   mistral4 runtime. Routing either shape through MLLM silently loads
-    #   the wrong class or drops weights.
-    # Force LLM path for both until their vision fold-in is implemented.
+    #
+    # Do not apply this to Mistral Small 4. mlx-vlm's mistral3 wrapper now
+    # dispatches text_config.model_type=mistral4 to Mistral4Model, so routing
+    # that family text-only drops real image support.
     try:
         import json as _json_m3
         from pathlib import Path as _Path_m3
@@ -398,13 +397,9 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
             cfg_m3 = _json_m3.loads(cfg_path_m3.read_text())
             top_mt = cfg_m3.get("model_type")
             text_mt = (cfg_m3.get("text_config") or {}).get("model_type")
-            if (
-                text_mt == "ministral3"
-                or top_mt == "ministral3"
-                or (top_mt == "mistral3" and text_mt == "mistral4")
-            ):
+            if text_mt == "ministral3" or top_mt == "ministral3":
                 _logger.info(
-                    "is_mllm_model(%s): tier=mistral_wrapper_text_runtime result=False",
+                    "is_mllm_model(%s): tier=ministral3_wrapper_text_runtime result=False",
                     model_name,
                 )
                 return False
@@ -463,30 +458,6 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
                                     model_name,
                                 )
                                 return False
-                            # Mistral 4 has_vision=true exception: mlx_vlm has
-                            # mistral3 (standard attention) and mistral4 (text
-                            # only; no VLM class). A Mistral 4 VLM config
-                            # routed through the VLM engine stuffs MLA weights
-                            # into mistral3's standard-attention skeleton →
-                            # garbage tokens. Force text-only until mlx_vlm
-                            # ships a mistral4 VLM class; paired with the
-                            # loader's text-only fallback as defense in depth.
-                            try:
-                                hf_cfg_path = os.path.join(local_path, "config.json")
-                                if os.path.isfile(hf_cfg_path):
-                                    hf_cfg = json.loads(open(hf_cfg_path).read())
-                                    tc = hf_cfg.get("text_config") or {}
-                                    if (hf_cfg.get("model_type") == "mistral3"
-                                            and tc.get("model_type") == "mistral4"):
-                                        _logger.warning(
-                                            "is_mllm_model(%s): Mistral 4 VLM "
-                                            "wrapper unsupported by mlx_vlm — "
-                                            "forcing text-only to avoid garbage output",
-                                            model_name,
-                                        )
-                                        return False
-                            except Exception:
-                                pass
                             _logger.info(
                                 "is_mllm_model(%s): tier=jang_config_explicit_true result=True",
                                 model_name,

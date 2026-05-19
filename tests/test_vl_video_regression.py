@@ -5911,19 +5911,20 @@ class TestPanelUIContractFull:
         )
 
 
-class TestMistral4VlmTextFallback:
-    """Mistral 4 has no mlx_vlm VLM class. When jang_config.has_vision=true,
-    the naive VLM path loads mistral3 (standard attention) with mistral4
-    MLA weights → garbage tokens. Must fall through to text-only load.
+class TestMistral4VlmWrapperRouting:
+    """Mistral Small 4 is a mistral3 VLM wrapper around a mistral4 MLA LM.
 
-    Live-reproduced against Mistral-Small-4-119B-JANG_2L 2026-04-19.
+    Older mlx-vlm builds routed that wrapper into the standard mistral3 text
+    skeleton and produced garbage. Current bundled mlx-vlm's mistral3
+    LanguageModel dispatches text_config.model_type="mistral4" to
+    Mistral4Model, so the old forced text-only fallback now causes
+    mlxstudio#111: image requests are rejected as "loaded runtime is text-only".
     """
 
-    def test_is_mllm_forces_false_on_mistral3_mistral4_combo(self, tmp_path):
-        """is_mllm_model must override jang_config.has_vision=true when
-        the config.json is the mistral3-wrapper-with-mistral4-inner combo."""
+    def test_is_mllm_allows_mistral3_mistral4_vlm_combo(self, tmp_path):
+        """A Mistral Small 4 VLM bundle must remain a VLM when it has vision."""
         import json as _json
-        # Fake model dir with the buggy config
+
         d = tmp_path / "FakeMistral4"
         d.mkdir()
         (d / "jang_config.json").write_text(_json.dumps({
@@ -5943,28 +5944,23 @@ class TestMistral4VlmTextFallback:
 
         from vmlx_engine.api.utils import is_mllm_model, _IS_MLLM_CACHE
         _IS_MLLM_CACHE.clear()  # avoid stale cache from earlier tests
-        result = is_mllm_model(str(d))
-        assert result is False, (
-            "mistral3+mistral4 config must force is_mllm=False to avoid "
-            "VLM-path garbage output from Mistral 4 weights in mistral3 class"
-        )
+        assert is_mllm_model(str(d)) is True
+        assert is_mllm_model(str(d), force_mllm=True) is True
 
-    def test_vlm_loader_has_mistral4_fallback(self):
-        """Defense in depth: even if is_mllm is forced True via --is-mllm,
-        _load_jang_v2_vlm must detect mistral3+mistral4 and delegate to
-        the text-only loader."""
+    def test_vlm_loader_does_not_fallback_to_text_only_for_mistral4_wrapper(self):
+        """The JANG VLM path must not strip image support for Mistral Small 4."""
         src = Path("vmlx_engine/utils/jang_loader.py").read_text()
-        # In the VLM loader, check for the fallback block
         vlm_idx = src.find("def _load_jang_v2_vlm")
         assert vlm_idx > 0
         next_fn = src.find("\ndef _", vlm_idx + 10)
         vlm_body = src[vlm_idx:next_fn if next_fn > 0 else len(src)]
-        assert 'mistral3' in vlm_body and 'mistral4' in vlm_body, (
-            "VLM loader must check for mistral3+mistral4 combo"
-        )
-        assert 'return _load_jang_v2(' in vlm_body, (
-            "VLM loader must delegate to text-only _load_jang_v2 on "
-            "Mistral 4 fallback"
+        assert "Mistral 4 VLM not supported" not in vlm_body
+        assert (
+            'config.get("model_type") == "mistral3"'
+            ' and _tc.get("model_type") == "mistral4"'
+        ) not in vlm_body, (
+            "Mistral Small 4 VLM wrappers must stay on the mlx-vlm path; "
+            "text-only fallback recreates mlxstudio#111"
         )
 
     def test_non_mistral4_vlm_still_loads_via_vlm_path(self):
@@ -5974,13 +5970,119 @@ class TestMistral4VlmTextFallback:
         vlm_idx = src.find("def _load_jang_v2_vlm")
         next_fn = src.find("\ndef _", vlm_idx + 10)
         vlm_body = src[vlm_idx:next_fn if next_fn > 0 else len(src)]
-        # The fallback check must be strict (both == "mistral3" AND
-        # text_config model_type == "mistral4")
-        assert ('config.get("model_type") == "mistral3"' in vlm_body
-                and '"model_type") == "mistral4"' in vlm_body), (
-            "fallback guard must be narrow — any model with model_type != "
-            "mistral3 or text_config.model_type != mistral4 stays on VLM path"
+        assert "affine-JANG VLM is routed text-only" in vlm_body, (
+            "the known Qwen affine fallback should remain narrow and documented"
         )
+
+    def test_vlm_mistral4_keeps_kv_b_proj_when_class_expects_it(self):
+        """mlx-vlm Mistral4 VLM owns kv_b_proj; only mlx-lm text MLA is split."""
+        from vmlx_engine.utils.jang_loader import _mistral4_attention_uses_split_mla
+
+        class _KvAttention:
+            kv_b_proj = object()
+
+        class _SplitAttention:
+            embed_q = object()
+            unembed_out = object()
+
+        class _Layer:
+            def __init__(self, attn):
+                self.self_attn = attn
+
+        class _Inner:
+            def __init__(self, attn):
+                self.layers = [_Layer(attn)]
+
+        class _Lang:
+            def __init__(self, attn):
+                self.model = _Inner(attn)
+
+        class _Model:
+            def __init__(self, attn):
+                self.language_model = _Lang(attn)
+
+        assert _mistral4_attention_uses_split_mla(_Model(_KvAttention())) is False
+        assert _mistral4_attention_uses_split_mla(_Model(_SplitAttention())) is True
+
+    def test_mistral_processor_receives_nested_local_image_paths(self):
+        """Mistral3/Pixtral processors interpret a flat local-path string as
+        an iterable and pass "/" to transformers.image_utils.load_image.
+        Local temp paths from data URLs therefore need the conversation-level
+        nesting shape that the upstream processor expects.
+        """
+        from vmlx_engine.mllm_batch_generator import (
+            _shape_images_for_processor_call,
+        )
+
+        class _MistralProcessor:
+            __module__ = "mlx_vlm.models.mistral3.processing_mistral3"
+
+        class _GenericProcessor:
+            __module__ = "vmlx_engine.tests"
+
+        local_image = "/tmp/vmlx-red.png"
+        assert _shape_images_for_processor_call(
+            _MistralProcessor(), [local_image]
+        ) == [[local_image]]
+        assert _shape_images_for_processor_call(
+            _MistralProcessor(), [local_image, "/tmp/vmlx-blue.png"]
+        ) == [[local_image, "/tmp/vmlx-blue.png"]]
+        assert _shape_images_for_processor_call(
+            _GenericProcessor(), [local_image]
+        ) == [local_image]
+
+    def test_batched_mistral3_without_processor_template_keeps_image_token(self):
+        """Mistral3 processors may have no chat template, but mlx-vlm's prompt
+        helper still knows the required [IMG] token format. Falling through to
+        the generic tokenizer path drops the image token and produces text-only
+        vision answers.
+        """
+        from types import SimpleNamespace
+
+        from vmlx_engine.engine.batched import BatchedEngine
+
+        class _Tokenizer:
+            chat_template = None
+
+            def apply_chat_template(self, *_args, **_kwargs):
+                raise AssertionError("generic tokenizer fallback dropped Mistral media")
+
+        class _Processor:
+            image_token = "[IMG]"
+            chat_template = None
+            tokenizer = _Tokenizer()
+
+            def apply_chat_template(self, *_args, **_kwargs):
+                raise ValueError(
+                    "Cannot use apply_chat_template because this processor "
+                    "does not have a chat template."
+                )
+
+        engine = BatchedEngine.__new__(BatchedEngine)
+        engine._is_mllm = True
+        engine._processor = _Processor()
+        engine._tokenizer = None
+        engine._model_name = "mistral-small4-vlm-test"
+        engine._model = SimpleNamespace(config={"model_type": "mistral3"})
+
+        prompt = engine._apply_chat_template(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,AAAA"},
+                        },
+                        {"type": "text", "text": "What color?"},
+                    ],
+                }
+            ],
+            num_images=1,
+            enable_thinking=False,
+        )
+
+        assert prompt == "[IMG] What color?"
 
 
 class TestAnthropicAssistantToolCallsEmptyContent:

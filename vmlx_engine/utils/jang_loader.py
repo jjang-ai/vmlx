@@ -202,6 +202,21 @@ def _vlm_model_type_from_config(config) -> str:
     return str(getattr(config, "model_type", "") or "").lower()
 
 
+def _mistral4_attention_uses_split_mla(model) -> bool:
+    """Return true when a Mistral4 model expects split MLA weights."""
+    lang = getattr(model, "language_model", None)
+    inner = getattr(lang, "model", lang)
+    layers = getattr(inner, "layers", None)
+    if not layers:
+        return False
+    attn = getattr(layers[0], "self_attn", None)
+    return bool(
+        attn is not None
+        and hasattr(attn, "embed_q")
+        and hasattr(attn, "unembed_out")
+    )
+
+
 def _resolve_vlm_processor_eos_token_ids(path: Path, model) -> list[int]:
     """Return deduped VLM EOS ids from generation/config/model metadata."""
 
@@ -2131,28 +2146,10 @@ def _load_jang_v2_vlm(
             "using the real mlx-vlm loader with vMLX MTP/VL runtime adapters."
         )
 
-    # Mistral 4 VLM fallback: the outer config has model_type=mistral3 (the VLM
-    # wrapper class name in HuggingFace) but text_config.model_type=mistral4
-    # (the inner MLA language model). `get_model_and_args` picks mlx_vlm's
-    # mistral3 class which uses standard attention (q_proj/k_proj/v_proj); our
-    # weights are Mistral 4 MLA (q_a_proj/q_b_proj/kv_a_proj/kv_b_proj/embed_q/
-    # unembed_out) so weights have nowhere to land and the model outputs
-    # repetitive token soup ('.;.;.;' / 'SuppAddAdd' / 'cevcev-top-top') —
-    # live-observed against Mistral-Small-4-119B-JANG_2L on 2026-04-19.
-    #
-    # mlx_vlm does not (yet) ship a mistral4 VLM class, only a mistral4
-    # language-model. Fall through to the text-only `_load_jang_v2` path which
-    # already has the mistral3→mistral4 promotion at line ~460 and produces
-    # coherent output. Cost: no image input for Mistral 4 until mlx_vlm adds
-    # a VLM class. (Image input was already broken pre-rerouting — the class
-    # mismatch meant weights were corrupt; no regression.)
-    if config.get("model_type") == "mistral3" and _tc.get("model_type") == "mistral4":
-        logger.warning(
-            "  Mistral 4 VLM not supported by mlx_vlm (no mistral4 VLM class); "
-            "falling back to text-only load. Vision input will be ignored."
-        )
-        globals()["_LAST_LOAD_VLM_FALLBACK"] = True
-        return _load_jang_v2(path, jang_cfg, skip_eval=skip_eval, filter_expert_keys=filter_expert_keys)
+    # Mistral Small 4 VLM uses outer config.model_type=mistral3 for the VLM
+    # wrapper and inner text_config.model_type=mistral4 for the MLA language
+    # model. Current mlx-vlm releases dispatch that wrapper to Mistral4Model, so
+    # this must stay on the real VLM load path; routing text-only drops images.
 
     # Qwen3.5/3.6-VL MXTQ/JANGTQ hybrid SSM bundles must stay on the real VLM
     # path. The affine-JANG exception above is deliberately narrow and exists
@@ -2713,16 +2710,14 @@ def _load_jang_v2_vlm(
                             f"verify the JANG file integrity and quant format."
                         )
 
-        # Mistral4 MLA: split kv_b_proj → embed_q + unembed_out.
-        # Original implementation by Jinho Jang (eric@jangq.ai) for vMLX.
-        # MLA stores compressed KV latents — the HF kv_b_proj weight must be
-        # dequantized, reshaped (nheads, head_dim, kv_rank), and split into
-        # embed_q (nheads, kv_rank, qk_nope) and unembed_out (nheads, v_head, kv_rank).
-        # JANG safetensors store the unsplit kv_b_proj weight, but the model
-        # has MultiLinear modules for embed_q (k projection) and unembed_out
-        # (v projection). Without this split, they keep random init → garbage.
+        # Mistral4 MLA text models in mlx-lm expect split
+        # embed_q/unembed_out weights, but mlx-vlm's Mistral4 VLM wrapper still
+        # owns a regular kv_b_proj module and does that split in forward().
+        # Splitting unconditionally here removes kv_b_proj from the VLM load and
+        # leaves the real module effectively uninitialized, producing repeated
+        # punctuation / token soup on Mistral Small 4 VLM (#111).
         _text_mt = config.get("text_config", {}).get("model_type", "")
-        if _text_mt == "mistral4":
+        if _text_mt == "mistral4" and _mistral4_attention_uses_split_mla(model):
             _t_cfg = config.get("text_config", config)
             _nheads = _t_cfg.get("num_attention_heads", 32)
             _qk_nope = _t_cfg.get("qk_nope_head_dim", 64)

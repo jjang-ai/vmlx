@@ -134,8 +134,8 @@ def test_plain_qwen3_moe_auto_mode_keeps_loader_turboquant_enabled(tmp_path, mon
     assert os.environ.get("VMLX_DISABLE_TQ_KV") is None
 
 
-def test_qwen3_5_moe_linear_attention_disables_live_tq_but_keeps_stored_kv_q4(tmp_path, monkeypatch):
-    """Qwen3.5/3.6 hybrid SSM stores attention KV as q4 but does not live-patch the whole cache."""
+def test_qwen3_5_moe_linear_attention_keeps_selective_live_tq_and_stored_kv_q4(tmp_path, monkeypatch):
+    """Qwen3.5/3.6 hybrid SSM uses selective attention TQ and stored q4 KV."""
 
     (tmp_path / "config.json").write_text(json.dumps({
         "model_type": "qwen3_5_moe",
@@ -154,8 +154,8 @@ def test_qwen3_5_moe_linear_attention_disables_live_tq_but_keeps_stored_kv_q4(tm
 
     assert args.kv_cache_quantization == "q4"
     assert args.kv_cache_quantization_explicit is False
-    assert os.environ.get("VMLX_DISABLE_TQ_KV") == "1"
-    assert os.environ.get("VMLX_FORCE_TQ_AUTO") is None
+    assert os.environ.get("VMLX_DISABLE_TQ_KV") is None
+    assert os.environ.get("VMLX_FORCE_TQ_AUTO") == "1"
 
 
 def test_explicit_kv_quantization_disables_loader_turboquant(tmp_path, monkeypatch):

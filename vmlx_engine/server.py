@@ -1540,11 +1540,12 @@ _template_starts_reasoning_cache: dict[tuple[str, bool], bool] = {}
 
 # Tool call markers to detect in streaming output for buffering
 _TOOL_CALL_MARKERS = [
-    "<tool_call>",
-    "<zyphra_tool_call>",
+    "<tool_call",
+    "<zyphra_tool_call",
     "<|tool_call>",  # Gemma 4 native tool call format
     "<|tool_call|>",
     "[TOOL_CALLS]",
+    "<function",
     "<function=",
     "<minimax:tool_call>",
     "[Calling tool:",
@@ -12005,6 +12006,7 @@ async def stream_chat_completion(
                                 )
                             ],
                             usage=get_usage(output),
+                            tool_call_generating=True,
                         )
                         if not tool_call_buffering_notified:
                             tool_call_buffering_notified = True
@@ -12127,6 +12129,7 @@ async def stream_chat_completion(
                                 )
                             ],
                             usage=get_usage(output),
+                            tool_call_generating=True,
                         )
                         if not tool_call_buffering_notified:
                             tool_call_buffering_notified = True
@@ -12932,6 +12935,7 @@ async def stream_responses_api(
                                 "response.heartbeat",
                                 {
                                     "type": "response.heartbeat",
+                                    "tool_call_generating": True,
                                 },
                             )
                             continue
@@ -13005,6 +13009,7 @@ async def stream_responses_api(
                             "response.heartbeat",
                             {
                                 "type": "response.heartbeat",
+                                "tool_call_generating": True,
                             },
                         )
                         continue

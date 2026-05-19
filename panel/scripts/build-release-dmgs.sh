@@ -35,7 +35,7 @@ build_one() {
   esac
 
   echo "==> Building vMLX ${VERSION} ${flavor} DMG (${wheel_tag})"
-  VMLINUX_BUNDLE_MLX_PLATFORM="$platform" ./scripts/bundle-python.sh
+  VMLX_BUNDLE_MLX_PLATFORM="$platform" ./scripts/bundle-python.sh
   ./scripts/verify-bundled-python.sh
   npx electron-vite build
   npx electron-builder --mac dmg \

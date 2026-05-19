@@ -22,4 +22,16 @@ describe('tool status responsiveness contract', () => {
     expect(streamSseSource).toContain('if (toolStatusNeedsFlush)')
     expect(streamSseSource).toContain('await flushToolStatusToRenderer();')
   })
+
+  it('detects partial ZAYA/Zyphra XML tool prefixes before raw markup renders', () => {
+    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+
+    expect(source).toContain('<zyphra_tool_call\\b')
+    expect(source).toContain('<function(?:=|\\b)')
+    expect(source).toContain('emitToolStatus(\n                  "generating"')
+    expect(source).toContain('currentEventType === "response.heartbeat"')
+    expect(source).toContain('parsed.tool_call_generating')
+    expect(source).toContain('if (!suppressVisibleToolDelta) {')
+    expect(source).toContain('if (!isReasoningDelta && suppressVisibleToolDelta) return;')
+  })
 })

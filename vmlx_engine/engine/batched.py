@@ -832,11 +832,23 @@ class BatchedEngine(BaseEngine):
                 else:
                     built_messages = _normalize_processor_messages(messages)
 
-                # Apply template with enable_thinking via the processor directly.
-                # mlx_vlm's get_chat_template doesn't forward enable_thinking,
-                # causing thinking models to always use thinking-OFF format.
-                prompt = _processor_template(built_messages)
-                return prompt
+                try:
+                    # Apply template with enable_thinking via the processor directly.
+                    # mlx_vlm's get_chat_template doesn't forward enable_thinking,
+                    # causing thinking models to always use thinking-OFF format.
+                    prompt = _processor_template(built_messages)
+                    return prompt
+                except ValueError as template_err:
+                    msg = str(template_err)
+                    if "does not have a chat template" not in msg:
+                        raise
+                    return apply_chat_template(
+                        self._processor,
+                        config,
+                        messages,
+                        num_images=num_images,
+                        add_generation_prompt=not skip_generation_prompt,
+                    )
             except Exception as e:
                 logger.warning(f"Failed to apply MLLM chat template: {e}")
                 # Fall through to standard template

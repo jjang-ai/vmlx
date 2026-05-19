@@ -1004,8 +1004,11 @@ class TestToolParserConcurrency:
 
         source = inspect.getsource(stream_chat_completion)
         assert "<｜DSML｜tool_c" in _TOOL_CALL_MARKERS
+        assert "<function" in _TOOL_CALL_MARKERS
+        assert "<zyphra_tool_call" in _TOOL_CALL_MARKERS
         assert "not emit_content.strip()" in source
         assert "not content.strip()" in source
+        assert "tool_call_generating=True" in source
 
 
 class TestCacheTruncation:
@@ -3252,7 +3255,8 @@ class TestStartupCompatibilityGuards:
         assert 'MLX_LM_VERSION="0.31.3"' in bundle_script
         assert 'MLX_VLM_VERSION="0.4.4"' in bundle_script
         assert 'detect_mlx_wheel_platform()' in bundle_script
-        assert 'VMLINUX_BUNDLE_MLX_PLATFORM:-compat' in bundle_script
+        assert 'VMLX_BUNDLE_MLX_PLATFORM:-${VMLINUX_BUNDLE_MLX_PLATFORM:-compat}' in bundle_script
+        assert "legacy misspelled VMLINUX_BUNDLE_MLX_PLATFORM is still accepted" in bundle_script
         assert 'echo "macosx_26_0_arm64"' in bundle_script
         assert 'auto|compat|sonoma|sequoia|"")' in bundle_script
         assert 'echo "macosx_14_0_arm64"' in bundle_script
@@ -3269,7 +3273,8 @@ class TestStartupCompatibilityGuards:
         source = script.read_text()
         assert 'build_one "sequoia" "compat"' in source
         assert 'build_one "tahoe" "native"' in source
-        assert 'VMLINUX_BUNDLE_MLX_PLATFORM="$platform"' in source
+        assert 'VMLINUX_BUNDLE_MLX_PLATFORM="$platform"' not in source
+        assert 'VMLX_BUNDLE_MLX_PLATFORM="$platform"' in source
         assert 'vMLX-\\${version}-${flavor}-\\${arch}.\\${ext}' in source
         assert "electron-builder --mac" in source
         assert "gh release" not in source

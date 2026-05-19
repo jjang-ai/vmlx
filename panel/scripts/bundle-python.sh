@@ -69,7 +69,7 @@ MLX_VLM_VERSION="0.4.4"
 MFLUX_VERSION="0.17.5"
 
 detect_mlx_wheel_platform() {
-  local requested="${VMLINUX_BUNDLE_MLX_PLATFORM:-compat}"
+  local requested="${VMLX_BUNDLE_MLX_PLATFORM:-${VMLINUX_BUNDLE_MLX_PLATFORM:-compat}}"
   case "$requested" in
     auto|compat|sonoma|sequoia|"")
       echo "macosx_14_0_arm64"
@@ -95,6 +95,9 @@ detect_mlx_wheel_platform() {
 # defaults to compat so ad-hoc packaging from Tahoe/M5 hardware is not
 # accidentally Sequoia-hostile. Native/Tahoe wheels stay explicit opt-in:
 #   VMLX_BUNDLE_MLX_PLATFORM=native ./panel/scripts/bundle-python.sh
+# The legacy misspelled VMLINUX_BUNDLE_MLX_PLATFORM is still accepted so older
+# local scripts fail closed to their intended wheel flavor instead of silently
+# drifting back to compat.
 MLX_WHEEL_PLATFORM="$(detect_mlx_wheel_platform)"
 WHEELHOUSE="$BUNDLE_DIR/wheelhouse"
 mkdir -p "$WHEELHOUSE"
