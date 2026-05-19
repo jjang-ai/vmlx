@@ -941,12 +941,6 @@ def _resolve_dsv4_thinking_policy(
     tool_choice: Any,
 ) -> _DSV4ThinkingDecision:
     """Resolve DSV4's public thinking toggle without hidden rail guards."""
-    if tools_present and tool_choice != "none":
-        return _DSV4ThinkingDecision(
-            enable_thinking=False,
-            reasoning_effort_allowed=False,
-            reason="tool_call_direct_rail",
-        )
     if requested_enable_thinking is True or effort_requested:
         return _DSV4ThinkingDecision(
             enable_thinking=True,
