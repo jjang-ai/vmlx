@@ -90,9 +90,10 @@ detect_mlx_wheel_platform() {
 
 # MLX publishes multiple macOS-tagged wheels for the same version. The older
 # macosx_14 wheel preserves Sonoma/Sequoia compatibility; the macosx_26 wheel
-# carries newer Metal kernels but cannot be loaded on macOS 15 (#169). Public
-# release builds must default to compat even when built on Tahoe/M5 hardware.
-# Native/Tahoe wheels stay explicit opt-in for local speed experiments:
+# carries newer Metal kernels but cannot be loaded on macOS 15 (#169). The
+# release DMG script builds both flavors explicitly; this lower-level bundler
+# defaults to compat so ad-hoc packaging from Tahoe/M5 hardware is not
+# accidentally Sequoia-hostile. Native/Tahoe wheels stay explicit opt-in:
 #   VMLX_BUNDLE_MLX_PLATFORM=native ./panel/scripts/bundle-python.sh
 MLX_WHEEL_PLATFORM="$(detect_mlx_wheel_platform)"
 WHEELHOUSE="$BUNDLE_DIR/wheelhouse"

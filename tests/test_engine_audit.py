@@ -3138,7 +3138,7 @@ class TestStartupCompatibilityGuards:
         assert '@app.post(\n    "/api/embed",\n    dependencies=[\n        Depends(verify_api_key),\n        Depends(check_memory_pressure),\n        Depends(check_metal_working_set_pressure),' in source
 
     def test_bundle_selects_native_mlx_wheels_with_compat_override(self):
-        """Public builds stay Sequoia-compatible; Tahoe native is opt-in."""
+        """Bundling can select Sequoia-compatible or Tahoe-native MLX wheels."""
         bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
         assert 'MLX_VERSION="0.31.2"' in bundle_script
         assert 'MLX_LM_VERSION="0.31.3"' in bundle_script
@@ -3152,6 +3152,29 @@ class TestStartupCompatibilityGuards:
         assert '--platform "$MLX_WHEEL_PLATFORM"' in bundle_script
         assert '"mlx==$MLX_VERSION"' in bundle_script
         assert '"mlx-metal==$MLX_VERSION"' in bundle_script
+
+    def test_release_build_declares_sequoia_and_tahoe_dmg_flavors(self):
+        """vmlx#169 release packaging must build both wheel-tag variants."""
+        script = Path("./panel/scripts/build-release-dmgs.sh")
+
+        assert script.is_file()
+        source = script.read_text()
+        assert 'build_one "sequoia" "compat"' in source
+        assert 'build_one "tahoe" "native"' in source
+        assert 'VMLINUX_BUNDLE_MLX_PLATFORM="$platform"' in source
+        assert 'vMLX-\\${version}-${flavor}-\\${arch}.\\${ext}' in source
+        assert "electron-builder --mac" in source
+        assert "gh release" not in source
+        assert "latest.json" not in source
+
+    def test_macos_compat_error_points_to_sequoia_dmg_for_tahoe_wheels(self):
+        """Wrong-DMG installs should fail before MLX import with actionable text."""
+        cli_source = Path("./vmlx_engine/cli.py").read_text()
+        check_idx = cli_source.index("def _check_macos_compat")
+        check_block = cli_source[check_idx: cli_source.index("def _check_no_duplicate_mlx", check_idx)]
+
+        assert "download the Sequoia-compatible vMLX DMG" in check_block
+        assert "Tahoe-native DMG requires macOS 26" in check_block
 
     def test_turboquant_disable_env_is_honored_by_jang_loader(self):
         """Explicit/off-family cache choices must stop loader-level live TQ-KV."""

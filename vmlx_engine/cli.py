@@ -1664,8 +1664,9 @@ def _check_macos_compat():
                     "This wheel can fail during Metal initialization with:\n"
                     "  Failed to load the default metallib. This library is "
                     "using language version 4.0 which is not supported on this OS.\n"
-                    "Install a vMLX build whose bundled MLX wheel tag matches "
-                    "your macOS version, or upgrade macOS.\n"
+                    "If this is the Tahoe-native DMG, download the Sequoia-compatible vMLX DMG instead. "
+                    "The Tahoe-native DMG requires macOS 26+. "
+                    "You can also upgrade macOS and retry.\n"
                 )
                 sys.exit(2)
 
