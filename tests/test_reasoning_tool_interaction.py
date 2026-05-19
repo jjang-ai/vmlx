@@ -4,7 +4,7 @@ Tests for reasoning + tool call interaction edge cases.
 
 Covers the specific bugs fixed:
 1. Reasoning leak on tool follow-ups (think_in_prompt suppression)
-2. Duplicate content when reasoning disabled (suppress_reasoning dedup)
+2. Hidden reasoning separation when reasoning disabled
 3. Reasoning parser + tool parser cross-interaction
 
 Also covers inverse/subtle edge cases:
@@ -188,8 +188,8 @@ class TestThinkParserInverseMode:
 class TestSuppressReasoningDedup:
     """Tests that simulate the server's suppress_reasoning logic.
 
-    When suppress_reasoning=True, reasoning deltas are redirected as content.
-    The end-of-stream tool call extraction must NOT re-emit this content.
+    When suppress_reasoning=True, reasoning deltas stay hidden. The
+    end-of-stream tool call extraction must NOT leak them as visible content.
     """
 
     @pytest.fixture(params=["qwen3", "deepseek_r1"])
@@ -199,20 +199,19 @@ class TestSuppressReasoningDedup:
         p.reset_state(think_in_prompt=True)
         return p
 
-    def test_suppress_reasoning_no_duplicate(self, parser):
-        """Simulate suppress_reasoning: reasoning→content redirect.
+    def test_suppress_reasoning_no_visible_leak(self, parser):
+        """Simulate suppress_reasoning: reasoning remains separate from content.
 
         When suppress_reasoning=True:
-        1. Parser classifies as reasoning → server emits as content
-        2. At end-of-stream, cleaned_text should NOT be re-emitted
+        1. Parser classifies pre-</think> text as reasoning
+        2. Only post-</think> content should be visible
 
         We verify by collecting what the parser returns and checking
-        there's no overlap between reasoning-redirected-as-content
-        and the final cleaned_text.
+        there's no overlap between reasoning and content.
         """
         text = "I'll analyze the files.</think>Here's what I found."
         accumulated = ""
-        reasoning_redirected_as_content = []
+        hidden_reasoning = []
         actual_content = []
 
         for char in text:
@@ -221,18 +220,17 @@ class TestSuppressReasoningDedup:
             result = parser.extract_reasoning_streaming(prev, accumulated, char)
             if result:
                 if result.reasoning:
-                    # suppress_reasoning=True: server would emit this as content
-                    reasoning_redirected_as_content.append(result.reasoning)
+                    hidden_reasoning.append(result.reasoning)
                 if result.content:
                     actual_content.append(result.content)
 
-        redirected = "".join(reasoning_redirected_as_content)
+        redirected = "".join(hidden_reasoning)
         content = "".join(actual_content)
 
         # The redirected text and actual content should NOT overlap
         assert "analyze the files" in redirected
         assert "Here's what I found" in content
-        # Critical: content should NOT contain the redirected reasoning
+        # Critical: content should NOT contain hidden reasoning.
         assert "analyze the files" not in content
 
     def test_suppress_with_tool_call_xml(self, parser):
@@ -253,16 +251,15 @@ class TestSuppressReasoningDedup:
     def test_suppress_no_think_tags_all_content(self, parser):
         """When think_in_prompt=True but model doesn't think at all.
 
-        Model outputs content directly without </think>. With suppress_reasoning=True,
-        the server redirects it all as content. No duplication should occur.
+        Model outputs text without </think>. With think_in_prompt=True this is
+        hidden reasoning until a boundary appears, not visible content.
         """
         text = "The answer is 42."
         reasoning, content = simulate_streaming(parser, text)
 
         # Everything classified as reasoning (because think_in_prompt=True)
         assert "The answer is 42" in reasoning
-        # With suppress_reasoning, server would redirect this to content
-        # No content emitted by parser → no overlap → no duplication ✓
+        # No content emitted by parser → no visible leak.
 
 
 # ──────────────────────────────────────────────────────────────────────

@@ -11638,19 +11638,12 @@ async def stream_chat_completion(
                     )
 
                 # Accumulate for marker detection (before buffering check).
-                # §15 NO-REGRESSION: when suppress_reasoning is on, reasoning
-                # is redirected to emit_content below — mirror that here so
-                # accumulated_content reflects what the client actually sees
-                # (keeps marker detection + content_was_emitted honest).
-                # Mirror UNCONDITIONALLY under suppress so the boundary delta
-                # case ("reason</think>answer" → delta with BOTH fields set)
-                # doesn't drop the reasoning half that emit_content will stream.
+                # Suppressed reasoning stays internal and must not be mirrored
+                # into accumulated_content or next-turn visible history.
                 if delta_msg.content:
                     accumulated_content += delta_msg.content
                 if delta_msg.reasoning:
                     accumulated_reasoning += delta_msg.reasoning
-                    if suppress_reasoning:
-                        accumulated_content += delta_msg.reasoning
 
                 # Check for tool call markers — separate logic for content vs reasoning:
                 # - Content: check accumulated_content (markers can span deltas)
@@ -11714,24 +11707,11 @@ async def stream_chat_completion(
                 # Include usage in every chunk when include_usage is on (for real-time metrics)
                 chunk_usage = get_usage(output) if include_usage else None
 
-                # §15 NO-REGRESSION: when reasoning is suppressed AND the model
-                # thinks anyway (ignores enable_thinking=False — Flor1an-B style
-                # vmlx#80 follow-up), we MUST route reasoning → content so the
-                # UI never shows "N tokens generated" with an empty body. Empty
-                # heartbeats alone leave the chat blank at end-of-stream.
-                #
-                # Boundary delta case: the parser can return BOTH reasoning AND
-                # content in a single chunk when `</think>answer` lands inside
-                # one delta (think_parser.py lines 200–203, 220–223, 246–249).
-                # Concatenate in natural order (reasoning → content) instead of
-                # `or`, which would drop the content half.
+                # Suppressed reasoning is never redirected into visible content.
+                # If a boundary delta carries both reasoning and content, only
+                # the content half is user-visible.
                 if suppress_reasoning:
-                    _parts = []
-                    if delta_msg.reasoning:
-                        _parts.append(delta_msg.reasoning)
-                    if delta_msg.content:
-                        _parts.append(delta_msg.content)
-                    emit_content = "".join(_parts) if _parts else None
+                    emit_content = delta_msg.content
                     emit_reasoning = None
                     if not emit_content and not output.finished:
                         heartbeat = ChatCompletionChunk(
@@ -12142,11 +12122,14 @@ async def stream_chat_completion(
                 )
                 yield f"data: {_dump_sse_json(tc_chunk)}\n\n"
             else:
-                logger.info(f"Request {response_id}: tool markers found but parsing failed — emitting reasoning as content fallback")
+                logger.info(
+                    f"Request {response_id}: tool markers found in suppressed "
+                    "reasoning but parsing failed — preserving hidden reasoning"
+                )
                 diag_chunk = ChatCompletionChunk(
                     id=response_id, created=_created_ts, model=request.model,
                     choices=[ChatCompletionChunkChoice(
-                        delta=ChatCompletionChunkDelta(content=accumulated_reasoning),
+                        delta=ChatCompletionChunkDelta(),
                         finish_reason="stop",
                     )],
                 )
@@ -12520,18 +12503,12 @@ async def stream_responses_api(
                         if delta_msg.reasoning:
                             delta_msg.reasoning = strip_marker_tokens_delta(delta_msg.reasoning)
                         # Accumulate for marker detection (before buffering check).
-                        # §15: when suppress_reasoning redirects reasoning → content
-                        # via emit below, mirror it here so accumulated_content
-                        # matches client-visible output (Responses API parity).
-                        # Mirror UNCONDITIONALLY under suppress so the boundary
-                        # delta case ("reason</think>answer" with both fields set)
-                        # doesn't drop half the output.
+                        # Suppressed reasoning stays internal and must not be
+                        # mirrored into visible output_text/history.
                         if delta_msg.content:
                             accumulated_content += delta_msg.content
                         if delta_msg.reasoning:
                             accumulated_reasoning += delta_msg.reasoning
-                            if suppress_reasoning:
-                                accumulated_content += delta_msg.reasoning
 
                         # Check for tool call markers in content and reasoning
                         if tool_call_active and not tool_call_buffering:
@@ -12576,21 +12553,12 @@ async def stream_responses_api(
                             continue
 
                         if not tool_call_buffering:
-                            # §15 NO-REGRESSION: when suppress_reasoning is on
-                            # and the model still thinks (ignores enable_thinking
-                            # =False), route reasoning → content so the Response
-                            # API never finishes with zero visible output. See
-                            # vmlx#80 follow-up / Flor1an-B report 2026-04-15.
-                            # Concatenate BOTH fields (reasoning first, then
-                            # content) so boundary deltas like "reason</think>answer"
-                            # don't drop the content half.
+                            # Suppressed reasoning is never redirected into
+                            # visible output_text. Boundary deltas can still
+                            # carry post-</think> content, which remains
+                            # visible.
                             if suppress_reasoning:
-                                _parts_r = []
-                                if delta_msg.reasoning:
-                                    _parts_r.append(delta_msg.reasoning)
-                                if delta_msg.content:
-                                    _parts_r.append(delta_msg.content)
-                                emit_content = "".join(_parts_r) if _parts_r else None
+                                emit_content = delta_msg.content
                                 emit_reasoning = None
                                 if not emit_content and not output.finished:
                                     yield _sse(
