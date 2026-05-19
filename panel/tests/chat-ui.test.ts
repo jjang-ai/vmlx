@@ -1267,6 +1267,19 @@ describe('Media attachment product path', () => {
     expect(source).toContain('[Attached file: ${a.name}]')
   })
 
+  it('exported session logs include redacted image request diagnostics', () => {
+    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    expect(source).toContain('[CHAT_DIAG] attachment_route=')
+    expect(source).toContain('[CHAT_DIAG] request_shape=')
+    expect(source).toContain('[CHAT_DIAG] request_error=')
+    expect(source).toContain('summarizeAttachmentsForLog(attachments)')
+    expect(source).toContain('summarizeRequestForLog(requestBody, useResponsesApi)')
+    expect(source).toContain('url: "<redacted>"')
+    expect(source).toContain('data_url_chars')
+    expect(source).toContain('sessionManager.pushLog(sessionId, data)')
+    expect(source).toContain('sessionManager.emit("session:log", { sessionId, data })')
+  })
+
   it('message rendering includes audio controls for persisted audio parts', () => {
     const source = readFileSync('src/renderer/src/components/chat/MessageBubble.tsx', 'utf8')
     expect(source).toContain("p.type === 'input_audio' && p.input_audio?.data")

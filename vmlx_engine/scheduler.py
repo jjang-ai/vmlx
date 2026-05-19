@@ -872,10 +872,20 @@ class Scheduler:
                     ),
                     kv_quant_bits=self._kv_cache_bits,
                 )
-                logger.info(
-                    f"Paged cache enabled: block_size={self.config.paged_cache_block_size}, "
-                    f"max_blocks={self.config.max_cache_blocks}"
-                )
+                if self._uses_dsv4_cache:
+                    logger.info(
+                        "DSV4 native composite block index enabled: "
+                        "block_size=%s, max_blocks=%s "
+                        "(not generic paged KV; records deepseek_v4_v7 "
+                        "SWA+CSA/HCA state)",
+                        self.config.paged_cache_block_size,
+                        self.config.max_cache_blocks,
+                    )
+                else:
+                    logger.info(
+                        f"Paged cache enabled: block_size={self.config.paged_cache_block_size}, "
+                        f"max_blocks={self.config.max_cache_blocks}"
+                    )
             elif self.config.use_memory_aware_cache:
                 # Use memory-aware cache (recommended for large models)
                 cache_config = MemoryCacheConfig(

@@ -59,6 +59,7 @@ from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import uvicorn
@@ -1210,6 +1211,108 @@ def _content_has_multimodal(content) -> bool:
     return False
 
 
+def _content_multimodal_summary(content) -> dict:
+    """Return redacted media counts for a message/content-part list.
+
+    This intentionally never logs URL strings or base64 payloads. The goal is
+    to make exported user logs answer whether media reached the server and what
+    route/runtime saw it, without leaking image/audio/video contents.
+    """
+    summary = {
+        "total": 0,
+        "types": {},
+        "data_url": 0,
+        "url_or_path": 0,
+        "missing_source": 0,
+    }
+    if not isinstance(content, list):
+        return summary
+
+    def _as_clean_dict(obj):
+        if hasattr(obj, "model_dump"):
+            return obj.model_dump(exclude_none=True)
+        if hasattr(obj, "dict"):
+            return {k: v for k, v in obj.dict().items() if v is not None}
+        return obj if isinstance(obj, dict) else None
+
+    def _source_for_part(part: dict):
+        ptype = part.get("type")
+        if ptype in ("image_url", "image"):
+            src = part.get("image_url") or part.get("image")
+            return src.get("url") if isinstance(src, dict) else src
+        if ptype in ("video_url", "video"):
+            src = part.get("video_url") or part.get("video")
+            return src.get("url") if isinstance(src, dict) else src
+        if ptype in ("input_image",):
+            src = part.get("image_url") or part.get("url") or part.get("file_id")
+            return src.get("url") if isinstance(src, dict) else src
+        if ptype in ("input_video",):
+            src = part.get("video_url") or part.get("url") or part.get("file_id")
+            return src.get("url") if isinstance(src, dict) else src
+        if ptype in ("input_audio", "audio"):
+            src = part.get("input_audio") or part.get("audio")
+            if isinstance(src, dict):
+                return src.get("url") or ("<inline_audio_data>" if src.get("data") else None)
+            return src
+        return None
+
+    for raw_part in content:
+        part = _as_clean_dict(raw_part)
+        if not isinstance(part, dict):
+            continue
+        ptype = part.get("type")
+        if ptype not in _MULTIMODAL_CONTENT_TYPES:
+            continue
+        summary["total"] += 1
+        summary["types"][ptype] = int(summary["types"].get(ptype, 0)) + 1
+        src = _source_for_part(part)
+        if isinstance(src, str) and src.startswith("data:"):
+            summary["data_url"] += 1
+        elif src:
+            summary["url_or_path"] += 1
+        else:
+            summary["missing_source"] += 1
+    return summary
+
+
+def _merge_multimodal_summaries(target: dict, child: dict) -> None:
+    target["total"] += int(child.get("total") or 0)
+    target["data_url"] += int(child.get("data_url") or 0)
+    target["url_or_path"] += int(child.get("url_or_path") or 0)
+    target["missing_source"] += int(child.get("missing_source") or 0)
+    for key, value in (child.get("types") or {}).items():
+        target["types"][key] = int(target["types"].get(key, 0)) + int(value)
+
+
+def _messages_multimodal_summary(messages) -> dict:
+    summary = {
+        "total": 0,
+        "types": {},
+        "data_url": 0,
+        "url_or_path": 0,
+        "missing_source": 0,
+        "roles": {},
+        "messages": 0,
+        "content_arrays": 0,
+    }
+    for msg in messages or []:
+        if hasattr(msg, "model_dump"):
+            msg = msg.model_dump(exclude_none=True)
+        elif hasattr(msg, "dict"):
+            msg = {k: v for k, v in msg.dict().items() if v is not None}
+        role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+        if isinstance(content, list):
+            summary["content_arrays"] += 1
+        child = _content_multimodal_summary(content)
+        if child.get("total"):
+            summary["messages"] += 1
+            role_key = str(role or "unknown")
+            summary["roles"][role_key] = int(summary["roles"].get(role_key, 0)) + 1
+            _merge_multimodal_summaries(summary, child)
+    return summary
+
+
 def _messages_have_multimodal(messages) -> bool:
     for msg in messages or []:
         if hasattr(msg, "model_dump"):
@@ -1220,6 +1323,41 @@ def _messages_have_multimodal(messages) -> bool:
         if _content_has_multimodal(content):
             return True
     return False
+
+
+def _responses_input_multimodal_summary(input_data) -> dict:
+    summary = {
+        "total": 0,
+        "types": {},
+        "data_url": 0,
+        "url_or_path": 0,
+        "missing_source": 0,
+        "items": 0,
+        "content_arrays": 0,
+    }
+    if isinstance(input_data, str):
+        return summary
+    for item in input_data or []:
+        if hasattr(item, "model_dump"):
+            item = item.model_dump(exclude_none=True)
+        elif hasattr(item, "dict"):
+            item = {k: v for k, v in item.dict().items() if v is not None}
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if item_type in _MULTIMODAL_CONTENT_TYPES:
+            child = _content_multimodal_summary([item])
+            if child.get("total"):
+                summary["items"] += 1
+                _merge_multimodal_summaries(summary, child)
+        content = item.get("content")
+        if isinstance(content, list):
+            summary["content_arrays"] += 1
+            child = _content_multimodal_summary(content)
+            if child.get("total"):
+                summary["items"] += 1
+                _merge_multimodal_summaries(summary, child)
+    return summary
 
 
 def _responses_input_has_multimodal(input_data) -> bool:
@@ -1237,6 +1375,34 @@ def _responses_input_has_multimodal(input_data) -> bool:
         if _content_has_multimodal(item.get("content")):
             return True
     return False
+
+
+def _log_multimodal_request_shape(route: str, model_name: str, summary: dict) -> None:
+    """Log redacted media request shape for user-exported diagnostics."""
+    if not summary or int(summary.get("total") or 0) <= 0:
+        return
+    try:
+        from .model_config_registry import get_model_config_registry
+
+        cfg = get_model_config_registry().lookup(_model_path or model_name or "")
+        family = getattr(cfg, "family_name", None)
+        registry_is_mllm = bool(getattr(cfg, "is_mllm", False))
+    except Exception:
+        family = None
+        registry_is_mllm = False
+    engine_is_mllm = bool(
+        getattr(_engine, "is_mllm", False) or getattr(_engine, "_is_mllm", False)
+    ) if _engine is not None else None
+    payload = {
+        "route": route,
+        "model": Path(str(model_name)).name if model_name else None,
+        "family": family,
+        "engine_is_mllm": engine_is_mllm,
+        "registry_is_mllm": registry_is_mllm,
+        "omni_modalities": _loaded_omni_modalities(),
+        "media": summary,
+    }
+    logger.info("[MEDIA_DIAG] request_shape=%s", json.dumps(payload, sort_keys=True))
 
 
 def _loaded_omni_modalities() -> list[str] | None:
@@ -1387,6 +1553,7 @@ _TOOL_CALL_MARKERS = [
     "<|tool_call_begin|>",
     "<\uff5ctool\u2581calls\u2581begin\uff5c>",  # DeepSeek Unicode variant (U+FF5C, U+2581)
     "<\uff5ctool\u2581call\u2581begin\uff5c>",  # DeepSeek singular begin (GLM-5.1 emits this)
+    "<｜DSML｜tool_c",  # DSV4 DSML wrapper prefix before inner invoke
     "<｜DSML｜invoke",  # DSV4 native tool-call format
     "<|python_tag|>",  # Llama 3.1+ code interpreter / tool call
     "```tool_code",  # Gemma 3 / 3n function-call code block (Google docs format)
@@ -2099,6 +2266,17 @@ def _apply_jit_compilation():
             inner = getattr(model_obj, "model", model_obj)
             if inner is None or not callable(inner):
                 logger.warning("JIT: Model object is not callable — skipping")
+                return
+            untraceable_cache_names = _jit_probe_untraceable_cache_names(
+                inner,
+                model_obj,
+            )
+            if untraceable_cache_names:
+                logger.info(
+                    "JIT: Skipping mx.compile - text hybrid cache contains "
+                    f"{', '.join(untraceable_cache_names)}. mx.compile() cannot "
+                    "trace these Python cache objects."
+                )
                 return
 
             logger.info("JIT: Applying mx.compile to model forward pass...")
@@ -3784,7 +3962,9 @@ def _bundle_weight_index_status(bundle_path: str | None) -> dict | None:
 
         suffix_counts: dict[str, int] = defaultdict(int)
         tq_target_counts: dict[str, int] = defaultdict(int)
+        routed_layout_counts: dict[str, int] = defaultdict(int)
         sample_tq_packed_targets: list[str] = []
+        mtp_tensor_count = 0
         suffixes = (
             "tq_packed",
             "tq_norms",
@@ -3796,6 +3976,7 @@ def _bundle_weight_index_status(bundle_path: str | None) -> dict | None:
 
         for raw_key in weight_map:
             key = str(raw_key)
+            lowered = key.lower()
             suffix = next(
                 (candidate for candidate in suffixes if key.endswith(f".{candidate}")),
                 None,
@@ -3806,12 +3987,23 @@ def _bundle_weight_index_status(bundle_path: str | None) -> dict | None:
                 tq_target_counts[_weight_index_role_for_key(key)] += 1
             if suffix == "tq_packed" and len(sample_tq_packed_targets) < 12:
                 sample_tq_packed_targets.append(key[: -len(".tq_packed")])
+            if key.startswith("mtp.") or ".mtp." in lowered:
+                mtp_tensor_count += 1
+            if ".switch_mlp." in lowered:
+                routed_layout_counts["prestacked_switch"] += 1
+            if re.search(r"(?:^|\.)layers\.\d+\.(?:mlp|ffn)\.experts\.\d+\.", lowered):
+                routed_layout_counts["split_expert"] += 1
 
         result = {
             "index_file": str(index_path),
             "total_tensors": len(weight_map),
             "suffix_counts": dict(sorted(suffix_counts.items())),
             "tq_target_counts": dict(sorted(tq_target_counts.items())),
+            "routed_layout_counts": {
+                "prestacked_switch": routed_layout_counts.get("prestacked_switch", 0),
+                "split_expert": routed_layout_counts.get("split_expert", 0),
+            },
+            "mtp_tensor_count": mtp_tensor_count,
             "sample_tq_packed_targets": sample_tq_packed_targets or None,
         }
         return {k: v for k, v in result.items() if v is not None}
@@ -6461,6 +6653,11 @@ async def create_anthropic_message(
     # Resolve model name
     resolved_name = _resolve_model_name()
     chat_req.model = resolved_name
+    _log_multimodal_request_shape(
+        "/v1/messages",
+        _model_path or _model_name or chat_req.model,
+        _messages_multimodal_summary(chat_req.messages),
+    )
 
     _msg_max_prompt_tokens = _effective_max_prompt_tokens(chat_req)
     prompt_limit_response = _reject_if_prompt_too_long_for_messages(
@@ -6548,6 +6745,8 @@ async def create_anthropic_message(
         )
 
     engine = get_engine()
+    if _messages_have_multimodal(chat_req.messages) and not engine.is_mllm:
+        _reject_unsupported_multimodal("/v1/messages")
 
     # Build generation kwargs from the converted chat request (shared by streaming + non-streaming)
     _msg_kwargs: dict = {
@@ -7299,6 +7498,11 @@ async def ollama_chat(fastapi_request: Request):
     from .api.models import ChatCompletionRequest
 
     chat_req = ChatCompletionRequest(**openai_req)
+    _log_multimodal_request_shape(
+        "/api/chat",
+        _model_path or _model_name or chat_req.model,
+        _messages_multimodal_summary(chat_req.messages),
+    )
     _ollama_max_prompt_tokens = _effective_max_prompt_tokens(chat_req)
     prompt_limit_response = _reject_if_prompt_too_long_for_messages(
         chat_req.messages,
@@ -7326,6 +7530,8 @@ async def ollama_chat(fastapi_request: Request):
     from starlette.responses import StreamingResponse as _SR
 
     engine = get_engine()
+    if _messages_have_multimodal(chat_req.messages) and not engine.is_mllm:
+        _reject_unsupported_multimodal("/api/chat")
     chat_kwargs = {
         "max_tokens": _resolve_max_tokens(chat_req.max_tokens, chat_req.model),
         "temperature": _resolve_temperature(chat_req.temperature, chat_req.model),
@@ -9028,6 +9234,11 @@ async def create_chat_completion(
             )
     # Normalize response model field to the resolved name
     request.model = resolved_name
+    _log_multimodal_request_shape(
+        "/v1/chat/completions",
+        _model_path or _model_name or request.model,
+        _messages_multimodal_summary(request.messages),
+    )
 
     _chat_max_prompt_tokens = _effective_max_prompt_tokens(request)
     prompt_limit_response = _reject_if_prompt_too_long_for_messages(
@@ -9102,7 +9313,7 @@ async def create_chat_completion(
                     txt = getattr(p, "text", None) or (p.get("text") if isinstance(p, dict) else None)
                     if txt and str(txt).strip():
                         return True
-                elif t in ("image_url", "video_url", "image", "input_audio"):
+                elif t in _MULTIMODAL_CONTENT_TYPES:
                     return True
             return False
         return bool(c)
@@ -9719,6 +9930,12 @@ async def create_chat_completion(
 
     # Determine finish reason
     finish_reason = "tool_calls" if tool_calls else output.finish_reason
+    response_content = clean_output_text(cleaned_text) if cleaned_text else None
+    response_warnings = _chat_completion_warnings_for_reasoning_only(
+        response_content,
+        reasoning_text,
+        tool_calls,
+    )
 
     response = ChatCompletionResponse(
         id=response_id,
@@ -9726,7 +9943,7 @@ async def create_chat_completion(
         choices=[
             ChatCompletionChoice(
                 message=AssistantMessage(
-                    content=clean_output_text(cleaned_text) if cleaned_text else None,
+                    content=response_content,
                     reasoning=reasoning_text,
                     tool_calls=tool_calls,
                 ),
@@ -9740,6 +9957,7 @@ async def create_chat_completion(
             )
         ],
         usage=get_usage(output),
+        warnings=response_warnings,
     )
 
     # When tool_calls are present, serialize manually to ensure content:null is
@@ -9972,6 +10190,19 @@ def _current_response_warnings_for_reasoning_only(
         "is empty. Consider raising max_output_tokens or sending "
         "enable_thinking=false for the final synthesis turn."
     ]
+
+
+def _chat_completion_warnings_for_reasoning_only(
+    content: str | None,
+    reasoning: str | None,
+    tool_calls: list | None,
+) -> list[str] | None:
+    has_visible_content = bool((content or "").strip())
+    has_reasoning = bool((reasoning or "").strip())
+    has_tool_calls = bool(tool_calls)
+    return _current_response_warnings_for_reasoning_only(
+        has_reasoning and not has_visible_content and not has_tool_calls
+    )
 
 
 def _merge_responses_warnings(*warning_lists: list[str] | None) -> list[str] | None:
@@ -10453,6 +10684,11 @@ async def create_response(
 
     engine = get_engine()
     _responses_has_media = _responses_input_has_multimodal(request.input)
+    _log_multimodal_request_shape(
+        "/v1/responses",
+        _model_path or _model_name or request.model,
+        _responses_input_multimodal_summary(request.input),
+    )
     if (
         _responses_has_media
         and not engine.is_mllm
@@ -11788,6 +12024,33 @@ async def stream_chat_completion(
                     emit_reasoning = delta_msg.reasoning
                     emit_content = delta_msg.content
 
+                # Tool-call-only streams often start with harmless whitespace
+                # before the native marker (DSV4 commonly emits "\n\n<｜DSML｜…").
+                # Do not send that whitespace as visible content until we know
+                # the turn is not a tool call; otherwise clients see a blank
+                # assistant message before the structured tool_calls delta.
+                if (
+                    tool_call_active
+                    and not content_was_emitted
+                    and emit_content
+                    and not emit_content.strip()
+                ):
+                    if include_usage:
+                        heartbeat = ChatCompletionChunk(
+                            id=response_id,
+                            created=_created_ts,
+                            model=request.model,
+                            choices=[
+                                ChatCompletionChunkChoice(
+                                    delta=ChatCompletionChunkDelta(content=None),
+                                    finish_reason=None,
+                                )
+                            ],
+                            usage=get_usage(output),
+                        )
+                        yield f"data: {_dump_sse_json(heartbeat)}\n\n"
+                    continue
+
                 if _suppress_tools and emit_content:
                     emit_content = _suppressed_tool_display_delta(
                         accumulated_content,
@@ -11853,6 +12116,29 @@ async def stream_chat_completion(
                         if not tool_call_buffering_notified:
                             tool_call_buffering_notified = True
                         yield f"data: {_dump_sse_json(buf_chunk)}\n\n"
+                    continue
+
+                # Same leading-whitespace guard as the reasoning-parser path.
+                if (
+                    tool_call_active
+                    and not content_was_emitted
+                    and content
+                    and not content.strip()
+                ):
+                    if include_usage:
+                        heartbeat = ChatCompletionChunk(
+                            id=response_id,
+                            created=_created_ts,
+                            model=request.model,
+                            choices=[
+                                ChatCompletionChunkChoice(
+                                    delta=ChatCompletionChunkDelta(content=None),
+                                    finish_reason=None,
+                                )
+                            ],
+                            usage=get_usage(output),
+                        )
+                        yield f"data: {_dump_sse_json(heartbeat)}\n\n"
                     continue
 
                 # Add <think> prefix on first content chunk for thinking models
@@ -12176,6 +12462,7 @@ async def stream_chat_completion(
                         finish_reason="tool_calls",
                     )],
                 )
+                tool_calls_emitted = True
                 yield f"data: {_dump_sse_json(tc_chunk)}\n\n"
             else:
                 logger.info(
@@ -12202,6 +12489,28 @@ async def stream_chat_completion(
                 )],
             )
             yield f"data: {_dump_sse_json(diag_chunk)}\n\n"
+
+    _stream_chat_warnings = None
+    if (
+        accumulated_reasoning
+        and not content_was_emitted
+        and not tool_calls_emitted
+        and (suppress_reasoning or reasoning_was_streamed)
+    ):
+        _stream_chat_warnings = _chat_completion_warnings_for_reasoning_only(
+            content=None,
+            reasoning=accumulated_reasoning,
+            tool_calls=None,
+        )
+    if _stream_chat_warnings:
+        warning_chunk = ChatCompletionChunk(
+            id=response_id,
+            created=_created_ts,
+            model=request.model,
+            choices=[],
+            warnings=_stream_chat_warnings,
+        )
+        yield f"data: {_dump_sse_json(warning_chunk)}\n\n"
 
     # Safeguard: if model generated zero tokens (empty stream), finish the stream
     # without injecting diagnostic prose as assistant output. The warning belongs

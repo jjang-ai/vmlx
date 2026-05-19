@@ -2,6 +2,25 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.5.41] - 2026-05-18
+
+### Fixed
+- **DSV4 DSML streaming tool calls no longer leak wrapper text**: streaming
+  requests now buffer the full DSV4 `<｜DSML｜tool_calls>` envelope before
+  emitting structured tool-call deltas, including the leading-whitespace case
+  that previously surfaced raw DSML marker text as assistant content.
+- **DSV4, Qwen native-MTP, and ZAYA native-cache release gates were refreshed
+  against packaged bundled-Python builds**: the fixed app reports the correct
+  native cache schemas, keeps generic TurboQuant KV disabled for incompatible
+  composite/hybrid caches, and preserves storage-boundary cache telemetry.
+
+### Verified
+- Live DSV4 Flash DSML parser gate passed for non-streaming tool calls,
+  tool-result roundtrip, and streaming `tool_choice=required` with no raw DSML
+  leakage.
+- Packaged smoke gates passed for DSV4 Flash native cache, Qwen3.6 native-MTP
+  hybrid cache, and ZAYA CCA cache lifecycle paths.
+
 ## [1.5.40] - 2026-05-17
 
 ### Fixed

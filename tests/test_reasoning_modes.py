@@ -343,6 +343,74 @@ def test_dsv4_bundle_defaults_apply_only_when_request_omits_values(tmp_path, mon
     assert server._resolve_repetition_penalty(1.05, enable_thinking=True) == 1.05
 
 
+def test_dsv4_jang_chat_defaults_override_generation_config_when_cli_unset(
+    tmp_path, monkeypatch
+):
+    """DSV4 uses jang_config.chat defaults over generic generation_config values.
+
+    Real DSV4 Flash bundles currently carry generation_config temperature/top_p
+    as 1.0/1.0, while jang_config.chat.sampling_defaults declares the audited
+    chat runtime defaults. This pins the server resolver behavior directly so a
+    future route refactor cannot silently fall back to the wrong source.
+    """
+    import json
+    from vmlx_engine import server
+
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "deepseek_v4"}))
+    (tmp_path / "generation_config.json").write_text(json.dumps({
+        "do_sample": True,
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "top_k": 99,
+        "repetition_penalty": 1.2,
+        "max_new_tokens": 8192,
+    }))
+    (tmp_path / "jang_config.json").write_text(json.dumps({
+        "chat": {
+            "reasoning": {"default_mode": "chat"},
+            "sampling_defaults": {
+                "temperature": 0.6,
+                "top_p": 0.95,
+                "top_k": 0,
+                "repetition_penalty_thinking": 1.0,
+                "repetition_penalty_chat": 1.05,
+                "max_new_tokens": 4096,
+            },
+        },
+    }))
+
+    monkeypatch.setattr(server, "_model_path", str(tmp_path))
+    monkeypatch.setattr(server, "_model_name", "dsv4")
+    monkeypatch.setattr(server, "_default_temperature", None)
+    monkeypatch.setattr(server, "_default_top_p", None)
+    monkeypatch.setattr(server, "_default_top_k", None)
+    monkeypatch.setattr(server, "_default_min_p", None)
+    monkeypatch.setattr(server, "_default_repetition_penalty", None)
+    server._jang_sampling_defaults_cache.clear()
+    server._generation_defaults_cache.clear()
+
+    assert server._resolve_temperature(None, str(tmp_path)) == 0.6
+    assert server._resolve_top_p(None, str(tmp_path)) == 0.95
+    assert server._resolve_top_k(None, str(tmp_path)) == 0
+    assert server._resolve_max_tokens(None, str(tmp_path)) == 4096
+    assert (
+        server._resolve_repetition_penalty(
+            None,
+            str(tmp_path),
+            enable_thinking=False,
+        )
+        == 1.05
+    )
+    assert (
+        server._resolve_repetition_penalty(
+            None,
+            str(tmp_path),
+            enable_thinking=True,
+        )
+        == 1.0
+    )
+
+
 def test_ling_stamped_bailing_family_preserves_sampling_values(tmp_path, monkeypatch):
     """Ling JANGTQ bundles stamp capabilities.family=bailing_hybrid.
 
@@ -1025,6 +1093,22 @@ def test_deepseek_r1_reasoning_parser_orphan_close_is_not_visible():
 
     assert reasoning is None
     assert content == "The answer is 4."
+    assert "</think>" not in content
+
+
+def test_deepseek_r1_direct_rail_stray_close_preserves_visible_prefix():
+    """DSV4 chat/direct rail may emit a stray </think>; prefix is not hidden reasoning."""
+    from vmlx_engine.reasoning.deepseek_r1_parser import DeepSeekR1ReasoningParser
+
+    parser = DeepSeekR1ReasoningParser()
+    parser.reset_state(think_in_prompt=False)
+
+    reasoning, content = parser.extract_reasoning(
+        "The anchor is ADA LOVELACE.</think>**CERULEAN, 45, ADA LOVELACE**"
+    )
+
+    assert reasoning is None
+    assert content == "The anchor is ADA LOVELACE.**CERULEAN, 45, ADA LOVELACE**"
     assert "</think>" not in content
 
 

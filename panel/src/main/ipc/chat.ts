@@ -50,6 +50,122 @@ function shouldForwardReasoningEffort(
   return sessionHasReasoningParser || detectedFamily === "deepseek-v4";
 }
 
+type ComposerAttachment = {
+  dataUrl: string;
+  name: string;
+  kind?: "image" | "video" | "audio" | "text";
+  type?: string;
+  size?: number;
+  text?: string;
+};
+
+function inferKind(a: ComposerAttachment): "image" | "video" | "audio" | "text" {
+  if (a.kind) return a.kind;
+  if (a.text !== undefined) return "text";
+  if (a.dataUrl.startsWith("data:audio/")) return "audio";
+  if (a.dataUrl.startsWith("data:video/")) return "video";
+  if (a.dataUrl.startsWith("data:text/")) return "text";
+  return "image";
+}
+
+function mimeFromDataUrl(dataUrl?: string): string | undefined {
+  return dataUrl?.match(/^data:([^;,]+)[;,]/)?.[1]?.toLowerCase();
+}
+
+function redactContentForLog(content: any): any {
+  if (Array.isArray(content)) {
+    return content.map((part: any) => {
+      if (!part || typeof part !== "object") return { type: typeof part };
+      if (part.type === "text") {
+        return { type: "text", chars: String(part.text || "").length };
+      }
+      if (part.type === "image_url") {
+        const url = part.image_url?.url || part.image_url;
+        return {
+          type: "image_url",
+          mime: mimeFromDataUrl(typeof url === "string" ? url : undefined),
+          data_url_chars: typeof url === "string" && url.startsWith("data:") ? url.length : undefined,
+          url: "<redacted>",
+        };
+      }
+      if (part.type === "video_url") {
+        const url = part.video_url?.url || part.video_url;
+        return {
+          type: "video_url",
+          mime: mimeFromDataUrl(typeof url === "string" ? url : undefined),
+          data_url_chars: typeof url === "string" && url.startsWith("data:") ? url.length : undefined,
+          url: "<redacted>",
+        };
+      }
+      if (part.type === "input_audio") {
+        return {
+          type: "input_audio",
+          format: part.input_audio?.format,
+          data_chars:
+            typeof part.input_audio?.data === "string"
+              ? part.input_audio.data.length
+              : undefined,
+        };
+      }
+      return { type: part.type || "unknown", keys: Object.keys(part).sort() };
+    });
+  }
+  if (typeof content === "string") return { type: "text", chars: content.length };
+  if (content == null) return null;
+  return { type: typeof content };
+}
+
+function summarizeRequestForLog(bodyJson: string, useResponsesApi: boolean): Record<string, any> {
+  try {
+    const body = JSON.parse(bodyJson);
+    const items = useResponsesApi ? body.input : body.messages;
+    return {
+      route: useResponsesApi ? "/v1/responses" : "/v1/chat/completions",
+      model: body.model,
+      stream: body.stream === true,
+      max_tokens: body.max_output_tokens ?? body.max_tokens,
+      temperature: body.temperature,
+      top_p: body.top_p,
+      top_k: body.top_k,
+      min_p: body.min_p,
+      repetition_penalty: body.repetition_penalty,
+      enable_thinking: body.enable_thinking,
+      thinking_mode: body.thinking_mode,
+      reasoning_effort: body.reasoning_effort,
+      previous_response_id: body.previous_response_id ? "<present>" : undefined,
+      has_tools: Array.isArray(body.tools) && body.tools.length > 0,
+      messages: Array.isArray(items)
+        ? items.slice(-8).map((m: any) => ({
+            role: m.role || m.type || "item",
+            content: redactContentForLog(m.content ?? m.input ?? m.output ?? m.text),
+          }))
+        : redactContentForLog(items),
+    };
+  } catch (e: any) {
+    return { error: `request summary failed: ${e?.message || String(e)}` };
+  }
+}
+
+function summarizeAttachmentsForLog(attachments?: ComposerAttachment[]): Record<string, any> {
+  const counts = { image: 0, video: 0, audio: 0, text: 0 };
+  const files: Array<Record<string, any>> = [];
+  for (const attachment of attachments || []) {
+    const kind = inferKind(attachment);
+    counts[kind] += 1;
+    files.push({
+      kind,
+      name: attachment.name,
+      mime: attachment.type || mimeFromDataUrl(attachment.dataUrl),
+      size: attachment.size,
+      data_url_chars: attachment.dataUrl?.startsWith("data:")
+        ? attachment.dataUrl.length
+        : undefined,
+      text_chars: attachment.text?.length,
+    });
+  }
+  return { total: attachments?.length || 0, counts, files };
+}
+
 /**
  * SSE-streaming fetch using Node.js http/https directly.
  * Electron 28's global fetch() uses Chromium's net module which buffers
@@ -423,6 +539,13 @@ async function resolveServerEndpoint(
 export function registerChatHandlers(
   getWindow: () => BrowserWindow | null,
 ): void {
+  const pushChatSessionLog = (sessionId: string | undefined, line: string) => {
+    if (!sessionId) return;
+    const data = line.endsWith("\n") ? line : `${line}\n`;
+    sessionManager.pushLog(sessionId, data);
+    sessionManager.emit("session:log", { sessionId, data });
+  };
+
   // Folders
   ipcMain.handle(
     "chat:createFolder",
@@ -625,6 +748,7 @@ export function registerChatHandlers(
         name: string;
         kind?: "image" | "video" | "audio" | "text";
         type?: string;
+        size?: number;
         text?: string;
       }>,
     ) => {
@@ -909,18 +1033,6 @@ export function registerChatHandlers(
       // server will reject the request properly if the model truly cannot
       // handle media, which is far better than silently dropping it. Text-file
       // attachments are plain text context and do not need multimodal routing.
-      const inferKind = (a: {
-        dataUrl: string;
-        kind?: "image" | "video" | "audio" | "text";
-        text?: string;
-      }): "image" | "video" | "audio" | "text" => {
-        if (a.kind) return a.kind;
-        if (a.text !== undefined) return "text";
-        if (a.dataUrl.startsWith("data:audio/")) return "audio";
-        if (a.dataUrl.startsWith("data:video/")) return "video";
-        if (a.dataUrl.startsWith("data:text/")) return "text";
-        return "image";
-      };
       const hasMediaAttachments =
         hasAttachments && attachments!.some((a) => inferKind(a) !== "text");
       const modelForceTextOnly = (() => {
@@ -946,6 +1058,19 @@ export function registerChatHandlers(
           `[CHAT] Forcing multimodal=true for ${chatId} — user attached ${imgs} image(s), ${vids} video(s), ${auds} audio file(s)`,
         );
         chatIsMultimodal = true;
+      }
+      if (hasAttachments || chatIsMultimodal) {
+        pushChatSessionLog(
+          chatSession?.id || resolvedSession?.id,
+          `[CHAT_DIAG] attachment_route=${JSON.stringify({
+            chatId: chatId.slice(0, 8),
+            modelPath: chat.modelPath,
+            detectedFamily: chatDetectedFamily,
+            modelForceTextOnly,
+            chatIsMultimodal,
+            attachments: summarizeAttachmentsForLog(attachments),
+          })}`,
+        );
       }
       const audioFormatFromDataUrl = (dataUrl: string): string => {
         const mime = dataUrl.match(/^data:([^;,]+)[;,]/)?.[1]?.toLowerCase() || "";
@@ -1572,6 +1697,22 @@ export function registerChatHandlers(
           }
         };
         const requestBody = JSON.stringify(buildRequestBody());
+        const requestDiagSessionId = chatSession?.id || resolvedSession?.id;
+        if (requestDiagSessionId) {
+          pushChatSessionLog(
+            requestDiagSessionId,
+            `[CHAT_DIAG] request_shape=${JSON.stringify({
+              chatId: chatId.slice(0, 8),
+              wireApi,
+              isRemote,
+              baseUrl,
+              chatIsMultimodal,
+              detectedFamily: chatDetectedFamily,
+              sessionHasReasoningParser,
+              body: summarizeRequestForLog(requestBody, useResponsesApi),
+            })}`,
+          );
+        }
 
         fetchStartTime = Date.now(); // Capture just before fetch for accurate TTFT
         // Remote: use Electron's net.fetch (Chromium stack — proper HTTPS certs, proxies, SSE).
@@ -2138,6 +2279,12 @@ export function registerChatHandlers(
               }
             } else {
               // ── Chat Completions SSE parsing ──
+              const chatWarnings = extractResponsesWarnings(parsed);
+              if (chatWarnings) {
+                responseWarnings = Array.from(
+                  new Set([...(responseWarnings || []), ...chatWarnings]),
+                );
+              }
               const choice = parsed.choices?.[0]?.delta;
 
               // Track response ID for server-side cancel
@@ -3272,6 +3419,18 @@ export function registerChatHandlers(
           fullContentLen: fullContent?.length,
           readerAcquired: !!reader,
         });
+        pushChatSessionLog(
+          chatSession?.id || resolvedSession?.id,
+          `[CHAT_DIAG] request_error=${JSON.stringify({
+            chatId: chatId.slice(0, 8),
+            message: _err?.message,
+            name: _err?.name,
+            code: _err?.code,
+            timedOut,
+            fullContentLen: fullContent?.length || 0,
+            readerAcquired: !!reader,
+          })}`,
+        );
 
         // Fire reasoningDone if interrupted during reasoning mode
         if (isReasoning) {

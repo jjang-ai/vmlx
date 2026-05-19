@@ -61,6 +61,29 @@ def test_classify_model_marks_deepseek_v4_composite_cache(tmp_path):
     assert row["has_mtp"] is True
 
 
+def test_classify_model_does_not_mark_explicit_nomtp_bundle(tmp_path):
+    mod = load_module()
+    model_dir = tmp_path / "DeepSeek-V4-Flash-JANG_DQ2-NoMTP"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text(
+        '{"model_type":"deepseek_v4","num_nextn_predict_layers":0}',
+        encoding="utf-8",
+    )
+    (model_dir / "jang_config.json").write_text(
+        '{"weight_format":"affine"}',
+        encoding="utf-8",
+    )
+    (model_dir / "model.safetensors.index.json").write_text(
+        '{"weight_map":{"model.embed_tokens.weight":"model.safetensors"}}',
+        encoding="utf-8",
+    )
+
+    row = mod.classify_model_dir(model_dir)
+
+    assert row["cache_family"] == "deepseek_v4_composite"
+    assert row["has_mtp"] is False
+
+
 def test_build_serve_command_uses_production_auto_cache(tmp_path):
     mod = load_module()
     row = {
@@ -131,6 +154,18 @@ def test_request_json_returns_status_body_and_elapsed(monkeypatch):
     assert code == 200
     assert body == {"ok": True}
     assert elapsed >= 0
+
+
+def test_build_server_env_can_isolate_packaged_python(monkeypatch):
+    mod = load_module()
+    monkeypatch.setenv("PYTHONPATH", "/tmp/source")
+    monkeypatch.setenv("VMLINUX_BENCH_ISOLATED", "1")
+
+    env = mod.build_server_env()
+
+    assert env["PYTHONUNBUFFERED"] == "1"
+    assert "PYTHONPATH" not in env
+    assert env["PYTHONNOUSERSITE"] == "1"
 
 
 def test_filter_rows_skips_auxiliary_dirs_by_default():
@@ -241,6 +276,14 @@ def test_validate_probe_response_accepts_ack_probe():
     mod = load_module()
 
     failures = mod.validate_probe_response("text_cache_repeat_2", 200, "ACK", "")
+
+    assert failures == []
+
+
+def test_validate_probe_response_accepts_semantic_acknowledgement():
+    mod = load_module()
+
+    failures = mod.validate_probe_response("text_cache_repeat_2", 200, "Acknowledged.", "")
 
     assert failures == []
 

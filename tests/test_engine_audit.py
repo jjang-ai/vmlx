@@ -888,6 +888,17 @@ class TestToolParserConcurrency:
         }
         assert DSML_PREFIX not in tool_calls[0].function.arguments
 
+    def test_stream_chat_buffers_leading_whitespace_before_tool_marker(self):
+        """Tool-call-only streams must not leak whitespace before tool_calls."""
+        import inspect
+
+        from vmlx_engine.server import _TOOL_CALL_MARKERS, stream_chat_completion
+
+        source = inspect.getsource(stream_chat_completion)
+        assert "<｜DSML｜tool_c" in _TOOL_CALL_MARKERS
+        assert "not emit_content.strip()" in source
+        assert "not content.strip()" in source
+
 
 class TestCacheTruncation:
     """Test N-1 token truncation logic for cache storage."""
@@ -1388,6 +1399,238 @@ class TestH3VideoExtractionFailures:
         assert "failed_images" in source and "failed_videos" in source, (
             "Must track failed image and video counts"
         )
+
+
+class TestMediaDiagnostics:
+    """Redacted media diagnostics for user logs when image requests fail."""
+
+    def test_messages_multimodal_summary_redacts_data_urls(self):
+        from vmlx_engine.server import _messages_multimodal_summary
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what color?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "data:image/png;base64,SECRET_IMAGE_BYTES"
+                        },
+                    },
+                    {
+                        "type": "video_url",
+                        "video_url": {"url": "/tmp/example.mp4"},
+                    },
+                ],
+            }
+        ]
+
+        summary = _messages_multimodal_summary(messages)
+
+        assert summary["total"] == 2
+        assert summary["types"] == {"image_url": 1, "video_url": 1}
+        assert summary["data_url"] == 1
+        assert summary["url_or_path"] == 1
+        assert "SECRET_IMAGE_BYTES" not in json.dumps(summary)
+
+    def test_responses_multimodal_summary_handles_input_image_without_payload(self):
+        from vmlx_engine.server import _responses_input_multimodal_summary
+
+        response_input = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "describe"},
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,SECRET_RESPONSE_IMAGE",
+                    },
+                ],
+            }
+        ]
+
+        summary = _responses_input_multimodal_summary(response_input)
+
+        assert summary["total"] == 1
+        assert summary["types"] == {"input_image": 1}
+        assert summary["data_url"] == 1
+        assert "SECRET_RESPONSE_IMAGE" not in json.dumps(summary)
+
+    def test_chat_multimodal_summary_handles_input_image_shape(self):
+        from vmlx_engine.server import _messages_multimodal_summary
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": ""},
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,SECRET_CHAT_INPUT_IMAGE",
+                    },
+                ],
+            }
+        ]
+
+        summary = _messages_multimodal_summary(messages)
+
+        assert summary["total"] == 1
+        assert summary["types"] == {"input_image": 1}
+        assert summary["data_url"] == 1
+        assert summary["roles"] == {"user": 1}
+        assert "SECRET_CHAT_INPUT_IMAGE" not in json.dumps(summary)
+
+    def test_anthropic_image_conversion_reaches_media_summary(self):
+        from vmlx_engine.api.anthropic_adapter import AnthropicRequest, to_chat_completion
+        from vmlx_engine.server import _messages_multimodal_summary
+
+        anthropic = AnthropicRequest(
+            model="vl",
+            max_tokens=32,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "SECRET_ANTHROPIC_IMAGE",
+                            },
+                        },
+                        {"type": "text", "text": "describe"},
+                    ],
+                }
+            ],
+        )
+
+        chat = to_chat_completion(anthropic)
+        summary = _messages_multimodal_summary(chat.messages)
+
+        assert summary["total"] == 1
+        assert summary["types"] == {"image_url": 1}
+        assert summary["data_url"] == 1
+        assert summary["roles"] == {"user": 1}
+        assert "SECRET_ANTHROPIC_IMAGE" not in json.dumps(summary)
+
+    def test_media_diag_hooks_cover_anthropic_and_ollama_streaming_ingress(self):
+        import inspect
+        import vmlx_engine.server as server
+
+        anthropic_source = inspect.getsource(server.create_anthropic_message)
+        ollama_source = inspect.getsource(server.ollama_chat)
+
+        assert '"/v1/messages"' in anthropic_source
+        assert "_log_multimodal_request_shape" in anthropic_source
+        assert "_messages_multimodal_summary(chat_req.messages)" in anthropic_source
+        assert '_reject_unsupported_multimodal("/v1/messages")' in anthropic_source
+
+        assert '"/api/chat"' in ollama_source
+        assert "_log_multimodal_request_shape" in ollama_source
+        assert "_messages_multimodal_summary(chat_req.messages)" in ollama_source
+        assert '_reject_unsupported_multimodal("/api/chat")' in ollama_source
+
+    def test_anthropic_media_on_text_runtime_rejects_instead_of_dropping(
+        self, monkeypatch
+    ):
+        from fastapi.testclient import TestClient
+        import vmlx_engine.server as server
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=False))
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_name", "text-runtime")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        response = TestClient(server.app).post(
+            "/v1/messages",
+            json={
+                "model": "claude",
+                "max_tokens": 8,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": "aGVsbG8=",
+                                },
+                            },
+                            {"type": "text", "text": ""},
+                        ],
+                    }
+                ],
+            },
+        )
+
+        assert response.status_code == 400
+        assert "text-only" in response.text
+
+    def test_ollama_streaming_media_on_text_runtime_rejects_instead_of_dropping(
+        self, monkeypatch
+    ):
+        from fastapi.testclient import TestClient
+        import vmlx_engine.server as server
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=False))
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_name", "text-runtime")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        response = TestClient(server.app).post(
+            "/api/chat",
+            json={
+                "model": "text-runtime",
+                "stream": True,
+                "messages": [
+                    {"role": "user", "content": "", "images": ["aGVsbG8="]}
+                ],
+            },
+        )
+
+        assert response.status_code == 400
+        assert "text-only" in response.text
+
+    def test_server_media_diag_log_includes_route_runtime_and_redacts_payload(
+        self, caplog, monkeypatch
+    ):
+        import logging
+        import vmlx_engine.server as server
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_model_path", "/models/Brooklyn-VLM")
+        monkeypatch.setattr(server, "_model_name", "Brooklyn-VLM")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+        summary = {
+            "total": 1,
+            "types": {"image_url": 1},
+            "data_url": 1,
+            "url_or_path": 0,
+            "missing_source": 0,
+            "roles": {"user": 1},
+            "messages": 1,
+            "content_arrays": 1,
+        }
+
+        caplog.set_level(logging.INFO, logger="vmlx_engine.server")
+        server._log_multimodal_request_shape(
+            "/v1/chat/completions",
+            "/models/Brooklyn-VLM",
+            summary,
+        )
+
+        text = caplog.text
+        assert "[MEDIA_DIAG] request_shape=" in text
+        assert '"/v1/chat/completions"' in text
+        assert '"engine_is_mllm": true' in text
+        assert '"total": 1' in text
+        assert "SECRET" not in text
+        assert "data:image" not in text
 
 
 class TestH4JsonSchemaStreaming:
@@ -2787,6 +3030,7 @@ class TestStartupCompatibilityGuards:
             "mllm_scheduler.py",
             "omni_multimodal.py",
             "prefix_cache.py",
+            "runtime_patches/gemma4_processing.py",
             "scheduler.py",
         ):
             assert f'"{rel}"' in verify_script
@@ -5302,17 +5546,21 @@ class TestTurboQuantKVTelemetry:
             assert "effectiveFlashMoe" in source
             assert "effectiveDistributed" in source
             assert "dsv4Active" in source
+            assert "hybridCacheActive" in source
             assert "effectiveEnableJit" in source
             assert "if (effectiveFlashMoe)" in source
             assert "if (effectiveDistributed)" in source
+            assert "compatibleExternalSpeculative" in source
             assert "if (effectiveEnableJit)" in source
+            assert "if (compatibleExternalSpeculative)" in source
             assert "if (config.enableJit) args.push('--enable-jit')" not in source
 
         assert "normalizedDetectedFamily === 'deepseek-v4'" in form_source
         # JIT incompat list expanded 2026-05-09 to include TurboQuant
         # (engine skips mx.compile for TurboQuantKVCache; UI now matches).
-        assert "disabled={flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive}" in form_source
-        assert "checked={!!config.enableJit && !flashMoeActive && !distributedActive && !dsv4Active && !zayaCcaActive && !turboQuantActive && !multimodalActive}" in form_source
+        assert "disabled={flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive || hybridCacheActive}" in form_source
+        assert "checked={!!config.enableJit && !flashMoeActive && !distributedActive && !dsv4Active && !zayaCcaActive && !turboQuantActive && !multimodalActive && !hybridCacheActive}" in form_source
+        assert "disabled={config.continuousBatching || multimodalActive || dsv4Active}" in form_source
 
     def test_responses_long_context_tool_cache_gate_script_pins_artifacts(self):
         gate_source = Path(
@@ -6038,6 +6286,11 @@ class TestTurboQuantKVTelemetry:
         assert status["weight_index"]["suffix_counts"]["tq_norms"] == 1
         assert status["weight_index"]["suffix_counts"]["tq_bits"] == 1
         assert status["weight_index"]["tq_target_counts"]["routed_expert"] == 3
+        assert status["weight_index"]["mtp_tensor_count"] == 0
+        assert status["weight_index"]["routed_layout_counts"] == {
+            "prestacked_switch": 3,
+            "split_expert": 0,
+        }
         assert status["weight_index"]["sample_tq_packed_targets"] == [
             "model.layers.0.mlp.switch_mlp.gate_proj"
         ]
@@ -6047,6 +6300,131 @@ class TestTurboQuantKVTelemetry:
             "metal_na_eligible": False,
             "reason": "turboquant_codebook_uses_custom_tq_kernels",
         }
+
+    def test_dsv4_keeper_identity_reports_no_mtp_and_prestacked_layout(
+        self, tmp_path
+    ):
+        """Pin the final DSV4 no-MTP keeper shape without local model paths."""
+        from vmlx_engine.server import _model_mtp_status, _model_quantization_status
+
+        pure_jang = tmp_path / "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
+        pure_jang.mkdir()
+        (pure_jang / "config.json").write_text(json.dumps({
+            "model_type": "deepseek_v4",
+            "weight_format": "affine",
+            "num_nextn_predict_layers": 0,
+            "n_routed_experts": 256,
+            "num_experts_per_tok": 6,
+            "quantization": {"bits": 4, "group_size": 64},
+        }))
+        (pure_jang / "jang_config.json").write_text(json.dumps({
+            "weight_format": "affine",
+            "quantization": {
+                "method": "affine",
+                "routed_experts": {
+                    "bits": 2,
+                    "codec": "affine",
+                    "group_size": 64,
+                    "bit_plan": {
+                        "routed_projection_group_sizes": {
+                            "w1": 32,
+                            "w2": 32,
+                            "w3": 64,
+                        },
+                    },
+                },
+                "non_routed": {"bits": 4, "codec": "affine", "group_size": 64},
+            },
+        }))
+        (pure_jang / "model.safetensors.index.json").write_text(json.dumps({
+            "weight_map": {
+                "model.embed_tokens.weight": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.gate_proj.weight": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.gate_proj.scales": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.gate_proj.biases": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.down_proj.weight": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.down_proj.scales": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.down_proj.biases": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.up_proj.weight": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.up_proj.scales": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.up_proj.biases": "model.safetensors",
+            }
+        }))
+
+        pure_quant = _model_quantization_status(str(pure_jang))
+        pure_mtp = _model_mtp_status(str(pure_jang))
+
+        assert pure_quant["codec"] == "affine_quantized_matmul"
+        assert pure_quant["weight_format"] == "affine"
+        assert pure_quant["weight_index"]["total_tensors"] == 10
+        assert pure_quant["weight_index"]["mtp_tensor_count"] == 0
+        assert pure_quant["weight_index"]["routed_layout_counts"] == {
+            "prestacked_switch": 9,
+            "split_expert": 0,
+        }
+        assert pure_mtp["status"] == "not_configured"
+        assert pure_mtp["config_num_nextn_predict_layers"] == 0
+        assert pure_mtp["index_has_mtp_tensors"] is False
+
+        jangtq = tmp_path / "DeepSeek-V4-Flash-JANGTQ-K"
+        jangtq.mkdir()
+        (jangtq / "config.json").write_text(json.dumps({
+            "model_type": "deepseek_v4",
+            "weight_format": "mxtq",
+            "num_nextn_predict_layers": 0,
+            "n_routed_experts": 256,
+            "num_experts_per_tok": 6,
+            "mxtq_bits": {
+                "routed_expert": 2,
+                "attention": 8,
+                "shared_expert": 8,
+                "embed_tokens": 8,
+                "lm_head": 8,
+            },
+        }))
+        (jangtq / "jang_config.json").write_text(json.dumps({
+            "weight_format": "mxtq",
+            "drop_mtp": True,
+            "quantization": {
+                "profile": "JANGTQ-K",
+                "quantization_backend": "turboquant",
+            },
+        }))
+        (jangtq / "jangtq_runtime.safetensors").write_bytes(b"sidecar")
+        (jangtq / "model.safetensors.index.json").write_text(json.dumps({
+            "weight_map": {
+                "model.layers.0.mlp.switch_mlp.gate_proj.tq_packed": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.gate_proj.tq_norms": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.gate_proj.tq_bits": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.down_proj.tq_packed": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.down_proj.tq_norms": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.down_proj.tq_bits": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.up_proj.tq_packed": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.up_proj.tq_norms": "model.safetensors",
+                "model.layers.0.mlp.switch_mlp.up_proj.tq_bits": "model.safetensors",
+                "model.lm_head.weight": "model.safetensors",
+            }
+        }))
+
+        jangtq_quant = _model_quantization_status(str(jangtq))
+        jangtq_mtp = _model_mtp_status(str(jangtq))
+
+        assert jangtq_quant["codec"] == "turboquant_codebook"
+        assert jangtq_quant["weight_format"] == "mxtq"
+        assert jangtq_quant["weight_index"]["total_tensors"] == 10
+        assert jangtq_quant["weight_index"]["suffix_counts"]["tq_packed"] == 3
+        assert jangtq_quant["weight_index"]["suffix_counts"]["tq_norms"] == 3
+        assert jangtq_quant["weight_index"]["suffix_counts"]["tq_bits"] == 3
+        assert jangtq_quant["weight_index"]["tq_target_counts"]["routed_expert"] == 9
+        assert jangtq_quant["weight_index"]["mtp_tensor_count"] == 0
+        assert jangtq_quant["weight_index"]["routed_layout_counts"] == {
+            "prestacked_switch": 9,
+            "split_expert": 0,
+        }
+        assert jangtq_mtp["status"] == "dropped"
+        assert jangtq_mtp["jang_drop_mtp"] is True
+        assert jangtq_mtp["config_num_nextn_predict_layers"] == 0
+        assert jangtq_mtp["index_has_mtp_tensors"] is False
 
     def test_quantization_status_reports_routed_layer_bit_plan(self, tmp_path):
         """Layer-specific routed bits must be visible for speed/quality audits."""
@@ -6236,6 +6614,43 @@ class TestTurboQuantKVTelemetry:
             for warning in warnings
         )
 
+    def test_quantization_status_trusts_dsv4_affine_runtime_coherency_stamp(
+        self, tmp_path
+    ):
+        from vmlx_engine.server import _model_quantization_status
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "deepseek_v4",
+            "weight_format": "affine",
+            "quantization": {"bits": 2, "group_size": 64},
+        }))
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "weight_format": "affine",
+            "runtime": {
+                "coherency_verified": True,
+                "ar_coherency_verified": True,
+                "verified_with": "packaged-live-gate",
+            },
+            "quantization": {
+                "method": "affine",
+                "routed_experts": {
+                    "bits": 2,
+                    "codec": "affine",
+                    "group_size": 64,
+                },
+            },
+        }))
+
+        status = _model_quantization_status(str(tmp_path))
+
+        assert status["codec"] == "affine_quantized_matmul"
+        warnings = status.get("compat_warnings") or []
+        assert not any(
+            "DSV4 affine routed JANG runtime is loaded but not coherency-verified"
+            in warning
+            for warning in warnings
+        )
+
     def test_routing_status_reports_trained_top_k_without_override(self, monkeypatch, tmp_path):
         from vmlx_engine.server import _model_routing_status
 
@@ -6254,6 +6669,28 @@ class TestTurboQuantKVTelemetry:
             "n_routed_experts": 256,
             "override_env": None,
             "effective_active_experts": 8,
+            "effective_active_experts_source": "trained_default",
+        }
+
+    def test_dsv4_routing_status_reports_trained_top_k_six(self, monkeypatch, tmp_path):
+        """DSV4 MoE top-k is trained routing metadata, not sampler top_k."""
+        from vmlx_engine.server import _model_routing_status
+
+        monkeypatch.delenv("JANGTQ_TOPK_OVERRIDE", raising=False)
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "deepseek_v4",
+            "n_routed_experts": 256,
+            "num_experts_per_tok": 6,
+        }))
+
+        status = _model_routing_status(str(tmp_path))
+
+        assert status == {
+            "trained_active_experts": 6,
+            "trained_active_experts_source": "config.num_experts_per_tok",
+            "n_routed_experts": 256,
+            "override_env": None,
+            "effective_active_experts": 6,
             "effective_active_experts_source": "trained_default",
         }
 
@@ -6576,10 +7013,13 @@ class TestTurboQuantKVTelemetry:
         monkeypatch.setattr(server, "_mcp_manager", None)
 
         health = await server.health()
+        mtp_alias = await server.health_mtp()
         capabilities = await server.model_capabilities("dsv4-test")
 
         assert health["mtp"]["status"] == "dropped"
         assert health["mtp"]["runtime_available"] is False
+        assert mtp_alias["status"] == "dropped"
+        assert mtp_alias["runtime_available"] is False
         assert health["routing"]["trained_active_experts"] == 6
         assert health["routing"]["effective_active_experts_source"] == "trained_default"
         assert capabilities["mtp"]["status"] == "dropped"
@@ -6880,8 +7320,8 @@ class TestJitTurboQuantSymmetricGuard:
 
         assert "turboQuantActive" in form
         assert "detectedIsTurboQuant" in form
-        # disabled prop covers turboQuantActive
-        assert "disabled={flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive}" in form
+        # disabled prop covers turboQuantActive and hybrid path-dependent caches.
+        assert "disabled={flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive || hybridCacheActive}" in form
 
     def test_detect_config_stamps_isTurboQuant_flag(self):
         """detectModelConfigFromDir must set isTurboQuant when bundle is TQ.

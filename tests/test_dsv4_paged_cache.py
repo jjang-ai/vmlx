@@ -251,6 +251,19 @@ def test_panel_suppresses_generic_kv_quantization_controls_for_dsv4():
     assert "if (family === 'deepseek_v4') return 'deepseek-v4'" in sessions
 
 
+def test_panel_names_dsv4_cache_as_native_composite_not_generic_paged_kv():
+    """DSV4 UI must not make the internal paged-prefix path look like generic KV."""
+    from pathlib import Path
+
+    form = Path("panel/src/renderer/src/components/sessions/SessionConfigForm.tsx").read_text()
+
+    assert "const pagedCacheSectionTitle = dsv4CompositeRequiresPaged" in form
+    assert "DSV4 Native Cache" in form
+    assert "const pagedCacheToggleLabel = dsv4CompositeRequiresPaged" in form
+    assert "Native Composite Prefix Cache" in form
+    assert "not generic paged KV" in form
+
+
 def test_panel_suppresses_generic_batch_and_chunk_controls_for_dsv4():
     """DSV4 app launches must not pass misleading generic batch/chunk flags."""
     from pathlib import Path
@@ -310,7 +323,8 @@ def test_dsv4_launch_filters_stale_saved_and_additional_args():
         assert "const isVLM = dsv4Active || effectiveSmelt" in source
         assert "const effectiveDistributed = requestedDistributed && !dsv4Active" in source
         assert "const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed && !dsv4Active" in source
-        assert "if (!dsv4Active && config.speculativeModel)" in source
+        assert "compatibleExternalSpeculative" in source
+        assert "if (compatibleExternalSpeculative)" in source
         assert "DSV4_ADDITIONAL_ARG_BLOCKLIST" in source
         assert "--no-continuous-batching" in source
         assert "--disable-prefix-cache" in source
@@ -780,6 +794,43 @@ def test_dsv4_serve_path_forces_generic_kv_quantization_off():
     assert 'args.kv_cache_quantization = "none"' in policy_src
     assert "DSV4-Flash native SWA+CSA/HCA cache owns cache" in policy_src
     assert 'os.environ["VMLX_DISABLE_TQ_KV"] = "1"' in policy_src
+
+
+def test_dsv4_cli_cache_summary_names_native_composite_cache():
+    """Startup summary should say DSV4 composite cache, not generic paged KV."""
+    from types import SimpleNamespace
+
+    from vmlx_engine.cli import _cache_stack_summary_lines
+
+    lines = _cache_stack_summary_lines(
+        SimpleNamespace(
+            use_paged_cache=True,
+            paged_cache_block_size=256,
+            max_cache_blocks=1000,
+            enable_block_disk_cache=True,
+            block_disk_cache_max_gb=10,
+        ),
+        dsv4_model=True,
+    )
+
+    joined = "\n".join(lines)
+    assert "DSV4 native composite prefix cache" in joined
+    assert "deepseek_v4_v7" in joined
+    assert "generic paged KV" in joined
+    assert "Paged cache:" not in joined
+
+
+def test_dsv4_scheduler_log_names_native_composite_block_index():
+    """Scheduler log should not call DSV4's typed block transport generic paged KV."""
+    import inspect
+
+    from vmlx_engine.scheduler import Scheduler
+
+    source = inspect.getsource(Scheduler.__init__)
+    assert "DSV4 native composite block index enabled" in source
+    assert "not generic paged KV" in source
+    assert "deepseek_v4_v7" in source
+    assert 'f"Paged cache enabled: block_size=' in source
 
 
 def test_dsv4_cached_prefix_kickoff_avoids_cross_thread_mx_eval():

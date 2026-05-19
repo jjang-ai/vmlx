@@ -2474,10 +2474,11 @@ export class SessionManager extends EventEmitter {
     // Tool sessions benefit from prefix reuse, but an explicit user opt-out must
     // stay an opt-out; do not silently re-enable cache because tools are present.
     const zayaCcaActive = isZayaCcaFamily(detectedFamily)
+    const hybridCacheActive = cacheTypeRequiresPaged(detected.cacheType)
     const architectureRequiresPagedCache =
       zayaCcaActive ||
       dsv4Active ||
-      (cacheTypeRequiresPaged(detected.cacheType) && detected.usePagedCache === true)
+      (hybridCacheActive && detected.usePagedCache === true)
     const cacheLaunchPolicy = resolveCacheLaunchPolicy({
       continuousBatching: cacheStackActive,
       enablePrefixCache: config.enablePrefixCache !== false,
@@ -2592,7 +2593,7 @@ export class SessionManager extends EventEmitter {
     const turboQuantActive = !!(detected as any).isTurboQuant
     const effectiveDistributed = requestedDistributed && !dsv4Active
     const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed && !dsv4Active
-    const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !zayaCcaActive && !turboQuantActive
+    const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !zayaCcaActive && !turboQuantActive && !hybridCacheActive
     if (dsv4Active && ((config as any).smelt || requestedFlashMoe || requestedDistributed || config.speculativeModel)) {
       console.warn('[SESSION] DSV4-Flash detected: ignoring stale Smelt/Flash MoE/distributed/speculative flags; native DSV4 cache and expert hydration own this runtime')
     }
@@ -2608,6 +2609,8 @@ export class SessionManager extends EventEmitter {
         ? 'multimodal/VLM models use the mlx-vlm streaming path, which is not mx.compile safe'
         : turboQuantActive
         ? 'TurboQuantKVCache uses custom cache objects that mx.compile cannot trace'
+        : hybridCacheActive
+        ? 'hybrid SSM/Mamba cache uses path-dependent Python cache objects that mx.compile cannot trace'
         : 'Flash MoE or distributed mode is active'
       console.warn(`[SESSION] Ignoring stale JIT flag because ${reason}`)
     }
@@ -2651,8 +2654,20 @@ export class SessionManager extends EventEmitter {
     }
 
     // Speculative decoding
-    if (!dsv4Active && config.speculativeModel) {
-      args.push('--speculative-model', config.speculativeModel)
+    const externalSpeculativeModel = config.speculativeModel || ''
+    const compatibleExternalSpeculative = !dsv4Active && !isVLM && !cacheStackActive && !!externalSpeculativeModel
+    if (externalSpeculativeModel && !compatibleExternalSpeculative) {
+      const reason = dsv4Active
+        ? 'DSV4-Flash has a native composite-cache runtime'
+        : isVLM
+        ? 'multimodal/VLM generation has no external draft verifier path'
+        : cacheStackActive
+        ? 'continuous batching is active'
+        : 'this runtime does not support external draft decoding'
+      console.warn(`[SESSION] Ignoring stale speculative model because ${reason}`)
+    }
+    if (compatibleExternalSpeculative) {
+      args.push('--speculative-model', externalSpeculativeModel)
       if (config.numDraftTokens && config.numDraftTokens !== 3) {
         args.push('--num-draft-tokens', config.numDraftTokens.toString())
       }
@@ -2661,8 +2676,9 @@ export class SessionManager extends EventEmitter {
     // Native in-model MTP. This is separate from external speculative decoding:
     // Qwen3.6 preserved-MTP bundles carry their own draft head and the current
     // verified path is deterministic. The default app mode therefore launches
-    // native-MTP bundles with D3 plus deterministic startup sampling so normal
-    // app/API requests actually reach the D3 runtime instead of silently taking
+    // native-MTP bundles with the measured model-local depth when present
+    // (D3 fallback) plus deterministic startup sampling so normal app/API
+    // requests actually reach the native MTP runtime instead of silently taking
     // autoregressive decode through generation_config temperature=1.0.
     const nativeMtp = (detected as any).nativeMtp
     if (!dsv4Active && nativeMtp?.supported) {

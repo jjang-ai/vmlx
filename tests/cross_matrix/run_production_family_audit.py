@@ -188,6 +188,27 @@ ROWS: list[ModelRow] = [
         ],
     ),
     ModelRow(
+        id="dsv4_jang_dq2_gate3math6",
+        label="DeepSeek-V4-Flash JANG DQ2 Token8 DownG32 Gate3Math6 NoMTP",
+        path=(
+            "/Users/example/models/JANGQ/"
+            "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
+        ),
+        family="deepseek_v4",
+        expect_reasoning=True,
+        expect_tool_parser="dsml",
+        cache_profile="dsv4_composite",
+        slow=True,
+        notes=[
+            "Current pure-affine JANG DSV4 keeper candidate. Keeps the DQ2 "
+            "speed-class layout with token bookends at 8-bit, routed down "
+            "g32, selected gate 3-bit math layers, and no preserved MTP.",
+            "Must use the DSV4 native SWA+CSA/HCA composite cache path "
+            "with deepseek_v4_v7 paged-prefix/L2 serialization; generic "
+            "TurboQuant KV is invalid for this family.",
+        ],
+    ),
+    ModelRow(
         id="dsv4_tq2",
         label="DeepSeek-V4-Flash JANGTQ2",
         path="/Volumes/ModelDrive/jangq-ai/DeepSeek-V4-Flash-JANGTQ2",

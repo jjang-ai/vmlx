@@ -31,7 +31,10 @@ DEFAULT_PY = (
     REPO
     / "panel/release/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
 )
-DEFAULT_MODEL = "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K"
+DEFAULT_MODEL = (
+    "/Users/example/models/JANGQ/"
+    "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
+)
 DEFAULT_OUT = REPO / "docs/internal/release-gates/dsv4_long_context_gate_latest.json"
 
 
@@ -167,6 +170,21 @@ def extract(obj: dict[str, Any], wall: float) -> dict[str, Any]:
     }
 
 
+def cached_tokens(case: dict[str, Any]) -> int:
+    usage = case.get("usage") or {}
+    details = usage.get("prompt_tokens_details") or {}
+    try:
+        return int(details.get("cached_tokens") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def cache_detail(case: dict[str, Any]) -> str:
+    usage = case.get("usage") or {}
+    details = usage.get("prompt_tokens_details") or {}
+    return str(details.get("cache_detail") or "")
+
+
 def chat(url: str, model: str, payload: dict[str, Any], timeout: int = 600) -> dict[str, Any]:
     t0 = time.perf_counter()
     obj = post_json(url, {"model": model, "stream": False, **payload}, timeout=timeout)
@@ -249,7 +267,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     try:
         health0 = wait_health(args.port, proc, args.timeout)
         url = f"http://127.0.0.1:{args.port}/v1/chat/completions"
-        long_context = make_long_context(args.words)
+        run_id = f"dsv4-gate-{int(time.time() * 1000)}-{os.getpid()}"
+        long_context = (
+            make_long_context(args.words)
+            + f"\n\nGATE RUN ID = {run_id}. "
+            "This nonce is diagnostic-only and does not modify the anchor facts."
+        )
 
         cold_messages = [
             {
@@ -283,6 +306,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "temperature": 0.0,
                 "top_p": 1.0,
                 "top_k": 0,
+                "repetition_penalty": 1.0,
                 "enable_thinking": False,
                 "chat_template_kwargs": {"enable_thinking": False},
                 "skip_prefix_cache": True,
@@ -305,6 +329,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "temperature": 0.0,
                 "top_p": 1.0,
                 "top_k": 0,
+                "repetition_penalty": 1.0,
                 "enable_thinking": False,
                 "chat_template_kwargs": {"enable_thinking": False},
             },
@@ -327,8 +352,25 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "temperature": 0.0,
                 "top_p": 1.0,
                 "top_k": 0,
+                "repetition_penalty": 1.0,
                 "enable_thinking": False,
                 "chat_template_kwargs": {"enable_thinking": False},
+            },
+            timeout=600,
+        )
+        follow_no_cache = chat(
+            url,
+            model_name,
+            {
+                "messages": follow_messages,
+                "max_tokens": 192,
+                "temperature": 0.0,
+                "top_p": 1.0,
+                "top_k": 0,
+                "repetition_penalty": 1.0,
+                "enable_thinking": False,
+                "chat_template_kwargs": {"enable_thinking": False},
+                "skip_prefix_cache": True,
             },
             timeout=600,
         )
@@ -359,6 +401,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "DSV4_POOL_QUANT": env["DSV4_POOL_QUANT"],
                 "VMLX_METAL_WS_REJECT_PCT": env.get("VMLX_METAL_WS_REJECT_PCT"),
             },
+            "run_id": run_id,
             "log_path": str(log_path),
             "health_before": health0,
             "health_after": health1,
@@ -367,6 +410,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "cold_no_cache": cold_no_cache,
                 "store_turn": store,
                 "follow_cached": follow_cached,
+                "follow_no_cache": follow_no_cache,
                 "reasoning_max": reasoning_max,
             },
         }
@@ -378,6 +422,22 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 case["has_cerulean"] and case["has_45"] and case["has_ada"]
             ):
                 notes.append(f"{name}: missing anchor")
+        if cached_tokens(store) or cache_detail(store):
+            notes.append(
+                "store_turn: unexpected prefix cache hit; per-run nonce should "
+                "make the store prefill fresh"
+            )
+        if cached_tokens(follow_cached) <= 0:
+            notes.append("follow_cached: missing cached_tokens evidence")
+        if "dsv4" not in cache_detail(follow_cached):
+            notes.append("follow_cached: missing dsv4 cache_detail")
+        if cached_tokens(follow_no_cache) or cache_detail(follow_no_cache):
+            notes.append("follow_no_cache: unexpected prefix cache usage")
+        if follow_cached["content"].strip() != follow_no_cache["content"].strip():
+            notes.append(
+                "cached_vs_no_cache: follow-up output differs; inspect "
+                "cache_detail and log terminal-block state"
+            )
         if reasoning_max["reasoning"] and not reasoning_max["content"]:
             notes.append("reasoning_max: reasoning-only visible output")
         if notes:
