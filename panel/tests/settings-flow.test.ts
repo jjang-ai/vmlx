@@ -312,13 +312,6 @@ function buildCommandPreview(
                 : detected.nativeMtp.depth
             parts.push('--native-mtp-depth', String(configuredDepth || detected.nativeMtp.depth || 3))
             parts.push('--native-mtp-sampling-policy', mode === 'deterministic' ? 'deterministic-defaults' : 'compatible-only')
-            if (mode === 'deterministic') {
-                parts.push('--default-temperature', '0')
-                parts.push('--default-top-p', '1')
-                parts.push('--default-top-k', '0')
-                parts.push('--default-min-p', '0')
-                parts.push('--default-repetition-penalty', '1')
-            }
         }
     }
 
@@ -1005,16 +998,16 @@ describe('Native MTP', () => {
         },
     }
 
-    it('defaults native-MTP bundles to deterministic measured-depth launch settings', () => {
+    it('defaults native-MTP bundles to deterministic measured-depth launch policy without hidden sampler flags', () => {
         const out = preview({}, qwenMtpDetected)
 
         expect(getFlagValue(out, '--native-mtp-depth')).toBe('2')
         expect(getFlagValue(out, '--native-mtp-sampling-policy')).toBe('deterministic-defaults')
-        expect(getFlagValue(out, '--default-temperature')).toBe('0')
-        expect(getFlagValue(out, '--default-top-p')).toBe('1')
-        expect(getFlagValue(out, '--default-top-k')).toBe('0')
-        expect(getFlagValue(out, '--default-min-p')).toBe('0')
-        expect(getFlagValue(out, '--default-repetition-penalty')).toBe('1')
+        expect(hasFlag(out, '--default-temperature')).toBe(false)
+        expect(hasFlag(out, '--default-top-p')).toBe(false)
+        expect(hasFlag(out, '--default-top-k')).toBe(false)
+        expect(hasFlag(out, '--default-min-p')).toBe(false)
+        expect(hasFlag(out, '--default-repetition-penalty')).toBe(false)
     })
 
     it('lets a manual native-MTP depth override win over the measured default', () => {

@@ -414,13 +414,6 @@ function buildCommandPreview(
       const depth = Math.max(1, Math.min(3, Math.round(Number(configuredDepth || nativeMtp.depth || 3))))
       parts.push('--native-mtp-depth', depth.toString())
       parts.push('--native-mtp-sampling-policy', mode === 'deterministic' ? 'deterministic-defaults' : 'compatible-only')
-      if (mode === 'deterministic') {
-        parts.push('--default-temperature', '0')
-        parts.push('--default-top-p', '1')
-        parts.push('--default-top-k', '0')
-        parts.push('--default-min-p', '0')
-        parts.push('--default-repetition-penalty', '1')
-      }
     }
   }
 

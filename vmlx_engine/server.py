@@ -13518,8 +13518,6 @@ Examples:
             _default_top_k = 0
         if _default_min_p is None:
             _default_min_p = 0.0
-        if _default_repetition_penalty is None:
-            _default_repetition_penalty = 1.0
     if args.default_enable_thinking is not None:
         _default_enable_thinking = args.default_enable_thinking == "true"
 

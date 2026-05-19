@@ -289,7 +289,7 @@
       "thinkingAuto": "Auto",
       "thinkingOn": "On",
       "thinkingOff": "Off",
-      "thinkingHelp": "Auto: local vMLX keeps default reasoning on when the runtime supports it and disables it only for incompatible families. On: force thinking. Off: direct responses only.",
+      "thinkingHelp": "Auto: local vMLX keeps default reasoning on when the runtime supports it and disables it only for incompatible families. On: request thinking. Off: request direct responses.",
       "reasoningEffort": "Reasoning Effort",
       "effortLow": "Low",
       "effortMedium": "Medium",

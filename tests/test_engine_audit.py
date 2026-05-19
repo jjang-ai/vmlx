@@ -3114,7 +3114,7 @@ class TestZayaCCACachePolicy:
         assert cfg.think_in_template is False
         assert cfg.supports_thinking is True
 
-    def test_zaya_auto_thinking_enabled_but_no_think_prompt_stays_safe(self, tmp_path):
+    def test_zaya_auto_thinking_stays_unset_but_no_think_prompt_stays_safe(self, tmp_path):
         from vmlx_engine import server
 
         model_dir = self._write_zaya_fixture(tmp_path)
@@ -3132,9 +3132,9 @@ class TestZayaCCACachePolicy:
         finally:
             server._default_enable_thinking = old_default
 
-        assert resolved is True
+        assert resolved is None
 
-    def test_server_default_false_does_not_override_reasoning_on_runtime_default(self):
+    def test_server_default_false_is_explicit_and_request_off_still_wins(self):
         from vmlx_engine import server
 
         old_default = server._default_enable_thinking
@@ -3159,7 +3159,7 @@ class TestZayaCCACachePolicy:
         finally:
             server._default_enable_thinking = old_default
 
-        assert resolved is True
+        assert resolved is False
         assert explicit_off is False
 
     def test_server_default_false_respected_for_known_reasoning_model(self, tmp_path):
@@ -3185,14 +3185,13 @@ class TestZayaCCACachePolicy:
 
         assert resolved is False
 
-    def test_minimax_auto_does_not_force_thinking_but_explicit_on_still_works(
+    def test_minimax_auto_stays_unset_and_explicit_thinking_still_works(
         self, tmp_path
     ):
-        """MiniMax supports thinking, but omitted/Auto must not open it.
+        """MiniMax supports thinking, but omitted/Auto must stay unset.
 
-        The native MiniMax template opens `<think>` when enable_thinking is
-        omitted. Normal app/API chat should stay on the visible rail unless
-        the user explicitly turns thinking on.
+        The engine must not hide runtime/template issues behind a family-level
+        forced off rail. Explicit user thinking controls still win.
         """
         from vmlx_engine import server
         from vmlx_engine.model_config_registry import get_model_config_registry
@@ -3225,19 +3224,17 @@ class TestZayaCCACachePolicy:
 
         assert cfg.supports_thinking is True
         assert cfg.reasoning_parser == "qwen3"
-        assert auto_resolved is False
+        assert auto_resolved is None
         assert explicit_on is True
 
     @pytest.mark.parametrize("model_type", ["qwen3_5", "qwen3_5_moe"])
-    def test_qwen36_auto_does_not_force_thinking_but_explicit_on_still_works(
+    def test_qwen36_auto_stays_unset_and_explicit_thinking_still_works(
         self, tmp_path, model_type
     ):
-        """Qwen3.6 supports thinking, but omitted/Auto must stay visible.
+        """Qwen3.6 supports thinking, but omitted/Auto must stay unset.
 
-        Live Qwen3.6 MXFP8-MTP proof showed short omitted/default requests can
-        spend the whole response in the reasoning rail. Normal app/API chat
-        should produce visible content unless the user explicitly enables
-        thinking.
+        Visibility/coherency issues must be fixed in template/runtime handling,
+        not by converting Auto into a hidden off rail.
         """
         from vmlx_engine import server
         from vmlx_engine.model_config_registry import get_model_config_registry
@@ -3271,10 +3268,10 @@ class TestZayaCCACachePolicy:
         assert cfg.family_name == model_type
         assert cfg.supports_thinking is True
         assert cfg.reasoning_parser == "qwen3"
-        assert auto_resolved is False
+        assert auto_resolved is None
         assert explicit_on is True
 
-    def test_gemma4_tools_still_auto_disable_thinking(self):
+    def test_gemma4_tools_auto_stays_unset_and_explicit_thinking_still_works(self):
         from vmlx_engine import server
 
         old_default = server._default_enable_thinking
@@ -3299,7 +3296,7 @@ class TestZayaCCACachePolicy:
         finally:
             server._default_enable_thinking = old_default
 
-        assert resolved is False
+        assert resolved is None
         assert explicit_on is True
 
     def test_gemma4_supports_thinking_is_explicit_not_implicit(self):
@@ -5158,7 +5155,8 @@ class TestTurboQuantKVTelemetry:
         sessions_outside_native_mtp = (
             sessions_source[:native_mtp_idx] + sessions_source[generation_defaults_idx:]
         )
-        assert "args.push('--default-min-p', '0')" in native_mtp_launch_block
+        assert "args.push('--native-mtp-sampling-policy'" in native_mtp_launch_block
+        assert "args.push('--default-min-p'" not in native_mtp_launch_block
         assert "args.push('--default-min-p'" not in sessions_outside_native_mtp
         assert "args.push('--no-continuous-batching')" in sessions_source
         assert "Auto-enable continuous batching when prefix cache is on" not in sessions_source
@@ -5222,14 +5220,26 @@ class TestTurboQuantKVTelemetry:
         preview_outside_native = (
             preview_source[:preview_native_idx] + preview_source[preview_gen_idx:]
         )
-        assert "args.push('--default-repetition-penalty', '1')" in sessions_native_block
-        assert "parts.push('--default-repetition-penalty', '1')" in preview_native_block
+        for flag in (
+            "--default-temperature",
+            "--default-top-p",
+            "--default-top-k",
+            "--default-min-p",
+            "--default-repetition-penalty",
+        ):
+            assert f"args.push('{flag}'" not in sessions_native_block
+            assert f"parts.push('{flag}'" not in preview_native_block
         assert "args.push('--default-repetition-penalty'" not in sessions_outside_native
         assert "parts.push('--default-repetition-penalty'" not in preview_outside_native
         assert "IMAGE_ADDITIONAL_ARG_BLOCKLIST" in sessions_source
         assert "IMAGE_ADDITIONAL_ARG_BLOCKLIST" in preview_source
         assert "DSV4_ADDITIONAL_ARG_BLOCKLIST" in sessions_source
         assert "DSV4_ADDITIONAL_ARG_BLOCKLIST" in preview_source
+
+        cli_source = Path("./vmlx_engine/cli.py").read_text()
+        server_source = Path("./vmlx_engine/server.py").read_text()
+        assert "server._default_repetition_penalty = 1.0" not in cli_source
+        assert "_default_repetition_penalty = 1.0" not in server_source
 
     def test_panel_startup_defaults_sanitize_incompatible_saved_modes(self):
         sessions_source = Path("./panel/src/main/sessions.ts").read_text()

@@ -450,8 +450,6 @@ def serve_command(args):
                 server._default_top_k = 0
             if server._default_min_p is None:
                 server._default_min_p = 0.0
-            if server._default_repetition_penalty is None:
-                server._default_repetition_penalty = 1.0
 
     # Apply default enable_thinking
     _det = getattr(args, 'default_enable_thinking', None)
@@ -803,7 +801,7 @@ def serve_command(args):
             if policy == "compatible-only" and mtp_status.get("runtime_available"):
                 print("    Request gate: temperature=0 and repetition_penalty=1.0 required")
             elif policy == "deterministic-defaults" and mtp_status.get("runtime_available"):
-                print("    Startup defaults: temperature=0, top_p=1, top_k=0, min_p=0, repetition=1")
+                print("    Startup defaults: temperature=0, top_p=1, top_k=0, min_p=0")
     except Exception:
         pass
     if getattr(args, 'chat_template', None):
@@ -2315,9 +2313,8 @@ Examples:
         default="compatible-only",
         help="Native MTP request policy. compatible-only leaves sampling defaults alone and "
              "uses MTP only for deterministic requests. deterministic-defaults is used by "
-             "the app for native-MTP sessions together with --default-temperature 0, "
-             "--default-top-p 1, --default-top-k 0, --default-min-p 0, and "
-             "--default-repetition-penalty 1.",
+             "the app for native-MTP sessions to set deterministic temperature/top-p/top-k/min-p "
+             "without applying repetition-penalty guards.",
     )
     serve_parser.add_argument(
         "--disable-native-mtp",

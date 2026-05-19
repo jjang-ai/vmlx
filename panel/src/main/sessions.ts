@@ -1057,8 +1057,8 @@ export class SessionManager extends EventEmitter {
           // over stale saved `isMultimodal=false` from older sessions, while a
           // forceTextOnly policy must clear stale true rows. The latter is used
           // for affine-JANG Qwen hybrid until its mlx_vlm M-RoPE path is fixed.
-          // Smelt is handled later at launch time because it intentionally
-          // forces text-only loading.
+          // Smelt is handled later at launch time because its partial expert
+          // support uses text-only loading.
           if (freshConfig.forceTextOnly === true) {
             config.isMultimodal = false
           } else if (freshConfig.isMultimodal === true) {
@@ -2640,13 +2640,6 @@ export class SessionManager extends EventEmitter {
         const depth = Math.max(1, Math.min(3, Math.round(Number(configuredDepth || nativeMtp.depth || 3))))
         args.push('--native-mtp-depth', depth.toString())
         args.push('--native-mtp-sampling-policy', mode === 'deterministic' ? 'deterministic-defaults' : 'compatible-only')
-        if (mode === 'deterministic') {
-          args.push('--default-temperature', '0')
-          args.push('--default-top-p', '1')
-          args.push('--default-top-k', '0')
-          args.push('--default-min-p', '0')
-          args.push('--default-repetition-penalty', '1')
-        }
       }
     }
 

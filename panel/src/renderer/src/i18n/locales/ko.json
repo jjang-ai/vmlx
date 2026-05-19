@@ -289,7 +289,7 @@
       "thinkingAuto": "자동",
       "thinkingOn": "켜기",
       "thinkingOff": "끄기",
-      "thinkingHelp": "자동: 로컬 vMLX는 런타임이 지원하면 기본적으로 추론을 켜고, 호환되지 않는 계열에서만 끕니다. 켜기: 사고를 강제합니다. 끄기: 직접 응답만 합니다.",
+      "thinkingHelp": "자동: 로컬 vMLX는 런타임이 지원하면 기본적으로 추론을 켜고, 호환되지 않는 계열에서만 끕니다. 켜기: 사고를 요청합니다. 끄기: 직접 응답을 요청합니다.",
       "reasoningEffort": "추론 수준",
       "effortLow": "낮음",
       "effortMedium": "중간",

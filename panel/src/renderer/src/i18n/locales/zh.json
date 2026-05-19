@@ -289,7 +289,7 @@
       "thinkingAuto": "自动",
       "thinkingOn": "开启",
       "thinkingOff": "关闭",
-      "thinkingHelp": "自动:本地 vMLX 在运行时支持时默认开启推理,只对不兼容的模型族关闭。开启:强制思考。关闭:仅直接回复。",
+      "thinkingHelp": "自动:本地 vMLX 在运行时支持时默认开启推理,只对不兼容的模型族关闭。开启:请求思考。关闭:请求直接回复。",
       "reasoningEffort": "推理强度",
       "effortLow": "低",
       "effortMedium": "中",

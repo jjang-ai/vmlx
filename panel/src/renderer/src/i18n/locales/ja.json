@@ -289,7 +289,7 @@
       "thinkingAuto": "自動",
       "thinkingOn": "オン",
       "thinkingOff": "オフ",
-      "thinkingHelp": "自動: ローカル vMLX はランタイムが対応する場合は既定で推論をオンにし、非対応ファミリーだけオフにします。オン: 思考を強制。オフ: 直接回答のみ。",
+      "thinkingHelp": "自動: ローカル vMLX はランタイムが対応する場合は既定で推論をオンにし、非対応ファミリーだけオフにします。オン: 思考を要求。オフ: 直接回答を要求。",
       "reasoningEffort": "推論の度合い",
       "effortLow": "低",
       "effortMedium": "中",

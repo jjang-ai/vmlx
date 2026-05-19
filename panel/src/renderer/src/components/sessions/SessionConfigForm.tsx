@@ -640,7 +640,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                     </p>
                     <ul className="list-disc pl-5 space-y-2 text-muted-foreground">
                       <li><strong>KV Quantization:</strong> vMLX securely isolates Mamba layers. If you turn on KV Quantization (e.g. q8), it will safely compress the Attention layers while leaving the internal Mamba/SSM memory at full precision, ensuring no corruption or quality loss.</li>
-                      <li><strong>Paged Cache Requirement:</strong> Since cumulative SSM states cannot be safely stored as continuous memory-aware blocks, the engine automatically forces <code>--use-paged-cache</code> internally for these models.</li>
+                      <li><strong>Paged Cache Requirement:</strong> Since cumulative SSM states cannot be safely stored as continuous memory-aware blocks, the engine uses <code>--use-paged-cache</code> for these models when prefix caching is enabled.</li>
                     </ul>
                   </div>
 
@@ -1018,7 +1018,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         </Field>
         <SelectField
           label="Multimodal Support (VLM)"
-          tooltip="Vision-Language Model mode for models like Qwen2-VL, Qwen3-VL, Pixtral, InternVL, or LLaVA. Auto-detected VLMs launch with the MLLM scheduler even if an older saved session says off. Smelt and documented unsafe runtimes force text-only loading."
+          tooltip="Vision-Language Model mode for models like Qwen2-VL, Qwen3-VL, Pixtral, InternVL, or LLaVA. Auto-detected VLMs launch with the MLLM scheduler even if an older saved session says off. Smelt and documented unsafe runtimes use text-only loading."
           value={dsv4Active || smeltActive || detectedForceTextOnly ? 'off' : config.isMultimodal === true ? 'on' : config.isMultimodal === false ? 'off' : 'auto'}
           onChange={v => onChange('isMultimodal', v === 'on' ? true : v === 'off' ? false : undefined)}
           options={[
@@ -1032,13 +1032,13 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           <InfoNote text="DSV4 Flash is served through the text runtime. Image/video controls stay hidden because this bundle has no VL processor path." />
         )}
         {smeltActive && (
-          <IncompatWarning text="VLM is disabled when Smelt Mode is active. Smelt forces text-only loading for partial expert support." />
+          <IncompatWarning text="VLM is disabled when Smelt Mode is active. Smelt uses text-only loading for partial expert support." />
         )}
         {detectedForceTextOnly && (
           <IncompatWarning text="This model has media metadata, but vMLX is using the text runtime because its current VLM language path is not production-safe. Use an MXFP4 or JANGTQ/MXTQ variant for image/video input." />
         )}
         {!dsv4Active && !smeltActive && !detectedForceTextOnly && config.isMultimodal === true && (
-          <InfoNote text="VLM mode forced ON — the MLLM scheduler handles image/video processing with full prefix cache, paged KV cache, and KV quantization support." />
+          <InfoNote text="VLM mode is active — the MLLM scheduler handles image/video processing with full prefix cache, paged KV cache, and KV quantization support." />
         )}
         {!dsv4Active && !smeltActive && !detectedForceTextOnly && config.isMultimodal === false && (
           <InfoNote text="VLM mode is off only when the model is not auto-detected as multimodal. Detected VLM bundles launch with image/video support." />
@@ -1106,7 +1106,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           defaultValue={3}
           disabled={nativeMtpMode === 'off'}
         />
-        <InfoNote text={`Detected scope: ${detectedNativeMtp?.runtimeScope || 'text'}; depth source: ${detectedNativeMtp?.depthSource || 'default'}. Paged cache remains forced for hybrid cache bundles while prefix cache is enabled so KV blocks and SSM state stay in one cache contract.`} />
+        <InfoNote text={`Detected scope: ${detectedNativeMtp?.runtimeScope || 'text'}; depth source: ${detectedNativeMtp?.depthSource || 'default'}. Hybrid cache bundles use paged cache while prefix cache is enabled so KV blocks and SSM state stay in one cache contract.`} />
       </Section>
 
       {/* Speculative Decoding */}

@@ -289,7 +289,7 @@
       "thinkingAuto": "Auto",
       "thinkingOn": "Activado",
       "thinkingOff": "Desactivado",
-      "thinkingHelp": "Auto: vMLX local mantiene el razonamiento activado por defecto cuando el runtime lo admite y lo desactiva solo en familias incompatibles. Activado: fuerza el pensamiento. Desactivado: solo respuestas directas.",
+      "thinkingHelp": "Auto: vMLX local mantiene el razonamiento activado por defecto cuando el runtime lo admite y lo desactiva solo en familias incompatibles. Activado: solicita pensamiento. Desactivado: solicita respuestas directas.",
       "reasoningEffort": "Esfuerzo de razonamiento",
       "effortLow": "Bajo",
       "effortMedium": "Medio",
