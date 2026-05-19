@@ -834,6 +834,60 @@ class TestToolParserConcurrency:
         finally:
             srv._enable_auto_tool_choice = old_val
 
+    def test_dsml_issue_165_server_tool_call_arguments_are_not_empty_or_raw(self):
+        """DSV4 DSML repair must survive the server's OpenAI ToolCall wrapper."""
+        import json
+
+        import vmlx_engine.server as srv
+        from vmlx_engine.tool_parsers.dsml_tool_parser import DSML_PREFIX
+
+        request = srv.ChatCompletionRequest(
+            model="dsv4-test",
+            messages=[
+                srv.Message(
+                    role="user",
+                    content="Use read_file for docs/vendor_memo.md.",
+                )
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"],
+                        },
+                    },
+                }
+            ],
+        )
+        output = (
+            f'<{DSML_PREFIX}tool_calls>\n'
+            f'<{DSML_PREFIX}invoke name="read_file">\n'
+            '    <param name="path">docs/vendor_memo.md</param>\n'
+            '</inv>'
+        )
+
+        old_auto = srv._enable_auto_tool_choice
+        old_parser = srv._tool_call_parser
+        try:
+            srv._enable_auto_tool_choice = True
+            srv._tool_call_parser = "deepseek_v4"
+            cleaned, tool_calls = srv._parse_tool_calls_with_parser(output, request)
+        finally:
+            srv._enable_auto_tool_choice = old_auto
+            srv._tool_call_parser = old_parser
+
+        assert cleaned == ""
+        assert tool_calls and len(tool_calls) == 1
+        assert tool_calls[0].function.name == "read_file"
+        assert json.loads(tool_calls[0].function.arguments) == {
+            "path": "docs/vendor_memo.md"
+        }
+        assert DSML_PREFIX not in tool_calls[0].function.arguments
+
 
 class TestCacheTruncation:
     """Test N-1 token truncation logic for cache storage."""
