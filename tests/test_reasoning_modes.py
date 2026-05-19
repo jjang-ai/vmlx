@@ -608,6 +608,59 @@ def test_minimax_m2_preserves_sampling_values_without_family_floor(tmp_path, mon
     assert server._resolve_repetition_penalty(1.25, enable_thinking=True) == 1.25
 
 
+def test_enable_thinking_auto_stays_unset_for_reasoning_families(monkeypatch):
+    """Auto is not a hidden behavior choice.
+
+    The adapters and UI may omit enable_thinking to ask the native
+    tokenizer/template/runtime to decide. The server must not convert that
+    omission into family-specific forced on/off behavior.
+    """
+    from vmlx_engine import server
+
+    monkeypatch.setattr(server, "_default_enable_thinking", None)
+
+    for model_key in ("gemma4", "minimax", "qwen3_5", "qwen3_5_moe", "unknown"):
+        assert server._resolve_enable_thinking(
+            request_value=None,
+            ct_kwargs={},
+            tools_present=model_key == "gemma4",
+            model_key=model_key,
+            engine=None,
+            auto_detect=True,
+        ) is None
+
+
+def test_enable_thinking_explicit_values_still_win_for_reasoning_families(monkeypatch):
+    from vmlx_engine import server
+
+    monkeypatch.setattr(server, "_default_enable_thinking", None)
+
+    assert server._resolve_enable_thinking(
+        request_value=False,
+        ct_kwargs={},
+        tools_present=True,
+        model_key="gemma4",
+        engine=None,
+        auto_detect=True,
+    ) is False
+    assert server._resolve_enable_thinking(
+        request_value=True,
+        ct_kwargs={},
+        tools_present=False,
+        model_key="qwen3_5",
+        engine=None,
+        auto_detect=True,
+    ) is True
+    assert server._resolve_enable_thinking(
+        request_value=None,
+        ct_kwargs={"enable_thinking": False},
+        tools_present=False,
+        model_key="minimax",
+        engine=None,
+        auto_detect=True,
+    ) is False
+
+
 @pytest.mark.asyncio
 async def test_capabilities_reports_loaded_scheduler_cache(monkeypatch):
     """The panel gates cache UI from /capabilities, so this must reflect the

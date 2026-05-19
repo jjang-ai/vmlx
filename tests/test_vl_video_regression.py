@@ -1774,28 +1774,20 @@ class TestEnableThinkingPriorityChain:
 class TestToolsReasoningInteraction:
     """Tools + reasoning must interact correctly:
 
-    - Gemma 4 + tools → auto enable_thinking=False (mlxstudio#71)
+    - Gemma 4 + tools → preserve model/request thinking policy
     - Other families + tools → keep default thinking (unless user override)
     - Mistral 4 + tools + thinking=True → reasoning_effort=high auto-map
     - Prior assistant messages with <think>…</think>+tool_calls: strip must
       NOT drop tool_calls (NO-REGRESSION-CHECKLIST line 996)
     """
 
-    def test_gemma4_tools_sets_thinking_false_three_paths(self):
-        """After iter 8 consolidation, Gemma4+tools auto-off lives in
-        _resolve_enable_thinking — called from all 3 API paths. Verify
-        both the branch exists and the helper is wired up."""
+    def test_gemma4_tools_preserve_reasoning_policy_three_paths(self):
+        """Gemma4+tools must not have a family branch that flips thinking off."""
         src = Path("vmlx_engine/server.py").read_text()
-        import re as _re
-        # Branch still exists (inside the helper now)
-        branch = _re.search(
-            r'_family_l\s+in\s+\(\s*["\']gemma4["\'],\s*["\']gemma4_text["\']\s*\)',
-            src,
+        assert 'in ("gemma4", "gemma4_text")' not in src, (
+            "Gemma 4 tools must not silently force the reasoning rail off"
         )
-        assert branch is not None, (
-            "Gemma 4 family branch missing from _resolve_enable_thinking"
-        )
-        # Helper is called from ≥3 sites (definition + Anthropic/Ollama/OpenAI)
+        # Helper is called from >=3 sites (definition + Anthropic/Ollama/OpenAI).
         helper_calls = src.count("_resolve_enable_thinking(")
         assert helper_calls >= 4, (
             f"_resolve_enable_thinking must be called from 3 API paths, "
@@ -6968,11 +6960,11 @@ class TestZombieCodeConsolidation:
             request_value=None, ct_kwargs={"enable_thinking": False},
             tools_present=False, model_key="x",
         ) is False
-        # None everywhere → reasoning-on vMLX API default
+        # None everywhere → leave Auto unset so native template/runtime decides.
         assert _resolve_enable_thinking(
             request_value=None, ct_kwargs={},
             tools_present=False, model_key="x",
-        ) is True
+        ) is None
 
     def test_enable_thinking_duplicates_eliminated(self):
         """Guard: fail if server.py grows back the 4-way copy-pasted

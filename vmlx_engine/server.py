@@ -1319,22 +1319,15 @@ def _resolve_enable_thinking(
 ) -> bool | None:
     """Resolve enable_thinking using the shared precedence chain.
 
-    Precedence: per-request > chat_template_kwargs > incompatible family guard >
-    unsupported-family guard > server default true > model/template auto-detect
-    > true.
+    Precedence: unsupported-family guard > per-request > chat_template_kwargs >
+    explicit server default > Auto.
 
     Native API client defaults such as Ollama ``think:false`` must not force
-    reasoning off globally. vMLX defaults reasoning on for supported families
-    across API surfaces, while preserving explicit user opt-outs and hard
-    family contracts such as Ling/Bailing's supports_thinking=False.
-
-    Returns a concrete bool so every API surface reaches the same effective
-    thinking policy.
-
-    auto_detect=True mirrors the OpenAI path which, after the three
-    upstream layers miss, inspects registry.think_in_template,
-    registry.reasoning_parser, and tokenizer.has_thinking to infer a
-    default.
+    reasoning off globally. Omitted controls must also not force reasoning on:
+    Auto is represented as ``None`` so the native tokenizer/template/runtime
+    default decides. Explicit user/default settings and hard family contracts
+    such as Ling/Bailing's supports_thinking=False still produce a concrete
+    bool.
     """
     _mc = None
     try:
@@ -1355,53 +1348,12 @@ def _resolve_enable_thinking(
         return request_value
     if "enable_thinking" in ct_kwargs:
         return bool(ct_kwargs["enable_thinking"])
-    if tools_present and _family_l in ("gemma4", "gemma4_text"):
-        # mlxstudio#71: Gemma 4 emits a native thought channel before tools and
-        # can truncate the actual tool call under small budgets. This is an
-        # architecture-specific incompatible row, so it stays off by default
-        # only when tools are present; explicit request/template values above
-        # still win.
-        return False
-    if _family_l in ("minimax", "minimax_m2", "minimax_m2_5"):
-        # MiniMax M2/M2.5/M2.7 templates open `<think>` whenever
-        # enable_thinking is omitted. Live MiniMax-M2.7-JANGTQ_K proof showed
-        # omission can spend the full small response budget in reasoning-only
-        # output and can take minutes on a cold first turn, while explicit
-        # enable_thinking=false returns the same visible answer immediately.
-        # This is a default-policy correction, not a clamp: explicit
-        # enable_thinking=true above still opens the thinking rail.
-        return False
-    if _family_l in ("qwen3_5", "qwen3_5_moe"):
-        # Qwen3.6 / Qwen3.5 templates support a reasoning rail, but live
-        # Qwen3.6-35B MXFP8-MTP proof showed omitted/default chat requests can
-        # spend the whole short response budget in reasoning-only output. Keep
-        # normal app/API chat on the visible rail unless the request or chat
-        # template kwargs explicitly enable thinking above.
-        return False
     if _default_enable_thinking is True:
         return True
     if _default_enable_thinking is False:
-        # vMLX's production default is reasoning-on for unknown models to
-        # avoid accidentally breaking first-run behavior. A stale
-        # --default-enable-thinking=false from older profiles should *not*
-        # override known model configs, but can still fall back to on for
-        # genuinely unknown models.
-        return False if getattr(_mc, "family_name", None) not in (None, "unknown") else True
+        return False
 
-    if auto_detect:
-        _enable = bool(getattr(_mc, "think_in_template", False)) if _mc else False
-        if not _enable and _mc is not None and getattr(_mc, "reasoning_parser", None):
-            _enable = True
-        if not _enable and engine is not None:
-            try:
-                if getattr(engine.tokenizer, "has_thinking", False):
-                    _enable = True
-            except Exception:
-                pass
-        if _enable:
-            return True
-
-    return True
+    return None
 
 
 # Global MCP manager
