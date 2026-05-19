@@ -46,6 +46,12 @@ describe("Ollama gateway parity contracts", () => {
     expect(source).toContain("openaiBody.chat_template_kwargs = parsed.chat_template_kwargs");
   });
 
+  it("does not force enable_thinking when Ollama thinking controls are omitted", () => {
+    expect(source).toContain("private applyOllamaThinking");
+    expect(source).not.toContain("Omitted thinking controls default on");
+    expect(source).not.toContain("openaiBody.enable_thinking = true;");
+  });
+
   it("routes Ollama generate through chat templates unless raw=true", () => {
     expect(source).toContain("const useRawCompletion = parsed.raw === true");
     expect(source).toContain("prompt: parsed.prompt || \"\"");

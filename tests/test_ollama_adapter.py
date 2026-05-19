@@ -34,8 +34,21 @@ def test_ollama_generate_default_uses_chat_template_request_shape():
     assert req["temperature"] == 0
     assert req["top_p"] == 1
     assert req["repetition_penalty"] == 1.1
-    assert req["enable_thinking"] is True
+    assert "enable_thinking" not in req
     assert req["response_format"] == {"type": "json_object"}
+
+
+def test_ollama_chat_omits_enable_thinking_when_think_is_omitted():
+    from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
+
+    req = ollama_chat_to_openai(
+        {
+            "model": "zaya",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+    )
+
+    assert "enable_thinking" not in req
 
 
 def test_ollama_chat_accepts_enable_thinking_extension():

@@ -56,9 +56,9 @@ def clean_output_text(text: str) -> str:
     """
     Clean model output by removing special tokens.
 
-    Keeps <think>...</think> blocks intact for reasoning models.
-    Adds opening <think> tag if missing (happens when thinking is enabled
-    in the prompt template but the tag is part of the prompt, not output).
+    Keeps <think>...</think> blocks intact for reasoning models. This helper
+    only removes known special tokens; it must not synthesize missing reasoning
+    markers because that hides template/parser defects from live tests.
 
     Args:
         text: Raw model output
@@ -92,11 +92,6 @@ def clean_output_text(text: str) -> str:
         text = text[len("thought\n"):]
 
     text = text.strip()
-
-    # Add opening <think> tag if response has closing but not opening
-    # This happens when enable_thinking=True in the chat template
-    if "</think>" in text and not text.lstrip().startswith("<think>"):
-        text = "<think>" + text
 
     return text
 

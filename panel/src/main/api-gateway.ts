@@ -816,9 +816,9 @@ export class ApiGateway extends EventEmitter {
   }
 
   private applyOllamaThinking(parsed: any, openaiBody: any): void {
-    // Omitted thinking controls default on for capable vMLX chat models.
-    // Native Ollama `think:false` is an explicit opt-out and must not be
-    // overwritten by that default.
+    // Omitted thinking controls stay omitted so the model's native
+    // tokenizer/template/runtime default decides. Native Ollama `think:false`
+    // is an explicit opt-out and must not be overwritten.
     if (typeof parsed?.think === "boolean") {
       openaiBody.enable_thinking = parsed.think;
     } else if (
@@ -836,7 +836,6 @@ export class ApiGateway extends EventEmitter {
       ) {
         return;
       }
-      openaiBody.enable_thinking = true;
     }
   }
 

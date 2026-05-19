@@ -70,10 +70,10 @@ class TestCleanOutputText:
         assert "</think>" in result
         assert "The answer is 42." in result
 
-    def test_adds_missing_opening_think_tag(self):
+    def test_does_not_synthesize_missing_opening_think_tag(self):
         text = "Some thinking content.</think>The answer is 42."
         result = clean_output_text(text)
-        assert result.startswith("<think>")
+        assert not result.startswith("<think>")
         assert "</think>" in result
 
     def test_no_extra_think_tag_when_already_present(self):
