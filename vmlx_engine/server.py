@@ -5349,6 +5349,12 @@ async def health():
     return result
 
 
+@app.get("/health.mtp")
+async def health_mtp():
+    """Native MTP status endpoint used by the app and release gates."""
+    return _model_mtp_status_with_loaded_runtime(_model_path or _model_name)
+
+
 def _get_scheduler():
     """Get the scheduler from the engine, or None if not available."""
     if _engine is None:

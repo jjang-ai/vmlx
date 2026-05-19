@@ -6539,6 +6539,32 @@ class TestTurboQuantKVTelemetry:
         assert capabilities["routing"]["trained_active_experts"] == 6
         assert capabilities["routing"]["effective_active_experts_source"] == "trained_default"
 
+    @pytest.mark.asyncio
+    async def test_health_mtp_endpoint_returns_loaded_runtime_status(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "qwen-mtp-test")
+        monkeypatch.setattr(
+            server,
+            "_model_mtp_status_with_loaded_runtime",
+            lambda bundle_path: {
+                "status": "native_runtime_active",
+                "runtime_active": True,
+                "runtime_scope": "text+vl",
+                "bundle_path": bundle_path,
+            },
+        )
+
+        payload = await server.health_mtp()
+
+        assert payload["status"] == "native_runtime_active"
+        assert payload["runtime_active"] is True
+        assert payload["runtime_scope"] == "text+vl"
+        assert payload["bundle_path"] == str(tmp_path)
+
     def test_mlx_metal_na_status_handles_namespace_mlx_package(self, monkeypatch, tmp_path):
         """MLX can be a namespace package with mlx.__file__ == None.
 
