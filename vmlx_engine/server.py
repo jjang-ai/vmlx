@@ -5134,13 +5134,18 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
             ssm_entries = len(getattr(ssm_cache, "_store", {}) or {})
         except Exception:
             pass
-        hybrid_tq_override = str(
-            os.environ.get("VMLX_ALLOW_HYBRID_KV_QUANT", "")
-        ).lower() in ("1", "true", "yes", "on")
+        hybrid_live_tq_policy = getattr(
+            scheduler, "_hybrid_live_tq_policy", None
+        )
         hybrid_tq_enabled = bool(
-            hybrid_tq_override
-            and getattr(getattr(scheduler, "config", None), "kv_cache_quantization", "none")
-            != "none"
+            getattr(scheduler, "_tq_active", False)
+            and hybrid_live_tq_policy == "attention_kv_only"
+        )
+        hybrid_tq_attention_layers = list(
+            getattr(scheduler, "_hybrid_live_tq_attention_layers", []) or []
+        )
+        hybrid_tq_companion_layers = list(
+            getattr(scheduler, "_hybrid_live_tq_companion_layers", []) or []
         )
         try:
             stored_kv_bits = int(getattr(scheduler, "_kv_cache_bits", 0) or 0)
@@ -5162,10 +5167,18 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
             "generic_turboquant_kv": {
                 "enabled": hybrid_tq_enabled,
                 "reason": (
-                    "hybrid_ssm_state_override"
+                    "hybrid_attention_kv_only"
                     if hybrid_tq_enabled
                     else "hybrid_ssm_state"
                 ),
+            },
+            "live_attention_tq_kv": {
+                "enabled": hybrid_tq_enabled,
+                "mode": "live_decode" if hybrid_tq_enabled else None,
+                "applies_to": "attention_kv_layers_only",
+                "ssm_policy": "native_full_precision_companion_state",
+                "attention_layers": hybrid_tq_attention_layers,
+                "companion_layers": hybrid_tq_companion_layers,
             },
             "attention_kv_storage_quantization": {
                 "enabled": stored_kv_bits > 0,

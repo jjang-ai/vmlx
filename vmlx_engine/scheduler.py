@@ -54,6 +54,7 @@ from .utils.head_dim_detection import (
     choose_supported_kv_group_size,
     detect_cache_head_dims,
 )
+from .utils.hybrid_tq_cache import is_turboquant_make_cache
 from .utils.ssm_companion_disk_store import SSMCompanionDiskStore
 from .utils.memory_limits import (
     get_effective_metal_working_set_bytes,
@@ -363,9 +364,19 @@ class Scheduler:
         self._long_repetition_context = self._model_type_for_runtime in {
             "deepseek_v4",
         }
-        self._tq_active = getattr(model, "make_cache", None) and getattr(
-            model.make_cache, "__name__", ""
-        ) in ("_tq_make_cache", "_turboquant_make_cache")
+        _model_make_cache = getattr(model, "make_cache", None)
+        self._tq_active = bool(
+            _model_make_cache and is_turboquant_make_cache(_model_make_cache)
+        )
+        self._hybrid_live_tq_policy = getattr(
+            _model_make_cache, "_vmlx_hybrid_tq_policy", None
+        )
+        self._hybrid_live_tq_attention_layers = list(
+            getattr(_model_make_cache, "_vmlx_hybrid_tq_attention_layers", ()) or []
+        )
+        self._hybrid_live_tq_companion_layers = list(
+            getattr(_model_make_cache, "_vmlx_hybrid_tq_companion_layers", ()) or []
+        )
         self._tq_batch_api = self._turboquant_cache_supports_batch_api(model)
         self._log_runtime_cache_contract(model)
         if self._tq_active and self._tq_batch_api:
@@ -436,13 +447,27 @@ class Scheduler:
             and not self._uses_zaya_cache
             and self.config.kv_cache_quantization != "none"
         ):
-            logger.info(
-                "Hybrid/path-dependent cache model detected — using q4/q8 only at cache storage boundaries "
-                "(attention KVCache layers). Hybrid non-KV state is preserved full precision "
-                "and restored through the SSM companion cache or clean-prefill rederive "
-                "(stored_kv_quantization=%s).",
-                self.config.kv_cache_quantization,
-            )
+            if (
+                self._tq_active
+                and self._hybrid_live_tq_policy == "attention_kv_only"
+            ):
+                logger.info(
+                    "Hybrid/path-dependent cache model detected — live "
+                    "TurboQuant KV active for attention KVCache layers; q4/q8 "
+                    "remains storage-boundary quantization for prefix/paged/L2. "
+                    "Hybrid non-KV state is preserved full precision and "
+                    "restored through the SSM companion cache or clean-prefill "
+                    "rederive (stored_kv_quantization=%s).",
+                    self.config.kv_cache_quantization,
+                )
+            else:
+                logger.info(
+                    "Hybrid/path-dependent cache model detected — using q4/q8 only at cache storage boundaries "
+                    "(attention KVCache layers). Hybrid non-KV state is preserved full precision "
+                    "and restored through the SSM companion cache or clean-prefill rederive "
+                    "(stored_kv_quantization=%s).",
+                    self.config.kv_cache_quantization,
+                )
 
         # Mixed-attention models (Gemma 4 = sliding + full) require preserving
         # RotatingKVCache metadata through truncation, paged blocks, and L2

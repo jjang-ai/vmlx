@@ -3297,15 +3297,16 @@ class TestStartupCompatibilityGuards:
         assert 'os.environ["VMLX_DISABLE_TQ_KV"] = "1"' in cli_source
         assert "VMLINUX_DISABLE_TQ_KV" not in cli_source
 
-    def test_hybrid_auto_mode_keeps_stored_kv_quant_but_skips_live_tq(self):
-        """Hybrid auto mode must live-disable TQ while keeping attention-KV storage q4."""
+    def test_hybrid_auto_mode_enables_qwen_selective_live_tq_only(self):
+        """Qwen3.6 hybrid auto mode TQs attention KV while preserving SSM state."""
         cli_source = Path("./vmlx_engine/cli.py").read_text()
         scheduler_source = Path("./vmlx_engine/scheduler.py").read_text()
         tokenizer_source = Path("./vmlx_engine/utils/tokenizer.py").read_text()
 
         assert 'getattr(_mc, "cache_type", None) == "hybrid"' in cli_source
-        assert "Hybrid/path-dependent cache model detected" in cli_source
-        assert "os.environ.pop(\"VMLX_FORCE_TQ_AUTO\", None)" in cli_source
+        assert "Qwen3.6 hybrid/path-dependent cache model detected" in cli_source
+        assert "attention KVCache" in cli_source
+        assert "Only Qwen3.6 has a selective live" in cli_source
         hybrid_idx = cli_source.index('getattr(_mc, "cache_type", None) == "hybrid"')
         hybrid_block = cli_source[hybrid_idx : cli_source.index("if _mc.family_name !=", hybrid_idx)]
         assert 'args.kv_cache_quantization = "none"' not in hybrid_block
@@ -3314,7 +3315,8 @@ class TestStartupCompatibilityGuards:
 
         assert "Hybrid/path-dependent cache model detected — using q4/q8 only at cache storage boundaries" in scheduler_source
         assert "non-KV state is preserved full precision" in scheduler_source
-        assert "TurboQuant skipped: hybrid/path-dependent cache detected" in tokenizer_source
+        assert "build_hybrid_turboquant_make_cache" in tokenizer_source
+        assert "is_qwen36_hybrid_tq_supported" in tokenizer_source
         assert "model.make_cache()" in tokenizer_source
 
     def test_generic_turboquant_patcher_honors_disable_env(self, tmp_path, monkeypatch):
@@ -6159,7 +6161,7 @@ class TestTurboQuantKVTelemetry:
         assert status["ssm_entries"] == 1
         assert status["kv_layer_indices"] == [7, 15, 23, 31]
 
-    def test_native_cache_status_reports_hybrid_tq_override(self, monkeypatch):
+    def test_native_cache_status_ignores_legacy_hybrid_tq_override(self, monkeypatch):
         from types import SimpleNamespace
         from vmlx_engine.server import _native_cache_status
 
@@ -6179,9 +6181,10 @@ class TestTurboQuantKVTelemetry:
         status = _native_cache_status(scheduler)
 
         assert status["generic_turboquant_kv"] == {
-            "enabled": True,
-            "reason": "hybrid_ssm_state_override",
+            "enabled": False,
+            "reason": "hybrid_ssm_state",
         }
+        assert status["live_attention_tq_kv"]["enabled"] is False
 
     def test_quantization_status_detects_jangtq_sidecar_and_bits(self, tmp_path):
         from vmlx_engine.server import _model_quantization_status

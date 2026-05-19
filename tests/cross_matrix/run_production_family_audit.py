@@ -1866,12 +1866,27 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
             {"native_cache": native_caps},
         )
     elif row.cache_profile == "hybrid_ssm":
+        qwen_selective_live_tq = row.family in {"qwen3_5", "qwen3_5_moe"}
+        live_tq = native_caps.get("live_attention_tq_kv", {}) if isinstance(native_caps, dict) else {}
         check(
             "hybrid_native_cache_capabilities",
             isinstance(native_caps, dict)
             and native_caps.get("cache_type") == "hybrid_ssm_typed"
-            and native_caps.get("generic_turboquant_kv", {}).get("enabled") is False,
-            {"native_cache": native_caps},
+            and native_caps.get("generic_turboquant_kv", {}).get("enabled")
+            == qwen_selective_live_tq
+            and (
+                not qwen_selective_live_tq
+                or (
+                    live_tq.get("enabled") is True
+                    and live_tq.get("applies_to") == "attention_kv_layers_only"
+                    and live_tq.get("ssm_policy")
+                    == "native_full_precision_companion_state"
+                )
+            ),
+            {
+                "native_cache": native_caps,
+                "qwen_selective_live_tq_expected": qwen_selective_live_tq,
+            },
         )
 
     if row.cache_profile in {"zaya_cca", "dsv4_composite", "hybrid_ssm"}:

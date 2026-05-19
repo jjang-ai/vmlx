@@ -591,24 +591,30 @@ def serve_command(args):
             getattr(_mc, "cache_type", None) == "hybrid"
             and not getattr(args, "kv_cache_quantization_explicit", False)
         ):
-            # Hybrid/path-dependent models carry cumulative non-KV state in
-            # addition to attention KV. This includes SSM/Mamba caches and
-            # Qwen3.5/3.6 GatedDelta ArraysCache layers. Live TurboQuantKVCache
-            # currently replaces the model cache object globally, so keep that
-            # loader patch off. The scheduler's q4/q8 stored-cache codec is
-            # different: it quantizes only KVCache layers at prefix/paged/L2
-            # storage boundaries and preserves SSM/ArraysCache companions for
-            # async clean-prefill rederive.
             _old_kvq = args.kv_cache_quantization
-            os.environ["VMLX_DISABLE_TQ_KV"] = "1"
-            os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
-            logger.info(
-                "Hybrid/path-dependent cache model detected — disabling live "
-                "TurboQuant KV patch while preserving stored attention-KV "
-                "quantization=%s for prefix/paged/L2; SSM companions stay "
-                "full precision with async clean-prefill rederive.",
-                _old_kvq,
-            )
+            if _mc.family_name in {"qwen3_5", "qwen3_5_moe"}:
+                logger.info(
+                    "Qwen3.6 hybrid/path-dependent cache model detected — "
+                    "keeping auto live TurboQuant enabled for attention KVCache "
+                    "layers only; SSM/GatedDelta companion state remains native "
+                    "full precision. Stored attention-KV quantization=%s remains "
+                    "active for prefix/paged/L2 boundaries.",
+                    _old_kvq,
+                )
+            else:
+                # Hybrid/path-dependent models carry cumulative non-KV state in
+                # addition to attention KV. Only Qwen3.6 has a selective live
+                # TQ path; other hybrid families keep the generic loader patch
+                # disabled until their typed partial codec is parity-proven.
+                os.environ["VMLX_DISABLE_TQ_KV"] = "1"
+                os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
+                logger.info(
+                    "Hybrid/path-dependent cache model detected — disabling live "
+                    "TurboQuant KV patch while preserving stored attention-KV "
+                    "quantization=%s for prefix/paged/L2; SSM companions stay "
+                    "full precision with async clean-prefill rederive.",
+                    _old_kvq,
+                )
         if _mc.family_name != "unknown":
             # Auto-apply tool parser
             if (

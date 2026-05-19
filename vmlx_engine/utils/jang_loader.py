@@ -670,6 +670,10 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
     except ImportError:
         logger.warning("  TurboQuant config found but turboquant module not available")
         return
+    from .hybrid_tq_cache import (
+        build_hybrid_turboquant_make_cache,
+        is_qwen36_hybrid_tq_supported,
+    )
 
     # Use the model's native cache contract, not `len(model.layers)`.
     # Ling/Bailing appends MTP layers to `model.layers` but intentionally
@@ -746,10 +750,28 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
             + " layers"
         )
 
-    def _turboquant_make_cache(
-        _cfg=tq_config, _n=_n_cache, _kd=_key_dim, _vd=_val_dim, _lt=_layer_types
-    ):
-        return make_turboquant_cache(_cfg, _n, [_kd] * _n, [_vd] * _n, _lt)
+    if _n_ssm > 0:
+        if not is_qwen36_hybrid_tq_supported(model_config, _layer_types):
+            logger.info(
+                "  TurboQuant KV skipped: hybrid/path-dependent cache family "
+                "is not on the Qwen3.6 selective attention-KV allow-list; "
+                "native KV + non-KV companion state remains active."
+            )
+            return
+        _native_make_cache = model.make_cache
+        _turboquant_make_cache = build_hybrid_turboquant_make_cache(
+            _native_make_cache,
+            tq_config,
+            _key_dim,
+            _val_dim,
+            _layer_types,
+        )
+    else:
+
+        def _turboquant_make_cache(
+            _cfg=tq_config, _n=_n_cache, _kd=_key_dim, _vd=_val_dim, _lt=_layer_types
+        ):
+            return make_turboquant_cache(_cfg, _n, [_kd] * _n, [_vd] * _n, _lt)
 
     model.make_cache = _turboquant_make_cache
     logger.info(

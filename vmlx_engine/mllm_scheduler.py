@@ -169,6 +169,7 @@ from .utils.head_dim_detection import (
     choose_supported_kv_group_size,
     detect_cache_head_dims,
 )
+from .utils.hybrid_tq_cache import is_turboquant_make_cache
 from .utils.ssm_companion_disk_store import SSMCompanionDiskStore
 from .utils.memory_limits import (
     get_effective_metal_working_set_bytes,
@@ -443,6 +444,9 @@ class MLLMScheduler:
         self._kv_cache_bits = 0
         self._kv_cache_group_size = 64
         self._tq_active = False
+        self._hybrid_live_tq_policy = None
+        self._hybrid_live_tq_attention_layers = []
+        self._hybrid_live_tq_companion_layers = []
 
         # Detect hybrid models (mixed KVCache + MambaCache layers)
         lang_model = self.model.language_model if hasattr(self.model, "language_model") else self.model
@@ -746,6 +750,7 @@ class MLLMScheduler:
 
         self._tq_active = self._detect_turboquant_make_cache()
         self._tq_batch_api = self._detect_turboquant_batch_api()
+        self._capture_hybrid_turboquant_policy()
         self._enforce_turboquant_single_sequence()
 
         # Get stop tokens from tokenizer
@@ -1057,10 +1062,7 @@ class MLLMScheduler:
 
         def _is_tq_make_cache(obj: Any) -> bool:
             make_cache = _safe_attr(obj, "make_cache")
-            return make_cache is not None and getattr(make_cache, "__name__", "") in (
-                "_tq_make_cache",
-                "_turboquant_make_cache",
-            )
+            return make_cache is not None and is_turboquant_make_cache(make_cache)
 
         seen = set()
         stack = [self.model]
@@ -1100,10 +1102,7 @@ class MLLMScheduler:
             seen.add(id(obj))
 
             make_cache = _safe_attr(obj, "make_cache")
-            if make_cache is not None and getattr(make_cache, "__name__", "") in (
-                "_tq_make_cache",
-                "_turboquant_make_cache",
-            ):
+            if make_cache is not None and is_turboquant_make_cache(make_cache):
                 try:
                     cache = make_cache() or []
                 except Exception:
@@ -1122,6 +1121,39 @@ class MLLMScheduler:
                 if nxt is not None and nxt is not obj and id(nxt) not in seen:
                     stack.append(nxt)
         return False
+
+    def _capture_hybrid_turboquant_policy(self) -> None:
+        """Copy selective hybrid TQ metadata from the patched language model."""
+
+        def _safe_attr(obj: Any, name: str) -> Any:
+            if obj is None:
+                return None
+            if type(obj).__module__ == "unittest.mock":
+                return getattr(obj, "__dict__", {}).get(name)
+            return getattr(obj, name, None)
+
+        seen = set()
+        stack = [self.model]
+        while stack:
+            obj = stack.pop()
+            if obj is None or id(obj) in seen:
+                continue
+            seen.add(id(obj))
+            make_cache = _safe_attr(obj, "make_cache")
+            policy = getattr(make_cache, "_vmlx_hybrid_tq_policy", None)
+            if policy:
+                self._hybrid_live_tq_policy = policy
+                self._hybrid_live_tq_attention_layers = list(
+                    getattr(make_cache, "_vmlx_hybrid_tq_attention_layers", ()) or []
+                )
+                self._hybrid_live_tq_companion_layers = list(
+                    getattr(make_cache, "_vmlx_hybrid_tq_companion_layers", ()) or []
+                )
+                return
+            for attr in ("model", "language_model"):
+                nxt = _safe_attr(obj, attr)
+                if nxt is not None and nxt is not obj and id(nxt) not in seen:
+                    stack.append(nxt)
 
     def _enforce_turboquant_single_sequence(self) -> None:
         """Keep MLLM live batching honest for TurboQuantKVCache."""

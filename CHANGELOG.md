@@ -21,8 +21,10 @@ All notable changes to vMLX Engine will be documented in this file.
 - **Model-family cache policy is explicit and fail-closed**: standard KV
   families can use live TurboQuant KV, DSV4 keeps generic KV quantization off
   for its native SWA/CSA/HCA composite cache, ZAYA uses typed CCA state, and
-  Qwen hybrid SSM uses q4/q8 only for stored attention-KV snapshots while live
-  hybrid attention KV remains full precision pending a separate parity gate.
+  Qwen3.6 hybrid SSM now uses live TurboQuant KV only for attention layers while
+  SSM/ArraysCache companion state remains native full precision. The prior
+  global hybrid make-cache patch stays disabled because it cannot preserve
+  path-dependent companion state.
 - **Hugging Face GUI downloads recover from stale backup endpoints and stale
   tokens**: the bundled worker can fall back to unauthenticated metadata and
   direct Hub resolution when user credentials or cached endpoint state are bad.
@@ -33,7 +35,14 @@ All notable changes to vMLX Engine will be documented in this file.
 ### Verified
 - Current-head live gates covered Qwen3.6-27B MXFP4-MTP, MXFP8-MTP, and
   JANG_4M-MTP native-MTP generation, acceptance telemetry, text+VL detection,
-  hybrid SSM cache handling, and stored q4 attention-KV snapshots.
+  hybrid SSM cache handling, selective live attention TQ-KV, and stored q4
+  attention-KV snapshots.
+- Task 8 parity gates covered MXFP4, MXFP8, and JANG_4M hybrid live TQ-KV:
+  selective attention-layer TurboQuant exactly matched full-precision live KV
+  on deterministic probes while preserving 48 native companion layers.
+- Task 8 MTP/VL reruns covered MXFP4 D2, MXFP8 D3, and JANG_4M D3 with native
+  MTP active, text+VL scope, visible non-empty output, and selective live
+  attention TQ-KV active.
 - Real Electron/CDP chat proof covered reasoning streaming, run/list/image/video
   tool calls, tool auto-continue, media follow-up content, cache UI toggles, and
   absence of raw think/tool-tag leakage.

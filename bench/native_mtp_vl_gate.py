@@ -305,6 +305,8 @@ def build_env(base_env: dict[str, str], *, mode: str, args: argparse.Namespace) 
     env = dict(base_env)
     enabled = "1" if mode == "mtp" else "0"
     env["PYTHONUNBUFFERED"] = "1"
+    env.pop("VMLX_DISABLE_TQ_KV", None)
+    env.pop("VMLINUX_DISABLE_TQ_KV", None)
     env["VMLINUX_NATIVE_MTP"] = enabled
     env["VMLX_NATIVE_MTP"] = enabled
     depth = max(1, min(3, int(getattr(args, "depth", 3) or 3)))
@@ -421,8 +423,6 @@ def start_server(
         "2",
         "--ssm-state-cache-mb",
         "1024",
-        "--kv-cache-quantization",
-        "q4",
     ]
     log_file = log_path.open("w")
     proc = subprocess.Popen(
@@ -512,10 +512,13 @@ def summarize_result(result: dict[str, Any]) -> dict[str, Any]:
     ssm = cache_after.get("ssm_companion") or {}
     health = result.get("health_after") or result.get("health_before") or {}
     mtp = health.get("mtp") or {}
+    native_cache = health.get("native_cache") or {}
     return {
         "mode": result.get("mode"),
         "mtp_runtime_active": mtp.get("runtime_active"),
         "mtp_effective_depth": mtp.get("effective_depth"),
+        "generic_turboquant_kv": (native_cache.get("generic_turboquant_kv") or {}),
+        "live_attention_tq_kv": (native_cache.get("live_attention_tq_kv") or {}),
         "all_http_ok": all(bool(row.get("ok")) for row in requests) if requests else False,
         "visible_nonempty": all(
             bool(str(row.get("content") or "").strip())
@@ -642,6 +645,8 @@ def run_mode(
             for line in full_log
             if "MLLM MTP[" in line
             or "native MTP" in line
+            or "TurboQuant" in line
+            or "Runtime cache layout:" in line
             or "VLM HYBRID cache" in line
             or "VLM prefix cache" in line
             or "prefix cache store" in line
