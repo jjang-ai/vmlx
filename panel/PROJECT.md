@@ -223,7 +223,7 @@ CREATE TABLE IF NOT EXISTS chats (
 ### Install Flow
 1. `detectAvailableInstallers()` — checks uv paths, then pip3 with Python >=3.10 validation
 2. User picks method (or auto-selects uv if available)
-3. `installVllmStreaming()` — spawns `uv tool install vmlx-engine` or `pip3 install vmlx-engine`
+3. `installVllmStreaming()` — spawns `uv tool install vmlx` or `pip3 install vmlx`
 4. Real-time stdout/stderr forwarded as `vllm:install-log` IPC events
 5. On completion, Promise resolves with success/failure
 

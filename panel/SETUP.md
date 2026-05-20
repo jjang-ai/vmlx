@@ -20,10 +20,10 @@ vMLX auto-detects and offers to install vMLX Engine on first launch. You can als
 
 ```bash
 # Recommended — uv manages its own Python venv
-uv tool install vmlx-engine
+uv tool install vmlx
 
 # Alternative — needs Python 3.10+
-pip3 install vmlx-engine
+pip3 install vmlx
 ```
 
 The app searches for `vmlx-engine` in these locations:

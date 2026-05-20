@@ -42,6 +42,7 @@ const SEARCH_DIRS = [
   join(homedir(), '.pyenv', 'shims'),                   // pyenv shims
 ]
 const SEARCH_PATHS = SEARCH_DIRS.flatMap(d => ENTRY_POINT_NAMES.map(n => join(d, n)))
+const PYPI_PACKAGE_NAME = 'vmlx'
 
 /**
  * Get the path to bundled Python interpreter (standalone distribution).
@@ -379,7 +380,7 @@ function buildInstallCommand(
 ): { cmd: string; args: string[] } {
   const bundledSource = getBundledSourcePath()
   // Use bundled source path if available, otherwise fall back to PyPI package name
-  const pkg = bundledSource || 'vmlx-engine'
+  const pkg = bundledSource || PYPI_PACKAGE_NAME
 
   if (method === 'uv') {
     const cmd = installerPath || 'uv'
@@ -389,7 +390,7 @@ function buildInstallCommand(
       // uv tool upgrade doesn't support local paths — reinstall with --force
       return bundledSource
         ? { cmd, args: ['tool', 'install', '--force', pkg] }
-        : { cmd, args: ['tool', 'upgrade', 'vmlx-engine'] }
+        : { cmd, args: ['tool', 'upgrade', PYPI_PACKAGE_NAME] }
     }
   } else {
     const cmd = installerPath || 'pip3'

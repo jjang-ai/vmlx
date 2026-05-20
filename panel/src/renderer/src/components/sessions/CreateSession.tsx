@@ -252,8 +252,8 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
         setLaunchError(
           'Inference engine not found. Restart vMLX to run first-time setup, ' +
           'or install manually:\n\n' +
-          '  uv tool install vmlx-engine\n' +
-          '  pip3 install vmlx-engine'
+          '  uv tool install vmlx\n' +
+          '  pip3 install vmlx'
         )
         return
       }

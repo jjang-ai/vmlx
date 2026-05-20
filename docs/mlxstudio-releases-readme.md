@@ -130,7 +130,7 @@ npx electron-builder --mac dmg
 
 | Resource | Link |
 |---|---|
-| **PyPI** (CLI / Python library) | `pip install vmlx-engine` -- [pypi.org/project/vmlx-engine](https://pypi.org/project/vmlx-engine/) |
+| **PyPI** (CLI / Python library) | `pip install vmlx` -- [pypi.org/project/vmlx](https://pypi.org/project/vmlx/) |
 | **Source Code** | [github.com/jjang-ai/vmlx](https://github.com/jjang-ai/vmlx) |
 | **JANG Quantization** | Mixed-precision quantization for MLX -- [docs](https://github.com/jjang-ai/vmlx) |
 | **Models on Hugging Face** | [huggingface.co/jjang-ai](https://huggingface.co/jjang-ai) |

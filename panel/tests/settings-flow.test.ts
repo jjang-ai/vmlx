@@ -1185,6 +1185,23 @@ describe('Native MTP', () => {
 })
 
 describe('Generation Defaults', () => {
+    it('uses the published vmlx package name for PyPI install guidance while preserving vmlx-engine entrypoints', () => {
+        const engineManager = readFileSync('src/main/engine-manager.ts', 'utf8')
+        const createSource = readFileSync('src/renderer/src/components/sessions/CreateSession.tsx', 'utf8')
+
+        expect(engineManager).toContain("const ENTRY_POINT_NAMES = ['vmlx-engine', 'vmlx-serve', 'vmlx']")
+        expect(engineManager).toContain("const PYPI_PACKAGE_NAME = 'vmlx'")
+        expect(engineManager).toContain('const pkg = bundledSource || PYPI_PACKAGE_NAME')
+        expect(engineManager).toContain("['tool', 'upgrade', PYPI_PACKAGE_NAME]")
+        expect(engineManager).not.toContain("const pkg = bundledSource || 'vmlx-engine'")
+        expect(engineManager).not.toContain("['tool', 'upgrade', 'vmlx-engine']")
+
+        expect(createSource).toContain('uv tool install vmlx')
+        expect(createSource).toContain('pip3 install vmlx')
+        expect(createSource).not.toContain('uv tool install vmlx-engine')
+        expect(createSource).not.toContain('pip3 install vmlx-engine')
+    })
+
     it('does not synthesize server --default sampling flags from UI/session config', () => {
         const out = preview({
             defaultTemperature: 80,

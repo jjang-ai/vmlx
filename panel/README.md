@@ -211,7 +211,7 @@ Both APIs support: streaming, tool calls, reasoning extraction, usage tracking, 
 
 - macOS 14.5+ (Sonoma) — Apple Silicon required. Older Sonoma builds lack libc++/Metal runtime symbols required by the bundled MLX wheel.
 - Node.js 18+
-- vMLX Engine installed (auto-installed on first launch, or manually via `uv tool install vmlx-engine`)
+- vMLX Engine installed (auto-installed on first launch, or manually via `uv tool install vmlx`)
 - MLX-format models (configurable scan directories, defaults: `~/.lmstudio/models/`, `~/.cache/huggingface/hub/`)
 
 ---
@@ -358,8 +358,8 @@ Deploy: `cp -R release/mac-arm64/vMLX.app /Applications/`
 ### vMLX Engine not found
 On first launch, the app offers one-click install. If you prefer manual install:
 ```bash
-uv tool install vmlx-engine          # Recommended (fastest)
-pip3 install vmlx-engine             # Alternative (needs Python 3.10+)
+uv tool install vmlx                 # Recommended (fastest)
+pip3 install vmlx                    # Alternative (needs Python 3.10+)
 ```
 
 ### Models not detected
