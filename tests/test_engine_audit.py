@@ -1309,6 +1309,152 @@ class TestToolParserConcurrency:
         }
         assert DSML_PREFIX not in tool_calls[0].function.arguments
 
+    def test_dsv4_fallback_tool_prompt_uses_canonical_tool_calls_wrapper(self):
+        """Fallback injection must not teach a non-canonical bare DSML invoke."""
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class DSV4FakeTokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                rendered = "<｜begin▁of▁sentence｜>"
+                for msg in messages:
+                    role = msg.get("role")
+                    if role == "system":
+                        rendered += msg.get("content") or ""
+                    elif role == "user":
+                        rendered += "<｜User｜>" + (msg.get("content") or "")
+                    elif role == "assistant":
+                        rendered += "<｜Assistant｜>" + (msg.get("content") or "")
+                    elif role == "tool":
+                        rendered += (
+                            "<｜User｜><tool_result>"
+                            + (msg.get("content") or "")
+                            + "</tool_result>"
+                        )
+                rendered += "<｜Assistant｜></think>"
+                return rendered
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_directory",
+                    "description": "List files.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "write_file",
+                    "description": "Write a file.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "content": {"type": "string"},
+                        },
+                        "required": ["path", "content"],
+                    },
+                },
+            },
+        ]
+        prompt = (
+            "<｜begin▁of▁sentence｜>\n\n## Tools\n"
+            "<｜DSML｜tool_calls>\n"
+            "<｜DSML｜invoke name=\"$TOOL_NAME\">\n"
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>\n"
+            "<｜User｜>Use tools in sequence."
+        )
+
+        rendered = check_and_inject_fallback_tools(
+            prompt,
+            [{"role": "user", "content": "Use tools in sequence."}],
+            tools,
+            DSV4FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="dsml",
+        )
+
+        assert "or a DSML wrapper block" not in rendered
+        assert "VALUE HERE" not in rendered
+        assert "string=" not in rendered.split("<｜User｜>", 1)[0]
+        assert "<｜DSML｜parameter" not in rendered.split("<｜User｜>", 1)[0]
+        assert "<｜DSML｜tool_calls>" in rendered
+        assert "</｜DSML｜tool_calls>" in rendered
+        assert '<｜DSML｜invoke name="list_directory">' in rendered
+        assert '<｜DSML｜invoke name="write_file">' in rendered
+        assert "path (string, required)" in rendered
+        assert "content (string, required)" in rendered
+
+    def test_dsv4_native_schema_prompt_does_not_get_replaced_by_fallback(self):
+        """DSV4's bundle-native tool schema is sufficient even without concrete names in the exemplar."""
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class DSV4FakeTokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                return "SHOULD_NOT_RE_RENDER"
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_directory",
+                    "description": "List files.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "write_file",
+                    "description": "Write a file.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "content": {"type": "string"},
+                        },
+                        "required": ["path", "content"],
+                    },
+                },
+            },
+        ]
+        prompt = (
+            "<｜begin▁of▁sentence｜>\n\n## Tools\n"
+            "You can invoke tools by writing a \"<｜DSML｜tool_calls>\" block like the following:\n\n"
+            "<｜DSML｜tool_calls>\n"
+            "<｜DSML｜invoke name=\"$TOOL_NAME\">\n"
+            "<｜DSML｜parameter name=\"$PARAMETER_NAME\" string=\"true|false\">"
+            "$PARAMETER_VALUE</｜DSML｜parameter>\n"
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>\n\n"
+            "### Available Tool Schemas\n\n"
+            '{"name": "list_directory", "parameters": {"properties": {"path": {"type": "string"}}}}\n'
+            '{"name": "write_file", "parameters": {"properties": {"path": {"type": "string"}, "content": {"type": "string"}}}}\n'
+            "<｜User｜>Use tools in sequence."
+        )
+
+        rendered = check_and_inject_fallback_tools(
+            prompt,
+            [{"role": "user", "content": "Use tools in sequence."}],
+            tools,
+            DSV4FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="dsml",
+        )
+
+        assert rendered == prompt
+        assert "SHOULD_NOT_RE_RENDER" not in rendered
+
     def test_stream_chat_buffers_leading_whitespace_before_tool_marker(self):
         """Tool-call-only streams must not leak whitespace before tool_calls."""
         import inspect

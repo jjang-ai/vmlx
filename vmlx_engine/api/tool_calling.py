@@ -101,11 +101,9 @@ def check_and_inject_fallback_tools(
     _dsv4_has_native_dsml_schema = (
         is_dsv4_prompt
         and "<｜DSML｜tool_calls>" in instruction_prompt
+        and "<｜DSML｜parameter" in instruction_prompt
+        and "### Available Tool Schemas" in instruction_prompt
         and all(name in instruction_prompt for name in tool_names)
-        and all(
-            f'<｜DSML｜invoke name="{name}"' in instruction_prompt
-            for name in tool_names
-        )
     )
     _dsv4_has_concrete_dsml_examples = (
         is_dsv4_prompt
@@ -148,18 +146,36 @@ def check_and_inject_fallback_tools(
         props = params.get("properties", {}) if isinstance(params, dict) else {}
         return name, [p for p in props if p]
 
-    def _render_dsml_examples(tools: list[dict]) -> str:
+    def _render_dsml_examples(
+        tools: list[dict],
+        *,
+        include_parameters: bool = True,
+    ) -> str:
         blocks: list[str] = []
         for tool in tools:
             name, props = _tool_props(tool)
             lines = [f'<｜DSML｜invoke name="{name}">']
-            for param in props:
-                lines.append(
-                    f'  <｜DSML｜parameter name="{param}" string="true">VALUE HERE</｜DSML｜parameter>'
-                )
+            if include_parameters:
+                for param in props:
+                    lines.append(
+                        f'  <｜DSML｜parameter name="{param}" string="true">VALUE HERE</｜DSML｜parameter>'
+                    )
             lines.append("</｜DSML｜invoke>")
             blocks.append("\n".join(lines))
         return "\n\n".join(blocks)
+
+    def _render_dsml_tool_calls_example(tools: list[dict]) -> str:
+        # DSV4 already has the generic DSML parameter grammar in its native
+        # template. Do not inject placeholder parameter values here: live DSV4
+        # copied `VALUE HERE` / `string=` into real tool arguments after a
+        # tool-result round. This example only binds concrete tool names to the
+        # canonical wrapper; the parameter list above supplies the arg names.
+        examples = _render_dsml_examples(tools, include_parameters=False)
+        return (
+            "<｜DSML｜tool_calls>\n"
+            + examples
+            + "\n</｜DSML｜tool_calls>"
+        )
 
     def _render_xml_examples(
         tools: list[dict],
@@ -215,9 +231,9 @@ def check_and_inject_fallback_tools(
             dsv4_lines.append("")
         tool_prompt = (
             "\n".join(dsv4_lines).rstrip()
-            + "\n\nWhen you decide to call a tool, emit ONLY this DSML shape. "
-            "Do not emit JSON, markdown, prose, generic XML tool tags, or a DSML wrapper block.\n"
-            + _render_dsml_examples(template_tools)
+            + "\n\nWhen you decide to call a tool, emit ONLY this canonical DSML tool_calls block. "
+            "Do not emit JSON, markdown, prose, generic XML tool tags, or bare invoke blocks outside the wrapper.\n"
+            + _render_dsml_tool_calls_example(template_tools)
             + "\n\n"
             "For a request to list the current directory, set the path parameter to \".\" exactly. "
             "Do not explain inability to call tools; emit the DSML call."
