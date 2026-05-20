@@ -74,6 +74,38 @@ def test_ollama_generate_omits_disabled_top_k_sentinels():
             assert "top_k" not in req
 
 
+def test_ollama_chat_omits_non_positive_num_predict_sentinels():
+    from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
+
+    for sentinel in (0, -1, -2):
+        req = ollama_chat_to_openai(
+            {
+                "model": "hy3",
+                "messages": [{"role": "user", "content": "hi"}],
+                "options": {"num_predict": sentinel},
+            }
+        )
+        assert "max_tokens" not in req
+
+
+def test_ollama_generate_omits_non_positive_num_predict_sentinels():
+    from vmlx_engine.api.ollama_adapter import (
+        ollama_generate_to_openai,
+        ollama_generate_to_openai_chat,
+    )
+
+    for convert in (ollama_generate_to_openai, ollama_generate_to_openai_chat):
+        for sentinel in (0, -1, -2):
+            req = convert(
+                {
+                    "model": "hy3",
+                    "prompt": "hi",
+                    "options": {"num_predict": sentinel},
+                }
+            )
+            assert "max_tokens" not in req
+
+
 def test_ollama_chat_omits_enable_thinking_when_think_is_omitted():
     from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
 

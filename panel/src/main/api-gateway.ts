@@ -945,6 +945,17 @@ export class ApiGateway extends EventEmitter {
     }
   }
 
+  private applyOllamaNumPredict(opts: any, openaiBody: any): void {
+    const value = opts?.num_predict;
+    if (value === undefined || value === null) return;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      openaiBody.max_tokens = value;
+      return;
+    }
+    if (parsed > 0) openaiBody.max_tokens = value;
+  }
+
   private openAIToolCallsToOllama(
     toolCalls: any[] | undefined | null,
   ): any[] | undefined {
@@ -1016,7 +1027,7 @@ export class ApiGateway extends EventEmitter {
       stream: parsed.stream !== false,
       stream_options: { include_usage: true },
     };
-    if (opts.num_predict != null) openaiBody.max_tokens = opts.num_predict;
+    this.applyOllamaNumPredict(opts, openaiBody);
     if (opts.temperature != null) openaiBody.temperature = opts.temperature;
     if (opts.top_p != null) openaiBody.top_p = opts.top_p;
     if (opts.top_k != null && Number(opts.top_k) > 0) openaiBody.top_k = opts.top_k;
@@ -1327,7 +1338,7 @@ export class ApiGateway extends EventEmitter {
           stream: isStreaming,
           stream_options: { include_usage: true },
         };
-    if (opts.num_predict != null) openaiBody.max_tokens = opts.num_predict;
+    this.applyOllamaNumPredict(opts, openaiBody);
     if (opts.temperature != null) openaiBody.temperature = opts.temperature;
     if (opts.top_p != null) openaiBody.top_p = opts.top_p;
     if (opts.top_k != null && Number(opts.top_k) > 0) openaiBody.top_k = opts.top_k;

@@ -1335,6 +1335,22 @@ def _messages_have_multimodal(messages) -> bool:
     return False
 
 
+def _requested_modalities_from_summary(summary: dict) -> set[str]:
+    types = set((summary.get("types") or {}).keys()) if isinstance(summary, dict) else set()
+    modalities: set[str] = set()
+    if types & {"image_url", "image", "input_image"}:
+        modalities.add("image")
+    if types & {"video_url", "video", "input_video"}:
+        modalities.add("video")
+    if types & {"input_audio", "audio"}:
+        modalities.add("audio")
+    return modalities
+
+
+def _messages_requested_modalities(messages) -> set[str]:
+    return _requested_modalities_from_summary(_messages_multimodal_summary(messages))
+
+
 def _responses_input_multimodal_summary(input_data) -> dict:
     summary = {
         "total": 0,
@@ -1387,6 +1403,10 @@ def _responses_input_has_multimodal(input_data) -> bool:
     return False
 
 
+def _responses_input_requested_modalities(input_data) -> set[str]:
+    return _requested_modalities_from_summary(_responses_input_multimodal_summary(input_data))
+
+
 def _log_multimodal_request_shape(route: str, model_name: str, summary: dict) -> None:
     """Log redacted media request shape for user-exported diagnostics."""
     if not summary or int(summary.get("total") or 0) <= 0:
@@ -1428,9 +1448,92 @@ def _loaded_omni_modalities() -> list[str] | None:
     return None
 
 
-def _reject_unsupported_multimodal(endpoint: str) -> None:
+def _bundle_declares_native_video(bundle_path: str | None) -> bool:
+    """Return True when the loaded non-Omni VLM bundle declares video support.
+
+    Do not infer video from tokenizer-only markers. ZAYA1-VL ships a
+    ``<video>`` tokenizer token but its local processor/chat-template path only
+    expands image placeholders, so advertising video there produces a runtime
+    crash instead of usable video understanding.
+    """
+    cfg = _read_bundle_json(bundle_path, "config.json")
+    if not cfg:
+        return False
+    if cfg.get("video_config") is not None:
+        return True
+    if Path(str(bundle_path or "")).joinpath("video_preprocessor_config.json").is_file():
+        return True
+    for obj in (cfg, cfg.get("text_config"), cfg.get("vision_config")):
+        if not isinstance(obj, dict):
+            continue
+        for key in ("video_token_id", "video_token_index"):
+            if obj.get(key) is not None:
+                return True
+    return False
+
+
+def _loaded_mllm_modalities() -> list[str] | None:
+    engine = _engine
+    engine_is_mllm = bool(
+        getattr(engine, "is_mllm", False) or getattr(engine, "_is_mllm", False)
+    ) if engine is not None else False
+    if not engine_is_mllm:
+        return None
+    modalities = ["text", "vision"]
+    if _bundle_declares_native_video(_model_path or _model_name):
+        modalities.append("video")
+    return modalities
+
+
+def _loaded_runtime_modalities() -> list[str]:
     modalities = _loaded_omni_modalities()
     if modalities is not None:
+        return modalities
+    modalities = _loaded_mllm_modalities()
+    if modalities is not None:
+        return modalities
+    return ["text"]
+
+
+def _normalize_modality_set(modalities: set[str] | list[str] | tuple[str, ...]) -> set[str]:
+    normalized = {str(m).lower() for m in modalities or []}
+    if "vision" in normalized:
+        normalized.add("image")
+    if "image" in normalized:
+        normalized.add("vision")
+    return normalized
+
+
+def _reject_unsupported_multimodal(
+    endpoint: str,
+    requested_modalities: set[str] | None = None,
+) -> None:
+    if requested_modalities:
+        supported = set(_loaded_runtime_modalities())
+        unsupported = sorted(
+            {str(m).lower() for m in requested_modalities}
+            - _normalize_modality_set(supported)
+        )
+        if not unsupported:
+            return
+        if _loaded_runtime_modalities() == ["text"]:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{endpoint} received unsupported media modality "
+                    f"{', '.join(unsupported)} because the loaded runtime is "
+                    "text-only. Supported modalities: text."
+                ),
+            )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{endpoint} received unsupported media modality "
+                f"{', '.join(unsupported)}. Supported modalities: "
+                f"{', '.join(_loaded_runtime_modalities())}."
+            ),
+        )
+    if _loaded_omni_modalities() is not None:
         # Omni requests should have been routed through OmniMultimodalDispatcher
         # before the text path. If dispatch failed, do not silently drop media.
         raise HTTPException(
@@ -6650,13 +6753,9 @@ async def model_capabilities(model_id: str) -> dict:
         if _engine is not None
         else registry_is_mllm
     )
-    omni_modalities = _loaded_omni_modalities()
-    if omni_modalities is not None:
-        modalities = omni_modalities
-    elif engine_is_mllm:
-        modalities = ["text", "vision", "video"]
-    else:
-        modalities = ["text"]
+    modalities = _loaded_runtime_modalities()
+    if modalities == ["text"] and engine_is_mllm:
+        modalities = ["text", "vision"]
     supports_thinking_explicit = getattr(cfg, "supports_thinking", None) if cfg is not None else None
     supports_thinking = (
         bool(supports_thinking_explicit)
@@ -6918,6 +7017,12 @@ async def create_anthropic_message(
         )
 
     engine = get_engine()
+    _msg_requested_modalities = _messages_requested_modalities(chat_req.messages)
+    if _msg_requested_modalities:
+        _reject_unsupported_multimodal(
+            "/v1/messages",
+            _msg_requested_modalities,
+        )
     if _messages_have_multimodal(chat_req.messages) and not engine.is_mllm:
         _reject_unsupported_multimodal("/v1/messages")
 
@@ -7703,6 +7808,12 @@ async def ollama_chat(fastapi_request: Request):
     from starlette.responses import StreamingResponse as _SR
 
     engine = get_engine()
+    _ollama_requested_modalities = _messages_requested_modalities(chat_req.messages)
+    if _ollama_requested_modalities:
+        _reject_unsupported_multimodal(
+            "/api/chat",
+            _ollama_requested_modalities,
+        )
     if _messages_have_multimodal(chat_req.messages) and not engine.is_mllm:
         _reject_unsupported_multimodal("/api/chat")
     chat_kwargs = {
@@ -9539,6 +9650,12 @@ async def create_chat_completion(
         )
 
     engine = get_engine()
+    _chat_requested_modalities = _messages_requested_modalities(request.messages)
+    if _chat_requested_modalities:
+        _reject_unsupported_multimodal(
+            "/v1/chat/completions",
+            _chat_requested_modalities,
+        )
 
     # For MLLM models, keep original messages with embedded images
     # (MLLM.chat() extracts images from message content internally)
@@ -10854,11 +10971,17 @@ async def create_response(
 
     engine = get_engine()
     _responses_has_media = _responses_input_has_multimodal(request.input)
+    _responses_requested_modalities = _responses_input_requested_modalities(request.input)
     _log_multimodal_request_shape(
         "/v1/responses",
         _model_path or _model_name or request.model,
         _responses_input_multimodal_summary(request.input),
     )
+    if _responses_requested_modalities:
+        _reject_unsupported_multimodal(
+            "/v1/responses",
+            _responses_requested_modalities,
+        )
     if (
         _responses_has_media
         and not engine.is_mllm

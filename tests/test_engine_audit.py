@@ -1984,6 +1984,100 @@ class TestMediaDiagnostics:
         assert response.status_code == 400
         assert "text-only" in response.text
 
+    def test_zaya_vl_runtime_modalities_do_not_infer_video_from_vision(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "zaya1_vl",
+                    "vision_config": {"model_type": "qwen2_5_vl"},
+                    "image_token_id": 262147,
+                    "capabilities": {"modality": "vision"},
+                }
+            )
+        )
+        (tmp_path / "tokenizer_config.json").write_text(
+            json.dumps({"video_token": "<video>"})
+        )
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "zaya-vl-test")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        assert server._loaded_runtime_modalities() == ["text", "vision"]
+
+    def test_qwen_vl_runtime_modalities_keep_explicit_video(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "qwen3_5",
+                    "vision_config": {"model_type": "qwen3_vl"},
+                    "video_token_id": 248057,
+                }
+            )
+        )
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "qwen-vl-test")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        assert server._loaded_runtime_modalities() == ["text", "vision", "video"]
+
+    def test_video_request_on_image_only_mllm_rejects_instead_of_crashing(
+        self, monkeypatch, tmp_path
+    ):
+        from fastapi.testclient import TestClient
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "zaya1_vl",
+                    "vision_config": {"model_type": "qwen2_5_vl"},
+                    "image_token_id": 262147,
+                    "capabilities": {"modality": "vision"},
+                }
+            )
+        )
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "zaya-vl-test")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        response = TestClient(server.app).post(
+            "/v1/chat/completions",
+            json={
+                "model": "zaya-vl-test",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "What is in this video?"},
+                            {
+                                "type": "video_url",
+                                "video_url": {"url": "data:video/mp4;base64,AAAA"},
+                            },
+                        ],
+                    }
+                ],
+                "max_tokens": 8,
+            },
+        )
+
+        assert response.status_code == 400
+        assert "unsupported media modality video" in response.text
+        assert "text, vision" in response.text
+
     def test_server_media_diag_log_includes_route_runtime_and_redacts_payload(
         self, caplog, monkeypatch
     ):

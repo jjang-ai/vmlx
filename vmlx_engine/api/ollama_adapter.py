@@ -79,6 +79,20 @@ def _apply_ollama_top_k(opts: dict, req: dict[str, Any]) -> None:
         req["top_k"] = top_k
 
 
+def _apply_ollama_num_predict(opts: dict, req: dict[str, Any]) -> None:
+    """Forward only active output caps; Ollama <=0 sentinels are model-owned."""
+    value = opts.get("num_predict")
+    if value is None:
+        return
+    try:
+        max_tokens = int(value)
+    except (TypeError, ValueError):
+        req["max_tokens"] = value
+        return
+    if max_tokens > 0:
+        req["max_tokens"] = max_tokens
+
+
 def ollama_chat_to_openai(body: dict) -> dict:
     """Convert Ollama /api/chat request to OpenAI /v1/chat/completions."""
     opts = body.get("options", {})
@@ -124,8 +138,7 @@ def ollama_chat_to_openai(body: dict) -> dict:
         # Always request usage so Ollama clients get eval_count/prompt_eval_count
         "stream_options": {"include_usage": True},
     }
-    if opts.get("num_predict") is not None:
-        req["max_tokens"] = opts["num_predict"]
+    _apply_ollama_num_predict(opts, req)
     if opts.get("temperature") is not None:
         req["temperature"] = opts["temperature"]
     if opts.get("top_p") is not None:
@@ -179,8 +192,7 @@ def ollama_generate_to_openai(body: dict) -> dict:
         "prompt": body.get("prompt", ""),
         "stream": body.get("stream", True),
     }
-    if opts.get("num_predict") is not None:
-        req["max_tokens"] = opts["num_predict"]
+    _apply_ollama_num_predict(opts, req)
     if opts.get("temperature") is not None:
         req["temperature"] = opts["temperature"]
     if opts.get("top_p") is not None:
@@ -225,8 +237,7 @@ def ollama_generate_to_openai_chat(body: dict) -> dict:
         "stream": body.get("stream", True),
         "stream_options": {"include_usage": True},
     }
-    if opts.get("num_predict") is not None:
-        req["max_tokens"] = opts["num_predict"]
+    _apply_ollama_num_predict(opts, req)
     if opts.get("temperature") is not None:
         req["temperature"] = opts["temperature"]
     if opts.get("top_p") is not None:

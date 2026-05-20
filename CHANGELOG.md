@@ -2,6 +2,48 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.5.45] - 2026-05-20
+
+### Fixed
+- **DSV4 DSML and XML tool prompts now include concrete examples for real tool
+  names without inventing fake arguments**: zero-argument built-in tools render
+  as empty invokes, and schema-only DSML prompts get concrete per-tool examples
+  so DSV4 can chain built-in and MCP tools cleanly.
+- **Ollama `num_predict` disabled sentinels stay model-owned**: `0`, `-1`, and
+  `-2` are no longer forwarded as invalid `max_tokens`, while positive
+  `num_predict` values and other sampler overrides still pass through.
+- **VLM video capability reporting is no longer guessed from vision support**:
+  image-only VLMs such as ZAYA1-VL now report `text, vision` and reject
+  `video_url` requests clearly instead of reaching a processor crash. Qwen-style
+  VLM bundles with explicit video metadata continue to report video support.
+- **Top-k and disabled sampling sentinels remain hidden/omitted consistently**
+  across the panel and Ollama gateway paths.
+
+### Verified
+- Focused backend checkpoint suite passed: tool-prompt fallback, Ollama
+  adapter/defaults, API surface parity, server sampling/max-token guards, media
+  diagnostics, and local-model smoke harness contracts.
+- Focused panel gateway suite passed for Ollama request translation, including
+  disabled `num_predict`/`top_k` omission and explicit override forwarding.
+- Live DSV4 and Hy3 Electron UI proofs exercised built-in plus MCP tools in one
+  chat with no raw tool-marker leak.
+- Live Hy3 JANGTQ_K A/B did not reproduce Chinese visible output under bounded
+  English thinking-off prompts and showed paged/TurboQuant cache hits.
+- Live ZAYA1-VL JANGTQ_K checkpoint now reports `text, vision` and skips video
+  probes instead of advertising unsupported video; blue-image, no-media
+  follow-up, multi-turn recall, paged ZAYA-CCA cache hit, and block-L2 paths
+  ran through the real server.
+
+### Known Follow-ups
+- ZAYA1-VL JANGTQ_K still needs a dedicated color/probe investigation: the
+  solid-blue image probe answers blue, but the solid-red image probe answered
+  white in the current live smoke.
+- ZAYA1-VL exact `ACK` obedience in the broad smoke harness remains too weak
+  for a pass, although multi-turn recall and cache-hit behavior were coherent.
+- Full VLM/video/audio proof remains open for families that genuinely declare
+  video/audio support; this release only prevents unsupported image-only VLMs
+  from crashing on video requests.
+
 ## [1.5.44] - 2026-05-19
 
 ### Fixed

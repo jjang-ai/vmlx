@@ -102,6 +102,10 @@ def check_and_inject_fallback_tools(
         is_dsv4_prompt
         and "<｜DSML｜tool_calls>" in instruction_prompt
         and all(name in instruction_prompt for name in tool_names)
+        and all(
+            f'<｜DSML｜invoke name="{name}"' in instruction_prompt
+            for name in tool_names
+        )
     )
     _dsv4_has_concrete_dsml_examples = (
         is_dsv4_prompt
@@ -148,9 +152,8 @@ def check_and_inject_fallback_tools(
         blocks: list[str] = []
         for tool in tools:
             name, props = _tool_props(tool)
-            params = props or ["arg1"]
             lines = [f'<｜DSML｜invoke name="{name}">']
-            for param in params:
+            for param in props:
                 lines.append(
                     f'  <｜DSML｜parameter name="{param}" string="true">VALUE HERE</｜DSML｜parameter>'
                 )
@@ -166,9 +169,8 @@ def check_and_inject_fallback_tools(
         blocks: list[str] = []
         for tool in tools:
             name, props = _tool_props(tool)
-            params = props or ["arg1"]
             lines = [wrapper_open, f"<function={name}>"]
-            for param in params:
+            for param in props:
                 lines.extend([f"<parameter={param}>", "VALUE HERE", "</parameter>"])
             lines.extend(["</function>", wrapper_close])
             blocks.append("\n".join(lines))
