@@ -15,7 +15,7 @@ permissions:
 jobs:
   publish:
     name: Build and publish vmlx
-    runs-on: macos-15
+    runs-on: ubuntu-latest
     environment: pypi
 
     steps:
