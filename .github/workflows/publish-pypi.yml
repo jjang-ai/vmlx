@@ -1,0 +1,42 @@
+name: Publish PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to publish"
+        required: true
+        default: "v1.5.45"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Build and publish vmlx
+    runs-on: macos-15
+    environment: pypi
+
+    steps:
+      - name: Check out release ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build backend
+        run: python -m pip install --upgrade build twine
+
+      - name: Build package
+        run: python -m build --sdist --wheel
+
+      - name: Check package metadata
+        run: python -m twine check dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
