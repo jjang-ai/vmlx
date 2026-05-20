@@ -42,6 +42,38 @@ def test_ollama_generate_default_uses_chat_template_request_shape():
     assert req["response_format"] == {"type": "json_object"}
 
 
+def test_ollama_chat_omits_disabled_top_k_sentinels():
+    from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
+
+    for sentinel in (0, -1):
+        req = ollama_chat_to_openai(
+            {
+                "model": "hy3",
+                "messages": [{"role": "user", "content": "hi"}],
+                "options": {"top_k": sentinel},
+            }
+        )
+        assert "top_k" not in req
+
+
+def test_ollama_generate_omits_disabled_top_k_sentinels():
+    from vmlx_engine.api.ollama_adapter import (
+        ollama_generate_to_openai,
+        ollama_generate_to_openai_chat,
+    )
+
+    for convert in (ollama_generate_to_openai, ollama_generate_to_openai_chat):
+        for sentinel in (0, -1):
+            req = convert(
+                {
+                    "model": "hy3",
+                    "prompt": "hi",
+                    "options": {"top_k": sentinel},
+                }
+            )
+            assert "top_k" not in req
+
+
 def test_ollama_chat_omits_enable_thinking_when_think_is_omitted():
     from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
 

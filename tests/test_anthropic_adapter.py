@@ -44,6 +44,22 @@ class TestRequestConversion:
         assert chat_req.messages[0].content == "Hello"
         assert chat_req.max_tokens == 100
 
+    def test_omitted_max_tokens_stays_model_owned(self):
+        req = AnthropicRequest(
+            model="test-model",
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+        chat_req = to_chat_completion(req)
+        assert chat_req.max_tokens is None
+
+    def test_invalid_max_tokens_rejected_when_present(self):
+        with pytest.raises(ValueError):
+            AnthropicRequest(
+                model="test-model",
+                messages=[{"role": "user", "content": "Hello"}],
+                max_tokens=0,
+            )
+
     def test_system_prompt_string(self):
         req = AnthropicRequest(
             model="test-model",
@@ -579,14 +595,14 @@ class TestAnthropicIntegrationCompat:
         assert chat_req.messages[2].role == "tool"
         assert chat_req.messages[2].tool_call_id == "call_xyz"
 
-    def test_max_tokens_always_set(self):
-        """Engine uses max_tokens for generation — must have a default."""
+    def test_omitted_max_tokens_stays_omitted_for_server_resolution(self):
+        """Omitted length stays model-owned; server resolves bundle/fallback."""
         req = AnthropicRequest(
             model="test-model",
             messages=[{"role": "user", "content": "Hi"}],
         )
         chat_req = to_chat_completion(req)
-        assert chat_req.max_tokens == 4096  # Anthropic default
+        assert chat_req.max_tokens is None
 
     def test_empty_messages_rejected_by_validation(self):
         """Edge case: empty message list is rejected by Pydantic (min_length=1)."""

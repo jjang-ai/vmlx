@@ -745,6 +745,53 @@ class TestFallbackToolPromptFormat:
         assert 'parameter name="path"' in rendered
         assert "<tool_call>" not in rendered
 
+    def test_dsv4_fallback_ignores_historical_dsml_when_checking_examples(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            calls = 0
+
+            def apply_chat_template(self, messages, **kwargs):
+                self.calls += 1
+                return "\n".join(m.get("content", "") for m in messages)
+
+        prompt = (
+            "<｜begin▁of▁sentence｜><｜User｜>list files<｜Assistant｜>\n"
+            '<｜DSML｜invoke name="list_directory">\n'
+            '  <｜DSML｜parameter name="path" string="true">.</｜DSML｜parameter>\n'
+            "</｜DSML｜invoke>\n"
+            "<｜User｜>{\"entries\":[\"README.md\"]}<｜Assistant｜>"
+        )
+        messages = [{"role": "user", "content": "use list_directory"}]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_directory",
+                    "description": "List files",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            }
+        ]
+
+        tokenizer = FakeTokenizer()
+        rendered = check_and_inject_fallback_tools(
+            prompt,
+            messages,
+            tools,
+            tokenizer,
+            {"tokenize": False, "add_generation_prompt": True},
+        )
+
+        assert tokenizer.calls >= 1
+        assert 'name="list_directory"' in rendered
+        assert 'parameter name="path"' in rendered
+        assert "Call them using DSML format" in rendered
+
     def test_qwen_fallback_injects_concrete_native_tool_example(self):
         from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
 
@@ -913,6 +960,98 @@ class TestFallbackToolPromptFormat:
         assert "<parameter=path>" in rendered
         assert "<parameter=content>" in rendered
         assert rendered.count("<zyphra_tool_call>") >= 2
+
+    def test_zaya_fallback_ignores_historical_tool_calls_when_checking_examples(self):
+        """Prior assistant tool-call history is not a concrete instruction exemplar.
+
+        Live ZAYA chained-tool repro: after list_directory then write_file,
+        the rendered prompt contained ``<function=list_directory>`` and
+        ``<function=write_file>`` in assistant history. The fallback detector
+        incorrectly counted those history blocks as native examples, stopped
+        injecting the stronger ZAYA tool instructions, and the model repeated
+        write_file instead of ending with final content.
+        """
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            last_kwargs = None
+            calls = 0
+
+            def apply_chat_template(self, messages, **kwargs):
+                self.calls += 1
+                self.last_kwargs = kwargs
+                return "\n".join(m.get("content", "") for m in messages)
+
+        prompt = (
+            "<bos><|im_start|>system\n"
+            "# Tools\n\n<tools>\n"
+            "<function>\n<name>list_directory</name>\n</function>\n"
+            "<function>\n<name>write_file</name>\n</function>\n"
+            "</tools>\n"
+            "If you choose to call a function ONLY reply in the following format with NO suffix:\n"
+            "<zyphra_tool_call>\n<function=example_function_name>\n"
+            "<parameter=example_parameter_1>\nvalue_1\n</parameter>\n"
+            "</function>\n</zyphra_tool_call><|im_end|>\n"
+            "<|im_start|>user\nUse list_directory then write_file.<|im_end|>\n"
+            "<|im_start|>assistant\n<think>\n</think>\n\n"
+            "<zyphra_tool_call>\n<function=list_directory>\n"
+            "<parameter=path>\n.\n</parameter>\n</function>\n</zyphra_tool_call>\n"
+            "<|im_end|>\n<|im_start|>user\n"
+            "<zyphra_tool_response>{\"entries\":[\"README.md\"]}</zyphra_tool_response>"
+            "<|im_end|>\n<|im_start|>assistant\n<think>\n</think>\n\n"
+            "<zyphra_tool_call>\n<function=write_file>\n"
+            "<parameter=path>\nvmlx_chained_tool_probe.txt\n</parameter>\n"
+            "<parameter=content>\nok\n</parameter>\n"
+            "</function>\n</zyphra_tool_call>\n<|im_end|>\n"
+            "<|im_start|>user\n"
+            "<zyphra_tool_response>{\"path\":\"vmlx_chained_tool_probe.txt\",\"bytes\":2}</zyphra_tool_response>"
+            "<|im_end|>\n<|im_start|>assistant\n"
+        )
+        messages = [{"role": "user", "content": "Use list_directory then write_file."}]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_directory",
+                    "description": "List files",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "write_file",
+                    "description": "Write a file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "content": {"type": "string"},
+                        },
+                        "required": ["path", "content"],
+                    },
+                },
+            },
+        ]
+
+        tokenizer = FakeTokenizer()
+        rendered = check_and_inject_fallback_tools(
+            prompt,
+            messages,
+            tools,
+            tokenizer,
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="zaya_xml",
+        )
+
+        assert tokenizer.calls >= 1
+        assert "fake directory listing" in rendered
+        assert "<function=list_directory>" in rendered
+        assert "<function=write_file>" in rendered
 
     def test_zaya_parser_id_forces_native_tool_example_for_plain_template(self):
         from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools

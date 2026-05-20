@@ -12,6 +12,7 @@ import { resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { resolveCacheLaunchPolicy } from '../src/shared/cacheControlPolicy'
 import { buildMcpPolicyArgs } from '../src/shared/mcpPolicy'
+import { canonicalizeToolParserId } from '../src/shared/toolParserAliases'
 
 // ─── SessionConfig replica (from SessionConfigForm.tsx) ──────────────────────
 
@@ -239,7 +240,7 @@ function buildCommandPreview(
     // (mirrors buildArgs: user choice wins over detection)
     const effectiveToolParser = config.toolCallParser === ''
         ? undefined
-        : (config.toolCallParser && config.toolCallParser !== 'auto' ? config.toolCallParser
+        : canonicalizeToolParserId(config.toolCallParser && config.toolCallParser !== 'auto' ? config.toolCallParser
             : detected?.toolParser)
     const effectiveAutoTool = config.enableAutoToolChoice ?? detected?.enableAutoToolChoice
     const effectiveReasoningParser = config.reasoningParser === ''
@@ -950,10 +951,17 @@ describe('Tool Integration', () => {
         expect(getFlagValue(out, '--tool-call-parser')).toBe('llama')
     })
 
+    it('canonicalizes legacy DSV4 and Hy3 parser aliases before launch', () => {
+        expect(getFlagValue(preview({ enableAutoToolChoice: true, toolCallParser: 'deepseek_v4' }), '--tool-call-parser')).toBe('dsml')
+        expect(getFlagValue(preview({ enableAutoToolChoice: true, toolCallParser: 'hy_v3' }), '--tool-call-parser')).toBe('hunyuan')
+        expect(getFlagValue(preview({ enableAutoToolChoice: true, toolCallParser: 'auto' }, { toolParser: 'deepseek_v4' }), '--tool-call-parser')).toBe('dsml')
+        expect(getFlagValue(preview({ enableAutoToolChoice: true, toolCallParser: 'auto' }, { toolParser: 'hy_v3' }), '--tool-call-parser')).toBe('hunyuan')
+    })
+
     it('tool parser dropdown exposes DSV4 DSML, Hy3, and ZAYA parsers', () => {
         const formSource = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
-        expect(formSource).toContain("value: 'deepseek_v4'")
-        expect(formSource).toContain("value: 'hy_v3'")
+        expect(formSource).toContain("value: 'dsml'")
+        expect(formSource).toContain("value: 'hunyuan'")
         expect(formSource).toContain("value: 'zaya_xml'")
         expect(formSource).toContain('DeepSeek V4')
         expect(formSource).toContain('Hy3')
@@ -977,14 +985,9 @@ describe('Tool Integration', () => {
         const formSource = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
         const emittedParsers = [...registrySource.matchAll(/toolParser: '([^']+)'/g)].map(match => match[1])
         const uiValues = new Set([...formSource.matchAll(/value: '([^']+)'/g)].map(match => match[1]))
-        const uiAliases: Record<string, string> = {
-            dsml: 'deepseek_v4',
-            hunyuan: 'hy_v3',
-        }
 
         const missing = [...new Set(emittedParsers)].filter(parser => {
-            const uiValue = uiAliases[parser] || parser
-            return !uiValues.has(uiValue)
+            return !uiValues.has(parser)
         })
 
         expect(missing).toEqual([])

@@ -12,6 +12,7 @@ import { resolveImageModelFromDirectoryName } from '../shared/imageModels'
 import { dsv4EnvFromConfig } from '../shared/dsv4Env'
 import { resolveCacheLaunchPolicy } from '../shared/cacheControlPolicy'
 import { buildMcpPolicyArgs } from '../shared/mcpPolicy'
+import { canonicalizeToolParserId } from '../shared/toolParserAliases'
 
 export type { ServerConfig, DetectedProcess } from './server'
 import type { ServerConfig, DetectedProcess } from './server'
@@ -2451,7 +2452,7 @@ export class SessionManager extends EventEmitter {
     const userToolParser = config.toolCallParser
     const effectiveToolParser = userToolParser === ''
       ? undefined                     // User explicitly chose "None"
-      : (userToolParser && userToolParser !== 'auto' ? userToolParser
+      : canonicalizeToolParserId(userToolParser && userToolParser !== 'auto' ? userToolParser
         : detected.toolParser)       // Fallback to detection if auto or missing
 
     const effectiveAutoTool = config.enableAutoToolChoice ?? detected.enableAutoToolChoice

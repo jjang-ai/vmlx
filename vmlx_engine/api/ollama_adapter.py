@@ -65,6 +65,20 @@ def _apply_ollama_prompt_context_limit(body: dict, req: dict[str, Any]) -> None:
             return
 
 
+def _apply_ollama_top_k(opts: dict, req: dict[str, Any]) -> None:
+    """Forward only active top_k values; 0/-1 are disabled sentinels."""
+    value = opts.get("top_k")
+    if value is None:
+        return
+    try:
+        top_k = int(value)
+    except (TypeError, ValueError):
+        req["top_k"] = value
+        return
+    if top_k > 0:
+        req["top_k"] = top_k
+
+
 def ollama_chat_to_openai(body: dict) -> dict:
     """Convert Ollama /api/chat request to OpenAI /v1/chat/completions."""
     opts = body.get("options", {})
@@ -116,8 +130,7 @@ def ollama_chat_to_openai(body: dict) -> dict:
         req["temperature"] = opts["temperature"]
     if opts.get("top_p") is not None:
         req["top_p"] = opts["top_p"]
-    if opts.get("top_k") is not None:
-        req["top_k"] = opts["top_k"]
+    _apply_ollama_top_k(opts, req)
     if opts.get("min_p") is not None:
         req["min_p"] = opts["min_p"]
     if opts.get("stop"):
@@ -172,8 +185,7 @@ def ollama_generate_to_openai(body: dict) -> dict:
         req["temperature"] = opts["temperature"]
     if opts.get("top_p") is not None:
         req["top_p"] = opts["top_p"]
-    if opts.get("top_k") is not None:
-        req["top_k"] = opts["top_k"]
+    _apply_ollama_top_k(opts, req)
     if opts.get("min_p") is not None:
         req["min_p"] = opts["min_p"]
     if opts.get("repeat_penalty") is not None:
@@ -219,8 +231,7 @@ def ollama_generate_to_openai_chat(body: dict) -> dict:
         req["temperature"] = opts["temperature"]
     if opts.get("top_p") is not None:
         req["top_p"] = opts["top_p"]
-    if opts.get("top_k") is not None:
-        req["top_k"] = opts["top_k"]
+    _apply_ollama_top_k(opts, req)
     if opts.get("min_p") is not None:
         req["min_p"] = opts["min_p"]
     if opts.get("stop"):

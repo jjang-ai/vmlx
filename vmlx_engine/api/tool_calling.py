@@ -24,6 +24,29 @@ from .models import FunctionCall, ResponseFormat, ToolCall
 logger = logging.getLogger(__name__)
 
 
+def _tool_instruction_scope(prompt: str) -> str:
+    """Return the template instruction block, excluding prior chat history."""
+    if not prompt:
+        return ""
+
+    # Tool templates normally place schemas/examples in the opening system
+    # section. Later assistant history can contain real tool calls, which must
+    # not be counted as parser-native instruction examples.
+    cut_markers = (
+        "<|im_start|>user",
+        "<｜User｜>",
+        "<|user|>",
+        "\nUser:",
+        "\nuser:",
+        "\n### User",
+        "\n[INST]",
+    )
+    cuts = [prompt.find(marker) for marker in cut_markers if prompt.find(marker) >= 0]
+    if not cuts:
+        return prompt
+    return prompt[: min(cuts)]
+
+
 def check_and_inject_fallback_tools(
     prompt: Optional[str],
     messages: List[Dict[str, Any]],
@@ -50,6 +73,8 @@ def check_and_inject_fallback_tools(
     if not tool_names:
         return prompt
 
+    instruction_prompt = _tool_instruction_scope(prompt)
+
     # Some templates need more than tool-name visibility. DSV4 may mention
     # schemas without a parser-matching DSML exemplar. Qwen3.5/3.6 MoE's
     # shipped template includes only an `example_function_name` exemplar; live
@@ -75,20 +100,23 @@ def check_and_inject_fallback_tools(
     # tools correctly. Otherwise inject a concrete native exemplar.
     _dsv4_has_native_dsml_schema = (
         is_dsv4_prompt
-        and "<｜DSML｜tool_calls>" in prompt
-        and all(name in prompt for name in tool_names)
+        and "<｜DSML｜tool_calls>" in instruction_prompt
+        and all(name in instruction_prompt for name in tool_names)
     )
     _dsv4_has_concrete_dsml_examples = (
         is_dsv4_prompt
-        and all(f'<｜DSML｜invoke name="{name}"' in prompt for name in tool_names)
+        and all(
+            f'<｜DSML｜invoke name="{name}"' in instruction_prompt
+            for name in tool_names
+        )
     )
     _qwen_has_concrete_tool_examples = (
         is_qwen_native_tool_prompt
-        and all(f"<function={name}>" in prompt for name in tool_names)
+        and all(f"<function={name}>" in instruction_prompt for name in tool_names)
     )
     _zaya_has_concrete_tool_examples = (
         is_zaya_native_tool_prompt
-        and all(f"<function={name}>" in prompt for name in tool_names)
+        and all(f"<function={name}>" in instruction_prompt for name in tool_names)
     )
     if all(name in prompt for name in tool_names) and (
         (not is_dsv4_prompt or _dsv4_has_native_dsml_schema or _dsv4_has_concrete_dsml_examples)

@@ -33,7 +33,7 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .models import (
     ChatCompletionRequest,
@@ -67,7 +67,7 @@ class AnthropicRequest(BaseModel):
     model: str
     messages: list[dict]
     system: str | list[dict] | None = None
-    max_tokens: int = 4096
+    max_tokens: int | None = None
     temperature: float | None = None
     top_p: float | None = None
     top_k: int | None = None
@@ -89,6 +89,13 @@ class AnthropicRequest(BaseModel):
     chat_template_kwargs: dict | None = None
     # Non-Anthropic passthrough for explicit enable_thinking bool.
     enable_thinking: bool | None = None
+
+    @field_validator("max_tokens")
+    @classmethod
+    def validate_max_tokens(cls, value: int | None) -> int | None:
+        if value is not None and value < 1:
+            raise ValueError("max_tokens must be at least 1")
+        return value
 
 
 # ─── Request Conversion ────────────────────────────────────────────────

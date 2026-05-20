@@ -10,6 +10,7 @@ import {
   type CacheControlUpdate,
 } from '../../../../shared/cacheControlPolicy'
 import { normalizeMcpPolicyList } from '../../../../shared/mcpPolicy'
+import { canonicalizeToolParserId } from '../../../../shared/toolParserAliases'
 export interface SessionConfig {
   host: string
   port: number
@@ -1236,7 +1237,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <ParserField
           label="Tool Call Parser"
           tooltip="Specifies how to parse the model's tool call output. Each model family uses a different format (Qwen, Llama, Mistral, Hermes, DeepSeek, GLM, etc). 'Auto-detect' reads config.json to pick the right one. If auto-detection fails (e.g. GGUF, renamed fine-tunes), select the parser matching your model's base architecture. Click '?' to see format examples and supported models for each parser."
-          value={config.toolCallParser}
+          value={canonicalizeToolParserId(config.toolCallParser) ?? 'auto'}
           onChange={v => onChange('toolCallParser', v)}
           options={TOOL_PARSER_OPTIONS}
         />
@@ -1624,13 +1625,13 @@ const TOOL_PARSER_OPTIONS: ParserOption[] = [
     ]
   },
   {
-    value: 'deepseek_v4', label: 'DeepSeek V4 / DSV4-Flash — DSML', format: '<｜DSML｜invoke name="fn"><｜DSML｜parameter name="arg" string="true">val</｜DSML｜parameter></｜DSML｜invoke>', models: [
+    value: 'dsml', label: 'DeepSeek V4 / DSV4-Flash — DSML', format: '<｜DSML｜invoke name="fn"><｜DSML｜parameter name="arg" string="true">val</｜DSML｜parameter></｜DSML｜invoke>', models: [
       'DeepSeek-V4-Flash / DSV4-Flash JANG, JANGTQ, and DQ bundles',
       'Use this for deepseek_v4 model_type; DeepSeek V3/R1 use the DeepSeek parser above',
     ]
   },
   {
-    value: 'hy_v3', label: 'Hy3 / Hunyuan — Tencent XML tools', format: '<tool_calls><tool_call>fn<tool_sep><arg_key>arg</arg_key><arg_value>val</arg_value></tool_call></tool_calls>', models: [
+    value: 'hunyuan', label: 'Hy3 / Hunyuan — Tencent XML tools', format: '<tool_calls><tool_call>fn<tool_sep><arg_key>arg</arg_key><arg_value>val</arg_value></tool_call></tool_calls>', models: [
       'Hy3-preview / Hunyuan model_type=hy_v3 bundles',
       'Hunyuan/Tencent XML tool-call contract',
     ]

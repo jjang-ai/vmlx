@@ -14,8 +14,50 @@ interface ToolConfig {
   installArgs: string[]
   configPath: string
   getEntries: () => Array<{ label: string; baseUrl: string }>
-  addEntry: (baseUrl: string, modelName: string, port: number | null) => void
+  addEntry: (baseUrl: string, modelName: string, port: number | null, limits: CodingToolModelLimits) => void
   removeEntry: (label: string) => void
+}
+
+interface CodingToolModelLimits {
+  context: number
+  output: number
+}
+
+const FALLBACK_CODING_TOOL_LIMITS: CodingToolModelLimits = {
+  context: 32768,
+  output: 4096,
+}
+
+function normalizePositiveInt(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return undefined
+  return Math.round(value)
+}
+
+async function getCodingToolModelLimits(baseUrl: string, modelName: string): Promise<CodingToolModelLimits> {
+  const limits: CodingToolModelLimits = { ...FALLBACK_CODING_TOOL_LIMITS }
+  try {
+    const health = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(1500) })
+    if (health.ok) {
+      const body = await health.json()
+      limits.context = normalizePositiveInt(body?.max_prompt_tokens) ?? limits.context
+    }
+  } catch {}
+
+  try {
+    const encoded = encodeURIComponent(modelName)
+    const caps = await fetch(`${baseUrl}/v1/models/${encoded}/capabilities`, {
+      signal: AbortSignal.timeout(1500),
+    })
+    if (caps.ok) {
+      const body = await caps.json()
+      limits.output =
+        normalizePositiveInt(body?.sampling_defaults?.max_new_tokens) ??
+        normalizePositiveInt(body?.sampling_defaults?.max_tokens) ??
+        limits.output
+    }
+  } catch {}
+
+  return limits
 }
 
 function safeReadJSON(path: string): any {
@@ -147,14 +189,14 @@ const codexCli: ToolConfig = {
     }
     return entries
   },
-  addEntry: (baseUrl, modelName) => {
+  addEntry: (baseUrl, modelName, _port, limits) => {
     let toml = safeReadTOML(CODEX_TOML) || ''
     const providerKey = `MLXSTUDIO_${modelName.replace(/[^a-zA-Z0-9_]/g, '_').toUpperCase()}`
     // Remove existing section if present
     const sectionPattern = new RegExp(`\\[model_providers\\.${providerKey}\\][\\s\\S]*?(?=\\n\\[|$)`, 'g')
     toml = toml.replace(sectionPattern, '').replace(/\n{3,}/g, '\n\n').trim()
     // Append new section
-    const section = `\n\n[model_providers.${providerKey}]\nname = "MLX Studio (${modelName})"\nbase_url = "${baseUrl}/v1"\nwire_api = "responses"\nmax_context = 32768\n`
+    const section = `\n\n[model_providers.${providerKey}]\nname = "MLX Studio (${modelName})"\nbase_url = "${baseUrl}/v1"\nwire_api = "responses"\nmax_context = ${limits.context}\n`
     toml += section
     safeWriteTOML(CODEX_TOML, toml)
   },
@@ -182,7 +224,7 @@ const openCode: ToolConfig = {
       .filter(([_, v]: any) => v?.[MLXSTUDIO_TAG])
       .map(([k, v]: any) => ({ label: k, baseUrl: (v as any)?.options?.baseURL || '' }))
   },
-  addEntry: (baseUrl, modelName) => {
+  addEntry: (baseUrl, modelName, _port, limits) => {
     const path = join(homedir(), '.config', 'opencode', 'opencode.json')
     const cfg = safeReadJSON(path) || { '$schema': 'https://opencode.ai/config.json' }
     if (!cfg.provider) cfg.provider = {}
@@ -194,7 +236,7 @@ const openCode: ToolConfig = {
       models: {
         [modelName]: {
           name: modelName,
-          limit: { context: 32768, output: 4096 },
+          limit: { context: limits.context, output: limits.output },
           modalities: { input: ['text'], output: ['text'] },
         },
       },
@@ -231,7 +273,7 @@ const openClaw: ToolConfig = {
     }
     return entries
   },
-  addEntry: (baseUrl, modelName) => {
+  addEntry: (baseUrl, modelName, _port, limits) => {
     const cfg = safeReadJSON(OPENCLAW_JSON) || {}
     if (!cfg.models) cfg.models = {}
     if (!cfg.models.mode) cfg.models.mode = 'merge'
@@ -251,8 +293,8 @@ const openClaw: ToolConfig = {
         reasoning: false,
         input: ['text'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 32768,
-        maxTokens: 32768,
+        contextWindow: limits.context,
+        maxTokens: limits.output,
       }],
       [MLXSTUDIO_TAG]: true,
     }
@@ -317,7 +359,8 @@ export function registerCodingToolHandlers(): void {
     if (!tool) return { success: false, error: 'Unknown tool' }
     if (!tool.detect()) return { success: false, error: 'Tool not installed' }
     try {
-      tool.addEntry(baseUrl, modelName, port)
+      const limits = await getCodingToolModelLimits(baseUrl, modelName)
+      tool.addEntry(baseUrl, modelName, port, limits)
       return { success: true }
     } catch (e) {
       return { success: false, error: (e as Error).message }
@@ -338,6 +381,7 @@ export function registerCodingToolHandlers(): void {
   // Returns tailored config snippets for manual setup instructions
   ipcMain.handle('tools:getConfigSnippets', async (_, baseUrl: string, modelName: string) => {
     const home = homedir()
+    const limits = await getCodingToolModelLimits(baseUrl, modelName)
     return {
       'claude-code': {
         filePath: `${home}/.claude/settings.json`,
@@ -354,7 +398,7 @@ export function registerCodingToolHandlers(): void {
       'codex': {
         filePath: `${home}/.codex/config.toml`,
         language: 'toml',
-        snippet: `[model_providers.MLXSTUDIO_${modelName.replace(/[^a-zA-Z0-9_]/g, '_').toUpperCase()}]\nname = "MLX Studio (${modelName})"\nbase_url = "${baseUrl}/v1"\nwire_api = "responses"\nmax_context = 32768`,
+        snippet: `[model_providers.MLXSTUDIO_${modelName.replace(/[^a-zA-Z0-9_]/g, '_').toUpperCase()}]\nname = "MLX Studio (${modelName})"\nbase_url = "${baseUrl}/v1"\nwire_api = "responses"\nmax_context = ${limits.context}`,
         notes: 'Append this section to the end of your config.toml. If the file doesn\'t exist, create ~/.codex/config.toml. Then run: codex --provider MLXSTUDIO_... Verify: codex --version',
       },
       'opencode': {
@@ -369,7 +413,7 @@ export function registerCodingToolHandlers(): void {
               models: {
                 [modelName]: {
                   name: modelName,
-                  limit: { context: 32768, output: 4096 },
+                  limit: { context: limits.context, output: limits.output },
                   modalities: { input: ['text'], output: ['text'] },
                 },
               },
@@ -395,8 +439,8 @@ export function registerCodingToolHandlers(): void {
                   reasoning: false,
                   input: ['text'],
                   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 32768,
-                  maxTokens: 32768,
+                  contextWindow: limits.context,
+                  maxTokens: limits.output,
                 }],
               },
             },

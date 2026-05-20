@@ -541,6 +541,88 @@ class TestServerSamplingResolution:
         assert captured[0]["chat_template_kwargs"]["thinking_budget"] == 32768
         assert captured[1]["chat_template_kwargs"]["thinking_budget"] == 32768
 
+    def test_anthropic_messages_omitted_max_tokens_uses_bundle_default(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Anthropic compatibility must not force its old 4096 default.
+
+        The /v1/messages endpoint aggregates the shared Chat Completions stream,
+        so test the route, not just anthropic_adapter.to_chat_completion().
+        """
+        from fastapi.testclient import TestClient
+
+        import vmlx_engine.server as server
+
+        (tmp_path / "generation_config.json").write_text(
+            json.dumps({"max_new_tokens": 2048})
+        )
+
+        class FakeEngine:
+            is_mllm = False
+            tokenizer = None
+            preserve_native_tool_format = False
+
+        captured: list[dict] = []
+
+        async def fake_stream_chat_completion(*args, **kwargs):
+            captured.append(
+                {
+                    "max_tokens": kwargs.get("max_tokens"),
+                    "temperature": kwargs.get("temperature"),
+                    "top_p": kwargs.get("top_p"),
+                }
+            )
+            yield (
+                'data: {"choices":[{"delta":{"content":"ok"},'
+                '"finish_reason":"stop"}],"usage":{"prompt_tokens":1,'
+                '"completion_tokens":1}}\n\n'
+            )
+            yield "data: [DONE]\n\n"
+
+        monkeypatch.setattr(server, "_engine", FakeEngine())
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "bundle-model")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+        monkeypatch.setattr(server, "_api_key", None, raising=False)
+        monkeypatch.setattr(server, "_default_max_tokens", 32768)
+        monkeypatch.setattr(server, "_default_max_tokens_explicit", False, raising=False)
+        monkeypatch.setattr(server, "_default_temperature", None)
+        monkeypatch.setattr(server, "_default_top_p", None)
+        monkeypatch.setattr(server, "_default_top_k", None)
+        monkeypatch.setattr(server, "_default_min_p", None)
+        monkeypatch.setattr(server, "_default_repetition_penalty", None)
+        monkeypatch.setattr(server, "stream_chat_completion", fake_stream_chat_completion)
+        server._jang_sampling_defaults_cache.clear()
+        server._generation_defaults_cache.clear()
+
+        client = TestClient(server.app)
+
+        omitted = client.post(
+            "/v1/messages",
+            json={
+                "model": "bundle-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+            },
+        )
+        explicit = client.post(
+            "/v1/messages",
+            json={
+                "model": "bundle-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+                "max_tokens": 33,
+            },
+        )
+
+        assert omitted.status_code == 200
+        assert explicit.status_code == 200
+        assert captured[0]["max_tokens"] == 2048
+        assert captured[1]["max_tokens"] == 33
+
     def test_explicit_server_max_tokens_overrides_bundle_max_new_tokens(
         self,
         tmp_path,
