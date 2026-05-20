@@ -26,6 +26,14 @@ describe('dsv4EnvFromConfig', () => {
     })
   })
 
+  it('keeps DSV4 composite prefix cache explicit and opt-in when enabled', () => {
+    expect(dsv4EnvFromConfig({ dsv4PrefixCache: true }, { dsv4Active: true })).toEqual({
+      DSV4_LONG_CTX: '1',
+      DSV4_POOL_QUANT: '0',
+      VMLX_DSV4_ENABLE_PREFIX_CACHE: '1',
+    })
+  })
+
   it('does not leak DSV4 pool quant env into non-DSV4 launches', () => {
     expect(dsv4EnvFromConfig({ dsv4PoolQuant: true }, { dsv4Active: false })).toEqual({})
   })
@@ -76,6 +84,7 @@ describe('dsv4EnvFromConfig', () => {
 
   it('combines supported DSV4 fields when set together', () => {
     const env = dsv4EnvFromConfig({
+      dsv4PrefixCache: true,
       dsv4PoolQuant: true,
       dsv4RawMax: true,
       dsv4ForceDirect: true,
@@ -83,6 +92,7 @@ describe('dsv4EnvFromConfig', () => {
     expect(env).toEqual({
       DSV4_LONG_CTX: '1',
       DSV4_POOL_QUANT: '1',
+      VMLX_DSV4_ENABLE_PREFIX_CACHE: '1',
     })
   })
 
@@ -113,12 +123,13 @@ describe('dsv4EnvFromConfig wired into sessions.ts spawnEnv', () => {
     expect(source).toContain('spawnEnv[key] = value')
   })
 
-  it('marks DSV4 pool quant as restart-required session config', () => {
+  it('marks DSV4 cache controls as restart-required session config', () => {
     const fs = require('node:fs')
     const path = require('node:path')
     const sessionsPath = path.resolve(__dirname, '../src/main/sessions.ts')
     const source = fs.readFileSync(sessionsPath, 'utf8')
 
+    expect(source).toContain("'dsv4PrefixCache'")
     expect(source).toContain("'dsv4PoolQuant'")
     expect(source).not.toContain("'dsv4RawMax'")
     expect(source).not.toContain("'dsv4ForceDirect'")
@@ -133,11 +144,13 @@ describe('DSV4 runtime controls in SessionConfigForm', () => {
     const source = fs.readFileSync(formPath, 'utf8')
 
     expect(source).toContain('dsv4PoolQuant?: boolean')
+    expect(source).toContain('dsv4PrefixCache?: boolean')
     expect(source).toContain('dsv4PoolQuant: false')
+    expect(source).toContain('dsv4PrefixCache: false')
     expect(source).not.toContain('dsv4FinalizerTokens')
   })
 
-  it('renders only DSV4 pool quant control in performance settings', () => {
+  it('renders only supported DSV4 runtime controls in performance settings', () => {
     const fs = require('node:fs')
     const path = require('node:path')
     const formPath = path.resolve(__dirname, '../src/renderer/src/components/sessions/SessionConfigForm.tsx')
@@ -150,6 +163,8 @@ describe('DSV4 runtime controls in SessionConfigForm', () => {
     expect(source).not.toContain("onChange={v => onChange('dsv4FinalizerTokens', v)}")
     expect(source).not.toContain('DSV4 Force Direct Rail')
     expect(source).not.toContain("onChange={v => onChange('dsv4ForceDirect', v)}")
+    expect(source).toContain('DSV4 Composite Prefix Cache')
+    expect(source).toContain("onChange('dsv4PrefixCache', v)")
     expect(source).toContain('DSV4 Pool Quantization')
     expect(source).toContain("onChange={v => onChange('dsv4PoolQuant', v)}")
     expect(source).not.toContain('DSV4 Raw Max Thinking')

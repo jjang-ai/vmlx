@@ -872,14 +872,20 @@
     },
     "notice": {
       "title": "MLX Studio 的新功能",
-      "section1Heading": "JIT 休眠与自动唤醒",
-      "section1Body": "模型在下次请求时会自动唤醒 (JIT),耗时 2-15 秒。可在电源管理设置中按会话配置超时时间。",
-      "section2Heading": "磁盘缓存与稳定性",
-      "section2BodyA": "修复了静默失败的磁盘缓存写入 (重命名时出现 ENOENT)。孤立的临时文件现在会在启动时自动清理。",
-      "section2BodyB": "更平滑的 token 流式输出 (8ms 节流)、修复了内存图表可见性问题,以及生产审计中的 38+ 个 bug 修复。",
-      "section3Heading": "JANG v2 量化",
-      "section3Body": "JANG 现已支持视觉语言 (VL) 模型 — 可在聊天中结合 JANG MoE 模型 (如 Qwen3.5-35B 和 122B) 加载图像。",
-      "footer": "感谢您使用 MLX Studio 和 JANG。— Jinho Jang"
+      "section1Heading": "MCP tools 与 API gateway",
+      "section1BodyA": "MCP config discovery 现在无需启动参数即可从 mcp.json 或 mcp.yaml 工作，并且按服务器/工具的策略会贯穿 sessions 与 gateway。",
+      "section1BodyB": "Built-in tools 与 MCP tools 现在可一起使用，支持 structured tool calls、multi-round continuation，并通过更安全的 parser cleanup 避免 raw marker leak。",
+      "section2Heading": "Model settings 与 generation defaults",
+      "section2BodyA": "Chat Settings 现在会显示已应用的 temperature、top_p、top_k、repetition penalty、thinking mode、tool parser 和 reasoning parser。",
+      "section2BodyB": "省略 max_tokens 时，现在会解析为有界的 model/default budget，而不是旧的 32768 fallback，并在 request logs 中显示 resolved value。",
+      "section3Heading": "MTP, cache 与 JANG runtime hardening",
+      "section3BodyA": "Qwen3.6 native MTP detection、JANG/JANGTQ group-size recognition、MX matmul dispatch checks，以及 Hunyuan/ZAYA/Gemma/MiniMax routing 都有更严格的 gates。",
+      "section3BodyB": "Prefix cache、paged cache、L2 disk cache 与 TurboQuant KV 路径现在公开更清晰的 health counters，让 cache reuse 可被确认而不是猜测。",
+      "section4Heading": "Release integrity 与 updater safety",
+      "section4BodyA": "发布前会检查 packaged app 的 Developer ID signing、notarization、bundled source hashes、critical imports、GUI launch，以及 latest.json/update manifest compatibility。",
+      "section4BodyB": "DeepSeek V4 Flash 仍保持保守策略：composite cache 继续 opt-in，exact long-code output 在 identifier gate 清除前列为 follow-up。",
+      "footer": "感谢您使用 MLX Studio 和 JANG。— Jinho Jang",
+      "dismiss": "知道了 — 下次更新前不再显示"
     }
   },
   "ui": {

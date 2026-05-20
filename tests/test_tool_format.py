@@ -1252,6 +1252,62 @@ class TestFallbackToolPromptFormat:
         assert '"path": "."' in result.tool_calls[0]["arguments"]
         assert result.content is None
 
+    def test_dsml_parser_repairs_dsv4_live_degraded_dsml_params(self):
+        from vmlx_engine.tool_parsers.dsml_tool_parser import DSMLToolParser
+
+        text = (
+            '<｜DSML｜tool_calls>\n'
+            '<｜DSML｜invoke name="list_directory">\n'
+            '<｜DSML｜parameter name="path">.</｜DSML｜parameter>\n'
+            '</｜DSML｜inv>\n'
+            '<｜DSML｜invoke name="write_file">\n'
+            '<｜DSML｜parameter name="path">x.txt</｜DSML｜parameter>\n'
+            '<｜DSML｜parameter name="content">ok</｜DSML｜parameter>\n'
+            '</｜DSML｜inv>\n'
+            '</｜DSML｜tool_calls>'
+        )
+        req = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "list_directory",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "write_file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "content": {"type": "string"},
+                            },
+                            "required": ["path", "content"],
+                        },
+                    },
+                },
+            ]
+        }
+
+        result = DSMLToolParser(None).extract_tool_calls(text, request=req)
+
+        assert result.tools_called
+        assert [tc["name"] for tc in result.tool_calls] == [
+            "list_directory",
+            "write_file",
+        ]
+        assert '"path": "."' in result.tool_calls[0]["arguments"]
+        assert '"path": "x.txt"' in result.tool_calls[1]["arguments"]
+        assert '"content": "ok"' in result.tool_calls[1]["arguments"]
+        assert result.content is None
+
     def test_dsml_parser_repairs_partial_invoke_with_malformed_value_attr(self):
         from vmlx_engine.tool_parsers.dsml_tool_parser import DSMLToolParser
 
@@ -1510,6 +1566,8 @@ import json
 def encode_messages(messages, **kwargs):
     out = []
     for msg in messages:
+        if msg.get("role") == "user":
+            out.append(f'<｜User｜>{msg.get("content", "")}')
         if msg.get("role") == "assistant":
             for tc in msg.get("tool_calls") or []:
                 fn = tc.get("function") or {}
@@ -1520,6 +1578,9 @@ def encode_messages(messages, **kwargs):
                     out.append(f'<parameter name="{k}">{v}</parameter>')
         if msg.get("role") == "tool":
             out.append(f'<tool_result>{msg.get("content", "")}</tool_result>')
+    if messages and messages[-1].get("role") in ("user", "developer"):
+        out.append("<｜Assistant｜>")
+        out.append("<think>" if kwargs.get("thinking_mode") == "thinking" else "</think>")
     return "\\n".join(out)
 
 def parse_message_from_completion_text(raw_text, **kwargs):
@@ -1563,6 +1624,35 @@ def parse_message_from_completion_text(raw_text, **kwargs):
         assert 'parameter name="path"' in prompt
         assert 'parameter name="arguments"' not in prompt
         assert "<tool_result>README.md</tool_result>" in prompt
+
+    def test_dsv4_encoder_preserves_code_identifiers_on_direct_chat_rail(self, tmp_path):
+        import vmlx_engine.loaders.dsv4_chat_encoder as dsv4_chat_encoder
+
+        model_path = tmp_path / "DeepSeek-V4-Flash-JANGTQ"
+        self._write_fake_dsv4_encoder(model_path)
+        dsv4_chat_encoder._encoding_cache.clear()
+        snippet = (
+            "const scene = new THREE.Scene();\n"
+            "const renderer = new THREE.WebGLRenderer();\n"
+            "const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 100);\n"
+            "const mesh = new THREE.Mesh(new THREE.BoxGeometry(), "
+            "new THREE.MeshBasicMaterial());"
+        )
+
+        prompt = dsv4_chat_encoder.apply_chat_template(
+            [{"role": "user", "content": f"Output exactly this:\n{snippet}"}],
+            enable_thinking=False,
+            model_path=str(model_path),
+        )
+
+        assert "THREE.Scene" in prompt
+        assert "THREE.WebGLRenderer" in prompt
+        assert "THREE.PerspectiveCamera" in prompt
+        assert "THREE.Mesh" in prompt
+        assert "THREE.BoxGeometry" in prompt
+        assert "THREE.MeshBasicMaterial" in prompt
+        assert "WebWebGLRenderer" not in prompt
+        assert prompt.endswith("<｜Assistant｜>\n</think>")
 
     def test_dsv4_encoder_auto_discovers_home_models_encoding(self, tmp_path, monkeypatch):
         import vmlx_engine.loaders.dsv4_chat_encoder as dsv4_chat_encoder

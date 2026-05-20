@@ -149,4 +149,28 @@ describe('i18n locale consistency', () => {
     expect(indexSrc).toContain('localStorage.setItem')
     expect(indexSrc).toContain('localStorage.getItem')
   })
+
+  it('release update notice is localized and covers v1.5.45 release-critical items', () => {
+    const updateNoticeSrc = readFileSync(
+      resolve(__dirname, '..', 'src', 'renderer', 'src', 'components', 'UpdateNotice.tsx'),
+      'utf-8',
+    )
+    expect(updateNoticeSrc).toContain("CURRENT_NOTICE_VERSION = '1.5.45'")
+    expect(updateNoticeSrc).toContain('useTranslation')
+    expect(updateNoticeSrc).not.toContain('JIT Sleep & Auto-Wake')
+    expect(updateNoticeSrc).not.toContain('JANG v2 Quantization')
+
+    const notice = locales.en.update.notice
+    const combined = Object.values(notice).join('\n')
+    for (const term of ['MCP', 'MTP', 'latest.json', 'Developer ID', 'L2 disk cache', 'max_tokens']) {
+      expect(combined, `update notice must mention ${term}`).toContain(term)
+    }
+
+    for (const l of LOCALES) {
+      const localeNotice = locales[l].update.notice
+      expect(localeNotice.section1Heading).toContain('MCP')
+      expect(localeNotice.section3Heading).toContain('MTP')
+      expect(localeNotice.section4BodyA).toContain('latest.json')
+    }
+  })
 })

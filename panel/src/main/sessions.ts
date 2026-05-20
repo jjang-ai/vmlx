@@ -88,18 +88,48 @@ function effectiveSessionTimeoutSeconds(config: Partial<ServerConfig>, family?: 
   return configured != null && configured > 0 ? configured : GENERIC_DEFAULT_TIMEOUT_SECONDS
 }
 
-function applyFamilyStartupDefaults(config: Partial<ServerConfig>, modelPath?: string): void {
-  if (!modelPath) return
+function applyFamilyStartupDefaults(config: Partial<ServerConfig>, modelPath?: string): boolean {
+  if (!modelPath) return false
   try {
     const detected = detectModelConfigFromDir(modelPath)
+    let changed = false
     if (
       normalizeDetectedFamilyName(detected.family) === 'deepseek-v4' &&
       (config.timeout == null || config.timeout === GENERIC_DEFAULT_TIMEOUT_SECONDS)
     ) {
       config.timeout = DSV4_DEFAULT_TIMEOUT_SECONDS
+      changed = true
     }
+    if (normalizeDetectedFamilyName(detected.family) === 'deepseek-v4') {
+      const dsv4PrefixOptIn = config.dsv4PrefixCache === true
+      const desiredPrefix = dsv4PrefixOptIn
+      const desiredPaged = dsv4PrefixOptIn
+      const desiredBlockDisk = dsv4PrefixOptIn
+      if (config.enablePrefixCache !== desiredPrefix) {
+        config.enablePrefixCache = desiredPrefix
+        changed = true
+      }
+      if (config.usePagedCache !== desiredPaged) {
+        config.usePagedCache = desiredPaged
+        changed = true
+      }
+      if (config.enableBlockDiskCache !== desiredBlockDisk) {
+        config.enableBlockDiskCache = desiredBlockDisk
+        changed = true
+      }
+      if (config.pagedCacheBlockSize !== DSV4_PAGED_CACHE_BLOCK_SIZE) {
+        config.pagedCacheBlockSize = DSV4_PAGED_CACHE_BLOCK_SIZE
+        changed = true
+      }
+      if (config.dsv4PrefixCache == null) {
+        config.dsv4PrefixCache = false
+        changed = true
+      }
+    }
+    return changed
   } catch {
     /* family defaults are best-effort; launch-time buildArgs repeats the guard */
+    return false
   }
 }
 
@@ -185,6 +215,7 @@ const DSV4_ADDITIONAL_ARG_BLOCKLIST = new Set([
   '--log-level',
   '--allowed-origins',
   '--served-model-name',
+  '--dsv4-enable-prefix-cache',
   '--enable-prefix-cache',
   '--disable-prefix-cache',
   '--use-paged-cache',
@@ -962,8 +993,9 @@ export class SessionManager extends EventEmitter {
     config.port = session.port
     applyBundleStartupDefaults(config, config.modelPath)
     const migrated = applyCacheStackStartupDefaultMigration(config, config.modelPath)
+    const familyDefaultsChanged = applyFamilyStartupDefaults(config, config.modelPath)
     const markedCurrent = markCacheStackStartupDefaultsCurrent(config)
-    if (migrated || markedCurrent) {
+    if (migrated || familyDefaultsChanged || markedCurrent) {
       // Persist the migrated config so the settings UI reflects the corrected
       // values on next render and the same migration doesn't have to re-fire
       // on every session start. Without this writeback the saved config keeps
@@ -971,7 +1003,7 @@ export class SessionManager extends EventEmitter {
       // values.
       try {
         db.updateSession(session.id, { config: JSON.stringify(config) })
-        console.log(`[SESSION] Persisted cache-stack startup defaults version for session ${session.id}`)
+        console.log(`[SESSION] Persisted cache/family startup defaults for session ${session.id}`)
       } catch (e) {
         console.warn(`[SESSION] Failed to persist migration for ${session.id}: ${e}`)
       }
@@ -1060,10 +1092,13 @@ export class SessionManager extends EventEmitter {
             }
           }
           if (freshFamily === 'deepseek-v4') {
+            const dsv4PrefixOptIn = config.dsv4PrefixCache === true
             const dsv4Changed =
               config.continuousBatching !== true ||
-              config.enablePrefixCache !== true ||
-              config.usePagedCache !== true ||
+              config.dsv4PrefixCache !== dsv4PrefixOptIn ||
+              config.enablePrefixCache !== dsv4PrefixOptIn ||
+              config.usePagedCache !== dsv4PrefixOptIn ||
+              config.enableBlockDiskCache !== dsv4PrefixOptIn ||
               config.pagedCacheBlockSize !== DSV4_PAGED_CACHE_BLOCK_SIZE ||
               config.maxNumSeqs !== 1 ||
               config.kvCacheQuantization !== 'auto' ||
@@ -1074,8 +1109,9 @@ export class SessionManager extends EventEmitter {
               !!config.speculativeModel ||
               config.isMultimodal !== false
             config.continuousBatching = true
-            config.enablePrefixCache = true
-            config.usePagedCache = true
+            config.dsv4PrefixCache = dsv4PrefixOptIn
+            config.enablePrefixCache = dsv4PrefixOptIn
+            config.usePagedCache = dsv4PrefixOptIn
             config.pagedCacheBlockSize = DSV4_PAGED_CACHE_BLOCK_SIZE
             config.maxNumSeqs = 1
             config.prefillBatchSize = 1
@@ -1083,6 +1119,7 @@ export class SessionManager extends EventEmitter {
             config.kvCacheQuantization = 'auto'
             config.noMemoryAwareCache = false
             config.enableDiskCache = false
+            config.enableBlockDiskCache = dsv4PrefixOptIn
             config.enableJit = false
             ;(config as any).smelt = false
             ;(config as any).flashMoe = false
@@ -1090,7 +1127,9 @@ export class SessionManager extends EventEmitter {
             config.speculativeModel = ''
             config.isMultimodal = false
             if (dsv4Changed) {
-              this.pushLog(sessionId, '[INFO] DSV4-Flash detected; stale generic runtime settings were reset to the native SWA+CSA/HCA cache policy')
+              this.pushLog(sessionId, dsv4PrefixOptIn
+                ? '[INFO] DSV4-Flash detected; diagnostic native SWA+CSA/HCA composite cache opt-in is active with 256-token blocks'
+                : '[INFO] DSV4-Flash detected; composite prefix/paged/L2 cache is disabled by default until cached-vs-no-cache equivalence is proven')
             }
           }
           // Refresh multimodal detection from disk. A detected VLM must win
@@ -1216,6 +1255,7 @@ export class SessionManager extends EventEmitter {
     delete spawnEnv.JANGTQ_DISABLE_DSV4_FAST_LOAD
     delete spawnEnv.VMLX_DENSE_STRICT_LANE
     delete spawnEnv.VMLX_DSV4_FAST_LOAD_DISABLE
+    delete spawnEnv.VMLX_DSV4_ENABLE_PREFIX_CACHE
     delete spawnEnv.VMLINUX_DENSE_STRICT_LANE
     delete spawnEnv.VMLINUX_DSV4_FAST_LOAD_DISABLE
     // MCP config and policy must be session-owned. Inheriting these from a
@@ -1243,6 +1283,7 @@ export class SessionManager extends EventEmitter {
       'JANGTQ_DISABLE_DSV4_FAST_LOAD',
       'VMLX_DENSE_STRICT_LANE',
       'VMLX_DSV4_FAST_LOAD_DISABLE',
+      'VMLX_DSV4_ENABLE_PREFIX_CACHE',
       'VMLINUX_DENSE_STRICT_LANE',
       'VMLINUX_DSV4_FAST_LOAD_DISABLE',
     ]
@@ -1528,7 +1569,7 @@ export class SessionManager extends EventEmitter {
     'enableBlockDiskCache', 'blockDiskCacheMaxGb', 'blockDiskCacheDir',
     'prefixCacheSize', 'prefixCacheMaxBytes', 'cacheTtlMinutes', 'isMultimodal',
     'toolCallParser', 'reasoningParser',
-    'dsv4PoolQuant',
+    'dsv4PrefixCache', 'dsv4PoolQuant',
     'maxNumSeqs', 'prefillBatchSize', 'prefillStepSize', 'completionBatchSize',
     'streamInterval', 'apiKey', 'rateLimit',
     // NOTE: 'timeout' intentionally omitted — client sends per-request timeout
@@ -1653,11 +1694,13 @@ export class SessionManager extends EventEmitter {
         // block disk L2, and stored-cache codecs; maxNumSeqs=1 avoids a large
         // multi-user batch shape while keeping those features active.
         // Stream interval 1 = lowest latency per-token delivery.
+        const detectedFamily = normalizeDetectedFamilyName(detected.family)
+        const dsv4DefaultCacheOptIn = false
         const defaultConfig: ServerConfig = {
           modelPath: proc.modelPath,
           host: '127.0.0.1',
           port: proc.port,
-          timeout: normalizeDetectedFamilyName(detected.family) === 'deepseek-v4'
+          timeout: detectedFamily === 'deepseek-v4'
             ? DSV4_DEFAULT_TIMEOUT_SECONDS
             : GENERIC_DEFAULT_TIMEOUT_SECONDS,
           maxNumSeqs: 1,
@@ -1665,16 +1708,16 @@ export class SessionManager extends EventEmitter {
           prefillStepSize: 2048,
           completionBatchSize: 512,
           continuousBatching: true,
-          enablePrefixCache: true,
+          enablePrefixCache: detectedFamily === 'deepseek-v4' ? dsv4DefaultCacheOptIn : true,
           prefixCacheSize: 100,
           prefixCacheMaxBytes: 0, // 0 = unlimited (bounded by cacheMemoryPercent)
           cacheMemoryMb: 0,
           cacheMemoryPercent: 15,
           noMemoryAwareCache: false,
-          usePagedCache: detected.usePagedCache ?? true,
-          pagedCacheBlockSize: normalizeDetectedFamilyName(detected.family) === 'deepseek-v4' ? DSV4_PAGED_CACHE_BLOCK_SIZE : 64,
+          usePagedCache: detectedFamily === 'deepseek-v4' ? dsv4DefaultCacheOptIn : detected.usePagedCache ?? true,
+          pagedCacheBlockSize: detectedFamily === 'deepseek-v4' ? DSV4_PAGED_CACHE_BLOCK_SIZE : 64,
           maxCacheBlocks: 1000,
-          enableBlockDiskCache: true,
+          enableBlockDiskCache: detectedFamily === 'deepseek-v4' ? dsv4DefaultCacheOptIn : true,
           blockDiskCacheMaxGb: 10,
           kvCacheQuantization: 'auto',
           cacheStackStartupDefaultsVersion: CACHE_STACK_STARTUP_DEFAULTS_VERSION,
@@ -1683,6 +1726,7 @@ export class SessionManager extends EventEmitter {
           maxContextLength: 0,
           toolCallParser: 'auto',
           reasoningParser: 'auto',
+          dsv4PrefixCache: dsv4DefaultCacheOptIn,
           dsv4PoolQuant: false,
           defaultEnableThinking: undefined,
           nativeMtpMode: 'deterministic',
@@ -2403,6 +2447,7 @@ export class SessionManager extends EventEmitter {
     // single-batch even though the generic session profile defaults higher.
     const detectedFamily = normalizeDetectedFamilyName(detected.family)
     const dsv4Active = detectedFamily === 'deepseek-v4'
+    const dsv4PrefixCacheOptIn = dsv4Active && config.dsv4PrefixCache === true
 
     // Concurrent processing
     // When value is 0 ("No limit" in UI), omit the flag so backend uses its default.
@@ -2491,6 +2536,12 @@ export class SessionManager extends EventEmitter {
     }
 
     console.log(`[SESSION] Model family: ${detected.family} | tool: ${effectiveToolParser || 'none'} (user=${userToolParser}, detected=${detected.toolParser || 'none'}) | reasoning: ${effectiveReasoningParser || 'none'} (user=${userReasoningParser}, detected=${detected.reasoningParser || 'none'}) | autoTool: ${effectiveAutoTool} | VLM: ${isVLM}`)
+    if (dsv4PrefixCacheOptIn) {
+      args.push('--dsv4-enable-prefix-cache')
+      console.log('[SESSION] DSV4-Flash composite prefix cache diagnostic opt-in is active')
+    } else if (dsv4Active) {
+      console.log('[SESSION] DSV4-Flash composite prefix/paged/L2 cache disabled by default until deterministic cache equivalence is proven')
+    }
 
     // Prefix cache — requires --continuous-batching to take effect in vmlx-engine
     // Tool sessions benefit from prefix reuse, but an explicit user opt-out must
@@ -2499,14 +2550,20 @@ export class SessionManager extends EventEmitter {
     const hybridCacheActive = cacheTypeRequiresPaged(detected.cacheType)
     const architectureRequiresPagedCache =
       zayaCcaActive ||
-      dsv4Active ||
+      dsv4PrefixCacheOptIn ||
       (hybridCacheActive && detected.usePagedCache === true)
     const cacheLaunchPolicy = resolveCacheLaunchPolicy({
       continuousBatching: cacheStackActive,
-      enablePrefixCache: config.enablePrefixCache !== false,
-      usePagedCache: config.usePagedCache ?? detected.usePagedCache ?? false,
+      enablePrefixCache: dsv4Active
+        ? dsv4PrefixCacheOptIn && config.enablePrefixCache !== false
+        : config.enablePrefixCache !== false,
+      usePagedCache: dsv4Active
+        ? dsv4PrefixCacheOptIn
+        : config.usePagedCache ?? detected.usePagedCache ?? false,
       enableDiskCache: !!config.enableDiskCache,
-      enableBlockDiskCache: !!config.enableBlockDiskCache,
+      enableBlockDiskCache: dsv4Active
+        ? dsv4PrefixCacheOptIn && !!config.enableBlockDiskCache
+        : !!config.enableBlockDiskCache,
       architectureRequiresPagedCache,
     })
     const prefixCacheOff = cacheLaunchPolicy.prefixCacheOff

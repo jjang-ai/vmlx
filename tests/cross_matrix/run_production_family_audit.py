@@ -188,6 +188,23 @@ ROWS: list[ModelRow] = [
         ],
     ),
     ModelRow(
+        id="dsv4_jang_local",
+        label="DeepSeek-V4-Flash JANG local affine artifact",
+        path="/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANG",
+        family="deepseek_v4",
+        expect_reasoning=True,
+        expect_tool_parser="dsml",
+        cache_profile="dsv4_composite",
+        slow=True,
+        notes=[
+            "Actual local affine DSV4 artifact present on this host. Static "
+            "headers show the same output-head/final-norm precision boundary "
+            "as JANGTQ-K: quantized head plus F16 norm, so it cannot clear "
+            "long-output production claims without source-vs-quant or rebuilt "
+            "artifact evidence.",
+        ],
+    ),
+    ModelRow(
         id="dsv4_jang_dq2_gate3math6",
         label="DeepSeek-V4-Flash JANG DQ2 Token8 DownG32 Gate3Math6 NoMTP",
         path=(
@@ -288,6 +305,45 @@ ROWS: list[ModelRow] = [
             "and tool parser is hunyuan.",
             "Large 128GB-class row; Metal working-set guard must allow the "
             "validated near-limit load without command-buffer OOM.",
+        ],
+    ),
+    ModelRow(
+        id="hy3_preview_jang_2k",
+        label="Hy3-preview JANG_2K",
+        path="/Users/example/models/JANGQ/Hy3-preview-JANG_2K",
+        family="hy_v3",
+        expect_reasoning=True,
+        expect_tool_parser="hunyuan",
+        slow=True,
+        notes=[
+            "Hy3 all-affine JANG_2K row. UI/API contract is reasoning_effort "
+            "low/high with qwen3 reasoning extraction and Hunyuan tool calls.",
+            "Bundle generation_config intentionally omits max_new_tokens; live "
+            "gates must prove omitted requests resolve to the sane bounded "
+            "server fallback, not 32768.",
+            "Affine quantization uses group_size=128 with 2-bit routed gate/up "
+            "and 3-bit routed down projections; release proof must confirm the "
+            "group-size metadata is honored by the loader.",
+        ],
+    ),
+    ModelRow(
+        id="hy3_preview_jang_2l",
+        label="Hy3-preview JANG_2L",
+        path="/Users/example/models/JANGQ/Hy3-preview-JANG_2L",
+        family="hy_v3",
+        expect_reasoning=True,
+        expect_tool_parser="hunyuan",
+        slow=True,
+        notes=[
+            "Hy3 all-affine JANG_2L row. Same qwen3 reasoning parser, Hunyuan "
+            "tool parser, KV cache, and low/high effort UI/API contract as "
+            "JANGTQ2/JANG_2K.",
+            "Bundle generation_config intentionally omits max_new_tokens; live "
+            "gates must prove omitted requests resolve to the sane bounded "
+            "server fallback, not 32768.",
+            "Affine quantization uses group_size=128 with 2-bit routed expert "
+            "projections; release proof must confirm group-size metadata is "
+            "honored by the loader.",
         ],
     ),
     ModelRow(
@@ -557,6 +613,266 @@ def _index_has_tensor_prefix(model_dir: Path, prefix: str) -> bool:
     return _index_tensor_prefix_status(model_dir, prefix)[0]
 
 
+def _tensor_header_summary(model_dir: Path, tensor_names: tuple[str, ...]) -> dict[str, Any]:
+    """Return safetensors header metadata for named tensors without loading data."""
+    summary: dict[str, Any] = {
+        "checked": False,
+        "tensors": {},
+        "missing": [],
+        "errors": [],
+    }
+    index = read_json(model_dir / "model.safetensors.index.json")
+    if "_read_error" in index:
+        summary["errors"].append(f"model.safetensors.index.json read failed: {index['_read_error']}")
+        return summary
+    weight_map = index.get("weight_map") if isinstance(index, dict) else None
+    if not isinstance(weight_map, dict):
+        if (model_dir / "model.safetensors.index.json").is_file():
+            summary["errors"].append("model.safetensors.index.json has no weight_map object")
+        return summary
+    try:
+        from safetensors import safe_open
+    except Exception as exc:
+        summary["errors"].append(f"safetensors import failed: {exc}")
+        return summary
+
+    tensors_by_file: dict[str, list[str]] = {}
+    for name in tensor_names:
+        filename = weight_map.get(name)
+        if not filename:
+            summary["missing"].append(name)
+            continue
+        tensors_by_file.setdefault(str(filename), []).append(name)
+
+    for filename, names in tensors_by_file.items():
+        path = model_dir / filename
+        if not path.is_file():
+            summary["errors"].extend(
+                f"{name}: mapped shard missing: {filename}" for name in names
+            )
+            continue
+        try:
+            with safe_open(str(path), framework="np") as reader:
+                available = set(reader.keys())
+                for name in names:
+                    if name not in available:
+                        summary["errors"].append(f"{name}: mapped shard {filename} does not contain tensor")
+                        continue
+                    tensor = reader.get_slice(name)
+                    summary["tensors"][name] = {
+                        "file": str(filename),
+                        "dtype": tensor.get_dtype(),
+                        "shape": tensor.get_shape(),
+                    }
+        except Exception as exc:
+            summary["errors"].extend(
+                f"{name}: header read failed from {filename}: {type(exc).__name__}: {exc}"
+                for name in names
+            )
+    summary["checked"] = True
+    return summary
+
+
+def dsv4_output_precision_boundary(model_dir: Path) -> dict[str, Any]:
+    """Inspect DSV4 output-head/final-norm precision from safetensors headers.
+
+    Live probes showed DSV4 exact-code corruption occurs in generated logits,
+    after prompt rendering/tokenization and before response assembly. This
+    header-only check records whether the active artifact compressed the final
+    output projection or final norm so release gates cannot treat a DSV4 row as
+    production-cleared without source-vs-quant or rebuilt-artifact evidence.
+    """
+    header = _tensor_header_summary(
+        model_dir,
+        (
+            "head.weight",
+            "head.scales",
+            "head.biases",
+            "lm_head.weight",
+            "lm_head.scales",
+            "lm_head.biases",
+            "norm.weight",
+            "model.norm.weight",
+        ),
+    )
+    tensors = header.get("tensors") if isinstance(header.get("tensors"), dict) else {}
+    output_key = "head.weight" if "head.weight" in tensors else "lm_head.weight" if "lm_head.weight" in tensors else None
+    output_dtype = tensors.get(output_key, {}).get("dtype") if output_key else None
+    output_shape = tensors.get(output_key, {}).get("shape") if output_key else None
+    output_has_aux = bool(
+        ("head.scales" in tensors and "head.biases" in tensors)
+        or ("lm_head.scales" in tensors and "lm_head.biases" in tensors)
+    )
+    final_norm_key = "norm.weight" if "norm.weight" in tensors else "model.norm.weight" if "model.norm.weight" in tensors else None
+    final_norm_dtype = tensors.get(final_norm_key, {}).get("dtype") if final_norm_key else None
+    quantized_dtypes = {"U8", "U16", "U32", "I8", "I16", "I32"}
+    source_like_dtypes = {"BF16", "F32"}
+    output_head_quantized = bool(output_dtype in quantized_dtypes or output_has_aux)
+    final_norm_lower_precision = bool(final_norm_dtype and final_norm_dtype not in source_like_dtypes)
+    needs_clearance = bool(output_head_quantized or final_norm_lower_precision)
+    return {
+        **header,
+        "output_head_key": output_key,
+        "output_head_dtype": output_dtype,
+        "output_head_shape": output_shape,
+        "output_head_has_quant_aux": output_has_aux,
+        "output_head_quantized": output_head_quantized,
+        "final_norm_key": final_norm_key,
+        "final_norm_dtype": final_norm_dtype,
+        "final_norm_lower_precision": final_norm_lower_precision,
+        "needs_source_or_rebuild_clearance": needs_clearance,
+    }
+
+
+def dsv4_rope_scaling_contract(
+    cfg: dict[str, Any],
+    *,
+    model_dir: Path,
+) -> dict[str, Any]:
+    """Record whether DSV4 Flash runtime needs the source YaRN metadata repair."""
+    try:
+        from vmlx_engine.loaders.load_jangtq_dsv4 import (
+            _DSV4_FLASH_REQUIRED_ROPE_SCALING,
+            _normalize_dsv4_runtime_config,
+        )
+    except Exception as exc:
+        return {
+            "checked": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "runtime_repair_required": False,
+            "source_required_rope_scaling": None,
+            "bundle_rope_scaling": cfg.get("rope_scaling"),
+            "runtime_rope_scaling": cfg.get("rope_scaling"),
+        }
+
+    runtime_cfg, changed = _normalize_dsv4_runtime_config(cfg, model_path=model_dir)
+    return {
+        "checked": True,
+        "bundle_rope_scaling": cfg.get("rope_scaling"),
+        "runtime_rope_scaling": runtime_cfg.get("rope_scaling"),
+        "runtime_repair_required": changed,
+        "source_required_rope_scaling": dict(_DSV4_FLASH_REQUIRED_ROPE_SCALING),
+    }
+
+
+def dsv4_release_fault_matrix(
+    *,
+    model_dir: Path,
+    precision_boundary: dict[str, Any] | None = None,
+    rope_scaling_contract: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return the current DSV4 release fault matrix.
+
+    This is intentionally explicit because the DSV4 failure has repeatedly
+    looked "nearly fixed" from proxy evidence. The matrix separates layers that
+    existing probes have ruled out from blockers that still require source,
+    broader-body, or first-divergence proof before any release claim.
+    """
+    precision = precision_boundary or {}
+    rope_contract = rope_scaling_contract or {}
+    source_dir = Path("/Users/example/models/Sources/DeepSeek-V4-Flash")
+    ruled_out = [
+        {
+            "layer": "prompt_renderer",
+            "status": "ruled_out",
+            "evidence": "canonical DSV4 prompt-render probes preserved Three.js identifiers exactly",
+        },
+        {
+            "layer": "api_endpoint_adapter",
+            "status": "ruled_out",
+            "evidence": "raw completions with the rendered canonical chat prompt reproduced the same identifier corruption",
+        },
+        {
+            "layer": "stream_sse_or_response_assembly",
+            "status": "ruled_out",
+            "evidence": "non-stream logprob responses contained generated token sequence .Web, Web, GL, Renderer",
+        },
+        {
+            "layer": "tokenizer_roundtrip",
+            "status": "ruled_out",
+            "evidence": "tokenizer and streaming detokenizer round-tripped known-correct Three.js identifiers",
+        },
+        {
+            "layer": "mxtq_only_kernel_path",
+            "status": "ruled_out",
+            "evidence": "local affine DSV4 JANG artifact reproduced the same Three.js identifier corruption class",
+        },
+        {
+            "layer": "output_head_or_final_norm_only",
+            "status": "ruled_out",
+            "evidence": "BF16 head/final-norm overlay over the JANGTQ-K body still generated THREE.WebWebGLRenderer",
+        },
+    ]
+    open_blockers = [
+        {
+            "layer": "source_or_broader_body_comparison",
+            "status": "open",
+            "evidence": "source DSV4 is present locally but too large for a casual 128 GB live load; no source full-output clearance artifact exists",
+            "source_model_present": source_dir.is_dir(),
+        },
+        {
+            "layer": "shared_dsv4_runtime_or_body_precision",
+            "status": "open",
+            "evidence": "affine and JANGTQ rows share the failure class; remaining suspects are shared DSV4 runtime integration or quantized body precision",
+        },
+        {
+            "layer": "full_output_identifier_gate",
+            "status": "open",
+            "evidence": "short exact identifier and long Three.js full-output gates still reject corrupted API names",
+        },
+        {
+            "layer": "dsv4_composite_prefix_cache_equivalence",
+            "status": "mitigated_open",
+            "evidence": (
+                "patched-config live DSV4 run produced a paged+dsv4 cache hit "
+                "with cached_tokens evidence, but greedy follow-up output differed "
+                "from the skip_prefix_cache control; vMLX now disables DSV4 "
+                "composite prefix/paged/L2 reuse by default and requires "
+                "--dsv4-enable-prefix-cache or VMLX_DSV4_ENABLE_PREFIX_CACHE=1 "
+                "for diagnostic opt-in"
+            ),
+        },
+    ]
+    if precision.get("needs_source_or_rebuild_clearance"):
+        open_blockers.append(
+            {
+                "layer": "precision_boundary_clearance",
+                "status": "open",
+                "evidence": (
+                    "active artifact still needs source or rebuilt-body clearance "
+                    f"(head_quantized={precision.get('output_head_quantized')}, "
+                    f"final_norm_lower_precision={precision.get('final_norm_lower_precision')})"
+                ),
+            }
+        )
+    if rope_contract.get("runtime_repair_required"):
+        open_blockers.append(
+            {
+                "layer": "compressed_rope_scaling_metadata",
+                "status": "open",
+                "evidence": (
+                    "active bundle config omitted source DeepSeek-V4-Flash YaRN "
+                    "rope_scaling; vMLX now repairs it before construction, but "
+                    "DSV4 still needs a fresh live identifier/full-output gate"
+                ),
+            }
+        )
+    return {
+        "checked": True,
+        "model_dir": str(model_dir),
+        "release_blocked": True,
+        "ruled_out": ruled_out,
+        "open_blockers": open_blockers,
+        "required_next_proofs": [
+            "Run the same full-output identifier gate on source DSV4 or a broader rebuilt body; a short canary is not a release pass.",
+            "If source cannot fit, run first-divergence or teacher-forced margin probes against a coherent rebuilt affine/MXFP body before changing prompt/API code.",
+            "Keep DSV4 composite prefix/paged/L2 cache disabled by default until a diagnostic opt-in cache equivalence proof shows temperature=0 cached follow-up byte-matches the skip_prefix_cache control for the same rendered prompt.",
+            "Verify the DSV4 source YaRN rope-scaling repair on a live full-output identifier gate; static config repair is not enough.",
+            "Keep DSV4 scoped as not production-cleared until exact identifiers and long raw HTML gates pass without parser, reasoning, or tool leaks.",
+        ],
+    }
+
+
 def _mtp_status(
     model_dir: Path,
     cfg: dict[str, Any],
@@ -685,6 +1001,9 @@ def static_audit(row: ModelRow) -> dict[str, Any]:
     }
 
     issues: list[str] = []
+    dsv4_precision_boundary: dict[str, Any] = {}
+    dsv4_rope_contract: dict[str, Any] = {}
+    dsv4_fault_matrix: dict[str, Any] = {}
     if model_dir.is_dir() and safetensors_summary.get("files", 0) == 0:
         issues.append("bundle has no safetensors weights; structural metadata only")
     if not row.live_supported and row.unsupported_reason:
@@ -710,6 +1029,27 @@ def static_audit(row: ModelRow) -> dict[str, Any]:
         except Exception as exc:
             dsv4_bit_plan = {}
             issues.append(f"DSV4 static artifact audit failed: {exc}")
+        dsv4_precision_boundary = dsv4_output_precision_boundary(model_dir)
+        if dsv4_precision_boundary.get("needs_source_or_rebuild_clearance"):
+            issues.append(
+                "DSV4 output-head/final-norm precision boundary requires "
+                "source-vs-quant or rebuilt-artifact clearance before "
+                "long-output production claims "
+                f"(head={dsv4_precision_boundary.get('output_head_dtype')}, "
+                f"norm={dsv4_precision_boundary.get('final_norm_dtype')})"
+            )
+        dsv4_rope_contract = dsv4_rope_scaling_contract(cfg, model_dir=model_dir)
+        if dsv4_rope_contract.get("runtime_repair_required"):
+            issues.append(
+                "DSV4 bundle config omits source YaRN rope_scaling for "
+                "compressed-context layers; runtime repair is required and "
+                "fresh live DSV4 identifier/full-output gates must pass"
+            )
+        dsv4_fault_matrix = dsv4_release_fault_matrix(
+            model_dir=model_dir,
+            precision_boundary=dsv4_precision_boundary,
+            rope_scaling_contract=dsv4_rope_contract,
+        )
         if jang.get("weight_format") == "mxtq":
             bits = jang.get("mxtq_bits", {})
             if bits.get("routed_expert") not in (2, 4, 8):
@@ -738,6 +1078,37 @@ def static_audit(row: ModelRow) -> dict[str, Any]:
     )
     if row.expect_reasoning and not has_reasoning_surface:
         issues.append("expected reasoning model but no reasoning metadata/template found")
+    if registry.get("family_name") and registry.get("family_name") != row.family:
+        issues.append(
+            "registry family mismatch: "
+            f"expected {row.family}, got {registry.get('family_name')}"
+        )
+    if row.expect_tool_parser and registry.get("tool_parser") != row.expect_tool_parser:
+        issues.append(
+            "registry tool parser mismatch: "
+            f"expected {row.expect_tool_parser}, got {registry.get('tool_parser')}"
+        )
+    if row.family == "hy_v3":
+        if registry.get("reasoning_parser") != "qwen3":
+            issues.append(
+                "Hy3 registry reasoning parser mismatch: expected qwen3, "
+                f"got {registry.get('reasoning_parser')}"
+            )
+        if registry.get("cache_type") != "kv":
+            issues.append(
+                "Hy3 registry cache type mismatch: expected kv, "
+                f"got {registry.get('cache_type')}"
+            )
+        if registry.get("think_in_template") is not False:
+            issues.append("Hy3 must keep think_in_template=false")
+        caps = jang.get("capabilities") if isinstance(jang.get("capabilities"), dict) else {}
+        if caps:
+            if caps.get("reasoning_parser") != "qwen3":
+                issues.append("Hy3 jang capabilities missing qwen3 reasoning parser")
+            if caps.get("tool_parser") != "hunyuan":
+                issues.append("Hy3 jang capabilities missing hunyuan tool parser")
+            if caps.get("cache_type") != "kv":
+                issues.append("Hy3 jang capabilities missing kv cache type")
     if row.kind in ("vl", "omni") and not any(
         k in (str(cfg) + str(jang) + str(tok_cfg)).lower()
         for k in ("vision", "image", "audio", "video", "mm", "omni", "radio", "parakeet")
@@ -786,6 +1157,9 @@ def static_audit(row: ModelRow) -> dict[str, Any]:
         "eos": eos,
         "mtp": mtp,
         "dsv4_artifact_bit_plan": dsv4_bit_plan if row.family == "deepseek_v4" else None,
+        "dsv4_precision_boundary": dsv4_precision_boundary if row.family == "deepseek_v4" else None,
+        "dsv4_rope_scaling_contract": dsv4_rope_contract if row.family == "deepseek_v4" else None,
+        "dsv4_release_fault_matrix": dsv4_fault_matrix if row.family == "deepseek_v4" else None,
         "registry": registry,
         "safetensors": safetensors_summary,
         "issues": issues,
@@ -993,6 +1367,7 @@ def dsv4_long_context_full_output_ok(
     content: str,
     split_ok: bool,
     loop_score: float,
+    content_contract_ok: bool = True,
 ) -> bool:
     """Return whether a DSV4 long-output row is production-coherent.
 
@@ -1007,9 +1382,155 @@ def dsv4_long_context_full_output_ok(
         and len(full_text) >= 120
         and len(content) >= 40
         and split_ok
+        and content_contract_ok
         and not has_duplicate_block(full_text)
         and loop_score < 0.25
     )
+
+
+DSV4_THREEJS_CORE_IDENTIFIERS = (
+    "THREE.Scene",
+    "THREE.WebGLRenderer",
+    "THREE.PerspectiveCamera",
+    "THREE.Mesh",
+    "THREE.BoxGeometry",
+    "THREE.MeshBasicMaterial",
+)
+
+DSV4_THREEJS_CORRUPT_IDENTIFIER_PATTERNS = (
+    "three.scscene",
+    "three.persperspectivecamera",
+    "three.pperspectivecamera",
+    "three.webwebglrenderer",
+    "three.webwebrenderrenderer",
+    "three.mmesh",
+    "three.bboxgeometry",
+    "three.mmeshbasicmaterial",
+    "three.ddirectionallight",
+    "three.aambientlight",
+    "ththree.",
+)
+
+
+def dsv4_threejs_identifier_integrity_ok(content: str) -> bool:
+    """Return whether a short Three.js snippet preserved exact API names."""
+    raw = content or ""
+    lower = raw.lower()
+    return (
+        all(identifier in raw for identifier in DSV4_THREEJS_CORE_IDENTIFIERS)
+        and "```" not in raw
+        and not any(pattern in lower for pattern in DSV4_THREEJS_CORRUPT_IDENTIFIER_PATTERNS)
+    )
+
+
+def dsv4_threejs_single_file_ok(content: str) -> bool:
+    """Return whether the DSV4 game-design output is a complete Three.js file.
+
+    This is intentionally a structural release gate, not a style score. A
+    response that stops cleanly but emits a 2D canvas sketch, broken placeholder
+    code, or an unfinished HTML fragment must not clear the long-output row.
+    """
+    raw = content or ""
+    stripped = raw.strip()
+    lower = raw.lower()
+    lower_stripped = stripped.lower()
+    has_html_shell = lower_stripped.startswith("<!doctype html") and lower_stripped.endswith("</html>")
+    has_three_import = (
+        "three.min.js" in lower
+        or "three.module" in lower
+        or "from 'three'" in lower
+        or 'from "three"' in lower
+    )
+    has_core_three_api = all(marker.lower() in lower for marker in DSV4_THREEJS_CORE_IDENTIFIERS[:4])
+    has_render_loop = "requestanimationframe" in lower
+    has_game_requirements = (
+        "health" in lower
+        and "score" in lower
+        and "enemy" in lower
+        and ("projectile" in lower or "bullet" in lower or "pellet" in lower)
+        and ("collision" in lower or "distanceto" in lower)
+    )
+    has_placeholder = any(
+        marker in lower
+        for marker in (
+            "... (existing",
+            "omitted for brevity",
+            "placeholder",
+            "todo",
+        )
+    )
+    has_markdown_fence = "```" in raw
+    has_corrupt_three_api = any(
+        marker in lower for marker in DSV4_THREEJS_CORRUPT_IDENTIFIER_PATTERNS
+    )
+    return (
+        has_html_shell
+        and has_three_import
+        and has_core_three_api
+        and has_render_loop
+        and has_game_requirements
+        and not has_placeholder
+        and not has_markdown_fence
+        and not has_corrupt_three_api
+    )
+
+
+def dsv4_long_prompt_specs() -> list[dict[str, Any]]:
+    """Return DSV4 long-output gates with the intended rail per prompt.
+
+    These are production gates, not generic "think as much as possible" rows.
+    The VC planning prompt benefits from DSV4's reasoning rail and has live
+    evidence that 2500 tokens can reach a stop. The game/code prompt should use
+    the direct rail because forcing thinking-on can spend the entire budget in
+    internal planning before producing visible code.
+    """
+    return [
+        {
+            "name": "vc_project_plan",
+            "prompt": (
+                "For our VC fund, we are trying to document everything we do, "
+                "create cadences, and bring in a student from the Haskayne Propel "
+                "2026 project plan program. Help fill this form field by field. "
+                "Proposed Project Name: Process optimisation and document "
+                "standardization for the VC fund. What is the project's goal? "
+                "The primary deliverable must be realistic and achievable within "
+                "50 hours by a student unfamiliar with our organization and "
+                "industry. Please outline the project timeline. What will the "
+                "student work on each week at about 6 hours per week? Weeks 1 "
+                "and 8 have preset onboarding and offboarding activities. Please "
+                "break down specialized skills or mindsets required. Students may "
+                "need to work with people from diverse backgrounds and should be "
+                "strong in Microsoft software, process mapping, documentation, "
+                "stakeholder interviews, and organized project management. Please "
+                "think carefully, then produce a concise usable draft with clear "
+                "headings and no repeated filler."
+            ),
+            "enable_thinking": True,
+            "max_tokens": 2500,
+        },
+        {
+            "name": "game_design_long_context",
+            "prompt": (
+                "Create one complete runnable HTML file for a minimal Three.js "
+                "forest survival shooter. Non-negotiable: include a script "
+                "import for three.min.js or three.module.js; create "
+                "THREE.Scene, THREE.WebGLRenderer, THREE.PerspectiveCamera, "
+                "THREE.Mesh primitives, and a requestAnimationFrame loop. Game "
+                "requirements: WASD movement, shotgun pellet projectiles, "
+                "boar/moose/wolf enemies with distinct simple behavior, spawn "
+                "timer, collision detection, health, score, and a compact UI "
+                "overlay. Keep under 170 lines and 2600 generated tokens. "
+                "Output only raw HTML starting with <!DOCTYPE html> and ending "
+                "with </html>; no markdown fence, no explanation, no TODO, no "
+                "omitted sections."
+            ),
+            "enable_thinking": False,
+            "max_tokens": 2600,
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "repetition_penalty": 1.0,
+        },
+    ]
 
 
 def dsv4_thinking_mode_max_ok(
@@ -1276,8 +1797,6 @@ def live_server_command(
         "0.2",
         "--stream-interval",
         "1",
-        "--max-tokens",
-        "32768",
         "--enable-prefix-cache",
         "--use-paged-cache",
         "--paged-cache-block-size",
@@ -2019,38 +2538,104 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
             },
         )
 
-        long_prompts = [
-            (
-                "vc_project_plan",
-                "For our VC fund, we are trying to document everything we do, "
-                "create cadences, and bring in a student from the Haskayne Propel "
-                "2026 project plan program. Help fill this form field by field. "
-                "Proposed Project Name: Process optimisation and document "
-                "standardization for the VC fund. What is the project's goal? "
-                "The primary deliverable must be realistic and achievable within "
-                "50 hours by a student unfamiliar with our organization and "
-                "industry. Please outline the project timeline. What will the "
-                "student work on each week at about 6 hours per week? Weeks 1 "
-                "and 8 have preset onboarding and offboarding activities. Please "
-                "break down specialized skills or mindsets required. Students may "
-                "need to work with people from diverse backgrounds and should be "
-                "strong in Microsoft software, process mapping, documentation, "
-                "stakeholder interviews, and organized project management. Please "
-                "think carefully, then produce a concise usable draft with clear "
-                "headings and no repeated filler."
-            ),
-            (
-                "game_design_long_context",
-                "Create a single HTML file for a Three.js game. The player is a "
-                "hunter moving through a forest with a shotgun while hostile "
-                "boars, moose, and other enemies spawn with different behavior. "
-                "Include projectile physics, collision detection, enemy AI, spawn "
-                "timers, acceleration over time, health, score, and a compact UI "
-                "layer over the canvas. Explain the architecture first, then give "
-                "the complete file. Avoid repeating the same noun or phrase."
-            ),
+        identifier_prompt = (
+            "Output exactly this JavaScript snippet and nothing else:\n"
+            "const scene = new THREE.Scene();\n"
+            "const renderer = new THREE.WebGLRenderer();\n"
+            "const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 100);\n"
+            "const mesh = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial());"
+        )
+        code, ident_resp, ident_elapsed = request_json(
+            "dsv4_threejs_identifier_integrity",
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": identifier_prompt}],
+                "enable_thinking": False,
+                "chat_template_kwargs": {"enable_thinking": False},
+                "max_tokens": 220,
+                "temperature": 0.0,
+                "top_p": 1.0,
+                "repetition_penalty": 1.0,
+                "logprobs": True,
+                "top_logprobs": 5,
+                "stream": False,
+            },
+            timeout=240,
+        )
+        ident_content, ident_reasoning, ident_finish = extract_chat_text(ident_resp)
+        ident_lower = ident_content.lower()
+        ident_bad_patterns = [
+            pattern
+            for pattern in DSV4_THREEJS_CORRUPT_IDENTIFIER_PATTERNS
+            if pattern in ident_lower
         ]
-        for probe_name, prompt in long_prompts:
+        ident_artifact = write_probe_output(
+            row.id,
+            "dsv4_threejs_identifier_integrity",
+            {
+                "request": {
+                    "prompt": identifier_prompt,
+                    "max_tokens": 220,
+                    "enable_thinking": False,
+                    "temperature": 0.0,
+                    "top_p": 1.0,
+                    "repetition_penalty": 1.0,
+                    "logprobs": True,
+                    "top_logprobs": 5,
+                },
+                "code": code,
+                "finish": ident_finish,
+                "content": ident_content,
+                "reasoning": ident_reasoning,
+                "bad_patterns": ident_bad_patterns,
+                "raw_response": ident_resp,
+                "elapsed_sec": ident_elapsed,
+            },
+        )
+        ident_ok = (
+            code == 200
+            and ident_finish == "stop"
+            and dsv4_threejs_identifier_integrity_ok(ident_content)
+        )
+        check(
+            "dsv4_threejs_identifier_integrity",
+            ident_ok,
+            {
+                "code": code,
+                "finish": ident_finish,
+                "content_chars": len(ident_content),
+                "reasoning_chars": len(ident_reasoning),
+                "bad_patterns": ident_bad_patterns,
+                "has_markdown_fence": "```" in ident_content,
+                "elapsed_sec": ident_elapsed,
+                "artifact": ident_artifact,
+                "content": ident_content,
+            },
+        )
+
+        for spec in dsv4_long_prompt_specs():
+            probe_name = str(spec["name"])
+            prompt = str(spec["prompt"])
+            enable_thinking = bool(spec["enable_thinking"])
+            max_tokens = int(spec["max_tokens"])
+            temperature = float(spec.get("temperature", 0.6))
+            top_p = float(spec.get("top_p", 0.95))
+            repetition_penalty = spec.get("repetition_penalty")
+            if probe_name == "game_design_long_context" and not ident_ok:
+                check(
+                    f"dsv4_long_context_full_output_{probe_name}",
+                    False,
+                    {
+                        "skipped_due_to_identifier_integrity_failure": True,
+                        "identifier_artifact": ident_artifact,
+                        "identifier_bad_patterns": ident_bad_patterns,
+                        "identifier_has_markdown_fence": "```" in ident_content,
+                        "identifier_content": ident_content,
+                    },
+                )
+                continue
             code, long_resp, long_elapsed = request_json(
                 f"dsv4_long_{probe_name}",
                 "POST",
@@ -2058,11 +2643,16 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
                 {
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "enable_thinking": True,
-                    "chat_template_kwargs": {"enable_thinking": True},
-                    "max_tokens": 900,
-                    "temperature": 0.6,
-                    "top_p": 0.95,
+                    "enable_thinking": enable_thinking,
+                    "chat_template_kwargs": {"enable_thinking": enable_thinking},
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "top_p": top_p,
+                    **(
+                        {"repetition_penalty": float(repetition_penalty)}
+                        if repetition_penalty is not None
+                        else {}
+                    ),
                     "stream": False,
                 },
                 timeout=420,
@@ -2074,11 +2664,27 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
                 not long_reasoning.strip()
                 or long_content.strip() != long_reasoning.strip()
             )
+            content_contract_ok = (
+                dsv4_threejs_single_file_ok(long_content)
+                if probe_name == "game_design_long_context"
+                else True
+            )
             artifact = write_probe_output(
                 row.id,
                 f"dsv4_long_{probe_name}",
                 {
-                    "request": {"prompt": prompt, "max_tokens": 900},
+                    "request": {
+                        "prompt": prompt,
+                        "max_tokens": max_tokens,
+                        "enable_thinking": enable_thinking,
+                        "temperature": temperature,
+                        "top_p": top_p,
+                        **(
+                            {"repetition_penalty": float(repetition_penalty)}
+                            if repetition_penalty is not None
+                            else {}
+                        ),
+                    },
                     "code": code,
                     "finish": long_finish,
                     "content": long_content,
@@ -2087,6 +2693,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
                     "reasoning_chars": len(long_reasoning),
                     "content_equals_reasoning": long_content.strip() == long_reasoning.strip(),
                     "loop_score": loop_score,
+                    "content_contract_ok": content_contract_ok,
                     "raw_response": long_resp,
                     "elapsed_sec": long_elapsed,
                 },
@@ -2100,6 +2707,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
                     content=long_content,
                     split_ok=split_ok,
                     loop_score=loop_score,
+                    content_contract_ok=content_contract_ok,
                 ),
                 {
                     "code": code,
@@ -2108,6 +2716,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
                     "reasoning_chars": len(long_reasoning),
                     "content_equals_reasoning": long_content.strip() == long_reasoning.strip(),
                     "loop_score": loop_score,
+                    "content_contract_ok": content_contract_ok,
                     "elapsed_sec": long_elapsed,
                     "artifact": artifact,
                     "head": full_text[:400],

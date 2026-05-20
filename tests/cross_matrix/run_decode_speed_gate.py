@@ -31,6 +31,18 @@ DEFAULT_PY = (
     / "panel/release/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
 )
 DEFAULT_OUT = REPO / "docs/internal/release-gates/decode_speed_gate_latest.json"
+DSV4_AFFINE_MODEL_CANDIDATES = (
+    "/Users/example/models/JANGQ/"
+    "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP",
+    "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANG",
+)
+
+
+def resolve_default_model(candidates: tuple[str, ...] = DSV4_AFFINE_MODEL_CANDIDATES) -> str:
+    for candidate in candidates:
+        if Path(candidate).is_dir():
+            return candidate
+    return candidates[0]
 
 
 @dataclass
@@ -278,10 +290,7 @@ ROWS: dict[str, Row] = {
     ),
     "dsv4_jang_dq2_gate3math6": Row(
         "dsv4_jang_dq2_gate3math6",
-        (
-            "/Users/example/models/JANGQ/"
-            "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
-        ),
+        resolve_default_model(),
         tool_parser="deepseek",
         reasoning_parser="deepseek-r1",
         max_tokens=128,

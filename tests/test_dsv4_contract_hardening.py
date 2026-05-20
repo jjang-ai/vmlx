@@ -25,6 +25,7 @@ Specifically:
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -371,3 +372,151 @@ def test_bundled_jang_dsv4_attention_contract_markers_present():
         if needle not in source
     ]
     assert not missing
+
+
+def test_dsv4_runtime_config_reinjects_source_yarn_rope_scaling():
+    """Converted DSV4 Flash bundles must not run compressed layers with null YaRN."""
+    from vmlx_engine.loaders.load_jangtq_dsv4 import (
+        _DSV4_FLASH_REQUIRED_ROPE_SCALING,
+        _normalize_dsv4_runtime_config,
+    )
+
+    config = {
+        "model_type": "deepseek_v4",
+        "hidden_size": 4096,
+        "head_dim": 512,
+        "qk_rope_head_dim": 64,
+        "max_position_embeddings": 1048576,
+        "compress_rope_theta": 160000,
+        "compress_ratios": [0, 0, 4, 128, 0],
+        "rope_scaling": None,
+    }
+
+    repaired, changed = _normalize_dsv4_runtime_config(
+        config,
+        model_path="/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
+    )
+
+    assert changed is True
+    assert repaired is not config
+    assert repaired["rope_scaling"] == _DSV4_FLASH_REQUIRED_ROPE_SCALING
+    assert config["rope_scaling"] is None
+
+
+def test_dsv4_runtime_config_preserves_existing_rope_scaling():
+    from vmlx_engine.loaders.load_jangtq_dsv4 import _normalize_dsv4_runtime_config
+
+    existing = {
+        "type": "yarn",
+        "factor": 8,
+        "original_max_position_embeddings": 32768,
+        "beta_fast": 16,
+        "beta_slow": 2,
+    }
+    config = {
+        "model_type": "deepseek_v4",
+        "hidden_size": 4096,
+        "head_dim": 512,
+        "qk_rope_head_dim": 64,
+        "max_position_embeddings": 1048576,
+        "compress_rope_theta": 160000,
+        "compress_ratios": [0, 4, 0],
+        "rope_scaling": existing,
+    }
+
+    repaired, changed = _normalize_dsv4_runtime_config(config)
+
+    assert changed is False
+    assert repaired is config
+    assert repaired["rope_scaling"] == existing
+
+
+def test_dsv4_normalized_load_config_is_scoped_and_restored(tmp_path):
+    import mlx_lm.utils as mlx_lm_utils
+
+    from vmlx_engine.loaders.load_jangtq_dsv4 import _dsv4_normalized_load_config
+
+    model_dir = tmp_path / "DeepSeek-V4-Flash-JANGTQ-K"
+    other_dir = tmp_path / "Other"
+    model_dir.mkdir()
+    other_dir.mkdir()
+    config = {
+        "model_type": "deepseek_v4",
+        "hidden_size": 4096,
+        "head_dim": 512,
+        "qk_rope_head_dim": 64,
+        "max_position_embeddings": 1048576,
+        "compress_rope_theta": 160000,
+        "compress_ratios": [0, 0, 4, 128, 0],
+        "rope_scaling": None,
+    }
+    (model_dir / "config.json").write_text(json.dumps(config))
+    (other_dir / "config.json").write_text(json.dumps(config))
+
+    original = mlx_lm_utils.load_config
+    with _dsv4_normalized_load_config(model_dir):
+        assert mlx_lm_utils.load_config(model_dir)["rope_scaling"]["factor"] == 16
+        assert mlx_lm_utils.load_config(other_dir)["rope_scaling"] is None
+
+    assert mlx_lm_utils.load_config is original
+
+
+def test_dsv4_safe_auto_tokenizer_falls_back_to_tokenizer_json(tmp_path, monkeypatch):
+    import transformers
+    from tokenizers import Tokenizer
+    from tokenizers.models import WordLevel
+    from tokenizers.pre_tokenizers import Whitespace
+
+    from vmlx_engine.loaders.load_jangtq_dsv4 import _dsv4_safe_auto_tokenizer
+
+    model_dir = tmp_path / "DeepSeek-V4-Flash-JANGTQ-K"
+    other_dir = tmp_path / "Other"
+    model_dir.mkdir()
+    other_dir.mkdir()
+    (model_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "deepseek_v4",
+                "hidden_size": 4096,
+                "head_dim": 512,
+                "qk_rope_head_dim": 64,
+                "max_position_embeddings": 1048576,
+                "compress_rope_theta": 160000,
+                "compress_ratios": [0, 0, 4, 128, 0],
+                "rope_scaling": {
+                    "type": "yarn",
+                    "factor": 16,
+                    "original_max_position_embeddings": 65536,
+                    "beta_fast": 32,
+                    "beta_slow": 1,
+                },
+            }
+        )
+    )
+    tokenizer = Tokenizer(WordLevel({"<unk>": 0, "<｜User｜>": 1}, unk_token="<unk>"))
+    tokenizer.pre_tokenizer = Whitespace()
+    tokenizer.save(str(model_dir / "tokenizer.json"))
+
+    def failing_from_pretrained(*args, **kwargs):
+        raise ValueError("deepseek_v4 is unknown and rope_scaling rejected")
+
+    monkeypatch.setattr(
+        transformers.AutoTokenizer,
+        "from_pretrained",
+        failing_from_pretrained,
+    )
+
+    with _dsv4_safe_auto_tokenizer(model_dir):
+        loaded = transformers.AutoTokenizer.from_pretrained(
+            str(model_dir),
+            trust_remote_code=True,
+        )
+        assert loaded.convert_tokens_to_ids("<｜User｜>") == 1
+        try:
+            transformers.AutoTokenizer.from_pretrained(str(other_dir))
+        except ValueError as exc:
+            assert "deepseek_v4" in str(exc)
+        else:
+            raise AssertionError("non-target tokenizer path should not be hidden")
+
+    assert transformers.AutoTokenizer.from_pretrained is failing_from_pretrained

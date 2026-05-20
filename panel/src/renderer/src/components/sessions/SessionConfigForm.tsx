@@ -75,6 +75,7 @@ export interface SessionConfig {
   defaultRepetitionPenalty: number
   defaultMaxNewTokens?: number
   defaultEnableThinking?: boolean
+  dsv4PrefixCache?: boolean
   dsv4PoolQuant?: boolean
   embeddingModel: string
   additionalArgs: string
@@ -163,6 +164,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   defaultRepetitionPenalty: 0,
   defaultMaxNewTokens: 0,
   defaultEnableThinking: undefined,
+  dsv4PrefixCache: false,
   dsv4PoolQuant: false,
   embeddingModel: '',
   additionalArgs: '',
@@ -178,7 +180,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   videoMaxFrames: 8,
 }
 
-const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
+export const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 
 function normalizeDetectedFamilyName(family?: string): string | undefined {
   if (!family) return undefined
@@ -305,21 +307,25 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const turboQuantActive = !!detectedIsTurboQuant
   const multimodalActive = !dsv4Active && !detectedForceTextOnly && (!!detectedIsMultimodal || config.isMultimodal === true)
   const hybridCacheActive = detectedCacheType === 'hybrid' || detectedCacheType === 'mamba'
+  const dsv4CompositeCacheOptIn = dsv4Active && config.dsv4PrefixCache === true
   const effectiveContinuousBatching = dsv4Active ? true : config.continuousBatching
   const batchingOff = !effectiveContinuousBatching
   const effectivelyNoBatching = batchingOff
-  const prefixOff = !config.enablePrefixCache
+  const effectivePrefixCacheEnabled = dsv4Active
+    ? dsv4CompositeCacheOptIn && config.enablePrefixCache !== false
+    : config.enablePrefixCache
+  const prefixOff = !effectivePrefixCacheEnabled
   const isMambaCache = detectedCacheType === 'mamba' || detectedCacheType === 'hybrid'
-  const architectureRequiresPagedCache = zayaCcaActive || dsv4Active || isMambaCache
+  const architectureRequiresPagedCache = zayaCcaActive || dsv4CompositeCacheOptIn || isMambaCache
   const zayaTypedCacheRequiresPaged = zayaCcaActive && !batchingOff && !prefixOff
-  const dsv4CompositeRequiresPaged = dsv4Active && !batchingOff && !prefixOff
+  const dsv4CompositeRequiresPaged = dsv4CompositeCacheOptIn && !batchingOff && !prefixOff
   const nativeCacheRequiresPaged = isMambaCache && !batchingOff && !prefixOff
   const cacheControlState = {
     continuousBatching: effectiveContinuousBatching,
-    enablePrefixCache: config.enablePrefixCache,
-    usePagedCache: config.usePagedCache,
+    enablePrefixCache: effectivePrefixCacheEnabled,
+    usePagedCache: dsv4Active ? dsv4CompositeCacheOptIn : config.usePagedCache,
     enableDiskCache: config.enableDiskCache,
-    enableBlockDiskCache: config.enableBlockDiskCache,
+    enableBlockDiskCache: dsv4Active ? dsv4CompositeCacheOptIn && config.enableBlockDiskCache : config.enableBlockDiskCache,
     architectureRequiresPagedCache,
   }
   const cachePolicy = resolveCacheControlPolicy(cacheControlState)
@@ -327,10 +333,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const effectivePagedCacheBlockSize = dsv4CompositeRequiresPaged
     ? DSV4_PAGED_CACHE_BLOCK_SIZE
     : config.pagedCacheBlockSize
-  const pagedCacheSectionTitle = dsv4CompositeRequiresPaged
+  const pagedCacheSectionTitle = dsv4Active
     ? 'DSV4 Native Cache'
     : t('sessions.config.pagedKVCache')
-  const pagedCacheToggleLabel = dsv4CompositeRequiresPaged
+  const pagedCacheToggleLabel = dsv4Active
     ? 'Native Composite Prefix Cache'
     : 'Use Paged KV Cache'
   const effectiveStoredCacheQuantization = dsv4Active ? 'auto' : config.kvCacheQuantization
@@ -682,7 +688,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <CheckField label="Continuous Batching" tooltip="Keep ON for best performance. This is the master switch for prefix cache, paged KV cache, block disk L2, and stored-cache codecs. Turning it off uses the direct single-request engine and disables the cache features below." checked={effectiveContinuousBatching} onChange={v => onChange('continuousBatching', v)} disabled={dsv4Active} />
         <PerformanceHint text="Keep ON for best overall behavior: it enables prefix reuse, paged cache, block disk L2, and architecture-specific cache restore while the default max sequence count stays at one for local chat." />
         {dsv4Active && <InfoNote text="DSV4 Flash uses the continuous-batching DSV4BatchGenerator path for native SWA+CSA/HCA cache correctness." />}
-        {!effectiveContinuousBatching && config.enablePrefixCache && (
+        {!effectiveContinuousBatching && effectivePrefixCacheEnabled && (
           <InfoNote text="Cache flags will be omitted at launch while continuous batching is off. Turn it back on to use prefix cache, paged KV cache, block disk L2, and stored-cache codecs." />
         )}
         {!effectiveContinuousBatching && (
@@ -693,9 +699,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       {/* Prefix Cache */}
       <Section title={t('sessions.config.prefixCache')} expanded={expandedSections.prefixCache} onToggle={() => toggleSection('prefixCache')} hidden={isImage}>
         {!effectivelyNoBatching && <PerformanceHint text="Speeds up repeated conversations by remembering previous prompts. Makes follow-up messages much faster (lower time-to-first-token)." />}
+        {dsv4Active && !dsv4CompositeCacheOptIn && <InfoNote text="DSV4 Flash composite prefix cache is disabled by default until deterministic cache equivalence is proven. Use the DSV4 diagnostic opt-in in Performance settings before enabling prefix reuse." />}
         {batchingOff && <IncompatWarning text="Prefix cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable prefix caching." />}
-        <CheckField label="Enable Prefix Cache" tooltip="Caches prompt prefixes in memory. If you send the same system prompt or document multiple times, the server reuses the cached internal states instead of recomputing them, drastically reducing Time-To-First-Token (TTFT) and saving GPU compute. Highly recommended for agents and tool calling." checked={config.enablePrefixCache} onChange={v => onChange('enablePrefixCache', v)} />
-        {config.enablePrefixCache && (
+        <CheckField label="Enable Prefix Cache" tooltip="Caches prompt prefixes in memory. If you send the same system prompt or document multiple times, the server reuses the cached internal states instead of recomputing them, drastically reducing Time-To-First-Token (TTFT) and saving GPU compute. Highly recommended for agents and tool calling." checked={effectivePrefixCacheEnabled} onChange={v => onChange('enablePrefixCache', v)} disabled={dsv4Active && !dsv4CompositeCacheOptIn} />
+        {effectivePrefixCacheEnabled && (
           <>
             {dsv4Active ? (
               <InfoNote text="DSV4 Flash stores native SWA+CSA/HCA prompt-boundary state through the paged prefix path. Generic memory-aware and legacy entry-count prefix-cache controls are not used." />
@@ -838,7 +845,8 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* Paged Cache */}
       <Section title={pagedCacheSectionTitle} expanded={expandedSections.pagedCache} onToggle={() => toggleSection('pagedCache')} hidden={isImage}>
-        {!effectivelyNoBatching && !dsv4CompositeRequiresPaged && <PerformanceHint text="Reduces memory waste by splitting the KV cache into small blocks instead of one big chunk. Lets the server handle longer conversations without running out of RAM." />}
+        {!effectivelyNoBatching && !dsv4Active && <PerformanceHint text="Reduces memory waste by splitting the KV cache into small blocks instead of one big chunk. Lets the server handle longer conversations without running out of RAM." />}
+        {dsv4Active && !dsv4CompositeCacheOptIn && <PerformanceHint text="DSV4 Flash native composite prefix cache is off by default; launch uses full prefill to avoid the cached-vs-no-cache divergence found in the live gate." />}
         {dsv4CompositeRequiresPaged && <PerformanceHint text="DSV4 Flash stores native SWA+CSA/HCA prompt-boundary snapshots for prefix reuse. This is not generic paged KV; the internal paged path is only the block index and L2 transport for DeepseekV4Cache state." />}
         {batchingOff && <IncompatWarning text="Paged cache requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above to enable paged cache." />}
         {!dsv4CompositeRequiresPaged && config.enableDiskCache && <IncompatWarning text="Paged cache and legacy Disk Cache cannot run simultaneously. Enabling paged cache will auto-disable legacy Disk Cache. For persistent caching with paged cache, use 'Block Disk Cache (L2)' below instead." />}
@@ -846,7 +854,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {!batchingOff && prefixOff && cachePolicy.architectureRequiresPagedCache && <IncompatWarning text="This model uses native/paged cache when Prefix Cache is enabled. Enable Prefix Cache above to activate the architecture-specific cache stack." />}
         {zayaTypedCacheRequiresPaged && <InfoNote text="ZAYA typed CCA cache requires paged cache while prefix cache is enabled. Turn off Prefix Cache to disable this cache stack for ZAYA." />}
         {nativeCacheRequiresPaged && !zayaTypedCacheRequiresPaged && !dsv4CompositeRequiresPaged && <InfoNote text="Hybrid/Mamba cache models require paged cache while prefix cache is enabled so KV blocks and path-dependent state stay in the same cache contract." />}
-        {dsv4CompositeRequiresPaged && <InfoNote text="DSV4 uses native SWA+CSA/HCA composite cache snapshots, so paged cache stays on and block size is fixed to 256 tokens for production decode compatibility." />}
+        {dsv4CompositeRequiresPaged && <InfoNote text="DSV4 uses native SWA+CSA/HCA composite cache snapshots, so paged cache stays on and block size is fixed to 256 tokens for diagnostic decode-cache testing." />}
         <CheckField label={pagedCacheToggleLabel} tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations." checked={effectiveUsePagedCache} onChange={v => applyCacheControlUpdates(cacheControlUpdatesForPagedToggle(v, cacheControlState))} disabled={cachePolicy.pagedCacheDisabled} />
         {effectiveUsePagedCache && (
           <>
@@ -926,7 +934,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {batchingOff && <IncompatWarning text="KV cache quantization requires continuous batching. Turn on 'Continuous Batching' in the Concurrent Processing section above." />}
         {!batchingOff && prefixOff && <IncompatWarning text="KV cache quantization requires prefix cache. Enable 'Prefix Cache' above to use KV cache quantization." />}
         {!effectivelyNoBatching && !prefixOff && isMambaCache && <PerformanceHint text="Hybrid stateful cache detected — the engine keeps SSM/GLA state native and only uses cache codecs proven for that architecture. Generic TurboQuant KV is disabled unless a tested override exists." />}
-        {!effectivelyNoBatching && !prefixOff && dsv4Active && <PerformanceHint text="DeepSeek-V4 keeps generic KV q4/q8 disabled. Prefix reuse uses native SWA+CSA/HCA records with optional DSV4-only pool quantization below." />}
+        {!effectivelyNoBatching && dsv4Active && <PerformanceHint text="DeepSeek-V4 keeps generic KV q4/q8 disabled. Composite prefix reuse is a separate DSV4 diagnostic opt-in; default launches use full prefill." />}
 
         {/* Live/native cache codec — automatic per architecture. */}
         <div className="block">
@@ -971,7 +979,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       <Section title={t('sessions.config.diskCachePersistent')} expanded={expandedSections.diskCache} onToggle={() => toggleSection('diskCache')} hidden={isImage}>
         {!effectivelyNoBatching && <PerformanceHint text="Saves cached prompts to your SSD so they survive server restarts. Next time you load the same model, previous conversations warm up instantly." />}
         {dsv4Active ? (
-          <InfoNote text="DSV4 Flash stores persistent prefix state through Block Disk Cache (L2) in the native cache section. Legacy disk cache is disabled because DSV4 restores typed SWA+CSA/HCA composite records, not generic KV entries." />
+          <InfoNote text={dsv4CompositeCacheOptIn
+            ? "DSV4 Flash stores persistent prefix state through Block Disk Cache (L2) in the native cache section. Legacy disk cache is disabled because DSV4 restores typed SWA+CSA/HCA composite records, not generic KV entries."
+            : "DSV4 Flash composite prefix and Block Disk Cache (L2) reuse are disabled by default until deterministic cache equivalence is proven. Legacy disk cache is also unavailable for DSV4 typed cache records."} />
         ) : (
           <InfoNote text="Legacy disk cache works with memory-aware prefix cache. Block disk cache (in the Paged KV Cache section) works with paged cache. Only one can be active at a time." />
         )}
@@ -1102,7 +1112,18 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
         {dsv4Active && (
           <>
-            <InfoNote text="DeepSeek-V4 uses a native SWA+CSA/HCA composite cache. These controls map to DSV4-only engine env vars and require a restart." />
+            <InfoNote text="DeepSeek-V4 uses a native SWA+CSA/HCA composite cache. The prefix-cache path is off by default until cached-vs-no-cache equivalence is proven; these controls require a restart." />
+            <CheckField
+              label="DSV4 Composite Prefix Cache"
+              tooltip="Diagnostic opt-in for the native SWA+CSA/HCA paged prefix cache. Keep off for production until deterministic cached-vs-no-cache equivalence is proven."
+              checked={!!config.dsv4PrefixCache}
+              onChange={v => {
+                onChange('dsv4PrefixCache', v)
+                onChange('enablePrefixCache', v)
+                onChange('usePagedCache', v)
+                onChange('enableBlockDiskCache', v)
+              }}
+            />
             <CheckField
               label="DSV4 Pool Quantization"
               tooltip="Enables the experimental native CSA/HCA pool codec with DSV4_POOL_QUANT=1. Keep off for production correctness; use only for local memory/restore experiments."

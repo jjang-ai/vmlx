@@ -872,14 +872,20 @@
     },
     "notice": {
       "title": "MLX Studio の新機能",
-      "section1Heading": "JIT スリープと自動復帰",
-      "section1Body": "モデルは次のリクエスト時に JIT で 2〜15 秒で自動復帰します。セッションごとのタイムアウトは電源管理設定で構成できます。",
-      "section2Heading": "ディスクキャッシュと安定性",
-      "section2BodyA": "静かに失敗していたディスクキャッシュ書き込みを修正(rename 時の ENOENT)。起動時に孤立した一時ファイルが自動的にクリーンアップされるようになりました。",
-      "section2BodyB": "トークンストリーミングをより滑らかに (8ms スロットル)、メモリグラフの表示を修正、プロダクション監査全体で 38 件以上のバグを修正。",
-      "section3Heading": "JANG v2 量子化",
-      "section3Body": "JANG は視覚言語 (VL) モデルに対応しました — Qwen3.5-35B や 122B などの JANG MoE モデルでチャット中に画像を読み込めます。",
-      "footer": "MLX Studio と JANG をご利用いただきありがとうございます。— Jinho Jang"
+      "section1Heading": "MCP tools と API gateway",
+      "section1BodyA": "MCP config discovery は起動フラグなしで mcp.json または mcp.yaml から動作し、サーバー別/ツール別ポリシーがセッションと gateway に反映されます。",
+      "section1BodyB": "Built-in tools と MCP tools は、structured tool calls、multi-round continuation、より安全な parser cleanup により、raw marker leak を抑えて併用できます。",
+      "section2Heading": "Model settings と generation defaults",
+      "section2BodyA": "Chat Settings は temperature、top_p、top_k、repetition penalty、thinking mode、tool parser、reasoning parser の適用状態を表示します。",
+      "section2BodyB": "max_tokens を省略した場合、古い 32768 fallback ではなく bounded model/default budget に解決され、request logs に解決値が表示されます。",
+      "section3Heading": "MTP, cache, JANG runtime hardening",
+      "section3BodyA": "Qwen3.6 native MTP detection、JANG/JANGTQ group-size recognition、MX matmul dispatch checks、Hunyuan/ZAYA/Gemma/MiniMax routing の gate を強化しました。",
+      "section3BodyB": "Prefix cache、paged cache、L2 disk cache、TurboQuant KV は、cache reuse を推測ではなく確認できるように health counters を明確化しました。",
+      "section4Heading": "Release integrity と updater safety",
+      "section4BodyA": "Release 前に packaged app の Developer ID signing、notarization、bundled source hashes、critical imports、GUI launch、latest.json/update manifest compatibility を確認します。",
+      "section4BodyB": "DeepSeek V4 Flash は保守的な扱いです。composite cache は opt-in のままで、exact long-code output は identifier gate が通るまで follow-up として残します。",
+      "footer": "MLX Studio と JANG をご利用いただきありがとうございます。— Jinho Jang",
+      "dismiss": "了解 — 次のアップデートまで表示しない"
     }
   },
   "ui": {

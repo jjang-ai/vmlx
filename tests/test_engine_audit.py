@@ -1384,20 +1384,22 @@ class TestToolParserConcurrency:
         assert "VALUE HERE" not in rendered
         assert "string=" not in rendered.split("<｜User｜>", 1)[0]
         assert "<｜DSML｜parameter" not in rendered.split("<｜User｜>", 1)[0]
+        instruction_scope = rendered.split("<｜User｜>", 1)[0]
         assert "<｜DSML｜tool_calls>" in rendered
         assert "</｜DSML｜tool_calls>" in rendered
         assert '<｜DSML｜invoke name="list_directory">' in rendered
         assert '<｜DSML｜invoke name="write_file">' in rendered
+        assert instruction_scope.count("<｜DSML｜tool_calls>") == 2
         assert "path (string, required)" in rendered
         assert "content (string, required)" in rendered
 
-    def test_dsv4_native_schema_prompt_does_not_get_replaced_by_fallback(self):
-        """DSV4's bundle-native tool schema is sufficient even without concrete names in the exemplar."""
+    def test_dsv4_native_schema_prompt_with_only_generic_examples_gets_concrete_fallback(self):
+        """DSV4 needs concrete invoke names, not only generic DSML placeholders."""
         from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
 
         class DSV4FakeTokenizer:
             def apply_chat_template(self, messages, **kwargs):
-                return "SHOULD_NOT_RE_RENDER"
+                return "\n".join(m.get("content", "") for m in messages)
 
         tools = [
             {
@@ -1452,8 +1454,15 @@ class TestToolParserConcurrency:
             tool_parser_id="dsml",
         )
 
-        assert rendered == prompt
-        assert "SHOULD_NOT_RE_RENDER" not in rendered
+        instruction_scope = rendered.split("<｜User｜>", 1)[0]
+        assert rendered != prompt
+        assert '<｜DSML｜invoke name="list_directory">' in instruction_scope
+        assert '<｜DSML｜invoke name="write_file">' in instruction_scope
+        assert "path (string, required)" in instruction_scope
+        assert "content (string, required)" in instruction_scope
+        assert "$TOOL_NAME" not in instruction_scope
+        assert "$PARAMETER_NAME" not in instruction_scope
+        assert "$PARAMETER_VALUE" not in instruction_scope
 
     def test_stream_chat_buffers_leading_whitespace_before_tool_marker(self):
         """Tool-call-only streams must not leak whitespace before tool_calls."""
@@ -1496,6 +1505,24 @@ class TestToolParserConcurrency:
             assert "after" in cleaned, family
             assert "<" not in cleaned, (family, cleaned)
             assert "[TOOL_CALLS]" not in cleaned, (family, cleaned)
+            assert "```tool_code" not in cleaned, (family, cleaned)
+
+    def test_tool_markup_residue_strips_interrupted_non_dsml_fragments(self):
+        """Interrupted marker fragments must not leak attribute/code tails."""
+        from vmlx_engine.server import _strip_tool_markup_residue_for_display
+
+        cases = {
+            "zaya_attr_tail": 'Before <zyphra_tool_call name="write_file"',
+            "llama_function_tail": "Before <function=write_file",
+            "gemma3_code_tail": "Before ```tool_code\nwrite_file(",
+        }
+
+        for family, text in cases.items():
+            cleaned = _strip_tool_markup_residue_for_display(text)
+            assert "Before" in cleaned, family
+            assert "write_file" not in cleaned, (family, cleaned)
+            assert "zyphra" not in cleaned, (family, cleaned)
+            assert "function" not in cleaned, (family, cleaned)
             assert "```tool_code" not in cleaned, (family, cleaned)
 
 
@@ -3650,33 +3677,46 @@ class TestStartupCompatibilityGuards:
         ]
 
         assert '"$PYTHON" -m pip install --force-reinstall --no-deps "$VMLX_LOCAL"' in local_install_block
-        assert 'JANG_LOCAL="${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}"' in bundle_script
+        assert 'JANG_LOCAL="${VMLX_JANG_TOOLS_SOURCE:-${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}}"' in bundle_script
         assert '"$PYTHON" -m pip install --force-reinstall --no-deps "$JANG_LOCAL"' in local_install_block
 
     def test_bundled_python_does_not_silently_fallback_to_pypi_jang_tools(self):
         bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
         verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
 
-        assert "VMLINUX_ALLOW_PYPI_JANG" in bundle_script
+        assert '${VMLX_ALLOW_PYPI_JANG:-${VMLINUX_ALLOW_PYPI_JANG:-0}}' in bundle_script
         assert "RELEASE BLOCKED — local jang-tools source missing" in bundle_script
         assert 'pip install --no-deps "jang>=2.5.29"' in bundle_script
-        assert "VMLINUX_ALLOW_MISSING_JANG_SOURCE_HASH" in verify_script
+        assert '${VMLX_ALLOW_MISSING_JANG_SOURCE_HASH:-${VMLINUX_ALLOW_MISSING_JANG_SOURCE_HASH:-0}}' in verify_script
         assert "RELEASE BLOCKED — local jang_tools source unavailable for hash parity" in verify_script
 
     def test_bundled_python_blocks_tracked_dirty_local_jang_tools_by_default(self):
         bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
         local_install_block = bundle_script[
-            bundle_script.index('JANG_LOCAL="${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}"')
+            bundle_script.index('JANG_LOCAL="${VMLX_JANG_TOOLS_SOURCE:-${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}}"')
             : bundle_script.index("# Clean up to reduce size")
         ]
         destructive_build_index = bundle_script.index('rm -rf "$BUNDLE_DIR"')
         dirty_guard_index = bundle_script.index("check_local_jang_source_clean")
 
-        assert "VMLINUX_ALLOW_DIRTY_JANG_SOURCE" in local_install_block
+        assert '${VMLX_ALLOW_DIRTY_JANG_SOURCE:-${VMLINUX_ALLOW_DIRTY_JANG_SOURCE:-0}}' in local_install_block
         assert "RELEASE BLOCKED — local jang-tools source has tracked changes" in local_install_block
         assert 'git -C "$JANG_LOCAL" diff --quiet --ignore-submodules --' in local_install_block
         assert 'git -C "$JANG_LOCAL" diff --cached --quiet --ignore-submodules --' in local_install_block
         assert dirty_guard_index < destructive_build_index
+
+    def test_release_scripts_accept_documented_jang_tools_env_names_with_legacy_fallback(self):
+        bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
+        verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
+        release_gate = Path("./panel/scripts/release-gate-python-app.py").read_text()
+
+        assert 'JANG_LOCAL="${VMLX_JANG_TOOLS_SOURCE:-${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}}"' in bundle_script
+        assert 'JANG_TOOLS_SOURCE_DIR="${VMLX_JANG_TOOLS_SOURCE:-${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}}/jang_tools"' in verify_script
+        assert 'os.environ.get("VMLX_JANG_TOOLS_SOURCE")' in release_gate
+        assert 'os.environ.get("VMLINUX_JANG_TOOLS_SOURCE")' in release_gate
+        assert '${VMLX_ALLOW_DIRTY_JANG_SOURCE:-${VMLINUX_ALLOW_DIRTY_JANG_SOURCE:-0}}' in bundle_script
+        assert '${VMLX_ALLOW_PYPI_JANG:-${VMLINUX_ALLOW_PYPI_JANG:-0}}' in bundle_script
+        assert '${VMLX_ALLOW_MISSING_JANG_SOURCE_HASH:-${VMLINUX_ALLOW_MISSING_JANG_SOURCE_HASH:-0}}' in verify_script
 
     def test_bundled_python_console_scripts_are_relocatable(self):
         bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()

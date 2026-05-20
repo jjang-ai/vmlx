@@ -5,6 +5,8 @@ model mentions the expected token inside reasoning but never emits visible
 content.
 """
 
+import json
+
 from tests.cross_matrix.run_production_family_audit import (
     ModelRow,
     ROWS,
@@ -14,8 +16,14 @@ from tests.cross_matrix.run_production_family_audit import (
     cache_exact_hit_required,
     capability_endpoint_contract_ok,
     chat_basic_turn_ok,
+    dsv4_release_fault_matrix,
+    dsv4_output_precision_boundary,
+    dsv4_rope_scaling_contract,
     dsv4_thinking_mode_max_ok,
+    dsv4_threejs_identifier_integrity_ok,
+    dsv4_threejs_single_file_ok,
     dsv4_long_context_full_output_ok,
+    dsv4_long_prompt_specs,
     extract_anthropic_text_and_stop,
     extract_ollama_visible_text_and_stop,
     is_non_length_stop,
@@ -29,9 +37,10 @@ from tests.cross_matrix import run_production_family_audit as audit_harness
 
 def test_live_audit_root_is_this_checkout_not_stale_absolute_path():
     expected_root = audit_harness.Path(audit_harness.__file__).resolve().parents[2]
+    source = audit_harness.Path(audit_harness.__file__).read_text(encoding="utf-8")
 
     assert audit_harness.ROOT == expected_root
-    assert audit_harness.ROOT != audit_harness.Path("/Users/example/mlx/vllm-mlx")
+    assert 'Path("/Users/example/mlx/vllm-mlx")' not in source
 
 
 def test_anthropic_exact_probe_ignores_reasoning_blocks():
@@ -125,9 +134,34 @@ def test_zaya_vl_rows_are_present_and_marked_cca_mllm():
 def test_hy3_release_row_is_present_with_hunyuan_contract():
     rows = {row.id: row for row in ROWS}
 
-    assert rows["hy3_preview_jangtq2"].family == "hy_v3"
-    assert rows["hy3_preview_jangtq2"].expect_reasoning is True
-    assert rows["hy3_preview_jangtq2"].expect_tool_parser == "hunyuan"
+    for row_id in (
+        "hy3_preview_jangtq2",
+        "hy3_preview_jang_2k",
+        "hy3_preview_jang_2l",
+    ):
+        assert rows[row_id].family == "hy_v3"
+        assert rows[row_id].expect_reasoning is True
+        assert rows[row_id].expect_tool_parser == "hunyuan"
+        assert rows[row_id].slow is True
+
+
+def test_hy3_affine_rows_track_generation_and_quantization_contract():
+    rows = {row.id: row for row in ROWS}
+
+    for row_id in ("hy3_preview_jang_2k", "hy3_preview_jang_2l"):
+        static = static_audit(rows[row_id])
+
+        assert static["registry"]["family_name"] == "hy_v3"
+        assert static["registry"]["reasoning_parser"] == "qwen3"
+        assert static["registry"]["tool_parser"] == "hunyuan"
+        assert static["registry"]["cache_type"] == "kv"
+        assert static["registry"]["think_in_template"] is False
+        assert static["generation"]["max_new_tokens"] is None
+        assert static["generation"]["temperature"] == 0.9
+        assert static["generation"]["top_p"] == 1
+        assert static["jang"]["quantization"]["group_size"] == 128
+        assert static["jang"]["runtime"]["bundle_has_mtp"] is False
+        assert not static["issues"]
 
 
 def test_ling_rows_do_not_expect_reasoning():
@@ -255,14 +289,11 @@ def test_dsv4_row_points_at_current_sub80_upload_candidate_bundle():
     assert rows["dsv4_tq"].path.endswith("DeepSeek-V4-Flash-JANGTQ-K")
 
 
-def test_dsv4_pure_affine_keeper_is_in_production_audit_matrix():
+def test_dsv4_local_affine_artifact_is_in_production_audit_matrix():
     rows = {row.id: row for row in ROWS}
 
-    row = rows["dsv4_jang_dq2_gate3math6"]
-    assert row.path == (
-        "/Users/example/models/JANGQ/"
-        "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
-    )
+    row = rows["dsv4_jang_local"]
+    assert row.path == "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANG"
     assert row.family == "deepseek_v4"
     assert row.cache_profile == "dsv4_composite"
     assert row.expect_tool_parser == "dsml"
@@ -274,16 +305,22 @@ def test_dsv4_decode_speed_gate_tracks_jangtq_and_pure_affine_lanes():
     assert run_decode_speed_gate.ROWS["dsv4_k"].path.endswith(
         "DeepSeek-V4-Flash-JANGTQ-K"
     )
-    assert run_decode_speed_gate.ROWS["dsv4_jang_dq2_gate3math6"].path.endswith(
-        "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
+    assert "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANG" in (
+        run_decode_speed_gate.DSV4_AFFINE_MODEL_CANDIDATES
+    )
+    assert run_decode_speed_gate.ROWS["dsv4_jang_dq2_gate3math6"].path in (
+        run_decode_speed_gate.DSV4_AFFINE_MODEL_CANDIDATES
     )
 
 
-def test_dsv4_long_context_gate_defaults_to_pure_affine_keeper():
+def test_dsv4_long_context_gate_defaults_to_existing_affine_candidate():
     from tests.cross_matrix import run_dsv4_long_context_gate
 
-    assert run_dsv4_long_context_gate.DEFAULT_MODEL.endswith(
-        "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
+    assert "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANG" in (
+        run_dsv4_long_context_gate.DSV4_AFFINE_MODEL_CANDIDATES
+    )
+    assert run_dsv4_long_context_gate.DEFAULT_MODEL in (
+        run_dsv4_long_context_gate.DSV4_AFFINE_MODEL_CANDIDATES
     )
 
 
@@ -303,11 +340,14 @@ def test_dsv4_long_context_gate_compares_cached_followup_to_no_cache():
     assert "cached_vs_no_cache" in src
 
 
-def test_dsv4_responses_cache_gate_defaults_to_pure_affine_keeper():
+def test_dsv4_responses_cache_gate_defaults_to_existing_affine_candidate():
     from tests.cross_matrix import run_dsv4_responses_cache_gate
 
-    assert run_dsv4_responses_cache_gate.DEFAULT_MODEL.endswith(
-        "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
+    assert "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANG" in (
+        run_dsv4_responses_cache_gate.DSV4_AFFINE_MODEL_CANDIDATES
+    )
+    assert run_dsv4_responses_cache_gate.DEFAULT_MODEL in (
+        run_dsv4_responses_cache_gate.DSV4_AFFINE_MODEL_CANDIDATES
     )
 
 
@@ -396,6 +436,173 @@ def test_dsv4_static_audit_exposes_actual_bit_plan_when_local_bundle_exists():
     assert bit_plan["metadata_matches_actual"] is True
     assert bit_plan["sidecar"]["missing_keys"] == []
     assert bit_plan["issues"] == []
+    precision = static["dsv4_precision_boundary"]
+    assert precision["output_head_quantized"] is True
+    assert precision["needs_source_or_rebuild_clearance"] is True
+    assert any("output-head/final-norm precision boundary" in issue for issue in static["issues"])
+
+
+def test_dsv4_precision_boundary_marks_quantized_output_head(tmp_path):
+    import numpy as np
+    from safetensors.numpy import save_file
+
+    save_file(
+        {
+            "head.weight": np.zeros((4, 2), dtype=np.uint32),
+            "head.scales": np.ones((4, 1), dtype=np.float16),
+            "head.biases": np.zeros((4, 1), dtype=np.float16),
+            "norm.weight": np.ones((2,), dtype=np.float16),
+        },
+        str(tmp_path / "model.safetensors"),
+    )
+    (tmp_path / "model.safetensors.index.json").write_text(
+        json.dumps(
+            {
+                "weight_map": {
+                    "head.weight": "model.safetensors",
+                    "head.scales": "model.safetensors",
+                    "head.biases": "model.safetensors",
+                    "norm.weight": "model.safetensors",
+                }
+            }
+        )
+    )
+
+    precision = dsv4_output_precision_boundary(tmp_path)
+
+    assert precision["checked"] is True
+    assert precision["output_head_dtype"] == "U32"
+    assert precision["output_head_quantized"] is True
+    assert precision["final_norm_dtype"] == "F16"
+    assert precision["final_norm_lower_precision"] is True
+    assert precision["needs_source_or_rebuild_clearance"] is True
+
+
+def test_dsv4_precision_boundary_accepts_source_like_output_head(tmp_path):
+    import numpy as np
+    from safetensors.numpy import save_file
+
+    save_file(
+        {
+            "head.weight": np.zeros((4, 2), dtype=np.float32),
+            "norm.weight": np.ones((2,), dtype=np.float32),
+        },
+        str(tmp_path / "model.safetensors"),
+    )
+    (tmp_path / "model.safetensors.index.json").write_text(
+        json.dumps(
+            {
+                "weight_map": {
+                    "head.weight": "model.safetensors",
+                    "norm.weight": "model.safetensors",
+                }
+            }
+        )
+    )
+
+    precision = dsv4_output_precision_boundary(tmp_path)
+
+    assert precision["checked"] is True
+    assert precision["output_head_dtype"] == "F32"
+    assert precision["output_head_quantized"] is False
+    assert precision["final_norm_dtype"] == "F32"
+    assert precision["final_norm_lower_precision"] is False
+    assert precision["needs_source_or_rebuild_clearance"] is False
+
+
+def test_dsv4_release_fault_matrix_separates_ruled_out_layers_from_open_blockers(tmp_path):
+    matrix = dsv4_release_fault_matrix(
+        model_dir=tmp_path,
+        precision_boundary={
+            "output_head_quantized": True,
+            "final_norm_lower_precision": True,
+            "needs_source_or_rebuild_clearance": True,
+        },
+        rope_scaling_contract={"runtime_repair_required": True},
+    )
+
+    assert matrix["checked"] is True
+    assert matrix["release_blocked"] is True
+    ruled_out = {item["layer"] for item in matrix["ruled_out"]}
+    assert {
+        "prompt_renderer",
+        "api_endpoint_adapter",
+        "stream_sse_or_response_assembly",
+        "tokenizer_roundtrip",
+        "mxtq_only_kernel_path",
+        "output_head_or_final_norm_only",
+    }.issubset(ruled_out)
+    open_layers = {item["layer"] for item in matrix["open_blockers"]}
+    assert {
+        "source_or_broader_body_comparison",
+        "shared_dsv4_runtime_or_body_precision",
+        "full_output_identifier_gate",
+        "dsv4_composite_prefix_cache_equivalence",
+        "compressed_rope_scaling_metadata",
+    }.issubset(open_layers)
+    assert any("not a release pass" in step for step in matrix["required_next_proofs"])
+    assert any("cache equivalence" in step for step in matrix["required_next_proofs"])
+
+
+def test_dsv4_rope_scaling_contract_flags_null_flash_yarn_metadata(tmp_path):
+    cfg = {
+        "model_type": "deepseek_v4",
+        "hidden_size": 4096,
+        "head_dim": 512,
+        "qk_rope_head_dim": 64,
+        "max_position_embeddings": 1048576,
+        "compress_rope_theta": 160000,
+        "compress_ratios": [0, 0, 4, 128, 0],
+        "rope_scaling": None,
+    }
+
+    contract = dsv4_rope_scaling_contract(cfg, model_dir=tmp_path / "DeepSeek-V4-Flash-JANGTQ-K")
+
+    assert contract["checked"] is True
+    assert contract["runtime_repair_required"] is True
+    assert contract["bundle_rope_scaling"] is None
+    assert contract["runtime_rope_scaling"]["factor"] == 16
+
+
+def test_dsv4_static_audit_exposes_missing_source_rope_scaling(tmp_path):
+    (tmp_path / "config.json").write_text(json.dumps({
+        "model_type": "deepseek_v4",
+        "hidden_size": 4096,
+        "head_dim": 512,
+        "qk_rope_head_dim": 64,
+        "max_position_embeddings": 1048576,
+        "compress_rope_theta": 160000,
+        "compress_ratios": [0, 0, 4, 128, 0],
+        "rope_scaling": None,
+    }))
+    (tmp_path / "jang_config.json").write_text(json.dumps({
+        "model_family": "deepseek_v4",
+        "weight_format": "mxtq",
+        "chat": {
+            "encoder": "encoding_dsv4",
+            "encoder_fn": "encode_messages",
+            "sampling_defaults": {"repetition_penalty_thinking": 1.0},
+        },
+    }))
+    row = ModelRow(
+        id="dsv4_tmp",
+        label="tmp dsv4",
+        path=str(tmp_path),
+        family="deepseek_v4",
+        expect_reasoning=True,
+        expect_tool_parser="dsml",
+        cache_profile="dsv4_composite",
+    )
+
+    static = static_audit(row)
+
+    assert static["dsv4_rope_scaling_contract"]["runtime_repair_required"] is True
+    assert any("YaRN rope_scaling" in issue for issue in static["issues"])
+    open_layers = {
+        item["layer"]
+        for item in static["dsv4_release_fault_matrix"]["open_blockers"]
+    }
+    assert "compressed_rope_scaling_metadata" in open_layers
 
 
 def test_dsv4_static_audit_accepts_canonical_encoder_metadata(tmp_path):
@@ -626,6 +833,104 @@ def test_dsv4_long_output_requires_stop_not_length_cap():
         loop_score=0.0,
     )
 
+    assert not dsv4_long_context_full_output_ok(
+        code=200,
+        finish="stop",
+        full_text=f"Reasoning summary.\n{complete_answer}",
+        content=complete_answer,
+        split_ok=True,
+        loop_score=0.0,
+        content_contract_ok=False,
+    )
+
+
+def test_dsv4_game_gate_requires_complete_threejs_html_not_canvas_sketch():
+    good = """
+<!DOCTYPE html>
+<html><body><script src="https://cdn.jsdelivr.net/npm/three/build/three.min.js"></script>
+<script>
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
+const renderer = new THREE.WebGLRenderer();
+const player = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial());
+function spawnEnemy(){}
+function updateProjectiles(){ /* collision and health score updates */ }
+function loop(){ requestAnimationFrame(loop); }
+loop();
+</script><div>health score enemy projectile collision</div></body></html>
+"""
+    bad_canvas = """
+<!DOCTYPE html>
+<html><body><canvas id="c"></canvas><script>
+function loop(){ requestAnimationFrame(loop); }
+// health score enemy projectile collision
+</script></body></html>
+"""
+    fenced = f"```html\n{good}\n```"
+    placeholder = good.replace("</script>", "// TODO omitted for brevity\n</script>")
+
+    assert dsv4_threejs_single_file_ok(good)
+    assert not dsv4_threejs_single_file_ok(bad_canvas)
+    assert not dsv4_threejs_single_file_ok(fenced)
+    assert not dsv4_threejs_single_file_ok(placeholder)
+
+    corrupt_api = good.replace("THREE.Scene", "THREE.ScScene").replace(
+        "THREE.PerspectiveCamera", "THREE.PPerspectiveCamera"
+    )
+    assert not dsv4_threejs_single_file_ok(corrupt_api)
+
+
+def test_dsv4_identifier_integrity_gate_rejects_corrupted_api_names():
+    good = "\n".join(
+        [
+            "const scene = new THREE.Scene();",
+            "const renderer = new THREE.WebGLRenderer();",
+            "const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 100);",
+            "const mesh = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial());",
+        ]
+    )
+    corrupt = good.replace("THREE.Scene", "THREE.ScScene").replace(
+        "THREE.WebGLRenderer", "THREE.WebWebGLRenderer"
+    )
+
+    assert dsv4_threejs_identifier_integrity_ok(good)
+    assert not dsv4_threejs_identifier_integrity_ok(f"```javascript\n{good}\n```")
+    assert not dsv4_threejs_identifier_integrity_ok(corrupt)
+
+
+def test_dsv4_live_gate_skips_full_game_when_identifier_gate_failed():
+    source = audit_harness.Path(audit_harness.__file__).read_text(encoding="utf-8")
+
+    assert "skipped_due_to_identifier_integrity_failure" in source
+    assert "identifier_artifact" in source
+
+
+def test_dsv4_identifier_gate_requests_token_logprobs_for_root_cause_artifacts():
+    source = audit_harness.Path(audit_harness.__file__).read_text(encoding="utf-8")
+    start = source.index('"dsv4_threejs_identifier_integrity"')
+    block = source[start : source.index("ident_content", start)]
+
+    assert '"logprobs": True' in block
+    assert '"top_logprobs": 5' in block
+
+
+def test_dsv4_long_prompt_specs_use_right_rail_and_budget():
+    specs = {spec["name"]: spec for spec in dsv4_long_prompt_specs()}
+
+    vc = specs["vc_project_plan"]
+    assert vc["enable_thinking"] is True
+    assert vc["max_tokens"] >= 2500
+
+    game = specs["game_design_long_context"]
+    assert game["enable_thinking"] is False
+    assert game["max_tokens"] == 2600
+    assert game["temperature"] == 0.0
+    assert game["top_p"] == 1.0
+    assert game["repetition_penalty"] == 1.0
+    assert "THREE.Scene" in game["prompt"]
+    assert "THREE.WebGLRenderer" in game["prompt"]
+    assert "ending with </html>" in game["prompt"]
+
 
 def test_dsv4_max_mode_requires_visible_exact_answer_not_reasoning_mention():
     assert dsv4_thinking_mode_max_ok(
@@ -719,5 +1024,6 @@ def test_live_gate_server_command_does_not_force_sampling_defaults(tmp_path):
         "--default-top-k",
         "--default-min-p",
         "--default-repetition-penalty",
+        "--max-tokens",
     ):
         assert flag not in cmd

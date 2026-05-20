@@ -88,7 +88,11 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
         enableAutoToolChoice: detected?.enableAutoToolChoice,
         toolCallParser: 'auto',
         reasoningParser: 'auto',
-        usePagedCache: detected?.usePagedCache,
+        dsv4PrefixCache: detected?.family === 'deepseek-v4' ? false : prev.dsv4PrefixCache,
+        enablePrefixCache: detected?.family === 'deepseek-v4' ? false : prev.enablePrefixCache,
+        usePagedCache: detected?.family === 'deepseek-v4' ? false : detected?.usePagedCache,
+        enableBlockDiskCache: detected?.family === 'deepseek-v4' ? false : prev.enableBlockDiskCache,
+        pagedCacheBlockSize: detected?.family === 'deepseek-v4' ? 256 : prev.pagedCacheBlockSize,
       }
       return applyGenerationDefaultsToConfig(next, gen)
     })
@@ -185,8 +189,16 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
         const gen = await window.api.models.getGenerationDefaults(selectedModel).catch(() => null) as any
         if (detected && detected.family !== 'unknown') {
           base.enableAutoToolChoice = detected.enableAutoToolChoice
-          base.usePagedCache = detected.usePagedCache
-          if (detected.family === 'deepseek-v4') base.timeout = 900
+          if (detected.family === 'deepseek-v4') {
+            base.timeout = 900
+            base.dsv4PrefixCache = false
+            base.enablePrefixCache = false
+            base.usePagedCache = false
+            base.enableBlockDiskCache = false
+            base.pagedCacheBlockSize = 256
+          } else {
+            base.usePagedCache = detected.usePagedCache
+          }
           setDetectedFamily(detected.family)
           setDetectedIsTurboQuant(!!detected.isTurboQuant)
           setDetectedIsMultimodal(!!detected.isMultimodal)

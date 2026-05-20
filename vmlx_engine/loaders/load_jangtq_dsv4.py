@@ -46,8 +46,9 @@ import os
 import json
 import re
 import sys
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Tuple
+from typing import Any, Iterator, Tuple
 
 _log = _logging.getLogger(__name__)
 _PREFILL_PATCH_INSTALLED = False
@@ -59,6 +60,13 @@ _INSTANT_LOAD_SCHEMA = 1
 _INSTANT_LOAD_RUNTIME_PATCH = "dsv4-prefill-mask-v1-switchglu-marker-v2-mla-bitfix-v1"
 _SIDECAR_FILENAME = "jangtq_stacked.safetensors"
 _SIDECAR_MANIFEST = "jangtq_stacked.json"
+_DSV4_FLASH_REQUIRED_ROPE_SCALING = {
+    "type": "yarn",
+    "factor": 16,
+    "original_max_position_embeddings": 65536,
+    "beta_fast": 32,
+    "beta_slow": 1,
+}
 
 _DSV4_CRITICAL_CONTROL_RE = re.compile(
     r"^(hc_head_(?:fn|base|scale)|"
@@ -80,6 +88,156 @@ def _read_json(path: Path) -> dict:
 def _is_dsv4_bundle(model_path: str | Path) -> bool:
     cfg = _read_json(Path(model_path) / "config.json")
     return cfg.get("model_type") == "deepseek_v4"
+
+
+def _is_dsv4_flash_config(config: dict[str, Any], model_path: str | Path | None = None) -> bool:
+    if config.get("model_type") != "deepseek_v4":
+        return False
+    ratios = config.get("compress_ratios")
+    if not isinstance(ratios, list) or not any(int(r or 0) > 0 for r in ratios):
+        return False
+    if int(config.get("hidden_size") or 0) != 4096:
+        return False
+    if int(config.get("head_dim") or 0) != 512:
+        return False
+    if int(config.get("qk_rope_head_dim") or config.get("rope_head_dim") or 0) != 64:
+        return False
+    if int(config.get("max_position_embeddings") or 0) < 65536:
+        return False
+    if model_path is not None and "DeepSeek-V4-Flash" in str(model_path):
+        return True
+    return int(config.get("compress_rope_theta") or 0) == 160000
+
+
+def _normalize_dsv4_runtime_config(
+    config: dict[str, Any],
+    *,
+    model_path: str | Path | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """Return a DSV4 runtime config with source-compatible compressed RoPE.
+
+    The local DSV4 JANG/JANGTQ conversion artifacts can carry
+    ``rope_scaling: null`` even though the source DeepSeek-V4-Flash config uses
+    YaRN scaling for compressed-context layers. Leaving it null builds the MLX
+    attention stack with the wrong RoPE frequencies before the model ever sees
+    a prompt, which matches the observed "API identifiers drift only in fuller
+    prompts" failure much better than an endpoint/parser/cache theory.
+    """
+    if not _is_dsv4_flash_config(config, model_path=model_path):
+        return config, False
+    existing = config.get("rope_scaling")
+    if isinstance(existing, dict) and existing:
+        return config, False
+    repaired = dict(config)
+    repaired["rope_scaling"] = dict(_DSV4_FLASH_REQUIRED_ROPE_SCALING)
+    return repaired, True
+
+
+@contextmanager
+def _dsv4_normalized_load_config(model_path: str | Path) -> Iterator[None]:
+    """Temporarily normalize ``mlx_lm.utils.load_config`` for this DSV4 bundle.
+
+    ``jang_tools.load_jangtq_model`` and the affine JANG loader both import
+    ``load_config`` inside their load functions, before constructing the model
+    skeleton. This scoped adapter lets vMLX repair stale bundle metadata before
+    construction while leaving other model loads untouched and without writing
+    into the user's model directory.
+    """
+    import mlx_lm.utils as mlx_lm_utils
+
+    target = Path(model_path).expanduser()
+    try:
+        target = target.resolve()
+    except Exception:
+        pass
+    original = mlx_lm_utils.load_config
+
+    def _load_config_with_dsv4_rope_scaling(path, *args, **kwargs):
+        config = original(path, *args, **kwargs)
+        try:
+            current = Path(path).expanduser()
+            try:
+                current = current.resolve()
+            except Exception:
+                pass
+            if current != target:
+                return config
+            repaired, changed = _normalize_dsv4_runtime_config(
+                config,
+                model_path=current,
+            )
+            if changed:
+                _log.warning(
+                    "DSV4 config repair: injected DeepSeek-V4-Flash YaRN "
+                    "rope_scaling for compressed-context layers; bundle "
+                    "config.json had rope_scaling=null."
+                )
+            return repaired
+        except Exception:
+            return config
+
+    mlx_lm_utils.load_config = _load_config_with_dsv4_rope_scaling
+    try:
+        yield
+    finally:
+        mlx_lm_utils.load_config = original
+
+
+@contextmanager
+def _dsv4_safe_auto_tokenizer(model_path: str | Path) -> Iterator[None]:
+    """Allow DSV4 tokenizer lookup even when HF config parsing rejects YaRN.
+
+    ``jang_tools.load_jangtq_model`` calls ``AutoTokenizer.from_pretrained`` only
+    to discover the DSV4 ``<｜User｜>`` token id for EOS expansion. Once
+    converted bundles carry source-compatible ``rope_scaling``, Transformers can
+    reject the unknown ``deepseek_v4`` config before it returns the local
+    tokenizer. Scope a fallback to ``tokenizer.json`` for this bundle only.
+    """
+    import transformers
+
+    target = Path(model_path).expanduser()
+    try:
+        target = target.resolve()
+    except Exception:
+        pass
+    original = transformers.AutoTokenizer.from_pretrained
+
+    def _from_pretrained_with_dsv4_fallback(path, *args, **kwargs):
+        try:
+            return original(path, *args, **kwargs)
+        except Exception as exc:
+            current = Path(path).expanduser()
+            try:
+                current = current.resolve()
+            except Exception:
+                pass
+            if current != target:
+                raise
+            try:
+                cfg_path = current / "config.json"
+                cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+                if not _is_dsv4_flash_config(cfg, model_path=current):
+                    raise
+                tok_file = current / "tokenizer.json"
+                if not tok_file.exists():
+                    raise
+                from transformers import PreTrainedTokenizerFast
+
+                _log.warning(
+                    "DSV4 tokenizer repair: AutoTokenizer rejected the "
+                    "DeepSeek-V4-Flash config; using tokenizer.json fallback "
+                    "for EOS expansion only: %s",
+                    exc,
+                )
+                return PreTrainedTokenizerFast(tokenizer_file=str(tok_file))
+            except Exception:
+                raise exc
+
+    transformers.AutoTokenizer.from_pretrained = _from_pretrained_with_dsv4_fallback
+    try:
+        yield
+    finally:
+        transformers.AutoTokenizer.from_pretrained = original
 
 
 def _dsv4_uses_jangtq_hydration(model_path: str | Path) -> bool:
@@ -1240,9 +1398,10 @@ def load_jangtq_dsv4_model(model_path: str, *, skip_params_eval: bool = True) ->
         # on subsequent launches.
         _install_dsv4_instant_load_patch()
 
-        model, tokenizer = load_jangtq_model(
-            model_path, skip_params_eval=skip_params_eval
-        )
+        with _dsv4_normalized_load_config(model_path), _dsv4_safe_auto_tokenizer(model_path):
+            model, tokenizer = load_jangtq_model(
+                model_path, skip_params_eval=skip_params_eval
+            )
         _audit_dsv4_switchglu_contract(model)
     else:
         _log.info(
@@ -1251,10 +1410,11 @@ def load_jangtq_dsv4_model(model_path: str, *, skip_params_eval: bool = True) ->
         )
         from ..utils.jang_loader import load_jang_model
 
-        model, tokenizer = load_jang_model(
-            model_path,
-            skip_eval=skip_params_eval,
-        )
+        with _dsv4_normalized_load_config(model_path), _dsv4_safe_auto_tokenizer(model_path):
+            model, tokenizer = load_jang_model(
+                model_path,
+                skip_eval=skip_params_eval,
+            )
 
     # 2026-05-03 (F17): install canonical-encoder shim on
     # tokenizer.apply_chat_template. The bundle ships a Jinja chat_template

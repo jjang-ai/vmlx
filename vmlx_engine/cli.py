@@ -19,10 +19,19 @@ import sys
 
 DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
+DSV4_PREFIX_CACHE_ENV = "VMLX_DSV4_ENABLE_PREFIX_CACHE"
 
 
 def _env_truthy(name: str) -> bool:
     return os.environ.get(name, "").lower() in ("1", "true", "yes", "on")
+
+
+def _dsv4_prefix_cache_opt_in(args=None) -> bool:
+    """Return whether DSV4 composite prefix reuse was explicitly enabled."""
+
+    return bool(getattr(args, "dsv4_enable_prefix_cache", False)) or _env_truthy(
+        DSV4_PREFIX_CACHE_ENV
+    )
 
 
 def _argv_has_option(argv: list[str], option: str) -> bool:
@@ -108,11 +117,42 @@ def _apply_dsv4_cache_policy(args, logger):
 
     DSV4 paged-prefix entries hold prompt-boundary DeepseekV4Cache snapshots
     for SWA plus CSA/HCA compressed pools. Treating those records like generic
-    KV pages makes stale app defaults too easy to launch. Keep DSV4 on the
-    DS4/vLLM-style 256-token page size whenever prefix cache is active.
+    KV pages makes stale app defaults too easy to launch. A live deterministic
+    patched-config DSV4 run showed cached-vs-no-cache output divergence, so
+    composite prefix reuse is opt-in until byte-equivalence is proven.
     """
 
     changed = []
+    opt_in = _dsv4_prefix_cache_opt_in(args)
+
+    old_block_size = int(getattr(args, "paged_cache_block_size", 0) or 0)
+    if old_block_size != DSV4_PAGED_CACHE_BLOCK_SIZE:
+        args.paged_cache_block_size = DSV4_PAGED_CACHE_BLOCK_SIZE
+        changed.append(f"block_size={old_block_size}->{DSV4_PAGED_CACHE_BLOCK_SIZE}")
+
+    if not opt_in:
+        if getattr(args, "enable_prefix_cache", True) or not getattr(
+            args, "disable_prefix_cache", False
+        ):
+            args.enable_prefix_cache = False
+            args.disable_prefix_cache = True
+            changed.append("prefix_cache=disabled_until_dsv4_equivalence")
+        if getattr(args, "use_paged_cache", False):
+            args.use_paged_cache = False
+            changed.append("paged=disabled_until_dsv4_equivalence")
+        if getattr(args, "enable_block_disk_cache", False):
+            args.enable_block_disk_cache = False
+            changed.append("L2 disk=disabled_until_dsv4_equivalence")
+        logger.warning(
+            "DSV4-Flash composite prefix cache is disabled by default. A "
+            "patched-config live DSV4 gate produced deterministic cached-vs-"
+            "no-cache divergence on the paged+dsv4 path; serving will use "
+            "full prefill unless --dsv4-enable-prefix-cache or %s=1 is set "
+            "for diagnostic opt-in.",
+            DSV4_PREFIX_CACHE_ENV,
+        )
+        return tuple(changed)
+
     prefix_active = (
         getattr(args, "enable_prefix_cache", True)
         and not getattr(args, "disable_prefix_cache", False)
@@ -130,16 +170,11 @@ def _apply_dsv4_cache_policy(args, logger):
         args.use_paged_cache = True
         changed.append("paged=required_for_dsv4_composite")
 
-    old_block_size = int(getattr(args, "paged_cache_block_size", 0) or 0)
-    if old_block_size != DSV4_PAGED_CACHE_BLOCK_SIZE:
-        args.paged_cache_block_size = DSV4_PAGED_CACHE_BLOCK_SIZE
-        changed.append(f"block_size={old_block_size}->{DSV4_PAGED_CACHE_BLOCK_SIZE}")
-
     if changed:
         logger.info(
-            "DSV4-Flash cache policy applied: %s. Paged prefix cache stores "
-            "native SWA+CSA/HCA composite prompt-boundary state; using "
-            "%d-token blocks for DS4 decode-cache compatibility.",
+            "DSV4-Flash diagnostic cache policy applied: %s. Paged prefix "
+            "cache stores native SWA+CSA/HCA composite prompt-boundary state; "
+            "using %d-token blocks for DS4 decode-cache compatibility.",
             ", ".join(changed),
             DSV4_PAGED_CACHE_BLOCK_SIZE,
         )
@@ -1887,6 +1922,14 @@ Examples:
         help="Turn off prefix caching. Useful for debugging or if memory is very limited.",
     )
     serve_parser.add_argument(
+        "--dsv4-enable-prefix-cache",
+        action="store_true",
+        help="Diagnostic opt-in for DeepSeek-V4 Flash native SWA+CSA/HCA "
+             "composite prefix cache reuse. Default is off until cached-vs-"
+             "no-cache byte equivalence is proven; VMLX_DSV4_ENABLE_PREFIX_CACHE=1 "
+             "is the equivalent environment override.",
+    )
+    serve_parser.add_argument(
         "--prefix-cache-size",
         type=int,
         default=100,
@@ -2520,6 +2563,13 @@ Examples:
         "--disable-prefix-cache",
         action="store_true",
         help="Disable prefix caching",
+    )
+    bench_parser.add_argument(
+        "--dsv4-enable-prefix-cache",
+        action="store_true",
+        help="Diagnostic opt-in for DeepSeek-V4 Flash native composite prefix "
+             "cache reuse. Default is off until cached-vs-no-cache equivalence "
+             "is proven; VMLX_DSV4_ENABLE_PREFIX_CACHE=1 is equivalent.",
     )
     bench_parser.add_argument(
         "--prefix-cache-size",

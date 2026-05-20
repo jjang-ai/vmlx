@@ -245,6 +245,7 @@ function buildCommandPreview(
   const requestedFlashMoe = !!(config as any).flashMoe
   const detectedFamily = normalizeDetectedFamilyName(detected?.family)
   const dsv4Active = detectedFamily === 'deepseek-v4'
+  const dsv4PrefixCacheOptIn = dsv4Active && config.dsv4PrefixCache === true
   const effectiveSmelt = !!(config as any).smelt && !dsv4Active
   const isVLM = dsv4Active || effectiveSmelt || detected?.forceTextOnly ? false
     : detected?.isMultimodal ? true
@@ -299,14 +300,20 @@ function buildCommandPreview(
   const zayaTypedCacheRequiresPaged = zayaCcaActive
   const architectureRequiresPagedCache =
     zayaTypedCacheRequiresPaged ||
-    dsv4Active ||
+    dsv4PrefixCacheOptIn ||
     (cacheTypeRequiresPaged(detected?.cacheType) && detected?.usePagedCache === true)
   const cacheLaunchPolicy = resolveCacheLaunchPolicy({
     continuousBatching: cacheStackActive,
-    enablePrefixCache: config.enablePrefixCache !== false,
-    usePagedCache: config.usePagedCache ?? detected?.usePagedCache ?? false,
+    enablePrefixCache: dsv4Active
+      ? dsv4PrefixCacheOptIn && config.enablePrefixCache !== false
+      : config.enablePrefixCache !== false,
+    usePagedCache: dsv4Active
+      ? dsv4PrefixCacheOptIn
+      : config.usePagedCache ?? detected?.usePagedCache ?? false,
     enableDiskCache: !!config.enableDiskCache,
-    enableBlockDiskCache: !!config.enableBlockDiskCache,
+    enableBlockDiskCache: dsv4Active
+      ? dsv4PrefixCacheOptIn && !!config.enableBlockDiskCache
+      : !!config.enableBlockDiskCache,
     architectureRequiresPagedCache,
   })
   const prefixCacheOff = cacheLaunchPolicy.prefixCacheOff
@@ -377,6 +384,7 @@ function buildCommandPreview(
     parts.push('--enable-auto-tool-choice')
   }
   if (effectiveReasoningParser) parts.push('--reasoning-parser', effectiveReasoningParser)
+  if (dsv4PrefixCacheOptIn) parts.push('--dsv4-enable-prefix-cache')
 
   if (config.mcpConfig) parts.push('--mcp-config', config.mcpConfig)
   parts.push(...buildMcpPolicyArgs(config))
@@ -633,7 +641,15 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         const detected = await window.api.models.detectConfig(session.modelPath)
         if (detected && detected.family !== 'unknown') {
           base.enableAutoToolChoice = detected.enableAutoToolChoice
-          base.usePagedCache = detected.usePagedCache
+          if (detected.family === 'deepseek-v4') {
+            base.dsv4PrefixCache = false
+            base.enablePrefixCache = false
+            base.usePagedCache = false
+            base.enableBlockDiskCache = false
+            base.pagedCacheBlockSize = DSV4_PAGED_CACHE_BLOCK_SIZE
+          } else {
+            base.usePagedCache = detected.usePagedCache
+          }
           // VLM models: set isMultimodal flag unless this model has a
           // runtime forceTextOnly policy (affine-JANG Qwen hybrid).
           if (detected.isMultimodal && !detected.forceTextOnly) {

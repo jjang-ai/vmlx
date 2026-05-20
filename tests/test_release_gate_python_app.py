@@ -83,6 +83,22 @@ def test_packaged_bundled_engine_path_uses_isolated_cwd():
     assert gate.run_kwargs["env"]["PYTHONPATH"] == ""
 
 
+def test_release_gate_jang_source_prefers_documented_env(monkeypatch):
+    gate_module = _load_gate_module()
+    monkeypatch.setenv("VMLX_JANG_TOOLS_SOURCE", "/clean/documented")
+    monkeypatch.setenv("VMLINUX_JANG_TOOLS_SOURCE", "/legacy")
+
+    assert gate_module.jang_tools_source_root() == Path("/clean/documented")
+
+
+def test_release_gate_jang_source_keeps_legacy_env_fallback(monkeypatch):
+    gate_module = _load_gate_module()
+    monkeypatch.delenv("VMLX_JANG_TOOLS_SOURCE", raising=False)
+    monkeypatch.setenv("VMLINUX_JANG_TOOLS_SOURCE", "/legacy")
+
+    assert gate_module.jang_tools_source_root() == Path("/legacy")
+
+
 def test_live_engine_gate_uses_packaged_python_with_isolated_cwd():
     src = Path("panel/scripts/release-gate-python-app.py").read_text()
     assert 'cwd=str(gate.log_dir)' in src
@@ -172,6 +188,48 @@ def test_packaged_console_script_shebang_gate_accepts_relocatable_trampoline(tmp
 
     assert gate.records[-1][0] == "packaged console-script shebangs"
     assert gate.records[-1][1] == "PASS"
+
+
+def test_packaged_signature_gate_rejects_ad_hoc_signature():
+    gate_module = _load_gate_module()
+    gate = _FakeGate("Executable=/tmp/vMLX.app/Contents/MacOS/vMLX\nSignature=adhoc\n")
+
+    gate_module.check_packaged_developer_id_signature(
+        gate,
+        Path("/tmp/vMLX.app"),
+        expected_team_id="55KGF2S5AY",
+    )
+
+    assert gate.records[-1][0] == "packaged Developer ID signature"
+    assert gate.records[-1][1] == "FAIL"
+    assert "ad-hoc" in gate.records[-1][2]
+
+
+def test_packaged_signature_gate_accepts_expected_developer_id():
+    gate_module = _load_gate_module()
+    gate = _FakeGate(
+        "\n".join(
+            [
+                "Executable=/tmp/vMLX.app/Contents/MacOS/vMLX",
+                "Authority=Developer ID Application: ShieldStack LLC (55KGF2S5AY)",
+                "Authority=Developer ID Certification Authority",
+                "Authority=Apple Root CA",
+                "TeamIdentifier=55KGF2S5AY",
+            ]
+        )
+    )
+
+    gate_module.check_packaged_developer_id_signature(
+        gate,
+        Path("/tmp/vMLX.app"),
+        expected_team_id="55KGF2S5AY",
+    )
+
+    assert gate.records[-1] == (
+        "packaged Developer ID signature",
+        "PASS",
+        "team=55KGF2S5AY",
+    )
 
 
 def test_bundled_verifier_rejects_non_relocatable_console_shebangs():

@@ -140,7 +140,7 @@ done
 echo "  ok   bundled critical vmlx_engine files match source content"
 
 BUNDLED_JANG_TOOLS_DIR="$(PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH= "$PY" -B -s -c 'import pathlib, jang_tools; print(pathlib.Path(jang_tools.__file__).resolve().parent)' 2>/dev/null || true)"
-JANG_TOOLS_SOURCE_DIR="${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}/jang_tools"
+JANG_TOOLS_SOURCE_DIR="${VMLX_JANG_TOOLS_SOURCE:-${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}}/jang_tools"
 HASH_GATED_JANG_TOOLS_FILES=(
   "capabilities.py"
   "convert.py"
@@ -169,7 +169,7 @@ if [ -z "$BUNDLED_JANG_TOOLS_DIR" ] || [ ! -d "$BUNDLED_JANG_TOOLS_DIR" ]; then
   exit 1
 fi
 if [ ! -d "$JANG_TOOLS_SOURCE_DIR" ]; then
-  if [ "${VMLINUX_ALLOW_MISSING_JANG_SOURCE_HASH:-0}" = "1" ]; then
+  if [ "${VMLX_ALLOW_MISSING_JANG_SOURCE_HASH:-${VMLINUX_ALLOW_MISSING_JANG_SOURCE_HASH:-0}}" = "1" ]; then
     echo "⚠️  skipping jang_tools content hash parity; local source not present: $JANG_TOOLS_SOURCE_DIR"
   else
     echo "❌ RELEASE BLOCKED — local jang_tools source unavailable for hash parity"

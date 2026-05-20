@@ -24,6 +24,21 @@ All notable changes to vMLX Engine will be documented in this file.
 - **Bundled app packaging strips third-party `.agents` metadata** from
   site-packages so release artifacts do not carry agent/skill sidecar files
   that are not used at runtime.
+- **Omitted `max_tokens` now resolves to a bounded model/default budget**:
+  explicit request/session overrides still win, bundle `max_new_tokens` is
+  honored when present, and no-request/no-bundle-default paths use the bounded
+  4096 fallback instead of the old hidden 32768 value.
+- **MCP config auto-discovery now runs at startup without a launch flag**:
+  `mcp.json` / `mcp.yaml` discovery covers the working directory and user config
+  locations, and MCP only initializes when the discovered config contains
+  servers.
+- **Tool-marker leak cleanup now follows the shared marker registry**: DSML,
+  Hunyuan/XML, ZAYA/Zyphra, and related partial tool-call prefixes are handled
+  through the same marker list instead of one-off regex coverage.
+- **Text-chat chained tool continuation resets streaming state between rounds**:
+  follow-up requests clear accumulated tool buffers and parser state, while a
+  stall watchdog clears the visible "Generating tool call" state if a buffered
+  stream never finishes a tool envelope.
 
 ### Verified
 - Focused backend checkpoint suite passed: tool-prompt fallback, Ollama
@@ -31,6 +46,12 @@ All notable changes to vMLX Engine will be documented in this file.
   diagnostics, and local-model smoke harness contracts.
 - Focused panel gateway suite passed for Ollama request translation, including
   disabled `num_predict`/`top_k` omission and explicit override forwarding.
+- Focused release-blocker backend suite passed for MCP policy, tool formatting,
+  DSV4 contracts, DSV4 paged cache, cross-matrix audits, and engine audit
+  coverage.
+- Focused panel release-blocker suite passed for update checking, settings
+  flow, DSV4 environment wiring, i18n consistency, tool auto-continue, tool
+  status responsiveness, chat UI grouping, and reasoning display.
 - Live DSV4 and Hy3 Electron UI proofs exercised built-in plus MCP tools in one
   chat with no raw tool-marker leak.
 - Live Hy3 JANGTQ_K A/B did not reproduce Chinese visible output under bounded
@@ -41,8 +62,59 @@ All notable changes to vMLX Engine will be documented in this file.
   ran through the real server.
 - Final release-gate rerun passed the full backend suite, full panel test
   suite, TypeScript typecheck, and bundled-Python/Electron build.
+- The packaged app was rebuilt after the v1.5.45 localized "What's New" notice
+  update; the fresh bundle contains MCP/MTP/latest.json release text and passed
+  Developer ID signing, notarization, strict codesign, Gatekeeper assessment,
+  bundled source hash checks, and packaged GUI launch.
 
 ### Known Follow-ups
+- DSV4 Flash JANGTQ-K is not production-cleared for long full-output prompts:
+  the packaged app still passes short/API/tool/cache/composite-cache gates, but
+  fresh long VC/code and game-design probes hit `finish=length`; thinking-on
+  game-design stayed entirely in reasoning at the 4096-token model-owned
+  default budget. Follow-up exact JavaScript identifier probes also corrupted
+  Three.js API names even when tokenizer round-trip was clean and sampling was
+  deterministic with `repetition_penalty=1.0`; a token-logprob probe showed
+  the duplicate `Web` token is generated before response parsing in the chat
+  path. The canonical DSV4 chat prompt was rendered separately and preserved
+  the requested Three.js identifiers exactly; sending that exact canonical
+  prompt through raw completions reproduced the same duplicate `Web` token.
+  Single-shot and two-phase DSV4 prefill produced the same result, ruling out
+  the prefix-cache N-1 prefill split as the cause. A minimal canonical prompt
+  can still emit `WebGLRenderer` correctly, but a fresh identifier-count
+  ablation shows the failure starts as soon as a preceding `THREE.Scene` line is
+  added: `THREE.Scene` becomes `THREE.ScScene` and `THREE.WebGLRenderer`
+  becomes `THREE.WebWebGLRenderer`. Putting the renderer line first preserves
+  `WebGLRenderer` but then degrades `Scene` to `THREE.Sc`. Logits on the full
+  snippet strongly prefer duplicate `Web` over `GL` after `.Web`. Header-only artifact
+  inspection shows the local source bundle has BF16 `head.weight`, while the
+  local JANG and JANGTQ-K artifacts both use a quantized output head. A local
+  BF16 output-head/final-norm overlay over the JANGTQ-K body still reproduced
+  the duplicate `WebWebGLRenderer` failure, so output-head restoration alone is
+  not a fix. The matrix now records the precision boundary as a static
+  prerequisite. A separate runtime-config audit found the local converted DSV4
+  JANG/JANGTQ-K artifacts had `rope_scaling: null` even though the source
+  DeepSeek-V4-Flash config requires YaRN scaling for compressed-context layers;
+  vMLX now repairs that metadata before DSV4 model construction, but the live
+  identifier gate remains the release blocker. After patching the local JANG
+  and JANGTQ-K configs to preserve source YaRN `rope_scaling`, a fresh source
+  runtime gate on `DeepSeek-V4-Flash-JANG` produced real `paged+dsv4`
+  cached-token evidence but still failed deterministic cache equivalence:
+  temperature-0 cached follow-up text differed from the `skip_prefix_cache`
+  control. DSV4 long code/full-output production claims require source-vs-quant,
+  composite-cache equivalence, or a broader rebuilt-artifact/runtime clearance.
+  The same short identifier-count gate also fails on the local affine
+  `DeepSeek-V4-Flash-JANG` artifact, so the open exact-code blocker is not
+  isolated to JANGTQ/TurboQuant routed-expert matmul, parser output, endpoint
+  assembly, or cache reuse.
+  Because the live `paged+dsv4` path is not byte-equivalent yet, vMLX now
+  starts DSV4 Flash with composite prefix/paged/L2 cache reuse disabled by
+  default across CLI and the Electron panel. The native composite cache remains
+  available only through the explicit diagnostic opt-in
+  `--dsv4-enable-prefix-cache` / `VMLX_DSV4_ENABLE_PREFIX_CACHE=1` /
+  the panel's "DSV4 Composite Prefix Cache" setting. The local source DSV4
+  bundle is larger than this host's RAM, so source-vs-quant live comparison was
+  not run here.
 - ZAYA1-VL JANGTQ_K still needs a dedicated color/probe investigation: the
   solid-blue image probe answers blue, but the solid-red image probe answered
   white in the current live smoke.

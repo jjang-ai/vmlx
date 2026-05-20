@@ -73,6 +73,7 @@ interface SessionConfig {
     defaultRepetitionPenalty: number
     defaultMaxNewTokens?: number
     defaultEnableThinking?: boolean
+    dsv4PrefixCache?: boolean
     nativeMtpMode?: 'deterministic' | 'auto' | 'off'
     nativeMtpDepth?: number
     nativeMtpDepthOverride?: boolean
@@ -141,6 +142,7 @@ const DEFAULT_CONFIG: SessionConfig = {
     defaultRepetitionPenalty: 0,
     defaultMaxNewTokens: 0,
     defaultEnableThinking: undefined,
+    dsv4PrefixCache: false,
     nativeMtpMode: 'deterministic',
     nativeMtpDepth: 3,
     nativeMtpDepthOverride: false,
@@ -215,6 +217,7 @@ function buildCommandPreview(
     const detectedFamily = normalizeDetectedFamilyName(detected?.family)
     const turboQuantActive = !!detected?.isTurboQuant
     const dsv4Active = detectedFamily === 'deepseek-v4'
+    const dsv4PrefixCacheOptIn = dsv4Active && config.dsv4PrefixCache === true
     const isVLM = dsv4Active || detected?.forceTextOnly ? false : (!!detected?.isMultimodal || config.isMultimodal === true)
     const zayaCcaActive = isZayaCcaFamily(detectedFamily)
 
@@ -250,13 +253,19 @@ function buildCommandPreview(
 
     const cacheLaunchPolicy = resolveCacheLaunchPolicy({
         continuousBatching: cacheStackActive,
-        enablePrefixCache: config.enablePrefixCache !== false,
-        usePagedCache: config.usePagedCache ?? detected?.usePagedCache ?? false,
+        enablePrefixCache: dsv4Active
+            ? dsv4PrefixCacheOptIn && config.enablePrefixCache !== false
+            : config.enablePrefixCache !== false,
+        usePagedCache: dsv4Active
+            ? dsv4PrefixCacheOptIn
+            : config.usePagedCache ?? detected?.usePagedCache ?? false,
         enableDiskCache: !!config.enableDiskCache,
-        enableBlockDiskCache: !!config.enableBlockDiskCache,
+        enableBlockDiskCache: dsv4Active
+            ? dsv4PrefixCacheOptIn && !!config.enableBlockDiskCache
+            : !!config.enableBlockDiskCache,
         architectureRequiresPagedCache:
             zayaCcaActive ||
-            dsv4Active ||
+            dsv4PrefixCacheOptIn ||
             (cacheTypeRequiresPaged(detected?.cacheType) && detected?.usePagedCache === true),
     })
     const prefixCacheOff = cacheLaunchPolicy.prefixCacheOff
@@ -318,6 +327,7 @@ function buildCommandPreview(
         parts.push('--enable-auto-tool-choice')
     }
     if (effectiveReasoningParser) parts.push('--reasoning-parser', effectiveReasoningParser)
+    if (dsv4PrefixCacheOptIn) parts.push('--dsv4-enable-prefix-cache')
 
     if (config.mcpConfig) parts.push('--mcp-config', config.mcpConfig)
     parts.push(...buildMcpPolicyArgs(config))
@@ -1398,7 +1408,7 @@ describe('No Hardcoded Values', () => {
         expect(getFlagValue(preview({ enablePrefixCache: true, pagedCacheBlockSize: 256 }), '--paged-cache-block-size')).toBe('256')
     })
 
-    it('deepseek-v4 uses DS4 page-sized blocks even when stale config has generic 64', () => {
+    it('deepseek-v4 disables composite prefix cache by default even with stale cache config', () => {
         const out = preview(
             {
                 enablePrefixCache: true,
@@ -1416,12 +1426,13 @@ describe('No Hardcoded Values', () => {
             { family: 'deepseek-v4', usePagedCache: false },
         )
 
-        expect(hasFlag(out, '--use-paged-cache')).toBe(true)
-        expect(getFlagValue(out, '--paged-cache-block-size')).toBe('256')
+        expect(hasFlag(out, '--dsv4-enable-prefix-cache')).toBe(false)
+        expect(hasFlag(out, '--use-paged-cache')).toBe(false)
+        expect(hasFlag(out, '--paged-cache-block-size')).toBe(false)
         expect(getFlagValue(out, '--max-num-seqs')).toBe('1')
         expect(hasFlag(out, '--no-continuous-batching')).toBe(false)
         expect(hasFlag(out, '--continuous-batching')).toBe(true)
-        expect(hasFlag(out, '--disable-prefix-cache')).toBe(false)
+        expect(hasFlag(out, '--disable-prefix-cache')).toBe(true)
         expect(hasFlag(out, '--prefill-batch-size')).toBe(false)
         expect(hasFlag(out, '--prefill-step-size')).toBe(false)
         expect(hasFlag(out, '--completion-batch-size')).toBe(false)
@@ -1429,6 +1440,25 @@ describe('No Hardcoded Values', () => {
         expect(hasFlag(out, '--speculative-model')).toBe(false)
         expect(hasFlag(out, '--is-mllm')).toBe(false)
         expect(hasFlag(out, '--native-mtp-depth')).toBe(false)
+    })
+
+    it('deepseek-v4 diagnostic cache opt-in uses DS4 page-sized blocks', () => {
+        const out = preview(
+            {
+                dsv4PrefixCache: true,
+                enablePrefixCache: true,
+                usePagedCache: false,
+                enableBlockDiskCache: true,
+                pagedCacheBlockSize: 64,
+            },
+            { family: 'deepseek-v4', usePagedCache: false },
+        )
+
+        expect(hasFlag(out, '--dsv4-enable-prefix-cache')).toBe(true)
+        expect(hasFlag(out, '--disable-prefix-cache')).toBe(false)
+        expect(hasFlag(out, '--use-paged-cache')).toBe(true)
+        expect(getFlagValue(out, '--paged-cache-block-size')).toBe('256')
+        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(true)
     })
 
     it('deepseek-v4 respects explicit prefix cache disable', () => {
@@ -1579,7 +1609,8 @@ describe('Default IP and New Settings', () => {
         expect(serverSource).toContain('cacheStackStartupDefaultsVersion?: number')
         expect(source).toContain('Number(config.cacheStackStartupDefaultsVersion || 0) >= CACHE_STACK_STARTUP_DEFAULTS_VERSION')
         expect(source).toContain('const markedCurrent = markCacheStackStartupDefaultsCurrent(config)')
-        expect(source).toContain('if (migrated || markedCurrent)')
+        expect(source).toContain('const familyDefaultsChanged = applyFamilyStartupDefaults(config, config.modelPath)')
+        expect(source).toContain('if (migrated || familyDefaultsChanged || markedCurrent)')
         expect(source).toContain('markCacheStackStartupDefaultsCurrent(merged as Partial<ServerConfig>)')
         expect(source).toContain('cacheStackStartupDefaultsVersion: CACHE_STACK_STARTUP_DEFAULTS_VERSION')
     })
@@ -1867,7 +1898,7 @@ describe('JIT Toggle', () => {
         expect(sessions).toContain('zayaCcaActive ||')
     })
 
-    it('settings form and launch code surface DSV4 composite paged-cache policy', () => {
+    it('settings form and launch code surface DSV4 composite cache as diagnostic opt-in', () => {
         const fs = require('fs')
         const form = fs.readFileSync(
             'src/renderer/src/components/sessions/SessionConfigForm.tsx',
@@ -1880,12 +1911,17 @@ describe('JIT Toggle', () => {
         const sessions = fs.readFileSync('src/main/sessions.ts', 'utf-8')
 
         expect(form).toContain('dsv4CompositeRequiresPaged')
+        expect(form).toContain('dsv4CompositeCacheOptIn')
+        expect(form).toContain('DSV4 Composite Prefix Cache')
+        expect(form).toContain('disabled by default until deterministic cache equivalence is proven')
         expect(form).toContain('block size is fixed to 256 tokens')
-        expect(form).toContain('checked={config.enablePrefixCache}')
+        expect(form).toContain('checked={effectivePrefixCacheEnabled}')
         expect(form).not.toContain('checked={dsv4Active ? true : config.enablePrefixCache}')
         expect(settings).toContain('DSV4_PAGED_CACHE_BLOCK_SIZE = 256')
+        expect(settings).toContain('dsv4PrefixCacheOptIn')
         expect(sessions).toContain('DSV4_PAGED_CACHE_BLOCK_SIZE = 256')
-        expect(sessions).toContain('native SWA+CSA/HCA composite cache')
+        expect(sessions).toContain('--dsv4-enable-prefix-cache')
+        expect(sessions).toContain('composite prefix/paged/L2 cache disabled by default')
         expect(sessions).not.toContain('const prefixCacheOff = dsv4Active ? false')
     })
 
@@ -2296,6 +2332,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         'speculativeModel', 'numDraftTokens',
         'smelt', 'smeltExperts', 'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
         'defaultTemperature', 'defaultTopP', 'defaultTopK', 'defaultMinP', 'defaultRepetitionPenalty', 'defaultMaxNewTokens', 'defaultEnableThinking',
+        'dsv4PrefixCache',
         'nativeMtpMode', 'nativeMtpDepth', 'nativeMtpDepthOverride',
         'embeddingModel', 'additionalArgs',
         'enableJit', 'logLevel', 'corsOrigins', 'maxContextLength',

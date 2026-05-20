@@ -29,10 +29,21 @@ DEFAULT_PY = (
     REPO
     / "panel/release/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
 )
-DEFAULT_MODEL = (
+DSV4_AFFINE_MODEL_CANDIDATES = (
     "/Users/example/models/JANGQ/"
-    "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
+    "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP",
+    "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANG",
 )
+
+
+def resolve_default_model(candidates: tuple[str, ...] = DSV4_AFFINE_MODEL_CANDIDATES) -> str:
+    for candidate in candidates:
+        if Path(candidate).is_dir():
+            return candidate
+    return candidates[0]
+
+
+DEFAULT_MODEL = resolve_default_model()
 DEFAULT_OUT = REPO / "docs/internal/release-gates/dsv4_responses_cache_gate_latest.json"
 
 

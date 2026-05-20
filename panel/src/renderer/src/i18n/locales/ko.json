@@ -872,14 +872,20 @@
     },
     "notice": {
       "title": "MLX Studio의 새로운 기능",
-      "section1Heading": "JIT 절전 및 자동 깨우기",
-      "section1Body": "모델이 다음 요청에서 자동으로 깨어납니다 (JIT), 2-15초 이내. 전원 관리 설정에서 세션별 타임아웃을 구성하세요.",
-      "section2Heading": "디스크 캐시 및 안정성",
-      "section2BodyA": "자동으로 실패하던 디스크 캐시 쓰기 문제 수정 (rename 시 ENOENT). 고립된 임시 파일은 이제 시작 시 정리됩니다.",
-      "section2BodyB": "더 부드러운 토큰 스트리밍 (8ms 스로틀), 메모리 그래프 가시성 수정, 프로덕션 감사를 통한 38개 이상의 버그 수정.",
-      "section3Heading": "JANG v2 양자화",
-      "section3Body": "JANG은 이제 비전-언어 (VL) 모델을 지원합니다 — Qwen3.5-35B 및 122B와 같은 JANG MoE 모델로 채팅에서 이미지를 로드하세요.",
-      "footer": "MLX Studio와 JANG을 사용해 주셔서 감사합니다. — Jinho Jang"
+      "section1Heading": "MCP tools 및 API gateway",
+      "section1BodyA": "MCP config discovery는 이제 시작 플래그 없이 mcp.json 또는 mcp.yaml에서 동작하며, 서버별/도구별 정책이 세션과 gateway에 전달됩니다.",
+      "section1BodyB": "Built-in tools와 MCP tools는 structured tool calls, multi-round continuation, 더 안전한 parser cleanup으로 raw marker leak 없이 함께 사용할 수 있습니다.",
+      "section2Heading": "Model settings 및 generation defaults",
+      "section2BodyA": "Chat Settings는 temperature, top_p, top_k, repetition penalty, thinking mode, tool parser, reasoning parser 적용 상태를 표시합니다.",
+      "section2BodyB": "max_tokens를 생략하면 이제 이전 32768 fallback 대신 bounded model/default budget으로 해석되며, request logs에 resolved value가 표시됩니다.",
+      "section3Heading": "MTP, cache, JANG runtime hardening",
+      "section3BodyA": "Qwen3.6 native MTP detection, JANG/JANGTQ group-size recognition, MX matmul dispatch checks, Hunyuan/ZAYA/Gemma/MiniMax routing gate가 더 엄격해졌습니다.",
+      "section3BodyB": "Prefix cache, paged cache, L2 disk cache, TurboQuant KV 경로는 cache reuse를 추측이 아니라 확인할 수 있도록 health counters를 더 명확히 노출합니다.",
+      "section4Heading": "Release integrity 및 updater safety",
+      "section4BodyA": "Release 전에 packaged app의 Developer ID signing, notarization, bundled source hashes, critical imports, GUI launch, latest.json/update manifest compatibility를 확인합니다.",
+      "section4BodyB": "DeepSeek V4 Flash는 보수적으로 유지됩니다. composite cache는 opt-in이며 exact long-code output은 identifier gate가 통과될 때까지 follow-up으로 남습니다.",
+      "footer": "MLX Studio와 JANG을 사용해 주셔서 감사합니다. — Jinho Jang",
+      "dismiss": "확인 — 다음 업데이트까지 보지 않기"
     }
   },
   "ui": {

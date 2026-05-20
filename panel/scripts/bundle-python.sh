@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PANEL_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_DIR="$(dirname "$PANEL_DIR")"
 BUNDLE_DIR="$PANEL_DIR/bundled-python"
-JANG_LOCAL="${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}"
+JANG_LOCAL="${VMLX_JANG_TOOLS_SOURCE:-${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}}"
 
 echo "==> Bundling Python $PYTHON_VERSION for standalone vMLX distribution"
 
@@ -23,7 +23,7 @@ check_local_jang_source_clean() {
   if ! git -C "$JANG_LOCAL" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     return 0
   fi
-  if [ "${VMLINUX_ALLOW_DIRTY_JANG_SOURCE:-0}" = "1" ]; then
+  if [ "${VMLX_ALLOW_DIRTY_JANG_SOURCE:-${VMLINUX_ALLOW_DIRTY_JANG_SOURCE:-0}}" = "1" ]; then
     echo "    WARNING: VMLX_ALLOW_DIRTY_JANG_SOURCE=1 — bundling tracked-dirty jang-tools" >&2
     return 0
   fi
@@ -180,7 +180,7 @@ if [ -f "$JANG_LOCAL/pyproject.toml" ]; then
   echo "    using local jang-tools at $JANG_LOCAL"
   "$PYTHON" -m pip install --force-reinstall --no-deps "$JANG_LOCAL"
 else
-  if [ "${VMLINUX_ALLOW_PYPI_JANG:-0}" = "1" ]; then
+  if [ "${VMLX_ALLOW_PYPI_JANG:-${VMLINUX_ALLOW_PYPI_JANG:-0}}" = "1" ]; then
     echo "    local jang-tools missing; VMLX_ALLOW_PYPI_JANG=1 so using PyPI fallback"
     "$PYTHON" -m pip install --no-deps "jang>=2.5.29"
   else

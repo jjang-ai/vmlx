@@ -90,28 +90,60 @@ def test_dsv4_pool_quant_default_is_correctness_safe_opt_in(monkeypatch):
     assert _configure_dsv4_pool_quant_default() == "1"
 
 
-def test_dsv4_cli_cache_policy_uses_ds4_page_sized_blocks(caplog):
-    """DSV4 serve auto-config must not inherit generic 64-token pages.
+def test_dsv4_cli_cache_policy_disables_composite_cache_by_default(caplog, monkeypatch):
+    """DSV4 serve auto-config must default to full prefill.
 
     DeepSeek-V4 Flash uses a composite SWA+CSA/HCA decode cache; the paged
     prefix layer stores prompt-boundary snapshots of that composite state,
-    not plain KV. The production serve path therefore needs the DS4/vLLM-style
-    256-token block size even when a stale panel/session config still carries
-    the generic 64-token default.
+    not plain KV. A live patched-config DSV4 run showed greedy cached-vs-
+    no-cache divergence, so stale panel/session settings must not turn this
+    path on by default.
     """
     from vmlx_engine.cli import _apply_dsv4_cache_policy
 
+    monkeypatch.delenv("VMLX_DSV4_ENABLE_PREFIX_CACHE", raising=False)
+    args = SimpleNamespace(
+        enable_prefix_cache=True,
+        disable_prefix_cache=False,
+        use_paged_cache=True,
+        paged_cache_block_size=64,
+        enable_block_disk_cache=True,
+        dsv4_enable_prefix_cache=False,
+    )
+
+    changed = _apply_dsv4_cache_policy(args, logger=__import__("logging").getLogger("test"))
+
+    assert args.enable_prefix_cache is False
+    assert args.disable_prefix_cache is True
+    assert args.use_paged_cache is False
+    assert args.enable_block_disk_cache is False
+    assert args.paged_cache_block_size == 256
+    assert "prefix_cache=disabled_until_dsv4_equivalence" in changed
+    assert "paged=disabled_until_dsv4_equivalence" in changed
+    assert "L2 disk=disabled_until_dsv4_equivalence" in changed
+    assert "block_size=64->256" in changed
+
+
+def test_dsv4_cli_cache_policy_opt_in_uses_ds4_page_sized_blocks(monkeypatch):
+    """Explicit diagnostic opt-in keeps the native 256-token composite path."""
+    from vmlx_engine.cli import _apply_dsv4_cache_policy
+
+    monkeypatch.delenv("VMLX_DSV4_ENABLE_PREFIX_CACHE", raising=False)
     args = SimpleNamespace(
         enable_prefix_cache=True,
         disable_prefix_cache=False,
         use_paged_cache=False,
         paged_cache_block_size=64,
         enable_block_disk_cache=True,
+        dsv4_enable_prefix_cache=True,
     )
 
     changed = _apply_dsv4_cache_policy(args, logger=__import__("logging").getLogger("test"))
 
+    assert args.enable_prefix_cache is True
+    assert args.disable_prefix_cache is False
     assert args.use_paged_cache is True
+    assert args.enable_block_disk_cache is True
     assert args.paged_cache_block_size == 256
     assert "paged=required_for_dsv4_composite" in changed
     assert "block_size=64->256" in changed
@@ -127,7 +159,7 @@ def test_dsv4_runtime_policy_applies_to_bench_like_cli_args(tmp_path, monkeypatc
         continuous_batching=False,
         enable_prefix_cache=True,
         disable_prefix_cache=False,
-        use_paged_cache=False,
+        use_paged_cache=True,
         paged_cache_block_size=64,
         enable_block_disk_cache=True,
         kv_cache_quantization="q4",
@@ -143,9 +175,11 @@ def test_dsv4_runtime_policy_applies_to_bench_like_cli_args(tmp_path, monkeypatc
         flash_moe=True,
         distributed=True,
         speculative_model="draft",
+        dsv4_enable_prefix_cache=False,
     )
     monkeypatch.delenv("DSV4_LONG_CTX", raising=False)
     monkeypatch.delenv("DSV4_POOL_QUANT", raising=False)
+    monkeypatch.delenv("VMLX_DSV4_ENABLE_PREFIX_CACHE", raising=False)
     monkeypatch.setenv("VMLX_FORCE_TQ_AUTO", "1")
 
     applied, changes = _apply_dsv4_runtime_policy(
@@ -155,13 +189,15 @@ def test_dsv4_runtime_policy_applies_to_bench_like_cli_args(tmp_path, monkeypatc
     )
 
     assert applied is True
-    assert args.use_paged_cache is True
+    assert args.enable_prefix_cache is False
+    assert args.disable_prefix_cache is True
+    assert args.use_paged_cache is False
+    assert args.enable_block_disk_cache is False
     assert args.paged_cache_block_size == 256
     assert args.kv_cache_quantization == "none"
     assert args.kv_cache_quantization_explicit is True
     assert args.max_num_seqs == 1
     assert args.continuous_batching is True
-    assert args.disable_prefix_cache is False
     assert args.prefill_batch_size == 1
     assert args.completion_batch_size == 1
     assert args.no_memory_aware_cache is False
@@ -174,9 +210,11 @@ def test_dsv4_runtime_policy_applies_to_bench_like_cli_args(tmp_path, monkeypatc
     assert os.environ["DSV4_LONG_CTX"] == "1"
     assert os.environ["DSV4_POOL_QUANT"] == "0"
     assert os.environ["VMLX_DISABLE_TQ_KV"] == "1"
-    assert "VMLINUX_FORCE_TQ_AUTO" not in os.environ
+    assert "VMLX_FORCE_TQ_AUTO" not in os.environ
     assert "continuous_batching=off->on" in changes
-    assert "paged=required_for_dsv4_composite" in changes
+    assert "prefix_cache=disabled_until_dsv4_equivalence" in changes
+    assert "paged=disabled_until_dsv4_equivalence" in changes
+    assert "L2 disk=disabled_until_dsv4_equivalence" in changes
     assert "block_size=64->256" in changes
     assert "max_num_seqs=9->1" in changes
     assert "prefill_batch_size=2048->1" in changes
@@ -213,9 +251,11 @@ def test_dsv4_runtime_policy_respects_explicit_prefix_cache_disable(monkeypatch)
         flash_moe=False,
         distributed=False,
         speculative_model=None,
+        dsv4_enable_prefix_cache=True,
     )
     monkeypatch.delenv("DSV4_LONG_CTX", raising=False)
     monkeypatch.delenv("DSV4_POOL_QUANT", raising=False)
+    monkeypatch.delenv("VMLX_DSV4_ENABLE_PREFIX_CACHE", raising=False)
 
     applied, changes = _apply_dsv4_runtime_policy(
         args,
@@ -227,11 +267,11 @@ def test_dsv4_runtime_policy_respects_explicit_prefix_cache_disable(monkeypatch)
     assert args.disable_prefix_cache is True
     assert args.use_paged_cache is False
     assert args.enable_block_disk_cache is False
-    assert args.paged_cache_block_size == 64
+    assert args.paged_cache_block_size == 256
     assert "disable_prefix_cache=off" not in changes
     assert "paged=disabled_without_prefix" in changes
     assert "L2 disk=disabled_without_prefix" in changes
-    assert not any(str(c).startswith("block_size=") for c in changes)
+    assert "block_size=64->256" in changes
 
 
 def test_panel_suppresses_generic_kv_quantization_controls_for_dsv4():
@@ -257,9 +297,9 @@ def test_panel_names_dsv4_cache_as_native_composite_not_generic_paged_kv():
 
     form = Path("panel/src/renderer/src/components/sessions/SessionConfigForm.tsx").read_text()
 
-    assert "const pagedCacheSectionTitle = dsv4CompositeRequiresPaged" in form
+    assert "const pagedCacheSectionTitle = dsv4Active" in form
     assert "DSV4 Native Cache" in form
-    assert "const pagedCacheToggleLabel = dsv4CompositeRequiresPaged" in form
+    assert "const pagedCacheToggleLabel = dsv4Active" in form
     assert "Native Composite Prefix Cache" in form
     assert "not generic paged KV" in form
 
@@ -283,17 +323,20 @@ def test_panel_suppresses_generic_batch_and_chunk_controls_for_dsv4():
     assert "if (!dsv4Active && config.completionBatchSize" in settings
 
 
-def test_dsv4_ui_defaults_native_cache_stack_but_keeps_prefix_toggle_user_controlled():
-    """DSV4 settings default to native cache, but explicit prefix off is allowed."""
+def test_dsv4_ui_defaults_composite_cache_off_but_exposes_diagnostic_opt_in():
+    """DSV4 settings default to full prefill with a restart-gated cache opt-in."""
     from pathlib import Path
 
     form = Path("panel/src/renderer/src/components/sessions/SessionConfigForm.tsx").read_text()
 
     assert "const effectiveContinuousBatching = dsv4Active ? true : config.continuousBatching" in form
-    assert "const prefixOff = !config.enablePrefixCache" in form
+    assert "const dsv4CompositeCacheOptIn = dsv4Active && config.dsv4PrefixCache === true" in form
+    assert "const prefixOff = !effectivePrefixCacheEnabled" in form
     assert "const multimodalActive = !dsv4Active" in form
     assert "checked={effectiveContinuousBatching}" in form
-    assert "checked={config.enablePrefixCache}" in form
+    assert "checked={effectivePrefixCacheEnabled}" in form
+    assert "disabled={dsv4Active && !dsv4CompositeCacheOptIn}" in form
+    assert "DSV4 Composite Prefix Cache" in form
     assert "checked={dsv4Active ? true : config.enablePrefixCache}" not in form
     assert "hidden={isImage || dsv4Active}" in form
     assert "const showVideoControls = !dsv4Active" in form
@@ -337,7 +380,9 @@ def test_dsv4_launch_filters_stale_saved_and_additional_args():
         assert "--stream-interval" in source
         assert "--tool-call-parser" in source
         assert "--reasoning-parser" in source
+        assert "dsv4PrefixCacheOptIn" in source
     assert "config.isMultimodal = false" in sessions
+    assert "--dsv4-enable-prefix-cache" in sessions
 
 
 def test_dsv4_block_l2_namespace_includes_paged_block_size():

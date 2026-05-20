@@ -10,6 +10,9 @@
  *     migration compatibility with older saved sessions. They intentionally
  *     do not emit env vars: the runtime must not inject thinking tags or
  *     silently flip requested reasoning rails.
+ *   - `dsv4PrefixCache` -> `VMLX_DSV4_ENABLE_PREFIX_CACHE=1` — diagnostic
+ *     opt-in for native SWA+CSA/HCA composite prefix reuse. Default off until
+ *     deterministic cached-vs-no-cache equivalence is proven.
  *   - `dsv4PoolQuant` -> `DSV4_POOL_QUANT=1` — experimental native CSA/HCA
  *     pool codec. Production DSV4 launches explicitly set `DSV4_POOL_QUANT=0`
  *     unless this is enabled.
@@ -23,6 +26,7 @@ export interface Dsv4EnvConfig {
   dsv4RawMax?: boolean
   dsv4FinalizerTokens?: number
   dsv4ForceDirect?: boolean
+  dsv4PrefixCache?: boolean
   dsv4PoolQuant?: boolean
 }
 
@@ -40,6 +44,9 @@ export function dsv4EnvFromConfig(
   if (options.dsv4Active === true) {
     env.DSV4_LONG_CTX = '1'
     env.DSV4_POOL_QUANT = config.dsv4PoolQuant === true ? '1' : '0'
+    if (config.dsv4PrefixCache === true) {
+      env.VMLX_DSV4_ENABLE_PREFIX_CACHE = '1'
+    }
   }
 
   return env

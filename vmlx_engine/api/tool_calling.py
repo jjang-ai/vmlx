@@ -98,13 +98,6 @@ def check_and_inject_fallback_tools(
     # If ALL tool names made it into a prompt and the prompt also contains a
     # concrete parser-native exemplar for those names, the template handled
     # tools correctly. Otherwise inject a concrete native exemplar.
-    _dsv4_has_native_dsml_schema = (
-        is_dsv4_prompt
-        and "<｜DSML｜tool_calls>" in instruction_prompt
-        and "<｜DSML｜parameter" in instruction_prompt
-        and "### Available Tool Schemas" in instruction_prompt
-        and all(name in instruction_prompt for name in tool_names)
-    )
     _dsv4_has_concrete_dsml_examples = (
         is_dsv4_prompt
         and all(
@@ -121,7 +114,7 @@ def check_and_inject_fallback_tools(
         and all(f"<function={name}>" in instruction_prompt for name in tool_names)
     )
     if all(name in prompt for name in tool_names) and (
-        (not is_dsv4_prompt or _dsv4_has_native_dsml_schema or _dsv4_has_concrete_dsml_examples)
+        (not is_dsv4_prompt or _dsv4_has_concrete_dsml_examples)
         and (not is_qwen_native_tool_prompt or _qwen_has_concrete_tool_examples)
         and (not is_zaya_native_tool_prompt or _zaya_has_concrete_tool_examples)
     ):
@@ -170,12 +163,18 @@ def check_and_inject_fallback_tools(
         # copied `VALUE HERE` / `string=` into real tool arguments after a
         # tool-result round. This example only binds concrete tool names to the
         # canonical wrapper; the parameter list above supplies the arg names.
-        examples = _render_dsml_examples(tools, include_parameters=False)
-        return (
-            "<｜DSML｜tool_calls>\n"
-            + examples
-            + "\n</｜DSML｜tool_calls>"
-        )
+        # Render one wrapper per tool so the prompt does not teach "call every
+        # available tool at once" during chained-tool requests.
+        blocks: list[str] = []
+        for tool in tools:
+            name, _props = _tool_props(tool)
+            blocks.append(
+                "<｜DSML｜tool_calls>\n"
+                f'<｜DSML｜invoke name="{name}">\n'
+                "</｜DSML｜invoke>\n"
+                "</｜DSML｜tool_calls>"
+            )
+        return "\n\n".join(blocks)
 
     def _render_xml_examples(
         tools: list[dict],
@@ -231,10 +230,11 @@ def check_and_inject_fallback_tools(
             dsv4_lines.append("")
         tool_prompt = (
             "\n".join(dsv4_lines).rstrip()
-            + "\n\nWhen you decide to call a tool, emit ONLY this canonical DSML tool_calls block. "
+            + "\n\nWhen you decide to call a tool, emit ONLY one canonical DSML tool_calls block for the next tool. "
             "Do not emit JSON, markdown, prose, generic XML tool tags, or bare invoke blocks outside the wrapper.\n"
             + _render_dsml_tool_calls_example(template_tools)
             + "\n\n"
+            "Do not combine every available tool just because it is listed. "
             "For a request to list the current directory, set the path parameter to \".\" exactly. "
             "Do not explain inability to call tools; emit the DSML call."
         )

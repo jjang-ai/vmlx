@@ -204,6 +204,35 @@ def test_server_discovers_cwd_mcp_json_without_env_or_cli(tmp_path, monkeypatch)
     assert discovered == str(tmp_path / "mcp.json")
 
 
+def test_server_auto_discovery_loads_mcp_config_with_none(tmp_path, monkeypatch):
+    import vmlx_engine.mcp.config as mcp_config
+    import vmlx_engine.server as server
+
+    calls = []
+    discovered_path = tmp_path / "mcp.yaml"
+
+    def fake_load_mcp_config(path=None):
+        calls.append(path)
+        return MCPConfig(
+            servers={
+                "smoke": MCPServerConfig(
+                    name="smoke",
+                    command="python3",
+                    args=["-c", "print('ready')"],
+                )
+            }
+        )
+
+    monkeypatch.delenv("VLLM_MLX_MCP_CONFIG", raising=False)
+    monkeypatch.setattr(mcp_config, "load_mcp_config", fake_load_mcp_config)
+    monkeypatch.setattr(mcp_config, "_find_config_file", lambda path=None: discovered_path)
+
+    discovered = server._discover_mcp_config_for_startup()
+
+    assert calls == [None]
+    assert discovered == str(discovered_path)
+
+
 def test_server_skips_empty_discovered_mcp_config(tmp_path, monkeypatch):
     import vmlx_engine.server as server
 

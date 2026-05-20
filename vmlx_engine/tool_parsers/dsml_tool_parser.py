@@ -100,7 +100,9 @@ class DSMLToolParser(ToolParser):
         re.DOTALL,
     )
     _PLAIN_PARAM_RE = re.compile(
-        r'<(?:param|parameter)\s+name=["\']?([A-Za-z_][A-Za-z0-9_]*)["\']?[^>]*>(.*?)</(?:param|parameter)>',
+        rf'<(?:{re.escape(DSML_PREFIX)})?(?:param|parameter)\s+name=["\']?'
+        rf'([A-Za-z_][A-Za-z0-9_]*)["\']?[^>]*>(.*?)'
+        rf'</(?:{re.escape(DSML_PREFIX)})?(?:param|parameter)>',
         re.DOTALL,
     )
     _DEGRADED_INVOKE_START_RE = re.compile(

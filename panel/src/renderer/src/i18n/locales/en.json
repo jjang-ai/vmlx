@@ -872,14 +872,20 @@
     },
     "notice": {
       "title": "What's New in MLX Studio",
-      "section1Heading": "JIT Sleep & Auto-Wake",
-      "section1Body": "Models auto-wake on the next request (JIT) in 2-15 seconds. Configure per-session timeouts in Power Management settings.",
-      "section2Heading": "Disk Cache & Stability",
-      "section2BodyA": "Fixed disk cache writes that silently failed (ENOENT on rename). Orphaned temp files are now cleaned up on startup.",
-      "section2BodyB": "Smoother token streaming (8ms throttle), fixed memory graph visibility, and 38+ bug fixes across the production audit.",
-      "section3Heading": "JANG v2 Quantization",
-      "section3Body": "JANG now supports Vision-Language (VL) models — load images in chat with JANG MoE models like Qwen3.5-35B and 122B.",
-      "footer": "Thank you for using MLX Studio and JANG. — Jinho Jang"
+      "section1Heading": "MCP tools and API gateway",
+      "section1BodyA": "MCP config discovery now works from mcp.json or mcp.yaml without a launch flag, and per-server/per-tool policy is carried through sessions and the gateway.",
+      "section1BodyB": "Built-in tools and MCP tools can run together with structured tool calls, multi-round continuation, and safer parser cleanup to prevent raw marker leaks.",
+      "section2Heading": "Model settings and generation defaults",
+      "section2BodyA": "Chat Settings now reflect applied generation config: temperature, top_p, top_k, repetition penalty, thinking mode, tool parser, and reasoning parser.",
+      "section2BodyB": "Omitted max_tokens now resolves to a bounded model/default budget instead of the old 32768 fallback, with request logs showing the resolved value.",
+      "section3Heading": "MTP, cache, and JANG runtime hardening",
+      "section3BodyA": "Qwen3.6 native MTP detection, JANG/JANGTQ group-size recognition, MX matmul dispatch checks, and Hunyuan/ZAYA/Gemma/MiniMax family routing have stricter gates.",
+      "section3BodyB": "Prefix cache, paged cache, L2 disk cache, and TurboQuant KV paths now expose clearer health counters so cache reuse is visible instead of guessed.",
+      "section4Heading": "Release integrity and updater safety",
+      "section4BodyA": "The packaged app is checked for Developer ID signing, notarization, bundled source hashes, critical imports, GUI launch, and latest.json/update manifest compatibility before release.",
+      "section4BodyB": "DeepSeek V4 Flash remains conservative: composite cache stays opt-in and exact long-code output is listed as a follow-up until the identifier gate is cleared.",
+      "footer": "Thank you for using MLX Studio and JANG. — Jinho Jang",
+      "dismiss": "Got it — don't show until next update"
     }
   },
   "ui": {

@@ -99,7 +99,8 @@ describe('update manifest validation', () => {
 function isValidUpdateUrl(url: string): boolean {
   try {
     const parsed = new URL(url)
-    return parsed.protocol === 'https:' && (parsed.hostname === 'github.com' || parsed.hostname.endsWith('.github.com'))
+    const trusted = ['github.com', 'mlx.studio']
+    return parsed.protocol === 'https:' && trusted.some(d => parsed.hostname === d || parsed.hostname.endsWith(`.${d}`))
   } catch {
     return false
   }
@@ -108,6 +109,10 @@ function isValidUpdateUrl(url: string): boolean {
 describe('update URL validation', () => {
   it('accepts valid GitHub HTTPS URL', () => {
     expect(isValidUpdateUrl('https://github.com/jjang-ai/mlxstudio/releases/tag/v1.0.0')).toBe(true)
+  })
+
+  it('accepts trusted mlx.studio updater URL', () => {
+    expect(isValidUpdateUrl('https://mlx.studio/update/latest.json')).toBe(true)
   })
 
   it('rejects githubusercontent.com (not github.com)', () => {

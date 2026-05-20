@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
-import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG, SliderField } from './SessionConfigForm'
+import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG, SliderField, DSV4_PAGED_CACHE_BLOCK_SIZE } from './SessionConfigForm'
 import { useInferenceMode } from '../layout/InferenceMode'
 import { useTranslation } from '../../i18n'
 
@@ -188,7 +188,15 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
         const detected = await window.api.models.detectConfig(session.modelPath)
         if (detected && detected.family !== 'unknown') {
           base.enableAutoToolChoice = detected.enableAutoToolChoice
-          base.usePagedCache = detected.usePagedCache
+          if (detected.family === 'deepseek-v4') {
+            base.dsv4PrefixCache = false
+            base.enablePrefixCache = false
+            base.usePagedCache = false
+            base.enableBlockDiskCache = false
+            base.pagedCacheBlockSize = DSV4_PAGED_CACHE_BLOCK_SIZE
+          } else {
+            base.usePagedCache = detected.usePagedCache
+          }
           setDetectedFamily(detected.family)
           setDetectedIsTurboQuant(!!detected.isTurboQuant)
           setDetectedIsMultimodal(!!detected.isMultimodal)

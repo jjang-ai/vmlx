@@ -657,6 +657,76 @@ def check_packaged_console_script_shebangs(gate: Gate, app: Path) -> None:
     gate.record("packaged console-script shebangs", "PASS", str(bin_dir))
 
 
+def expected_developer_id_team_id() -> str:
+    panel_pkg = json.loads((PANEL / "package.json").read_text())
+    return str(panel_pkg.get("build", {}).get("mac", {}).get("notarize", {}).get("teamId", ""))
+
+
+def jang_tools_source_root() -> Path:
+    configured = os.environ.get("VMLX_JANG_TOOLS_SOURCE") or os.environ.get("VMLINUX_JANG_TOOLS_SOURCE")
+    return Path(configured or (Path.home() / "jang" / "jang-tools"))
+
+
+def check_packaged_developer_id_signature(
+    gate: Gate,
+    app: Path,
+    *,
+    expected_team_id: str | None = None,
+) -> None:
+    """Block ad-hoc app signatures from being treated as release signatures."""
+    expected_team_id = expected_team_id if expected_team_id is not None else expected_developer_id_team_id()
+    proc = gate.run(
+        "packaged signature details",
+        ["codesign", "-dv", "--verbose=4", str(app)],
+        timeout=60,
+        allow_fail=True,
+    )
+    output = proc.stdout or ""
+    if proc.returncode != 0:
+        gate.record(
+            "packaged Developer ID signature",
+            "FAIL",
+            f"codesign -dv failed with exit={proc.returncode}",
+        )
+        return
+    if "Signature=adhoc" in output:
+        gate.record(
+            "packaged Developer ID signature",
+            "FAIL",
+            "ad-hoc signature is not a release Developer ID signature",
+        )
+        return
+
+    authorities = [
+        line.split("=", 1)[1].strip()
+        for line in output.splitlines()
+        if line.startswith("Authority=")
+    ]
+    team_id = ""
+    for line in output.splitlines():
+        if line.startswith("TeamIdentifier="):
+            team_id = line.split("=", 1)[1].strip()
+            break
+
+    has_developer_id = any(auth.startswith("Developer ID Application:") for auth in authorities)
+    if not has_developer_id:
+        gate.record(
+            "packaged Developer ID signature",
+            "FAIL",
+            "missing Developer ID Application authority",
+        )
+        return
+    if expected_team_id and team_id != expected_team_id:
+        gate.record(
+            "packaged Developer ID signature",
+            "FAIL",
+            f"team={team_id or '<none>'}, expected={expected_team_id}",
+        )
+        return
+
+    gate.record("packaged Developer ID signature", "PASS", f"team={team_id}")
+
+
 def check_static(gate: Gate, app: Path, skip_app: bool) -> None:
     version = version_from_pyproject()
     panel_pkg = json.loads((PANEL / "package.json").read_text())
@@ -699,7 +769,7 @@ def check_static(gate: Gate, app: Path, skip_app: bool) -> None:
         check_no_removed_env_var_force_flips(gate, engine_dir)
     check_packaged_console_script_shebangs(gate, app)
     jang_tools_dir = packaged_package_dir(gate, py, "jang_tools")
-    jang_tools_source = Path(os.environ.get("VMLINUX_JANG_TOOLS_SOURCE", str(Path.home() / "jang" / "jang-tools"))) / "jang_tools"
+    jang_tools_source = jang_tools_source_root() / "jang_tools"
     if jang_tools_dir is not None:
         check_bundled_package_file_hashes(
             gate,
@@ -709,6 +779,7 @@ def check_static(gate: Gate, app: Path, skip_app: bool) -> None:
             rel_paths=JANG_TOOLS_SOURCE_HASH_PATHS,
         )
     check_no_packaged_pycache(gate, app)
+    check_packaged_developer_id_signature(gate, app)
     gate.run("codesign strict verify", ["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(app)], timeout=180, allow_fail=False)
     gate.run("spctl assessment", ["spctl", "--assess", "--type", "execute", "--verbose=4", str(app)], timeout=120, allow_fail=True)
 

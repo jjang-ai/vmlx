@@ -872,14 +872,20 @@
     },
     "notice": {
       "title": "Novedades de MLX Studio",
-      "section1Heading": "Reposo JIT y activación automática",
-      "section1Body": "Los modelos se activan automáticamente en la siguiente solicitud (JIT) en 2-15 segundos. Configure los tiempos de espera por sesión en los ajustes de Gestión de energía.",
-      "section2Heading": "Caché en disco y estabilidad",
-      "section2BodyA": "Se corrigieron las escrituras de caché en disco que fallaban silenciosamente (ENOENT al renombrar). Los archivos temporales huérfanos ahora se limpian al iniciar.",
-      "section2BodyB": "Streaming de tokens más fluido (throttle de 8ms), visibilidad del gráfico de memoria corregida y más de 38 correcciones de errores en toda la auditoría de producción.",
-      "section3Heading": "Cuantización JANG v2",
-      "section3Body": "JANG ahora admite modelos de visión-lenguaje (VL) — cargue imágenes en el chat con modelos JANG MoE como Qwen3.5-35B y 122B.",
-      "footer": "Gracias por usar MLX Studio y JANG. — Jinho Jang"
+      "section1Heading": "Herramientas MCP y puerta de enlace API",
+      "section1BodyA": "El descubrimiento de MCP ahora funciona desde mcp.json o mcp.yaml sin una opción de inicio, y la política por servidor y herramienta se mantiene en sesiones y gateway.",
+      "section1BodyB": "Las herramientas integradas y MCP pueden ejecutarse juntas con tool calls estructurados, continuación multi-turno y limpieza de parser más segura para evitar fugas de marcadores.",
+      "section2Heading": "Ajustes del modelo y valores generativos",
+      "section2BodyA": "Chat Settings ahora refleja la configuración aplicada: temperature, top_p, top_k, penalización de repetición, modo de pensamiento, tool parser y reasoning parser.",
+      "section2BodyB": "Si se omite max_tokens, ahora se resuelve a un presupuesto acotado del modelo/default en vez del antiguo 32768, con logs de solicitud mostrando el valor resuelto.",
+      "section3Heading": "MTP, caché y endurecimiento del runtime JANG",
+      "section3BodyA": "La detección MTP nativa de Qwen3.6, el reconocimiento de group-size JANG/JANGTQ, las comprobaciones de MX matmul y el enrutamiento Hunyuan/ZAYA/Gemma/MiniMax tienen gates más estrictos.",
+      "section3BodyB": "Prefix cache, paged cache, L2 disk cache y TurboQuant KV muestran contadores de salud más claros para que la reutilización de caché sea visible y no supuesta.",
+      "section4Heading": "Integridad de release y seguridad del actualizador",
+      "section4BodyA": "La app empaquetada se comprueba para Developer ID, notarización, hashes de fuente incluidos, imports críticos, arranque GUI y compatibilidad con latest.json/update manifest antes del release.",
+      "section4BodyB": "DeepSeek V4 Flash sigue en modo conservador: composite cache queda opt-in y la salida exacta de código largo figura como seguimiento hasta limpiar el gate de identificadores.",
+      "footer": "Gracias por usar MLX Studio y JANG. — Jinho Jang",
+      "dismiss": "Entendido — no mostrar hasta la próxima actualización"
     }
   },
   "ui": {

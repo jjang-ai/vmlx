@@ -1776,8 +1776,22 @@ _TOOL_CALL_MARKERS = [
 ]
 
 _TOOL_MARKUP_RESIDUE_PATTERNS = []
+_TOOL_MARKUP_STRIP_TO_EOL_MARKERS = {
+    "<tool_call",
+    "<zyphra_tool_call",
+    "<function",
+    "<function=",
+}
 for _marker in _TOOL_CALL_MARKERS:
+    if _marker == "```tool_code":
+        _TOOL_MARKUP_RESIDUE_PATTERNS.append(
+            re.escape(_marker) + r"(?:\r?\n[\s\S]*?(?:```|$))"
+        )
     if _marker.startswith("<") and not _marker.endswith(">"):
+        if _marker in _TOOL_MARKUP_STRIP_TO_EOL_MARKERS:
+            _TOOL_MARKUP_RESIDUE_PATTERNS.append(
+                re.escape(_marker) + r"[^>\n]*(?:>|$)"
+            )
         _TOOL_MARKUP_RESIDUE_PATTERNS.append(re.escape(_marker) + r"[^>\n]*>")
     elif _marker == "[Calling tool:":
         _TOOL_MARKUP_RESIDUE_PATTERNS.append(re.escape(_marker) + r"[^\]\n]*(?:\])?")
@@ -13925,15 +13939,16 @@ def _discover_mcp_config_for_startup() -> str | None:
 
         env_config = os.environ.get(CONFIG_ENV_VAR)
         explicit_env_config = bool(env_config)
-        config_path = (
-            Path(env_config).expanduser()
-            if env_config
-            else _find_config_file(None)
-        )
-        if config_path is None:
-            return None
-        config_path = config_path.expanduser().resolve()
-        config = load_mcp_config(config_path)
+        if explicit_env_config:
+            config_path = Path(env_config).expanduser()
+            config = load_mcp_config(config_path)
+        else:
+            config = load_mcp_config(None)
+            config_path = _find_config_file(None)
+            if config_path is None:
+                return None
+
+        config_path = Path(config_path).expanduser().resolve()
         if not config.servers:
             logger.info("MCP config discovered at %s but contains no servers", config_path)
             return None
