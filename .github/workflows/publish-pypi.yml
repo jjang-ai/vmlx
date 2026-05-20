@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     env:
-      PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+      PYPI_API_TOKEN_PRESENT: ${{ secrets.PYPI_API_TOKEN != '' }}
 
     steps:
       - name: Check out release ref
@@ -71,11 +71,11 @@ jobs:
         run: python -m twine check dist/*
 
       - name: Publish to PyPI with API token
-        if: ${{ env.PYPI_API_TOKEN != '' }}
+        if: ${{ env.PYPI_API_TOKEN_PRESENT == 'true' }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
 
       - name: Publish to PyPI with trusted publishing
-        if: ${{ env.PYPI_API_TOKEN == '' }}
+        if: ${{ env.PYPI_API_TOKEN_PRESENT != 'true' }}
         uses: pypa/gh-action-pypi-publish@release/v1
