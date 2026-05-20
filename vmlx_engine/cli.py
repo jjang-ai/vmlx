@@ -18,6 +18,7 @@ import os
 import sys
 
 DSV4_PAGED_CACHE_BLOCK_SIZE = 256
+DEFAULT_MAX_OUTPUT_TOKENS = 4096
 
 
 def _env_truthy(name: str) -> bool:
@@ -895,7 +896,8 @@ def serve_command(args):
         getattr(
             args,
             "max_tokens_explicit",
-            getattr(args, "max_tokens", 32768) != 32768,
+            getattr(args, "max_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
+            != DEFAULT_MAX_OUTPUT_TOKENS,
         )
     )
     if max_tokens_explicit:
@@ -1964,10 +1966,10 @@ Examples:
     serve_parser.add_argument(
         "--max-tokens",
         type=int,
-        default=32768,
+        default=DEFAULT_MAX_OUTPUT_TOKENS,
         help="Default maximum number of tokens the model will generate per request. "
              "Can be overridden per-request via the 'max_tokens' API parameter. "
-             "Higher values allow longer responses but use more memory. (default: 32768)",
+             f"Higher values allow longer responses but use more memory. (default: {DEFAULT_MAX_OUTPUT_TOKENS})",
     )
     serve_parser.add_argument(
         "--max-prompt-tokens",

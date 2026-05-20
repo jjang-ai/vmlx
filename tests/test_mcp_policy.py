@@ -181,6 +181,74 @@ def test_mcp_policy_status_redacts_remote_url_query_secrets():
     assert status["servers"][0]["header_keys"] == ["Authorization"]
 
 
+def test_server_discovers_cwd_mcp_json_without_env_or_cli(tmp_path, monkeypatch):
+    import vmlx_engine.server as server
+
+    (tmp_path / "mcp.json").write_text(
+        json.dumps(
+            {
+                "servers": {
+                    "smoke": {
+                        "command": "python3",
+                        "args": ["-c", "print('ready')"],
+                    }
+                }
+            }
+        )
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("VLLM_MLX_MCP_CONFIG", raising=False)
+
+    discovered = server._discover_mcp_config_for_startup()
+
+    assert discovered == str(tmp_path / "mcp.json")
+
+
+def test_server_skips_empty_discovered_mcp_config(tmp_path, monkeypatch):
+    import vmlx_engine.server as server
+
+    (tmp_path / "mcp.json").write_text(json.dumps({}))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("VLLM_MLX_MCP_CONFIG", raising=False)
+
+    assert server._discover_mcp_config_for_startup() is None
+
+
+def test_server_skips_invalid_discovered_mcp_config(tmp_path, monkeypatch):
+    import vmlx_engine.server as server
+
+    (tmp_path / "mcp.json").write_text("{not valid json")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("VLLM_MLX_MCP_CONFIG", raising=False)
+
+    assert server._discover_mcp_config_for_startup() is None
+
+
+def test_server_does_not_fall_back_when_explicit_mcp_env_path_is_missing(
+    tmp_path,
+    monkeypatch,
+):
+    import vmlx_engine.server as server
+
+    (tmp_path / "mcp.json").write_text(
+        json.dumps(
+            {
+                "servers": {
+                    "fallback": {
+                        "command": "python3",
+                        "args": ["-c", "print('wrong')"],
+                    }
+                }
+            }
+        )
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("VLLM_MLX_MCP_CONFIG", str(tmp_path / "missing.json"))
+
+    with pytest.raises(FileNotFoundError):
+        server._discover_mcp_config_for_startup()
+
+
 def test_cli_and_server_expose_mcp_policy_startup_flags():
     import inspect
 

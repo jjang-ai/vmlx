@@ -3041,6 +3041,8 @@ export function registerChatHandlers(
             receivedToolCalls = [];
             fullContent = "";
             rawAccumulated = "";
+            currentEventType = "";
+            seenResponsesApiEvents.clear();
             lastFinishReason = undefined; // Reset for next iteration
             // Reset content offset tracker to match the accumulated content position
             lastEmittedContentLength = allGeneratedContent.length
@@ -3125,6 +3127,8 @@ export function registerChatHandlers(
             }
             fullContent = "";
             rawAccumulated = "";
+            currentEventType = "";
+            seenResponsesApiEvents.clear();
             lastFinishReason = undefined; // Reset for next iteration
             clientToolCallBuffering = false;
             clientSideThinkParsing = false;

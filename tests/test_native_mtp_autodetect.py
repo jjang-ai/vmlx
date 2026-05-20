@@ -256,6 +256,60 @@ class TestNativeMtpAutodetect:
         assert status["status"] == "metadata_inconsistent"
         assert any("index has no mtp.* tensors" in issue for issue in status["issues"])
 
+    def test_runtime_metadata_can_explicitly_drop_configured_mtp(self, tmp_path):
+        from vmlx_engine.server import _model_mtp_status
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "hy_v3",
+                    "num_nextn_predict_layers": 1,
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "weight_format": "affine",
+                    "profile": "JANG_2K",
+                    "runtime": {
+                        "bundle_has_mtp": False,
+                        "mtp_layers": 1,
+                        "mtp_mode": "dropped_for_smallest_affine",
+                    },
+                    "capabilities": {
+                        "family": "hy_v3",
+                        "cache_type": "kv",
+                    },
+                }
+            )
+        )
+        (tmp_path / "model.safetensors.index.json").write_text(
+            json.dumps(
+                {
+                    "weight_map": {
+                        "model.layers.0.self_attn.q_proj.weight": "model.safetensors",
+                    }
+                }
+            )
+        )
+
+        status = _model_mtp_status(str(tmp_path))
+
+        assert status["config_num_nextn_predict_layers"] == 1
+        assert status["jang_mtp_layers"] == 1
+        assert status["jang_drop_mtp"] is True
+        assert status["index_has_mtp_tensors"] is False
+        assert status["artifact_available"] is False
+        assert status["runtime_available"] is False
+        assert status["runtime_active"] is False
+        assert status["status"] == "dropped"
+        assert status["runtime_bundle_has_mtp"] is False
+        assert status["runtime_mtp_mode"] == "dropped_for_smallest_affine"
+        assert status["runtime_reason"] == "jang_config.runtime.bundle_has_mtp=false"
+        assert status["issues"] == []
+
     def test_native_mtp_detection_scans_safetensors_headers_without_index(self, tmp_path):
         import numpy as np
         from safetensors.numpy import save_file

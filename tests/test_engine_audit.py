@@ -665,6 +665,30 @@ class TestServerSamplingResolution:
 
         assert server._resolve_max_tokens(None, "bundle-model") == 2048
 
+    def test_omitted_server_max_tokens_without_bundle_default_is_bounded(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """No request/session/bundle length must not silently become 32K.
+
+        Several local JANG/JANGTQ bundles intentionally omit
+        generation_config.max_new_tokens. In that case the engine still needs
+        a real bounded output budget instead of inheriting the historical
+        32768 fallback, which lets long turns drift into loops.
+        """
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(json.dumps({"model_type": "hy_v3"}))
+        (tmp_path / "generation_config.json").write_text(json.dumps({"top_k": -1}))
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_default_max_tokens", 32768)
+        monkeypatch.setattr(server, "_default_max_tokens_explicit", False, raising=False)
+        server._jang_sampling_defaults_cache.clear()
+        server._generation_defaults_cache.clear()
+
+        assert server._resolve_max_tokens(None, "bundle-model") == 4096
+
     def test_max_tokens_resolution_contract_applies_to_every_registered_family(
         self,
         tmp_path,
@@ -731,6 +755,22 @@ class TestServerSamplingResolution:
 
         assert '"max_tokens_explicit": max_tokens_explicit' in source
         assert 'max_tokens_explicit=_cli_args.get("max_tokens_explicit", False)' in wake_block
+
+    def test_cli_serve_implicit_max_tokens_uses_bounded_fallback(self):
+        """The vmlx serve parser must not reintroduce the historical 32K default."""
+        import vmlx_engine.cli as cli
+        import vmlx_engine.server as server
+
+        cli_source = Path("./vmlx_engine/cli.py").read_text()
+        serve_max_tokens_block = cli_source[
+            cli_source.index('serve_parser.add_argument(\n        "--max-tokens"'):
+            cli_source.index('serve_parser.add_argument(\n        "--max-prompt-tokens"')
+        ]
+
+        assert cli.DEFAULT_MAX_OUTPUT_TOKENS == server._FALLBACK_MAX_OUTPUT_TOKENS
+        assert "default=DEFAULT_MAX_OUTPUT_TOKENS" in serve_max_tokens_block
+        assert "default=32768" not in serve_max_tokens_block
+        assert 'getattr(args, "max_tokens", 32768) != 32768' not in cli_source
 
 
 # ===========================================================================
@@ -1286,6 +1326,31 @@ class TestToolParserConcurrency:
         assert "not emit_content.strip()" in source
         assert "not content.strip()" in source
         assert "tool_call_generating=True" in source
+
+    def test_tool_markup_residue_strips_all_registered_marker_families(self):
+        """Display cleanup must track every family marker, not only DSML/Hy3."""
+        from vmlx_engine.server import _strip_tool_markup_residue_for_display
+
+        cases = {
+            "zaya": "Before <zyphra_tool_call name=\"read_file\"> after",
+            "mistral": "Before [TOOL_CALLS] after",
+            "minimax": "Before <minimax:tool_call> after",
+            "kimi": "Before <|tool_calls_section_begin|> after",
+            "gemma": "Before <|tool_call> after",
+            "llama": "Before <function=read_file> after",
+            "deepseek_glm": "Before <｜tool▁call▁begin｜> after",
+            "dsv4": "Before <｜DSML｜tool after",
+            "python_tag": "Before <|python_tag|> after",
+            "tool_code": "Before ```tool_code after",
+        }
+
+        for family, text in cases.items():
+            cleaned = _strip_tool_markup_residue_for_display(text)
+            assert "Before" in cleaned, family
+            assert "after" in cleaned, family
+            assert "<" not in cleaned, (family, cleaned)
+            assert "[TOOL_CALLS]" not in cleaned, (family, cleaned)
+            assert "```tool_code" not in cleaned, (family, cleaned)
 
 
 class TestCacheTruncation:
@@ -7097,6 +7162,65 @@ class TestTurboQuantKVTelemetry:
         assert status["target_bits"] == 2
         assert status["actual_bits"] == 2.73
         assert status["group_size"] == 128
+        assert status["weight_matmul_dispatch"] == {
+            "primary": "mlx_affine_quantized_matmul",
+            "uses_mlx_quantized_matmul": True,
+            "metal_na_eligible": True,
+            "reason": None,
+        }
+
+    def test_quantization_status_reports_hy3_jang_affine_role_bit_plan(self, tmp_path):
+        """Hy3 JANG_2K/2L use affine role metadata, not top-level 8-bit defaults."""
+        from vmlx_engine.server import _model_quantization_status
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "hy_v3",
+            "weight_format": "affine",
+            "quantization": {"bits": 8, "group_size": 128, "mode": "affine"},
+        }))
+        (tmp_path / "jang_config.json").write_text(json.dumps({
+            "format": "jang",
+            "weight_format": "affine",
+            "profile": "JANG_2K",
+            "affine_bits": {
+                "routed_expert": {
+                    "gate_proj": 2,
+                    "up_proj": 2,
+                    "down_proj": 3,
+                },
+                "attention": 8,
+                "shared_expert": 8,
+                "dense_ffn": 8,
+                "embed_tokens": 6,
+                "lm_head": 8,
+                "norms_router_biases": 16,
+            },
+            "quantization": {
+                "method": "jang-affine",
+                "bits_default": 8,
+                "group_size": 128,
+                "mode": "affine",
+            },
+        }))
+
+        status = _model_quantization_status(str(tmp_path))
+
+        assert status["codec"] == "affine_quantized_matmul"
+        assert status["weight_format"] == "affine"
+        assert status["profile"] == "JANG_2K"
+        assert status["group_size"] == 128
+        assert status["target_bits"] == 2
+        assert status["affine_bits_by_role"]["routed_expert"] == {
+            "gate_proj": 2,
+            "up_proj": 2,
+            "down_proj": 3,
+        }
+        assert status["routed_expert_bits_by_projection"] == {
+            "gate_proj": 2,
+            "up_proj": 2,
+            "down_proj": 3,
+        }
+        assert status["routed_expert_bits_label"] == "gate=2/up=2/down=3-bit"
         assert status["weight_matmul_dispatch"] == {
             "primary": "mlx_affine_quantized_matmul",
             "uses_mlx_quantized_matmul": True,

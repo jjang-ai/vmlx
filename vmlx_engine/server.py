@@ -149,7 +149,8 @@ _wake_lock: asyncio.Lock | None = (
 _model_name: str | None = None
 _model_path: str | None = None  # Full local path for config.json lookups
 _served_model_name: str | None = None  # Custom name for API (--served-model-name)
-_default_max_tokens: int = 32768
+_FALLBACK_MAX_OUTPUT_TOKENS = 4096
+_default_max_tokens: int = _FALLBACK_MAX_OUTPUT_TOKENS
 _default_max_tokens_explicit: bool = False
 _default_timeout: float = 300.0  # Default request timeout in seconds (5 minutes)
 _default_temperature: float | None = None  # Set via --default-temperature
@@ -926,7 +927,13 @@ def _set_resolved_min_p(
 
 
 def _resolve_max_tokens(request_value: int | None, model_name: str = "") -> int:
-    """Resolve max output tokens from request, bundle, then server default."""
+    """Resolve max output tokens.
+
+    Precedence is request > explicit CLI/session override > bundle
+    max_new_tokens > bounded engine fallback. The final fallback must stay
+    modest because many local JANG bundles intentionally omit max_new_tokens;
+    treating that omission as 32K lets normal chats drift into loops.
+    """
     if request_value is not None:
         return request_value
     if _default_max_tokens_explicit:
@@ -934,7 +941,7 @@ def _resolve_max_tokens(request_value: int | None, model_name: str = "") -> int:
     v = _bundle_sampling_default(model_name, "max_new_tokens")
     if v is not None and v > 0:
         return int(v)
-    return _default_max_tokens
+    return _FALLBACK_MAX_OUTPUT_TOKENS
 
 
 @dataclass(frozen=True)
@@ -1768,12 +1775,32 @@ _TOOL_CALL_MARKERS = [
     "```tool_code",  # Gemma 3 / 3n function-call code block (Google docs format)
 ]
 
+_TOOL_MARKUP_RESIDUE_PATTERNS = []
+for _marker in _TOOL_CALL_MARKERS:
+    if _marker.startswith("<") and not _marker.endswith(">"):
+        _TOOL_MARKUP_RESIDUE_PATTERNS.append(re.escape(_marker) + r"[^>\n]*>")
+    elif _marker == "[Calling tool:":
+        _TOOL_MARKUP_RESIDUE_PATTERNS.append(re.escape(_marker) + r"[^\]\n]*(?:\])?")
+    _TOOL_MARKUP_RESIDUE_PATTERNS.append(re.escape(_marker))
+_TOOL_MARKUP_RESIDUE_PATTERNS.extend(
+    [
+        r"</?｜DSML｜(?:tool_calls?|tool_call_type|tool_c|tool|invoke|parameter)?[^>\n]*>?",
+        r"</?tool_calls?>?",
+        r"</?tool_call>?",
+        r"</?arg_key>?",
+        r"</?arg_value>?",
+        r"</?minimax:tool_call>?",
+        r"</?zyphra_tool_call[^>\n]*>?",
+        r"</?function[^>\n]*>?",
+        r"</?\|tool_calls_section_begin\|>?",
+        r"</?\|tool_call_begin\|>?",
+        r"</?\|tool_call\|>?",
+        r"</?｜tool▁calls?▁begin｜>?",
+        r"```tool_code",
+    ]
+)
 _TOOL_MARKUP_RESIDUE_RE = re.compile(
-    r"</?｜DSML｜(?:tool_calls?|tool_call_type|tool_c|tool|invoke|parameter)?[^>\n]*>?"
-    r"|</?tool_calls?>?"
-    r"|<tool_sep>"
-    r"|</?arg_key>?"
-    r"|</?arg_value>?",
+    "|".join(_TOOL_MARKUP_RESIDUE_PATTERNS),
     re.DOTALL,
 )
 
@@ -2083,15 +2110,16 @@ async def lifespan(app: FastAPI):
     if _enable_jit and _engine is not None:
         _apply_jit_compilation()
 
-    # Initialize MCP if config provided — failure should not crash server
-    mcp_config = os.environ.get("VLLM_MLX_MCP_CONFIG")
-    if mcp_config:
-        try:
+    # Initialize MCP from explicit env/CLI config or the standard mcp.json/yaml
+    # discovery paths. Failure should not crash model serving.
+    try:
+        mcp_config = _discover_mcp_config_for_startup()
+        if mcp_config:
             await init_mcp(mcp_config)
-        except Exception as e:
-            logger.error(
-                f"Failed to initialize MCP — continuing without tool support: {e}"
-            )
+    except Exception as e:
+        logger.error(
+            f"Failed to initialize MCP — continuing without tool support: {e}"
+        )
 
     yield
 
@@ -3590,7 +3618,7 @@ def load_model(
     use_batching: bool = False,
     scheduler_config=None,
     stream_interval: int = 1,
-    max_tokens: int = 32768,
+    max_tokens: int = _FALLBACK_MAX_OUTPUT_TOKENS,
     max_tokens_explicit: bool = False,
     max_prompt_tokens: int | None = None,
     force_mllm: bool = False,
@@ -4053,7 +4081,7 @@ def load_model(
     else:
         logger.info(
             "Default max tokens fallback: %s (bundle max_new_tokens wins when present)",
-            _default_max_tokens,
+            _FALLBACK_MAX_OUTPUT_TOKENS,
         )
 
 
@@ -4820,9 +4848,19 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
         or q_jang.get("mxtq_bits")
         or q_jang.get("bits_default")
     )
+    affine_bits = (
+        cfg.get("affine_bits")
+        or jang_cfg.get("affine_bits")
+        or q_jang.get("affine_bits")
+    )
     profile_bits = _jangtq_bits_from_profile(profile)
+    normalized_format = str(weight_format or "").lower()
+    is_affine_jang_metadata = normalized_format in ("affine", "jang", "jjqf", "mxq")
+    bits_by_role = affine_bits if is_affine_jang_metadata and affine_bits else mxtq_bits
     routed_expert_bits_raw = (
-        mxtq_bits.get("routed_expert") if isinstance(mxtq_bits, dict) else mxtq_bits
+        bits_by_role.get("routed_expert")
+        if isinstance(bits_by_role, dict)
+        else bits_by_role
     )
     if routed_expert_bits_raw is None:
         routed_expert_bits_raw = profile_bits
@@ -4857,6 +4895,11 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
         q_jang.get("target_bits")
         or q_jang.get("bits")
         or routed_expert_bits
+        or (
+            min(routed_expert_bits_by_projection.values())
+            if routed_expert_bits_by_projection
+            else None
+        )
         or profile_bits
         or q_cfg.get("bits")
     )
@@ -4888,7 +4931,6 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
         has_jang_config = False
         has_prestacked_bundle = False
 
-    normalized_format = str(weight_format or "").lower()
     normalized_backend = str(backend or "").lower()
     if normalized_format in ("mxtq", "jangtq") or has_jangtq_sidecar:
         codec = "turboquant_codebook"
@@ -4983,6 +5025,8 @@ def _model_quantization_status(bundle_path: str | None) -> dict:
         "profile": profile,
         "mxtq_bits": mxtq_bits if not isinstance(mxtq_bits, dict) else None,
         "mxtq_bits_by_role": mxtq_bits if isinstance(mxtq_bits, dict) else None,
+        "affine_bits": affine_bits if not isinstance(affine_bits, dict) else None,
+        "affine_bits_by_role": affine_bits if isinstance(affine_bits, dict) else None,
         "routed_expert_bits": routed_expert_bits,
         "routed_expert_bits_by_projection": routed_expert_bits_by_projection,
         "routed_expert_bits_label": routed_expert_bits_label,
@@ -6102,7 +6146,7 @@ async def admin_wake():
                     use_batching=_cli_args.get("use_batching", False),
                     scheduler_config=_cli_args.get("scheduler_config"),
                     stream_interval=_cli_args.get("stream_interval", 1),
-                    max_tokens=_cli_args.get("max_tokens", 32768),
+                    max_tokens=_cli_args.get("max_tokens", _FALLBACK_MAX_OUTPUT_TOKENS),
                     max_tokens_explicit=_cli_args.get("max_tokens_explicit", False),
                     max_prompt_tokens=_cli_args.get("max_prompt_tokens"),
                     force_mllm=_cli_args.get("force_mllm", False),
@@ -13861,6 +13905,50 @@ async def stream_responses_api(
 # =============================================================================
 
 
+def _discover_mcp_config_for_startup() -> str | None:
+    """Return an MCP config path worth starting, or None.
+
+    ``load_mcp_config(None)`` already implements the expected search order:
+    env var, cwd ``mcp.json``/``mcp.yaml``, then the user config directory.
+    Startup should use that path when it declares servers, but it should not
+    initialize the MCP manager for an absent or empty config.
+    """
+    explicit_env_config = False
+    try:
+        from pathlib import Path
+
+        from vmlx_engine.mcp.config import (
+            CONFIG_ENV_VAR,
+            _find_config_file,
+            load_mcp_config,
+        )
+
+        env_config = os.environ.get(CONFIG_ENV_VAR)
+        explicit_env_config = bool(env_config)
+        config_path = (
+            Path(env_config).expanduser()
+            if env_config
+            else _find_config_file(None)
+        )
+        if config_path is None:
+            return None
+        config_path = config_path.expanduser().resolve()
+        config = load_mcp_config(config_path)
+        if not config.servers:
+            logger.info("MCP config discovered at %s but contains no servers", config_path)
+            return None
+        return str(config_path)
+    except FileNotFoundError:
+        if explicit_env_config:
+            raise
+        return None
+    except Exception as e:
+        if explicit_env_config:
+            raise
+        logger.error("Failed to discover MCP config — continuing without MCP: %s", e)
+        return None
+
+
 async def init_mcp(config_path: str):
     """Initialize MCP manager from config file."""
     global _mcp_manager, _mcp_policy
@@ -13988,8 +14076,11 @@ Examples:
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=32768,
-        help="Default max tokens for generation",
+        default=_FALLBACK_MAX_OUTPUT_TOKENS,
+        help=(
+            "Default max tokens for generation when explicitly supplied. "
+            "If omitted, request > bundle max_new_tokens > bounded engine fallback applies."
+        ),
     )
     parser.add_argument(
         "--max-prompt-tokens",

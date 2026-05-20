@@ -423,6 +423,18 @@ def inspect_native_mtp_bundle(bundle_path: str | Path | None) -> dict[str, Any]:
     mtp_sidecar = jang_cfg.get("mtp") if isinstance(jang_cfg.get("mtp"), dict) else {}
     if mtp_sidecar.get("enabled") is False or mtp_sidecar.get("kept") is False:
         drop_mtp = True
+    runtime_sidecar = (
+        jang_cfg.get("runtime") if isinstance(jang_cfg.get("runtime"), dict) else {}
+    )
+    runtime_bundle_has_mtp = runtime_sidecar.get("bundle_has_mtp")
+    runtime_mtp_mode = runtime_sidecar.get("mtp_mode")
+    runtime_declares_dropped_mtp = (
+        runtime_bundle_has_mtp is False
+        and isinstance(runtime_mtp_mode, str)
+        and "drop" in runtime_mtp_mode.lower()
+    )
+    if runtime_declares_dropped_mtp:
+        drop_mtp = True
 
     weight_keys, _weight_key_source, weight_key_error = _bundle_weight_keys(bundle_path)
     if weight_key_error:
@@ -443,7 +455,11 @@ def inspect_native_mtp_bundle(bundle_path: str | Path | None) -> dict[str, Any]:
         )
     if config_layers in (None, 0) and drop_mtp is not True and has_mtp_tensors:
         issues.append("bundle indexes mtp.* tensors but config disables MTP runtime")
-    if drop_mtp is True and config_layers not in (None, 0):
+    if (
+        drop_mtp is True
+        and config_layers not in (None, 0)
+        and not runtime_declares_dropped_mtp
+    ):
         issues.append(
             "jang_config.drop_mtp=true but config declares "
             f"{config_layers} MTP layer(s)"
@@ -507,7 +523,11 @@ def inspect_native_mtp_bundle(bundle_path: str | Path | None) -> dict[str, Any]:
         runtime_reason = "metadata_inconsistent"
     elif drop_mtp is True:
         status = "dropped"
-        runtime_reason = "jang_config.drop_mtp=true"
+        runtime_reason = (
+            "jang_config.runtime.bundle_has_mtp=false"
+            if runtime_declares_dropped_mtp
+            else "jang_config.drop_mtp=true"
+        )
     elif runtime_available:
         status = "native_runtime_ready"
         runtime_reason = (
@@ -559,6 +579,8 @@ def inspect_native_mtp_bundle(bundle_path: str | Path | None) -> dict[str, Any]:
         "effective_depth_source": effective_depth_source if runtime_available else None,
         "runtime_scope": runtime_scope,
         "vl_runtime_available": vl_runtime_available,
+        "runtime_bundle_has_mtp": runtime_bundle_has_mtp,
+        "runtime_mtp_mode": runtime_mtp_mode,
         "runtime_reason": runtime_reason,
         "status": status,
         "issues": issues,

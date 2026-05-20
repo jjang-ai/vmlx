@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { shouldAutoContinueAfterToolUse } from '../src/shared/toolAutoContinue'
 
 describe('tool auto-continue policy', () => {
@@ -33,5 +34,37 @@ describe('tool auto-continue policy', () => {
         thresholdTokens: 100,
       }),
     ).toBe(false)
+  })
+
+  it('increments the auto-continue counter once per follow-up attempt', () => {
+    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    const branch = source.slice(
+      source.indexOf('shouldAutoContinueAfterToolUse({'),
+      source.indexOf('const hasContent = fullContent.trim().length > 0'),
+    )
+
+    expect(branch.match(/autoContinueCount\+\+/g) || []).toHaveLength(1)
+  })
+
+  it('resets text-chat tool streaming state before chained follow-up requests', () => {
+    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    const branch = source.slice(
+      source.indexOf('receivedToolCalls = [];'),
+      source.indexOf('if (!(await sendFollowUp())) break;', source.indexOf('receivedToolCalls = [];')),
+    )
+
+    for (const required of [
+      'receivedToolCalls = []',
+      'fullContent = ""',
+      'rawAccumulated = ""',
+      'lastFinishReason = undefined',
+      'clientToolCallBuffering = false',
+      'clientSideThinkParsing = false',
+      'serverSendsUsage = false',
+      'currentEventType = ""',
+      'seenResponsesApiEvents.clear()',
+    ]) {
+      expect(branch).toContain(required)
+    }
   })
 })

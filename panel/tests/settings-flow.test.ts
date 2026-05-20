@@ -318,9 +318,6 @@ function buildCommandPreview(
         parts.push('--enable-auto-tool-choice')
     }
     if (effectiveReasoningParser) parts.push('--reasoning-parser', effectiveReasoningParser)
-    if (detected?.defaultEnableThinking === false) {
-        parts.push('--default-enable-thinking', 'false')
-    }
 
     if (config.mcpConfig) parts.push('--mcp-config', config.mcpConfig)
     parts.push(...buildMcpPolicyArgs(config))
@@ -1305,7 +1302,7 @@ describe('Generation Defaults', () => {
         expect(hasFlag(preview({ defaultEnableThinking: false }), '--default-enable-thinking')).toBe(false)
     })
 
-    it('emits detected family default thinking override when the model contract requires it', () => {
+    it('keeps detected family thinking defaults model-owned at startup', () => {
         const out = preview({}, {
             family: 'zaya',
             toolParser: 'zaya_xml',
@@ -1315,7 +1312,8 @@ describe('Generation Defaults', () => {
             cacheType: 'hybrid',
             usePagedCache: true,
         })
-        expect(getFlagValue(out, '--default-enable-thinking')).toBe('false')
+        expect(hasFlag(out, '--default-enable-thinking')).toBe(false)
+        expect(getFlagValue(out, '--reasoning-parser')).toBe('qwen3')
     })
 })
 
@@ -1628,7 +1626,7 @@ describe('Default IP and New Settings', () => {
         expect(source).toContain('if (isZayaCcaFamily(freshFamily))')
         expect(source).toContain("config.reasoningParser = freshConfig.reasoningParser || 'auto'")
         expect(source).toContain('delete config.defaultEnableThinking')
-        expect(source).toContain("args.push('--default-enable-thinking', 'false')")
+        expect(source).not.toContain("args.push('--default-enable-thinking', 'false')")
         expect(source).not.toContain('ZAYA default thinking reset from stale on to off')
 
         const out = preview(
@@ -1637,7 +1635,7 @@ describe('Default IP and New Settings', () => {
         )
         expect(hasFlag(out, '--reasoning-parser')).toBe(true)
         expect(getFlagValue(out, '--reasoning-parser')).toBe('qwen3')
-        expect(getFlagValue(out, '--default-enable-thinking')).toBe('false')
+        expect(hasFlag(out, '--default-enable-thinking')).toBe(false)
     })
 
     it('logLevel INFO (default) does not emit --log-level flag', () => {

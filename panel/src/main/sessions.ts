@@ -2478,9 +2478,9 @@ export class SessionManager extends EventEmitter {
     if (effectiveReasoningParser) {
       args.push('--reasoning-parser', effectiveReasoningParser)
     }
-    if (detected.defaultEnableThinking === false) {
-      args.push('--default-enable-thinking', 'false')
-    }
+    // Thinking defaults are resolved by vmlx_engine.server from the registry
+    // and explicit per-request UI/API controls. Do not turn detected
+    // per-model defaults into hidden server-level startup overrides.
     // Pass custom served model name if configured
     if (config.servedModelName) {
       args.push('--served-model-name', config.servedModelName)
