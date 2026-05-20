@@ -21,6 +21,8 @@ jobs:
     name: Build and publish vmlx
     runs-on: ubuntu-latest
     environment: pypi
+    env:
+      PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
 
     steps:
       - name: Check out release ref
@@ -68,5 +70,12 @@ jobs:
       - name: Check package metadata
         run: python -m twine check dist/*
 
-      - name: Publish to PyPI
+      - name: Publish to PyPI with API token
+        if: ${{ env.PYPI_API_TOKEN != '' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+      - name: Publish to PyPI with trusted publishing
+        if: ${{ env.PYPI_API_TOKEN == '' }}
         uses: pypa/gh-action-pypi-publish@release/v1
