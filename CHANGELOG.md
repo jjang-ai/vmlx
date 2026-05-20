@@ -18,6 +18,9 @@ All notable changes to vMLX Engine will be documented in this file.
   VLM bundles with explicit video metadata continue to report video support.
 - **Top-k and disabled sampling sentinels remain hidden/omitted consistently**
   across the panel and Ollama gateway paths.
+- **Kimi K2.6 tokenizer rendering now has its required runtime dependency**:
+  `tiktoken` is a core dependency, not audio-only, so Kimi chat-template
+  rendering works in source and bundled Python environments.
 
 ### Verified
 - Focused backend checkpoint suite passed: tool-prompt fallback, Ollama
@@ -33,6 +36,8 @@ All notable changes to vMLX Engine will be documented in this file.
   probes instead of advertising unsupported video; blue-image, no-media
   follow-up, multi-turn recall, paged ZAYA-CCA cache hit, and block-L2 paths
   ran through the real server.
+- Final release-gate rerun passed the full backend suite, full panel test
+  suite, TypeScript typecheck, and bundled-Python/Electron build.
 
 ### Known Follow-ups
 - ZAYA1-VL JANGTQ_K still needs a dedicated color/probe investigation: the
