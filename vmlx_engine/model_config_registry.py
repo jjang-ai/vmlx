@@ -571,6 +571,32 @@ class ModelConfigRegistry:
                             self._match_cache[model_name] = config
                             return config
 
+                # Mistral Small 4 VLM is a `mistral3` Pixtral-style wrapper
+                # around a `mistral4` MLA language model. Keep multimodal
+                # routing from the wrapper, but inherit the inner Mistral 4
+                # parser metadata so CLI/API/UI agree on reasoning/tool
+                # defaults. Do this before the generic multimodal-wrapper
+                # branch, which would otherwise return plain mistral3.
+                if (
+                    model_type == "mistral3"
+                    and text_model_type == "mistral4"
+                    and has_media_config
+                ):
+                    for config in self._configs:
+                        if "mistral4" in config.model_types:
+                            next_config = _with_config_metadata_overrides(
+                                config,
+                                model_config,
+                            )
+                            next_config = replace(next_config, is_mllm=True)
+                            logger.info(
+                                "Model config: matched Mistral 4 VLM wrapper "
+                                "model_type='mistral3' text_config.model_type='mistral4' "
+                                "→ mistral4 is_mllm=True"
+                            )
+                            self._match_cache[model_name] = next_config
+                            return next_config
+
                 # Some VLM wrappers use a text-only inner `text_config`
                 # model_type (Gemma 4: outer gemma4 + inner gemma4_text).
                 # If the top-level type is itself a registered multimodal

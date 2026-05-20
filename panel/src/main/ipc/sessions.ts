@@ -1,9 +1,10 @@
-import { ipcMain, BrowserWindow, dialog } from 'electron'
+import { ipcMain, BrowserWindow, dialog, app as electronApp } from 'electron'
 import { readFileSync } from 'fs'
 import { sessionManager } from '../sessions'
 import type { ServerConfig } from '../server'
 import { abortByEndpoint } from './chat'
 import { validateMcpConfigText } from '../../shared/mcpConfigValidation'
+import { defaultManagedMcpConfigDir, importMcpConfigFile } from '../mcp-config-store'
 
 function connectHost(host: string): string {
   return host === '0.0.0.0' ? '127.0.0.1' : host
@@ -39,6 +40,19 @@ function validateMcpConfigFile(filePath: string): any {
   if (!filePath || !filePath.trim()) throw new Error('MCP config path is empty')
   const raw = readFileSync(filePath, 'utf8')
   return validateMcpConfigText(raw, filePath)
+}
+
+async function pickMcpConfigFile(): Promise<string | null> {
+  const result = await dialog.showOpenDialog({
+    title: 'Select mcp.json',
+    properties: ['openFile'],
+    filters: [
+      { name: 'MCP config', extensions: ['json', 'jsonc', 'yaml', 'yml'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+  return result.filePaths[0]
 }
 
 const SESSION_EVENTS = [
@@ -160,17 +174,22 @@ export function registerSessionHandlers(getWindow: () => BrowserWindow | null): 
     })
 
     ipcMain.handle('sessions:browseMcpConfig', async () => {
-      const result = await dialog.showOpenDialog({
-        title: 'Select mcp.json',
-        properties: ['openFile'],
-        filters: [
-          { name: 'MCP config', extensions: ['json', 'jsonc', 'yaml', 'yml'] },
-          { name: 'All files', extensions: ['*'] },
-        ],
-      })
+      const filePath = await pickMcpConfigFile()
       return {
-        canceled: result.canceled || result.filePaths.length === 0,
-        filePath: result.filePaths[0],
+        canceled: !filePath,
+        filePath: filePath || undefined,
+      }
+    })
+
+    ipcMain.handle('sessions:importMcpConfig', async (_, filePath?: string) => {
+      try {
+        const sourcePath = filePath?.trim() || await pickMcpConfigFile()
+        if (!sourcePath) return { success: false, canceled: true, servers: [] }
+        return importMcpConfigFile(sourcePath, {
+          storeDir: defaultManagedMcpConfigDir(electronApp.getPath('userData')),
+        })
+      } catch (error) {
+        return { success: false, error: (error as Error).message, servers: [] }
       }
     })
 

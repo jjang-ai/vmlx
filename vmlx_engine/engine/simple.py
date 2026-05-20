@@ -517,6 +517,8 @@ class SimpleEngine(BaseEngine):
                         k: v for k, v in extra_ct_kwargs.items()
                         if k not in ("tokenize", "add_generation_prompt")
                     })
+                if template_tools:
+                    mllm_kwargs["tools"] = template_tools
                 output = await self._run_model_call(
                     self._model.chat,
                     messages=messages,
@@ -726,6 +728,8 @@ class SimpleEngine(BaseEngine):
                     k: v for k, v in extra_ct_kwargs.items()
                     if k not in ("tokenize", "add_generation_prompt")
                 })
+            if template_tools:
+                mllm_kwargs["tools"] = template_tools
 
             async with self._generation_lock:
                 try:

@@ -376,7 +376,7 @@ class TestExtractMultimodalMessages:
         assert tool_msg["content"] == "4"
 
     def test_assistant_tool_calls_preserved(self):
-        """Assistant messages with tool_calls should preserve them."""
+        """Assistant messages with tool_calls should preserve template-safe args."""
         from vmlx_engine.models.mllm import MLXMultimodalLM
 
         tool_calls = [{"id": "call_123", "type": "function", "function": {"name": "calc", "arguments": "{}"}}]
@@ -388,7 +388,12 @@ class TestExtractMultimodalMessages:
         chat_msgs, _, _ = MLXMultimodalLM._extract_multimodal_messages(messages)
         assistant_msg = [m for m in chat_msgs if m["role"] == "assistant"][0]
         assert "tool_calls" in assistant_msg
-        assert assistant_msg["tool_calls"] == tool_calls
+        assert assistant_msg["tool_calls"][0]["id"] == "call_123"
+        assert assistant_msg["tool_calls"][0]["type"] == "function"
+        assert assistant_msg["tool_calls"][0]["function"] == {
+            "name": "calc",
+            "arguments": {},
+        }
 
     def test_assistant_image_tokens_included(self):
         """Assistant messages with images must produce image placeholders.

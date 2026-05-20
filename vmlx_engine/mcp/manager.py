@@ -5,6 +5,7 @@ MCP Client Manager for handling multiple MCP server connections.
 
 import asyncio
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from .client import MCPClient
@@ -18,6 +19,19 @@ from .types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+_URL_SECRET_QUERY_RE = re.compile(
+    r"([?&][^=&#]*(?:key|token|secret|password)[^=&#]*=)[^&#]*",
+    re.IGNORECASE,
+)
+
+
+def _redact_url_secrets(url: Optional[str]) -> Optional[str]:
+    """Redact common secret-bearing query parameters from diagnostics URLs."""
+    if not url:
+        return url
+    return _URL_SECRET_QUERY_RE.sub(r"\1<redacted>", url)
 
 
 class MCPClientManager:
@@ -203,7 +217,7 @@ class MCPClientManager:
                     "error": client.get_status().error,
                     "last_connected": client.get_status().last_connected,
                     "command_redacted": cfg.command,
-                    "url_redacted": cfg.url,
+                    "url_redacted": _redact_url_secrets(cfg.url),
                     "env_keys": sorted((cfg.env or {}).keys()),
                     "header_keys": sorted((cfg.headers or {}).keys()),
                     "skip_security_validation": bool(

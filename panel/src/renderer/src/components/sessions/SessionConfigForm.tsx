@@ -290,6 +290,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const [mcpStatusLoading, setMcpStatusLoading] = useState(false)
   const [mcpValidation, setMcpValidation] = useState<{ servers: any[]; serverCount?: number; error?: string } | null>(null)
   const [mcpValidationLoading, setMcpValidationLoading] = useState(false)
+  const [mcpImportLoading, setMcpImportLoading] = useState(false)
 
   const normalizedDetectedFamily = normalizeDetectedFamilyName(detectedFamily)
   const dsv4Active = normalizedDetectedFamily === 'deepseek-v4'
@@ -363,6 +364,27 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     if (!result?.canceled && result.filePath) {
       onChange('mcpConfig', result.filePath)
       validateMcpConfig(result.filePath)
+    }
+  }
+
+  const importMcpConfig = async () => {
+    setMcpImportLoading(true)
+    try {
+      const result = await window.api.sessions.importMcpConfig(config.mcpConfig?.trim() || undefined)
+      if (result?.canceled) return
+      if (result?.success && result.importedPath) {
+        onChange('mcpConfig', result.importedPath)
+        setMcpValidation({
+          servers: Array.isArray(result.servers) ? result.servers : [],
+          serverCount: result.serverCount,
+        })
+      } else {
+        setMcpValidation({ servers: [], error: result?.error || 'MCP config import failed' })
+      }
+    } catch (error) {
+      setMcpValidation({ servers: [], error: (error as Error).message })
+    } finally {
+      setMcpImportLoading(false)
     }
   }
 
@@ -1122,6 +1144,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           <div className="flex gap-2">
             <input type="text" value={config.mcpConfig} onChange={e => onChange('mcpConfig', e.target.value)} placeholder={t('sessions.config.mcpConfigPlaceholder')} className="cfg-input flex-1" />
             <button type="button" onClick={browseMcpConfig} className="px-3 py-1.5 rounded border border-border text-sm hover:bg-accent">Browse</button>
+            <button type="button" onClick={importMcpConfig} className="px-3 py-1.5 rounded border border-border text-sm hover:bg-accent" disabled={mcpImportLoading}>
+              {mcpImportLoading ? 'Importing' : 'Import'}
+            </button>
             <button type="button" onClick={() => validateMcpConfig()} className="px-3 py-1.5 rounded border border-border text-sm hover:bg-accent" disabled={mcpValidationLoading}>
               {mcpValidationLoading ? 'Validating' : 'Validate'}
             </button>

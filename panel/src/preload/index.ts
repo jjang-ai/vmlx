@@ -359,6 +359,7 @@ const api = {
     getLogs: (sessionId: string) => ipcRenderer.invoke('sessions:getLogs', sessionId),
     clearLogs: (sessionId: string) => ipcRenderer.invoke('sessions:clearLogs', sessionId),
     browseMcpConfig: () => ipcRenderer.invoke('sessions:browseMcpConfig'),
+    importMcpConfig: (filePath?: string) => ipcRenderer.invoke('sessions:importMcpConfig', filePath),
     validateMcpConfig: (filePath: string) => ipcRenderer.invoke('sessions:validateMcpConfig', filePath),
     mcpStatus: (sessionId: string) => ipcRenderer.invoke('sessions:mcpStatus', sessionId),
     softSleep: (sessionId: string) => ipcRenderer.invoke('sessions:softSleep', sessionId),

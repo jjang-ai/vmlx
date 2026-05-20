@@ -899,6 +899,16 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
         if (modelType === 'gemma2' && /medgemma/i.test(modelPath)) {
           familyName = 'medgemma'
         }
+        // Mistral Small 4 VLM uses a Pixtral-style `mistral3` wrapper around
+        // an inner `mistral4` MLA language model. Preserve the wrapper's media
+        // route while inheriting Mistral 4 parser defaults for UI/CLI parity.
+        if (
+          modelType === 'mistral3' &&
+          parsed.text_config?.model_type === 'mistral4' &&
+          configDeclaresMedia(parsed)
+        ) {
+          familyName = 'mistral4'
+        }
 
         const config = CONFIG_BY_FAMILY.get(familyName)
           if (config) {

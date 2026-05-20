@@ -165,6 +165,8 @@ describe("MCP gateway routing", () => {
 
     const alphaTools = await fetch(`http://127.0.0.1:${started.port}/v1/mcp/tools?model=alpha-model`).then((r) => r.json());
     const betaTools = await fetch(`http://127.0.0.1:${started.port}/v1/mcp/tools?model=beta-model`).then((r) => r.json());
+    const alphaServers = await fetch(`http://127.0.0.1:${started.port}/v1/mcp/servers?model=alpha-model`).then((r) => r.json());
+    const betaServers = await fetch(`http://127.0.0.1:${started.port}/v1/mcp/servers?model=beta-model`).then((r) => r.json());
     const betaExecute = await fetch(`http://127.0.0.1:${started.port}/v1/mcp/execute`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -177,9 +179,13 @@ describe("MCP gateway routing", () => {
 
     expect(alphaTools.tools[0].name).toBe("alpha_smoke__echo");
     expect(betaTools.tools[0].name).toBe("beta_smoke__echo");
+    expect(alphaServers.servers[0].name).toBe("alpha_smoke");
+    expect(betaServers.servers[0].name).toBe("beta_smoke");
     expect(betaExecute.content).toBe("beta:gateway-ok");
     expect(a.requests).toContain("GET /v1/mcp/tools?model=alpha-model");
+    expect(a.requests).toContain("GET /v1/mcp/servers?model=alpha-model");
     expect(b.requests).toContain("GET /v1/mcp/tools?model=beta-model");
+    expect(b.requests).toContain("GET /v1/mcp/servers?model=beta-model");
     expect(b.requests).toContain("POST /v1/mcp/execute");
     expect(sessionManagerMock.touchSession).toHaveBeenCalledWith("a");
     expect(sessionManagerMock.touchSession).toHaveBeenCalledWith("b");
@@ -197,9 +203,20 @@ describe("MCP gateway routing", () => {
 
     const response = await fetch(`http://127.0.0.1:${started.port}/v1/mcp/tools`);
     const body = await response.json();
+    const executeResponse = await fetch(`http://127.0.0.1:${started.port}/v1/mcp/execute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tool_name: "alpha_smoke__echo",
+        arguments: { text: "must-not-route" },
+      }),
+    });
+    const executeBody = await executeResponse.json();
 
     expect(response.status).toBe(400);
     expect(body.error.code).toBe("model_required");
+    expect(executeResponse.status).toBe(400);
+    expect(executeBody.error.code).toBe("model_required");
     expect(a.requests).toEqual([]);
     expect(b.requests).toEqual([]);
   });

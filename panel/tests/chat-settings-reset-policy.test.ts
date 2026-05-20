@@ -48,7 +48,6 @@ describe('chat settings reset policy', () => {
       topP: 0.77,
       topK: 33,
       repeatPenalty: 1.07,
-      maxTokens: 2048,
       workingDirectory: '/tmp/vmlx-tools',
       builtinToolsEnabled: true,
       webSearchEnabled: true,
@@ -69,6 +68,16 @@ describe('chat settings reset policy', () => {
     expect(result.enableThinking).toBeUndefined()
     expect(result.reasoningEffort).toBeUndefined()
     expect(result.minP).toBeUndefined()
+    expect(result.maxTokens).toBeUndefined()
+  })
+
+  it('does not turn model max_new_tokens into a sticky per-chat max_tokens override', () => {
+    const result = buildChatSettingsResetOverrides(
+      { maxTokens: 128 } satisfies ChatSettingsResetOverrides,
+      { maxNewTokens: 2048 },
+    )
+
+    expect(result.maxTokens).toBeUndefined()
   })
 
   it('does not invent tool keys when they were unset', () => {

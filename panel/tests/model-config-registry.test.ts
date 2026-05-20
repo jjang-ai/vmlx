@@ -889,6 +889,28 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
 
     expect(detectModelConfigFromDir(dir).isMultimodal).toBe(false)
   })
+
+  it('keeps Mistral Small 4 VLM multimodal while inheriting Mistral 4 reasoning defaults', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'mistral3',
+        architectures: ['Mistral3ForConditionalGeneration'],
+        text_config: { model_type: 'mistral4' },
+        vision_config: { model_type: 'pixtral' },
+      },
+      {
+        format: 'jang',
+        architecture: { has_vision: true },
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('mistral4')
+    expect(detected.isMultimodal).toBe(true)
+    expect(detected.toolParser).toBe('mistral')
+    expect(detected.reasoningParser).toBe('mistral')
+  })
 })
 
 describe('detectModelConfigFromDir backend parity coverage', () => {

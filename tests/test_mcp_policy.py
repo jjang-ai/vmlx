@@ -2,6 +2,7 @@
 """MCP policy contracts for server-side tool visibility and execution."""
 
 import asyncio
+import json
 import pytest
 
 from vmlx_engine.mcp.manager import MCPClientManager
@@ -150,6 +151,36 @@ def test_mcp_policy_status_marks_effective_tools_and_redacts_server_config():
     assert status["tools"][1]["effective"] is False
 
 
+def test_mcp_policy_status_redacts_remote_url_query_secrets():
+    manager = MCPClientManager(
+        MCPConfig(
+            servers={
+                "remote": MCPServerConfig(
+                    name="remote",
+                    transport="http",
+                    url="https://example.test/mcp?token=real-token&safe=ok&api_key=real-key&password=real-pass",
+                    headers={"Authorization": "Bearer real-secret"},
+                )
+            }
+        )
+    )
+    manager._clients["remote"] = _FakeClient(
+        manager.config.servers["remote"],
+        [MCPTool("remote", "search", "search", {"type": "object"})],
+    )
+
+    status = manager.get_policy_status()
+
+    assert status["servers"][0]["url_redacted"] == (
+        "https://example.test/mcp?token=<redacted>&safe=ok&api_key=<redacted>&password=<redacted>"
+    )
+    assert "real-token" not in str(status)
+    assert "real-key" not in str(status)
+    assert "real-pass" not in str(status)
+    assert "real-secret" not in str(status)
+    assert status["servers"][0]["header_keys"] == ["Authorization"]
+
+
 def test_cli_and_server_expose_mcp_policy_startup_flags():
     import inspect
 
@@ -192,6 +223,96 @@ def test_mcp_schema_merge_drops_mcp_tools_that_collide_with_request_tools():
     merged = server._drop_colliding_mcp_tools(mcp_tools, request_tools)
 
     assert [tool["function"]["name"] for tool in merged] == ["fs__read_file"]
+
+
+def test_mcp_specific_tool_choice_filters_mcp_tools_by_nested_or_flat_shape():
+    import vmlx_engine.server as server
+
+    nested_tools = [
+        {"type": "function", "function": {"name": "fs__read_file"}},
+        {"type": "function", "function": {"name": "web__fetch"}},
+    ]
+    flat_tools = [
+        {"type": "function", "name": "fs__read_file"},
+        {"type": "function", "name": "web__fetch"},
+    ]
+
+    nested = server._filter_tools_for_specific_choice(
+        nested_tools,
+        {"type": "function", "function": {"name": "web__fetch"}},
+    )
+    flat = server._filter_tools_for_specific_choice(
+        flat_tools,
+        {"type": "function", "name": "web__fetch"},
+    )
+
+    assert [_tool["function"]["name"] for _tool in nested] == ["web__fetch"]
+    assert [_tool["name"] for _tool in flat] == ["web__fetch"]
+
+
+def test_mcp_required_tool_choice_errors_when_policy_disables_all_tools():
+    import pytest
+    from fastapi import HTTPException
+    import vmlx_engine.server as server
+
+    manager = _manager_with_fake_tools()
+    policy = MCPPolicy(enabled_tools={"missing__tool"})
+
+    with pytest.raises(HTTPException) as exc_info:
+        server._suppress_tool_parsing_when_no_tools(
+            manager.get_all_tools_openai(policy=policy),
+            "required",
+            "Chat Completions",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "tool_choice requires at least one available tool" in exc_info.value.detail
+
+
+def test_mcp_effective_tools_are_used_for_schema_gated_dsml_repair(monkeypatch):
+    import vmlx_engine.server as server
+
+    request = server.ChatCompletionRequest(
+        model="dsv4-chain-smoke",
+        messages=[{"role": "user", "content": "chain"}],
+    )
+    object.__setattr__(
+        request,
+        "_vmlx_effective_tools",
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "smoke__add",
+                    "description": "Add two integers.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "a": {"type": "integer"},
+                            "b": {"type": "integer"},
+                        },
+                        "required": ["a", "b"],
+                    },
+                },
+            }
+        ],
+    )
+    malformed_dsml = (
+        '<｜DSML｜tool_calls>\n'
+        '<｜DSML｜invoke name="smoke__add">\n'
+        '<｜DSML｜parameter name="a" string="false">2</｜DSML｜parameter>\n'
+        '<｜DSML｜parameter name="b" string="false">3</｜DSML｜parameter>\n'
+        '</｜DSML｜invinvoke>\n'
+        '</｜DSML｜tool_calls>'
+    )
+    monkeypatch.setattr(server, "_tool_call_parser", "dsml")
+
+    cleaned, calls = server._parse_tool_calls_with_parser(malformed_dsml, request)
+
+    assert cleaned == ""
+    assert calls is not None
+    assert calls[0].function.name == "smoke__add"
+    assert json.loads(calls[0].function.arguments) == {"a": 2, "b": 3}
 
 
 @pytest.mark.asyncio

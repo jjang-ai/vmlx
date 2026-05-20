@@ -605,6 +605,17 @@ declare global {
           canceled: boolean;
           filePath?: string;
         }>;
+        importMcpConfig: (filePath?: string) => Promise<{
+          success: boolean;
+          canceled?: boolean;
+          error?: string;
+          managed?: boolean;
+          sourcePath?: string;
+          importedPath?: string;
+          serverCount?: number;
+          servers: any[];
+          redactedConfig?: any;
+        }>;
         validateMcpConfig: (filePath: string) => Promise<{
           success: boolean;
           error?: string;

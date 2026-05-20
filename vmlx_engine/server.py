@@ -1567,6 +1567,26 @@ def _tool_definition_name(tool: Any) -> str | None:
     return None
 
 
+def _effective_tools_for_tool_parsing(request: Any) -> Any:
+    """Return the tool set actually shown to the model for parser schema gates."""
+    if request is None:
+        return None
+    effective = getattr(request, "_vmlx_effective_tools", None)
+    if effective is not None:
+        return effective
+    return getattr(request, "tools", None)
+
+
+def _attach_effective_tools_for_tool_parsing(request: Any, tools: list[Any]) -> None:
+    """Attach merged request+MCP tools without mutating the public API payload."""
+    if request is None:
+        return
+    try:
+        object.__setattr__(request, "_vmlx_effective_tools", list(tools or []))
+    except Exception:
+        logger.debug("Failed to attach effective tool schema set for parser context")
+
+
 def _filter_tools_for_specific_choice(
     tools: list[Any],
     tool_choice: Any,
@@ -2743,11 +2763,12 @@ def _parse_tool_calls_with_parser(
         Tuple of (cleaned_text, tool_calls)
     """
     def _allowed_tool_names() -> set[str]:
-        if not request or not getattr(request, "tools", None):
+        effective_tools = _effective_tools_for_tool_parsing(request)
+        if not request or not effective_tools:
             return set()
         names: set[str] = set()
         try:
-            for tool in convert_tools_for_template(request.tools) or []:
+            for tool in convert_tools_for_template(effective_tools) or []:
                 fn = tool.get("function") if isinstance(tool, dict) else None
                 name = fn.get("name") if isinstance(fn, dict) else None
                 if isinstance(name, str) and name:
@@ -2851,7 +2872,8 @@ def _parse_tool_calls_with_parser(
 
         schema = None
         try:
-            for tool in convert_tools_for_template(getattr(request, "tools", None)) or []:
+            effective_tools = _effective_tools_for_tool_parsing(request)
+            for tool in convert_tools_for_template(effective_tools) or []:
                 fn = tool.get("function") if isinstance(tool, dict) else None
                 if isinstance(fn, dict) and fn.get("name") == name:
                     schema = fn
@@ -2945,9 +2967,10 @@ def _parse_tool_calls_with_parser(
     try:
         # Convert request to dict format for parsers that need schema info (e.g., Step3p5 type coercion)
         parser_request = None
-        if request and request.tools:
+        effective_tools = _effective_tools_for_tool_parsing(request)
+        if request and effective_tools:
             parser_request = {
-                "tools": convert_tools_for_template(request.tools),
+                "tools": convert_tools_for_template(effective_tools),
                 "model_path": (
                     _model_path or _model_name or getattr(request, "model", None)
                 ),
@@ -9815,6 +9838,7 @@ async def create_chat_completion(
         _suppress_tools = _suppress_tool_parsing_when_no_tools(
             all_tools, _tool_choice, "Chat Completions"
         )
+    _attach_effective_tools_for_tool_parsing(request, all_tools)
 
     # Pass merged tools to engine (normalize all to template format)
     if all_tools:
@@ -11179,6 +11203,7 @@ async def create_response(
         _suppress_tools = _suppress_tool_parsing_when_no_tools(
             all_tools, _tool_choice, "Responses API"
         )
+    _attach_effective_tools_for_tool_parsing(request, all_tools)
 
     # Pass merged tools to engine
     if all_tools:

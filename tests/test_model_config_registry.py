@@ -1144,6 +1144,34 @@ class TestModelConfigs:
         assert config.cache_type == "hybrid"
         assert config.reasoning_parser == "qwen3"
 
+    def test_mistral3_mistral4_vlm_wrapper_preserves_inner_reasoning(
+        self, registry, tmp_path
+    ):
+        """Mistral Small 4 is a mistral3 VLM wrapper around a mistral4 LM.
+
+        The wrapper must stay multimodal for image routing while inheriting the
+        inner Mistral 4 parser metadata used by CLI/API/UI defaults.
+        """
+
+        config_json = {
+            "model_type": "mistral3",
+            "architectures": ["Mistral3ForConditionalGeneration"],
+            "text_config": {"model_type": "mistral4"},
+            "vision_config": {"model_type": "pixtral"},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config_json))
+
+        def _load_config(path):
+            return dict(config_json)
+
+        with patch("vmlx_engine.model_config_registry.load_config", _load_config):
+            config = registry.lookup(str(tmp_path))
+
+        assert config.family_name == "mistral4"
+        assert config.is_mllm is True
+        assert config.tool_parser == "mistral"
+        assert config.reasoning_parser == "mistral"
+
     def test_qwen3_5_moe_config(self, registry):
         """qwen3_5_moe is shared between text and VL. Registry is_mllm=False."""
         config = self._lookup(registry, "Qwen/Qwen3.5-MoE-VL-38B", "qwen3_5_moe")

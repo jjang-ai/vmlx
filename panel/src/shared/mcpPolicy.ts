@@ -18,8 +18,8 @@ function joined(value?: string | string[] | null): string | undefined {
   return normalized.length ? normalized.join(',') : undefined
 }
 
-function redactUrlSecrets(value: string): string {
-  return value.replace(/([?&](?:key|token|secret|password)=)[^&]+/gi, '$1<redacted>')
+export function redactUrlSecrets(value: string): string {
+  return value.replace(/([?&][^=&#]*(?:key|token|secret|password)[^=&#]*=)[^&#]*/gi, '$1<redacted>')
 }
 
 export function buildMcpPolicyArgs(config: McpPolicyConfig): string[] {

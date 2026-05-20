@@ -68,7 +68,9 @@ export function buildChatSettingsResetOverrides<T extends ChatSettingsResetOverr
   if (genDefaults?.topK != null) reset.topK = genDefaults.topK as T['topK']
   if (genDefaults?.minP != null) reset.minP = genDefaults.minP as T['minP']
   if (genDefaults?.repeatPenalty != null) reset.repeatPenalty = genDefaults.repeatPenalty as T['repeatPenalty']
-  if (genDefaults?.maxNewTokens != null) reset.maxTokens = genDefaults.maxNewTokens as T['maxTokens']
+  // Keep max_new_tokens model-owned. Saving it as a per-chat maxTokens
+  // override makes the UI enforce a sticky output cap even though the server
+  // can resolve the same bundle default when the request omits max_tokens.
 
   return reset
 }

@@ -1,4 +1,4 @@
-import { redactMcpConfigForDisplay } from './mcpPolicy'
+import { redactMcpConfigForDisplay, redactUrlSecrets } from './mcpPolicy'
 
 export function stripJsonComments(input: string): string {
   let out = ''
@@ -53,7 +53,7 @@ export function validateMcpConfigText(raw: string, filePath = 'mcp.json'): any {
       transport: String(config.transport || (config.url ? 'http' : 'stdio')),
       enabled: config.enabled !== false,
       command_redacted: config.command ? String(config.command) : null,
-      url_redacted: config.url ? String(config.url).replace(/([?&](?:key|token|secret|password)=)[^&]+/gi, '$1<redacted>') : null,
+      url_redacted: config.url ? redactUrlSecrets(String(config.url)) : null,
       env_keys: config.env && typeof config.env === 'object' ? Object.keys(config.env).sort() : [],
       header_keys: config.headers && typeof config.headers === 'object' ? Object.keys(config.headers).sort() : [],
       error: !config.command && !config.url ? 'Missing command or url' : null,

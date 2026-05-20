@@ -601,6 +601,49 @@ def process_video_input(video: str | dict) -> str:
     raise ValueError(f"Cannot process video: {video[:50]}...")
 
 
+def _normalize_tool_calls_for_template(tool_calls: Any) -> list[dict] | None:
+    """Return OpenAI tool calls as plain mappings with dict arguments."""
+    if not tool_calls:
+        return None
+    normalized: list[dict] = []
+    for tool_call in tool_calls:
+        if hasattr(tool_call, "model_dump"):
+            call = tool_call.model_dump(exclude_none=True)
+        elif hasattr(tool_call, "dict"):
+            call = tool_call.dict()
+            call = {k: v for k, v in call.items() if v is not None}
+        elif isinstance(tool_call, dict):
+            call = dict(tool_call)
+        else:
+            continue
+
+        fn = call.get("function")
+        if hasattr(fn, "model_dump"):
+            fn = fn.model_dump(exclude_none=True)
+        elif hasattr(fn, "dict"):
+            fn = fn.dict()
+            fn = {k: v for k, v in fn.items() if v is not None}
+        elif isinstance(fn, dict):
+            fn = dict(fn)
+        else:
+            fn = {}
+
+        args = fn.get("arguments")
+        if isinstance(args, str):
+            try:
+                parsed = json.loads(args)
+                fn["arguments"] = parsed if isinstance(parsed, dict) else {}
+            except (json.JSONDecodeError, TypeError):
+                fn["arguments"] = {}
+        elif args is None:
+            fn["arguments"] = {}
+
+        call["function"] = fn
+        normalized.append(call)
+
+    return normalized or None
+
+
 # Cache for base64 images to avoid re-saving the same image
 # OrderedDict for LRU eviction with bounded size
 from collections import OrderedDict
@@ -1324,7 +1367,7 @@ class MLXMultimodalLM:
             # Build properly structured message for Qwen3-VL-MoE
             # Format: {"role": "...", "content": [{"type": "image"|"video"}, ..., {"type": "text", "text": "..."}]}
             # Preserve tool_calls on assistant messages and tool role fields
-            tool_calls = msg.get("tool_calls")
+            tool_calls = _normalize_tool_calls_for_template(msg.get("tool_calls"))
             tool_call_id = msg.get("tool_call_id")
             msg_name = msg.get("name")
 
@@ -1463,6 +1506,7 @@ class MLXMultimodalLM:
         self,
         chat_messages: list[dict],
         enable_thinking: bool | None = None,
+        tools: list[dict] | None = None,
     ) -> str:
         """
         Apply chat template to structured messages with enable_thinking support.
@@ -1484,6 +1528,8 @@ class MLXMultimodalLM:
         template_kwargs = {}
         if enable_thinking is not None:
             template_kwargs["enable_thinking"] = enable_thinking
+        if tools:
+            template_kwargs["tools"] = tools
 
         formatted_prompt = None
         try:
@@ -1495,13 +1541,30 @@ class MLXMultimodalLM:
             )
         except TypeError:
             # Processor doesn't support enable_thinking kwarg — use processor
-            # WITHOUT the kwarg (correct VLM format), then strip <think> below.
+            # WITHOUT the kwarg first. Preserve tools unless the processor
+            # rejects them too.
+            fallback_kwargs = dict(template_kwargs)
+            fallback_kwargs.pop("enable_thinking", None)
             try:
                 formatted_prompt = get_chat_template(
                     self.processor,
                     chat_messages,
                     add_generation_prompt=True,
+                    **fallback_kwargs,
                 )
+            except TypeError:
+                fallback_kwargs.pop("tools", None)
+                try:
+                    formatted_prompt = get_chat_template(
+                        self.processor,
+                        chat_messages,
+                        add_generation_prompt=True,
+                        **fallback_kwargs,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to apply chat template: {e}, using last user message"
+                    )
             except Exception as e:
                 logger.warning(
                     f"Failed to apply chat template: {e}, using last user message"
@@ -2014,6 +2077,7 @@ class MLXMultimodalLM:
             )
 
         # Apply chat template
+        template_tools = kwargs.pop("tools", None)
         logger.info(
             f"Applying chat template with {len(chat_messages)} messages, {len(all_images)} images"
         )
@@ -2023,7 +2087,11 @@ class MLXMultimodalLM:
                 f"  Chat msg {i}: role={cm['role']}, content={content_preview}..."
             )
         enable_thinking = kwargs.pop("enable_thinking", None)
-        formatted_prompt = self._apply_chat_template(chat_messages, enable_thinking)
+        formatted_prompt = self._apply_chat_template(
+            chat_messages,
+            enable_thinking,
+            tools=template_tools,
+        )
 
         # Post-template image count guard: VLM chat templates may not expand
         # image placeholders for assistant-role messages. Trim all_images to
@@ -2316,8 +2384,13 @@ class MLXMultimodalLM:
             )
 
         # Apply chat template
+        template_tools = kwargs.pop("tools", None)
         enable_thinking = kwargs.pop("enable_thinking", None)
-        formatted_prompt = self._apply_chat_template(chat_messages, enable_thinking)
+        formatted_prompt = self._apply_chat_template(
+            chat_messages,
+            enable_thinking,
+            tools=template_tools,
+        )
 
         # Post-template image count guard: VLM chat templates may not expand
         # image placeholders for assistant-role messages. Trim all_images to
