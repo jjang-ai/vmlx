@@ -742,7 +742,8 @@ class TestFallbackToolPromptFormat:
 
         assert "<｜DSML｜invoke" in rendered
         assert 'name="list_directory"' in rendered
-        assert 'parameter name="path"' in rendered
+        assert "- path (string, required)" in rendered
+        assert "VALUE HERE" not in rendered
         assert "<tool_call>" not in rendered
 
     def test_dsv4_fallback_ignores_historical_dsml_when_checking_examples(self):
@@ -789,7 +790,8 @@ class TestFallbackToolPromptFormat:
 
         assert tokenizer.calls >= 1
         assert 'name="list_directory"' in rendered
-        assert 'parameter name="path"' in rendered
+        assert "- path (string, required)" in rendered
+        assert "VALUE HERE" not in rendered
         assert "Call them using DSML format" in rendered
 
     def test_qwen_fallback_injects_concrete_native_tool_example(self):

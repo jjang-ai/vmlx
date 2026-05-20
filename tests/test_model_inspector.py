@@ -91,7 +91,8 @@ def test_nemotron_turboquant_layer_types_skip_moe_but_keep_native_cache_slots():
     assert layer_types.count("attention") == pattern.count("*")
 
 
-def test_jang_loader_turboquant_make_cache_preserves_nemotron_cache_count():
+def test_jang_loader_does_not_apply_qwen_hybrid_tq_policy_to_nemotron():
+    """Nemotron hybrid state stays native until that family has live TQ proof."""
     from mlx_lm.models.cache import ArraysCache, KVCache
     from vmlx_engine.utils.jang_loader import _patch_turboquant_make_cache
 
@@ -132,7 +133,8 @@ def test_jang_loader_turboquant_make_cache_preserves_nemotron_cache_count():
     patched = model.make_cache()
     assert len(patched) == len(native_cache)
     assert sum(type(c).__name__ == "ArraysCache" for c in patched) == pattern.count("M")
-    assert sum(type(c).__name__ == "TurboQuantKVCache" for c in patched) == pattern.count("*")
+    assert sum(type(c).__name__ == "KVCache" for c in patched) == pattern.count("*")
+    assert sum(type(c).__name__ == "TurboQuantKVCache" for c in patched) == 0
 
 
 def _make_model_dir(tmp_path, config, weight_files=None):

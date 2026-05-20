@@ -7926,7 +7926,7 @@ class TestMcpEndpoints:
             error_message = None
 
         class _FakeMcpManager:
-            async def execute_tool(self, name, args):
+            async def execute_tool(self, name, args, **_kwargs):
                 # Prove arguments round-trip
                 assert name == "fake.echo"
                 assert args == {"input": "hello"}

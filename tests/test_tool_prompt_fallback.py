@@ -70,7 +70,11 @@ def test_dsv4_fallback_does_not_invent_arg1_for_zero_arg_tool():
     datetime_block = datetime_block.split("</｜DSML｜invoke>", 1)[0]
     assert "<｜DSML｜parameter" not in datetime_block
     assert '<｜DSML｜invoke name="smoke__echo">' in injected
-    assert '<｜DSML｜parameter name="text" string="true">VALUE HERE</｜DSML｜parameter>' in injected
+    echo_block = injected.split('<｜DSML｜invoke name="smoke__echo">', 1)[1]
+    echo_block = echo_block.split("</｜DSML｜invoke>", 1)[0]
+    assert "<｜DSML｜parameter" not in echo_block
+    assert "VALUE HERE" not in injected
+    assert "- text (string, required)" in injected
 
 
 def test_dsv4_schema_only_prompt_gets_concrete_per_tool_examples():

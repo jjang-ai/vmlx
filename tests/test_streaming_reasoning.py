@@ -1491,7 +1491,7 @@ class TestToolCallBufferingStructure:
         source = inspect.getsource(server_mod.stream_chat_completion)
 
         assert "accumulated_content" in source
-        assert "marker in accumulated_content" in source
+        assert "_has_tool_marker_or_partial_suffix(\n                            accumulated_content" in source
 
     def test_reasoning_uses_trailing_window(self):
         """Reasoning tool call detection should use a trailing window of accumulated_reasoning."""
@@ -1500,7 +1500,7 @@ class TestToolCallBufferingStructure:
 
         # Uses trailing window to catch split-chunk markers without false positives
         assert "_reasoning_tail" in source
-        assert "marker in _reasoning_tail" in source
+        assert "_has_tool_marker_or_partial_suffix(\n                            _reasoning_tail" in source
 
     def test_deepseek_unicode_marker_in_markers_list(self):
         """DeepSeek Unicode tool call marker must be in _TOOL_CALL_MARKERS."""

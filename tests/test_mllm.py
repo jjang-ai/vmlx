@@ -444,7 +444,13 @@ class TestExtractMultimodalMessages:
         assert len(images) == 1
         assistant_msg = chat_msgs[0]
         assert "tool_calls" in assistant_msg
-        assert assistant_msg["tool_calls"] == tool_calls
+        assert assistant_msg["tool_calls"] == [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "analyze", "arguments": {}},
+            }
+        ]
         assert isinstance(assistant_msg["content"], list)
 
     def test_user_image_still_works(self):

@@ -582,7 +582,7 @@ class TestMLXMultimodalLMCache:
             [],
             [],
         )
-        mllm._apply_chat_template = lambda _messages, _enable_thinking: "prompt"
+        mllm._apply_chat_template = lambda _messages, _enable_thinking, **_kwargs: "prompt"
         mllm._prepare_images = lambda _images: []
         mllm._prepare_video = lambda *_args, **_kwargs: []
         mllm._guard_simple_image_prefill = lambda *_args, **_kwargs: None
@@ -639,7 +639,7 @@ class TestMLXMultimodalLMCache:
         mllm.processor = SimpleNamespace(tokenizer=_Tokenizer())
         mllm._prepare_images = lambda _imgs: ["processed-image.png"]
         mllm._prepare_video = lambda *_args, **_kwargs: []
-        mllm._apply_chat_template = lambda _msgs, _enable: "new formatted prompt"
+        mllm._apply_chat_template = lambda _msgs, _enable, **_kwargs: "new formatted prompt"
 
         output = mllm.chat(
             [
@@ -856,7 +856,7 @@ class TestMLXMultimodalLMCache:
         mllm.processor = SimpleNamespace(tokenizer=_Tokenizer(), _patched_detok=True)
         mllm._prepare_images = lambda _imgs: ["processed-image.png"]
         mllm._prepare_video = lambda *_args, **_kwargs: []
-        mllm._apply_chat_template = lambda _msgs, _enable: "new formatted prompt"
+        mllm._apply_chat_template = lambda _msgs, _enable, **_kwargs: "new formatted prompt"
 
         chunks = list(
             mllm.stream_chat(
@@ -928,7 +928,7 @@ class TestMLXMultimodalLMCache:
         mllm.processor = SimpleNamespace(tokenizer=_Tokenizer(), _patched_detok=True)
         mllm._prepare_images = lambda _imgs: ["processed-image.png"]
         mllm._prepare_video = lambda *_args, **_kwargs: []
-        mllm._apply_chat_template = lambda _msgs, _enable: "formatted prompt"
+        mllm._apply_chat_template = lambda _msgs, _enable, **_kwargs: "formatted prompt"
 
         chunks = list(
             mllm.stream_chat(
