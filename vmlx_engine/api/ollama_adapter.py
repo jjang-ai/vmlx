@@ -118,6 +118,8 @@ def ollama_chat_to_openai(body: dict) -> dict:
         req["top_p"] = opts["top_p"]
     if opts.get("top_k") is not None:
         req["top_k"] = opts["top_k"]
+    if opts.get("min_p") is not None:
+        req["min_p"] = opts["min_p"]
     if opts.get("stop"):
         req["stop"] = opts["stop"]
     if opts.get("repeat_penalty") is not None:
@@ -170,6 +172,12 @@ def ollama_generate_to_openai(body: dict) -> dict:
         req["temperature"] = opts["temperature"]
     if opts.get("top_p") is not None:
         req["top_p"] = opts["top_p"]
+    if opts.get("top_k") is not None:
+        req["top_k"] = opts["top_k"]
+    if opts.get("min_p") is not None:
+        req["min_p"] = opts["min_p"]
+    if opts.get("repeat_penalty") is not None:
+        req["repetition_penalty"] = opts["repeat_penalty"]
     if opts.get("stop"):
         req["stop"] = opts["stop"]
     _apply_ollama_prompt_context_limit(body, req)
@@ -213,6 +221,8 @@ def ollama_generate_to_openai_chat(body: dict) -> dict:
         req["top_p"] = opts["top_p"]
     if opts.get("top_k") is not None:
         req["top_k"] = opts["top_k"]
+    if opts.get("min_p") is not None:
+        req["min_p"] = opts["min_p"]
     if opts.get("stop"):
         req["stop"] = opts["stop"]
     if opts.get("repeat_penalty") is not None:

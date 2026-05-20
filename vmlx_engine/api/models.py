@@ -605,6 +605,12 @@ class MCPToolInfo(BaseModel):
     description: str
     server: str
     parameters: dict = Field(default_factory=dict)
+    enabled: bool = True
+    effective: bool = True
+    source: str = "mcp"
+    transport: str | None = None
+    server_state: str | None = None
+    error: str | None = None
 
 
 class MCPToolsResponse(BaseModel):
@@ -622,6 +628,13 @@ class MCPServerInfo(BaseModel):
     transport: str
     tools_count: int
     error: str | None = None
+    enabled: bool = True
+    configured: bool = True
+    command_redacted: str | None = None
+    url_redacted: str | None = None
+    last_connected: float | None = None
+    env_keys: list[str] = Field(default_factory=list)
+    header_keys: list[str] = Field(default_factory=list)
 
 
 class MCPServersResponse(BaseModel):
@@ -635,6 +648,7 @@ class MCPExecuteRequest(BaseModel):
 
     tool_name: str
     arguments: dict = Field(default_factory=dict)
+    model: str | None = None
 
 
 class MCPExecuteResponse(BaseModel):

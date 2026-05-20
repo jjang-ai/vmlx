@@ -601,6 +601,24 @@ declare global {
         }>;
         getLogs: (sessionId: string) => Promise<string[]>;
         clearLogs: (sessionId: string) => Promise<{ success: boolean }>;
+        browseMcpConfig: () => Promise<{
+          canceled: boolean;
+          filePath?: string;
+        }>;
+        validateMcpConfig: (filePath: string) => Promise<{
+          success: boolean;
+          error?: string;
+          serverCount?: number;
+          servers: any[];
+          redactedConfig?: any;
+        }>;
+        mcpStatus: (sessionId: string) => Promise<{
+          success: boolean;
+          error?: string;
+          tools: any[];
+          servers: any[];
+          count?: number;
+        }>;
         softSleep: (
           sessionId: string,
         ) => Promise<{ success: boolean; error?: string }>;

@@ -11,6 +11,7 @@ from .client import MCPClient
 from .tools import merge_tools, mcp_tools_to_openai, openai_call_to_mcp
 from .types import (
     MCPConfig,
+    MCPPolicy,
     MCPServerStatus,
     MCPTool,
     MCPToolResult,
@@ -65,24 +66,16 @@ class MCPClientManager:
                 f"Starting MCP client manager with {len(self._clients)} servers"
             )
 
-            # Connect to all servers in parallel
-            tasks = [
-                client.connect()
-                for client in self._clients.values()
-                if client.config.enabled
-            ]
-
-            if tasks:
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-
-                # Log results
-                for client, result in zip(
-                    [c for c in self._clients.values() if c.config.enabled],
-                    results,
-                ):
-                    if isinstance(result, Exception):
-                        logger.error(f"Failed to connect to '{client.name}': {result}")
-                    elif result:
+            # MCP SDK stdio transports bind async context managers to the
+            # entering task. Keep connect/disconnect in the manager task so
+            # shutdown can exit those contexts cleanly.
+            for client in [c for c in self._clients.values() if c.config.enabled]:
+                try:
+                    result = await client.connect()
+                except Exception as exc:
+                    logger.error(f"Failed to connect to '{client.name}': {exc}")
+                else:
+                    if result:
                         logger.info(f"Connected to '{client.name}'")
 
             self._started = True
@@ -103,15 +96,26 @@ class MCPClientManager:
 
             logger.info("Stopping MCP client manager")
 
-            # Disconnect from all servers in parallel
-            tasks = [client.disconnect() for client in self._clients.values()]
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+            for client in self._clients.values():
+                try:
+                    await client.disconnect()
+                except Exception as exc:
+                    logger.warning(f"Failed to disconnect '{client.name}': {exc}")
 
             self._started = False
             logger.info("MCP client manager stopped")
 
-    def get_all_tools(self) -> List[MCPTool]:
+    def _tool_effective(self, tool: MCPTool, policy: Optional[MCPPolicy]) -> bool:
+        if policy is None:
+            return True
+        return policy.tool_enabled(tool.full_name, tool.server_name, tool.name)
+
+    def _server_effective(self, server_name: str, policy: Optional[MCPPolicy]) -> bool:
+        if policy is None:
+            return True
+        return policy.server_enabled(server_name)
+
+    def get_all_tools(self, policy: Optional[MCPPolicy] = None) -> List[MCPTool]:
         """
         Get all tools from all connected servers.
 
@@ -120,22 +124,28 @@ class MCPClientManager:
         """
         tools = []
         for client in self._clients.values():
-            if client.is_connected:
-                tools.extend(client.tools)
+            if client.is_connected and self._server_effective(client.name, policy):
+                tools.extend(
+                    tool for tool in client.tools if self._tool_effective(tool, policy)
+                )
         return tools
 
-    def get_all_tools_openai(self) -> List[Dict[str, Any]]:
+    def get_all_tools_openai(
+        self,
+        policy: Optional[MCPPolicy] = None,
+    ) -> List[Dict[str, Any]]:
         """
         Get all tools in OpenAI function calling format.
 
         Returns:
             List of OpenAI-compatible tool definitions
         """
-        return mcp_tools_to_openai(self.get_all_tools())
+        return mcp_tools_to_openai(self.get_all_tools(policy=policy))
 
     def get_merged_tools(
         self,
         user_tools: Optional[List[Dict[str, Any]]] = None,
+        policy: Optional[MCPPolicy] = None,
     ) -> List[Dict[str, Any]]:
         """
         Get MCP tools merged with user-provided tools.
@@ -148,7 +158,7 @@ class MCPClientManager:
         Returns:
             Combined list of tools in OpenAI format
         """
-        return merge_tools(self.get_all_tools(), user_tools)
+        return merge_tools(self.get_all_tools(policy=policy), user_tools)
 
     def get_server_status(self) -> List[MCPServerStatus]:
         """
@@ -171,11 +181,63 @@ class MCPClientManager:
         """
         return self._clients.get(server_name)
 
+    def get_policy_status(
+        self,
+        policy: Optional[MCPPolicy] = None,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Return redacted server/tool state with effective policy flags."""
+        servers: List[Dict[str, Any]] = []
+        tools: List[Dict[str, Any]] = []
+
+        for client in self._clients.values():
+            cfg = client.config
+            server_enabled = self._server_effective(client.name, policy)
+            servers.append(
+                {
+                    "name": client.name,
+                    "state": client.get_status().state.value,
+                    "transport": cfg.transport.value,
+                    "enabled": server_enabled,
+                    "configured": bool(getattr(cfg, "enabled", True)),
+                    "tools_count": len(client.tools),
+                    "error": client.get_status().error,
+                    "last_connected": client.get_status().last_connected,
+                    "command_redacted": cfg.command,
+                    "url_redacted": cfg.url,
+                    "env_keys": sorted((cfg.env or {}).keys()),
+                    "header_keys": sorted((cfg.headers or {}).keys()),
+                    "skip_security_validation": bool(
+                        getattr(cfg, "skip_security_validation", False)
+                    ),
+                }
+            )
+            for tool in client.tools:
+                effective = bool(client.is_connected) and self._tool_effective(
+                    tool, policy
+                )
+                tools.append(
+                    {
+                        "name": tool.full_name,
+                        "tool_name": tool.name,
+                        "server": tool.server_name,
+                        "description": tool.description,
+                        "parameters": tool.input_schema,
+                        "enabled": self._tool_effective(tool, policy),
+                        "effective": effective,
+                        "transport": cfg.transport.value,
+                        "server_state": client.get_status().state.value,
+                        "error": client.get_status().error,
+                    }
+                )
+
+        return {"servers": servers, "tools": tools}
+
     async def execute_tool(
         self,
         full_name: str,
         arguments: Dict[str, Any],
         timeout: Optional[float] = None,
+        policy: Optional[MCPPolicy] = None,
     ) -> MCPToolResult:
         """
         Execute a tool by its full name (server__tool).
@@ -224,6 +286,17 @@ class MCPClientManager:
                 error_message=f"Server '{server_name}' is not connected",
             )
 
+        full_tool_name = f"{server_name}__{tool_name}"
+        if policy is not None and not policy.tool_enabled(
+            full_tool_name, server_name, tool_name
+        ):
+            return MCPToolResult(
+                tool_name=full_name,
+                content=None,
+                is_error=True,
+                error_message=f"Tool '{full_tool_name}' is disabled by MCP policy",
+            )
+
         # Execute tool
         return await client.call_tool(
             tool_name,
@@ -235,6 +308,7 @@ class MCPClientManager:
         self,
         tool_call: Dict[str, Any],
         timeout: Optional[float] = None,
+        policy: Optional[MCPPolicy] = None,
     ) -> MCPToolResult:
         """
         Execute a tool call from OpenAI format.
@@ -253,7 +327,7 @@ class MCPClientManager:
         else:
             full_name = tool_name
 
-        return await self.execute_tool(full_name, arguments, timeout)
+        return await self.execute_tool(full_name, arguments, timeout, policy=policy)
 
     def _find_tool_server(self, tool_name: str) -> Optional[str]:
         """

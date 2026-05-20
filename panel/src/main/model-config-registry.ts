@@ -56,6 +56,7 @@ interface ModelConfig {
   reasoningParser?: string
   supportsThinking?: boolean
   thinkInTemplate?: boolean
+  defaultEnableThinking?: boolean
   usePagedCache?: boolean
   enableAutoToolChoice?: boolean
   isMultimodal?: boolean
@@ -69,6 +70,7 @@ export interface DetectedConfig {
   reasoningParser?: string
   supportsThinking?: boolean
   thinkInTemplate?: boolean
+  defaultEnableThinking?: boolean
   cacheType: string
   usePagedCache: boolean
   enableAutoToolChoice: boolean
@@ -96,11 +98,11 @@ function registerFamily(familyName: string, config: Omit<ModelConfig, 'familyNam
 // thinking-on can stay in an open <think> rail without a visible answer, so
 // auto-detection keeps reasoning disabled while preserving zaya_xml tools and
 // the typed CCA cache contract.
-registerFamily('zaya', { cacheType: 'hybrid', toolParser: 'zaya_xml', usePagedCache: true, enableAutoToolChoice: true, description: 'ZAYA CCA hybrid MoE', priority: 3 })
+registerFamily('zaya', { cacheType: 'hybrid', toolParser: 'zaya_xml', reasoningParser: 'qwen3', supportsThinking: true, thinkInTemplate: false, defaultEnableThinking: false, usePagedCache: true, enableAutoToolChoice: true, description: 'ZAYA CCA hybrid MoE', priority: 3 })
 // ZAYA1-VL is detected separately so the UI does not fall through to generic
 // VLM defaults. The Python runtime uses a typed CCA cache contract, so panel
 // sessions must start on paged cache instead of the legacy prefix-cache backend.
-registerFamily('zaya1-vl', { cacheType: 'hybrid', toolParser: 'zaya_xml', usePagedCache: true, enableAutoToolChoice: true, isMultimodal: true, description: 'ZAYA1-VL CCA hybrid vision-language', priority: 3 })
+registerFamily('zaya1-vl', { cacheType: 'hybrid', toolParser: 'zaya_xml', reasoningParser: 'qwen3', supportsThinking: true, thinkInTemplate: false, defaultEnableThinking: false, usePagedCache: true, enableAutoToolChoice: true, isMultimodal: true, description: 'ZAYA1-VL CCA hybrid vision-language', priority: 3 })
 
 // Qwen
 // Qwen 3.5 dense and MoE share model_types with VL variants — VL detection
@@ -121,6 +123,9 @@ registerFamily('llama3', { cacheType: 'kv', toolParser: 'llama', enableAutoToolC
 registerFamily('llama', { cacheType: 'kv', toolParser: 'llama', description: 'Llama', priority: 50 })
 
 // Mistral/Mixtral/Devstral/Codestral
+registerFamily('mistral4', { cacheType: 'kv', toolParser: 'mistral', reasoningParser: 'mistral', enableAutoToolChoice: true, description: 'Mistral 4 (MLA/MoE reasoning)', priority: 4 })
+registerFamily('mistral3', { cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, isMultimodal: true, description: 'Mistral 3 / Pixtral-style VLM wrapper', priority: 5 })
+registerFamily('ministral3', { cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, description: 'Ministral 3 text decoder', priority: 5 })
 registerFamily('devstral', { cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, description: 'Devstral (Mistral coding)', priority: 5 })
 registerFamily('codestral', { cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, description: 'Codestral (Mistral coding)', priority: 5 })
 registerFamily('pixtral', { cacheType: 'kv', toolParser: 'mistral', enableAutoToolChoice: true, isMultimodal: true, description: 'Pixtral Vision', priority: 5 })
@@ -138,6 +143,7 @@ registerFamily('deepseek', { cacheType: 'kv', toolParser: 'deepseek', reasoningP
 // GLM
 registerFamily('gpt-oss', { cacheType: 'kv', toolParser: 'glm47', reasoningParser: 'openai_gptoss', enableAutoToolChoice: true, description: 'GPT-OSS (Harmony reasoning)', priority: 3 })
 registerFamily('glm47-flash', { cacheType: 'kv', toolParser: 'glm47', reasoningParser: 'openai_gptoss', enableAutoToolChoice: true, description: 'GLM-4.7 Flash (reasoning)', priority: 3 })
+registerFamily('glm5', { cacheType: 'kv', toolParser: 'deepseek', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, description: 'GLM-5.1 / GLM MoE DSA', priority: 5 })
 registerFamily('glm47', { cacheType: 'kv', toolParser: 'glm47', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, description: 'GLM-Z1 (deepseek_r1 reasoning)', priority: 5 })
 registerFamily('glm4', { cacheType: 'kv', toolParser: 'glm47', enableAutoToolChoice: true, description: 'GLM-4 (tools only)', priority: 20 })
 
@@ -146,8 +152,10 @@ registerFamily('medgemma', { cacheType: 'kv', isMultimodal: true, description: '
 registerFamily('paligemma', { cacheType: 'kv', isMultimodal: true, description: 'Google PaliGemma', priority: 5 })
 registerFamily('gemma4', { cacheType: 'kv', toolParser: 'gemma4', reasoningParser: 'gemma4', enableAutoToolChoice: true, isMultimodal: true, description: 'Gemma 4 (multimodal)', priority: 5 })
 registerFamily('gemma4-text', { cacheType: 'kv', toolParser: 'gemma4', reasoningParser: 'gemma4', enableAutoToolChoice: true, description: 'Gemma 4 (text-only)', priority: 4 })
-registerFamily('gemma3', { cacheType: 'kv', toolParser: 'hermes', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, isMultimodal: true, description: 'Gemma 3 (multimodal)', priority: 10 })
-registerFamily('gemma3-text', { cacheType: 'kv', toolParser: 'hermes', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, description: 'Gemma 3 (text-only)', priority: 8 })
+registerFamily('gemma3', { cacheType: 'kv', toolParser: 'gemma3', enableAutoToolChoice: true, isMultimodal: true, description: 'Gemma 3 (multimodal)', priority: 10 })
+registerFamily('gemma3-text', { cacheType: 'kv', toolParser: 'gemma3', enableAutoToolChoice: true, description: 'Gemma 3 (text-only)', priority: 8 })
+registerFamily('gemma3n', { cacheType: 'kv', toolParser: 'gemma3', enableAutoToolChoice: true, isMultimodal: true, description: 'Gemma 3n (multimodal)', priority: 10 })
+registerFamily('gemma3n-text', { cacheType: 'kv', toolParser: 'gemma3', enableAutoToolChoice: true, description: 'Gemma 3n (text-only)', priority: 8 })
 registerFamily('gemma2', { cacheType: 'kv', description: 'Gemma 2', priority: 15 })
 registerFamily('gemma', { cacheType: 'kv', description: 'Gemma', priority: 30 })
 
@@ -165,6 +173,9 @@ registerFamily('hermes', { cacheType: 'kv', toolParser: 'hermes', enableAutoTool
 registerFamily('nemotron', { cacheType: 'kv', toolParser: 'nemotron', reasoningParser: 'deepseek_r1', description: 'Nemotron', priority: 10 })
 registerFamily('nemotron-h', { cacheType: 'hybrid', toolParser: 'nemotron', reasoningParser: 'deepseek_r1', usePagedCache: true, description: 'Nemotron Hybrid', priority: 10 })
 
+// Poolside / Laguna
+registerFamily('laguna', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', supportsThinking: true, thinkInTemplate: true, enableAutoToolChoice: true, description: 'Laguna / Poolside coding model', priority: 10 })
+
 // Jamba
 registerFamily('jamba', { cacheType: 'hybrid', usePagedCache: true, description: 'Jamba (Hybrid)', priority: 10 })
 
@@ -174,6 +185,7 @@ registerFamily('command-r', { cacheType: 'kv', description: 'Command R', priorit
 
 // Granite
 registerFamily('granite', { cacheType: 'kv', toolParser: 'granite', enableAutoToolChoice: true, description: 'Granite', priority: 20 })
+registerFamily('granitemoehybrid', { cacheType: 'hybrid', toolParser: 'granite', enableAutoToolChoice: true, usePagedCache: true, description: 'Granite MoE Hybrid', priority: 10 })
 
 // Functionary
 registerFamily('functionary', { cacheType: 'kv', toolParser: 'functionary', enableAutoToolChoice: true, description: 'Functionary', priority: 20 })
@@ -201,6 +213,7 @@ registerFamily('step', { cacheType: 'kv', toolParser: 'step3p5', reasoningParser
 registerFamily('xlam', { cacheType: 'kv', toolParser: 'xlam', enableAutoToolChoice: true, description: 'xLAM', priority: 20 })
 
 // Kimi/Moonshot
+registerFamily('kimi-k25', { cacheType: 'kv', toolParser: 'kimi', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, isMultimodal: true, description: 'Kimi K2.5/K2.6 Vision-Language', priority: 5 })
 registerFamily('kimi-k2', { cacheType: 'kv', toolParser: 'kimi', reasoningParser: 'deepseek_r1', enableAutoToolChoice: true, description: 'Kimi K2 (MoE)', priority: 5 })
 registerFamily('kimi', { cacheType: 'kv', toolParser: 'kimi', enableAutoToolChoice: true, description: 'Kimi/Moonshot', priority: 20 })
 
@@ -213,6 +226,9 @@ registerFamily('exaone', { cacheType: 'kv', description: 'EXAONE', priority: 20 
 
 // OLMo
 registerFamily('olmo', { cacheType: 'kv', description: 'OLMo', priority: 20 })
+
+// Liquid / hybrid SSM
+registerFamily('lfm2', { cacheType: 'hybrid', usePagedCache: true, description: 'Liquid LFM2 / LFM2-MoE hybrid', priority: 10 })
 
 // StarCoder / StableLM / Baichuan
 registerFamily('starcoder', { cacheType: 'kv', description: 'StarCoder', priority: 30 })
@@ -228,10 +244,12 @@ registerFamily('cogvlm', { cacheType: 'kv', isMultimodal: true, description: 'Co
 registerFamily('internvl', { cacheType: 'kv', isMultimodal: true, description: 'InternVL vision-language', priority: 15 })
 registerFamily('minicpm-v', { cacheType: 'kv', isMultimodal: true, description: 'MiniCPM-V vision', priority: 20 })
 registerFamily('florence', { cacheType: 'kv', isMultimodal: true, description: 'Florence vision', priority: 20 })
+registerFamily('got-ocr', { cacheType: 'kv', isMultimodal: true, description: 'GOT-OCR2 document/scene OCR', priority: 15 })
 registerFamily('smolvlm', { cacheType: 'kv', isMultimodal: true, description: 'SmolVLM', priority: 20 })
 registerFamily('internlm-xcomposer', { cacheType: 'kv', isMultimodal: true, description: 'InternLM-XComposer', priority: 8 })
 
 // Pure SSM
+registerFamily('falcon-h1', { cacheType: 'hybrid', usePagedCache: true, description: 'Falcon H1 hybrid SSM/attention', priority: 5 })
 registerFamily('falcon-mamba', { cacheType: 'mamba', usePagedCache: true, description: 'Falcon Mamba (SSM)', priority: 5 })
 registerFamily('mamba', { cacheType: 'mamba', usePagedCache: true, description: 'Mamba SSM', priority: 30 })
 registerFamily('rwkv', { cacheType: 'mamba', usePagedCache: true, description: 'RWKV', priority: 30 })
@@ -273,12 +291,16 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'mistral': 'mistral',
   'mixtral': 'mixtral',
   'pixtral': 'pixtral',
+  'mistral3': 'mistral3',
+  'mistral4': 'mistral4',
+  'ministral3': 'ministral3',
   'codestral': 'codestral',
   'devstral': 'devstral',
   'codestral_mamba': 'mamba',
   // ── DeepSeek family ──
   'deepseek_v4': 'deepseek-v4',
   'deepseek_v3': 'deepseek-v3',
+  'deepseek_v32': 'deepseek-v3',
   'deepseek_v2': 'deepseek-v2',
   'deepseek_vl': 'deepseek-vl',
   'deepseek_vl2': 'deepseek-vl',
@@ -298,6 +320,7 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'hy_v3': 'hy3',
   // ── GLM family ──
   'chatglm': 'glm4',
+  'glm_moe_dsa': 'glm5',
   'glm4': 'glm4',
   'glm4_moe': 'glm47-flash',
   'glm4_moe_lite': 'glm47-flash',
@@ -313,6 +336,8 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'gemma2': 'gemma2',
   'gemma3': 'gemma3',
   'gemma3_text': 'gemma3-text',
+  'gemma3n': 'gemma3n',
+  'gemma3n_text': 'gemma3n-text',
   'gemma4': 'gemma4',
   'gemma4_text': 'gemma4-text',
   // ── Phi family ──
@@ -332,16 +357,20 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'jamba': 'jamba',
   'mamba': 'mamba',
   'mamba2': 'mamba',
+  'falcon_h1': 'falcon-h1',
   'falcon_mamba': 'falcon-mamba',
   'rwkv': 'rwkv',
   'rwkv5': 'rwkv',
   'rwkv6': 'rwkv',
+  'rwkv7': 'rwkv',
   // ── NVIDIA ──
   'nemotron': 'nemotron',
   'nemotron_h': 'nemotron-h',
+  'nemotron_h_v2': 'nemotron-h',
   // ── IBM ──
   'granite': 'granite',
   'granite_moe': 'granite',
+  'granitemoehybrid': 'granitemoehybrid',
   // ── Cohere ──
   'cohere': 'command-r',
   'cohere2': 'command-r',
@@ -349,12 +378,18 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'hermes': 'hermes',
   // ── Kimi/Moonshot ──
   'kimi_k2': 'kimi-k2',
+  'kimi_k25': 'kimi-k25',
   // ── EXAONE ──
   'exaone': 'exaone',
   'exaone3': 'exaone',
   // ── OLMo ──
   'olmo': 'olmo',
   'olmo2': 'olmo',
+  // ── Liquid AI ──
+  'lfm2': 'lfm2',
+  'lfm2_moe': 'lfm2',
+  // ── Laguna / Poolside ──
+  'laguna': 'laguna',
   // ── Gemma extras ──
   'paligemma': 'paligemma',
   'paligemma2': 'paligemma',
@@ -366,6 +401,7 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'cogvlm': 'cogvlm',
   'cogvlm2': 'cogvlm',
   'florence2': 'florence',
+  'got_ocr2': 'got-ocr',
   'molmo': 'molmo',
   'minicpmv': 'minicpm-v',
   'smolvlm': 'smolvlm',
@@ -712,6 +748,7 @@ function configToDetected(family: string, config: Omit<ModelConfig, 'pattern' | 
     reasoningParser: config.reasoningParser,
     supportsThinking: config.supportsThinking,
     thinkInTemplate: config.thinkInTemplate,
+    defaultEnableThinking: config.defaultEnableThinking,
     cacheType: config.cacheType,
     usePagedCache: config.usePagedCache ?? true,
     enableAutoToolChoice: config.enableAutoToolChoice ?? false,
@@ -742,6 +779,7 @@ function applyJangCapabilities(
     next.reasoningParser = 'qwen3'
     next.supportsThinking = true
     next.thinkInTemplate = false
+    next.defaultEnableThinking = false
   } else if (next.family === 'hy3') {
     next.reasoningParser = 'qwen3'
     next.supportsThinking = true

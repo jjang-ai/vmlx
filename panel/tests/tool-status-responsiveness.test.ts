@@ -34,4 +34,33 @@ describe('tool status responsiveness contract', () => {
     expect(source).toContain('if (!suppressVisibleToolDelta) {')
     expect(source).toContain('if (!isReasoningDelta && suppressVisibleToolDelta) return;')
   })
+
+  it('has a stall watchdog while waiting for a buffered tool call to finish', () => {
+    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    const streamSseSource = source.slice(
+      source.indexOf('const streamSSE = async'),
+      source.indexOf('await streamSSE(reader);'),
+    )
+
+    expect(source).toContain('TOOL_STREAM_STALL_TIMEOUT_MS')
+    expect(streamSseSource).toContain('Promise.race')
+    expect(streamSseSource).toContain('clientToolCallBuffering')
+    expect(streamSseSource).toContain('Tool call generation stalled')
+    expect(streamSseSource).toContain('await rdr.cancel()')
+  })
+
+  it('marks tool status done whenever any tool status was shown', () => {
+    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    const doneIdx = source.indexOf('emitToolStatus("done", "", undefined')
+    const preDone = source.substring(Math.max(0, doneIdx - 300), doneIdx)
+
+    expect(doneIdx).toBeGreaterThan(0)
+    expect(preDone).toContain('collectedToolStatuses.length > 0')
+  })
+
+  it('does not leave a completed message summarized as generating', () => {
+    const source = readFileSync('src/renderer/src/components/chat/ToolCallStatus.tsx', 'utf8')
+
+    expect(source).toContain("const isGenerating = isActive && lastStatus.phase === 'generating'")
+  })
 })

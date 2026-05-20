@@ -3,6 +3,7 @@ import { ArrowLeft, ChevronRight } from 'lucide-react'
 import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG } from './SessionConfigForm'
 import { useTranslation } from '../../i18n'
 import { resolveCacheLaunchPolicy } from '../../../../shared/cacheControlPolicy'
+import { buildMcpPolicyArgs } from '../../../../shared/mcpPolicy'
 
 interface Session {
   id: string
@@ -89,6 +90,10 @@ const ADDITIONAL_ARG_VALUE_FLAGS = new Set([
   '--max-prompt-tokens',
   '--max-tokens',
   '--mcp-config',
+  '--mcp-disabled-servers',
+  '--mcp-disabled-tools',
+  '--mcp-enabled-servers',
+  '--mcp-enabled-tools',
   '--mflux-class',
   '--num-draft-tokens',
   '--paged-cache-block-size',
@@ -171,6 +176,10 @@ const DSV4_ADDITIONAL_ARG_BLOCKLIST = new Set([
   '--pld-summary-interval',
   '--is-mllm',
   '--mcp-config',
+  '--mcp-disabled-servers',
+  '--mcp-disabled-tools',
+  '--mcp-enabled-servers',
+  '--mcp-enabled-tools',
   '--enable-auto-tool-choice',
   '--tool-call-parser',
   '--reasoning-parser',
@@ -354,8 +363,6 @@ function buildCommandPreview(
   if (config.streamInterval && config.streamInterval > 0) parts.push('--stream-interval', config.streamInterval.toString())
   if (config.maxTokens && config.maxTokens > 0) {
     parts.push('--max-tokens', config.maxTokens.toString())
-  } else {
-    parts.push('--max-tokens', '1000000')
   }
   if (config.maxContextLength && config.maxContextLength > 0) {
     parts.push('--max-prompt-tokens', config.maxContextLength.toString())
@@ -372,6 +379,7 @@ function buildCommandPreview(
   if (effectiveReasoningParser) parts.push('--reasoning-parser', effectiveReasoningParser)
 
   if (config.mcpConfig) parts.push('--mcp-config', config.mcpConfig)
+  parts.push(...buildMcpPolicyArgs(config))
 
   // Smelt mode (partial expert loading)
   if (effectiveSmelt) {

@@ -409,6 +409,9 @@ class ModelConfigRegistry:
                 updates["supports_thinking"] = True
                 updates["reasoning_parser"] = "qwen3"
                 updates["think_in_template"] = False
+                zaya_hints = dict(getattr(base, "architecture_hints", None) or {})
+                zaya_hints["default_enable_thinking"] = False
+                updates["architecture_hints"] = zaya_hints
             elif is_ling_family:
                 # Ling/Bailing emits plain content. Do not let drifted bundle
                 # stamps resurrect a reasoning parser or thinking-capable

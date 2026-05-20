@@ -22,6 +22,7 @@ Example usage:
 from .types import (
     MCPServerConfig,
     MCPConfig,
+    MCPPolicy,
     MCPTool,
     MCPToolResult,
     MCPServerStatus,
@@ -51,6 +52,7 @@ __all__ = [
     # Types
     "MCPServerConfig",
     "MCPConfig",
+    "MCPPolicy",
     "MCPTool",
     "MCPToolResult",
     "MCPServerStatus",

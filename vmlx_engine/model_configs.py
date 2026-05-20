@@ -104,6 +104,7 @@ def register_all(registry=None):
             think_in_template=False,
             supports_thinking=True,
             supports_native_tools=True,
+            architecture_hints={"default_enable_thinking": False},
             priority=3,
         )
     )
@@ -121,6 +122,7 @@ def register_all(registry=None):
             supports_thinking=True,
             supports_native_tools=True,
             is_mllm=True,
+            architecture_hints={"default_enable_thinking": False},
             priority=3,
         )
     )

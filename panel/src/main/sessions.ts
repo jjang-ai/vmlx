@@ -11,6 +11,7 @@ import { db, Session } from './database'
 import { resolveImageModelFromDirectoryName } from '../shared/imageModels'
 import { dsv4EnvFromConfig } from '../shared/dsv4Env'
 import { resolveCacheLaunchPolicy } from '../shared/cacheControlPolicy'
+import { buildMcpPolicyArgs } from '../shared/mcpPolicy'
 
 export type { ServerConfig, DetectedProcess } from './server'
 import type { ServerConfig, DetectedProcess } from './server'
@@ -137,6 +138,10 @@ const ADDITIONAL_ARG_VALUE_FLAGS = new Set([
   '--max-prompt-tokens',
   '--max-tokens',
   '--mcp-config',
+  '--mcp-disabled-servers',
+  '--mcp-disabled-tools',
+  '--mcp-enabled-servers',
+  '--mcp-enabled-tools',
   '--mflux-class',
   '--num-draft-tokens',
   '--native-mtp-depth',
@@ -224,6 +229,10 @@ const DSV4_ADDITIONAL_ARG_BLOCKLIST = new Set([
   '--pld-summary-interval',
   '--is-mllm',
   '--mcp-config',
+  '--mcp-disabled-servers',
+  '--mcp-disabled-tools',
+  '--mcp-enabled-servers',
+  '--mcp-enabled-tools',
   '--enable-auto-tool-choice',
   '--tool-call-parser',
   '--reasoning-parser',
@@ -314,14 +323,14 @@ function applyBundleStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
   ;(config as any).defaultRepetitionPenalty = defs.defaultRepetitionPenalty ?? 0
   ;(config as any).defaultMaxNewTokens = defs.maxTokens ?? 0
   const migrationKey = 'generationStartupDefaultsVersion'
-  if ((config as any)[migrationKey] !== 2) {
+  if ((config as any)[migrationKey] !== 3) {
     const oldHiddenMaxTokens =
       defs.maxTokens != null && Number(config.maxTokens) === Number(defs.maxTokens)
-    const oldGenericMaxTokens = [4096, 12000].includes(Number(config.maxTokens))
+    const oldGenericMaxTokens = [4096, 12000, 12068, 32768].includes(Number(config.maxTokens))
     if (oldHiddenMaxTokens || oldGenericMaxTokens) {
-      config.maxTokens = 32768
+      config.maxTokens = 0
     }
-    ;(config as any)[migrationKey] = 2
+    ;(config as any)[migrationKey] = 3
   }
 }
 
@@ -1208,6 +1217,13 @@ export class SessionManager extends EventEmitter {
     delete spawnEnv.VMLX_DSV4_FAST_LOAD_DISABLE
     delete spawnEnv.VMLINUX_DENSE_STRICT_LANE
     delete spawnEnv.VMLINUX_DSV4_FAST_LOAD_DISABLE
+    // MCP config and policy must be session-owned. Inheriting these from a
+    // developer shell would make the effective tool set differ from the UI.
+    delete spawnEnv.VLLM_MLX_MCP_CONFIG
+    delete spawnEnv.VLLM_MLX_MCP_ENABLED_SERVERS
+    delete spawnEnv.VLLM_MLX_MCP_DISABLED_SERVERS
+    delete spawnEnv.VLLM_MLX_MCP_ENABLED_TOOLS
+    delete spawnEnv.VLLM_MLX_MCP_DISABLED_TOOLS
     // DSV4 Flash runtime knobs. Helper validates inputs and emits only the
     // env vars the engine reads.
     const dsv4Env = dsv4EnvFromConfig(config as any, {
@@ -1516,7 +1532,9 @@ export class SessionManager extends EventEmitter {
     'streamInterval', 'apiKey', 'rateLimit',
     // NOTE: 'timeout' intentionally omitted — client sends per-request timeout
     // to server in the request body (chat.ts:818), so changes take effect immediately.
-    'maxTokens', 'maxContextLength', 'mcpConfig', 'servedModelName',
+    'maxTokens', 'maxContextLength', 'mcpConfig',
+    'mcpEnabledServers', 'mcpDisabledServers', 'mcpEnabledTools', 'mcpDisabledTools',
+    'servedModelName',
     'speculativeModel', 'numDraftTokens', 'smelt', 'smeltExperts',
     'nativeMtpMode', 'nativeMtpDepth', 'nativeMtpDepthOverride',
     'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
@@ -1660,7 +1678,7 @@ export class SessionManager extends EventEmitter {
           kvCacheQuantization: 'auto',
           cacheStackStartupDefaultsVersion: CACHE_STACK_STARTUP_DEFAULTS_VERSION,
           streamInterval: 1,
-          maxTokens: 32768,
+          maxTokens: 0,
           maxContextLength: 0,
           toolCallParser: 'auto',
           reasoningParser: 'auto',
@@ -2459,6 +2477,9 @@ export class SessionManager extends EventEmitter {
     if (effectiveReasoningParser) {
       args.push('--reasoning-parser', effectiveReasoningParser)
     }
+    if (detected.defaultEnableThinking === false) {
+      args.push('--default-enable-thinking', 'false')
+    }
     // Pass custom served model name if configured
     if (config.servedModelName) {
       args.push('--served-model-name', config.servedModelName)
@@ -2576,17 +2597,17 @@ export class SessionManager extends EventEmitter {
     if (config.streamInterval && config.streamInterval > 0) {
       args.push('--stream-interval', config.streamInterval.toString())
     }
-    // maxTokens: 0 = "No limit" → pass a very large value so the model context window is the limit
+    // maxTokens: 0/unset = no session-level output override. Let the server
+    // resolve explicit request > bundle max_new_tokens > engine fallback.
     if (config.maxTokens && config.maxTokens > 0) {
       args.push('--max-tokens', config.maxTokens.toString())
-    } else {
-      args.push('--max-tokens', '1000000')
     }
     if (config.maxContextLength && config.maxContextLength > 0) {
       args.push('--max-prompt-tokens', config.maxContextLength.toString())
     }
     // Tool integration (parsers and --enable-auto-tool-choice already pushed above)
     if (config.mcpConfig) args.push('--mcp-config', config.mcpConfig)
+    args.push(...buildMcpPolicyArgs(config))
 
     const requestedDistributed = !!(config as any).distributedEnabled
     const requestedFlashMoe = !!(config as any).flashMoe

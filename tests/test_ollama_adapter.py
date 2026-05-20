@@ -20,6 +20,8 @@ def test_ollama_generate_default_uses_chat_template_request_shape():
                 "num_predict": 16,
                 "temperature": 0,
                 "top_p": 1,
+                "top_k": 40,
+                "min_p": 0.02,
                 "repeat_penalty": 1.1,
             },
         }
@@ -33,6 +35,8 @@ def test_ollama_generate_default_uses_chat_template_request_shape():
     assert req["max_tokens"] == 16
     assert req["temperature"] == 0
     assert req["top_p"] == 1
+    assert req["top_k"] == 40
+    assert req["min_p"] == 0.02
     assert req["repetition_penalty"] == 1.1
     assert "enable_thinking" not in req
     assert req["response_format"] == {"type": "json_object"}
@@ -154,7 +158,14 @@ def test_ollama_generate_raw_keeps_completion_request_shape():
             "model": "base",
             "prompt": "raw text",
             "stream": False,
-            "options": {"num_predict": 4, "temperature": 0},
+            "options": {
+                "num_predict": 4,
+                "temperature": 0,
+                "top_p": 0.9,
+                "top_k": 20,
+                "min_p": 0.01,
+                "repeat_penalty": 1.05,
+            },
         }
     )
 
@@ -162,6 +173,10 @@ def test_ollama_generate_raw_keeps_completion_request_shape():
     assert "messages" not in req
     assert req["max_tokens"] == 4
     assert req["temperature"] == 0
+    assert req["top_p"] == 0.9
+    assert req["top_k"] == 20
+    assert req["min_p"] == 0.01
+    assert req["repetition_penalty"] == 1.05
 
 
 def test_chat_response_converts_to_ollama_generate_shape():

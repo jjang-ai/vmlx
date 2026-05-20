@@ -459,6 +459,197 @@ class TestServerSamplingResolution:
         assert "'top_k': 42" in log_text
         assert "'min_p': 0.04" in log_text
 
+    def test_reasoning_effort_preserves_bundle_max_new_tokens(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """reasoning_effort should not inflate model-declared output length.
+
+        The template-facing thinking_budget is the effort control. Length is
+        owned by explicit request max_tokens/max_output_tokens first, then the
+        bundle's generation_config.max_new_tokens.
+        """
+        from fastapi.testclient import TestClient
+
+        import vmlx_engine.server as server
+        from vmlx_engine.engine.base import GenerationOutput
+
+        (tmp_path / "generation_config.json").write_text(
+            json.dumps({"max_new_tokens": 2048})
+        )
+
+        class FakeTokenizer:
+            has_thinking = False
+
+        class FakeEngine:
+            is_mllm = False
+            tokenizer = FakeTokenizer()
+            preserve_native_tool_format = False
+
+        captured: list[dict] = []
+
+        async def fake_await_chat(*args, **kwargs):
+            captured.append(dict(kwargs["chat_kwargs"]))
+            return GenerationOutput(text="ok", prompt_tokens=3, completion_tokens=1)
+
+        monkeypatch.setattr(server, "_engine", FakeEngine())
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "bundle-model")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+        monkeypatch.setattr(server, "_api_key", None, raising=False)
+        monkeypatch.setattr(server, "_default_max_tokens", 32768)
+        monkeypatch.setattr(server, "_default_temperature", None)
+        monkeypatch.setattr(server, "_default_top_p", None)
+        monkeypatch.setattr(server, "_default_top_k", None)
+        monkeypatch.setattr(server, "_default_min_p", None)
+        monkeypatch.setattr(server, "_default_repetition_penalty", None)
+        monkeypatch.setattr(
+            server,
+            "_await_chat_with_disconnect_abort",
+            fake_await_chat,
+        )
+        server._jang_sampling_defaults_cache.clear()
+        server._generation_defaults_cache.clear()
+
+        client = TestClient(server.app)
+
+        chat_resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "bundle-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+                "reasoning_effort": "high",
+            },
+        )
+        responses_resp = client.post(
+            "/v1/responses",
+            json={
+                "model": "bundle-model",
+                "input": "hi",
+                "stream": False,
+                "reasoning_effort": "high",
+            },
+        )
+
+        assert chat_resp.status_code == 200
+        assert responses_resp.status_code == 200
+        assert captured[0]["max_tokens"] == 2048
+        assert captured[1]["max_tokens"] == 2048
+        assert captured[0]["chat_template_kwargs"]["thinking_budget"] == 32768
+        assert captured[1]["chat_template_kwargs"]["thinking_budget"] == 32768
+
+    def test_explicit_server_max_tokens_overrides_bundle_max_new_tokens(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """A real session/CLI max-tokens setting must remain an override.
+
+        Omitted startup max_tokens should let the bundle own the default
+        length, but an explicit session value is a user/operator choice.
+        """
+        import vmlx_engine.server as server
+
+        (tmp_path / "generation_config.json").write_text(
+            json.dumps({"max_new_tokens": 2048})
+        )
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_default_max_tokens", 512)
+        monkeypatch.setattr(server, "_default_max_tokens_explicit", True, raising=False)
+        server._jang_sampling_defaults_cache.clear()
+        server._generation_defaults_cache.clear()
+
+        assert server._resolve_max_tokens(None, "bundle-model") == 512
+
+    def test_omitted_server_max_tokens_uses_bundle_max_new_tokens(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """No session/CLI override means generation_config owns length."""
+        import vmlx_engine.server as server
+
+        (tmp_path / "generation_config.json").write_text(
+            json.dumps({"max_new_tokens": 2048})
+        )
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_default_max_tokens", 32768)
+        monkeypatch.setattr(server, "_default_max_tokens_explicit", False, raising=False)
+        server._jang_sampling_defaults_cache.clear()
+        server._generation_defaults_cache.clear()
+
+        assert server._resolve_max_tokens(None, "bundle-model") == 2048
+
+    def test_max_tokens_resolution_contract_applies_to_every_registered_family(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Every backend family gets the same output-length precedence.
+
+        This prevents family-specific parser/cache work from accidentally
+        bypassing the model-owned length contract:
+        request > explicit startup --max-tokens > bundle max_new_tokens > fallback.
+        """
+        import vmlx_engine.server as server
+        from vmlx_engine.model_config_registry import ModelConfigRegistry
+        from vmlx_engine.model_configs import register_all
+
+        registry = ModelConfigRegistry()
+        register_all(registry)
+        families = [c for c in registry._configs if c.model_types]
+        assert len(families) >= 70
+
+        monkeypatch.setattr(server, "_default_max_tokens", 512)
+        server._jang_sampling_defaults_cache.clear()
+        server._generation_defaults_cache.clear()
+
+        for cfg in families:
+            model_type = cfg.model_types[0]
+            model_dir = tmp_path / model_type
+            model_dir.mkdir()
+            (model_dir / "config.json").write_text(json.dumps({"model_type": model_type}))
+            (model_dir / "generation_config.json").write_text(
+                json.dumps({"max_new_tokens": 2048})
+            )
+
+            monkeypatch.setattr(server, "_model_path", str(model_dir))
+
+            monkeypatch.setattr(
+                server, "_default_max_tokens_explicit", False, raising=False
+            )
+            server._jang_sampling_defaults_cache.clear()
+            server._generation_defaults_cache.clear()
+            assert server._resolve_max_tokens(None, str(model_dir)) == 2048, (
+                cfg.family_name,
+                model_type,
+            )
+            assert server._resolve_max_tokens(77, str(model_dir)) == 77
+
+            monkeypatch.setattr(
+                server, "_default_max_tokens_explicit", True, raising=False
+            )
+            server._jang_sampling_defaults_cache.clear()
+            server._generation_defaults_cache.clear()
+            assert server._resolve_max_tokens(None, str(model_dir)) == 512, (
+                cfg.family_name,
+                model_type,
+            )
+
+    def test_wake_reload_preserves_max_tokens_explicitness(self):
+        """Deep-sleep reload must not turn fallback max_tokens into override."""
+        source = Path("./vmlx_engine/server.py").read_text()
+        wake_block = source[
+            source.index("async def admin_wake"):
+            source.index("@app.get(\"/v1/cache/stats\"")
+        ]
+
+        assert '"max_tokens_explicit": max_tokens_explicit' in source
+        assert 'max_tokens_explicit=_cli_args.get("max_tokens_explicit", False)' in wake_block
+
 
 # ===========================================================================
 # D. Settings & Config
@@ -2659,18 +2850,16 @@ class TestL2IncrementalDelta:
 
 
 class TestL3ReasoningEffort:
-    """reasoning_effort must map to thinking_budget and max_tokens."""
+    """reasoning_effort maps to thinking_budget without rewriting output length."""
 
     def test_effort_constants_defined(self):
         """Server must define effort-to-budget mapping constants."""
-        from vmlx_engine.server import _EFFORT_THINKING_BUDGET, _EFFORT_MAX_TOKENS
+        from vmlx_engine.server import _EFFORT_THINKING_BUDGET
         assert "low" in _EFFORT_THINKING_BUDGET
         assert "medium" in _EFFORT_THINKING_BUDGET
         assert "high" in _EFFORT_THINKING_BUDGET
         assert _EFFORT_THINKING_BUDGET["low"] < _EFFORT_THINKING_BUDGET["medium"]
         assert _EFFORT_THINKING_BUDGET["medium"] < _EFFORT_THINKING_BUDGET["high"]
-        assert "low" in _EFFORT_MAX_TOKENS
-        assert _EFFORT_MAX_TOKENS["low"] < _EFFORT_MAX_TOKENS["high"]
 
     def test_chat_completions_maps_effort(self):
         """Chat Completions must map reasoning_effort to thinking_budget."""
@@ -2693,16 +2882,17 @@ class TestL3ReasoningEffort:
             "Responses API must inject thinking_budget from reasoning_effort"
         )
 
-    def test_effort_sets_max_tokens_when_unset(self):
-        """reasoning_effort must set max_tokens when not explicitly provided."""
+    def test_effort_does_not_synthesize_max_tokens_when_unset(self):
+        """reasoning_effort must not replace model-owned max_new_tokens."""
         import inspect
         from vmlx_engine.server import create_chat_completion
         source = inspect.getsource(create_chat_completion)
-        assert "_EFFORT_MAX_TOKENS" in source, (
-            "Must use _EFFORT_MAX_TOKENS to cap generation"
+        assert "thinking_budget" in source, (
+            "reasoning_effort should still reach chat_template_kwargs"
         )
-        assert "max_tokens is None" in source, (
-            "Must only set max_tokens when user didn't specify it"
+        assert "_EFFORT_MAX_TOKENS" not in source, (
+            "reasoning_effort must not secretly rewrite max_tokens; explicit "
+            "max_tokens/max_output_tokens or bundle generation_config own length"
         )
 
 
@@ -3395,6 +3585,35 @@ class TestStartupCompatibilityGuards:
         assert '"zaya_xml"' in cli_source
         assert '"hunyuan"' in cli_source
 
+    def test_cli_tool_parser_choices_cover_family_registry_parsers(self):
+        """Every parser emitted by model_configs.py must be CLI-selectable.
+
+        The panel resolves family parsers before launching the server. If
+        argparse choices lag behind the model registry, a valid auto-detected
+        session fails at startup before the engine can use that parser.
+        """
+        from vmlx_engine.model_configs import register_all
+        from vmlx_engine.model_config_registry import ModelConfigRegistry
+
+        import vmlx_engine.model_config_registry as mcr
+
+        ModelConfigRegistry._instance = None
+        mcr._configs_loaded = False
+        registry = ModelConfigRegistry()
+        register_all(registry)
+
+        cli_source = Path("./vmlx_engine/cli.py").read_text()
+        missing = sorted(
+            {
+                config.tool_parser
+                for config in registry._configs
+                if config.tool_parser and f'"{config.tool_parser}"' not in cli_source
+            }
+        )
+        assert not missing
+        assert '"gemma3"' in cli_source
+        assert '"gemma3n"' in cli_source
+
     def test_sampler_recreation_invalidates_pending_prefix_hits(self):
         """A sampler change must not leave requests pointing at cleared paged blocks."""
         import inspect
@@ -3548,7 +3767,7 @@ class TestZayaCCACachePolicy:
         assert cfg.think_in_template is False
         assert cfg.supports_thinking is True
 
-    def test_zaya_auto_thinking_stays_unset_but_no_think_prompt_stays_safe(self, tmp_path):
+    def test_zaya_auto_defaults_to_no_think_but_explicit_on_still_works(self, tmp_path):
         from vmlx_engine import server
 
         model_dir = self._write_zaya_fixture(tmp_path)
@@ -3563,10 +3782,19 @@ class TestZayaCCACachePolicy:
                 engine=None,
                 auto_detect=True,
             )
+            explicit_on = server._resolve_enable_thinking(
+                request_value=True,
+                ct_kwargs={},
+                tools_present=False,
+                model_key=str(model_dir),
+                engine=None,
+                auto_detect=True,
+            )
         finally:
             server._default_enable_thinking = old_default
 
-        assert resolved is None
+        assert resolved is False
+        assert explicit_on is True
 
     def test_server_default_false_is_explicit_and_request_off_still_wins(self):
         from vmlx_engine import server

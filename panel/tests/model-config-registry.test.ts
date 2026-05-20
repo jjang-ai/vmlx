@@ -213,6 +213,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.reasoningParser).toBe('qwen3')
     expect(detected.supportsThinking).toBe(true)
     expect(detected.thinkInTemplate).toBe(false)
+    expect(detected.defaultEnableThinking).toBe(false)
   })
 
   it('detects ZAYA1-VL as multimodal CCA hybrid with opt-in qwen3 reasoning parser', () => {
@@ -244,6 +245,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.reasoningParser).toBe('qwen3')
     expect(detected.supportsThinking).toBe(true)
     expect(detected.thinkInTemplate).toBe(false)
+    expect(detected.defaultEnableThinking).toBe(false)
     expect(detected.isMultimodal).toBe(true)
   })
 
@@ -539,6 +541,51 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.toolParser).toBe('hunyuan')
     expect(detected.reasoningParser).toBe('qwen3')
     expect(detected.isTurboQuant).toBe(true)
+  })
+
+  it('detects Gemma 3 tool_code parser without reasoning extraction', () => {
+    const dir = makeModelDir({
+      model_type: 'gemma3',
+      vision_config: { hidden_size: 1024 },
+    })
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('gemma3')
+    expect(detected.toolParser).toBe('gemma3')
+    expect(detected.reasoningParser).toBeUndefined()
+    expect(detected.enableAutoToolChoice).toBe(true)
+    expect(detected.isMultimodal).toBe(true)
+  })
+
+  it('detects Gemma 3n as Gemma tool_code parser without reasoning extraction', () => {
+    const dir = makeModelDir({
+      model_type: 'gemma3n',
+      vision_config: { hidden_size: 1024 },
+      audio_config: { hidden_size: 512 },
+    })
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('gemma3n')
+    expect(detected.toolParser).toBe('gemma3')
+    expect(detected.reasoningParser).toBeUndefined()
+    expect(detected.enableAutoToolChoice).toBe(true)
+    expect(detected.isMultimodal).toBe(true)
+  })
+
+  it('keeps Gemma 3 text bundles text-only with Gemma tool_code parser', () => {
+    const dir = makeModelDir({
+      model_type: 'gemma3_text',
+    })
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('gemma3-text')
+    expect(detected.toolParser).toBe('gemma3')
+    expect(detected.reasoningParser).toBeUndefined()
+    expect(detected.enableAutoToolChoice).toBe(true)
+    expect(detected.isMultimodal).toBe(false)
   })
 
   it('keeps Gemma 4 VLM wrapper multimodal instead of demoting to gemma4-text', () => {
@@ -842,4 +889,44 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
 
     expect(detectModelConfigFromDir(dir).isMultimodal).toBe(false)
   })
+})
+
+describe('detectModelConfigFromDir backend parity coverage', () => {
+  const cases: Array<{
+    modelType: string
+    family: string
+    cacheType: string
+    toolParser?: string
+    reasoningParser?: string
+    isMultimodal?: boolean
+  }> = [
+    { modelType: 'deepseek_v32', family: 'deepseek-v3', cacheType: 'kv', toolParser: 'deepseek', reasoningParser: 'deepseek_r1' },
+    { modelType: 'falcon_h1', family: 'falcon-h1', cacheType: 'hybrid' },
+    { modelType: 'glm_moe_dsa', family: 'glm5', cacheType: 'kv', toolParser: 'deepseek', reasoningParser: 'deepseek_r1' },
+    { modelType: 'got_ocr2', family: 'got-ocr', cacheType: 'kv', isMultimodal: true },
+    { modelType: 'granitemoehybrid', family: 'granitemoehybrid', cacheType: 'hybrid', toolParser: 'granite' },
+    { modelType: 'kimi_k25', family: 'kimi-k25', cacheType: 'kv', toolParser: 'kimi', reasoningParser: 'deepseek_r1', isMultimodal: true },
+    { modelType: 'laguna', family: 'laguna', cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3' },
+    { modelType: 'lfm2', family: 'lfm2', cacheType: 'hybrid' },
+    { modelType: 'lfm2_moe', family: 'lfm2', cacheType: 'hybrid' },
+    { modelType: 'ministral3', family: 'ministral3', cacheType: 'kv', toolParser: 'mistral' },
+    { modelType: 'mistral3', family: 'mistral3', cacheType: 'kv', toolParser: 'mistral', isMultimodal: true },
+    { modelType: 'mistral4', family: 'mistral4', cacheType: 'kv', toolParser: 'mistral', reasoningParser: 'mistral' },
+    { modelType: 'nemotron_h_v2', family: 'nemotron-h', cacheType: 'hybrid', toolParser: 'nemotron', reasoningParser: 'deepseek_r1' },
+    { modelType: 'rwkv7', family: 'rwkv', cacheType: 'mamba' },
+  ]
+
+  for (const row of cases) {
+    it(`detects backend-covered model_type=${row.modelType}`, () => {
+      const dir = makeModelDir({ model_type: row.modelType })
+
+      const detected = detectModelConfigFromDir(dir)
+
+      expect(detected.family).toBe(row.family)
+      expect(detected.cacheType).toBe(row.cacheType)
+      if (row.toolParser !== undefined) expect(detected.toolParser).toBe(row.toolParser)
+      if (row.reasoningParser !== undefined) expect(detected.reasoningParser).toBe(row.reasoningParser)
+      if (row.isMultimodal !== undefined) expect(detected.isMultimodal).toBe(row.isMultimodal)
+    })
+  }
 })

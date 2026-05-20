@@ -224,6 +224,21 @@ export class ApiGateway extends EventEmitter {
   // Request Router
   // ═══════════════════════════════════════════════════════════════
 
+  private isMcpGatewayRoute(url: string): boolean {
+    const path = url.split("?")[0];
+    return (
+      path === "/v1/mcp/tools" ||
+      path === "/v1/mcp/servers" ||
+      path === "/v1/mcp/execute"
+    );
+  }
+
+  private mcpRequiresExplicitModel(modelName?: string): boolean {
+    if (modelName) return false;
+    const localSessions = db.getSessions().filter((s) => s.type !== "remote");
+    return localSessions.length > 1;
+  }
+
   private async handleRequest(
     req: IncomingMessage,
     res: ServerResponse,
@@ -286,6 +301,17 @@ export class ApiGateway extends EventEmitter {
         const params = new URLSearchParams(url.slice(qIdx));
         modelName = params.get("model") || undefined;
       }
+    }
+
+    if (this.isMcpGatewayRoute(url) && this.mcpRequiresExplicitModel(modelName)) {
+      return this.sendJson(res, 400, {
+        error: {
+          message:
+            "MCP gateway requests require a model when multiple local sessions exist. Pass ?model=served-name for /v1/mcp/tools and /v1/mcp/servers, or include model in the /v1/mcp/execute body.",
+          type: "invalid_request_error",
+          code: "model_required",
+        },
+      });
     }
 
     // Cancel requests without model field: broadcast to all running backends.

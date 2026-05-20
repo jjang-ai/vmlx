@@ -95,7 +95,7 @@ export function ToolCallStatus({ statuses, isStreaming }: ToolCallStatusProps) {
   })
 
   // Build summary text
-  const isGenerating = lastStatus.phase === 'generating'
+  const isGenerating = isActive && lastStatus.phase === 'generating'
   const summaryParts: string[] = []
   if (isGenerating) {
     summaryParts.push('Generating tool call...')

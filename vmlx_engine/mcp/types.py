@@ -5,7 +5,7 @@ Type definitions for MCP client support.
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 
 class MCPTransport(str, Enum):
@@ -115,6 +115,60 @@ class MCPConfig:
             max_tool_calls=data.get("max_tool_calls", 10),
             default_timeout=data.get("default_timeout", 30.0),
         )
+
+
+@dataclass
+class MCPPolicy:
+    """Session-level allow/deny policy for effective MCP tools."""
+
+    enabled_servers: Optional[Set[str]] = None
+    disabled_servers: Set[str] = field(default_factory=set)
+    enabled_tools: Optional[Set[str]] = None
+    disabled_tools: Set[str] = field(default_factory=set)
+
+    @staticmethod
+    def _normalize(values: Optional[Any]) -> Optional[Set[str]]:
+        if values is None:
+            return None
+        if isinstance(values, str):
+            raw = values.replace("\n", ",").split(",")
+        else:
+            raw = list(values)
+        normalized = {str(v).strip() for v in raw if str(v).strip()}
+        return normalized
+
+    @classmethod
+    def from_values(
+        cls,
+        *,
+        enabled_servers: Optional[Any] = None,
+        disabled_servers: Optional[Any] = None,
+        enabled_tools: Optional[Any] = None,
+        disabled_tools: Optional[Any] = None,
+    ) -> "MCPPolicy":
+        return cls(
+            enabled_servers=cls._normalize(enabled_servers),
+            disabled_servers=cls._normalize(disabled_servers) or set(),
+            enabled_tools=cls._normalize(enabled_tools),
+            disabled_tools=cls._normalize(disabled_tools) or set(),
+        )
+
+    def server_enabled(self, server_name: str) -> bool:
+        if server_name in self.disabled_servers:
+            return False
+        if self.enabled_servers is not None and server_name not in self.enabled_servers:
+            return False
+        return True
+
+    def tool_enabled(self, full_name: str, server_name: str, tool_name: str) -> bool:
+        if not self.server_enabled(server_name):
+            return False
+        names = {full_name, tool_name}
+        if names & self.disabled_tools:
+            return False
+        if self.enabled_tools is not None and not (names & self.enabled_tools):
+            return False
+        return True
 
 
 @dataclass

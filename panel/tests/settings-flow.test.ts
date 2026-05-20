@@ -8,8 +8,10 @@
  * generation defaults, and embedding model.
  */
 import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { resolveCacheLaunchPolicy } from '../src/shared/cacheControlPolicy'
+import { buildMcpPolicyArgs } from '../src/shared/mcpPolicy'
 
 // ─── SessionConfig replica (from SessionConfigForm.tsx) ──────────────────────
 
@@ -46,6 +48,10 @@ interface SessionConfig {
     streamInterval: number
     maxTokens: number
     mcpConfig: string
+    mcpEnabledServers: string
+    mcpDisabledServers: string
+    mcpEnabledTools: string
+    mcpDisabledTools: string
     enableAutoToolChoice?: boolean
     toolCallParser: string
     reasoningParser: string
@@ -108,8 +114,12 @@ const DEFAULT_CONFIG: SessionConfig = {
     blockDiskCacheMaxGb: 10,
     blockDiskCacheDir: '',
     streamInterval: 1,
-    maxTokens: 32768,
+    maxTokens: 0,
     mcpConfig: '',
+    mcpEnabledServers: '',
+    mcpDisabledServers: '',
+    mcpEnabledTools: '',
+    mcpDisabledTools: '',
     // enableAutoToolChoice intentionally omitted (undefined = auto-detect)
     toolCallParser: 'auto',
     reasoningParser: 'auto',
@@ -151,6 +161,7 @@ type DetectedConfig = {
     forceTextOnly?: boolean
     usePagedCache?: boolean
     enableAutoToolChoice?: boolean
+    defaultEnableThinking?: boolean
     cacheType?: string
     family?: string
     isTurboQuant?: boolean
@@ -295,8 +306,6 @@ function buildCommandPreview(
     if (config.streamInterval && config.streamInterval > 0) parts.push('--stream-interval', config.streamInterval.toString())
     if (config.maxTokens && config.maxTokens > 0) {
         parts.push('--max-tokens', config.maxTokens.toString())
-    } else {
-        parts.push('--max-tokens', '1000000')
     }
     // Pass resolved parsers directly (mirrors buildArgs lines 1139-1150)
     if (effectiveToolParser) {
@@ -308,8 +317,12 @@ function buildCommandPreview(
         parts.push('--enable-auto-tool-choice')
     }
     if (effectiveReasoningParser) parts.push('--reasoning-parser', effectiveReasoningParser)
+    if (detected?.defaultEnableThinking === false) {
+        parts.push('--default-enable-thinking', 'false')
+    }
 
     if (config.mcpConfig) parts.push('--mcp-config', config.mcpConfig)
+    parts.push(...buildMcpPolicyArgs(config))
 
     if (config.servedModelName) parts.push('--served-model-name', config.servedModelName)
 
@@ -868,9 +881,11 @@ describe('Performance & Generation', () => {
         expect(getFlagValue(out, '--max-tokens')).toBe('8192')
     })
 
-    it('uses 1000000 for max tokens when 0 (unlimited)', () => {
+    it('does not synthesize a huge max tokens flag when set to 0 (model/server default)', () => {
         const out = preview({ maxTokens: 0 })
-        expect(getFlagValue(out, '--max-tokens')).toBe('1000000')
+        expect(getFlagValue(out, '--max-tokens')).toBeUndefined()
+        expect(readFileSync(resolve(__dirname, '../src/main/sessions.ts'), 'utf8')).not.toContain("args.push('--max-tokens', '1000000')")
+        expect(readFileSync(resolve(__dirname, '../src/renderer/src/components/sessions/SessionSettings.tsx'), 'utf8')).not.toContain("parts.push('--max-tokens', '1000000')")
     })
 
     it('custom max tokens is not overridden by default', () => {
@@ -890,6 +905,36 @@ describe('Tool Integration', () => {
         expect(getFlagValue(out, '--mcp-config')).toBe('/path/mcp.json')
     })
 
+    it('sets session-level MCP policy flags', () => {
+        const out = preview({
+            mcpConfig: '/path/mcp.json',
+            mcpEnabledServers: 'filesystem,github',
+            mcpDisabledServers: 'browser_automation',
+            mcpEnabledTools: 'filesystem__read_file\ngithub__search_repositories',
+            mcpDisabledTools: 'filesystem__write_file',
+            enableAutoToolChoice: true,
+        })
+
+        expect(getFlagValue(out, '--mcp-enabled-servers')).toBe('filesystem,github')
+        expect(getFlagValue(out, '--mcp-disabled-servers')).toBe('browser_automation')
+        expect(getFlagValue(out, '--mcp-enabled-tools')).toBe('filesystem__read_file,github__search_repositories')
+        expect(getFlagValue(out, '--mcp-disabled-tools')).toBe('filesystem__write_file')
+    })
+
+    it('scrubs inherited MCP policy environment so UI settings own session policy', () => {
+        const source = readFileSync('src/main/sessions.ts', 'utf8')
+
+        for (const key of [
+            'VLLM_MLX_MCP_CONFIG',
+            'VLLM_MLX_MCP_ENABLED_SERVERS',
+            'VLLM_MLX_MCP_DISABLED_SERVERS',
+            'VLLM_MLX_MCP_ENABLED_TOOLS',
+            'VLLM_MLX_MCP_DISABLED_TOOLS',
+        ]) {
+            expect(source).toContain(`delete spawnEnv.${key}`)
+        }
+    })
+
     it('enables auto tool choice', () => {
         const out = preview({ enableAutoToolChoice: true })
         expect(hasFlag(out, '--enable-auto-tool-choice')).toBe(true)
@@ -905,12 +950,44 @@ describe('Tool Integration', () => {
         expect(getFlagValue(out, '--tool-call-parser')).toBe('llama')
     })
 
-    it('tool parser dropdown exposes DSV4 DSML and Hy3 parsers', () => {
+    it('tool parser dropdown exposes DSV4 DSML, Hy3, and ZAYA parsers', () => {
         const formSource = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
         expect(formSource).toContain("value: 'deepseek_v4'")
         expect(formSource).toContain("value: 'hy_v3'")
+        expect(formSource).toContain("value: 'zaya_xml'")
         expect(formSource).toContain('DeepSeek V4')
         expect(formSource).toContain('Hy3')
+        expect(formSource).toContain('ZAYA')
+    })
+
+    it('tool parser dropdown exposes Gemma 3 tool_code parser separately from Hermes', () => {
+        const formSource = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
+        expect(formSource).toContain("value: 'gemma3'")
+        expect(formSource).toContain('Gemma 3 / 3n')
+        expect(formSource).toContain('tool_code')
+        const reasoningTooltip = formSource.slice(
+            formSource.indexOf('label="Reasoning Parser"'),
+            formSource.indexOf('options={REASONING_PARSER_OPTIONS}', formSource.indexOf('label="Reasoning Parser"')),
+        )
+        expect(reasoningTooltip).not.toContain('Gemma 3')
+    })
+
+    it('tool parser dropdown covers every parser the panel registry can emit', () => {
+        const registrySource = readFileSync('src/main/model-config-registry.ts', 'utf8')
+        const formSource = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
+        const emittedParsers = [...registrySource.matchAll(/toolParser: '([^']+)'/g)].map(match => match[1])
+        const uiValues = new Set([...formSource.matchAll(/value: '([^']+)'/g)].map(match => match[1]))
+        const uiAliases: Record<string, string> = {
+            dsml: 'deepseek_v4',
+            hunyuan: 'hy_v3',
+        }
+
+        const missing = [...new Set(emittedParsers)].filter(parser => {
+            const uiValue = uiAliases[parser] || parser
+            return !uiValues.has(uiValue)
+        })
+
+        expect(missing).toEqual([])
     })
 
     it('manual tool parser takes priority over detected', () => {
@@ -1193,7 +1270,7 @@ describe('Generation Defaults', () => {
         expect(source).toContain('migration_reset_stale_sampling_overrides_1_5_37')
         expect(source).toContain('temperature = CASE')
         expect(source).toContain('top_k = CASE WHEN top_k = 40 THEN NULL ELSE top_k END')
-        expect(source).toContain('max_tokens IN (4096, 12000, 12068)')
+        expect(source).toContain('max_tokens IN (4096, 12000, 12068, 32768)')
         expect(source).toContain('migration_clear_model_settings_sampling_1_5_37')
         expect(source).toContain("reasoning_mode = 'auto'")
     })
@@ -1219,10 +1296,23 @@ describe('Generation Defaults', () => {
         expect(source).not.toContain('max_tokens')
     })
 
-    it('never emits server default thinking override from session startup', () => {
+    it('never emits user-saved server default thinking override from session startup', () => {
         expect(hasFlag(preview({ defaultEnableThinking: undefined }), '--default-enable-thinking')).toBe(false)
         expect(hasFlag(preview({ defaultEnableThinking: true }), '--default-enable-thinking')).toBe(false)
         expect(hasFlag(preview({ defaultEnableThinking: false }), '--default-enable-thinking')).toBe(false)
+    })
+
+    it('emits detected family default thinking override when the model contract requires it', () => {
+        const out = preview({}, {
+            family: 'zaya',
+            toolParser: 'zaya_xml',
+            reasoningParser: 'qwen3',
+            defaultEnableThinking: false,
+            enableAutoToolChoice: true,
+            cacheType: 'hybrid',
+            usePagedCache: true,
+        })
+        expect(getFlagValue(out, '--default-enable-thinking')).toBe('false')
     })
 })
 
@@ -1246,8 +1336,8 @@ describe('Additional Arguments', () => {
 
     it('omits additional args when empty', () => {
         const out = preview({ additionalArgs: '' })
-        // Count total parts — shouldn't have trailing empty content
-        expect(out.trim().endsWith('--max-tokens') || out.includes('--max-tokens')).toBe(true)
+        expect(out.trim()).toBe(out)
+        expect(out).not.toContain('undefined')
     })
 })
 
@@ -1529,21 +1619,22 @@ describe('Default IP and New Settings', () => {
         expect(block).toContain("config.kvCacheQuantization === 'none'")
     })
 
-    it('ZAYA sessions keep the qwen3 reasoning parser without startup thinking defaults', () => {
+    it('ZAYA sessions keep the qwen3 reasoning parser and model-owned no-thinking default', () => {
         const source = readFileSync('src/main/sessions.ts', 'utf8')
         expect(source).toContain('function isZayaCcaFamily')
         expect(source).toContain('if (isZayaCcaFamily(freshFamily))')
         expect(source).toContain("config.reasoningParser = freshConfig.reasoningParser || 'auto'")
         expect(source).toContain('delete config.defaultEnableThinking')
+        expect(source).toContain("args.push('--default-enable-thinking', 'false')")
         expect(source).not.toContain('ZAYA default thinking reset from stale on to off')
 
         const out = preview(
             { defaultEnableThinking: true },
-            { family: 'zaya', cacheType: 'hybrid', usePagedCache: true, reasoningParser: 'qwen3' }
+            { family: 'zaya', cacheType: 'hybrid', usePagedCache: true, reasoningParser: 'qwen3', defaultEnableThinking: false }
         )
         expect(hasFlag(out, '--reasoning-parser')).toBe(true)
         expect(getFlagValue(out, '--reasoning-parser')).toBe('qwen3')
-        expect(hasFlag(out, '--default-enable-thinking')).toBe(false)
+        expect(getFlagValue(out, '--default-enable-thinking')).toBe('false')
     })
 
     it('logLevel INFO (default) does not emit --log-level flag', () => {
@@ -1582,6 +1673,7 @@ describe('Default IP and New Settings', () => {
         expect(DEFAULT_CONFIG.defaultTopK).toBe(0)
         expect(DEFAULT_CONFIG.defaultMinP).toBe(0)
         expect(DEFAULT_CONFIG.defaultRepetitionPenalty).toBe(0)
+        expect(DEFAULT_CONFIG.maxTokens).toBe(0)
         expect(DEFAULT_CONFIG.omniBackend).toBe('stage1')
     })
 
@@ -2180,7 +2272,8 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         'enableDiskCache', 'diskCacheMaxGb', 'diskCacheDir',
         'enableBlockDiskCache', 'blockDiskCacheMaxGb', 'blockDiskCacheDir',
         'streamInterval', 'maxTokens',
-        'mcpConfig', 'enableAutoToolChoice', 'toolCallParser', 'reasoningParser',
+        'mcpConfig', 'mcpEnabledServers', 'mcpDisabledServers', 'mcpEnabledTools', 'mcpDisabledTools',
+        'enableAutoToolChoice', 'toolCallParser', 'reasoningParser',
         'isMultimodal', 'servedModelName',
         'speculativeModel', 'numDraftTokens',
         'smelt', 'smeltExperts', 'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
@@ -2231,7 +2324,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized).toContain('--host')
         expect(normalized).toContain('--port')
         expect(normalized).toContain('--timeout')
-        expect(normalized).toContain('--max-tokens')
+        expect(normalized).not.toContain('--max-tokens')
         expect(normalized).toContain('--continuous-batching')
         expect(normalized).toContain('--use-paged-cache')
         expect(normalized).toContain('--enable-block-disk-cache')

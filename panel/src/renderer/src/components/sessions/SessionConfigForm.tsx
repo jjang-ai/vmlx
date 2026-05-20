@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { Modal } from '../ui/Modal'
 import { DistributedNodeList } from './DistributedNodeList'
 import { useTranslation } from '../../i18n'
@@ -9,6 +9,7 @@ import {
   resolveCacheControlPolicy,
   type CacheControlUpdate,
 } from '../../../../shared/cacheControlPolicy'
+import { normalizeMcpPolicyList } from '../../../../shared/mcpPolicy'
 export interface SessionConfig {
   host: string
   port: number
@@ -46,6 +47,10 @@ export interface SessionConfig {
   streamInterval: number
   maxTokens: number
   mcpConfig: string
+  mcpEnabledServers: string
+  mcpDisabledServers: string
+  mcpEnabledTools: string
+  mcpDisabledTools: string
   enableAutoToolChoice?: boolean
   toolCallParser: string
   reasoningParser: string
@@ -127,8 +132,12 @@ export const DEFAULT_CONFIG: SessionConfig = {
   blockDiskCacheMaxGb: 10,
   blockDiskCacheDir: '',
   streamInterval: 1,
-  maxTokens: 32768,
+  maxTokens: 0,
   mcpConfig: '',
+  mcpEnabledServers: '',
+  mcpDisabledServers: '',
+  mcpEnabledTools: '',
+  mcpDisabledTools: '',
   // enableAutoToolChoice intentionally omitted (undefined = auto-detect from model config).
   // false blocks auto-detection because ?? doesn't fall through on false.
   toolCallParser: 'auto',
@@ -204,6 +213,27 @@ export const CASUAL_CONFIG: SessionConfig = {
   enableJit: true,            // JIT on by default (includes warmup for cold-start OOM prevention)
 }
 
+interface LiveMcpServer {
+  name: string
+  state?: string
+  transport?: string
+  tools_count?: number
+  enabled?: boolean
+  configured?: boolean
+  error?: string | null
+}
+
+interface LiveMcpTool {
+  name: string
+  description?: string
+  server?: string
+  effective?: boolean
+  enabled?: boolean
+  transport?: string
+  server_state?: string
+  error?: string | null
+}
+
 interface SessionConfigFormProps {
   config: SessionConfig
   onChange: <K extends keyof SessionConfig>(key: K, value: SessionConfig[K]) => void
@@ -256,6 +286,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   })
 
   const [showCachingHelp, setShowCachingHelp] = useState(false)
+  const [mcpStatus, setMcpStatus] = useState<{ servers: LiveMcpServer[]; tools: LiveMcpTool[]; error?: string } | null>(null)
+  const [mcpStatusLoading, setMcpStatusLoading] = useState(false)
+  const [mcpValidation, setMcpValidation] = useState<{ servers: any[]; serverCount?: number; error?: string } | null>(null)
+  const [mcpValidationLoading, setMcpValidationLoading] = useState(false)
 
   const normalizedDetectedFamily = normalizeDetectedFamilyName(detectedFamily)
   const dsv4Active = normalizedDetectedFamily === 'deepseek-v4'
@@ -322,6 +356,97 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
   const applyCacheControlUpdates = (updates: CacheControlUpdate[]) => {
     updates.forEach(([key, value]) => onChange(key, value))
+  }
+
+  const browseMcpConfig = async () => {
+    const result = await window.api.sessions.browseMcpConfig()
+    if (!result?.canceled && result.filePath) {
+      onChange('mcpConfig', result.filePath)
+      validateMcpConfig(result.filePath)
+    }
+  }
+
+  const validateMcpConfig = async (path = config.mcpConfig) => {
+    if (!path?.trim()) {
+      setMcpValidation({ servers: [], error: 'MCP config path is empty' })
+      return
+    }
+    setMcpValidationLoading(true)
+    try {
+      const result = await window.api.sessions.validateMcpConfig(path)
+      if (result?.success) {
+        setMcpValidation({
+          servers: Array.isArray(result.servers) ? result.servers : [],
+          serverCount: result.serverCount,
+        })
+      } else {
+        setMcpValidation({ servers: [], error: result?.error || 'MCP config validation failed' })
+      }
+    } catch (error) {
+      setMcpValidation({ servers: [], error: (error as Error).message })
+    } finally {
+      setMcpValidationLoading(false)
+    }
+  }
+
+  const refreshMcpStatus = async () => {
+    if (!sessionId) return
+    setMcpStatusLoading(true)
+    try {
+      const result = await window.api.sessions.mcpStatus(sessionId)
+      if (result?.success) {
+        setMcpStatus({
+          servers: Array.isArray(result.servers) ? result.servers : [],
+          tools: Array.isArray(result.tools) ? result.tools : [],
+        })
+      } else {
+        setMcpStatus({ servers: [], tools: [], error: result?.error || 'MCP status unavailable' })
+      }
+    } catch (error) {
+      setMcpStatus({ servers: [], tools: [], error: (error as Error).message })
+    } finally {
+      setMcpStatusLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (expandedSections.tools && sessionId) {
+      refreshMcpStatus()
+    }
+  }, [expandedSections.tools, sessionId])
+
+  const joinPolicyList = (values: Iterable<string>) => Array.from(values).sort().join('\n')
+  const policyServers = normalizeMcpPolicyList(config.mcpEnabledServers)
+  const policyDisabledServers = normalizeMcpPolicyList(config.mcpDisabledServers)
+  const policyEnabledTools = normalizeMcpPolicyList(config.mcpEnabledTools)
+  const policyDisabledTools = normalizeMcpPolicyList(config.mcpDisabledTools)
+
+  const toggleMcpServer = (serverName: string, enabled: boolean) => {
+    const allowed = new Set(policyServers)
+    const denied = new Set(policyDisabledServers)
+    if (enabled) {
+      denied.delete(serverName)
+      if (allowed.size) allowed.add(serverName)
+    } else {
+      denied.add(serverName)
+      allowed.delete(serverName)
+    }
+    onChange('mcpEnabledServers', joinPolicyList(allowed))
+    onChange('mcpDisabledServers', joinPolicyList(denied))
+  }
+
+  const toggleMcpTool = (toolName: string, enabled: boolean) => {
+    const allowed = new Set(policyEnabledTools)
+    const denied = new Set(policyDisabledTools)
+    if (enabled) {
+      denied.delete(toolName)
+      if (allowed.size) allowed.add(toolName)
+    } else {
+      denied.add(toolName)
+      allowed.delete(toolName)
+    }
+    onChange('mcpEnabledTools', joinPolicyList(allowed))
+    onChange('mcpDisabledTools', joinPolicyList(denied))
   }
 
   return (
@@ -994,8 +1119,91 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
       <Section title={t('sessions.config.toolIntegrationMCP')} expanded={expandedSections.tools} onToggle={() => toggleSection('tools')} hidden={isImage}>
         <PerformanceHint text="Lets the model call external tools (web search, code execution, etc.) during conversations. Requires a model that supports tool calling." />
         <Field label="MCP Config File" tooltip="Path to a JSON config file defining MCP (Model Context Protocol) tool servers. When configured, the model can call external tools during generation. The config file defines tool server endpoints, authentication, and available capabilities.">
-          <input type="text" value={config.mcpConfig} onChange={e => onChange('mcpConfig', e.target.value)} placeholder={t('sessions.config.mcpConfigPlaceholder')} className="cfg-input" />
+          <div className="flex gap-2">
+            <input type="text" value={config.mcpConfig} onChange={e => onChange('mcpConfig', e.target.value)} placeholder={t('sessions.config.mcpConfigPlaceholder')} className="cfg-input flex-1" />
+            <button type="button" onClick={browseMcpConfig} className="px-3 py-1.5 rounded border border-border text-sm hover:bg-accent">Browse</button>
+            <button type="button" onClick={() => validateMcpConfig()} className="px-3 py-1.5 rounded border border-border text-sm hover:bg-accent" disabled={mcpValidationLoading}>
+              {mcpValidationLoading ? 'Validating' : 'Validate'}
+            </button>
+          </div>
         </Field>
+        {mcpValidation && (
+          <div className="rounded border border-border/60 bg-background/60 px-2 py-1.5 text-xs">
+            {mcpValidation.error ? (
+              <span className="text-destructive">{mcpValidation.error}</span>
+            ) : (
+              <div className="space-y-1">
+                <div className="text-muted-foreground">{mcpValidation.serverCount ?? mcpValidation.servers.length} configured MCP servers</div>
+                {mcpValidation.servers.slice(0, 4).map(server => (
+                  <div key={server.name} className="flex items-center justify-between gap-2">
+                    <span className="font-medium">{server.name}</span>
+                    <span className="text-muted-foreground">{server.transport || 'mcp'} · {server.enabled === false ? 'disabled' : 'enabled'}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        <Field label="Enabled MCP Servers" tooltip="Comma or newline separated server names from mcp.json. Empty means every configured server is eligible for this session.">
+          <textarea value={config.mcpEnabledServers} onChange={e => onChange('mcpEnabledServers', e.target.value)} placeholder="filesystem,github" className="cfg-input" rows={2} />
+        </Field>
+        <Field label="Disabled MCP Servers" tooltip="Comma or newline separated server names to block even when they are present in mcp.json.">
+          <textarea value={config.mcpDisabledServers} onChange={e => onChange('mcpDisabledServers', e.target.value)} placeholder="browser_automation&#10;postgres_readonly" className="cfg-input" rows={2} />
+        </Field>
+        <Field label="Enabled MCP Tools" tooltip="Comma or newline separated MCP tool names, usually server__tool. Empty means every server-eligible tool is eligible unless denied below.">
+          <textarea value={config.mcpEnabledTools} onChange={e => onChange('mcpEnabledTools', e.target.value)} placeholder="filesystem__read_file&#10;github__search_repositories" className="cfg-input" rows={3} />
+        </Field>
+        <Field label="Disabled MCP Tools" tooltip="Comma or newline separated MCP tool names to block even if the model asks for them.">
+          <textarea value={config.mcpDisabledTools} onChange={e => onChange('mcpDisabledTools', e.target.value)} placeholder="filesystem__write_file" className="cfg-input" rows={2} />
+        </Field>
+        {sessionId && (
+          <div className="rounded border border-border bg-background/60 p-2 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-muted-foreground">Live MCP Status</span>
+              <button type="button" onClick={refreshMcpStatus} className="text-xs px-2 py-1 rounded border border-border hover:bg-accent" disabled={mcpStatusLoading}>
+                {mcpStatusLoading ? 'Refreshing' : 'Refresh'}
+              </button>
+            </div>
+            {mcpStatus?.error && (
+              <div className="text-xs text-destructive">{mcpStatus.error}</div>
+            )}
+            {(mcpStatus?.servers?.length || 0) > 0 && (
+              <div className="space-y-1">
+                <div className="text-[11px] text-muted-foreground">Servers</div>
+                {(mcpStatus?.servers || []).map(server => {
+                  const allowListActive = policyServers.length > 0
+                  const checked = !policyDisabledServers.includes(server.name) && (allowListActive ? policyServers.includes(server.name) : server.enabled !== false)
+                  return (
+                    <label key={server.name} className="flex items-center justify-between gap-2 rounded border border-border/60 px-2 py-1 text-xs">
+                      <span className="min-w-0">
+                        <span className="font-medium">{server.name}</span>
+                        <span className="ml-2 text-muted-foreground">{server.transport || 'mcp'} · {server.state || 'unknown'} · {server.tools_count ?? 0} tools</span>
+                      </span>
+                      <input type="checkbox" checked={checked} onChange={e => toggleMcpServer(server.name, e.target.checked)} />
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+            {(mcpStatus?.tools?.length || 0) > 0 && (
+              <div className="space-y-1">
+                <div className="text-[11px] text-muted-foreground">Tools</div>
+                {(mcpStatus?.tools || []).map(tool => (
+                  <label key={tool.name} className="grid grid-cols-[1fr_auto] gap-2 rounded border border-border/60 px-2 py-1 text-xs">
+                    <span className="min-w-0">
+                      <span className="font-medium break-all">{tool.name}</span>
+                      <span className={`ml-2 ${tool.effective ? 'text-primary' : 'text-muted-foreground'}`}>
+                        {tool.effective ? 'effective' : 'blocked'}
+                      </span>
+                      {tool.description && <span className="block truncate text-muted-foreground">{tool.description}</span>}
+                    </span>
+                    <input type="checkbox" checked={tool.effective !== false && !policyDisabledTools.includes(tool.name)} onChange={e => toggleMcpTool(tool.name, e.target.checked)} />
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         <CheckField label="Enable Auto Tool Choice" tooltip="When enabled, the model automatically decides when to call tools based on the conversation context. Requires a model that supports tool calling (Qwen, Llama 3+, Mistral, Gemma 3, Phi-4, Hermes, DeepSeek, GLM, Granite, Kimi, xLAM, Functionary, MiniMax, StepFun). The model will format tool calls according to the selected parser. Leave unchecked for auto-detection (recommended)." checked={config.enableAutoToolChoice ?? false} onChange={v => onChange('enableAutoToolChoice', v || undefined)} />
         {config.enableAutoToolChoice === undefined && (
           <InfoNote text="Auto-detect: most models enable this automatically when a tool parser is detected." />
@@ -1009,7 +1217,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         />
         <ParserField
           label="Reasoning Parser"
-          tooltip="Separates reasoning/thinking from final content. Use Auto-detect unless it picks wrong. Qwen3: Qwen, QwQ, MiniMax, StepFun (strict <think> tags). DeepSeek R1: DeepSeek-R1, Gemma 3, GLM-4.7, Phi-4, Nemotron (lenient <think> tags). GPT-OSS: GLM-4.7 Flash (Harmony protocol). Mistral 4: Mistral Small/Large 4 ([THINK] tags). Click '?' for full model list."
+          tooltip="Separates reasoning/thinking from final content. Use Auto-detect unless it picks wrong. Qwen3: Qwen, QwQ, MiniMax, StepFun (strict <think> tags). DeepSeek R1: DeepSeek-R1, GLM-4.7, Phi-4, Nemotron (lenient <think> tags). GPT-OSS: GLM-4.7 Flash (Harmony protocol). Mistral 4: Mistral Small/Large 4 ([THINK] tags). Click '?' for full model list."
           value={config.reasoningParser}
           onChange={v => onChange('reasoningParser', v)}
           options={REASONING_PARSER_OPTIONS}
@@ -1370,15 +1578,23 @@ const TOOL_PARSER_OPTIONS: ParserOption[] = [
     ]
   },
   {
-    value: 'hermes', label: 'Hermes — Gemma 3 / Phi-4 / Hermes fine-tunes', format: '<tool_call>{"name":"fn","arguments":{...}}</tool_call>', models: [
-      'Gemma 3 (1B/4B/12B/27B)', 'Gemma 3n (E2B/E4B)', 'Phi-4 Mini (3.8B)', 'Phi-4 Medium (14B)',
+    value: 'hermes', label: 'Hermes — Phi-4 / Hermes fine-tunes', format: '<tool_call>{"name":"fn","arguments":{...}}</tool_call>', models: [
+      'Phi-4 Mini (3.8B)', 'Phi-4 Medium (14B)',
       'Phi-4 Reasoning (14B)', 'Hermes 2 / 3 / 4', 'Any Hermes-format fine-tune',
     ]
   },
   {
-    value: 'deepseek', label: 'DeepSeek — V2/V2.5/V3/R1 (native arch only)', format: '\u{ff5c}<tool_call>name\n{"arg":"val"}</tool_call>\u{ff5c}', models: [
+    value: 'gemma3', label: 'Gemma 3 / 3n — Google tool_code', format: '```tool_code\nfn(arg="val")\n```', models: [
+      'Gemma 3 (1B/4B/12B/27B)',
+      'Gemma 3n (E2B/E4B)',
+      'Use this for model_type=gemma3/gemma3n; do not use Hermes for Google tool_code bundles',
+    ]
+  },
+  {
+    value: 'deepseek', label: 'DeepSeek / GLM5 / Ling — DeepSeek-style tools', format: '\u{ff5c}<tool_call>name\n{"arg":"val"}</tool_call>\u{ff5c}', models: [
       'DeepSeek-V3 (671B MoE)', 'DeepSeek-V2.5 (236B MoE)', 'DeepSeek-V2 (236B MoE)',
       'DeepSeek-R1 (671B native)', 'DeepSeek-Coder-V2 (236B)',
+      'GLM-5.1 / GLM MoE DSA', 'Ling / Bailing hybrid',
       '\u26A0 R1-Distill-Qwen/Llama use qwen/llama parsers',
     ]
   },
@@ -1392,6 +1608,12 @@ const TOOL_PARSER_OPTIONS: ParserOption[] = [
     value: 'hy_v3', label: 'Hy3 / Hunyuan — Tencent XML tools', format: '<tool_calls><tool_call>fn<tool_sep><arg_key>arg</arg_key><arg_value>val</arg_value></tool_call></tool_calls>', models: [
       'Hy3-preview / Hunyuan model_type=hy_v3 bundles',
       'Hunyuan/Tencent XML tool-call contract',
+    ]
+  },
+  {
+    value: 'zaya_xml', label: 'ZAYA / Zyphra — XML tools', format: '<function=fn>{"arg":"val"}</function>', models: [
+      'ZAYA1 / ZAYA1-VL JANGTQ and MXFP bundles',
+      'Zyphra XML tool-call contract',
     ]
   },
   {
@@ -1427,8 +1649,8 @@ const TOOL_PARSER_OPTIONS: ParserOption[] = [
     ]
   },
   {
-    value: 'kimi', label: 'Kimi — Kimi-K2 / Moonshot', format: '<|tool_calls_section_begin|><|tool_call_begin|>fn<|tool_call_argument_begin|>{...}<|tool_call_end|>', models: [
-      'Kimi-K2 (1T MoE)', 'Kimi-K2.5', 'Moonshot-v1',
+    value: 'kimi', label: 'Kimi — Kimi-K2/K2.5/K2.6 / Moonshot', format: '<|tool_calls_section_begin|><|tool_call_begin|>fn<|tool_call_argument_begin|>{...}<|tool_call_end|>', models: [
+      'Kimi-K2 (1T MoE)', 'Kimi-K2.5 / kimi_k25', 'Kimi-K2.6 VL', 'Moonshot-v1',
     ]
   },
   {
@@ -1459,7 +1681,6 @@ const REASONING_PARSER_OPTIONS: ParserOption[] = [
   {
     value: 'deepseek_r1', label: 'DeepSeek R1 — DeepSeek / Gemma / GLM / Phi / Nemotron', format: '<think>...reasoning...</think>content  (lenient: handles missing <think>)', models: [
       'DeepSeek-R1 (671B native)', 'DeepSeek-R1-0528',
-      'Gemma 3 (1B/4B/12B/27B, thinking mode)',
       'GLM-4.7 (9B) \u2014 NOT GLM-4.7 Flash', 'GLM-Z1 (32B)',
       'Phi-4 Reasoning / Reasoning Plus (14B)',
       'Nemotron (hybrid Mamba+attention)',

@@ -65,6 +65,10 @@ export interface ServerConfig {
 
   // Tool integration
   mcpConfig?: string
+  mcpEnabledServers?: string
+  mcpDisabledServers?: string
+  mcpEnabledTools?: string
+  mcpDisabledTools?: string
   enableAutoToolChoice?: boolean
   toolCallParser?: string
 

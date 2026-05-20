@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "qwen_smoke": {
+      "transport": "stdio",
+      "command": ".venv/bin/python",
+      "args": ["tests/fixtures/mcp_smoke_server.py"],
+      "enabled": true,
+      "timeout": 10
+    }
+  },
+  "max_tool_calls": 4,
+  "default_timeout": 10
+}

@@ -782,7 +782,7 @@ class DatabaseManager {
 	             WHERE ABS(COALESCE(temperature, -999) - 0.7) < 0.000001
 	                OR ABS(COALESCE(top_p, -999) - 0.95) < 0.000001
 	                OR top_k = 40
-	                OR max_tokens IN (4096, 12000, 12068)`,
+	                OR max_tokens IN (4096, 12000, 12068, 32768)`,
           )
           .get() as { cnt: number };
         if (affectedSamplingOverrides.cnt > 0) {
@@ -799,7 +799,7 @@ class DatabaseManager {
               END,
 	              top_k = CASE WHEN top_k = 40 THEN NULL ELSE top_k END,
 	              max_tokens = CASE
-	                WHEN max_tokens IN (4096, 12000, 12068) THEN NULL
+	                WHEN max_tokens IN (4096, 12000, 12068, 32768) THEN NULL
 	                ELSE max_tokens
 	              END
           `);

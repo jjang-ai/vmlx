@@ -848,6 +848,72 @@ class TestFallbackToolPromptFormat:
         assert "fake directory listing" in rendered
         assert "tools" not in tokenizer.last_kwargs
 
+    def test_zaya_fallback_injects_native_example_for_each_tool(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            last_kwargs = None
+
+            def apply_chat_template(self, messages, **kwargs):
+                self.last_kwargs = kwargs
+                return "\n".join(m.get("content", "") for m in messages)
+
+        prompt = (
+            "<|system|>\n# Tools\n<tools>\n"
+            '{"type":"function","function":{"name":"list_directory"}}\n'
+            '{"type":"function","function":{"name":"write_file"}}\n'
+            "</tools>\n"
+            "<zyphra_tool_call>\n"
+            "<function=example_function_name>\n"
+            "<parameter=example_parameter_1>\nvalue_1\n</parameter>\n"
+            "</function>\n</zyphra_tool_call>\n"
+            "<|user|>\nUse list_directory then write_file\n<|assistant|>\n"
+        )
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_directory",
+                    "description": "List files",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "write_file",
+                    "description": "Write a file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "content": {"type": "string"},
+                        },
+                        "required": ["path", "content"],
+                    },
+                },
+            },
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            prompt,
+            [{"role": "user", "content": "Use list_directory then write_file"}],
+            tools,
+            FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="zaya_xml",
+        )
+
+        assert "<function=list_directory>" in rendered
+        assert "<function=write_file>" in rendered
+        assert "<parameter=path>" in rendered
+        assert "<parameter=content>" in rendered
+        assert rendered.count("<zyphra_tool_call>") >= 2
+
     def test_zaya_parser_id_forces_native_tool_example_for_plain_template(self):
         from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
 

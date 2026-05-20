@@ -1,7 +1,45 @@
-import { ipcMain, BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow, dialog } from 'electron'
+import { readFileSync } from 'fs'
 import { sessionManager } from '../sessions'
 import type { ServerConfig } from '../server'
 import { abortByEndpoint } from './chat'
+import { validateMcpConfigText } from '../../shared/mcpConfigValidation'
+
+function connectHost(host: string): string {
+  return host === '0.0.0.0' ? '127.0.0.1' : host
+}
+
+function sessionAuthHeaders(config: Partial<ServerConfig>): Record<string, string> {
+  const key = String(config.apiKey || '').trim()
+  return key ? { Authorization: `Bearer ${key}` } : {}
+}
+
+async function fetchSessionJson(sessionId: string, path: string): Promise<any> {
+  const session = sessionManager.getSession(sessionId)
+  if (!session) throw new Error(`Session ${sessionId} not found`)
+  let config: Partial<ServerConfig> = {}
+  try {
+    config = JSON.parse(session.config || '{}')
+  } catch {
+    config = {}
+  }
+  const url = `http://${connectHost(session.host)}:${session.port}${path}`
+  const response = await fetch(url, {
+    headers: sessionAuthHeaders(config),
+    signal: AbortSignal.timeout(5000),
+  })
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(`${path} failed with ${response.status}${text ? `: ${text.slice(0, 200)}` : ''}`)
+  }
+  return response.json()
+}
+
+function validateMcpConfigFile(filePath: string): any {
+  if (!filePath || !filePath.trim()) throw new Error('MCP config path is empty')
+  const raw = readFileSync(filePath, 'utf8')
+  return validateMcpConfigText(raw, filePath)
+}
 
 const SESSION_EVENTS = [
   'session:created',
@@ -121,6 +159,29 @@ export function registerSessionHandlers(getWindow: () => BrowserWindow | null): 
       return { success: true }
     })
 
+    ipcMain.handle('sessions:browseMcpConfig', async () => {
+      const result = await dialog.showOpenDialog({
+        title: 'Select mcp.json',
+        properties: ['openFile'],
+        filters: [
+          { name: 'MCP config', extensions: ['json', 'jsonc', 'yaml', 'yml'] },
+          { name: 'All files', extensions: ['*'] },
+        ],
+      })
+      return {
+        canceled: result.canceled || result.filePaths.length === 0,
+        filePath: result.filePaths[0],
+      }
+    })
+
+    ipcMain.handle('sessions:validateMcpConfig', async (_, filePath: string) => {
+      try {
+        return validateMcpConfigFile(filePath)
+      } catch (error) {
+        return { success: false, error: (error as Error).message, servers: [] }
+      }
+    })
+
     ipcMain.handle('sessions:softSleep', async (_, sessionId: string) => {
       try {
         return await sessionManager.softSleep(sessionId)
@@ -148,6 +209,23 @@ export function registerSessionHandlers(getWindow: () => BrowserWindow | null): 
     ipcMain.handle('sessions:touch', async (_, sessionId: string) => {
       sessionManager.touchSession(sessionId)
       return { success: true }
+    })
+
+    ipcMain.handle('sessions:mcpStatus', async (_, sessionId: string) => {
+      try {
+        const [tools, servers] = await Promise.all([
+          fetchSessionJson(sessionId, '/v1/mcp/tools'),
+          fetchSessionJson(sessionId, '/v1/mcp/servers'),
+        ])
+        return {
+          success: true,
+          tools: Array.isArray(tools?.tools) ? tools.tools : [],
+          servers: Array.isArray(servers?.servers) ? servers.servers : [],
+          count: typeof tools?.count === 'number' ? tools.count : 0,
+        }
+      } catch (error) {
+        return { success: false, error: (error as Error).message, tools: [], servers: [] }
+      }
     })
 
     handlersRegistered = true

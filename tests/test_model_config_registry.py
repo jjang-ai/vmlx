@@ -494,6 +494,7 @@ class TestModelConfigRegistry:
         assert result.reasoning_parser == "qwen3"
         assert result.supports_thinking is True
         assert result.think_in_template is False
+        assert result.architecture_hints.get("default_enable_thinking") is False
 
     def test_zaya1_vl_vision_config_beats_stale_text_modality_stamp(
         self, empty_registry, tmp_path
@@ -1701,6 +1702,7 @@ class TestModelConfigComprehensiveChecks:
         assert config.reasoning_parser == "qwen3"
         assert config.supports_thinking is True
         assert config.think_in_template is False
+        assert config.architecture_hints.get("default_enable_thinking") is False
 
     def test_ling_is_not_a_reasoning_model_per_eric_2026_05_11(self, registry):
         """REGRESSION (2026-05-11): Eric directive — Ling is NOT a reasoning model.

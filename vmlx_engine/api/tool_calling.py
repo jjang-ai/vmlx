@@ -109,6 +109,43 @@ def check_and_inject_fallback_tools(
             "parameters": func.get("parameters", {})
         })
 
+    def _tool_props(tool: dict) -> tuple[str, list[str]]:
+        func = tool.get("function", {}) if isinstance(tool, dict) else {}
+        name = func.get("name", "") or "unknown_tool"
+        params = func.get("parameters", {}) or {}
+        props = params.get("properties", {}) if isinstance(params, dict) else {}
+        return name, [p for p in props if p]
+
+    def _render_dsml_examples(tools: list[dict]) -> str:
+        blocks: list[str] = []
+        for tool in tools:
+            name, props = _tool_props(tool)
+            params = props or ["arg1"]
+            lines = [f'<｜DSML｜invoke name="{name}">']
+            for param in params:
+                lines.append(
+                    f'  <｜DSML｜parameter name="{param}" string="true">VALUE HERE</｜DSML｜parameter>'
+                )
+            lines.append("</｜DSML｜invoke>")
+            blocks.append("\n".join(lines))
+        return "\n\n".join(blocks)
+
+    def _render_xml_examples(
+        tools: list[dict],
+        wrapper_open: str,
+        wrapper_close: str,
+    ) -> str:
+        blocks: list[str] = []
+        for tool in tools:
+            name, props = _tool_props(tool)
+            params = props or ["arg1"]
+            lines = [wrapper_open, f"<function={name}>"]
+            for param in params:
+                lines.extend([f"<parameter={param}>", "VALUE HERE", "</parameter>"])
+            lines.extend(["</function>", wrapper_close])
+            blocks.append("\n".join(lines))
+        return "\n\n".join(blocks)
+
     # DSV4's native parser is DSML, not generic <tool_call> JSON. Its shipped
     # templates currently do not render tool schemas, so this fallback is the
     # only place the model sees tool instructions on OpenAI/Responses tool
@@ -119,13 +156,9 @@ def check_and_inject_fallback_tools(
             "You have access to these tools. Call them using DSML format.",
             "",
         ]
-        first_name = "FUNCTION_NAME"
-        first_param = "arg1"
         for idx, tool in enumerate(template_tools):
             func = tool.get("function", {})
             name = func.get("name", "") or "unknown_tool"
-            if idx == 0:
-                first_name = name
             dsv4_lines.append(f"Tool: {name}")
             desc = func.get("description", "")
             if desc:
@@ -136,8 +169,6 @@ def check_and_inject_fallback_tools(
             if props:
                 dsv4_lines.append("  parameters:")
                 for p_name, p_schema in props.items():
-                    if idx == 0 and first_param == "arg1":
-                        first_param = p_name
                     p_type = (
                         p_schema.get("type", "string")
                         if isinstance(p_schema, dict)
@@ -156,9 +187,8 @@ def check_and_inject_fallback_tools(
             "\n".join(dsv4_lines).rstrip()
             + "\n\nWhen you decide to call a tool, emit ONLY this DSML shape. "
             "Do not emit JSON, markdown, prose, generic XML tool tags, or a DSML wrapper block.\n"
-            f"<｜DSML｜invoke name=\"{first_name}\">\n"
-            f"  <｜DSML｜parameter name=\"{first_param}\" string=\"true\">VALUE HERE</｜DSML｜parameter>\n"
-            "</｜DSML｜invoke>\n\n"
+            + _render_dsml_examples(template_tools)
+            + "\n\n"
             "For a request to list the current directory, set the path parameter to \".\" exactly. "
             "Do not explain inability to call tools; emit the DSML call."
         )
@@ -168,13 +198,9 @@ def check_and_inject_fallback_tools(
             "you must call it instead of fabricating a result.",
             "",
         ]
-        first_name = "FUNCTION_NAME"
-        first_param = "arg1"
         for idx, tool in enumerate(template_tools):
             func = tool.get("function", {})
             name = func.get("name", "") or "unknown_tool"
-            if idx == 0:
-                first_name = name
             zaya_lines.append(f"Tool: {name}")
             desc = func.get("description", "")
             if desc:
@@ -185,8 +211,6 @@ def check_and_inject_fallback_tools(
             if props:
                 zaya_lines.append("  parameters:")
                 for p_name, p_schema in props.items():
-                    if idx == 0 and first_param == "arg1":
-                        first_param = p_name
                     p_type = (
                         p_schema.get("type", "string")
                         if isinstance(p_schema, dict)
@@ -205,13 +229,12 @@ def check_and_inject_fallback_tools(
             "\n".join(zaya_lines).rstrip()
             + "\n\nWhen a tool call is needed, emit ONLY this native Zyphra XML shape. "
             "Do not emit JSON result data, markdown, prose, generic XML tool tags, or a fake directory listing.\n"
-            "<zyphra_tool_call>\n"
-            f"<function={first_name}>\n"
-            f"<parameter={first_param}>\n"
-            "VALUE HERE\n"
-            f"</parameter>\n"
-            f"</function>\n"
-            "</zyphra_tool_call>\n\n"
+            + _render_xml_examples(
+                template_tools,
+                "<zyphra_tool_call>",
+                "</zyphra_tool_call>",
+            )
+            + "\n\n"
             "For a request to list the current directory, set path to \".\" exactly."
         )
     elif is_qwen_native_tool_prompt:
@@ -220,13 +243,9 @@ def check_and_inject_fallback_tools(
             "you must call it instead of fabricating a result.",
             "",
         ]
-        first_name = "FUNCTION_NAME"
-        first_param = "arg1"
         for idx, tool in enumerate(template_tools):
             func = tool.get("function", {})
             name = func.get("name", "") or "unknown_tool"
-            if idx == 0:
-                first_name = name
             qwen_lines.append(f"Tool: {name}")
             desc = func.get("description", "")
             if desc:
@@ -237,8 +256,6 @@ def check_and_inject_fallback_tools(
             if props:
                 qwen_lines.append("  parameters:")
                 for p_name, p_schema in props.items():
-                    if idx == 0 and first_param == "arg1":
-                        first_param = p_name
                     p_type = (
                         p_schema.get("type", "string")
                         if isinstance(p_schema, dict)
@@ -257,13 +274,8 @@ def check_and_inject_fallback_tools(
             "\n".join(qwen_lines).rstrip()
             + "\n\nWhen a tool call is needed, emit ONLY this native XML shape. "
             "Do not emit JSON result data, markdown, prose, or a fake directory listing.\n"
-            "<tool_call>\n"
-            f"<function={first_name}>\n"
-            f"<parameter={first_param}>\n"
-            "VALUE HERE\n"
-            f"</parameter>\n"
-            f"</function>\n"
-            "</tool_call>\n\n"
+            + _render_xml_examples(template_tools, "<tool_call>", "</tool_call>")
+            + "\n\n"
             "For a request to list the current directory, set path to \".\" exactly."
         )
     else:

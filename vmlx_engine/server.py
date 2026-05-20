@@ -50,6 +50,7 @@ import platform
 import re
 import secrets
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -149,6 +150,7 @@ _model_name: str | None = None
 _model_path: str | None = None  # Full local path for config.json lookups
 _served_model_name: str | None = None  # Custom name for API (--served-model-name)
 _default_max_tokens: int = 32768
+_default_max_tokens_explicit: bool = False
 _default_timeout: float = 300.0  # Default request timeout in seconds (5 minutes)
 _default_temperature: float | None = None  # Set via --default-temperature
 _default_top_p: float | None = None  # Set via --default-top-p
@@ -172,6 +174,12 @@ _model_name_mismatch_warned: bool = (
 # didn't match the loaded model — lowered log level hid the bug.
 _model_name_mismatch_seen: set[tuple[str, str]] = set()
 _metal_na_status_cache: dict[str, dict] = {}
+
+
+def _argv_has_option(argv: list[str], option: str) -> bool:
+    """Return whether an argparse option was supplied by the caller."""
+    prefix = option + "="
+    return any(arg == option or arg.startswith(prefix) for arg in argv)
 
 
 def _estimate_max_prompt_tokens() -> int:
@@ -921,6 +929,8 @@ def _resolve_max_tokens(request_value: int | None, model_name: str = "") -> int:
     """Resolve max output tokens from request, bundle, then server default."""
     if request_value is not None:
         return request_value
+    if _default_max_tokens_explicit:
+        return _default_max_tokens
     v = _bundle_sampling_default(model_name, "max_new_tokens")
     if v is not None and v > 0:
         return int(v)
@@ -1513,11 +1523,80 @@ def _resolve_enable_thinking(
     if _default_enable_thinking is False:
         return False
 
+    default_hint = None
+    try:
+        default_hint = (getattr(_mc, "architecture_hints", None) or {}).get(
+            "default_enable_thinking"
+        )
+    except Exception:
+        default_hint = None
+    if isinstance(default_hint, bool):
+        return default_hint
+
     return None
 
 
 # Global MCP manager
 _mcp_manager = None
+_mcp_policy = None
+
+
+def _load_mcp_policy_from_env():
+    """Build the effective MCP policy from per-session CLI/env values."""
+    from vmlx_engine.mcp import MCPPolicy
+
+    return MCPPolicy.from_values(
+        enabled_servers=os.environ.get("VLLM_MLX_MCP_ENABLED_SERVERS"),
+        disabled_servers=os.environ.get("VLLM_MLX_MCP_DISABLED_SERVERS"),
+        enabled_tools=os.environ.get("VLLM_MLX_MCP_ENABLED_TOOLS"),
+        disabled_tools=os.environ.get("VLLM_MLX_MCP_DISABLED_TOOLS"),
+    )
+
+
+def _tool_definition_name(tool: Any) -> str | None:
+    """Return a function/tool name from either flat or nested API tool shapes."""
+    if hasattr(tool, "function"):
+        function = getattr(tool, "function", None)
+        if isinstance(function, dict):
+            return function.get("name")
+    if isinstance(tool, dict):
+        function = tool.get("function")
+        if isinstance(function, dict):
+            return function.get("name")
+        return tool.get("name")
+    return None
+
+
+def _filter_tools_for_specific_choice(
+    tools: list[Any],
+    tool_choice: Any,
+) -> list[Any]:
+    """Apply explicit tool_choice filtering to MCP tools as well as user tools."""
+    if not isinstance(tool_choice, dict):
+        return tools
+    function = tool_choice.get("function")
+    target_name = function.get("name") if isinstance(function, dict) else None
+    target_name = target_name or tool_choice.get("name")
+    if not target_name:
+        return tools
+    filtered = [tool for tool in tools if _tool_definition_name(tool) == target_name]
+    return filtered
+
+
+def _drop_colliding_mcp_tools(
+    mcp_tools: list[dict[str, Any]],
+    request_tools: Any,
+) -> list[dict[str, Any]]:
+    """Keep request/native tools authoritative when names collide with MCP."""
+    user_names = {
+        name
+        for tool in (request_tools or [])
+        for name in [_tool_definition_name(tool)]
+        if name
+    }
+    if not user_names:
+        return mcp_tools
+    return [tool for tool in mcp_tools if _tool_definition_name(tool) not in user_names]
 
 # Global embedding engine (lazy loaded)
 _embedding_engine = None
@@ -1833,7 +1912,6 @@ _tool_call_parser_disabled_explicitly: bool = False
 # (research/DSV4-RUNTIME-ARCHITECTURE.md §4) — allow extended budgets so
 # the token ceiling doesn't truncate deep reasoning chains mid-thought.
 _EFFORT_THINKING_BUDGET = {"low": 1024, "medium": 8192, "high": 32768, "max": 131072}
-_EFFORT_MAX_TOKENS = {"low": 4096, "medium": 16384, "high": 32768, "max": 131072}
 
 
 @asynccontextmanager
@@ -3387,6 +3465,7 @@ def load_model(
     scheduler_config=None,
     stream_interval: int = 1,
     max_tokens: int = 32768,
+    max_tokens_explicit: bool = False,
     max_prompt_tokens: int | None = None,
     force_mllm: bool = False,
     served_model_name: str | None = None,
@@ -3423,6 +3502,7 @@ def load_model(
         _model_name, \
         _model_path, \
         _default_max_tokens, \
+        _default_max_tokens_explicit, \
         _served_model_name, \
         _model_load_error, \
         _jang_metadata, \
@@ -3447,6 +3527,7 @@ def load_model(
         "scheduler_config": scheduler_config,
         "stream_interval": stream_interval,
         "max_tokens": max_tokens,
+        "max_tokens_explicit": max_tokens_explicit,
         "max_prompt_tokens": max_prompt_tokens,
         "force_mllm": force_mllm,
         "served_model_name": served_model_name,
@@ -3479,6 +3560,7 @@ def load_model(
     _jang_metadata = None  # Clear any previous JANG metadata
 
     _default_max_tokens = max_tokens
+    _default_max_tokens_explicit = bool(max_tokens_explicit)
     _model_path = model_name  # Full path for config.json lookups
     # Normalize model name: extract "org/model" from full local paths
     # e.g. "~/.mlxstudio/models/mlx-community/Llama-3.2-3B-Instruct-4bit"
@@ -3840,7 +3922,13 @@ def load_model(
     if _engine.preserve_native_tool_format:
         logger.info(f"Native tool format enabled for parser: {_tool_call_parser}")
 
-    logger.info(f"Default max tokens: {_default_max_tokens}")
+    if _default_max_tokens_explicit:
+        logger.info(f"Default max tokens override: {_default_max_tokens}")
+    else:
+        logger.info(
+            "Default max tokens fallback: %s (bundle max_new_tokens wins when present)",
+            _default_max_tokens,
+        )
 
 
 def get_usage(output: GenerationOutput) -> Usage:
@@ -5445,7 +5533,7 @@ async def health():
             "enabled": True,
             "servers_connected": connected,
             "servers_total": total,
-            "tools_available": len(_mcp_manager.get_all_tools()),
+            "tools_available": len(_mcp_manager.get_all_tools(policy=_mcp_policy)),
         }
 
     engine_stats = _engine.get_stats() if _engine else {}
@@ -5889,6 +5977,7 @@ async def admin_wake():
                     scheduler_config=_cli_args.get("scheduler_config"),
                     stream_interval=_cli_args.get("stream_interval", 1),
                     max_tokens=_cli_args.get("max_tokens", 32768),
+                    max_tokens_explicit=_cli_args.get("max_tokens_explicit", False),
                     max_prompt_tokens=_cli_args.get("max_prompt_tokens"),
                     force_mllm=_cli_args.get("force_mllm", False),
                     served_model_name=_cli_args.get("served_model_name"),
@@ -8847,13 +8936,19 @@ async def list_mcp_tools() -> MCPToolsResponse:
         return MCPToolsResponse(tools=[], count=0)
 
     tools = []
-    for tool in _mcp_manager.get_all_tools():
+    status = _mcp_manager.get_policy_status(policy=_mcp_policy)
+    for tool in status["tools"]:
         tools.append(
             MCPToolInfo(
-                name=tool.full_name,
-                description=tool.description,
-                server=tool.server_name,
-                parameters=tool.input_schema,
+                name=tool["name"],
+                description=tool["description"],
+                server=tool["server"],
+                parameters=tool["parameters"],
+                enabled=tool["enabled"],
+                effective=tool["effective"],
+                transport=tool["transport"],
+                server_state=tool["server_state"],
+                error=tool["error"],
             )
         )
 
@@ -8867,14 +8962,22 @@ async def list_mcp_servers() -> MCPServersResponse:
         return MCPServersResponse(servers=[])
 
     servers = []
-    for status in _mcp_manager.get_server_status():
+    status = _mcp_manager.get_policy_status(policy=_mcp_policy)
+    for server in status["servers"]:
         servers.append(
             MCPServerInfo(
-                name=status.name,
-                state=status.state.value,
-                transport=status.transport.value,
-                tools_count=status.tools_count,
-                error=status.error,
+                name=server["name"],
+                state=server["state"],
+                transport=server["transport"],
+                tools_count=server["tools_count"],
+                error=server["error"],
+                enabled=server["enabled"],
+                configured=server["configured"],
+                command_redacted=server["command_redacted"],
+                url_redacted=server["url_redacted"],
+                last_connected=server["last_connected"],
+                env_keys=server["env_keys"],
+                header_keys=server["header_keys"],
             )
         )
 
@@ -8894,6 +8997,7 @@ async def execute_mcp_tool(request: MCPExecuteRequest) -> MCPExecuteResponse:
     result = await _mcp_manager.execute_tool(
         request.tool_name,
         request.arguments,
+        policy=_mcp_policy,
     )
 
     return MCPExecuteResponse(
@@ -9520,7 +9624,8 @@ async def create_chat_completion(
         request.enable_thinking = _et
 
     # Pass reasoning_effort if provided (for GPT-OSS and models that support thinking levels).
-    # Also map to thinking_budget (Qwen3) and max_tokens ceiling when not explicitly set.
+    # Map it to template-side thinking_budget only; output length remains owned
+    # by explicit max_tokens/max_output_tokens, then bundle max_new_tokens.
     if request.reasoning_effort is not None:
         chat_kwargs["reasoning_effort"] = request.reasoning_effort
         # Also inject into chat_template_kwargs so Jinja templates can access it
@@ -9530,9 +9635,6 @@ async def create_chat_completion(
         _budget = _EFFORT_THINKING_BUDGET.get(_effort_lower)
         if _budget:
             _ct_kwargs.setdefault("thinking_budget", _budget)
-        _effort_max = _EFFORT_MAX_TOKENS.get(_effort_lower)
-        if _effort_max and request.max_tokens is None:
-            chat_kwargs["max_tokens"] = _effort_max
 
     # Auto-map enable_thinking → reasoning_effort for Mistral 4.
     # Mistral 4's template uses reasoning_effort ("none"/"high"), not enable_thinking.
@@ -9681,7 +9783,9 @@ async def create_chat_completion(
     if not _suppress_tools:
         # Add MCP tools if available
         if _mcp_manager is not None:
-            mcp_tools = _mcp_manager.get_all_tools_openai()
+            mcp_tools = _mcp_manager.get_all_tools_openai(policy=_mcp_policy)
+            mcp_tools = _drop_colliding_mcp_tools(mcp_tools, request.tools)
+            mcp_tools = _filter_tools_for_specific_choice(mcp_tools, _tool_choice)
             all_tools.extend(mcp_tools)
             if mcp_tools:
                 logger.debug(f"Added {len(mcp_tools)} MCP tools")
@@ -9726,26 +9830,7 @@ async def create_chat_completion(
             chat_kwargs["prompt_suffix"] = _analysis_hint
             # Skip template's generation prompt — suffix provides the full assistant prefix
             chat_kwargs["skip_generation_prompt"] = True
-            # Reasoning effort: scale total max_tokens to control how much the model
-            # can reason. Like OpenAI's reasoning_effort, lower effort = tighter token
-            # budget = less reasoning before the model must produce an answer.
-            # This is the genuine mechanism — the model allocates its token budget
-            # between analysis and final answer within the limit.
             _effort = chat_kwargs.get("reasoning_effort", "").lower()
-            _original_max = chat_kwargs.get("max_tokens", 4096)
-            if _effort == "low":
-                # Cap total output to force concise analysis + answer
-                chat_kwargs["max_tokens"] = min(_original_max, 512)
-            elif _effort == "high":
-                # Allow generous budget for deep analysis
-                chat_kwargs["max_tokens"] = max(_original_max, 16384)
-            # medium/auto: use request's max_tokens as-is
-            _adjusted = chat_kwargs.get("max_tokens", _original_max)
-            if _adjusted != _original_max:
-                logger.info(
-                    f"[chat] reasoning_effort='{_effort}' adjusted max_tokens: "
-                    f"{_original_max} -> {_adjusted}"
-                )
             logger.info(
                 f"[chat] Injecting Harmony analysis prefix for GPT-OSS model (effort={_effort or 'default'})"
             )
@@ -10891,7 +10976,8 @@ async def create_response(
         request.enable_thinking = _et
 
     # Pass reasoning_effort if provided (for GPT-OSS and models that support thinking levels).
-    # Also map to thinking_budget (Qwen3) and max_output_tokens ceiling when not explicitly set.
+    # Map it to template-side thinking_budget only; output length remains owned
+    # by explicit max_tokens/max_output_tokens, then bundle max_new_tokens.
     if request.reasoning_effort is not None:
         chat_kwargs["reasoning_effort"] = request.reasoning_effort
         # Also inject into chat_template_kwargs so Jinja templates can access it
@@ -10901,9 +10987,6 @@ async def create_response(
         _budget = _EFFORT_THINKING_BUDGET.get(_effort_lower)
         if _budget:
             _ct_kwargs.setdefault("thinking_budget", _budget)
-        _effort_max = _EFFORT_MAX_TOKENS.get(_effort_lower)
-        if _effort_max and request.max_output_tokens is None:
-            chat_kwargs["max_tokens"] = _effort_max
 
     # Auto-map enable_thinking → reasoning_effort for Mistral 4 (Responses API path).
     if (
@@ -11048,7 +11131,9 @@ async def create_response(
     if not _suppress_tools:
         # Add MCP tools if available
         if _mcp_manager is not None:
-            mcp_tools = _mcp_manager.get_all_tools_openai()
+            mcp_tools = _mcp_manager.get_all_tools_openai(policy=_mcp_policy)
+            mcp_tools = _drop_colliding_mcp_tools(mcp_tools, request.tools)
+            mcp_tools = _filter_tools_for_specific_choice(mcp_tools, _tool_choice)
             all_tools.extend(mcp_tools)
             if mcp_tools:
                 logger.debug(f"Added {len(mcp_tools)} MCP tools")
@@ -11118,17 +11203,6 @@ async def create_response(
             chat_kwargs["prompt_suffix"] = _analysis_hint
             chat_kwargs["skip_generation_prompt"] = True
             _effort = chat_kwargs.get("reasoning_effort", "").lower()
-            _original_max = chat_kwargs.get("max_tokens", 4096)
-            if _effort == "low":
-                chat_kwargs["max_tokens"] = min(_original_max, 512)
-            elif _effort == "high":
-                chat_kwargs["max_tokens"] = max(_original_max, 16384)
-            _adjusted = chat_kwargs.get("max_tokens", _original_max)
-            if _adjusted != _original_max:
-                logger.info(
-                    f"[responses] reasoning_effort='{_effort}' adjusted max_tokens: "
-                    f"{_original_max} -> {_adjusted}"
-                )
             logger.info(
                 f"[responses] Injecting Harmony analysis prefix for GPT-OSS model (effort={_effort or 'default'})"
             )
@@ -13641,16 +13715,19 @@ async def stream_responses_api(
 
 async def init_mcp(config_path: str):
     """Initialize MCP manager from config file."""
-    global _mcp_manager
+    global _mcp_manager, _mcp_policy
 
     try:
         from vmlx_engine.mcp import MCPClientManager, load_mcp_config
 
         config = load_mcp_config(config_path)
+        _mcp_policy = _load_mcp_policy_from_env()
         _mcp_manager = MCPClientManager(config)
         await _mcp_manager.start()
 
-        logger.info(f"MCP initialized with {len(_mcp_manager.get_all_tools())} tools")
+        logger.info(
+            f"MCP initialized with {len(_mcp_manager.get_all_tools(policy=_mcp_policy))} effective tools"
+        )
 
     except ImportError:
         logger.error("MCP SDK not installed. Install with: pip install mcp")
@@ -13735,6 +13812,30 @@ Examples:
         type=str,
         default=None,
         help="Path to MCP configuration file (JSON/YAML)",
+    )
+    parser.add_argument(
+        "--mcp-enabled-servers",
+        type=str,
+        default=None,
+        help="Comma-separated MCP server allow-list for this model session",
+    )
+    parser.add_argument(
+        "--mcp-disabled-servers",
+        type=str,
+        default=None,
+        help="Comma-separated MCP server deny-list for this model session",
+    )
+    parser.add_argument(
+        "--mcp-enabled-tools",
+        type=str,
+        default=None,
+        help="Comma-separated MCP tool allow-list for this model session",
+    )
+    parser.add_argument(
+        "--mcp-disabled-tools",
+        type=str,
+        default=None,
+        help="Comma-separated MCP tool deny-list for this model session",
     )
     parser.add_argument(
         "--max-tokens",
@@ -13869,6 +13970,7 @@ Examples:
         help="Custom model name exposed via the API (overrides actual model name in /v1/models)",
     )
 
+    max_tokens_explicit = _argv_has_option(sys.argv[1:], "--max-tokens")
     args = parser.parse_args()
 
     # Set global configuration
@@ -13944,6 +14046,14 @@ Examples:
     # Set MCP config for lifespan
     if args.mcp_config:
         os.environ["VLLM_MLX_MCP_CONFIG"] = args.mcp_config
+    if args.mcp_enabled_servers:
+        os.environ["VLLM_MLX_MCP_ENABLED_SERVERS"] = args.mcp_enabled_servers
+    if args.mcp_disabled_servers:
+        os.environ["VLLM_MLX_MCP_DISABLED_SERVERS"] = args.mcp_disabled_servers
+    if args.mcp_enabled_tools:
+        os.environ["VLLM_MLX_MCP_ENABLED_TOOLS"] = args.mcp_enabled_tools
+    if args.mcp_disabled_tools:
+        os.environ["VLLM_MLX_MCP_DISABLED_TOOLS"] = args.mcp_disabled_tools
 
     # Auto-detect reasoning and tool parsers from model name
     from .model_config_registry import get_model_config_registry
@@ -14023,6 +14133,7 @@ Examples:
         args.model,
         use_batching=args.continuous_batching,
         max_tokens=args.max_tokens,
+        max_tokens_explicit=max_tokens_explicit,
         max_prompt_tokens=args.max_prompt_tokens,
         force_mllm=args.mllm,
         served_model_name=args.served_model_name,

@@ -24,6 +24,11 @@ def _env_truthy(name: str) -> bool:
     return os.environ.get(name, "").lower() in ("1", "true", "yes", "on")
 
 
+def _argv_has_option(argv: list[str], option: str) -> bool:
+    prefix = option + "="
+    return any(arg == option or arg.startswith(prefix) for arg in argv)
+
+
 def _speculative_incompatibility_reason(args) -> str | None:
     if not getattr(args, "speculative_model", None):
         return None
@@ -886,7 +891,20 @@ def serve_command(args):
     print(f"Loading model: {args.model}")
     if getattr(args, 'served_model_name', None):
         print(f"Served model name: {args.served_model_name}")
-    print(f"Default max tokens: {args.max_tokens}")
+    max_tokens_explicit = bool(
+        getattr(
+            args,
+            "max_tokens_explicit",
+            getattr(args, "max_tokens", 32768) != 32768,
+        )
+    )
+    if max_tokens_explicit:
+        print(f"Default max tokens override: {args.max_tokens}")
+    else:
+        print(
+            f"Max output fallback: {args.max_tokens} "
+            "(bundle max_new_tokens wins when present)"
+        )
     if getattr(args, 'max_prompt_tokens', None):
         print(f"Max prompt/context tokens: {args.max_prompt_tokens}")
 
@@ -894,6 +912,14 @@ def serve_command(args):
     if args.mcp_config:
         print(f"MCP config: {args.mcp_config}")
         os.environ["VLLM_MLX_MCP_CONFIG"] = args.mcp_config
+    if getattr(args, "mcp_enabled_servers", None):
+        os.environ["VLLM_MLX_MCP_ENABLED_SERVERS"] = args.mcp_enabled_servers
+    if getattr(args, "mcp_disabled_servers", None):
+        os.environ["VLLM_MLX_MCP_DISABLED_SERVERS"] = args.mcp_disabled_servers
+    if getattr(args, "mcp_enabled_tools", None):
+        os.environ["VLLM_MLX_MCP_ENABLED_TOOLS"] = args.mcp_enabled_tools
+    if getattr(args, "mcp_disabled_tools", None):
+        os.environ["VLLM_MLX_MCP_DISABLED_TOOLS"] = args.mcp_disabled_tools
 
     # Pre-load embedding model if specified
     if args.embedding_model:
@@ -1234,6 +1260,7 @@ def serve_command(args):
             scheduler_config=scheduler_config,
             stream_interval=args.stream_interval if args.continuous_batching else 1,
             max_tokens=args.max_tokens,
+            max_tokens_explicit=max_tokens_explicit,
             max_prompt_tokens=getattr(args, 'max_prompt_tokens', None),
             served_model_name=getattr(args, 'served_model_name', None),
             force_mllm=getattr(args, 'is_mllm', False),
@@ -2148,6 +2175,30 @@ Examples:
              "to call external tools (web search, code execution, etc.) via MCP servers. "
              "Tools appear in /v1/mcp/tools and can be used in chat completions with tool_choice.",
     )
+    serve_parser.add_argument(
+        "--mcp-enabled-servers",
+        type=str,
+        default=None,
+        help="Comma-separated MCP server allow-list for this model session.",
+    )
+    serve_parser.add_argument(
+        "--mcp-disabled-servers",
+        type=str,
+        default=None,
+        help="Comma-separated MCP server deny-list for this model session.",
+    )
+    serve_parser.add_argument(
+        "--mcp-enabled-tools",
+        type=str,
+        default=None,
+        help="Comma-separated MCP tool allow-list for this model session.",
+    )
+    serve_parser.add_argument(
+        "--mcp-disabled-tools",
+        type=str,
+        default=None,
+        help="Comma-separated MCP tool deny-list for this model session.",
+    )
     # Security options
     serve_parser.add_argument(
         "--api-key",
@@ -2216,6 +2267,8 @@ Examples:
             "functionary",
             "glm47",
             "step3p5",
+            "gemma3",
+            "gemma3n",
             # DeepSeek V4 DSML format (<｜DSML｜invoke name="…">)
             "dsml",
             "deepseek_v4",
@@ -2761,6 +2814,7 @@ Examples:
         raise
 
     if args.command == "serve":
+        args.max_tokens_explicit = _argv_has_option(sys.argv[1:], "--max-tokens")
         serve_command(args)
     elif args.command == "bench":
         bench_command(args)

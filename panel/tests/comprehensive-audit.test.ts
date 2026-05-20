@@ -80,6 +80,8 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   gemma2: "gemma2",
   gemma3: "gemma3",
   gemma3_text: "gemma3-text",
+  gemma3n: "gemma3n",
+  gemma3n_text: "gemma3n-text",
   phi3: "phi3",
   phi3v: "phi3-vision",
   phi3small: "phi3",
@@ -184,9 +186,21 @@ const FAMILY_CONFIGS: Record<string, Partial<DetectedConfig>> = {
   },
   gemma3: {
     cacheType: "kv",
-    toolParser: "hermes",
-    reasoningParser: "deepseek_r1",
+    toolParser: "gemma3",
     isMultimodal: true,
+  },
+  "gemma3-text": {
+    cacheType: "kv",
+    toolParser: "gemma3",
+  },
+  gemma3n: {
+    cacheType: "kv",
+    toolParser: "gemma3",
+    isMultimodal: true,
+  },
+  "gemma3n-text": {
+    cacheType: "kv",
+    toolParser: "gemma3",
   },
   "phi4-reasoning": {
     cacheType: "kv",
@@ -1686,8 +1700,6 @@ describe("Phase 6: Tool & Reasoning Parsers", () => {
         deepseek_v2: "deepseek_r1",
         deepseek2: "deepseek_r1",
         deepseek: "deepseek_r1",
-        gemma3: "deepseek_r1",
-        gemma3_text: "deepseek_r1",
         phi4_reasoning: "deepseek_r1",
         gpt_oss: "openai_gptoss",
         glm4_moe: "openai_gptoss",
@@ -1700,8 +1712,8 @@ describe("Phase 6: Tool & Reasoning Parsers", () => {
       expect(detectReasoningParser("qwen3")).toBe("qwen3");
     });
 
-    it("Gemma3 uses deepseek_r1 parser", () => {
-      expect(detectReasoningParser("gemma3")).toBe("deepseek_r1");
+    it("Gemma3 does not use a reasoning parser", () => {
+      expect(detectReasoningParser("gemma3")).toBeUndefined();
     });
 
     it("DeepSeek V3 uses deepseek_r1 parser", () => {

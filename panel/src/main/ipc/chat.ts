@@ -29,6 +29,14 @@ import { buildNewChatInheritedOverrides } from "../chat-override-policy";
 const DEFAULT_PORT = 8000;
 const GENERIC_DEFAULT_TIMEOUT_SECONDS = 300;
 const DSV4_DEFAULT_TIMEOUT_SECONDS = 900;
+const configuredToolStreamStallTimeoutMs = Number(
+  process.env.VMLX_TOOL_STREAM_STALL_TIMEOUT_MS,
+);
+const TOOL_STREAM_STALL_TIMEOUT_MS = Number.isFinite(
+  configuredToolStreamStallTimeoutMs,
+)
+  ? Math.max(5_000, configuredToolStreamStallTimeoutMs)
+  : 30_000;
 
 function effectiveDsv4RequestTimeoutSeconds(
   timeoutSeconds: number,
@@ -2571,10 +2579,43 @@ export function registerChatHandlers(
         ) => {
           const dec = new TextDecoder();
           let buf = "";
+          const readNext = async (): Promise<
+            ReadableStreamReadResult<Uint8Array>
+          > => {
+            if (!clientToolCallBuffering) return rdr.read();
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            try {
+              return await Promise.race([
+                rdr.read(),
+                new Promise<ReadableStreamReadResult<Uint8Array>>(
+                  (resolve) => {
+                    timer = setTimeout(async () => {
+                      console.warn(
+                        `[CHAT] Tool call generation stalled for ${TOOL_STREAM_STALL_TIMEOUT_MS}ms; cancelling stalled stream`,
+                      );
+                      emitToolStatus(
+                        "error",
+                        "",
+                        "Tool call generation stalled; cancelled stalled stream.",
+                        toolIteration,
+                      );
+                      clientToolCallBuffering = false;
+                      try {
+                        await rdr.cancel();
+                      } catch (_) {}
+                      resolve({ value: undefined, done: true });
+                    }, TOOL_STREAM_STALL_TIMEOUT_MS);
+                  },
+                ),
+              ]);
+            } finally {
+              if (timer) clearTimeout(timer);
+            }
+          };
           while (true) {
             // Check abort before each read — fast models can buffer many chunks
             if (abortController.signal.aborted) break;
-            const { value, done } = await rdr.read();
+            const { value, done } = await readNext();
             if (done) break;
             buf += dec.decode(value, { stream: true });
             const lines = buf.split("\n");
@@ -3132,10 +3173,12 @@ export function registerChatHandlers(
           }
         }
 
-        if (toolIteration > 0) {
-          console.log(
-            `[CHAT] Tool loop completed after ${toolIteration} iteration(s)`,
-          );
+        if (toolIteration > 0 || collectedToolStatuses.length > 0) {
+          if (toolIteration > 0) {
+            console.log(
+              `[CHAT] Tool loop completed after ${toolIteration} iteration(s)`,
+            );
+          }
           emitToolStatus("done", "", undefined, toolIteration);
         }
 
