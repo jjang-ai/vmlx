@@ -214,6 +214,10 @@ rm -f "$BUNDLE_DIR/python/lib/python3.12/lib-dynload/_tkinter"*.so 2>/dev/null |
 find "$SITE" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
 find "$SITE" -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
 
+# Third-party packages can ship agent/skill metadata that is not used at
+# runtime and can be mistaken for release-workspace artifacts.
+find "$SITE" -type d -name ".agents" -exec rm -rf {} + 2>/dev/null || true
+
 # Packages not needed at runtime (transitive deps / dev-only tools)
 # torch/torchvision/torchgen: KEEP (2026-05-03 reversal of earlier strip).
 # Earlier comment claimed "vmlx-engine uses MLX, not PyTorch" — true for the

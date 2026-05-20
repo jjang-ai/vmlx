@@ -21,6 +21,9 @@ All notable changes to vMLX Engine will be documented in this file.
 - **Kimi K2.6 tokenizer rendering now has its required runtime dependency**:
   `tiktoken` is a core dependency, not audio-only, so Kimi chat-template
   rendering works in source and bundled Python environments.
+- **Bundled app packaging strips third-party `.agents` metadata** from
+  site-packages so release artifacts do not carry agent/skill sidecar files
+  that are not used at runtime.
 
 ### Verified
 - Focused backend checkpoint suite passed: tool-prompt fallback, Ollama
