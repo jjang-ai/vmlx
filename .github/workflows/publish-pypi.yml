@@ -12,6 +12,10 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: publish-pypi
+  cancel-in-progress: false
+
 jobs:
   publish:
     name: Build and publish vmlx
@@ -23,6 +27,32 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
+
+      - name: Validate release ref
+        env:
+          PUBLISH_REF: ${{ inputs.ref }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import sys
+          import tomllib
+
+          ref = os.environ["PUBLISH_REF"]
+          if not re.fullmatch(r"v\d+\.\d+\.\d+", ref):
+              print(f"Ref must be a version tag like v1.5.45, got {ref!r}", file=sys.stderr)
+              raise SystemExit(1)
+
+          with open("pyproject.toml", "rb") as f:
+              version = tomllib.load(f)["project"]["version"]
+
+          expected = f"v{version}"
+          if ref != expected:
+              print(f"Ref {ref!r} does not match pyproject.toml version {version!r}", file=sys.stderr)
+              raise SystemExit(1)
+
+          print(f"Publishing {expected}")
+          PY
 
       - name: Set up Python
         uses: actions/setup-python@v5
