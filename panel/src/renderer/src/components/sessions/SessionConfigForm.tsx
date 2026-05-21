@@ -1078,7 +1078,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
       {/* Performance */}
       <Section title={t('sessions.config.performanceGeneration')} expanded={expandedSections.performance} onToggle={() => toggleSection('performance')} hidden={isImage}>
-        <PerformanceHint text="Controls how tokens stream to you and the max response length. For chat, keep stream interval at 1. Max tokens limits how long a single reply can be." />
+        <PerformanceHint text="Controls token streaming, response length, and prompt-window limits. Max Output Tokens caps generated tokens; Max Context Tokens caps accepted prompt/context tokens." />
         {/* JIT is not available for image models or VLM chat models. */}
         <Field label="JIT Compile (mx.compile)" tooltip="Enable Metal kernel fusion via mx.compile on the model forward pass. This optimizes GPU operations for faster inference after a one-time warmup on the first request. May not work with all models — falls back gracefully if compilation fails. Requires restart.">
           <label className={`flex items-center gap-2 ${flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive || hybridCacheActive ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
@@ -1142,6 +1142,20 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           max={100}
           step={1}
           defaultValue={DEFAULT_CONFIG.streamInterval}
+        />
+        <SliderField
+          label="Max Output Tokens"
+          tooltip="Default generated-token cap for this local server. This maps to --max-tokens and only limits response length; it does not change prompt/context length. Leave model-owned to let API request max_tokens or the engine's bundle/default policy decide."
+          value={config.maxTokens}
+          onChange={v => onChange('maxTokens', v)}
+          min={1}
+          max={32768}
+          step={256}
+          defaultValue={(config.defaultMaxNewTokens ?? 0) > 0 ? Math.floor(config.defaultMaxNewTokens ?? 0) : 4096}
+          allowUnlimited
+          unlimitedValue={0}
+          unlimitedLabel={(config.defaultMaxNewTokens ?? 0) > 0 ? `Model (${Math.floor(config.defaultMaxNewTokens ?? 0)})` : 'Model-owned'}
+          maxInput={1000000}
         />
         <SliderField
           label="Max Context Tokens"
@@ -1717,12 +1731,16 @@ const REASONING_PARSER_OPTIONS: ParserOption[] = [
   { value: 'auto', label: 'Auto-detect (recommended)' },
   { value: '', label: 'None (disable reasoning extraction)' },
   {
-    value: 'qwen3', label: 'Qwen3 — Qwen / QwQ / MiniMax / StepFun', format: '<think>...reasoning...</think>content  (strict: both tags required)', models: [
+    value: 'qwen3', label: 'Qwen3 — Qwen / QwQ / StepFun', format: '<think>...reasoning...</think>content  (strict: both tags required)', models: [
       'Qwen3.5-VL (0.8B\u2013122B MoE, vision+reasoning)', 'Qwen3 (0.6B\u2013235B, all sizes)',
       'Qwen3-Coder (all sizes)', 'Qwen3-MoE (22B/57B)', 'QwQ-32B',
-      'MiniMax-M2 (46B)', 'MiniMax-M2.5 (172B MoE)',
-      'MiniMax Prism Pro (80B)', 'StepFun Step-3.5 Flash (8B MoE)',
-      'StepFun Step-3.5', 'StepFun Step-1V (vision)',
+      'StepFun Step-3.5 Flash (8B MoE)', 'StepFun Step-3.5', 'StepFun Step-1V (vision)',
+    ]
+  },
+  {
+    value: 'minimax_m2', label: 'MiniMax M2 — MiniMax M2 / M2.5', format: '<think>...reasoning...</think>content  (MiniMax M2 parser)', models: [
+      'MiniMax-M2 (46B)', 'MiniMax-M2.5 (172B MoE)', 'MiniMax Prism Pro (80B)',
+      'Use this when a stale bundle sidecar still says qwen3; Auto normalizes MiniMax to minimax_m2.',
     ]
   },
   {

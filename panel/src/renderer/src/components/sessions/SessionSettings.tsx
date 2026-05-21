@@ -4,6 +4,7 @@ import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG } from './SessionConfi
 import { useTranslation } from '../../i18n'
 import { resolveCacheLaunchPolicy } from '../../../../shared/cacheControlPolicy'
 import { buildMcpPolicyArgs } from '../../../../shared/mcpPolicy'
+import { canonicalizeReasoningParserForCli } from '../../../../shared/reasoningParserAliases'
 
 interface Session {
   id: string
@@ -289,10 +290,11 @@ function buildCommandPreview(
     : (config.toolCallParser && config.toolCallParser !== 'auto' ? config.toolCallParser
       : detected?.toolParser)
   const effectiveAutoTool = config.enableAutoToolChoice ?? detected?.enableAutoToolChoice
-  const effectiveReasoningParser = config.reasoningParser === ''
+  const requestedReasoningParser = config.reasoningParser === ''
     ? undefined
     : (config.reasoningParser && config.reasoningParser !== 'auto' ? config.reasoningParser
       : detected?.reasoningParser)
+  const effectiveReasoningParser = canonicalizeReasoningParserForCli(requestedReasoningParser)
 
   // Prefix cache (mirrors buildArgs): explicit user opt-out stays off even
   // when tools are configured. Tool sessions benefit from cache but do not

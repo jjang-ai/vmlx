@@ -190,7 +190,8 @@ registerFamily('granitemoehybrid', { cacheType: 'hybrid', toolParser: 'granite',
 // Functionary
 registerFamily('functionary', { cacheType: 'kv', toolParser: 'functionary', enableAutoToolChoice: true, description: 'Functionary', priority: 20 })
 
-// MiniMax
+// MiniMax uses its own parser name so panel-emitted CLI args match the engine
+// registry and diagnostics instead of relying on a generic qwen3 alias.
 registerFamily('minimax', { cacheType: 'kv', toolParser: 'minimax', reasoningParser: 'minimax_m2', enableAutoToolChoice: true, description: 'MiniMax', priority: 20 })
 
 // Ling / Bailing hybrid: MLA softmax layers plus linear-attention/SSM-style

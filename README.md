@@ -228,7 +228,7 @@ Auto-detected parsers for every major model family:
 
 Auto-detected reasoning parsers that extract `<think>` blocks:
 
-`qwen3` (Qwen3, QwQ, MiniMax, StepFun) - `deepseek_r1` (DeepSeek R1, Gemma 3, GLM, Phi-4) - `openai_gptoss` (GLM Flash, GPT-OSS)
+`qwen3` (Qwen3, QwQ, StepFun) - `minimax_m2` (MiniMax M2/M2.5/M2.7) - `deepseek_r1` (DeepSeek R1, Gemma 3, GLM, Phi-4) - `openai_gptoss` (GLM Flash, GPT-OSS)
 
 ### Audio
 

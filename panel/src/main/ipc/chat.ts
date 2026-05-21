@@ -55,6 +55,7 @@ function shouldForwardReasoningEffort(
 ): reasoningEffort is string {
   if (typeof reasoningEffort !== "string" || !reasoningEffort) return false;
   if (enableThinking === false) return false;
+  if (detectedFamily === "hy3" && enableThinking !== true) return false;
   return sessionHasReasoningParser || detectedFamily === "deepseek-v4";
 }
 

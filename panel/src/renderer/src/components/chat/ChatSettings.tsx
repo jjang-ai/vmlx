@@ -158,7 +158,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   }
 
   const updateThinkingMode = (
-    enableThinking: boolean,
+    enableThinking: boolean | undefined,
     reasoningEffort?: ChatOverrides['reasoningEffort']
   ) => {
     setOverrides(prev => ({ ...prev, enableThinking, reasoningEffort }))
@@ -455,7 +455,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
                 <div className="flex gap-1 bg-background rounded border border-border p-0.5">
                   <button
                     disabled={!thinkingSupported}
-                    onClick={() => update('enableThinking', undefined)}
+                    onClick={() => updateThinkingMode(undefined, undefined)}
                     className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
                       displayedEnableThinking == null
                         ? 'bg-primary text-primary-foreground'
@@ -466,7 +466,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
                   </button>
                   <button
                     disabled={!thinkingSupported}
-                    onClick={() => update('enableThinking', true)}
+                    onClick={() => updateThinkingMode(true, overrides.reasoningEffort)}
                     className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
                       displayedEnableThinking === true
                         ? 'bg-primary text-primary-foreground'
@@ -477,7 +477,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
                   </button>
                   <button
                     disabled={!thinkingSupported}
-                    onClick={() => update('enableThinking', false)}
+                    onClick={() => updateThinkingMode(false, undefined)}
                     className={`flex-1 px-2 py-1 text-xs rounded transition-colors ${
                       displayedEnableThinking === false
                         ? 'bg-primary text-primary-foreground'

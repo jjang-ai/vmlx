@@ -240,7 +240,7 @@ vMLX auto-detects model architecture from `config.json` and selects the appropri
 | GLM-4.7 / GLM-Z1 | `glm47` | `deepseek_r1` | `<think>` tags |
 | GLM-4.7 Flash / GPT-OSS | `glm47` | `openai_gptoss` | Harmony `<\|channel\|>` protocol |
 | GLM-4 | `glm47` | — | Tools only, no reasoning |
-| MiniMax M1 / M2 / M2.5 | `minimax` | `qwen3` | MoE |
+| MiniMax M1 / M2 / M2.5 | `minimax` | `minimax_m2` | MoE |
 | Granite 3.x / Granite-Code | `granite` | — | IBM |
 | Nemotron (native arch) | `nemotron` | — | Hybrid Mamba+Transformer |
 | Kimi-K2 / Moonshot | `kimi` | — | |

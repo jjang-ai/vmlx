@@ -13,6 +13,8 @@ import { dsv4EnvFromConfig } from '../shared/dsv4Env'
 import { resolveCacheLaunchPolicy } from '../shared/cacheControlPolicy'
 import { buildMcpPolicyArgs } from '../shared/mcpPolicy'
 import { canonicalizeToolParserId } from '../shared/toolParserAliases'
+import { canonicalizeReasoningParserForCli } from '../shared/reasoningParserAliases'
+import { GENERATION_STARTUP_DEFAULTS_VERSION, LEGACY_GENERIC_MAX_OUTPUT_TOKENS } from '../shared/sessionConfigMigrations'
 
 export type { ServerConfig, DetectedProcess } from './server'
 import type { ServerConfig, DetectedProcess } from './server'
@@ -86,6 +88,12 @@ function effectiveSessionTimeoutSeconds(config: Partial<ServerConfig>, family?: 
     return DSV4_DEFAULT_TIMEOUT_SECONDS
   }
   return configured != null && configured > 0 ? configured : GENERIC_DEFAULT_TIMEOUT_SECONDS
+}
+
+function setConfigValue(config: Record<string, any>, key: string, value: unknown): boolean {
+  if (config[key] === value) return false
+  config[key] = value
+  return true
 }
 
 function applyFamilyStartupDefaults(config: Partial<ServerConfig>, modelPath?: string): boolean {
@@ -339,8 +347,10 @@ function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
   return out
 }
 
-function applyBundleStartupDefaults(config: Partial<ServerConfig>, modelPath?: string): void {
+function applyBundleStartupDefaults(config: Partial<ServerConfig>, modelPath?: string): boolean {
   const defs = readBundleStartupDefaults(modelPath)
+  const mutable = config as Record<string, any>
+  let changed = false
 
   // Startup generation defaults are model-owned. Keep the saved/display config
   // aligned with bundle sampling metadata and clear old generic startup
@@ -348,22 +358,23 @@ function applyBundleStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
   // --default-* flags. max_new_tokens is also bundle-owned, but it must not be
   // copied into a hidden session-level --max-tokens default. Users change
   // output length per chat or per API request.
-  config.defaultTemperature = defs.defaultTemperature ?? 0
-  config.defaultTopP = defs.defaultTopP ?? 0
-  ;(config as any).defaultTopK = defs.defaultTopK ?? 0
-  ;(config as any).defaultMinP = defs.defaultMinP ?? 0
-  ;(config as any).defaultRepetitionPenalty = defs.defaultRepetitionPenalty ?? 0
-  ;(config as any).defaultMaxNewTokens = defs.maxTokens ?? 0
+  changed = setConfigValue(mutable, 'defaultTemperature', defs.defaultTemperature ?? 0) || changed
+  changed = setConfigValue(mutable, 'defaultTopP', defs.defaultTopP ?? 0) || changed
+  changed = setConfigValue(mutable, 'defaultTopK', defs.defaultTopK ?? 0) || changed
+  changed = setConfigValue(mutable, 'defaultMinP', defs.defaultMinP ?? 0) || changed
+  changed = setConfigValue(mutable, 'defaultRepetitionPenalty', defs.defaultRepetitionPenalty ?? 0) || changed
+  changed = setConfigValue(mutable, 'defaultMaxNewTokens', defs.maxTokens ?? 0) || changed
   const migrationKey = 'generationStartupDefaultsVersion'
-  if ((config as any)[migrationKey] !== 3) {
+  if (mutable[migrationKey] !== GENERATION_STARTUP_DEFAULTS_VERSION) {
     const oldHiddenMaxTokens =
       defs.maxTokens != null && Number(config.maxTokens) === Number(defs.maxTokens)
-    const oldGenericMaxTokens = [4096, 12000, 12068, 32768].includes(Number(config.maxTokens))
+    const oldGenericMaxTokens = LEGACY_GENERIC_MAX_OUTPUT_TOKENS.has(Number(config.maxTokens))
     if (oldHiddenMaxTokens || oldGenericMaxTokens) {
-      config.maxTokens = 0
+      changed = setConfigValue(mutable, 'maxTokens', 0) || changed
     }
-    ;(config as any)[migrationKey] = 3
+    changed = setConfigValue(mutable, migrationKey, GENERATION_STARTUP_DEFAULTS_VERSION) || changed
   }
+  return changed
 }
 
 const CACHE_STACK_STARTUP_DEFAULTS_VERSION = 2
@@ -991,11 +1002,11 @@ export class SessionManager extends EventEmitter {
     config.modelPath = session.modelPath
     config.host = session.host
     config.port = session.port
-    applyBundleStartupDefaults(config, config.modelPath)
+    const bundleDefaultsChanged = applyBundleStartupDefaults(config, config.modelPath)
     const migrated = applyCacheStackStartupDefaultMigration(config, config.modelPath)
     const familyDefaultsChanged = applyFamilyStartupDefaults(config, config.modelPath)
     const markedCurrent = markCacheStackStartupDefaultsCurrent(config)
-    if (migrated || familyDefaultsChanged || markedCurrent) {
+    if (bundleDefaultsChanged || migrated || familyDefaultsChanged || markedCurrent) {
       // Persist the migrated config so the settings UI reflects the corrected
       // values on next render and the same migration doesn't have to re-fire
       // on every session start. Without this writeback the saved config keeps
@@ -1003,7 +1014,7 @@ export class SessionManager extends EventEmitter {
       // values.
       try {
         db.updateSession(session.id, { config: JSON.stringify(config) })
-        console.log(`[SESSION] Persisted cache/family startup defaults for session ${session.id}`)
+        console.log(`[SESSION] Persisted startup defaults for session ${session.id}`)
       } catch (e) {
         console.warn(`[SESSION] Failed to persist migration for ${session.id}: ${e}`)
       }
@@ -1090,6 +1101,9 @@ export class SessionManager extends EventEmitter {
             if (config.reasoningParser !== '') {
               config.reasoningParser = freshConfig.reasoningParser || 'auto'
             }
+          }
+          if (freshFamily === 'minimax' && config.reasoningParser !== '') {
+            config.reasoningParser = freshConfig.reasoningParser || 'auto'
           }
           if (freshFamily === 'deepseek-v4') {
             const dsv4PrefixOptIn = config.dsv4PrefixCache === true
@@ -2503,10 +2517,14 @@ export class SessionManager extends EventEmitter {
     const effectiveAutoTool = config.enableAutoToolChoice ?? detected.enableAutoToolChoice
 
     const userReasoningParser = config.reasoningParser
-    const effectiveReasoningParser = userReasoningParser === ''
+    const requestedReasoningParser = userReasoningParser === ''
       ? undefined                     // User explicitly chose "None"
       : (userReasoningParser && userReasoningParser !== 'auto' ? userReasoningParser
         : detected.reasoningParser)  // Fallback to detection if auto or missing
+    const effectiveReasoningParser = canonicalizeReasoningParserForCli(requestedReasoningParser)
+    if (requestedReasoningParser && !effectiveReasoningParser) {
+      console.warn(`[SESSION] Ignoring unsupported reasoning parser "${requestedReasoningParser}" for CLI launch`)
+    }
 
     // Pass resolved parsers directly to the CLI so backend doesn't guess.
     // When a tool parser is set, --enable-auto-tool-choice is required by the engine

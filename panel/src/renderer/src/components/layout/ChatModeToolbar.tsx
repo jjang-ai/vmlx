@@ -4,6 +4,7 @@ import { ChatSettings } from '../chat/ChatSettings'
 import { ServerSettingsDrawer } from '../sessions/ServerSettingsDrawer'
 import { useSessionsContext, type SessionSummary } from '../../contexts/SessionsContext'
 import { isImageSession } from '../../../../shared/sessionUtils'
+import { canonicalizeReasoningParserForCli } from '../../../../shared/reasoningParserAliases'
 
 interface ChatModeToolbarProps {
   activeChatId: string | null
@@ -63,13 +64,13 @@ export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange
               if (detected?.supportsThinking === false || !detected?.reasoningParser) {
                 setEffectiveReasoningParser(undefined)
               } else if (cfg.reasoningParser && cfg.reasoningParser !== 'auto') {
-                setEffectiveReasoningParser(cfg.reasoningParser)
+                setEffectiveReasoningParser(canonicalizeReasoningParserForCli(cfg.reasoningParser))
               } else {
-                setEffectiveReasoningParser(detected.reasoningParser)
+                setEffectiveReasoningParser(canonicalizeReasoningParserForCli(detected.reasoningParser))
               }
             }).catch((err) => console.error('Failed to load session info:', err))
           } else if (cfg.reasoningParser && cfg.reasoningParser !== 'auto') {
-            setEffectiveReasoningParser(cfg.reasoningParser)
+            setEffectiveReasoningParser(canonicalizeReasoningParserForCli(cfg.reasoningParser))
           }
         } catch { /* ignore */ }
       }

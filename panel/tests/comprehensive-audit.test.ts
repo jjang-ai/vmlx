@@ -225,7 +225,7 @@ const FAMILY_CONFIGS: Record<string, Partial<DetectedConfig>> = {
   minimax: {
     cacheType: "kv",
     toolParser: "minimax",
-    reasoningParser: "minimax_m2",
+    reasoningParser: "qwen3",
     enableAutoToolChoice: true,
   },
   "kimi-k2": {
@@ -1732,7 +1732,7 @@ describe("Phase 6: Tool & Reasoning Parsers", () => {
       expect(detectReasoningParser("gpt_oss")).toBe("openai_gptoss");
     });
 
-    it("MiniMax uses minimax_m2 parser", () => {
+    it("MiniMax uses its registered reasoning parser", () => {
       expect(detectReasoningParser("minimax")).toBe("minimax_m2");
     });
 

@@ -955,9 +955,9 @@ class TestOtherModelConfigs:
             yield
 
     def test_minimax_properties(self):
-        """MiniMax must use qwen3 reasoning parser with think_in_template."""
+        """MiniMax must use its registered reasoning parser with think_in_template."""
         config = _find_config_by_model_type(self._registry,"minimax")
-        assert config.reasoning_parser == "qwen3"
+        assert config.reasoning_parser == "minimax_m2"
         assert config.think_in_template is True
         assert config.tool_parser == "minimax"
 

@@ -272,7 +272,7 @@ class ModelConfigRegistry:
         capabilities block in jang_config.json of the form:
 
             "capabilities": {
-              "reasoning_parser": "qwen3 | deepseek_r1 | mistral | gemma4",
+              "reasoning_parser": "qwen3 | deepseek_r1 | minimax_m2 | mistral | gemma4",
               "tool_parser":      "qwen | minimax | deepseek | nemotron | mistral | gemma4 | glm47",
               "think_in_template": true | false,
               "supports_tools":    true,
@@ -399,6 +399,7 @@ class ModelConfigRegistry:
             is_ling_family = base.family_name == "ling"
             is_zaya_family = base.family_name in {"zaya", "zaya1_vl"}
             is_hy3_family = base.family_name == "hy_v3"
+            is_minimax_family = base.family_name == "minimax"
             preserve_template_metadata_when_no_thinking = False
 
             if is_zaya_family:
@@ -430,13 +431,24 @@ class ModelConfigRegistry:
                 updates["supports_thinking"] = True
                 updates["reasoning_parser"] = "qwen3"
                 updates["think_in_template"] = False
+            elif is_minimax_family:
+                # Some v1.5.45-era MiniMax sidecars stamped qwen3 even though
+                # the panel emits the MiniMax-specific parser and the CLI only
+                # accepts registered parser ids. Keep the family parser
+                # canonical here so source, packaged app, and CLI agree.
+                updates["reasoning_parser"] = "minimax_m2"
             elif base_supports_thinking is False:
                 updates["supports_thinking"] = False
             elif isinstance(sth, bool):
                 updates["supports_thinking"] = sth
             if (
                 rp is not None
-                and not (is_zaya_family or is_ling_family or is_hy3_family)
+                and not (
+                    is_zaya_family
+                    or is_ling_family
+                    or is_hy3_family
+                    or is_minimax_family
+                )
                 and base_supports_thinking is not False
             ):
                 updates["reasoning_parser"] = rp if rp != "none" else None

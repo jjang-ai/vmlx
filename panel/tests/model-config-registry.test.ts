@@ -811,7 +811,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.reasoningParser).toBe('minimax_m2')
   })
 
-  it('keeps MiniMax reasoning parser when stale JANG sidecar says qwen3', () => {
+  it('uses the registered MiniMax reasoning parser even when bundle sidecars say qwen3', () => {
     const dir = makeModelDir(
       { model_type: 'minimax_m2' },
       {

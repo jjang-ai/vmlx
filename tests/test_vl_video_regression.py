@@ -4275,8 +4275,8 @@ class TestMLLMModelConfigMapping:
     def test_minimax_family_has_parsers(self):
         """Family is registered under 'minimax' (not 'minimax_m2') with
         model_types covering minimax / minimax_m2 / minimax_m2_5. The
-        MiniMax-M2.x models use tool_parser=minimax + reasoning=qwen3
-        (per JANG capabilities stamp)."""
+        MiniMax-M2.x models use tool_parser=minimax + reasoning=minimax_m2.
+        Stale bundle stamps that say qwen3 are normalized by the registry."""
         from vmlx_engine.model_config_registry import ModelConfigRegistry
         from vmlx_engine.model_configs import register_all
         reg = ModelConfigRegistry()
@@ -4290,7 +4290,7 @@ class TestMLLMModelConfigMapping:
             "minimax_m2 inner model_type must map to minimax family"
         )
         assert c.tool_parser == "minimax"
-        assert c.reasoning_parser == "qwen3"
+        assert c.reasoning_parser == "minimax_m2"
 
 
 class TestMlxstudio78MetalWorkingSetGuard:
@@ -6841,8 +6841,7 @@ class TestJangStampAutoDetectsParsers:
         assert "Tier 1 — JANG-stamped" in src or "detection_source=jang_stamped" in src
 
     def test_minimax_maps_to_minimax_tool_parser(self):
-        """Live-verified live 24-model matrix — MiniMax JANG stamps
-        family=minimax_m2, tool_parser=minimax, reasoning=qwen3."""
+        """MiniMax JANG uses the MiniMax tool parser and canonical reasoning parser."""
         from vmlx_engine.model_config_registry import get_model_config_registry
         import os
         path = "/Users/example/.mlxstudio/models/MLXModels/dealignai/MiniMax-M2.7-JANGTQ-CRACK"
@@ -6853,7 +6852,7 @@ class TestJangStampAutoDetectsParsers:
         c = reg.lookup(path)
         assert c.family_name == "minimax_m2"
         assert c.tool_parser == "minimax"
-        assert c.reasoning_parser == "qwen3"  # MiniMax uses <think> tags
+        assert c.reasoning_parser == "minimax_m2"
 
     def test_qwen36_jangtq_is_detected_as_vl(self):
         """Qwen3.6-JANGTQ has vision — jang_config modality=vision must
@@ -9914,7 +9913,7 @@ class TestReasoningLeakNonStreamVsStream:
        output in new `GenerationOutput.raw_text` field; server uses
        `raw_text or text` for reasoning extraction.
 
-    3. MiniMax M2.7: inherits qwen3 parser via registry, cascaded-fix.
+    3. MiniMax M2.7: uses the registered minimax_m2 parser via registry.
        Live-verified CLEAN post-fix.
 
     All three families live-tested T1/T2/T3 + non-stream + streaming + tools.

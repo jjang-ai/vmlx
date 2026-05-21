@@ -1280,6 +1280,12 @@ describe('Media attachment product path', () => {
     expect(source).toContain('sessionManager.emit("session:log", { sessionId, data })')
   })
 
+  it('Thinking Auto and Off clear stale reasoning effort in chat settings', () => {
+    const source = readFileSync('src/renderer/src/components/chat/ChatSettings.tsx', 'utf8')
+    expect(source).toContain('onClick={() => updateThinkingMode(undefined, undefined)}')
+    expect(source).toContain('onClick={() => updateThinkingMode(false, undefined)}')
+  })
+
   it('message rendering includes audio controls for persisted audio parts', () => {
     const source = readFileSync('src/renderer/src/components/chat/MessageBubble.tsx', 'utf8')
     expect(source).toContain("p.type === 'input_audio' && p.input_audio?.data")

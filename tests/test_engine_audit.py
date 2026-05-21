@@ -84,13 +84,13 @@ class TestParserRegistryParity:
     def test_all_reasoning_parsers_registered(self):
         from vmlx_engine.reasoning import list_parsers
         parsers = list_parsers()
-        expected = ["qwen3", "deepseek_r1", "openai_gptoss"]
+        expected = ["qwen3", "deepseek_r1", "minimax_m2", "openai_gptoss"]
         for name in expected:
             assert name in parsers, f"Reasoning parser '{name}' not registered"
 
     def test_all_reasoning_parsers_instantiable(self):
         from vmlx_engine.reasoning import get_parser
-        for name in ["qwen3", "deepseek_r1", "openai_gptoss"]:
+        for name in ["qwen3", "deepseek_r1", "minimax_m2", "openai_gptoss"]:
             parser = get_parser(name)()
             assert hasattr(parser, "extract_reasoning")
             assert hasattr(parser, "extract_reasoning_streaming")
@@ -169,6 +169,7 @@ class TestToolParserReasoningParserMapping:
 
         expected = {
             "qwen3": "qwen3",
+            "minimax": "minimax_m2",
             "deepseek": "deepseek_r1",
             "glm47-flash": "openai_gptoss",
             "gpt-oss": "openai_gptoss",
@@ -4063,7 +4064,12 @@ class TestStartupCompatibilityGuards:
 class TestZayaCCACachePolicy:
     """ZAYA/CCA must not fall through generic hybrid cache paths."""
 
-    def _write_minimax_fixture(self, tmp_path):
+    def _write_minimax_fixture(
+        self,
+        tmp_path,
+        *,
+        stamped_reasoning_parser: str = "minimax_m2",
+    ):
         (tmp_path / "config.json").write_text(json.dumps({
             "model_type": "minimax",
             "text_config": {
@@ -4080,7 +4086,7 @@ class TestZayaCCACachePolicy:
             },
             "capabilities": {
                 "family": "minimax",
-                "reasoning_parser": "qwen3",
+                "reasoning_parser": stamped_reasoning_parser,
                 "think_in_template": True,
                 "supports_thinking": True,
                 "cache_type": "kv",
@@ -4090,7 +4096,7 @@ class TestZayaCCACachePolicy:
             "chat": {
                 "reasoning": {
                     "supported": True,
-                    "parser": "qwen3",
+                    "parser": stamped_reasoning_parser,
                 }
             },
         }))
@@ -4193,6 +4199,22 @@ class TestZayaCCACachePolicy:
         assert cfg.reasoning_parser == "qwen3"
         assert cfg.think_in_template is False
         assert cfg.supports_thinking is True
+
+    def test_registry_overrides_stale_minimax_qwen3_sidecar(self, tmp_path):
+        from vmlx_engine.model_config_registry import get_model_config_registry
+
+        model_dir = self._write_minimax_fixture(
+            tmp_path,
+            stamped_reasoning_parser="qwen3",
+        )
+        registry = get_model_config_registry()
+        registry.clear_cache()
+
+        cfg = registry.lookup(str(model_dir))
+
+        assert cfg.family_name == "minimax"
+        assert cfg.tool_parser == "minimax"
+        assert cfg.reasoning_parser == "minimax_m2"
 
     def test_zaya_auto_defaults_to_no_think_but_explicit_on_still_works(self, tmp_path):
         from vmlx_engine import server
@@ -4312,7 +4334,7 @@ class TestZayaCCACachePolicy:
             server._default_enable_thinking = old_default
 
         assert cfg.supports_thinking is True
-        assert cfg.reasoning_parser == "qwen3"
+        assert cfg.reasoning_parser == "minimax_m2"
         assert auto_resolved is None
         assert explicit_on is True
 
@@ -6237,7 +6259,10 @@ class TestTurboQuantKVTelemetry:
         assert 'unlimitedLabel="Default (2048)"' in session_form_source
         assert "isLingCrackModelPath" not in sessions_source
         assert "out.defaultTemperature = 20" not in sessions_source
-        assert "defaultMinP = defs.defaultMinP ?? 0" in sessions_source
+        assert (
+            "defaultMinP = defs.defaultMinP ?? 0" in sessions_source
+            or "setConfigValue(mutable, 'defaultMinP', defs.defaultMinP ?? 0)" in sessions_source
+        )
         native_mtp_idx = sessions_source.index("// Native in-model MTP")
         generation_defaults_idx = sessions_source.index("// Generation defaults", native_mtp_idx)
         native_mtp_launch_block = sessions_source[native_mtp_idx:generation_defaults_idx]

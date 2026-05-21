@@ -39,6 +39,7 @@ function buildRequestBody(
     const shouldForwardReasoningEffort =
         !!overrides?.reasoningEffort &&
         overrides.enableThinking !== false &&
+        (detectedFamily !== 'hy3' || overrides.enableThinking === true) &&
         (sessionHasReasoningParser || detectedFamily === 'deepseek-v4')
     const outputBudget = overrides?.maxTokens
     const effectiveEnableThinkingOverride =
@@ -359,6 +360,47 @@ describe('buildRequestBody — Responses API', () => {
         const body = buildRequestBody('responses', 'zaya-vl-k', messages, { enableThinking: true }, false, true, undefined, 'zaya1-vl')
         expect(body.enable_thinking).toBe(true)
         expect(body.chat_template_kwargs).toEqual({ enable_thinking: true })
+    })
+
+    it('Hy3 local Responses Auto omits enable_thinking and reasoning_effort', () => {
+        const body = buildRequestBody('responses', 'hy3', messages, undefined, false, true, undefined, 'hy3')
+        expect(body.enable_thinking).toBeUndefined()
+        expect(body.chat_template_kwargs).toBeUndefined()
+        expect(body.reasoning_effort).toBeUndefined()
+    })
+
+    it('Hy3 local Responses Auto suppresses stale High effort', () => {
+        const body = buildRequestBody(
+            'responses',
+            'hy3',
+            messages,
+            { enableThinking: undefined, reasoningEffort: 'high' },
+            false,
+            true,
+            undefined,
+            'hy3',
+        )
+        expect(body.enable_thinking).toBeUndefined()
+        expect(body.chat_template_kwargs).toBeUndefined()
+        expect(body.reasoning_effort).toBeUndefined()
+    })
+
+    it('Hy3 local Responses Thinking Off sends explicit off and no High effort', () => {
+        const body = buildRequestBody(
+            'responses',
+            'hy3',
+            messages,
+            { enableThinking: false, reasoningEffort: 'high' },
+            false,
+            true,
+            undefined,
+            'hy3',
+        )
+        expect(body.enable_thinking).toBe(false)
+        expect(body.chat_template_kwargs).toEqual({ enable_thinking: false })
+        expect(body.reasoning_effort).toBeUndefined()
+        expect(body.chat_template_kwargs.reasoning_effort).toBeUndefined()
+        expect(body.chat_template_kwargs.thinking_budget).toBeUndefined()
     })
 })
 

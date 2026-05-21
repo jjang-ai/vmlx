@@ -13,6 +13,7 @@ import { describe, it, expect } from 'vitest'
 import { resolveCacheLaunchPolicy } from '../src/shared/cacheControlPolicy'
 import { buildMcpPolicyArgs } from '../src/shared/mcpPolicy'
 import { canonicalizeToolParserId } from '../src/shared/toolParserAliases'
+import { canonicalizeReasoningParserForCli } from '../src/shared/reasoningParserAliases'
 
 // ─── SessionConfig replica (from SessionConfigForm.tsx) ──────────────────────
 
@@ -246,10 +247,11 @@ function buildCommandPreview(
         : canonicalizeToolParserId(config.toolCallParser && config.toolCallParser !== 'auto' ? config.toolCallParser
             : detected?.toolParser)
     const effectiveAutoTool = config.enableAutoToolChoice ?? detected?.enableAutoToolChoice
-    const effectiveReasoningParser = config.reasoningParser === ''
+    const requestedReasoningParser = config.reasoningParser === ''
         ? undefined
         : (config.reasoningParser && config.reasoningParser !== 'auto' ? config.reasoningParser
             : detected?.reasoningParser)
+    const effectiveReasoningParser = canonicalizeReasoningParserForCli(requestedReasoningParser)
 
     const cacheLaunchPolicy = resolveCacheLaunchPolicy({
         continuousBatching: cacheStackActive,
@@ -889,6 +891,28 @@ describe('Performance & Generation', () => {
         expect(getFlagValue(out, '--max-tokens')).toBe('8192')
     })
 
+    it('surfaces Max Output Tokens separately from Max Context Tokens', () => {
+        const formSource = readFileSync(resolve(__dirname, '../src/renderer/src/components/sessions/SessionConfigForm.tsx'), 'utf8')
+        const maxOutputIndex = formSource.indexOf('label="Max Output Tokens"')
+        const maxContextIndex = formSource.indexOf('label="Max Context Tokens"')
+
+        expect(maxOutputIndex).toBeGreaterThan(-1)
+        expect(maxContextIndex).toBeGreaterThan(-1)
+        expect(maxOutputIndex).toBeLessThan(maxContextIndex)
+        expect(formSource).toContain("onChange={v => onChange('maxTokens', v)}")
+        expect(formSource).toContain('maps to --max-tokens')
+        expect(formSource).toContain('does not change prompt/context length')
+    })
+
+    it('persists bundle/default migration so stale 32768 sessions do not keep relaunching huge output caps', () => {
+        const source = readFileSync(resolve(__dirname, '../src/main/sessions.ts'), 'utf8')
+        const helper = readFileSync(resolve(__dirname, '../src/shared/sessionConfigMigrations.ts'), 'utf8')
+        expect(source).toContain('function applyBundleStartupDefaults(config: Partial<ServerConfig>, modelPath?: string): boolean')
+        expect(source).toContain('const bundleDefaultsChanged = applyBundleStartupDefaults(config, config.modelPath)')
+        expect(source).toContain('bundleDefaultsChanged || migrated || familyDefaultsChanged || markedCurrent')
+        expect(helper).toContain('32768')
+    })
+
     it('does not synthesize a huge max tokens flag when set to 0 (model/server default)', () => {
         const out = preview({ maxTokens: 0 })
         expect(getFlagValue(out, '--max-tokens')).toBeUndefined()
@@ -1023,6 +1047,24 @@ describe('Tool Integration', () => {
     it('manual reasoning parser takes priority over detected', () => {
         const out = preview({ reasoningParser: 'deepseek_r1' }, { reasoningParser: 'qwen3' })
         expect(getFlagValue(out, '--reasoning-parser')).toBe('deepseek_r1')
+    })
+
+    it('passes MiniMax through the registered minimax_m2 reasoning parser', () => {
+        const out = preview(
+            { reasoningParser: 'minimax_m2', toolCallParser: 'minimax', enableAutoToolChoice: true },
+            { family: 'minimax', reasoningParser: 'minimax_m2', toolParser: 'minimax', enableAutoToolChoice: true },
+        )
+
+        expect(getFlagValue(out, '--tool-call-parser')).toBe('minimax')
+        expect(getFlagValue(out, '--reasoning-parser')).toBe('minimax_m2')
+    })
+
+    it('exposes MiniMax as its own reasoning parser option instead of under qwen3', () => {
+        const formSource = readFileSync(resolve(__dirname, '../src/renderer/src/components/sessions/SessionConfigForm.tsx'), 'utf8')
+
+        expect(formSource).toContain("value: 'minimax_m2'")
+        expect(formSource).toContain('MiniMax M2')
+        expect(formSource).not.toContain('Qwen / QwQ / MiniMax / StepFun')
     })
 
     // ── enableAutoToolChoice auto-detection regression tests ──
@@ -1300,6 +1342,19 @@ describe('Generation Defaults', () => {
         expect(source).toContain('max_tokens IN (4096, 12000, 12068, 32768)')
         expect(source).toContain('migration_clear_model_settings_sampling_1_5_37')
         expect(source).toContain("reasoning_mode = 'auto'")
+    })
+
+    it('database clears legacy session maxTokens before settings UI or launch can reuse them', () => {
+        const source = readFileSync('src/main/database.ts', 'utf8')
+        const helper = readFileSync('src/shared/sessionConfigMigrations.ts', 'utf8')
+        expect(source).toContain('migration_clear_legacy_session_max_output_1_5_45_2')
+        expect(source).toMatch(/legacySessionMaxOutputKey[\s\S]*SELECT id, model_path, config FROM sessions/)
+        expect(source).toContain('migrateLegacySessionStartupConfig(')
+        expect(source).toContain('session.model_path')
+        expect(helper).toContain('config.maxTokens = 0')
+        expect(helper).toContain('config.generationStartupDefaultsVersion = GENERATION_STARTUP_DEFAULTS_VERSION')
+        expect(helper).toContain("config.reasoningParser === 'qwen3'")
+        expect(helper).toContain("config.reasoningParser = 'minimax_m2'")
     })
 
     it('saving chat overrides never syncs sampling or thinking back to model_settings', () => {
@@ -1610,7 +1665,7 @@ describe('Default IP and New Settings', () => {
         expect(source).toContain('Number(config.cacheStackStartupDefaultsVersion || 0) >= CACHE_STACK_STARTUP_DEFAULTS_VERSION')
         expect(source).toContain('const markedCurrent = markCacheStackStartupDefaultsCurrent(config)')
         expect(source).toContain('const familyDefaultsChanged = applyFamilyStartupDefaults(config, config.modelPath)')
-        expect(source).toContain('if (migrated || familyDefaultsChanged || markedCurrent)')
+        expect(source).toContain('if (bundleDefaultsChanged || migrated || familyDefaultsChanged || markedCurrent)')
         expect(source).toContain('markCacheStackStartupDefaultsCurrent(merged as Partial<ServerConfig>)')
         expect(source).toContain('cacheStackStartupDefaultsVersion: CACHE_STACK_STARTUP_DEFAULTS_VERSION')
     })

@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { app, safeStorage } from "electron";
 import { join } from "path";
 import { existsSync, unlinkSync, renameSync } from "fs";
+import { migrateLegacySessionStartupConfig } from "../shared/sessionConfigMigrations";
 
 function encryptValue(value: string): string {
   if (!value || !safeStorage.isEncryptionAvailable()) return value;
@@ -720,8 +721,8 @@ class DatabaseManager {
         .get(samplingResetKey) as { value: string } | undefined;
       if (!samplingResetDone) {
         const sessions = this.db
-          .prepare("SELECT id, config FROM sessions")
-          .all() as { id: string; config: string }[];
+          .prepare("SELECT id, model_path, config FROM sessions")
+          .all() as { id: string; model_path?: string; config: string }[];
         const updateSession = this.db.prepare(
           "UPDATE sessions SET config = ?, updated_at = ? WHERE id = ?",
         );
@@ -762,6 +763,55 @@ class DatabaseManager {
             "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
           )
           .run(samplingResetKey, String(Date.now()));
+      }
+
+      // v1.5.45 max-output recovery:
+      // Some installed sessions carried the old generic session-level
+      // maxTokens=32768 (and related historical defaults). That bypasses the
+      // engine's bounded model-owned fallback because the launcher sees an
+      // explicit --max-tokens value. The same vintage can carry
+      // MiniMax parser aliases. Clear only the known historical defaults;
+      // non-generic user edits remain explicit.
+      const legacySessionMaxOutputKey =
+        "migration_clear_legacy_session_max_output_1_5_45_2";
+      const legacySessionMaxOutputDone = this.db
+        .prepare("SELECT value FROM settings WHERE key = ?")
+        .get(legacySessionMaxOutputKey) as { value: string } | undefined;
+      if (!legacySessionMaxOutputDone) {
+        const sessions = this.db
+          .prepare("SELECT id, model_path, config FROM sessions")
+          .all() as { id: string; model_path?: string; config: string }[];
+        const updateSession = this.db.prepare(
+          "UPDATE sessions SET config = ?, updated_at = ? WHERE id = ?",
+        );
+        let migratedSessionCount = 0;
+        for (const session of sessions) {
+          try {
+            const parsed = JSON.parse(session.config || "{}");
+            if (!parsed || typeof parsed !== "object") continue;
+            const changed = migrateLegacySessionStartupConfig(
+              parsed,
+              session.model_path,
+            );
+            if (changed) {
+              updateSession.run(JSON.stringify(parsed), Date.now(), session.id);
+              migratedSessionCount += 1;
+            }
+          } catch {
+            // Leave malformed session JSON untouched; normal session loading
+            // already handles parse failures defensively.
+          }
+        }
+        if (migratedSessionCount > 0) {
+          console.log(
+            `[DB] v1.5.45 cleared legacy session maxTokens in ${migratedSessionCount} session config(s)`,
+          );
+        }
+        this.db
+          .prepare(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+          )
+          .run(legacySessionMaxOutputKey, String(Date.now()));
       }
 
       // v1.5.37 stale sampling recovery:

@@ -2,6 +2,40 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [1.5.46] - 2026-05-20
+
+### Fixed
+- **Hy3 Auto/Off requests no longer inherit stale thinking effort**: saved High
+  reasoning effort is only forwarded when thinking is explicitly enabled, so
+  Auto and Off requests stay model-owned instead of sending old
+  `enable_thinking` / `reasoning_effort` state.
+- **Legacy session output caps are cleared on startup**: old generic
+  `maxTokens` values such as 4096, 12000, 12068, and 32768 are reset to
+  model-owned output length, while prompt/context length remains controlled by
+  `maxContextLength` / `--max-prompt-tokens`.
+- **MiniMax M2 reasoning parser detection is canonical**: MiniMax M2/M2.5/M2.7
+  now uses `minimax_m2` across engine registry, stale sidecar overrides, panel
+  parser aliases, and CLI launch arguments.
+
+### Verified
+- Focused panel request/settings/gateway/MCP tests passed: 496 passed, 3
+  skipped; expanded panel release wiring passed: 859 passed, 3 skipped; panel
+  TypeScript typecheck passed.
+- Focused Python release/server contracts passed: 68 passed; expanded Python
+  release slice passed: 1120 passed, 45 skipped; diff whitespace check passed.
+- Live source Hy3 JANGTQ2 gate passed with paged/TurboQuant cache hit evidence
+  and exact multi-turn recall (`color=blue, animal=cat`).
+- Live source MiniMax-M2.7-Small-JANGTQ smoke passed with `tool_parser=minimax`,
+  `reasoning_parser=minimax_m2`, paged/TurboQuant cache hits, and multi-turn
+  recall.
+- Packaged 1.5.46 Sequoia and Tahoe DMGs were Developer ID signed, notarized,
+  stapled, Gatekeeper accepted, and passed the mounted-app release gate against
+  the bundled Python/JANG runtime.
+
+### Known Follow-ups
+- DSV4 Flash long full-output/code-generation production claims remain blocked
+  by the existing exact-code/runtime-quality issues documented in v1.5.45.
+
 ## [1.5.45] - 2026-05-20
 
 ### Fixed

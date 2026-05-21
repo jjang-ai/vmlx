@@ -80,7 +80,8 @@ Pure Python changes — only step 1 above needed.
 
 | Parser | Models | Format |
 |--------|--------|--------|
-| `qwen3` | Qwen3, Qwen3-Coder, QwQ-32B, StepFun, MiniMax-M2.5 | `<think>...</think>content` (strict) |
+| `qwen3` | Qwen3, Qwen3-Coder, QwQ-32B, StepFun | `<think>...</think>content` (strict) |
+| `minimax_m2` | MiniMax M2 / M2.5 | `<think>...</think>content` (MiniMax M2 parser) |
 | `deepseek_r1` | DeepSeek-R1, R1-Distill, R1-0528 | `<think>...</think>content` (lenient) |
 | `openai_gptoss` | GLM-4.7, GLM-4.7 Flash, GLM-Z1, GPT-OSS | `<\|channel\|>analysis...final` (Harmony) |
 

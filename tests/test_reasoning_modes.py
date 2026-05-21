@@ -658,7 +658,7 @@ def test_minimax_m2_preserves_sampling_values_without_family_floor(tmp_path, mon
             "family": "minimax",
             "cache_type": "kv",
             "tool_parser": "minimax",
-            "reasoning_parser": "qwen3",
+            "reasoning_parser": "minimax_m2",
             "think_in_template": True,
             "modality": "text",
         }

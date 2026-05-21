@@ -12,6 +12,7 @@ import { LogsPanel } from './LogsPanel'
 import { useToast } from '../Toast'
 import { useAppState } from '../../contexts/AppStateContext'
 import { useSessionsContext } from '../../contexts/SessionsContext'
+import { canonicalizeReasoningParserForCli } from '../../../../shared/reasoningParserAliases'
 
 interface Session {
   id: string
@@ -100,12 +101,12 @@ export function SessionView({ sessionId, onBack }: SessionViewProps) {
               if (detected?.supportsThinking === false || !detected?.reasoningParser) {
                 setEffectiveReasoningParser(undefined)
               } else if (cfg.reasoningParser && cfg.reasoningParser !== 'auto') {
-                setEffectiveReasoningParser(cfg.reasoningParser)
+                setEffectiveReasoningParser(canonicalizeReasoningParserForCli(cfg.reasoningParser))
               } else {
-                setEffectiveReasoningParser(detected.reasoningParser)
+                setEffectiveReasoningParser(canonicalizeReasoningParserForCli(detected.reasoningParser))
               }
             } else if (cfg.reasoningParser && cfg.reasoningParser !== 'auto') {
-              setEffectiveReasoningParser(cfg.reasoningParser)
+              setEffectiveReasoningParser(canonicalizeReasoningParserForCli(cfg.reasoningParser))
             }
           } catch (_) { /* ignore detection errors */ }
 
