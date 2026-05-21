@@ -21,6 +21,12 @@ FINISH_RE = re.compile(
     r"cycles=(?P<cycles>\d+)\s+accepted=(?P<accepted>\d+)/(?P<drafted>\d+)",
     re.IGNORECASE,
 )
+TEXT_FINISH_RE = re.compile(
+    r"MTP\[(?P<request>[^\]]+)\]\s+finish=(?P<finish>\S+)\s+"
+    r"tokens=(?P<tokens>\d+)\s+cycles=(?P<cycles>\d+)\s+"
+    r"accept=(?P<accepted>\d+)/(?P<drafted>\d+)",
+    re.IGNORECASE,
+)
 DEPTH_RE = re.compile(
     r"MLLM\s+MTP\[(?P<request>[^\]]+)\]\s+accept_by_depth\["
     r"d1=(?P<a1>\d+)/(?P<d1>\d+),d2=(?P<a2>\d+)/(?P<d2>\d+),"
@@ -55,6 +61,23 @@ def parse_log_lines(lines: Iterable[str]) -> dict[str, Any]:
                 {
                     "finish": finish.group("finish"),
                     "cycles": int(finish.group("cycles")),
+                    "accepted_tokens": accepted,
+                    "drafted_tokens": drafted,
+                    "acceptance_rate": _rate(accepted, drafted),
+                }
+            )
+            continue
+
+        text_finish = TEXT_FINISH_RE.search(line)
+        if text_finish:
+            request = _request_row(requests, text_finish.group("request"))
+            accepted = int(text_finish.group("accepted"))
+            drafted = int(text_finish.group("drafted"))
+            request.update(
+                {
+                    "finish": text_finish.group("finish"),
+                    "tokens": int(text_finish.group("tokens")),
+                    "cycles": int(text_finish.group("cycles")),
                     "accepted_tokens": accepted,
                     "drafted_tokens": drafted,
                     "acceptance_rate": _rate(accepted, drafted),

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -11,6 +12,7 @@ from vmlx_engine.native_mtp_examples.mtp_runtime_common import (
     build_server_command,
     print_json,
     require_live_run_allowed,
+    shell_join,
 )
 
 
@@ -32,6 +34,16 @@ def build_smoke_plan(
         mllm=mllm,
     )
     base_url = f"http://{host}:{port}"
+    payload = json.dumps(
+        {
+            "model": model_name,
+            "messages": [{"role": "user", "content": "Count 1, 2, 3."}],
+            "max_tokens": 16,
+            "temperature": 0,
+            "stream": False,
+        },
+        separators=(",", ":"),
+    )
     return {
         "dry_run": True,
         "no_model_load": True,
@@ -46,7 +58,7 @@ def build_smoke_plan(
                 "-H",
                 "Content-Type: application/json",
                 "-d",
-                '{"model":"' + model_name + '","messages":[{"role":"user","content":"Count 1, 2, 3."}],"max_tokens":16,"temperature":0,"stream":false}',
+                payload,
             ],
         ],
     }
@@ -83,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
             print("Dry-run only; server was not launched.")
             print(plan["server"]["shell"])
             for check in plan["checks"]:
-                print(" ".join(check))
+                print(shell_join(check))
         return 0
 
     require_live_run_allowed(allow_live=args.allow_live)

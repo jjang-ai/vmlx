@@ -121,6 +121,29 @@ def test_env_matrix_builds_default_depth_and_clamped_alias_rows(tmp_path):
         parse_depths("1,nope")
 
 
+def test_server_command_reports_validated_tuning_without_setting_depth_env(tmp_path):
+    from vmlx_engine.native_mtp_examples.mtp_runtime_common import build_server_command
+
+    (tmp_path / "vmlx_mtp_tuning.json").write_text(
+        json.dumps(
+            {
+                "native_mtp": {
+                    "validated": True,
+                    "output_equivalent": True,
+                    "best_depth": 2,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    plan = build_server_command(tmp_path)
+
+    assert plan["native_mtp_depth"] == 2
+    assert plan["native_mtp_depth_source"] == "vmlx_mtp_tuning.json:native_mtp.best_depth"
+    assert "VMLINUX_NATIVE_MTP_DEPTH" not in plan["env"]
+
+
 def test_parse_mtp_logs_detects_activation_accept_and_depth_telemetry():
     from vmlx_engine.native_mtp_examples.parse_mtp_logs import parse_log_lines
 
@@ -141,6 +164,23 @@ def test_parse_mtp_logs_detects_activation_accept_and_depth_telemetry():
     assert row["accept_events"][0]["acceptance_rate"] == 2 / 3
     assert row["accepted_by_depth"] == [4, 3, 3]
     assert row["acceptance_by_depth"] == [1.0, 0.75, 0.75]
+
+
+def test_parse_mtp_logs_detects_text_batch_generator_finish():
+    from vmlx_engine.native_mtp_examples.parse_mtp_logs import parse_log_lines
+
+    report = parse_log_lines(
+        [
+            "INFO MTP[7] finish=stop tokens=11 cycles=5 accept=4/5 (80.0%) emits[init=2,draft=4,bonus=2,verify=5]",
+        ]
+    )
+
+    assert report["acceptance_telemetry_present"] is True
+    row = report["requests"][0]
+    assert row["finish"] == "stop"
+    assert row["tokens"] == 11
+    assert row["accepted_tokens"] == 4
+    assert row["drafted_tokens"] == 5
 
 
 def test_parse_mtp_logs_summarizes_accept_only_telemetry():
@@ -181,5 +221,6 @@ def test_server_smoke_is_dry_run_and_live_guard_blocks(tmp_path):
     assert "serve" in plan["server"]["command"]
     assert plan["server"]["env"]["VMLINUX_NATIVE_MTP_DEPTH"] == "3"
     assert plan["checks"][0][-1].endswith("/health")
+    assert "evil;name" in build_smoke_plan(tmp_path, model_name="evil;name")["checks"][1][-1]
     with pytest.raises(SystemExit):
         require_live_run_allowed({}, allow_live=True)

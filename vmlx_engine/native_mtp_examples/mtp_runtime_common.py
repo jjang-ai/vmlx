@@ -165,15 +165,21 @@ def build_server_command(
     if disable_prefix_cache:
         command.append("--disable-prefix-cache")
     command.extend(str(item) for item in extra_args)
-    clamped_depth = clamp_native_mtp_depth(depth, default=DEFAULT_NATIVE_MTP_DEPTH)
+    if depth is None:
+        tuned_depth, tuned_source = tuning_depth(model_dir)
+        reported_depth = tuned_depth if tuned_depth is not None else DEFAULT_NATIVE_MTP_DEPTH
+        depth_source = tuned_source or "runtime_default"
+    else:
+        reported_depth = clamp_native_mtp_depth(depth, default=DEFAULT_NATIVE_MTP_DEPTH)
+        depth_source = "argument"
     return {
         "dry_run": True,
         "warning": LIVE_RUN_WARNING,
         "env": env,
         "command": [str(item) for item in command],
         "shell": command_with_env(env, command),
-        "native_mtp_depth": clamped_depth,
-        "native_mtp_depth_source": "argument" if depth is not None else "runtime_default_or_tuning",
+        "native_mtp_depth": reported_depth,
+        "native_mtp_depth_source": depth_source,
     }
 
 
