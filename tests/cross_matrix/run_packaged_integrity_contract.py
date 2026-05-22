@@ -22,6 +22,7 @@ from typing import Any
 
 DEFAULT_OUT = Path("build/current-packaged-integrity-contract-20260521.json")
 EXPECTED_OPEN_REQUIREMENT = "DSV4 long-output/code/file-generation quality is release-cleared"
+MIN_RELEASE_GATE_UNIT_TESTS = 34
 
 SOURCE_HASH_FILES = (
     "panel/scripts/release-gate-python-app.py",
@@ -133,7 +134,8 @@ def build_artifact(root: Path) -> dict[str, Any]:
     verifier_output = "\n".join(results["bundled_python_verifier"]["stdout_tail"])
     checks = {
         "release_gate_unit_contracts_pass": (
-            results["release_gate_unit_contracts"]["returncode"] == 0 and unit_passed >= 38
+            results["release_gate_unit_contracts"]["returncode"] == 0
+            and unit_passed >= MIN_RELEASE_GATE_UNIT_TESTS
         ),
         "bundled_python_verify_passes": results["bundled_python_verifier"]["returncode"] == 0,
         "bundled_engine_version_matches_package_json": (
