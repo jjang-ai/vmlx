@@ -74,7 +74,10 @@ def test_family_detection_contract_marker_validation_fails_if_required_row_missi
     result = {
         "engine_family_detection": {
             "returncode": 0,
-            "stdout_tail": ["test_qwen3_5_config PASSED"],
+            "stdout_tail": [
+                "test_qwen3_5_config PASSED",
+                "test_nemotron_h_stale_omni_stamp_without_media_stays_text_hybrid PASSED",
+            ],
         },
         "panel_family_detection": {
             "returncode": 0,

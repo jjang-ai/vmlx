@@ -123,6 +123,7 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
         "detects Ling/Bailing hybrid with tools and no reasoning parser",
     ),
     "nemotron_h_hybrid_text_not_stale_omni": (
+        "test_nemotron_h_stale_omni_stamp_without_media_stays_text_hybrid",
         "detects backend-covered model_type=nemotron_h_v2",
         "does not route Nemotron-H text extracts through MLLM",
     ),

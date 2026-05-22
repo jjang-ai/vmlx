@@ -1393,6 +1393,41 @@ class TestModelConfigs:
         assert config.tokenizer_fallback is True
         assert config.reasoning_parser == "deepseek_r1"
 
+    def test_nemotron_h_stale_omni_stamp_without_media_stays_text_hybrid(
+        self, registry, tmp_path
+    ):
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "nemotron_h_v2",
+                    "architectures": ["NemotronHForCausalLM"],
+                    "text_config": {"layer_types": ["mamba", "full_attention"]},
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "capabilities": {
+                        "family": "nemotron_h",
+                        "modality": "omni",
+                        "cache_type": "hybrid",
+                        "tool_parser": "nemotron",
+                        "reasoning_parser": "deepseek_r1",
+                    }
+                }
+            )
+        )
+        (tmp_path / "preprocessor_config.json").write_text("{}")
+
+        config = registry.lookup(str(tmp_path))
+
+        assert config.family_name == "nemotron_h"
+        assert config.cache_type == "hybrid"
+        assert config.tool_parser == "nemotron"
+        assert config.reasoning_parser == "deepseek_r1"
+        assert config.is_mllm is False
+
     # ── MiniMax coverage ──
 
     def test_minimax_config(self, registry):
