@@ -49,6 +49,8 @@ def test_max_output_context_contract_covers_all_public_api_surfaces():
     assert "clears legacy session maxTokens=32768 before launch can reuse it" in required
     assert "new chats preserve model-owned maxTokens while refusing inherited output caps" in required
 
+    assert "new_chat_output_caps_are_not_inherited_or_made_sticky" in gate.build_artifact.__code__.co_consts
+
     engine_command = gate.COMMANDS["engine_output_context_resolution"][1]
     panel_command = gate.COMMANDS["panel_output_context_wiring"][1]
     assert "-vv" in engine_command

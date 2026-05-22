@@ -300,6 +300,12 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "omits invalid persisted maxTokens values instead of poisoning Chat Completions" not in missing_markers
             and "omits invalid persisted maxTokens values instead of poisoning Responses" not in missing_markers
         ),
+        "new_chat_output_caps_are_not_inherited_or_made_sticky": (
+            not failed
+            and "default profiles cannot make maxTokens sticky on clean new chats" not in missing_markers
+            and "new chats preserve model-owned maxTokens while refusing inherited output caps" not in missing_markers
+            and "chat maxTokens save path cannot mutate session startup maxTokens" not in missing_markers
+        ),
         "all_family_max_token_precedence_stays_uniform": (
             not failed
             and "test_max_tokens_resolution_contract_applies_to_every_registered_family" not in missing_markers
