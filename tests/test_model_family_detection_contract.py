@@ -133,8 +133,22 @@ def test_decode_speed_gate_has_explicit_nemotron_omni_nano_jangtq4_row():
     row = ROWS["nemotron_omni_nano_jangtq4"]
     assert row.path == "/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ4-CRACK"
     assert row.tool_parser == "nemotron"
-    assert row.reasoning_parser == "qwen3"
+    assert row.reasoning_parser == "deepseek_r1"
     assert row.max_tokens <= 320
+
+
+def test_decode_speed_gate_matches_registry_parser_policy_for_ling_and_nemotron():
+    from tests.cross_matrix.run_decode_speed_gate import ROWS
+
+    for row_name in ("ling", "ling_crack", "ling_mxfp4"):
+        row = ROWS[row_name]
+        assert row.tool_parser == "deepseek"
+        assert row.reasoning_parser is None
+
+    for row_name in ("nemotron_jangtq", "nemotron_omni_nano_jangtq4", "nemotron_mxfp4"):
+        row = ROWS[row_name]
+        assert row.tool_parser == "nemotron"
+        assert row.reasoning_parser == "deepseek_r1"
 
 
 def test_dsv4_live_cache_gates_use_canonical_parser_and_no_legacy_32k_startup_cap():
