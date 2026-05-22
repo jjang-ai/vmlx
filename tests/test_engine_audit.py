@@ -818,6 +818,83 @@ class TestServerSamplingResolution:
         assert captured[1]["max_tokens"] == 256
         assert captured[1]["max_prompt_tokens"] == 4096
 
+    def test_legacy_completions_streaming_output_cap_overrides_server_default_without_touching_context_cap(
+        self,
+        monkeypatch,
+    ):
+        """Streaming `/v1/completions` must preserve the same cap semantics."""
+        from fastapi.testclient import TestClient
+
+        import vmlx_engine.server as server
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class FakeTokenizer:
+            has_thinking = False
+
+        class FakeEngine:
+            is_mllm = False
+            tokenizer = FakeTokenizer()
+            preserve_native_tool_format = False
+
+            async def stream_generate(self, **kwargs):
+                captured.append(dict(kwargs))
+                yield GenerationOutput(
+                    text="ok",
+                    new_text="ok",
+                    prompt_tokens=2,
+                    completion_tokens=1,
+                    finish_reason="stop",
+                    finished=True,
+                )
+
+        captured: list[dict] = []
+
+        monkeypatch.setattr(server, "_engine", FakeEngine())
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_name", "completion-stream-cap-model")
+        monkeypatch.setattr(server, "_api_key", None, raising=False)
+        monkeypatch.setattr(server, "_default_temperature", None)
+        monkeypatch.setattr(server, "_default_top_p", None)
+        monkeypatch.setattr(server, "_default_top_k", None)
+        monkeypatch.setattr(server, "_default_min_p", None)
+        monkeypatch.setattr(server, "_default_repetition_penalty", None)
+        monkeypatch.setattr(server, "_default_max_tokens", 384)
+        monkeypatch.setattr(server, "_default_max_tokens_explicit", True, raising=False)
+        monkeypatch.setattr(server, "_max_prompt_tokens", 32768)
+        server._jang_sampling_defaults_cache.clear()
+        server._generation_defaults_cache.clear()
+
+        client = TestClient(server.app)
+
+        explicit = client.post(
+            "/v1/completions",
+            json={
+                "model": "completion-stream-cap-model",
+                "prompt": "explicit streaming cap",
+                "stream": True,
+                "max_tokens": 1536,
+                "max_prompt_tokens": 12288,
+            },
+        )
+        defaulted = client.post(
+            "/v1/completions",
+            json={
+                "model": "completion-stream-cap-model",
+                "prompt": "default streaming cap",
+                "stream": True,
+                "max_prompt_tokens": 6144,
+            },
+        )
+
+        assert explicit.status_code == 200
+        assert defaulted.status_code == 200
+        assert "data: [DONE]" in explicit.text
+        assert "data: [DONE]" in defaulted.text
+        assert captured[0]["max_tokens"] == 1536
+        assert captured[0]["max_prompt_tokens"] == 12288
+        assert captured[1]["max_tokens"] == 384
+        assert captured[1]["max_prompt_tokens"] == 6144
+
     def test_reasoning_effort_preserves_bundle_max_new_tokens(
         self,
         tmp_path,
