@@ -1061,6 +1061,19 @@ describe('Tool Integration', () => {
         expect(missing).toEqual([])
     })
 
+    it('reasoning parser dropdown covers every parser the panel registry can emit', () => {
+        const registrySource = readFileSync('src/main/model-config-registry.ts', 'utf8')
+        const formSource = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
+        const emittedParsers = [...registrySource.matchAll(/reasoningParser: '([^']+)'/g)].map(match => match[1])
+        const uiValues = new Set([...formSource.matchAll(/value: '([^']+)'/g)].map(match => match[1]))
+
+        const missing = [...new Set(emittedParsers)].filter(parser => {
+            return !uiValues.has(parser)
+        })
+
+        expect(missing).toEqual([])
+    })
+
     it('manual tool parser takes priority over detected', () => {
         const out = preview({ enableAutoToolChoice: true, toolCallParser: 'llama' }, { toolParser: 'qwen' })
         expect(getFlagValue(out, '--tool-call-parser')).toBe('llama')

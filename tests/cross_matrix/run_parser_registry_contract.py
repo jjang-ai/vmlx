@@ -59,6 +59,7 @@ REQUIRED_PARSER_TEST_MARKERS = (
     # command builder, not only backend Python config.
     "canonicalizes legacy DSV4 and Hy3 parser aliases before launch",
     "tool parser dropdown exposes DSV4 DSML, Hy3, and ZAYA parsers",
+    "reasoning parser dropdown covers every parser the panel registry can emit",
     "passes MiniMax through the registered minimax_m2 reasoning parser",
     "uses the registered MiniMax reasoning parser even when bundle sidecars say qwen3",
     "detects Hy3 as text-only KV with Hunyuan tools and qwen3 reasoning",
@@ -189,6 +190,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_deepseek_v4_eos_includes_latest_reminder" not in missing_markers
             and "detects Hy3 as text-only KV with Hunyuan tools and qwen3 reasoning" not in missing_markers
         ),
+        "all_required_parser_markers_present": not failed and not missing_markers,
         "legacy_count_floor_still_nontrivial": (
             not failed and engine_passed >= 30 and panel_passed >= 35
         ),

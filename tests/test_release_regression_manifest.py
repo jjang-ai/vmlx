@@ -351,9 +351,10 @@ def test_release_regression_manifest_tracks_parser_parity_with_runner_artifact()
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_parser_registry_contract.py" in joined
-    assert "current-parser-registry-contract-20260521.json" in joined
+    assert "current-parser-registry-contract-20260522-reasoning-dropdown.json" in joined
     assert "MiniMax" in joined
     assert "reasoning parser" in joined
+    assert "Reasoning parser dropdown covers every parser" in joined
     assert "tool parser" in joined
 
 

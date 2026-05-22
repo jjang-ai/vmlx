@@ -1,3 +1,6 @@
+from pathlib import Path
+
+
 def test_parser_registry_contract_pins_named_parser_edges():
     from tests.cross_matrix import run_parser_registry_contract as gate
 
@@ -12,6 +15,7 @@ def test_parser_registry_contract_pins_named_parser_edges():
     assert "test_minimax_eos_includes_role_boundary_marker" in required
     assert "canonicalizes legacy DSV4 and Hy3 parser aliases before launch" in required
     assert "tool parser dropdown exposes DSV4 DSML, Hy3, and ZAYA parsers" in required
+    assert "reasoning parser dropdown covers every parser the panel registry can emit" in required
     assert "passes MiniMax through the registered minimax_m2 reasoning parser" in required
     assert "uses the registered MiniMax reasoning parser even when bundle sidecars say qwen3" in required
     assert "detects Hy3 as text-only KV with Hunyuan tools and qwen3 reasoning" in required
@@ -20,3 +24,10 @@ def test_parser_registry_contract_pins_named_parser_edges():
     panel_command = gate.COMMANDS["panel_parser_registry"][1]
     assert "-vv" in engine_command
     assert "--reporter=verbose" in panel_command
+
+
+def test_parser_registry_contract_status_fails_when_required_markers_are_missing():
+    source = Path("tests/cross_matrix/run_parser_registry_contract.py").read_text()
+
+    assert "all_required_parser_markers_present" in source
+    assert "not missing_markers" in source

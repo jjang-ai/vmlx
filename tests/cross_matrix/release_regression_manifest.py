@@ -101,13 +101,14 @@ _ROWS: list[dict[str, Any]] = [
         "proves": [
             "Panel-emitted tool parser ids are accepted by the engine",
             "Panel-emitted reasoning parser ids are accepted by the engine",
+            "Reasoning parser dropdown covers every parser the panel registry can emit",
             "MiniMax minimax_m2 regression stays covered",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_parser_registry_contract.py --out build/current-parser-registry-contract-20260521.json",
+            ".venv/bin/python tests/cross_matrix/run_parser_registry_contract.py --out build/current-parser-registry-contract-20260522-reasoning-dropdown.json",
         ],
         "artifacts": [
-            "build/current-parser-registry-contract-20260521.json",
+            "build/current-parser-registry-contract-20260522-reasoning-dropdown.json",
         ],
     },
     {
