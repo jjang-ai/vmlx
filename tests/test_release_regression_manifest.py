@@ -548,6 +548,18 @@ def test_release_regression_manifest_tracks_named_model_family_detection_with_ru
     assert "Hy3" in joined
 
 
+def test_release_regression_manifest_tracks_current_family_launch_policy_recheck():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+    row = rows["model-family-detection-noheavy"]
+    joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
+
+    assert "current-model-family-detection-contract-20260522-recheck-launch-policy-matrix.json" in joined
+    assert "engine, panel, and session launch wiring all run in the same family launch-policy matrix" in joined
+    assert "ZAYA, ZAYA1-VL, Ling/Bailing, Nemotron-H, Qwen 3.6, MiniMax, Hy3, and DSV4 rows keep aligned parser/cache/modality policy" in joined
+    assert "session launch strips stale DSV4 additionalArgs and preserves native-MTP D3 only where supported" in joined
+
+
 def test_release_regression_manifest_tracks_parser_parity_with_runner_artifact():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}
