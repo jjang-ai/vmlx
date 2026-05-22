@@ -252,7 +252,7 @@ def test_release_regression_manifest_tracks_named_model_family_detection_with_ru
 
     assert row["domain"] == "model_family_detection"
     assert "run_model_family_detection_contract.py" in joined
-    assert "current-model-family-detection-contract-20260521.json" in joined
+    assert "current-model-family-detection-contract-20260522-distinct-speed-rows.json" in joined
     assert "DSV4" in joined
     assert "ZAYA" in joined
     assert "Ling" in joined
@@ -260,6 +260,8 @@ def test_release_regression_manifest_tracks_named_model_family_detection_with_ru
     assert "Qwen 3.6" in joined
     assert "MXFP4" in joined
     assert "MXFP8" in joined
+    assert "JANG-only" in joined
+    assert "JANGTQ/MXTQ" in joined
     assert "MiniMax" in joined
     assert "Hy3" in joined
 

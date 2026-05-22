@@ -21,6 +21,7 @@ def test_family_detection_contract_pins_named_release_rows():
         "decode_speed_no_legacy_32k_startup_cap",
         "decode_speed_qwen36_mxfp8_native_mtp_rows",
         "decode_speed_nemotron_omni_nano_jangtq4_row",
+        "decode_speed_distinct_jang_jangtq_mxfp_speed_rows",
         "decode_speed_existing_rows_match_engine_parser_policy",
         "decode_speed_existing_rows_match_engine_modality_policy",
         "decode_speed_registry_cache_metadata_health",
@@ -143,6 +144,31 @@ def test_decode_speed_gate_has_explicit_nemotron_omni_nano_jangtq4_row():
     assert row.tool_parser == "nemotron"
     assert row.reasoning_parser == "deepseek_r1"
     assert row.max_tokens <= 320
+
+
+def test_decode_speed_gate_has_distinct_jang_jangtq_mxfp_speed_rows():
+    from tests.cross_matrix.run_decode_speed_gate import ROWS
+
+    groups = {
+        "jang_only_mx_matmul": ("qwen27_jang4m", "minimax_jang2l_crack"),
+        "jangtq_mxtq_turboquant": ("qwen35_jangtq", "qwen36_35_jangtq4_ext"),
+        "mxfp4_mlx": ("qwen27_mxfp4", "zaya_text_mxfp4", "nemotron_mxfp4"),
+        "mxfp8_mlx_mtp": ("qwen27_mxfp8_mtp", "qwen35_mxfp8_mtp"),
+    }
+
+    for row_names in groups.values():
+        for row_name in row_names:
+            row = ROWS[row_name]
+            assert row.expected_min_tps is not None, row_name
+            assert row.expected_min_tps > 0, row_name
+            assert row.expected_min_pp is not None, row_name
+            assert row.expected_min_pp > 0, row_name
+
+    assert all("JANGTQ" not in ROWS[name].path for name in groups["jang_only_mx_matmul"])
+    assert all("JANG_" in ROWS[name].path for name in groups["jang_only_mx_matmul"])
+    assert all("JANGTQ" in ROWS[name].path for name in groups["jangtq_mxtq_turboquant"])
+    assert all("MXFP4" in ROWS[name].path or "mxfp4" in ROWS[name].path for name in groups["mxfp4_mlx"])
+    assert all("MXFP8" in ROWS[name].path for name in groups["mxfp8_mlx_mtp"])
 
 
 def test_decode_speed_gate_matches_registry_parser_policy_for_ling_and_nemotron():
