@@ -26,6 +26,7 @@ def test_family_detection_contract_pins_named_release_rows():
         "decode_speed_no_legacy_32k_startup_cap",
         "decode_speed_qwen36_mxfp8_native_mtp_rows",
         "decode_speed_nemotron_omni_nano_jangtq4_row",
+        "decode_speed_jang_only_mx_matmul_policy",
         "decode_speed_distinct_jang_jangtq_mxfp_speed_rows",
         "decode_speed_plain_mlx_4bit_qwen36_row",
         "decode_speed_artifact_format_coverage_matrix",
@@ -185,6 +186,38 @@ def test_decode_speed_gate_has_distinct_jang_jangtq_mxfp_speed_rows():
     assert all("JANGTQ" in ROWS[name].path for name in groups["jangtq_mxtq_turboquant"])
     assert all("MXFP4" in ROWS[name].path or "mxfp4" in ROWS[name].path for name in groups["mxfp4_mlx"])
     assert all("MXFP8" in ROWS[name].path for name in groups["mxfp8_mlx_mtp"])
+
+
+def test_decode_speed_gate_jang_only_rows_keep_text_mx_matmul_launch_policy():
+    from tests.cross_matrix.run_decode_speed_gate import ROWS, build_serve_command
+
+    jang_only_rows = {
+        "qwen27_jang4m": ("qwen", "qwen3"),
+        "qwen27_jang4m_mtp": ("qwen", "qwen3"),
+        "qwen35_jang4k_ext": ("qwen", "qwen3"),
+        "minimax_jang2l_crack": ("minimax", "minimax_m2"),
+    }
+
+    for row_name, (tool_parser, reasoning_parser) in jang_only_rows.items():
+        row = ROWS[row_name]
+        cmd = build_serve_command(
+            row,
+            python=Path("/bundle/python3"),
+            port=8793,
+            prefill_step_size=2048,
+        )
+        joined = " ".join(cmd)
+
+        assert "JANG_" in row.path, row_name
+        assert "JANGTQ" not in row.path, row_name
+        assert "MXFP" not in row.path.upper(), row_name
+        assert row.is_mllm is False, row_name
+        assert "--is-mllm" not in cmd, row_name
+        assert "--max-tokens" not in cmd, row_name
+        assert cmd[cmd.index("--tool-call-parser") + 1] == tool_parser
+        assert cmd[cmd.index("--reasoning-parser") + 1] == reasoning_parser
+        assert "JANGTQ_MPP" not in joined
+        assert "JANGTQ_DISABLE_DSV4" not in joined
 
 
 def test_decode_speed_gate_has_plain_mlx_qwen36_4bit_row():

@@ -222,6 +222,7 @@ _ROWS: list[dict[str, Any]] = [
             "base Nemotron-H registry rows stay hybrid cache before stale Omni sidecar overrides are considered",
             "stale ZAYA converter stamps cannot disable reasoning, swap the qwen3 parser, or reenable think_in_template",
             "Decode-speed rows keep JANG-only, JANGTQ/MXTQ, plain MLX 4bit, MXFP4, and MXFP8 speed thresholds distinct while staying aligned with engine registry parser, modality, and cache metadata for existing local models",
+            "JANG-only MX matmul rows stay text-only launch rows without --is-mllm, startup --max-tokens, MXFP, JANGTQ, or forced JANGTQ environment knobs",
             "Decode-speed rows keep DSV4 native composite separate from generic JANGTQ/MXTQ rows",
             "Decode-speed health checks reject DSV4 native or ZAYA typed cache health for plain KV JANG/JANGTQ/MXFP rows",
             "Every decode-speed row with a declared tool or reasoning parser uses a registered engine parser and CLI-accepted parser choice even when that local model path is absent",
@@ -234,6 +235,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_model_family_detection_contract.py --out build/current-model-family-detection-contract-20260522-qwen-nemotron-hybrid-cache.json",
         ],
         "artifacts": [
+            "build/current-model-family-detection-contract-20260522-jang-only-mx-matmul-policy.json",
             "build/current-model-family-detection-contract-20260522-qwen-nemotron-hybrid-cache.json",
             "build/current-model-family-detection-contract-20260522-zaya-stale-stamp.json",
             "build/current-model-family-detection-contract-20260522-plain-kv-cache-health.json",

@@ -255,6 +255,8 @@ def test_release_regression_manifest_tracks_decode_speed_artifact_format_matrix(
     assert "current-model-family-detection-contract-20260522-plain-kv-cache-health.json" in joined
     assert "row parser/modality policy" in joined
     assert "forced JANGTQ acceleration" in joined
+    assert "JANG-only MX matmul rows stay text-only launch rows" in joined
+    assert "current-model-family-detection-contract-20260522-jang-only-mx-matmul-policy.json" in joined
     assert "Mistral JANGTQ" in joined
     assert "Mistral MXFP4" in joined
     assert "GPT-OSS" in joined

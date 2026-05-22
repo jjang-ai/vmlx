@@ -96,6 +96,7 @@ REQUIRED_ROWS = (
     "decode_speed_no_legacy_32k_startup_cap",
     "decode_speed_qwen36_mxfp8_native_mtp_rows",
     "decode_speed_nemotron_omni_nano_jangtq4_row",
+    "decode_speed_jang_only_mx_matmul_policy",
     "decode_speed_distinct_jang_jangtq_mxfp_speed_rows",
     "decode_speed_plain_mlx_4bit_qwen36_row",
     "decode_speed_artifact_format_coverage_matrix",
@@ -175,6 +176,9 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
     ),
     "decode_speed_nemotron_omni_nano_jangtq4_row": (
         "test_decode_speed_gate_has_explicit_nemotron_omni_nano_jangtq4_row",
+    ),
+    "decode_speed_jang_only_mx_matmul_policy": (
+        "test_decode_speed_gate_jang_only_rows_keep_text_mx_matmul_launch_policy",
     ),
     "decode_speed_distinct_jang_jangtq_mxfp_speed_rows": (
         "test_decode_speed_gate_has_distinct_jang_jangtq_mxfp_speed_rows",
