@@ -45,6 +45,21 @@ DSML_PATTERN = (
     "or responses_extracts_suppressed_reasoning_tool_calls_before_finalize"
 )
 
+REQUIRED_TOOL_CALL_TEST_MARKERS = (
+    "visible_text_around_invoke_preserved_no_dsml_leak",
+    "tools_called_implies_no_dsml_in_content",
+    "dsml_parser_repairs_dsv4_live_degraded_dsml_params",
+    "dsml_parser_repairs_partial_invoke_with_malformed_value_attr",
+    "server_repairs_dsv4_partial_tool_intent_from_request_args",
+    "dsv4_encoder_keeps_function_arguments_as_dsml_params",
+    "dsv4_encoder_preserves_code_identifiers_on_direct_chat_rail",
+    "responses_extracts_suppressed_reasoning_tool_calls_before_finalize",
+    "tool_markup_residue_strips_all_registered_marker_families",
+    "increments the auto-continue counter once per follow-up attempt",
+    "resets text-chat tool streaming state before chained follow-up requests",
+    "panel max tool iterations caps tool loops",
+)
+
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
     "vmlx_engine/tool_parsers/dsml_tool_parser.py",
@@ -66,6 +81,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "-m",
             "pytest",
             "-q",
+            "-vv",
             "tests/test_dsml_tool_parser.py",
             "tests/test_tool_format.py",
             "tests/test_engine_audit.py",
@@ -81,6 +97,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "run",
             "tests/tool-executor-security.test.ts",
             "tests/tool-auto-continue.test.ts",
+            "--reporter=verbose",
         ],
     ),
 }
@@ -126,6 +143,7 @@ def _run(root: Path, name: str, cwd_rel: Path, cmd: list[str]) -> dict[str, Any]
         "returncode": proc.returncode,
         "elapsed_sec": round(time.monotonic() - started, 3),
         "counts": _parse_counts(proc.stdout),
+        "stdout": proc.stdout,
         "stdout_tail": proc.stdout.splitlines()[-80:],
     }
 
@@ -136,6 +154,12 @@ def build_artifact(root: Path) -> dict[str, Any]:
         for name, (cwd_rel, cmd) in COMMANDS.items()
     }
     failed = [name for name, result in results.items() if result["returncode"] != 0]
+    stdout = "\n".join(str(result.get("stdout", "")) for result in results.values())
+    missing_markers = [
+        marker
+        for marker in REQUIRED_TOOL_CALL_TEST_MARKERS
+        if marker not in stdout
+    ]
     engine_passed = results["engine_dsv4_dsml_tool_contracts"]["counts"]["passed"] or 0
     panel_passed = results["panel_tool_loop_security"]["counts"]["passed"] or 0
     live_default_cache_artifact = root / "build/current-dsv4-default-cache-tool-loop/result.json"
@@ -148,12 +172,14 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "panel_tool_executor_blocks_unsafe_paths_and_commands": not failed and panel_passed >= 10,
         "panel_max_tool_iterations_caps_tool_loops": not failed and panel_passed >= 10,
         "live_default_cache_dsv4_tool_loop_artifact_present": live_default_cache_artifact.exists(),
+        "all_required_tool_call_markers_present": not failed and not missing_markers,
     }
     return {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "status": "pass" if all(checks.values()) else "fail",
         "checks": checks,
         "failed": failed,
+        "missing_markers": missing_markers,
         "source_hashes": {
             rel: _sha256(root / rel)
             for rel in SOURCE_HASH_FILES
@@ -176,6 +202,7 @@ def main() -> int:
     print(args.out)
     print(f"status={artifact['status']}")
     print("failed=" + json.dumps(artifact["failed"]))
+    print("missing_markers=" + json.dumps(artifact["missing_markers"]))
     for name, result in artifact["results"].items():
         counts = result["counts"]
         print(

@@ -67,4 +67,16 @@ describe('tool auto-continue policy', () => {
       expect(branch).toContain(required)
     }
   })
+
+  it('panel max tool iterations caps tool loops', () => {
+    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    const branch = source.slice(
+      source.indexOf('const MAX_TOOL_ITERATIONS = overrides?.maxToolIterations ?? 10;'),
+      source.indexOf('if (toolIteration > 0 || collectedToolStatuses.length > 0)'),
+    )
+
+    expect(branch).toContain('const MAX_TOOL_ITERATIONS = overrides?.maxToolIterations ?? 10')
+    expect(branch).toContain('while (toolIteration < MAX_TOOL_ITERATIONS)')
+    expect(branch).toContain('toolIteration++')
+  })
 })
