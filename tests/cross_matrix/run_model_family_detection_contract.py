@@ -45,7 +45,7 @@ ENGINE_PATTERN = (
 )
 PANEL_PATTERN = (
     "ZAYA|zaya|Ling|Bailing|bailing|Nemotron|Qwen|MXFP|mxfp|JANGTQ|"
-    "MTP|MiniMax|minimax|Hy3|backend-covered|TurboQuant"
+    "MTP|MiniMax|minimax|Hy3|backend-covered|TurboQuant|local high-risk"
 )
 
 COMMANDS: dict[str, tuple[Path, list[str]]] = {
@@ -136,6 +136,7 @@ REQUIRED_ROWS = (
     "decode_speed_registry_cache_metadata_health",
     "decode_speed_plain_kv_cache_health_not_native",
     "decode_speed_local_high_risk_rows_match_engine_registry",
+    "panel_local_high_risk_rows_match_detector_policy",
 )
 
 ROW_MARKERS: dict[str, tuple[str, ...]] = {
@@ -265,6 +266,9 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
     ),
     "decode_speed_local_high_risk_rows_match_engine_registry": (
         "test_decode_speed_local_high_risk_rows_match_current_engine_registry",
+    ),
+    "panel_local_high_risk_rows_match_detector_policy": (
+        "matches current local high-risk model paths to panel parser cache and modality policy",
     ),
 }
 

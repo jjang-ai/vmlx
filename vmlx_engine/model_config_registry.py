@@ -184,6 +184,32 @@ def _is_affine_jang_qwen_hybrid_vlm(
     return not _is_mxtq_jang_config(jang_config)
 
 
+def _is_native_mtp_qwen_vl_artifact_ready(model_path: str | None) -> bool:
+    """Return true when Qwen affine-JANG has real native-MTP VL tensors.
+
+    Plain affine-JANG Qwen VL-looking bundles currently stay on the text
+    loader because the mlx-vlm M-RoPE fallback is unsafe. Native-MTP VL
+    artifacts are different: the loader has a dedicated VLM route and the
+    panel/API already expose them as multimodal. Keep the registry in parity
+    with that artifact-level truth.
+    """
+    if not model_path:
+        return False
+    try:
+        from .native_mtp import inspect_native_mtp_bundle
+
+        status = inspect_native_mtp_bundle(model_path)
+    except Exception:
+        return False
+    return bool(
+        status.get("artifact_available")
+        and status.get("has_vision_config")
+        and status.get("has_vision_weights")
+        and status.get("runtime_bundle_has_mtp")
+        and status.get("runtime_scope") == "text+vl"
+    )
+
+
 def _with_linear_attention_cache_override(
     config: ModelConfig,
     model_config: dict[str, Any],
@@ -465,9 +491,10 @@ class ModelConfigRegistry:
             if _is_affine_jang_qwen_hybrid_vlm(local_model_config, jcfg):
                 # Qwen3.6 affine-JANG carries real VL/video metadata, but the
                 # current mlx_vlm qwen3_5 language path corrupts text logits
-                # through the M-RoPE fallback. Keep registry in text-loader
-                # mode until docs/AUDIT-QWEN-AFFINE-JANG-VLM.md is resolved.
-                updates["is_mllm"] = False
+                # through the M-RoPE fallback. Keep plain affine-JANG in
+                # text-loader mode, but allow indexed native-MTP VL artifacts
+                # that have a dedicated VLM route.
+                updates["is_mllm"] = _is_native_mtp_qwen_vl_artifact_ready(model_name)
             elif mod == "vision" or (mod == "omni" and has_config_media):
                 # `omni` only becomes MLLM when config.json carries real
                 # media metadata. Some Nemotron-H text extracts keep stale

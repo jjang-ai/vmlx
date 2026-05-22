@@ -44,6 +44,7 @@ def test_family_detection_contract_pins_named_release_rows():
         "decode_speed_registry_cache_metadata_health",
         "decode_speed_plain_kv_cache_health_not_native",
         "decode_speed_local_high_risk_rows_match_engine_registry",
+        "panel_local_high_risk_rows_match_detector_policy",
     }.issubset(names)
 
 
@@ -150,7 +151,7 @@ def test_decode_speed_gate_has_explicit_qwen36_mxfp8_and_native_mtp_rows():
         },
         "qwen27_jang4m_mtp": {
             "path": "/Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP",
-            "is_mllm": False,
+            "is_mllm": True,
             "tool_parser": "qwen",
             "reasoning_parser": "qwen3",
         },
@@ -205,7 +206,6 @@ def test_decode_speed_gate_jang_only_rows_keep_text_mx_matmul_launch_policy():
 
     jang_only_rows = {
         "qwen27_jang4m": ("qwen", "qwen3"),
-        "qwen27_jang4m_mtp": ("qwen", "qwen3"),
         "qwen35_jang4k_ext": ("qwen", "qwen3"),
         "minimax_jang2l_crack": ("minimax", "minimax_m2"),
     }
@@ -230,6 +230,21 @@ def test_decode_speed_gate_jang_only_rows_keep_text_mx_matmul_launch_policy():
         assert cmd[cmd.index("--reasoning-parser") + 1] == reasoning_parser
         assert "JANGTQ_MPP" not in joined
         assert "JANGTQ_DISABLE_DSV4" not in joined
+
+    mtp_vlm = ROWS["qwen27_jang4m_mtp"]
+    mtp_vlm_cmd = build_serve_command(
+        mtp_vlm,
+        python=Path("/bundle/python3"),
+        port=8794,
+        prefill_step_size=2048,
+    )
+    assert "JANG_" in mtp_vlm.path
+    assert "JANGTQ" not in mtp_vlm.path
+    assert mtp_vlm.is_mllm is True
+    assert "--is-mllm" in mtp_vlm_cmd
+    assert "--max-tokens" not in mtp_vlm_cmd
+    assert mtp_vlm_cmd[mtp_vlm_cmd.index("--tool-call-parser") + 1] == "qwen"
+    assert mtp_vlm_cmd[mtp_vlm_cmd.index("--reasoning-parser") + 1] == "qwen3"
 
 
 def test_decode_speed_gate_has_plain_mlx_qwen36_4bit_row():
@@ -264,7 +279,7 @@ def test_decode_speed_gate_artifact_format_coverage_matrix():
 
     matrix = {
         "jang_only_mx_matmul": ("qwen27_jang4m", "qwen35_jang4k_ext", "minimax_jang2l_crack"),
-        "jang_mtp": ("qwen27_jang4m_mtp",),
+        "jang_mtp_vlm": ("qwen27_jang4m_mtp",),
         "jangtq_mxtq": ("qwen35_jangtq", "qwen36_35_jangtq4_ext", "hy3", "laguna"),
         "plain_mlx_4bit": ("qwen35_4bit",),
         "mxfp4_mlx": ("qwen27_mxfp4", "zaya_text_mxfp4", "ling_mxfp4", "nemotron_mxfp4"),
@@ -279,8 +294,8 @@ def test_decode_speed_gate_artifact_format_coverage_matrix():
             assert ROWS[row_name].expected_min_pp is not None
 
     assert all("JANG_" in ROWS[name].path and "JANGTQ" not in ROWS[name].path for name in matrix["jang_only_mx_matmul"])
-    assert all("JANG_" in ROWS[name].path and "MTP" in ROWS[name].path for name in matrix["jang_mtp"])
     assert all("JANGTQ" in ROWS[name].path for name in matrix["jangtq_mxtq"])
+    assert all("JANG_" in ROWS[name].path and "MTP" in ROWS[name].path and ROWS[name].is_mllm is True for name in matrix["jang_mtp_vlm"])
     assert all("JANG" not in ROWS[name].path and "MXFP" not in ROWS[name].path.upper() for name in matrix["plain_mlx_4bit"])
     assert all("MXFP4" in ROWS[name].path or "mxfp4" in ROWS[name].path for name in matrix["mxfp4_mlx"])
     assert all("MXFP8" in ROWS[name].path and "MTP" in ROWS[name].path for name in matrix["mxfp8_mtp"])

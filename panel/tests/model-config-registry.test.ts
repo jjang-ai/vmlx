@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { detectModelConfigFromDir } from '../src/main/model-config-registry'
@@ -992,4 +992,141 @@ describe('detectModelConfigFromDir backend parity coverage', () => {
       if (row.isMultimodal !== undefined) expect(detected.isMultimodal).toBe(row.isMultimodal)
     })
   }
+})
+
+describe('detectModelConfigFromDir local high-risk artifact parity', () => {
+  it('matches current local high-risk model paths to panel parser cache and modality policy', () => {
+    const rows: Array<{
+      name: string
+      path: string
+      family: string
+      cacheType: string
+      toolParser?: string
+      reasoningParser?: string
+      isMultimodal: boolean
+    }> = [
+      {
+        name: 'dsv4_k',
+        path: '/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K',
+        family: 'deepseek-v4',
+        cacheType: 'kv',
+        toolParser: 'dsml',
+        reasoningParser: 'deepseek_r1',
+        isMultimodal: false,
+      },
+      {
+        name: 'qwen27_jang4m',
+        path: '/Users/example/models/dealign.ai/Qwen3.6-27B-JANG_4M-CRACK',
+        family: 'qwen3.5',
+        cacheType: 'hybrid',
+        toolParser: 'qwen',
+        reasoningParser: 'qwen3',
+        isMultimodal: false,
+      },
+      {
+        name: 'qwen27_jang4m_mtp',
+        path: '/Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP',
+        family: 'qwen3.5',
+        cacheType: 'hybrid',
+        toolParser: 'qwen',
+        reasoningParser: 'qwen3',
+        isMultimodal: true,
+      },
+      {
+        name: 'qwen27_mxfp4',
+        path: '/Users/example/models/dealign.ai/Qwen3.6-27B-MXFP4-CRACK',
+        family: 'qwen3.5',
+        cacheType: 'hybrid',
+        toolParser: 'qwen',
+        reasoningParser: 'qwen3',
+        isMultimodal: true,
+      },
+      {
+        name: 'qwen27_mxfp8_mtp',
+        path: '/Users/example/models/JANGQ/Qwen3.6-27B-MXFP8-MTP',
+        family: 'qwen3.5',
+        cacheType: 'hybrid',
+        toolParser: 'qwen',
+        reasoningParser: 'qwen3',
+        isMultimodal: true,
+      },
+      {
+        name: 'qwen35_jangtq',
+        path: '/Users/example/models/dealign.ai/Qwen3.6-35B-A3B-JANGTQ-CRACK',
+        family: 'qwen3.5-moe',
+        cacheType: 'hybrid',
+        toolParser: 'qwen',
+        reasoningParser: 'qwen3',
+        isMultimodal: true,
+      },
+      {
+        name: 'qwen35_4bit',
+        path: '/Users/example/models/Qwen3.6-35B-A3B-4bit',
+        family: 'qwen3.5-moe',
+        cacheType: 'hybrid',
+        toolParser: 'qwen',
+        reasoningParser: 'qwen3',
+        isMultimodal: true,
+      },
+      {
+        name: 'qwen35_mxfp8_mtp',
+        path: '/Users/example/models/JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP',
+        family: 'qwen3.5-moe',
+        cacheType: 'hybrid',
+        toolParser: 'qwen',
+        reasoningParser: 'qwen3',
+        isMultimodal: true,
+      },
+      {
+        name: 'hy3',
+        path: '/Users/example/models/JANGQ/Hy3-preview-JANGTQ2',
+        family: 'hy3',
+        cacheType: 'kv',
+        toolParser: 'hunyuan',
+        reasoningParser: 'qwen3',
+        isMultimodal: false,
+      },
+      {
+        name: 'nemotron_jangtq',
+        path: '/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK',
+        family: 'nemotron-h',
+        cacheType: 'hybrid',
+        toolParser: 'nemotron',
+        reasoningParser: 'deepseek_r1',
+        isMultimodal: false,
+      },
+      {
+        name: 'nemotron_omni_nano_jangtq4',
+        path: '/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ4-CRACK',
+        family: 'nemotron-h',
+        cacheType: 'hybrid',
+        toolParser: 'nemotron',
+        reasoningParser: 'deepseek_r1',
+        isMultimodal: false,
+      },
+      {
+        name: 'nemotron_mxfp4',
+        path: '/Users/example/models/dealign.ai/Nemotron-Omni-Nano-MXFP4-CRACK',
+        family: 'nemotron-h',
+        cacheType: 'hybrid',
+        toolParser: 'nemotron',
+        reasoningParser: 'deepseek_r1',
+        isMultimodal: false,
+      },
+    ]
+
+    const missing = rows.filter(row => !existsSync(row.path)).map(row => row.path)
+    if (missing.length > 0) {
+      return
+    }
+
+    for (const row of rows) {
+      const detected = detectModelConfigFromDir(row.path)
+      expect(detected.family, row.name).toBe(row.family)
+      expect(detected.cacheType, row.name).toBe(row.cacheType)
+      expect(detected.toolParser, row.name).toBe(row.toolParser)
+      expect(detected.reasoningParser, row.name).toBe(row.reasoningParser)
+      expect(detected.isMultimodal, row.name).toBe(row.isMultimodal)
+    }
+  })
 })

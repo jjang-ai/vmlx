@@ -1204,6 +1204,75 @@ class TestModelConfigs:
         assert config.reasoning_parser == "qwen3"
         assert config.is_mllm is False
 
+    def test_qwen36_affine_jang_native_mtp_vlm_uses_vlm_loader(
+        self, registry, tmp_path
+    ):
+        """Native-MTP affine-JANG Qwen VL artifacts use the real VLM path.
+
+        The text-loader guard above applies to plain affine-JANG Qwen VL
+        bundles. Once the artifact has indexed MTP and vision tensors, the
+        native-MTP VLM loader path is available and the engine registry must
+        agree with panel/API routing.
+        """
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "qwen3_5",
+                    "text_config": {
+                        "model_type": "qwen3_5_text",
+                        "mtp_num_hidden_layers": 1,
+                        "layer_types": ["linear_attention", "full_attention"],
+                    },
+                    "vision_config": {"model_type": "qwen3_5_vit"},
+                    "image_token_id": 151665,
+                    "video_token_id": 151666,
+                    "video_token_index": 151666,
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "runtime": {
+                        "bundle_has_mtp": True,
+                        "mtp_layers": 1,
+                        "mtp_mode": "preserved_enabled",
+                    },
+                    "mtp": {"kept": True, "enabled": True, "num_layers": 1},
+                    "capabilities": {
+                        "family": "qwen3_5",
+                        "modality": "vision",
+                        "cache_type": "hybrid",
+                        "tool_parser": "qwen",
+                        "reasoning_parser": "qwen3",
+                    },
+                }
+            )
+        )
+        (tmp_path / "model.safetensors.index.json").write_text(
+            json.dumps(
+                {
+                    "weight_map": {
+                        "model.embed_tokens.weight": "model.safetensors",
+                        "model.visual.patch_embed.proj.weight": "model.safetensors",
+                        "mtp.fc.weight": "model.safetensors",
+                        "mtp.layers.0.self_attn.q_proj.weight": "model.safetensors",
+                    }
+                }
+            )
+        )
+
+        registry.clear_cache()
+        config = registry.lookup(str(tmp_path))
+
+        assert config.family_name == "qwen3_5"
+        assert config.cache_type == "hybrid"
+        assert config.tool_parser == "qwen"
+        assert config.reasoning_parser == "qwen3"
+        assert config.is_mllm is True
+
     def test_qwen3_5_moe_text_linear_attention_uses_hybrid_cache(self, registry, tmp_path):
         """Qwen3.6 MoE wrappers match text_config.model_type first; that path
         must still preserve the hybrid cache override."""

@@ -177,6 +177,7 @@ ROWS: dict[str, Row] = {
     "qwen27_jang4m_mtp": Row(
         "qwen27_jang4m_mtp",
         "/Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP",
+        is_mllm=True,
         tool_parser="qwen",
         reasoning_parser="qwen3",
         expected_min_tps=18.0,
