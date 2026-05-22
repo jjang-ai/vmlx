@@ -6,7 +6,10 @@ def test_max_output_context_contract_covers_all_public_api_surfaces():
     assert "vmlx_engine/api/models.py" in sources
     assert "vmlx_engine/api/anthropic_adapter.py" in sources
     assert "vmlx_engine/api/ollama_adapter.py" in sources
+    assert "panel/src/main/api-gateway.ts" in sources
+    assert "panel/src/shared/dsv4RequestBudget.ts" in sources
     assert "tests/test_ollama_adapter.py" in sources
+    assert "panel/tests/chat-settings-compatibility.test.ts" in sources
 
     joined_commands = "\n".join(
         " ".join(command)

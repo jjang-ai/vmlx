@@ -58,9 +58,11 @@ _ROWS: list[dict[str, Any]] = [
             "new chat output caps are not inherited or made sticky on default-profile or same-model clean chat creation",
             "chat reset does not convert model max_new_tokens into a sticky per-chat maxTokens override",
             "string-shaped legacy session maxTokens values are cleared before launch",
+            "API gateway output-budget and context-budget paths are source-hashed",
+            "DSV4 request-budget helper is source-hashed with the max-output boundary gate",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-reset-policy-string-legacy.json",
+            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-gateway-dsv4-budget-hash.json",
         ],
         "artifacts": [
             "build/current-max-output-context-contract-20260522-persisted-chat-output-cap.json",
@@ -70,6 +72,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-max-output-context-contract-20260522-request-default-mutation.json",
             "build/current-max-output-context-contract-20260522-reset-policy-string-legacy.json",
             "build/current-max-output-context-contract-20260522-api-validator-caps.json",
+            "build/current-max-output-context-contract-20260522-gateway-dsv4-budget-hash.json",
         ],
     },
     {

@@ -83,6 +83,9 @@ def test_release_regression_manifest_tracks_server_chat_max_output_boundary():
     assert "string-shaped legacy session maxTokens values are cleared" in joined
     assert "current-max-output-context-contract-20260522-reset-policy-string-legacy.json" in joined
     assert "current-max-output-context-contract-20260522-api-validator-caps.json" in joined
+    assert "API gateway output-budget and context-budget paths are source-hashed" in joined
+    assert "DSV4 request-budget helper is source-hashed with the max-output boundary gate" in joined
+    assert "current-max-output-context-contract-20260522-gateway-dsv4-budget-hash.json" in joined
 
 
 def test_release_regression_manifest_tracks_legacy_completions_output_boundary():
