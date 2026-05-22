@@ -30,6 +30,7 @@ def test_family_detection_contract_pins_named_release_rows():
         "decode_speed_existing_rows_match_engine_modality_policy",
         "decode_speed_build_command_parser_modality_policy",
         "decode_speed_large_external_jangtq_mxfp_gptoss_rows",
+        "decode_speed_external_nemotron3_jangtq_mxfp_rows",
         "decode_speed_registry_cache_metadata_health",
     }.issubset(names)
 
@@ -385,6 +386,48 @@ def test_decode_speed_gate_has_large_external_mistral_gptoss_rows():
         assert cmd[cmd.index("--reasoning-parser") + 1] == expected["reasoning"]
 
 
+def test_decode_speed_gate_has_external_nemotron3_jangtq_mxfp_rows():
+    from tests.cross_matrix.run_decode_speed_gate import ROWS, build_serve_command
+
+    expected_rows = {
+        "nemotron3_jangtq2_ext": {
+            "path": "/Volumes/ModelDrive/jangq-ai/Nemotron-3-Nano-Omni-30B-A3B-JANGTQ2",
+            "format_marker": "JANGTQ2",
+            "min_tps": 20.0,
+            "min_pp": 400.0,
+        },
+        "nemotron3_mxfp4_ext": {
+            "path": "/Volumes/ModelDrive/jangq-ai/Nemotron-3-Nano-Omni-30B-A3B-MXFP4",
+            "format_marker": "MXFP4",
+            "min_tps": 18.0,
+            "min_pp": 400.0,
+        },
+    }
+
+    for row_name, expected in expected_rows.items():
+        row = ROWS[row_name]
+        cmd = build_serve_command(
+            row,
+            python=Path("/bundle/python3"),
+            port=8792,
+            prefill_step_size=2048,
+        )
+
+        assert row.path == expected["path"]
+        assert expected["format_marker"] in row.path
+        assert row.is_mllm is False
+        assert row.tool_parser == "nemotron"
+        assert row.reasoning_parser == "deepseek_r1"
+        assert row.max_tokens <= 320
+        assert row.expected_min_tps == expected["min_tps"]
+        assert row.expected_min_pp == expected["min_pp"]
+        assert cmd[cmd.index("--served-model-name") + 1] == row.name
+        assert "--max-tokens" not in cmd
+        assert "--is-mllm" not in cmd
+        assert cmd[cmd.index("--tool-call-parser") + 1] == "nemotron"
+        assert cmd[cmd.index("--reasoning-parser") + 1] == "deepseek_r1"
+
+
 def test_decode_speed_gate_matches_registry_parser_policy_for_ling_and_nemotron():
     from tests.cross_matrix.run_decode_speed_gate import ROWS
 
@@ -393,7 +436,13 @@ def test_decode_speed_gate_matches_registry_parser_policy_for_ling_and_nemotron(
         assert row.tool_parser == "deepseek"
         assert row.reasoning_parser is None
 
-    for row_name in ("nemotron_jangtq", "nemotron_omni_nano_jangtq4", "nemotron_mxfp4"):
+    for row_name in (
+        "nemotron_jangtq",
+        "nemotron_omni_nano_jangtq4",
+        "nemotron_mxfp4",
+        "nemotron3_jangtq2_ext",
+        "nemotron3_mxfp4_ext",
+    ):
         row = ROWS[row_name]
         assert row.tool_parser == "nemotron"
         assert row.reasoning_parser == "deepseek_r1"

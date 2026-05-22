@@ -225,7 +225,7 @@ def test_release_regression_manifest_tracks_family_parser_cli_choice_guard():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "CLI-accepted parser choice" in joined
-    assert "current-model-family-detection-contract-20260522-large-external.json" in joined
+    assert "current-model-family-detection-contract-20260522-nemotron3-external.json" in joined
 
 
 def test_release_regression_manifest_tracks_decode_speed_artifact_format_matrix():
@@ -236,12 +236,15 @@ def test_release_regression_manifest_tracks_decode_speed_artifact_format_matrix(
 
     assert "DSV4 native composite" in joined
     assert "generic JANGTQ/MXTQ" in joined
-    assert "current-model-family-detection-contract-20260522-large-external.json" in joined
+    assert "current-model-family-detection-contract-20260522-nemotron3-external.json" in joined
     assert "row parser/modality policy" in joined
     assert "forced JANGTQ acceleration" in joined
     assert "Mistral JANGTQ" in joined
     assert "Mistral MXFP4" in joined
     assert "GPT-OSS" in joined
+    assert "Nemotron 3 JANGTQ2" in joined
+    assert "Nemotron parser/reasoning" in joined
+    assert "MXFP4" in joined
 
 
 def test_release_regression_manifest_commands_are_declared_for_noheavy_rows():
@@ -319,7 +322,7 @@ def test_release_regression_manifest_tracks_named_model_family_detection_with_ru
 
     assert row["domain"] == "model_family_detection"
     assert "run_model_family_detection_contract.py" in joined
-    assert "current-model-family-detection-contract-20260522-large-external.json" in joined
+    assert "current-model-family-detection-contract-20260522-nemotron3-external.json" in joined
     assert "DSV4" in joined
     assert "ZAYA" in joined
     assert "Ling" in joined
@@ -330,6 +333,7 @@ def test_release_regression_manifest_tracks_named_model_family_detection_with_ru
     assert "JANG-only" in joined
     assert "Mistral JANGTQ" in joined
     assert "Mistral MXFP4" in joined
+    assert "Nemotron 3 JANGTQ2" in joined
     assert "GPT-OSS" in joined
     assert "JANGTQ/MXTQ" in joined
     assert "registered engine parser" in joined

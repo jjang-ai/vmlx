@@ -100,6 +100,7 @@ REQUIRED_ROWS = (
     "decode_speed_existing_rows_match_engine_modality_policy",
     "decode_speed_build_command_parser_modality_policy",
     "decode_speed_large_external_jangtq_mxfp_gptoss_rows",
+    "decode_speed_external_nemotron3_jangtq_mxfp_rows",
     "decode_speed_registry_cache_metadata_health",
 )
 
@@ -178,6 +179,9 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
     ),
     "decode_speed_large_external_jangtq_mxfp_gptoss_rows": (
         "test_decode_speed_gate_has_large_external_mistral_gptoss_rows",
+    ),
+    "decode_speed_external_nemotron3_jangtq_mxfp_rows": (
+        "test_decode_speed_gate_has_external_nemotron3_jangtq_mxfp_rows",
     ),
     "decode_speed_registry_cache_metadata_health": (
         "test_decode_speed_gate_records_registry_cache_metadata_for_existing_rows",
