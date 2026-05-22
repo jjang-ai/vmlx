@@ -41,6 +41,13 @@ REQUIRED_ARTIFACT_TEST_MARKERS = (
     # JANGTQ_K mixed routed bits: gate/up and down can have different bit
     # widths; the down gather kernel must compile with down's bits.
     "test_gather_dn_uses_dp_bits",
+    # Ling/Bailing hybrid artifacts have had loader-level shape and absent-MTP
+    # regressions. These rows protect MXFP4 flat switch_mlp repair while also
+    # ensuring already-correct JANGTQ 3D tensors stay untouched.
+    "test_sanitize_repairs_flat_2d_switch_mlp_to_3d",
+    "test_sanitize_no_op_on_correct_3d_shape",
+    "test_sanitize_restores_dwq_split_mla_kv_b_proj",
+    "test_sanitize_trims_absent_mtp_layer_before_strict_load",
     # Qwen 3.6 VL/video native-MTP artifacts span plain JANG, MXFP4, MXFP8,
     # and real weight-index detection. These are the artifact formats most
     # likely to regress when loader/autodetect code is touched.
@@ -63,7 +70,7 @@ COMMANDS: dict[str, list[str]] = {
         "tests/test_native_mtp_autodetect.py",
         "tests/test_cross_matrix_audit_runner.py",
         "-k",
-        "jang or JANG or mxfp or mxp or mlx_4bit or mtp or MTP or cache_profile or dp_bits or gather_dn",
+        "jang or JANG or mxfp or mxp or mlx_4bit or bailing or switch_mlp or mtp or MTP or cache_profile or dp_bits or gather_dn",
     ],
 }
 
@@ -114,6 +121,13 @@ def build_artifact(root: Path) -> dict[str, Any]:
     ]
     checks = {
         "jang_and_jangtq_detection": not failed and "test_gather_dn_uses_dp_bits" not in missing_markers,
+        "ling_bailing_hybrid_loader_repairs": (
+            not failed
+            and "test_sanitize_repairs_flat_2d_switch_mlp_to_3d" not in missing_markers
+            and "test_sanitize_no_op_on_correct_3d_shape" not in missing_markers
+            and "test_sanitize_restores_dwq_split_mla_kv_b_proj" not in missing_markers
+            and "test_sanitize_trims_absent_mtp_layer_before_strict_load" not in missing_markers
+        ),
         "mxfp4_detection": not failed and "test_mxfp4_vlm_sanitize_shifts_mtp_norms_only" not in missing_markers,
         "mxfp8_detection": not failed and "test_jang_quant_mode_supports_mxfp8_metadata" not in missing_markers,
         "plain_mlx_4bit_detection": not failed and "test_qwen36_plain_mlx_4bit_keeps_hybrid_cache_without_jang_or_mxfp" not in missing_markers,
