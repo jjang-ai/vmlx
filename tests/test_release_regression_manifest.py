@@ -439,11 +439,13 @@ def test_release_regression_manifest_tracks_parser_parity_with_runner_artifact()
 
     assert "run_parser_registry_contract.py" in joined
     assert "current-parser-registry-contract-20260522-reasoning-dropdown.json" in joined
+    assert "current-parser-registry-contract-20260522-non-reasoning-boundaries.json" in joined
     assert "MiniMax" in joined
     assert "reasoning parser" in joined
     assert "Reasoning parser dropdown covers every parser" in joined
     assert "CLI accepts every registered reasoning parser" in joined
     assert "tool parser" in joined
+    assert "Qwen2/Qwen2-VL, Gemma 3, and GLM base stay off reasoning rails" in joined
 
 
 def test_release_regression_manifest_tracks_max_output_context_with_runner_artifact():

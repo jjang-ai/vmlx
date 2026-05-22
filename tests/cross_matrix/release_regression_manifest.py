@@ -113,12 +113,14 @@ _ROWS: list[dict[str, Any]] = [
             "CLI accepts every registered reasoning parser emitted by model families",
             "Reasoning parser dropdown covers every parser the panel registry can emit",
             "MiniMax minimax_m2 regression stays covered",
+            "Qwen2/Qwen2-VL, Gemma 3, and GLM base stay off reasoning rails",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_parser_registry_contract.py --out build/current-parser-registry-contract-20260522-reasoning-dropdown.json",
+            ".venv/bin/python tests/cross_matrix/run_parser_registry_contract.py --out build/current-parser-registry-contract-20260522-non-reasoning-boundaries.json",
         ],
         "artifacts": [
             "build/current-parser-registry-contract-20260522-reasoning-dropdown.json",
+            "build/current-parser-registry-contract-20260522-non-reasoning-boundaries.json",
         ],
     },
     {

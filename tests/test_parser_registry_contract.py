@@ -12,6 +12,10 @@ def test_parser_registry_contract_pins_named_parser_edges():
     assert "test_registry_overrides_stale_minimax_qwen3_sidecar" in required
     assert "test_zaya1_vl_registered_with_full_contract" in required
     assert "test_ling_is_not_a_reasoning_model_per_eric_2026_05_11" in required
+    assert "test_qwen2_must_not_have_reasoning" in required
+    assert "test_qwen2_vl_must_not_have_reasoning" in required
+    assert "test_gemma3_reasoning_parser" in required
+    assert "test_glm_flash_vs_base_reasoning_parser_differs" in required
     assert "test_deepseek_v4_eos_includes_latest_reminder" in required
     assert "test_minimax_eos_includes_role_boundary_marker" in required
     assert "canonicalizes legacy DSV4 and Hy3 parser aliases before launch" in required

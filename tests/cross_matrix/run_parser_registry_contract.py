@@ -55,6 +55,10 @@ REQUIRED_PARSER_TEST_MARKERS = (
     "test_minimax_eos_includes_role_boundary_marker",
     "test_zaya1_vl_registered_with_full_contract",
     "test_ling_is_not_a_reasoning_model_per_eric_2026_05_11",
+    "test_qwen2_must_not_have_reasoning",
+    "test_qwen2_vl_must_not_have_reasoning",
+    "test_gemma3_reasoning_parser",
+    "test_glm_flash_vs_base_reasoning_parser_differs",
     "test_deepseek_v4_eos_includes_latest_reminder",
     # Panel-side launch and UI parity. These protect aliases/dropdowns and the
     # command builder, not only backend Python config.
@@ -78,7 +82,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "tests/test_engine_audit.py",
             "tests/test_model_config_registry.py",
             "-k",
-            "parser or minimax or reasoning_parser or zaya or ling or deepseek_v4_eos or role_boundary",
+            "parser or minimax or reasoning or reasoning_parser or zaya or ling or deepseek_v4_eos or role_boundary",
         ],
     ),
     "panel_parser_registry": (
@@ -191,6 +195,13 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_ling_is_not_a_reasoning_model_per_eric_2026_05_11" not in missing_markers
             and "test_deepseek_v4_eos_includes_latest_reminder" not in missing_markers
             and "detects Hy3 as text-only KV with Hunyuan tools and qwen3 reasoning" not in missing_markers
+        ),
+        "non_reasoning_family_boundaries_are_present": (
+            not failed
+            and "test_qwen2_must_not_have_reasoning" not in missing_markers
+            and "test_qwen2_vl_must_not_have_reasoning" not in missing_markers
+            and "test_gemma3_reasoning_parser" not in missing_markers
+            and "test_glm_flash_vs_base_reasoning_parser_differs" not in missing_markers
         ),
         "all_required_parser_markers_present": not failed and not missing_markers,
         "legacy_count_floor_still_nontrivial": (
