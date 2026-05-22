@@ -79,6 +79,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
 REQUIRED_ROWS = (
     "dsv4_deepseek_v4_native_cache_and_parser",
     "zaya_text_cca_tools_reasoning",
+    "zaya_stale_stamp_reasoning_policy",
     "zaya1_vl_cca_multimodal",
     "ling_bailing_hybrid_plain_content",
     "nemotron_h_hybrid_text_not_stale_omni",
@@ -113,6 +114,9 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
     "zaya_text_cca_tools_reasoning": (
         "test_zaya_config",
         "detects text ZAYA as CCA hybrid",
+    ),
+    "zaya_stale_stamp_reasoning_policy": (
+        "test_zaya_stale_stamp_cannot_disable_reasoning_or_reenable_think_seed",
     ),
     "zaya1_vl_cca_multimodal": (
         "test_zaya1_vl_registered_with_full_contract",

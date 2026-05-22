@@ -263,6 +263,17 @@ def test_release_regression_manifest_tracks_decode_speed_artifact_format_matrix(
     assert "plain KV JANG/JANGTQ/MXFP rows" in joined
 
 
+def test_release_regression_manifest_tracks_zaya_stale_stamp_policy():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+    row = rows["model-family-detection-noheavy"]
+    joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
+
+    assert "stale ZAYA converter stamps" in joined
+    assert "cannot disable reasoning" in joined
+    assert "current-model-family-detection-contract-20260522-zaya-stale-stamp.json" in joined
+
+
 def test_release_regression_manifest_tracks_mxfp_vlm_loader_quant_mode():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}

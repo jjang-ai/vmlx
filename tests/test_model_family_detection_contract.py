@@ -9,6 +9,7 @@ def test_family_detection_contract_pins_named_release_rows():
     assert {
         "dsv4_deepseek_v4_native_cache_and_parser",
         "zaya_text_cca_tools_reasoning",
+        "zaya_stale_stamp_reasoning_policy",
         "zaya1_vl_cca_multimodal",
         "ling_bailing_hybrid_plain_content",
         "nemotron_h_hybrid_text_not_stale_omni",
