@@ -188,6 +188,26 @@ def test_release_regression_manifest_tracks_model_artifact_detection_with_runner
     assert "MTP" in joined
 
 
+def test_release_regression_manifest_tracks_named_model_family_detection_with_runner_artifact():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+    row = rows["model-family-detection-noheavy"]
+    joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
+
+    assert row["domain"] == "model_family_detection"
+    assert "run_model_family_detection_contract.py" in joined
+    assert "current-model-family-detection-contract-20260521.json" in joined
+    assert "DSV4" in joined
+    assert "ZAYA" in joined
+    assert "Ling" in joined
+    assert "Nemotron" in joined
+    assert "Qwen 3.6" in joined
+    assert "MXFP4" in joined
+    assert "MXFP8" in joined
+    assert "MiniMax" in joined
+    assert "Hy3" in joined
+
+
 def test_release_regression_manifest_tracks_parser_parity_with_runner_artifact():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}

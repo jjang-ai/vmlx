@@ -21,6 +21,7 @@ REQUIRED_RELEASE_DOMAINS = {
     "api_surface",
     "cache_architecture",
     "model_artifact_detection",
+    "model_family_detection",
     "native_mtp",
     "mcp",
     "vl_media",
@@ -169,6 +170,23 @@ _ROWS: list[dict[str, Any]] = [
         ],
         "artifacts": [
             "build/current-model-artifact-format-contract-20260521.json",
+        ],
+    },
+    {
+        "id": "model-family-detection-noheavy",
+        "domain": "model_family_detection",
+        "mode": "noheavy",
+        "heavy": False,
+        "proves": [
+            "Named DSV4, ZAYA, ZAYA1-VL, Ling/Bailing, Nemotron, Qwen 3.6 VL/video/hybrid, MXFP4, MXFP8, native-MTP, MiniMax, and Hy3 rows keep expected parser/cache/modality policy",
+            "Decode-speed rows stay aligned with engine registry parser, modality, and cache metadata for existing local models",
+            "This is source/static compatibility proof only; live multi-turn output quality remains a separate live row",
+        ],
+        "commands": [
+            ".venv/bin/python tests/cross_matrix/run_model_family_detection_contract.py --out build/current-model-family-detection-contract-20260521.json",
+        ],
+        "artifacts": [
+            "build/current-model-family-detection-contract-20260521.json",
         ],
     },
     {
