@@ -43,13 +43,14 @@ _ROWS: list[dict[str, Any]] = [
             "Chat Max Output Tokens remains a per-chat/API override",
             "External coding-tool configs keep context window and output limit separate",
             "new-chat model-owned maxTokens cannot be replaced by inherited per-chat output caps",
+            "server startup maxTokens and chat maxTokens remain independent when both are set",
             "DSV4 cache controls are singular and in the right settings sections",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-new-chat-max-output.json",
+            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-server-chat-boundary.json",
         ],
         "artifacts": [
-            "build/current-max-output-context-contract-20260522-new-chat-max-output.json",
+            "build/current-max-output-context-contract-20260522-server-chat-boundary.json",
         ],
     },
     {
