@@ -129,6 +129,49 @@ class TestListCommand:
         assert "Found 2" in output
 
 
+class TestServeCommandSocketBinding:
+    """Tests for serve command TCP vs Unix-domain-socket binding."""
+
+    def test_serve_help_includes_uds_flag(self, capsys):
+        with pytest.raises(SystemExit):
+            with patch("sys.argv", ["vmlx-engine", "serve", "--help"]):
+                from vmlx_engine.cli import main
+                main()
+
+        output = capsys.readouterr().out
+        assert "--uds" in output
+        assert "Unix domain socket" in output
+
+    def test_uvicorn_bind_kwargs_use_tcp_when_uds_omitted(self):
+        from argparse import Namespace
+        from vmlx_engine.cli import _uvicorn_bind_kwargs
+
+        kwargs = _uvicorn_bind_kwargs(
+            Namespace(host="127.0.0.1", port=8123, uds=None),
+            "INFO",
+        )
+
+        assert kwargs == {
+            "host": "127.0.0.1",
+            "port": 8123,
+            "log_level": "info",
+        }
+
+    def test_uvicorn_bind_kwargs_use_uds_instead_of_host_port(self):
+        from argparse import Namespace
+        from vmlx_engine.cli import _uvicorn_bind_kwargs
+
+        kwargs = _uvicorn_bind_kwargs(
+            Namespace(host="0.0.0.0", port=8123, uds="/tmp/vmlx.sock"),
+            "WARNING",
+        )
+
+        assert kwargs == {
+            "uds": "/tmp/vmlx.sock",
+            "log_level": "warning",
+        }
+
+
 class TestDoctorCommand:
     """Tests for doctor command."""
 

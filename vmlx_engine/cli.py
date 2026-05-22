@@ -39,6 +39,17 @@ def _argv_has_option(argv: list[str], option: str) -> bool:
     return any(arg == option or arg.startswith(prefix) for arg in argv)
 
 
+def _uvicorn_bind_kwargs(args, log_level: str) -> dict:
+    kwargs = {"log_level": log_level.lower()}
+    uds = getattr(args, "uds", None)
+    if uds:
+        kwargs["uds"] = uds
+    else:
+        kwargs["host"] = args.host
+        kwargs["port"] = args.port
+    return kwargs
+
+
 def _speculative_incompatibility_reason(args) -> str | None:
     if not getattr(args, "speculative_model", None):
         return None
@@ -1342,8 +1353,11 @@ def serve_command(args):
         print()
 
     # Start server
-    print(f"Starting server at http://{args.host}:{args.port}")
-    uvicorn.run(app, host=args.host, port=args.port, log_level=log_level.lower())
+    if getattr(args, "uds", None):
+        print(f"Starting server on Unix domain socket {args.uds}")
+    else:
+        print(f"Starting server at http://{args.host}:{args.port}")
+    uvicorn.run(app, **_uvicorn_bind_kwargs(args, log_level))
 
 
 def bench_command(args):
@@ -1881,6 +1895,11 @@ Examples:
     serve_parser.add_argument(
         "--port", type=int, default=8000,
         help="TCP port for the API server (default: 8000). Example: --port 8092",
+    )
+    serve_parser.add_argument(
+        "--uds", type=str, default=None,
+        help="Path to a Unix domain socket to bind instead of host/port. "
+             "When set, --host and --port are ignored. Example: --uds /tmp/vmlx.sock",
     )
     serve_parser.add_argument(
         "--max-num-seqs", type=int, default=1,

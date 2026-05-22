@@ -20,6 +20,15 @@ For multiple concurrent users:
 vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 --continuous-batching
 ```
 
+### Unix-Domain Socket
+
+For local sidecar integrations that should avoid TCP port allocation:
+
+```bash
+vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit \
+  --uds /tmp/vmlx.sock
+```
+
 ### With Paged Cache
 
 Memory-efficient caching for production:
@@ -34,6 +43,7 @@ vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 --continu
 |--------|-------------|---------|
 | `--port` | Server port | 8000 |
 | `--host` | Server host | 0.0.0.0 |
+| `--uds` | Unix-domain socket path; when set, host/port are ignored | None |
 | `--api-key` | API key for authentication | None |
 | `--rate-limit` | Requests per minute per client (0 = disabled) | 0 |
 | `--timeout` | Request timeout in seconds | 300 |
@@ -41,12 +51,13 @@ vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit --port 8000 --continu
 | `--use-paged-cache` | Enable paged KV cache | False |
 | `--cache-memory-mb` | Cache memory limit in MB | Auto |
 | `--cache-memory-percent` | Fraction of RAM for cache | 0.30 |
-| `--max-tokens` | Default max tokens | 32768 |
+| `--max-tokens` | Server default max output tokens. If omitted, model `generation_config.json` / `jang_config.json` `max_new_tokens` can own the default; otherwise vMLX uses the bounded 4096 output fallback. Per-request `max_tokens` / `max_output_tokens` overrides this. | 4096 fallback |
+| `--max-prompt-tokens` | Maximum prompt/context tokens accepted before prefill. This is the input/context cap, not response length. | Auto memory-safe limit |
 | `--default-temperature` | Default temperature when not specified | None |
 | `--default-top-p` | Default top_p when not specified | None |
 | `--stream-interval` | Tokens per stream chunk | 1 |
 | `--mcp-config` | Path to MCP config file | None |
-| `--reasoning-parser` | Parser for reasoning models (`qwen3`, `deepseek_r1`, `openai_gptoss`) | None |
+| `--reasoning-parser` | Parser for reasoning models (`auto`, `none`, `qwen3`, `deepseek_r1`, `minimax_m2`, `openai_gptoss`, `mistral`, `gemma4`) | None |
 | `--embedding-model` | Pre-load an embedding model at startup | None |
 | `--enable-auto-tool-choice` | Enable automatic tool calling | False |
 | `--tool-call-parser` | Tool call parser (see [Tool Calling](tool-calling.md)) | None |

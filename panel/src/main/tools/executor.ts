@@ -34,21 +34,33 @@ export interface ToolResult {
 
 /** Resolve path relative to working directory. Blocks directory traversal and symlink escape. */
 function resolvePath(workingDir: string, userPath: string): string {
-  const resolved = isAbsolute(userPath) ? resolve(userPath) : resolve(workingDir, userPath)
+  const realWorkingDir = realpathSync(workingDir)
+  const resolved = isAbsolute(userPath) ? resolve(userPath) : resolve(realWorkingDir, userPath)
   // Resolve symlinks to prevent escape via symlink chains
   let realResolved: string
   try {
     realResolved = realpathSync(resolved)
   } catch {
-    // Path doesn't exist yet (e.g., write_file creating new file) — resolve parent
-    const parent = dirname(resolved)
-    try {
-      realResolved = join(realpathSync(parent), basename(resolved))
-    } catch {
-      realResolved = resolved
+    // Path doesn't exist yet (e.g., write_file creating new nested dirs).
+    // Resolve the nearest existing parent so symlink parents still escape,
+    // while normal missing children remain anchored under the real workdir.
+    let parent = dirname(resolved)
+    const tails = [basename(resolved)]
+    while (true) {
+      try {
+        realResolved = join(realpathSync(parent), ...tails.reverse())
+        break
+      } catch {
+        const next = dirname(parent)
+        if (next === parent) {
+          realResolved = resolved
+          break
+        }
+        tails.push(basename(parent))
+        parent = next
+      }
     }
   }
-  const realWorkingDir = realpathSync(workingDir)
   const rel = relative(realWorkingDir, realResolved)
   if (rel.startsWith('..') || (isAbsolute(rel) && realResolved !== realWorkingDir && !realResolved.startsWith(realWorkingDir + sep))) {
     throw new Error(`Path escapes working directory: ${userPath}`)

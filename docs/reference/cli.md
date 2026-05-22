@@ -24,6 +24,7 @@ vmlx-engine serve <model> [options]
 |--------|-------------|---------|
 | `--port` | Server port | 8000 |
 | `--host` | Server host | 0.0.0.0 |
+| `--uds` | Unix-domain socket path; when set, host/port are ignored | None |
 | `--api-key` | API key for authentication | None |
 | `--rate-limit` | Requests per minute per client (0 = disabled) | 0 |
 | `--timeout` | Request timeout in seconds | 300 |
@@ -32,7 +33,8 @@ vmlx-engine serve <model> [options]
 | `--cache-memory-percent` | Fraction of RAM for cache | 0.30 |
 | `--no-memory-aware-cache` | Use legacy entry-count cache | False |
 | `--use-paged-cache` | Enable paged KV cache | False |
-| `--max-tokens` | Default max tokens | 32768 |
+| `--max-tokens` | Server default max output tokens. If omitted, model `generation_config.json` / `jang_config.json` `max_new_tokens` can own the default; otherwise vMLX uses the bounded 4096-token fallback. Per-request `max_tokens` / `max_output_tokens` overrides this. | 4096 fallback |
+| `--max-prompt-tokens` | Maximum prompt/context tokens accepted before prefill. This is the input/context cap, not response length. | Auto memory-safe limit |
 | `--stream-interval` | Tokens per stream chunk | 1 |
 | `--mcp-config` | Path to MCP config file | None |
 | `--paged-cache-block-size` | Tokens per cache block | 64 |
@@ -40,10 +42,10 @@ vmlx-engine serve <model> [options]
 | `--max-num-seqs` | Max concurrent sequences | 256 |
 | `--default-temperature` | Default temperature when not specified in request | None |
 | `--default-top-p` | Default top_p when not specified in request | None |
-| `--reasoning-parser` | Parser for reasoning models (`auto`, `qwen3`, `deepseek_r1`, `openai_gptoss`) | None |
+| `--reasoning-parser` | Parser for reasoning models (`auto`, `none`, `qwen3`, `deepseek_r1`, `minimax_m2`, `openai_gptoss`, `mistral`, `gemma4`) | None |
 | `--embedding-model` | Pre-load an embedding model at startup | None |
 | `--enable-auto-tool-choice` | Enable automatic tool calling | False |
-| `--tool-call-parser` | Tool call parser (`auto`, `mistral`, `qwen`, `llama`, `hermes`, `deepseek`, `kimi`, `granite`, `nemotron`, `xlam`, `functionary`, `glm47`) | None |
+| `--tool-call-parser` | Tool call parser (`auto`, `none`, `mistral`, `qwen`, `llama`, `hermes`, `deepseek`, `kimi`, `granite`, `nemotron`, `minimax`, `xlam`, `functionary`, `glm47`, `step3p5`, `gemma3`, `gemma3n`, `dsml`, `deepseek_v4`, `zaya_xml`, `hunyuan`, `generic`, `qwen3`, `llama3`, `llama4`, `nous`, `deepseek_v3`, `deepseek_r1`, `kimi_k2`, `moonshot`, `granite3`, `nemotron3`, `minimax_m2`, `meetkai`, `stepfun`, `glm4`, `gemma4`, `hy_v3`, `tencent`) | None |
 | `--kv-cache-quantization` | Quantize KV cache in prefix storage (`none`, `q4`, `q8`) | none |
 | `--kv-cache-group-size` | Group size for KV cache quantization | 64 |
 
@@ -52,6 +54,10 @@ vmlx-engine serve <model> [options]
 ```bash
 # Simple mode (single user, max throughput)
 vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit
+
+# Unix-domain socket for local sidecars
+vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit \
+  --uds /tmp/vmlx.sock
 
 # Continuous batching (multiple users)
 vmlx-engine serve mlx-community/Llama-3.2-3B-Instruct-4bit --continuous-batching
@@ -78,6 +84,12 @@ vmlx-engine serve mlx-community/Qwen3-8B-4bit --reasoning-parser auto
 
 # Reasoning model with explicit parser
 vmlx-engine serve mlx-community/Qwen3-8B-4bit --reasoning-parser qwen3
+
+# MiniMax M2/M2.5/M2.7 reasoning parser
+vmlx-engine serve JANGQ-AI/MiniMax-M2.7-JANGTQ_K \
+  --reasoning-parser minimax_m2 \
+  --tool-call-parser minimax \
+  --enable-auto-tool-choice
 
 # DeepSeek reasoning model
 vmlx-engine serve mlx-community/DeepSeek-R1-Distill-Qwen-7B-4bit --reasoning-parser deepseek_r1

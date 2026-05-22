@@ -1,0 +1,293 @@
+"""Release-regression manifest for current vMLX Python/Electron work.
+
+This is the durable index for the broad regression suite Eric requested. It is
+intentionally explicit: each row names the user-visible or runtime contract it
+protects, the commands that currently cover it, and whether the row is no-heavy,
+live-model, or packaged-app only.
+"""
+
+from __future__ import annotations
+
+from copy import deepcopy
+from typing import Any
+
+
+REQUIRED_RELEASE_DOMAINS = {
+    "chat_ui_settings",
+    "generation_defaults",
+    "parser_registry",
+    "reasoning_template",
+    "tool_calls",
+    "api_surface",
+    "cache_architecture",
+    "model_artifact_detection",
+    "native_mtp",
+    "mcp",
+    "vl_media",
+    "packaging_release",
+    "pr_intake",
+}
+
+
+_ROWS: list[dict[str, Any]] = [
+    {
+        "id": "chat-settings-max-output-context-ui",
+        "domain": "chat_ui_settings",
+        "mode": "noheavy",
+        "heavy": False,
+        "proves": [
+            "Server Default Max Output Tokens maps to --max-tokens",
+            "Max Context Tokens maps to --max-prompt-tokens",
+            "Chat Max Output Tokens remains a per-chat/API override",
+            "DSV4 cache controls are singular and in the right settings sections",
+        ],
+        "commands": [
+            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260521.json",
+        ],
+        "artifacts": [
+            "build/current-max-output-context-contract-20260521.json",
+        ],
+    },
+    {
+        "id": "generation-defaults-no-hidden-forcing",
+        "domain": "generation_defaults",
+        "mode": "noheavy",
+        "heavy": False,
+        "proves": [
+            "generation_config.json defaults are surfaced without copying into sticky overrides",
+            "jang_config.json sampling defaults are surfaced without hidden sampler forcing",
+            "request/API overrides remain explicit and win over startup defaults",
+        ],
+        "commands": [
+            ".venv/bin/python tests/cross_matrix/run_generation_defaults_contract.py --out build/current-generation-defaults-contract-20260521.json",
+        ],
+        "artifacts": [
+            "build/current-generation-defaults-contract-20260521.json",
+        ],
+    },
+    {
+        "id": "parser-registry-tool-reasoning-parity",
+        "domain": "parser_registry",
+        "mode": "noheavy",
+        "heavy": False,
+        "proves": [
+            "Panel-emitted tool parser ids are accepted by the engine",
+            "Panel-emitted reasoning parser ids are accepted by the engine",
+            "MiniMax minimax_m2 regression stays covered",
+        ],
+        "commands": [
+            ".venv/bin/python tests/cross_matrix/run_parser_registry_contract.py --out build/current-parser-registry-contract-20260521.json",
+        ],
+        "artifacts": [
+            "build/current-parser-registry-contract-20260521.json",
+        ],
+    },
+    {
+        "id": "reasoning-template-no-think-tag-leak",
+        "domain": "reasoning_template",
+        "mode": "noheavy",
+        "heavy": False,
+        "proves": [
+            "Reasoning on/off request wiring stays explicit",
+            "Server-side reasoning parsers do not leak think tags into visible content",
+            "Client streaming fallback does not double-extract reasoning_content",
+            "Interleaved reasoning segments render without corrupting token counts",
+        ],
+        "commands": [
+            ".venv/bin/python tests/cross_matrix/run_reasoning_template_contract.py --out build/current-reasoning-template-contract-20260521.json",
+        ],
+        "artifacts": [
+            "build/current-reasoning-template-contract-20260521.json",
+        ],
+    },
+    {
+        "id": "tool-call-loop-parser-cleanup",
+        "domain": "tool_calls",
+        "mode": "noheavy",
+        "heavy": False,
+        "proves": [
+            "Tool parser residue is rejected instead of executed",
+            "DSV4 degraded DSML variants from live default-cache runs are repaired only when schema-valid",
+            "maxToolIterations caps tool loops",
+        ],
+        "commands": [
+            ".venv/bin/python tests/cross_matrix/run_tool_call_contract.py --out build/current-tool-call-contract-20260521.json",
+        ],
+        "artifacts": [
+            "build/current-tool-call-contract-20260521.json",
+            "build/current-dsv4-default-cache-tool-loop/result.json",
+        ],
+    },
+    {
+        "id": "api-chat-responses-anthropic-ollama-parity",
+        "domain": "api_surface",
+        "mode": "noheavy",
+        "heavy": False,
+        "proves": [
+            "OpenAI Chat Completions sampling/default propagation",
+            "OpenAI Responses sampling/default propagation",
+            "Anthropic adapter bundle defaults",
+            "Ollama adapter streaming/done behavior",
+        ],
+        "commands": [
+            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260521.json",
+        ],
+        "artifacts": [
+            "build/current-api-surface-contract-20260521.json",
+        ],
+    },
+    {
+        "id": "cache-architecture-family-classification",
+        "domain": "cache_architecture",
+        "mode": "noheavy",
+        "heavy": False,
+        "proves": [
+            "Plain KV, hybrid SSM/Mamba, MLA, DSV4 composite, ZAYA CCA, and MLLM media-salt cache contracts stay classified per family",
+            "Generic TurboQuant KV is not applied to DSV4 native composite or hybrid SSM paths",
+            "Cache detail telemetry reports paged, typed native, and TQ/L2 state",
+        ],
+        "commands": [
+            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-20260521.json",
+        ],
+        "artifacts": [
+            "build/current-cache-architecture-contract-20260521.json",
+        ],
+    },
+    {
+        "id": "model-artifact-format-detection",
+        "domain": "model_artifact_detection",
+        "mode": "noheavy",
+        "heavy": False,
+        "proves": [
+            "JANG, JANGTQ/MXTQ, MXFP4, MXFP8, dropped-MTP, and preserved-MTP artifacts are not inferred from names alone",
+            "Registry/family detection uses bundle config and capability metadata",
+        ],
+        "commands": [
+            ".venv/bin/python tests/cross_matrix/run_model_artifact_format_contract.py --out build/current-model-artifact-format-contract-20260521.json",
+        ],
+        "artifacts": [
+            "build/current-model-artifact-format-contract-20260521.json",
+        ],
+    },
+    {
+        "id": "native-mtp-d3-effect-policy",
+        "domain": "native_mtp",
+        "mode": "noheavy",
+        "heavy": False,
+        "proves": [
+            "Native MTP D3 launch policy is wired where supported",
+            "Native MTP controls are hidden/suppressed for DSV4 and unsupported families",
+            "Runtime-active MTP still requires live equivalence/speed rows before release claims",
+        ],
+        "commands": [
+            ".venv/bin/python tests/cross_matrix/run_native_mtp_contract.py --out build/current-native-mtp-contract-20260521.json",
+        ],
+        "artifacts": [
+            "build/current-native-mtp-contract-20260521.json",
+        ],
+    },
+    {
+        "id": "mcp-policy-ui-gateway",
+        "domain": "mcp",
+        "mode": "noheavy",
+        "heavy": False,
+        "proves": [
+            "MCP autodiscovery, redaction, security policy, gateway routing, and panel config source stay covered",
+        ],
+        "commands": [
+            ".venv/bin/python tests/cross_matrix/run_mcp_policy_contract.py --out build/current-mcp-policy-contract-20260521.json",
+        ],
+        "artifacts": [
+            "build/current-mcp-policy-contract-20260521.json",
+        ],
+    },
+    {
+        "id": "vl-media-cache-tool-followup",
+        "domain": "vl_media",
+        "mode": "noheavy",
+        "heavy": False,
+        "proves": [
+            "VLM media request serialization, media cache salting, and tool follow-up paths stay source-covered",
+            "Still-image live rows do not imply video/audio/Omni clearance",
+        ],
+        "commands": [
+            ".venv/bin/python tests/cross_matrix/run_vl_media_cache_contract.py --out build/current-vl-media-cache-contract-20260521.json",
+        ],
+        "artifacts": [
+            "build/current-vl-media-cache-contract-20260521.json",
+        ],
+    },
+    {
+        "id": "packaged-release-integrity",
+        "domain": "packaging_release",
+        "mode": "packaged",
+        "heavy": False,
+        "proves": [
+            "Version triples, bundled Python hash parity, packaged app signature, and objective proof digest gate release attempts",
+            "verify-bundled checks packaged Python imports, source hash parity, and relocatable console scripts",
+        ],
+        "commands": [
+            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-20260521.json",
+        ],
+        "artifacts": [
+            "build/current-packaged-integrity-contract-20260521.json",
+        ],
+    },
+    {
+        "id": "pr-intake-credit-triage",
+        "domain": "pr_intake",
+        "mode": "noheavy",
+        "heavy": False,
+        "proves": [
+            "Open PRs are reviewed for merge/adapt/reject decision",
+            "Contributor credit is tracked even when an idea is adapted instead of merged",
+        ],
+        "commands": [
+            "gh pr list --repo jjang-ai/vmlx --state open --limit 100 --json number,title,author,createdAt,updatedAt,isDraft,headRefName,baseRefName,mergeable,reviewDecision,url,labels,statusCheckRollup",
+        ],
+        "artifacts": [
+            "docs/internal/pr-triage/2026-05-21-open-pr-intake.md",
+            "build/current-gh-prs-vmlx-open-20260521.json",
+        ],
+    },
+    {
+        "id": "dsv4-long-output-quality-live",
+        "domain": "tool_calls",
+        "mode": "live",
+        "heavy": True,
+        "proves": [
+            "DSV4 long-output/code/file-generation exactness and identifier integrity pass on a real model server",
+            "This remains open until a source/rebuilt-body or equivalent live proof passes",
+        ],
+        "commands": [
+            ".venv/bin/python build/run_dsv4_identifier_count_ablation.py --model /Users/example/models/JANGQ/DeepSeek-V4-Flash-JANG",
+        ],
+        "artifacts": [
+            "build/current-dsv4-identifier-count-ablation-20260521/result.json",
+            "build/current-dsv4-long-output-quality-clearance-20260521.json",
+        ],
+    },
+    {
+        "id": "model-family-live-multiturn-soak",
+        "domain": "reasoning_template",
+        "mode": "live",
+        "heavy": True,
+        "proves": [
+            "Hy3, MiniMax, Qwen MTP, ZAYA, VLM, and DSV4 family rows need real multi-turn UI/API soaks before broad production claims",
+            "No source-only test may claim output-coherence clearance for every family",
+        ],
+        "commands": [
+            "tests/cross_matrix/run_production_family_audit.py with scoped live model rows",
+        ],
+        "artifacts": [
+            "docs/internal/release-gates/",
+        ],
+    },
+]
+
+
+def build_manifest() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "rows": deepcopy(_ROWS),
+    }

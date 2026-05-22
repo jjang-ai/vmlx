@@ -2,6 +2,23 @@
 
 All notable changes to vMLX Engine will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- Added focused release-regression coverage for PR intake and runtime
+  compatibility rows, including max output/context wiring, generation defaults,
+  parser parity, cache architecture, native MTP, MCP, VL media cache, packaging,
+  and live-only model family gates.
+- Hardened built-in coding-tool path resolution so new nested writes are still
+  allowed inside the active working directory while traversal and symlink-parent
+  escapes remain blocked. Credit: @tomaioo for PR #170 and the arbitrary
+  file-write report.
+- Documented and tested Unix-domain socket serving via
+  `vmlx-engine serve --uds /tmp/vmlx.sock`. Credit: @efortin for PR #168.
+- Added a no-heavy JANG compatibility contract for the MiniMax sanitize and
+  MoEGate quantize failure class without installing the submitted global
+  monkeypatch. Credit: @pperezrubio for PR #155.
+
 ## [1.5.46] - 2026-05-20
 
 ### Fixed
