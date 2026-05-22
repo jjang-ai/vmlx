@@ -123,6 +123,19 @@ def test_release_regression_manifest_tracks_tool_calls_with_runner_artifact():
     assert "maxToolIterations" in joined
 
 
+def test_release_regression_manifest_tracks_panel_cache_family_gating():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+    row = rows["panel-session-cache-settings-family-gating"]
+    joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
+
+    assert row["domain"] == "cache_architecture"
+    assert "run_noheavy_panel_settings_contract.py" in joined
+    assert "current-panel-settings-contract-proof-20260522-dsv4-cache-controls.json" in joined
+    assert "DSV4 pool quant" in joined
+    assert "JANG/JANGTQ/MXFP" in joined
+
+
 def test_release_regression_manifest_tracks_mcp_with_runner_artifact():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}

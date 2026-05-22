@@ -60,6 +60,10 @@ SOURCE_HASH_FILES = (
     "tests/test_model_config_registry.py",
 )
 
+REQUIRED_PANEL_SETTINGS_SOURCE_MARKERS = (
+    "DSV4 pool quant and native prefix controls stay DSV4-only",
+)
+
 COMMANDS: dict[str, list[str]] = {
     "panel_settings_contracts": [
         "npx",
@@ -142,6 +146,21 @@ def source_hashes(root: Path) -> dict[str, str]:
     return hashes
 
 
+def missing_source_markers(root: Path) -> list[str]:
+    text = "\n".join(
+        (root / rel).read_text(encoding="utf-8")
+        for rel in (
+            "panel/tests/settings-flow.test.ts",
+            "panel/tests/dsv4-env.test.ts",
+        )
+    )
+    return [
+        marker
+        for marker in REQUIRED_PANEL_SETTINGS_SOURCE_MARKERS
+        if marker not in text
+    ]
+
+
 def build_artifact(root: Path) -> dict[str, Any]:
     panel_root = root / "panel"
     commands = {
@@ -164,12 +183,16 @@ def build_artifact(root: Path) -> dict[str, Any]:
     )
     engine_model_coverage_ok = engine_model_ok and (engine_model_counts["tests_passed"] or 0) >= 120
     typecheck_ok = commands["panel_typecheck"]["returncode"] == 0
+    missing_markers = missing_source_markers(root)
     checks = {
-        "panel_settings_contract_count": settings_ok and settings_coverage_ok,
+        "panel_settings_contract_count": settings_ok and settings_coverage_ok and not missing_markers,
         "dsv4_default_native_prefix_on": settings_ok and settings_coverage_ok,
         "dsv4_explicit_prefix_off_disables_native_flags": settings_ok and settings_coverage_ok,
         "dsv4_l2_explicit_off_preserves_prefix": settings_ok and settings_coverage_ok,
         "dsv4_generic_kv_flags_suppressed": settings_ok and settings_coverage_ok,
+        "dsv4_pool_quant_controls_are_dsv4_only": (
+            settings_ok and settings_coverage_ok and not missing_markers
+        ),
         "max_output_context_cli_split": settings_ok and settings_coverage_ok,
         "chat_max_output_is_per_chat_override": settings_ok and settings_coverage_ok,
         "non_dsv4_cache_toggles_preserved": settings_ok and settings_coverage_ok,
@@ -187,6 +210,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "status": "pass" if all(checks.values()) else "open",
         "checks": checks,
+        "missing_source_markers": missing_markers,
         "source_hashes": source_hashes(root),
         "commands": commands,
     }
@@ -203,6 +227,7 @@ def main() -> int:
     args.out.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
     print(args.out)
     print(f"status={artifact['status']}")
+    print("missing_source_markers=" + json.dumps(artifact["missing_source_markers"]))
     for name, result in artifact["commands"].items():
         counts = result["counts"]
         print(

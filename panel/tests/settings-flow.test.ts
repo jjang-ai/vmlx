@@ -1642,6 +1642,38 @@ describe('No Hardcoded Values', () => {
         expect(hasFlag(out, '--kv-cache-quantization')).toBe(false)
     })
 
+    it('DSV4 pool quant and native prefix controls stay DSV4-only', () => {
+        const staleDsv4Config = {
+            dsv4PrefixCache: true,
+            dsv4PoolQuant: true,
+            enablePrefixCache: true,
+            usePagedCache: true,
+            enableBlockDiskCache: true,
+            kvCacheQuantization: 'q8',
+            kvCacheGroupSize: 32,
+        } as const
+
+        const nonDsv4 = preview(staleDsv4Config, {
+            family: 'qwen3_5',
+            usePagedCache: true,
+        })
+        expect(hasFlag(nonDsv4, '--dsv4-enable-prefix-cache')).toBe(false)
+        expect(hasFlag(nonDsv4, '--use-paged-cache')).toBe(true)
+        expect(hasFlag(nonDsv4, '--enable-block-disk-cache')).toBe(true)
+        expect(getFlagValue(nonDsv4, '--kv-cache-quantization')).toBe('q8')
+        expect(getFlagValue(nonDsv4, '--kv-cache-group-size')).toBe('32')
+
+        const dsv4 = preview(staleDsv4Config, {
+            family: 'deepseek-v4',
+            usePagedCache: true,
+        })
+        expect(hasFlag(dsv4, '--dsv4-enable-prefix-cache')).toBe(true)
+        expect(hasFlag(dsv4, '--use-paged-cache')).toBe(true)
+        expect(getFlagValue(dsv4, '--paged-cache-block-size')).toBe('256')
+        expect(hasFlag(dsv4, '--kv-cache-quantization')).toBe(false)
+        expect(hasFlag(dsv4, '--kv-cache-group-size')).toBe(false)
+    })
+
     it('detected Qwen3.6 hybrid cache forces paged cache over stale saved false', () => {
         const out = preview(
             {

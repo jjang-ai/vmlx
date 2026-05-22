@@ -44,13 +44,31 @@ _ROWS: list[dict[str, Any]] = [
             "External coding-tool configs keep context window and output limit separate",
             "new-chat model-owned maxTokens cannot be replaced by inherited per-chat output caps",
             "server startup maxTokens and chat maxTokens remain independent when both are set",
-            "DSV4 cache controls are singular and in the right settings sections",
         ],
         "commands": [
             ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-server-chat-boundary.json",
         ],
         "artifacts": [
             "build/current-max-output-context-contract-20260522-server-chat-boundary.json",
+        ],
+    },
+    {
+        "id": "panel-session-cache-settings-family-gating",
+        "domain": "cache_architecture",
+        "mode": "noheavy",
+        "heavy": False,
+        "proves": [
+            "DSV4 pool quant and native prefix controls stay DSV4-only",
+            "DSV4 native composite prefix cache remains diagnostic opt-in",
+            "generic KV quantization is suppressed for DSV4 native composite cache",
+            "non-DSV4 JANG/JANGTQ/MXFP cache toggles keep normal prefix/paged/L2/KV semantics",
+            "panel typecheck and model-family registry stay green with those controls",
+        ],
+        "commands": [
+            ".venv/bin/python tests/cross_matrix/run_noheavy_panel_settings_contract.py --out build/current-panel-settings-contract-proof-20260522-dsv4-cache-controls.json",
+        ],
+        "artifacts": [
+            "build/current-panel-settings-contract-proof-20260522-dsv4-cache-controls.json",
         ],
     },
     {
