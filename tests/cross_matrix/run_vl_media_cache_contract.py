@@ -47,6 +47,7 @@ SOURCE_HASH_FILES = (
     "panel/src/main/sessions.ts",
     "panel/tests/tool-media-followup.test.ts",
     "panel/tests/image-display-consistency.test.ts",
+    "panel/tests/model-config-registry.test.ts",
     "panel/tests/settings-flow.test.ts",
     "tests/test_vl_video_regression.py",
     "tests/test_mllm_scheduler_cache.py",
@@ -96,6 +97,18 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             ),
         ],
     ),
+    "panel_vlm_family_detection": (
+        Path("panel"),
+        [
+            "npx",
+            "vitest",
+            "run",
+            "tests/model-config-registry.test.ts",
+            "--reporter=verbose",
+            "--testNamePattern",
+            "ZAYA1-VL|Qwen.*VLM|Qwen.*video|mxfp4 Qwen|mxfp8 Qwen|Nemotron-H",
+        ],
+    ),
 }
 
 REQUIRED_VL_MEDIA_CACHE_TEST_MARKERS = (
@@ -135,6 +148,12 @@ REQUIRED_PANEL_VL_MEDIA_TEST_MARKERS = (
     "VLM gets --continuous-batching for BatchedEngine with MLLMScheduler",
     "VLM continuous batching off emits explicit opt-out and suppresses cache stack",
     "auto-detected VLM wins over stale isMultimodal=false",
+    "keeps ZAYA1-VL multimodal when a stale stamp says text",
+    "keeps MXTQ/JANGTQ Qwen hybrid VLM multimodal",
+    "keeps mxfp4 Qwen hybrid VLM multimodal",
+    "keeps mxfp8 Qwen hybrid VLM multimodal",
+    "marks non-JANG Qwen 3.6 MoE bundles with vision/video metadata as multimodal",
+    "does not route Nemotron-H text extracts through MLLM from stale sidecars",
     "multimodal/VLM detection suppresses --enable-jit because mlx-vlm streaming is not compile-safe",
     "continuous batching off is a real master switch for VLM cache flags",
     "VLM with all caching features works together",
@@ -204,7 +223,11 @@ def _missing_engine_markers(results: dict[str, dict[str, Any]]) -> list[str]:
 def _missing_panel_markers(results: dict[str, dict[str, Any]]) -> list[str]:
     text = _combined_stdout(
         results,
-        ("panel_vl_media_followup_contracts", "panel_vlm_settings_contracts"),
+        (
+            "panel_vl_media_followup_contracts",
+            "panel_vlm_settings_contracts",
+            "panel_vlm_family_detection",
+        ),
     )
     return [marker for marker in REQUIRED_PANEL_VL_MEDIA_TEST_MARKERS if marker not in text]
 
@@ -271,6 +294,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "multimodal/VLM detection suppresses --enable-jit because mlx-vlm streaming is not compile-safe" not in missing_panel_markers
             and settings_passed >= 6
         ),
+        "all_required_panel_markers_present": not failed and not missing_panel_markers,
     }
     public_results = {
         name: {key: value for key, value in result.items() if key != "stdout"}

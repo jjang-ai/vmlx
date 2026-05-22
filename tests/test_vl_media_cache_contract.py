@@ -30,12 +30,19 @@ def test_vl_media_cache_contract_pins_named_panel_rows():
     assert "keeps media bytes out of plain tool text and returns data URLs separately" in required
     assert "VLM gets --continuous-batching for BatchedEngine with MLLMScheduler" in required
     assert "VLM continuous batching off emits explicit opt-out and suppresses cache stack" in required
+    assert "keeps ZAYA1-VL multimodal when a stale stamp says text" in required
+    assert "keeps MXTQ/JANGTQ Qwen hybrid VLM multimodal" in required
+    assert "keeps mxfp4 Qwen hybrid VLM multimodal" in required
+    assert "keeps mxfp8 Qwen hybrid VLM multimodal" in required
+    assert "marks non-JANG Qwen 3.6 MoE bundles with vision/video metadata as multimodal" in required
+    assert "does not route Nemotron-H text extracts through MLLM from stale sidecars" in required
     assert "multimodal/VLM detection suppresses --enable-jit because mlx-vlm streaming is not compile-safe" in required
     assert "VLM with all caching features works together" in required
 
     for name in (
         "panel_vl_media_followup_contracts",
         "panel_vlm_settings_contracts",
+        "panel_vlm_family_detection",
     ):
         command = gate.COMMANDS[name][1]
         assert "--reporter=verbose" in command
@@ -60,10 +67,19 @@ def test_vl_media_cache_contract_marker_validation_fails_if_required_row_missing
             "stdout": "VLM gets --continuous-batching for BatchedEngine with MLLMScheduler",
             "stdout_tail": [],
         },
+        "panel_vlm_family_detection": {
+            "returncode": 0,
+            "stdout": "",
+            "stdout_tail": [],
+        },
     }
 
     assert "test_image_and_video_url_content_part_schemas" in gate._missing_engine_markers(results)
     assert (
         "injects image and video tool results as multimodal follow-up content parts"
+        in gate._missing_panel_markers(results)
+    )
+    assert (
+        "marks non-JANG Qwen 3.6 MoE bundles with vision/video metadata as multimodal"
         in gate._missing_panel_markers(results)
     )

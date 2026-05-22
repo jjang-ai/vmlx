@@ -266,13 +266,14 @@ _ROWS: list[dict[str, Any]] = [
         "heavy": False,
         "proves": [
             "VLM media request serialization, media cache salting, and tool follow-up paths stay source-covered",
+            "Panel family detection keeps ZAYA-VL, Qwen VL/video/hybrid, MXFP4/MXFP8 VLM, and Nemotron stale-Omni sidecar routing covered",
             "Still-image live rows do not imply video/audio/Omni clearance",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_vl_media_cache_contract.py --out build/current-vl-media-cache-contract-20260521.json",
+            ".venv/bin/python tests/cross_matrix/run_vl_media_cache_contract.py --out build/current-vl-media-cache-contract-20260522-panel-family.json",
         ],
         "artifacts": [
-            "build/current-vl-media-cache-contract-20260521.json",
+            "build/current-vl-media-cache-contract-20260522-panel-family.json",
         ],
     },
     {

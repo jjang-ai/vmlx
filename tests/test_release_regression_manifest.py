@@ -390,10 +390,12 @@ def test_release_regression_manifest_tracks_vl_media_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_vl_media_cache_contract.py" in joined
-    assert "current-vl-media-cache-contract-20260521.json" in joined
+    assert "current-vl-media-cache-contract-20260522-panel-family.json" in joined
     assert "VLM media request serialization" in joined
     assert "media cache salting" in joined
     assert "tool follow-up" in joined
+    assert "Qwen VL/video/hybrid" in joined
+    assert "Nemotron stale-Omni" in joined
     assert "video" in joined.lower()
 
 
