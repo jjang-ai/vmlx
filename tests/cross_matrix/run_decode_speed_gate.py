@@ -243,6 +243,14 @@ ROWS: dict[str, Row] = {
         expected_min_tps=20.0,
         expected_min_pp=400.0,
     ),
+    "nemotron_omni_nano_jangtq4": Row(
+        "nemotron_omni_nano_jangtq4",
+        "/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ4-CRACK",
+        tool_parser="nemotron",
+        reasoning_parser="qwen3",
+        expected_min_tps=20.0,
+        expected_min_pp=400.0,
+    ),
     "nemotron_mxfp4": Row(
         "nemotron_mxfp4",
         "/Users/example/models/dealign.ai/Nemotron-Omni-Nano-MXFP4-CRACK",

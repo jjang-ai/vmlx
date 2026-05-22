@@ -127,6 +127,16 @@ def test_decode_speed_gate_has_explicit_qwen36_mxfp8_and_native_mtp_rows():
         assert row.max_tokens <= 320
 
 
+def test_decode_speed_gate_has_explicit_nemotron_omni_nano_jangtq4_row():
+    from tests.cross_matrix.run_decode_speed_gate import ROWS
+
+    row = ROWS["nemotron_omni_nano_jangtq4"]
+    assert row.path == "/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ4-CRACK"
+    assert row.tool_parser == "nemotron"
+    assert row.reasoning_parser == "qwen3"
+    assert row.max_tokens <= 320
+
+
 def test_dsv4_live_cache_gates_use_canonical_parser_and_no_legacy_32k_startup_cap():
     gate_paths = [
         Path("tests/cross_matrix/run_dsv4_long_context_gate.py"),
