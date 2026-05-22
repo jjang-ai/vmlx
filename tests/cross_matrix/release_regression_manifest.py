@@ -329,12 +329,16 @@ _ROWS: list[dict[str, Any]] = [
         "proves": [
             "MCP autodiscovery, redaction, security policy, gateway routing, and panel config source stay covered",
             "MCP required marker checks fail the gate if named engine or panel rows disappear",
+            "mcp.json/jsonc import keeps secrets out of managed metadata",
+            "built-in Electron tools remain separate from MCP execution and request policy",
+            "ambiguous multi-session MCP requests are rejected unless a model alias is explicit",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_mcp_policy_contract.py --out build/current-mcp-policy-contract-20260521.json",
+            ".venv/bin/python tests/cross_matrix/run_mcp_policy_contract.py --out build/current-mcp-policy-contract-20260522-recheck-ui-gateway.json",
         ],
         "artifacts": [
             "build/current-mcp-policy-contract-20260521.json",
+            "build/current-mcp-policy-contract-20260522-recheck-ui-gateway.json",
         ],
     },
     {
@@ -346,13 +350,18 @@ _ROWS: list[dict[str, Any]] = [
             "VLM media request serialization, media cache salting, and tool follow-up paths stay source-covered",
             "Panel family detection keeps ZAYA-VL, Qwen VL/video/hybrid/indexed-MTP, MXFP4/MXFP8 VLM, and Nemotron stale-Omni sidecar routing covered",
             "Engine family detection keeps affine-JANG Qwen VLM-looking artifacts on the text loader until the M-RoPE path is fixed",
+            "Qwen3.6 VL JANG indexed-MTP artifacts stay multimodal only when indexed MTP and vision tensors exist",
+            "MXTQ/JANGTQ and MXFP4/MXFP8 Qwen VLM rows preserve multimodal launch policy",
+            "hybrid SSM companion cache, deferred rederive, and generic TQ suppression stay covered for VLM paths",
+            "read_video and image/video tool-result follow-up build real multimodal content parts without leaking media bytes into plain tool text",
             "Still-image live rows do not imply video/audio/Omni clearance",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_vl_media_cache_contract.py --out build/current-vl-media-cache-contract-20260522-panel-family.json",
+            ".venv/bin/python tests/cross_matrix/run_vl_media_cache_contract.py --out build/current-vl-media-cache-contract-20260522-recheck-qwen-zaya-media.json",
         ],
         "artifacts": [
             "build/current-vl-media-cache-contract-20260522-panel-family.json",
+            "build/current-vl-media-cache-contract-20260522-recheck-qwen-zaya-media.json",
         ],
     },
     {

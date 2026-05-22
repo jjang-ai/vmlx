@@ -219,6 +219,27 @@ def test_release_regression_manifest_tracks_mcp_with_runner_artifact():
     assert "required marker" in joined
 
 
+def test_release_regression_manifest_tracks_current_mcp_and_vl_media_rechecks():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+
+    mcp = rows["mcp-policy-ui-gateway"]
+    mcp_joined = " ".join(mcp["commands"] + mcp["artifacts"] + mcp["proves"])
+    assert "current-mcp-policy-contract-20260522-recheck-ui-gateway.json" in mcp_joined
+    assert "mcp.json/jsonc import" in mcp_joined
+    assert "built-in Electron tools remain separate from MCP execution" in mcp_joined
+    assert "ambiguous multi-session MCP requests" in mcp_joined
+
+    vl_media = rows["vl-media-cache-tool-followup"]
+    vl_joined = " ".join(vl_media["commands"] + vl_media["artifacts"] + vl_media["proves"])
+    assert "current-vl-media-cache-contract-20260522-recheck-qwen-zaya-media.json" in vl_joined
+    assert "Qwen3.6 VL JANG indexed-MTP" in vl_joined
+    assert "MXTQ/JANGTQ and MXFP4/MXFP8 Qwen VLM" in vl_joined
+    assert "hybrid SSM companion cache" in vl_joined
+    assert "read_video" in vl_joined
+    assert "image/video tool-result follow-up" in vl_joined
+
+
 def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artifact():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}
