@@ -1845,7 +1845,86 @@ class MLLMScheduler:
             enable_prefix_cache=self.config.enable_prefix_cache,
             uses_zaya_cache=self._uses_zaya_cache,
         )
+        # Wire PLD speculative decoding into the batch generator (issue #134
+        # follow-up). Activates only on hybrid SSM/ATT models when
+        # --enable-pld is set. The excluded-token set (V0.6 filter) is built
+        # from tokenizer/processor special-token attributes to keep image-pad,
+        # vision markers, pad out of n-gram drafts.
+        pld_enabled = bool(getattr(self.config, "pld_enabled", False)) and getattr(
+            self.batch_generator, "_is_hybrid", False
+        )
+        if pld_enabled:
+            try:
+                excluded = self._build_pld_excluded_token_ids()
+                self.batch_generator.configure_pld_spec(
+                    enabled=True,
+                    excluded_token_ids=excluded,
+                )
+                logger.info(
+                    "[PLD] MLLM batched PLD enabled — K=2 (hybrid), "
+                    "excluded_token_ids=%d",
+                    len(excluded) if excluded else 0,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[PLD] MLLM PLD wiring failed, falling back to standard "
+                    "decode: %s", exc,
+                )
         self._current_sampler_params = new_params
+
+    def _build_pld_excluded_token_ids(self) -> Optional[Set[int]]:
+        """Collect tokenizer/processor special-token IDs to keep out of PLD drafts.
+
+        Mirrors Scheduler._build_pld_excluded_token_ids (PR #149). Covers
+        pad/image-pad/vision-start/vision-end/additional_special_tokens.
+        EOS/BOS are intentionally NOT excluded — accepting EOS as a draft
+        is the legitimate "model would have emitted EOS anyway" case,
+        gated by the verify forward.
+        """
+        excluded: Set[int] = set()
+        tok = getattr(self, "tokenizer", None)
+        inner = getattr(tok, "tokenizer", tok) if tok is not None else None
+
+        def _add(value):
+            if value is None:
+                return
+            if isinstance(value, int):
+                excluded.add(value)
+            elif isinstance(value, (list, tuple, set)):
+                for v in value:
+                    if isinstance(v, int):
+                        excluded.add(v)
+
+        for obj in (tok, inner):
+            if obj is None:
+                continue
+            for attr in (
+                "pad_token_id",
+                "image_token_id",
+                "image_pad_id",
+                "vision_start_token_id",
+                "vision_end_token_id",
+                "additional_special_tokens_ids",
+            ):
+                try:
+                    _add(getattr(obj, attr, None))
+                except Exception:
+                    pass
+
+        # Processor exposes some IDs not present on the tokenizer
+        try:
+            processor = getattr(self, "processor", None)
+            if processor is not None:
+                for attr in (
+                    "image_token_id",
+                    "image_pad_id",
+                    "vision_start_token_id",
+                ):
+                    _add(getattr(processor, attr, None))
+        except Exception:
+            pass
+
+        return excluded if excluded else None
 
     # ========== Sync API (step-based) ==========
 

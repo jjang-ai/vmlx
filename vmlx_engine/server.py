@@ -5893,19 +5893,51 @@ async def health():
                 pass
 
     # PLD SSM replay telemetry (issue #134)
-    _pld_scheduler = None
+    # Two engine paths expose PLD state at different objects:
+    #   - Simple engine: Scheduler has _pld_replay_* directly (PR #149)
+    #   - MLLM batched: MLLMBatchGenerator has them (PR #150 expansion)
+    # Probe both — whichever exposes the counters wins.
+    _pld_sources = []
     if _engine:
         if hasattr(_engine, "_engine") and _engine._engine:
-            _pld_scheduler = getattr(_engine._engine.engine, "scheduler", None)
-        elif hasattr(_engine, "_mllm_scheduler") and _engine._mllm_scheduler:
-            _pld_scheduler = _engine._mllm_scheduler
-    if _pld_scheduler is not None and hasattr(_pld_scheduler, "_pld_replay_enabled"):
-        result["pld_ssm_replay"] = {
-            "enabled": getattr(_pld_scheduler, "_pld_replay_enabled", False),
-            "attempts": getattr(_pld_scheduler, "_pld_replay_attempts", 0),
-            "emitted": getattr(_pld_scheduler, "_pld_replay_emitted", 0),
-            "failures": getattr(_pld_scheduler, "_pld_replay_failures", 0),
-        }
+            sched = getattr(_engine._engine.engine, "scheduler", None)
+            if sched is not None:
+                _pld_sources.append(sched)
+        if hasattr(_engine, "_mllm_scheduler") and _engine._mllm_scheduler:
+            mllm_sched = _engine._mllm_scheduler
+            _pld_sources.append(mllm_sched)
+            # MLLM batch generator carries the batched-PLD counters
+            bg = getattr(mllm_sched, "batch_generator", None)
+            if bg is not None:
+                _pld_sources.append(bg)
+    for _src in _pld_sources:
+        if hasattr(_src, "_pld_replay_enabled"):
+            result["pld_ssm_replay"] = {
+                "enabled": getattr(_src, "_pld_replay_enabled", False),
+                "attempts": getattr(_src, "_pld_replay_attempts", 0),
+                "emitted": getattr(_src, "_pld_replay_emitted", 0),
+                "failures": getattr(_src, "_pld_replay_failures", 0),
+            }
+            break
+    # Also expose batched-spec telemetry from MLLMBatchGenerator if available
+    if _engine and hasattr(_engine, "_mllm_scheduler"):
+        bg = getattr(_engine._mllm_scheduler, "batch_generator", None) if _engine._mllm_scheduler else None
+        if bg is not None and hasattr(bg, "_spec_batched_steps"):
+            existing = result.get("speculative_decoding")
+            if not isinstance(existing, dict):
+                existing = {} if existing == "not_configured" else (existing or {})
+                if not isinstance(existing, dict):
+                    existing = {}
+            existing["batched"] = {
+                "enabled": (
+                    getattr(bg, "_pld_spec_enabled", False)
+                    or bool(getattr(bg, "_spec_batched_steps", 0))
+                ),
+                "steps": getattr(bg, "_spec_batched_steps", 0),
+                "tokens_emitted": getattr(bg, "_spec_batched_tokens", 0),
+                "acceptance_rate": getattr(bg, "_spec_batched_acceptance_ema", 0.0),
+            }
+            result["speculative_decoding"] = existing
 
     # Smelt mode: report partial expert loading status
     if _smelt_enabled:
