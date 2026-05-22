@@ -13,10 +13,9 @@
  *   - `dsv4PrefixCache` -> `VMLX_DSV4_ENABLE_PREFIX_CACHE=1` — diagnostic
  *     opt-in for native SWA+CSA/HCA composite prefix reuse. Default off until
  *     deterministic cached-vs-no-cache equivalence is proven.
- *   - `dsv4PoolQuant` is retained for old-session migration only. The live
- *     pool codec is disabled because even after append-only writes, attention
- *     reads still dequantize/concatenate the historical CSA/HCA pool during
- *     decode; production DSV4 launches always set `DSV4_POOL_QUANT=0`.
+ *   - `dsv4PoolQuant` -> `DSV4_POOL_QUANT=1` only when the user explicitly
+ *     enables the native CSA/HCA pool codec. Default remains off; generic
+ *     TurboQuant KV is still suppressed for DSV4 composite cache.
  *
  * Natural model behavior wins: bundle chat/generation config plus explicit
  * per-request controls are the only model-behavior inputs.
@@ -44,7 +43,7 @@ export function dsv4EnvFromConfig(
 
   if (options.dsv4Active === true) {
     env.DSV4_LONG_CTX = '1'
-    env.DSV4_POOL_QUANT = '0'
+    env.DSV4_POOL_QUANT = config.dsv4PoolQuant === true ? '1' : '0'
     if (config.dsv4PrefixCache === true) {
       env.VMLX_DSV4_ENABLE_PREFIX_CACHE = '1'
     }

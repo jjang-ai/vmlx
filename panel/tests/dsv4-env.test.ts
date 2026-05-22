@@ -19,10 +19,10 @@ describe('dsv4EnvFromConfig', () => {
     })
   })
 
-  it('does not enable the rejected DSV4 pool quant codec even if old config asks for it', () => {
+  it('enables DSV4 pool quant only when explicit config asks for it', () => {
     expect(dsv4EnvFromConfig({ dsv4PoolQuant: true }, { dsv4Active: true })).toEqual({
       DSV4_LONG_CTX: '1',
-      DSV4_POOL_QUANT: '0',
+      DSV4_POOL_QUANT: '1',
     })
   })
 
@@ -91,7 +91,7 @@ describe('dsv4EnvFromConfig', () => {
     }, { dsv4Active: true })
     expect(env).toEqual({
       DSV4_LONG_CTX: '1',
-      DSV4_POOL_QUANT: '0',
+      DSV4_POOL_QUANT: '1',
       VMLX_DSV4_ENABLE_PREFIX_CACHE: '1',
     })
   })
@@ -166,9 +166,9 @@ describe('DSV4 runtime controls in SessionConfigForm', () => {
     expect(source).toContain('DSV4 Composite Prefix Cache')
     expect(source).toContain("onChange('dsv4PrefixCache', v)")
     expect(source).toContain('DSV4 Pool Quantization')
-    expect(source).toContain('dequantizes and concatenates the full CSA/HCA pool during decode')
-    expect(source).toContain("onChange={() => onChange('dsv4PoolQuant', false)}")
-    expect(source).toContain('disabled')
+    expect(source).toContain('reuses the materialized CSA/HCA pool view')
+    expect(source).toContain("onChange={v => onChange('dsv4PoolQuant', v)}")
+    expect(source).not.toContain("onChange={() => onChange('dsv4PoolQuant', false)}")
     expect(source).not.toContain('DSV4 Raw Max Thinking')
     expect(source).not.toContain('DSV4 Force Direct Rail')
     expect(source).not.toContain('DSV4 Finalizer Tokens')

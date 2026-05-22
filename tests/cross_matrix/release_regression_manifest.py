@@ -204,13 +204,13 @@ _ROWS: list[dict[str, Any]] = [
             "Generic TurboQuant KV is not applied to DSV4 native composite or hybrid SSM paths",
             "Bundled JANG DSV4 pool quant codec appends only newly generated CSA/HCA pool rows instead of requantizing the whole accumulated pool",
             "DSV4 pool quant reads reuse a materialized pool view instead of dequantizing and concatenating historical CSA/HCA pool segments on every read",
-            "DSV4 panel env mapping keeps the rejected pool quant codec disabled even when old saved sessions ask for it",
+            "DSV4 panel env mapping enables pool quant only from explicit DSV4 config while the default remains off",
             "DSV4 timing probe covers prefix-cache replay and cold-store boundaries before speed/cache root-cause claims",
             "Cache detail telemetry reports paged, typed native, and TQ/L2 state",
             "Panel session launch builder preserves DSV4 default and diagnostic prefix-cache policy, DSV4-only native cache controls, Qwen3.6 hybrid and Mamba paged-cache forcing, and regular KV stale saved false semantics",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-20260522-dsv4-pool-env-gate.json",
+            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-20260522-dsv4-pool-ui-wired.json",
         ],
         "artifacts": [
             "build/current-cache-architecture-contract-20260521.json",
@@ -219,6 +219,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-cache-architecture-contract-20260522-dsv4-timing.json",
             "build/current-cache-architecture-contract-20260522-dsv4-pool-env-gate.json",
             "build/current-cache-architecture-contract-20260522-dsv4-pool-materialized-cache.json",
+            "build/current-cache-architecture-contract-20260522-dsv4-pool-ui-wired.json",
         ],
     },
     {

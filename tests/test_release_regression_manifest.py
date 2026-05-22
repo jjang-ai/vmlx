@@ -531,7 +531,8 @@ def test_release_regression_manifest_tracks_cache_architecture_with_runner_artif
     assert "DSV4 pool quant reads reuse a materialized pool view" in joined
     assert "current-cache-architecture-contract-20260522-dsv4-pool-materialized-cache.json" in joined
     assert "pool quant codec appends only newly generated CSA/HCA pool rows" in joined
-    assert "DSV4 panel env mapping keeps the rejected pool quant codec disabled" in joined
+    assert "DSV4 panel env mapping enables pool quant only from explicit DSV4 config" in joined
+    assert "current-cache-architecture-contract-20260522-dsv4-pool-ui-wired.json" in joined
     assert "DSV4 timing probe covers prefix-cache replay and cold-store boundaries" in joined
     assert "Panel session launch builder preserves DSV4 default and diagnostic prefix-cache policy" in joined
     assert "Qwen3.6 hybrid and Mamba paged-cache forcing" in joined

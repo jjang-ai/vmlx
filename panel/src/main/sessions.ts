@@ -146,7 +146,7 @@ function applyFamilyStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
         config.dsv4PrefixCache = false
         changed = true
       }
-      if (config.dsv4PoolQuant !== false) {
+      if (config.dsv4PoolQuant == null) {
         config.dsv4PoolQuant = false
         changed = true
       }

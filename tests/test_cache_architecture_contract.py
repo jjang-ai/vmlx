@@ -27,7 +27,7 @@ def test_cache_architecture_contract_pins_named_cache_edges():
     assert "deepseek-v4 diagnostic cache opt-in uses DS4 page-sized blocks" in required_panel
     assert "DSV4 pool quant and native prefix controls stay DSV4-only" in required_panel
     assert (
-        "does not enable the rejected DSV4 pool quant codec even if old config asks for it"
+        "enables DSV4 pool quant only when explicit config asks for it"
         in required_panel
     )
     assert "detected Qwen3.6 hybrid cache forces paged cache over stale saved false" in required_panel

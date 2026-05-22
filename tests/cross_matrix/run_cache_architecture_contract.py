@@ -101,7 +101,7 @@ REQUIRED_PANEL_CACHE_MARKERS = (
     "deepseek-v4 disables composite prefix cache by default even with stale cache config",
     "deepseek-v4 diagnostic cache opt-in uses DS4 page-sized blocks",
     "deepseek-v4 respects explicit prefix cache disable",
-    "does not enable the rejected DSV4 pool quant codec even if old config asks for it",
+    "enables DSV4 pool quant only when explicit config asks for it",
     "DSV4 pool quant and native prefix controls stay DSV4-only",
     "detected Qwen3.6 hybrid cache forces paged cache over stale saved false",
     "detected Mamba cache forces paged cache while regular KV respects saved false",
