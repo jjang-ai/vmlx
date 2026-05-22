@@ -80,6 +80,7 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     "omits invalid persisted maxTokens values instead of poisoning Responses",
     "chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap",
     "chat:setOverrides rejects non-finite or non-numeric maxTokens instead of poisoning server defaults",
+    "default profiles cannot make maxTokens sticky on clean new chats",
     "does not synthesize a DSV4 max token budget when the request leaves it to server/model defaults",
     "preserves DSV4 Responses max_output_tokens for Max thinking",
     "omits unset and disabled sampling sentinels without dropping explicit overrides",
@@ -276,6 +277,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "legacy_count_floor_still_nontrivial": (
             not failed and engine_passed >= 14 and panel_passed >= 28
         ),
+        "all_required_max_output_context_markers_present": not failed and not missing_markers,
     }
     return {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
