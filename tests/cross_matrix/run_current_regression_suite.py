@@ -9,7 +9,9 @@ or release-gate failure that is not the known objective digest block.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import json
+import os
 import subprocess
 import sys
 import time
@@ -22,6 +24,27 @@ DEFAULT_OUT = Path("build/current-regression-suite-20260521.json")
 EXPECTED_OPEN_REQUIREMENTS = [
     "DSV4 long-output/code/file-generation quality is release-cleared",
 ]
+
+
+@contextmanager
+def _scoped_jang_tools_source(jang_tools_source: Path | None):
+    if jang_tools_source is None:
+        yield
+        return
+
+    keys = ("VMLX_JANG_TOOLS_SOURCE", "VMLINUX_JANG_TOOLS_SOURCE")
+    old = {key: os.environ.get(key) for key in keys}
+    value = str(jang_tools_source)
+    try:
+        for key in keys:
+            os.environ[key] = value
+        yield
+    finally:
+        for key, previous in old.items():
+            if previous is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = previous
 
 
 def _run_step(name: str, cmd: list[str], cwd: Path) -> dict[str, Any]:
@@ -83,7 +106,12 @@ def _step_is_ok(name: str, step: dict[str, Any]) -> bool:
     return step["returncode"] == 0
 
 
-def build_suite_artifact(root: Path, *, include_release_gate: bool = True) -> dict[str, Any]:
+def build_suite_artifact(
+    root: Path,
+    *,
+    include_release_gate: bool = True,
+    jang_tools_source: Path | None = None,
+) -> dict[str, Any]:
     steps: dict[str, dict[str, Any]] = {}
     commands: dict[str, list[str]] = {
         "noheavy_api_cache_contract": [
@@ -237,8 +265,9 @@ def build_suite_artifact(root: Path, *, include_release_gate: bool = True) -> di
             "--skip-gui",
         ]
 
-    for name, cmd in commands.items():
-        steps[name] = _run_step(name, cmd, root)
+    with _scoped_jang_tools_source(jang_tools_source):
+        for name, cmd in commands.items():
+            steps[name] = _run_step(name, cmd, root)
 
     digest = _load_objective_digest(root)
     open_requirements = _open_requirements(digest)
@@ -273,11 +302,22 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=Path("."))
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--skip-release-gate", action="store_true")
+    parser.add_argument(
+        "--jang-tools-source",
+        type=Path,
+        default=None,
+        help=(
+            "Clean jang-tools source checkout used for child release/bundled "
+            "hash checks. Sets both VMLX_JANG_TOOLS_SOURCE and the legacy "
+            "VMLINUX_JANG_TOOLS_SOURCE while running the suite."
+        ),
+    )
     args = parser.parse_args()
 
     artifact = build_suite_artifact(
         args.root,
         include_release_gate=not args.skip_release_gate,
+        jang_tools_source=args.jang_tools_source,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")

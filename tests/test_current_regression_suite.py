@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 
@@ -732,6 +733,42 @@ def test_current_regression_suite_runs_packaged_integrity_contracts(monkeypatch,
         "run_packaged_integrity_contract.py" in " ".join(cmd)
         for _name, cmd in seen_steps
     )
+
+
+def test_current_regression_suite_sets_clean_jang_source_env_for_release_children(monkeypatch, tmp_path):
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    _write_json(
+        tmp_path / "build/current-objective-proof-audit-20260521.json",
+        {
+            "requirements": [
+                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
+            ]
+        },
+    )
+
+    clean_jang = tmp_path / "clean-jang" / "jang-tools"
+    seen_env = {}
+
+    def fake_run_step(name, cmd, cwd):
+        if name in {"packaged_integrity_contracts", "release_gate_skip_app"}:
+            seen_env[name] = (
+                os.environ.get("VMLX_JANG_TOOLS_SOURCE"),
+                os.environ.get("VMLINUX_JANG_TOOLS_SOURCE"),
+            )
+        return {"name": name, "command": cmd, "returncode": 0, "stdout_tail": []}
+
+    monkeypatch.setattr(suite, "_run_step", fake_run_step)
+
+    artifact = suite.build_suite_artifact(
+        tmp_path,
+        include_release_gate=True,
+        jang_tools_source=clean_jang,
+    )
+
+    assert artifact["status"] == "pass"
+    assert seen_env["packaged_integrity_contracts"] == (str(clean_jang), str(clean_jang))
+    assert seen_env["release_gate_skip_app"] == (str(clean_jang), str(clean_jang))
 
 
 def test_api_surface_contract_parses_nested_runner_counts():

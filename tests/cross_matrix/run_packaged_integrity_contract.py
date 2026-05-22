@@ -10,8 +10,10 @@ known DSV4 long-output/code quality objective row.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -63,6 +65,27 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
         ],
     ),
 }
+
+
+@contextmanager
+def _scoped_jang_tools_source(jang_tools_source: Path | None):
+    if jang_tools_source is None:
+        yield
+        return
+
+    keys = ("VMLX_JANG_TOOLS_SOURCE", "VMLINUX_JANG_TOOLS_SOURCE")
+    old = {key: os.environ.get(key) for key in keys}
+    value = str(jang_tools_source)
+    try:
+        for key in keys:
+            os.environ[key] = value
+        yield
+    finally:
+        for key, previous in old.items():
+            if previous is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = previous
 
 
 def _sha256(path: Path) -> str:
@@ -124,11 +147,16 @@ def release_gate_failure_is_expected(step: dict[str, Any]) -> bool:
     return fail_lines == [expected] and not any(item in text for item in forbidden)
 
 
-def build_artifact(root: Path) -> dict[str, Any]:
-    results = {
-        name: _run(root, name, cwd_rel, cmd)
-        for name, (cwd_rel, cmd) in COMMANDS.items()
-    }
+def build_artifact(
+    root: Path,
+    *,
+    jang_tools_source: Path | None = None,
+) -> dict[str, Any]:
+    with _scoped_jang_tools_source(jang_tools_source):
+        results = {
+            name: _run(root, name, cwd_rel, cmd)
+            for name, (cwd_rel, cmd) in COMMANDS.items()
+        }
     release_gate_ok = release_gate_failure_is_expected(results["release_gate_skip_app"])
     unit_passed = results["release_gate_unit_contracts"]["counts"]["passed"] or 0
     verifier_output = "\n".join(results["bundled_python_verifier"]["stdout_tail"])
@@ -184,9 +212,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path("."))
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument(
+        "--jang-tools-source",
+        type=Path,
+        default=None,
+        help=(
+            "Clean jang-tools source checkout used for bundled hash checks. "
+            "Sets both VMLX_JANG_TOOLS_SOURCE and legacy "
+            "VMLINUX_JANG_TOOLS_SOURCE while running child gates."
+        ),
+    )
     args = parser.parse_args()
 
-    artifact = build_artifact(args.root)
+    artifact = build_artifact(args.root, jang_tools_source=args.jang_tools_source)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
     print(args.out)
