@@ -47,6 +47,7 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap",
     "test_legacy_completions_streaming_output_cap_overrides_server_default_without_touching_context_cap",
     "test_anthropic_messages_streaming_max_tokens_overrides_server_default_without_touching_context_cap",
+    "test_prompt_context_aliases_clamp_without_rewriting_output_caps",
     "test_anthropic_messages_omitted_max_tokens_uses_bundle_default",
     "test_ollama_streaming_suppresses_duplicate_done_chunks",
     "test_ollama_streaming_num_predict_overrides_server_default_without_touching_context_cap",
@@ -91,6 +92,7 @@ COMMANDS: dict[str, list[str]] = {
             "or legacy_completions_output_cap_overrides_server_default_without_touching_context_cap "
             "or legacy_completions_streaming_output_cap_overrides_server_default_without_touching_context_cap "
             "or anthropic_messages_streaming_max_tokens_overrides_server_default_without_touching_context_cap "
+            "or prompt_context_aliases_clamp_without_rewriting_output_caps "
             "or ollama_streaming_num_predict_overrides_server_default_without_touching_context_cap "
             "or responses_request_has_sampling_fields "
             "or media_diag_hooks_cover_anthropic_and_ollama_streaming_ingress "
@@ -237,6 +239,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             api_ok
             and "test_request_output_caps_override_server_default_without_touching_context_cap" not in missing_markers
             and "test_chat_and_responses_streaming_output_caps_override_server_default_without_touching_context_cap" not in missing_markers
+            and "test_prompt_context_aliases_clamp_without_rewriting_output_caps" not in missing_markers
         ),
         "legacy_completions_output_caps_override_server_default": (
             api_ok

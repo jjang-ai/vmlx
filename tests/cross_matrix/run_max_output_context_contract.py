@@ -61,6 +61,7 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     "test_explicit_server_max_tokens_overrides_bundle_max_new_tokens",
     "test_omitted_server_max_tokens_uses_bundle_max_new_tokens",
     "test_omitted_server_max_tokens_without_bundle_default_is_bounded",
+    "test_prompt_context_aliases_clamp_without_rewriting_output_caps",
     "test_max_tokens_resolution_contract_applies_to_every_registered_family",
     "test_wake_reload_preserves_max_tokens_explicitness",
     "test_cli_serve_implicit_max_tokens_uses_bounded_fallback",
@@ -119,6 +120,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_legacy_completions_streaming_output_cap_overrides_server_default_without_touching_context_cap",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_anthropic_messages_streaming_max_tokens_overrides_server_default_without_touching_context_cap",
+            "tests/test_engine_audit.py::TestServerSamplingResolution::test_prompt_context_aliases_clamp_without_rewriting_output_caps",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_ollama_streaming_num_predict_overrides_server_default_without_touching_context_cap",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_explicit_server_max_tokens_overrides_bundle_max_new_tokens",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_omitted_server_max_tokens_uses_bundle_max_new_tokens",
@@ -261,6 +263,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "prompt_context_caps_do_not_rewrite_output_cap": (
             not failed
             and "test_request_output_caps_override_server_default_without_touching_context_cap" not in missing_markers
+            and "test_prompt_context_aliases_clamp_without_rewriting_output_caps" not in missing_markers
             and "maxContextLength emits max prompt/context CLI flag when explicitly set" not in missing_markers
         ),
         "panel_server_default_output_maps_to_max_tokens": (

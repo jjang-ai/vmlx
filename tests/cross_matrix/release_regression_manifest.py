@@ -42,15 +42,16 @@ _ROWS: list[dict[str, Any]] = [
             "Max Context Tokens maps to --max-prompt-tokens",
             "Chat Max Output Tokens remains a per-chat/API override for non-streaming and streaming",
             "Legacy /v1/completions max_tokens remains a per-request output cap for non-streaming and streaming",
+            "Prompt/context aliases clamp to server max-prompt-tokens without rewriting output caps",
             "External coding-tool configs keep context window and output limit separate",
             "new-chat model-owned maxTokens cannot be replaced by inherited per-chat output caps",
             "server startup maxTokens and chat maxTokens remain independent when both are set",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-chat-responses-streaming.json",
+            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-context-alias-clamp.json",
         ],
         "artifacts": [
-            "build/current-max-output-context-contract-20260522-chat-responses-streaming.json",
+            "build/current-max-output-context-contract-20260522-context-alias-clamp.json",
         ],
     },
     {
@@ -152,13 +153,14 @@ _ROWS: list[dict[str, Any]] = [
             "OpenAI Responses sampling/default propagation for non-streaming and streaming",
             "OpenAI legacy Completions max_tokens/default propagation for non-streaming and streaming",
             "Anthropic adapter bundle defaults and streaming max_tokens override semantics",
+            "Prompt/context alias clamp semantics across OpenAI, Anthropic, and Ollama-compatible surfaces",
             "Ollama adapter streaming/done behavior and streaming num_predict output-cap overrides",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260522-ollama-streaming.json",
+            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260522-context-alias-clamp.json",
         ],
         "artifacts": [
-            "build/current-api-surface-contract-20260522-ollama-streaming.json",
+            "build/current-api-surface-contract-20260522-context-alias-clamp.json",
         ],
     },
     {

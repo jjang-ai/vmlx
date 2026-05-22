@@ -1092,6 +1092,128 @@ class TestServerSamplingResolution:
         assert chat_captured[1]["max_tokens"] == 512
         assert chat_captured[1]["max_prompt_tokens"] == 2048
 
+    def test_prompt_context_aliases_clamp_without_rewriting_output_caps(
+        self,
+        monkeypatch,
+    ):
+        """Prompt/context aliases must not mutate per-request output caps."""
+        from fastapi.testclient import TestClient
+
+        import vmlx_engine.server as server
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class FakeTokenizer:
+            has_thinking = False
+
+        class FakeEngine:
+            is_mllm = False
+            tokenizer = FakeTokenizer()
+            preserve_native_tool_format = False
+
+            async def generate(self, **kwargs):
+                completion_captured.append(dict(kwargs))
+                return GenerationOutput(text="ok", prompt_tokens=2, completion_tokens=1)
+
+        chat_captured: list[dict] = []
+        completion_captured: list[dict] = []
+        anthropic_captured: list[dict] = []
+
+        async def fake_await_chat(*args, **kwargs):
+            chat_captured.append(dict(kwargs["chat_kwargs"]))
+            return GenerationOutput(text="ok", prompt_tokens=3, completion_tokens=1)
+
+        async def fake_stream_chat_completion(*args, **kwargs):
+            anthropic_captured.append(dict(kwargs))
+            yield (
+                'data: {"choices":[{"delta":{"content":"ok"},'
+                '"finish_reason":"stop"}],"usage":{"prompt_tokens":3,'
+                '"completion_tokens":1}}\n\n'
+            )
+            yield "data: [DONE]\n\n"
+
+        monkeypatch.setattr(server, "_engine", FakeEngine())
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_name", "context-alias-cap-model")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+        monkeypatch.setattr(server, "_api_key", None, raising=False)
+        monkeypatch.setattr(server, "_default_temperature", None)
+        monkeypatch.setattr(server, "_default_top_p", None)
+        monkeypatch.setattr(server, "_default_top_k", None)
+        monkeypatch.setattr(server, "_default_min_p", None)
+        monkeypatch.setattr(server, "_default_repetition_penalty", None)
+        monkeypatch.setattr(server, "_default_max_tokens", 512)
+        monkeypatch.setattr(server, "_default_max_tokens_explicit", True, raising=False)
+        monkeypatch.setattr(server, "_max_prompt_tokens", 4096)
+        monkeypatch.setattr(
+            server,
+            "_await_chat_with_disconnect_abort",
+            fake_await_chat,
+        )
+        monkeypatch.setattr(
+            server,
+            "stream_chat_completion",
+            fake_stream_chat_completion,
+        )
+        server._jang_sampling_defaults_cache.clear()
+        server._generation_defaults_cache.clear()
+
+        client = TestClient(server.app)
+
+        chat_resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "context-alias-cap-model",
+                "messages": [{"role": "user", "content": "chat"}],
+                "stream": False,
+                "max_tokens": 123,
+                "max_context_tokens": 999999,
+            },
+        )
+        responses_resp = client.post(
+            "/v1/responses",
+            json={
+                "model": "context-alias-cap-model",
+                "input": "responses",
+                "stream": False,
+                "max_output_tokens": 321,
+                "max_context": 2048,
+            },
+        )
+        completion_resp = client.post(
+            "/v1/completions",
+            json={
+                "model": "context-alias-cap-model",
+                "prompt": "completion",
+                "stream": False,
+                "max_tokens": 222,
+                "max_context_tokens": 999999,
+            },
+        )
+        anthropic_resp = client.post(
+            "/v1/messages",
+            json={
+                "model": "context-alias-cap-model",
+                "messages": [{"role": "user", "content": "anthropic"}],
+                "stream": False,
+                "max_tokens": 111,
+                "max_context": 1024,
+            },
+        )
+
+        assert chat_resp.status_code == 200
+        assert responses_resp.status_code == 200
+        assert completion_resp.status_code == 200
+        assert anthropic_resp.status_code == 200
+        assert chat_captured[0]["max_tokens"] == 123
+        assert chat_captured[0]["max_prompt_tokens"] == 4096
+        assert chat_captured[1]["max_tokens"] == 321
+        assert chat_captured[1]["max_prompt_tokens"] == 2048
+        assert completion_captured[0]["max_tokens"] == 222
+        assert completion_captured[0]["max_prompt_tokens"] == 4096
+        assert anthropic_captured[0]["max_tokens"] == 111
+        assert anthropic_captured[0]["max_prompt_tokens"] == 1024
+
     def test_reasoning_effort_preserves_bundle_max_new_tokens(
         self,
         tmp_path,
