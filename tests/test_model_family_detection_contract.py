@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 
@@ -23,6 +24,7 @@ def test_family_detection_contract_pins_named_release_rows():
         "decode_speed_nemotron_omni_nano_jangtq4_row",
         "decode_speed_distinct_jang_jangtq_mxfp_speed_rows",
         "decode_speed_all_declared_parsers_are_engine_registered",
+        "decode_speed_all_declared_parsers_are_cli_choices",
         "decode_speed_existing_rows_match_engine_parser_policy",
         "decode_speed_existing_rows_match_engine_modality_policy",
         "decode_speed_registry_cache_metadata_health",
@@ -186,6 +188,41 @@ def test_decode_speed_gate_declared_parsers_are_engine_registered():
         if row.tool_parser and row.tool_parser not in registered_tool_parsers:
             bad_tool_rows.append(f"{row_name}:{row.tool_parser}")
         if row.reasoning_parser and row.reasoning_parser not in registered_reasoning_parsers:
+            bad_reasoning_rows.append(f"{row_name}:{row.reasoning_parser}")
+
+    assert bad_tool_rows == []
+    assert bad_reasoning_rows == []
+
+
+def test_decode_speed_gate_declared_parsers_are_cli_choices():
+    from tests.cross_matrix.run_decode_speed_gate import ROWS
+    from vmlx_engine.reasoning import list_parsers
+
+    cli_source = Path("vmlx_engine/cli.py").read_text()
+    cli_ast = ast.parse(cli_source)
+    tool_choices = None
+    for node in ast.walk(cli_ast):
+        if not isinstance(node, ast.Call):
+            continue
+        if not any(
+            isinstance(arg, ast.Constant) and arg.value == "--tool-call-parser"
+            for arg in node.args
+        ):
+            continue
+        for keyword in node.keywords:
+            if keyword.arg == "choices":
+                tool_choices = set(ast.literal_eval(keyword.value))
+                break
+
+    assert tool_choices is not None
+    reasoning_choices = {"auto", "none", *list_parsers()}
+    bad_tool_rows = []
+    bad_reasoning_rows = []
+
+    for row_name, row in ROWS.items():
+        if row.tool_parser and row.tool_parser not in tool_choices:
+            bad_tool_rows.append(f"{row_name}:{row.tool_parser}")
+        if row.reasoning_parser and row.reasoning_parser not in reasoning_choices:
             bad_reasoning_rows.append(f"{row_name}:{row.reasoning_parser}")
 
     assert bad_tool_rows == []

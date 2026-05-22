@@ -177,6 +177,16 @@ def test_release_regression_manifest_live_soak_does_not_overclaim_qwen_mtp():
         assert "qwen" in command_text and "mtp" in command_text
 
 
+def test_release_regression_manifest_tracks_family_parser_cli_choice_guard():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+    row = rows["model-family-detection-noheavy"]
+    joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
+
+    assert "CLI-accepted parser choice" in joined
+    assert "current-model-family-detection-contract-20260522-cli-parser-choices.json" in joined
+
+
 def test_release_regression_manifest_commands_are_declared_for_noheavy_rows():
     manifest = build_manifest()
     noheavy_rows = [row for row in manifest["rows"] if row["mode"] == "noheavy"]
@@ -252,7 +262,7 @@ def test_release_regression_manifest_tracks_named_model_family_detection_with_ru
 
     assert row["domain"] == "model_family_detection"
     assert "run_model_family_detection_contract.py" in joined
-    assert "current-model-family-detection-contract-20260522-parser-registry-rows.json" in joined
+    assert "current-model-family-detection-contract-20260522-cli-parser-choices.json" in joined
     assert "DSV4" in joined
     assert "ZAYA" in joined
     assert "Ling" in joined
@@ -263,6 +273,7 @@ def test_release_regression_manifest_tracks_named_model_family_detection_with_ru
     assert "JANG-only" in joined
     assert "JANGTQ/MXTQ" in joined
     assert "registered engine parser" in joined
+    assert "CLI-accepted parser choice" in joined
     assert "MiniMax" in joined
     assert "Hy3" in joined
 

@@ -94,6 +94,7 @@ REQUIRED_ROWS = (
     "decode_speed_nemotron_omni_nano_jangtq4_row",
     "decode_speed_distinct_jang_jangtq_mxfp_speed_rows",
     "decode_speed_all_declared_parsers_are_engine_registered",
+    "decode_speed_all_declared_parsers_are_cli_choices",
     "decode_speed_existing_rows_match_engine_parser_policy",
     "decode_speed_existing_rows_match_engine_modality_policy",
     "decode_speed_registry_cache_metadata_health",
@@ -156,6 +157,9 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
     ),
     "decode_speed_all_declared_parsers_are_engine_registered": (
         "test_decode_speed_gate_declared_parsers_are_engine_registered",
+    ),
+    "decode_speed_all_declared_parsers_are_cli_choices": (
+        "test_decode_speed_gate_declared_parsers_are_cli_choices",
     ),
     "decode_speed_existing_rows_match_engine_parser_policy": (
         "test_existing_decode_speed_rows_match_engine_registry_parser_policy",
