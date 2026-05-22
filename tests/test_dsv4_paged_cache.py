@@ -315,9 +315,12 @@ def test_panel_suppresses_generic_batch_and_chunk_controls_for_dsv4():
     assert "const effectiveMaxNumSeqs = dsv4Active ? 1 : config.maxNumSeqs" in form
     assert "const effectivePrefillBatchSize = dsv4Active ? 1 : config.prefillBatchSize" in form
     assert "const effectiveCompletionBatchSize = dsv4Active ? 1 : config.completionBatchSize" in form
-    assert "if (!dsv4Active && config.prefillBatchSize" in sessions
-    assert "if (!dsv4Active && config.prefillStepSize" in sessions
-    assert "if (!dsv4Active && config.completionBatchSize" in sessions
+    assert "const prefillBatchSize = finitePositiveInteger(config.prefillBatchSize)" in sessions
+    assert "if (!dsv4Active && prefillBatchSize != null)" in sessions
+    assert "const prefillStepSize = finitePositiveInteger(config.prefillStepSize)" in sessions
+    assert "if (!dsv4Active && prefillStepSize != null)" in sessions
+    assert "const completionBatchSize = finitePositiveInteger(config.completionBatchSize)" in sessions
+    assert "if (!dsv4Active && completionBatchSize != null)" in sessions
     assert "if (!dsv4Active && config.prefillBatchSize" in settings
     assert "if (!dsv4Active && config.prefillStepSize" in settings
     assert "if (!dsv4Active && config.completionBatchSize" in settings
@@ -825,6 +828,32 @@ def test_dsv4_native_pool_codec_stays_distinct_from_generic_kv_quant():
     assert "DSV4 composite cache detected" in init_src
     assert "DSV4_POOL_QUANT" in init_src
     assert "wrap any component in generic QuantizedKVCache" in quant_src
+
+
+def test_dsv4_pool_quant_appends_only_new_pool_rows(monkeypatch):
+    """Bundled JANG pool quant must not requantize old DSV4 pool rows."""
+    import jang_tools.dsv4.pool_quant_cache as pq
+    from jang_tools.dsv4.pool_quant_cache import PoolQuantizedV4Cache
+
+    quant_shapes = []
+    original_quant = pq._quant_pool
+
+    def recording_quant(pool, *args, **kwargs):
+        quant_shapes.append(tuple(pool.shape))
+        return original_quant(pool, *args, **kwargs)
+
+    monkeypatch.setattr(pq, "_quant_pool", recording_quant)
+
+    cache = PoolQuantizedV4Cache(sliding_window=128, compress_ratio=4)
+    first = mx.ones((1, 3, 16), dtype=mx.bfloat16)
+    second = mx.ones((1, 1, 16), dtype=mx.bfloat16) * 2
+
+    pool_a = cache.update_pool(first, "compressor_state")
+    pool_b = cache.update_pool(second, "compressor_state")
+    mx.eval(pool_a, pool_b)
+
+    assert tuple(pool_b.shape) == (1, 4, 16)
+    assert quant_shapes == [(1, 3, 16), (1, 1, 16)]
 
 
 def test_dsv4_serve_path_forces_generic_kv_quantization_off():

@@ -512,6 +512,8 @@ def test_release_regression_manifest_tracks_cache_architecture_with_runner_artif
     assert "TurboQuant KV" in joined
     assert "MLA" in joined
     assert "current-cache-architecture-contract-20260522-panel-cache-launch.json" in joined
+    assert "current-cache-architecture-contract-20260522-dsv4-pool-quant-append.json" in joined
+    assert "pool quant codec appends only newly generated CSA/HCA pool rows" in joined
     assert "Panel session launch builder preserves DSV4 default and diagnostic prefix-cache policy" in joined
     assert "Qwen3.6 hybrid and Mamba paged-cache forcing" in joined
     assert "regular KV stale saved false semantics" in joined

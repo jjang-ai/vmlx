@@ -41,6 +41,7 @@ SOURCE_HASH_FILES = (
     "tests/test_batching.py",
     "tests/test_hybrid_batching.py",
     "tests/test_hybrid_prefix_cache.py",
+    "tests/test_dsv4_paged_cache.py",
     "tests/test_kimi_k25_mla_patch.py",
     "tests/test_mllm_scheduler_cache.py",
     "tests/test_turboquant_cache_contract.py",
@@ -57,6 +58,7 @@ REQUIRED_CACHE_TEST_MARKERS = (
     # SWA+CSA/HCA composite block is present.
     "test_memory_pressure_reuses_shorter_dsv4_terminal_composite_prefix",
     "test_memory_pressure_refuses_dsv4_partial_without_terminal_composite",
+    "test_dsv4_pool_quant_appends_only_new_pool_rows",
     # Hybrid SSM cache must reuse only aligned checkpoints and must not apply
     # generic TQ live-cache paths to SSM state.
     "test_memory_pressure_partially_reuses_hybrid_ssm_with_aligned_checkpoint",
@@ -131,6 +133,7 @@ COMMANDS: dict[str, CommandSpec] = {
         "tests/test_batching.py",
         "tests/test_hybrid_batching.py",
         "tests/test_hybrid_prefix_cache.py",
+        "tests/test_dsv4_paged_cache.py",
         "tests/test_kimi_k25_mla_patch.py",
         "tests/test_mllm_scheduler_cache.py",
         "tests/test_turboquant_cache_contract.py",
