@@ -151,9 +151,10 @@ def test_release_regression_manifest_tracks_panel_cache_family_gating():
 
     assert row["domain"] == "cache_architecture"
     assert "run_noheavy_panel_settings_contract.py" in joined
-    assert "current-panel-settings-contract-proof-20260522-dsv4-cache-controls.json" in joined
+    assert "current-panel-settings-contract-proof-20260522-launch-memory-warning.json" in joined
     assert "DSV4 pool quant" in joined
     assert "JANG/JANGTQ/MXFP" in joined
+    assert "warning-only for lazy-mmap" in joined
 
 
 def test_release_regression_manifest_tracks_mcp_with_runner_artifact():

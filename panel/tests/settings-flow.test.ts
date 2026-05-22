@@ -604,6 +604,22 @@ describe('Prefix Cache', () => {
         expect(matches).toHaveLength(1)
     })
 
+    it('launch memory admission is warning-only for lazy-mmap bundles', () => {
+        const source = readFileSync('src/main/sessions.ts', 'utf-8')
+        const start = source.indexOf('// Memory estimation: warn if model is too large')
+        const end = source.indexOf('// Kill anything on this port first')
+        const block = source.slice(start, end)
+
+        expect(start).toBeGreaterThanOrEqual(0)
+        expect(end).toBeGreaterThan(start)
+        expect(block).toContain('Model estimate')
+        expect(block).toContain('Memory warning')
+        expect(block).not.toContain('Launch blocked')
+        expect(block).not.toContain('ALLOW_UNSAFE_MODEL_LAUNCH')
+        expect(block).not.toContain("status: 'failed'")
+        expect(block).not.toContain('throw new Error')
+    })
+
     it('memory-aware mode: sets --cache-memory-percent as fraction', () => {
         const out = preview({ enablePrefixCache: true, cacheMemoryPercent: 30, usePagedCache: false })
         expect(getFlagValue(out, '--cache-memory-percent')).toBe('0.3')

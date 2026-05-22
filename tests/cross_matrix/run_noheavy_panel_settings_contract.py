@@ -62,6 +62,7 @@ SOURCE_HASH_FILES = (
 
 REQUIRED_PANEL_SETTINGS_SOURCE_MARKERS = (
     "DSV4 pool quant and native prefix controls stay DSV4-only",
+    "launch memory admission is warning-only for lazy-mmap bundles",
 )
 
 COMMANDS: dict[str, list[str]] = {

@@ -67,13 +67,14 @@ _ROWS: list[dict[str, Any]] = [
             "DSV4 native composite prefix cache remains diagnostic opt-in",
             "generic KV quantization is suppressed for DSV4 native composite cache",
             "non-DSV4 JANG/JANGTQ/MXFP cache toggles keep normal prefix/paged/L2/KV semantics",
+            "launch-memory admission is warning-only for lazy-mmap JANG/JANGTQ bundles and does not hard-block on macOS cache pressure",
             "panel typecheck and model-family registry stay green with those controls",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_noheavy_panel_settings_contract.py --out build/current-panel-settings-contract-proof-20260522-dsv4-cache-controls.json",
+            ".venv/bin/python tests/cross_matrix/run_noheavy_panel_settings_contract.py --out build/current-panel-settings-contract-proof-20260522-launch-memory-warning.json",
         ],
         "artifacts": [
-            "build/current-panel-settings-contract-proof-20260522-dsv4-cache-controls.json",
+            "build/current-panel-settings-contract-proof-20260522-launch-memory-warning.json",
         ],
     },
     {
