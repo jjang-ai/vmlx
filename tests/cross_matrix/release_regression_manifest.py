@@ -196,13 +196,15 @@ _ROWS: list[dict[str, Any]] = [
         "heavy": False,
         "proves": [
             "JANG, JANGTQ/MXTQ, Ling/Bailing hybrid loader repairs, plain MLX 4bit, MXFP4, MXFP8, dropped-MTP, and preserved-MTP artifacts are not inferred from names alone",
+            "generic affine JANG loader accepts weight_format=affine bundles without misclassifying them as JANGTQ/MXFP/plain MLX",
             "MXFP4/MXFP8 VLM loader paths quantize with the declared quantization mode instead of falling back to affine or JANGTQ handling",
             "Registry/family detection uses bundle config and capability metadata",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_model_artifact_format_contract.py --out build/current-model-artifact-format-contract-20260522-mxfp-vlm-loader.json",
+            ".venv/bin/python tests/cross_matrix/run_model_artifact_format_contract.py --out build/current-model-artifact-format-contract-20260522-affine-jang-loader.json",
         ],
         "artifacts": [
+            "build/current-model-artifact-format-contract-20260522-affine-jang-loader.json",
             "build/current-model-artifact-format-contract-20260522-mxfp-vlm-loader.json",
         ],
     },

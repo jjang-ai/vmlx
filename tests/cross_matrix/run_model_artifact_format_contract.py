@@ -34,6 +34,9 @@ SOURCE_HASH_FILES = (
 )
 
 REQUIRED_ARTIFACT_TEST_MARKERS = (
+    # Generic affine JANG bundles must continue through the JANG loader rather
+    # than being rejected or misclassified as JANGTQ/MXFP/plain MLX.
+    "test_load_jang_model_accepts_affine_weight_format",
     # DSV4 must not be treated as generic JANGTQ/MTP. The static audit needs
     # to preserve explicit drop/no-runtime states instead of inferring runtime
     # from path names or stray weights.
@@ -121,7 +124,11 @@ def build_artifact(root: Path) -> dict[str, Any]:
         marker for marker in REQUIRED_ARTIFACT_TEST_MARKERS if marker not in stdout
     ]
     checks = {
-        "jang_and_jangtq_detection": not failed and "test_gather_dn_uses_dp_bits" not in missing_markers,
+        "jang_and_jangtq_detection": (
+            not failed
+            and "test_load_jang_model_accepts_affine_weight_format" not in missing_markers
+            and "test_gather_dn_uses_dp_bits" not in missing_markers
+        ),
         "ling_bailing_hybrid_loader_repairs": (
             not failed
             and "test_sanitize_repairs_flat_2d_switch_mlp_to_3d" not in missing_markers

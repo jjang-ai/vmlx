@@ -274,6 +274,17 @@ def test_release_regression_manifest_tracks_mxfp_vlm_loader_quant_mode():
     assert "current-model-artifact-format-contract-20260522-mxfp-vlm-loader.json" in joined
 
 
+def test_release_regression_manifest_tracks_affine_jang_loader_acceptance():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+    row = rows["model-artifact-format-detection"]
+    joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
+
+    assert "generic affine JANG loader" in joined
+    assert "weight_format=affine" in joined
+    assert "current-model-artifact-format-contract-20260522-affine-jang-loader.json" in joined
+
+
 def test_release_regression_manifest_commands_are_declared_for_noheavy_rows():
     manifest = build_manifest()
     noheavy_rows = [row for row in manifest["rows"] if row["mode"] == "noheavy"]

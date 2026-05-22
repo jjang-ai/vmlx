@@ -3,6 +3,7 @@ def test_model_artifact_format_contract_pins_named_artifact_edges():
 
     required = gate.REQUIRED_ARTIFACT_TEST_MARKERS
 
+    assert "test_load_jang_model_accepts_affine_weight_format" in required
     assert "test_dsv4_static_audit_reports_mtp_drop_contract" in required
     assert "test_gather_dn_uses_dp_bits" in required
     assert "test_sanitize_repairs_flat_2d_switch_mlp_to_3d" in required
