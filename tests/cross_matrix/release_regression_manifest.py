@@ -88,13 +88,15 @@ _ROWS: list[dict[str, Any]] = [
             "generic KV quantization is suppressed for DSV4 native composite cache",
             "non-DSV4 JANG/JANGTQ/MXFP cache toggles keep normal prefix/paged/L2/KV semantics",
             "launch-memory admission is warning-only for lazy-mmap JANG/JANGTQ bundles and does not hard-block on macOS cache pressure",
+            "What's New update notice is localized across all five locales and mentions MCP, MTP, latest.json, Developer ID, L2 disk cache, and max_tokens",
             "panel typecheck and model-family registry stay green with those controls",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_noheavy_panel_settings_contract.py --out build/current-panel-settings-contract-proof-20260522-launch-memory-warning.json",
+            ".venv/bin/python tests/cross_matrix/run_noheavy_panel_settings_contract.py --out build/current-panel-settings-contract-proof-20260522-recheck-update-notice-i18n.json",
         ],
         "artifacts": [
             "build/current-panel-settings-contract-proof-20260522-launch-memory-warning.json",
+            "build/current-panel-settings-contract-proof-20260522-recheck-update-notice-i18n.json",
         ],
     },
     {
@@ -389,15 +391,18 @@ _ROWS: list[dict[str, Any]] = [
         "heavy": False,
         "proves": [
             "local latest.json updater manifest does not advance ahead of the source version",
+            "source version consistent across pyproject.toml and panel/package.json",
             "if latest.json is bumped to the source version, it carries a matching URL, SHA256, and notes version",
+            "complete post-release updater state is accepted while incomplete bumped latest.json state is rejected",
             "after release, latest.json may equal the source version only when the published updater state is complete",
             "PyPI, GitHub release, and updater feeds remain explicit operator checks before public release",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_release_surface_contract.py --out build/current-release-surface-contract-20260522-post-release-updater.json",
+            ".venv/bin/python tests/cross_matrix/run_release_surface_contract.py --out build/current-release-surface-contract-20260522-recheck-updater-i18n.json",
         ],
         "artifacts": [
             "build/current-release-surface-contract-20260522-post-release-updater.json",
+            "build/current-release-surface-contract-20260522-recheck-updater-i18n.json",
             "build/current-release-surface-contract-20260521.json",
             "latest.json",
         ],

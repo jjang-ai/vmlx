@@ -271,6 +271,25 @@ def test_release_regression_manifest_tracks_public_release_surface_preflight():
     assert "published updater state is complete" in joined
 
 
+def test_release_regression_manifest_tracks_current_updater_and_i18n_rechecks():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+
+    panel = rows["panel-session-cache-settings-family-gating"]
+    panel_joined = " ".join(panel["commands"] + panel["artifacts"] + panel["proves"])
+    assert "current-panel-settings-contract-proof-20260522-recheck-update-notice-i18n.json" in panel_joined
+    assert "What's New update notice" in panel_joined
+    assert "MCP, MTP, latest.json, Developer ID, L2 disk cache, and max_tokens" in panel_joined
+    assert "all five locales" in panel_joined
+
+    release = rows["public-release-surface-preflight"]
+    release_joined = " ".join(release["commands"] + release["artifacts"] + release["proves"])
+    assert "current-release-surface-contract-20260522-recheck-updater-i18n.json" in release_joined
+    assert "source version consistent across pyproject.toml and panel/package.json" in release_joined
+    assert "complete post-release updater state" in release_joined
+    assert "incomplete bumped latest.json" in release_joined
+
+
 def test_release_regression_manifest_tracks_live_only_boundaries():
     manifest = build_manifest()
     live_rows = [row for row in manifest["rows"] if row["mode"] == "live"]
