@@ -408,6 +408,7 @@ def test_release_regression_manifest_tracks_vl_media_with_runner_artifact():
     assert "media cache salting" in joined
     assert "tool follow-up" in joined
     assert "Qwen VL/video/hybrid" in joined
+    assert "affine-JANG Qwen" in joined
     assert "Nemotron stale-Omni" in joined
     assert "video" in joined.lower()
 

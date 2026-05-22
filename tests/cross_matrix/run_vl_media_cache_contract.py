@@ -31,7 +31,8 @@ PYTEST_PATTERN = (
     "or turboquant_kv_cache_importable or mllm_scheduler_wires_paged "
     "or image_and_video_mixed or mllm_batch_generator_wires_resume_default_on "
     "or video_token_marker_distinct or multimodal_and_tools "
-    "or tool_choice_auto_coexists or anthropic_tools_on_vl_messages"
+    "or tool_choice_auto_coexists or anthropic_tools_on_vl_messages "
+    "or qwen36_affine_jang"
 )
 
 SOURCE_HASH_FILES = (
@@ -52,6 +53,7 @@ SOURCE_HASH_FILES = (
     "tests/test_vl_video_regression.py",
     "tests/test_mllm_scheduler_cache.py",
     "tests/test_mllm_tool_replay.py",
+    "tests/test_model_config_registry.py",
     "tests/test_vl_media_cache_contract.py",
 )
 
@@ -67,6 +69,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "tests/test_vl_video_regression.py",
             "tests/test_mllm_scheduler_cache.py",
             "tests/test_mllm_tool_replay.py",
+            "tests/test_model_config_registry.py",
             "-k",
             PYTEST_PATTERN,
         ],
@@ -121,6 +124,7 @@ REQUIRED_VL_MEDIA_CACHE_TEST_MARKERS = (
     "test_openai_content_part_allows_video",
     "test_qwen36_jangtq_is_detected_as_vl",
     "test_jang_config_qwen36_can_be_video",
+    "test_qwen36_affine_jang_vlm_stays_text_loader_until_mrope_fixed",
     "test_hybrid_ssm_auto_mode_disables_live_tq_kv",
     "test_deferred_rederive_covers_post_output_hybrid_ssm_paths",
     "test_mllm_side_captures_at_prefill_not_finalize",

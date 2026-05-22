@@ -8,6 +8,7 @@ def test_vl_media_cache_contract_pins_named_engine_rows():
     assert "test_jangtq_video_fallback_no_crash" in required
     assert "test_qwen36_jangtq_is_detected_as_vl" in required
     assert "test_jang_config_qwen36_can_be_video" in required
+    assert "test_qwen36_affine_jang_vlm_stays_text_loader_until_mrope_fixed" in required
     assert "test_hybrid_ssm_auto_mode_disables_live_tq_kv" in required
     assert "test_deferred_rederive_covers_post_output_hybrid_ssm_paths" in required
     assert "test_mllm_side_captures_at_prefill_not_finalize" in required

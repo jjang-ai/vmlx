@@ -1153,6 +1153,57 @@ class TestModelConfigs:
         assert config.tool_parser == "qwen"
         assert config.reasoning_parser == "qwen3"
 
+    def test_qwen36_affine_jang_vlm_stays_text_loader_until_mrope_fixed(
+        self, registry, tmp_path
+    ):
+        """Affine-JANG Qwen VLM-looking artifacts must not use mlx-vlm yet.
+
+        The bundle can carry real image/video metadata, but affine-JANG Qwen
+        text quality is currently safer through the language path until the
+        mlx-vlm M-RoPE fallback is fixed. This is not a broad VLM demotion:
+        JANGTQ/MXTQ and plain MLX/MXFP VLM rows remain covered separately.
+        """
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "qwen3_5",
+                    "text_config": {
+                        "model_type": "qwen3_5_text",
+                        "layer_types": ["linear_attention", "full_attention"],
+                    },
+                    "vision_config": {"model_type": "qwen3_5_vit"},
+                    "image_token_id": 151665,
+                    "video_token_id": 151666,
+                    "video_token_index": 151666,
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "architecture": {"has_vision": True},
+                    "capabilities": {
+                        "family": "qwen3_5",
+                        "modality": "vision",
+                        "cache_type": "hybrid",
+                        "tool_parser": "qwen",
+                        "reasoning_parser": "qwen3",
+                    },
+                }
+            )
+        )
+
+        registry.clear_cache()
+        config = registry.lookup(str(tmp_path))
+
+        assert config.family_name == "qwen3_5"
+        assert config.cache_type == "hybrid"
+        assert config.tool_parser == "qwen"
+        assert config.reasoning_parser == "qwen3"
+        assert config.is_mllm is False
+
     def test_qwen3_5_moe_text_linear_attention_uses_hybrid_cache(self, registry, tmp_path):
         """Qwen3.6 MoE wrappers match text_config.model_type first; that path
         must still preserve the hybrid cache override."""
