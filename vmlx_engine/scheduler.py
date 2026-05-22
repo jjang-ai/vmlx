@@ -2388,6 +2388,7 @@ class Scheduler:
                     prefill_batch_size=1,
                     completion_batch_size=1,
                     prefill_step_size=self.config.prefill_step_size,
+                    capture_prompt_snapshot=self.block_aware_cache is not None,
                 )
         except Exception as _dsv4_err:
             logger.debug(f"DSV4 generator detection failed: {_dsv4_err}")

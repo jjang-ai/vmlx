@@ -1799,6 +1799,13 @@ describe('No Hardcoded Values', () => {
         expect(hasFlag(dsv4, '--kv-cache-group-size')).toBe(false)
     })
 
+    it('deepseek-v4 family defaults clear stale pool quant before launch', () => {
+        const source = readFileSync(resolve(__dirname, '../src/main/sessions.ts'), 'utf8')
+        expect(source).toContain('config.dsv4PoolQuant !== false')
+        expect(source).toContain('config.dsv4PoolQuant = false')
+        expect(source).toContain('dsv4PoolQuant: false')
+    })
+
     it('detected Qwen3.6 hybrid cache forces paged cache over stale saved false', () => {
         const out = preview(
             {

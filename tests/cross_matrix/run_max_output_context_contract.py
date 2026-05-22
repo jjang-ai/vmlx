@@ -97,6 +97,8 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     "server startup maxTokens and chat maxTokens remain independent when both are set",
     "per-chat maxTokens below or above the server startup default remain request scoped",
     "Auto chat maxTokens omits per-request output caps so server default can apply",
+    "switching chats never carries a previous chat maxTokens into Auto Chat Completions",
+    "switching chats never carries a previous chat maxTokens into Auto Responses",
     "default profiles cannot make maxTokens sticky on clean new chats",
     "new chats preserve model-owned maxTokens while refusing inherited output caps",
     "coding tool configs keep output limit separate from context fallback",
@@ -311,6 +313,8 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "does not invent Responses sampler or output-budget values when chat overrides are absent" not in missing_markers
             and "omits invalid persisted maxTokens values instead of poisoning Chat Completions" not in missing_markers
             and "omits invalid persisted maxTokens values instead of poisoning Responses" not in missing_markers
+            and "switching chats never carries a previous chat maxTokens into Auto Chat Completions" not in missing_markers
+            and "switching chats never carries a previous chat maxTokens into Auto Responses" not in missing_markers
         ),
         "new_chat_output_caps_are_not_inherited_or_made_sticky": (
             not failed

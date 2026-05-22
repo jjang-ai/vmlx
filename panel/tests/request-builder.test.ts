@@ -282,6 +282,20 @@ describe('buildRequestBody — Chat Completions API', () => {
         expect(dsv4MaxThinkingAuto.reasoning_effort).toBe('max')
     })
 
+    it('switching chats never carries a previous chat maxTokens into Auto Chat Completions', () => {
+        const cappedChat = buildRequestBody('completions', 'gpt-4', messages, { maxTokens: 512 }, false, false)
+        const autoChat = buildRequestBody('completions', 'gpt-4', messages, {}, false, false)
+        const raisedChat = buildRequestBody('completions', 'gpt-4', messages, { maxTokens: 8192 }, false, false)
+
+        expect(cappedChat.max_tokens).toBe(512)
+        expect(autoChat.max_tokens).toBeUndefined()
+        expect(autoChat.max_output_tokens).toBeUndefined()
+        expect(autoChat.max_prompt_tokens).toBeUndefined()
+        expect(autoChat.max_context_tokens).toBeUndefined()
+        expect(autoChat.max_context).toBeUndefined()
+        expect(raisedChat.max_tokens).toBe(8192)
+    })
+
     it('forwards reasoning_effort', () => {
         const body = buildRequestBody('completions', 'gpt-4', messages, { reasoningEffort: 'high' }, false, true)
         expect(body.reasoning_effort).toBe('high')
@@ -414,6 +428,20 @@ describe('buildRequestBody — Responses API', () => {
         expect(body.top_p).toBeUndefined()
         expect(body.max_output_tokens).toBeUndefined()
         expect(body.repetition_penalty).toBeUndefined()
+    })
+
+    it('switching chats never carries a previous chat maxTokens into Auto Responses', () => {
+        const cappedChat = buildRequestBody('responses', 'gpt-4', messages, { maxTokens: 512 }, false, false)
+        const autoChat = buildRequestBody('responses', 'gpt-4', messages, {}, false, false)
+        const raisedChat = buildRequestBody('responses', 'gpt-4', messages, { maxTokens: 8192 }, false, false)
+
+        expect(cappedChat.max_output_tokens).toBe(512)
+        expect(autoChat.max_output_tokens).toBeUndefined()
+        expect(autoChat.max_tokens).toBeUndefined()
+        expect(autoChat.max_prompt_tokens).toBeUndefined()
+        expect(autoChat.max_context_tokens).toBeUndefined()
+        expect(autoChat.max_context).toBeUndefined()
+        expect(raisedChat.max_output_tokens).toBe(8192)
     })
 
     it('uses input instead of messages', () => {

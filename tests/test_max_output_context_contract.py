@@ -51,6 +51,8 @@ def test_max_output_context_contract_covers_all_public_api_surfaces():
     assert "does not invent Responses sampler or output-budget values when chat overrides are absent" in required
     assert "chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap" in required
     assert "clears legacy session maxTokens=32768 before launch can reuse it" in required
+    assert "switching chats never carries a previous chat maxTokens into Auto Chat Completions" in required
+    assert "switching chats never carries a previous chat maxTokens into Auto Responses" in required
     assert "new chats preserve model-owned maxTokens while refusing inherited output caps" in required
     assert "persisted chat maxTokens cannot relaunch server with a new startup maxTokens" in required
 

@@ -107,6 +107,7 @@ class DSV4BatchGenerator:
         prefill_step_size: int = 2048,
         max_kv_size: Optional[int] = None,
         stream=None,
+        capture_prompt_snapshot: bool = True,
     ):
         self.model = model
         self.max_tokens = max_tokens
@@ -169,6 +170,7 @@ class DSV4BatchGenerator:
         self.prefill_batch_size = 1  # always 1 for DSV4
         self.completion_batch_size = 1
         self.max_kv_size = max_kv_size
+        self.capture_prompt_snapshot = bool(capture_prompt_snapshot)
         self._uid_count = 0
         self._requests: List[_Request] = []
         # Pin a concrete MLX stream owned by this generator. Using the
@@ -203,7 +205,9 @@ class DSV4BatchGenerator:
                 sampled = sampled + mx.zeros_like(sampled)
             except Exception:
                 pass
-            self._sync()
+            # Scalar materialization is the required sync point. Calling
+            # _sync() here first adds a second host/GPU barrier to every
+            # decode token on the DSV4 hot path.
             return int(sampled.tolist()[0]) if hasattr(sampled, "tolist") else int(sampled.item())
 
     # ---------- helpers ----------
@@ -353,7 +357,23 @@ class DSV4BatchGenerator:
             return None
         return snapshots
 
-    def _sample(self, logits, sampler, processors, recent_tokens, generated_tokens=None):
+    def _should_capture_logprobs(self, uid: int) -> bool:
+        try:
+            from .mamba_cache import _should_capture_generation_logprobs
+
+            return bool(_should_capture_generation_logprobs(self.model, [uid])[0])
+        except Exception:
+            return False
+
+    def _sample(
+        self,
+        logits,
+        sampler,
+        processors,
+        recent_tokens,
+        generated_tokens=None,
+        capture_logprobs: bool = False,
+    ):
         """Apply logits processors then sample. logits: (1, vocab).
 
         `recent_tokens`: full prompt+generated context (used by rep_penalty
@@ -369,10 +389,19 @@ class DSV4BatchGenerator:
                 x = p(recent_tokens, x)
             except TypeError:
                 x = p(x)
-        # Convert log-probs via logsumexp normalization
-        logprobs = x - mx.logsumexp(x, axis=-1, keepdims=True)
-        # Sampler
         sample_fn = sampler or self.fallback_sampler
+        if (
+            not capture_logprobs
+            and getattr(sample_fn, "_vmlx_accepts_logits", False)
+        ):
+            sampled = sample_fn(x)
+            return sampled, None
+
+        # Convert log-probs via logsumexp normalization only when the sampler
+        # needs normalized probabilities or the request asked for logprobs.
+        # Default vMLX greedy samplers accept raw logits; materializing a
+        # full-vocab log-softmax every token is wasted DSV4 decode time.
+        logprobs = x - mx.logsumexp(x, axis=-1, keepdims=True)
         sampled = sample_fn(logprobs)
         return sampled, logprobs
 
@@ -574,19 +603,22 @@ class DSV4BatchGenerator:
                         last_token = r.prompt_tokens[-1:]
                         # Phase 1
                         _ = self._prefill_last_logits(head_tokens, r.cache)
-                        try:
-                            r.prompt_snapshot = self._snapshot_dsv4_cache(r.cache)
-                            if r.prompt_snapshot is not None:
-                                logger.debug(
-                                    f"DSV4Gen: captured N-1 prompt-boundary "
-                                    f"snapshot ({len(r.prompt_snapshot)} layers, "
-                                    f"N-1={len(head_tokens)} tokens) "
-                                    f"for uid={r.uid}"
+                        if self.capture_prompt_snapshot:
+                            try:
+                                r.prompt_snapshot = self._snapshot_dsv4_cache(r.cache)
+                                if r.prompt_snapshot is not None:
+                                    logger.debug(
+                                        f"DSV4Gen: captured N-1 prompt-boundary "
+                                        f"snapshot ({len(r.prompt_snapshot)} layers, "
+                                        f"N-1={len(head_tokens)} tokens) "
+                                        f"for uid={r.uid}"
+                                    )
+                            except Exception as _snap_err:
+                                logger.warning(
+                                    f"DSV4Gen: snapshot capture failed: {_snap_err}"
                                 )
-                        except Exception as _snap_err:
-                            logger.warning(
-                                f"DSV4Gen: snapshot capture failed: {_snap_err}"
-                            )
+                                r.prompt_snapshot = None
+                        else:
                             r.prompt_snapshot = None
                         # Phase 2 — feed the last token, get its logits
                         last_logits = self._prefill_last_logits(last_token, r.cache)
@@ -599,8 +631,8 @@ class DSV4BatchGenerator:
                         last_logits, r.sampler, r.logits_processors,
                         self._processor_context(r),
                         generated_tokens=list(r.out_tokens),
+                        capture_logprobs=self._should_capture_logprobs(r.uid),
                     )
-                    self._sync()
                     tok_id = self._sampled_token_id(sampled)
                     r.out_tokens.append(tok_id)
                     r.prompt_processed = True
@@ -629,8 +661,8 @@ class DSV4BatchGenerator:
                         last_logits, r.sampler, r.logits_processors,
                         self._processor_context(r),
                         generated_tokens=list(r.out_tokens),
+                        capture_logprobs=self._should_capture_logprobs(r.uid),
                     )
-                    self._sync()
                     tok_id = self._sampled_token_id(sampled)
                     r.out_tokens.append(tok_id)
                     r.prompt_processed = True
@@ -650,14 +682,13 @@ class DSV4BatchGenerator:
                     last_id = r.out_tokens[-1]
                     ids = mx.array([[last_id]], dtype=mx.int32)
                     logits = self.model(ids, cache=r.cache)
-                    self._sync()
                     last_logits = logits[:, -1, :]
                     sampled, logprobs = self._sample(
                         last_logits, r.sampler, r.logits_processors,
                         self._processor_context(r),
                         generated_tokens=list(r.out_tokens),
+                        capture_logprobs=self._should_capture_logprobs(r.uid),
                     )
-                    self._sync()
                     tok_id = self._sampled_token_id(sampled)
                     r.out_tokens.append(tok_id)
                     self._update_finish_reason_after_token(r, tok_id)

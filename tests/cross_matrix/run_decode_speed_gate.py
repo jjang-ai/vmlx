@@ -585,8 +585,10 @@ def cache_health_mismatches(
     mismatches: list[str] = []
     cache_type = registry_metadata.get("cache_type")
     cache_subtype = registry_metadata.get("cache_subtype")
-    health_cache_type = health.get("cache_type")
-    generic_tq = health.get("generic_turboquant_kv")
+    native_cache = health.get("native_cache")
+    typed_health = native_cache if isinstance(native_cache, dict) else health
+    health_cache_type = typed_health.get("cache_type")
+    generic_tq = typed_health.get("generic_turboquant_kv")
     generic_tq_enabled = (
         generic_tq.get("enabled") if isinstance(generic_tq, dict) else None
     )

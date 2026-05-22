@@ -1164,6 +1164,72 @@ def test_dsv4_cache_hit_store_skips_sync_full_reprefill_when_snapshot_missing():
     assert "chunk_size = len(prompt_tokens) if self._uses_dsv4_cache else 2048" in helper_src
 
 
+def test_dsv4_generator_skips_prompt_snapshot_when_cache_store_disabled(monkeypatch):
+    """No-cache DSV4 requests must not deep-copy composite cache snapshots.
+
+    The prompt-boundary snapshot is only useful when paged/L2 prefix storage can
+    consume it. Capturing it on plain no-cache chat adds a large synchronous
+    cache copy before decoding and is visible as a DSV4 speed regression.
+    """
+    import mlx.core as mx
+
+    from vmlx_engine.utils.dsv4_batch_generator import DSV4BatchGenerator
+
+    class _Model:
+        def make_cache(self):
+            return [object()]
+
+        def __call__(self, ids, cache=None):
+            return mx.array([[[0.0, 1.0, 0.0]]], dtype=mx.float32)
+
+    calls = []
+
+    def _snapshot(_cache):
+        calls.append("snapshot")
+        return ["snapshot"]
+
+    monkeypatch.setattr(DSV4BatchGenerator, "_snapshot_dsv4_cache", staticmethod(_snapshot))
+    gen = DSV4BatchGenerator(_Model(), capture_prompt_snapshot=False)
+    gen._warmed_up = True
+    gen.insert([[42, 43]], max_tokens=[2])
+
+    prompt_responses, generation_responses = gen.next()
+
+    assert prompt_responses
+    assert not generation_responses
+    assert calls == []
+    assert prompt_responses[0].prompt_cache_snapshot is None
+
+
+def test_dsv4_generator_captures_prompt_snapshot_when_cache_store_enabled(monkeypatch):
+    import mlx.core as mx
+
+    from vmlx_engine.utils.dsv4_batch_generator import DSV4BatchGenerator
+
+    class _Model:
+        def make_cache(self):
+            return [object()]
+
+        def __call__(self, ids, cache=None):
+            return mx.array([[[0.0, 1.0, 0.0]]], dtype=mx.float32)
+
+    calls = []
+
+    def _snapshot(_cache):
+        calls.append("snapshot")
+        return ["snapshot"]
+
+    monkeypatch.setattr(DSV4BatchGenerator, "_snapshot_dsv4_cache", staticmethod(_snapshot))
+    gen = DSV4BatchGenerator(_Model(), capture_prompt_snapshot=True)
+    gen._warmed_up = True
+    gen.insert([[42, 43]], max_tokens=[2])
+
+    prompt_responses, _ = gen.next()
+
+    assert calls == ["snapshot"]
+    assert prompt_responses[0].prompt_cache_snapshot == ["snapshot"]
+
+
 def test_dsv4_long_prefill_guard_describes_single_shot_default():
     """The DSV4 long-prefill guard must not claim chunked prefill is default.
 

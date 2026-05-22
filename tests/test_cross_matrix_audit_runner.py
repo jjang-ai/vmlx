@@ -313,6 +313,23 @@ def test_dsv4_decode_speed_gate_tracks_jangtq_and_pure_affine_lanes():
     )
 
 
+def test_dsv4_decode_speed_gate_reads_nested_native_cache_health():
+    from tests.cross_matrix.run_decode_speed_gate import cache_health_mismatches
+
+    registry = {
+        "cache_type": "kv",
+        "cache_subtype": "deepseek_v4_composite",
+    }
+    health = {
+        "native_cache": {
+            "cache_type": "native_composite",
+            "generic_turboquant_kv": {"enabled": False},
+        }
+    }
+
+    assert cache_health_mismatches(registry, health) == []
+
+
 def test_dsv4_long_context_gate_defaults_to_existing_affine_candidate():
     from tests.cross_matrix import run_dsv4_long_context_gate
 
