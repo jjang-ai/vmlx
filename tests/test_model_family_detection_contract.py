@@ -35,6 +35,7 @@ def test_family_detection_contract_pins_named_release_rows():
         "decode_speed_existing_rows_match_engine_parser_policy",
         "decode_speed_existing_rows_match_engine_modality_policy",
         "decode_speed_build_command_parser_modality_policy",
+        "panel_session_launch_parser_modality_policy",
         "decode_speed_large_external_jangtq_mxfp_gptoss_rows",
         "decode_speed_external_nemotron3_jangtq_mxfp_rows",
         "decode_speed_registry_cache_metadata_health",
@@ -50,8 +51,10 @@ def test_family_detection_contract_hashes_app_and_engine_sources():
         "vmlx_engine/model_configs.py",
         "vmlx_engine/native_mtp.py",
         "panel/src/main/model-config-registry.ts",
+        "panel/src/main/sessions.ts",
         "panel/src/shared/reasoningParserAliases.ts",
         "panel/tests/model-config-registry.test.ts",
+        "panel/tests/settings-flow.test.ts",
         "tests/cross_matrix/run_decode_speed_gate.py",
         "tests/test_model_config_registry.py",
     }
@@ -71,6 +74,11 @@ def test_family_detection_contract_runs_verbose_engine_and_panel_rows():
     assert "tests/model-config-registry.test.ts" in panel_cmd
     assert "--reporter" in panel_cmd
     assert "verbose" in panel_cmd
+
+    launch_cmd = " ".join(gate.COMMANDS["panel_session_launch_wiring"][1])
+    assert "tests/settings-flow.test.ts" in launch_cmd
+    assert "--reporter" in launch_cmd
+    assert "verbose" in launch_cmd
 
 
 def test_family_detection_contract_marker_validation_fails_if_required_row_missing(tmp_path):

@@ -27,9 +27,11 @@ SOURCE_HASH_FILES = (
     "vmlx_engine/model_configs.py",
     "vmlx_engine/native_mtp.py",
     "panel/src/main/model-config-registry.ts",
+    "panel/src/main/sessions.ts",
     "panel/src/shared/reasoningParserAliases.ts",
     "panel/src/shared/toolParserAliases.ts",
     "panel/tests/model-config-registry.test.ts",
+    "panel/tests/settings-flow.test.ts",
     "tests/cross_matrix/run_decode_speed_gate.py",
     "tests/cross_matrix/run_dsv4_long_context_gate.py",
     "tests/cross_matrix/run_dsv4_responses_cache_gate.py",
@@ -74,6 +76,26 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             PANEL_PATTERN,
         ],
     ),
+    "panel_session_launch_wiring": (
+        Path("panel"),
+        [
+            "npx",
+            "vitest",
+            "run",
+            "tests/settings-flow.test.ts",
+            "--reporter",
+            "verbose",
+            "--testNamePattern",
+            (
+                "passes MiniMax through the registered minimax_m2 reasoning parser|"
+                "detected Qwen3.6 hybrid cache forces paged cache over stale saved false|"
+                "ZAYA sessions keep the qwen3 reasoning parser and model-owned no-thinking default|"
+                "deepseek-v4 disables composite prefix cache by default even with stale cache config|"
+                "DSV4 additional args cannot reenable native MTP or deterministic sampling policy|"
+                "defaults native-MTP bundles to deterministic measured-depth launch policy"
+            ),
+        ],
+    ),
 }
 
 REQUIRED_ROWS = (
@@ -105,6 +127,7 @@ REQUIRED_ROWS = (
     "decode_speed_existing_rows_match_engine_parser_policy",
     "decode_speed_existing_rows_match_engine_modality_policy",
     "decode_speed_build_command_parser_modality_policy",
+    "panel_session_launch_parser_modality_policy",
     "decode_speed_large_external_jangtq_mxfp_gptoss_rows",
     "decode_speed_external_nemotron3_jangtq_mxfp_rows",
     "decode_speed_registry_cache_metadata_health",
@@ -203,6 +226,14 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
     ),
     "decode_speed_build_command_parser_modality_policy": (
         "test_decode_speed_gate_build_command_preserves_row_parser_modality_policy",
+    ),
+    "panel_session_launch_parser_modality_policy": (
+        "passes MiniMax through the registered minimax_m2 reasoning parser",
+        "detected Qwen3.6 hybrid cache forces paged cache over stale saved false",
+        "ZAYA sessions keep the qwen3 reasoning parser and model-owned no-thinking default",
+        "deepseek-v4 disables composite prefix cache by default even with stale cache config",
+        "DSV4 additional args cannot reenable native MTP or deterministic sampling policy",
+        "defaults native-MTP bundles to deterministic measured-depth launch policy",
     ),
     "decode_speed_large_external_jangtq_mxfp_gptoss_rows": (
         "test_decode_speed_gate_has_large_external_mistral_gptoss_rows",

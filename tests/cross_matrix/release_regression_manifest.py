@@ -229,6 +229,7 @@ _ROWS: list[dict[str, Any]] = [
             "Decode-speed health checks reject DSV4 native or ZAYA typed cache health for plain KV JANG/JANGTQ/MXFP rows",
             "Every decode-speed row with a declared tool or reasoning parser uses a registered engine parser and CLI-accepted parser choice even when that local model path is absent",
             "Decode-speed launch commands preserve row parser/modality policy and strip source-path or forced JANGTQ acceleration environment overrides",
+            "Panel session launch builder preserves MiniMax minimax_m2 parser launch, Qwen3.6 hybrid cache forces paged cache, ZAYA qwen3 reasoning parser and model-owned no-thinking defaults, DSV4 stale cache/additionalArgs suppression, and native-MTP D3 launch policy",
             "Decode-speed matrix includes large external Mistral JANGTQ, Mistral MXFP4, and GPT-OSS rows with parser/modality launch policy pinned",
             "Decode-speed matrix includes external Nemotron 3 JANGTQ2 and MXFP4 rows with Nemotron parser/reasoning launch policy pinned",
             "This is source/static compatibility proof only; live multi-turn output quality remains a separate live row",
@@ -241,6 +242,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-model-family-detection-contract-20260522-qwen-nemotron-hybrid-cache.json",
             "build/current-model-family-detection-contract-20260522-zaya-stale-stamp.json",
             "build/current-model-family-detection-contract-20260522-plain-kv-cache-health.json",
+            "build/current-model-family-detection-contract-20260522-panel-launch-wiring.json",
         ],
     },
     {

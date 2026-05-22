@@ -292,6 +292,21 @@ def test_release_regression_manifest_tracks_zaya_stale_stamp_policy():
     assert "current-model-family-detection-contract-20260522-zaya-stale-stamp.json" in joined
 
 
+def test_release_regression_manifest_tracks_panel_family_launch_wiring():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+    row = rows["model-family-detection-noheavy"]
+    joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
+
+    assert "current-model-family-detection-contract-20260522-panel-launch-wiring.json" in joined
+    assert "Panel session launch builder" in joined
+    assert "MiniMax minimax_m2" in joined
+    assert "Qwen3.6 hybrid cache forces paged cache" in joined
+    assert "ZAYA qwen3 reasoning parser" in joined
+    assert "DSV4 stale cache/additionalArgs suppression" in joined
+    assert "native-MTP D3 launch policy" in joined
+
+
 def test_release_regression_manifest_tracks_mxfp_vlm_loader_quant_mode():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}
