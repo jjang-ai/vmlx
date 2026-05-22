@@ -5504,7 +5504,31 @@ class Scheduler:
                                                 if len(dsv4_prompt_tokens) > 1
                                                 else []
                                             )
-                                            if dsv4_key_tokens:
+                                            try:
+                                                from .utils.dsv4_batch_generator import (
+                                                    dsv4_prompt_snapshot_min_tokens as _resolve_dsv4_prompt_snapshot_min_tokens,
+                                                )
+
+                                                dsv4_prompt_snapshot_min_tokens = (
+                                                    _resolve_dsv4_prompt_snapshot_min_tokens()
+                                                )
+                                            except Exception:
+                                                dsv4_prompt_snapshot_min_tokens = 256
+                                            if (
+                                                len(dsv4_key_tokens)
+                                                < dsv4_prompt_snapshot_min_tokens
+                                            ):
+                                                logger.info(
+                                                    "DSV4 prefix cache store skipped "
+                                                    "for request %s: prompt below snapshot/store threshold "
+                                                    "(cache_key_tokens=%d < %d).",
+                                                    request.request_id,
+                                                    len(dsv4_key_tokens),
+                                                    dsv4_prompt_snapshot_min_tokens,
+                                                )
+                                                cache_for_extract = None
+                                                request._dsv4_short_prompt_store_skipped = True
+                                            elif dsv4_key_tokens:
                                                 logger.info(
                                                     "DSV4 prefix cache store using "
                                                     "clean prompt-boundary re-prefill "

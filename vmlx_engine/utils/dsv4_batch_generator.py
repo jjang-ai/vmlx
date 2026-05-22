@@ -40,6 +40,32 @@ THINK_CLOSE_ID = 128822
 DSV4_EOS_ID = 1
 DSV4_USER_ID = 128803
 DSV4_ASSISTANT_ID = 128804
+DEFAULT_DSV4_PROMPT_SNAPSHOT_MIN_TOKENS = 256
+
+
+def dsv4_prompt_snapshot_min_tokens() -> int:
+    """Minimum DSV4 N-1 prompt-key length that donates a sync snapshot.
+
+    DSV4's composite prompt-boundary snapshot is correctness-safe for prefix/L2
+    store, but live timing showed it can cost seconds on tiny prompts. Short
+    prompts are cheap to re-prefill on the next request, so default to only
+    snapshotting block-sized-or-larger prefix keys. Operators can lower this
+    for diagnostics or cache experiments without changing sampling behavior.
+    """
+    raw = os.environ.get("DSV4_PROMPT_SNAPSHOT_MIN_TOKENS")
+    if raw is None:
+        raw = os.environ.get("VMLINUX_DSV4_PROMPT_SNAPSHOT_MIN_TOKENS")
+    if raw is None:
+        return DEFAULT_DSV4_PROMPT_SNAPSHOT_MIN_TOKENS
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid DSV4 prompt snapshot threshold %r; using default %d",
+            raw,
+            DEFAULT_DSV4_PROMPT_SNAPSHOT_MIN_TOKENS,
+        )
+        return DEFAULT_DSV4_PROMPT_SNAPSHOT_MIN_TOKENS
 
 
 @dataclass
@@ -172,6 +198,7 @@ class DSV4BatchGenerator:
         self.completion_batch_size = 1
         self.max_kv_size = max_kv_size
         self.capture_prompt_snapshot = bool(capture_prompt_snapshot)
+        self.prompt_snapshot_min_tokens = dsv4_prompt_snapshot_min_tokens()
         self._uid_count = 0
         self._requests: List[_Request] = []
         # Pin a concrete MLX stream owned by this generator. Using the
@@ -632,7 +659,10 @@ class DSV4BatchGenerator:
                             r.uid,
                             tokens=len(head_tokens),
                         )
-                        if self.capture_prompt_snapshot:
+                        if (
+                            self.capture_prompt_snapshot
+                            and len(head_tokens) >= self.prompt_snapshot_min_tokens
+                        ):
                             try:
                                 _t_snapshot = time.perf_counter()
                                 r.prompt_snapshot = self._snapshot_dsv4_cache(r.cache)
@@ -654,6 +684,23 @@ class DSV4BatchGenerator:
                                     f"DSV4Gen: snapshot capture failed: {_snap_err}"
                                 )
                                 r.prompt_snapshot = None
+                        elif self.capture_prompt_snapshot:
+                            r.prompt_snapshot = None
+                            _t_snapshot_skip = time.perf_counter()
+                            self._trace_timing(
+                                "prompt_snapshot_skipped",
+                                _t_snapshot_skip,
+                                r.uid,
+                                tokens=len(head_tokens),
+                                min_tokens=self.prompt_snapshot_min_tokens,
+                            )
+                            logger.debug(
+                                "DSV4Gen: skipped prompt-boundary snapshot for "
+                                "short prompt (N-1=%d < min_tokens=%d) uid=%s",
+                                len(head_tokens),
+                                self.prompt_snapshot_min_tokens,
+                                r.uid,
+                            )
                         else:
                             r.prompt_snapshot = None
                         # Phase 2 — feed the last token, get its logits

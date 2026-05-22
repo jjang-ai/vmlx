@@ -206,6 +206,7 @@ _ROWS: list[dict[str, Any]] = [
             "Generic TurboQuant KV is not applied to DSV4 native composite or hybrid SSM paths",
             "Bundled JANG DSV4 pool quant codec appends only newly generated CSA/HCA pool rows instead of requantizing the whole accumulated pool",
             "DSV4 pool quant reads reuse a materialized pool view instead of dequantizing and concatenating historical CSA/HCA pool segments on every read",
+            "DSV4 short prompts skip synchronous composite prompt snapshots and do not replace that saved time with a synchronous prompt-only re-prefill store",
             "DSV4 panel env mapping enables pool quant only from explicit DSV4 config while the default remains off",
             "DSV4 timing probe covers prefix-cache replay and cold-store boundaries before speed/cache root-cause claims",
             "Cache detail telemetry reports paged, typed native, and TQ/L2 state",
@@ -222,6 +223,8 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-cache-architecture-contract-20260522-dsv4-pool-env-gate.json",
             "build/current-cache-architecture-contract-20260522-dsv4-pool-materialized-cache.json",
             "build/current-cache-architecture-contract-20260522-dsv4-pool-ui-wired.json",
+            "build/current-cache-architecture-contract-20260522-dsv4-short-snapshot-threshold.json",
+            "build/current-dsv4-prefix-enabled-two-turn-threshold-live-20260522.json",
         ],
     },
     {

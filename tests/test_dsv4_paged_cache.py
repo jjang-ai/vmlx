@@ -1250,6 +1250,24 @@ def test_dsv4_cache_hit_store_skips_sync_full_reprefill_when_snapshot_missing():
     assert "chunk_size = len(prompt_tokens) if self._uses_dsv4_cache else 2048" in helper_src
 
 
+def test_dsv4_short_prompt_snapshot_skip_does_not_sync_reprefill_for_store():
+    """Short-prompt snapshot skips must also skip sync re-prefill store.
+
+    If the generator omits the prompt-boundary snapshot because the prompt is
+    below the DSV4 snapshot threshold, the scheduler must not immediately
+    replace that saved time with a clean prompt-only re-prefill during cleanup.
+    The short request should simply skip donating a DSV4 prefix block.
+    """
+    import inspect
+    from vmlx_engine import scheduler
+
+    src = inspect.getsource(scheduler.Scheduler._process_batch_responses)
+
+    assert "DSV4 prefix cache store skipped" in src
+    assert "prompt below snapshot/store threshold" in src
+    assert "dsv4_prompt_snapshot_min_tokens" in src
+
+
 def test_dsv4_generator_skips_prompt_snapshot_when_cache_store_disabled(monkeypatch):
     """No-cache DSV4 requests must not deep-copy composite cache snapshots.
 
@@ -1292,6 +1310,8 @@ def test_dsv4_generator_captures_prompt_snapshot_when_cache_store_enabled(monkey
 
     from vmlx_engine.utils.dsv4_batch_generator import DSV4BatchGenerator
 
+    monkeypatch.setenv("DSV4_PROMPT_SNAPSHOT_MIN_TOKENS", "0")
+
     class _Model:
         def make_cache(self):
             return [object()]
@@ -1314,6 +1334,45 @@ def test_dsv4_generator_captures_prompt_snapshot_when_cache_store_enabled(monkey
 
     assert calls == ["snapshot"]
     assert prompt_responses[0].prompt_cache_snapshot == ["snapshot"]
+
+
+def test_dsv4_generator_skips_prompt_snapshot_for_short_cache_store_prompt_by_default(monkeypatch):
+    """Short DSV4 prompts must not pay the composite snapshot store cost.
+
+    Live timing showed a 21-token prompt spending ~14s in the prompt-boundary
+    snapshot before decode. Prefix/L2 store still has value for long prompts,
+    but tiny prompts should decode immediately and let the safe scheduler
+    fallback skip or re-derive cache state instead of blocking the user path.
+    """
+    import mlx.core as mx
+
+    from vmlx_engine.utils.dsv4_batch_generator import DSV4BatchGenerator
+
+    monkeypatch.delenv("DSV4_PROMPT_SNAPSHOT_MIN_TOKENS", raising=False)
+    monkeypatch.delenv("VMLINUX_DSV4_PROMPT_SNAPSHOT_MIN_TOKENS", raising=False)
+
+    class _Model:
+        def make_cache(self):
+            return [object()]
+
+        def __call__(self, ids, cache=None):
+            return mx.array([[[0.0, 1.0, 0.0]]], dtype=mx.float32)
+
+    calls = []
+
+    def _snapshot(_cache):
+        calls.append("snapshot")
+        return ["snapshot"]
+
+    monkeypatch.setattr(DSV4BatchGenerator, "_snapshot_dsv4_cache", staticmethod(_snapshot))
+    gen = DSV4BatchGenerator(_Model(), capture_prompt_snapshot=True)
+    gen._warmed_up = True
+    gen.insert([[42, 43, 44]], max_tokens=[2])
+
+    prompt_responses, _ = gen.next()
+
+    assert calls == []
+    assert prompt_responses[0].prompt_cache_snapshot is None
 
 
 def test_dsv4_long_prefill_guard_describes_single_shot_default():
