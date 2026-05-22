@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
   buildNewChatInheritedOverrides,
+  sanitizeChatOverrides,
   type ChatOverridePolicyInput,
 } from '../src/main/chat-override-policy'
 
@@ -141,6 +142,41 @@ describe('new-chat override inheritance policy', () => {
     expect(setOverridesHandler).not.toContain('db.saveModelSettings')
     expect(setOverridesHandler).not.toContain('reasoning_mode')
     expect(setOverridesHandler).not.toContain('Synced')
+  })
+
+  it('chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap', () => {
+    expect(sanitizeChatOverrides({ chatId: 'chat', maxTokens: 0 }).maxTokens).toBeUndefined()
+    expect(sanitizeChatOverrides({ chatId: 'chat', maxTokens: -20 }).maxTokens).toBeUndefined()
+    expect(sanitizeChatOverrides({ chatId: 'chat', maxTokens: 512 }).maxTokens).toBe(512)
+    expect(sanitizeChatOverrides({ chatId: 'chat', maxTokens: 2_000_000 }).maxTokens).toBe(1_000_000)
+  })
+
+  it('chat:setOverrides rejects non-finite or non-numeric maxTokens instead of poisoning server defaults', () => {
+    expect(sanitizeChatOverrides({ chatId: 'chat', maxTokens: Number.NaN }).maxTokens).toBeUndefined()
+    expect(sanitizeChatOverrides({ chatId: 'chat', maxTokens: Number.POSITIVE_INFINITY }).maxTokens).toBeUndefined()
+    expect(sanitizeChatOverrides({ chatId: 'chat', maxTokens: '1024' as any }).maxTokens).toBeUndefined()
+    expect(sanitizeChatOverrides({ chatId: 'chat', maxTokens: 512.9 }).maxTokens).toBe(512)
+  })
+
+  it('chat:setOverrides rejects malformed sampler and tool numeric overrides instead of forcing hidden values', () => {
+    const sanitized = sanitizeChatOverrides({
+      chatId: 'chat',
+      temperature: Number.NaN,
+      topP: Number.POSITIVE_INFINITY,
+      topK: '40' as any,
+      minP: Number.NEGATIVE_INFINITY,
+      repeatPenalty: '1.1' as any,
+      maxToolIterations: Number.NaN,
+      toolResultMaxChars: Number.POSITIVE_INFINITY,
+    })
+
+    expect(sanitized.temperature).toBeUndefined()
+    expect(sanitized.topP).toBeUndefined()
+    expect(sanitized.topK).toBeUndefined()
+    expect(sanitized.minP).toBeUndefined()
+    expect(sanitized.repeatPenalty).toBeUndefined()
+    expect(sanitized.maxToolIterations).toBeUndefined()
+    expect(sanitized.toolResultMaxChars).toBeUndefined()
   })
 
   it('wires starred default profiles through the tool-only new-chat inheritance policy', () => {

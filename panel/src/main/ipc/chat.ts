@@ -23,7 +23,10 @@ import {
 import { shouldAutoContinueAfterToolUse } from "../../shared/toolAutoContinue";
 import { buildToolMediaFollowupContent } from "../../shared/toolMediaFollowup";
 import { dsv4OutputBudget } from "../../shared/dsv4RequestBudget";
-import { buildNewChatInheritedOverrides } from "../chat-override-policy";
+import {
+  buildNewChatInheritedOverrides,
+  sanitizeChatOverrides,
+} from "../chat-override-policy";
 
 // Default connection config (fallback values)
 const DEFAULT_PORT = 8000;
@@ -3810,31 +3813,7 @@ export function registerChatHandlers(
   ipcMain.handle(
     "chat:setOverrides",
     async (_, chatId: string, overrides: any) => {
-      const clamp = (v: any, lo: number, hi: number) =>
-        typeof v === "number" ? Math.max(lo, Math.min(hi, v)) : v;
-      const sanitized = { ...overrides };
-      if (sanitized.temperature != null)
-        sanitized.temperature = clamp(sanitized.temperature, 0, 10);
-      if (sanitized.topP != null) sanitized.topP = clamp(sanitized.topP, 0, 1);
-      if (sanitized.topK != null)
-        sanitized.topK = clamp(sanitized.topK, 0, 1000);
-      if (sanitized.minP != null) sanitized.minP = clamp(sanitized.minP, 0, 1);
-      if (sanitized.maxTokens != null)
-        sanitized.maxTokens = clamp(sanitized.maxTokens, 1, 1000000);
-      if (sanitized.repeatPenalty != null)
-        sanitized.repeatPenalty = clamp(sanitized.repeatPenalty, 0, 10);
-      if (sanitized.maxToolIterations != null)
-        sanitized.maxToolIterations = clamp(
-          sanitized.maxToolIterations,
-          1,
-          100,
-        );
-      if (sanitized.toolResultMaxChars != null)
-        sanitized.toolResultMaxChars = clamp(
-          sanitized.toolResultMaxChars,
-          100,
-          500000,
-        );
+      const sanitized = sanitizeChatOverrides({ chatId, ...overrides });
       db.setChatOverrides({ chatId, ...sanitized });
 
       return { success: true };
