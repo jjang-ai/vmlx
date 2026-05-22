@@ -55,9 +55,11 @@ _ROWS: list[dict[str, Any]] = [
             "Responses Auto does not synthesize max_output_tokens",
             "Auto chat Max Tokens omits per-request output caps so server startup defaults can apply",
             "new chat output caps are not inherited or made sticky on default-profile or same-model clean chat creation",
+            "chat reset does not convert model max_new_tokens into a sticky per-chat maxTokens override",
+            "string-shaped legacy session maxTokens values are cleared before launch",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-request-default-mutation.json",
+            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-reset-policy-string-legacy.json",
         ],
         "artifacts": [
             "build/current-max-output-context-contract-20260522-persisted-chat-output-cap.json",
@@ -65,6 +67,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-max-output-context-contract-20260522-chat-auto-server-default.json",
             "build/current-max-output-context-contract-20260522-responses-output-boundary.json",
             "build/current-max-output-context-contract-20260522-request-default-mutation.json",
+            "build/current-max-output-context-contract-20260522-reset-policy-string-legacy.json",
         ],
     },
     {

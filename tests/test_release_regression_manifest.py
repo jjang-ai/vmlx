@@ -78,6 +78,9 @@ def test_release_regression_manifest_tracks_server_chat_max_output_boundary():
     assert "Responses maxTokens below or above the server startup default remain request scoped" in joined
     assert "Responses Auto does not synthesize max_output_tokens" in joined
     assert "do not mutate the server startup default" in joined
+    assert "chat reset does not convert model max_new_tokens" in joined
+    assert "string-shaped legacy session maxTokens values are cleared" in joined
+    assert "current-max-output-context-contract-20260522-reset-policy-string-legacy.json" in joined
 
 
 def test_release_regression_manifest_tracks_legacy_completions_output_boundary():

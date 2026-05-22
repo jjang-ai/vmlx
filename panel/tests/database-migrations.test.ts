@@ -14,6 +14,15 @@ describe('database startup migrations', () => {
     },
   )
 
+  it('clears string legacy session maxTokens before launch can reuse it', () => {
+    const config = { maxTokens: '32768', reasoningParser: 'qwen3' }
+
+    expect(migrateLegacySessionStartupConfig(config)).toBe(true)
+
+    expect(config.maxTokens).toBe(0)
+    expect(config.generationStartupDefaultsVersion).toBe(4)
+  })
+
   it('canonicalizes stale MiniMax reasoning aliases to the registered engine parser', () => {
     for (const reasoningParser of ['minimax', 'minimax_m2', 'minimax_m2_5']) {
       const config = { maxTokens: 0, reasoningParser }
