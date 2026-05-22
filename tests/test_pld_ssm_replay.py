@@ -3,9 +3,8 @@
 
 Tests the hybrid partial-accept replay path without requiring real model
 weights or a full mlx-lm/transformers environment.  Uses _FakeSSMLayer /
-_FakeKVCache stubs and a mock model callable.  The static method is
-replicated directly in this file to isolate the test from the full
-scheduler import chain.
+_FakeKVCache stubs and a mock model callable.  Imports replay_ssm_forward
+from vmlx_engine.utils.pld_replay to test the real production code path.
 
 Run:
     .venv/bin/python -m pytest tests/test_pld_ssm_replay.py -v
@@ -21,56 +20,8 @@ import pytest
 import mlx.core as mx
 
 
-# ---------------------------------------------------------------------------
-# Standalone implementation of _replay_ssm_forward for testing
-# (mirrors the logic in Scheduler._replay_ssm_forward without importing
-#  the full scheduler module which pulls in mlx_lm/transformers)
-# ---------------------------------------------------------------------------
-
-def _replay_ssm_forward(model, kv_cache, saved_array_caches, accepted_tokens,
-                        pre_verify_offset):
-    """Test-local copy of Scheduler._replay_ssm_forward logic."""
-    import numpy as _np_local
-
-    def _rewind_kv_to(kv_cache, target_offset):
-        for c in kv_cache:
-            if not c.is_trimmable() or c.offset == 0:
-                continue
-            if c.offset <= target_offset:
-                continue
-            if isinstance(c.keys, mx.array):
-                _kd, _vd = c.keys.dtype, c.values.dtype
-                _ka = c.keys.astype(mx.float16) if "bfloat16" in str(_kd) else c.keys
-                _va = c.values.astype(mx.float16) if "bfloat16" in str(_vd) else c.values
-                _k, _v = _np_local.array(_ka), _np_local.array(_va)
-                c.keys = mx.array(_k[..., :target_offset, :]).astype(_kd)
-                c.values = mx.array(_v[..., :target_offset, :]).astype(_vd)
-            c.offset = target_offset
-            if hasattr(c, "_idx"):
-                c._idx = target_offset
-
-    try:
-        for i, c in enumerate(kv_cache):
-            if i in saved_array_caches:
-                c.cache = saved_array_caches[i]
-        _rewind_kv_to(kv_cache, pre_verify_offset)
-
-        replay_input = mx.array([accepted_tokens])
-        _ = model(replay_input, cache=kv_cache)
-        mx.eval(kv_cache)
-
-        return True
-
-    except Exception as exc:
-        # Best-effort restore
-        try:
-            for i, c in enumerate(kv_cache):
-                if i in saved_array_caches:
-                    c.cache = saved_array_caches[i]
-            _rewind_kv_to(kv_cache, pre_verify_offset)
-        except Exception:
-            pass
-        return False
+# Import the production replay helper directly — tests exercise the real code path.
+from vmlx_engine.utils.pld_replay import replay_ssm_forward as _replay_ssm_forward
 
 
 # ---------------------------------------------------------------------------
