@@ -1761,6 +1761,8 @@ def live_server_command(
     model_dir: Path,
     port: int,
     block_cache_dir: Path,
+    *,
+    row: ModelRow | None = None,
 ) -> list[str]:
     """Build a live audit server command that proves the selected Python.
 
@@ -1769,6 +1771,11 @@ def live_server_command(
     lives in the source checkout, and it must not write pycache into the signed
     app bundle before codesign verification.
     """
+    prefix_cache_flag = (
+        "--dsv4-enable-prefix-cache"
+        if row is not None and row.family == "deepseek_v4"
+        else "--enable-prefix-cache"
+    )
     return [
         str(py),
         "-B",
@@ -1797,7 +1804,7 @@ def live_server_command(
         "0.2",
         "--stream-interval",
         "1",
-        "--enable-prefix-cache",
+        prefix_cache_flag,
         "--use-paged-cache",
         "--paged-cache-block-size",
         "64",
@@ -2142,7 +2149,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
     log = OUT_DIR / f"{row.id}_{int(time.time())}.log"
     block_cache_dir = OUT_DIR / f"{row.id}_block_cache_{int(time.time())}"
     block_cache_dir.mkdir(parents=True, exist_ok=True)
-    cmd = live_server_command(py, model_dir, port, block_cache_dir)
+    cmd = live_server_command(py, model_dir, port, block_cache_dir, row=row)
 
     if os.environ.get("VMLINUX_AUDIT_KILL_EXISTING") == "1":
         subprocess.run(["pkill", "-9", "-f", "vmlx_engine.cli"], capture_output=True)

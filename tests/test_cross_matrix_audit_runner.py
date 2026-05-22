@@ -1027,3 +1027,27 @@ def test_live_gate_server_command_does_not_force_sampling_defaults(tmp_path):
         "--max-tokens",
     ):
         assert flag not in cmd
+
+
+def test_live_gate_server_command_uses_dsv4_native_prefix_flag(tmp_path):
+    rows = {row.id: row for row in ROWS}
+
+    dsv4_cmd = audit_harness.live_server_command(
+        tmp_path / "python3",
+        tmp_path / "dsv4",
+        8123,
+        tmp_path / "block-cache",
+        row=rows["dsv4_jang_local"],
+    )
+    assert "--dsv4-enable-prefix-cache" in dsv4_cmd
+    assert "--enable-prefix-cache" not in dsv4_cmd
+
+    zaya_cmd = audit_harness.live_server_command(
+        tmp_path / "python3",
+        tmp_path / "zaya",
+        8123,
+        tmp_path / "block-cache",
+        row=rows["zaya_mxfp4"],
+    )
+    assert "--enable-prefix-cache" in zaya_cmd
+    assert "--dsv4-enable-prefix-cache" not in zaya_cmd
