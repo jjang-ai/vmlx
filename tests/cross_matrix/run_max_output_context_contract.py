@@ -85,6 +85,8 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     "chat settings expose per-chat max tokens without hidden DSV4 floors",
     "keeps per-chat maxTokens as output budget only, never prompt context",
     "keeps Responses maxTokens as output budget only, never prompt context",
+    "per-chat maxTokens below or above the server startup default remain request scoped for Responses",
+    "does not invent Responses sampler or output-budget values when chat overrides are absent",
     "omits invalid persisted maxTokens values instead of poisoning Chat Completions",
     "omits invalid persisted maxTokens values instead of poisoning Responses",
     "chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap",
@@ -252,6 +254,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_request_output_caps_override_server_default_without_touching_context_cap" not in missing_markers
             and "test_chat_and_responses_streaming_output_caps_override_server_default_without_touching_context_cap" not in missing_markers
             and "keeps Responses maxTokens as output budget only, never prompt context" not in missing_markers
+            and "per-chat maxTokens below or above the server startup default remain request scoped for Responses" not in missing_markers
         ),
         "anthropic_messages_preserves_bundle_and_explicit_output_caps": (
             not failed
@@ -299,6 +302,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "request_builders_omit_auto_output_cap": (
             not failed
             and "does not synthesize a DSV4 max token budget when the request leaves it to server/model defaults" not in missing_markers
+            and "does not invent Responses sampler or output-budget values when chat overrides are absent" not in missing_markers
             and "omits invalid persisted maxTokens values instead of poisoning Chat Completions" not in missing_markers
             and "omits invalid persisted maxTokens values instead of poisoning Responses" not in missing_markers
         ),

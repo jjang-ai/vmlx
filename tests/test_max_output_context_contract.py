@@ -45,6 +45,8 @@ def test_max_output_context_contract_covers_all_public_api_surfaces():
     assert "chat settings expose per-chat max tokens without hidden DSV4 floors" in required
     assert "keeps per-chat maxTokens as output budget only, never prompt context" in required
     assert "keeps Responses maxTokens as output budget only, never prompt context" in required
+    assert "per-chat maxTokens below or above the server startup default remain request scoped for Responses" in required
+    assert "does not invent Responses sampler or output-budget values when chat overrides are absent" in required
     assert "chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap" in required
     assert "clears legacy session maxTokens=32768 before launch can reuse it" in required
     assert "new chats preserve model-owned maxTokens while refusing inherited output caps" in required

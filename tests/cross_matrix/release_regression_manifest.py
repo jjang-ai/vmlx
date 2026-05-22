@@ -50,16 +50,19 @@ _ROWS: list[dict[str, Any]] = [
             "server startup maxTokens and chat maxTokens remain independent when both are set",
             "persisted chat maxTokens cannot relaunch server with a new startup maxTokens",
             "per-chat maxTokens below or above the server startup default remain request-scoped",
+            "Responses maxTokens below or above the server startup default remain request scoped",
+            "Responses Auto does not synthesize max_output_tokens",
             "Auto chat Max Tokens omits per-request output caps so server startup defaults can apply",
             "new chat output caps are not inherited or made sticky on default-profile or same-model clean chat creation",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-new-chat-output-cap-nonsticky.json",
+            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-responses-output-boundary.json",
         ],
         "artifacts": [
             "build/current-max-output-context-contract-20260522-persisted-chat-output-cap.json",
             "build/current-max-output-context-contract-20260522-new-chat-output-cap-nonsticky.json",
             "build/current-max-output-context-contract-20260522-chat-auto-server-default.json",
+            "build/current-max-output-context-contract-20260522-responses-output-boundary.json",
         ],
     },
     {

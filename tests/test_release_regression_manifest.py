@@ -73,6 +73,9 @@ def test_release_regression_manifest_tracks_server_chat_max_output_boundary():
     assert "persisted chat maxTokens cannot relaunch server" in joined
     assert "current-max-output-context-contract-20260522-persisted-chat-output-cap.json" in joined
     assert "current-max-output-context-contract-20260522-new-chat-output-cap-nonsticky.json" in joined
+    assert "current-max-output-context-contract-20260522-responses-output-boundary.json" in joined
+    assert "Responses maxTokens below or above the server startup default remain request scoped" in joined
+    assert "Responses Auto does not synthesize max_output_tokens" in joined
 
 
 def test_release_regression_manifest_tracks_legacy_completions_output_boundary():
