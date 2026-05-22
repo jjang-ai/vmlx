@@ -317,9 +317,10 @@ _ROWS: list[dict[str, Any]] = [
             "No source-only test may claim output-coherence clearance for every family",
         ],
         "commands": [
-            "tests/cross_matrix/run_production_family_audit.py with scoped live model rows",
+            "uv run --extra dev python tests/cross_matrix/run_production_family_audit.py --rows hy3_preview_jangtq2,minimax_m27_tq_k,qwen36_moe_tq4,zaya_jangtq2,zaya_vl_jangtq4,ling_flash_tq,nemotron_omni_tq2,dsv4_jang_local --live --out build/current-production-family-audit-live-multifamily-soak-20260522.json",
         ],
         "artifacts": [
+            "build/current-production-family-audit-live-multifamily-soak-20260522.json",
             "docs/internal/release-gates/",
         ],
     },

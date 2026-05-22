@@ -174,6 +174,24 @@ def test_release_regression_manifest_python_entrypoints_are_tracked():
                 assert path.exists(), f"{row['id']} references missing Python entrypoint {path}"
 
 
+def test_release_regression_manifest_python_runner_commands_are_executable_invocations():
+    manifest = build_manifest()
+
+    for row in manifest["rows"]:
+        for command in row["commands"]:
+            parts = shlex.split(command)
+            for index, token in enumerate(parts):
+                if not token.startswith("tests/cross_matrix/") or not token.endswith(".py"):
+                    continue
+                launcher = parts[:index]
+                assert launcher, f"{row['id']} references {token} without a Python launcher"
+                assert (
+                    "python" in launcher
+                    or "python3" in launcher
+                    or any(part.endswith("/python") or part.endswith("/python3") for part in launcher)
+                ), f"{row['id']} references {token} without an executable Python command"
+
+
 def test_release_regression_manifest_tracks_model_artifact_detection_with_runner_artifact():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}
