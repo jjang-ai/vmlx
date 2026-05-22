@@ -313,7 +313,8 @@ _ROWS: list[dict[str, Any]] = [
         "mode": "live",
         "heavy": True,
         "proves": [
-            "Hy3, MiniMax, Qwen MTP, ZAYA, VLM, and DSV4 family rows need real multi-turn UI/API soaks before broad production claims",
+            "Hy3, MiniMax, Qwen 3.6 hybrid, ZAYA, ZAYA1-VL, Ling, Nemotron, and DSV4 family rows need real multi-turn UI/API soaks before broad production claims",
+            "Qwen MTP/VL/video rows are no-heavy family-detection covered until dedicated live-audit rows exist",
             "No source-only test may claim output-coherence clearance for every family",
         ],
         "commands": [

@@ -23,6 +23,14 @@ def test_release_regression_manifest_has_stable_unique_ids():
     assert all(" " not in row_id for row_id in row_ids)
 
 
+def test_release_regression_manifest_artifacts_are_unique_per_row():
+    manifest = build_manifest()
+
+    for row in manifest["rows"]:
+        artifacts = row["artifacts"]
+        assert len(artifacts) == len(set(artifacts)), row["id"]
+
+
 def test_release_regression_manifest_tracks_no_fake_sampler_policy():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}
@@ -137,6 +145,17 @@ def test_release_regression_manifest_tracks_live_only_boundaries():
     assert "dsv4-long-output-quality-live" in live_ids
     assert "model-family-live-multiturn-soak" in live_ids
     assert all(row["heavy"] for row in live_rows)
+
+
+def test_release_regression_manifest_live_soak_does_not_overclaim_qwen_mtp():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+    row = rows["model-family-live-multiturn-soak"]
+    command_text = " ".join(row["commands"]).lower()
+    proves_text = " ".join(row["proves"]).lower()
+
+    if "qwen mtp" in proves_text and "no-heavy" not in proves_text:
+        assert "qwen" in command_text and "mtp" in command_text
 
 
 def test_release_regression_manifest_commands_are_declared_for_noheavy_rows():
