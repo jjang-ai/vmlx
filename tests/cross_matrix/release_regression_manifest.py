@@ -103,6 +103,7 @@ _ROWS: list[dict[str, Any]] = [
         "proves": [
             "Panel-emitted tool parser ids are accepted by the engine",
             "Panel-emitted reasoning parser ids are accepted by the engine",
+            "CLI accepts every registered reasoning parser emitted by model families",
             "Reasoning parser dropdown covers every parser the panel registry can emit",
             "MiniMax minimax_m2 regression stays covered",
         ],

@@ -369,6 +369,7 @@ def test_release_regression_manifest_tracks_parser_parity_with_runner_artifact()
     assert "MiniMax" in joined
     assert "reasoning parser" in joined
     assert "Reasoning parser dropdown covers every parser" in joined
+    assert "CLI accepts every registered reasoning parser" in joined
     assert "tool parser" in joined
 
 

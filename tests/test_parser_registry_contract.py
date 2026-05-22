@@ -8,6 +8,7 @@ def test_parser_registry_contract_pins_named_parser_edges():
 
     assert "test_all_reasoning_parsers_registered" in required
     assert "test_cli_tool_parser_choices_cover_family_registry_parsers" in required
+    assert "test_cli_reasoning_parser_choices_cover_family_registry_parsers" in required
     assert "test_registry_overrides_stale_minimax_qwen3_sidecar" in required
     assert "test_zaya1_vl_registered_with_full_contract" in required
     assert "test_ling_is_not_a_reasoning_model_per_eric_2026_05_11" in required

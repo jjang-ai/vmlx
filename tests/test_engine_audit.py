@@ -4875,6 +4875,41 @@ class TestStartupCompatibilityGuards:
         assert '"gemma3"' in cli_source
         assert '"gemma3n"' in cli_source
 
+    def test_cli_reasoning_parser_choices_cover_family_registry_parsers(self):
+        """Every reasoning parser emitted by model_configs.py must be CLI-selectable.
+
+        MiniMax regressed when the panel emitted ``minimax_m2`` but the
+        packaged engine CLI rejected it before startup. The CLI now builds
+        choices from the runtime reasoning registry; keep that contract pinned
+        for all registered families, not only MiniMax.
+        """
+        from vmlx_engine.model_configs import register_all
+        from vmlx_engine.model_config_registry import ModelConfigRegistry
+        from vmlx_engine.reasoning import list_parsers
+
+        import vmlx_engine.model_config_registry as mcr
+
+        ModelConfigRegistry._instance = None
+        mcr._configs_loaded = False
+        registry = ModelConfigRegistry()
+        register_all(registry)
+
+        cli_source = Path("./vmlx_engine/cli.py").read_text()
+        cli_reasoning_choices = {"auto", "none", *list_parsers()}
+        missing = sorted(
+            {
+                config.reasoning_parser
+                for config in registry._configs
+                if config.reasoning_parser
+                and config.reasoning_parser not in cli_reasoning_choices
+            }
+        )
+
+        assert 'reasoning_choices = list_parsers()' in cli_source
+        assert 'choices=["auto", "none"] + reasoning_choices' in cli_source
+        assert not missing
+        assert "minimax_m2" in cli_reasoning_choices
+
     def test_sampler_recreation_invalidates_pending_prefix_hits(self):
         """A sampler change must not leave requests pointing at cleared paged blocks."""
         import inspect

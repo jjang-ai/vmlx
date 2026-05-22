@@ -48,6 +48,7 @@ REQUIRED_PARSER_TEST_MARKERS = (
     "test_all_reasoning_parsers_valid",
     "test_all_tool_parsers_valid",
     "test_cli_tool_parser_choices_cover_family_registry_parsers",
+    "test_cli_reasoning_parser_choices_cover_family_registry_parsers",
     # Family-specific parser contracts. These are the rows users actually hit
     # when auto-detection resolves a launch config from local model metadata.
     "test_registry_overrides_stale_minimax_qwen3_sidecar",
@@ -158,6 +159,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             not failed
             and "test_all_reasoning_parsers_registered" not in missing_markers
             and "test_all_reasoning_parsers_valid" not in missing_markers
+            and "test_cli_reasoning_parser_choices_cover_family_registry_parsers" not in missing_markers
         ),
         "engine_accepts_registered_tool_parsers": (
             not failed
