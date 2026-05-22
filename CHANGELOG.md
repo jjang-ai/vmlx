@@ -26,6 +26,11 @@ All notable changes to vMLX Engine will be documented in this file.
 - Confirmed VLM JIT keeps `LanguageModel.layers` available through the current
   compiled-module proxy instead of installing a bare `mx.compile` function.
   Credit: @st-adam for PR #154 and the VLM JIT regression report.
+- Added no-heavy prefill-loop contracts and accepted the safe slice of PR #163:
+  sorted SSM boundary lookup, precomputed state-layer evals, hoisted token-list
+  materialization, and an opt-in `--prefill-keep-alloc` /
+  `VMLINUX_PREFILL_KEEP_ALLOC=1` chunked-prefill allocator tuning flag. Credit:
+  @st-adam for the prefill-loop cleanup work.
 
 ## [1.5.46] - 2026-05-20
 

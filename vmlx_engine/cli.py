@@ -1230,6 +1230,9 @@ def serve_command(args):
     # Configure JIT compilation
     server._enable_jit = getattr(args, 'enable_jit', False)
 
+    if getattr(args, 'prefill_keep_alloc', False):
+        os.environ["VMLX_PREFILL_KEEP_ALLOC"] = "1"
+
     # Port validation now happens at the top of `serve_command` so a
     # bad port short-circuits BEFORE any model / registry / parser
     # logging. This kept producing user reports of "Process exited
@@ -2024,6 +2027,14 @@ Examples:
         help="How many tokens to generate before sending a streaming update to the client. "
              "1 = send every token (smoothest typing effect). Higher values batch tokens "
              "for slightly better throughput. Requires --continuous-batching. (default: 1)",
+    )
+    serve_parser.add_argument(
+        "--prefill-keep-alloc",
+        action="store_true",
+        default=False,
+        help="Skip per-prefill-chunk mx.clear_cache() calls by setting "
+             "VMLX_PREFILL_KEEP_ALLOC=1. This is opt-in for long text-only "
+             "chunked prefill tuning; default behavior is unchanged.",
     )
     serve_parser.add_argument(
         "--max-tokens",
