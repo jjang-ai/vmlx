@@ -610,6 +610,10 @@ def cache_health_mismatches(
             )
         return mismatches
 
+    if cache_type == "kv" and health_cache_type not in {"kv", "paged_kv"}:
+        mismatches.append("registry kv cache expected health cache_type=kv-or-paged_kv")
+        return mismatches
+
     if cache_type == "hybrid" and generic_tq_enabled is True:
         mismatches.append(
             "registry hybrid cache expected generic_turboquant_kv.enabled=false"

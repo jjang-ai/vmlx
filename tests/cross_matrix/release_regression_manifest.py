@@ -210,6 +210,7 @@ _ROWS: list[dict[str, Any]] = [
             "Named DSV4, ZAYA, ZAYA1-VL, Ling/Bailing, Nemotron, Qwen 3.6 VL/video/hybrid, MXFP4, MXFP8, native-MTP, MiniMax, and Hy3 rows keep expected parser/cache/modality policy",
             "Decode-speed rows keep JANG-only, JANGTQ/MXTQ, MXFP4, and MXFP8 speed thresholds distinct while staying aligned with engine registry parser, modality, and cache metadata for existing local models",
             "Decode-speed rows keep DSV4 native composite separate from generic JANGTQ/MXTQ rows",
+            "Decode-speed health checks reject DSV4 native or ZAYA typed cache health for plain KV JANG/JANGTQ/MXFP rows",
             "Every decode-speed row with a declared tool or reasoning parser uses a registered engine parser and CLI-accepted parser choice even when that local model path is absent",
             "Decode-speed launch commands preserve row parser/modality policy and strip source-path or forced JANGTQ acceleration environment overrides",
             "Decode-speed matrix includes large external Mistral JANGTQ, Mistral MXFP4, and GPT-OSS rows with parser/modality launch policy pinned",
@@ -217,10 +218,10 @@ _ROWS: list[dict[str, Any]] = [
             "This is source/static compatibility proof only; live multi-turn output quality remains a separate live row",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_model_family_detection_contract.py --out build/current-model-family-detection-contract-20260522-nemotron3-external.json",
+            ".venv/bin/python tests/cross_matrix/run_model_family_detection_contract.py --out build/current-model-family-detection-contract-20260522-plain-kv-cache-health.json",
         ],
         "artifacts": [
-            "build/current-model-family-detection-contract-20260522-nemotron3-external.json",
+            "build/current-model-family-detection-contract-20260522-plain-kv-cache-health.json",
         ],
     },
     {

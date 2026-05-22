@@ -32,6 +32,7 @@ def test_family_detection_contract_pins_named_release_rows():
         "decode_speed_large_external_jangtq_mxfp_gptoss_rows",
         "decode_speed_external_nemotron3_jangtq_mxfp_rows",
         "decode_speed_registry_cache_metadata_health",
+        "decode_speed_plain_kv_cache_health_not_native",
     }.issubset(names)
 
 
@@ -573,6 +574,43 @@ def test_decode_speed_gate_detects_cache_health_mismatches():
     ) == [
         "registry hybrid cache expected generic_turboquant_kv.enabled=false",
     ]
+
+
+def test_decode_speed_gate_detects_plain_kv_cache_health_mismatches():
+    from tests.cross_matrix.run_decode_speed_gate import cache_health_mismatches
+
+    plain_kv_metadata = {
+        "family_name": "qwen3_5",
+        "cache_type": "kv",
+        "cache_subtype": None,
+    }
+
+    assert cache_health_mismatches(
+        plain_kv_metadata,
+        {
+            "cache_type": "native_composite",
+            "generic_turboquant_kv": {"enabled": False},
+        },
+    ) == ["registry kv cache expected health cache_type=kv-or-paged_kv"]
+
+    assert cache_health_mismatches(
+        plain_kv_metadata,
+        {
+            "cache_type": "typed_cca",
+            "generic_turboquant_kv": {"enabled": False},
+        },
+    ) == ["registry kv cache expected health cache_type=kv-or-paged_kv"]
+
+    assert (
+        cache_health_mismatches(
+            plain_kv_metadata,
+            {
+                "cache_type": "paged_kv",
+                "generic_turboquant_kv": {"enabled": True},
+            },
+        )
+        == []
+    )
 
 
 def test_dsv4_live_cache_gates_use_canonical_parser_and_no_legacy_32k_startup_cap():
