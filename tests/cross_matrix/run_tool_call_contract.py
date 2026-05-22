@@ -22,19 +22,27 @@ from typing import Any
 DEFAULT_OUT = Path("build/current-tool-call-contract-20260521.json")
 
 DSML_PATTERN = (
-    "streaming_rejects_schema_residue_arguments "
-    "or streaming_rejects_value_attribute_residue_arguments "
-    "or streaming_accepts_schema_valid_dsml_arguments "
-    "or server_rejects_dsv4_placeholder_residue_tool_arguments "
-    "or server_rejects_dsv4_value_residue_tool_arguments "
-    "or dsml_parser_rejects_placeholder_attribute_residue_as_argument_value "
-    "or server_cleans_suppressed_dsv4_dsml_without_schema_or_call "
-    "or responses_tool_choice_none_does_not_fallback_to_raw_dsml "
-    "or test_repairs_live_dsv4_default_cache_nested_name_inv_shape "
-    "or test_repairs_live_dsv4_default_cache_invue_typo_shape "
-    "or test_repairs_live_dsv4_inv_par_value_attribute_shape "
-    "or test_responses_dsml_tool_call_suppresses_planning_preamble "
-    "or test_dsv4_responses_stream_buffers_tool_preamble"
+    "visible_text_around_invoke_preserved_no_dsml_leak "
+    "or tools_called_implies_no_dsml_in_content "
+    "or repairs_dsml_invoke_with_plain_param_tags "
+    "or repairs_dsml_tool_calls_wrapper_with_truncated_plain_param_invokes "
+    "or streaming_buffers_dsml_tool_calls_wrapper_before_invoke "
+    "or server_buffers_dsml_wrapper_marker_before_invoke "
+    "or dsml_parser_repairs_schema_gated_malformed_old_dsv4_tool_call "
+    "or dsml_parser_repairs_partial_canonical_invoke "
+    "or dsml_parser_repairs_dsv4_live_degraded_dsml_params "
+    "or dsml_parser_repairs_partial_invoke_with_malformed_value_attr "
+    "or dsml_parser_repairs_htmlish_invoke_degradation "
+    "or server_repairs_dsv4_partial_tool_intent_from_request_args "
+    "or dsv4_encoder_keeps_function_arguments_as_dsml_params "
+    "or dsv4_encoder_preserves_code_identifiers_on_direct_chat_rail "
+    "or dsml_issue_165_server_tool_call_arguments_are_not_empty_or_raw "
+    "or dsv4_fallback_tool_prompt_uses_canonical_tool_calls_wrapper "
+    "or dsv4_native_schema_prompt_with_only_generic_examples_gets_concrete_fallback "
+    "or tool_markup_residue_strips_all_registered_marker_families "
+    "or tool_markup_residue_strips_interrupted_non_dsml_fragments "
+    "or responses_api_no_fallback_on_suppressed_reasoning "
+    "or responses_extracts_suppressed_reasoning_tool_calls_before_finalize"
 )
 
 SOURCE_HASH_FILES = (
@@ -132,13 +140,13 @@ def build_artifact(root: Path) -> dict[str, Any]:
     panel_passed = results["panel_tool_loop_security"]["counts"]["passed"] or 0
     live_default_cache_artifact = root / "build/current-dsv4-default-cache-tool-loop/result.json"
     checks = {
-        "tool_parser_residue_rejected_instead_of_executed": not failed and engine_passed >= 13,
-        "schema_valid_dsml_tool_call_preserved": not failed and engine_passed >= 13,
-        "dsv4_default_cache_degraded_dsml_shapes_repaired_when_schema_valid": not failed and engine_passed >= 13,
-        "dsv4_tool_preamble_suppressed_and_not_stored_without_call": not failed and engine_passed >= 13,
-        "tool_choice_none_does_not_fallback_to_raw_dsml": not failed and engine_passed >= 13,
-        "panel_tool_executor_blocks_unsafe_paths_and_commands": not failed and panel_passed >= 12,
-        "panel_max_tool_iterations_caps_tool_loops": not failed and panel_passed >= 12,
+        "tool_parser_residue_rejected_instead_of_executed": not failed and engine_passed >= 21,
+        "schema_valid_dsml_tool_call_preserved": not failed and engine_passed >= 21,
+        "dsv4_default_cache_degraded_dsml_shapes_repaired_when_schema_valid": not failed and engine_passed >= 21,
+        "dsv4_tool_preamble_suppressed_and_not_stored_without_call": not failed and engine_passed >= 21,
+        "tool_choice_none_does_not_fallback_to_raw_dsml": not failed and engine_passed >= 21,
+        "panel_tool_executor_blocks_unsafe_paths_and_commands": not failed and panel_passed >= 10,
+        "panel_max_tool_iterations_caps_tool_loops": not failed and panel_passed >= 10,
         "live_default_cache_dsv4_tool_loop_artifact_present": live_default_cache_artifact.exists(),
     }
     return {

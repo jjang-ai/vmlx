@@ -1,0 +1,639 @@
+import json
+from pathlib import Path
+
+
+def _write_json(root: Path, rel: str, obj: dict) -> None:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(obj), encoding="utf-8")
+
+
+def _sha256(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_passing_base_artifacts(tmp_path: Path) -> None:
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-cache-proof-digest-20260521.json",
+        {
+            "checks": {
+                "persistedDefaultOn": True,
+                "launchHasDsv4EnablePrefix": True,
+                "launchHasUsePagedCache": True,
+                "launchHasBlockDisk": True,
+                "launchNoDisablePrefix": True,
+                "hotFasterTtft": True,
+                "sameProcessHitDsv4": True,
+                "blockDiskWrite": True,
+                "restartL2DiskHit": True,
+                "restartDsv4CacheHit": True,
+            },
+            "timings": {"cold_ttft_sec": 15.0, "hot_ttft_sec": 1.0},
+            "stats_after_hot": {"block_disk_cache": {"disk_writes": 3}},
+            "stats_after_restart": {"block_disk_cache": {"disk_hits": 3}},
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/dev-ui-dsv4-live-cache-proof-20260521/result.json",
+        {
+            "before": {
+                "body": {
+                    "native_cache": {
+                        "cache_type": "native_composite",
+                        "components": ["swa_local", "csa_compressed_pool", "hca_compressed_pool"],
+                        "prefix": True,
+                        "paged": True,
+                        "block_disk_l2": True,
+                        "generic_turboquant_kv": {"enabled": False},
+                    }
+                }
+            },
+            "turn1": {"elapsed_sec": 25.0},
+            "turn2": {
+                "elapsed_sec": 1.0,
+                "body": {"usage": {"prompt_tokens_details": {"cached_tokens": 998}}},
+            },
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/dev-ui-dsv4-live-tool-proof-20260521/result.json",
+        {
+            "round1": {
+                "body": {
+                    "output": [
+                        {"type": "function_call", "name": "list_directory", "arguments": "{\"path\":\".\"}"}
+                    ]
+                }
+            },
+            "round2": {"body": {"output": [], "output_text": "DONE"}},
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/v1546-current-bundled-dsv4-two-tool-proof-20260521001426/result.json",
+        {
+            "rounds": [
+                {"executed_tools": [{"name": "list_directory"}]},
+                {"executed_tools": [{"name": "write_file"}]},
+                {"executed_tools": [], "output_text": "DONE"},
+            ]
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-default-cache-tool-loop/result.json",
+        {
+            "cmd": [
+                "python",
+                "-m",
+                "vmlx_engine.cli",
+                "serve",
+                "/models/dsv4",
+                "--dsv4-enable-prefix-cache",
+                "--use-paged-cache",
+                "--enable-block-disk-cache",
+                "--tool-call-parser",
+                "dsml",
+            ],
+            "health": {
+                "native_cache": {
+                    "cache_type": "native_composite",
+                    "prefix": True,
+                    "paged": True,
+                    "block_disk_l2": True,
+                    "generic_turboquant_kv": {"enabled": False},
+                }
+            },
+            "rounds": [
+                {
+                    "executed_tools": [{"name": "list_directory"}],
+                    "usage": {
+                        "input_tokens_details": {
+                            "cached_tokens": 0,
+                            "cache_detail": "",
+                        }
+                    },
+                },
+                {
+                    "executed_tools": [{"name": "write_file"}],
+                    "usage": {
+                        "input_tokens_details": {
+                            "cached_tokens": 128,
+                            "cache_detail": "paged+dsv4",
+                        }
+                    },
+                },
+                {
+                    "executed_tools": [],
+                    "output_text": "DONE",
+                    "usage": {
+                        "input_tokens_details": {
+                            "cached_tokens": 192,
+                            "cache_detail": "paged+dsv4",
+                        }
+                    },
+                },
+            ]
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/v1546-dsv4-app-tool-cap-nocache-proof-20260521090706/summary.json",
+        {
+            "allPassed": True,
+            "checks": {
+                "maxToolIterationsPersisted": True,
+                "sawLimitMessage": True,
+                "executedExactlyOneRealTool": True,
+                "capFileNotWritten": True,
+            },
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/dev-ui-smoke-20260521/summary.json",
+        {
+            "visible_assertions": {
+                "server_default_max_output_visible": True,
+                "max_context_visible": True,
+                "generation_defaults_visible": True,
+            },
+            "cli_preview_assertions": {
+                "has_max_tokens_flag_after_reset": False,
+                "has_max_prompt_tokens_flag_after_reset": False,
+            },
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-static-cache-architecture-audit-full-qwen-hybrid-20260521.json",
+        {
+            "rows": [
+                {
+                    "static": {
+                        "id": row_id,
+                        "exists": True,
+                        "cache_profile_expected": expected,
+                        "registry": {"cache_type": registry_cache},
+                        "issues": [],
+                    }
+                }
+                for row_id, expected, registry_cache in (
+                    ("dsv4_jang_local", "dsv4_composite", "kv"),
+                    ("minimax_m27_tq_k", "default", "kv"),
+                    ("qwen36_dense_mxfp4", "hybrid_ssm", "hybrid"),
+                    ("qwen36_dense_jang", "hybrid_ssm", "hybrid"),
+                    ("zaya_vl_mxfp4", "zaya_cca", "hybrid"),
+                    ("nemotron_omni_tq2", "hybrid_ssm", "hybrid"),
+                    ("ling_flash_tq", "hybrid_ssm", "hybrid"),
+                )
+            ]
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-long-context-proof-digest-20260521.json",
+        {"status": "review", "notes": ["identifier corruption still open"]},
+    )
+    _write_json(
+        tmp_path,
+        "tests/test_engine_audit.py",
+        {"fixture": "engine-audit"},
+    )
+    _write_json(
+        tmp_path,
+        "vmlx_engine/server.py",
+        {"fixture": "server"},
+    )
+    _write_json(
+        tmp_path,
+        "vmlx_engine/tool_parsers/dsml_tool_parser.py",
+        {"fixture": "dsml-parser"},
+    )
+    _write_json(
+        tmp_path,
+        "tests/test_batching.py",
+        {"fixture": "batching"},
+    )
+    _write_json(
+        tmp_path,
+        "tests/test_mllm_scheduler_cache.py",
+        {"fixture": "mllm-cache"},
+    )
+    _write_json(
+        tmp_path,
+        "tests/test_tq_disk_cache.py",
+        {"fixture": "tq-disk"},
+    )
+    _write_json(
+        tmp_path,
+        "tests/test_dsml_tool_parser.py",
+        {"fixture": "dsml-tests"},
+    )
+    _write_json(
+        tmp_path,
+        "tests/test_tool_format.py",
+        {"fixture": "tool-format"},
+    )
+    source_hashes = {
+        rel: _sha256(tmp_path / rel)
+        for rel in (
+            "vmlx_engine/server.py",
+            "vmlx_engine/tool_parsers/dsml_tool_parser.py",
+            "tests/test_engine_audit.py",
+            "tests/test_batching.py",
+            "tests/test_mllm_scheduler_cache.py",
+            "tests/test_tq_disk_cache.py",
+            "tests/test_dsml_tool_parser.py",
+            "tests/test_tool_format.py",
+        )
+    }
+    _write_json(
+        tmp_path,
+        "build/current-api-cache-contract-proof-20260521.json",
+        {
+            "status": "pass",
+            "checks": {
+                "openai_chat_sampling_kwargs": True,
+                "responses_sampling_kwargs": True,
+                "anthropic_bundle_defaults": True,
+                "ollama_adapter_surface": True,
+                "dsv4_native_cache_status": True,
+                "dsv4_dsml_parser_residue_rejection": True,
+                "dsv4_dsml_valid_tool_call_preserved": True,
+                "dsv4_suppressed_tool_markup_not_stored": True,
+                "zaya_typed_cca_status": True,
+                "hybrid_ssm_partial_reuse": True,
+                "turboquant_kv_runtime_contract": True,
+                "turboquant_disk_roundtrip": True,
+                "no_generic_tq_on_hybrid_ssm": True,
+            },
+            "source_hashes": source_hashes,
+        },
+    )
+    for rel in (
+        "panel/src/main/sessions.ts",
+        "panel/src/renderer/src/components/sessions/SessionSettings.tsx",
+        "panel/src/renderer/src/components/sessions/SessionConfigForm.tsx",
+        "panel/src/renderer/src/components/chat/ChatSettings.tsx",
+        "panel/src/shared/dsv4Env.ts",
+        "panel/src/shared/cacheControlPolicy.ts",
+        "panel/tests/settings-flow.test.ts",
+        "panel/tests/dsv4-env.test.ts",
+        "panel/tests/cache-control-policy.test.ts",
+    ):
+        _write_json(tmp_path, rel, {"fixture": rel})
+    panel_source_hashes = {
+        rel: _sha256(tmp_path / rel)
+        for rel in (
+            "panel/src/main/sessions.ts",
+            "panel/src/renderer/src/components/sessions/SessionSettings.tsx",
+            "panel/src/renderer/src/components/sessions/SessionConfigForm.tsx",
+            "panel/src/renderer/src/components/chat/ChatSettings.tsx",
+            "panel/src/shared/dsv4Env.ts",
+            "panel/src/shared/cacheControlPolicy.ts",
+            "panel/tests/settings-flow.test.ts",
+            "panel/tests/dsv4-env.test.ts",
+            "panel/tests/cache-control-policy.test.ts",
+        )
+    }
+    _write_json(
+        tmp_path,
+        "build/current-panel-settings-contract-proof-20260521.json",
+        {
+            "status": "pass",
+            "checks": {
+                "dsv4_default_native_prefix_on": True,
+                "dsv4_explicit_prefix_off_disables_native_flags": True,
+                "dsv4_l2_explicit_off_preserves_prefix": True,
+                "dsv4_generic_kv_flags_suppressed": True,
+                "max_output_context_cli_split": True,
+                "chat_max_output_is_per_chat_override": True,
+                "non_dsv4_cache_toggles_preserved": True,
+                "i18n_max_output_context_copy": True,
+                "panel_typecheck": True,
+            },
+            "source_hashes": panel_source_hashes,
+        },
+    )
+
+
+def test_objective_proof_digest_keeps_dsv4_long_quality_open(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    assert rows["DSV4 long-output/code/file-generation quality is release-cleared"][
+        "status"
+    ] == "open"
+    assert rows["DSV4 Flash prefix/paged/L2 cache is enabled by default from app launch"][
+        "status"
+    ] == "pass"
+    assert sum(item["status"] == "open" for item in digest["requirements"]) == 1
+
+
+def test_objective_proof_digest_downgrades_pass_rows_with_missing_evidence(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    (tmp_path / "build/dev-ui-smoke-20260521/summary.json").unlink()
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Server default max output and max context are distinct and map to correct CLI flags"]
+    assert row["status"] == "open"
+    assert row["details"]["missing_evidence"] == ["build/dev-ui-smoke-20260521/summary.json"]
+    assert row["details"]["evidence_files_present"]["build/dev-ui-smoke-20260521/summary.json"] is False
+
+
+def test_objective_proof_digest_rejects_no_cache_dsv4_multi_tool_proof(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    proof_path = (
+        tmp_path
+        / "build/current-dsv4-default-cache-tool-loop/result.json"
+    )
+    proof = json.loads(proof_path.read_text(encoding="utf-8"))
+    proof["cmd"] = [
+        "python",
+        "-m",
+        "vmlx_engine.cli",
+        "serve",
+        "/models/dsv4",
+        "--disable-prefix-cache",
+        "--tool-call-parser",
+        "dsml",
+    ]
+    proof["health"]["native_cache"]["prefix"] = False
+    proof["health"]["native_cache"]["paged"] = False
+    proof["health"]["native_cache"]["block_disk_l2"] = False
+    proof_path.write_text(json.dumps(proof), encoding="utf-8")
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["DSV4 default-cache multi-tool agent loop is proven"]
+    assert row["status"] == "open"
+    assert row["details"]["launch_has_disable_prefix_cache"] is True
+    assert row["details"]["native_cache_prefix"] is False
+
+
+def test_objective_proof_digest_rejects_default_cache_multi_tool_without_cache_hit(
+    tmp_path,
+):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    proof_path = (
+        tmp_path
+        / "build/current-dsv4-default-cache-tool-loop/result.json"
+    )
+    proof = json.loads(proof_path.read_text(encoding="utf-8"))
+    for item in proof["rounds"]:
+        item["usage"] = {
+            "input_tokens_details": {"cached_tokens": 0, "cache_detail": ""}
+        }
+    proof_path.write_text(json.dumps(proof), encoding="utf-8")
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["DSV4 default-cache multi-tool agent loop is proven"]
+    assert row["status"] == "open"
+    assert row["details"]["tool_loop_cached_tokens"] == 0
+    assert row["details"]["tool_loop_cache_detail_has_dsv4"] is False
+
+
+def test_objective_proof_digest_surfaces_skipped_default_cache_multi_tool_gate(
+    tmp_path,
+):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    proof_path = (
+        tmp_path
+        / "build/current-dsv4-default-cache-tool-loop/result.json"
+    )
+    proof = json.loads(proof_path.read_text(encoding="utf-8"))
+    proof.clear()
+    proof.update(
+        {
+            "status": "skipped",
+            "reason": "insufficient_free_memory",
+            "cmd": ["python", "-m", "vmlx_engine.cli", "serve", "/models/dsv4"],
+        }
+    )
+    proof_path.write_text(json.dumps(proof), encoding="utf-8")
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["DSV4 default-cache multi-tool agent loop is proven"]
+    assert row["status"] == "open"
+    assert row["details"]["artifact_status"] == "skipped"
+    assert row["details"]["artifact_reason"] == "insufficient_free_memory"
+
+
+def test_objective_proof_digest_marks_api_cache_contract_open_without_artifact(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    (tmp_path / "build/current-api-cache-contract-proof-20260521.json").unlink()
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Current-source API adapters and non-DSV4 cache contracts are no-heavy covered"]
+    assert row["status"] == "open"
+    assert row["details"]["missing_evidence"] == [
+        "build/current-api-cache-contract-proof-20260521.json"
+    ]
+
+
+def test_objective_proof_digest_accepts_api_cache_contract_artifact(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Current-source API adapters and non-DSV4 cache contracts are no-heavy covered"]
+    assert row["status"] == "pass"
+    assert row["details"]["contract_checks"]["responses_sampling_kwargs"] is True
+    assert row["details"]["contract_checks"]["dsv4_dsml_parser_residue_rejection"] is True
+    assert row["details"]["missing_evidence"] == []
+    assert row["details"]["stale_source_hashes"] == []
+
+
+def test_objective_proof_digest_accepts_panel_settings_contract_artifact(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Panel settings keep DSV4 cache, max output, and max context controls unambiguous"]
+    assert row["status"] == "pass"
+    assert row["details"]["contract_checks"]["dsv4_explicit_prefix_off_disables_native_flags"] is True
+    assert row["details"]["contract_checks"]["max_output_context_cli_split"] is True
+    assert row["details"]["missing_evidence"] == []
+    assert row["details"]["stale_source_hashes"] == []
+
+
+def test_objective_proof_digest_rejects_stale_panel_settings_contract_artifact(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    (tmp_path / "panel/src/renderer/src/components/sessions/SessionConfigForm.tsx").write_text(
+        "changed", encoding="utf-8"
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Panel settings keep DSV4 cache, max output, and max context controls unambiguous"]
+    assert row["status"] == "open"
+    assert row["details"]["stale_source_hashes"] == [
+        "panel/src/renderer/src/components/sessions/SessionConfigForm.tsx"
+    ]
+
+
+def test_objective_proof_digest_rejects_api_cache_contract_without_source_hashes(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    contract_path = tmp_path / "build/current-api-cache-contract-proof-20260521.json"
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    contract.pop("source_hashes")
+    contract_path.write_text(json.dumps(contract), encoding="utf-8")
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Current-source API adapters and non-DSV4 cache contracts are no-heavy covered"]
+    assert row["status"] == "open"
+    assert row["details"]["missing_source_hashes"] == [
+        "vmlx_engine/server.py",
+        "vmlx_engine/tool_parsers/dsml_tool_parser.py",
+        "tests/test_engine_audit.py",
+        "tests/test_batching.py",
+        "tests/test_mllm_scheduler_cache.py",
+        "tests/test_tq_disk_cache.py",
+        "tests/test_dsml_tool_parser.py",
+        "tests/test_tool_format.py",
+    ]
+
+
+def test_objective_proof_digest_rejects_stale_api_cache_contract_hashes(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    (tmp_path / "tests/test_engine_audit.py").write_text(
+        "changed after proof\n",
+        encoding="utf-8",
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Current-source API adapters and non-DSV4 cache contracts are no-heavy covered"]
+    assert row["status"] == "open"
+    assert row["details"]["stale_source_hashes"] == ["tests/test_engine_audit.py"]
+
+
+def test_objective_proof_digest_accepts_dsv4_quality_clearance_artifact(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    _write_json(tmp_path, "build/dsv4-source-identifier/result.json", {"ok": True})
+    _write_json(tmp_path, "build/dsv4-source-full-output/result.json", {"ok": True})
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-identifier-count-ablation-20260521/result.json",
+        {"ok": True},
+    )
+    _write_json(
+        tmp_path,
+        "docs/internal/release-gates/20260520_sisyphus_dsv4_identifier_gate_jang_affine_current/result.json",
+        {"ok": True},
+    )
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-long-output-quality-clearance-20260521.json",
+        {
+            "status": "pass",
+            "checks": {
+                "identifier_integrity": True,
+                "threejs_single_file": True,
+                "no_markdown_fence": True,
+                "no_corrupt_identifiers": True,
+                "non_length_stop": True,
+                "source_or_rebuilt_body_clearance": True,
+                "cached_vs_no_cache_semantic_equivalence": True,
+            },
+            "artifacts": {
+                "identifier_gate": "build/dsv4-source-identifier/result.json",
+                "full_output_gate": "build/dsv4-source-full-output/result.json",
+            },
+        },
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    quality = rows["DSV4 long-output/code/file-generation quality is release-cleared"]
+    assert quality["status"] == "pass"
+    assert quality["details"]["clearance_checks"]["identifier_integrity"] is True
+    assert sum(item["status"] == "open" for item in digest["requirements"]) == 0
+
+
+def test_objective_proof_digest_rejects_quality_clearance_with_missing_artifacts(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-long-output-quality-clearance-20260521.json",
+        {
+            "status": "pass",
+            "checks": {
+                "identifier_integrity": True,
+                "threejs_single_file": True,
+                "no_markdown_fence": True,
+                "no_corrupt_identifiers": True,
+                "non_length_stop": True,
+                "source_or_rebuilt_body_clearance": True,
+                "cached_vs_no_cache_semantic_equivalence": True,
+            },
+            "artifacts": {
+                "identifier_gate": "build/dsv4-source-identifier/result.json",
+                "full_output_gate": "build/dsv4-source-full-output/result.json",
+            },
+        },
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    quality = rows["DSV4 long-output/code/file-generation quality is release-cleared"]
+    assert quality["status"] == "open"
+    assert quality["details"]["clearance_artifact_paths_present"] == {
+        "identifier_gate": False,
+        "full_output_gate": False,
+    }
+    assert quality["details"]["missing_clearance_artifacts"] == [
+        "build/dsv4-source-identifier/result.json",
+        "build/dsv4-source-full-output/result.json",
+    ]

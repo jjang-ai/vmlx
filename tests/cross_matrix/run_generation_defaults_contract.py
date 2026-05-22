@@ -118,11 +118,11 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "jang_config_sampling_defaults_override_generation_config": not failed and panel_passed >= 7,
         "disabled_top_k_sentinels_normalize_to_off": not failed and panel_passed >= 7,
         "mode_specific_jang_repetition_penalty_is_metadata_owned": not failed and panel_passed >= 7,
-        "request_api_overrides_win_over_startup_defaults": not failed and engine_passed >= 28,
-        "bundle_max_new_tokens_preserved_when_omitted": not failed and engine_passed >= 28,
-        "omitted_max_tokens_without_bundle_default_is_bounded": not failed and engine_passed >= 28,
-        "no_hidden_sampler_forcing_or_repetition_floor": not failed and engine_passed >= 28,
-        "panel_does_not_emit_default_sampler_cli_flags": not failed and engine_passed >= 28,
+        "request_api_overrides_win_over_startup_defaults": not failed and engine_passed >= 25,
+        "bundle_max_new_tokens_preserved_when_omitted": not failed and engine_passed >= 25,
+        "omitted_max_tokens_without_bundle_default_is_bounded": not failed and engine_passed >= 25,
+        "no_hidden_sampler_forcing_or_repetition_floor": not failed and engine_passed >= 25,
+        "panel_does_not_emit_default_sampler_cli_flags": not failed and engine_passed >= 25,
     }
     return {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),

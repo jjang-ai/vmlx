@@ -1363,7 +1363,7 @@ class TestModelConfigs:
     def test_minimax_config(self, registry):
         config = self._lookup(registry, "MiniMaxAI/Prism-Pro", "minimax")
         assert config.tool_parser == "minimax"
-        assert config.reasoning_parser == "qwen3"
+        assert config.reasoning_parser == "minimax_m2"
         assert config.think_in_template is True
 
     # ── Kimi coverage ──
@@ -1435,7 +1435,15 @@ class TestModelConfigComprehensiveChecks:
         mcr._configs_loaded = False
         return get_model_config_registry()
 
-    VALID_REASONING_PARSERS = {None, "qwen3", "deepseek_r1", "openai_gptoss", "mistral", "gemma4"}
+    VALID_REASONING_PARSERS = {
+        None,
+        "qwen3",
+        "deepseek_r1",
+        "openai_gptoss",
+        "mistral",
+        "gemma4",
+        "minimax_m2",
+    }
     VALID_TOOL_PARSERS = {
         None, "qwen", "llama", "mistral", "deepseek", "hermes",
         "granite", "glm47", "step3p5", "nemotron", "minimax", "kimi",

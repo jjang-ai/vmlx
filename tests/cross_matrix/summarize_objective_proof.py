@@ -1,0 +1,683 @@
+#!/usr/bin/env python3
+"""Summarize the current DSV4/cache/tool objective proof state.
+
+This is a no-heavy helper: it reads existing JSON proof artifacts and produces
+a requirement-by-requirement digest. It deliberately keeps broad DSV4
+long-output/code-quality open unless a dedicated clearance artifact exists.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import time
+from pathlib import Path
+from typing import Any
+
+
+DEFAULT_OUT = Path("build/current-objective-proof-audit-20260521.json")
+DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
+API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260521.json"
+PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260521.json"
+DSV4_DEFAULT_CACHE_TOOL_LOOP_REL = "build/current-dsv4-default-cache-tool-loop/result.json"
+DSV4_QUALITY_CLEARANCE_CHECKS = (
+    "identifier_integrity",
+    "threejs_single_file",
+    "no_markdown_fence",
+    "no_corrupt_identifiers",
+    "non_length_stop",
+    "source_or_rebuilt_body_clearance",
+    "cached_vs_no_cache_semantic_equivalence",
+)
+API_CACHE_CONTRACT_CHECKS = (
+    "openai_chat_sampling_kwargs",
+    "responses_sampling_kwargs",
+    "anthropic_bundle_defaults",
+    "ollama_adapter_surface",
+    "dsv4_native_cache_status",
+    "dsv4_dsml_parser_residue_rejection",
+    "dsv4_dsml_valid_tool_call_preserved",
+    "dsv4_suppressed_tool_markup_not_stored",
+    "zaya_typed_cca_status",
+    "hybrid_ssm_partial_reuse",
+    "turboquant_kv_runtime_contract",
+    "turboquant_disk_roundtrip",
+    "no_generic_tq_on_hybrid_ssm",
+)
+API_CACHE_SOURCE_HASH_FILES = (
+    "vmlx_engine/server.py",
+    "vmlx_engine/tool_parsers/dsml_tool_parser.py",
+    "tests/test_engine_audit.py",
+    "tests/test_batching.py",
+    "tests/test_mllm_scheduler_cache.py",
+    "tests/test_tq_disk_cache.py",
+    "tests/test_dsml_tool_parser.py",
+    "tests/test_tool_format.py",
+)
+PANEL_SETTINGS_CONTRACT_CHECKS = (
+    "dsv4_default_native_prefix_on",
+    "dsv4_explicit_prefix_off_disables_native_flags",
+    "dsv4_l2_explicit_off_preserves_prefix",
+    "dsv4_generic_kv_flags_suppressed",
+    "max_output_context_cli_split",
+    "chat_max_output_is_per_chat_override",
+    "non_dsv4_cache_toggles_preserved",
+    "i18n_max_output_context_copy",
+    "panel_typecheck",
+)
+PANEL_SETTINGS_SOURCE_HASH_FILES = (
+    "panel/src/main/sessions.ts",
+    "panel/src/renderer/src/components/sessions/SessionSettings.tsx",
+    "panel/src/renderer/src/components/sessions/SessionConfigForm.tsx",
+    "panel/src/renderer/src/components/chat/ChatSettings.tsx",
+    "panel/src/shared/dsv4Env.ts",
+    "panel/src/shared/cacheControlPolicy.ts",
+    "panel/tests/settings-flow.test.ts",
+    "panel/tests/dsv4-env.test.ts",
+    "panel/tests/cache-control-policy.test.ts",
+)
+
+
+def _load(root: Path, rel: str) -> dict[str, Any]:
+    path = root / rel
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - diagnostic digest should continue
+        return {"_load_error": f"{type(exc).__name__}: {exc}", "_path": str(path)}
+
+
+def _status(ok: bool, *, partial: bool = False) -> str:
+    if ok:
+        return "pass"
+    return "partial" if partial else "open"
+
+
+def _add(
+    requirements: list[dict[str, Any]],
+    requirement: str,
+    status: str,
+    evidence: list[str],
+    *,
+    caveat: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    item: dict[str, Any] = {
+        "requirement": requirement,
+        "status": status,
+        "evidence": evidence,
+    }
+    if caveat:
+        item["caveat"] = caveat
+    if details is not None:
+        item["details"] = details
+    requirements.append(item)
+
+
+def _static_rows(static: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    rows: dict[str, dict[str, Any]] = {}
+    for row in static.get("rows") or []:
+        if not isinstance(row, dict):
+            continue
+        payload = row.get("static") or {}
+        row_id = payload.get("id")
+        if isinstance(row_id, str):
+            rows[row_id] = payload
+    return rows
+
+
+def _function_calls(response_body: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in response_body.get("output") or []
+        if isinstance(item, dict) and item.get("type") == "function_call"
+    ]
+
+
+def _usage_details(payload: dict[str, Any]) -> dict[str, Any]:
+    usage = payload.get("usage") or {}
+    details = usage.get("input_tokens_details") or usage.get("prompt_tokens_details") or {}
+    return details if isinstance(details, dict) else {}
+
+
+def _cached_tokens_from_payload(payload: dict[str, Any]) -> int:
+    details = _usage_details(payload)
+    try:
+        return int(details.get("cached_tokens") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _cache_detail_from_payload(payload: dict[str, Any]) -> str:
+    return str(_usage_details(payload).get("cache_detail") or "")
+
+
+def _command_tokens(payload: dict[str, Any]) -> list[str]:
+    cmd = payload.get("cmd") or payload.get("command") or payload.get("server_args") or []
+    if isinstance(cmd, str):
+        return cmd.split()
+    if isinstance(cmd, list):
+        return [str(item) for item in cmd]
+    return []
+
+
+def _resolve_artifact_path(root: Path, value: str) -> Path:
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    return root / path
+
+
+def _path_present(root: Path, value: str) -> bool:
+    path = _resolve_artifact_path(root, value)
+    return path.is_file() and path.stat().st_size > 0
+
+
+def _attach_evidence_file_status(requirements: list[dict[str, Any]], root: Path) -> None:
+    for item in requirements:
+        evidence = item.get("evidence") or []
+        if not isinstance(evidence, list):
+            continue
+        evidence_files_present: dict[str, bool] = {}
+        missing_evidence: list[str] = []
+        for value in evidence:
+            if not isinstance(value, str) or not value:
+                continue
+            present = _path_present(root, value)
+            evidence_files_present[value] = present
+            if not present:
+                missing_evidence.append(value)
+        details = item.setdefault("details", {})
+        if isinstance(details, dict):
+            details["evidence_files_present"] = evidence_files_present
+            details["missing_evidence"] = missing_evidence
+        if item.get("status") == "pass" and missing_evidence:
+            item["status"] = "open"
+            caveat = item.get("caveat")
+            missing_note = "Listed evidence files are missing or empty."
+            item["caveat"] = f"{caveat} {missing_note}" if caveat else missing_note
+
+
+def _dsv4_quality_clearance(clearance: dict[str, Any], root: Path) -> tuple[bool, dict[str, Any]]:
+    checks = clearance.get("checks") or {}
+    required = {key: checks.get(key) is True for key in DSV4_QUALITY_CLEARANCE_CHECKS}
+    artifacts = clearance.get("artifacts") or {}
+    required_artifacts = ("identifier_gate", "full_output_gate")
+    artifact_paths_present: dict[str, bool] = {}
+    missing_artifacts: list[str] = []
+    non_string_artifacts: list[str] = []
+
+    for key in required_artifacts:
+        value = artifacts.get(key)
+        if not isinstance(value, str) or not value:
+            non_string_artifacts.append(key)
+            artifact_paths_present[key] = False
+            missing_artifacts.append(str(value) if value is not None else key)
+
+    for key, value in artifacts.items():
+        if not isinstance(value, str) or not value:
+            if key not in non_string_artifacts:
+                non_string_artifacts.append(str(key))
+            artifact_paths_present[str(key)] = False
+            continue
+        present = _path_present(root, value)
+        artifact_paths_present[str(key)] = present
+        if not present:
+            missing_artifacts.append(value)
+
+    required_artifact_paths_present = all(
+        artifact_paths_present.get(key) is True for key in required_artifacts
+    )
+    ok = (
+        clearance.get("status") == "pass"
+        and all(required.values())
+        and required_artifact_paths_present
+        and not missing_artifacts
+        and not non_string_artifacts
+    )
+    return ok, {
+        "clearance_status": clearance.get("status"),
+        "clearance_checks": required,
+        "clearance_artifacts": artifacts,
+        "clearance_artifact_paths_present": artifact_paths_present,
+        "missing_clearance_artifacts": missing_artifacts,
+        "non_string_clearance_artifacts": non_string_artifacts,
+    }
+
+
+def _contract_checks(payload: dict[str, Any], required: tuple[str, ...]) -> tuple[bool, dict[str, bool]]:
+    checks = payload.get("checks") or {}
+    required_checks = {key: checks.get(key) is True for key in required}
+    return payload.get("status") == "pass" and all(required_checks.values()), required_checks
+
+
+def _source_hash_status(
+    root: Path, payload: dict[str, Any], required_files: tuple[str, ...]
+) -> tuple[bool, dict[str, Any]]:
+    recorded = payload.get("source_hashes") or {}
+    current_hashes: dict[str, str | None] = {}
+    missing_source_hashes: list[str] = []
+    stale_source_hashes: list[str] = []
+    missing_source_files: list[str] = []
+
+    for rel in required_files:
+        expected = recorded.get(rel)
+        if not isinstance(expected, str) or not expected:
+            missing_source_hashes.append(rel)
+        path = root / rel
+        if not path.is_file():
+            current_hashes[rel] = None
+            missing_source_files.append(rel)
+            continue
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        current_hashes[rel] = actual
+        if isinstance(expected, str) and expected and actual != expected:
+            stale_source_hashes.append(rel)
+
+    ok = not missing_source_hashes and not stale_source_hashes and not missing_source_files
+    return ok, {
+        "source_hashes_recorded": recorded,
+        "source_hashes_current": current_hashes,
+        "missing_source_hashes": missing_source_hashes,
+        "stale_source_hashes": stale_source_hashes,
+        "missing_source_files": missing_source_files,
+    }
+
+
+def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
+    root = Path(root)
+    cache = _load(root, "build/current-dsv4-cache-proof-digest-20260521.json")
+    dev_cache = _load(root, "build/dev-ui-dsv4-live-cache-proof-20260521/result.json")
+    dev_tool = _load(root, "build/dev-ui-dsv4-live-tool-proof-20260521/result.json")
+    two_tool = _load(
+        root, "build/v1546-current-bundled-dsv4-two-tool-proof-20260521001426/result.json"
+    )
+    default_cache_tool_loop = _load(root, DSV4_DEFAULT_CACHE_TOOL_LOOP_REL)
+    cap = _load(root, "build/v1546-dsv4-app-tool-cap-nocache-proof-20260521090706/summary.json")
+    ui = _load(root, "build/dev-ui-smoke-20260521/summary.json")
+    static = _load(root, "build/current-static-cache-architecture-audit-full-qwen-hybrid-20260521.json")
+    longctx = _load(root, "build/current-dsv4-long-context-proof-digest-20260521.json")
+    quality_clearance = _load(root, DSV4_QUALITY_CLEARANCE_REL)
+    api_cache_contract = _load(root, API_CACHE_CONTRACT_REL)
+    panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
+
+    requirements: list[dict[str, Any]] = []
+    cache_checks = cache.get("checks") or {}
+    native = (
+        ((dev_cache.get("before") or {}).get("body") or {}).get("native_cache")
+        or (dev_tool.get("health") or {}).get("native_cache")
+        or {}
+    )
+    turn1 = dev_cache.get("turn1") or {}
+    turn2 = dev_cache.get("turn2") or {}
+    round1_body = ((dev_tool.get("round1") or {}).get("body") or {})
+    round2_body = ((dev_tool.get("round2") or {}).get("body") or {})
+    round1_calls = _function_calls(round1_body)
+    round2_calls = _function_calls(round2_body)
+    two_tool_rounds = two_tool.get("rounds") or []
+    executed_tools = [
+        tool
+        for round_item in two_tool_rounds
+        for tool in (round_item.get("executed_tools") or [])
+        if isinstance(tool, dict)
+    ]
+    final_text = two_tool_rounds[-1].get("output_text") if two_tool_rounds else None
+    two_tool_names = [tool.get("name") for tool in executed_tools]
+    default_tool_rounds = default_cache_tool_loop.get("rounds") or []
+    default_tool_executed = [
+        tool
+        for round_item in default_tool_rounds
+        for tool in (round_item.get("executed_tools") or [])
+        if isinstance(tool, dict)
+    ]
+    default_tool_names = [tool.get("name") for tool in default_tool_executed]
+    default_tool_final_text = (
+        default_tool_rounds[-1].get("output_text") if default_tool_rounds else None
+    )
+    default_tool_cmd = _command_tokens(default_cache_tool_loop)
+    default_tool_health = default_cache_tool_loop.get("health") or {}
+    default_tool_native = default_tool_health.get("native_cache") or {}
+    default_tool_cached_tokens = sum(
+        _cached_tokens_from_payload(row) for row in default_tool_rounds
+    )
+    default_tool_cache_details = [
+        _cache_detail_from_payload(row)
+        for row in default_tool_rounds
+        if _cache_detail_from_payload(row)
+    ]
+    default_tool_cache_detail_has_dsv4 = any(
+        "dsv4" in detail for detail in default_tool_cache_details
+    )
+    default_tool_cache_ok = (
+        "--disable-prefix-cache" not in default_tool_cmd
+        and "--dsv4-enable-prefix-cache" in default_tool_cmd
+        and "--use-paged-cache" in default_tool_cmd
+        and "--enable-block-disk-cache" in default_tool_cmd
+        and default_tool_native.get("cache_type") == "native_composite"
+        and default_tool_native.get("prefix") is True
+        and default_tool_native.get("paged") is True
+        and default_tool_native.get("block_disk_l2") is True
+        and (default_tool_native.get("generic_turboquant_kv") or {}).get("enabled")
+        is False
+        and default_tool_cached_tokens > 0
+        and default_tool_cache_detail_has_dsv4
+    )
+    cap_checks = cap.get("checks") or {}
+    ui_visible = ui.get("visible_assertions") or {}
+    ui_cli = ui.get("cli_preview_assertions") or {}
+    rows = _static_rows(static)
+
+    _add(
+        requirements,
+        "DSV4 Flash prefix/paged/L2 cache is enabled by default from app launch",
+        _status(
+            all(
+                cache_checks.get(key)
+                for key in (
+                    "persistedDefaultOn",
+                    "launchHasDsv4EnablePrefix",
+                    "launchHasUsePagedCache",
+                    "launchHasBlockDisk",
+                    "launchNoDisablePrefix",
+                )
+            )
+        ),
+        ["build/current-dsv4-cache-proof-digest-20260521.json", "build/dev-ui-smoke-20260521/summary.json"],
+        details={
+            key: cache_checks.get(key)
+            for key in (
+                "persistedDefaultOn",
+                "launchHasDsv4EnablePrefix",
+                "launchHasUsePagedCache",
+                "launchHasBlockDisk",
+                "launchNoDisablePrefix",
+            )
+        },
+    )
+    _add(
+        requirements,
+        "DSV4 cache is native SWA+CSA/HCA composite, not generic KV/TurboQuant KV",
+        _status(
+            native.get("cache_type") == "native_composite"
+            and native.get("prefix") is True
+            and native.get("paged") is True
+            and native.get("block_disk_l2") is True
+            and (native.get("generic_turboquant_kv") or {}).get("enabled") is False
+        ),
+        ["build/dev-ui-dsv4-live-cache-proof-20260521/result.json"],
+        details={
+            "cache_type": native.get("cache_type"),
+            "components": native.get("components"),
+            "generic_turboquant_kv": native.get("generic_turboquant_kv"),
+            "cache_store_policy": native.get("cache_store_policy"),
+        },
+    )
+    cached_details = (((turn2.get("body") or {}).get("usage") or {}).get("prompt_tokens_details") or {})
+    _add(
+        requirements,
+        "DSV4 same-process cache hit improves latency/TTFT and records paged+dsv4 hit",
+        _status(cache_checks.get("hotFasterTtft") and cache_checks.get("sameProcessHitDsv4")),
+        ["build/current-dsv4-cache-proof-digest-20260521.json", "build/dev-ui-dsv4-live-cache-proof-20260521/result.json"],
+        details={
+            "cold_ttft_sec": (cache.get("timings") or {}).get("cold_ttft_sec"),
+            "hot_ttft_sec": (cache.get("timings") or {}).get("hot_ttft_sec"),
+            "dev_cold_elapsed_sec": turn1.get("elapsed_sec"),
+            "dev_hot_elapsed_sec": turn2.get("elapsed_sec"),
+            "dev_cached_tokens": cached_details.get("cached_tokens"),
+            "dev_cache_detail": cached_details.get("cache_detail"),
+        },
+    )
+    _add(
+        requirements,
+        "DSV4 block disk L2 stores and hits after restart",
+        _status(
+            cache_checks.get("blockDiskWrite")
+            and cache_checks.get("restartL2DiskHit")
+            and cache_checks.get("restartDsv4CacheHit")
+        ),
+        ["build/current-dsv4-cache-proof-digest-20260521.json"],
+        details={
+            "after_hot_block_disk": (cache.get("stats_after_hot") or {}).get("block_disk_cache"),
+            "after_restart_block_disk": (cache.get("stats_after_restart") or {}).get("block_disk_cache"),
+        },
+    )
+    _add(
+        requirements,
+        "DSV4 Responses one-tool call stops after tool result",
+        _status(
+            len(round1_calls) == 1
+            and round1_calls[0].get("name") == "list_directory"
+            and not round2_calls
+            and round2_body.get("output_text") == "DONE"
+        ),
+        ["build/dev-ui-dsv4-live-tool-proof-20260521/result.json"],
+        details={
+            "round1_calls": round1_calls,
+            "round2_output_text": round2_body.get("output_text"),
+            "round2_function_calls": round2_calls,
+        },
+    )
+    _add(
+        requirements,
+        "DSV4 can perform multiple tool iterations then final answer",
+        _status(two_tool_names == ["list_directory", "write_file"] and final_text == "DONE"),
+        ["build/v1546-current-bundled-dsv4-two-tool-proof-20260521001426/result.json"],
+        caveat=(
+            "This proof used --disable-prefix-cache, so it proves DSML multi-tool "
+            "loop behavior separately from default-on cache."
+        ),
+        details={"executed_tools": executed_tools, "final_text": final_text},
+    )
+    _add(
+        requirements,
+        "DSV4 default-cache multi-tool agent loop is proven",
+        _status(
+            default_tool_names == ["list_directory", "write_file"]
+            and default_tool_final_text == "DONE"
+            and default_tool_cache_ok
+        ),
+        [DSV4_DEFAULT_CACHE_TOOL_LOOP_REL],
+        caveat=(
+            None
+            if default_tool_cache_ok
+            else "Existing multi-tool proof does not prove the default DSV4 native prefix/paged/L2 cache path."
+        ),
+        details={
+            "artifact_status": default_cache_tool_loop.get("status"),
+            "artifact_reason": default_cache_tool_loop.get("reason"),
+            "executed_tool_names": default_tool_names,
+            "final_text": default_tool_final_text,
+            "launch_has_disable_prefix_cache": "--disable-prefix-cache" in default_tool_cmd,
+            "launch_has_dsv4_enable_prefix_cache": "--dsv4-enable-prefix-cache"
+            in default_tool_cmd,
+            "launch_has_use_paged_cache": "--use-paged-cache" in default_tool_cmd,
+            "launch_has_block_disk_cache": "--enable-block-disk-cache"
+            in default_tool_cmd,
+            "native_cache_type": default_tool_native.get("cache_type"),
+            "native_cache_prefix": default_tool_native.get("prefix"),
+            "native_cache_paged": default_tool_native.get("paged"),
+            "native_cache_block_disk_l2": default_tool_native.get("block_disk_l2"),
+            "generic_turboquant_kv": default_tool_native.get("generic_turboquant_kv"),
+            "tool_loop_cached_tokens": default_tool_cached_tokens,
+            "tool_loop_cache_details": default_tool_cache_details,
+            "tool_loop_cache_detail_has_dsv4": default_tool_cache_detail_has_dsv4,
+        },
+    )
+    _add(
+        requirements,
+        "App maxToolIterations cap is enforced for DSV4 tool loop",
+        _status(
+            cap.get("allPassed")
+            and all(
+                cap_checks.get(key)
+                for key in (
+                    "maxToolIterationsPersisted",
+                    "sawLimitMessage",
+                    "executedExactlyOneRealTool",
+                    "capFileNotWritten",
+                )
+            )
+        ),
+        ["build/v1546-dsv4-app-tool-cap-nocache-proof-20260521090706/summary.json"],
+        details=cap_checks,
+    )
+    _add(
+        requirements,
+        "Server default max output and max context are distinct and map to correct CLI flags",
+        _status(
+            all(
+                ui_visible.get(key)
+                for key in (
+                    "server_default_max_output_visible",
+                    "max_context_visible",
+                    "generation_defaults_visible",
+                )
+            )
+            and ui_cli.get("has_max_tokens_flag_after_reset") is False
+            and ui_cli.get("has_max_prompt_tokens_flag_after_reset") is False
+        ),
+        ["build/dev-ui-smoke-20260521/summary.json"],
+        details={
+            "visible_assertions": {
+                key: ui_visible.get(key)
+                for key in (
+                    "server_default_max_output_visible",
+                    "max_context_visible",
+                    "generation_defaults_visible",
+                )
+            },
+            "cli_preview_assertions": {
+                key: ui_cli.get(key)
+                for key in (
+                    "has_max_tokens_flag_after_reset",
+                    "has_max_prompt_tokens_flag_after_reset",
+                )
+            },
+        },
+    )
+    panel_settings_ok, panel_settings_checks = _contract_checks(
+        panel_settings_contract, PANEL_SETTINGS_CONTRACT_CHECKS
+    )
+    panel_settings_hash_ok, panel_settings_hash_details = _source_hash_status(
+        root, panel_settings_contract, PANEL_SETTINGS_SOURCE_HASH_FILES
+    )
+    _add(
+        requirements,
+        "Panel settings keep DSV4 cache, max output, and max context controls unambiguous",
+        _status(panel_settings_ok and panel_settings_hash_ok),
+        [PANEL_SETTINGS_CONTRACT_REL],
+        caveat=(
+            None
+            if panel_settings_ok and panel_settings_hash_ok
+            else "Run the no-heavy panel settings contract before claiming settings/UI coverage."
+        ),
+        details={
+            "contract_status": panel_settings_contract.get("status"),
+            "contract_checks": panel_settings_checks,
+            "commands": panel_settings_contract.get("commands"),
+            **panel_settings_hash_details,
+        },
+    )
+    expected_profiles = {
+        "dsv4_jang_local": "dsv4_composite",
+        "minimax_m27_tq_k": "default",
+        "qwen36_dense_mxfp4": "hybrid_ssm",
+        "qwen36_dense_jang": "hybrid_ssm",
+        "zaya_vl_mxfp4": "zaya_cca",
+        "nemotron_omni_tq2": "hybrid_ssm",
+        "ling_flash_tq": "hybrid_ssm",
+    }
+    _add(
+        requirements,
+        "Cross-family cache architecture is classified per family",
+        _status(
+            all(
+                (rows.get(row_id) or {}).get("cache_profile_expected") == expected
+                for row_id, expected in expected_profiles.items()
+            )
+        ),
+        ["build/current-static-cache-architecture-audit-full-qwen-hybrid-20260521.json"],
+        caveat="Static architecture proof only; broad live generation still requires per-family live rows.",
+        details={
+            row_id: {
+                "exists": (rows.get(row_id) or {}).get("exists"),
+                "expected": (rows.get(row_id) or {}).get("cache_profile_expected"),
+                "registry_cache": ((rows.get(row_id) or {}).get("registry") or {}).get("cache_type"),
+                "issues": (rows.get(row_id) or {}).get("issues"),
+            }
+            for row_id in expected_profiles
+        },
+    )
+    api_cache_ok, api_cache_checks = _contract_checks(
+        api_cache_contract, API_CACHE_CONTRACT_CHECKS
+    )
+    api_cache_hash_ok, api_cache_hash_details = _source_hash_status(
+        root, api_cache_contract, API_CACHE_SOURCE_HASH_FILES
+    )
+    _add(
+        requirements,
+        "Current-source API adapters and non-DSV4 cache contracts are no-heavy covered",
+        _status(api_cache_ok and api_cache_hash_ok),
+        [API_CACHE_CONTRACT_REL],
+        caveat=(
+            None
+            if api_cache_ok and api_cache_hash_ok
+            else "Run the current-source no-heavy API/cache contract proof before claiming API/cache coverage."
+        ),
+        details={
+            "contract_status": api_cache_contract.get("status"),
+            "contract_checks": api_cache_checks,
+            "commands": api_cache_contract.get("commands"),
+            **api_cache_hash_details,
+        },
+    )
+    quality_ok, quality_details = _dsv4_quality_clearance(quality_clearance, root)
+    quality_details.update(
+        {
+            "long_context_status": longctx.get("status"),
+            "long_context_notes": longctx.get("notes"),
+        }
+    )
+    _add(
+        requirements,
+        "DSV4 long-output/code/file-generation quality is release-cleared",
+        _status(quality_ok),
+        [
+            DSV4_QUALITY_CLEARANCE_REL,
+            "build/current-dsv4-long-context-proof-digest-20260521.json",
+            "build/current-dsv4-identifier-count-ablation-20260521/result.json",
+            "docs/internal/release-gates/20260520_sisyphus_dsv4_identifier_gate_jang_affine_current/result.json",
+        ],
+        caveat=(
+            None
+            if quality_ok
+            else "Current long-context digest is status=review with caveats; "
+            "identifier ablations still show exact-code/identifier corruption. "
+            "Do not release-claim this yet."
+        ),
+        details=quality_details,
+    )
+    _attach_evidence_file_status(requirements, root)
+    return {
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "requirements": requirements,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=Path("."))
+    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    args = parser.parse_args()
+
+    digest = build_digest(args.root)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(digest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(args.out)
+    for item in digest["requirements"]:
+        print(f"{item['status'].upper():7} {item['requirement']}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
