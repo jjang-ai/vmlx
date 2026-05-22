@@ -23,7 +23,8 @@ DEFAULT_OUT = Path("build/current-cache-architecture-contract-20260521.json")
 
 CACHE_PATTERN = (
     "dsv4 or hybrid_ssm or cache_detail or MLA or mla or TurboQuant "
-    "or turboquant or TQ or zaya or media_salt or cache_profile"
+    "or turboquant or TQ or zaya or media_salt or cache_profile "
+    "or prompt_disk_l2 or mllm_stats_include_cache"
 )
 
 SOURCE_HASH_FILES = (
@@ -34,6 +35,7 @@ SOURCE_HASH_FILES = (
     "vmlx_engine/mllm_scheduler.py",
     "vmlx_engine/tq_disk_cache.py",
     "tests/cross_matrix/run_noheavy_api_cache_contract.py",
+    "tests/cross_matrix/run_cache_architecture_contract.py",
     "tests/test_engine_audit.py",
     "tests/test_batching.py",
     "tests/test_hybrid_batching.py",
@@ -42,6 +44,45 @@ SOURCE_HASH_FILES = (
     "tests/test_mllm_scheduler_cache.py",
     "tests/test_turboquant_cache_contract.py",
     "tests/test_tq_disk_cache.py",
+    "tests/test_cache_architecture_contract.py",
+)
+
+REQUIRED_CACHE_TEST_MARKERS = (
+    # DSV4 composite cache can only reuse partial prefixes when the terminal
+    # SWA+CSA/HCA composite block is present.
+    "test_memory_pressure_reuses_shorter_dsv4_terminal_composite_prefix",
+    "test_memory_pressure_refuses_dsv4_partial_without_terminal_composite",
+    # Hybrid SSM cache must reuse only aligned checkpoints and must not apply
+    # generic TQ live-cache paths to SSM state.
+    "test_memory_pressure_partially_reuses_hybrid_ssm_with_aligned_checkpoint",
+    "test_hybrid_ssm_checkpoint_alignment_falls_back_to_exact_aligned_state",
+    "test_hybrid_ssm_auto_mode_disables_live_tq_but_keeps_stored_kv_q4",
+    # L2/block-disk must backfill paged cache for later partial reuse.
+    "test_prompt_disk_l2_hit_backfills_paged_cache_for_partial_reuse",
+    # Qwen hybrid rows keep selective live TQ only where the runtime supports it.
+    "test_qwen3_5_moe_linear_attention_keeps_selective_live_tq_and_stored_kv_q4",
+    # TQ-native disk serialization must preserve mixed hybrid caches and round
+    # trip real safetensors metadata instead of dequantizing everything.
+    "test_serialize_tq_cache_mixed_hybrid",
+    "test_tq_tensors_roundtrip_via_safetensors",
+    # MLLM/cache telemetry must keep cache modes visible to the UI/API.
+    "test_mllm_stats_include_cache_fields",
+)
+
+REQUIRED_API_CACHE_CHECKS = (
+    "dsv4_native_cache_status",
+    "zaya_typed_cca_status",
+    "hybrid_ssm_partial_reuse",
+    "turboquant_kv_runtime_contract",
+    "turboquant_disk_roundtrip",
+    "no_generic_tq_on_hybrid_ssm",
+)
+
+REQUIRED_API_CACHE_COMMAND_MARKERS = (
+    "native_cache_status_reports_dsv4_separately_from_tq_kv",
+    "native_cache_status_reports_zaya_typed_cca",
+    "request_output_caps_override_server_default_without_touching_context_cap",
+    "generic_turboquant_patcher_skips_hybrid_ssm",
 )
 
 COMMANDS: dict[str, list[str]] = {
@@ -56,6 +97,7 @@ COMMANDS: dict[str, list[str]] = {
         "-m",
         "pytest",
         "-q",
+        "-vv",
         "tests/test_batching.py",
         "tests/test_hybrid_batching.py",
         "tests/test_hybrid_prefix_cache.py",
@@ -105,6 +147,7 @@ def _run(root: Path, name: str, cmd: list[str]) -> dict[str, Any]:
         "returncode": proc.returncode,
         "elapsed_sec": round(time.monotonic() - started, 3),
         "counts": _parse_counts(proc.stdout),
+        "stdout": proc.stdout,
         "stdout_tail": proc.stdout.splitlines()[-80:],
     }
 
@@ -121,41 +164,91 @@ def build_artifact(root: Path) -> dict[str, Any]:
     failed = [name for name, result in results.items() if result["returncode"] != 0]
     api_artifact = _load_api_cache_artifact(root)
     api_checks = api_artifact.get("checks", {})
+    cache_stdout = str(results["cache_family_pytest"].get("stdout", ""))
+    missing_markers = [
+        marker for marker in REQUIRED_CACHE_TEST_MARKERS if marker not in cache_stdout
+    ]
+    missing_api_checks = [
+        check
+        for check in REQUIRED_API_CACHE_CHECKS
+        if api_checks.get(check) is not True
+    ]
+    api_command_text = "\n".join(
+        " ".join(command.get("command", []))
+        for command in api_artifact.get("commands", {}).values()
+    )
+    missing_api_command_markers = [
+        marker
+        for marker in REQUIRED_API_CACHE_COMMAND_MARKERS
+        if marker not in api_command_text
+    ]
     cache_passed = results["cache_family_pytest"]["counts"]["passed"] or 0
     checks = {
         "dsv4_native_composite_cache_status": (
-            not failed and api_checks.get("dsv4_native_cache_status") is True
+            not failed
+            and "dsv4_native_cache_status" not in missing_api_checks
+            and "native_cache_status_reports_dsv4_separately_from_tq_kv" not in missing_api_command_markers
         ),
         "zaya_typed_cca_status": (
-            not failed and api_checks.get("zaya_typed_cca_status") is True
+            not failed
+            and "zaya_typed_cca_status" not in missing_api_checks
+            and "native_cache_status_reports_zaya_typed_cca" not in missing_api_command_markers
         ),
         "hybrid_ssm_partial_reuse": (
-            not failed and api_checks.get("hybrid_ssm_partial_reuse") is True and cache_passed >= 55
+            not failed
+            and "hybrid_ssm_partial_reuse" not in missing_api_checks
+            and "test_memory_pressure_partially_reuses_hybrid_ssm_with_aligned_checkpoint" not in missing_markers
+            and "test_hybrid_ssm_checkpoint_alignment_falls_back_to_exact_aligned_state" not in missing_markers
         ),
         "generic_tq_not_applied_to_hybrid_ssm": (
-            not failed and api_checks.get("no_generic_tq_on_hybrid_ssm") is True
+            not failed
+            and "no_generic_tq_on_hybrid_ssm" not in missing_api_checks
+            and "generic_turboquant_patcher_skips_hybrid_ssm" not in missing_api_command_markers
+            and "test_hybrid_ssm_auto_mode_disables_live_tq_but_keeps_stored_kv_q4" not in missing_markers
         ),
         "turboquant_kv_runtime_contract": (
-            not failed and api_checks.get("turboquant_kv_runtime_contract") is True and cache_passed >= 55
+            not failed
+            and "turboquant_kv_runtime_contract" not in missing_api_checks
+            and "test_qwen3_5_moe_linear_attention_keeps_selective_live_tq_and_stored_kv_q4" not in missing_markers
         ),
         "turboquant_disk_roundtrip": (
-            not failed and api_checks.get("turboquant_disk_roundtrip") is True and cache_passed >= 55
+            not failed
+            and "turboquant_disk_roundtrip" not in missing_api_checks
+            and "test_serialize_tq_cache_mixed_hybrid" not in missing_markers
+            and "test_tq_tensors_roundtrip_via_safetensors" not in missing_markers
         ),
-        "mla_cache_shape_contracts": not failed and cache_passed >= 55,
-        "cache_detail_telemetry_contracts": not failed and cache_passed >= 55,
-        "mllm_media_salt_cache_contracts": not failed and cache_passed >= 55,
+        "dsv4_terminal_composite_contracts": (
+            not failed
+            and "test_memory_pressure_reuses_shorter_dsv4_terminal_composite_prefix" not in missing_markers
+            and "test_memory_pressure_refuses_dsv4_partial_without_terminal_composite" not in missing_markers
+        ),
+        "prompt_disk_l2_backfill_contracts": (
+            not failed
+            and "test_prompt_disk_l2_hit_backfills_paged_cache_for_partial_reuse" not in missing_markers
+        ),
+        "cache_detail_telemetry_contracts": (
+            not failed
+            and "test_mllm_stats_include_cache_fields" not in missing_markers
+        ),
+        "legacy_count_floor_still_nontrivial": not failed and cache_passed >= 55,
     }
     return {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "status": "pass" if all(checks.values()) else "fail",
         "checks": checks,
         "failed": failed,
+        "missing_markers": missing_markers,
+        "missing_api_checks": missing_api_checks,
+        "missing_api_command_markers": missing_api_command_markers,
         "source_hashes": {
             rel: _sha256(root / rel)
             for rel in SOURCE_HASH_FILES
             if (root / rel).exists()
         },
-        "results": results,
+        "results": {
+            name: {key: value for key, value in result.items() if key != "stdout"}
+            for name, result in results.items()
+        },
         "api_cache_artifact_status": api_artifact.get("status"),
     }
 
@@ -172,6 +265,9 @@ def main() -> int:
     print(args.out)
     print(f"status={artifact['status']}")
     print("failed=" + json.dumps(artifact["failed"]))
+    print("missing_markers=" + json.dumps(artifact["missing_markers"]))
+    print("missing_api_checks=" + json.dumps(artifact["missing_api_checks"]))
+    print("missing_api_command_markers=" + json.dumps(artifact["missing_api_command_markers"]))
     for name, result in artifact["results"].items():
         counts = result["counts"]
         print(
