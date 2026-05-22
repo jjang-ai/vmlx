@@ -4,6 +4,8 @@ All notable changes to vMLX Engine will be documented in this file.
 
 ## [Unreleased]
 
+## [1.5.47] - 2026-05-21
+
 ### Fixed
 - Added focused release-regression coverage for PR intake and runtime
   compatibility rows, including max output/context wiring, generation defaults,
