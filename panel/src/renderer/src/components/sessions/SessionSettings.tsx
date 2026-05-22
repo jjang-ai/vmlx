@@ -55,6 +55,15 @@ function effectiveSessionTimeoutSeconds(config: Partial<SessionConfig>, family?:
   return configured != null && configured > 0 ? configured : GENERIC_DEFAULT_TIMEOUT_SECONDS
 }
 
+function finitePositiveNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
+}
+
+function finitePositiveInteger(value: unknown): number | undefined {
+  const number = finitePositiveNumber(value)
+  return number == null ? undefined : Math.max(1, Math.floor(number))
+}
+
 const ADDITIONAL_ARG_VALUE_FLAGS = new Set([
   '--block-disk-cache-dir',
   '--block-disk-cache-max-gb',
@@ -369,12 +378,15 @@ function buildCommandPreview(
   }
 
   // Performance
-  if (config.streamInterval && config.streamInterval > 0) parts.push('--stream-interval', config.streamInterval.toString())
-  if (config.maxTokens && config.maxTokens > 0) {
-    parts.push('--max-tokens', config.maxTokens.toString())
+  const streamInterval = finitePositiveInteger(config.streamInterval)
+  if (streamInterval != null) parts.push('--stream-interval', streamInterval.toString())
+  const maxTokens = finitePositiveInteger(config.maxTokens)
+  if (maxTokens != null) {
+    parts.push('--max-tokens', maxTokens.toString())
   }
-  if (config.maxContextLength && config.maxContextLength > 0) {
-    parts.push('--max-prompt-tokens', config.maxContextLength.toString())
+  const maxContextLength = finitePositiveInteger(config.maxContextLength)
+  if (maxContextLength != null) {
+    parts.push('--max-prompt-tokens', maxContextLength.toString())
   }
   // Tool integration — mirrors buildArgs lines 1136-1147
   if (effectiveToolParser) {

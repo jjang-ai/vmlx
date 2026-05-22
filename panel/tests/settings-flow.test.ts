@@ -412,7 +412,7 @@ function buildCommandPreview(
     if (config.corsOrigins && config.corsOrigins !== '*') parts.push('--allowed-origins', config.corsOrigins)
 
     const maxContextLength = finitePositiveInteger(config.maxContextLength)
-    if (maxContextLength != null) parts.push('--max-prompt-tokens', config.maxContextLength.toString())
+    if (maxContextLength != null) parts.push('--max-prompt-tokens', maxContextLength.toString())
 
     if (config.additionalArgs?.trim()) parts.push(...config.additionalArgs.trim().split(/\s+/).filter(Boolean))
 
@@ -1529,6 +1529,27 @@ describe('No Hardcoded Values', () => {
         expect(getFlagValue(out, '--max-prompt-tokens')).toBeUndefined()
         expect(getFlagValue(out, '--num-draft-tokens')).toBeUndefined()
         expect(getFlagValue(out, '--native-mtp-depth')).toBe('3')
+    })
+
+    it('floors positive decimal output/context launch overrides in the UI preview', () => {
+        const out = preview({
+            streamInterval: 1.9,
+            maxTokens: 512.9,
+            maxContextLength: 32768.9,
+        })
+
+        expect(getFlagValue(out, '--stream-interval')).toBe('1')
+        expect(getFlagValue(out, '--max-tokens')).toBe('512')
+        expect(getFlagValue(out, '--max-prompt-tokens')).toBe('32768')
+
+        const settingsSource = readFileSync(resolve(__dirname, '../src/renderer/src/components/sessions/SessionSettings.tsx'), 'utf8')
+        const previewBlock = settingsSource.slice(
+            settingsSource.indexOf('function buildCommandPreview'),
+            settingsSource.indexOf('const SettingsSection'),
+        )
+        expect(previewBlock).toContain('finitePositiveInteger(config.maxTokens)')
+        expect(previewBlock).toContain('finitePositiveInteger(config.maxContextLength)')
+        expect(previewBlock).toContain("parts.push('--max-prompt-tokens', maxContextLength.toString())")
     })
 
     it('changing prefillBatchSize produces different CLI output', () => {

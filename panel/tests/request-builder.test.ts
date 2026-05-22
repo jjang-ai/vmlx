@@ -5,6 +5,7 @@
  * and that remote-only gating (chat_template_kwargs exclusion) works correctly.
  */
 import { describe, it, expect } from 'vitest'
+import { dsv4OutputBudget } from '../src/shared/dsv4RequestBudget'
 
 // ─── buildRequestBody logic (extracted from chat.ts) ─────────────────────────
 
@@ -41,7 +42,12 @@ function buildRequestBody(
         overrides.enableThinking !== false &&
         (detectedFamily !== 'hy3' || overrides.enableThinking === true) &&
         (sessionHasReasoningParser || detectedFamily === 'deepseek-v4')
-    const outputBudget = overrides?.maxTokens
+    const outputBudget = dsv4OutputBudget(
+        overrides?.maxTokens,
+        overrides?.enableThinking,
+        detectedFamily,
+        overrides?.reasoningEffort,
+    )
     const effectiveEnableThinkingOverride =
         !isRemote &&
         !sessionHasReasoningParser &&
@@ -210,6 +216,14 @@ describe('buildRequestBody — Chat Completions API', () => {
         expect(body.max_tokens).toBe(8192)
     })
 
+    it('omits invalid persisted maxTokens values instead of poisoning Chat Completions', () => {
+        const badValues = [0, -5, Number.NaN, Number.POSITIVE_INFINITY, '1024']
+        for (const value of badValues) {
+            const body = buildRequestBody('completions', 'gpt-4', messages, { maxTokens: value as any }, false, false)
+            expect(body.max_tokens).toBeUndefined()
+        }
+    })
+
     it('forwards reasoning_effort', () => {
         const body = buildRequestBody('completions', 'gpt-4', messages, { reasoningEffort: 'high' }, false, true)
         expect(body.reasoning_effort).toBe('high')
@@ -299,6 +313,15 @@ describe('buildRequestBody — Responses API', () => {
         const body = buildRequestBody('responses', 'gpt-4', messages, { maxTokens: 4096 }, false, false)
         expect(body.max_output_tokens).toBe(4096)
         expect(body.max_tokens).toBeUndefined()
+    })
+
+    it('omits invalid persisted maxTokens values instead of poisoning Responses', () => {
+        const badValues = [0, -5, Number.NaN, Number.POSITIVE_INFINITY, '1024']
+        for (const value of badValues) {
+            const body = buildRequestBody('responses', 'gpt-4', messages, { maxTokens: value as any }, false, false)
+            expect(body.max_output_tokens).toBeUndefined()
+            expect(body.max_tokens).toBeUndefined()
+        }
     })
 
     it('does not invent Responses sampler or output-budget values when chat overrides are absent', () => {
