@@ -90,6 +90,19 @@ function effectiveSessionTimeoutSeconds(config: Partial<ServerConfig>, family?: 
   return configured != null && configured > 0 ? configured : GENERIC_DEFAULT_TIMEOUT_SECONDS
 }
 
+function finitePositiveNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
+}
+
+function finiteNonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+function finitePositiveInteger(value: unknown): number | undefined {
+  const number = finitePositiveNumber(value)
+  return number == null ? undefined : Math.max(1, Math.floor(number))
+}
+
 function setConfigValue(config: Record<string, any>, key: string, value: unknown): boolean {
   if (config[key] === value) return false
   config[key] = value
@@ -2414,7 +2427,8 @@ export class SessionManager extends EventEmitter {
     args.push('--port', config.port.toString())
     args.push('--timeout', effectiveSessionTimeoutSeconds(config, detected.family).toString())
 
-    if (config.rateLimit && config.rateLimit > 0) args.push('--rate-limit', config.rateLimit.toString())
+    const rateLimit = finitePositiveInteger(config.rateLimit)
+    if (rateLimit != null) args.push('--rate-limit', rateLimit.toString())
     // API key passed via VLLM_API_KEY env var in spawn (not CLI arg) to avoid exposure in ps aux
 
     // Image models: skip all text-specific flags (parsers, batching, cache, etc.)
@@ -2439,7 +2453,8 @@ export class SessionManager extends EventEmitter {
       }
       // Image-specific settings (explicit flags, not via additionalArgs)
       if (config.imageMode === 'edit') args.push('--image-mode', 'edit')
-      if (config.imageQuantize && config.imageQuantize > 0) args.push('--image-quantize', config.imageQuantize.toString())
+      const imageQuantize = finitePositiveInteger(config.imageQuantize)
+      if (imageQuantize != null) args.push('--image-quantize', imageQuantize.toString())
       if (effectiveServedName) args.push('--served-model-name', effectiveServedName)
       if (effectiveMfluxClass) args.push('--mflux-class', effectiveMfluxClass)
       // Logging + CORS still apply to image servers
@@ -2466,21 +2481,24 @@ export class SessionManager extends EventEmitter {
     // Concurrent processing
     // When value is 0 ("No limit" in UI), omit the flag so backend uses its default.
     // When value > 0, pass it explicitly to override the backend default.
-    const effectiveMaxNumSeqs = dsv4Active ? 1 : config.maxNumSeqs
+    const effectiveMaxNumSeqs = dsv4Active ? 1 : finitePositiveInteger(config.maxNumSeqs)
     if (dsv4Active && config.maxNumSeqs && config.maxNumSeqs !== 1) {
       console.log(`[SESSION] DSV4-Flash detected: overriding maxNumSeqs ${config.maxNumSeqs} -> 1 (DSV4BatchGenerator is single-batch only)`)
     }
     if (effectiveMaxNumSeqs && effectiveMaxNumSeqs > 0) {
       args.push('--max-num-seqs', effectiveMaxNumSeqs.toString())
     }
-    if (!dsv4Active && config.prefillBatchSize && config.prefillBatchSize > 0) {
-      args.push('--prefill-batch-size', config.prefillBatchSize.toString())
+    const prefillBatchSize = finitePositiveInteger(config.prefillBatchSize)
+    if (!dsv4Active && prefillBatchSize != null) {
+      args.push('--prefill-batch-size', prefillBatchSize.toString())
     }
-    if (!dsv4Active && config.prefillStepSize && config.prefillStepSize > 0) {
-      args.push('--prefill-step-size', config.prefillStepSize.toString())
+    const prefillStepSize = finitePositiveInteger(config.prefillStepSize)
+    if (!dsv4Active && prefillStepSize != null) {
+      args.push('--prefill-step-size', prefillStepSize.toString())
     }
-    if (!dsv4Active && config.completionBatchSize && config.completionBatchSize > 0) {
-      args.push('--completion-batch-size', config.completionBatchSize.toString())
+    const completionBatchSize = finitePositiveInteger(config.completionBatchSize)
+    if (!dsv4Active && completionBatchSize != null) {
+      args.push('--completion-batch-size', completionBatchSize.toString())
     }
 
     // VLM detection: tri-state — undefined=auto, true=force on, false=force off.
@@ -2592,22 +2610,27 @@ export class SessionManager extends EventEmitter {
     } else if (!dsv4Active) {
       if (config.noMemoryAwareCache) {
         args.push('--no-memory-aware-cache')
-        if (config.prefixCacheSize && config.prefixCacheSize > 0) {
-          args.push('--prefix-cache-size', config.prefixCacheSize.toString())
+        const prefixCacheSize = finitePositiveInteger(config.prefixCacheSize)
+        if (prefixCacheSize != null) {
+          args.push('--prefix-cache-size', prefixCacheSize.toString())
         }
-        if (config.prefixCacheMaxBytes && config.prefixCacheMaxBytes > 0) {
-          args.push('--prefix-cache-max-bytes', config.prefixCacheMaxBytes.toString())
+        const prefixCacheMaxBytes = finitePositiveInteger(config.prefixCacheMaxBytes)
+        if (prefixCacheMaxBytes != null) {
+          args.push('--prefix-cache-max-bytes', prefixCacheMaxBytes.toString())
         }
       } else {
-        if (!usePagedCache && config.cacheMemoryMb && config.cacheMemoryMb > 0) {
-          args.push('--cache-memory-mb', config.cacheMemoryMb.toString())
+        const cacheMemoryMb = finitePositiveInteger(config.cacheMemoryMb)
+        if (!usePagedCache && cacheMemoryMb != null) {
+          args.push('--cache-memory-mb', cacheMemoryMb.toString())
         }
-        if (!usePagedCache && config.cacheMemoryPercent && config.cacheMemoryPercent > 0) {
-          args.push('--cache-memory-percent', (config.cacheMemoryPercent / 100).toString())
+        const cacheMemoryPercent = finitePositiveNumber(config.cacheMemoryPercent)
+        if (!usePagedCache && cacheMemoryPercent != null) {
+          args.push('--cache-memory-percent', (cacheMemoryPercent / 100).toString())
         }
         // Cache TTL (time-to-live for cache entries) — only meaningful for memory-aware cache, not paged cache
-        if (config.cacheTtlMinutes && config.cacheTtlMinutes > 0 && !usePagedCache) {
-          args.push('--cache-ttl-minutes', config.cacheTtlMinutes.toString())
+        const cacheTtlMinutes = finitePositiveNumber(config.cacheTtlMinutes)
+        if (cacheTtlMinutes != null && !usePagedCache) {
+          args.push('--cache-ttl-minutes', cacheTtlMinutes.toString())
         }
       }
     }
@@ -2621,11 +2644,13 @@ export class SessionManager extends EventEmitter {
       if (detectedFamily === 'deepseek-v4' && config.pagedCacheBlockSize !== DSV4_PAGED_CACHE_BLOCK_SIZE) {
         console.log(`[SESSION] DSV4-Flash detected: overriding pagedCacheBlockSize ${config.pagedCacheBlockSize} -> ${DSV4_PAGED_CACHE_BLOCK_SIZE} (native SWA+CSA/HCA composite cache)`)
       }
-      if (effectivePagedCacheBlockSize && effectivePagedCacheBlockSize > 0) {
-        args.push('--paged-cache-block-size', effectivePagedCacheBlockSize.toString())
+      const pagedCacheBlockSize = finitePositiveInteger(effectivePagedCacheBlockSize)
+      if (pagedCacheBlockSize != null) {
+        args.push('--paged-cache-block-size', pagedCacheBlockSize.toString())
       }
-      if (config.maxCacheBlocks && config.maxCacheBlocks > 0) {
-        args.push('--max-cache-blocks', config.maxCacheBlocks.toString())
+      const maxCacheBlocks = finitePositiveInteger(config.maxCacheBlocks)
+      if (maxCacheBlocks != null) {
+        args.push('--max-cache-blocks', maxCacheBlocks.toString())
       }
     }
 
@@ -2637,8 +2662,9 @@ export class SessionManager extends EventEmitter {
     }
     if (!prefixCacheOff && detectedFamily !== 'deepseek-v4' && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
       args.push('--kv-cache-quantization', config.kvCacheQuantization)
-      if (config.kvCacheQuantization !== 'none' && config.kvCacheGroupSize && config.kvCacheGroupSize !== 64) {
-        args.push('--kv-cache-group-size', config.kvCacheGroupSize.toString())
+      const kvCacheGroupSize = finitePositiveInteger(config.kvCacheGroupSize)
+      if (config.kvCacheQuantization !== 'none' && kvCacheGroupSize != null && kvCacheGroupSize !== 64) {
+        args.push('--kv-cache-group-size', kvCacheGroupSize.toString())
       }
     }
 
@@ -2651,8 +2677,9 @@ export class SessionManager extends EventEmitter {
       if (config.diskCacheDir) {
         args.push('--disk-cache-dir', config.diskCacheDir)
       }
-      if (config.diskCacheMaxGb != null && config.diskCacheMaxGb >= 0) {
-        args.push('--disk-cache-max-gb', config.diskCacheMaxGb.toString())
+      const diskCacheMaxGb = finiteNonNegativeNumber(config.diskCacheMaxGb)
+      if (diskCacheMaxGb != null) {
+        args.push('--disk-cache-max-gb', diskCacheMaxGb.toString())
       }
     }
 
@@ -2664,22 +2691,26 @@ export class SessionManager extends EventEmitter {
       if (config.blockDiskCacheDir) {
         args.push('--block-disk-cache-dir', config.blockDiskCacheDir)
       }
-      if (config.blockDiskCacheMaxGb != null && config.blockDiskCacheMaxGb >= 0) {
-        args.push('--block-disk-cache-max-gb', config.blockDiskCacheMaxGb.toString())
+      const blockDiskCacheMaxGb = finiteNonNegativeNumber(config.blockDiskCacheMaxGb)
+      if (blockDiskCacheMaxGb != null) {
+        args.push('--block-disk-cache-max-gb', blockDiskCacheMaxGb.toString())
       }
     }
 
     // Performance
-    if (config.streamInterval && config.streamInterval > 0) {
-      args.push('--stream-interval', config.streamInterval.toString())
+    const streamInterval = finitePositiveInteger(config.streamInterval)
+    if (streamInterval != null) {
+      args.push('--stream-interval', streamInterval.toString())
     }
     // maxTokens: 0/unset = no session-level output override. Let the server
     // resolve explicit request > bundle max_new_tokens > engine fallback.
-    if (config.maxTokens && config.maxTokens > 0) {
-      args.push('--max-tokens', config.maxTokens.toString())
+    const maxTokens = finitePositiveInteger(config.maxTokens)
+    if (maxTokens != null) {
+      args.push('--max-tokens', maxTokens.toString())
     }
-    if (config.maxContextLength && config.maxContextLength > 0) {
-      args.push('--max-prompt-tokens', config.maxContextLength.toString())
+    const maxContextLength = finitePositiveInteger(config.maxContextLength)
+    if (maxContextLength != null) {
+      args.push('--max-prompt-tokens', maxContextLength.toString())
     }
     // Tool integration (parsers and --enable-auto-tool-choice already pushed above)
     if (config.mcpConfig) args.push('--mcp-config', config.mcpConfig)
@@ -2715,7 +2746,7 @@ export class SessionManager extends EventEmitter {
     // Smelt mode (partial expert loading)
     if (effectiveSmelt) {
       args.push('--smelt')
-      const pct = (config as any).smeltExperts ?? 50
+      const pct = finitePositiveInteger((config as any).smeltExperts) ?? 50
       if (pct !== 50) {
         args.push('--smelt-experts', pct.toString())
       }
@@ -2726,16 +2757,16 @@ export class SessionManager extends EventEmitter {
     // (no stale equality-with-default guard that drifts when DEFAULT_CONFIG changes).
     if (effectiveFlashMoe) {
       args.push('--flash-moe')
-      const slotBank = (config as any).flashMoeSlotBank
-      if (typeof slotBank === 'number' && slotBank > 0) {
+      const slotBank = finitePositiveInteger((config as any).flashMoeSlotBank)
+      if (slotBank != null) {
         args.push('--flash-moe-slot-bank', slotBank.toString())
       }
       const prefetch = (config as any).flashMoePrefetch
       if (prefetch && prefetch !== 'none') {
         args.push('--flash-moe-prefetch', prefetch)
       }
-      const ioSplit = (config as any).flashMoeIoSplit
-      if (typeof ioSplit === 'number' && ioSplit > 0) {
+      const ioSplit = finitePositiveInteger((config as any).flashMoeIoSplit)
+      if (ioSplit != null) {
         args.push('--flash-moe-io-split', ioSplit.toString())
       }
     }
@@ -2765,8 +2796,9 @@ export class SessionManager extends EventEmitter {
     }
     if (compatibleExternalSpeculative) {
       args.push('--speculative-model', externalSpeculativeModel)
-      if (config.numDraftTokens && config.numDraftTokens !== 3) {
-        args.push('--num-draft-tokens', config.numDraftTokens.toString())
+      const numDraftTokens = finitePositiveInteger(config.numDraftTokens)
+      if (numDraftTokens != null && numDraftTokens !== 3) {
+        args.push('--num-draft-tokens', numDraftTokens.toString())
       }
     }
 
@@ -2786,7 +2818,7 @@ export class SessionManager extends EventEmitter {
         const configuredDepth = (config as any).nativeMtpDepthOverride === true
           ? (config as any).nativeMtpDepth
           : nativeMtp.depth
-        const depth = Math.max(1, Math.min(3, Math.round(Number(configuredDepth || nativeMtp.depth || 3))))
+        const depth = Math.max(1, Math.min(3, finitePositiveInteger(configuredDepth) || finitePositiveInteger(nativeMtp.depth) || 3))
         args.push('--native-mtp-depth', depth.toString())
         args.push('--native-mtp-sampling-policy', mode === 'deterministic' ? 'deterministic-defaults' : 'compatible-only')
       }

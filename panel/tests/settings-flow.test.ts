@@ -209,6 +209,19 @@ function effectiveSessionTimeoutSeconds(config: Partial<SessionConfig>, family?:
     return configured != null && configured > 0 ? configured : GENERIC_DEFAULT_TIMEOUT_SECONDS
 }
 
+function finitePositiveNumber(value: unknown): number | undefined {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
+}
+
+function finiteNonNegativeNumber(value: unknown): number | undefined {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+function finitePositiveInteger(value: unknown): number | undefined {
+    const number = finitePositiveNumber(value)
+    return number == null ? undefined : Math.max(1, Math.floor(number))
+}
+
 function buildCommandPreview(
     modelPath: string,
     config: SessionConfig,
@@ -227,13 +240,17 @@ function buildCommandPreview(
     parts.push('--timeout', effectiveSessionTimeoutSeconds(config, detectedFamily).toString())
 
     if (config.apiKey) parts.push('# VLLM_API_KEY=*** (env var)')
-    if (config.rateLimit && config.rateLimit > 0) parts.push('--rate-limit', config.rateLimit.toString())
+    const rateLimit = finitePositiveInteger(config.rateLimit)
+    if (rateLimit != null) parts.push('--rate-limit', rateLimit.toString())
 
-    const effectiveMaxNumSeqs = dsv4Active ? 1 : config.maxNumSeqs
+    const effectiveMaxNumSeqs = dsv4Active ? 1 : finitePositiveInteger(config.maxNumSeqs)
     if (effectiveMaxNumSeqs && effectiveMaxNumSeqs > 0) parts.push('--max-num-seqs', effectiveMaxNumSeqs.toString())
-    if (!dsv4Active && config.prefillBatchSize && config.prefillBatchSize > 0) parts.push('--prefill-batch-size', config.prefillBatchSize.toString())
-    if (!dsv4Active && config.prefillStepSize && config.prefillStepSize > 0) parts.push('--prefill-step-size', config.prefillStepSize.toString())
-    if (!dsv4Active && config.completionBatchSize && config.completionBatchSize > 0) parts.push('--completion-batch-size', config.completionBatchSize.toString())
+    const prefillBatchSize = finitePositiveInteger(config.prefillBatchSize)
+    if (!dsv4Active && prefillBatchSize != null) parts.push('--prefill-batch-size', prefillBatchSize.toString())
+    const prefillStepSize = finitePositiveInteger(config.prefillStepSize)
+    if (!dsv4Active && prefillStepSize != null) parts.push('--prefill-step-size', prefillStepSize.toString())
+    const completionBatchSize = finitePositiveInteger(config.completionBatchSize)
+    if (!dsv4Active && completionBatchSize != null) parts.push('--completion-batch-size', completionBatchSize.toString())
 
     if (isVLM) parts.push('--is-mllm')
     const cacheStackActive = dsv4Active ? true : config.continuousBatching !== false
@@ -278,12 +295,17 @@ function buildCommandPreview(
     } else if (!dsv4Active) {
         if (config.noMemoryAwareCache) {
             parts.push('--no-memory-aware-cache')
-            if (config.prefixCacheSize && config.prefixCacheSize > 0) parts.push('--prefix-cache-size', config.prefixCacheSize.toString())
-            if (config.prefixCacheMaxBytes && config.prefixCacheMaxBytes > 0) parts.push('--prefix-cache-max-bytes', config.prefixCacheMaxBytes.toString())
+            const prefixCacheSize = finitePositiveInteger(config.prefixCacheSize)
+            if (prefixCacheSize != null) parts.push('--prefix-cache-size', prefixCacheSize.toString())
+            const prefixCacheMaxBytes = finitePositiveInteger(config.prefixCacheMaxBytes)
+            if (prefixCacheMaxBytes != null) parts.push('--prefix-cache-max-bytes', prefixCacheMaxBytes.toString())
         } else {
-            if (!usePagedCache && config.cacheMemoryMb && config.cacheMemoryMb > 0) parts.push('--cache-memory-mb', config.cacheMemoryMb.toString())
-            if (!usePagedCache && config.cacheMemoryPercent && config.cacheMemoryPercent > 0) parts.push('--cache-memory-percent', (config.cacheMemoryPercent / 100).toString())
-            if (config.cacheTtlMinutes && config.cacheTtlMinutes > 0 && !usePagedCache) parts.push('--cache-ttl-minutes', config.cacheTtlMinutes.toString())
+            const cacheMemoryMb = finitePositiveInteger(config.cacheMemoryMb)
+            if (!usePagedCache && cacheMemoryMb != null) parts.push('--cache-memory-mb', cacheMemoryMb.toString())
+            const cacheMemoryPercent = finitePositiveNumber(config.cacheMemoryPercent)
+            if (!usePagedCache && cacheMemoryPercent != null) parts.push('--cache-memory-percent', (cacheMemoryPercent / 100).toString())
+            const cacheTtlMinutes = finitePositiveNumber(config.cacheTtlMinutes)
+            if (cacheTtlMinutes != null && !usePagedCache) parts.push('--cache-ttl-minutes', cacheTtlMinutes.toString())
         }
     }
 
@@ -292,32 +314,39 @@ function buildCommandPreview(
         const effectivePagedCacheBlockSize = dsv4Active
             ? DSV4_PAGED_CACHE_BLOCK_SIZE
             : config.pagedCacheBlockSize
-        if (effectivePagedCacheBlockSize && effectivePagedCacheBlockSize > 0) parts.push('--paged-cache-block-size', effectivePagedCacheBlockSize.toString())
-        if (config.maxCacheBlocks && config.maxCacheBlocks > 0) parts.push('--max-cache-blocks', config.maxCacheBlocks.toString())
+        const pagedCacheBlockSize = finitePositiveInteger(effectivePagedCacheBlockSize)
+        if (pagedCacheBlockSize != null) parts.push('--paged-cache-block-size', pagedCacheBlockSize.toString())
+        const maxCacheBlocks = finitePositiveInteger(config.maxCacheBlocks)
+        if (maxCacheBlocks != null) parts.push('--max-cache-blocks', maxCacheBlocks.toString())
     }
 
     if (!prefixCacheOff && !dsv4Active && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
         parts.push('--kv-cache-quantization', config.kvCacheQuantization)
-        if (config.kvCacheQuantization !== 'none' && config.kvCacheGroupSize && config.kvCacheGroupSize !== 64) {
-            parts.push('--kv-cache-group-size', config.kvCacheGroupSize.toString())
+        const kvCacheGroupSize = finitePositiveInteger(config.kvCacheGroupSize)
+        if (config.kvCacheQuantization !== 'none' && kvCacheGroupSize != null && kvCacheGroupSize !== 64) {
+            parts.push('--kv-cache-group-size', kvCacheGroupSize.toString())
         }
     }
 
     if (cacheLaunchPolicy.enableLegacyDiskCache) {
         parts.push('--enable-disk-cache')
         if (config.diskCacheDir) parts.push('--disk-cache-dir', config.diskCacheDir)
-        if (config.diskCacheMaxGb != null && config.diskCacheMaxGb >= 0) parts.push('--disk-cache-max-gb', config.diskCacheMaxGb.toString())
+        const diskCacheMaxGb = finiteNonNegativeNumber(config.diskCacheMaxGb)
+        if (diskCacheMaxGb != null) parts.push('--disk-cache-max-gb', diskCacheMaxGb.toString())
     }
 
     if (cacheLaunchPolicy.enableBlockDiskCache) {
         parts.push('--enable-block-disk-cache')
         if (config.blockDiskCacheDir) parts.push('--block-disk-cache-dir', config.blockDiskCacheDir)
-        if (config.blockDiskCacheMaxGb != null && config.blockDiskCacheMaxGb >= 0) parts.push('--block-disk-cache-max-gb', config.blockDiskCacheMaxGb.toString())
+        const blockDiskCacheMaxGb = finiteNonNegativeNumber(config.blockDiskCacheMaxGb)
+        if (blockDiskCacheMaxGb != null) parts.push('--block-disk-cache-max-gb', blockDiskCacheMaxGb.toString())
     }
 
-    if (config.streamInterval && config.streamInterval > 0) parts.push('--stream-interval', config.streamInterval.toString())
-    if (config.maxTokens && config.maxTokens > 0) {
-        parts.push('--max-tokens', config.maxTokens.toString())
+    const streamInterval = finitePositiveInteger(config.streamInterval)
+    if (streamInterval != null) parts.push('--stream-interval', streamInterval.toString())
+    const maxTokens = finitePositiveInteger(config.maxTokens)
+    if (maxTokens != null) {
+        parts.push('--max-tokens', maxTokens.toString())
     }
     // Pass resolved parsers directly (mirrors buildArgs lines 1139-1150)
     if (effectiveToolParser) {
@@ -339,8 +368,9 @@ function buildCommandPreview(
     // Speculative decoding
     if (!dsv4Active && config.speculativeModel) {
         parts.push('--speculative-model', config.speculativeModel)
-        if (config.numDraftTokens && config.numDraftTokens !== 3) {
-            parts.push('--num-draft-tokens', config.numDraftTokens.toString())
+        const numDraftTokens = finitePositiveInteger(config.numDraftTokens)
+        if (numDraftTokens != null && numDraftTokens !== 3) {
+            parts.push('--num-draft-tokens', numDraftTokens.toString())
         }
     }
 
@@ -352,7 +382,8 @@ function buildCommandPreview(
             const configuredDepth = config.nativeMtpDepthOverride === true
                 ? config.nativeMtpDepth
                 : detected.nativeMtp.depth
-            parts.push('--native-mtp-depth', String(configuredDepth || detected.nativeMtp.depth || 3))
+            const depth = Math.max(1, Math.min(3, finitePositiveInteger(configuredDepth) || finitePositiveInteger(detected.nativeMtp.depth) || 3))
+            parts.push('--native-mtp-depth', String(depth))
             parts.push('--native-mtp-sampling-policy', mode === 'deterministic' ? 'deterministic-defaults' : 'compatible-only')
         }
     }
@@ -380,7 +411,8 @@ function buildCommandPreview(
     // CORS
     if (config.corsOrigins && config.corsOrigins !== '*') parts.push('--allowed-origins', config.corsOrigins)
 
-    if (config.maxContextLength && config.maxContextLength > 0) parts.push('--max-prompt-tokens', config.maxContextLength.toString())
+    const maxContextLength = finitePositiveInteger(config.maxContextLength)
+    if (maxContextLength != null) parts.push('--max-prompt-tokens', config.maxContextLength.toString())
 
     if (config.additionalArgs?.trim()) parts.push(...config.additionalArgs.trim().split(/\s+/).filter(Boolean))
 
@@ -407,6 +439,11 @@ function getFlagValue(output: string, flag: string): string | undefined {
     const rest = normalized.slice(idx + flag.length)
     const match = rest.match(/\s+(\S+)/)
     return match?.[1]
+}
+
+function expectNoInvalidNumericFlagValues(output: string) {
+    const normalized = output.replace(/\s*\\\n\s*/g, ' ')
+    expect(normalized).not.toMatch(/\s(?:NaN|Infinity|-Infinity)(?:\s|$)/)
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -1441,6 +1478,57 @@ describe('No Hardcoded Values', () => {
     it('changing maxTokens produces different CLI output', () => {
         expect(getFlagValue(preview({ maxTokens: 4096 }), '--max-tokens')).toBe('4096')
         expect(getFlagValue(preview({ maxTokens: 131072 }), '--max-tokens')).toBe('131072')
+    })
+
+    it('omits malformed persisted numeric launch overrides instead of emitting invalid CLI values', () => {
+        const out = preview({
+            rateLimit: Number.NaN,
+            maxNumSeqs: Number.POSITIVE_INFINITY,
+            prefillBatchSize: '512' as any,
+            prefillStepSize: Number.NEGATIVE_INFINITY,
+            completionBatchSize: Number.NaN,
+            prefixCacheSize: Number.POSITIVE_INFINITY,
+            prefixCacheMaxBytes: '4096' as any,
+            cacheMemoryMb: Number.NaN,
+            cacheMemoryPercent: Number.POSITIVE_INFINITY,
+            cacheTtlMinutes: Number.NEGATIVE_INFINITY,
+            pagedCacheBlockSize: Number.NaN,
+            maxCacheBlocks: Number.POSITIVE_INFINITY,
+            kvCacheQuantization: 'q4',
+            kvCacheGroupSize: '64' as any,
+            diskCacheMaxGb: Number.NaN,
+            blockDiskCacheMaxGb: Number.POSITIVE_INFINITY,
+            streamInterval: Number.NaN,
+            maxTokens: Number.POSITIVE_INFINITY,
+            maxContextLength: '32768' as any,
+            speculativeModel: '/models/draft',
+            numDraftTokens: Number.NaN,
+            nativeMtpDepthOverride: true,
+            nativeMtpDepth: Number.POSITIVE_INFINITY,
+        }, {
+            nativeMtp: { supported: true, depth: 3 },
+        })
+
+        expectNoInvalidNumericFlagValues(out)
+        expect(getFlagValue(out, '--rate-limit')).toBeUndefined()
+        expect(getFlagValue(out, '--max-num-seqs')).toBeUndefined()
+        expect(getFlagValue(out, '--prefill-batch-size')).toBeUndefined()
+        expect(getFlagValue(out, '--prefill-step-size')).toBeUndefined()
+        expect(getFlagValue(out, '--completion-batch-size')).toBeUndefined()
+        expect(getFlagValue(out, '--prefix-cache-size')).toBeUndefined()
+        expect(getFlagValue(out, '--prefix-cache-max-bytes')).toBeUndefined()
+        expect(getFlagValue(out, '--cache-memory-mb')).toBeUndefined()
+        expect(getFlagValue(out, '--cache-memory-percent')).toBeUndefined()
+        expect(getFlagValue(out, '--cache-ttl-minutes')).toBeUndefined()
+        expect(getFlagValue(out, '--max-cache-blocks')).toBeUndefined()
+        expect(getFlagValue(out, '--kv-cache-group-size')).toBeUndefined()
+        expect(getFlagValue(out, '--disk-cache-max-gb')).toBeUndefined()
+        expect(getFlagValue(out, '--block-disk-cache-max-gb')).toBeUndefined()
+        expect(getFlagValue(out, '--stream-interval')).toBeUndefined()
+        expect(getFlagValue(out, '--max-tokens')).toBeUndefined()
+        expect(getFlagValue(out, '--max-prompt-tokens')).toBeUndefined()
+        expect(getFlagValue(out, '--num-draft-tokens')).toBeUndefined()
+        expect(getFlagValue(out, '--native-mtp-depth')).toBe('3')
     })
 
     it('changing prefillBatchSize produces different CLI output', () => {
