@@ -33,18 +33,36 @@ SOURCE_HASH_FILES = (
     "tests/test_cross_matrix_audit_runner.py",
 )
 
+REQUIRED_ARTIFACT_TEST_MARKERS = (
+    # DSV4 must not be treated as generic JANGTQ/MTP. The static audit needs
+    # to preserve explicit drop/no-runtime states instead of inferring runtime
+    # from path names or stray weights.
+    "test_dsv4_static_audit_reports_mtp_drop_contract",
+    # JANGTQ_K mixed routed bits: gate/up and down can have different bit
+    # widths; the down gather kernel must compile with down's bits.
+    "test_gather_dn_uses_dp_bits",
+    # Qwen 3.6 VL/video native-MTP artifacts span plain JANG, MXFP4, MXFP8,
+    # and real weight-index detection. These are the artifact formats most
+    # likely to regress when loader/autodetect code is touched.
+    "test_qwen36_mxfp4_mtp_bundle_is_text_native_ready",
+    "test_mxfp4_vlm_sanitize_shifts_mtp_norms_only",
+    "test_jang_quant_mode_supports_mxfp8_metadata",
+    "test_native_mtp_detection_uses_weights_not_path_name",
+)
+
 COMMANDS: dict[str, list[str]] = {
     "model_artifact_format_pytest": [
         sys.executable,
         "-m",
         "pytest",
         "-q",
+        "-vv",
         "tests/test_model_config_registry.py",
         "tests/test_jang_loader.py",
         "tests/test_native_mtp_autodetect.py",
         "tests/test_cross_matrix_audit_runner.py",
         "-k",
-        "jang or JANG or mxfp or mxp or mtp or MTP or cache_profile",
+        "jang or JANG or mxfp or mxp or mtp or MTP or cache_profile or dp_bits or gather_dn",
     ],
 }
 
@@ -81,6 +99,7 @@ def _run(root: Path, name: str, cmd: list[str]) -> dict[str, Any]:
         "returncode": proc.returncode,
         "elapsed_sec": round(time.monotonic() - started, 3),
         "counts": _parse_counts(proc.stdout),
+        "stdout": proc.stdout,
         "stdout_tail": proc.stdout.splitlines()[-80:],
     }
 
@@ -88,26 +107,34 @@ def _run(root: Path, name: str, cmd: list[str]) -> dict[str, Any]:
 def build_artifact(root: Path) -> dict[str, Any]:
     results = {name: _run(root, name, cmd) for name, cmd in COMMANDS.items()}
     failed = [name for name, result in results.items() if result["returncode"] != 0]
+    stdout = "\n".join(str(result.get("stdout", "")) for result in results.values())
+    missing_markers = [
+        marker for marker in REQUIRED_ARTIFACT_TEST_MARKERS if marker not in stdout
+    ]
     checks = {
-        "jang_and_jangtq_detection": not failed,
-        "mxfp4_detection": not failed,
-        "mxfp8_detection": not failed,
-        "dropped_mtp_detection": not failed,
-        "preserved_mtp_detection": not failed,
+        "jang_and_jangtq_detection": not failed and "test_gather_dn_uses_dp_bits" not in missing_markers,
+        "mxfp4_detection": not failed and "test_mxfp4_vlm_sanitize_shifts_mtp_norms_only" not in missing_markers,
+        "mxfp8_detection": not failed and "test_jang_quant_mode_supports_mxfp8_metadata" not in missing_markers,
+        "dropped_mtp_detection": not failed and "test_dsv4_static_audit_reports_mtp_drop_contract" not in missing_markers,
+        "preserved_mtp_detection": not failed and "test_qwen36_mxfp4_mtp_bundle_is_text_native_ready" not in missing_markers,
         "cache_profile_detection": not failed,
-        "not_path_name_only": not failed,
+        "not_path_name_only": not failed and "test_native_mtp_detection_uses_weights_not_path_name" not in missing_markers,
     }
     return {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "status": "pass" if all(checks.values()) else "fail",
         "checks": checks,
         "failed": failed,
+        "missing_markers": missing_markers,
         "source_hashes": {
             rel: _sha256(root / rel)
             for rel in SOURCE_HASH_FILES
             if (root / rel).exists()
         },
-        "results": results,
+        "results": {
+            name: {key: value for key, value in result.items() if key != "stdout"}
+            for name, result in results.items()
+        },
     }
 
 
@@ -123,6 +150,7 @@ def main() -> int:
     print(args.out)
     print(f"status={artifact['status']}")
     print("failed=" + json.dumps(artifact["failed"]))
+    print("missing_markers=" + json.dumps(artifact["missing_markers"]))
     for name, result in artifact["results"].items():
         counts = result["counts"]
         print(
