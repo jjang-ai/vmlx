@@ -40,6 +40,7 @@ _ROWS: list[dict[str, Any]] = [
             "Server Default Max Output Tokens maps to --max-tokens",
             "Max Context Tokens maps to --max-prompt-tokens",
             "Chat Max Output Tokens remains a per-chat/API override",
+            "External coding-tool configs keep context window and output limit separate",
             "DSV4 cache controls are singular and in the right settings sections",
         ],
         "commands": [

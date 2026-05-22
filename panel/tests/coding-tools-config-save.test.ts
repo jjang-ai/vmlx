@@ -115,6 +115,62 @@ describe('coding tool config saving', () => {
     expect(snippetResult.openclaw.snippet).toContain(`mlxstudio/${model}`)
     expect(snippetResult.openclaw.snippet).toContain('"maxTokens": 6144')
   })
+
+  it('coding tool configs keep output limit separate from context fallback', async () => {
+    global.fetch = vi.fn(async (url: any) => {
+      const target = String(url)
+      if (target.endsWith('/health')) {
+        return {
+          ok: true,
+          json: async () => ({
+            max_prompt_tokens: 262144,
+            max_context_tokens: 262144,
+            max_tokens: 262144,
+          }),
+        } as any
+      }
+      if (target.includes('/v1/models/') && target.endsWith('/capabilities')) {
+        return {
+          ok: true,
+          json: async () => ({
+            sampling_defaults: {},
+          }),
+        } as any
+      }
+      return { ok: false, json: async () => ({}) } as any
+    }) as any
+
+    const add = electronMock.handlers.get('tools:addCodingToolConfig')
+    const snippets = electronMock.handlers.get('tools:getConfigSnippets')
+    expect(add).toBeTruthy()
+    expect(snippets).toBeTruthy()
+
+    const baseUrl = 'http://127.0.0.1:8080'
+    const model = 'JANGQ/DeepSeek-V4-Flash-JANG'
+
+    for (const tool of ['opencode', 'openclaw']) {
+      const result = await add!({}, tool, baseUrl, model, 8080)
+      expect(result).toEqual({ success: true })
+    }
+
+    const opencode = JSON.parse(readFileSync(join(home, '.config', 'opencode', 'opencode.json'), 'utf8'))
+    const opencodeKey = 'mlxstudio-JANGQ-DeepSeek-V4-Flash-JANG'
+    expect(opencode.provider[opencodeKey].models[model].limit).toEqual({
+      context: 262144,
+      output: 4096,
+    })
+
+    const openclaw = JSON.parse(readFileSync(join(home, '.openclaw', 'openclaw.json'), 'utf8'))
+    expect(openclaw.models.providers.mlxstudio.models[0].contextWindow).toBe(262144)
+    expect(openclaw.models.providers.mlxstudio.models[0].maxTokens).toBe(4096)
+
+    const snippetResult = await snippets!({}, baseUrl, model, 8080)
+    expect(snippetResult.opencode.snippet).toContain('"context": 262144')
+    expect(snippetResult.opencode.snippet).toContain('"output": 4096')
+    expect(snippetResult.openclaw.snippet).toContain('"contextWindow": 262144')
+    expect(snippetResult.openclaw.snippet).toContain('"maxTokens": 4096')
+    expect(snippetResult.openclaw.snippet).not.toContain('"maxTokens": 262144')
+  })
 })
 
 function mkTempHome(): string {

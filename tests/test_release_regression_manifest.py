@@ -198,6 +198,7 @@ def test_release_regression_manifest_tracks_max_output_context_with_runner_artif
     assert "Max Context Tokens" in joined
     assert "--max-tokens" in joined
     assert "--max-prompt-tokens" in joined
+    assert "coding-tool configs" in joined
 
 
 def test_release_regression_manifest_tracks_vl_media_with_runner_artifact():

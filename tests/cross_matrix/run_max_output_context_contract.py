@@ -42,6 +42,7 @@ SOURCE_HASH_FILES = (
     "panel/tests/database-migrations.test.ts",
     "panel/tests/request-builder.test.ts",
     "panel/tests/chat-override-policy.test.ts",
+    "panel/tests/coding-tools-config-save.test.ts",
     "panel/tests/dsv4-request-budget.test.ts",
     "panel/tests/api-gateway-ollama-behavior.test.ts",
     "tests/cross_matrix/run_max_output_context_contract.py",
@@ -81,6 +82,7 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     "chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap",
     "chat:setOverrides rejects non-finite or non-numeric maxTokens instead of poisoning server defaults",
     "default profiles cannot make maxTokens sticky on clean new chats",
+    "coding tool configs keep output limit separate from context fallback",
     "does not synthesize a DSV4 max token budget when the request leaves it to server/model defaults",
     "preserves DSV4 Responses max_output_tokens for Max thinking",
     "omits unset and disabled sampling sentinels without dropping explicit overrides",
@@ -89,7 +91,8 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
 PANEL_PATTERN = (
     "maxTokens|Max Tokens|Max Output|Max Context|max context|max output|"
     "max_tokens|max_output_tokens|32768|server default output|per-chat|"
-    "omits max_tokens|max token budget|output budgets"
+    "omits max_tokens|max token budget|output budgets|output limit|"
+    "context fallback|coding tool"
 )
 
 COMMANDS: dict[str, tuple[Path, list[str]]] = {
@@ -128,6 +131,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "tests/database-migrations.test.ts",
             "tests/request-builder.test.ts",
             "tests/chat-override-policy.test.ts",
+            "tests/coding-tools-config-save.test.ts",
             "tests/dsv4-request-budget.test.ts",
             "tests/api-gateway-ollama-behavior.test.ts",
             "--testNamePattern",
