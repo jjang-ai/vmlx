@@ -507,6 +507,19 @@ def test_release_regression_manifest_tracks_model_artifact_detection_with_runner
     assert "MTP" in joined
 
 
+def test_release_regression_manifest_tracks_current_jang_mxfp_mtp_loader_recheck():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+    row = rows["model-artifact-format-detection"]
+    joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
+
+    assert "current-model-artifact-format-contract-20260522-recheck-jang-mxfp-mtp-loaders.json" in joined
+    assert "JANGTQ_K mixed routed bits use the down-projection bit width for gather_dn" in joined
+    assert "Ling/Bailing flat 2D switch_mlp repair and correct 3D no-op stay covered" in joined
+    assert "Qwen plain MLX 4bit stays distinct from JANG, JANGTQ/MXTQ, MXFP4, and MXFP8" in joined
+    assert "native-MTP detection uses real indexed weights rather than path names" in joined
+
+
 def test_release_regression_manifest_tracks_named_model_family_detection_with_runner_artifact():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}
