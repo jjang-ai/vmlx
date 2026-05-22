@@ -490,6 +490,22 @@ def run_pp_case(url: str, model_name: str, target_tokens: int) -> dict[str, Any]
     }
 
 
+def resolve_row_registry_metadata(row: Row) -> dict[str, Any]:
+    """Return the engine registry policy that this live speed row should exercise."""
+    from vmlx_engine.model_config_registry import get_model_config_registry
+
+    registry = get_model_config_registry()
+    cfg = registry.lookup(row.path)
+    return {
+        "family_name": cfg.family_name,
+        "cache_type": cfg.cache_type,
+        "cache_subtype": cfg.cache_subtype,
+        "is_mllm": cfg.is_mllm,
+        "tool_parser": cfg.tool_parser,
+        "reasoning_parser": cfg.reasoning_parser,
+    }
+
+
 def run_row(
     row: Row,
     *,
@@ -499,8 +515,14 @@ def run_row(
     timeout_s: int,
     prefill_step_size: int,
 ) -> dict[str, Any]:
+    registry_metadata = resolve_row_registry_metadata(row)
     if not Path(row.path).exists():
-        return {"name": row.name, "path": row.path, "status": "missing"}
+        return {
+            "name": row.name,
+            "path": row.path,
+            "status": "missing",
+            "registry": registry_metadata,
+        }
 
     log_path = keep_logs / f"{row.name}-{int(time.time())}.log"
     cmd = [
@@ -649,6 +671,7 @@ def run_row(
             "path": row.path,
             "status": status,
             "notes": notes,
+            "registry": registry_metadata,
             "cmd": cmd,
             "prefill_step_size": prefill_step_size,
             "log_path": str(log_path),
@@ -666,6 +689,7 @@ def run_row(
             "path": row.path,
             "status": "error",
             "error": repr(exc),
+            "registry": registry_metadata,
             "cmd": cmd,
             "log_path": str(log_path),
             "log_tail": log_path.read_text(errors="replace")[-12000:] if log_path.exists() else "",

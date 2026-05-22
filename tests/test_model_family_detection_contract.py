@@ -195,6 +195,41 @@ def test_existing_decode_speed_rows_match_engine_registry_modality_policy():
     assert mismatches == []
 
 
+def test_decode_speed_gate_records_registry_cache_metadata_for_existing_rows():
+    from tests.cross_matrix.run_decode_speed_gate import (
+        ROWS,
+        resolve_row_registry_metadata,
+    )
+    from vmlx_engine.model_config_registry import get_model_config_registry
+
+    registry = get_model_config_registry()
+    registry.clear_cache()
+    rows_seen = []
+    cache_families = set()
+    cache_subtypes = set()
+
+    for row_name, row in ROWS.items():
+        if not Path(row.path).exists():
+            continue
+        cfg = registry.lookup(row.path)
+        metadata = resolve_row_registry_metadata(row)
+        rows_seen.append(row_name)
+        cache_families.add(metadata["cache_type"])
+        cache_subtypes.add(metadata["cache_subtype"])
+
+        assert metadata["family_name"] == cfg.family_name
+        assert metadata["cache_type"] == cfg.cache_type
+        assert metadata["cache_subtype"] == cfg.cache_subtype
+        assert metadata["tool_parser"] == cfg.tool_parser
+        assert metadata["reasoning_parser"] == cfg.reasoning_parser
+        assert metadata["is_mllm"] == cfg.is_mllm
+
+    assert rows_seen
+    assert {"kv", "hybrid"}.issubset(cache_families)
+    assert "zaya_cca" in cache_subtypes
+    assert "deepseek_v4_composite" in cache_subtypes
+
+
 def test_dsv4_live_cache_gates_use_canonical_parser_and_no_legacy_32k_startup_cap():
     gate_paths = [
         Path("tests/cross_matrix/run_dsv4_long_context_gate.py"),
