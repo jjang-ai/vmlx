@@ -31,6 +31,8 @@ SOURCE_HASH_FILES = (
     "panel/src/shared/toolParserAliases.ts",
     "panel/tests/model-config-registry.test.ts",
     "tests/cross_matrix/run_decode_speed_gate.py",
+    "tests/cross_matrix/run_dsv4_long_context_gate.py",
+    "tests/cross_matrix/run_dsv4_responses_cache_gate.py",
     "tests/test_model_config_registry.py",
     "tests/test_model_family_detection_contract.py",
 )

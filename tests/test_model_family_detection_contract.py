@@ -92,3 +92,16 @@ def test_decode_speed_gate_does_not_force_legacy_32k_startup_output_cap():
 
     assert '"--max-tokens",' not in source
     assert '"32768",' not in source
+
+
+def test_dsv4_live_cache_gates_use_canonical_parser_and_no_legacy_32k_startup_cap():
+    gate_paths = [
+        Path("tests/cross_matrix/run_dsv4_long_context_gate.py"),
+        Path("tests/cross_matrix/run_dsv4_responses_cache_gate.py"),
+    ]
+
+    for path in gate_paths:
+        source = path.read_text()
+        assert '"--tool-call-parser",\n        "deepseek",' not in source
+        assert '"--tool-call-parser",\n        "dsml",' in source
+        assert '"--max-tokens",\n        "32768",' not in source

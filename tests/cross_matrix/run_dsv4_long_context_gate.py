@@ -232,7 +232,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "512",
         "--continuous-batching",
         "--tool-call-parser",
-        "deepseek",
+        "dsml",
         "--enable-auto-tool-choice",
         "--reasoning-parser",
         "deepseek_r1",
@@ -246,8 +246,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "10",
         "--stream-interval",
         "1",
-        "--max-tokens",
-        "32768",
         "--served-model-name",
         model_name,
     ]
