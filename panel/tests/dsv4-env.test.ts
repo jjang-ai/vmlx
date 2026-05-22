@@ -166,6 +166,7 @@ describe('DSV4 runtime controls in SessionConfigForm', () => {
     expect(source).toContain('DSV4 Composite Prefix Cache')
     expect(source).toContain("onChange('dsv4PrefixCache', v)")
     expect(source).toContain('DSV4 Pool Quantization')
+    expect(source).toContain('dequantizes and concatenates the full CSA/HCA pool during decode')
     expect(source).toContain("onChange={() => onChange('dsv4PoolQuant', false)}")
     expect(source).toContain('disabled')
     expect(source).not.toContain('DSV4 Raw Max Thinking')

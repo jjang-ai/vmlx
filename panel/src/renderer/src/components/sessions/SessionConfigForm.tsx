@@ -1126,7 +1126,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             />
             <CheckField
               label="DSV4 Pool Quantization"
-              tooltip="Disabled: the experimental CSA/HCA pool codec repeatedly requantizes live DSV4 pool state during decode and is not production-safe. DSV4 composite prefix cache still uses the native unquantized SWA+CSA/HCA pool path."
+              tooltip="Disabled: the experimental CSA/HCA pool codec dequantizes and concatenates the full CSA/HCA pool during decode and is not production-safe. DSV4 composite prefix cache still uses the native unquantized SWA+CSA/HCA pool path."
               checked={false}
               onChange={() => onChange('dsv4PoolQuant', false)}
               disabled
