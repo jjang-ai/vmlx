@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from tests.cross_matrix.release_regression_manifest import (
     REQUIRED_RELEASE_DOMAINS,
     build_manifest,
@@ -128,6 +130,18 @@ def test_release_regression_manifest_commands_are_declared_for_noheavy_rows():
     assert noheavy_rows
     for row in noheavy_rows:
         assert row["commands"], row["id"]
+
+
+def test_release_regression_manifest_runner_commands_exist():
+    manifest = build_manifest()
+
+    for row in manifest["rows"]:
+        for command in row["commands"]:
+            if "tests/cross_matrix/" not in command:
+                continue
+            runner = command.split("tests/cross_matrix/", 1)[1].split()[0]
+            path = Path("tests/cross_matrix") / runner
+            assert path.exists(), f"{row['id']} references missing runner {path}"
 
 
 def test_release_regression_manifest_tracks_model_artifact_detection_with_runner_artifact():
