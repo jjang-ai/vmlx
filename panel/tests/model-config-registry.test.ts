@@ -156,6 +156,47 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.nativeMtp).toBeUndefined()
   })
 
+  it('does not expose Native MTP for config-only bundles without indexed mtp tensors', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'qwen3_5',
+        vision_config: { model_type: 'qwen3_5_vl' },
+        text_config: {
+          model_type: 'qwen3_5_text',
+          mtp_num_hidden_layers: 1,
+        },
+      },
+      {
+        format: 'jang',
+        runtime: {
+          bundle_has_mtp: true,
+          mtp_layers: 1,
+          mtp_mode: 'preserved_enabled',
+        },
+        mtp: { kept: true, enabled: true, num_layers: 1 },
+        capabilities: {
+          family: 'qwen3_5',
+          modality: 'vision',
+          cache_type: 'hybrid',
+        },
+      },
+    )
+    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
+      weight_map: {
+        'language_model.model.embed_tokens.weight': 'model.safetensors',
+        'vision_tower.patch_embed.proj.weight': 'model.safetensors',
+      },
+    }))
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('qwen3.5')
+    expect(detected.cacheType).toBe('hybrid')
+    expect(detected.isMultimodal).toBe(false)
+    expect(detected.forceTextOnly).toBe(true)
+    expect(detected.nativeMtp).toBeUndefined()
+  })
+
   it('keeps JANG_2K Native MTP blocked by default to match Python runtime policy', () => {
     const dir = makeModelDir(
       {

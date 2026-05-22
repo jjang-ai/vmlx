@@ -256,6 +256,34 @@ class TestNativeMtpAutodetect:
         assert status["status"] == "metadata_inconsistent"
         assert any("index has no mtp.* tensors" in issue for issue in status["issues"])
 
+    def test_config_only_mtp_bundle_does_not_activate_native_runtime(self, tmp_path):
+        from vmlx_engine.server import _model_mtp_status
+
+        _write_qwen36_jang_mtp_bundle(tmp_path)
+        index = json.loads((tmp_path / "model.safetensors.index.json").read_text())
+        index["weight_map"] = {
+            key: value
+            for key, value in index["weight_map"].items()
+            if not key.startswith("mtp.")
+        }
+        (tmp_path / "model.safetensors.index.json").write_text(json.dumps(index))
+
+        status = _model_mtp_status(str(tmp_path))
+
+        assert status["config_num_nextn_predict_layers"] == 1
+        assert status["index_has_mtp_tensors"] is False
+        assert status["mtp_tensor_count"] == 0
+        assert status["artifact_available"] is False
+        assert status["runtime_available"] is False
+        assert status["runtime_active"] is False
+        assert status["effective_depth"] is None
+        assert status["status"] == "metadata_inconsistent"
+        assert status["runtime_reason"] == "metadata_inconsistent"
+        assert status["issues"] == [
+            "config expects MTP next-token prediction layers, but the bundle "
+            "index has no mtp.* tensors"
+        ]
+
     def test_runtime_metadata_can_explicitly_drop_configured_mtp(self, tmp_path):
         from vmlx_engine.server import _model_mtp_status
 

@@ -419,7 +419,9 @@ def test_release_regression_manifest_tracks_native_mtp_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_native_mtp_contract.py" in joined
-    assert "current-native-mtp-contract-20260521.json" in joined
+    assert "current-native-mtp-contract-20260522-config-only.json" in joined
     assert "Native MTP D3" in joined
     assert "DSV4" in joined
+    assert "Config-only MTP bundles" in joined
+    assert "indexed mtp.* tensors" in joined
     assert "live equivalence/speed" in joined

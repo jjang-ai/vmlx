@@ -30,6 +30,7 @@ SOURCE_HASH_FILES = (
     "panel/src/main/model-config-registry.ts",
     "panel/src/renderer/src/components/sessions/SessionConfigForm.tsx",
     "panel/tests/settings-flow.test.ts",
+    "panel/tests/model-config-registry.test.ts",
     "tests/cross_matrix/run_native_mtp_contract.py",
     "tests/test_native_mtp_autodetect.py",
     "tests/test_native_mtp_policy_suite.py",
@@ -45,6 +46,7 @@ REQUIRED_NATIVE_MTP_TEST_MARKERS = (
     "test_qwen36_nested_config_and_layered_tensors_are_native_ready",
     "test_qwen36_mxfp4_mtp_bundle_is_text_native_ready",
     "test_native_mtp_detection_uses_weights_not_path_name",
+    "test_config_only_mtp_bundle_does_not_activate_native_runtime",
     "test_runtime_metadata_can_explicitly_drop_configured_mtp",
     "test_jang2k_profile_blocks_native_mtp_runtime_but_keeps_vl_artifact_route",
     "test_jang_quant_mode_supports_mxfp8_metadata",
@@ -63,6 +65,7 @@ REQUIRED_NATIVE_MTP_TEST_MARKERS = (
     "defaults native-MTP bundles to deterministic measured-depth launch policy without hidden sampler flags",
     "lets users disable native MTP without leaving deterministic sampling overrides behind",
     "keeps non-MTP models on bundle-owned generation defaults",
+    "does not expose Native MTP for config-only bundles without indexed mtp tensors",
     "real session launcher and settings form expose native MTP controls",
 )
 
@@ -90,6 +93,18 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "tests/settings-flow.test.ts",
             "--testNamePattern",
             "native MTP|MTP|D3|DSV4",
+            "--reporter=verbose",
+        ],
+    ),
+    "panel_native_mtp_detection": (
+        Path("panel"),
+        [
+            "npx",
+            "vitest",
+            "run",
+            "tests/model-config-registry.test.ts",
+            "--testNamePattern",
+            "Native MTP|MTP",
             "--reporter=verbose",
         ],
     ),
@@ -170,6 +185,11 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_runtime_metadata_can_explicitly_drop_configured_mtp" not in missing_markers
             and "test_partial_indexed_layers_flagged" not in missing_markers
             and "test_qwen36_nested_config_and_layered_tensors_are_native_ready" not in missing_markers
+        ),
+        "config_only_mtp_never_activates": (
+            not failed
+            and "test_config_only_mtp_bundle_does_not_activate_native_runtime" not in missing_markers
+            and "does not expose Native MTP for config-only bundles without indexed mtp tensors" not in missing_markers
         ),
         "mxfp4_mxfp8_mtp_artifact_detection": (
             not failed
