@@ -322,7 +322,6 @@ _ROWS: list[dict[str, Any]] = [
         ],
         "artifacts": [
             "build/current-production-family-audit-live-multifamily-soak-20260522.json",
-            "docs/internal/release-gates/",
         ],
     },
 ]

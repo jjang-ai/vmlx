@@ -31,6 +31,14 @@ def test_release_regression_manifest_artifacts_are_unique_per_row():
         assert len(artifacts) == len(set(artifacts)), row["id"]
 
 
+def test_release_regression_manifest_artifacts_are_concrete_files():
+    manifest = build_manifest()
+
+    for row in manifest["rows"]:
+        for artifact in row["artifacts"]:
+            assert not artifact.endswith("/"), f"{row['id']} lists directory artifact {artifact}"
+
+
 def test_release_regression_manifest_tracks_no_fake_sampler_policy():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}
