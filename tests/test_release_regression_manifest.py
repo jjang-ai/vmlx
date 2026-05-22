@@ -49,6 +49,17 @@ def test_release_regression_manifest_tracks_no_fake_sampler_policy():
     assert "jang_config.json" in " ".join(rows["generation-defaults-no-hidden-forcing"]["proves"])
 
 
+def test_release_regression_manifest_tracks_new_chat_output_cap_inheritance_guard():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+    row = rows["chat-settings-max-output-context-ui"]
+    joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
+
+    assert "new-chat" in joined
+    assert "model-owned maxTokens" in joined
+    assert "current-max-output-context-contract-20260522-new-chat-max-output.json" in joined
+
+
 def test_release_regression_manifest_tracks_generation_defaults_with_runner_artifact():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}
@@ -273,7 +284,7 @@ def test_release_regression_manifest_tracks_max_output_context_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_max_output_context_contract.py" in joined
-    assert "current-max-output-context-contract-20260521.json" in joined
+    assert "current-max-output-context-contract-20260522-new-chat-max-output.json" in joined
     assert "Server Default Max Output Tokens" in joined
     assert "Chat Max Output Tokens" in joined
     assert "Max Context Tokens" in joined
