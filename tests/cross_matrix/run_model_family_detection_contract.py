@@ -83,6 +83,9 @@ REQUIRED_ROWS = (
     "zaya1_vl_cca_multimodal",
     "ling_bailing_hybrid_plain_content",
     "nemotron_h_hybrid_text_not_stale_omni",
+    "nemotron_h_registry_hybrid_cache",
+    "qwen36_dense_linear_attention_hybrid_cache",
+    "qwen36_moe_text_linear_attention_hybrid_cache",
     "qwen36_vl_video_hybrid",
     "qwen36_moe_vl_video_hybrid",
     "qwen36_mxfp4_mxfp8_vl",
@@ -130,6 +133,16 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
         "test_nemotron_h_stale_omni_stamp_without_media_stays_text_hybrid",
         "detects backend-covered model_type=nemotron_h_v2",
         "does not route Nemotron-H text extracts through MLLM",
+    ),
+    "nemotron_h_registry_hybrid_cache": (
+        "test_nemotron_hybrid_cache",
+        "test_nemotron_h_v2_config",
+    ),
+    "qwen36_dense_linear_attention_hybrid_cache": (
+        "test_qwen3_5_linear_attention_config_uses_hybrid_cache",
+    ),
+    "qwen36_moe_text_linear_attention_hybrid_cache": (
+        "test_qwen3_5_moe_text_linear_attention_uses_hybrid_cache",
     ),
     "qwen36_vl_video_hybrid": (
         "keeps MXTQ/JANGTQ Qwen hybrid VLM multimodal",

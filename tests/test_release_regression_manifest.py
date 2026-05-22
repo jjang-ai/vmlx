@@ -258,6 +258,18 @@ def test_release_regression_manifest_tracks_decode_speed_artifact_format_matrix(
     assert "Mistral MXFP4" in joined
     assert "GPT-OSS" in joined
     assert "Nemotron 3 JANGTQ2" in joined
+
+
+def test_release_regression_manifest_tracks_qwen_nemotron_hybrid_cache_rows():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+    row = rows["model-family-detection-noheavy"]
+    joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
+
+    assert "Qwen dense linear-attention wrappers stay hybrid cache" in joined
+    assert "Qwen MoE text linear-attention wrappers stay hybrid cache" in joined
+    assert "base Nemotron-H registry rows stay hybrid cache" in joined
+    assert "current-model-family-detection-contract-20260522-qwen-nemotron-hybrid-cache.json" in joined
     assert "Nemotron parser/reasoning" in joined
     assert "MXFP4" in joined
     assert "plain KV JANG/JANGTQ/MXFP rows" in joined
