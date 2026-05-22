@@ -110,6 +110,7 @@ HASH_GATED_ENGINE_FILES=(
   "prefix_cache.py"
   "runtime_patches/gemma4_processing.py"
   "scheduler.py"
+  "utils/single_batch_generator.py"
   "utils/head_dim_detection.py"
   "utils/ssm_companion_cache.py"
   "utils/ssm_companion_disk_store.py"
