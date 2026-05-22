@@ -56,6 +56,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "pytest",
             "-q",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_request_output_caps_override_server_default_without_touching_context_cap",
+            "tests/test_engine_audit.py::TestServerSamplingResolution::test_explicit_startup_max_tokens_is_default_not_request_ceiling",
         ],
     ),
     "panel_output_context_wiring": (
@@ -130,15 +131,16 @@ def build_artifact(root: Path) -> dict[str, Any]:
     engine_passed = results["engine_output_context_resolution"]["counts"]["passed"] or 0
     panel_passed = results["panel_output_context_wiring"]["counts"]["passed"] or 0
     checks = {
-        "server_default_output_cap_uses_max_tokens": not failed and engine_passed >= 1,
-        "chat_max_tokens_overrides_server_default_per_request": not failed and engine_passed >= 1,
-        "responses_max_output_tokens_overrides_server_default_per_request": not failed and engine_passed >= 1,
-        "prompt_context_caps_do_not_rewrite_output_cap": not failed and engine_passed >= 1,
-        "panel_server_default_output_maps_to_max_tokens": not failed and panel_passed >= 20,
-        "panel_max_context_maps_to_max_prompt_tokens": not failed and panel_passed >= 20,
-        "stale_32768_session_output_caps_are_migrated": not failed and panel_passed >= 20,
-        "chat_output_cap_remains_per_chat_override": not failed and panel_passed >= 20,
-        "request_builders_omit_auto_output_cap": not failed and panel_passed >= 20,
+        "server_default_output_cap_uses_max_tokens": not failed and engine_passed >= 2,
+        "startup_output_cap_is_default_not_request_ceiling": not failed and engine_passed >= 2,
+        "chat_max_tokens_overrides_server_default_per_request": not failed and engine_passed >= 2,
+        "responses_max_output_tokens_overrides_server_default_per_request": not failed and engine_passed >= 2,
+        "prompt_context_caps_do_not_rewrite_output_cap": not failed and engine_passed >= 2,
+        "panel_server_default_output_maps_to_max_tokens": not failed and panel_passed >= 22,
+        "panel_max_context_maps_to_max_prompt_tokens": not failed and panel_passed >= 22,
+        "stale_32768_session_output_caps_are_migrated": not failed and panel_passed >= 22,
+        "chat_output_cap_remains_per_chat_override": not failed and panel_passed >= 22,
+        "request_builders_omit_auto_output_cap": not failed and panel_passed >= 22,
     }
     return {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),

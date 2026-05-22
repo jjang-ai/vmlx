@@ -216,6 +216,15 @@ describe('buildRequestBody — Chat Completions API', () => {
         expect(body.max_tokens).toBe(8192)
     })
 
+    it('keeps per-chat maxTokens as output budget only, never prompt context', () => {
+        const body = buildRequestBody('completions', 'gpt-4', messages, { maxTokens: 2048 }, false, false)
+        expect(body.max_tokens).toBe(2048)
+        expect(body.max_output_tokens).toBeUndefined()
+        expect(body.max_prompt_tokens).toBeUndefined()
+        expect(body.max_context_tokens).toBeUndefined()
+        expect(body.max_context).toBeUndefined()
+    })
+
     it('omits invalid persisted maxTokens values instead of poisoning Chat Completions', () => {
         const badValues = [0, -5, Number.NaN, Number.POSITIVE_INFINITY, '1024']
         for (const value of badValues) {
@@ -313,6 +322,15 @@ describe('buildRequestBody — Responses API', () => {
         const body = buildRequestBody('responses', 'gpt-4', messages, { maxTokens: 4096 }, false, false)
         expect(body.max_output_tokens).toBe(4096)
         expect(body.max_tokens).toBeUndefined()
+    })
+
+    it('keeps Responses maxTokens as output budget only, never prompt context', () => {
+        const body = buildRequestBody('responses', 'gpt-4', messages, { maxTokens: 2048 }, false, false)
+        expect(body.max_output_tokens).toBe(2048)
+        expect(body.max_tokens).toBeUndefined()
+        expect(body.max_prompt_tokens).toBeUndefined()
+        expect(body.max_context_tokens).toBeUndefined()
+        expect(body.max_context).toBeUndefined()
     })
 
     it('omits invalid persisted maxTokens values instead of poisoning Responses', () => {
