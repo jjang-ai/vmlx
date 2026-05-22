@@ -141,6 +141,35 @@ describe('new-chat override inheritance policy', () => {
     expect(inherited.systemPrompt).toBeUndefined()
   })
 
+  it('new chats preserve model-owned maxTokens while refusing inherited output caps', () => {
+    const inherited = buildNewChatInheritedOverrides({
+      chatId: 'new-chat',
+      maxTokens: 4096,
+      temperature: 0.9,
+    }, {
+      chatId: 'previous-chat',
+      maxTokens: 32768,
+      temperature: 2.0,
+      repeatPenalty: 2.0,
+      systemPrompt: 'sticky prompt text that should stay chat-scoped',
+      builtinToolsEnabled: true,
+      shellEnabled: true,
+      workingDirectory: '/Users/example/code',
+    })
+
+    expect(inherited).toMatchObject({
+      chatId: 'new-chat',
+      maxTokens: 4096,
+      temperature: 0.9,
+      builtinToolsEnabled: true,
+      shellEnabled: true,
+      workingDirectory: '/Users/example/code',
+    })
+    expect(inherited.maxTokens).not.toBe(32768)
+    expect(inherited.repeatPenalty).toBeUndefined()
+    expect(inherited.systemPrompt).toBeUndefined()
+  })
+
   it('does not overwrite derived model defaults with undefined inherited tool values', () => {
     const inherited = buildNewChatInheritedOverrides(baseExisting, {
       chatId: 'old-chat',
