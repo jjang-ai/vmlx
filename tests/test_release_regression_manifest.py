@@ -255,6 +255,19 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     assert "verify-bundled" in joined
 
 
+def test_release_regression_manifest_tracks_current_packaged_integrity_recheck():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+    row = rows["packaged-release-integrity"]
+    joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
+
+    assert "current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json" in joined
+    assert "clean JANG source path" in joined
+    assert "bundled critical jang_tools files match source content" in joined
+    assert "console-script shebangs are relocatable" in joined
+    assert "fails only on the known DSV4 objective row" in joined
+
+
 def test_release_regression_manifest_tracks_public_release_surface_preflight():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}
