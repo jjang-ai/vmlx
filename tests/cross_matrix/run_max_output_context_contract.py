@@ -67,6 +67,7 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     "test_anthropic_messages_omitted_max_tokens_uses_bundle_default",
     "test_ollama_chat_omits_non_positive_num_predict_sentinels",
     "test_ollama_generate_omits_non_positive_num_predict_sentinels",
+    "test_ollama_streaming_num_predict_overrides_server_default_without_touching_context_cap",
     # Panel launch/settings. These catch UI confusion between response length
     # and prompt/context length before a session can relaunch with stale state.
     "surfaces Max Output Tokens separately from Max Context Tokens",
@@ -118,6 +119,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_legacy_completions_streaming_output_cap_overrides_server_default_without_touching_context_cap",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_anthropic_messages_streaming_max_tokens_overrides_server_default_without_touching_context_cap",
+            "tests/test_engine_audit.py::TestServerSamplingResolution::test_ollama_streaming_num_predict_overrides_server_default_without_touching_context_cap",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_explicit_server_max_tokens_overrides_bundle_max_new_tokens",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_omitted_server_max_tokens_uses_bundle_max_new_tokens",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_omitted_server_max_tokens_without_bundle_default_is_bounded",
@@ -253,6 +255,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             not failed
             and "test_ollama_chat_omits_non_positive_num_predict_sentinels" not in missing_markers
             and "test_ollama_generate_omits_non_positive_num_predict_sentinels" not in missing_markers
+            and "test_ollama_streaming_num_predict_overrides_server_default_without_touching_context_cap" not in missing_markers
             and "omits unset and disabled sampling sentinels without dropping explicit overrides" not in missing_markers
         ),
         "prompt_context_caps_do_not_rewrite_output_cap": (

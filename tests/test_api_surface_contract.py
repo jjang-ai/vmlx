@@ -41,6 +41,7 @@ def test_noheavy_api_cache_contract_pins_named_server_rows():
     assert "test_anthropic_messages_streaming_max_tokens_overrides_server_default_without_touching_context_cap" in required
     assert "test_anthropic_messages_omitted_max_tokens_uses_bundle_default" in required
     assert "test_ollama_streaming_suppresses_duplicate_done_chunks" in required
+    assert "test_ollama_streaming_num_predict_overrides_server_default_without_touching_context_cap" in required
     assert "test_native_cache_status_reports_dsv4_separately_from_tq_kv" in required
     assert "test_native_cache_status_reports_zaya_typed_cca" in required
     assert "test_responses_extracts_suppressed_reasoning_tool_calls_before_finalize" in required

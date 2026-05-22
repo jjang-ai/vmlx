@@ -115,7 +115,7 @@ def test_release_regression_manifest_tracks_api_surface_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_api_surface_contract.py" in joined
-    assert "current-api-surface-contract-20260522-anthropic-streaming.json" in joined
+    assert "current-api-surface-contract-20260522-ollama-streaming.json" in joined
     assert "OpenAI Chat Completions" in joined
     assert "OpenAI Responses" in joined
     assert "non-streaming and streaming" in joined
@@ -123,6 +123,7 @@ def test_release_regression_manifest_tracks_api_surface_with_runner_artifact():
     assert "Anthropic" in joined
     assert "streaming max_tokens override" in joined
     assert "Ollama" in joined
+    assert "streaming num_predict" in joined
 
 
 def test_release_regression_manifest_tracks_tool_calls_with_runner_artifact():

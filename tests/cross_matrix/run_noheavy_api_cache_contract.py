@@ -49,6 +49,7 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_anthropic_messages_streaming_max_tokens_overrides_server_default_without_touching_context_cap",
     "test_anthropic_messages_omitted_max_tokens_uses_bundle_default",
     "test_ollama_streaming_suppresses_duplicate_done_chunks",
+    "test_ollama_streaming_num_predict_overrides_server_default_without_touching_context_cap",
     "test_chat_completions_nonstreaming",
     "test_responses_nonstreaming",
     "test_chat_completions_streaming",
@@ -90,6 +91,7 @@ COMMANDS: dict[str, list[str]] = {
             "or legacy_completions_output_cap_overrides_server_default_without_touching_context_cap "
             "or legacy_completions_streaming_output_cap_overrides_server_default_without_touching_context_cap "
             "or anthropic_messages_streaming_max_tokens_overrides_server_default_without_touching_context_cap "
+            "or ollama_streaming_num_predict_overrides_server_default_without_touching_context_cap "
             "or responses_request_has_sampling_fields "
             "or media_diag_hooks_cover_anthropic_and_ollama_streaming_ingress "
             "or responses_nonstreaming_forwards_tc_id "
@@ -247,7 +249,9 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_anthropic_messages_streaming_max_tokens_overrides_server_default_without_touching_context_cap" not in missing_markers
         ),
         "ollama_adapter_surface": (
-            api_ok and "test_ollama_streaming_suppresses_duplicate_done_chunks" not in missing_markers
+            api_ok
+            and "test_ollama_streaming_suppresses_duplicate_done_chunks" not in missing_markers
+            and "test_ollama_streaming_num_predict_overrides_server_default_without_touching_context_cap" not in missing_markers
         ),
         "dsv4_native_cache_status": (
             api_ok and scheduler_ok and "test_native_cache_status_reports_dsv4_separately_from_tq_kv" not in missing_markers
