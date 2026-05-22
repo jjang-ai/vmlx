@@ -18,6 +18,14 @@ All notable changes to vMLX Engine will be documented in this file.
 - Added a no-heavy JANG compatibility contract for the MiniMax sanitize and
   MoEGate quantize failure class without installing the submitted global
   monkeypatch. Credit: @pperezrubio for PR #155.
+- Confirmed the older-engine `--default-repetition-penalty` launch failure is
+  superseded by the current no-hidden-sampler-defaults path: stale generic
+  `1.10` defaults are migrated away and session launch no longer emits default
+  sampler flags from displayed bundle metadata. Credit: @Rishirandhawa for
+  PR #77 and the external-engine compatibility report.
+- Confirmed VLM JIT keeps `LanguageModel.layers` available through the current
+  compiled-module proxy instead of installing a bare `mx.compile` function.
+  Credit: @st-adam for PR #154 and the VLM JIT regression report.
 
 ## [1.5.46] - 2026-05-20
 
