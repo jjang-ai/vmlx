@@ -651,6 +651,99 @@ class TestServerSamplingResolution:
         assert captured[2]["max_tokens"] == 1536
         assert captured[2]["max_prompt_tokens"] == 12288
 
+    def test_request_output_caps_can_go_below_or_above_startup_default(
+        self,
+        monkeypatch,
+    ):
+        """Per-request output caps are overrides in both directions.
+
+        A Server Settings max output value is the omitted-request default for a
+        local server. It is not a hard ceiling that clamps per-chat/API caps,
+        and prompt/context caps remain a separate admission limit.
+        """
+        from fastapi.testclient import TestClient
+
+        import vmlx_engine.server as server
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class FakeTokenizer:
+            has_thinking = False
+
+        class FakeEngine:
+            is_mllm = False
+            tokenizer = FakeTokenizer()
+            preserve_native_tool_format = False
+
+        captured: list[dict] = []
+
+        async def fake_await_chat(*args, **kwargs):
+            captured.append(dict(kwargs["chat_kwargs"]))
+            return GenerationOutput(text="ok", prompt_tokens=3, completion_tokens=1)
+
+        monkeypatch.setattr(server, "_engine", FakeEngine())
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_name", "edge-cap-model")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+        monkeypatch.setattr(server, "_api_key", None, raising=False)
+        monkeypatch.setattr(server, "_default_temperature", None)
+        monkeypatch.setattr(server, "_default_top_p", None)
+        monkeypatch.setattr(server, "_default_top_k", None)
+        monkeypatch.setattr(server, "_default_min_p", None)
+        monkeypatch.setattr(server, "_default_repetition_penalty", None)
+        monkeypatch.setattr(server, "_default_max_tokens", 4096)
+        monkeypatch.setattr(server, "_default_max_tokens_explicit", True, raising=False)
+        monkeypatch.setattr(server, "_max_prompt_tokens", 65536)
+        monkeypatch.setattr(
+            server,
+            "_await_chat_with_disconnect_abort",
+            fake_await_chat,
+        )
+        server._jang_sampling_defaults_cache.clear()
+        server._generation_defaults_cache.clear()
+
+        client = TestClient(server.app)
+
+        lower_chat = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "edge-cap-model",
+                "messages": [{"role": "user", "content": "short"}],
+                "stream": False,
+                "max_tokens": 512,
+                "max_prompt_tokens": 8192,
+            },
+        )
+        higher_responses = client.post(
+            "/v1/responses",
+            json={
+                "model": "edge-cap-model",
+                "input": "longer",
+                "stream": False,
+                "max_output_tokens": 8192,
+                "max_prompt_tokens": 32768,
+            },
+        )
+        auto_chat = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "edge-cap-model",
+                "messages": [{"role": "user", "content": "auto"}],
+                "stream": False,
+                "max_prompt_tokens": 16384,
+            },
+        )
+
+        assert lower_chat.status_code == 200
+        assert higher_responses.status_code == 200
+        assert auto_chat.status_code == 200
+        assert captured[0]["max_tokens"] == 512
+        assert captured[0]["max_prompt_tokens"] == 8192
+        assert captured[1]["max_tokens"] == 8192
+        assert captured[1]["max_prompt_tokens"] == 32768
+        assert captured[2]["max_tokens"] == 4096
+        assert captured[2]["max_prompt_tokens"] == 16384
+
     def test_reasoning_effort_preserves_bundle_max_new_tokens(
         self,
         tmp_path,
