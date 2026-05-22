@@ -161,12 +161,13 @@ _ROWS: list[dict[str, Any]] = [
             "Prompt/context alias clamp semantics across OpenAI, Anthropic, and Ollama-compatible surfaces",
             "Ollama adapter streaming/done behavior, streaming num_predict output-cap overrides, malformed num_predict omission, and malformed context omission",
             "Auto chat Max Tokens omits per-request output caps so server startup defaults can apply on Chat Completions and Responses",
+            "Chat Completions and Responses streaming usage preserve cached_tokens plus cache_detail through finish chunks",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260522-chat-auto-server-default.json",
+            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260522-stream-cache-detail.json",
         ],
         "artifacts": [
-            "build/current-api-surface-contract-20260522-chat-auto-server-default.json",
+            "build/current-api-surface-contract-20260522-stream-cache-detail.json",
         ],
     },
     {

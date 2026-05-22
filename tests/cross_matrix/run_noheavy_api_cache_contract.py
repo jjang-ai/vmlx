@@ -56,6 +56,10 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_chat_completions_streaming",
     "test_responses_streaming",
     "test_responses_nonstreaming_forwards_tc_id",
+    "test_chat_stream_tracks_cache_detail_alongside_cached_tokens",
+    "test_chat_stream_finish_chunks_emit_cache_detail",
+    "test_responses_stream_tracks_cache_detail_alongside_cached",
+    "test_responses_stream_finish_emits_cache_detail",
     "test_cache_stats_endpoint_projects_cache_reuse_skip_telemetry",
     "test_native_cache_status_reports_dsv4_separately_from_tq_kv",
     "test_native_cache_status_reports_zaya_typed_cca",
@@ -101,6 +105,10 @@ COMMANDS: dict[str, list[str]] = {
             "or responses_nonstreaming "
             "or chat_completions_streaming "
             "or responses_streaming "
+            "or chat_stream_tracks_cache_detail_alongside_cached_tokens "
+            "or chat_stream_finish_chunks_emit_cache_detail "
+            "or responses_stream_tracks_cache_detail_alongside_cached "
+            "or responses_stream_finish_emits_cache_detail "
             "or generic_turboquant_patcher_skips_hybrid_ssm "
             "or ollama_streaming_suppresses_duplicate_done_chunks "
             "or cache_stats_endpoint_projects_cache_reuse_skip_telemetry "
@@ -255,6 +263,13 @@ def build_artifact(root: Path) -> dict[str, Any]:
             api_ok
             and "test_ollama_streaming_suppresses_duplicate_done_chunks" not in missing_markers
             and "test_ollama_streaming_num_predict_overrides_server_default_without_touching_context_cap" not in missing_markers
+        ),
+        "streaming_cache_detail_usage": (
+            api_ok
+            and "test_chat_stream_tracks_cache_detail_alongside_cached_tokens" not in missing_markers
+            and "test_chat_stream_finish_chunks_emit_cache_detail" not in missing_markers
+            and "test_responses_stream_tracks_cache_detail_alongside_cached" not in missing_markers
+            and "test_responses_stream_finish_emits_cache_detail" not in missing_markers
         ),
         "dsv4_native_cache_status": (
             api_ok and scheduler_ok and "test_native_cache_status_reports_dsv4_separately_from_tq_kv" not in missing_markers

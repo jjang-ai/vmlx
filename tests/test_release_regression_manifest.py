@@ -116,7 +116,7 @@ def test_release_regression_manifest_tracks_api_surface_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_api_surface_contract.py" in joined
-    assert "current-api-surface-contract-20260522-chat-auto-server-default.json" in joined
+    assert "current-api-surface-contract-20260522-stream-cache-detail.json" in joined
     assert "OpenAI Chat Completions" in joined
     assert "OpenAI Responses" in joined
     assert "non-streaming and streaming" in joined
@@ -128,6 +128,7 @@ def test_release_regression_manifest_tracks_api_surface_with_runner_artifact():
     assert "streaming num_predict" in joined
     assert "malformed num_predict" in joined
     assert "malformed context" in joined
+    assert "cache_detail" in joined
 
 
 def test_release_regression_manifest_tracks_tool_calls_with_runner_artifact():
