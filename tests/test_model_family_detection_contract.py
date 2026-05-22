@@ -94,6 +94,39 @@ def test_decode_speed_gate_does_not_force_legacy_32k_startup_output_cap():
     assert '"32768",' not in source
 
 
+def test_decode_speed_gate_has_explicit_qwen36_mxfp8_and_native_mtp_rows():
+    from tests.cross_matrix.run_decode_speed_gate import ROWS
+
+    required = {
+        "qwen27_mxfp8_mtp": {
+            "path": "/Users/example/models/JANGQ/Qwen3.6-27B-MXFP8-MTP",
+            "is_mllm": True,
+            "tool_parser": "qwen",
+            "reasoning_parser": "qwen3",
+        },
+        "qwen35_mxfp8_mtp": {
+            "path": "/Users/example/models/JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP",
+            "is_mllm": True,
+            "tool_parser": "qwen",
+            "reasoning_parser": "qwen3",
+        },
+        "qwen27_jang4m_mtp": {
+            "path": "/Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP",
+            "is_mllm": True,
+            "tool_parser": "qwen",
+            "reasoning_parser": "qwen3",
+        },
+    }
+
+    for row_name, expected in required.items():
+        row = ROWS[row_name]
+        assert row.path == expected["path"]
+        assert row.is_mllm is expected["is_mllm"]
+        assert row.tool_parser == expected["tool_parser"]
+        assert row.reasoning_parser == expected["reasoning_parser"]
+        assert row.max_tokens <= 320
+
+
 def test_dsv4_live_cache_gates_use_canonical_parser_and_no_legacy_32k_startup_cap():
     gate_paths = [
         Path("tests/cross_matrix/run_dsv4_long_context_gate.py"),
