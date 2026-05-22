@@ -263,6 +263,17 @@ def test_release_regression_manifest_tracks_decode_speed_artifact_format_matrix(
     assert "plain KV JANG/JANGTQ/MXFP rows" in joined
 
 
+def test_release_regression_manifest_tracks_mxfp_vlm_loader_quant_mode():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+    row = rows["model-artifact-format-detection"]
+    joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
+
+    assert "MXFP4/MXFP8 VLM loader" in joined
+    assert "declared quantization mode" in joined
+    assert "current-model-artifact-format-contract-20260522-mxfp-vlm-loader.json" in joined
+
+
 def test_release_regression_manifest_commands_are_declared_for_noheavy_rows():
     manifest = build_manifest()
     noheavy_rows = [row for row in manifest["rows"] if row["mode"] == "noheavy"]
@@ -323,7 +334,7 @@ def test_release_regression_manifest_tracks_model_artifact_detection_with_runner
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_model_artifact_format_contract.py" in joined
-    assert "current-model-artifact-format-contract-20260521.json" in joined
+    assert "current-model-artifact-format-contract-20260522-mxfp-vlm-loader.json" in joined
     assert "JANGTQ" in joined
     assert "MXFP4" in joined
     assert "MXFP8" in joined
