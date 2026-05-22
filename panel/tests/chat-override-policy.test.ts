@@ -257,6 +257,48 @@ describe('new-chat override inheritance policy', () => {
     expect(modelSettingsSource).not.toContain('reasoning_mode')
   })
 
+  it('persisted chat maxTokens cannot relaunch server with a new startup maxTokens', () => {
+    const databaseSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/main/database.ts'),
+      'utf8',
+    )
+    const setChatOverridesBlock = databaseSource.slice(
+      databaseSource.indexOf('setChatOverrides(overrides'),
+      databaseSource.indexOf('getChatOverrides(chatId'),
+    )
+    const saveModelSettingsBlock = databaseSource.slice(
+      databaseSource.indexOf('saveModelSettings(modelPath'),
+      databaseSource.indexOf('deleteModelSettings(modelPath'),
+    )
+    const sessionsSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/main/sessions.ts'),
+      'utf8',
+    )
+    const performanceLaunchBlock = sessionsSource.slice(
+      sessionsSource.indexOf('// Performance'),
+      sessionsSource.indexOf('// Tool integration'),
+    )
+
+    expect(setChatOverridesBlock).toContain('INSERT OR REPLACE INTO chat_overrides')
+    expect(setChatOverridesBlock).toContain('max_tokens')
+    expect(setChatOverridesBlock).toContain('overrides.maxTokens')
+    expect(setChatOverridesBlock).not.toContain('sessions')
+    expect(setChatOverridesBlock).not.toContain('model_settings')
+    expect(setChatOverridesBlock).not.toContain('saveModelSettings')
+    expect(setChatOverridesBlock).not.toContain('saveSession')
+
+    expect(saveModelSettingsBlock).toContain('max_tokens')
+    expect(saveModelSettingsBlock).toContain('null')
+    expect(saveModelSettingsBlock).not.toContain('settings.maxTokens')
+    expect(saveModelSettingsBlock).not.toContain('settings.max_tokens')
+
+    expect(performanceLaunchBlock).toContain('finitePositiveInteger(config.maxTokens)')
+    expect(performanceLaunchBlock).toContain("args.push('--max-tokens', maxTokens.toString())")
+    expect(performanceLaunchBlock).not.toContain('getChatOverrides')
+    expect(performanceLaunchBlock).not.toContain('chat_overrides')
+    expect(performanceLaunchBlock).not.toContain('overrides.maxTokens')
+  })
+
   it('server startup maxTokens and chat maxTokens remain independent when both are set', () => {
     expect(sanitizeChatOverrides({ chatId: 'chat', maxTokens: 8192 }).maxTokens).toBe(8192)
 

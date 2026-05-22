@@ -48,8 +48,10 @@ def test_max_output_context_contract_covers_all_public_api_surfaces():
     assert "chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap" in required
     assert "clears legacy session maxTokens=32768 before launch can reuse it" in required
     assert "new chats preserve model-owned maxTokens while refusing inherited output caps" in required
+    assert "persisted chat maxTokens cannot relaunch server with a new startup maxTokens" in required
 
     assert "new_chat_output_caps_are_not_inherited_or_made_sticky" in gate.build_artifact.__code__.co_consts
+    assert "chat_output_cap_remains_per_chat_override" in gate.build_artifact.__code__.co_consts
 
     engine_command = gate.COMMANDS["engine_output_context_resolution"][1]
     panel_command = gate.COMMANDS["panel_output_context_wiring"][1]
