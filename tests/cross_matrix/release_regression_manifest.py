@@ -206,13 +206,14 @@ _ROWS: list[dict[str, Any]] = [
             "Decode-speed rows keep JANG-only, JANGTQ/MXTQ, MXFP4, and MXFP8 speed thresholds distinct while staying aligned with engine registry parser, modality, and cache metadata for existing local models",
             "Decode-speed rows keep DSV4 native composite separate from generic JANGTQ/MXTQ rows",
             "Every decode-speed row with a declared tool or reasoning parser uses a registered engine parser and CLI-accepted parser choice even when that local model path is absent",
+            "Decode-speed launch commands preserve row parser/modality policy and strip source-path or forced JANGTQ acceleration environment overrides",
             "This is source/static compatibility proof only; live multi-turn output quality remains a separate live row",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_model_family_detection_contract.py --out build/current-model-family-detection-contract-20260522-artifact-format-matrix.json",
+            ".venv/bin/python tests/cross_matrix/run_model_family_detection_contract.py --out build/current-model-family-detection-contract-20260522-command-policy.json",
         ],
         "artifacts": [
-            "build/current-model-family-detection-contract-20260522-artifact-format-matrix.json",
+            "build/current-model-family-detection-contract-20260522-command-policy.json",
         ],
     },
     {

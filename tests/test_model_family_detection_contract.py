@@ -28,6 +28,7 @@ def test_family_detection_contract_pins_named_release_rows():
         "decode_speed_all_declared_parsers_are_cli_choices",
         "decode_speed_existing_rows_match_engine_parser_policy",
         "decode_speed_existing_rows_match_engine_modality_policy",
+        "decode_speed_build_command_parser_modality_policy",
         "decode_speed_registry_cache_metadata_health",
     }.issubset(names)
 
@@ -255,6 +256,81 @@ def test_decode_speed_gate_declared_parsers_are_cli_choices():
 
     assert bad_tool_rows == []
     assert bad_reasoning_rows == []
+
+
+def test_decode_speed_gate_build_command_preserves_row_parser_modality_policy():
+    from tests.cross_matrix.run_decode_speed_gate import (
+        ROWS,
+        build_clean_env,
+        build_serve_command,
+    )
+
+    representative_rows = {
+        "dsv4_k": {"mllm": False, "tool": "dsml", "reasoning": "deepseek_r1"},
+        "qwen27_jang4m": {"mllm": False, "tool": "qwen", "reasoning": "qwen3"},
+        "qwen27_mxfp8_mtp": {"mllm": True, "tool": "qwen", "reasoning": "qwen3"},
+        "zaya_vl_jangtq4": {"mllm": True, "tool": "zaya_xml", "reasoning": "qwen3"},
+        "ling_mxfp4": {"mllm": False, "tool": "deepseek", "reasoning": None},
+        "nemotron_omni_nano_jangtq4": {
+            "mllm": False,
+            "tool": "nemotron",
+            "reasoning": "deepseek_r1",
+        },
+        "minimax_jang2l_crack": {
+            "mllm": False,
+            "tool": "minimax",
+            "reasoning": "minimax_m2",
+        },
+    }
+
+    for row_name, expected in representative_rows.items():
+        row = ROWS[row_name]
+        cmd = build_serve_command(
+            row,
+            python=Path("/bundle/python3"),
+            port=8790,
+            prefill_step_size=2048,
+        )
+        joined = " ".join(cmd)
+
+        assert "--max-tokens" not in cmd, row_name
+        assert "--is-mllm" in cmd if expected["mllm"] else "--is-mllm" not in cmd
+        assert cmd[cmd.index("--tool-call-parser") + 1] == expected["tool"]
+        assert "--enable-auto-tool-choice" in cmd
+        if expected["reasoning"] is None:
+            assert "--reasoning-parser" not in cmd
+        else:
+            assert cmd[cmd.index("--reasoning-parser") + 1] == expected["reasoning"]
+        assert "JANGTQ_MPP" not in joined
+        assert "JANGTQ_DISABLE_DSV4" not in joined
+
+    clean_env = build_clean_env(
+        {
+            "PYTHONPATH": "/source/tree",
+            "JANGTQ_MPP_NAX": "1",
+            "JANGTQ_MPP_NAX_DISABLE": "1",
+            "JANGTQ_MPP_NAX_STRICT": "1",
+            "JANGTQ_MPP_DENSE": "1",
+            "JANGTQ_MPP_DENSE_STRICT": "1",
+            "JANGTQ_DISABLE_DSV4_STREAM_LOAD": "1",
+            "JANGTQ_DISABLE_DSV4_FAST_LOAD": "1",
+            "KEEP_ME": "1",
+        }
+    )
+    assert clean_env["KEEP_ME"] == "1"
+    assert clean_env["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert clean_env["PYTHONNOUSERSITE"] == "1"
+    for forbidden in (
+        "PYTHONPATH",
+        "JANGTQ_MPP_NAX",
+        "JANGTQ_MPP_NAX_DISABLE",
+        "JANGTQ_MPP_NAX_STRICT",
+        "JANGTQ_MPP_DENSE",
+        "JANGTQ_MPP_DENSE_STRICT",
+        "JANGTQ_DISABLE_DSV4_STREAM_LOAD",
+        "JANGTQ_DISABLE_DSV4_FAST_LOAD",
+    ):
+        assert forbidden not in clean_env
 
 
 def test_decode_speed_gate_matches_registry_parser_policy_for_ling_and_nemotron():

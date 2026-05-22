@@ -395,6 +395,76 @@ def wait_health(port: int, proc: subprocess.Popen, timeout_s: int) -> dict[str, 
     raise TimeoutError(f"health timeout on port {port}: {last_error!r}")
 
 
+def build_serve_command(
+    row: Row,
+    *,
+    python: Path,
+    port: int,
+    prefill_step_size: int,
+) -> list[str]:
+    """Build the exact live server command for one decode-speed row."""
+    cmd = [
+        str(python),
+        "-B",
+        "-s",
+        "-m",
+        "vmlx_engine.cli",
+        "serve",
+        row.path,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--timeout",
+        "300",
+        "--max-num-seqs",
+        "1",
+        "--prefill-batch-size",
+        "512",
+        "--prefill-step-size",
+        str(prefill_step_size),
+        "--completion-batch-size",
+        "512",
+        "--continuous-batching",
+        "--use-paged-cache",
+        "--paged-cache-block-size",
+        "64",
+        "--max-cache-blocks",
+        "1000",
+        "--enable-block-disk-cache",
+        "--block-disk-cache-max-gb",
+        "10",
+        "--stream-interval",
+        "1",
+        "--served-model-name",
+        row.name,
+    ]
+    if row.is_mllm:
+        cmd.append("--is-mllm")
+    if row.tool_parser:
+        cmd.extend(["--tool-call-parser", row.tool_parser, "--enable-auto-tool-choice"])
+    if row.reasoning_parser:
+        cmd.extend(["--reasoning-parser", row.reasoning_parser])
+    cmd.extend(row.extra_args)
+    return cmd
+
+
+def build_clean_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
+    """Return the live harness env without source/path or forced JANGTQ knobs."""
+    env = dict(os.environ if base_env is None else base_env)
+    env.pop("JANGTQ_MPP_NAX", None)
+    env.pop("JANGTQ_MPP_NAX_DISABLE", None)
+    env.pop("JANGTQ_MPP_NAX_STRICT", None)
+    env.pop("JANGTQ_MPP_DENSE", None)
+    env.pop("JANGTQ_MPP_DENSE_STRICT", None)
+    env.pop("JANGTQ_DISABLE_DSV4_STREAM_LOAD", None)
+    env.pop("JANGTQ_DISABLE_DSV4_FAST_LOAD", None)
+    env.pop("PYTHONPATH", None)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONNOUSERSITE"] = "1"
+    return env
+
+
 def loopish(text: str) -> bool:
     lower = text.lower()
     if any(
@@ -566,61 +636,13 @@ def run_row(
         }
 
     log_path = keep_logs / f"{row.name}-{int(time.time())}.log"
-    cmd = [
-        str(python),
-        "-B",
-        "-s",
-        "-m",
-        "vmlx_engine.cli",
-        "serve",
-        row.path,
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(port),
-        "--timeout",
-        "300",
-        "--max-num-seqs",
-        "1",
-        "--prefill-batch-size",
-        "512",
-        "--prefill-step-size",
-        str(prefill_step_size),
-        "--completion-batch-size",
-        "512",
-        "--continuous-batching",
-        "--use-paged-cache",
-        "--paged-cache-block-size",
-        "64",
-        "--max-cache-blocks",
-        "1000",
-        "--enable-block-disk-cache",
-        "--block-disk-cache-max-gb",
-        "10",
-        "--stream-interval",
-        "1",
-        "--served-model-name",
-        row.name,
-    ]
-    if row.is_mllm:
-        cmd.append("--is-mllm")
-    if row.tool_parser:
-        cmd.extend(["--tool-call-parser", row.tool_parser, "--enable-auto-tool-choice"])
-    if row.reasoning_parser:
-        cmd.extend(["--reasoning-parser", row.reasoning_parser])
-    cmd.extend(row.extra_args)
-
-    env = dict(os.environ)
-    env.pop("JANGTQ_MPP_NAX", None)
-    env.pop("JANGTQ_MPP_NAX_DISABLE", None)
-    env.pop("JANGTQ_MPP_NAX_STRICT", None)
-    env.pop("JANGTQ_MPP_DENSE", None)
-    env.pop("JANGTQ_MPP_DENSE_STRICT", None)
-    env.pop("JANGTQ_DISABLE_DSV4_STREAM_LOAD", None)
-    env.pop("JANGTQ_DISABLE_DSV4_FAST_LOAD", None)
-    env.pop("PYTHONPATH", None)
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    env["PYTHONNOUSERSITE"] = "1"
+    cmd = build_serve_command(
+        row,
+        python=python,
+        port=port,
+        prefill_step_size=prefill_step_size,
+    )
+    env = build_clean_env()
 
     with log_path.open("w") as log:
         proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env)

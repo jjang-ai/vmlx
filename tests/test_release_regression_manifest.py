@@ -223,7 +223,7 @@ def test_release_regression_manifest_tracks_family_parser_cli_choice_guard():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "CLI-accepted parser choice" in joined
-    assert "current-model-family-detection-contract-20260522-artifact-format-matrix.json" in joined
+    assert "current-model-family-detection-contract-20260522-command-policy.json" in joined
 
 
 def test_release_regression_manifest_tracks_decode_speed_artifact_format_matrix():
@@ -234,7 +234,9 @@ def test_release_regression_manifest_tracks_decode_speed_artifact_format_matrix(
 
     assert "DSV4 native composite" in joined
     assert "generic JANGTQ/MXTQ" in joined
-    assert "current-model-family-detection-contract-20260522-artifact-format-matrix.json" in joined
+    assert "current-model-family-detection-contract-20260522-command-policy.json" in joined
+    assert "row parser/modality policy" in joined
+    assert "forced JANGTQ acceleration" in joined
 
 
 def test_release_regression_manifest_commands_are_declared_for_noheavy_rows():
@@ -312,7 +314,7 @@ def test_release_regression_manifest_tracks_named_model_family_detection_with_ru
 
     assert row["domain"] == "model_family_detection"
     assert "run_model_family_detection_contract.py" in joined
-    assert "current-model-family-detection-contract-20260522-artifact-format-matrix.json" in joined
+    assert "current-model-family-detection-contract-20260522-command-policy.json" in joined
     assert "DSV4" in joined
     assert "ZAYA" in joined
     assert "Ling" in joined

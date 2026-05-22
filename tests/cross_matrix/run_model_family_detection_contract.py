@@ -98,6 +98,7 @@ REQUIRED_ROWS = (
     "decode_speed_all_declared_parsers_are_cli_choices",
     "decode_speed_existing_rows_match_engine_parser_policy",
     "decode_speed_existing_rows_match_engine_modality_policy",
+    "decode_speed_build_command_parser_modality_policy",
     "decode_speed_registry_cache_metadata_health",
 )
 
@@ -170,6 +171,9 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
     ),
     "decode_speed_existing_rows_match_engine_modality_policy": (
         "test_existing_decode_speed_rows_match_engine_registry_modality_policy",
+    ),
+    "decode_speed_build_command_parser_modality_policy": (
+        "test_decode_speed_gate_build_command_preserves_row_parser_modality_policy",
     ),
     "decode_speed_registry_cache_metadata_health": (
         "test_decode_speed_gate_records_registry_cache_metadata_for_existing_rows",
