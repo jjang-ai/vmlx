@@ -1,4 +1,5 @@
 from pathlib import Path
+import shlex
 
 from tests.cross_matrix.release_regression_manifest import (
     REQUIRED_RELEASE_DOMAINS,
@@ -157,6 +158,20 @@ def test_release_regression_manifest_runner_commands_exist():
             runner = command.split("tests/cross_matrix/", 1)[1].split()[0]
             path = Path("tests/cross_matrix") / runner
             assert path.exists(), f"{row['id']} references missing runner {path}"
+
+
+def test_release_regression_manifest_python_entrypoints_are_tracked():
+    manifest = build_manifest()
+
+    for row in manifest["rows"]:
+        for command in row["commands"]:
+            for token in shlex.split(command):
+                if not token.endswith(".py"):
+                    continue
+                path = Path(token)
+                if path.is_absolute():
+                    continue
+                assert path.exists(), f"{row['id']} references missing Python entrypoint {path}"
 
 
 def test_release_regression_manifest_tracks_model_artifact_detection_with_runner_artifact():

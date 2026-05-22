@@ -281,9 +281,10 @@ _ROWS: list[dict[str, Any]] = [
             "This remains open until a source/rebuilt-body or equivalent live proof passes",
         ],
         "commands": [
-            ".venv/bin/python build/run_dsv4_identifier_count_ablation.py --model /Users/example/models/JANGQ/DeepSeek-V4-Flash-JANG",
+            "uv run --extra dev python tests/cross_matrix/run_production_family_audit.py --rows dsv4_jang_local --live --out build/current-production-family-audit-live-dsv4-jang-local-20260522.json",
         ],
         "artifacts": [
+            "build/current-production-family-audit-live-dsv4-jang-local-20260522.json",
             "build/current-dsv4-identifier-count-ablation-20260521/result.json",
             "build/current-dsv4-long-output-quality-clearance-20260521.json",
         ],
