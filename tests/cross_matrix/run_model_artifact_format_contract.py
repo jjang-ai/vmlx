@@ -47,6 +47,7 @@ REQUIRED_ARTIFACT_TEST_MARKERS = (
     "test_qwen36_mxfp4_mtp_bundle_is_text_native_ready",
     "test_mxfp4_vlm_sanitize_shifts_mtp_norms_only",
     "test_jang_quant_mode_supports_mxfp8_metadata",
+    "test_qwen36_plain_mlx_4bit_keeps_hybrid_cache_without_jang_or_mxfp",
     "test_native_mtp_detection_uses_weights_not_path_name",
 )
 
@@ -62,7 +63,7 @@ COMMANDS: dict[str, list[str]] = {
         "tests/test_native_mtp_autodetect.py",
         "tests/test_cross_matrix_audit_runner.py",
         "-k",
-        "jang or JANG or mxfp or mxp or mtp or MTP or cache_profile or dp_bits or gather_dn",
+        "jang or JANG or mxfp or mxp or mlx_4bit or mtp or MTP or cache_profile or dp_bits or gather_dn",
     ],
 }
 
@@ -115,6 +116,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "jang_and_jangtq_detection": not failed and "test_gather_dn_uses_dp_bits" not in missing_markers,
         "mxfp4_detection": not failed and "test_mxfp4_vlm_sanitize_shifts_mtp_norms_only" not in missing_markers,
         "mxfp8_detection": not failed and "test_jang_quant_mode_supports_mxfp8_metadata" not in missing_markers,
+        "plain_mlx_4bit_detection": not failed and "test_qwen36_plain_mlx_4bit_keeps_hybrid_cache_without_jang_or_mxfp" not in missing_markers,
         "dropped_mtp_detection": not failed and "test_dsv4_static_audit_reports_mtp_drop_contract" not in missing_markers,
         "preserved_mtp_detection": not failed and "test_qwen36_mxfp4_mtp_bundle_is_text_native_ready" not in missing_markers,
         "cache_profile_detection": not failed,

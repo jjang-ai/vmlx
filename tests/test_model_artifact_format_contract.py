@@ -8,7 +8,9 @@ def test_model_artifact_format_contract_pins_named_artifact_edges():
     assert "test_qwen36_mxfp4_mtp_bundle_is_text_native_ready" in required
     assert "test_mxfp4_vlm_sanitize_shifts_mtp_norms_only" in required
     assert "test_jang_quant_mode_supports_mxfp8_metadata" in required
+    assert "test_qwen36_plain_mlx_4bit_keeps_hybrid_cache_without_jang_or_mxfp" in required
     assert "test_native_mtp_detection_uses_weights_not_path_name" in required
 
     command = gate.COMMANDS["model_artifact_format_pytest"]
     assert "-vv" in command
+    assert "mlx_4bit" in " ".join(command)

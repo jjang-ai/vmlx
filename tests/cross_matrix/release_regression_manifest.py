@@ -193,7 +193,7 @@ _ROWS: list[dict[str, Any]] = [
         "mode": "noheavy",
         "heavy": False,
         "proves": [
-            "JANG, JANGTQ/MXTQ, MXFP4, MXFP8, dropped-MTP, and preserved-MTP artifacts are not inferred from names alone",
+            "JANG, JANGTQ/MXTQ, plain MLX 4bit, MXFP4, MXFP8, dropped-MTP, and preserved-MTP artifacts are not inferred from names alone",
             "Registry/family detection uses bundle config and capability metadata",
         ],
         "commands": [

@@ -1118,6 +1118,41 @@ class TestModelConfigs:
         assert config.cache_type == "hybrid"
         assert config.reasoning_parser == "qwen3"
 
+    def test_qwen36_plain_mlx_4bit_keeps_hybrid_cache_without_jang_or_mxfp(
+        self, registry
+    ):
+        """Plain MLX 4-bit Qwen artifacts still use config metadata.
+
+        This guards against treating every Qwen 3.6 release row as JANG,
+        JANGTQ/MXTQ, or MXFP based on adjacent release work. The bundle name is
+        plain `4bit`; cache/modality/parser policy must come from config.json.
+        """
+
+        config_json = {
+            "model_type": "qwen3_5",
+            "quantization": {"bits": 4, "group_size": 64},
+            "text_config": {
+                "model_type": "qwen3_5_text",
+                "layer_types": [
+                    "linear_attention",
+                    "full_attention",
+                ],
+            },
+            "vision_config": {"model_type": "qwen3_5_vit"},
+        }
+
+        def _load_config(path):
+            return dict(config_json)
+
+        with patch("vmlx_engine.model_config_registry.load_config", _load_config):
+            config = registry.lookup("Qwen3.6-35B-A3B-4bit")
+
+        assert config.family_name == "qwen3_5"
+        assert config.cache_type == "hybrid"
+        assert config.is_mllm is True
+        assert config.tool_parser == "qwen"
+        assert config.reasoning_parser == "qwen3"
+
     def test_qwen3_5_moe_text_linear_attention_uses_hybrid_cache(self, registry, tmp_path):
         """Qwen3.6 MoE wrappers match text_config.model_type first; that path
         must still preserve the hybrid cache override."""
