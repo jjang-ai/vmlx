@@ -315,6 +315,36 @@ def test_current_regression_suite_runs_model_artifact_format_contracts(monkeypat
     )
 
 
+def test_current_regression_suite_runs_model_family_detection_contracts(monkeypatch, tmp_path):
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    _write_json(
+        tmp_path / "build/current-objective-proof-audit-20260521.json",
+        {
+            "requirements": [
+                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
+            ]
+        },
+    )
+
+    seen_steps = []
+
+    def fake_run_step(name, cmd, cwd):
+        seen_steps.append((name, cmd))
+        return {"name": name, "command": cmd, "returncode": 0, "stdout_tail": []}
+
+    monkeypatch.setattr(suite, "_run_step", fake_run_step)
+
+    artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
+
+    assert artifact["status"] == "pass"
+    assert any(name == "model_family_detection_contracts" for name, _cmd in seen_steps)
+    assert any(
+        "run_model_family_detection_contract.py" in " ".join(cmd)
+        for _name, cmd in seen_steps
+    )
+
+
 def test_current_regression_suite_runs_parser_registry_contracts(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 

@@ -183,6 +183,12 @@ def build_suite_artifact(root: Path, *, include_release_gate: bool = True) -> di
             "--out",
             "build/current-model-artifact-format-contract-20260521.json",
         ],
+        "model_family_detection_contracts": [
+            sys.executable,
+            "tests/cross_matrix/run_model_family_detection_contract.py",
+            "--out",
+            "build/current-model-family-detection-contract-20260521.json",
+        ],
         "native_mtp_contracts": [
             sys.executable,
             "tests/cross_matrix/run_native_mtp_contract.py",
