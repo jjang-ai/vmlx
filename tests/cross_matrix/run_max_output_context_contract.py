@@ -81,6 +81,7 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     "omits invalid persisted maxTokens values instead of poisoning Responses",
     "chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap",
     "chat:setOverrides rejects non-finite or non-numeric maxTokens instead of poisoning server defaults",
+    "chat maxTokens save path cannot mutate session startup maxTokens",
     "default profiles cannot make maxTokens sticky on clean new chats",
     "coding tool configs keep output limit separate from context fallback",
     "does not synthesize a DSV4 max token budget when the request leaves it to server/model defaults",

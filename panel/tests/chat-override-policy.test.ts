@@ -182,6 +182,52 @@ describe('new-chat override inheritance policy', () => {
     expect(sanitizeChatOverrides({ chatId: 'chat', maxTokens: 512.9 }).maxTokens).toBe(512)
   })
 
+  it('chat maxTokens save path cannot mutate session startup maxTokens', () => {
+    expect(sanitizeChatOverrides({ chatId: 'chat', maxTokens: 8192 }).maxTokens).toBe(8192)
+
+    const chatIpcSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/main/ipc/chat.ts'),
+      'utf8',
+    )
+    const setOverridesHandler = chatIpcSource.slice(
+      chatIpcSource.indexOf('"chat:setOverrides"'),
+      chatIpcSource.indexOf('ipcMain.handle("chat:getOverrides"'),
+    )
+
+    expect(setOverridesHandler).toContain('sanitizeChatOverrides')
+    expect(setOverridesHandler).toContain('db.setChatOverrides')
+    expect(setOverridesHandler).not.toContain('sessionManager')
+    expect(setOverridesHandler).not.toContain('saveModelSettings')
+    expect(setOverridesHandler).not.toContain('saveSession')
+    expect(setOverridesHandler).not.toContain('model_settings')
+
+    const sessionsSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/main/sessions.ts'),
+      'utf8',
+    )
+    const performanceLaunchBlock = sessionsSource.slice(
+      sessionsSource.indexOf('// Performance'),
+      sessionsSource.indexOf('// Tool integration'),
+    )
+
+    expect(performanceLaunchBlock).toContain('const maxTokens = finitePositiveInteger(config.maxTokens)')
+    expect(performanceLaunchBlock).toContain("args.push('--max-tokens', maxTokens.toString())")
+    expect(performanceLaunchBlock).toContain('const maxContextLength = finitePositiveInteger(config.maxContextLength)')
+    expect(performanceLaunchBlock).toContain("args.push('--max-prompt-tokens', maxContextLength.toString())")
+    expect(performanceLaunchBlock).not.toContain('overrides.maxTokens')
+    expect(performanceLaunchBlock).not.toContain('chatOverrides')
+    expect(performanceLaunchBlock).not.toContain('getChatOverrides')
+
+    const modelSettingsSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/main/db/model-settings.ts'),
+      'utf8',
+    )
+    expect(modelSettingsSource).toContain('choices are per-chat/API overrides and must not be stored per model')
+    expect(modelSettingsSource).not.toContain('maxTokens')
+    expect(modelSettingsSource).not.toContain('max_tokens')
+    expect(modelSettingsSource).not.toContain('reasoning_mode')
+  })
+
   it('chat:setOverrides rejects malformed sampler and tool numeric overrides instead of forcing hidden values', () => {
     const sanitized = sanitizeChatOverrides({
       chatId: 'chat',
