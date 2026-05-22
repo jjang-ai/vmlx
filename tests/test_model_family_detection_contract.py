@@ -151,6 +151,30 @@ def test_decode_speed_gate_matches_registry_parser_policy_for_ling_and_nemotron(
         assert row.reasoning_parser == "deepseek_r1"
 
 
+def test_existing_decode_speed_rows_match_engine_registry_parser_policy():
+    from tests.cross_matrix.run_decode_speed_gate import ROWS
+    from vmlx_engine.model_config_registry import get_model_config_registry
+
+    registry = get_model_config_registry()
+    registry.clear_cache()
+    mismatches = []
+
+    for row_name, row in ROWS.items():
+        if not Path(row.path).exists():
+            continue
+        cfg = registry.lookup(row.path)
+        if row.tool_parser != cfg.tool_parser:
+            mismatches.append(
+                f"{row_name}: tool row={row.tool_parser!r} registry={cfg.tool_parser!r}"
+            )
+        if row.reasoning_parser != cfg.reasoning_parser:
+            mismatches.append(
+                f"{row_name}: reasoning row={row.reasoning_parser!r} registry={cfg.reasoning_parser!r}"
+            )
+
+    assert mismatches == []
+
+
 def test_dsv4_live_cache_gates_use_canonical_parser_and_no_legacy_32k_startup_cap():
     gate_paths = [
         Path("tests/cross_matrix/run_dsv4_long_context_gate.py"),
