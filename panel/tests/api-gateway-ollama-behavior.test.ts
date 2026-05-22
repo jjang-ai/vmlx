@@ -192,4 +192,33 @@ describe("Ollama gateway request translation behavior", () => {
       "/v1/chat/completions",
     ]);
   });
+
+  it("omits malformed Ollama num_predict values instead of poisoning max_tokens", async () => {
+    backend = await startCaptureBackend();
+    const started = await startGateway(backend.port);
+    gateway = started.gateway;
+
+    await postJson(`http://127.0.0.1:${started.port}/api/chat`, {
+      model: "hy3-model",
+      stream: false,
+      messages: [{ role: "user", content: "bad" }],
+      options: { num_predict: "not-a-number" },
+    });
+    await postJson(`http://127.0.0.1:${started.port}/api/generate`, {
+      model: "hy3-model",
+      stream: false,
+      prompt: "bad",
+      options: { num_predict: "Infinity" },
+    });
+    await postJson(`http://127.0.0.1:${started.port}/api/chat`, {
+      model: "hy3-model",
+      stream: false,
+      messages: [{ role: "user", content: "decimal" }],
+      options: { num_predict: 12.9 },
+    });
+
+    expect(backend.bodies[0]).not.toHaveProperty("max_tokens");
+    expect(backend.bodies[1]).not.toHaveProperty("max_tokens");
+    expect(backend.bodies[2].max_tokens).toBe(12);
+  });
 });

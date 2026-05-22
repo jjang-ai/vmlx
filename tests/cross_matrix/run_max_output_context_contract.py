@@ -69,6 +69,7 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     "test_ollama_chat_omits_non_positive_num_predict_sentinels",
     "test_ollama_generate_omits_non_positive_num_predict_sentinels",
     "test_ollama_streaming_num_predict_overrides_server_default_without_touching_context_cap",
+    "omits malformed Ollama num_predict values instead of poisoning max_tokens",
     # Panel launch/settings. These catch UI confusion between response length
     # and prompt/context length before a session can relaunch with stale state.
     "surfaces Max Output Tokens separately from Max Context Tokens",
@@ -258,6 +259,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_ollama_chat_omits_non_positive_num_predict_sentinels" not in missing_markers
             and "test_ollama_generate_omits_non_positive_num_predict_sentinels" not in missing_markers
             and "test_ollama_streaming_num_predict_overrides_server_default_without_touching_context_cap" not in missing_markers
+            and "omits malformed Ollama num_predict values instead of poisoning max_tokens" not in missing_markers
             and "omits unset and disabled sampling sentinels without dropping explicit overrides" not in missing_markers
         ),
         "prompt_context_caps_do_not_rewrite_output_cap": (

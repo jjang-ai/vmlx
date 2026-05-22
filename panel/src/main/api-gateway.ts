@@ -949,11 +949,9 @@ export class ApiGateway extends EventEmitter {
     const value = opts?.num_predict;
     if (value === undefined || value === null) return;
     const parsed = Number(value);
-    if (!Number.isFinite(parsed)) {
-      openaiBody.max_tokens = value;
-      return;
+    if (Number.isFinite(parsed) && parsed > 0) {
+      openaiBody.max_tokens = Math.floor(parsed);
     }
-    if (parsed > 0) openaiBody.max_tokens = value;
   }
 
   private openAIToolCallsToOllama(
