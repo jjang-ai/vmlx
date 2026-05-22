@@ -5996,6 +5996,118 @@ class MLLMBatchGenerator:
             )
         return token, logprobs
 
+    @staticmethod
+    def _snapshot_ssm_per_row(batch_cache: List[Any]) -> Dict[int, List[Any]]:
+        """Snapshot per-row SSM state before a batched verify forward (issue #134/#135).
+
+        For each non-trimmable cache layer (SSM/Mamba in hybrid models),
+        extracts each row's state independently so partial-accept rows can be
+        restored without disturbing fully-accepted rows.
+
+        Trimmable layers (KV cache) are skipped — they use cheaper per-row
+        offset rewind for rollback.
+
+        Args:
+            batch_cache: Per-layer cache list (mix of BatchKVCache + BatchMambaCache).
+
+        Returns:
+            Dict mapping layer_idx → list of per-row snapshots. Each per-row
+            snapshot is either a MambaCache instance (when the layer exposes
+            `extract()`) or a list of mx.array slices (fallback). Empty dict
+            if no SSM layers found.
+        """
+        snapshot: Dict[int, List[Any]] = {}
+        for layer_idx, c in enumerate(batch_cache):
+            if c is None or c.is_trimmable():
+                continue
+            if not hasattr(c, "cache") or c.cache is None or not c.cache:
+                continue
+            first_arr = next((a for a in c.cache if a is not None), None)
+            if first_arr is None:
+                continue
+            B = first_arr.shape[0]
+            row_snapshots: List[Any] = []
+            for r in range(B):
+                if hasattr(c, "extract"):
+                    row_snapshots.append(c.extract(r))
+                else:
+                    row_snapshots.append(
+                        [
+                            mx.contiguous(a[r : r + 1]) if a is not None else None
+                            for a in c.cache
+                        ]
+                    )
+            # Force materialization so the subsequent verify forward doesn't
+            # alias these arrays through lazy MLX evaluation.
+            for row_cache in row_snapshots:
+                arrs = (
+                    row_cache.cache
+                    if hasattr(row_cache, "cache")
+                    else row_cache
+                )
+                mx.eval([a for a in arrs if a is not None])
+            snapshot[layer_idx] = row_snapshots
+        return snapshot
+
+    @staticmethod
+    def _restore_ssm_rows(
+        batch_cache: List[Any],
+        snapshot: Dict[int, List[Any]],
+        row_indices: List[int],
+    ) -> None:
+        """Restore specified rows of each SSM layer from a per-row snapshot.
+
+        Rows NOT in row_indices keep their current (post-verify) state. Rows
+        IN row_indices revert to their pre-verify snapshot value.
+
+        Uses per-row concatenate to avoid disturbing fully-accepted rows:
+        builds a new state tensor where each row is either the current slice
+        or the snapshot slice based on row_indices membership. Cost: O(B)
+        slices + 1 concatenate per layer per cache array.
+
+        No-op if snapshot is empty or row_indices is empty.
+
+        Args:
+            batch_cache: Per-layer cache list (same object passed to
+                _snapshot_ssm_per_row earlier in this step).
+            snapshot: Output of _snapshot_ssm_per_row (per-layer per-row state).
+            row_indices: Rows to restore from snapshot. Other rows keep their
+                current (post-verify) state.
+        """
+        if not snapshot or not row_indices:
+            return
+        restore_set = set(row_indices)
+        for layer_idx, row_snapshots in snapshot.items():
+            c = batch_cache[layer_idx]
+            if c is None or not hasattr(c, "cache") or not c.cache:
+                continue
+            new_cache: List[Any] = []
+            for arr_idx, cur_arr in enumerate(c.cache):
+                if cur_arr is None:
+                    new_cache.append(None)
+                    continue
+                B = cur_arr.shape[0]
+                parts: List[Any] = []
+                for r in range(B):
+                    if r in restore_set:
+                        snap = row_snapshots[r]
+                        snap_arrs = (
+                            snap.cache if hasattr(snap, "cache") else snap
+                        )
+                        snap_arr = (
+                            snap_arrs[arr_idx]
+                            if arr_idx < len(snap_arrs)
+                            else None
+                        )
+                        if snap_arr is None:
+                            parts.append(cur_arr[r : r + 1])
+                        else:
+                            parts.append(snap_arr)
+                    else:
+                        parts.append(cur_arr[r : r + 1])
+                new_cache.append(mx.concatenate(parts, axis=0))
+            c.cache = new_cache
+
     def _step(
         self, input_tokens: mx.array, cache: List[Any]
     ) -> Tuple[mx.array, List[mx.array]]:
