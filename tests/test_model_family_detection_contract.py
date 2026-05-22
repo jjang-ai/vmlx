@@ -112,7 +112,7 @@ def test_decode_speed_gate_has_explicit_qwen36_mxfp8_and_native_mtp_rows():
         },
         "qwen27_jang4m_mtp": {
             "path": "/Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP",
-            "is_mllm": True,
+            "is_mllm": False,
             "tool_parser": "qwen",
             "reasoning_parser": "qwen3",
         },
@@ -170,6 +170,26 @@ def test_existing_decode_speed_rows_match_engine_registry_parser_policy():
         if row.reasoning_parser != cfg.reasoning_parser:
             mismatches.append(
                 f"{row_name}: reasoning row={row.reasoning_parser!r} registry={cfg.reasoning_parser!r}"
+            )
+
+    assert mismatches == []
+
+
+def test_existing_decode_speed_rows_match_engine_registry_modality_policy():
+    from tests.cross_matrix.run_decode_speed_gate import ROWS
+    from vmlx_engine.model_config_registry import get_model_config_registry
+
+    registry = get_model_config_registry()
+    registry.clear_cache()
+    mismatches = []
+
+    for row_name, row in ROWS.items():
+        if not Path(row.path).exists():
+            continue
+        cfg = registry.lookup(row.path)
+        if row.is_mllm != cfg.is_mllm:
+            mismatches.append(
+                f"{row_name}: is_mllm row={row.is_mllm!r} registry={cfg.is_mllm!r}"
             )
 
     assert mismatches == []

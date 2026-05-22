@@ -151,7 +151,6 @@ ROWS: dict[str, Row] = {
     "qwen27_jang4m": Row(
         "qwen27_jang4m",
         "/Users/example/models/dealign.ai/Qwen3.6-27B-JANG_4M-CRACK",
-        is_mllm=True,
         tool_parser="qwen",
         reasoning_parser="qwen3",
         expected_min_tps=18.0,
@@ -178,7 +177,6 @@ ROWS: dict[str, Row] = {
     "qwen27_jang4m_mtp": Row(
         "qwen27_jang4m_mtp",
         "/Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP",
-        is_mllm=True,
         tool_parser="qwen",
         reasoning_parser="qwen3",
         expected_min_tps=18.0,
@@ -187,6 +185,7 @@ ROWS: dict[str, Row] = {
     "qwen35_jangtq": Row(
         "qwen35_jangtq",
         "/Users/example/models/dealign.ai/Qwen3.6-35B-A3B-JANGTQ-CRACK",
+        is_mllm=True,
         tool_parser="qwen",
         reasoning_parser="qwen3",
         expected_min_tps=35.0,
@@ -195,6 +194,7 @@ ROWS: dict[str, Row] = {
     "qwen35_4bit": Row(
         "qwen35_4bit",
         "/Users/example/models/Qwen3.6-35B-A3B-4bit",
+        is_mllm=True,
         tool_parser="qwen",
         reasoning_parser="qwen3",
         expected_min_tps=30.0,
