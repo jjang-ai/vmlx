@@ -43,6 +43,7 @@ def test_family_detection_contract_pins_named_release_rows():
         "decode_speed_external_nemotron3_jangtq_mxfp_rows",
         "decode_speed_registry_cache_metadata_health",
         "decode_speed_plain_kv_cache_health_not_native",
+        "decode_speed_local_high_risk_rows_match_engine_registry",
     }.issubset(names)
 
 
@@ -508,6 +509,57 @@ def test_decode_speed_gate_has_external_nemotron3_jangtq_mxfp_rows():
         assert "--is-mllm" not in cmd
         assert cmd[cmd.index("--tool-call-parser") + 1] == "nemotron"
         assert cmd[cmd.index("--reasoning-parser") + 1] == "deepseek_r1"
+
+
+def test_decode_speed_local_high_risk_rows_match_current_engine_registry():
+    from pathlib import Path
+
+    from tests.cross_matrix.run_decode_speed_gate import ROWS
+    from vmlx_engine.model_config_registry import get_model_config_registry
+
+    row_names = (
+        "dsv4_k",
+        "qwen27_jang4m",
+        "qwen27_jang4m_mtp",
+        "qwen27_mxfp4",
+        "qwen27_mxfp8_mtp",
+        "qwen35_jangtq",
+        "qwen35_4bit",
+        "qwen35_mxfp8_mtp",
+        "hy3",
+        "nemotron_jangtq",
+        "nemotron_omni_nano_jangtq4",
+        "nemotron_mxfp4",
+    )
+    expected_families = {
+        "dsv4_k": ("deepseek_v4", "kv", "deepseek_v4_composite"),
+        "qwen27_jang4m": ("qwen3_5", "hybrid", None),
+        "qwen27_jang4m_mtp": ("qwen3_5", "hybrid", None),
+        "qwen27_mxfp4": ("qwen3_5", "hybrid", None),
+        "qwen27_mxfp8_mtp": ("qwen3_5", "hybrid", None),
+        "qwen35_jangtq": ("qwen3_5_moe", "hybrid", None),
+        "qwen35_4bit": ("qwen3_5_moe", "hybrid", None),
+        "qwen35_mxfp8_mtp": ("qwen3_5_moe", "hybrid", None),
+        "hy3": ("hy_v3", "kv", "kv"),
+        "nemotron_jangtq": ("nemotron_h", "hybrid", None),
+        "nemotron_omni_nano_jangtq4": ("nemotron_h", "hybrid", None),
+        "nemotron_mxfp4": ("nemotron_h", "hybrid", None),
+    }
+
+    registry = get_model_config_registry()
+
+    for row_name in row_names:
+        row = ROWS[row_name]
+        assert Path(row.path).is_dir(), f"{row_name} path missing: {row.path}"
+        detected = registry.lookup(row.path)
+        family_name, cache_type, cache_subtype = expected_families[row_name]
+
+        assert detected.family_name == family_name, row_name
+        assert detected.cache_type == cache_type, row_name
+        assert detected.cache_subtype == cache_subtype, row_name
+        assert detected.tool_parser == row.tool_parser, row_name
+        assert detected.reasoning_parser == row.reasoning_parser, row_name
+        assert detected.is_mllm is row.is_mllm, row_name
 
 
 def test_decode_speed_gate_matches_registry_parser_policy_for_ling_and_nemotron():

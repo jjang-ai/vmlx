@@ -286,6 +286,9 @@ def test_release_regression_manifest_tracks_qwen_nemotron_hybrid_cache_rows():
     assert "Nemotron parser/reasoning" in joined
     assert "MXFP4" in joined
     assert "plain KV JANG/JANGTQ/MXFP rows" in joined
+    assert "local high-risk DSV4" in joined
+    assert "Nemotron Omni/Nano" in joined
+    assert "current-model-family-detection-contract-20260522-local-artifact-registry.json" in joined
 
 
 def test_release_regression_manifest_tracks_zaya_stale_stamp_policy():

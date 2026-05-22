@@ -244,10 +244,11 @@ _ROWS: list[dict[str, Any]] = [
             "Panel session launch builder preserves MiniMax minimax_m2 parser launch, Qwen3.6 hybrid cache forces paged cache, ZAYA qwen3 reasoning parser and model-owned no-thinking defaults, DSV4 stale cache/additionalArgs suppression, and native-MTP D3 launch policy",
             "Decode-speed matrix includes large external Mistral JANGTQ, Mistral MXFP4, and GPT-OSS rows with parser/modality launch policy pinned",
             "Decode-speed matrix includes external Nemotron 3 JANGTQ2 and MXFP4 rows with Nemotron parser/reasoning launch policy pinned",
+            "Existing local high-risk DSV4, Qwen JANG/JANGTQ/MXFP/4bit/MTP, Hy3, and Nemotron Omni/Nano JANGTQ/MXFP rows match the current engine registry parser, cache, and modality policy without loading weights",
             "This is source/static compatibility proof only; live multi-turn output quality remains a separate live row",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_model_family_detection_contract.py --out build/current-model-family-detection-contract-20260522-qwen-nemotron-hybrid-cache.json",
+            ".venv/bin/python tests/cross_matrix/run_model_family_detection_contract.py --out build/current-model-family-detection-contract-20260522-local-artifact-registry.json",
         ],
         "artifacts": [
             "build/current-model-family-detection-contract-20260522-jang-only-mx-matmul-policy.json",
@@ -256,6 +257,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-model-family-detection-contract-20260522-plain-kv-cache-health.json",
             "build/current-model-family-detection-contract-20260522-panel-launch-wiring.json",
             "build/current-model-family-detection-contract-20260522-zaya-hy3-qwen-vl-profile-rows.json",
+            "build/current-model-family-detection-contract-20260522-local-artifact-registry.json",
         ],
     },
     {

@@ -135,6 +135,7 @@ REQUIRED_ROWS = (
     "decode_speed_external_nemotron3_jangtq_mxfp_rows",
     "decode_speed_registry_cache_metadata_health",
     "decode_speed_plain_kv_cache_health_not_native",
+    "decode_speed_local_high_risk_rows_match_engine_registry",
 )
 
 ROW_MARKERS: dict[str, tuple[str, ...]] = {
@@ -261,6 +262,9 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
     ),
     "decode_speed_plain_kv_cache_health_not_native": (
         "test_decode_speed_gate_detects_plain_kv_cache_health_mismatches",
+    ),
+    "decode_speed_local_high_risk_rows_match_engine_registry": (
+        "test_decode_speed_local_high_risk_rows_match_current_engine_registry",
     ),
 }
 
