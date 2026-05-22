@@ -1,6 +1,7 @@
 def test_max_output_context_contract_covers_all_public_api_surfaces():
     from tests.cross_matrix import run_max_output_context_contract as gate
 
+    required = gate.REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS
     sources = set(gate.SOURCE_HASH_FILES)
     assert "vmlx_engine/api/anthropic_adapter.py" in sources
     assert "vmlx_engine/api/ollama_adapter.py" in sources
@@ -17,3 +18,25 @@ def test_max_output_context_contract_covers_all_public_api_surfaces():
     assert "test_ollama_generate_default_uses_chat_template_request_shape" in joined_commands
     assert "test_ollama_chat_omits_non_positive_num_predict_sentinels" in joined_commands
     assert "test_ollama_generate_omits_non_positive_num_predict_sentinels" in joined_commands
+
+    assert "test_request_output_caps_override_server_default_without_touching_context_cap" in required
+    assert "test_explicit_startup_max_tokens_is_default_not_request_ceiling" in required
+    assert "test_request_output_caps_can_go_below_or_above_startup_default" in required
+    assert "test_explicit_server_max_tokens_overrides_bundle_max_new_tokens" in required
+    assert "test_omitted_server_max_tokens_uses_bundle_max_new_tokens" in required
+    assert "test_omitted_server_max_tokens_without_bundle_default_is_bounded" in required
+    assert "test_max_tokens_resolution_contract_applies_to_every_registered_family" in required
+    assert "test_wake_reload_preserves_max_tokens_explicitness" in required
+    assert "test_cli_serve_implicit_max_tokens_uses_bounded_fallback" in required
+    assert "surfaces Max Output Tokens separately from Max Context Tokens" in required
+    assert "does not copy model max_new_tokens into hidden startup maxTokens config" in required
+    assert "chat settings expose per-chat max tokens without hidden DSV4 floors" in required
+    assert "keeps per-chat maxTokens as output budget only, never prompt context" in required
+    assert "keeps Responses maxTokens as output budget only, never prompt context" in required
+    assert "chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap" in required
+    assert "clears legacy session maxTokens=32768 before launch can reuse it" in required
+
+    engine_command = gate.COMMANDS["engine_output_context_resolution"][1]
+    panel_command = gate.COMMANDS["panel_output_context_wiring"][1]
+    assert "-vv" in engine_command
+    assert "--reporter=verbose" in panel_command
