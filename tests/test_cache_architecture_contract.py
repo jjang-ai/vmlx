@@ -4,6 +4,7 @@ def test_cache_architecture_contract_pins_named_cache_edges():
     required_pytest = gate.REQUIRED_CACHE_TEST_MARKERS
     required_api = gate.REQUIRED_API_CACHE_CHECKS
     required_api_command = gate.REQUIRED_API_CACHE_COMMAND_MARKERS
+    required_panel = gate.REQUIRED_PANEL_CACHE_MARKERS
 
     assert "test_memory_pressure_reuses_shorter_dsv4_terminal_composite_prefix" in required_pytest
     assert "test_memory_pressure_refuses_dsv4_partial_without_terminal_composite" in required_pytest
@@ -22,5 +23,28 @@ def test_cache_architecture_contract_pins_named_cache_edges():
     assert "hybrid_ssm_partial_reuse" in required_api
     assert "turboquant_disk_roundtrip" in required_api
 
-    command = gate.COMMANDS["cache_family_pytest"]
+    assert "deepseek-v4 disables composite prefix cache by default even with stale cache config" in required_panel
+    assert "deepseek-v4 diagnostic cache opt-in uses DS4 page-sized blocks" in required_panel
+    assert "DSV4 pool quant and native prefix controls stay DSV4-only" in required_panel
+    assert "detected Qwen3.6 hybrid cache forces paged cache over stale saved false" in required_panel
+    assert "detected Mamba cache forces paged cache while regular KV respects saved false" in required_panel
+    assert "disabling prefix cache disables all dependent features" in required_panel
+
+    command = gate.COMMANDS["cache_family_pytest"].cmd
     assert "-vv" in command
+
+
+def test_cache_architecture_contract_pins_panel_launch_cache_policy():
+    from tests.cross_matrix import run_cache_architecture_contract as gate
+
+    assert "panel/src/main/sessions.ts" in gate.SOURCE_HASH_FILES
+    assert "panel/src/shared/cacheControlPolicy.ts" in gate.SOURCE_HASH_FILES
+    assert "panel/tests/settings-flow.test.ts" in gate.SOURCE_HASH_FILES
+    assert "panel/tests/cache-control-policy.test.ts" in gate.SOURCE_HASH_FILES
+
+    panel_command = gate.COMMANDS["panel_cache_launch_policy"]
+    assert panel_command.cwd == "panel"
+    assert panel_command.cmd[:4] == ["npm", "exec", "vitest", "--"]
+    assert "tests/settings-flow.test.ts" in panel_command.cmd
+    assert "-t" in panel_command.cmd
+    assert "deepseek-v4|DSV4|Qwen3\\.6|Mamba|cache" in panel_command.cmd

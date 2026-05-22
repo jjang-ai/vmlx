@@ -185,12 +185,14 @@ _ROWS: list[dict[str, Any]] = [
             "Plain KV, hybrid SSM/Mamba, MLA, DSV4 composite, ZAYA CCA, and MLLM media-salt cache contracts stay classified per family",
             "Generic TurboQuant KV is not applied to DSV4 native composite or hybrid SSM paths",
             "Cache detail telemetry reports paged, typed native, and TQ/L2 state",
+            "Panel session launch builder preserves DSV4 default and diagnostic prefix-cache policy, DSV4-only native cache controls, Qwen3.6 hybrid and Mamba paged-cache forcing, and regular KV stale saved false semantics",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-20260521.json",
+            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-20260522-panel-cache-launch.json",
         ],
         "artifacts": [
             "build/current-cache-architecture-contract-20260521.json",
+            "build/current-cache-architecture-contract-20260522-panel-cache-launch.json",
         ],
     },
     {

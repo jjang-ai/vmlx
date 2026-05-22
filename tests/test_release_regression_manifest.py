@@ -492,6 +492,10 @@ def test_release_regression_manifest_tracks_cache_architecture_with_runner_artif
     assert "hybrid SSM" in joined
     assert "TurboQuant KV" in joined
     assert "MLA" in joined
+    assert "current-cache-architecture-contract-20260522-panel-cache-launch.json" in joined
+    assert "Panel session launch builder preserves DSV4 default and diagnostic prefix-cache policy" in joined
+    assert "Qwen3.6 hybrid and Mamba paged-cache forcing" in joined
+    assert "regular KV stale saved false semantics" in joined
 
 
 def test_release_regression_manifest_tracks_native_mtp_with_runner_artifact():

@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,10 @@ SOURCE_HASH_FILES = (
     "tests/test_turboquant_cache_contract.py",
     "tests/test_tq_disk_cache.py",
     "tests/test_cache_architecture_contract.py",
+    "panel/src/main/sessions.ts",
+    "panel/src/shared/cacheControlPolicy.ts",
+    "panel/tests/settings-flow.test.ts",
+    "panel/tests/cache-control-policy.test.ts",
 )
 
 REQUIRED_CACHE_TEST_MARKERS = (
@@ -85,14 +90,39 @@ REQUIRED_API_CACHE_COMMAND_MARKERS = (
     "generic_turboquant_patcher_skips_hybrid_ssm",
 )
 
-COMMANDS: dict[str, list[str]] = {
-    "api_cache_status_contracts": [
+REQUIRED_PANEL_CACHE_MARKERS = (
+    "deepseek-v4 disables composite prefix cache by default even with stale cache config",
+    "deepseek-v4 diagnostic cache opt-in uses DS4 page-sized blocks",
+    "deepseek-v4 respects explicit prefix cache disable",
+    "DSV4 pool quant and native prefix controls stay DSV4-only",
+    "detected Qwen3.6 hybrid cache forces paged cache over stale saved false",
+    "detected Mamba cache forces paged cache while regular KV respects saved false",
+    "continuous batching off is a real master switch for LLM cache flags",
+    "continuous batching off is a real master switch for VLM cache flags",
+    "disabling prefix cache disables all dependent features",
+    "MCP tools honor explicit prefix cache disable",
+    "cacheMemoryPercent default 15 emits 0.15 when legacy memory cache is active",
+    "omits memory-aware cache budget flags when paged cache is active",
+    "mutual exclusion: disk cache NOT emitted when paged cache is active",
+    "mutual exclusion: block disk cache only emitted when paged cache is active",
+    "prefix cache disabled suppresses all cache sub-flags",
+)
+
+
+@dataclass(frozen=True)
+class CommandSpec:
+    cmd: list[str]
+    cwd: str = "."
+
+
+COMMANDS: dict[str, CommandSpec] = {
+    "api_cache_status_contracts": CommandSpec([
         sys.executable,
         "tests/cross_matrix/run_noheavy_api_cache_contract.py",
         "--out",
         "build/current-api-cache-contract-cache-architecture-check-20260521.json",
-    ],
-    "cache_family_pytest": [
+    ]),
+    "cache_family_pytest": CommandSpec([
         sys.executable,
         "-m",
         "pytest",
@@ -107,7 +137,22 @@ COMMANDS: dict[str, list[str]] = {
         "tests/test_tq_disk_cache.py",
         "-k",
         CACHE_PATTERN,
-    ],
+    ]),
+    "panel_cache_launch_policy": CommandSpec(
+        [
+            "npm",
+            "exec",
+            "vitest",
+            "--",
+            "run",
+            "tests/settings-flow.test.ts",
+            "tests/cache-control-policy.test.ts",
+            "--reporter=verbose",
+            "-t",
+            "deepseek-v4|DSV4|Qwen3\\.6|Mamba|cache",
+        ],
+        cwd="panel",
+    ),
 }
 
 
@@ -119,23 +164,23 @@ def _parse_counts(output: str) -> dict[str, int | None]:
     passed = None
     skipped = None
     deselected = None
-    match = re.search(r"(\d+) passed", output)
-    if match:
-        passed = int(match.group(1))
-    match = re.search(r"(\d+) skipped", output)
-    if match:
-        skipped = int(match.group(1))
-    match = re.search(r"(\d+) deselected", output)
-    if match:
-        deselected = int(match.group(1))
+    matches = [int(value) for value in re.findall(r"(\d+) passed", output)]
+    if matches:
+        passed = max(matches)
+    matches = [int(value) for value in re.findall(r"(\d+) skipped", output)]
+    if matches:
+        skipped = max(matches)
+    matches = [int(value) for value in re.findall(r"(\d+) deselected", output)]
+    if matches:
+        deselected = max(matches)
     return {"passed": passed, "skipped": skipped, "deselected": deselected}
 
 
-def _run(root: Path, name: str, cmd: list[str]) -> dict[str, Any]:
+def _run(root: Path, name: str, spec: CommandSpec) -> dict[str, Any]:
     started = time.monotonic()
     proc = subprocess.run(
-        cmd,
-        cwd=root,
+        spec.cmd,
+        cwd=root / spec.cwd,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -143,7 +188,8 @@ def _run(root: Path, name: str, cmd: list[str]) -> dict[str, Any]:
     )
     return {
         "name": name,
-        "command": cmd,
+        "command": spec.cmd,
+        "cwd": spec.cwd,
         "returncode": proc.returncode,
         "elapsed_sec": round(time.monotonic() - started, 3),
         "counts": _parse_counts(proc.stdout),
@@ -182,7 +228,14 @@ def build_artifact(root: Path) -> dict[str, Any]:
         for marker in REQUIRED_API_CACHE_COMMAND_MARKERS
         if marker not in api_command_text
     ]
+    panel_stdout = str(results["panel_cache_launch_policy"].get("stdout", ""))
+    missing_panel_markers = [
+        marker
+        for marker in REQUIRED_PANEL_CACHE_MARKERS
+        if marker not in panel_stdout
+    ]
     cache_passed = results["cache_family_pytest"]["counts"]["passed"] or 0
+    panel_passed = results["panel_cache_launch_policy"]["counts"]["passed"] or 0
     checks = {
         "dsv4_native_composite_cache_status": (
             not failed
@@ -230,6 +283,11 @@ def build_artifact(root: Path) -> dict[str, Any]:
             not failed
             and "test_mllm_stats_include_cache_fields" not in missing_markers
         ),
+        "panel_cache_launch_policy": (
+            not failed
+            and not missing_panel_markers
+            and panel_passed >= len(REQUIRED_PANEL_CACHE_MARKERS)
+        ),
         "legacy_count_floor_still_nontrivial": not failed and cache_passed >= 55,
     }
     return {
@@ -240,6 +298,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "missing_markers": missing_markers,
         "missing_api_checks": missing_api_checks,
         "missing_api_command_markers": missing_api_command_markers,
+        "missing_panel_markers": missing_panel_markers,
         "source_hashes": {
             rel: _sha256(root / rel)
             for rel in SOURCE_HASH_FILES
@@ -268,6 +327,7 @@ def main() -> int:
     print("missing_markers=" + json.dumps(artifact["missing_markers"]))
     print("missing_api_checks=" + json.dumps(artifact["missing_api_checks"]))
     print("missing_api_command_markers=" + json.dumps(artifact["missing_api_command_markers"]))
+    print("missing_panel_markers=" + json.dumps(artifact["missing_panel_markers"]))
     for name, result in artifact["results"].items():
         counts = result["counts"]
         print(
