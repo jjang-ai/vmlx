@@ -312,6 +312,10 @@ class SingleBatchGenerator:
     def _prefill(self, tokens: list[int], req: _Request) -> None:
         if not tokens:
             return
+        _prefill_keep_alloc = os.environ.get(
+            "VMLINUX_PREFILL_KEEP_ALLOC",
+            os.environ.get("VMLX_PREFILL_KEEP_ALLOC", ""),
+        ).lower() in {"1", "true", "yes", "on"}
         pos = 0
         while pos < len(tokens):
             n = min(self.prefill_step_size, len(tokens) - pos)
@@ -320,8 +324,9 @@ class SingleBatchGenerator:
             req.context_tokens.extend(chunk)
             req.token_context.update_and_fetch(mx.array(chunk, dtype=mx.int32))
             self._sync()
-            if hasattr(mx, "clear_cache"):
-                mx.clear_cache()
+            if not _prefill_keep_alloc:
+                if hasattr(mx, "clear_cache"):
+                    mx.clear_cache()
             pos += n
 
     def _logprobs_required(self, req: _Request) -> bool:

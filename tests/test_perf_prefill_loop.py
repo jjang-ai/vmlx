@@ -43,6 +43,15 @@ def test_chunk_loop_env_gates_clear_cache():
     assert "if not _prefill_keep_alloc:" in src
 
 
+def test_single_batch_prefill_loop_env_gates_clear_cache():
+    import vmlx_engine.utils.single_batch_generator as mod
+
+    src = inspect.getsource(mod.SingleBatchGenerator._prefill)
+    assert "VMLX_PREFILL_KEEP_ALLOC" in src
+    assert "_prefill_keep_alloc" in src
+    assert "if not _prefill_keep_alloc:" in src
+
+
 def test_cli_flag_propagates_to_env():
     import vmlx_engine.cli as cli_mod
 

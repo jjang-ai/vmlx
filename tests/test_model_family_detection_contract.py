@@ -248,6 +248,28 @@ def test_decode_speed_gate_jang_only_rows_keep_text_mx_matmul_launch_policy():
     assert mtp_vlm_cmd[mtp_vlm_cmd.index("--reasoning-parser") + 1] == "qwen3"
 
 
+def test_decode_speed_gate_extra_serve_arg_is_opt_in_without_mutating_row_defaults():
+    from tests.cross_matrix.run_decode_speed_gate import (
+        ROWS,
+        build_serve_command,
+        row_with_extra_serve_args,
+    )
+
+    base = ROWS["qwen27_jang4m"]
+    assert "--prefill-keep-alloc" not in base.extra_args
+
+    row = row_with_extra_serve_args(base, ["--prefill-keep-alloc"])
+    cmd = build_serve_command(
+        row,
+        python=Path("/bundle/python3"),
+        port=8793,
+        prefill_step_size=2048,
+    )
+
+    assert "--prefill-keep-alloc" in cmd
+    assert "--prefill-keep-alloc" not in base.extra_args
+
+
 def test_decode_speed_gate_has_plain_mlx_qwen36_4bit_row():
     from tests.cross_matrix.run_decode_speed_gate import ROWS, build_serve_command
 

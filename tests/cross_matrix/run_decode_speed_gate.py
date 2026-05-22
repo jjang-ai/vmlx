@@ -20,7 +20,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -450,6 +450,13 @@ def build_serve_command(
     return cmd
 
 
+def row_with_extra_serve_args(row: Row, extra_args: list[str] | None) -> Row:
+    """Return a row copy with one-off serve args appended for live A/B probes."""
+    if not extra_args:
+        return row
+    return replace(row, extra_args=[*row.extra_args, *extra_args])
+
+
 def build_clean_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
     """Return the live harness env without source/path or forced JANGTQ knobs."""
     env = dict(os.environ if base_env is None else base_env)
@@ -800,6 +807,15 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--timeout", type=int, default=240)
     parser.add_argument("--prefill-step-size", type=int, default=2048)
+    parser.add_argument(
+        "--serve-extra-arg",
+        action="append",
+        default=[],
+        help=(
+            "Append one extra serve arg to each selected row. Use "
+            "--serve-extra-arg=--flag for values that start with '-'."
+        ),
+    )
     args = parser.parse_args()
 
     logs = args.out.parent / "decode-speed-logs"
@@ -810,6 +826,7 @@ def main() -> None:
         if row is None:
             results.append({"name": name, "status": "unknown-row"})
             continue
+        row = row_with_extra_serve_args(row, args.serve_extra_arg)
         print(f"[decode-gate] row={name} path={row.path}", flush=True)
         result = run_row(
             row,
