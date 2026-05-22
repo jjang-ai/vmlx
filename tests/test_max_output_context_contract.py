@@ -14,6 +14,7 @@ def test_max_output_context_contract_covers_all_public_api_surfaces():
     assert "test_request_output_caps_override_server_default_without_touching_context_cap" in joined_commands
     assert "test_explicit_startup_max_tokens_is_default_not_request_ceiling" in joined_commands
     assert "test_request_output_caps_can_go_below_or_above_startup_default" in joined_commands
+    assert "test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap" in joined_commands
     assert "test_anthropic_messages_omitted_max_tokens_uses_bundle_default" in joined_commands
     assert "test_ollama_generate_default_uses_chat_template_request_shape" in joined_commands
     assert "test_ollama_chat_omits_non_positive_num_predict_sentinels" in joined_commands
@@ -22,6 +23,7 @@ def test_max_output_context_contract_covers_all_public_api_surfaces():
     assert "test_request_output_caps_override_server_default_without_touching_context_cap" in required
     assert "test_explicit_startup_max_tokens_is_default_not_request_ceiling" in required
     assert "test_request_output_caps_can_go_below_or_above_startup_default" in required
+    assert "test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap" in required
     assert "test_explicit_server_max_tokens_overrides_bundle_max_new_tokens" in required
     assert "test_omitted_server_max_tokens_uses_bundle_max_new_tokens" in required
     assert "test_omitted_server_max_tokens_without_bundle_default_is_bounded" in required

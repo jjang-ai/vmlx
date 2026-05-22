@@ -41,15 +41,16 @@ _ROWS: list[dict[str, Any]] = [
             "Server Default Max Output Tokens maps to --max-tokens",
             "Max Context Tokens maps to --max-prompt-tokens",
             "Chat Max Output Tokens remains a per-chat/API override",
+            "Legacy /v1/completions max_tokens remains a per-request output cap",
             "External coding-tool configs keep context window and output limit separate",
             "new-chat model-owned maxTokens cannot be replaced by inherited per-chat output caps",
             "server startup maxTokens and chat maxTokens remain independent when both are set",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-server-chat-boundary.json",
+            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-legacy-completions.json",
         ],
         "artifacts": [
-            "build/current-max-output-context-contract-20260522-server-chat-boundary.json",
+            "build/current-max-output-context-contract-20260522-legacy-completions.json",
         ],
     },
     {
@@ -149,14 +150,15 @@ _ROWS: list[dict[str, Any]] = [
         "proves": [
             "OpenAI Chat Completions sampling/default propagation",
             "OpenAI Responses sampling/default propagation",
+            "OpenAI legacy Completions max_tokens/default propagation",
             "Anthropic adapter bundle defaults",
             "Ollama adapter streaming/done behavior",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260521.json",
+            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260522-legacy-completions.json",
         ],
         "artifacts": [
-            "build/current-api-surface-contract-20260521.json",
+            "build/current-api-surface-contract-20260522-legacy-completions.json",
         ],
     },
     {

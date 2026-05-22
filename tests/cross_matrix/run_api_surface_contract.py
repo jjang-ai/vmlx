@@ -43,6 +43,7 @@ SOURCE_HASH_FILES = (
 REQUIRED_NESTED_API_CHECKS = (
     "openai_chat_sampling_kwargs",
     "responses_sampling_kwargs",
+    "legacy_completions_output_caps_override_server_default",
     "request_output_caps_override_server_default",
     "prompt_context_caps_stay_separate_from_output_caps",
     "anthropic_bundle_defaults",
@@ -179,6 +180,9 @@ def build_artifact(root: Path) -> dict[str, Any]:
         ),
         "openai_responses_sampling_defaults": (
             not failed and "responses_sampling_kwargs" not in missing_nested_checks
+        ),
+        "legacy_completions_output_caps_override_server_default": (
+            not failed and "legacy_completions_output_caps_override_server_default" not in missing_nested_checks
         ),
         "chat_and_responses_output_caps_override_server_default": (
             not failed

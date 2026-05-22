@@ -744,6 +744,80 @@ class TestServerSamplingResolution:
         assert captured[2]["max_tokens"] == 4096
         assert captured[2]["max_prompt_tokens"] == 16384
 
+    def test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap(
+        self,
+        monkeypatch,
+    ):
+        """Legacy text completions must keep output and prompt caps separate.
+
+        `/v1/completions` does not use the chat request builder, but it still
+        serves API clients through the same local server defaults. Its
+        per-request `max_tokens` must override the server default output cap
+        without mutating or being clamped by `max_prompt_tokens`.
+        """
+        from fastapi.testclient import TestClient
+
+        import vmlx_engine.server as server
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class FakeTokenizer:
+            has_thinking = False
+
+        class FakeEngine:
+            is_mllm = False
+            tokenizer = FakeTokenizer()
+            preserve_native_tool_format = False
+
+            async def generate(self, **kwargs):
+                captured.append(dict(kwargs))
+                return GenerationOutput(text="ok", prompt_tokens=2, completion_tokens=1)
+
+        captured: list[dict] = []
+
+        monkeypatch.setattr(server, "_engine", FakeEngine())
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_name", "completion-cap-model")
+        monkeypatch.setattr(server, "_api_key", None, raising=False)
+        monkeypatch.setattr(server, "_default_temperature", None)
+        monkeypatch.setattr(server, "_default_top_p", None)
+        monkeypatch.setattr(server, "_default_top_k", None)
+        monkeypatch.setattr(server, "_default_min_p", None)
+        monkeypatch.setattr(server, "_default_repetition_penalty", None)
+        monkeypatch.setattr(server, "_default_max_tokens", 256)
+        monkeypatch.setattr(server, "_default_max_tokens_explicit", True, raising=False)
+        monkeypatch.setattr(server, "_max_prompt_tokens", 16384)
+        server._jang_sampling_defaults_cache.clear()
+        server._generation_defaults_cache.clear()
+
+        client = TestClient(server.app)
+
+        explicit = client.post(
+            "/v1/completions",
+            json={
+                "model": "completion-cap-model",
+                "prompt": "explicit cap",
+                "stream": False,
+                "max_tokens": 1024,
+                "max_prompt_tokens": 8192,
+            },
+        )
+        defaulted = client.post(
+            "/v1/completions",
+            json={
+                "model": "completion-cap-model",
+                "prompt": "default cap",
+                "stream": False,
+                "max_prompt_tokens": 4096,
+            },
+        )
+
+        assert explicit.status_code == 200
+        assert defaulted.status_code == 200
+        assert captured[0]["max_tokens"] == 1024
+        assert captured[0]["max_prompt_tokens"] == 8192
+        assert captured[1]["max_tokens"] == 256
+        assert captured[1]["max_prompt_tokens"] == 4096
+
     def test_reasoning_effort_preserves_bundle_max_new_tokens(
         self,
         tmp_path,

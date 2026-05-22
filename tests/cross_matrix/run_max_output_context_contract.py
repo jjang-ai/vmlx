@@ -54,6 +54,7 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     "test_request_output_caps_override_server_default_without_touching_context_cap",
     "test_explicit_startup_max_tokens_is_default_not_request_ceiling",
     "test_request_output_caps_can_go_below_or_above_startup_default",
+    "test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap",
     "test_explicit_server_max_tokens_overrides_bundle_max_new_tokens",
     "test_omitted_server_max_tokens_uses_bundle_max_new_tokens",
     "test_omitted_server_max_tokens_without_bundle_default_is_bounded",
@@ -110,6 +111,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_request_output_caps_override_server_default_without_touching_context_cap",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_explicit_startup_max_tokens_is_default_not_request_ceiling",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_request_output_caps_can_go_below_or_above_startup_default",
+            "tests/test_engine_audit.py::TestServerSamplingResolution::test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_explicit_server_max_tokens_overrides_bundle_max_new_tokens",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_omitted_server_max_tokens_uses_bundle_max_new_tokens",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_omitted_server_max_tokens_without_bundle_default_is_bounded",
@@ -218,6 +220,10 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "request_output_caps_can_go_below_or_above_startup_default": (
             not failed
             and "test_request_output_caps_can_go_below_or_above_startup_default" not in missing_markers
+        ),
+        "legacy_completions_output_cap_overrides_server_default": (
+            not failed
+            and "test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap" not in missing_markers
         ),
         "chat_max_tokens_overrides_server_default_per_request": (
             not failed
