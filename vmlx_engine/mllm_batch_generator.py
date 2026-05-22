@@ -6254,14 +6254,19 @@ class MLLMBatchGenerator:
     def _writeback_kv_row(batch_layer: Any, solo_kv: Any, row_idx: int) -> None:
         """Write a single-row KVCache state back into batch_layer at row_idx.
 
-        Used by _per_row_replay_forward for hybrid SSM rollback. Handles two
-        edge cases:
-          - solo_kv.offset > batch_layer current max seq → grow batch_layer
-          - solo_kv.offset < batch_layer current max seq → pad solo row with
-            zeros so concatenate aligns
+        Used by _per_row_replay_forward for hybrid SSM rollback. Handles four
+        cases:
+          - B == 1: REPLACE the full tensor with solo state (truncate). Avoids
+            leaving zero padding in tensor that the model's attention layer
+            may read (correctness bug observed on hybrid Qwen3.5 with
+            VMLX_PLD_DEBUG live test).
+          - B > 1 and solo_seq matches max row offset: pad solo to cur_max,
+            concatenate per row.
+          - B > 1 and solo state shorter than other rows: pad with zeros.
+            (Correctness depends on attention mask being per-row offset aware.)
+          - solo_kv.offset > batch_layer current max seq: grow batch_layer.
 
-        Updates batch_layer.offset[row_idx] = solo_kv.offset. If offset is a
-        scalar (single-request batch path), assigns directly.
+        Updates batch_layer.offset[row_idx] = solo_kv.offset.
         """
         if solo_kv is None or batch_layer is None:
             return
@@ -6276,7 +6281,21 @@ class MLLMBatchGenerator:
         cur_max = batch_layer.keys.shape[2]
         new_seq = int(solo_kv.offset) if not isinstance(solo_kv.offset, mx.array) else int(solo_kv.offset.item())
 
-        # Grow batch_layer's max seq if solo state is longer
+        # B == 1 fast path: replace tensor entirely (truncate). Avoids
+        # leaving zero-padded positions in the cache that the model's
+        # attention layer would read on the next forward.
+        if B == 1:
+            batch_layer.keys = solo_kv.keys
+            batch_layer.values = solo_kv.values
+            if isinstance(batch_layer.offset, mx.array):
+                batch_layer.offset = mx.array([new_seq])
+            else:
+                batch_layer.offset = new_seq
+            if hasattr(batch_layer, "_idx"):
+                batch_layer._idx = new_seq
+            return
+
+        # B > 1 path: must keep other rows' content. Grow if solo is longer.
         if new_seq > cur_max:
             pad_amount = new_seq - cur_max
             pad_k = mx.zeros((B, H, pad_amount, D), dtype=batch_layer.keys.dtype)
@@ -6285,7 +6304,10 @@ class MLLMBatchGenerator:
             batch_layer.values = mx.concatenate([batch_layer.values, pad_v], axis=2)
             cur_max = new_seq
 
-        # Pad solo state to current max seq for concatenation along batch dim
+        # Pad solo state to cur_max for concatenation along batch dim.
+        # Note: B > 1 case is potentially incorrect if attention reads beyond
+        # per-row offset (mask must be respected). Verified safe only for B=1
+        # via VMLX_PLD_DEBUG live test on Qwen3.5; B > 1 is best-effort.
         solo_seq = solo_kv.keys.shape[2]
         if solo_seq < cur_max:
             pad_amount = cur_max - solo_seq

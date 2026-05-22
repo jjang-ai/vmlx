@@ -1857,8 +1857,25 @@ class MLLMScheduler:
         # --enable-pld is set. The excluded-token set (V0.6 filter) is built
         # from tokenizer/processor special-token attributes to keep image-pad,
         # vision markers, pad out of n-gram drafts.
-        pld_enabled = bool(getattr(self.config, "pld_enabled", False)) and getattr(
-            self.batch_generator, "_is_hybrid", False
+        #
+        # SAFETY GATE on hybrid models: Mamba/SSM layers process multi-token
+        # input differently from single-token decode (parallel scan vs
+        # recurrent state). Even with mathematically-equivalent algorithms,
+        # finite-precision differences accumulate after replay-driven rollbacks,
+        # causing token-level output drift on low-acceptance workloads
+        # (observed live on Qwen3.5 hybrid: code generation produced duplicate
+        # tokens like "return        return", "fibonacci fibonacci(n(n"). The
+        # full-accept path is safer (no rollback) but still has the multi-token
+        # vs single-token forward semantics mismatch.
+        #
+        # Until the cache-state divergence is root-caused and fixed, hybrid
+        # PLD is opt-in via VMLX_ENABLE_MLLM_PLD_HYBRID=1. Non-hybrid MLLM
+        # paths (if any) activate normally on --enable-pld.
+        config_pld_enabled = bool(getattr(self.config, "pld_enabled", False))
+        is_hybrid_model = getattr(self.batch_generator, "_is_hybrid", False)
+        hybrid_opt_in = os.getenv("VMLX_ENABLE_MLLM_PLD_HYBRID", "0") == "1"
+        pld_enabled = config_pld_enabled and (
+            not is_hybrid_model or hybrid_opt_in
         )
         if pld_enabled:
             try:
@@ -1868,8 +1885,10 @@ class MLLMScheduler:
                     excluded_token_ids=excluded,
                 )
                 logger.info(
-                    "[PLD] MLLM batched PLD enabled — K=2 (hybrid), "
+                    "[PLD] MLLM batched PLD enabled — K=%d, hybrid=%s, "
                     "excluded_token_ids=%d",
+                    2 if is_hybrid_model else 5,
+                    is_hybrid_model,
                     len(excluded) if excluded else 0,
                 )
             except Exception as exc:
@@ -1877,6 +1896,12 @@ class MLLMScheduler:
                     "[PLD] MLLM PLD wiring failed, falling back to standard "
                     "decode: %s", exc,
                 )
+        elif config_pld_enabled and is_hybrid_model:
+            logger.info(
+                "[PLD] MLLM batched PLD disabled on hybrid model "
+                "(cache-state divergence in Mamba multi-token vs single-token "
+                "forwards). Set VMLX_ENABLE_MLLM_PLD_HYBRID=1 to override."
+            )
         self._current_sampler_params = new_params
 
     def _build_pld_excluded_token_ids(self) -> Optional[Set[int]]:

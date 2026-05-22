@@ -72,6 +72,29 @@ def _import_gen():
     return MLLMBatchGenerator
 
 
+def test_writeback_kv_row_b1_truncates_to_solo_seq():
+    """B=1 fast path: writeback REPLACES the tensor entirely (no padding).
+
+    Avoids leaving zero positions in the cache that the model's attention
+    would read on next forward. Correctness bug observed live on hybrid
+    Qwen3.5 with low-acceptance prompts when the writeback padded with zeros.
+    """
+    Gen = _import_gen()
+    batch_layer = _FakeKVLayer(B=1, max_seq=5, value_seed=7)
+    solo = _FakeSoloKV(
+        mx.full((1, 2, 3, 4), 99.0),
+        mx.full((1, 2, 3, 4), 99.0),
+        offset=3,
+    )
+    Gen._writeback_kv_row(batch_layer, solo, row_idx=0)
+    # Tensor truncated to solo seq (no zero padding left)
+    assert batch_layer.keys.shape == (1, 2, 3, 4)
+    keys_list = batch_layer.keys.tolist()
+    for pos in range(3):
+        assert keys_list[0][0][pos][0] == 99.0
+    assert batch_layer.offset.tolist() == [3]
+
+
 def test_writeback_kv_row_simple():
     """Write a row's KVCache state into a batch with same max_seq."""
     Gen = _import_gen()
