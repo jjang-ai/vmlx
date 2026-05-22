@@ -26,6 +26,10 @@ def test_cache_architecture_contract_pins_named_cache_edges():
     assert "deepseek-v4 disables composite prefix cache by default even with stale cache config" in required_panel
     assert "deepseek-v4 diagnostic cache opt-in uses DS4 page-sized blocks" in required_panel
     assert "DSV4 pool quant and native prefix controls stay DSV4-only" in required_panel
+    assert (
+        "does not enable the rejected DSV4 pool quant codec even if old config asks for it"
+        in required_panel
+    )
     assert "detected Qwen3.6 hybrid cache forces paged cache over stale saved false" in required_panel
     assert "detected Mamba cache forces paged cache while regular KV respects saved false" in required_panel
     assert "disabling prefix cache disables all dependent features" in required_panel
@@ -38,7 +42,9 @@ def test_cache_architecture_contract_pins_panel_launch_cache_policy():
     from tests.cross_matrix import run_cache_architecture_contract as gate
 
     assert "panel/src/main/sessions.ts" in gate.SOURCE_HASH_FILES
+    assert "panel/src/shared/dsv4Env.ts" in gate.SOURCE_HASH_FILES
     assert "panel/src/shared/cacheControlPolicy.ts" in gate.SOURCE_HASH_FILES
+    assert "panel/tests/dsv4-env.test.ts" in gate.SOURCE_HASH_FILES
     assert "panel/tests/settings-flow.test.ts" in gate.SOURCE_HASH_FILES
     assert "panel/tests/cache-control-policy.test.ts" in gate.SOURCE_HASH_FILES
 

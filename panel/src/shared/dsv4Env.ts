@@ -14,9 +14,9 @@
  *     opt-in for native SWA+CSA/HCA composite prefix reuse. Default off until
  *     deterministic cached-vs-no-cache equivalence is proven.
  *   - `dsv4PoolQuant` is retained for old-session migration only. The live
- *     pool codec is disabled because it repeatedly requantizes DSV4 CSA/HCA
- *     pool state during decode; production DSV4 launches always set
- *     `DSV4_POOL_QUANT=0`.
+ *     pool codec is disabled because even after append-only writes, attention
+ *     reads still dequantize/concatenate the historical CSA/HCA pool during
+ *     decode; production DSV4 launches always set `DSV4_POOL_QUANT=0`.
  *
  * Natural model behavior wins: bundle chat/generation config plus explicit
  * per-request controls are the only model-behavior inputs.
