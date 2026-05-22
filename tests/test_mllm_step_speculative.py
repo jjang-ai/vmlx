@@ -282,17 +282,16 @@ def test_partial_accept_pure_attention():
 # ---------------------------------------------------------------------------
 
 
-def test_partial_accept_hybrid_drops_drafts():
-    """Hybrid model partial-accept emits CORRECTION ONLY, drops accepted drafts.
+def test_partial_accept_hybrid_preserves_drafts_via_replay():
+    """Hybrid partial-accept now PRESERVES accepted drafts via per-row replay (C.5).
 
-    Conservative simplification: per-row SSM replay isn't implemented in C.3,
-    so partial accepts revert to "correction only" (same as full-reject)
-    for safety. Full-accept and full-reject still work as designed.
+    Per-row replay forward restores both KV and SSM via solo cache extraction,
+    forward, and writeback. Accepted drafts are emitted as extras alongside
+    the next-step seed (correction at the rejected position).
     """
-    # drafts [3,4]. Plan: pos0→3 ✓ (would accept d0), pos1→55 (reject d1)
+    # drafts [3,4]. Plan: pos0→3 ✓ (accept d0), pos1→55 (reject d1), pos2→99
     model = _MockLanguageModel(argmax_plan=[[3, 55, 99]])
-    # Add an SSM layer to make this hybrid
-    ssm_state = mx.array([[1.0, 2.0]])  # one row
+    ssm_state = mx.array([[1.0, 2.0]])
     ssm_layer = _FakeSSMLayer(ssm_state)
     gen = _make_gen(model, pld_enabled=True, is_hybrid=True)
     req = _FakeReq(
@@ -304,11 +303,39 @@ def test_partial_accept_hybrid_drops_drafts():
 
     sampled, _ = gen._step_speculative(batch, K=2)
 
-    # Hybrid partial-accept rule: drop accepted drafts, emit correction at pos 0
-    assert int(sampled[0].item()) == 3  # argmax at pos 0 (the "correction")
+    # New C.5 behaviour: primary = correction at pos n_accept=1 = 55
+    # extras = accepted drafts = [3]
+    assert int(sampled[0].item()) == 55
+    assert req.scratch_extra_tokens == [3]
+    # Replay counters incremented
+    assert gen._pld_replay_attempts == 1
+
+
+def test_full_reject_hybrid_emits_correction_only():
+    """Hybrid full-reject: n_accept=0 → emit correction at pos 0, no extras.
+
+    Per-row replay forwards [seed] to advance SSM by 1 from snapshot, KV via
+    writeback. Cache ends at N+1.
+    """
+    # drafts [3,4]. Plan: pos0→99 (reject d0)
+    model = _MockLanguageModel(argmax_plan=[[99, 88, 77]])
+    ssm_state = mx.array([[1.0, 2.0]])
+    ssm_layer = _FakeSSMLayer(ssm_state)
+    gen = _make_gen(model, pld_enabled=True, is_hybrid=True)
+    req = _FakeReq(
+        last_token=5, num_tokens=1, output_tokens=[],
+        input_ids=mx.array([1, 2, 3, 4, 5, 1, 2]),
+    )
+    cache = [_FakeKVLayer([10]), ssm_layer]
+    batch = _FakeBatch([req], cache, y=mx.array([5]))
+
+    sampled, _ = gen._step_speculative(batch, K=2)
+
+    # n_accept=0, primary = correction = pos 0 = 99
+    assert int(sampled[0].item()) == 99
     assert req.scratch_extra_tokens is None
-    # SSM was restored from snapshot
-    assert ssm_layer.cache[0].tolist() == [[1.0, 2.0]]
+    # Replay counter incremented (replay ran with [seed])
+    assert gen._pld_replay_attempts == 1
 
 
 def test_full_accept_hybrid_no_rollback():

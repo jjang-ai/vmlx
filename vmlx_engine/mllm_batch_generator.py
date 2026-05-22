@@ -6213,6 +6213,213 @@ class MLLMBatchGenerator:
                 new_cache.append(mx.concatenate(parts, axis=0))
             c.cache = new_cache
 
+    @staticmethod
+    def _writeback_kv_row(batch_layer: Any, solo_kv: Any, row_idx: int) -> None:
+        """Write a single-row KVCache state back into batch_layer at row_idx.
+
+        Used by _per_row_replay_forward for hybrid SSM rollback. Handles two
+        edge cases:
+          - solo_kv.offset > batch_layer current max seq → grow batch_layer
+          - solo_kv.offset < batch_layer current max seq → pad solo row with
+            zeros so concatenate aligns
+
+        Updates batch_layer.offset[row_idx] = solo_kv.offset. If offset is a
+        scalar (single-request batch path), assigns directly.
+        """
+        if solo_kv is None or batch_layer is None:
+            return
+        if not hasattr(batch_layer, "keys") or batch_layer.keys is None:
+            return
+        if not hasattr(solo_kv, "keys") or solo_kv.keys is None:
+            return
+
+        B = batch_layer.keys.shape[0]
+        H = batch_layer.keys.shape[1]
+        D = batch_layer.keys.shape[3]
+        cur_max = batch_layer.keys.shape[2]
+        new_seq = int(solo_kv.offset) if not isinstance(solo_kv.offset, mx.array) else int(solo_kv.offset.item())
+
+        # Grow batch_layer's max seq if solo state is longer
+        if new_seq > cur_max:
+            pad_amount = new_seq - cur_max
+            pad_k = mx.zeros((B, H, pad_amount, D), dtype=batch_layer.keys.dtype)
+            pad_v = mx.zeros((B, H, pad_amount, D), dtype=batch_layer.values.dtype)
+            batch_layer.keys = mx.concatenate([batch_layer.keys, pad_k], axis=2)
+            batch_layer.values = mx.concatenate([batch_layer.values, pad_v], axis=2)
+            cur_max = new_seq
+
+        # Pad solo state to current max seq for concatenation along batch dim
+        solo_seq = solo_kv.keys.shape[2]
+        if solo_seq < cur_max:
+            pad_amount = cur_max - solo_seq
+            pad_k = mx.zeros((1, H, pad_amount, D), dtype=batch_layer.keys.dtype)
+            pad_v = mx.zeros((1, H, pad_amount, D), dtype=batch_layer.values.dtype)
+            row_k = mx.concatenate([solo_kv.keys, pad_k], axis=2)
+            row_v = mx.concatenate([solo_kv.values, pad_v], axis=2)
+        else:
+            row_k = solo_kv.keys
+            row_v = solo_kv.values
+
+        # Concatenate-per-row rebuild
+        parts_k = []
+        parts_v = []
+        for r in range(B):
+            if r == row_idx:
+                parts_k.append(row_k)
+                parts_v.append(row_v)
+            else:
+                parts_k.append(batch_layer.keys[r : r + 1])
+                parts_v.append(batch_layer.values[r : r + 1])
+        batch_layer.keys = mx.concatenate(parts_k, axis=0)
+        batch_layer.values = mx.concatenate(parts_v, axis=0)
+
+        # Update offset[row_idx]
+        if isinstance(batch_layer.offset, mx.array):
+            off_list = batch_layer.offset.tolist()
+            if not isinstance(off_list, list):
+                off_list = [off_list]
+            if row_idx < len(off_list):
+                off_list[row_idx] = new_seq
+            batch_layer.offset = mx.array(off_list)
+        else:
+            batch_layer.offset = new_seq
+        if hasattr(batch_layer, "_idx"):
+            try:
+                batch_layer._idx = int(batch_layer.offset[0].item()) if isinstance(
+                    batch_layer.offset, mx.array
+                ) else int(batch_layer.offset)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _writeback_ssm_row(batch_layer: Any, solo_ssm: Any, row_idx: int) -> None:
+        """Write a single-row SSM cache state back into batch_layer at row_idx.
+
+        solo_ssm is either a MambaCache-like object with .cache attribute, or
+        a list of single-row mx.array states.
+        """
+        if solo_ssm is None or batch_layer is None:
+            return
+        if not hasattr(batch_layer, "cache") or not batch_layer.cache:
+            return
+
+        solo_arrs = solo_ssm.cache if hasattr(solo_ssm, "cache") else solo_ssm
+        if not solo_arrs:
+            return
+
+        new_cache_arrays: List[Any] = []
+        for arr_idx, batch_arr in enumerate(batch_layer.cache):
+            if batch_arr is None:
+                new_cache_arrays.append(None)
+                continue
+            solo_arr = solo_arrs[arr_idx] if arr_idx < len(solo_arrs) else None
+            if solo_arr is None:
+                new_cache_arrays.append(batch_arr)
+                continue
+            B = batch_arr.shape[0]
+            parts = []
+            for r in range(B):
+                if r == row_idx:
+                    parts.append(solo_arr)
+                else:
+                    parts.append(batch_arr[r : r + 1])
+            new_cache_arrays.append(mx.concatenate(parts, axis=0))
+        batch_layer.cache = new_cache_arrays
+
+    def _per_row_replay_forward(
+        self,
+        batch_cache: List[Any],
+        snapshot: Dict[int, List[Any]],
+        row_idx: int,
+        replay_tokens: List[int],
+        pre_verify_offsets: Dict[int, int],
+    ) -> bool:
+        """Replay a single row through the model after partial/full reject.
+
+        For hybrid SSM models, recovers correct cache state for a row whose
+        drafts were rejected during the verify forward. Builds a solo cache
+        from the pre-verify state (KV trimmed to pre_verify_offsets, SSM from
+        snapshot), runs language_model on replay_tokens, then writes results
+        back into the batch cache.
+
+        Args:
+            batch_cache: Per-layer batch cache (modified in place).
+            snapshot: Per-row SSM snapshot from _snapshot_ssm_per_row.
+            row_idx: Row to advance.
+            replay_tokens: Tokens to process — typically [seed] for full
+                reject or [seed, d0, ..., d_{n-1}] for partial accept.
+            pre_verify_offsets: Per-layer pre-verify KV offset for row_idx.
+
+        Returns:
+            True on success; False on exception (cache state may be partial).
+        """
+        from mlx_lm.models.cache import KVCache
+
+        if not replay_tokens:
+            return False
+
+        try:
+            # 1. Build solo cache: KV layers trimmed to pre-verify, SSM from snapshot
+            solo_cache: List[Any] = []
+            for layer_idx, c in enumerate(batch_cache):
+                if c is None:
+                    solo_cache.append(None)
+                    continue
+                if c.is_trimmable():
+                    pv_off = pre_verify_offsets.get(layer_idx, 0)
+                    kv = KVCache()
+                    if pv_off > 0:
+                        kv.keys = mx.contiguous(
+                            c.keys[row_idx : row_idx + 1, :, :pv_off, :]
+                        )
+                        kv.values = mx.contiguous(
+                            c.values[row_idx : row_idx + 1, :, :pv_off, :]
+                        )
+                    else:
+                        kv.keys = None
+                        kv.values = None
+                    kv.offset = pv_off
+                    solo_cache.append(kv)
+                else:
+                    # SSM: pull row from snapshot
+                    if layer_idx in snapshot:
+                        solo_cache.append(snapshot[layer_idx][row_idx])
+                    else:
+                        solo_cache.append(None)
+
+            # 2. Forward replay tokens through model
+            replay_input = mx.array([replay_tokens])  # shape (1, T)
+            _ = self.language_model(replay_input, cache=solo_cache)
+
+            # 3. Materialize before write-back
+            for c in solo_cache:
+                if c is None:
+                    continue
+                if hasattr(c, "cache") and c.cache:
+                    mx.eval([a for a in c.cache if a is not None])
+                elif hasattr(c, "keys") and c.keys is not None:
+                    mx.eval([c.keys, c.values])
+
+            # 4. Write solo state back into batch_cache at row_idx
+            for layer_idx, (batch_layer, solo_layer) in enumerate(
+                zip(batch_cache, solo_cache)
+            ):
+                if batch_layer is None or solo_layer is None:
+                    continue
+                if batch_layer.is_trimmable():
+                    self._writeback_kv_row(batch_layer, solo_layer, row_idx)
+                else:
+                    self._writeback_ssm_row(batch_layer, solo_layer, row_idx)
+
+            return True
+
+        except Exception as exc:
+            logger.warning(
+                "[PLD-replay] per-row replay failed at row %d: %s",
+                row_idx, exc, exc_info=False,
+            )
+            return False
+
     def _step(
         self, input_tokens: mx.array, cache: List[Any]
     ) -> Tuple[mx.array, List[mx.array]]:
@@ -6411,24 +6618,99 @@ class MLLMBatchGenerator:
                 extras_per_row.append(list(row_drafts[:n]))
 
             # ---- 6. Per-row rollback for partial/full rejects ----
-            # Hybrid partial-accept simplification (no per-row replay yet):
-            # for rows with 0 < n_accept < K we DROP the accepted drafts and
-            # emit only correction. This avoids the per-row replay forward.
-            # Full-accept (n == K): no rollback needed.
-            # Full-reject (n == 0): KV rewind by K + SSM restore.
+            # Three cases per row:
+            #   - Full accept (n == K): no rollback. Cache at N+K+1 ✓.
+            #   - Pure-attention partial/full reject: KV per-row offset rewind
+            #     by (K - n). Cache at N+1+n ✓. No SSM to worry about.
+            #   - Hybrid partial/full reject: per-row replay forward of
+            #     [seed, d0, ..., d_{n-1}] restores both KV and SSM to N+1+n.
+            #     Accepted drafts are preserved as extras (C.5 — full PLD gain).
             is_hybrid = bool(ssm_snapshot)
+
+            # Compute pre-verify offsets per KV layer (current offset - (K+1)).
+            # Used by per-row replay to build solo caches from pre-verify state.
+            pre_verify_offsets: Dict[int, int] = {}
+            if is_hybrid:
+                # All rows advanced by K+1 in the verify forward
+                advance = K + 1
+                for layer_idx, layer in enumerate(batch.cache):
+                    if layer is None or not layer.is_trimmable():
+                        continue
+                    if isinstance(layer.offset, mx.array):
+                        cur = layer.offset.tolist()
+                        if not isinstance(cur, list):
+                            cur = [cur]
+                        # All rows have same pre-verify offset (uniform advance)
+                        if cur:
+                            pre_verify_offsets[layer_idx] = max(
+                                0, int(cur[0]) - advance
+                            )
+                    else:
+                        pre_verify_offsets[layer_idx] = max(
+                            0, int(layer.offset) - advance
+                        )
+
+            # Hybrid rollback: per-row replay forward for rows with n < K
+            replay_failures: List[int] = []
             if is_hybrid:
                 for i in range(B):
-                    if 0 < n_accept[i] < K:
-                        # Drop the accepted prefix: emit correction at pos 0
+                    if n_accept[i] == K:
+                        continue  # full accept — no rollback
+                    replay_tokens = [seeds[i]] + all_drafts[i][:n_accept[i]]
+                    success = self._per_row_replay_forward(
+                        batch_cache=batch.cache,
+                        snapshot=ssm_snapshot,
+                        row_idx=i,
+                        replay_tokens=replay_tokens,
+                        pre_verify_offsets=pre_verify_offsets,
+                    )
+                    if success:
+                        self._pld_replay_attempts += 1
+                        self._pld_replay_emitted += len(replay_tokens) - 1  # extras count
+                    else:
+                        replay_failures.append(i)
+                        self._pld_replay_failures += 1
+                        # Fallback: drop drafts, emit correction only for this row
                         n_accept[i] = 0
                         primary_tokens[i] = int(predicted_list[i][0])
                         extras_per_row[i] = []
+                        # SSM restore to snapshot (replay didn't write back)
+                        self._restore_ssm_rows(batch.cache, ssm_snapshot, [i])
 
-            # KV cache: per-row offset rewind by (K - n_accept[i])
-            # For full-accept rows (n == K), shortfall is 0 → no-op.
-            shortfalls = [K - n_accept[i] for i in range(B)]
-            if any(s > 0 for s in shortfalls):
+            # Pure-attention KV rewind: per-row offset adjustment by (K - n_accept[i])
+            # For hybrid the per-row replay already updated offsets via writeback.
+            if not is_hybrid:
+                shortfalls = [K - n_accept[i] for i in range(B)]
+                if any(s > 0 for s in shortfalls):
+                    for layer in batch.cache:
+                        if not layer.is_trimmable():
+                            continue
+                        if not hasattr(layer, "offset"):
+                            continue
+                        if isinstance(layer.offset, mx.array):
+                            cur = layer.offset.tolist()
+                            if not isinstance(cur, list):
+                                cur = [cur]
+                            new_off = []
+                            for i in range(min(len(cur), B)):
+                                new_off.append(max(0, int(cur[i]) - shortfalls[i]))
+                            for i in range(B, len(cur)):
+                                new_off.append(int(cur[i]))
+                            layer.offset = mx.array(new_off)
+                        else:
+                            worst = max(shortfalls)
+                            layer.offset = max(0, int(layer.offset) - worst)
+                        if hasattr(layer, "_idx"):
+                            if isinstance(layer.offset, mx.array):
+                                try:
+                                    layer._idx = int(layer.offset[0].item())
+                                except Exception:
+                                    pass
+                            else:
+                                layer._idx = int(layer.offset)
+
+            # KV rewind for hybrid replay-failed rows (replay didn't succeed)
+            if replay_failures:
                 for layer in batch.cache:
                     if not layer.is_trimmable():
                         continue
@@ -6438,31 +6720,11 @@ class MLLMBatchGenerator:
                         cur = layer.offset.tolist()
                         if not isinstance(cur, list):
                             cur = [cur]
-                        new_off = []
-                        for i in range(min(len(cur), B)):
-                            new_off.append(max(0, int(cur[i]) - shortfalls[i]))
-                        # Preserve any rows beyond B (shouldn't happen but safe)
-                        for i in range(B, len(cur)):
-                            new_off.append(int(cur[i]))
+                        new_off = list(cur)
+                        for i in replay_failures:
+                            if i < len(new_off):
+                                new_off[i] = max(0, int(cur[i]) - K)
                         layer.offset = mx.array(new_off)
-                    else:
-                        # Scalar offset (single-request batch); use worst shortfall
-                        worst = max(shortfalls)
-                        layer.offset = max(0, int(layer.offset) - worst)
-                    if hasattr(layer, "_idx"):
-                        # RotatingKVCache: sync write pointer
-                        if isinstance(layer.offset, mx.array):
-                            try:
-                                layer._idx = int(layer.offset[0].item())
-                            except Exception:
-                                pass
-                        else:
-                            layer._idx = int(layer.offset)
-
-            # SSM cache: restore rows that didn't fully accept
-            rollback_rows_ssm = [i for i in range(B) if n_accept[i] < K]
-            if rollback_rows_ssm and is_hybrid:
-                self._restore_ssm_rows(batch.cache, ssm_snapshot, rollback_rows_ssm)
 
             # ---- 7. Update per-request state ----
             for i, req in enumerate(batch.requests):
