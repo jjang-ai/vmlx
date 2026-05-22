@@ -106,12 +106,15 @@ _ROWS: list[dict[str, Any]] = [
             "generation_config.json defaults are surfaced without copying into sticky overrides",
             "jang_config.json sampling defaults are surfaced without hidden sampler forcing",
             "request/API overrides remain explicit and win over startup defaults",
+            "bundle max_new_tokens is preserved for omitted request budgets without hidden sampler or repetition floors",
+            "server default output cap is not a request ceiling for explicit Chat Completions or Responses requests",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_generation_defaults_contract.py --out build/current-generation-defaults-contract-20260521.json",
+            ".venv/bin/python tests/cross_matrix/run_generation_defaults_contract.py --out build/current-generation-defaults-contract-20260522-recheck-no-hidden-forcing.json",
         ],
         "artifacts": [
             "build/current-generation-defaults-contract-20260521.json",
+            "build/current-generation-defaults-contract-20260522-recheck-no-hidden-forcing.json",
         ],
     },
     {
@@ -145,12 +148,16 @@ _ROWS: list[dict[str, Any]] = [
             "Server-side reasoning parsers do not leak think tags into visible content",
             "Client streaming fallback does not double-extract reasoning_content",
             "Interleaved reasoning segments render without corrupting token counts",
+            "DSV4 requested reasoning rails are preserved and DSV4 tool calls are not forced onto a hidden direct rail",
+            "MiniMax and Ling family-specific reasoning boundaries stay explicit without sampling floors",
+            "tool follow-up reasoning state resets before subsequent visible content or tool parsing",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_reasoning_template_contract.py --out build/current-reasoning-template-contract-20260521.json",
+            ".venv/bin/python tests/cross_matrix/run_reasoning_template_contract.py --out build/current-reasoning-template-contract-20260522-recheck-parser-rails.json",
         ],
         "artifacts": [
             "build/current-reasoning-template-contract-20260521.json",
+            "build/current-reasoning-template-contract-20260522-recheck-parser-rails.json",
         ],
     },
     {
@@ -188,12 +195,15 @@ _ROWS: list[dict[str, Any]] = [
             "Ollama adapter streaming/done behavior, streaming num_predict output-cap overrides, malformed num_predict omission, and malformed context omission",
             "Auto chat Max Tokens omits per-request output caps so server startup defaults can apply on Chat Completions and Responses",
             "Chat Completions and Responses streaming usage preserve cached_tokens plus cache_detail through finish chunks",
+            "server cache and DSV4 tool/parser surfaces stay named in the API surface contract",
+            "panel request builders omit invalid persisted maxTokens instead of poisoning Chat Completions or Responses",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260522-stream-cache-detail.json",
+            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260522-recheck-endpoint-assembly.json",
         ],
         "artifacts": [
             "build/current-api-surface-contract-20260522-stream-cache-detail.json",
+            "build/current-api-surface-contract-20260522-recheck-endpoint-assembly.json",
         ],
     },
     {

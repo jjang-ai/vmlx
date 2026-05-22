@@ -149,6 +149,31 @@ def test_release_regression_manifest_tracks_api_surface_with_runner_artifact():
     assert "cache_detail" in joined
 
 
+def test_release_regression_manifest_tracks_current_defaults_reasoning_api_rechecks():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+
+    generation = rows["generation-defaults-no-hidden-forcing"]
+    generation_joined = " ".join(generation["commands"] + generation["artifacts"] + generation["proves"])
+    assert "current-generation-defaults-contract-20260522-recheck-no-hidden-forcing.json" in generation_joined
+    assert "bundle max_new_tokens" in generation_joined
+    assert "without hidden sampler or repetition floors" in generation_joined
+    assert "server default output cap is not a request ceiling" in generation_joined
+
+    reasoning = rows["reasoning-template-no-think-tag-leak"]
+    reasoning_joined = " ".join(reasoning["commands"] + reasoning["artifacts"] + reasoning["proves"])
+    assert "current-reasoning-template-contract-20260522-recheck-parser-rails.json" in reasoning_joined
+    assert "DSV4 requested reasoning rails are preserved" in reasoning_joined
+    assert "MiniMax and Ling family-specific reasoning boundaries" in reasoning_joined
+    assert "tool follow-up reasoning state resets" in reasoning_joined
+
+    api = rows["api-chat-responses-anthropic-ollama-parity"]
+    api_joined = " ".join(api["commands"] + api["artifacts"] + api["proves"])
+    assert "current-api-surface-contract-20260522-recheck-endpoint-assembly.json" in api_joined
+    assert "server cache and DSV4 tool/parser surfaces stay named" in api_joined
+    assert "panel request builders omit invalid persisted maxTokens" in api_joined
+
+
 def test_release_regression_manifest_tracks_tool_calls_with_runner_artifact():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}
