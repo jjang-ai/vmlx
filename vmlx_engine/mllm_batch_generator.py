@@ -107,7 +107,7 @@ import os
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
-from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional, Set, Tuple
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -2185,6 +2185,17 @@ class MLLMBatchRequest:
     draft_cache: Optional[List[Any]] = None  # Per-request draft model cache
     draft_offset: int = 0  # Number of tokens in draft cache
     last_token: Optional[int] = None  # Last decoded token (seed for draft)
+    # Per-step scratch: tokens accepted via speculative decode in the current
+    # step, to be emitted alongside the primary `token` via
+    # MLLMBatchResponse.extra_tokens. Cleared at the start of each step.
+    scratch_extra_tokens: Optional[List[int]] = None
+    # Lazy-built n-gram index for PLD (issue #134 follow-up). Index is owned
+    # by the request so it persists across remove/insert cycles even though
+    # batch UIDs may change.
+    _pld_ngram_index: Optional[Any] = None
+    # Lazy-cached prompt token IDs (decoded from input_ids once for PLD lookup
+    # to avoid re-tolist on every speculative step).
+    _cached_prompt_token_ids: Optional[List[int]] = None
 
 
 @dataclass
@@ -2973,6 +2984,26 @@ class MLLMBatchGenerator:
         self._spec_batched_steps: int = 0
         self._spec_batched_tokens: int = 0
         self._spec_batched_acceptance_ema: float = 0.0
+
+        # PLD speculative decoding state (issue #134 follow-up).
+        # Enabled by config.pld_enabled (set by --enable-pld). Default OFF so
+        # this is purely opt-in until live-validated on hardware.
+        # Note: actual PLD activation gate also requires `--enable-pld` to be
+        # passed via the scheduler config; this generator-side flag is set
+        # later by the scheduler via configure_pld_spec() when applicable.
+        self._pld_spec_enabled: bool = False
+        # Special-token IDs to keep out of PLD drafts. Same defensive filter
+        # as Scheduler._build_pld_excluded_token_ids (issue #134 V0.6).
+        self._pld_excluded_token_ids: Optional[Set[int]] = None
+        # Per-step replay counters (issue #134 — partial-accept replay).
+        # Currently the MLLM path falls back to "correction only" on partial
+        # accept (no per-row replay), so these remain at 0 until C.3 ships.
+        self._pld_replay_attempts: int = 0
+        self._pld_replay_emitted: int = 0
+        self._pld_replay_failures: int = 0
+        self._pld_replay_enabled: bool = (
+            os.getenv("VMLX_DISABLE_PLD_REPLAY") != "1"
+        )
 
         # Pre-compute hybrid cache template info (avoids make_cache() per request)
         self._hybrid_kv_positions: Optional[List[int]] = None
@@ -5995,6 +6026,80 @@ class MLLMBatchGenerator:
                 token,
             )
         return token, logprobs
+
+    def configure_pld_spec(
+        self,
+        enabled: bool,
+        excluded_token_ids: Optional[Set[int]] = None,
+    ) -> None:
+        """Wire PLD speculative decode into this batch generator.
+
+        Called by MLLMScheduler at startup when `config.pld_enabled` is True.
+        The scheduler builds the excluded-token set from its tokenizer/processor
+        and hands it off here so the generator-side n-gram lookup applies the
+        same V0.6 filter as the simple-engine path (PR #149).
+
+        Args:
+            enabled: Master switch from --enable-pld.
+            excluded_token_ids: Special IDs to keep out of drafts (image-pad,
+                vision markers, pad). None = no filter.
+        """
+        self._pld_spec_enabled = bool(enabled)
+        self._pld_excluded_token_ids = (
+            set(excluded_token_ids) if excluded_token_ids else None
+        )
+
+    def _pld_drafts_for_request(
+        self,
+        req: "MLLMBatchRequest",
+        K: int,
+    ) -> List[int]:
+        """Find up to K draft token candidates via n-gram lookup over the
+        request's token sequence (prompt + output_tokens).
+
+        Maintains a per-request NgramIndex on `req._pld_ngram_index` so the
+        index is built once and incrementally updated. Applies the V0.6
+        special-token filter so image-pad / vision markers never appear in
+        proposed drafts.
+
+        Returns up to K tokens; possibly empty (no match found, or filter
+        truncated all candidates).
+        """
+        from .prompt_lookup import NgramIndex
+
+        if not self._pld_spec_enabled or K <= 0:
+            return []
+
+        # Build the lookup sequence: prompt tokens + output tokens so far.
+        # Cache the prompt-token list on first access to avoid repeated tolist().
+        prompt_ids = req._cached_prompt_token_ids
+        if prompt_ids is None:
+            if req.input_ids is None:
+                prompt_ids = []
+            else:
+                try:
+                    prompt_ids = req.input_ids.tolist()
+                    # input_ids may be shape [1, T] (vision) or [T] — flatten.
+                    if prompt_ids and isinstance(prompt_ids[0], list):
+                        prompt_ids = prompt_ids[0]
+                except Exception:
+                    prompt_ids = []
+            req._cached_prompt_token_ids = prompt_ids
+
+        full_tokens = list(prompt_ids) + list(req.output_tokens)
+        if len(full_tokens) < 3:
+            return []
+
+        if req._pld_ngram_index is None:
+            req._pld_ngram_index = NgramIndex()
+
+        drafts = req._pld_ngram_index.find_drafts(
+            full_tokens,
+            num_draft_tokens=K,
+            max_ngram_size=3,
+            exclude_token_ids=self._pld_excluded_token_ids,
+        )
+        return drafts
 
     @staticmethod
     def _snapshot_ssm_per_row(batch_cache: List[Any]) -> Dict[int, List[Any]]:
