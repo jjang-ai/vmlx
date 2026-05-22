@@ -24,7 +24,11 @@ DEFAULT_OUT = Path("build/current-max-output-context-contract-20260521.json")
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
+    "vmlx_engine/api/anthropic_adapter.py",
+    "vmlx_engine/api/ollama_adapter.py",
     "tests/test_engine_audit.py",
+    "tests/test_ollama_adapter.py",
+    "tests/test_max_output_context_contract.py",
     "panel/src/main/chat-override-policy.ts",
     "panel/src/main/sessions.ts",
     "panel/src/main/ipc/chat.ts",
@@ -57,6 +61,11 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "-q",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_request_output_caps_override_server_default_without_touching_context_cap",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_explicit_startup_max_tokens_is_default_not_request_ceiling",
+            "tests/test_engine_audit.py::TestServerSamplingResolution::test_anthropic_messages_omitted_max_tokens_uses_bundle_default",
+            "tests/test_ollama_adapter.py::test_ollama_generate_default_uses_chat_template_request_shape",
+            "tests/test_ollama_adapter.py::test_ollama_chat_omits_non_positive_num_predict_sentinels",
+            "tests/test_ollama_adapter.py::test_ollama_generate_omits_non_positive_num_predict_sentinels",
+            "tests/test_max_output_context_contract.py",
         ],
     ),
     "panel_output_context_wiring": (
@@ -131,11 +140,13 @@ def build_artifact(root: Path) -> dict[str, Any]:
     engine_passed = results["engine_output_context_resolution"]["counts"]["passed"] or 0
     panel_passed = results["panel_output_context_wiring"]["counts"]["passed"] or 0
     checks = {
-        "server_default_output_cap_uses_max_tokens": not failed and engine_passed >= 2,
-        "startup_output_cap_is_default_not_request_ceiling": not failed and engine_passed >= 2,
-        "chat_max_tokens_overrides_server_default_per_request": not failed and engine_passed >= 2,
-        "responses_max_output_tokens_overrides_server_default_per_request": not failed and engine_passed >= 2,
-        "prompt_context_caps_do_not_rewrite_output_cap": not failed and engine_passed >= 2,
+        "server_default_output_cap_uses_max_tokens": not failed and engine_passed >= 7,
+        "startup_output_cap_is_default_not_request_ceiling": not failed and engine_passed >= 7,
+        "chat_max_tokens_overrides_server_default_per_request": not failed and engine_passed >= 7,
+        "responses_max_output_tokens_overrides_server_default_per_request": not failed and engine_passed >= 7,
+        "anthropic_messages_preserves_bundle_and_explicit_output_caps": not failed and engine_passed >= 7,
+        "ollama_num_predict_maps_only_positive_output_caps": not failed and engine_passed >= 7,
+        "prompt_context_caps_do_not_rewrite_output_cap": not failed and engine_passed >= 7,
         "panel_server_default_output_maps_to_max_tokens": not failed and panel_passed >= 22,
         "panel_max_context_maps_to_max_prompt_tokens": not failed and panel_passed >= 22,
         "stale_32768_session_output_caps_are_migrated": not failed and panel_passed >= 22,
