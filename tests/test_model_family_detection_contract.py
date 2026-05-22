@@ -19,6 +19,7 @@ def test_family_detection_contract_pins_named_release_rows():
         "qwen36_moe_text_linear_attention_hybrid_cache",
         "qwen36_vl_video_hybrid",
         "qwen36_moe_vl_video_hybrid",
+        "qwen36_release_rows_use_qwen35_family_alias",
         "qwen36_affine_jang_native_mtp_vl_video",
         "qwen36_mxfp4_mxfp8_vl",
         "qwen36_native_mtp_vl",

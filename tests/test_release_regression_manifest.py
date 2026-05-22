@@ -304,6 +304,8 @@ def test_release_regression_manifest_tracks_qwen_nemotron_hybrid_cache_rows():
     assert "Panel detection matches the same current local high-risk paths" in joined
     assert "native-MTP Qwen affine-JANG VL routing" in joined
     assert "current-model-family-detection-contract-20260522-panel-local-paths.json" in joined
+    assert "Qwen 3.6 release rows intentionally keep qwen3_5/qwen3.5 family aliases" in joined
+    assert "current-model-family-detection-contract-20260522-qwen36-alias.json" in joined
 
 
 def test_release_regression_manifest_tracks_zaya_stale_stamp_policy():

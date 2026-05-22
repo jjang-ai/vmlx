@@ -1092,6 +1092,31 @@ class TestModelConfigs:
         assert config.think_in_template is True
         assert config.eos_tokens == ["<|im_end|>"]
 
+    def test_qwen36_release_rows_intentionally_use_qwen3_5_family_alias(self, registry):
+        """Qwen 3.6 release bundles still declare qwen3_5 model_type.
+
+        Do not rename these registry families based on marketing/version text:
+        app, API, VL/video, MXFP, JANG, and JANGTQ launch policy depend on the
+        canonical qwen3_5/qwen3_5_moe model_type aliases.
+        """
+        dense = self._lookup(registry, "JANGQ/Qwen3.6-27B-MXFP8-MTP", "qwen3_5")
+        moe = self._lookup(registry, "JANGQ/Qwen3.6-35B-A3B-JANGTQ", "qwen3_5_moe")
+        inner_moe = self._lookup(
+            registry,
+            "JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP",
+            "qwen3_5_moe_text",
+        )
+
+        assert dense.family_name == "qwen3_5"
+        assert dense.tool_parser == "qwen"
+        assert dense.reasoning_parser == "qwen3"
+        assert moe.family_name == "qwen3_5_moe"
+        assert moe.tool_parser == "qwen"
+        assert moe.reasoning_parser == "qwen3"
+        assert inner_moe.family_name == "qwen3_5_moe"
+        assert inner_moe.tool_parser == "qwen"
+        assert inner_moe.reasoning_parser == "qwen3"
+
     def test_qwen3_5_linear_attention_config_uses_hybrid_cache(self, registry):
         """Qwen3.6 dense MXFP4 has no JANG stamp but text_config.layer_types
         declares linear_attention/full_attention. Registry must not report

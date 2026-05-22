@@ -111,6 +111,7 @@ REQUIRED_ROWS = (
     "qwen36_moe_text_linear_attention_hybrid_cache",
     "qwen36_vl_video_hybrid",
     "qwen36_moe_vl_video_hybrid",
+    "qwen36_release_rows_use_qwen35_family_alias",
     "qwen36_affine_jang_native_mtp_vl_video",
     "qwen36_mxfp4_mxfp8_vl",
     "qwen36_native_mtp_vl",
@@ -183,6 +184,10 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
     ),
     "qwen36_moe_vl_video_hybrid": (
         "marks non-JANG Qwen 3.6 MoE bundles with vision/video metadata as multimodal",
+    ),
+    "qwen36_release_rows_use_qwen35_family_alias": (
+        "test_qwen36_release_rows_intentionally_use_qwen3_5_family_alias",
+        "documents Qwen 3.6 release rows intentionally use qwen3.5 family aliases",
     ),
     "qwen36_affine_jang_native_mtp_vl_video": (
         "keeps affine-JANG Qwen native-MTP VL artifacts multimodal when indexed MTP and vision tensors exist",

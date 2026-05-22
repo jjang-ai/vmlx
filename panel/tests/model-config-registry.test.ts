@@ -797,6 +797,43 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.isMultimodal).toBe(true)
   })
 
+  it('documents Qwen 3.6 release rows intentionally use qwen3.5 family aliases', () => {
+    const dense = makeModelDir({
+      model_type: 'qwen3_5',
+      text_config: {
+        model_type: 'qwen3_5_text',
+        layer_types: ['linear_attention', 'full_attention'],
+      },
+      vision_config: { hidden_size: 1024 },
+      video_token_id: 151666,
+      video_token_index: 151666,
+    })
+    const moe = makeModelDir({
+      model_type: 'qwen3_5_moe',
+      text_config: {
+        model_type: 'qwen3_5_moe_text',
+        layer_types: ['linear_attention', 'full_attention'],
+      },
+      vision_config: { hidden_size: 1024 },
+      video_token_id: 151666,
+      video_token_index: 151666,
+    })
+
+    const denseDetected = detectModelConfigFromDir(dense)
+    const moeDetected = detectModelConfigFromDir(moe)
+
+    expect(denseDetected.family).toBe('qwen3.5')
+    expect(denseDetected.cacheType).toBe('hybrid')
+    expect(denseDetected.toolParser).toBe('qwen')
+    expect(denseDetected.reasoningParser).toBe('qwen3')
+    expect(denseDetected.isMultimodal).toBe(true)
+    expect(moeDetected.family).toBe('qwen3.5-moe')
+    expect(moeDetected.cacheType).toBe('hybrid')
+    expect(moeDetected.toolParser).toBe('qwen')
+    expect(moeDetected.reasoningParser).toBe('qwen3')
+    expect(moeDetected.isMultimodal).toBe(true)
+  })
+
   it('does not route Nemotron-H text extracts through MLLM from stale sidecars', () => {
     const dir = makeModelDir(
       {
