@@ -23,6 +23,7 @@ def test_family_detection_contract_pins_named_release_rows():
         "decode_speed_qwen36_mxfp8_native_mtp_rows",
         "decode_speed_nemotron_omni_nano_jangtq4_row",
         "decode_speed_distinct_jang_jangtq_mxfp_speed_rows",
+        "decode_speed_plain_mlx_4bit_qwen36_row",
         "decode_speed_artifact_format_coverage_matrix",
         "decode_speed_all_declared_parsers_are_engine_registered",
         "decode_speed_all_declared_parsers_are_cli_choices",
@@ -179,6 +180,33 @@ def test_decode_speed_gate_has_distinct_jang_jangtq_mxfp_speed_rows():
     assert all("MXFP8" in ROWS[name].path for name in groups["mxfp8_mlx_mtp"])
 
 
+def test_decode_speed_gate_has_plain_mlx_qwen36_4bit_row():
+    from tests.cross_matrix.run_decode_speed_gate import ROWS, build_serve_command
+
+    row = ROWS["qwen35_4bit"]
+    cmd = build_serve_command(
+        row,
+        python=Path("/bundle/python3"),
+        port=8793,
+        prefill_step_size=2048,
+    )
+
+    assert row.path == "/Users/example/models/Qwen3.6-35B-A3B-4bit"
+    assert "JANG" not in row.path
+    assert "JANGTQ" not in row.path
+    assert "MXFP" not in row.path.upper()
+    assert row.is_mllm is True
+    assert row.tool_parser == "qwen"
+    assert row.reasoning_parser == "qwen3"
+    assert row.max_tokens <= 320
+    assert row.expected_min_tps is not None and row.expected_min_tps > 0
+    assert row.expected_min_pp is not None and row.expected_min_pp > 0
+    assert "--max-tokens" not in cmd
+    assert "--is-mllm" in cmd
+    assert cmd[cmd.index("--tool-call-parser") + 1] == "qwen"
+    assert cmd[cmd.index("--reasoning-parser") + 1] == "qwen3"
+
+
 def test_decode_speed_gate_artifact_format_coverage_matrix():
     from tests.cross_matrix.run_decode_speed_gate import ROWS
 
@@ -186,6 +214,7 @@ def test_decode_speed_gate_artifact_format_coverage_matrix():
         "jang_only_mx_matmul": ("qwen27_jang4m", "qwen35_jang4k_ext", "minimax_jang2l_crack"),
         "jang_mtp": ("qwen27_jang4m_mtp",),
         "jangtq_mxtq": ("qwen35_jangtq", "qwen36_35_jangtq4_ext", "hy3", "laguna"),
+        "plain_mlx_4bit": ("qwen35_4bit",),
         "mxfp4_mlx": ("qwen27_mxfp4", "zaya_text_mxfp4", "ling_mxfp4", "nemotron_mxfp4"),
         "mxfp8_mtp": ("qwen27_mxfp8_mtp", "qwen35_mxfp8_mtp"),
         "dsv4_native_composite": ("dsv4_k", "dsv4_jang_dq2_gate3math6"),
@@ -200,6 +229,7 @@ def test_decode_speed_gate_artifact_format_coverage_matrix():
     assert all("JANG_" in ROWS[name].path and "JANGTQ" not in ROWS[name].path for name in matrix["jang_only_mx_matmul"])
     assert all("JANG_" in ROWS[name].path and "MTP" in ROWS[name].path for name in matrix["jang_mtp"])
     assert all("JANGTQ" in ROWS[name].path for name in matrix["jangtq_mxtq"])
+    assert all("JANG" not in ROWS[name].path and "MXFP" not in ROWS[name].path.upper() for name in matrix["plain_mlx_4bit"])
     assert all("MXFP4" in ROWS[name].path or "mxfp4" in ROWS[name].path for name in matrix["mxfp4_mlx"])
     assert all("MXFP8" in ROWS[name].path and "MTP" in ROWS[name].path for name in matrix["mxfp8_mtp"])
     assert all(ROWS[name].tool_parser == "dsml" for name in matrix["dsv4_native_composite"])
