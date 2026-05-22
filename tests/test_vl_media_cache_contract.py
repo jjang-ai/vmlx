@@ -31,6 +31,7 @@ def test_vl_media_cache_contract_pins_named_panel_rows():
     assert "VLM gets --continuous-batching for BatchedEngine with MLLMScheduler" in required
     assert "VLM continuous batching off emits explicit opt-out and suppresses cache stack" in required
     assert "keeps ZAYA1-VL multimodal when a stale stamp says text" in required
+    assert "marks Qwen3.6 VL JANG bundles with indexed MTP tensors as native MTP capable" in required
     assert "keeps MXTQ/JANGTQ Qwen hybrid VLM multimodal" in required
     assert "keeps mxfp4 Qwen hybrid VLM multimodal" in required
     assert "keeps mxfp8 Qwen hybrid VLM multimodal" in required
@@ -46,6 +47,9 @@ def test_vl_media_cache_contract_pins_named_panel_rows():
     ):
         command = gate.COMMANDS[name][1]
         assert "--reporter=verbose" in command
+
+    family_command = " ".join(gate.COMMANDS["panel_vlm_family_detection"][1])
+    assert "indexed MTP" in family_command
 
 
 def test_vl_media_cache_contract_marker_validation_fails_if_required_row_missing():

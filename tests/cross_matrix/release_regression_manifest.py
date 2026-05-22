@@ -267,7 +267,7 @@ _ROWS: list[dict[str, Any]] = [
         "heavy": False,
         "proves": [
             "VLM media request serialization, media cache salting, and tool follow-up paths stay source-covered",
-            "Panel family detection keeps ZAYA-VL, Qwen VL/video/hybrid, MXFP4/MXFP8 VLM, and Nemotron stale-Omni sidecar routing covered",
+            "Panel family detection keeps ZAYA-VL, Qwen VL/video/hybrid/indexed-MTP, MXFP4/MXFP8 VLM, and Nemotron stale-Omni sidecar routing covered",
             "Still-image live rows do not imply video/audio/Omni clearance",
         ],
         "commands": [

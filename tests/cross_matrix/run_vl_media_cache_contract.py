@@ -106,7 +106,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "tests/model-config-registry.test.ts",
             "--reporter=verbose",
             "--testNamePattern",
-            "ZAYA1-VL|Qwen.*VLM|Qwen.*video|mxfp4 Qwen|mxfp8 Qwen|Nemotron-H",
+            "ZAYA1-VL|Qwen.*VLM|Qwen.*video|indexed MTP|mxfp4 Qwen|mxfp8 Qwen|Nemotron-H",
         ],
     ),
 }
@@ -148,6 +148,7 @@ REQUIRED_PANEL_VL_MEDIA_TEST_MARKERS = (
     "VLM gets --continuous-batching for BatchedEngine with MLLMScheduler",
     "VLM continuous batching off emits explicit opt-out and suppresses cache stack",
     "auto-detected VLM wins over stale isMultimodal=false",
+    "marks Qwen3.6 VL JANG bundles with indexed MTP tensors as native MTP capable",
     "keeps ZAYA1-VL multimodal when a stale stamp says text",
     "keeps MXTQ/JANGTQ Qwen hybrid VLM multimodal",
     "keeps mxfp4 Qwen hybrid VLM multimodal",
