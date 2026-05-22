@@ -39,7 +39,7 @@ SOURCE_HASH_FILES = (
 
 ENGINE_PATTERN = (
     "deepseek_v4 or zaya or ling or bailing or nemotron or qwen3_5 "
-    "or minimax or hy_v3"
+    "or minimax or hy_v3 or decode_speed"
 )
 PANEL_PATTERN = (
     "ZAYA|zaya|Ling|Bailing|bailing|Nemotron|Qwen|MXFP|mxfp|JANGTQ|"
@@ -56,6 +56,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "-q",
             "-vv",
             "tests/test_model_config_registry.py",
+            "tests/test_model_family_detection_contract.py",
             "-k",
             ENGINE_PATTERN,
         ],
@@ -87,6 +88,13 @@ REQUIRED_ROWS = (
     "qwen36_native_mtp_vl",
     "minimax_m2_parser_alias",
     "hy3_jangtq_hunyuan_qwen3",
+    "decode_speed_dsv4_minimax_canonical_parsers",
+    "decode_speed_no_legacy_32k_startup_cap",
+    "decode_speed_qwen36_mxfp8_native_mtp_rows",
+    "decode_speed_nemotron_omni_nano_jangtq4_row",
+    "decode_speed_existing_rows_match_engine_parser_policy",
+    "decode_speed_existing_rows_match_engine_modality_policy",
+    "decode_speed_registry_cache_metadata_health",
 )
 
 ROW_MARKERS: dict[str, tuple[str, ...]] = {
@@ -128,6 +136,28 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
     "hy3_jangtq_hunyuan_qwen3": (
         "detects Hy3 as text-only KV with Hunyuan tools and qwen3 reasoning",
         "keeps Hy3 JANGTQ2 Low/High reasoning contract",
+    ),
+    "decode_speed_dsv4_minimax_canonical_parsers": (
+        "test_decode_speed_gate_uses_canonical_release_parsers_for_dsv4_and_minimax",
+    ),
+    "decode_speed_no_legacy_32k_startup_cap": (
+        "test_decode_speed_gate_does_not_force_legacy_32k_startup_output_cap",
+    ),
+    "decode_speed_qwen36_mxfp8_native_mtp_rows": (
+        "test_decode_speed_gate_has_explicit_qwen36_mxfp8_and_native_mtp_rows",
+    ),
+    "decode_speed_nemotron_omni_nano_jangtq4_row": (
+        "test_decode_speed_gate_has_explicit_nemotron_omni_nano_jangtq4_row",
+    ),
+    "decode_speed_existing_rows_match_engine_parser_policy": (
+        "test_existing_decode_speed_rows_match_engine_registry_parser_policy",
+    ),
+    "decode_speed_existing_rows_match_engine_modality_policy": (
+        "test_existing_decode_speed_rows_match_engine_registry_modality_policy",
+    ),
+    "decode_speed_registry_cache_metadata_health": (
+        "test_decode_speed_gate_records_registry_cache_metadata_for_existing_rows",
+        "test_decode_speed_gate_detects_cache_health_mismatches",
     ),
 }
 

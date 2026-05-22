@@ -17,6 +17,13 @@ def test_family_detection_contract_pins_named_release_rows():
         "qwen36_native_mtp_vl",
         "minimax_m2_parser_alias",
         "hy3_jangtq_hunyuan_qwen3",
+        "decode_speed_dsv4_minimax_canonical_parsers",
+        "decode_speed_no_legacy_32k_startup_cap",
+        "decode_speed_qwen36_mxfp8_native_mtp_rows",
+        "decode_speed_nemotron_omni_nano_jangtq4_row",
+        "decode_speed_existing_rows_match_engine_parser_policy",
+        "decode_speed_existing_rows_match_engine_modality_policy",
+        "decode_speed_registry_cache_metadata_health",
     }.issubset(names)
 
 
@@ -44,6 +51,7 @@ def test_family_detection_contract_runs_verbose_engine_and_panel_rows():
     panel_cmd = " ".join(gate.COMMANDS["panel_family_detection"][1])
 
     assert "tests/test_model_config_registry.py" in engine_cmd
+    assert "tests/test_model_family_detection_contract.py" in engine_cmd
     assert "-vv" in engine_cmd
     assert "tests/model-config-registry.test.ts" in panel_cmd
     assert "--reporter" in panel_cmd
