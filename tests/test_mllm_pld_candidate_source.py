@@ -75,8 +75,27 @@ def test_pld_disabled_returns_empty():
         input_ids=mx.array([1, 2, 3, 4, 5, 1, 2]),
         output_tokens=[],
     )
-    drafts = gen._pld_drafts_for_request(req, K=3)
+    drafts = gen._pld_drafts_for_request(req, K=3, seed_token=None)
     assert drafts == []
+
+
+def test_seed_token_included_in_lookup_no_match():
+    """seed_token appends to full_tokens for n-gram query (live-fix #1)."""
+    gen = _MethodProxy.make(pld_enabled=True)
+    req = _FakeRequest(input_ids=mx.array([1, 2, 3, 4, 5]), output_tokens=[])
+    drafts = gen._pld_drafts_for_request(req, K=3, seed_token=1)
+    # With seed: full = [1,2,3,4,5,1]. Query last 2 = [5,1] — no earlier match.
+    assert drafts == []
+
+
+def test_seed_token_completes_query_for_match():
+    """Seed appended creates the query that finds a prompt repetition match."""
+    gen = _MethodProxy.make(pld_enabled=True)
+    # Prompt: [1,2,3,4,5,1,2,3]. Seed: 4. Full: [1,2,3,4,5,1,2,3,4].
+    # Trigram [2,3,4] match at idx 1; drafts after = [5,1,2].
+    req = _FakeRequest(input_ids=mx.array([1, 2, 3, 4, 5, 1, 2, 3]), output_tokens=[])
+    drafts = gen._pld_drafts_for_request(req, K=3, seed_token=4)
+    assert drafts == [5, 1, 2]
 
 
 def test_k_zero_returns_empty():

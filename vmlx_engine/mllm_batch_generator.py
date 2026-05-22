@@ -2984,6 +2984,29 @@ class MLLMBatchGenerator:
         self._spec_batched_steps: int = 0
         self._spec_batched_tokens: int = 0
         self._spec_batched_acceptance_ema: float = 0.0
+        # Adaptive auto-disable: when EMA acceptance rate drops below
+        # threshold for too many consecutive steps, fall back to standard
+        # _step until probing re-enables. Prevents PLD from hurting
+        # throughput on low-acceptance workloads. TCP slow-start pattern
+        # mirrors Scheduler._pld_at_* logic (PR #26).
+        self._spec_batched_min_acceptance: float = float(
+            os.getenv("VMLX_PLD_MIN_ACCEPTANCE", "0.30")
+        )
+        self._spec_batched_warmup_steps: int = int(
+            os.getenv("VMLX_PLD_WARMUP_STEPS", "20")
+        )
+        self._spec_batched_probe_interval: int = int(
+            os.getenv("VMLX_PLD_PROBE_INTERVAL", "200")
+        )
+        # Cooldown countdown — when > 0, skip _step_speculative dispatch
+        # this step and decrement. Probes by resetting to 0 periodically.
+        self._spec_batched_cooldown: int = 0
+        self._spec_batched_cooldown_count: int = 0  # how many times we cooled down (telemetry)
+        # Debug: dump first N attempts to /tmp/vmlx_pld_debug.log for diagnostics
+        # when VMLX_PLD_DEBUG=N is set. 0 = no dump.
+        self._spec_batched_debug_remaining: int = int(
+            os.getenv("VMLX_PLD_DEBUG", "0")
+        )
 
         # PLD speculative decoding state (issue #134 follow-up).
         # Enabled by config.pld_enabled (set by --enable-pld). Default OFF so
@@ -6053,14 +6076,22 @@ class MLLMBatchGenerator:
         self,
         req: "MLLMBatchRequest",
         K: int,
+        seed_token: Optional[int] = None,
     ) -> List[int]:
         """Find up to K draft token candidates via n-gram lookup over the
-        request's token sequence (prompt + output_tokens).
+        request's token sequence (prompt + output_tokens + seed_token).
 
-        Maintains a per-request NgramIndex on `req._pld_ngram_index` so the
-        index is built once and incrementally updated. Applies the V0.6
-        special-token filter so image-pad / vision markers never appear in
-        proposed drafts.
+        Including the seed (the not-yet-emitted latest sampled token) in the
+        lookup query matches the simple-engine PLD semantics in PR #26: the
+        Scheduler calls find_draft_tokens AFTER the latest token has been
+        appended to request.output_token_ids. Live validation showed that
+        omitting the seed caused near-0% acceptance because the lookup query
+        was "behind by one token" relative to the model's actual generation
+        position.
+
+        Maintains a per-request NgramIndex on `req._pld_ngram_index`. Applies
+        the V0.6 special-token filter so image-pad / vision markers never
+        appear in proposed drafts.
 
         Returns up to K tokens; possibly empty (no match found, or filter
         truncated all candidates).
@@ -6086,7 +6117,13 @@ class MLLMBatchGenerator:
                     prompt_ids = []
             req._cached_prompt_token_ids = prompt_ids
 
+        # Include the seed token in the lookup context — it's the latest
+        # sampled token that the next-step forward will process. Without it,
+        # the n-gram query is offset by one token from the model's actual
+        # decode position, causing near-zero acceptance on repetitive text.
         full_tokens = list(prompt_ids) + list(req.output_tokens)
+        if seed_token is not None:
+            full_tokens.append(int(seed_token))
         if len(full_tokens) < 3:
             return []
 
@@ -6565,8 +6602,10 @@ class MLLMBatchGenerator:
                 # TODO(#135): per-seq draft-model forward + cache management
                 return self._step(batch.y[:, None], batch.cache)
 
-            # PLD source
-            req_drafts = self._pld_drafts_for_request(req, K)
+            # PLD source — include the seed token in lookup context so the
+            # n-gram query position matches the model's actual decode position.
+            # (Live-validation finding: omitting the seed caused ~0% acceptance.)
+            req_drafts = self._pld_drafts_for_request(req, K, seed_token=seed_int)
             if not req_drafts:
                 # Any row missing drafts → fall back for whole batch
                 return self._step(batch.y[:, None], batch.cache)
@@ -6592,7 +6631,17 @@ class MLLMBatchGenerator:
             cache = _wrap_batch_caches(batch.cache)
             output = self.language_model(verify_input, cache=cache)
             logits = output.logits if hasattr(output, "logits") else output
-            # logits shape: (B, K+1, vocab)
+            # logits shape: (B, K+1, vocab) — but some VLM wrappers return only
+            # (B, 1, vocab) at decode. Detect + guard.
+            _logits_shape = tuple(logits.shape)
+            if len(_logits_shape) != 3 or _logits_shape[1] < K + 1:
+                logger.warning(
+                    "[PLD] verify forward returned logits shape %s (expected "
+                    "(B, K+1=%d, V)); falling back to _step for this step.",
+                    _logits_shape, K + 1,
+                )
+                # Fall back: SSM may be in advanced state, KV too. Use _step.
+                return self._step(batch.y[:, None], batch.cache)
 
             # ---- 5. Per-row greedy accept/reject ----
             predicted = mx.argmax(logits, axis=-1)
@@ -6616,6 +6665,21 @@ class MLLMBatchGenerator:
                 primary = int(row_pred[n])
                 primary_tokens.append(primary)
                 extras_per_row.append(list(row_drafts[:n]))
+
+            # Debug dump: first N attempts to /tmp/vmlx_pld_debug.log
+            # (VMLX_PLD_DEBUG=N env var). Helps diagnose acceptance issues.
+            if getattr(self, "_spec_batched_debug_remaining", 0) > 0:
+                try:
+                    with open("/tmp/vmlx_pld_debug.log", "a") as df:
+                        df.write(
+                            f"[step {self._spec_batched_steps}] "
+                            f"K={K} B={B} seeds={seeds} drafts={all_drafts} "
+                            f"predicted={predicted_list} n_accept={n_accept} "
+                            f"primary={primary_tokens}\n"
+                        )
+                    self._spec_batched_debug_remaining -= 1
+                except Exception:
+                    pass
 
             # ---- 6. Per-row rollback for partial/full rejects ----
             # Three cases per row:
@@ -6934,10 +6998,17 @@ class MLLMBatchGenerator:
                 should_use_speculative_batched(is_mllm=_is_mllm_local)
                 and not prompt_processing
             )
+            # Adaptive auto-disable check (issue #134 follow-up live finding):
+            # If running acceptance rate is too low, PLD overhead exceeds gain.
+            # Cool down for VMLX_PLD_PROBE_INTERVAL steps, then probe again.
+            _in_cooldown = self._spec_batched_cooldown > 0
+            if _in_cooldown:
+                self._spec_batched_cooldown -= 1
             _use_pld_spec = (
                 getattr(self, "_pld_spec_enabled", False)
                 and not prompt_processing
                 and not _use_draft_spec  # draft-spec wins when both configured
+                and not _in_cooldown
             )
             if _use_draft_spec:
                 batch.y, batch.logprobs = self._step_speculative(
@@ -6950,6 +7021,24 @@ class MLLMBatchGenerator:
                 batch.y, batch.logprobs = self._step_speculative(
                     batch, K=pld_K
                 )
+                # Adaptive auto-disable trigger: after warmup, if EMA below
+                # threshold, enter cooldown.
+                if (
+                    self._spec_batched_steps >= self._spec_batched_warmup_steps
+                    and self._spec_batched_acceptance_ema
+                    < self._spec_batched_min_acceptance
+                ):
+                    self._spec_batched_cooldown = self._spec_batched_probe_interval
+                    self._spec_batched_cooldown_count += 1
+                    logger.info(
+                        "[PLD] acceptance EMA=%.3f below threshold %.3f after "
+                        "%d steps; cooling down for %d steps (probe #%d)",
+                        self._spec_batched_acceptance_ema,
+                        self._spec_batched_min_acceptance,
+                        self._spec_batched_steps,
+                        self._spec_batched_probe_interval,
+                        self._spec_batched_cooldown_count,
+                    )
             else:
                 batch.y, batch.logprobs = self._step(y[:, None], batch.cache)
             mx.async_eval(batch.y)

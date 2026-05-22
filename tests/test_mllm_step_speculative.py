@@ -220,7 +220,7 @@ def test_full_accept_pure_attention():
     gen = _make_gen(model, pld_enabled=True, is_hybrid=False)
     req = _FakeReq(
         last_token=5, num_tokens=1, output_tokens=[],
-        input_ids=mx.array([1, 2, 3, 4, 5, 1, 2]),
+        input_ids=mx.array([10, 5, 3, 4, 99, 88, 10]),
     )
     cache = [_FakeKVLayer([10, 10])]  # B=1, offset=10
     batch = _FakeBatch([req], cache, y=mx.array([5]))
@@ -242,7 +242,7 @@ def test_full_reject_pure_attention():
     gen = _make_gen(model, pld_enabled=True, is_hybrid=False)
     req = _FakeReq(
         last_token=5, num_tokens=1, output_tokens=[],
-        input_ids=mx.array([1, 2, 3, 4, 5, 1, 2]),
+        input_ids=mx.array([10, 5, 3, 4, 99, 88, 10]),
     )
     cache = [_FakeKVLayer([10, 10])]  # offset=10
     batch = _FakeBatch([req], cache, y=mx.array([5]))
@@ -263,7 +263,7 @@ def test_partial_accept_pure_attention():
     gen = _make_gen(model, pld_enabled=True, is_hybrid=False)
     req = _FakeReq(
         last_token=5, num_tokens=1, output_tokens=[],
-        input_ids=mx.array([1, 2, 3, 4, 5, 1, 2]),
+        input_ids=mx.array([10, 5, 3, 4, 99, 88, 10]),
     )
     cache = [_FakeKVLayer([10, 10])]
     batch = _FakeBatch([req], cache, y=mx.array([5]))
@@ -296,7 +296,7 @@ def test_partial_accept_hybrid_preserves_drafts_via_replay():
     gen = _make_gen(model, pld_enabled=True, is_hybrid=True)
     req = _FakeReq(
         last_token=5, num_tokens=1, output_tokens=[],
-        input_ids=mx.array([1, 2, 3, 4, 5, 1, 2]),
+        input_ids=mx.array([10, 5, 3, 4, 99, 88, 10]),
     )
     cache = [_FakeKVLayer([10]), ssm_layer]
     batch = _FakeBatch([req], cache, y=mx.array([5]))
@@ -324,7 +324,7 @@ def test_full_reject_hybrid_emits_correction_only():
     gen = _make_gen(model, pld_enabled=True, is_hybrid=True)
     req = _FakeReq(
         last_token=5, num_tokens=1, output_tokens=[],
-        input_ids=mx.array([1, 2, 3, 4, 5, 1, 2]),
+        input_ids=mx.array([10, 5, 3, 4, 99, 88, 10]),
     )
     cache = [_FakeKVLayer([10]), ssm_layer]
     batch = _FakeBatch([req], cache, y=mx.array([5]))
@@ -346,7 +346,7 @@ def test_full_accept_hybrid_no_rollback():
     gen = _make_gen(model, pld_enabled=True, is_hybrid=True)
     req = _FakeReq(
         last_token=5, num_tokens=1, output_tokens=[],
-        input_ids=mx.array([1, 2, 3, 4, 5, 1, 2]),
+        input_ids=mx.array([10, 5, 3, 4, 99, 88, 10]),
     )
     cache = [_FakeKVLayer([10]), ssm_layer]
     batch = _FakeBatch([req], cache, y=mx.array([5]))
@@ -370,7 +370,7 @@ def test_spec_steps_counter_increments():
     gen = _make_gen(model, pld_enabled=True)
     req = _FakeReq(
         last_token=5, num_tokens=1,
-        input_ids=mx.array([1, 2, 3, 4, 5, 1, 2]),
+        input_ids=mx.array([10, 5, 3, 4, 99, 88, 10]),
     )
     batch = _FakeBatch([req], [_FakeKVLayer([10])], y=mx.array([5]))
     assert gen._spec_batched_steps == 0
@@ -384,7 +384,7 @@ def test_acceptance_ema_updates():
     gen = _make_gen(model, pld_enabled=True)
     req = _FakeReq(
         last_token=5, num_tokens=1,
-        input_ids=mx.array([1, 2, 3, 4, 5, 1, 2]),
+        input_ids=mx.array([10, 5, 3, 4, 99, 88, 10]),
     )
     batch = _FakeBatch([req], [_FakeKVLayer([10])], y=mx.array([5]))
     gen._step_speculative(batch, K=2)
