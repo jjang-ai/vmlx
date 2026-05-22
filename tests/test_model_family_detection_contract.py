@@ -270,6 +270,17 @@ def test_decode_speed_gate_extra_serve_arg_is_opt_in_without_mutating_row_defaul
     assert "--prefill-keep-alloc" not in base.extra_args
 
 
+def test_decode_speed_gate_records_runtime_mlx_wheel_tags():
+    from tests.cross_matrix.run_decode_speed_gate import resolve_runtime_wheel_tags
+
+    tags = resolve_runtime_wheel_tags(Path("/bundle/python3"))
+
+    assert "mlx" in tags
+    assert "mlx-metal" in tags
+    assert any(tag.startswith("unavailable:") for tag in tags["mlx"])
+    assert any(tag.startswith("unavailable:") for tag in tags["mlx-metal"])
+
+
 def test_decode_speed_gate_has_plain_mlx_qwen36_4bit_row():
     from tests.cross_matrix.run_decode_speed_gate import ROWS, build_serve_command
 

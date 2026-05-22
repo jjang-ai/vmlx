@@ -485,6 +485,7 @@ _ROWS: list[dict[str, Any]] = [
         "heavy": True,
         "proves": [
             "Qwen3.6-27B JANG_4M live decode speed is measured from the packaged Python engine, not inferred from source-only rows",
+            "Qwen/JANG speed artifacts record the MLX and MLX-metal wheel tags so compat-vs-native wheel performance cannot be hidden",
             "selective live TurboQuant for Qwen attention KV layers is compatible only when native cache health proves SSM companion state remains full precision",
             "Current qwen27_jang4m live row is review, not release-clear: decode is above threshold but PP below expected remains open",
             "SingleBatchGenerator honors the explicit prefill keep-alloc CLI/env path so single-sequence JANG runs can test allocator reuse without changing defaults",
@@ -497,6 +498,7 @@ _ROWS: list[dict[str, Any]] = [
         "artifacts": [
             "build/current-decode-speed-live-qwen27-jang4m-20260522-hybrid-tq-review.json",
             "build/current-decode-speed-live-qwen27-jang4m-source-keepalloc-20260522.json",
+            "build/current-decode-speed-live-qwen27-jang4m-packaged-keepalloc-20260522.json",
         ],
     },
 ]

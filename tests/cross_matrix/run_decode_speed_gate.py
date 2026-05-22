@@ -457,6 +457,58 @@ def row_with_extra_serve_args(row: Row, extra_args: list[str] | None) -> Row:
     return replace(row, extra_args=[*row.extra_args, *extra_args])
 
 
+def resolve_runtime_wheel_tags(python: Path) -> dict[str, list[str]]:
+    """Return MLX wheel tags for the Python runtime used by a live speed row."""
+    packages = ("mlx", "mlx-metal")
+    if not python.exists():
+        return {name: ["unavailable: python missing"] for name in packages}
+    python = python.resolve()
+    script = r"""
+import importlib.metadata
+import json
+from pathlib import Path
+
+out = {}
+for name in ("mlx", "mlx-metal"):
+    try:
+        dist = importlib.metadata.distribution(name)
+        wheel = Path(dist._path) / "WHEEL"
+        tags = [
+            line.split(":", 1)[1].strip()
+            for line in wheel.read_text(encoding="utf-8").splitlines()
+            if line.startswith("Tag:")
+        ]
+        out[name] = tags or ["unavailable: no WHEEL tags"]
+    except Exception as exc:
+        out[name] = [f"unavailable: {type(exc).__name__}"]
+print(json.dumps(out))
+"""
+    env = build_clean_env()
+    try:
+        proc = subprocess.run(
+            [str(python), "-B", "-s", "-c", script],
+            cwd="/tmp",
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - diagnostic metadata only
+        return {name: [f"unavailable: {type(exc).__name__}"] for name in packages}
+    if proc.returncode != 0:
+        return {name: [f"unavailable: rc={proc.returncode}"] for name in packages}
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {name: ["unavailable: invalid-json"] for name in packages}
+    return {
+        name: [str(item) for item in data.get(name, ["unavailable: missing"])]
+        for name in packages
+    }
+
+
 def build_clean_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
     """Return the live harness env without source/path or forced JANGTQ knobs."""
     env = dict(os.environ if base_env is None else base_env)
@@ -655,12 +707,14 @@ def run_row(
     prefill_step_size: int,
 ) -> dict[str, Any]:
     registry_metadata = resolve_row_registry_metadata(row)
+    runtime_wheels = resolve_runtime_wheel_tags(python)
     if not Path(row.path).exists():
         return {
             "name": row.name,
             "path": row.path,
             "status": "missing",
             "registry": registry_metadata,
+            "runtime_wheels": runtime_wheels,
         }
 
     log_path = keep_logs / f"{row.name}-{int(time.time())}.log"
@@ -767,6 +821,7 @@ def run_row(
             "status": status,
             "notes": notes,
             "registry": registry_metadata,
+            "runtime_wheels": runtime_wheels,
             "cmd": cmd,
             "prefill_step_size": prefill_step_size,
             "log_path": str(log_path),
@@ -785,6 +840,7 @@ def run_row(
             "status": "error",
             "error": repr(exc),
             "registry": registry_metadata,
+            "runtime_wheels": runtime_wheels,
             "cmd": cmd,
             "log_path": str(log_path),
             "log_tail": log_path.read_text(errors="replace")[-12000:] if log_path.exists() else "",
