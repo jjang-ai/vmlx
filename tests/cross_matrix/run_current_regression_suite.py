@@ -218,9 +218,10 @@ def build_suite_artifact(root: Path, *, include_release_gate: bool = True) -> di
             "tests/test_current_regression_suite.py",
             "tests/test_release_regression_manifest.py",
             "tests/test_model_family_detection_contract.py",
+            "tests/test_mcp_policy_contract.py",
             "tests/test_vl_media_cache_contract.py",
             "-k",
-            "objective_proof_digest or default_cache_tool_loop or current_regression_suite or release_regression_manifest or model_family_detection or decode_speed_gate or vl_media_cache_contract",
+            "objective_proof_digest or default_cache_tool_loop or current_regression_suite or release_regression_manifest or model_family_detection or mcp_policy_contract or decode_speed_gate or vl_media_cache_contract",
         ],
         "objective_digest": [
             sys.executable,

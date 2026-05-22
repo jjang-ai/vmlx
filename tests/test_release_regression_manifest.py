@@ -97,6 +97,7 @@ def test_release_regression_manifest_tracks_mcp_with_runner_artifact():
     assert "redaction" in joined
     assert "gateway routing" in joined
     assert "panel config source" in joined
+    assert "required marker" in joined
 
 
 def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artifact():

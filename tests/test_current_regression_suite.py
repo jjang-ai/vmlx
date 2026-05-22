@@ -675,6 +675,35 @@ def test_current_regression_suite_runs_mcp_policy_contracts(monkeypatch, tmp_pat
     )
 
 
+def test_current_regression_suite_runs_mcp_policy_marker_contract(monkeypatch, tmp_path):
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    _write_json(
+        tmp_path / "build/current-objective-proof-audit-20260521.json",
+        {
+            "requirements": [
+                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
+            ]
+        },
+    )
+
+    seen_steps = []
+
+    def fake_run_step(name, cmd, cwd):
+        seen_steps.append((name, cmd))
+        return {"name": name, "command": cmd, "returncode": 0, "stdout_tail": []}
+
+    monkeypatch.setattr(suite, "_run_step", fake_run_step)
+
+    artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
+
+    assert artifact["status"] == "pass"
+    focused = next(cmd for name, cmd in seen_steps if name == "focused_regression_pytest")
+    joined = " ".join(focused)
+    assert "tests/test_mcp_policy_contract.py" in joined
+    assert "mcp_policy_contract" in joined
+
+
 def test_current_regression_suite_runs_packaged_integrity_contracts(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 

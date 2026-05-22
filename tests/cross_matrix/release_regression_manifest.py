@@ -195,6 +195,7 @@ _ROWS: list[dict[str, Any]] = [
         "heavy": False,
         "proves": [
             "MCP autodiscovery, redaction, security policy, gateway routing, and panel config source stay covered",
+            "MCP required marker checks fail the gate if named engine or panel rows disappear",
         ],
         "commands": [
             ".venv/bin/python tests/cross_matrix/run_mcp_policy_contract.py --out build/current-mcp-policy-contract-20260521.json",

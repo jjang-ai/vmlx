@@ -43,6 +43,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "-m",
             "pytest",
             "-q",
+            "-vv",
             "tests/test_mcp_policy.py",
             "tests/test_mcp_security.py",
         ],
@@ -56,9 +57,26 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "tests/mcp-policy.test.ts",
             "tests/mcp-config-store.test.ts",
             "tests/mcp-gateway-routing.test.ts",
+            "--reporter=verbose",
         ],
     ),
 }
+
+REQUIRED_MCP_POLICY_TEST_MARKERS = (
+    "test_server_discovers_cwd_mcp_json_without_env_or_cli",
+    "test_server_auto_discovery_loads_mcp_config_with_none",
+    "test_mcp_policy_filters_servers_and_tools_before_openai_schema_merge",
+    "test_mcp_policy_rejects_disabled_tool_execution_server_side",
+    "test_mcp_policy_status_redacts_remote_url_query_secrets",
+    "test_command_injection_semicolon_blocked",
+    "test_injection_in_env_value_blocked",
+    "test_sse_transport_forwards_auth_headers",
+    "wires MCP policy flags through session launch and command preview",
+    "copies a validated mcp.json/jsonc into a managed store without leaking secrets in metadata",
+    "routes MCP list and execute calls by explicit model alias",
+    "rejects ambiguous multi-session MCP requests without a model",
+    "keeps built-in Electron tools separate from MCP execution and request policy",
+)
 
 
 def _sha256(path: Path) -> str:
@@ -101,6 +119,7 @@ def _run(root: Path, name: str, cwd_rel: Path, cmd: list[str]) -> dict[str, Any]
         "returncode": proc.returncode,
         "elapsed_sec": round(time.monotonic() - started, 3),
         "counts": _parse_counts(proc.stdout),
+        "stdout": proc.stdout,
         "stdout_tail": proc.stdout.splitlines()[-80:],
     }
 
@@ -111,6 +130,12 @@ def build_artifact(root: Path) -> dict[str, Any]:
         for name, (cwd_rel, cmd) in COMMANDS.items()
     }
     failed = [name for name, result in results.items() if result["returncode"] != 0]
+    stdout = "\n".join(str(result.get("stdout", "")) for result in results.values())
+    missing_markers = [
+        marker
+        for marker in REQUIRED_MCP_POLICY_TEST_MARKERS
+        if marker not in stdout
+    ]
     engine_passed = results["engine_mcp_policy_security"]["counts"]["passed"] or 0
     panel_passed = results["panel_mcp_policy_gateway"]["counts"]["passed"] or 0
     checks = {
@@ -124,12 +149,14 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "mcp_gateway_routes_by_explicit_model": not failed and panel_passed >= 13,
         "mcp_gateway_rejects_ambiguous_multi_session_requests": not failed and panel_passed >= 13,
         "builtin_electron_tools_separate_from_mcp_execution": not failed and panel_passed >= 13,
+        "all_required_mcp_policy_markers_present": not failed and not missing_markers,
     }
     return {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "status": "pass" if all(checks.values()) else "fail",
         "checks": checks,
         "failed": failed,
+        "missing_markers": missing_markers,
         "source_hashes": {
             rel: _sha256(root / rel)
             for rel in SOURCE_HASH_FILES
@@ -151,6 +178,7 @@ def main() -> int:
     print(args.out)
     print(f"status={artifact['status']}")
     print("failed=" + json.dumps(artifact["failed"]))
+    print("missing_markers=" + json.dumps(artifact["missing_markers"]))
     for name, result in artifact["results"].items():
         counts = result["counts"]
         print(
