@@ -1038,6 +1038,19 @@ describe('Performance & Generation', () => {
         expect(getFlagValue(out, '--max-tokens')).toBe('4096')
     })
 
+    it('casual preset maxTokens uses an explicit server output cap without changing model-owned defaults or context', () => {
+        const formSource = readFileSync(resolve(__dirname, '../src/renderer/src/components/sessions/SessionConfigForm.tsx'), 'utf8')
+        const casualStart = formSource.indexOf('export const CASUAL_CONFIG')
+        const casualEnd = formSource.indexOf('\n}\n', casualStart)
+        const casualBlock = formSource.slice(casualStart, casualEnd)
+
+        expect(DEFAULT_CONFIG.maxTokens).toBe(0)
+        expect(casualBlock).toContain('maxTokens: 8192')
+        expect(casualBlock).not.toContain('maxContextLength')
+        expect(formSource).toContain('limits runaway long replies')
+        expect(formSource).not.toContain('prevents huge KV allocation')
+    })
+
     it('JANGTQ router top-k override is not emitted by the app', () => {
         const out = preview({} as any, { family: 'minimax', isTurboQuant: true })
         expect(out.includes('JANGTQ_TOPK_OVERRIDE=')).toBe(false)

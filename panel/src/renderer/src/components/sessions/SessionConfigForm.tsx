@@ -212,7 +212,7 @@ export const CASUAL_CONFIG: SessionConfig = {
   maxCacheBlocks: 500,        // Fewer paged blocks (half)
   prefixCacheSize: 50,        // Fewer cached prefixes
   kvCacheQuantization: 'auto', // Do not pass explicit q4; that disables calibrated live TQ-KV.
-  maxTokens: 8192,            // 8K vs 32K — prevents huge KV allocation
+  maxTokens: 8192,            // Explicit server output cap; limits runaway long replies without changing context.
   enableJit: true,            // JIT on by default (includes warmup for cold-start OOM prevention)
 }
 

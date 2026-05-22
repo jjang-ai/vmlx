@@ -82,6 +82,7 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     # Panel launch/settings. These catch UI confusion between response length
     # and prompt/context length before a session can relaunch with stale state.
     "surfaces Max Output Tokens separately from Max Context Tokens",
+    "casual preset maxTokens uses an explicit server output cap without changing model-owned defaults or context",
     "does not synthesize a huge max tokens flag when set to 0 (model/server default)",
     "does not copy model max_new_tokens into hidden startup maxTokens config",
     "database clears legacy session maxTokens before settings UI or launch can reuse them",
@@ -119,7 +120,7 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
 PANEL_PATTERN = (
     "maxTokens|Max Tokens|Max Output|Max Context|max context|max output|"
     "max_tokens|max_output_tokens|32768|server default output|per-chat|"
-    "omits max_tokens|max token budget|output budgets|output limit|"
+    "omits max_tokens|max token budget|output budgets|output limit|output cap|"
     "context fallback|coding tool"
 )
 
@@ -298,6 +299,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "panel_server_default_output_maps_to_max_tokens": (
             not failed
             and "surfaces Max Output Tokens separately from Max Context Tokens" not in missing_markers
+            and "casual preset maxTokens uses an explicit server output cap without changing model-owned defaults or context" not in missing_markers
             and "changing maxTokens produces different CLI output" not in missing_markers
         ),
         "panel_max_context_maps_to_max_prompt_tokens": (
