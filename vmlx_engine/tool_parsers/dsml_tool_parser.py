@@ -105,8 +105,16 @@ class DSMLToolParser(ToolParser):
         rf'</(?:{re.escape(DSML_PREFIX)})?(?:param|parameter)>',
         re.DOTALL,
     )
+    _SHORT_DSML_PARAM_RE = re.compile(
+        rf'<{re.escape(DSML_PREFIX)}parameter\s+name="([^"]+)"[^>]*>(.*?)</{re.escape(DSML_PREFIX)}>',
+        re.DOTALL,
+    )
     _DEGRADED_INVOKE_START_RE = re.compile(
         rf'(?:<{re.escape(DSML_PREFIX)}invoke|<invoke)\s+name=["\']([^"\']+)["\']\s*>',
+        re.DOTALL,
+    )
+    _DEGRADED_NAMED_INV_RE = re.compile(
+        rf'<{re.escape(DSML_PREFIX)}inv>\s*<{re.escape(DSML_PREFIX)}name>([^<]+)</{re.escape(DSML_PREFIX)}>',
         re.DOTALL,
     )
     _DEGRADED_INVOKE_CLOSE_RE = re.compile(
@@ -179,6 +187,13 @@ class DSMLToolParser(ToolParser):
         for m in self._PLAIN_PARAM_RE.finditer(body):
             name, raw = m.group(1), m.group(2)
             if name not in props:
+                continue
+            value = self._coerce_plain_param_value(raw, props.get(name))
+            if value != "":
+                args[name] = value
+        for m in self._SHORT_DSML_PARAM_RE.finditer(body):
+            name, raw = m.group(1), m.group(2)
+            if name not in props or name in args:
                 continue
             value = self._coerce_plain_param_value(raw, props.get(name))
             if value != "":
@@ -414,10 +429,42 @@ class DSMLToolParser(ToolParser):
         if not schemas:
             return []
         starts = list(self._DEGRADED_INVOKE_START_RE.finditer(text))
-        if not starts:
+        named_invokes = list(self._DEGRADED_NAMED_INV_RE.finditer(text))
+        if not starts and not named_invokes:
             return []
 
         calls: list[dict[str, Any]] = []
+        for index, match in enumerate(named_invokes):
+            name = match.group(1).strip()
+            schema = schemas.get(name)
+            if not schema:
+                continue
+            next_named = (
+                named_invokes[index + 1].start()
+                if index + 1 < len(named_invokes)
+                else len(text)
+            )
+            next_attr = next(
+                (start.start() for start in starts if start.start() > match.end()),
+                len(text),
+            )
+            close = self._DEGRADED_INVOKE_CLOSE_RE.search(text, match.end())
+            end = min(
+                next_named,
+                next_attr,
+                close.start() if close is not None else len(text),
+            )
+            body = text[match.end() : end]
+            args = self._parse_plain_params(body, schema)
+            if not self._required_satisfied(args, schema):
+                continue
+            calls.append(
+                self._make_tool_call(
+                    name=name,
+                    arguments=json.dumps(args, ensure_ascii=False),
+                    id_=generate_tool_id(),
+                )
+            )
         for index, match in enumerate(starts):
             name = match.group(1)
             schema = schemas.get(name)

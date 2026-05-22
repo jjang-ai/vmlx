@@ -159,6 +159,9 @@ def test_release_regression_manifest_tracks_tool_calls_with_runner_artifact():
     assert "Tool parser residue" in joined
     assert "DSV4" in joined
     assert "maxToolIterations" in joined
+    assert "live DSV4 write_file DSML degradation is repaired schema-safely" in joined
+    assert "current-tool-call-contract-20260522-dsv4-live-write-file-repair.json" in joined
+    assert "current-dsv4-default-cache-tool-loop-poolon-materialized-parserfix-20260522/result.json" in joined
 
 
 def test_release_regression_manifest_tracks_panel_cache_family_gating():
@@ -525,6 +528,8 @@ def test_release_regression_manifest_tracks_cache_architecture_with_runner_artif
     assert "current-cache-architecture-contract-20260522-dsv4-pool-quant-append.json" in joined
     assert "current-cache-architecture-contract-20260522-dsv4-timing.json" in joined
     assert "current-cache-architecture-contract-20260522-dsv4-pool-env-gate.json" in joined
+    assert "DSV4 pool quant reads reuse a materialized pool view" in joined
+    assert "current-cache-architecture-contract-20260522-dsv4-pool-materialized-cache.json" in joined
     assert "pool quant codec appends only newly generated CSA/HCA pool rows" in joined
     assert "DSV4 panel env mapping keeps the rejected pool quant codec disabled" in joined
     assert "DSV4 timing probe covers prefix-cache replay and cold-store boundaries" in joined

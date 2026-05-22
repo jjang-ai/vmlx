@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -61,6 +62,7 @@ REQUIRED_CACHE_TEST_MARKERS = (
     "test_memory_pressure_reuses_shorter_dsv4_terminal_composite_prefix",
     "test_memory_pressure_refuses_dsv4_partial_without_terminal_composite",
     "test_dsv4_pool_quant_appends_only_new_pool_rows",
+    "test_dsv4_pool_quant_reuses_materialized_pool_between_appends",
     "test_dsv4_timing_probe_is_env_gated_and_covers_cache_boundaries",
     # Hybrid SSM cache must reuse only aligned checkpoints and must not apply
     # generic TQ live-cache paths to SSM state.
@@ -186,9 +188,19 @@ def _parse_counts(output: str) -> dict[str, int | None]:
 
 def _run(root: Path, name: str, spec: CommandSpec) -> dict[str, Any]:
     started = time.monotonic()
+    env = dict(os.environ)
+    jang_source = env.get("VMLINUX_JANG_TOOLS_SOURCE") or env.get("VMLX_JANG_TOOLS_SOURCE")
+    if jang_source:
+        existing = env.get("PYTHONPATH") or ""
+        env["PYTHONPATH"] = (
+            str(jang_source)
+            if not existing
+            else f"{jang_source}{os.pathsep}{existing}"
+        )
     proc = subprocess.run(
         spec.cmd,
         cwd=root / spec.cwd,
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

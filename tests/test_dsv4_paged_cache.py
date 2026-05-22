@@ -856,6 +856,36 @@ def test_dsv4_pool_quant_appends_only_new_pool_rows(monkeypatch):
     assert quant_shapes == [(1, 3, 16), (1, 1, 16)]
 
 
+def test_dsv4_pool_quant_reuses_materialized_pool_between_appends(monkeypatch):
+    """Pool-on DSV4 must not dequant/concat the full historical pool per read."""
+    import jang_tools.dsv4.pool_quant_cache as pq
+    from jang_tools.dsv4.pool_quant_cache import PoolQuantizedV4Cache
+
+    dequant_count = 0
+    original_dequant = pq._dequant_pool
+
+    def recording_dequant(qpool, *args, **kwargs):
+        nonlocal dequant_count
+        dequant_count += 1
+        return original_dequant(qpool, *args, **kwargs)
+
+    monkeypatch.setattr(pq, "_dequant_pool", recording_dequant)
+
+    cache = PoolQuantizedV4Cache(sliding_window=128, compress_ratio=4)
+    first = mx.ones((1, 3, 16), dtype=mx.bfloat16)
+    second = mx.ones((1, 1, 16), dtype=mx.bfloat16) * 2
+
+    pool_a = cache.update_pool(first, "compressor_state")
+    first_read = cache.compressor_state["pooled"]
+    second_read = cache.compressor_state["pooled"]
+    pool_b = cache.update_pool(second, "compressor_state")
+    mx.eval(pool_a, first_read, second_read, pool_b)
+
+    assert dequant_count == 0
+    assert tuple(pool_b.shape) == (1, 4, 16)
+    assert cache.nbytes >= pool_b.nbytes
+
+
 def test_dsv4_timing_probe_is_env_gated_and_covers_cache_boundaries():
     """DSV4 speed work needs boundary timings, not sampler/cache guesses."""
     import inspect

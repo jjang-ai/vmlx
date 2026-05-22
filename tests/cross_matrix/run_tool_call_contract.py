@@ -31,6 +31,7 @@ DSML_PATTERN = (
     "or dsml_parser_repairs_schema_gated_malformed_old_dsv4_tool_call "
     "or dsml_parser_repairs_partial_canonical_invoke "
     "or dsml_parser_repairs_dsv4_live_degraded_dsml_params "
+    "or dsml_parser_rejects_canonical_attr_residue_and_repairs_live_write_file "
     "or dsml_parser_repairs_partial_invoke_with_malformed_value_attr "
     "or dsml_parser_repairs_htmlish_invoke_degradation "
     "or server_repairs_dsv4_partial_tool_intent_from_request_args "
@@ -49,6 +50,7 @@ REQUIRED_TOOL_CALL_TEST_MARKERS = (
     "visible_text_around_invoke_preserved_no_dsml_leak",
     "tools_called_implies_no_dsml_in_content",
     "dsml_parser_repairs_dsv4_live_degraded_dsml_params",
+    "dsml_parser_rejects_canonical_attr_residue_and_repairs_live_write_file",
     "dsml_parser_repairs_partial_invoke_with_malformed_value_attr",
     "server_repairs_dsv4_partial_tool_intent_from_request_args",
     "dsv4_encoder_keeps_function_arguments_as_dsml_params",

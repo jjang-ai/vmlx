@@ -1308,6 +1308,46 @@ class TestFallbackToolPromptFormat:
         assert '"content": "ok"' in result.tool_calls[1]["arguments"]
         assert result.content is None
 
+    def test_dsml_parser_rejects_canonical_attr_residue_and_repairs_live_write_file(self):
+        from vmlx_engine.tool_parsers.dsml_tool_parser import DSMLToolParser
+
+        text = (
+            '<｜DSML｜tool_ctools>\n'
+            '<｜DSML｜inv>\n'
+            '<｜DSML｜name>write_file</｜DSML｜>\n'
+            '<｜DSML｜parameter name="path" string="true">landing-p/proof.html</｜DSML｜>\n'
+            '<｜DSML｜parameter name="content" string="true"><html><body>dsv4-default-cache-tool-ok</body></html></｜DSML｜>\n'
+            '</｜DSML｜inv>\n'
+            '</｜DSML｜tool_calls>'
+        )
+        req = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "write_file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "content": {"type": "string"},
+                            },
+                            "required": ["path", "content"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        result = DSMLToolParser(None).extract_tool_calls(text, request=req)
+
+        assert result.tools_called
+        assert result.tool_calls[0]["name"] == "write_file"
+        assert '"path": "landing-p/proof.html"' in result.tool_calls[0]["arguments"]
+        assert '"content": "<html><body>dsv4-default-cache-tool-ok</body></html>"' in result.tool_calls[0]["arguments"]
+        assert " string=" not in result.tool_calls[0]["arguments"]
+        assert result.content is None
+
     def test_dsml_parser_repairs_partial_invoke_with_malformed_value_attr(self):
         from vmlx_engine.tool_parsers.dsml_tool_parser import DSMLToolParser
 
