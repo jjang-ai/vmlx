@@ -575,6 +575,18 @@ def test_release_regression_manifest_tracks_max_output_context_with_runner_artif
     assert "Auto chat Max Tokens omits per-request output caps" in joined
 
 
+def test_release_regression_manifest_tracks_current_server_chat_output_compat_recheck():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+    row = rows["chat-settings-max-output-context-ui"]
+    joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
+
+    assert "current-max-output-context-contract-20260522-recheck-server-chat-output-compat.json" in joined
+    assert "explicit per-request Chat/Responses output caps can be below or above Server Default Max Output Tokens" in joined
+    assert "later Auto Chat/Responses requests still use the original server startup default" in joined
+    assert "server startup maxTokens explicitness survives wake/reload and CLI implicit startup paths" in joined
+
+
 def test_release_regression_manifest_tracks_vl_media_with_runner_artifact():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}
