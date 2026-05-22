@@ -181,13 +181,14 @@ _ROWS: list[dict[str, Any]] = [
         "proves": [
             "Named DSV4, ZAYA, ZAYA1-VL, Ling/Bailing, Nemotron, Qwen 3.6 VL/video/hybrid, MXFP4, MXFP8, native-MTP, MiniMax, and Hy3 rows keep expected parser/cache/modality policy",
             "Decode-speed rows keep JANG-only, JANGTQ/MXTQ, MXFP4, and MXFP8 speed thresholds distinct while staying aligned with engine registry parser, modality, and cache metadata for existing local models",
+            "Every decode-speed row with a declared tool or reasoning parser uses a registered engine parser even when that local model path is absent",
             "This is source/static compatibility proof only; live multi-turn output quality remains a separate live row",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_model_family_detection_contract.py --out build/current-model-family-detection-contract-20260522-distinct-speed-rows.json",
+            ".venv/bin/python tests/cross_matrix/run_model_family_detection_contract.py --out build/current-model-family-detection-contract-20260522-parser-registry-rows.json",
         ],
         "artifacts": [
-            "build/current-model-family-detection-contract-20260522-distinct-speed-rows.json",
+            "build/current-model-family-detection-contract-20260522-parser-registry-rows.json",
         ],
     },
     {

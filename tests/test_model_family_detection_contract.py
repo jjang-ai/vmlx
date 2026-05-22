@@ -22,6 +22,7 @@ def test_family_detection_contract_pins_named_release_rows():
         "decode_speed_qwen36_mxfp8_native_mtp_rows",
         "decode_speed_nemotron_omni_nano_jangtq4_row",
         "decode_speed_distinct_jang_jangtq_mxfp_speed_rows",
+        "decode_speed_all_declared_parsers_are_engine_registered",
         "decode_speed_existing_rows_match_engine_parser_policy",
         "decode_speed_existing_rows_match_engine_modality_policy",
         "decode_speed_registry_cache_metadata_health",
@@ -169,6 +170,26 @@ def test_decode_speed_gate_has_distinct_jang_jangtq_mxfp_speed_rows():
     assert all("JANGTQ" in ROWS[name].path for name in groups["jangtq_mxtq_turboquant"])
     assert all("MXFP4" in ROWS[name].path or "mxfp4" in ROWS[name].path for name in groups["mxfp4_mlx"])
     assert all("MXFP8" in ROWS[name].path for name in groups["mxfp8_mlx_mtp"])
+
+
+def test_decode_speed_gate_declared_parsers_are_engine_registered():
+    from tests.cross_matrix.run_decode_speed_gate import ROWS
+    from vmlx_engine.reasoning import list_parsers
+    from vmlx_engine.tool_parsers import ToolParserManager
+
+    registered_tool_parsers = set(ToolParserManager.list_registered())
+    registered_reasoning_parsers = set(list_parsers())
+    bad_tool_rows = []
+    bad_reasoning_rows = []
+
+    for row_name, row in ROWS.items():
+        if row.tool_parser and row.tool_parser not in registered_tool_parsers:
+            bad_tool_rows.append(f"{row_name}:{row.tool_parser}")
+        if row.reasoning_parser and row.reasoning_parser not in registered_reasoning_parsers:
+            bad_reasoning_rows.append(f"{row_name}:{row.reasoning_parser}")
+
+    assert bad_tool_rows == []
+    assert bad_reasoning_rows == []
 
 
 def test_decode_speed_gate_matches_registry_parser_policy_for_ling_and_nemotron():
