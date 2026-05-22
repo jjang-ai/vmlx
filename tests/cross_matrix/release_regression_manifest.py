@@ -25,6 +25,7 @@ REQUIRED_RELEASE_DOMAINS = {
     "mcp",
     "vl_media",
     "packaging_release",
+    "release_surface",
     "pr_intake",
 }
 
@@ -231,6 +232,24 @@ _ROWS: list[dict[str, Any]] = [
         ],
         "artifacts": [
             "build/current-packaged-integrity-contract-20260521.json",
+        ],
+    },
+    {
+        "id": "public-release-surface-preflight",
+        "domain": "release_surface",
+        "mode": "noheavy",
+        "heavy": False,
+        "proves": [
+            "local latest.json updater manifest does not advance ahead of the source version",
+            "if latest.json is bumped to the source version, it carries a matching URL, SHA256, and notes version",
+            "PyPI, GitHub release, and updater feeds remain explicit operator checks before public release",
+        ],
+        "commands": [
+            ".venv/bin/python tests/cross_matrix/run_release_surface_contract.py --out build/current-release-surface-contract-20260521.json",
+        ],
+        "artifacts": [
+            "build/current-release-surface-contract-20260521.json",
+            "latest.json",
         ],
     },
     {

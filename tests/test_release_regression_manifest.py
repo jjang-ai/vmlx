@@ -113,6 +113,20 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     assert "verify-bundled" in joined
 
 
+def test_release_regression_manifest_tracks_public_release_surface_preflight():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+    row = rows["public-release-surface-preflight"]
+    joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
+
+    assert row["domain"] == "release_surface"
+    assert "run_release_surface_contract.py" in joined
+    assert "latest.json" in joined
+    assert "PyPI" in joined
+    assert "GitHub release" in joined
+    assert "updater" in joined.lower()
+
+
 def test_release_regression_manifest_tracks_live_only_boundaries():
     manifest = build_manifest()
     live_rows = [row for row in manifest["rows"] if row["mode"] == "live"]

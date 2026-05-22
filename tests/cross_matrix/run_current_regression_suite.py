@@ -164,6 +164,12 @@ def build_suite_artifact(root: Path, *, include_release_gate: bool = True) -> di
             "--out",
             "build/current-packaged-integrity-contract-20260521.json",
         ],
+        "release_surface_contracts": [
+            sys.executable,
+            "tests/cross_matrix/run_release_surface_contract.py",
+            "--out",
+            "build/current-release-surface-contract-20260521.json",
+        ],
         "cli_release_contracts": [
             sys.executable,
             "-m",
