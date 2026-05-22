@@ -151,14 +151,14 @@ _ROWS: list[dict[str, Any]] = [
             "OpenAI Chat Completions sampling/default propagation for non-streaming and streaming",
             "OpenAI Responses sampling/default propagation for non-streaming and streaming",
             "OpenAI legacy Completions max_tokens/default propagation for non-streaming and streaming",
-            "Anthropic adapter bundle defaults",
+            "Anthropic adapter bundle defaults and streaming max_tokens override semantics",
             "Ollama adapter streaming/done behavior",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260522-chat-responses-streaming.json",
+            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260522-anthropic-streaming.json",
         ],
         "artifacts": [
-            "build/current-api-surface-contract-20260522-chat-responses-streaming.json",
+            "build/current-api-surface-contract-20260522-anthropic-streaming.json",
         ],
     },
     {

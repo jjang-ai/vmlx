@@ -46,6 +46,7 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_chat_and_responses_streaming_output_caps_override_server_default_without_touching_context_cap",
     "test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap",
     "test_legacy_completions_streaming_output_cap_overrides_server_default_without_touching_context_cap",
+    "test_anthropic_messages_streaming_max_tokens_overrides_server_default_without_touching_context_cap",
     "test_anthropic_messages_omitted_max_tokens_uses_bundle_default",
     "test_ollama_streaming_suppresses_duplicate_done_chunks",
     "test_chat_completions_nonstreaming",
@@ -88,6 +89,7 @@ COMMANDS: dict[str, list[str]] = {
             "or chat_and_responses_streaming_output_caps_override_server_default_without_touching_context_cap "
             "or legacy_completions_output_cap_overrides_server_default_without_touching_context_cap "
             "or legacy_completions_streaming_output_cap_overrides_server_default_without_touching_context_cap "
+            "or anthropic_messages_streaming_max_tokens_overrides_server_default_without_touching_context_cap "
             "or responses_request_has_sampling_fields "
             "or media_diag_hooks_cover_anthropic_and_ollama_streaming_ingress "
             "or responses_nonstreaming_forwards_tc_id "
@@ -240,7 +242,9 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_legacy_completions_streaming_output_cap_overrides_server_default_without_touching_context_cap" not in missing_markers
         ),
         "anthropic_bundle_defaults": (
-            api_ok and "test_anthropic_messages_omitted_max_tokens_uses_bundle_default" not in missing_markers
+            api_ok
+            and "test_anthropic_messages_omitted_max_tokens_uses_bundle_default" not in missing_markers
+            and "test_anthropic_messages_streaming_max_tokens_overrides_server_default_without_touching_context_cap" not in missing_markers
         ),
         "ollama_adapter_surface": (
             api_ok and "test_ollama_streaming_suppresses_duplicate_done_chunks" not in missing_markers

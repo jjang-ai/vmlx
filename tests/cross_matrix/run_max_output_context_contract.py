@@ -57,6 +57,7 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     "test_request_output_caps_can_go_below_or_above_startup_default",
     "test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap",
     "test_legacy_completions_streaming_output_cap_overrides_server_default_without_touching_context_cap",
+    "test_anthropic_messages_streaming_max_tokens_overrides_server_default_without_touching_context_cap",
     "test_explicit_server_max_tokens_overrides_bundle_max_new_tokens",
     "test_omitted_server_max_tokens_uses_bundle_max_new_tokens",
     "test_omitted_server_max_tokens_without_bundle_default_is_bounded",
@@ -116,6 +117,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_request_output_caps_can_go_below_or_above_startup_default",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_legacy_completions_streaming_output_cap_overrides_server_default_without_touching_context_cap",
+            "tests/test_engine_audit.py::TestServerSamplingResolution::test_anthropic_messages_streaming_max_tokens_overrides_server_default_without_touching_context_cap",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_explicit_server_max_tokens_overrides_bundle_max_new_tokens",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_omitted_server_max_tokens_uses_bundle_max_new_tokens",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_omitted_server_max_tokens_without_bundle_default_is_bounded",
@@ -245,6 +247,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "anthropic_messages_preserves_bundle_and_explicit_output_caps": (
             not failed
             and "test_anthropic_messages_omitted_max_tokens_uses_bundle_default" not in missing_markers
+            and "test_anthropic_messages_streaming_max_tokens_overrides_server_default_without_touching_context_cap" not in missing_markers
         ),
         "ollama_num_predict_maps_only_positive_output_caps": (
             not failed

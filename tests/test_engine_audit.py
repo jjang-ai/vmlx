@@ -1152,6 +1152,85 @@ class TestServerSamplingResolution:
         assert captured[0]["max_tokens"] == 2048
         assert captured[1]["max_tokens"] == 33
 
+    def test_anthropic_messages_streaming_max_tokens_overrides_server_default_without_touching_context_cap(
+        self,
+        monkeypatch,
+    ):
+        """Anthropic streaming max_tokens must stay an output cap override."""
+        from fastapi.testclient import TestClient
+
+        import vmlx_engine.server as server
+
+        class FakeEngine:
+            is_mllm = False
+            tokenizer = None
+            preserve_native_tool_format = False
+
+        captured: list[dict] = []
+
+        async def fake_stream_chat_completion(*args, **kwargs):
+            captured.append(
+                {
+                    "max_tokens": kwargs.get("max_tokens"),
+                    "max_prompt_tokens": kwargs.get("max_prompt_tokens"),
+                }
+            )
+            yield (
+                'data: {"choices":[{"delta":{"content":"ok"},'
+                '"finish_reason":"stop"}],"usage":{"prompt_tokens":1,'
+                '"completion_tokens":1}}\n\n'
+            )
+            yield "data: [DONE]\n\n"
+
+        monkeypatch.setattr(server, "_engine", FakeEngine())
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_name", "anthropic-stream-cap-model")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+        monkeypatch.setattr(server, "_api_key", None, raising=False)
+        monkeypatch.setattr(server, "_default_max_tokens", 768)
+        monkeypatch.setattr(server, "_default_max_tokens_explicit", True, raising=False)
+        monkeypatch.setattr(server, "_max_prompt_tokens", 32768)
+        monkeypatch.setattr(server, "_default_temperature", None)
+        monkeypatch.setattr(server, "_default_top_p", None)
+        monkeypatch.setattr(server, "_default_top_k", None)
+        monkeypatch.setattr(server, "_default_min_p", None)
+        monkeypatch.setattr(server, "_default_repetition_penalty", None)
+        monkeypatch.setattr(server, "stream_chat_completion", fake_stream_chat_completion)
+        server._jang_sampling_defaults_cache.clear()
+        server._generation_defaults_cache.clear()
+
+        client = TestClient(server.app)
+
+        explicit = client.post(
+            "/v1/messages",
+            json={
+                "model": "anthropic-stream-cap-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+                "max_tokens": 96,
+                "max_prompt_tokens": 4096,
+            },
+        )
+        defaulted = client.post(
+            "/v1/messages",
+            json={
+                "model": "anthropic-stream-cap-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+                "max_prompt_tokens": 8192,
+            },
+        )
+
+        assert explicit.status_code == 200
+        assert defaulted.status_code == 200
+        assert "message_stop" in explicit.text
+        assert "message_stop" in defaulted.text
+        assert captured[0]["max_tokens"] == 96
+        assert captured[0]["max_prompt_tokens"] == 4096
+        assert captured[1]["max_tokens"] == 768
+        assert captured[1]["max_prompt_tokens"] == 8192
+
     def test_explicit_server_max_tokens_overrides_bundle_max_new_tokens(
         self,
         tmp_path,
