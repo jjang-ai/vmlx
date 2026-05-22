@@ -233,6 +233,38 @@ describe('buildRequestBody — Chat Completions API', () => {
         }
     })
 
+    it('Auto chat maxTokens omits per-request output caps so server default can apply', () => {
+        const autoCompletions = buildRequestBody('completions', 'gpt-4', messages, {}, false, false)
+        const disabledCompletions = buildRequestBody('completions', 'gpt-4', messages, { maxTokens: 0 }, false, false)
+        const dsv4MaxThinkingAuto = buildRequestBody(
+            'completions',
+            'dsv4',
+            messages,
+            { reasoningEffort: 'max' },
+            false,
+            true,
+            undefined,
+            'deepseek-v4',
+        )
+        const autoResponses = buildRequestBody('responses', 'gpt-4', messages, {}, false, false)
+        const disabledResponses = buildRequestBody('responses', 'gpt-4', messages, { maxTokens: 0 }, false, false)
+
+        for (const body of [
+            autoCompletions,
+            disabledCompletions,
+            dsv4MaxThinkingAuto,
+            autoResponses,
+            disabledResponses,
+        ]) {
+            expect(body.max_tokens).toBeUndefined()
+            expect(body.max_output_tokens).toBeUndefined()
+            expect(body.max_prompt_tokens).toBeUndefined()
+            expect(body.max_context_tokens).toBeUndefined()
+            expect(body.max_context).toBeUndefined()
+        }
+        expect(dsv4MaxThinkingAuto.reasoning_effort).toBe('max')
+    })
+
     it('forwards reasoning_effort', () => {
         const body = buildRequestBody('completions', 'gpt-4', messages, { reasoningEffort: 'high' }, false, true)
         expect(body.reasoning_effort).toBe('high')

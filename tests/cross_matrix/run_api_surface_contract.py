@@ -74,6 +74,7 @@ REQUIRED_PANEL_API_TEST_MARKERS = (
     "omits malformed Ollama num_predict values instead of poisoning max_tokens",
     "chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap",
     "chat:setOverrides rejects non-finite or non-numeric maxTokens instead of poisoning server defaults",
+    "Auto chat maxTokens omits per-request output caps so server default can apply",
 )
 
 COMMANDS: dict[str, tuple[Path, list[str]]] = {
@@ -223,6 +224,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "chat:setOverrides rejects non-finite or non-numeric maxTokens instead of poisoning server defaults" not in missing_panel_markers
             and panel_passed >= 53
         ),
+        "all_required_panel_api_markers_present": not failed and not missing_panel_markers,
     }
     public_results = {
         name: {key: value for key, value in result.items() if key != "stdout"}

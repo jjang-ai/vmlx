@@ -91,6 +91,7 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     "chat:setOverrides rejects non-finite or non-numeric maxTokens instead of poisoning server defaults",
     "chat maxTokens save path cannot mutate session startup maxTokens",
     "server startup maxTokens and chat maxTokens remain independent when both are set",
+    "Auto chat maxTokens omits per-request output caps so server default can apply",
     "default profiles cannot make maxTokens sticky on clean new chats",
     "new chats preserve model-owned maxTokens while refusing inherited output caps",
     "coding tool configs keep output limit separate from context fallback",

@@ -48,12 +48,13 @@ _ROWS: list[dict[str, Any]] = [
             "External coding-tool configs keep context window and output limit separate",
             "new-chat model-owned maxTokens cannot be replaced by inherited per-chat output caps",
             "server startup maxTokens and chat maxTokens remain independent when both are set",
+            "Auto chat Max Tokens omits per-request output caps so server startup defaults can apply",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-ollama-context-malformed.json",
+            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-chat-auto-server-default.json",
         ],
         "artifacts": [
-            "build/current-max-output-context-contract-20260522-ollama-context-malformed.json",
+            "build/current-max-output-context-contract-20260522-chat-auto-server-default.json",
         ],
     },
     {
@@ -157,12 +158,13 @@ _ROWS: list[dict[str, Any]] = [
             "Anthropic adapter bundle defaults and streaming max_tokens override semantics",
             "Prompt/context alias clamp semantics across OpenAI, Anthropic, and Ollama-compatible surfaces",
             "Ollama adapter streaming/done behavior, streaming num_predict output-cap overrides, malformed num_predict omission, and malformed context omission",
+            "Auto chat Max Tokens omits per-request output caps so server startup defaults can apply on Chat Completions and Responses",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260522-ollama-context-malformed.json",
+            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260522-chat-auto-server-default.json",
         ],
         "artifacts": [
-            "build/current-api-surface-contract-20260522-ollama-context-malformed.json",
+            "build/current-api-surface-contract-20260522-chat-auto-server-default.json",
         ],
     },
     {

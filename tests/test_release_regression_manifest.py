@@ -57,7 +57,7 @@ def test_release_regression_manifest_tracks_new_chat_output_cap_inheritance_guar
 
     assert "new-chat" in joined
     assert "model-owned maxTokens" in joined
-    assert "current-max-output-context-contract-20260522-ollama-context-malformed.json" in joined
+    assert "current-max-output-context-contract-20260522-chat-auto-server-default.json" in joined
 
 
 def test_release_regression_manifest_tracks_server_chat_max_output_boundary():
@@ -67,7 +67,8 @@ def test_release_regression_manifest_tracks_server_chat_max_output_boundary():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "server startup maxTokens and chat maxTokens remain independent" in joined
-    assert "current-max-output-context-contract-20260522-ollama-context-malformed.json" in joined
+    assert "Auto chat Max Tokens omits per-request output caps" in joined
+    assert "current-max-output-context-contract-20260522-chat-auto-server-default.json" in joined
 
 
 def test_release_regression_manifest_tracks_legacy_completions_output_boundary():
@@ -79,7 +80,7 @@ def test_release_regression_manifest_tracks_legacy_completions_output_boundary()
     assert "Legacy /v1/completions max_tokens" in joined
     assert "per-request output cap" in joined
     assert "non-streaming and streaming" in joined
-    assert "current-max-output-context-contract-20260522-ollama-context-malformed.json" in joined
+    assert "current-max-output-context-contract-20260522-chat-auto-server-default.json" in joined
 
 
 def test_release_regression_manifest_tracks_generation_defaults_with_runner_artifact():
@@ -115,7 +116,7 @@ def test_release_regression_manifest_tracks_api_surface_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_api_surface_contract.py" in joined
-    assert "current-api-surface-contract-20260522-ollama-context-malformed.json" in joined
+    assert "current-api-surface-contract-20260522-chat-auto-server-default.json" in joined
     assert "OpenAI Chat Completions" in joined
     assert "OpenAI Responses" in joined
     assert "non-streaming and streaming" in joined
@@ -123,6 +124,7 @@ def test_release_regression_manifest_tracks_api_surface_with_runner_artifact():
     assert "Anthropic" in joined
     assert "streaming max_tokens override" in joined
     assert "Ollama" in joined
+    assert "Auto chat Max Tokens omits per-request output caps" in joined
     assert "streaming num_predict" in joined
     assert "malformed num_predict" in joined
     assert "malformed context" in joined
@@ -362,7 +364,7 @@ def test_release_regression_manifest_tracks_max_output_context_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_max_output_context_contract.py" in joined
-    assert "current-max-output-context-contract-20260522-ollama-context-malformed.json" in joined
+    assert "current-max-output-context-contract-20260522-chat-auto-server-default.json" in joined
     assert "Server Default Max Output Tokens" in joined
     assert "Chat Max Output Tokens" in joined
     assert "non-streaming and streaming" in joined
@@ -375,6 +377,7 @@ def test_release_regression_manifest_tracks_max_output_context_with_runner_artif
     assert "--max-tokens" in joined
     assert "--max-prompt-tokens" in joined
     assert "coding-tool configs" in joined
+    assert "Auto chat Max Tokens omits per-request output caps" in joined
 
 
 def test_release_regression_manifest_tracks_vl_media_with_runner_artifact():

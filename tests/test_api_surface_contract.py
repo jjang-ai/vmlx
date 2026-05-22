@@ -1,3 +1,6 @@
+from pathlib import Path
+
+
 def test_api_surface_contract_pins_named_public_surface_edges():
     from tests.cross_matrix import run_api_surface_contract as gate
 
@@ -25,9 +28,19 @@ def test_api_surface_contract_pins_named_public_surface_edges():
     assert "omits malformed Ollama num_predict values instead of poisoning max_tokens" in panel
     assert "chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap" in panel
     assert "chat:setOverrides rejects non-finite or non-numeric maxTokens instead of poisoning server defaults" in panel
+    assert "Auto chat maxTokens omits per-request output caps so server default can apply" in panel
 
     panel_command = gate.COMMANDS["panel_api_request_builders"][1]
     assert "--reporter=verbose" in panel_command
+
+
+def test_api_surface_contract_status_fails_when_required_panel_markers_are_missing():
+    from tests.cross_matrix import run_api_surface_contract as gate
+
+    source = Path("tests/cross_matrix/run_api_surface_contract.py").read_text()
+
+    assert "all_required_panel_api_markers_present" in source
+    assert "not missing_panel_markers" in source
 
 
 def test_noheavy_api_cache_contract_pins_named_server_rows():
