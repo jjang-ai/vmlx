@@ -62,9 +62,22 @@ def _local_updater_checks(source_version: str, latest: dict[str, Any]) -> dict[s
     source_tuple = _parse_version(source_version)
     latest_tuple = _parse_version(latest_version)
     bumped_to_source = latest_version == source_version
+    complete_bumped_release = (
+        bumped_to_source
+        and all(
+            isinstance(latest.get(key), str) and latest.get(key)
+            for key in ("version", "url", "sha256", "notes")
+        )
+        and f"v{source_version}" in latest_url
+        and re.fullmatch(r"[0-9a-fA-F]{64}", latest_sha) is not None
+        and source_version in latest_notes
+    )
     return {
         "local_updater_not_ahead_of_source": bool(latest_tuple <= source_tuple),
         "staged_source_version_not_public": bool(latest_tuple < source_tuple),
+        "local_updater_release_state_valid": bool(
+            latest_tuple < source_tuple or complete_bumped_release
+        ),
         "local_updater_has_required_fields": all(
             isinstance(latest.get(key), str) and latest.get(key)
             for key in ("version", "url", "sha256", "notes")
@@ -91,7 +104,16 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "source_version_consistent": bool(source_version and source_version == panel_version),
         **_local_updater_checks(str(source_version or ""), latest),
     }
-    status = "pass" if all(checks.values()) else "fail"
+    status_check_names = {
+        "source_version_consistent",
+        "local_updater_not_ahead_of_source",
+        "local_updater_release_state_valid",
+        "local_updater_has_required_fields",
+        "local_updater_url_matches_version",
+        "local_updater_sha256_valid",
+        "local_updater_notes_match_version",
+    }
+    status = "pass" if all(checks[name] for name in status_check_names) else "fail"
     return {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "status": status,

@@ -74,8 +74,10 @@ def test_release_regression_manifest_tracks_server_chat_max_output_boundary():
     assert "current-max-output-context-contract-20260522-persisted-chat-output-cap.json" in joined
     assert "current-max-output-context-contract-20260522-new-chat-output-cap-nonsticky.json" in joined
     assert "current-max-output-context-contract-20260522-responses-output-boundary.json" in joined
+    assert "current-max-output-context-contract-20260522-request-default-mutation.json" in joined
     assert "Responses maxTokens below or above the server startup default remain request scoped" in joined
     assert "Responses Auto does not synthesize max_output_tokens" in joined
+    assert "do not mutate the server startup default" in joined
 
 
 def test_release_regression_manifest_tracks_legacy_completions_output_boundary():
@@ -207,6 +209,8 @@ def test_release_regression_manifest_tracks_public_release_surface_preflight():
     assert "PyPI" in joined
     assert "GitHub release" in joined
     assert "updater" in joined.lower()
+    assert "post-release-updater" in joined
+    assert "published updater state is complete" in joined
 
 
 def test_release_regression_manifest_tracks_live_only_boundaries():

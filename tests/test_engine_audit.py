@@ -837,6 +837,117 @@ class TestServerSamplingResolution:
         assert captured[2]["max_tokens"] == 4096
         assert captured[2]["max_prompt_tokens"] == 16384
 
+    def test_request_output_caps_do_not_mutate_server_default_across_later_omitted_requests(
+        self,
+        monkeypatch,
+    ):
+        """Explicit API output caps must not poison later Auto requests.
+
+        The server startup max output is a stable omitted-request default.
+        Chat Completions ``max_tokens`` and Responses ``max_output_tokens`` can
+        be lower or higher on individual requests, but those requests must not
+        rewrite the default used by the next omitted request.
+        """
+        from fastapi.testclient import TestClient
+
+        import vmlx_engine.server as server
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class FakeTokenizer:
+            has_thinking = False
+
+        class FakeEngine:
+            is_mllm = False
+            tokenizer = FakeTokenizer()
+            preserve_native_tool_format = False
+
+        captured: list[dict] = []
+
+        async def fake_await_chat(*args, **kwargs):
+            captured.append(dict(kwargs["chat_kwargs"]))
+            return GenerationOutput(text="ok", prompt_tokens=3, completion_tokens=1)
+
+        monkeypatch.setattr(server, "_engine", FakeEngine())
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_name", "stable-default-model")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+        monkeypatch.setattr(server, "_api_key", None, raising=False)
+        monkeypatch.setattr(server, "_default_temperature", None)
+        monkeypatch.setattr(server, "_default_top_p", None)
+        monkeypatch.setattr(server, "_default_top_k", None)
+        monkeypatch.setattr(server, "_default_min_p", None)
+        monkeypatch.setattr(server, "_default_repetition_penalty", None)
+        monkeypatch.setattr(server, "_default_max_tokens", 4096)
+        monkeypatch.setattr(server, "_default_max_tokens_explicit", True, raising=False)
+        monkeypatch.setattr(server, "_max_prompt_tokens", 65536)
+        monkeypatch.setattr(
+            server,
+            "_await_chat_with_disconnect_abort",
+            fake_await_chat,
+        )
+        server._jang_sampling_defaults_cache.clear()
+        server._generation_defaults_cache.clear()
+
+        client = TestClient(server.app)
+
+        requests = [
+            (
+                "/v1/chat/completions",
+                {
+                    "model": "stable-default-model",
+                    "messages": [{"role": "user", "content": "default one"}],
+                    "stream": False,
+                },
+            ),
+            (
+                "/v1/chat/completions",
+                {
+                    "model": "stable-default-model",
+                    "messages": [{"role": "user", "content": "short override"}],
+                    "stream": False,
+                    "max_tokens": 512,
+                },
+            ),
+            (
+                "/v1/responses",
+                {
+                    "model": "stable-default-model",
+                    "input": "default two",
+                    "stream": False,
+                },
+            ),
+            (
+                "/v1/responses",
+                {
+                    "model": "stable-default-model",
+                    "input": "long override",
+                    "stream": False,
+                    "max_output_tokens": 8192,
+                },
+            ),
+            (
+                "/v1/chat/completions",
+                {
+                    "model": "stable-default-model",
+                    "messages": [{"role": "user", "content": "default three"}],
+                    "stream": False,
+                },
+            ),
+        ]
+
+        responses = [client.post(path, json=body) for path, body in requests]
+
+        assert [response.status_code for response in responses] == [200] * 5
+        assert [item["max_tokens"] for item in captured] == [
+            4096,
+            512,
+            4096,
+            8192,
+            4096,
+        ]
+        assert server._default_max_tokens == 4096
+
     def test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap(
         self,
         monkeypatch,

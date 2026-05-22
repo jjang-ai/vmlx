@@ -55,6 +55,7 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     "test_chat_and_responses_streaming_output_caps_override_server_default_without_touching_context_cap",
     "test_explicit_startup_max_tokens_is_default_not_request_ceiling",
     "test_request_output_caps_can_go_below_or_above_startup_default",
+    "test_request_output_caps_do_not_mutate_server_default_across_later_omitted_requests",
     "test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap",
     "test_legacy_completions_streaming_output_cap_overrides_server_default_without_touching_context_cap",
     "test_anthropic_messages_streaming_max_tokens_overrides_server_default_without_touching_context_cap",
@@ -124,6 +125,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_chat_and_responses_streaming_output_caps_override_server_default_without_touching_context_cap",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_explicit_startup_max_tokens_is_default_not_request_ceiling",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_request_output_caps_can_go_below_or_above_startup_default",
+            "tests/test_engine_audit.py::TestServerSamplingResolution::test_request_output_caps_do_not_mutate_server_default_across_later_omitted_requests",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_legacy_completions_streaming_output_cap_overrides_server_default_without_touching_context_cap",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_anthropic_messages_streaming_max_tokens_overrides_server_default_without_touching_context_cap",
@@ -237,6 +239,10 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "request_output_caps_can_go_below_or_above_startup_default": (
             not failed
             and "test_request_output_caps_can_go_below_or_above_startup_default" not in missing_markers
+        ),
+        "request_output_caps_do_not_mutate_server_default": (
+            not failed
+            and "test_request_output_caps_do_not_mutate_server_default_across_later_omitted_requests" not in missing_markers
         ),
         "legacy_completions_output_cap_overrides_server_default": (
             not failed

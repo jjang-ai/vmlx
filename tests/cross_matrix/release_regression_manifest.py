@@ -50,19 +50,21 @@ _ROWS: list[dict[str, Any]] = [
             "server startup maxTokens and chat maxTokens remain independent when both are set",
             "persisted chat maxTokens cannot relaunch server with a new startup maxTokens",
             "per-chat maxTokens below or above the server startup default remain request-scoped",
+            "Explicit Chat/Responses output caps do not mutate the server startup default used by later Auto requests",
             "Responses maxTokens below or above the server startup default remain request scoped",
             "Responses Auto does not synthesize max_output_tokens",
             "Auto chat Max Tokens omits per-request output caps so server startup defaults can apply",
             "new chat output caps are not inherited or made sticky on default-profile or same-model clean chat creation",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-responses-output-boundary.json",
+            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-request-default-mutation.json",
         ],
         "artifacts": [
             "build/current-max-output-context-contract-20260522-persisted-chat-output-cap.json",
             "build/current-max-output-context-contract-20260522-new-chat-output-cap-nonsticky.json",
             "build/current-max-output-context-contract-20260522-chat-auto-server-default.json",
             "build/current-max-output-context-contract-20260522-responses-output-boundary.json",
+            "build/current-max-output-context-contract-20260522-request-default-mutation.json",
         ],
     },
     {
@@ -336,12 +338,14 @@ _ROWS: list[dict[str, Any]] = [
         "proves": [
             "local latest.json updater manifest does not advance ahead of the source version",
             "if latest.json is bumped to the source version, it carries a matching URL, SHA256, and notes version",
+            "after release, latest.json may equal the source version only when the published updater state is complete",
             "PyPI, GitHub release, and updater feeds remain explicit operator checks before public release",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_release_surface_contract.py --out build/current-release-surface-contract-20260521.json",
+            ".venv/bin/python tests/cross_matrix/run_release_surface_contract.py --out build/current-release-surface-contract-20260522-post-release-updater.json",
         ],
         "artifacts": [
+            "build/current-release-surface-contract-20260522-post-release-updater.json",
             "build/current-release-surface-contract-20260521.json",
             "latest.json",
         ],
