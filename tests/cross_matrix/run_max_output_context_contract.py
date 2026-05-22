@@ -62,6 +62,7 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     "test_omitted_server_max_tokens_uses_bundle_max_new_tokens",
     "test_omitted_server_max_tokens_without_bundle_default_is_bounded",
     "test_prompt_context_aliases_clamp_without_rewriting_output_caps",
+    "omits malformed Ollama context values instead of poisoning max_prompt_tokens",
     "test_max_tokens_resolution_contract_applies_to_every_registered_family",
     "test_wake_reload_preserves_max_tokens_explicitness",
     "test_cli_serve_implicit_max_tokens_uses_bounded_fallback",
@@ -266,6 +267,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             not failed
             and "test_request_output_caps_override_server_default_without_touching_context_cap" not in missing_markers
             and "test_prompt_context_aliases_clamp_without_rewriting_output_caps" not in missing_markers
+            and "omits malformed Ollama context values instead of poisoning max_prompt_tokens" not in missing_markers
             and "maxContextLength emits max prompt/context CLI flag when explicitly set" not in missing_markers
         ),
         "panel_server_default_output_maps_to_max_tokens": (

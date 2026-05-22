@@ -44,15 +44,16 @@ _ROWS: list[dict[str, Any]] = [
             "Legacy /v1/completions max_tokens remains a per-request output cap for non-streaming and streaming",
             "Prompt/context aliases clamp to server max-prompt-tokens without rewriting output caps",
             "Ollama gateway malformed num_predict values are omitted instead of poisoning max_tokens",
+            "Ollama gateway malformed context values are omitted instead of poisoning max_prompt_tokens",
             "External coding-tool configs keep context window and output limit separate",
             "new-chat model-owned maxTokens cannot be replaced by inherited per-chat output caps",
             "server startup maxTokens and chat maxTokens remain independent when both are set",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-ollama-malformed.json",
+            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-ollama-context-malformed.json",
         ],
         "artifacts": [
-            "build/current-max-output-context-contract-20260522-ollama-malformed.json",
+            "build/current-max-output-context-contract-20260522-ollama-context-malformed.json",
         ],
     },
     {
@@ -155,13 +156,13 @@ _ROWS: list[dict[str, Any]] = [
             "OpenAI legacy Completions max_tokens/default propagation for non-streaming and streaming",
             "Anthropic adapter bundle defaults and streaming max_tokens override semantics",
             "Prompt/context alias clamp semantics across OpenAI, Anthropic, and Ollama-compatible surfaces",
-            "Ollama adapter streaming/done behavior, streaming num_predict output-cap overrides, and malformed num_predict omission",
+            "Ollama adapter streaming/done behavior, streaming num_predict output-cap overrides, malformed num_predict omission, and malformed context omission",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260522-ollama-malformed.json",
+            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260522-ollama-context-malformed.json",
         ],
         "artifacts": [
-            "build/current-api-surface-contract-20260522-ollama-malformed.json",
+            "build/current-api-surface-contract-20260522-ollama-context-malformed.json",
         ],
     },
     {

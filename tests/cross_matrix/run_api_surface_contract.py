@@ -69,6 +69,7 @@ REQUIRED_PANEL_API_TEST_MARKERS = (
     "omits invalid persisted maxTokens values instead of poisoning Responses",
     "preserves DSV4 Responses max_output_tokens for Max thinking",
     "Hy3 local Responses Auto omits enable_thinking and reasoning_effort",
+    "omits malformed Ollama context values instead of poisoning max_prompt_tokens",
     "omits unset and disabled sampling sentinels without dropping explicit overrides",
     "omits malformed Ollama num_predict values instead of poisoning max_tokens",
     "chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap",
@@ -213,6 +214,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             not failed
             and "omits unset and disabled sampling sentinels without dropping explicit overrides" not in missing_panel_markers
             and "omits malformed Ollama num_predict values instead of poisoning max_tokens" not in missing_panel_markers
+            and "omits malformed Ollama context values instead of poisoning max_prompt_tokens" not in missing_panel_markers
             and panel_passed >= 53
         ),
         "panel_chat_override_policy_preserves_explicit_values": (

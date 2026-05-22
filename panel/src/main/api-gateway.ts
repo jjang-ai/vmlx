@@ -941,7 +941,10 @@ export class ApiGateway extends EventEmitter {
       parsed?.max_context_tokens ??
       parsed?.max_context;
     if (value !== undefined && value !== null) {
-      openaiBody.max_prompt_tokens = value;
+      const parsedValue = Number(value);
+      if (Number.isFinite(parsedValue) && parsedValue > 0) {
+        openaiBody.max_prompt_tokens = Math.floor(parsedValue);
+      }
     }
   }
 

@@ -20,6 +20,7 @@ def test_api_surface_contract_pins_named_public_surface_edges():
     assert "keeps per-chat maxTokens as output budget only, never prompt context" in panel
     assert "keeps Responses maxTokens as output budget only, never prompt context" in panel
     assert "preserves DSV4 Responses max_output_tokens for Max thinking" in panel
+    assert "omits malformed Ollama context values instead of poisoning max_prompt_tokens" in panel
     assert "omits unset and disabled sampling sentinels without dropping explicit overrides" in panel
     assert "omits malformed Ollama num_predict values instead of poisoning max_tokens" in panel
     assert "chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap" in panel
