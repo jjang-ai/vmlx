@@ -424,6 +424,33 @@ def _infer_attention_heads_for_hybrid_oom_guard(
     return default
 
 
+def _batch_shares_sampler_params(requests: List[Any]) -> bool:
+    """Return True when requests can share one request-scoped sampler call."""
+    if not requests:
+        return False
+    first_req = requests[0]
+    if getattr(first_req, "repetition_penalty", 1.0) not in (None, 1.0):
+        return False
+    first_key = (
+        getattr(first_req, "temperature", None),
+        getattr(first_req, "top_p", None),
+        getattr(first_req, "top_k", None),
+        getattr(first_req, "min_p", None),
+    )
+    for req in requests[1:]:
+        if getattr(req, "repetition_penalty", 1.0) not in (None, 1.0):
+            return False
+        key = (
+            getattr(req, "temperature", None),
+            getattr(req, "top_p", None),
+            getattr(req, "top_k", None),
+            getattr(req, "min_p", None),
+        )
+        if key != first_key:
+            return False
+    return True
+
+
 def _prefix_hit_tail_and_cached_tokens(
     *,
     token_list: List[int],
@@ -5544,11 +5571,15 @@ class MLLMBatchGenerator:
         # full-vocab logsoftmax every decode token on the default fast path.
         batch = self.active_batch
         if batch and len(batch.requests) == logits.shape[0]:
-            tokens = []
-            for i, req in enumerate(batch.requests):
-                req_sampler = self._make_request_sampler(req)
-                tokens.append(req_sampler(logits[i:i+1]))
-            sampled = mx.concatenate(tokens, axis=0)
+            if _batch_shares_sampler_params(batch.requests):
+                shared_sampler = self._make_request_sampler(batch.requests[0])
+                sampled = shared_sampler(logits)
+            else:
+                tokens = []
+                for i, req in enumerate(batch.requests):
+                    req_sampler = self._make_request_sampler(req)
+                    tokens.append(req_sampler(logits[i:i+1]))
+                sampled = mx.concatenate(tokens, axis=0)
         else:
             sampled = self.sampler(logits)
 

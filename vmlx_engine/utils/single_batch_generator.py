@@ -197,7 +197,7 @@ class SingleBatchGenerator:
             return None
         # MLX assignment into cache buffers can mutate the original allocation
         # after this point. Materialize an independent array for the snapshot.
-        cloned = value + mx.zeros_like(value)
+        cloned = 1 * value
         mx.eval(cloned)
         return cloned
 
