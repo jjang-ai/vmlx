@@ -4,6 +4,25 @@ All notable changes to vMLX Engine will be documented in this file.
 
 ## [Unreleased]
 
+## [1.5.48] - 2026-05-22
+
+### Fixed
+- Aligned Qwen3.6 affine-JANG native-MTP VL routing across engine registry,
+  decode-speed launch rows, panel detection, and API policy. Indexed native-MTP
+  VL artifacts with real vision and MTP tensors now use the multimodal route,
+  while plain affine-JANG Qwen VL remains text-only until the M-RoPE fallback
+  issue is cleared.
+- Added panel local-path parity coverage for high-risk DSV4, Qwen, Hy3, and
+  Nemotron artifacts so parser, reasoning, cache, modality, and launch policy
+  cannot silently diverge between the UI and engine.
+- Added post-release guards proving explicit Chat/Responses output caps do not
+  mutate server startup defaults, and adjusted the release-surface gate to
+  accept complete post-release updater state.
+
+### Known Follow-ups
+- DSV4 Flash long full-output/code-generation quality remains a documented
+  release exception pending separate exact-code/runtime-quality clearance.
+
 ## [1.5.47] - 2026-05-21
 
 ### Fixed
