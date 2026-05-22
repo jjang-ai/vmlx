@@ -195,16 +195,18 @@ _ROWS: list[dict[str, Any]] = [
             "Plain KV, hybrid SSM/Mamba, MLA, DSV4 composite, ZAYA CCA, and MLLM media-salt cache contracts stay classified per family",
             "Generic TurboQuant KV is not applied to DSV4 native composite or hybrid SSM paths",
             "Bundled JANG DSV4 pool quant codec appends only newly generated CSA/HCA pool rows instead of requantizing the whole accumulated pool",
+            "DSV4 timing probe covers prefix-cache replay and cold-store boundaries before speed/cache root-cause claims",
             "Cache detail telemetry reports paged, typed native, and TQ/L2 state",
             "Panel session launch builder preserves DSV4 default and diagnostic prefix-cache policy, DSV4-only native cache controls, Qwen3.6 hybrid and Mamba paged-cache forcing, and regular KV stale saved false semantics",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-20260522-dsv4-pool-quant-append.json",
+            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-20260522-dsv4-timing.json",
         ],
         "artifacts": [
             "build/current-cache-architecture-contract-20260521.json",
             "build/current-cache-architecture-contract-20260522-panel-cache-launch.json",
             "build/current-cache-architecture-contract-20260522-dsv4-pool-quant-append.json",
+            "build/current-cache-architecture-contract-20260522-dsv4-timing.json",
         ],
     },
     {

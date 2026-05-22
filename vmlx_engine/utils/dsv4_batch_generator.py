@@ -24,6 +24,7 @@ Constraints:
 from __future__ import annotations
 import logging
 import os
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Sequence, Tuple
@@ -178,6 +179,27 @@ class DSV4BatchGenerator:
         # absent in the scheduler worker thread on cache-hit replay.
         self._device = mx.default_device()
         self._stream = stream or mx.default_stream(self._device)
+
+    def _trace_timing(self, event: str, start: float, uid: Optional[int] = None, **fields: Any) -> None:
+        if os.environ.get("VMLINUX_DSV4_TRACE_TIMINGS", "").lower() not in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            return
+        try:
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
+            extra = " ".join(f"{k}={v}" for k, v in fields.items())
+            logger.info(
+                "DSV4 timing: component=generator event=%s uid=%s elapsed_ms=%.3f %s",
+                event,
+                uid,
+                elapsed_ms,
+                extra,
+            )
+        except Exception:
+            pass
 
     def _refresh_thread_stream(self):
         """Bind the generator to this worker thread's default MLX stream."""
@@ -602,10 +624,24 @@ class DSV4BatchGenerator:
                         head_tokens = r.prompt_tokens[:-1]
                         last_token = r.prompt_tokens[-1:]
                         # Phase 1
+                        _t_prefill_head = time.perf_counter()
                         _ = self._prefill_last_logits(head_tokens, r.cache)
+                        self._trace_timing(
+                            "prefill_head",
+                            _t_prefill_head,
+                            r.uid,
+                            tokens=len(head_tokens),
+                        )
                         if self.capture_prompt_snapshot:
                             try:
+                                _t_snapshot = time.perf_counter()
                                 r.prompt_snapshot = self._snapshot_dsv4_cache(r.cache)
+                                self._trace_timing(
+                                    "prompt_snapshot",
+                                    _t_snapshot,
+                                    r.uid,
+                                    layers=len(r.prompt_snapshot or []),
+                                )
                                 if r.prompt_snapshot is not None:
                                     logger.debug(
                                         f"DSV4Gen: captured N-1 prompt-boundary "
@@ -621,12 +657,27 @@ class DSV4BatchGenerator:
                         else:
                             r.prompt_snapshot = None
                         # Phase 2 — feed the last token, get its logits
+                        _t_prefill_last = time.perf_counter()
                         last_logits = self._prefill_last_logits(last_token, r.cache)
+                        self._trace_timing(
+                            "prefill_last",
+                            _t_prefill_last,
+                            r.uid,
+                            tokens=len(last_token),
+                        )
                     else:
                         # Trivial 1-token prompt — no N-1 to snapshot.
+                        _t_prefill_last = time.perf_counter()
                         last_logits = self._prefill_last_logits(r.prompt_tokens, r.cache)
+                        self._trace_timing(
+                            "prefill_last",
+                            _t_prefill_last,
+                            r.uid,
+                            tokens=len(r.prompt_tokens),
+                        )
                         r.prompt_snapshot = None
 
+                    _t_sample = time.perf_counter()
                     sampled, logprobs = self._sample(
                         last_logits, r.sampler, r.logits_processors,
                         self._processor_context(r),
@@ -634,6 +685,12 @@ class DSV4BatchGenerator:
                         capture_logprobs=self._should_capture_logprobs(r.uid),
                     )
                     tok_id = self._sampled_token_id(sampled)
+                    self._trace_timing(
+                        "sample_materialize",
+                        _t_sample,
+                        r.uid,
+                        capture_logprobs=logprobs is not None,
+                    )
                     r.out_tokens.append(tok_id)
                     r.prompt_processed = True
                     self._update_finish_reason_after_token(r, tok_id)
@@ -656,7 +713,15 @@ class DSV4BatchGenerator:
                         r.finish_reason = "stop"
                         r.prompt_processed = True
                         continue
+                    _t_prefill_tail = time.perf_counter()
                     last_logits = self._prefill_last_logits(r.prompt_tokens, r.cache)
+                    self._trace_timing(
+                        "cache_hit_tail_prefill",
+                        _t_prefill_tail,
+                        r.uid,
+                        tokens=len(r.prompt_tokens),
+                    )
+                    _t_sample = time.perf_counter()
                     sampled, logprobs = self._sample(
                         last_logits, r.sampler, r.logits_processors,
                         self._processor_context(r),
@@ -664,6 +729,12 @@ class DSV4BatchGenerator:
                         capture_logprobs=self._should_capture_logprobs(r.uid),
                     )
                     tok_id = self._sampled_token_id(sampled)
+                    self._trace_timing(
+                        "sample_materialize",
+                        _t_sample,
+                        r.uid,
+                        capture_logprobs=logprobs is not None,
+                    )
                     r.out_tokens.append(tok_id)
                     r.prompt_processed = True
                     self._update_finish_reason_after_token(r, tok_id)
@@ -681,8 +752,16 @@ class DSV4BatchGenerator:
                         continue
                     last_id = r.out_tokens[-1]
                     ids = mx.array([[last_id]], dtype=mx.int32)
+                    _t_decode_model = time.perf_counter()
                     logits = self.model(ids, cache=r.cache)
                     last_logits = logits[:, -1, :]
+                    self._trace_timing(
+                        "decode_model",
+                        _t_decode_model,
+                        r.uid,
+                        output_tokens=len(r.out_tokens),
+                    )
+                    _t_sample = time.perf_counter()
                     sampled, logprobs = self._sample(
                         last_logits, r.sampler, r.logits_processors,
                         self._processor_context(r),
@@ -690,6 +769,12 @@ class DSV4BatchGenerator:
                         capture_logprobs=self._should_capture_logprobs(r.uid),
                     )
                     tok_id = self._sampled_token_id(sampled)
+                    self._trace_timing(
+                        "sample_materialize",
+                        _t_sample,
+                        r.uid,
+                        capture_logprobs=logprobs is not None,
+                    )
                     r.out_tokens.append(tok_id)
                     self._update_finish_reason_after_token(r, tok_id)
                     gen_resps.append(_Response(

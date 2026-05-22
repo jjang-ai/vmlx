@@ -856,6 +856,33 @@ def test_dsv4_pool_quant_appends_only_new_pool_rows(monkeypatch):
     assert quant_shapes == [(1, 3, 16), (1, 1, 16)]
 
 
+def test_dsv4_timing_probe_is_env_gated_and_covers_cache_boundaries():
+    """DSV4 speed work needs boundary timings, not sampler/cache guesses."""
+    import inspect
+
+    from vmlx_engine.scheduler import Scheduler
+    from vmlx_engine.utils.dsv4_batch_generator import DSV4BatchGenerator
+
+    gen_src = inspect.getsource(DSV4BatchGenerator)
+    sched_src = inspect.getsource(Scheduler)
+
+    assert "VMLINUX_DSV4_TRACE_TIMINGS" in gen_src
+    assert "VMLINUX_DSV4_TRACE_TIMINGS" in sched_src
+    assert "DSV4 timing" in gen_src
+    assert "DSV4 timing" in sched_src
+    for marker in (
+        "prefill_head",
+        "prompt_snapshot",
+        "prefill_last",
+        "cache_hit_tail_prefill",
+        "decode_model",
+        "sample_materialize",
+    ):
+        assert marker in gen_src
+    for marker in ("reconstruct_cache", "extract_cache_states", "store_cache"):
+        assert marker in sched_src
+
+
 def test_dsv4_serve_path_forces_generic_kv_quantization_off():
     """The CLI/app serve path must not pass q4/q8 generic KV quant to DSV4."""
     import inspect

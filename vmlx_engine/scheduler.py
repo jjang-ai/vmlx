@@ -1906,6 +1906,35 @@ class Scheduler:
             logger.debug(traceback.format_exc())
             return None
 
+    def _dsv4_trace_timing(
+        self,
+        event: str,
+        start: float,
+        request_id: Optional[str] = None,
+        **fields: Any,
+    ) -> None:
+        if not self._uses_dsv4_cache:
+            return
+        if os.environ.get("VMLINUX_DSV4_TRACE_TIMINGS", "").lower() not in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            return
+        try:
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
+            extra = " ".join(f"{k}={v}" for k, v in fields.items())
+            logger.info(
+                "DSV4 timing: component=scheduler event=%s request_id=%s elapsed_ms=%.3f %s",
+                event,
+                request_id,
+                elapsed_ms,
+                extra,
+            )
+        except Exception:
+            pass
+
     def _get_actual_tokenizer(self, tokenizer: Any) -> Any:
         """
         Get the actual tokenizer from a processor or tokenizer.
@@ -4837,10 +4866,19 @@ class Scheduler:
 
             if getattr(request, "_paged_block_table_needs_worker_reconstruct", False):
                 block_table = getattr(request, "block_table", None)
+                _t_reconstruct = time.perf_counter()
                 cache_to_use = (
                     self.block_aware_cache.reconstruct_cache(block_table)
                     if self.block_aware_cache is not None and block_table is not None
                     else None
+                )
+                self._dsv4_trace_timing(
+                    "reconstruct_cache",
+                    _t_reconstruct,
+                    request.request_id,
+                    cached_tokens=getattr(block_table, "num_tokens", 0) if block_table else 0,
+                    blocks=len(getattr(block_table, "block_ids", []) or []) if block_table else 0,
+                    ok=cache_to_use is not None,
                 )
                 request._paged_block_table_needs_worker_reconstruct = False
                 if cache_to_use is None:
@@ -5566,8 +5604,16 @@ class Scheduler:
                                                     cache_for_extract
                                                 )
                                             )
+                                        _t_extract = time.perf_counter()
                                         extracted_cache = self._extract_cache_states(
                                             cache_for_extract
+                                        )
+                                        self._dsv4_trace_timing(
+                                            "extract_cache_states",
+                                            _t_extract,
+                                            request_id,
+                                            layers=len(extracted_cache or []),
+                                            snapshot=bool(snapshot_cache is not None),
                                         )
                                         # L2 disk: TQ recompress a COPY for 26x
                                         # smaller disk files. The original cache
@@ -6138,11 +6184,19 @@ class Scheduler:
                             # token and returned an empty/stop response. This
                             # is especially visible with block disk L2 because
                             # full-key stale blocks survive process restarts.
+                            _t_store = time.perf_counter()
                             self.block_aware_cache.store_cache(
                                 request_id,
                                 store_tokens,
                                 cache_data,
                                 cache_type=self._pick_cache_type_for_request(request),
+                            )
+                            self._dsv4_trace_timing(
+                                "store_cache",
+                                _t_store,
+                                request_id,
+                                tokens=len(store_tokens),
+                                layers=len(cache_data or []),
                             )
                             logger.info(
                                 f"Stored paged cache for request {request_id} "
