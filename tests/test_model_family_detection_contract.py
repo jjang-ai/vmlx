@@ -23,6 +23,7 @@ def test_family_detection_contract_pins_named_release_rows():
         "decode_speed_qwen36_mxfp8_native_mtp_rows",
         "decode_speed_nemotron_omni_nano_jangtq4_row",
         "decode_speed_distinct_jang_jangtq_mxfp_speed_rows",
+        "decode_speed_artifact_format_coverage_matrix",
         "decode_speed_all_declared_parsers_are_engine_registered",
         "decode_speed_all_declared_parsers_are_cli_choices",
         "decode_speed_existing_rows_match_engine_parser_policy",
@@ -172,6 +173,33 @@ def test_decode_speed_gate_has_distinct_jang_jangtq_mxfp_speed_rows():
     assert all("JANGTQ" in ROWS[name].path for name in groups["jangtq_mxtq_turboquant"])
     assert all("MXFP4" in ROWS[name].path or "mxfp4" in ROWS[name].path for name in groups["mxfp4_mlx"])
     assert all("MXFP8" in ROWS[name].path for name in groups["mxfp8_mlx_mtp"])
+
+
+def test_decode_speed_gate_artifact_format_coverage_matrix():
+    from tests.cross_matrix.run_decode_speed_gate import ROWS
+
+    matrix = {
+        "jang_only_mx_matmul": ("qwen27_jang4m", "qwen35_jang4k_ext", "minimax_jang2l_crack"),
+        "jang_mtp": ("qwen27_jang4m_mtp",),
+        "jangtq_mxtq": ("qwen35_jangtq", "qwen36_35_jangtq4_ext", "hy3", "laguna"),
+        "mxfp4_mlx": ("qwen27_mxfp4", "zaya_text_mxfp4", "ling_mxfp4", "nemotron_mxfp4"),
+        "mxfp8_mtp": ("qwen27_mxfp8_mtp", "qwen35_mxfp8_mtp"),
+        "dsv4_native_composite": ("dsv4_k", "dsv4_jang_dq2_gate3math6"),
+    }
+
+    for row_names in matrix.values():
+        for row_name in row_names:
+            assert row_name in ROWS
+            assert ROWS[row_name].expected_min_tps is not None
+            assert ROWS[row_name].expected_min_pp is not None
+
+    assert all("JANG_" in ROWS[name].path and "JANGTQ" not in ROWS[name].path for name in matrix["jang_only_mx_matmul"])
+    assert all("JANG_" in ROWS[name].path and "MTP" in ROWS[name].path for name in matrix["jang_mtp"])
+    assert all("JANGTQ" in ROWS[name].path for name in matrix["jangtq_mxtq"])
+    assert all("MXFP4" in ROWS[name].path or "mxfp4" in ROWS[name].path for name in matrix["mxfp4_mlx"])
+    assert all("MXFP8" in ROWS[name].path and "MTP" in ROWS[name].path for name in matrix["mxfp8_mtp"])
+    assert all(ROWS[name].tool_parser == "dsml" for name in matrix["dsv4_native_composite"])
+    assert all(ROWS[name].reasoning_parser == "deepseek_r1" for name in matrix["dsv4_native_composite"])
 
 
 def test_decode_speed_gate_declared_parsers_are_engine_registered():
