@@ -240,6 +240,21 @@ def test_release_regression_manifest_tracks_current_mcp_and_vl_media_rechecks():
     assert "image/video tool-result follow-up" in vl_joined
 
 
+def test_release_regression_manifest_tracks_qwen_jang_live_speed_review():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+
+    row = rows["qwen-jang-mx-live-speed-review"]
+    joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
+
+    assert row["domain"] == "performance"
+    assert row["mode"] == "live"
+    assert "current-decode-speed-live-qwen27-jang4m-20260522-hybrid-tq-review.json" in joined
+    assert "selective live TurboQuant for Qwen attention KV layers" in joined
+    assert "PP below expected" in joined
+    assert "review, not release-clear" in joined
+
+
 def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artifact():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}

@@ -618,6 +618,20 @@ def cache_health_mismatches(
         return mismatches
 
     if cache_type == "hybrid" and generic_tq_enabled is True:
+        live_attention_tq = typed_health.get("live_attention_tq_kv")
+        qwen_attention_only_tq = (
+            registry_metadata.get("family_name") in {"qwen3_5", "qwen3_5_moe"}
+            and health_cache_type == "hybrid_ssm_typed"
+            and isinstance(generic_tq, dict)
+            and generic_tq.get("reason") == "hybrid_attention_kv_only"
+            and isinstance(live_attention_tq, dict)
+            and live_attention_tq.get("enabled") is True
+            and live_attention_tq.get("applies_to") == "attention_kv_layers_only"
+            and live_attention_tq.get("ssm_policy")
+            == "native_full_precision_companion_state"
+        )
+        if qwen_attention_only_tq:
+            return mismatches
         mismatches.append(
             "registry hybrid cache expected generic_turboquant_kv.enabled=false"
         )

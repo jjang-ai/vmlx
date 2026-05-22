@@ -26,6 +26,7 @@ REQUIRED_RELEASE_DOMAINS = {
     "mcp",
     "vl_media",
     "packaging_release",
+    "performance",
     "release_surface",
     "pr_intake",
 }
@@ -475,6 +476,24 @@ _ROWS: list[dict[str, Any]] = [
         ],
         "artifacts": [
             "build/current-production-family-audit-live-multifamily-soak-20260522.json",
+        ],
+    },
+    {
+        "id": "qwen-jang-mx-live-speed-review",
+        "domain": "performance",
+        "mode": "live",
+        "heavy": True,
+        "proves": [
+            "Qwen3.6-27B JANG_4M live decode speed is measured from the packaged Python engine, not inferred from source-only rows",
+            "selective live TurboQuant for Qwen attention KV layers is compatible only when native cache health proves SSM companion state remains full precision",
+            "Current qwen27_jang4m live row is review, not release-clear: decode is above threshold but PP below expected remains open",
+            "This row prevents broad JANG/MX matmul speed claims from hiding prompt-processing regressions",
+        ],
+        "commands": [
+            ".venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m --port 8790 --out build/current-decode-speed-live-qwen27-jang4m-20260522-hybrid-tq-review.json --timeout 420",
+        ],
+        "artifacts": [
+            "build/current-decode-speed-live-qwen27-jang4m-20260522-hybrid-tq-review.json",
         ],
     },
 ]

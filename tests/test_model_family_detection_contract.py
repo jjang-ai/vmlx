@@ -718,6 +718,26 @@ def test_decode_speed_gate_detects_cache_health_mismatches():
         },
         {
             "cache_type": "hybrid_ssm_typed",
+            "generic_turboquant_kv": {
+                "enabled": True,
+                "reason": "hybrid_attention_kv_only",
+            },
+            "live_attention_tq_kv": {
+                "enabled": True,
+                "applies_to": "attention_kv_layers_only",
+                "ssm_policy": "native_full_precision_companion_state",
+            },
+        },
+    ) == []
+
+    assert cache_health_mismatches(
+        {
+            "family_name": "bailing_hybrid",
+            "cache_type": "hybrid",
+            "cache_subtype": None,
+        },
+        {
+            "cache_type": "hybrid_ssm_typed",
             "generic_turboquant_kv": {"enabled": True},
         },
     ) == [
