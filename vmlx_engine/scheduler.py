@@ -6621,11 +6621,17 @@ class Scheduler:
             #    active_batch.logprobs[e] = NEW logprobs = prediction AFTER
             #    last_token — exactly what we need for d0 acceptance.
             ab = self.batch_generator.active_batch
-            if ab is None or uid not in ab.uids:
+            if ab is None or not (
+                ab.has_uid(uid) if hasattr(ab, "has_uid") else uid in ab.uids
+            ):
                 raise RuntimeError(
                     "uid not in active_batch — cannot get forward logprobs"
                 )
-            ab_idx = ab.uids.index(uid)
+            ab_idx = (
+                ab.index_of(uid)
+                if hasattr(ab, "index_of")
+                else ab.uids.index(uid)
+            )
             forward_logprobs = ab.logprobs[ab_idx]
 
             # 1b. d0 pre-check: avoid the expensive remove/verify/insert cycle

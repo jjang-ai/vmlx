@@ -362,7 +362,7 @@ class SSMCompanionCache:
                         _mx_materialize(*materialise)
                 if getattr(c, "lengths", None) is not None:
                     try:
-                        c.lengths = mx.array(c.lengths) * 1
+                        c.lengths = mx.array(c.lengths)
                         _mx_materialize(c.lengths)
                     except Exception:
                         pass

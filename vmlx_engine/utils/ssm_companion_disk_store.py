@@ -65,7 +65,6 @@ import os
 import pickle
 import threading
 import time
-from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -442,17 +441,10 @@ class SSMCompanionDiskStore:
                 logger.debug("SSM disk store post-load materialize failed: %s", e)
                 return None
 
-        # Deep-copy semantics: caller mutates SSM state in-place. Safetensors
-        # load returns fresh arrays already, but we run a layer-level
-        # deepcopy to align with the L1 fetch contract.
-        copied: List[Any] = []
-        for s in states:
-            try:
-                copied.append(deepcopy(s))
-            except Exception as e:
-                logger.debug("SSM disk store post-load deepcopy failed: %s", e)
-                return None
-        return (copied, is_complete)
+        # Safetensors load returns fresh arrays already. L1 fetch wraps disk
+        # hits through SSMCompanionCache._clone_states before model mutation, so
+        # a second per-layer deepcopy here only adds RAM/copy cost.
+        return (states, is_complete)
 
     # --------------------------------------------------------------
     # Public API

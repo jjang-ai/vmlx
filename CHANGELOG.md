@@ -31,6 +31,12 @@ All notable changes to vMLX Engine will be documented in this file.
   materialization, and an opt-in `--prefill-keep-alloc` /
   `VMLINUX_PREFILL_KEEP_ALLOC=1` chunked-prefill allocator tuning flag. Credit:
   @st-adam for the prefill-loop cleanup work.
+- Added no-heavy contracts and accepted the safe cache/index slice of PR #162:
+  `MLLMBatch` UID lookup caching for PLD, removal of the redundant SSM
+  `lengths * 1` materialization kernel, and removal of duplicate L2 SSM disk
+  post-load deepcopy. The submitted sampler-helper hoist was intentionally not
+  accepted because current vMLX uses `vmlx_engine.sampling`. Credit: @st-adam
+  for the hot-path cleanup work.
 
 ## [1.5.46] - 2026-05-20
 
