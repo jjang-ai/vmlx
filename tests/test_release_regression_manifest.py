@@ -211,6 +211,16 @@ def test_release_regression_manifest_tracks_live_only_boundaries():
     assert all(row["heavy"] for row in live_rows)
 
 
+def test_release_regression_manifest_tracks_fresh_dsv4_live_failure_artifact():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+    row = rows["dsv4-long-output-quality-live"]
+    joined = " ".join(row["artifacts"] + row["proves"])
+
+    assert "current-production-family-audit-live-dsv4-jang-local-20260522-after-stream-cache-detail.json" in joined
+    assert "identifier integrity" in joined
+
+
 def test_release_regression_manifest_live_soak_does_not_overclaim_qwen_mtp():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}

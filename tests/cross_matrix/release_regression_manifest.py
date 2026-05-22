@@ -341,6 +341,7 @@ _ROWS: list[dict[str, Any]] = [
             "uv run --extra dev python tests/cross_matrix/run_production_family_audit.py --rows dsv4_jang_local --live --out build/current-production-family-audit-live-dsv4-jang-local-20260522.json",
         ],
         "artifacts": [
+            "build/current-production-family-audit-live-dsv4-jang-local-20260522-after-stream-cache-detail.json",
             "build/current-production-family-audit-live-dsv4-jang-local-20260522.json",
             "build/current-dsv4-identifier-count-ablation-20260521/result.json",
             "build/current-dsv4-long-output-quality-clearance-20260521.json",
