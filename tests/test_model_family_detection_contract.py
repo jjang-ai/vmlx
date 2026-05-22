@@ -230,6 +230,54 @@ def test_decode_speed_gate_records_registry_cache_metadata_for_existing_rows():
     assert "deepseek_v4_composite" in cache_subtypes
 
 
+def test_decode_speed_gate_detects_cache_health_mismatches():
+    from tests.cross_matrix.run_decode_speed_gate import cache_health_mismatches
+
+    assert cache_health_mismatches(
+        {
+            "family_name": "deepseek_v4",
+            "cache_type": "kv",
+            "cache_subtype": "deepseek_v4_composite",
+        },
+        {
+            "cache_type": "paged_kv",
+            "generic_turboquant_kv": {"enabled": True},
+        },
+    ) == [
+        "registry deepseek_v4_composite expected health cache_type=native_composite",
+        "registry deepseek_v4_composite expected generic_turboquant_kv.enabled=false",
+    ]
+
+    assert cache_health_mismatches(
+        {
+            "family_name": "zaya1_vl",
+            "cache_type": "hybrid",
+            "cache_subtype": "zaya_cca",
+        },
+        {
+            "cache_type": "paged_kv",
+            "generic_turboquant_kv": {"enabled": True},
+        },
+    ) == [
+        "registry zaya_cca expected health cache_type=typed_cca",
+        "registry zaya_cca expected generic_turboquant_kv.enabled=false",
+    ]
+
+    assert cache_health_mismatches(
+        {
+            "family_name": "qwen3_5",
+            "cache_type": "hybrid",
+            "cache_subtype": None,
+        },
+        {
+            "cache_type": "hybrid_ssm_typed",
+            "generic_turboquant_kv": {"enabled": True},
+        },
+    ) == [
+        "registry hybrid cache expected generic_turboquant_kv.enabled=false",
+    ]
+
+
 def test_dsv4_live_cache_gates_use_canonical_parser_and_no_legacy_32k_startup_cap():
     gate_paths = [
         Path("tests/cross_matrix/run_dsv4_long_context_gate.py"),

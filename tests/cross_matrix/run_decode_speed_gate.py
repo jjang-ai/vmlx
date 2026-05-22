@@ -506,6 +506,47 @@ def resolve_row_registry_metadata(row: Row) -> dict[str, Any]:
     }
 
 
+def cache_health_mismatches(
+    registry_metadata: dict[str, Any],
+    health: dict[str, Any],
+) -> list[str]:
+    """Return live health contradictions against registry cache policy."""
+    mismatches: list[str] = []
+    cache_type = registry_metadata.get("cache_type")
+    cache_subtype = registry_metadata.get("cache_subtype")
+    health_cache_type = health.get("cache_type")
+    generic_tq = health.get("generic_turboquant_kv")
+    generic_tq_enabled = (
+        generic_tq.get("enabled") if isinstance(generic_tq, dict) else None
+    )
+
+    if cache_subtype == "deepseek_v4_composite":
+        if health_cache_type != "native_composite":
+            mismatches.append(
+                "registry deepseek_v4_composite expected health cache_type=native_composite"
+            )
+        if generic_tq_enabled is not False:
+            mismatches.append(
+                "registry deepseek_v4_composite expected generic_turboquant_kv.enabled=false"
+            )
+        return mismatches
+
+    if cache_subtype == "zaya_cca":
+        if health_cache_type != "typed_cca":
+            mismatches.append("registry zaya_cca expected health cache_type=typed_cca")
+        if generic_tq_enabled is not False:
+            mismatches.append(
+                "registry zaya_cca expected generic_turboquant_kv.enabled=false"
+            )
+        return mismatches
+
+    if cache_type == "hybrid" and generic_tq_enabled is True:
+        mismatches.append(
+            "registry hybrid cache expected generic_turboquant_kv.enabled=false"
+        )
+    return mismatches
+
+
 def run_row(
     row: Row,
     *,
@@ -639,6 +680,10 @@ def run_row(
         health1 = get_json(f"http://127.0.0.1:{port}/health", timeout=5)
         status = "pass"
         notes: list[str] = []
+        cache_mismatches = cache_health_mismatches(registry_metadata, health1)
+        if cache_mismatches:
+            status = "fail"
+            notes.extend(cache_mismatches)
         if bundle["loopish"] or greedy["loopish"]:
             status = "fail"
             notes.append("loopish output detected")
