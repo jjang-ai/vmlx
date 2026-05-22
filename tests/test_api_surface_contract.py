@@ -35,6 +35,7 @@ def test_noheavy_api_cache_contract_pins_named_server_rows():
 
     assert "test_chat_and_responses_log_and_forward_supported_sampling_kwargs" in required
     assert "test_request_output_caps_override_server_default_without_touching_context_cap" in required
+    assert "test_chat_and_responses_streaming_output_caps_override_server_default_without_touching_context_cap" in required
     assert "test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap" in required
     assert "test_legacy_completions_streaming_output_cap_overrides_server_default_without_touching_context_cap" in required
     assert "test_anthropic_messages_omitted_max_tokens_uses_bundle_default" in required

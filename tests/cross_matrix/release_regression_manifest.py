@@ -40,17 +40,17 @@ _ROWS: list[dict[str, Any]] = [
         "proves": [
             "Server Default Max Output Tokens maps to --max-tokens",
             "Max Context Tokens maps to --max-prompt-tokens",
-            "Chat Max Output Tokens remains a per-chat/API override",
+            "Chat Max Output Tokens remains a per-chat/API override for non-streaming and streaming",
             "Legacy /v1/completions max_tokens remains a per-request output cap for non-streaming and streaming",
             "External coding-tool configs keep context window and output limit separate",
             "new-chat model-owned maxTokens cannot be replaced by inherited per-chat output caps",
             "server startup maxTokens and chat maxTokens remain independent when both are set",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-legacy-completions-streaming.json",
+            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-chat-responses-streaming.json",
         ],
         "artifacts": [
-            "build/current-max-output-context-contract-20260522-legacy-completions-streaming.json",
+            "build/current-max-output-context-contract-20260522-chat-responses-streaming.json",
         ],
     },
     {
@@ -148,17 +148,17 @@ _ROWS: list[dict[str, Any]] = [
         "mode": "noheavy",
         "heavy": False,
         "proves": [
-            "OpenAI Chat Completions sampling/default propagation",
-            "OpenAI Responses sampling/default propagation",
+            "OpenAI Chat Completions sampling/default propagation for non-streaming and streaming",
+            "OpenAI Responses sampling/default propagation for non-streaming and streaming",
             "OpenAI legacy Completions max_tokens/default propagation for non-streaming and streaming",
             "Anthropic adapter bundle defaults",
             "Ollama adapter streaming/done behavior",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260522-legacy-completions-streaming.json",
+            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260522-chat-responses-streaming.json",
         ],
         "artifacts": [
-            "build/current-api-surface-contract-20260522-legacy-completions-streaming.json",
+            "build/current-api-surface-contract-20260522-chat-responses-streaming.json",
         ],
     },
     {

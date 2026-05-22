@@ -43,6 +43,7 @@ SOURCE_HASH_FILES = (
 REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_chat_and_responses_log_and_forward_supported_sampling_kwargs",
     "test_request_output_caps_override_server_default_without_touching_context_cap",
+    "test_chat_and_responses_streaming_output_caps_override_server_default_without_touching_context_cap",
     "test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap",
     "test_legacy_completions_streaming_output_cap_overrides_server_default_without_touching_context_cap",
     "test_anthropic_messages_omitted_max_tokens_uses_bundle_default",
@@ -84,6 +85,7 @@ COMMANDS: dict[str, list[str]] = {
             "chat_and_responses_log_and_forward_supported_sampling_kwargs "
             "or anthropic_messages_omitted_max_tokens_uses_bundle_default "
             "or request_output_caps_override_server_default_without_touching_context_cap "
+            "or chat_and_responses_streaming_output_caps_override_server_default_without_touching_context_cap "
             "or legacy_completions_output_cap_overrides_server_default_without_touching_context_cap "
             "or legacy_completions_streaming_output_cap_overrides_server_default_without_touching_context_cap "
             "or responses_request_has_sampling_fields "
@@ -223,10 +225,14 @@ def build_artifact(root: Path) -> dict[str, Any]:
             api_ok and "test_chat_and_responses_log_and_forward_supported_sampling_kwargs" not in missing_markers
         ),
         "request_output_caps_override_server_default": (
-            api_ok and "test_request_output_caps_override_server_default_without_touching_context_cap" not in missing_markers
+            api_ok
+            and "test_request_output_caps_override_server_default_without_touching_context_cap" not in missing_markers
+            and "test_chat_and_responses_streaming_output_caps_override_server_default_without_touching_context_cap" not in missing_markers
         ),
         "prompt_context_caps_stay_separate_from_output_caps": (
-            api_ok and "test_request_output_caps_override_server_default_without_touching_context_cap" not in missing_markers
+            api_ok
+            and "test_request_output_caps_override_server_default_without_touching_context_cap" not in missing_markers
+            and "test_chat_and_responses_streaming_output_caps_override_server_default_without_touching_context_cap" not in missing_markers
         ),
         "legacy_completions_output_caps_override_server_default": (
             api_ok

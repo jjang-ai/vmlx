@@ -52,6 +52,7 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     # Engine/API resolution. These prove server --max-tokens is an omitted
     # request default, not a ceiling over explicit chat/API output caps.
     "test_request_output_caps_override_server_default_without_touching_context_cap",
+    "test_chat_and_responses_streaming_output_caps_override_server_default_without_touching_context_cap",
     "test_explicit_startup_max_tokens_is_default_not_request_ceiling",
     "test_request_output_caps_can_go_below_or_above_startup_default",
     "test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap",
@@ -110,6 +111,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "-q",
             "-vv",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_request_output_caps_override_server_default_without_touching_context_cap",
+            "tests/test_engine_audit.py::TestServerSamplingResolution::test_chat_and_responses_streaming_output_caps_override_server_default_without_touching_context_cap",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_explicit_startup_max_tokens_is_default_not_request_ceiling",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_request_output_caps_can_go_below_or_above_startup_default",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap",
@@ -231,11 +233,13 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "chat_max_tokens_overrides_server_default_per_request": (
             not failed
             and "test_request_output_caps_override_server_default_without_touching_context_cap" not in missing_markers
+            and "test_chat_and_responses_streaming_output_caps_override_server_default_without_touching_context_cap" not in missing_markers
             and "keeps per-chat maxTokens as output budget only, never prompt context" not in missing_markers
         ),
         "responses_max_output_tokens_overrides_server_default_per_request": (
             not failed
             and "test_request_output_caps_override_server_default_without_touching_context_cap" not in missing_markers
+            and "test_chat_and_responses_streaming_output_caps_override_server_default_without_touching_context_cap" not in missing_markers
             and "keeps Responses maxTokens as output budget only, never prompt context" not in missing_markers
         ),
         "anthropic_messages_preserves_bundle_and_explicit_output_caps": (

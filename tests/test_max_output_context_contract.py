@@ -12,6 +12,7 @@ def test_max_output_context_contract_covers_all_public_api_surfaces():
         for _root, command in gate.COMMANDS.values()
     )
     assert "test_request_output_caps_override_server_default_without_touching_context_cap" in joined_commands
+    assert "test_chat_and_responses_streaming_output_caps_override_server_default_without_touching_context_cap" in joined_commands
     assert "test_explicit_startup_max_tokens_is_default_not_request_ceiling" in joined_commands
     assert "test_request_output_caps_can_go_below_or_above_startup_default" in joined_commands
     assert "test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap" in joined_commands
@@ -22,6 +23,7 @@ def test_max_output_context_contract_covers_all_public_api_surfaces():
     assert "test_ollama_generate_omits_non_positive_num_predict_sentinels" in joined_commands
 
     assert "test_request_output_caps_override_server_default_without_touching_context_cap" in required
+    assert "test_chat_and_responses_streaming_output_caps_override_server_default_without_touching_context_cap" in required
     assert "test_explicit_startup_max_tokens_is_default_not_request_ceiling" in required
     assert "test_request_output_caps_can_go_below_or_above_startup_default" in required
     assert "test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap" in required

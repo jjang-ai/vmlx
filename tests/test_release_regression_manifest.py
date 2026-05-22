@@ -57,7 +57,7 @@ def test_release_regression_manifest_tracks_new_chat_output_cap_inheritance_guar
 
     assert "new-chat" in joined
     assert "model-owned maxTokens" in joined
-    assert "current-max-output-context-contract-20260522-legacy-completions-streaming.json" in joined
+    assert "current-max-output-context-contract-20260522-chat-responses-streaming.json" in joined
 
 
 def test_release_regression_manifest_tracks_server_chat_max_output_boundary():
@@ -67,7 +67,7 @@ def test_release_regression_manifest_tracks_server_chat_max_output_boundary():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "server startup maxTokens and chat maxTokens remain independent" in joined
-    assert "current-max-output-context-contract-20260522-legacy-completions-streaming.json" in joined
+    assert "current-max-output-context-contract-20260522-chat-responses-streaming.json" in joined
 
 
 def test_release_regression_manifest_tracks_legacy_completions_output_boundary():
@@ -79,7 +79,7 @@ def test_release_regression_manifest_tracks_legacy_completions_output_boundary()
     assert "Legacy /v1/completions max_tokens" in joined
     assert "per-request output cap" in joined
     assert "non-streaming and streaming" in joined
-    assert "current-max-output-context-contract-20260522-legacy-completions-streaming.json" in joined
+    assert "current-max-output-context-contract-20260522-chat-responses-streaming.json" in joined
 
 
 def test_release_regression_manifest_tracks_generation_defaults_with_runner_artifact():
@@ -115,9 +115,10 @@ def test_release_regression_manifest_tracks_api_surface_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_api_surface_contract.py" in joined
-    assert "current-api-surface-contract-20260522-legacy-completions-streaming.json" in joined
+    assert "current-api-surface-contract-20260522-chat-responses-streaming.json" in joined
     assert "OpenAI Chat Completions" in joined
     assert "OpenAI Responses" in joined
+    assert "non-streaming and streaming" in joined
     assert "OpenAI legacy Completions" in joined
     assert "Anthropic" in joined
     assert "Ollama" in joined
@@ -345,9 +346,10 @@ def test_release_regression_manifest_tracks_max_output_context_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_max_output_context_contract.py" in joined
-    assert "current-max-output-context-contract-20260522-legacy-completions-streaming.json" in joined
+    assert "current-max-output-context-contract-20260522-chat-responses-streaming.json" in joined
     assert "Server Default Max Output Tokens" in joined
     assert "Chat Max Output Tokens" in joined
+    assert "non-streaming and streaming" in joined
     assert "Legacy /v1/completions max_tokens" in joined
     assert "non-streaming and streaming" in joined
     assert "Max Context Tokens" in joined
