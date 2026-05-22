@@ -30,6 +30,7 @@ def test_family_detection_contract_hashes_app_and_engine_sources():
         "panel/src/main/model-config-registry.ts",
         "panel/src/shared/reasoningParserAliases.ts",
         "panel/tests/model-config-registry.test.ts",
+        "tests/cross_matrix/run_decode_speed_gate.py",
         "tests/test_model_config_registry.py",
     }
 
@@ -70,3 +71,17 @@ def test_family_detection_contract_marker_validation_fails_if_required_row_missi
 
     assert checks["qwen36_vl_video_hybrid"] is False
     assert checks["nemotron_h_hybrid_text_not_stale_omni"] is True
+
+
+def test_decode_speed_gate_uses_canonical_release_parsers_for_dsv4_and_minimax():
+    from tests.cross_matrix.run_decode_speed_gate import ROWS
+
+    for row_name in ("minimax", "minimax_k", "minimax_jang2l_crack"):
+        row = ROWS[row_name]
+        assert row.tool_parser == "minimax"
+        assert row.reasoning_parser == "minimax_m2"
+
+    for row_name in ("dsv4_k", "dsv4_jang_dq2_gate3math6"):
+        row = ROWS[row_name]
+        assert row.tool_parser == "dsml"
+        assert row.reasoning_parser == "deepseek_r1"

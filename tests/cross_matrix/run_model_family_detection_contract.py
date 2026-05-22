@@ -30,6 +30,7 @@ SOURCE_HASH_FILES = (
     "panel/src/shared/reasoningParserAliases.ts",
     "panel/src/shared/toolParserAliases.ts",
     "panel/tests/model-config-registry.test.ts",
+    "tests/cross_matrix/run_decode_speed_gate.py",
     "tests/test_model_config_registry.py",
     "tests/test_model_family_detection_contract.py",
 )
