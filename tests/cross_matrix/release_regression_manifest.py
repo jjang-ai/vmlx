@@ -300,12 +300,14 @@ _ROWS: list[dict[str, Any]] = [
         "heavy": False,
         "proves": [
             "Version triples, bundled Python hash parity, packaged app signature, and objective proof digest gate release attempts",
+            "Direct release-gate runs refresh and enforce the objective proof digest instead of relying only on the umbrella suite",
             "verify-bundled checks packaged Python imports, source hash parity, and relocatable console scripts",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-20260521.json",
+            "VMLINUX_JANG_TOOLS_SOURCE=/Users/example/jang/.worktrees/vmlx-release-clean-7f643ed/jang-tools VMLX_JANG_TOOLS_SOURCE=/Users/example/jang/.worktrees/vmlx-release-clean-7f643ed/jang-tools .venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-20260522-objective-gate-enforced.json",
         ],
         "artifacts": [
+            "build/current-packaged-integrity-contract-20260522-objective-gate-enforced.json",
             "build/current-packaged-integrity-contract-20260521.json",
         ],
     },

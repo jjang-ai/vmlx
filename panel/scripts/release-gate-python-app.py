@@ -667,6 +667,42 @@ def jang_tools_source_root() -> Path:
     return Path(configured or (Path.home() / "jang" / "jang-tools"))
 
 
+def check_objective_proof_digest(
+    gate: Gate,
+    *,
+    digest_path: Path | None = None,
+) -> None:
+    """Refresh and enforce the objective proof digest before release checks pass."""
+    digest_path = digest_path or (ROOT / "build" / "current-objective-proof-audit-20260521.json")
+    proc = gate.run(
+        "objective proof digest refresh",
+        [
+            sys.executable,
+            "tests/cross_matrix/summarize_objective_proof.py",
+            "--out",
+            str(digest_path),
+        ],
+        timeout=180,
+    )
+    if proc.returncode != 0:
+        return
+    try:
+        digest = json.loads(digest_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        gate.record("objective proof digest", "FAIL", f"cannot read {digest_path}: {exc}")
+        return
+
+    open_requirements = [
+        str(item.get("requirement"))
+        for item in digest.get("requirements", [])
+        if item.get("status") != "pass"
+    ]
+    if open_requirements:
+        gate.record("objective proof digest", "FAIL", "; ".join(open_requirements))
+        return
+    gate.record("objective proof digest", "PASS", str(digest_path))
+
+
 def check_packaged_developer_id_signature(
     gate: Gate,
     app: Path,
@@ -749,6 +785,7 @@ def check_static(gate: Gate, app: Path, skip_app: bool) -> None:
     gate.run("panel request/type tests", ["npm", "test", "--", "request-builder.test.ts", "reasoning-display.test.ts", "audit-fixes.test.ts"], cwd=PANEL, timeout=180)
     gate.run("panel typecheck", ["npm", "run", "typecheck"], cwd=PANEL, timeout=180)
     gate.run("bundled python import gate", ["npm", "run", "verify-bundled"], cwd=PANEL, timeout=180)
+    check_objective_proof_digest(gate)
 
     if skip_app:
         gate.record("packaged app checks", "WARN", "skipped by --skip-app")

@@ -186,6 +186,7 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     assert "Version triples" in joined
     assert "bundled Python hash parity" in joined
     assert "objective proof digest" in joined
+    assert "objective-gate-enforced" in joined
     assert "verify-bundled" in joined
 
 

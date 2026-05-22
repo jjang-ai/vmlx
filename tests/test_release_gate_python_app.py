@@ -409,6 +409,37 @@ def test_packaged_bundled_hash_gate_covers_critical_jang_tools_files():
     assert expected.issubset(set(gate_module.JANG_TOOLS_SOURCE_HASH_PATHS))
 
 
+def test_release_gate_objective_digest_fails_on_open_requirement(tmp_path):
+    gate_module = _load_gate_module()
+    digest = tmp_path / "objective.json"
+    digest.write_text(
+        json.dumps(
+            {
+                "requirements": [
+                    {"requirement": "safe cache", "status": "pass"},
+                    {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
+                ]
+            }
+        )
+    )
+    gate = _FakeGate("refreshed\n")
+
+    gate_module.check_objective_proof_digest(gate, digest_path=digest)
+
+    assert gate.records[-1] == (
+        "objective proof digest",
+        "FAIL",
+        "DSV4 long-output/code/file-generation quality is release-cleared",
+    )
+
+
+def test_release_gate_static_runs_objective_digest_gate():
+    src = Path("panel/scripts/release-gate-python-app.py").read_text()
+
+    assert "def check_objective_proof_digest" in src
+    assert "check_objective_proof_digest(gate)" in src
+
+
 def test_packaged_bundled_package_hash_gate_fails_on_content_drift(tmp_path):
     gate_module = _load_gate_module()
     gate = _FakeGate("")
