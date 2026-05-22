@@ -28,17 +28,44 @@ See also: notes/prompt-lookup-decoding.md
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
 _LOG_INTERVAL = 200  # log stats every N tokens
 
 
+def _truncate_at_excluded(
+    drafts: List[int],
+    exclude_token_ids: Optional[Set[int]],
+) -> List[int]:
+    """Truncate a draft sequence at the first occurrence of an excluded token.
+
+    Used to prevent model-special tokens (image-pad, pad, vision-start, etc.)
+    from being proposed as drafts. Returning partial drafts up to but not
+    including the bad token preserves any valid leading prefix.
+
+    Args:
+        drafts: Draft token IDs as proposed by the n-gram search.
+        exclude_token_ids: Token IDs that must not appear in any draft. If
+            None or empty, drafts are returned unchanged.
+
+    Returns:
+        Drafts truncated to the longest valid prefix, possibly empty.
+    """
+    if not exclude_token_ids:
+        return drafts
+    for i, t in enumerate(drafts):
+        if t in exclude_token_ids:
+            return drafts[:i]
+    return drafts
+
+
 def find_draft_tokens(
     token_ids: List[int],
     num_draft_tokens: int = 5,
     max_ngram_size: int = 3,
+    exclude_token_ids: Optional[Set[int]] = None,
 ) -> List[int]:
     """
     Find draft tokens by n-gram matching within the token sequence.
@@ -47,10 +74,17 @@ def find_draft_tokens(
     occurrence in the sequence is earlier than the current position, then
     returns up to num_draft_tokens tokens that follow it.
 
+    When `exclude_token_ids` is provided, drafts are truncated at the first
+    occurrence of any excluded token ID. This guards against proposing
+    model-special tokens (image-pad, vision markers, pad) as drafts — which
+    would be unsafe to accept during text decode.
+
     Args:
         token_ids:        Full sequence (prompt + output so far).
         num_draft_tokens: Max draft tokens to return.
         max_ngram_size:   Largest n-gram to try (3 is a good default).
+        exclude_token_ids: Optional set of token IDs that must not appear in
+            returned drafts. Drafts are truncated at the first excluded ID.
 
     Returns:
         List of draft token IDs, possibly empty.
@@ -67,9 +101,10 @@ def find_draft_tokens(
         for i in range(n - ngram_size - 1, -1, -1):
             if token_ids[i : i + ngram_size] == query:
                 draft_start = i + ngram_size
-                draft = token_ids[draft_start : draft_start + num_draft_tokens]
+                draft = list(token_ids[draft_start : draft_start + num_draft_tokens])
+                draft = _truncate_at_excluded(draft, exclude_token_ids)
                 if draft:
-                    return list(draft)
+                    return draft
 
     return []
 
@@ -107,7 +142,13 @@ class NgramIndex:
         token_ids: List[int],
         num_draft_tokens: int = 5,
         max_ngram_size: int = 3,
+        exclude_token_ids: Optional[Set[int]] = None,
     ) -> List[int]:
+        """O(1) n-gram lookup for draft tokens.
+
+        See module-level `find_draft_tokens` for parameter semantics. The
+        `exclude_token_ids` filter is applied identically here.
+        """
         n = len(token_ids)
         if n < 3 or num_draft_tokens <= 0:
             return []
@@ -130,9 +171,10 @@ class NgramIndex:
             if pos < 0:
                 continue
             draft_start = pos + ngram_size
-            drafts = token_ids[draft_start : draft_start + num_draft_tokens]
+            drafts = list(token_ids[draft_start : draft_start + num_draft_tokens])
+            drafts = _truncate_at_excluded(drafts, exclude_token_ids)
             if drafts:
-                return list(drafts)
+                return drafts
 
         return []
 

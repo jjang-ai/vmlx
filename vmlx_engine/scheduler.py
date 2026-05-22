@@ -639,6 +639,14 @@ class Scheduler:
             os.getenv("VMLX_DISABLE_PLD_REPLAY") != "1"
             and getattr(self.config, "pld_replay_enabled", True)
         )
+        # Special-token IDs to keep out of PLD drafts (issue #134 follow-up).
+        # n-gram lookup over the prompt would otherwise propose tokens like
+        # pad/image-pad/vision-start as drafts. Verify usually rejects them,
+        # but truncating drafts at the first special ID avoids the risk
+        # entirely and saves a wasted verify forward.
+        self._pld_excluded_token_ids: Optional[Set[int]] = (
+            self._build_pld_excluded_token_ids()
+        )
 
         # Prefix cache for KV state reuse
         self.prefix_cache: Optional[PrefixCacheManager] = None
@@ -3475,6 +3483,65 @@ class Scheduler:
         except Exception:
             return layer_cache is not None
 
+    def _build_pld_excluded_token_ids(self) -> Optional[Set[int]]:
+        """Collect tokenizer/processor special-token IDs to keep out of PLD drafts.
+
+        Pulled once at construction time. Safe over missing attributes — any
+        AttributeError or None value is silently skipped. Returns None if no
+        IDs were collected (filter is a no-op in that case).
+
+        Covers: pad, image-pad/image-token, vision-start, plus tokenizer
+        additional_special_tokens. EOS/BOS are intentionally NOT excluded:
+        accepting EOS as a draft is the legitimate "model would have emitted
+        EOS anyway" case, gated by the verify forward.
+        """
+        excluded: Set[int] = set()
+        tok = getattr(self, "tokenizer", None)
+        # tokenizer may be a TokenizerWrapper exposing an inner tokenizer
+        inner = getattr(tok, "tokenizer", tok) if tok is not None else None
+
+        def _add(value):
+            if value is None:
+                return
+            if isinstance(value, int):
+                excluded.add(value)
+            elif isinstance(value, (list, tuple, set)):
+                for v in value:
+                    if isinstance(v, int):
+                        excluded.add(v)
+
+        for obj in (tok, inner):
+            if obj is None:
+                continue
+            for attr in (
+                "pad_token_id",
+                "image_token_id",
+                "image_pad_id",
+                "vision_start_token_id",
+                "vision_end_token_id",
+                "additional_special_tokens_ids",
+            ):
+                try:
+                    _add(getattr(obj, attr, None))
+                except Exception:
+                    pass
+
+        # Some processors expose IDs only via the processor object on the
+        # underlying model wrapper. Best-effort probe; silently skip on failure.
+        try:
+            processor = getattr(self.model, "processor", None)
+            if processor is not None:
+                for attr in (
+                    "image_token_id",
+                    "image_pad_id",
+                    "vision_start_token_id",
+                ):
+                    _add(getattr(processor, attr, None))
+        except Exception:
+            pass
+
+        return excluded if excluded else None
+
     @staticmethod
     def _truncate_cache_to_prompt_length(
         raw_cache: List[Any], prompt_len: int
@@ -5247,7 +5314,10 @@ class Scheduler:
                         full_tokens = list(request.prompt_token_ids) + list(
                             request.output_token_ids
                         )
-                        drafts = find_draft_tokens(full_tokens)
+                        drafts = find_draft_tokens(
+                            full_tokens,
+                            exclude_token_ids=self._pld_excluded_token_ids,
+                        )
                         if drafts:
                             pld_stats.draft_found += 1
                             self._pld_pending[request_id] = (
@@ -6721,7 +6791,10 @@ class Scheduler:
             ngram_idx = NgramIndex()
             self._pld_ngram_indices[request_id] = ngram_idx
         drafts = ngram_idx.find_drafts(
-            full_tokens, num_draft_tokens=5, max_ngram_size=3
+            full_tokens,
+            num_draft_tokens=5,
+            max_ngram_size=3,
+            exclude_token_ids=self._pld_excluded_token_ids,
         )
         if not drafts:
             return []
