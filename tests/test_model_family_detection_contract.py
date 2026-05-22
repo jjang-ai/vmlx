@@ -29,6 +29,7 @@ def test_family_detection_contract_pins_named_release_rows():
         "decode_speed_existing_rows_match_engine_parser_policy",
         "decode_speed_existing_rows_match_engine_modality_policy",
         "decode_speed_build_command_parser_modality_policy",
+        "decode_speed_large_external_jangtq_mxfp_gptoss_rows",
         "decode_speed_registry_cache_metadata_health",
     }.issubset(names)
 
@@ -331,6 +332,57 @@ def test_decode_speed_gate_build_command_preserves_row_parser_modality_policy():
         "JANGTQ_DISABLE_DSV4_FAST_LOAD",
     ):
         assert forbidden not in clean_env
+
+
+def test_decode_speed_gate_has_large_external_mistral_gptoss_rows():
+    from tests.cross_matrix.run_decode_speed_gate import ROWS, build_serve_command
+
+    expected_rows = {
+        "mistral_medium_jangtq_ext": {
+            "path": "/Volumes/ModelDrive/jangq-ai/Mistral-Medium-3.5-128B-JANGTQ",
+            "mllm": True,
+            "tool": "mistral",
+            "reasoning": "mistral",
+            "format_marker": "JANGTQ",
+        },
+        "mistral_medium_mxfp4_ext": {
+            "path": "/Volumes/ModelDrive/jangq-ai/Mistral-Medium-3.5-128B-mxfp4",
+            "mllm": True,
+            "tool": "mistral",
+            "reasoning": "mistral",
+            "format_marker": "mxfp4",
+        },
+        "gpt_oss_ext": {
+            "path": "/Volumes/ModelDrive/dealignai/GPT-OSS-120B-MLX-CRACK",
+            "mllm": False,
+            "tool": "glm47",
+            "reasoning": "openai_gptoss",
+            "format_marker": "GPT-OSS",
+        },
+    }
+
+    for row_name, expected in expected_rows.items():
+        row = ROWS[row_name]
+        cmd = build_serve_command(
+            row,
+            python=Path("/bundle/python3"),
+            port=8791,
+            prefill_step_size=2048,
+        )
+
+        assert row.path == expected["path"]
+        assert expected["format_marker"] in row.path
+        assert row.is_mllm is expected["mllm"]
+        assert row.tool_parser == expected["tool"]
+        assert row.reasoning_parser == expected["reasoning"]
+        assert row.max_tokens <= 192
+        assert row.expected_min_tps is not None and row.expected_min_tps > 0
+        assert row.expected_min_pp is not None and row.expected_min_pp > 0
+        assert cmd[cmd.index("--served-model-name") + 1] == row.name
+        assert "--max-tokens" not in cmd
+        assert "--is-mllm" in cmd if expected["mllm"] else "--is-mllm" not in cmd
+        assert cmd[cmd.index("--tool-call-parser") + 1] == expected["tool"]
+        assert cmd[cmd.index("--reasoning-parser") + 1] == expected["reasoning"]
 
 
 def test_decode_speed_gate_matches_registry_parser_policy_for_ling_and_nemotron():
