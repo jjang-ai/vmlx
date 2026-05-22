@@ -199,6 +199,45 @@ const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 const GENERIC_DEFAULT_TIMEOUT_SECONDS = 300
 const DSV4_DEFAULT_TIMEOUT_SECONDS = 900
 
+const ADDITIONAL_ARG_VALUE_FLAGS = new Set([
+    '--allowed-origins',
+    '--api-key',
+    '--default-temperature',
+    '--default-top-p',
+    '--default-top-k',
+    '--default-min-p',
+    '--default-repetition-penalty',
+    '--default-enable-thinking',
+    '--log-level',
+    '--max-tokens',
+    '--max-prompt-tokens',
+    '--native-mtp-depth',
+    '--native-mtp-sampling-policy',
+])
+
+const IMAGE_ADDITIONAL_ARG_BLOCKLIST = new Set([
+    '--image-mode',
+    '--image-quantize',
+    '--served-model-name',
+    '--mflux-class',
+])
+
+const DSV4_ADDITIONAL_ARG_BLOCKLIST = new Set([
+    '--dsv4-enable-prefix-cache',
+    '--native-mtp-depth',
+    '--native-mtp-sampling-policy',
+    '--disable-native-mtp',
+    '--default-temperature',
+    '--default-top-p',
+    '--default-top-k',
+    '--default-min-p',
+    '--default-repetition-penalty',
+    '--default-enable-thinking',
+    '--max-tokens',
+    '--max-prompt-tokens',
+    '--log-level',
+])
+
 function effectiveSessionTimeoutSeconds(config: Partial<SessionConfig>, family?: string): number {
     const configured = config.timeout
     if (configured != null && configured <= 0) return 86400
@@ -220,6 +259,21 @@ function finiteNonNegativeNumber(value: unknown): number | undefined {
 function finitePositiveInteger(value: unknown): number | undefined {
     const number = finitePositiveNumber(value)
     return number == null ? undefined : Math.max(1, Math.floor(number))
+}
+
+function filterAdditionalArgs(raw: string | undefined, blockedFlags: Set<string>): string[] {
+    if (!raw?.trim()) return []
+    const extra = raw.trim().split(/\s+/).filter(Boolean)
+    const filtered: string[] = []
+    for (let i = 0; i < extra.length; i++) {
+        const flag = extra[i]
+        if (blockedFlags.has(flag)) {
+            if (ADDITIONAL_ARG_VALUE_FLAGS.has(flag)) i++
+            continue
+        }
+        filtered.push(flag)
+    }
+    return filtered
 }
 
 function buildCommandPreview(
@@ -414,7 +468,13 @@ function buildCommandPreview(
     const maxContextLength = finitePositiveInteger(config.maxContextLength)
     if (maxContextLength != null) parts.push('--max-prompt-tokens', maxContextLength.toString())
 
-    if (config.additionalArgs?.trim()) parts.push(...config.additionalArgs.trim().split(/\s+/).filter(Boolean))
+    if (config.additionalArgs?.trim()) {
+        const filtered = filterAdditionalArgs(
+            config.additionalArgs,
+            dsv4Active ? DSV4_ADDITIONAL_ARG_BLOCKLIST : IMAGE_ADDITIONAL_ARG_BLOCKLIST,
+        )
+        parts.push(...filtered)
+    }
 
     return parts.join(' \\\n  ')
 }
@@ -1481,6 +1541,42 @@ describe('Additional Arguments', () => {
     it('appends additional args to command', () => {
         const out = preview({ additionalArgs: '--log-level DEBUG' })
         expect(hasFlag(out, '--log-level DEBUG')).toBe(true)
+    })
+
+    it('DSV4 additional args cannot reenable native MTP or deterministic sampling policy', () => {
+        const out = preview(
+            {
+                additionalArgs: [
+                    '--native-mtp-depth 3',
+                    '--native-mtp-sampling-policy deterministic-defaults',
+                    '--disable-native-mtp',
+                    '--dsv4-enable-prefix-cache',
+                    '--default-temperature 0',
+                    '--max-tokens 32768',
+                    '--log-level DEBUG',
+                ].join(' '),
+            },
+            { family: 'deepseek-v4', usePagedCache: false },
+        )
+        const normalized = out.replace(/\s*\\\n\s*/g, ' ')
+
+        expect(normalized).not.toContain('--native-mtp-depth')
+        expect(normalized).not.toContain('--native-mtp-sampling-policy')
+        expect(normalized).not.toContain('deterministic-defaults')
+        expect(normalized).not.toContain('--disable-native-mtp')
+        expect(normalized).not.toContain('--dsv4-enable-prefix-cache')
+        expect(normalized).not.toContain('--default-temperature')
+        expect(normalized).not.toContain('--max-tokens')
+        expect(normalized).not.toContain('--log-level DEBUG')
+
+        const sessionsSource = readFileSync('src/main/sessions.ts', 'utf8')
+        const settingsSource = readFileSync('src/renderer/src/components/sessions/SessionSettings.tsx', 'utf8')
+        for (const source of [sessionsSource, settingsSource]) {
+            expect(source).toContain("'--native-mtp-depth'")
+            expect(source).toContain("'--native-mtp-sampling-policy'")
+            expect(source).toContain("'--disable-native-mtp'")
+            expect(source).toContain("'--dsv4-enable-prefix-cache'")
+        }
     })
 
     it('omits additional args when empty', () => {

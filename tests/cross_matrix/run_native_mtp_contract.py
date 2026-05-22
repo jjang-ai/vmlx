@@ -65,6 +65,7 @@ REQUIRED_NATIVE_MTP_TEST_MARKERS = (
     "defaults native-MTP bundles to deterministic measured-depth launch policy without hidden sampler flags",
     "lets users disable native MTP without leaving deterministic sampling overrides behind",
     "keeps non-MTP models on bundle-owned generation defaults",
+    "DSV4 additional args cannot reenable native MTP or deterministic sampling policy",
     "does not expose Native MTP for config-only bundles without indexed mtp tensors",
     "real session launcher and settings form expose native MTP controls",
 )
@@ -212,6 +213,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             not failed
             and "lets users disable native MTP without leaving deterministic sampling overrides behind" not in missing_markers
             and "keeps non-MTP models on bundle-owned generation defaults" not in missing_markers
+            and "DSV4 additional args cannot reenable native MTP or deterministic sampling policy" not in missing_markers
         ),
         "live_speed_equivalence_not_claimed": True,
         "legacy_count_floor_still_nontrivial": (

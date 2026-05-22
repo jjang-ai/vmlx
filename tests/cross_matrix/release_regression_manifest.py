@@ -251,13 +251,15 @@ _ROWS: list[dict[str, Any]] = [
         "proves": [
             "Native MTP D3 launch policy is wired where supported",
             "Native MTP controls are hidden/suppressed for DSV4 and unsupported families",
+            "DSV4 stale additionalArgs cannot reenable Native MTP, deterministic MTP sampling, hidden default sampling, or startup max-token overrides",
             "Config-only MTP bundles without indexed mtp.* tensors do not activate native MTP or expose Native MTP launch controls",
             "Runtime-active MTP still requires live equivalence/speed rows before release claims",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_native_mtp_contract.py --out build/current-native-mtp-contract-20260522-config-only.json",
+            ".venv/bin/python tests/cross_matrix/run_native_mtp_contract.py --out build/current-native-mtp-contract-20260522-dsv4-additional-args.json",
         ],
         "artifacts": [
+            "build/current-native-mtp-contract-20260522-dsv4-additional-args.json",
             "build/current-native-mtp-contract-20260522-config-only.json",
         ],
     },
