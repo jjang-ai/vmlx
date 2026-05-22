@@ -103,6 +103,7 @@ REQUIRED_ROWS = (
     "zaya_text_cca_tools_reasoning",
     "zaya_stale_stamp_reasoning_policy",
     "zaya1_vl_cca_multimodal",
+    "zaya1_vl_jangtq_profiles_reasoning_policy",
     "ling_bailing_hybrid_plain_content",
     "nemotron_h_hybrid_text_not_stale_omni",
     "nemotron_h_registry_hybrid_cache",
@@ -110,10 +111,12 @@ REQUIRED_ROWS = (
     "qwen36_moe_text_linear_attention_hybrid_cache",
     "qwen36_vl_video_hybrid",
     "qwen36_moe_vl_video_hybrid",
+    "qwen36_affine_jang_native_mtp_vl_video",
     "qwen36_mxfp4_mxfp8_vl",
     "qwen36_native_mtp_vl",
     "minimax_m2_parser_alias",
     "hy3_jangtq_hunyuan_qwen3",
+    "hy3_jangtq_k_reasoning_policy",
     "decode_speed_dsv4_minimax_canonical_parsers",
     "decode_speed_no_legacy_32k_startup_cap",
     "decode_speed_qwen36_mxfp8_native_mtp_rows",
@@ -149,6 +152,11 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
         "test_zaya1_vl_registered_with_full_contract",
         "detects ZAYA1-VL as multimodal CCA hybrid",
     ),
+    "zaya1_vl_jangtq_profiles_reasoning_policy": (
+        "keeps ZAYA1-VL JANGTQ_K on the opt-in qwen3 reasoning rail while preserving VL and typed CCA detection",
+        "keeps ZAYA1-VL JANGTQ2 on the opt-in qwen3 reasoning rail",
+        "keeps ZAYA1-VL JANGTQ4 on the opt-in qwen3 reasoning rail",
+    ),
     "ling_bailing_hybrid_plain_content": (
         "test_ling_is_not_a_reasoning_model",
         "detects Ling/Bailing hybrid with tools and no reasoning parser",
@@ -174,6 +182,9 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
     "qwen36_moe_vl_video_hybrid": (
         "marks non-JANG Qwen 3.6 MoE bundles with vision/video metadata as multimodal",
     ),
+    "qwen36_affine_jang_native_mtp_vl_video": (
+        "keeps affine-JANG Qwen native-MTP VL artifacts multimodal when indexed MTP and vision tensors exist",
+    ),
     "qwen36_mxfp4_mxfp8_vl": (
         "keeps mxfp4 Qwen hybrid VLM multimodal",
         "keeps mxfp8 Qwen hybrid VLM multimodal",
@@ -187,6 +198,9 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
     "hy3_jangtq_hunyuan_qwen3": (
         "detects Hy3 as text-only KV with Hunyuan tools and qwen3 reasoning",
         "keeps Hy3 JANGTQ2 Low/High reasoning contract",
+    ),
+    "hy3_jangtq_k_reasoning_policy": (
+        "keeps Hy3 JANGTQ_K Low/High reasoning contract",
     ),
     "decode_speed_dsv4_minimax_canonical_parsers": (
         "test_decode_speed_gate_uses_canonical_release_parsers_for_dsv4_and_minimax",

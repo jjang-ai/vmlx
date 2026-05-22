@@ -228,6 +228,9 @@ _ROWS: list[dict[str, Any]] = [
             "Qwen MoE text linear-attention wrappers stay hybrid cache through the engine registry, not panel-only matching",
             "base Nemotron-H registry rows stay hybrid cache before stale Omni sidecar overrides are considered",
             "stale ZAYA converter stamps cannot disable reasoning, swap the qwen3 parser, or reenable think_in_template",
+            "ZAYA1-VL JANGTQ_K/JANGTQ2/JANGTQ4 qwen3 reasoning rails preserve VL and typed CCA detection",
+            "Hy3 JANGTQ_K Low/High reasoning contract stays on Hunyuan tools with qwen3 reasoning",
+            "affine-JANG Qwen native-MTP VL/video artifacts stay multimodal when indexed MTP and vision tensors exist",
             "Decode-speed rows keep JANG-only, JANGTQ/MXTQ, plain MLX 4bit, MXFP4, and MXFP8 speed thresholds distinct while staying aligned with engine registry parser, modality, and cache metadata for existing local models",
             "JANG-only MX matmul rows stay text-only launch rows without --is-mllm, startup --max-tokens, MXFP, JANGTQ, or forced JANGTQ environment knobs",
             "Decode-speed rows keep DSV4 native composite separate from generic JANGTQ/MXTQ rows",
@@ -248,6 +251,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-model-family-detection-contract-20260522-zaya-stale-stamp.json",
             "build/current-model-family-detection-contract-20260522-plain-kv-cache-health.json",
             "build/current-model-family-detection-contract-20260522-panel-launch-wiring.json",
+            "build/current-model-family-detection-contract-20260522-zaya-hy3-qwen-vl-profile-rows.json",
         ],
     },
     {

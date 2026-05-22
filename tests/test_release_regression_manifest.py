@@ -302,12 +302,16 @@ def test_release_regression_manifest_tracks_panel_family_launch_wiring():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "current-model-family-detection-contract-20260522-panel-launch-wiring.json" in joined
+    assert "current-model-family-detection-contract-20260522-zaya-hy3-qwen-vl-profile-rows.json" in joined
     assert "Panel session launch builder" in joined
     assert "MiniMax minimax_m2" in joined
     assert "Qwen3.6 hybrid cache forces paged cache" in joined
     assert "ZAYA qwen3 reasoning parser" in joined
     assert "DSV4 stale cache/additionalArgs suppression" in joined
     assert "native-MTP D3 launch policy" in joined
+    assert "ZAYA1-VL JANGTQ_K/JANGTQ2/JANGTQ4 qwen3 reasoning rails" in joined
+    assert "Hy3 JANGTQ_K Low/High reasoning contract" in joined
+    assert "affine-JANG Qwen native-MTP VL/video" in joined
 
 
 def test_release_regression_manifest_tracks_mxfp_vlm_loader_quant_mode():
