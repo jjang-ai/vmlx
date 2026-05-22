@@ -6928,8 +6928,10 @@ class MLLMBatchGenerator:
             from .speculative import (
                 should_use_speculative_batched, get_num_draft_tokens
             )
+            # MLLMBatchGenerator is by definition the MLLM path; default to True
+            _is_mllm_local = getattr(self, "is_mllm", True)
             _use_draft_spec = (
-                should_use_speculative_batched(is_mllm=self.is_mllm)
+                should_use_speculative_batched(is_mllm=_is_mllm_local)
                 and not prompt_processing
             )
             _use_pld_spec = (

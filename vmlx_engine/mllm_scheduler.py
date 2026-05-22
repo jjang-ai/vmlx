@@ -256,6 +256,13 @@ class MLLMSchedulerConfig:
     # Maximum images per request (guard against Metal OOM from excessive images)
     max_images_per_request: int = 20
 
+    # Prompt Lookup Decoding (PLD) — issue #134 follow-up.
+    # When True AND model is hybrid, MLLMBatchGenerator activates in-batch
+    # PLD speculative decoding via _step_speculative (PR #150 expansion).
+    # Propagated from the LLM SchedulerConfig via engine/batched.py.
+    pld_enabled: bool = False
+    pld_summary_interval: int = 200
+
     # Optional pre-built single-worker executor for model ops. When the
     # caller (BatchedEngine._start_mllm) loads the model on a dedicated
     # executor, it should pass that same executor here so step()/prefill

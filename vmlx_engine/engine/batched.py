@@ -282,6 +282,13 @@ class BatchedEngine(BaseEngine):
             ssm_state_cache_max_mb=getattr(
                 self._scheduler_config, "ssm_state_cache_max_mb", 512
             ),
+            # Prompt Lookup Decoding (PLD) propagation — issue #134 follow-up.
+            # When True AND model is hybrid, MLLMBatchGenerator activates
+            # in-batch PLD speculative decoding via _step_speculative.
+            pld_enabled=getattr(self._scheduler_config, "pld_enabled", False),
+            pld_summary_interval=getattr(
+                self._scheduler_config, "pld_summary_interval", 200
+            ),
             # Hand the loader executor to the scheduler so step() runs on
             # the same worker thread as the load (JANGTQ Metal kernel
             # stream-isolation fix).
