@@ -2361,6 +2361,19 @@ class MLLMScheduler:
             is_stop = response.finish_reason == "stop"
             string_stop_truncate = -1  # >=0 when string stop matched
 
+            # Extra tokens emitted in the same step by batched speculative
+            # decoding (PLD or draft-model). They are appended to the request's
+            # output stream after the primary token, each passed through the
+            # detokenizer and stop-condition check. None/[] = single-token step.
+            extra_tokens: List[int] = list(
+                getattr(response, "extra_tokens", None) or []
+            )
+            # Track which token IDs were actually appended to output (primary +
+            # any extras that survived the stop check). The output's
+            # new_token_ids reflects this, and num_output_tokens is incremented
+            # after the loop to stay consistent.
+            new_token_ids: List[int] = [response.token]
+
             if _skip_this_token:
                 # Token consumed by gen-prefix suppression; no delta to emit
                 new_text = ""
@@ -2392,10 +2405,56 @@ class MLLMScheduler:
             else:
                 new_text = ""
 
+            # Process speculative-decode extras (PLD / draft-model accepted
+            # drafts). Each extra is treated like a fresh decoded token: append
+            # to request output, run through detokenizer, check EOS/string stops.
+            # If a stop fires inside extras, we truncate at that point — any
+            # remaining extras are dropped (the request finishes on the stop).
+            stop_in_extras: Optional[str] = None
+            for et in extra_tokens:
+                request.output_tokens.append(et)
+                request.num_output_tokens = len(request.output_tokens)
+                new_token_ids.append(et)
+                if et in self.batch_generator.stop_tokens:
+                    stop_in_extras = "stop"
+                    is_stop = True
+                    break
+                detok.add_token(et)
+                seg = detok.last_segment
+                if seg:
+                    new_text += seg
+                # Re-check string stops after each extra
+                if request.sampling_params.stop and string_stop_truncate < 0:
+                    full_text = detok.text
+                    in_think = (
+                        '<think>' in full_text
+                        and '</think>' not in full_text.split('<think>')[-1]
+                    )
+                    if not in_think:
+                        max_stop_len = max(len(s) for s in request.sampling_params.stop)
+                        search_start = max(
+                            0, len(full_text) - max_stop_len - 1
+                        )
+                        last_think_end = full_text.rfind('</think>')
+                        if last_think_end >= 0:
+                            search_start = max(
+                                search_start, last_think_end + len('</think>')
+                            )
+                        for stop_str in request.sampling_params.stop:
+                            idx = full_text.find(stop_str, search_start)
+                            if idx >= 0:
+                                string_stop_truncate = idx
+                                new_text = ""
+                                stop_in_extras = "stop"
+                                is_stop = True
+                                break
+                if stop_in_extras:
+                    break
+
             # Create output
             output = RequestOutput(
                 request_id=request_id,
-                new_token_ids=[response.token],
+                new_token_ids=new_token_ids,
                 new_text=new_text,
                 output_token_ids=list(request.output_tokens),
                 prompt_tokens=request.num_prompt_tokens,

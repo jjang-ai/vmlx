@@ -2224,6 +2224,13 @@ class MLLMBatchResponse:
     error_prompt_tokens: Optional[int] = None
     error_max_prompt_tokens: Optional[int] = None
     error_source: Optional[str] = None
+    # Extra tokens emitted alongside `token` in the same step.
+    # Set by batched speculative decoding (PLD or draft-model) when one
+    # step produces multiple accepted tokens. The scheduler appends them
+    # to the request's output stream in order, running each through the
+    # detokenizer and stop-condition check just like the primary `token`.
+    # None or [] means single-token step (legacy behaviour preserved).
+    extra_tokens: Optional[List[int]] = None
 
 
 @dataclass
