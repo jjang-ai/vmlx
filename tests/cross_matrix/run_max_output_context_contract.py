@@ -91,6 +91,7 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     "chat:setOverrides rejects non-finite or non-numeric maxTokens instead of poisoning server defaults",
     "chat maxTokens save path cannot mutate session startup maxTokens",
     "server startup maxTokens and chat maxTokens remain independent when both are set",
+    "per-chat maxTokens below or above the server startup default remain request scoped",
     "Auto chat maxTokens omits per-request output caps so server default can apply",
     "default profiles cannot make maxTokens sticky on clean new chats",
     "new chats preserve model-owned maxTokens while refusing inherited output caps",
@@ -291,6 +292,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "chat settings expose per-chat max tokens without hidden DSV4 floors" not in missing_markers
             and "chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap" not in missing_markers
             and "chat:setOverrides rejects non-finite or non-numeric maxTokens instead of poisoning server defaults" not in missing_markers
+            and "per-chat maxTokens below or above the server startup default remain request scoped" not in missing_markers
         ),
         "request_builders_omit_auto_output_cap": (
             not failed

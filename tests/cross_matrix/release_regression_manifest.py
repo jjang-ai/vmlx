@@ -48,6 +48,7 @@ _ROWS: list[dict[str, Any]] = [
             "External coding-tool configs keep context window and output limit separate",
             "new-chat model-owned maxTokens cannot be replaced by inherited per-chat output caps",
             "server startup maxTokens and chat maxTokens remain independent when both are set",
+            "per-chat maxTokens below or above the server startup default remain request-scoped",
             "Auto chat Max Tokens omits per-request output caps so server startup defaults can apply",
         ],
         "commands": [

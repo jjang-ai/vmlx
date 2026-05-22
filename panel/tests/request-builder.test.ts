@@ -225,6 +225,23 @@ describe('buildRequestBody — Chat Completions API', () => {
         expect(body.max_context).toBeUndefined()
     })
 
+    it('per-chat maxTokens below or above the server startup default remain request scoped', () => {
+        const serverStartupDefaultMaxTokens = 4096
+        const below = buildRequestBody('completions', 'gpt-4', messages, { maxTokens: 512 }, false, false)
+        const above = buildRequestBody('completions', 'gpt-4', messages, { maxTokens: 8192 }, false, false)
+
+        expect(below.max_tokens).toBe(512)
+        expect(above.max_tokens).toBe(8192)
+        expect(below.max_tokens).toBeLessThan(serverStartupDefaultMaxTokens)
+        expect(above.max_tokens).toBeGreaterThan(serverStartupDefaultMaxTokens)
+        for (const body of [below, above]) {
+            expect(body.max_output_tokens).toBeUndefined()
+            expect(body.max_prompt_tokens).toBeUndefined()
+            expect(body.max_context_tokens).toBeUndefined()
+            expect(body.max_context).toBeUndefined()
+        }
+    })
+
     it('omits invalid persisted maxTokens values instead of poisoning Chat Completions', () => {
         const badValues = [0, -5, Number.NaN, Number.POSITIVE_INFINITY, '1024']
         for (const value of badValues) {
@@ -363,6 +380,23 @@ describe('buildRequestBody — Responses API', () => {
         expect(body.max_prompt_tokens).toBeUndefined()
         expect(body.max_context_tokens).toBeUndefined()
         expect(body.max_context).toBeUndefined()
+    })
+
+    it('per-chat maxTokens below or above the server startup default remain request scoped for Responses', () => {
+        const serverStartupDefaultMaxTokens = 4096
+        const below = buildRequestBody('responses', 'gpt-4', messages, { maxTokens: 512 }, false, false)
+        const above = buildRequestBody('responses', 'gpt-4', messages, { maxTokens: 8192 }, false, false)
+
+        expect(below.max_output_tokens).toBe(512)
+        expect(above.max_output_tokens).toBe(8192)
+        expect(below.max_output_tokens).toBeLessThan(serverStartupDefaultMaxTokens)
+        expect(above.max_output_tokens).toBeGreaterThan(serverStartupDefaultMaxTokens)
+        for (const body of [below, above]) {
+            expect(body.max_tokens).toBeUndefined()
+            expect(body.max_prompt_tokens).toBeUndefined()
+            expect(body.max_context_tokens).toBeUndefined()
+            expect(body.max_context).toBeUndefined()
+        }
     })
 
     it('omits invalid persisted maxTokens values instead of poisoning Responses', () => {

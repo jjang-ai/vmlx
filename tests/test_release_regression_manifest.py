@@ -68,6 +68,7 @@ def test_release_regression_manifest_tracks_server_chat_max_output_boundary():
 
     assert "server startup maxTokens and chat maxTokens remain independent" in joined
     assert "Auto chat Max Tokens omits per-request output caps" in joined
+    assert "below or above the server startup default" in joined
     assert "current-max-output-context-contract-20260522-chat-auto-server-default.json" in joined
 
 
