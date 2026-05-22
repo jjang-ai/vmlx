@@ -85,3 +85,10 @@ def test_decode_speed_gate_uses_canonical_release_parsers_for_dsv4_and_minimax()
         row = ROWS[row_name]
         assert row.tool_parser == "dsml"
         assert row.reasoning_parser == "deepseek_r1"
+
+
+def test_decode_speed_gate_does_not_force_legacy_32k_startup_output_cap():
+    source = Path("tests/cross_matrix/run_decode_speed_gate.py").read_text()
+
+    assert '"--max-tokens",' not in source
+    assert '"32768",' not in source

@@ -492,8 +492,6 @@ def run_row(
         "10",
         "--stream-interval",
         "1",
-        "--max-tokens",
-        "32768",
         "--served-model-name",
         row.name,
     ]
