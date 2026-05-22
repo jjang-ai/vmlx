@@ -2112,6 +2112,33 @@ class TestAPIModels:
         )
         assert req.stream_options.include_usage is True
 
+    def test_public_api_models_reject_non_positive_output_caps(self):
+        """Raw API output caps are either omitted or positive request caps.
+
+        Panel Auto omits maxTokens so the server startup/model default can
+        apply. Direct OpenAI-compatible API clients must not send 0 or negative
+        caps that bypass that default and create empty/poisoned generations.
+        """
+        import pytest
+        from pydantic import ValidationError
+
+        from vmlx_engine.api.models import (
+            ChatCompletionRequest,
+            CompletionRequest,
+            ResponsesRequest,
+        )
+
+        with pytest.raises(ValidationError, match="max_tokens must be at least 1"):
+            ChatCompletionRequest(
+                model="test",
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=0,
+            )
+        with pytest.raises(ValidationError, match="max_tokens must be at least 1"):
+            CompletionRequest(model="test", prompt="hi", max_tokens=-1)
+        with pytest.raises(ValidationError, match="max_output_tokens must be at least 1"):
+            ResponsesRequest(model="test", input="hi", max_output_tokens=0)
+
 
 # ===========================================================================
 # G. MLLM Scheduler Fixes

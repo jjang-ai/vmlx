@@ -24,6 +24,7 @@ DEFAULT_OUT = Path("build/current-max-output-context-contract-20260521.json")
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
+    "vmlx_engine/api/models.py",
     "vmlx_engine/api/anthropic_adapter.py",
     "vmlx_engine/api/ollama_adapter.py",
     "tests/test_engine_audit.py",
@@ -74,6 +75,7 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     "test_ollama_generate_omits_non_positive_num_predict_sentinels",
     "test_ollama_streaming_num_predict_overrides_server_default_without_touching_context_cap",
     "omits malformed Ollama num_predict values instead of poisoning max_tokens",
+    "test_public_api_models_reject_non_positive_output_caps",
     # Panel launch/settings. These catch UI confusion between response length
     # and prompt/context length before a session can relaunch with stale state.
     "surfaces Max Output Tokens separately from Max Context Tokens",
@@ -148,6 +150,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "tests/test_ollama_adapter.py::test_ollama_chat_omits_non_positive_num_predict_sentinels",
             "tests/test_ollama_adapter.py::test_ollama_generate_omits_non_positive_num_predict_sentinels",
             "tests/test_max_output_context_contract.py",
+            "tests/test_engine_audit.py::TestAPIModels::test_public_api_models_reject_non_positive_output_caps",
         ],
     ),
     "panel_output_context_wiring": (

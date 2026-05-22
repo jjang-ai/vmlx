@@ -3,6 +3,7 @@ def test_max_output_context_contract_covers_all_public_api_surfaces():
 
     required = gate.REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS
     sources = set(gate.SOURCE_HASH_FILES)
+    assert "vmlx_engine/api/models.py" in sources
     assert "vmlx_engine/api/anthropic_adapter.py" in sources
     assert "vmlx_engine/api/ollama_adapter.py" in sources
     assert "tests/test_ollama_adapter.py" in sources
@@ -25,6 +26,7 @@ def test_max_output_context_contract_covers_all_public_api_surfaces():
     assert "test_ollama_chat_omits_non_positive_num_predict_sentinels" in joined_commands
     assert "test_ollama_generate_omits_non_positive_num_predict_sentinels" in joined_commands
     assert "test_ollama_streaming_num_predict_overrides_server_default_without_touching_context_cap" in joined_commands
+    assert "test_public_api_models_reject_non_positive_output_caps" in joined_commands
 
     assert "test_request_output_caps_override_server_default_without_touching_context_cap" in required
     assert "test_chat_and_responses_streaming_output_caps_override_server_default_without_touching_context_cap" in required
@@ -42,6 +44,7 @@ def test_max_output_context_contract_covers_all_public_api_surfaces():
     assert "test_wake_reload_preserves_max_tokens_explicitness" in required
     assert "test_cli_serve_implicit_max_tokens_uses_bounded_fallback" in required
     assert "test_ollama_streaming_num_predict_overrides_server_default_without_touching_context_cap" in required
+    assert "test_public_api_models_reject_non_positive_output_caps" in required
     assert "surfaces Max Output Tokens separately from Max Context Tokens" in required
     assert "does not copy model max_new_tokens into hidden startup maxTokens config" in required
     assert "chat settings expose per-chat max tokens without hidden DSV4 floors" in required

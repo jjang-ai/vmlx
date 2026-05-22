@@ -53,6 +53,7 @@ _ROWS: list[dict[str, Any]] = [
             "Explicit Chat/Responses output caps do not mutate the server startup default used by later Auto requests",
             "Responses maxTokens below or above the server startup default remain request scoped",
             "Responses Auto does not synthesize max_output_tokens",
+            "Raw API non-positive max_tokens/max_output_tokens are rejected rather than becoming hidden Auto defaults or empty generations",
             "Auto chat Max Tokens omits per-request output caps so server startup defaults can apply",
             "new chat output caps are not inherited or made sticky on default-profile or same-model clean chat creation",
             "chat reset does not convert model max_new_tokens into a sticky per-chat maxTokens override",
@@ -68,6 +69,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-max-output-context-contract-20260522-responses-output-boundary.json",
             "build/current-max-output-context-contract-20260522-request-default-mutation.json",
             "build/current-max-output-context-contract-20260522-reset-policy-string-legacy.json",
+            "build/current-max-output-context-contract-20260522-api-validator-caps.json",
         ],
     },
     {
