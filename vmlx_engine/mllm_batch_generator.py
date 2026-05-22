@@ -6298,69 +6298,197 @@ class MLLMBatchGenerator:
     def _step_speculative(
         self, batch: "MLLMBatch", K: int
     ) -> "Tuple[mx.array, List[mx.array]]":
-        """Batched speculative decoding step using a draft model (issue #135).
+        """Batched speculative decoding step with PLD or draft-model source.
 
-        For each request in the batch, runs K sequential draft steps seeded by
-        req.last_token, then runs one batched verify forward on (B, K+1) input.
-        Accepts/rejects per-token per-seq, rolls back hybrid SSM caches for
-        partial accepts using _replay_ssm_forward.
+        Builds a (B, K+1) verify input from `[last_token, d0, ..., d_{K-1}]`
+        per row, runs ONE batched forward through the target model, then
+        per-row accept/reject using greedy argmax (T=0) or sampled (T>0,
+        currently uses greedy as a starting point — stochastic accept is a
+        T>0 follow-up).
 
-        This is a skeleton implementation. The accept/reject logic is stubbed
-        so the dispatch wiring is correct and tests pass. Full accept/reject
-        with per-seq rollback will be implemented in a follow-up once the
-        batched verify is validated on hardware.
+        For hybrid SSM models, snapshots per-row SSM state before the verify
+        forward and selectively restores rows that need rollback via
+        _restore_ssm_rows. KV cache rollback is per-row offset rewind
+        (cheap — single mx.array write).
 
-        TODO(#135): implement per-token stochastic accept/reject.
-        TODO(#135): per-seq hybrid cache rollback via Scheduler._replay_ssm_forward.
+        On partial-accept rows in hybrid models (0 < n_accept < K), this
+        implementation conservatively falls back to "correction only": emits
+        a single correction token and discards the accepted drafts, because
+        per-row replay forward isn't implemented yet (TODO C.5). Full-accept
+        and full-reject rounds work as designed.
+
+        If any request has no drafts available (PLD found no match, prefill
+        not finished), falls back to standard _step for the whole batch.
+
+        Sets req.scratch_extra_tokens per request for emission alongside
+        primary token via MLLMBatchResponse.extra_tokens.
+
+        Args:
+            batch: Active batch with per-row state.
+            K: Number of draft tokens per row.
 
         Returns:
-            (sampled tokens [B], logprobs list [B]) — same shape as _step()
+            (primary sampled tokens [B], logprobs list [B]) — same shape as _step().
         """
-        from .speculative import get_draft_model, get_num_draft_tokens
+        from .speculative import get_draft_model
 
         draft_model = get_draft_model()
-        if draft_model is None or K <= 0:
-            # Fallback to regular step if draft not available
-            y = batch.y
-            return self._step(y[:, None], batch.cache)
-
         B = len(batch.requests)
+
+        if K <= 0 or B == 0:
+            return self._step(batch.y[:, None], batch.cache)
+
+        # ---- 1. Gather K drafts per request ----
+        all_drafts: List[List[int]] = []
+        seeds: List[int] = []
+        for i, req in enumerate(batch.requests):
+            # Skip spec if any request still in prefill (no decode state yet)
+            if req.num_tokens == 0:
+                return self._step(batch.y[:, None], batch.cache)
+
+            seed_int = (
+                int(req.last_token)
+                if req.last_token is not None
+                else int(batch.y[i].item())
+            )
+            seeds.append(seed_int)
+
+            if draft_model is not None:
+                # Draft-model source — not implemented yet.
+                # TODO(#135): per-seq draft-model forward + cache management
+                return self._step(batch.y[:, None], batch.cache)
+
+            # PLD source
+            req_drafts = self._pld_drafts_for_request(req, K)
+            if not req_drafts:
+                # Any row missing drafts → fall back for whole batch
+                return self._step(batch.y[:, None], batch.cache)
+
+            # Pad/truncate to exactly K
+            if len(req_drafts) < K:
+                req_drafts = req_drafts + [req_drafts[-1]] * (K - len(req_drafts))
+            else:
+                req_drafts = req_drafts[:K]
+            all_drafts.append(req_drafts)
+
         self._spec_batched_steps += 1
 
         try:
-            # --- Per-seq sequential draft ---
-            # For each request, run K draft steps from req.last_token.
-            # In this skeleton, we collect the draft tokens but don't use a
-            # separate draft model cache (TODO: wire draft_cache per req).
-            all_drafts: list = []  # shape: [B, K]
-            for req in batch.requests:
-                seed = req.last_token if req.last_token is not None else int(batch.y[0].item())
-                req_drafts = [seed]  # placeholder — real impl runs draft_model K times
-                all_drafts.append(req_drafts[:K] if len(req_drafts) >= K else req_drafts)
+            # ---- 2. Build (B, K+1) verify input ----
+            rows = [[seeds[i]] + all_drafts[i] for i in range(B)]
+            verify_input = mx.array(rows)
 
-            # --- Single batched verify forward ---
-            # Run target model on y[:, None] (same as standard step).
-            # Full (B, K+1) verify is TODO pending draft model cache wiring.
-            y = batch.y
-            sampled, logprobs = self._step(y[:, None], batch.cache)
+            # ---- 3. Snapshot per-row SSM state (hybrid layers only) ----
+            ssm_snapshot = self._snapshot_ssm_per_row(batch.cache)
 
-            # Update last_token for each request
+            # ---- 4. Batched verify forward ----
+            cache = _wrap_batch_caches(batch.cache)
+            output = self.language_model(verify_input, cache=cache)
+            logits = output.logits if hasattr(output, "logits") else output
+            # logits shape: (B, K+1, vocab)
+
+            # ---- 5. Per-row greedy accept/reject ----
+            predicted = mx.argmax(logits, axis=-1)
+            mx.eval(predicted)
+            predicted_list = predicted.tolist()  # list of lists, (B, K+1)
+
+            n_accept: List[int] = []
+            primary_tokens: List[int] = []
+            extras_per_row: List[List[int]] = []
+
+            for i in range(B):
+                row_drafts = all_drafts[i]
+                row_pred = predicted_list[i]
+                n = 0
+                for j in range(K):
+                    if row_pred[j] == row_drafts[j]:
+                        n += 1
+                    else:
+                        break
+                n_accept.append(n)
+                primary = int(row_pred[n])
+                primary_tokens.append(primary)
+                extras_per_row.append(list(row_drafts[:n]))
+
+            # ---- 6. Per-row rollback for partial/full rejects ----
+            # Hybrid partial-accept simplification (no per-row replay yet):
+            # for rows with 0 < n_accept < K we DROP the accepted drafts and
+            # emit only correction. This avoids the per-row replay forward.
+            # Full-accept (n == K): no rollback needed.
+            # Full-reject (n == 0): KV rewind by K + SSM restore.
+            is_hybrid = bool(ssm_snapshot)
+            if is_hybrid:
+                for i in range(B):
+                    if 0 < n_accept[i] < K:
+                        # Drop the accepted prefix: emit correction at pos 0
+                        n_accept[i] = 0
+                        primary_tokens[i] = int(predicted_list[i][0])
+                        extras_per_row[i] = []
+
+            # KV cache: per-row offset rewind by (K - n_accept[i])
+            # For full-accept rows (n == K), shortfall is 0 → no-op.
+            shortfalls = [K - n_accept[i] for i in range(B)]
+            if any(s > 0 for s in shortfalls):
+                for layer in batch.cache:
+                    if not layer.is_trimmable():
+                        continue
+                    if not hasattr(layer, "offset"):
+                        continue
+                    if isinstance(layer.offset, mx.array):
+                        cur = layer.offset.tolist()
+                        if not isinstance(cur, list):
+                            cur = [cur]
+                        new_off = []
+                        for i in range(min(len(cur), B)):
+                            new_off.append(max(0, int(cur[i]) - shortfalls[i]))
+                        # Preserve any rows beyond B (shouldn't happen but safe)
+                        for i in range(B, len(cur)):
+                            new_off.append(int(cur[i]))
+                        layer.offset = mx.array(new_off)
+                    else:
+                        # Scalar offset (single-request batch); use worst shortfall
+                        worst = max(shortfalls)
+                        layer.offset = max(0, int(layer.offset) - worst)
+                    if hasattr(layer, "_idx"):
+                        # RotatingKVCache: sync write pointer
+                        if isinstance(layer.offset, mx.array):
+                            try:
+                                layer._idx = int(layer.offset[0].item())
+                            except Exception:
+                                pass
+                        else:
+                            layer._idx = int(layer.offset)
+
+            # SSM cache: restore rows that didn't fully accept
+            rollback_rows_ssm = [i for i in range(B) if n_accept[i] < K]
+            if rollback_rows_ssm and is_hybrid:
+                self._restore_ssm_rows(batch.cache, ssm_snapshot, rollback_rows_ssm)
+
+            # ---- 7. Update per-request state ----
             for i, req in enumerate(batch.requests):
-                req.last_token = int(sampled[i].item())
+                req.last_token = primary_tokens[i]
+                req.scratch_extra_tokens = (
+                    extras_per_row[i] if extras_per_row[i] else None
+                )
 
-            self._spec_batched_tokens += B
+            # ---- 8. Telemetry ----
+            total_drafts = B * K
+            total_accepted = sum(n_accept)
+            if total_drafts > 0:
+                alpha = 0.1
+                acc_rate = total_accepted / total_drafts
+                self._spec_batched_acceptance_ema = (
+                    (1.0 - alpha) * self._spec_batched_acceptance_ema
+                    + alpha * acc_rate
+                )
+            self._spec_batched_tokens += B + total_accepted
 
-            # Update acceptance EMA (placeholder: 1.0 = no rejection)
-            alpha = 0.1
-            self._spec_batched_acceptance_ema = (
-                (1.0 - alpha) * self._spec_batched_acceptance_ema + alpha * 1.0
-            )
-
-            return sampled, logprobs
+            return mx.array(primary_tokens), [None] * B
 
         except Exception as exc:
             logger.warning(
-                "[batched-spec] _step_speculative failed, falling back to _step: %s", exc
+                "[batched-spec] _step_speculative failed, falling back to _step: %s",
+                exc,
             )
             return self._step(batch.y[:, None], batch.cache)
 
@@ -6529,14 +6657,35 @@ class MLLMBatchGenerator:
         else:
             y, logprobs = batch.y, batch.logprobs
 
-            # Batched speculative decoding dispatch (issue #135)
-            from .speculative import should_use_speculative_batched, get_num_draft_tokens
-            _use_batched_spec = (
+            # Batched speculative decoding dispatch (issue #134/#135).
+            # Two candidate sources:
+            #   - Draft model (--speculative-model + VMLX_ENABLE_BATCHED_SPEC=1)
+            #   - PLD n-gram lookup (--enable-pld, MLLM path, hybrid models)
+            # PLD activates only when configure_pld_spec() was called by the
+            # scheduler (which checks config.pld_enabled) AND we're past prefill.
+            from .speculative import (
+                should_use_speculative_batched, get_num_draft_tokens
+            )
+            _use_draft_spec = (
                 should_use_speculative_batched(is_mllm=self.is_mllm)
                 and not prompt_processing
             )
-            if _use_batched_spec:
-                batch.y, batch.logprobs = self._step_speculative(batch, K=get_num_draft_tokens())
+            _use_pld_spec = (
+                getattr(self, "_pld_spec_enabled", False)
+                and not prompt_processing
+                and not _use_draft_spec  # draft-spec wins when both configured
+            )
+            if _use_draft_spec:
+                batch.y, batch.logprobs = self._step_speculative(
+                    batch, K=get_num_draft_tokens()
+                )
+            elif _use_pld_spec:
+                # K=2 for hybrid models (verify cost), K=5 otherwise.
+                # Mirrors Scheduler._pld_num_drafts logic.
+                pld_K = 2 if getattr(self, "_is_hybrid", False) else 5
+                batch.y, batch.logprobs = self._step_speculative(
+                    batch, K=pld_K
+                )
             else:
                 batch.y, batch.logprobs = self._step(y[:, None], batch.cache)
             mx.async_eval(batch.y)
@@ -6565,15 +6714,40 @@ class MLLMBatchGenerator:
                 batch.requests,
             )
         ):
+            # Append primary token first (chronologically the seed that just
+            # got processed through the verify forward — predicted in prior step).
             num_tok += 1
+            req.output_tokens.append(token)
+
+            # Then process speculative-decode extras: tokens accepted by PLD
+            # or draft-model verify in the SAME step. They come AFTER the
+            # primary in chronological order. Truncate at stop token or
+            # max_tok cap. Scheduler-side _process_batch_responses replays
+            # the same checks for the SSE stream.
+            extras_raw = getattr(req, "scratch_extra_tokens", None) or []
+            extras: List[int] = []
+            stop_in_extras = False
+            for et in extras_raw:
+                if num_tok >= max_tok:
+                    break
+                if et in self.stop_tokens:
+                    stop_in_extras = True
+                    break
+                extras.append(et)
+                req.output_tokens.append(et)
+                num_tok += 1
             batch.num_tokens[i] = num_tok
             req.num_tokens = num_tok
-            req.output_tokens.append(token)
+            # Clear scratch so old extras don't leak into the next step
+            req.scratch_extra_tokens = None
 
             finish_reason = None
             cache_fn = None
 
-            if token in self.stop_tokens:
+            if stop_in_extras:
+                finish_reason = "stop"
+                end_idx.append(i)
+            elif token in self.stop_tokens:
                 finish_reason = "stop"
                 end_idx.append(i)
             elif num_tok >= max_tok:
@@ -6627,6 +6801,7 @@ class MLLMBatchGenerator:
                     cache_detail=getattr(req, '_cache_detail', "") or "",
                     cache_extra_keys=getattr(req, '_cache_extra_keys', None),
                     gen_prefix_tokens=getattr(req, '_gen_prefix_tokens', None),
+                    extra_tokens=extras if extras else None,
                 )
             )
 
