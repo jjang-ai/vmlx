@@ -337,7 +337,9 @@ def test_release_regression_manifest_tracks_mxfp_vlm_loader_quant_mode():
 
     assert "MXFP4/MXFP8 VLM loader" in joined
     assert "declared quantization mode" in joined
+    assert "family-specific loader wrappers" in joined
     assert "current-model-artifact-format-contract-20260522-mxfp-vlm-loader.json" in joined
+    assert "current-model-artifact-format-contract-20260522-loader-wrapper-hashes.json" in joined
 
 
 def test_release_regression_manifest_tracks_affine_jang_loader_acceptance():

@@ -2,6 +2,7 @@ def test_model_artifact_format_contract_pins_named_artifact_edges():
     from tests.cross_matrix import run_model_artifact_format_contract as gate
 
     required = gate.REQUIRED_ARTIFACT_TEST_MARKERS
+    sources = set(gate.SOURCE_HASH_FILES)
 
     assert "test_load_jang_model_accepts_affine_weight_format" in required
     assert "test_dsv4_static_audit_reports_mtp_drop_contract" in required
@@ -16,6 +17,14 @@ def test_model_artifact_format_contract_pins_named_artifact_edges():
     assert "test_jang_quant_mode_supports_mxfp8_metadata" in required
     assert "test_qwen36_plain_mlx_4bit_keeps_hybrid_cache_without_jang_or_mxfp" in required
     assert "test_native_mtp_detection_uses_weights_not_path_name" in required
+
+    assert "vmlx_engine/loaders/load_jangtq.py" in sources
+    assert "vmlx_engine/loaders/load_jangtq_vlm.py" in sources
+    assert "vmlx_engine/loaders/load_jangtq_kimi_vlm.py" in sources
+    assert "vmlx_engine/loaders/load_jangtq_dsv4.py" in sources
+    assert "vmlx_engine/loaders/load_zaya.py" in sources
+    assert "vmlx_engine/loaders/load_laguna.py" in sources
+    assert "vmlx_engine/loaders/load_mistral3.py" in sources
 
     command = gate.COMMANDS["model_artifact_format_pytest"]
     assert "-vv" in command
