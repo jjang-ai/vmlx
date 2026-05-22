@@ -31,10 +31,46 @@ SOURCE_HASH_FILES = (
     "panel/src/main/ipc/chat.ts",
     "panel/src/main/sessions.ts",
     "panel/src/main/server/api-gateway.ts",
+    "panel/src/main/api-gateway.ts",
     "panel/src/shared/sessionConfigMigrations.ts",
     "panel/tests/request-builder.test.ts",
     "panel/tests/api-gateway-ollama-behavior.test.ts",
     "panel/tests/chat-override-policy.test.ts",
+    "tests/cross_matrix/run_api_surface_contract.py",
+    "tests/test_api_surface_contract.py",
+)
+
+REQUIRED_NESTED_API_CHECKS = (
+    "openai_chat_sampling_kwargs",
+    "responses_sampling_kwargs",
+    "request_output_caps_override_server_default",
+    "prompt_context_caps_stay_separate_from_output_caps",
+    "anthropic_bundle_defaults",
+    "ollama_adapter_surface",
+    "dsv4_native_cache_status",
+    "dsv4_dsml_parser_residue_rejection",
+    "dsv4_dsml_valid_tool_call_preserved",
+    "dsv4_suppressed_tool_markup_not_stored",
+    "zaya_typed_cca_status",
+    "hybrid_ssm_partial_reuse",
+    "turboquant_kv_runtime_contract",
+    "turboquant_disk_roundtrip",
+    "no_generic_tq_on_hybrid_ssm",
+    "all_required_named_rows_ran",
+)
+
+REQUIRED_PANEL_API_TEST_MARKERS = (
+    "omits sampling and token defaults when unset so the engine resolves bundle metadata",
+    "does not invent sampler or output-budget values when chat overrides are absent",
+    "keeps per-chat maxTokens as output budget only, never prompt context",
+    "omits invalid persisted maxTokens values instead of poisoning Chat Completions",
+    "keeps Responses maxTokens as output budget only, never prompt context",
+    "omits invalid persisted maxTokens values instead of poisoning Responses",
+    "preserves DSV4 Responses max_output_tokens for Max thinking",
+    "Hy3 local Responses Auto omits enable_thinking and reasoning_effort",
+    "omits unset and disabled sampling sentinels without dropping explicit overrides",
+    "chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap",
+    "chat:setOverrides rejects non-finite or non-numeric maxTokens instead of poisoning server defaults",
 )
 
 COMMANDS: dict[str, tuple[Path, list[str]]] = {
@@ -56,6 +92,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "tests/request-builder.test.ts",
             "tests/api-gateway-ollama-behavior.test.ts",
             "tests/chat-override-policy.test.ts",
+            "--reporter=verbose",
         ],
     ),
 }
@@ -107,6 +144,7 @@ def _run(root: Path, name: str, cwd_rel: Path, cmd: list[str]) -> dict[str, Any]
         "returncode": proc.returncode,
         "elapsed_sec": round(time.monotonic() - started, 3),
         "counts": _parse_counts(proc.stdout),
+        "stdout": proc.stdout,
         "stdout_tail": proc.stdout.splitlines()[-80:],
     }
 
@@ -126,43 +164,76 @@ def build_artifact(root: Path) -> dict[str, Any]:
     failed = [name for name, result in results.items() if result["returncode"] != 0]
     nested = _load_nested(root)
     nested_checks = nested.get("checks", {})
+    nested_missing_markers = nested.get("missing_markers", [])
+    panel_stdout = str(results["panel_api_request_builders"].get("stdout", ""))
+    missing_panel_markers = [
+        marker for marker in REQUIRED_PANEL_API_TEST_MARKERS if marker not in panel_stdout
+    ]
+    missing_nested_checks = [
+        name for name in REQUIRED_NESTED_API_CHECKS if nested_checks.get(name) is not True
+    ]
     panel_passed = results["panel_api_request_builders"]["counts"]["passed"] or 0
     checks = {
         "openai_chat_completions_sampling_defaults": (
-            not failed and nested_checks.get("openai_chat_sampling_kwargs") is True
+            not failed and "openai_chat_sampling_kwargs" not in missing_nested_checks
         ),
         "openai_responses_sampling_defaults": (
-            not failed and nested_checks.get("responses_sampling_kwargs") is True
+            not failed and "responses_sampling_kwargs" not in missing_nested_checks
         ),
         "chat_and_responses_output_caps_override_server_default": (
             not failed
-            and nested_checks.get("request_output_caps_override_server_default") is True
+            and "request_output_caps_override_server_default" not in missing_nested_checks
         ),
         "prompt_context_caps_stay_separate_from_output_caps": (
             not failed
-            and nested_checks.get("prompt_context_caps_stay_separate_from_output_caps") is True
+            and "prompt_context_caps_stay_separate_from_output_caps" not in missing_nested_checks
         ),
         "anthropic_adapter_bundle_defaults": (
-            not failed and nested_checks.get("anthropic_bundle_defaults") is True
+            not failed and "anthropic_bundle_defaults" not in missing_nested_checks
         ),
         "ollama_adapter_streaming_done_behavior": (
-            not failed and nested_checks.get("ollama_adapter_surface") is True
+            not failed and "ollama_adapter_surface" not in missing_nested_checks
         ),
-        "panel_request_builder_sampling_and_output_overrides": not failed and panel_passed >= 53,
-        "panel_ollama_gateway_omits_disabled_sentinels": not failed and panel_passed >= 53,
-        "panel_chat_override_policy_preserves_explicit_values": not failed and panel_passed >= 53,
+        "server_cache_and_tool_surfaces_named": (
+            not failed and not missing_nested_checks and not nested_missing_markers
+        ),
+        "panel_request_builder_sampling_and_output_overrides": (
+            not failed
+            and "omits sampling and token defaults when unset so the engine resolves bundle metadata" not in missing_panel_markers
+            and "keeps per-chat maxTokens as output budget only, never prompt context" not in missing_panel_markers
+            and "keeps Responses maxTokens as output budget only, never prompt context" not in missing_panel_markers
+            and panel_passed >= 53
+        ),
+        "panel_ollama_gateway_omits_disabled_sentinels": (
+            not failed
+            and "omits unset and disabled sampling sentinels without dropping explicit overrides" not in missing_panel_markers
+            and panel_passed >= 53
+        ),
+        "panel_chat_override_policy_preserves_explicit_values": (
+            not failed
+            and "chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap" not in missing_panel_markers
+            and "chat:setOverrides rejects non-finite or non-numeric maxTokens instead of poisoning server defaults" not in missing_panel_markers
+            and panel_passed >= 53
+        ),
+    }
+    public_results = {
+        name: {key: value for key, value in result.items() if key != "stdout"}
+        for name, result in results.items()
     }
     return {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "status": "pass" if all(checks.values()) else "fail",
         "checks": checks,
         "failed": failed,
+        "missing_nested_checks": missing_nested_checks,
+        "missing_nested_markers": nested_missing_markers,
+        "missing_panel_markers": missing_panel_markers,
         "source_hashes": {
             rel: _sha256(root / rel)
             for rel in SOURCE_HASH_FILES
             if (root / rel).exists()
         },
-        "results": results,
+        "results": public_results,
         "nested_api_cache_status": nested.get("status"),
     }
 
@@ -179,6 +250,9 @@ def main() -> int:
     print(args.out)
     print(f"status={artifact['status']}")
     print("failed=" + json.dumps(artifact["failed"]))
+    print("missing_nested_checks=" + json.dumps(artifact["missing_nested_checks"]))
+    print("missing_nested_markers=" + json.dumps(artifact["missing_nested_markers"]))
+    print("missing_panel_markers=" + json.dumps(artifact["missing_panel_markers"]))
     for name, result in artifact["results"].items():
         counts = result["counts"]
         print(

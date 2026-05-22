@@ -28,12 +28,44 @@ DEFAULT_OUT = Path("build/current-api-cache-contract-proof-20260521.json")
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
     "vmlx_engine/tool_parsers/dsml_tool_parser.py",
+    "vmlx_engine/api/anthropic_adapter.py",
+    "vmlx_engine/api/ollama_adapter.py",
     "tests/test_engine_audit.py",
     "tests/test_batching.py",
     "tests/test_mllm_scheduler_cache.py",
     "tests/test_tq_disk_cache.py",
     "tests/test_dsml_tool_parser.py",
     "tests/test_tool_format.py",
+    "tests/cross_matrix/run_noheavy_api_cache_contract.py",
+)
+
+REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
+    "test_chat_and_responses_log_and_forward_supported_sampling_kwargs",
+    "test_request_output_caps_override_server_default_without_touching_context_cap",
+    "test_anthropic_messages_omitted_max_tokens_uses_bundle_default",
+    "test_ollama_streaming_suppresses_duplicate_done_chunks",
+    "test_chat_completions_nonstreaming",
+    "test_responses_nonstreaming",
+    "test_chat_completions_streaming",
+    "test_responses_streaming",
+    "test_responses_nonstreaming_forwards_tc_id",
+    "test_cache_stats_endpoint_projects_cache_reuse_skip_telemetry",
+    "test_native_cache_status_reports_dsv4_separately_from_tq_kv",
+    "test_native_cache_status_reports_zaya_typed_cca",
+    "test_dsml_issue_165_server_tool_call_arguments_are_not_empty_or_raw",
+    "test_dsv4_encoder_keeps_function_arguments_as_dsml_params",
+    "test_dsv4_encoder_preserves_code_identifiers_on_direct_chat_rail",
+    "test_responses_extracts_suppressed_reasoning_tool_calls_before_finalize",
+    "test_visible_text_around_invoke_preserved_no_dsml_leak",
+    "test_tools_called_implies_no_dsml_in_content",
+    "test_server_repairs_dsv4_partial_tool_intent_from_request_args",
+    "test_dsv4_fallback_tool_prompt_uses_canonical_tool_calls_wrapper",
+    "test_memory_pressure_partially_reuses_hybrid_ssm_with_aligned_checkpoint",
+    "test_prompt_disk_l2_hit_backfills_paged_cache_for_partial_reuse",
+    "test_hybrid_ssm_checkpoint_alignment_falls_back_to_exact_aligned_state",
+    "test_serialize_tq_cache_mixed_hybrid",
+    "test_tq_tensors_roundtrip_via_safetensors",
+    "test_hybrid_ssm_capture_stores_block_aligned_checkpoints",
 )
 
 COMMANDS: dict[str, list[str]] = {
@@ -42,6 +74,7 @@ COMMANDS: dict[str, list[str]] = {
         "-m",
         "pytest",
         "-q",
+        "-vv",
         "tests/test_engine_audit.py",
         "-k",
         (
@@ -67,15 +100,17 @@ COMMANDS: dict[str, list[str]] = {
         "-m",
         "pytest",
         "-q",
+        "-vv",
         "tests/test_batching.py",
         "-k",
-        "dsv4 or hybrid_ssm or cache_detail",
+        "dsv4 or hybrid_ssm or cache_detail or prompt_disk_l2",
     ],
     "tq_and_mllm_cache_contracts": [
         sys.executable,
         "-m",
         "pytest",
         "-q",
+        "-vv",
         "tests/test_mllm_scheduler_cache.py",
         "tests/test_tq_disk_cache.py",
         "-k",
@@ -86,6 +121,7 @@ COMMANDS: dict[str, list[str]] = {
         "-m",
         "pytest",
         "-q",
+        "-vv",
         "tests/test_dsml_tool_parser.py",
         "tests/test_tool_format.py",
         "tests/test_engine_audit.py",
@@ -146,6 +182,7 @@ def _run_command(name: str, cmd: list[str], cwd: Path) -> dict[str, Any]:
         "returncode": proc.returncode,
         "elapsed_sec": round(time.monotonic() - started, 3),
         "counts": _parse_counts(output),
+        "stdout": output,
         "stdout_tail": output.splitlines()[-40:],
     }
 
@@ -163,33 +200,76 @@ def build_artifact(root: Path) -> dict[str, Any]:
         name: _run_command(name, cmd, root)
         for name, cmd in COMMANDS.items()
     }
+    stdout = "\n".join(str(result.get("stdout", "")) for result in commands.values())
+    missing_markers = [
+        marker
+        for marker in REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS
+        if marker not in stdout
+    ]
     api_ok = commands["api_route_contracts"]["returncode"] == 0
     scheduler_ok = commands["scheduler_cache_contracts"]["returncode"] == 0
     tq_ok = commands["tq_and_mllm_cache_contracts"]["returncode"] == 0
     dsml_ok = commands["dsv4_dsml_tool_contracts"]["returncode"] == 0
     checks = {
-        "openai_chat_sampling_kwargs": api_ok,
-        "responses_sampling_kwargs": api_ok,
-        "request_output_caps_override_server_default": api_ok,
-        "prompt_context_caps_stay_separate_from_output_caps": api_ok,
-        "anthropic_bundle_defaults": api_ok,
-        "ollama_adapter_surface": api_ok,
-        "dsv4_native_cache_status": api_ok and scheduler_ok,
-        "dsv4_dsml_parser_residue_rejection": dsml_ok,
-        "dsv4_dsml_valid_tool_call_preserved": dsml_ok,
-        "dsv4_suppressed_tool_markup_not_stored": dsml_ok,
-        "zaya_typed_cca_status": api_ok,
-        "hybrid_ssm_partial_reuse": scheduler_ok and tq_ok,
-        "turboquant_kv_runtime_contract": tq_ok,
-        "turboquant_disk_roundtrip": tq_ok,
+        "openai_chat_sampling_kwargs": (
+            api_ok and "test_chat_and_responses_log_and_forward_supported_sampling_kwargs" not in missing_markers
+        ),
+        "responses_sampling_kwargs": (
+            api_ok and "test_chat_and_responses_log_and_forward_supported_sampling_kwargs" not in missing_markers
+        ),
+        "request_output_caps_override_server_default": (
+            api_ok and "test_request_output_caps_override_server_default_without_touching_context_cap" not in missing_markers
+        ),
+        "prompt_context_caps_stay_separate_from_output_caps": (
+            api_ok and "test_request_output_caps_override_server_default_without_touching_context_cap" not in missing_markers
+        ),
+        "anthropic_bundle_defaults": (
+            api_ok and "test_anthropic_messages_omitted_max_tokens_uses_bundle_default" not in missing_markers
+        ),
+        "ollama_adapter_surface": (
+            api_ok and "test_ollama_streaming_suppresses_duplicate_done_chunks" not in missing_markers
+        ),
+        "dsv4_native_cache_status": (
+            api_ok and scheduler_ok and "test_native_cache_status_reports_dsv4_separately_from_tq_kv" not in missing_markers
+        ),
+        "dsv4_dsml_parser_residue_rejection": (
+            dsml_ok and "test_tools_called_implies_no_dsml_in_content" not in missing_markers
+        ),
+        "dsv4_dsml_valid_tool_call_preserved": (
+            dsml_ok and "test_dsv4_encoder_keeps_function_arguments_as_dsml_params" not in missing_markers
+        ),
+        "dsv4_suppressed_tool_markup_not_stored": (
+            dsml_ok and "test_responses_extracts_suppressed_reasoning_tool_calls_before_finalize" not in missing_markers
+        ),
+        "zaya_typed_cca_status": (
+            api_ok and "test_native_cache_status_reports_zaya_typed_cca" not in missing_markers
+        ),
+        "hybrid_ssm_partial_reuse": (
+            scheduler_ok
+            and tq_ok
+            and "test_memory_pressure_partially_reuses_hybrid_ssm_with_aligned_checkpoint" not in missing_markers
+            and "test_hybrid_ssm_capture_stores_block_aligned_checkpoints" not in missing_markers
+        ),
+        "turboquant_kv_runtime_contract": (
+            tq_ok and "test_serialize_tq_cache_mixed_hybrid" not in missing_markers
+        ),
+        "turboquant_disk_roundtrip": (
+            tq_ok and "test_tq_tensors_roundtrip_via_safetensors" not in missing_markers
+        ),
         "no_generic_tq_on_hybrid_ssm": api_ok,
+        "all_required_named_rows_ran": not missing_markers,
+    }
+    public_commands = {
+        name: {key: value for key, value in result.items() if key != "stdout"}
+        for name, result in commands.items()
     }
     return {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "status": "pass" if all(checks.values()) else "open",
         "checks": checks,
+        "missing_markers": missing_markers,
         "source_hashes": source_hashes(root),
-        "commands": commands,
+        "commands": public_commands,
     }
 
 
@@ -204,6 +284,7 @@ def main() -> int:
     args.out.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
     print(args.out)
     print(f"status={artifact['status']}")
+    print("missing_markers=" + json.dumps(artifact["missing_markers"]))
     for name, result in artifact["commands"].items():
         counts = result["counts"]
         print(
