@@ -6655,21 +6655,44 @@ class MLLMBatchGenerator:
             # ---- 3. Snapshot per-row SSM state (hybrid layers only) ----
             ssm_snapshot = self._snapshot_ssm_per_row(batch.cache)
 
-            # ---- 4. Batched verify forward ----
+            # ---- 4. Verify forward — sequential K+1 single-token forwards ----
+            #
+            # CORRECTNESS (live finding from PR #171):
+            #   `self.language_model(verify_input, cache=cache)` with shape
+            #   (B, K+1) produces DIFFERENT logits than calling the model
+            #   K+1 times with shape (B, 1) on the same starting cache.
+            #   Verified via tests/benchmark/diagnose_multi_token_forward.py:
+            #   on smolvlm, max-abs logit diff at position j=2 was 0.375,
+            #   argmax flipped between paths (multi=30, sequential=36).
+            #
+            # ROOT CAUSE (suspected): mlx_lm / mlx_vlm transformer __call__
+            # for T>1 builds attention mask via create_attention_mask, but
+            # something in the multi-token path leaks future positions into
+            # earlier-position outputs. Cache writes (keys) match between
+            # paths (max_diff=0), so the divergence is in the
+            # forward-output computation, not cache state.
+            #
+            # FIX: K+1 sequential single-token forwards. Same code path as
+            # standalone _step uses, so byte-equal by construction. Cost:
+            # K+1× model forwards per spec step instead of 1. PLD net-gain
+            # holds when acceptance > ~1/(K+1) due to fixed kernel-launch
+            # overhead; auto-disable (VMLX_PLD_MIN_ACCEPTANCE, default 0.30)
+            # protects throughput on bad-fit workloads.
             cache = _wrap_batch_caches(batch.cache)
-            output = self.language_model(verify_input, cache=cache)
-            logits = output.logits if hasattr(output, "logits") else output
-            # logits shape: (B, K+1, vocab) — but some VLM wrappers return only
-            # (B, 1, vocab) at decode. Detect + guard.
-            _logits_shape = tuple(logits.shape)
-            if len(_logits_shape) != 3 or _logits_shape[1] < K + 1:
-                logger.warning(
-                    "[PLD] verify forward returned logits shape %s (expected "
-                    "(B, K+1=%d, V)); falling back to _step for this step.",
-                    _logits_shape, K + 1,
-                )
-                # Fall back: SSM may be in advanced state, KV too. Use _step.
-                return self._step(batch.y[:, None], batch.cache)
+            per_position_logits = []
+            for j in range(K + 1):
+                token_j = verify_input[:, j : j + 1]
+                out_j = self.language_model(token_j, cache=cache)
+                logits_j = out_j.logits if hasattr(out_j, "logits") else out_j
+                # logits_j shape: (B, 1, V). Slice last position only — for
+                # decode-mode T=1, this is the only meaningful position.
+                if logits_j.ndim == 3 and logits_j.shape[1] >= 1:
+                    per_position_logits.append(logits_j[:, -1:, :])
+                else:
+                    per_position_logits.append(logits_j)
+            logits = mx.concatenate(per_position_logits, axis=1)
+            # logits shape: (B, K+1, V) — same shape as the old multi-token
+            # forward, so downstream accept/reject logic is unchanged.
 
             # ---- 5. Per-row greedy accept/reject ----
             predicted = mx.argmax(logits, axis=-1)

@@ -122,36 +122,46 @@ class _FakeBatch:
 # ---------------------------------------------------------------------------
 
 
-def test_shape_guard_falls_back_when_t_too_small():
-    """When language_model returns logits shape (B, 1, V) but we passed
-    K+1=3 tokens, fall back to _step instead of crashing in accept loop."""
-    model = _ShapeModel(t_dim=1)  # returns (B, 1, V) — too short
+def test_sequential_verify_calls_model_k_plus_1_times():
+    """PR #172: sequential verify replaces multi-token forward.
+
+    For K=2, _step_speculative should now invoke language_model K+1=3 times
+    with input shape (B, 1) each. Each call advances cache by 1 (same as
+    standalone _step). This is the correctness fix for the multi-token
+    forward divergence found on smolvlm.
+    """
+    model = _ShapeModel(t_dim=1)  # returns (B, 1, V) — correct for T=1 input
     gen = _make_gen(model)
     req = _FakeReq()
     cache = [_FakeKVLayer(B=1, max_seq=10, offsets=[10])]
     batch = _FakeBatch([req], cache, y=mx.array([5]))
 
-    # Should not raise; fallback to _step (zeros)
     sampled, _ = gen._step_speculative(batch, K=2)
     assert sampled.shape == (1,)
-    # _step was called as fallback (model was called once, then fallback)
-    assert model.calls == 1
+    # Sequential verify: K+1 = 3 forward calls (replaces the old single
+    # multi-token forward).
+    assert model.calls == 3
 
 
-def test_shape_guard_passes_with_correct_shape():
-    """Correct shape (B, K+1, V) doesn't trigger fallback."""
-    # Model returns shape (B, K+1, V). For K=2 → (1, 3, 100).
-    model = _ShapeModel(t_dim=3)
+def test_sequential_verify_advances_cache_offset_by_k_plus_1():
+    """Each of the K+1 sequential forwards advances cache.offset by 1.
+
+    Net offset advance per spec round = K+1 (same as old multi-token).
+    """
+    model = _ShapeModel(t_dim=1)
     gen = _make_gen(model)
     req = _FakeReq()
-    cache = [_FakeKVLayer(B=1, max_seq=10, offsets=[10])]
+    # B=1, starting offset 10
+    layer = _FakeKVLayer(B=1, max_seq=10, offsets=[10])
+    cache = [layer]
     batch = _FakeBatch([req], cache, y=mx.array([5]))
+    K = 2
 
-    sampled, _ = gen._step_speculative(batch, K=2)
-    # No fallback exception — _step_speculative path completed
-    # All-zero logits → argmax=0 → drafts unlikely to match → full reject
-    # Pure-attention full-reject → primary = correction = 0
-    assert int(sampled[0].item()) == 0
+    gen._step_speculative(batch, K=K)
+    # Initial offset 10 + K+1=3 forwards = 13 post-forward
+    # Then full-reject rollback rewinds by K=2 → offset 11 (= N+1)
+    # (model returns all-zero logits → argmax=0 → no drafts match → full reject)
+    assert layer.offset.tolist()[0] == 10 + 1  # = pre_verify + 1 (seed processed)
 
 
 # ---------------------------------------------------------------------------

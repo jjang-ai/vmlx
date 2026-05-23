@@ -36,15 +36,20 @@ class _MockLanguageModel:
     Records calls so tests can assert behaviour. Logits shape (B, T, V) where
     V is a small toy vocab (e.g. 100). The argmax of each position is
     configurable per call so tests can drive accept/reject.
+
+    UPDATED for sequential verify (PR #172): _step_speculative now calls
+    the model K+1 times with T=1. The model tracks a global position
+    counter `_seq_pos` across calls within one verify cycle, returning
+    argmax_plan[i][_seq_pos] for the single position each call.
+    Counter resets when input length T > 1 (legacy multi-token tests).
     """
 
     def __init__(self, argmax_plan):
         # argmax_plan: list of lists — argmax_plan[i][j] is the predicted
-        # token id at row i, position j of the most recent forward call.
-        # On call, the model returns logits where the specified IDs have
-        # value 100.0 and others have 0.0 (deterministic argmax).
+        # token id at row i, position j of the most recent verify cycle.
         self.argmax_plan = argmax_plan
         self.calls: List[Tuple[mx.array, object]] = []
+        self._seq_pos = 0  # incremented across T=1 calls
 
     def __call__(self, input_tokens, cache=None):
         self.calls.append((input_tokens, cache))
@@ -52,7 +57,6 @@ class _MockLanguageModel:
         # Simulate real model behaviour: cache layers' offsets advance by T.
         if cache is not None:
             for layer in cache:
-                # Trimmable layers (KV) — advance offset by T per row
                 if hasattr(layer, "is_trimmable") and layer.is_trimmable():
                     if hasattr(layer, "offset"):
                         if isinstance(layer.offset, mx.array):
@@ -64,12 +68,24 @@ class _MockLanguageModel:
                                 pass
         V = 100
         logits_data = []
+        # Determine which positions of argmax_plan to use:
+        # - T == 1: return position [_seq_pos] from plan; increment counter
+        # - T > 1 (legacy): return positions [0..T-1] from plan; no counter use
+        if T == 1:
+            pos_indices = [self._seq_pos]
+            self._seq_pos += 1
+        else:
+            pos_indices = list(range(T))
+            self._seq_pos = T  # reset for any subsequent T=1 calls
         for i in range(B):
             row = []
-            for j in range(T):
+            for plan_j in pos_indices:
                 vec = [0.0] * V
-                if i < len(self.argmax_plan) and j < len(self.argmax_plan[i]):
-                    target = self.argmax_plan[i][j]
+                if (
+                    i < len(self.argmax_plan)
+                    and plan_j < len(self.argmax_plan[i])
+                ):
+                    target = self.argmax_plan[i][plan_j]
                     if 0 <= target < V:
                         vec[target] = 100.0
                 row.append(vec)
@@ -227,7 +243,8 @@ def test_full_accept_pure_attention():
 
     sampled, _ = gen._step_speculative(batch, K=2)
 
-    assert len(model.calls) == 1
+    # Sequential verify (PR #172): K+1=3 single-token forwards
+    assert len(model.calls) == 3
     # Primary is bonus
     assert int(sampled[0].item()) == 77
     # Extras = both accepted drafts
