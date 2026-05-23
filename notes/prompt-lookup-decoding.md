@@ -612,3 +612,137 @@ expected net improvement is **+5–10%** on top of existing PLD on hybrid models
 ```
 
 `[PLD:3b1f]` summary lines include `replay=emitted/attempts fail=N` when replay is active.
+
+---
+
+## MLLM Batched PLD (PRs #149/#150 — issue #134/#135)
+
+### Background
+
+The simple-engine PLD path (above) operates only on requests served via the
+non-batched `Scheduler` class. The user's typical workload (`vmlx serve ...
+--continuous-batching` with an MLLM-detected model) uses `MLLMScheduler` +
+`MLLMBatchGenerator`, which previously had **zero PLD code**. PR #150
+ports PLD into that batched MLLM path. PR #149's `replay_ssm_forward`
+helper is reused for hybrid SSM rollback.
+
+### Dispatch path
+
+`MLLMBatchGenerator._next()` (vmlx_engine/mllm_batch_generator.py) routes
+each step to one of three paths:
+
+| Condition | Path | When |
+|-----------|------|------|
+| `VMLX_ENABLE_BATCHED_SPEC=1` + `--speculative-model` set | `_step_speculative` with draft model | Draft spec configured |
+| `config.pld_enabled` AND model is non-hybrid (or hybrid opt-in) | `_step_speculative` with PLD candidate source | `--enable-pld` set |
+| Otherwise | `_step` (standard 1-token forward) | Default |
+
+`MLLMScheduler.__init__` calls `batch_generator.configure_pld_spec(enabled, excluded_token_ids)`
+at startup. The excluded-token set (image-pad, vision markers, pad) is built from
+tokenizer/processor attributes — same V0.6 filter as PR #149's simple-engine path.
+
+### In-batch verify
+
+`_step_speculative(batch, K)` runs **one** target-model forward on input shape
+(B, K+1) where each row is `[seed_i, d0_i, ..., d_{K-1}_i]`. Per-row drafts
+come from a per-request `NgramIndex` built lazily on `MLLMBatchRequest._pld_ngram_index`.
+Cache snapshot is captured BEFORE the verify forward via `_snapshot_ssm_per_row`.
+
+### Per-row rollback
+
+After accept/reject decided per row:
+- **Full accept (n_accept == K)**: no rollback. Cache state correct at N+K+1.
+- **Pure-attention partial/full reject**: per-row KV offset rewind by (K - n_accept).
+- **Hybrid partial/full reject**: per-row replay forward of `[seed, d0..d_{n-1}]`
+  via `_per_row_replay_forward`. Snapshot restores SSM to pre-verify; replay
+  advances KV+SSM to N+1+n_accept. Write-back via `_writeback_kv_row` /
+  `_writeback_ssm_row` (B=1 truncates the tensor; B>1 uses concatenate-per-row).
+
+### Hybrid Mamba limitation (known)
+
+For hybrid models with Mamba/GatedDeltaNet layers (Qwen3.5/3.6 family),
+PLD is **default-disabled**. The Mamba parallel-scan kernel
+(`mlx_lm/models/gated_delta.py:gated_delta_kernel`) produces different
+finite-precision state than the recurrent path used during per-row replay.
+Drift accumulates across low-acceptance rounds and corrupts decode output
+(observed live: `"return        return 0"`, `"fibonacci fibonacci(n(n - -  1)"`).
+
+Opt-in via `VMLX_ENABLE_MLLM_PLD_HYBRID=1` is for diagnostic only; will
+produce non-deterministic output on hybrid.
+
+**Deferred fix proposal** (not implemented): attention-only verify (issue #134
+original design). Skip SSM layers during verify, advance SSM separately
+through accepted prefix via sequential single-token forward. Adds K+1×
+Mamba per-accept cost. Expected gain on hybrid: 0 to +5% at high acceptance
+(sequential SSM cost dominates the savings). Decision criteria for
+implementing:
+- Implement if: a different hybrid model (<50% SSM layers) shows clear ROI
+- Don't if: pure-attention MLLM coverage is sufficient for production
+
+### Configuration
+
+| Env var | Default | Effect |
+|---------|---------|--------|
+| `VMLX_DISABLE_PLD_REPLAY=1` | OFF (replay enabled) | Disable per-row replay; reverts to correction-only on partial accept |
+| `VMLX_ENABLE_MLLM_PLD_HYBRID=1` | OFF | Opt-in PLD on hybrid (known output drift) |
+| `VMLX_PLD_MIN_ACCEPTANCE` | 0.30 | Adaptive auto-disable threshold (EMA acceptance rate) |
+| `VMLX_PLD_WARMUP_STEPS` | 20 | Steps before auto-disable can trigger |
+| `VMLX_PLD_PROBE_INTERVAL` | 200 | Steps between cooldown probes |
+| `VMLX_PLD_DEBUG=N` | 0 | Dump first N spec attempts to /tmp/vmlx_pld_debug.log |
+
+### Telemetry
+
+`/health` exposes both simple-engine and batched-MLLM PLD counters:
+
+```json
+{
+  "pld_ssm_replay": {
+    "enabled": true,
+    "attempts": 142,
+    "emitted": 421,
+    "failures": 0
+  },
+  "speculative_decoding": {
+    "batched": {
+      "enabled": true,
+      "steps": 200,
+      "tokens_emitted": 350,
+      "acceptance_rate": 0.87
+    }
+  }
+}
+```
+
+Probing falls through: simple `Scheduler` first, then `MLLMScheduler`, then
+`MLLMBatchGenerator`. Whichever exposes `_pld_replay_enabled` wins.
+
+### Validation
+
+Layer 1 (unit, mock-based, ~95 tests):
+```bash
+pytest tests/test_pld_ssm_replay.py tests/test_prompt_lookup_filter.py \
+  tests/test_mllm_step_speculative.py tests/test_mllm_per_row_replay.py \
+  tests/test_mllm_pld_candidate_source.py tests/test_mllm_pld_auto_disable.py \
+  tests/test_mllm_pld_multi_stream.py tests/test_batched_speculative.py
+```
+
+Layer 2 (live byte-equality, requires a server):
+```bash
+# Start two vmlx servers on different ports with PLD off/on
+# Then:
+python tests/benchmark/test_pld_byte_equality_mllm.py \
+  --port-off 8080 --port-on 8081
+```
+
+Layer 3 (live benchmark on running server):
+```bash
+python tests/benchmark/test_pld_acceptance.py --port 8080
+# Then check: curl -s http://127.0.0.1:8080/health | grep -A5 pld_ssm_replay
+```
+
+### Reference
+
+- PR #149: simple-engine `_replay_ssm_forward` extracted to `vmlx_engine/utils/pld_replay.py`
+- PR #150: batched-MLLM `_step_speculative` + per-row primitives in `mllm_batch_generator.py`
+- PR #151: pure-attention MLLM live validation
+- PR #152: B>1 multi-stream validation (this file)
