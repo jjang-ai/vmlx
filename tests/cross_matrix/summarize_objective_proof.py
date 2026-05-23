@@ -80,6 +80,8 @@ QWEN_NATIVE_MTP_PACKAGED_PREFILL_SPEED_REL = "build/current-decode-speed-live-qw
 QWEN_NATIVE_MTP_PREFILL_TRACE_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace-isolated-20260523.json"
 QWEN_JANG_TEXT_BASELINE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-text-baseline-source-isolated-20260523.json"
 QWEN_NATIVE_MTP_NO_PREFIX_LOGITS_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-no-prefix-logits-20260523.json"
+QWEN_NATIVE_MTP_HYBRID_LONG_PREFIX_SPLIT_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-hybrid-long-prefix-split-20260523.json"
+QWEN_NATIVE_MTP_KVNONE_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-kvnone-20260523.json"
 QWEN_NATIVE_MTP_AB_REL = "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json"
 DSV4_DEFAULT_CACHE_TOOL_LOOP_REL = "build/current-dsv4-default-cache-tool-loop/result.json"
 DSV4_QUALITY_CLEARANCE_CHECKS = (
@@ -971,24 +973,36 @@ def _no_prefix_logits_trial_detail(payload: dict[str, Any]) -> dict[str, Any]:
     return details
 
 
+def _qwen_pp_trial_detail(payload: dict[str, Any]) -> dict[str, Any]:
+    ok, details = _speed_artifact_detail(payload)
+    details["clears_prompt_processing_floor"] = ok
+    return details
+
+
 def _prompt_processing_speed_detail(
     text_payload: dict[str, Any],
     mtp_prefill_payload: dict[str, Any],
     mtp_packaged_payload: dict[str, Any],
     trace_payload: dict[str, Any],
     no_prefix_logits_payload: dict[str, Any],
+    hybrid_long_prefix_split_payload: dict[str, Any],
+    kvnone_payload: dict[str, Any],
 ) -> tuple[bool, dict[str, Any]]:
     text_ok, text_details = _speed_artifact_detail(text_payload)
     mtp_ok, mtp_details = _speed_artifact_detail(mtp_prefill_payload)
     mtp_packaged_ok, mtp_packaged_details = _speed_artifact_detail(mtp_packaged_payload)
     trace_details = _prefill_trace_detail(trace_payload)
     no_prefix_logits_details = _no_prefix_logits_trial_detail(no_prefix_logits_payload)
+    hybrid_long_prefix_split_details = _qwen_pp_trial_detail(hybrid_long_prefix_split_payload)
+    kvnone_details = _qwen_pp_trial_detail(kvnone_payload)
     return text_ok and mtp_ok and mtp_packaged_ok, {
         "text_loader": text_details,
         "native_mtp_prefill_source_native_wheels": mtp_details,
         "native_mtp_prefill_packaged_compat_wheels": mtp_packaged_details,
         "prefill_trace": trace_details,
         "native_mtp_no_prefix_logits_trial": no_prefix_logits_details,
+        "native_mtp_hybrid_long_prefix_split_trial": hybrid_long_prefix_split_details,
+        "native_mtp_kvnone_trial": kvnone_details,
     }
 
 
@@ -1031,6 +1045,8 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     qwen_native_mtp_packaged_prefill_speed = _load(root, QWEN_NATIVE_MTP_PACKAGED_PREFILL_SPEED_REL)
     qwen_native_mtp_prefill_trace = _load(root, QWEN_NATIVE_MTP_PREFILL_TRACE_REL)
     qwen_native_mtp_no_prefix_logits = _load(root, QWEN_NATIVE_MTP_NO_PREFIX_LOGITS_REL)
+    qwen_native_mtp_hybrid_long_prefix_split = _load(root, QWEN_NATIVE_MTP_HYBRID_LONG_PREFIX_SPLIT_REL)
+    qwen_native_mtp_kvnone = _load(root, QWEN_NATIVE_MTP_KVNONE_REL)
     qwen_native_mtp_ab = _load(root, QWEN_NATIVE_MTP_AB_REL)
 
     requirements: list[dict[str, Any]] = []
@@ -1475,6 +1491,8 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         qwen_native_mtp_packaged_prefill_speed,
         qwen_native_mtp_prefill_trace,
         qwen_native_mtp_no_prefix_logits,
+        qwen_native_mtp_hybrid_long_prefix_split,
+        qwen_native_mtp_kvnone,
     )
     _add(
         requirements,
@@ -1486,6 +1504,8 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             QWEN_NATIVE_MTP_PACKAGED_PREFILL_SPEED_REL,
             QWEN_NATIVE_MTP_PREFILL_TRACE_REL,
             QWEN_NATIVE_MTP_NO_PREFIX_LOGITS_REL,
+            QWEN_NATIVE_MTP_HYBRID_LONG_PREFIX_SPLIT_REL,
+            QWEN_NATIVE_MTP_KVNONE_REL,
         ],
         caveat=(
             "Fresh isolated evidence shows native-MTP decode is good and the "

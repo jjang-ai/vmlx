@@ -721,6 +721,16 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path,
+        "build/current-decode-speed-live-qwen27-jang4m-mtp-hybrid-long-prefix-split-20260523.json",
+        mtp_speed_base,
+    )
+    _write_json(
+        tmp_path,
+        "build/current-decode-speed-live-qwen27-jang4m-mtp-kvnone-20260523.json",
+        mtp_speed_base,
+    )
+    _write_json(
+        tmp_path,
         "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json",
         {
             "speedup_vs_baseline": 1.83,
@@ -1642,6 +1652,68 @@ def test_objective_proof_digest_surfaces_qwen_no_prefix_logits_trial(tmp_path):
     assert trial["status"] == "review"
     assert trial["min_pp_wall_tok_s"] == 256.75
     assert trial["clears_prompt_processing_floor"] is False
+
+
+def test_objective_proof_digest_surfaces_qwen_vlm_route_ab_trials(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    mtp_prefill = tmp_path / "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill2048-source-isolated-20260523.json"
+    mtp_payload = json.loads(mtp_prefill.read_text(encoding="utf-8"))
+    mtp_payload["results"][0]["status"] = "review"
+    mtp_payload["results"][0]["notes"] = ["PP below expected 600.00: 286.56"]
+    mtp_payload["results"][0]["pp_rows"] = [
+        {"pp_wall_tok_s": 286.56, "loopish": False},
+    ]
+    mtp_prefill.write_text(json.dumps(mtp_payload), encoding="utf-8")
+    _write_json(
+        tmp_path,
+        "build/current-decode-speed-live-qwen27-jang4m-mtp-hybrid-long-prefix-split-20260523.json",
+        {
+            "results": [
+                {
+                    "status": "review",
+                    "notes": ["PP below expected 600.00: 288.29, 297.96, 284.58"],
+                    "pp_rows": [
+                        {"pp_wall_tok_s": 288.29, "loopish": False},
+                        {"pp_wall_tok_s": 297.96, "loopish": False},
+                        {"pp_wall_tok_s": 284.58, "loopish": False},
+                    ],
+                    "bundle_sampling": {"decode_tps_wall": 25.53, "loopish": False},
+                }
+            ]
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-decode-speed-live-qwen27-jang4m-mtp-kvnone-20260523.json",
+        {
+            "results": [
+                {
+                    "status": "review",
+                    "notes": ["PP below expected 600.00: 274.78, 285.30, 277.18"],
+                    "pp_rows": [
+                        {"pp_wall_tok_s": 274.78, "loopish": False},
+                        {"pp_wall_tok_s": 285.30, "loopish": False},
+                        {"pp_wall_tok_s": 277.18, "loopish": False},
+                    ],
+                    "bundle_sampling": {"decode_tps_wall": 25.47, "loopish": False},
+                }
+            ]
+        },
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Qwen 27B JANG_4M prompt-processing speed floor is release-cleared"]
+    prefix_split = row["details"]["native_mtp_hybrid_long_prefix_split_trial"]
+    kvnone = row["details"]["native_mtp_kvnone_trial"]
+    assert row["status"] == "open"
+    assert prefix_split["clears_prompt_processing_floor"] is False
+    assert prefix_split["min_pp_wall_tok_s"] == 284.58
+    assert kvnone["clears_prompt_processing_floor"] is False
+    assert kvnone["min_pp_wall_tok_s"] == 274.78
 
 
 def test_objective_proof_digest_accepts_qwen_native_mtp_decode_ab_when_equivalent_and_faster(tmp_path):
