@@ -176,6 +176,17 @@ EXPECTED_CURRENT_MAX_OUTPUT_CONTEXT_CHECKS = (
     "all_required_max_output_context_markers_present",
 )
 
+EXPECTED_CURRENT_PACKAGED_INTEGRITY_CHECKS = (
+    "release_gate_unit_contracts_pass",
+    "bundled_python_verify_passes",
+    "bundled_engine_version_matches_package_json",
+    "bundled_engine_hash_parity",
+    "bundled_jang_tools_hash_parity",
+    "bundled_console_scripts_relocatable",
+    "bundled_media_and_jang_dependencies_import",
+    "dry_release_gate_fails_only_on_known_objectives",
+)
+
 
 REQUIRED_RELEASE_DOMAINS = {
     "chat_ui_settings",
@@ -781,6 +792,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
     vl_media_matrix = _validate_current_vl_media_matrix_artifact(root)
     mcp_policy_matrix = _validate_current_mcp_policy_matrix_artifact(root)
     max_output_context_matrix = _validate_current_max_output_context_matrix_artifact(root)
+    packaged_integrity_matrix = _validate_current_packaged_integrity_matrix_artifact(root)
     regression_suite_ok = (
         regression_suite["status"] == "pass"
         and not regression_suite["failed_steps"]
@@ -865,6 +877,14 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         and not max_output_context_matrix["failed_checks"]
         and not max_output_context_matrix["missing_expected_checks"]
     )
+    packaged_integrity_matrix_ok = (
+        packaged_integrity_matrix["status"] == "pass"
+        and not packaged_integrity_matrix["failed"]
+        and not packaged_integrity_matrix["unexpected_open_requirements"]
+        and not packaged_integrity_matrix["missing_expected_open_requirements"]
+        and not packaged_integrity_matrix["failed_checks"]
+        and not packaged_integrity_matrix["missing_expected_checks"]
+    )
 
     return {
         "status": "pass"
@@ -884,6 +904,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
             and vl_media_matrix_ok
             and mcp_policy_matrix_ok
             and max_output_context_matrix_ok
+            and packaged_integrity_matrix_ok
         )
         else "fail",
         "missing": missing,
@@ -901,6 +922,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "vl_media_matrix": vl_media_matrix,
         "mcp_policy_matrix": mcp_policy_matrix,
         "max_output_context_matrix": max_output_context_matrix,
+        "packaged_integrity_matrix": packaged_integrity_matrix,
     }
 
 
@@ -1430,6 +1452,66 @@ def _validate_current_max_output_context_matrix_artifact(root: Path) -> dict[str
             "checks": checks,
             "missing_markers": [str(item) for item in payload.get("missing_markers", [])],
             "failed": [str(item) for item in payload.get("failed", [])],
+            "failed_checks": failed_checks,
+            "missing_expected_checks": missing_expected_checks,
+        }
+    )
+    return result
+
+
+def _validate_current_packaged_integrity_matrix_artifact(root: Path) -> dict[str, Any]:
+    artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["packaged-release-integrity"]
+    result: dict[str, Any] = {
+        "artifact": artifact,
+        "status": "missing",
+        "checks": {},
+        "failed": [],
+        "known_expected_release_gate_open_requirements": [],
+        "unexpected_open_requirements": [],
+        "missing_expected_open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS.copy(),
+        "failed_checks": list(EXPECTED_CURRENT_PACKAGED_INTEGRITY_CHECKS),
+        "missing_expected_checks": list(EXPECTED_CURRENT_PACKAGED_INTEGRITY_CHECKS),
+    }
+    path = root / artifact
+    if not path.exists():
+        return result
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - diagnostic helper reports load failures
+        result["status"] = f"load_error:{type(exc).__name__}"
+        return result
+
+    checks = {
+        str(name): bool(value)
+        for name, value in dict(payload.get("checks", {})).items()
+    }
+    open_requirements = [
+        str(item)
+        for item in payload.get("known_expected_release_gate_open_requirements", [])
+    ]
+    unexpected_open_requirements = [
+        item for item in open_requirements if item not in EXPECTED_CURRENT_OPEN_REQUIREMENTS
+    ]
+    missing_expected_open_requirements = [
+        item for item in EXPECTED_CURRENT_OPEN_REQUIREMENTS if item not in open_requirements
+    ]
+    missing_expected_checks = [
+        name for name in EXPECTED_CURRENT_PACKAGED_INTEGRITY_CHECKS if name not in checks
+    ]
+    failed_checks = [
+        name
+        for name in EXPECTED_CURRENT_PACKAGED_INTEGRITY_CHECKS
+        if checks.get(name) is not True
+    ]
+    result.update(
+        {
+            "status": str(payload.get("status")),
+            "checks": checks,
+            "failed": [str(item) for item in payload.get("failed", [])],
+            "known_expected_release_gate_open_requirements": open_requirements,
+            "unexpected_open_requirements": unexpected_open_requirements,
+            "missing_expected_open_requirements": missing_expected_open_requirements,
             "failed_checks": failed_checks,
             "missing_expected_checks": missing_expected_checks,
         }

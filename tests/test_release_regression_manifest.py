@@ -14,6 +14,7 @@ from tests.cross_matrix.release_regression_manifest import (
     EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS,
     EXPECTED_CURRENT_NATIVE_MTP_CHECKS,
     EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+    EXPECTED_CURRENT_PACKAGED_INTEGRITY_CHECKS,
     EXPECTED_CURRENT_MODEL_FAMILY_ROWS,
     EXPECTED_CURRENT_PARSER_REGISTRY_CHECKS,
     EXPECTED_CURRENT_REASONING_TEMPLATE_CHECKS,
@@ -132,7 +133,7 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
     vl_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["vl-media-cache-tool-followup"]
     mcp_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["mcp-policy-ui-gateway"]
     max_output_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["chat-settings-max-output-context-ui"]
-    max_output_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["chat-settings-max-output-context-ui"]
+    packaged_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["packaged-release-integrity"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
         path = tmp_path / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -163,16 +164,16 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                 + "\n",
                 encoding="utf-8",
             )
-        elif artifact == max_output_artifact:
+        elif artifact == packaged_artifact:
             path.write_text(
                 json.dumps(
                     {
                         "status": "pass",
                         "checks": {
-                            name: True for name in EXPECTED_CURRENT_MAX_OUTPUT_CONTEXT_CHECKS
+                            name: True for name in EXPECTED_CURRENT_PACKAGED_INTEGRITY_CHECKS
                         },
-                        "missing_markers": [],
                         "failed": [],
+                        "known_expected_release_gate_open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
                     }
                 )
                 + "\n",
@@ -455,6 +456,17 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
         "failed_checks": [],
         "missing_expected_checks": [],
     }
+    assert result["packaged_integrity_matrix"] == {
+        "artifact": packaged_artifact,
+        "status": "pass",
+        "checks": {name: True for name in EXPECTED_CURRENT_PACKAGED_INTEGRITY_CHECKS},
+        "failed": [],
+        "known_expected_release_gate_open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+        "unexpected_open_requirements": [],
+        "missing_expected_open_requirements": [],
+        "failed_checks": [],
+        "missing_expected_checks": [],
+    }
 
 
 def test_release_regression_manifest_rejects_missing_or_failing_current_artifacts(tmp_path):
@@ -571,6 +583,62 @@ def test_release_regression_manifest_rejects_incomplete_current_max_output_conte
     ]
     assert result["max_output_context_matrix"]["failed_checks"] == [
         EXPECTED_CURRENT_MAX_OUTPUT_CONTEXT_CHECKS[-1]
+    ]
+
+
+def test_release_regression_manifest_rejects_incomplete_current_packaged_integrity_matrix(tmp_path):
+    packaged_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["packaged-release-integrity"]
+    for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
+        path = tmp_path / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if artifact == packaged_artifact:
+            checks = {name: True for name in EXPECTED_CURRENT_PACKAGED_INTEGRITY_CHECKS[:-1]}
+            checks[EXPECTED_CURRENT_PACKAGED_INTEGRITY_CHECKS[-1]] = False
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": checks,
+                        "failed": ["bundled_python_verifier"],
+                        "known_expected_release_gate_open_requirements": [
+                            EXPECTED_CURRENT_OPEN_REQUIREMENTS[0],
+                            "Unexpected release gate blocker",
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        else:
+            path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
+    regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
+    regression_suite.parent.mkdir(parents=True, exist_ok=True)
+    regression_suite.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "failed_steps": [],
+                "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["status"] == "fail"
+    assert result["packaged_integrity_matrix"]["artifact"] == packaged_artifact
+    assert result["packaged_integrity_matrix"]["status"] == "pass"
+    assert result["packaged_integrity_matrix"]["failed"] == ["bundled_python_verifier"]
+    assert result["packaged_integrity_matrix"]["failed_checks"] == [
+        EXPECTED_CURRENT_PACKAGED_INTEGRITY_CHECKS[-1]
+    ]
+    assert result["packaged_integrity_matrix"]["unexpected_open_requirements"] == [
+        "Unexpected release gate blocker"
+    ]
+    assert result["packaged_integrity_matrix"]["missing_expected_open_requirements"] == [
+        EXPECTED_CURRENT_OPEN_REQUIREMENTS[1]
     ]
 
 
@@ -1932,6 +2000,7 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
     vl_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["vl-media-cache-tool-followup"]
     mcp_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["mcp-policy-ui-gateway"]
     max_output_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["chat-settings-max-output-context-ui"]
+    packaged_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["packaged-release-integrity"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
         path = tmp_path / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1957,6 +2026,21 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
                         },
                         "missing_markers": [],
                         "failed": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == packaged_artifact:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_PACKAGED_INTEGRITY_CHECKS
+                        },
+                        "failed": [],
+                        "known_expected_release_gate_open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
                     }
                 )
                 + "\n",
@@ -2237,6 +2321,17 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
             "checks": {name: True for name in EXPECTED_CURRENT_MAX_OUTPUT_CONTEXT_CHECKS},
             "missing_markers": [],
             "failed": [],
+            "failed_checks": [],
+            "missing_expected_checks": [],
+        },
+        "packaged_integrity_matrix": {
+            "artifact": packaged_artifact,
+            "status": "pass",
+            "checks": {name: True for name in EXPECTED_CURRENT_PACKAGED_INTEGRITY_CHECKS},
+            "failed": [],
+            "known_expected_release_gate_open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+            "unexpected_open_requirements": [],
+            "missing_expected_open_requirements": [],
             "failed_checks": [],
             "missing_expected_checks": [],
         },
