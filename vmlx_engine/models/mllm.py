@@ -99,6 +99,22 @@ def reset_vlm_stream() -> None:
     _VLM_STREAM = None
 
 
+def _set_vlm_inference_mode(model: Any) -> None:
+    """Put mlx-vlm model copies in eval mode so inference kernels stay enabled."""
+    seen: set[int] = set()
+    for candidate in (
+        model,
+        getattr(model, "language_model", None),
+        getattr(model, "model", None),
+    ):
+        if candidate is None or id(candidate) in seen:
+            continue
+        seen.add(id(candidate))
+        eval_fn = getattr(candidate, "eval", None)
+        if callable(eval_fn):
+            eval_fn()
+
+
 class _MaybeVLMStream:
     __slots__ = ("_cm",)
 
@@ -965,6 +981,7 @@ class MLXMultimodalLM:
             else:
                 self.model, self.processor = load_jang_vlm_model(resolved_name)
             self.config = load_config(resolved_name)
+            _set_vlm_inference_mode(self.model)
             self._loaded = True
             logger.info(f"JANG VL model loaded: {self.model_name}")
             return
@@ -1017,6 +1034,7 @@ class MLXMultimodalLM:
                 from ..utils.tokenizer import _apply_turboquant_to_model
                 _apply_turboquant_to_model(_lang, resolved_name)
 
+            _set_vlm_inference_mode(self.model)
             self._loaded = True
             logger.info(f"MLLM loaded successfully: {self.model_name}")
 

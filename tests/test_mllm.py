@@ -532,6 +532,42 @@ class TestMLLMModelInit:
         assert "MLXMultimodalLM" in repr_str
         assert "test-model" in repr_str
 
+    def test_jang_vlm_load_sets_language_model_eval_mode(self, monkeypatch):
+        """JANG VLM inference must not leave mlx-vlm language modules in training mode."""
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        class FakeLanguageModel:
+            def __init__(self):
+                self.training = True
+                self.eval_called = False
+
+            def eval(self):
+                self.training = False
+                self.eval_called = True
+
+        class FakeModel:
+            def __init__(self):
+                self.language_model = FakeLanguageModel()
+
+        fake_model = FakeModel()
+
+        monkeypatch.setattr(
+            "vmlx_engine.api.utils.resolve_to_local_path",
+            lambda name: "/models/fake-jang-vl",
+        )
+        monkeypatch.setattr("vmlx_engine.utils.jang_loader.is_jang_model", lambda path: True)
+        monkeypatch.setattr(
+            "vmlx_engine.utils.jang_loader.load_jang_vlm_model",
+            lambda path: (fake_model, object()),
+        )
+        monkeypatch.setattr("mlx_vlm.utils.load_config", lambda path: {"model_type": "qwen3_5_vl"})
+
+        model = MLXMultimodalLM("fake-jang-vl")
+        model.load()
+
+        assert fake_model.language_model.eval_called is True
+        assert fake_model.language_model.training is False
+
 
 # =============================================================================
 # Integration Tests - Require Model Loading (Slow)
