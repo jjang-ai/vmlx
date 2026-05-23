@@ -18,6 +18,7 @@ from tests.cross_matrix.release_regression_manifest import (
     EXPECTED_CURRENT_MODEL_FAMILY_ROWS,
     EXPECTED_CURRENT_PARSER_REGISTRY_CHECKS,
     EXPECTED_CURRENT_REASONING_TEMPLATE_CHECKS,
+    EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS,
     EXPECTED_CURRENT_TOOL_CALL_CHECKS,
     EXPECTED_CURRENT_VL_MEDIA_CHECKS,
     REQUIRED_RELEASE_DOMAINS,
@@ -134,6 +135,7 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
     mcp_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["mcp-policy-ui-gateway"]
     max_output_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["chat-settings-max-output-context-ui"]
     packaged_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["packaged-release-integrity"]
+    release_surface_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["public-release-surface-preflight"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
         path = tmp_path / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -174,6 +176,19 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                         },
                         "failed": [],
                         "known_expected_release_gate_open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == release_surface_artifact:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS
+                        },
                     }
                 )
                 + "\n",
@@ -467,6 +482,13 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
         "failed_checks": [],
         "missing_expected_checks": [],
     }
+    assert result["release_surface_matrix"] == {
+        "artifact": release_surface_artifact,
+        "status": "pass",
+        "checks": {name: True for name in EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS},
+        "failed_checks": [],
+        "missing_expected_checks": [],
+    }
 
 
 def test_release_regression_manifest_rejects_missing_or_failing_current_artifacts(tmp_path):
@@ -639,6 +661,50 @@ def test_release_regression_manifest_rejects_incomplete_current_packaged_integri
     ]
     assert result["packaged_integrity_matrix"]["missing_expected_open_requirements"] == [
         EXPECTED_CURRENT_OPEN_REQUIREMENTS[1]
+    ]
+
+
+def test_release_regression_manifest_rejects_incomplete_current_release_surface_matrix(tmp_path):
+    release_surface_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["public-release-surface-preflight"]
+    for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
+        path = tmp_path / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if artifact == release_surface_artifact:
+            checks = {name: True for name in EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS[:-1]}
+            checks[EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS[-1]] = False
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": checks,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        else:
+            path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
+    regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
+    regression_suite.parent.mkdir(parents=True, exist_ok=True)
+    regression_suite.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "failed_steps": [],
+                "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["status"] == "fail"
+    assert result["release_surface_matrix"]["artifact"] == release_surface_artifact
+    assert result["release_surface_matrix"]["status"] == "pass"
+    assert result["release_surface_matrix"]["failed_checks"] == [
+        EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS[-1]
     ]
 
 
@@ -2001,6 +2067,7 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
     mcp_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["mcp-policy-ui-gateway"]
     max_output_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["chat-settings-max-output-context-ui"]
     packaged_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["packaged-release-integrity"]
+    release_surface_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["public-release-surface-preflight"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
         path = tmp_path / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -2041,6 +2108,19 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
                         },
                         "failed": [],
                         "known_expected_release_gate_open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == release_surface_artifact:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS
+                        },
                     }
                 )
                 + "\n",
@@ -2332,6 +2412,13 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
             "known_expected_release_gate_open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
             "unexpected_open_requirements": [],
             "missing_expected_open_requirements": [],
+            "failed_checks": [],
+            "missing_expected_checks": [],
+        },
+        "release_surface_matrix": {
+            "artifact": release_surface_artifact,
+            "status": "pass",
+            "checks": {name: True for name in EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS},
             "failed_checks": [],
             "missing_expected_checks": [],
         },

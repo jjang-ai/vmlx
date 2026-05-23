@@ -187,6 +187,17 @@ EXPECTED_CURRENT_PACKAGED_INTEGRITY_CHECKS = (
     "dry_release_gate_fails_only_on_known_objectives",
 )
 
+EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS = (
+    "source_version_consistent",
+    "local_updater_not_ahead_of_source",
+    "local_updater_release_state_valid",
+    "local_updater_platform_downloads_valid",
+    "local_updater_has_required_fields",
+    "local_updater_url_matches_version",
+    "local_updater_sha256_valid",
+    "local_updater_notes_match_version",
+)
+
 
 REQUIRED_RELEASE_DOMAINS = {
     "chat_ui_settings",
@@ -793,6 +804,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
     mcp_policy_matrix = _validate_current_mcp_policy_matrix_artifact(root)
     max_output_context_matrix = _validate_current_max_output_context_matrix_artifact(root)
     packaged_integrity_matrix = _validate_current_packaged_integrity_matrix_artifact(root)
+    release_surface_matrix = _validate_current_release_surface_matrix_artifact(root)
     regression_suite_ok = (
         regression_suite["status"] == "pass"
         and not regression_suite["failed_steps"]
@@ -885,6 +897,11 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         and not packaged_integrity_matrix["failed_checks"]
         and not packaged_integrity_matrix["missing_expected_checks"]
     )
+    release_surface_matrix_ok = (
+        release_surface_matrix["status"] == "pass"
+        and not release_surface_matrix["failed_checks"]
+        and not release_surface_matrix["missing_expected_checks"]
+    )
 
     return {
         "status": "pass"
@@ -905,6 +922,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
             and mcp_policy_matrix_ok
             and max_output_context_matrix_ok
             and packaged_integrity_matrix_ok
+            and release_surface_matrix_ok
         )
         else "fail",
         "missing": missing,
@@ -923,6 +941,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "mcp_policy_matrix": mcp_policy_matrix,
         "max_output_context_matrix": max_output_context_matrix,
         "packaged_integrity_matrix": packaged_integrity_matrix,
+        "release_surface_matrix": release_surface_matrix,
     }
 
 
@@ -1512,6 +1531,48 @@ def _validate_current_packaged_integrity_matrix_artifact(root: Path) -> dict[str
             "known_expected_release_gate_open_requirements": open_requirements,
             "unexpected_open_requirements": unexpected_open_requirements,
             "missing_expected_open_requirements": missing_expected_open_requirements,
+            "failed_checks": failed_checks,
+            "missing_expected_checks": missing_expected_checks,
+        }
+    )
+    return result
+
+
+def _validate_current_release_surface_matrix_artifact(root: Path) -> dict[str, Any]:
+    artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["public-release-surface-preflight"]
+    result: dict[str, Any] = {
+        "artifact": artifact,
+        "status": "missing",
+        "checks": {},
+        "failed_checks": list(EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS),
+        "missing_expected_checks": list(EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS),
+    }
+    path = root / artifact
+    if not path.exists():
+        return result
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - diagnostic helper reports load failures
+        result["status"] = f"load_error:{type(exc).__name__}"
+        return result
+
+    checks = {
+        str(name): bool(value)
+        for name, value in dict(payload.get("checks", {})).items()
+    }
+    missing_expected_checks = [
+        name for name in EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS if name not in checks
+    ]
+    failed_checks = [
+        name
+        for name in EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS
+        if checks.get(name) is not True
+    ]
+    result.update(
+        {
+            "status": str(payload.get("status")),
+            "checks": checks,
             "failed_checks": failed_checks,
             "missing_expected_checks": missing_expected_checks,
         }
