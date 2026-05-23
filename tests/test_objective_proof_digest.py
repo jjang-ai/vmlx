@@ -224,6 +224,24 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path,
+        "build/current-dsv4-installed-tokenizer-roundtrip-20260523.json",
+        {
+            "load_method": "AutoTokenizer.from_pretrained",
+            "tokenizer_class": "TokenizersBackend",
+            "all_roundtrip_exact": True,
+            "rows": [
+                {
+                    "input": "THREE.PerspectiveCamera",
+                    "ids": [8840, 21679, 5497, 387, 126614, 65184],
+                    "tokens": ["TH", "REE", ".P", "ers", "pective", "Camera"],
+                    "decoded": "THREE.PerspectiveCamera",
+                    "roundtrip_exact": True,
+                }
+            ],
+        },
+    )
+    _write_json(
+        tmp_path,
         "tests/test_engine_audit.py",
         {"fixture": "engine-audit"},
     )
@@ -739,6 +757,51 @@ def test_objective_proof_digest_surfaces_current_dsv4_identifier_matrix(tmp_path
     assert matrix["code_task_failed"] is True
     assert "THREE.PerscpectiveCamera" in matrix["probe_summaries"][0]["content"]
     assert "THREE.WebWebGLRenderer" in matrix["probe_summaries"][1]["content"]
+
+
+def test_objective_proof_digest_surfaces_dsv4_tokenizer_roundtrip_boundary(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-installed-tokenizer-roundtrip-20260523.json",
+        {
+            "load_method": "AutoTokenizer.from_pretrained",
+            "tokenizer_class": "TokenizersBackend",
+            "all_roundtrip_exact": True,
+            "rows": [
+                {
+                    "input": "THREE.PerspectiveCamera",
+                    "ids": [8840, 21679, 5497, 387, 126614, 65184],
+                    "tokens": ["TH", "REE", ".P", "ers", "pective", "Camera"],
+                    "decoded": "THREE.PerspectiveCamera",
+                    "roundtrip_exact": True,
+                },
+                {
+                    "input": "THREE.PerscpectiveCamera",
+                    "ids": [8840, 21679, 5497, 387, 69, 126614, 65184],
+                    "tokens": ["TH", "REE", ".P", "ers", "c", "pective", "Camera"],
+                    "decoded": "THREE.PerscpectiveCamera",
+                    "roundtrip_exact": True,
+                },
+            ],
+        },
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    quality = rows["DSV4 long-output/code/file-generation quality is release-cleared"]
+    tokenizer = quality["details"]["current_installed_tokenizer_roundtrip"]
+    assert quality["status"] == "open"
+    assert tokenizer["status"] == "pass"
+    assert tokenizer["all_roundtrip_exact"] is True
+    assert tokenizer["tokenizer_class"] == "TokenizersBackend"
+    assert tokenizer["row_count"] == 2
+    assert tokenizer["failed_inputs"] == []
+    assert tokenizer["rows"][0]["tokens"] == ["TH", "REE", ".P", "ers", "pective", "Camera"]
+    assert tokenizer["rows"][1]["tokens"] == ["TH", "REE", ".P", "ers", "c", "pective", "Camera"]
 
 
 def test_objective_proof_digest_downgrades_pass_rows_with_missing_evidence(tmp_path):

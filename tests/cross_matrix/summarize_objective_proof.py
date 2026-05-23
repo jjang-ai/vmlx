@@ -48,6 +48,7 @@ DEFAULT_OUT = Path("build/current-objective-proof-audit-20260521.json")
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = "build/current-dsv4-live-identifier-canary-20260523.json"
 DSV4_CURRENT_IDENTIFIER_MATRIX_REL = "build/current-dsv4-live-identifier-matrix-20260523.json"
+DSV4_INSTALLED_TOKENIZER_ROUNDTRIP_REL = "build/current-dsv4-installed-tokenizer-roundtrip-20260523.json"
 API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260521.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260521.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-20260521.json"
@@ -428,6 +429,42 @@ def _dsv4_identifier_matrix_detail(matrix: dict[str, Any], root: Path) -> dict[s
     }
 
 
+def _dsv4_tokenizer_roundtrip_detail(payload: dict[str, Any], root: Path) -> dict[str, Any]:
+    path_present = _path_present(root, DSV4_INSTALLED_TOKENIZER_ROUNDTRIP_REL)
+    rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+    row_summaries: list[dict[str, Any]] = []
+    failed_inputs: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        text = row.get("input")
+        if row.get("roundtrip_exact") is not True and isinstance(text, str):
+            failed_inputs.append(text)
+        row_summaries.append(
+            {
+                "input": text,
+                "ids": row.get("ids") or [],
+                "tokens": row.get("tokens") or [],
+                "decoded": row.get("decoded"),
+                "roundtrip_exact": row.get("roundtrip_exact") is True,
+            }
+        )
+    status = "missing"
+    if path_present:
+        status = "pass" if payload.get("all_roundtrip_exact") is True and not failed_inputs else "review"
+    return {
+        "artifact": DSV4_INSTALLED_TOKENIZER_ROUNDTRIP_REL,
+        "present": path_present,
+        "status": status,
+        "load_method": payload.get("load_method"),
+        "tokenizer_class": payload.get("tokenizer_class"),
+        "all_roundtrip_exact": payload.get("all_roundtrip_exact") is True,
+        "row_count": len(row_summaries),
+        "failed_inputs": failed_inputs,
+        "rows": row_summaries,
+    }
+
+
 def _contract_checks(payload: dict[str, Any], required: tuple[str, ...]) -> tuple[bool, dict[str, bool]]:
     checks = payload.get("checks") or {}
     required_checks = {key: checks.get(key) is True for key in required}
@@ -676,6 +713,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     quality_clearance = _load(root, DSV4_QUALITY_CLEARANCE_REL)
     dsv4_current_identifier_canary = _load(root, DSV4_CURRENT_IDENTIFIER_CANARY_REL)
     dsv4_current_identifier_matrix = _load(root, DSV4_CURRENT_IDENTIFIER_MATRIX_REL)
+    dsv4_installed_tokenizer_roundtrip = _load(root, DSV4_INSTALLED_TOKENIZER_ROUNDTRIP_REL)
     api_cache_contract = _load(root, API_CACHE_CONTRACT_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
     max_output_context_contract = _load(root, MAX_OUTPUT_CONTEXT_CONTRACT_REL)
@@ -1189,6 +1227,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "current_installed_identifier_matrix": _dsv4_identifier_matrix_detail(
                 dsv4_current_identifier_matrix, root
             ),
+            "current_installed_tokenizer_roundtrip": _dsv4_tokenizer_roundtrip_detail(
+                dsv4_installed_tokenizer_roundtrip, root
+            ),
         }
     )
     _add(
@@ -1200,6 +1241,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "build/current-dsv4-long-context-proof-digest-20260521.json",
             "build/current-dsv4-identifier-count-ablation-20260521/result.json",
             DSV4_CURRENT_IDENTIFIER_MATRIX_REL,
+            DSV4_INSTALLED_TOKENIZER_ROUNDTRIP_REL,
             "docs/internal/release-gates/20260520_sisyphus_dsv4_identifier_gate_jang_affine_current/result.json",
         ],
         caveat=(
