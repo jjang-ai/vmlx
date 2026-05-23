@@ -86,6 +86,19 @@ EXPECTED_CURRENT_API_SURFACE_CHECKS = (
     "all_required_panel_api_markers_present",
 )
 
+EXPECTED_CURRENT_REASONING_TEMPLATE_CHECKS = (
+    "reasoning_on_off_request_wiring_explicit",
+    "no_hidden_family_sampling_or_reasoning_forcing",
+    "deepseek_r1_visible_content_no_think_tag_leak",
+    "gemma4_visible_content_no_channel_marker_leak",
+    "hy3_zaya_style_no_think_no_visible_tag_leak",
+    "reasoning_tool_interaction_preserves_tool_calls",
+    "streaming_fallback_does_not_double_extract_reasoning",
+    "interleaved_reasoning_segments_render",
+    "visible_token_counts_not_corrupted_by_reasoning_ui",
+    "legacy_count_floor_still_nontrivial",
+)
+
 
 REQUIRED_RELEASE_DOMAINS = {
     "chat_ui_settings",
@@ -685,6 +698,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
     parser_registry_matrix = _validate_current_parser_registry_matrix_artifact(root)
     generation_defaults_matrix = _validate_current_generation_defaults_matrix_artifact(root)
     api_surface_matrix = _validate_current_api_surface_matrix_artifact(root)
+    reasoning_template_matrix = _validate_current_reasoning_template_matrix_artifact(root)
     regression_suite_ok = (
         regression_suite["status"] == "pass"
         and not regression_suite["failed_steps"]
@@ -731,6 +745,12 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         and not api_surface_matrix["failed_checks"]
         and not api_surface_matrix["missing_expected_checks"]
     )
+    reasoning_template_matrix_ok = (
+        reasoning_template_matrix["status"] == "pass"
+        and not reasoning_template_matrix["missing_markers"]
+        and not reasoning_template_matrix["failed_checks"]
+        and not reasoning_template_matrix["missing_expected_checks"]
+    )
 
     return {
         "status": "pass"
@@ -744,6 +764,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
             and parser_registry_matrix_ok
             and generation_defaults_matrix_ok
             and api_surface_matrix_ok
+            and reasoning_template_matrix_ok
         )
         else "fail",
         "missing": missing,
@@ -755,6 +776,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "parser_registry_matrix": parser_registry_matrix,
         "generation_defaults_matrix": generation_defaults_matrix,
         "api_surface_matrix": api_surface_matrix,
+        "reasoning_template_matrix": reasoning_template_matrix,
     }
 
 
@@ -1022,6 +1044,48 @@ def _validate_current_api_surface_matrix_artifact(root: Path) -> dict[str, Any]:
             "missing_panel_markers": [
                 str(item) for item in payload.get("missing_panel_markers", [])
             ],
+            "failed_checks": failed_checks,
+            "missing_expected_checks": missing_expected_checks,
+        }
+    )
+    return result
+
+
+def _validate_current_reasoning_template_matrix_artifact(root: Path) -> dict[str, Any]:
+    artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["reasoning-template-no-think-tag-leak"]
+    result: dict[str, Any] = {
+        "artifact": artifact,
+        "status": "missing",
+        "checks": {},
+        "missing_markers": [],
+        "failed_checks": list(EXPECTED_CURRENT_REASONING_TEMPLATE_CHECKS),
+        "missing_expected_checks": list(EXPECTED_CURRENT_REASONING_TEMPLATE_CHECKS),
+    }
+    path = root / artifact
+    if not path.exists():
+        return result
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - diagnostic helper reports load failures
+        result["status"] = f"load_error:{type(exc).__name__}"
+        return result
+
+    checks = {
+        str(name): bool(value)
+        for name, value in dict(payload.get("checks", {})).items()
+    }
+    missing_expected_checks = [
+        name for name in EXPECTED_CURRENT_REASONING_TEMPLATE_CHECKS if name not in checks
+    ]
+    failed_checks = [
+        name for name in EXPECTED_CURRENT_REASONING_TEMPLATE_CHECKS if checks.get(name) is not True
+    ]
+    result.update(
+        {
+            "status": str(payload.get("status")),
+            "checks": checks,
+            "missing_markers": [str(item) for item in payload.get("missing_markers", [])],
             "failed_checks": failed_checks,
             "missing_expected_checks": missing_expected_checks,
         }
