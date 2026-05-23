@@ -6610,6 +6610,25 @@ class MLLMBatchGenerator:
         if K <= 0 or B == 0:
             return self._step(batch.y[:, None], batch.cache)
 
+        # PR #172 Phase C — TurboQuant cache compatibility short-circuit.
+        # PLD's per-row writeback was found to leave `left_padding=None` on
+        # TurboQuant KV caches, which then crashes `c.extract(idx)` at
+        # `jang_tools/turboquant/cache.py:355` when the request finishes.
+        # Until per-row writeback preserves the TQ left_padding contract,
+        # detect TQ-quantized caches and fall back to standard _step.
+        for c in batch.cache:
+            if type(c).__name__ == "TurboQuantKVCache" or (
+                hasattr(c, "_tq_active") and getattr(c, "_tq_active", False)
+            ):
+                # Log once (debug-level so it doesn't spam) and skip PLD
+                if not getattr(self, "_pld_tq_skip_logged", False):
+                    logger.info(
+                        "[PLD] TurboQuant KV cache detected — PLD skipped "
+                        "this step. Use --kv-cache-quantization none/q8 for PLD."
+                    )
+                    self._pld_tq_skip_logged = True
+                return self._step(batch.y[:, None], batch.cache)
+
         # ---- 1. Gather K drafts per request ----
         all_drafts: List[List[int]] = []
         seeds: List[int] = []
