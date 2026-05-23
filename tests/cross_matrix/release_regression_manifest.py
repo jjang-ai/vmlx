@@ -29,6 +29,20 @@ EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS = (
     "not_path_name_only",
 )
 
+EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS = (
+    "dsv4_native_composite_cache_status",
+    "zaya_typed_cca_status",
+    "hybrid_ssm_partial_reuse",
+    "generic_tq_not_applied_to_hybrid_ssm",
+    "turboquant_kv_runtime_contract",
+    "turboquant_disk_roundtrip",
+    "dsv4_terminal_composite_contracts",
+    "prompt_disk_l2_backfill_contracts",
+    "cache_detail_telemetry_contracts",
+    "panel_cache_launch_policy",
+    "legacy_count_floor_still_nontrivial",
+)
+
 
 REQUIRED_RELEASE_DOMAINS = {
     "chat_ui_settings",
@@ -624,6 +638,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
     regression_suite = _validate_current_regression_suite_artifact(root)
     model_family_matrix = _validate_current_model_family_matrix_artifact(root)
     model_artifact_matrix = _validate_current_model_artifact_matrix_artifact(root)
+    cache_architecture_matrix = _validate_current_cache_architecture_matrix_artifact(root)
     regression_suite_ok = (
         regression_suite["status"] == "pass"
         and not regression_suite["failed_steps"]
@@ -641,6 +656,15 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         and not model_artifact_matrix["failed_checks"]
         and not model_artifact_matrix["missing_expected_checks"]
     )
+    cache_architecture_matrix_ok = (
+        cache_architecture_matrix["status"] == "pass"
+        and not cache_architecture_matrix["missing_markers"]
+        and not cache_architecture_matrix["missing_api_checks"]
+        and not cache_architecture_matrix["missing_api_command_markers"]
+        and not cache_architecture_matrix["missing_panel_markers"]
+        and not cache_architecture_matrix["failed_checks"]
+        and not cache_architecture_matrix["missing_expected_checks"]
+    )
 
     return {
         "status": "pass"
@@ -650,6 +674,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
             and regression_suite_ok
             and model_family_matrix_ok
             and model_artifact_matrix_ok
+            and cache_architecture_matrix_ok
         )
         else "fail",
         "missing": missing,
@@ -657,6 +682,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "regression_suite": regression_suite,
         "model_family_matrix": model_family_matrix,
         "model_artifact_matrix": model_artifact_matrix,
+        "cache_architecture_matrix": cache_architecture_matrix,
     }
 
 
@@ -695,6 +721,58 @@ def _validate_current_regression_suite_artifact(root: Path) -> dict[str, Any]:
             "open_requirements": open_requirements,
             "unexpected_open_requirements": unexpected_open_requirements,
             "missing_expected_open_requirements": missing_expected_open_requirements,
+        }
+    )
+    return result
+
+
+def _validate_current_cache_architecture_matrix_artifact(root: Path) -> dict[str, Any]:
+    artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["cache-architecture-family-classification"]
+    result: dict[str, Any] = {
+        "artifact": artifact,
+        "status": "missing",
+        "checks": {},
+        "missing_markers": [],
+        "missing_api_checks": [],
+        "missing_api_command_markers": [],
+        "missing_panel_markers": [],
+        "failed_checks": list(EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS),
+        "missing_expected_checks": list(EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS),
+    }
+    path = root / artifact
+    if not path.exists():
+        return result
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - diagnostic helper reports load failures
+        result["status"] = f"load_error:{type(exc).__name__}"
+        return result
+
+    checks = {
+        str(name): bool(value)
+        for name, value in dict(payload.get("checks", {})).items()
+    }
+    missing_expected_checks = [
+        name for name in EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS if name not in checks
+    ]
+    failed_checks = [
+        name for name in EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS if checks.get(name) is not True
+    ]
+    result.update(
+        {
+            "status": str(payload.get("status")),
+            "checks": checks,
+            "missing_markers": [str(item) for item in payload.get("missing_markers", [])],
+            "missing_api_checks": [str(item) for item in payload.get("missing_api_checks", [])],
+            "missing_api_command_markers": [
+                str(item) for item in payload.get("missing_api_command_markers", [])
+            ],
+            "missing_panel_markers": [
+                str(item) for item in payload.get("missing_panel_markers", [])
+            ],
+            "failed_checks": failed_checks,
+            "missing_expected_checks": missing_expected_checks,
         }
     )
     return result

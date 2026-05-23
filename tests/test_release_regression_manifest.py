@@ -6,6 +6,7 @@ from tests.cross_matrix.run_release_regression_manifest import build_manifest_ar
 from tests.cross_matrix.release_regression_manifest import (
     CURRENT_POST_BUDGET_EDGE_ARTIFACTS,
     CURRENT_REGRESSION_SUITE_ARTIFACT,
+    EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS,
     EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS,
     EXPECTED_CURRENT_OPEN_REQUIREMENTS,
     EXPECTED_CURRENT_MODEL_FAMILY_ROWS,
@@ -112,6 +113,7 @@ def test_release_regression_manifest_tracks_current_post_budget_edge_proof_sweep
 def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp_path):
     model_family_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-family-detection-noheavy"]
     model_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-artifact-format-detection"]
+    cache_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["cache-architecture-family-classification"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
         path = tmp_path / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -136,6 +138,23 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                             name: True for name in EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS
                         },
                         "missing_markers": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == cache_artifact:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS
+                        },
+                        "missing_markers": [],
+                        "missing_api_checks": [],
+                        "missing_api_command_markers": [],
+                        "missing_panel_markers": [],
                     }
                 )
                 + "\n",
@@ -182,6 +201,17 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
         "status": "pass",
         "checks": {name: True for name in EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS},
         "missing_markers": [],
+        "failed_checks": [],
+        "missing_expected_checks": [],
+    }
+    assert result["cache_architecture_matrix"] == {
+        "artifact": cache_artifact,
+        "status": "pass",
+        "checks": {name: True for name in EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS},
+        "missing_markers": [],
+        "missing_api_checks": [],
+        "missing_api_command_markers": [],
+        "missing_panel_markers": [],
         "failed_checks": [],
         "missing_expected_checks": [],
     }
@@ -355,9 +385,96 @@ def test_release_regression_manifest_rejects_incomplete_current_model_artifact_m
     ]
 
 
+def test_release_regression_manifest_rejects_incomplete_current_cache_architecture_matrix(tmp_path):
+    cache_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["cache-architecture-family-classification"]
+    for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
+        path = tmp_path / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if artifact == CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-family-detection-noheavy"]:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "matched_rows": EXPECTED_CURRENT_MODEL_FAMILY_ROWS,
+                        "missing_rows": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-artifact-format-detection"]:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS
+                        },
+                        "missing_markers": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == cache_artifact:
+            checks = {name: True for name in EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS[:-1]}
+            checks[EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS[-1]] = False
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": checks,
+                        "missing_markers": ["test_mllm_stats_include_cache_fields"],
+                        "missing_api_checks": ["turboquant_disk_roundtrip"],
+                        "missing_api_command_markers": ["generic_turboquant_patcher_skips_hybrid_ssm"],
+                        "missing_panel_markers": ["deepseek-v4 disables composite prefix cache by default even with stale cache config"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        else:
+            path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
+    regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
+    regression_suite.parent.mkdir(parents=True, exist_ok=True)
+    regression_suite.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "failed_steps": [],
+                "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["status"] == "fail"
+    assert result["cache_architecture_matrix"]["artifact"] == cache_artifact
+    assert result["cache_architecture_matrix"]["status"] == "pass"
+    assert result["cache_architecture_matrix"]["missing_markers"] == [
+        "test_mllm_stats_include_cache_fields"
+    ]
+    assert result["cache_architecture_matrix"]["missing_api_checks"] == [
+        "turboquant_disk_roundtrip"
+    ]
+    assert result["cache_architecture_matrix"]["missing_api_command_markers"] == [
+        "generic_turboquant_patcher_skips_hybrid_ssm"
+    ]
+    assert result["cache_architecture_matrix"]["missing_panel_markers"] == [
+        "deepseek-v4 disables composite prefix cache by default even with stale cache config"
+    ]
+    assert result["cache_architecture_matrix"]["failed_checks"] == [
+        EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS[-1]
+    ]
+
+
 def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_path):
     model_family_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-family-detection-noheavy"]
     model_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-artifact-format-detection"]
+    cache_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["cache-architecture-family-classification"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
         path = tmp_path / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -382,6 +499,23 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
                             name: True for name in EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS
                         },
                         "missing_markers": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == cache_artifact:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS
+                        },
+                        "missing_markers": [],
+                        "missing_api_checks": [],
+                        "missing_api_command_markers": [],
+                        "missing_panel_markers": [],
                     }
                 )
                 + "\n",
@@ -429,6 +563,17 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
             "status": "pass",
             "checks": {name: True for name in EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS},
             "missing_markers": [],
+            "failed_checks": [],
+            "missing_expected_checks": [],
+        },
+        "cache_architecture_matrix": {
+            "artifact": cache_artifact,
+            "status": "pass",
+            "checks": {name: True for name in EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS},
+            "missing_markers": [],
+            "missing_api_checks": [],
+            "missing_api_command_markers": [],
+            "missing_panel_markers": [],
             "failed_checks": [],
             "missing_expected_checks": [],
         },
