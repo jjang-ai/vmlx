@@ -2042,6 +2042,8 @@ def live_loop_probe_name(row: ModelRow) -> str | None:
         return "ling_multilingual_loop_trigger"
     if row.family == "minimax":
         return "minimax_multilingual_loop_trigger"
+    if row.family == "hy_v3":
+        return "hy3_multilingual_loop_trigger"
     return None
 
 
@@ -2851,11 +2853,12 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
 
     loop_probe = live_loop_probe_name(row)
     if loop_probe:
-        artifact_name = (
-            "ling_multilingual_game_prompt"
-            if row.family == "bailing_hybrid"
-            else "minimax_multilingual_game_prompt"
-        )
+        artifact_prefix = {
+            "bailing_hybrid": "ling",
+            "minimax": "minimax",
+            "hy_v3": "hy3",
+        }.get(row.family, row.family)
+        artifact_name = f"{artifact_prefix}_multilingual_game_prompt"
         code, loop_resp, loop_elapsed = request_json(
             loop_probe,
             "POST",
