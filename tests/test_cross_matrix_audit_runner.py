@@ -30,6 +30,7 @@ from tests.cross_matrix.run_production_family_audit import (
     normalize_python_executable,
     normalize_short_answer,
     family_matches_expected,
+    live_loop_probe_name,
     production_family_audit_summary,
     sampling_loop_risk_summary,
     simple_loop_score,
@@ -976,6 +977,14 @@ def test_loop_score_does_not_false_fail_coherent_cyrillic_list():
     )
 
     assert simple_loop_score(text) < 0.25
+
+
+def test_minimax_and_ling_rows_require_live_loop_probe():
+    rows = {row.id: row for row in ROWS}
+
+    assert live_loop_probe_name(rows["ling_flash_tq"]) == "ling_multilingual_loop_trigger"
+    assert live_loop_probe_name(rows["minimax_m27_small_tq"]) == "minimax_multilingual_loop_trigger"
+    assert live_loop_probe_name(rows["qwen36_dense_jang"]) is None
 
 
 def test_dsv4_long_output_requires_stop_not_length_cap():
