@@ -30,8 +30,17 @@ from tests.cross_matrix.run_model_family_detection_contract import (
     REQUIRED_ROWS as MODEL_FAMILY_CONTRACT_CHECKS,
     SOURCE_HASH_FILES as MODEL_FAMILY_SOURCE_HASH_FILES,
 )
+from tests.cross_matrix.run_generation_defaults_contract import (
+    SOURCE_HASH_FILES as GENERATION_DEFAULTS_SOURCE_HASH_FILES,
+)
+from tests.cross_matrix.run_native_mtp_contract import (
+    SOURCE_HASH_FILES as NATIVE_MTP_SOURCE_HASH_FILES,
+)
 from tests.cross_matrix.run_parser_registry_contract import (
     SOURCE_HASH_FILES as PARSER_REGISTRY_SOURCE_HASH_FILES,
+)
+from tests.cross_matrix.run_vl_media_cache_contract import (
+    SOURCE_HASH_FILES as VL_MEDIA_SOURCE_HASH_FILES,
 )
 
 
@@ -43,6 +52,9 @@ MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-202
 MODEL_FAMILY_CONTRACT_REL = "build/current-model-family-detection-contract-20260521.json"
 PARSER_REGISTRY_CONTRACT_REL = "build/current-parser-registry-contract-20260521.json"
 MODEL_ARTIFACT_FORMAT_CONTRACT_REL = "build/current-model-artifact-format-contract-20260521.json"
+GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-20260521.json"
+NATIVE_MTP_CONTRACT_REL = "build/current-native-mtp-contract-20260521.json"
+VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-20260521.json"
 DSV4_DEFAULT_CACHE_TOOL_LOOP_REL = "build/current-dsv4-default-cache-tool-loop/result.json"
 DSV4_QUALITY_CLEARANCE_CHECKS = (
     "identifier_integrity",
@@ -131,6 +143,43 @@ MODEL_ARTIFACT_FORMAT_CONTRACT_CHECKS = (
     "preserved_mtp_detection",
     "cache_profile_detection",
     "not_path_name_only",
+)
+GENERATION_DEFAULTS_CONTRACT_CHECKS = (
+    "generation_config_defaults_are_surfaced",
+    "jang_config_sampling_defaults_override_generation_config",
+    "disabled_top_k_sentinels_normalize_to_off",
+    "mode_specific_jang_repetition_penalty_is_metadata_owned",
+    "request_api_overrides_win_over_startup_defaults",
+    "bundle_max_new_tokens_preserved_when_omitted",
+    "omitted_max_tokens_without_bundle_default_is_bounded",
+    "server_default_output_cap_is_not_request_ceiling",
+    "no_hidden_sampler_forcing_or_repetition_floor",
+    "panel_does_not_emit_default_sampler_cli_flags",
+)
+NATIVE_MTP_CONTRACT_CHECKS = (
+    "native_mtp_d3_default_policy",
+    "model_tuning_depth_policy",
+    "dropped_and_preserved_mtp_detection",
+    "config_only_mtp_never_activates",
+    "mxfp4_mxfp8_mtp_artifact_detection",
+    "mllm_native_mtp_decode_loop",
+    "native_mtp_telemetry_edge_cases",
+    "panel_native_mtp_controls_visible_when_supported",
+    "panel_native_mtp_suppressed_for_dsv4_or_unsupported",
+    "live_speed_equivalence_not_claimed",
+)
+VL_MEDIA_CONTRACT_CHECKS = (
+    "video_url_request_schema",
+    "video_fallback_processing",
+    "qwen36_vl_video_detection",
+    "media_cache_salt_separates_modal_inputs",
+    "hybrid_ssm_vlm_cache_contracts",
+    "mllm_tool_replay_preserves_effective_tools",
+    "panel_read_video_builtin_tool",
+    "panel_media_tool_followup_content_parts",
+    "panel_image_display_consistency",
+    "panel_vlm_launch_settings",
+    "all_required_panel_markers_present",
 )
 PANEL_SETTINGS_SOURCE_HASH_FILES = (
     "panel/src/main/sessions.ts",
@@ -398,6 +447,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     model_family_contract = _load(root, MODEL_FAMILY_CONTRACT_REL)
     parser_registry_contract = _load(root, PARSER_REGISTRY_CONTRACT_REL)
     model_artifact_format_contract = _load(root, MODEL_ARTIFACT_FORMAT_CONTRACT_REL)
+    generation_defaults_contract = _load(root, GENERATION_DEFAULTS_CONTRACT_REL)
+    native_mtp_contract = _load(root, NATIVE_MTP_CONTRACT_REL)
+    vl_media_contract = _load(root, VL_MEDIA_CONTRACT_REL)
 
     requirements: list[dict[str, Any]] = []
     cache_checks = cache.get("checks") or {}
@@ -760,6 +812,44 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "model_family": model_family_details,
             "parser_registry": parser_registry_details,
             "model_artifact_format": model_artifact_format_details,
+        },
+    )
+    generation_defaults_ok, generation_defaults_details = _contract_detail(
+        root,
+        generation_defaults_contract,
+        GENERATION_DEFAULTS_CONTRACT_CHECKS,
+        GENERATION_DEFAULTS_SOURCE_HASH_FILES,
+    )
+    native_mtp_ok, native_mtp_details = _contract_detail(
+        root,
+        native_mtp_contract,
+        NATIVE_MTP_CONTRACT_CHECKS,
+        NATIVE_MTP_SOURCE_HASH_FILES,
+    )
+    vl_media_ok, vl_media_details = _contract_detail(
+        root,
+        vl_media_contract,
+        VL_MEDIA_CONTRACT_CHECKS,
+        VL_MEDIA_SOURCE_HASH_FILES,
+    )
+    _add(
+        requirements,
+        "Generation defaults, Native MTP, and VL media gates are current",
+        _status(generation_defaults_ok and native_mtp_ok and vl_media_ok),
+        [
+            GENERATION_DEFAULTS_CONTRACT_REL,
+            NATIVE_MTP_CONTRACT_REL,
+            VL_MEDIA_CONTRACT_REL,
+        ],
+        caveat=(
+            "This proves no-heavy wiring, metadata ownership, and media/cache "
+            "compatibility. Live MTP speed/equivalence and video/Omni quality "
+            "remain separate live rows."
+        ),
+        details={
+            "generation_defaults": generation_defaults_details,
+            "native_mtp": native_mtp_details,
+            "vl_media": vl_media_details,
         },
     )
     api_cache_ok, api_cache_checks = _contract_checks(

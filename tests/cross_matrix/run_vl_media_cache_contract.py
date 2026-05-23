@@ -41,7 +41,7 @@ SOURCE_HASH_FILES = (
     "vmlx_engine/mllm_scheduler.py",
     "vmlx_engine/mllm_cache.py",
     "vmlx_engine/engine/batched.py",
-    "vmlx_engine/openai_models.py",
+    "vmlx_engine/api/models.py",
     "panel/src/main/ipc/chat.ts",
     "panel/src/main/tools/executor.ts",
     "panel/src/main/tools/registry.ts",

@@ -405,6 +405,67 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
             },
         },
     )
+    from tests.cross_matrix.summarize_objective_proof import (
+        GENERATION_DEFAULTS_CONTRACT_CHECKS,
+        GENERATION_DEFAULTS_SOURCE_HASH_FILES,
+        NATIVE_MTP_CONTRACT_CHECKS,
+        NATIVE_MTP_SOURCE_HASH_FILES,
+        VL_MEDIA_CONTRACT_CHECKS,
+        VL_MEDIA_SOURCE_HASH_FILES,
+    )
+
+    for rel in (
+        *GENERATION_DEFAULTS_SOURCE_HASH_FILES,
+        *NATIVE_MTP_SOURCE_HASH_FILES,
+        *VL_MEDIA_SOURCE_HASH_FILES,
+    ):
+        if not (tmp_path / rel).exists():
+            _write_json(tmp_path, rel, {"fixture": rel})
+    _write_json(
+        tmp_path,
+        "build/current-generation-defaults-contract-20260521.json",
+        {
+            "status": "pass",
+            "checks": {
+                key: True
+                for key in GENERATION_DEFAULTS_CONTRACT_CHECKS
+            },
+            "failed": [],
+            "missing_markers": [],
+            "source_hashes": {
+                rel: _sha256(tmp_path / rel)
+                for rel in GENERATION_DEFAULTS_SOURCE_HASH_FILES
+            },
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-native-mtp-contract-20260521.json",
+        {
+            "status": "pass",
+            "checks": {key: True for key in NATIVE_MTP_CONTRACT_CHECKS},
+            "failed": [],
+            "missing_markers": [],
+            "source_hashes": {
+                rel: _sha256(tmp_path / rel)
+                for rel in NATIVE_MTP_SOURCE_HASH_FILES
+            },
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-vl-media-cache-contract-20260521.json",
+        {
+            "status": "pass",
+            "checks": {key: True for key in VL_MEDIA_CONTRACT_CHECKS},
+            "failed": [],
+            "missing_markers": [],
+            "source_hashes": {
+                rel: _sha256(tmp_path / rel)
+                for rel in VL_MEDIA_SOURCE_HASH_FILES
+            },
+        },
+    )
 
 
 def test_objective_proof_digest_keeps_dsv4_long_quality_open(tmp_path):
@@ -642,6 +703,42 @@ def test_objective_proof_digest_accepts_model_family_parser_artifact_contracts(t
     assert row["details"]["model_family"]["missing_source_hashes"] == []
     assert row["details"]["parser_registry"]["stale_source_hashes"] == []
     assert row["details"]["model_artifact_format"]["stale_source_hashes"] == []
+
+
+def test_objective_proof_digest_requires_generation_mtp_vl_contracts(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    (tmp_path / "build/current-native-mtp-contract-20260521.json").unlink(
+        missing_ok=True
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Generation defaults, Native MTP, and VL media gates are current"]
+    assert row["status"] == "open"
+    assert row["details"]["missing_evidence"] == [
+        "build/current-native-mtp-contract-20260521.json"
+    ]
+
+
+def test_objective_proof_digest_accepts_generation_mtp_vl_contracts(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Generation defaults, Native MTP, and VL media gates are current"]
+    assert row["status"] == "pass"
+    assert row["details"]["generation_defaults"]["missing_markers"] == []
+    assert row["details"]["native_mtp"]["missing_markers"] == []
+    assert row["details"]["vl_media"]["missing_markers"] == []
+    assert row["details"]["generation_defaults"]["stale_source_hashes"] == []
+    assert row["details"]["native_mtp"]["stale_source_hashes"] == []
+    assert row["details"]["vl_media"]["stale_source_hashes"] == []
 
 
 def test_objective_proof_digest_rejects_stale_panel_settings_contract_artifact(tmp_path):
