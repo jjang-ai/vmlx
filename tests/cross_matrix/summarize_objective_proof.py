@@ -57,6 +57,12 @@ DSV4_LIVE_CACHE_CONTEXT_IDENTIFIER_REL = (
 DSV4_SOURCE_NOCACHE_IDENTIFIER_REL = (
     "build/current-dsv4-live-identifier-list-nocache-source-20260523.json"
 )
+DSV4_SOURCE_SAME_PROMPT_NOCACHE_REL = (
+    "build/current-dsv4-live-identifier-sameprompt-nocache-source-20260523.json"
+)
+DSV4_SOURCE_CACHE_COMPARISON_REL = (
+    "build/current-dsv4-live-identifier-cache-source-comparison-20260523.json"
+)
 API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260521.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260521.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-20260521.json"
@@ -670,6 +676,80 @@ def _dsv4_source_nocache_identifier_detail(payload: dict[str, Any], root: Path) 
     }
 
 
+def _dsv4_source_same_prompt_cache_boundary_detail(
+    same_prompt_payload: dict[str, Any],
+    cache_payload: dict[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    same_present = _path_present(root, DSV4_SOURCE_SAME_PROMPT_NOCACHE_REL)
+    cache_present = _path_present(root, DSV4_SOURCE_CACHE_COMPARISON_REL)
+    probe = same_prompt_payload.get("probe") if isinstance(same_prompt_payload.get("probe"), dict) else {}
+    analysis = probe.get("analysis") if isinstance(probe.get("analysis"), dict) else {}
+    same_content = analysis.get("content") if isinstance(analysis.get("content"), str) else ""
+    missing = [
+        item
+        for item in (analysis.get("missing_identifiers") or [])
+        if isinstance(item, str)
+    ]
+    same_nocache_failed = same_present and (
+        same_prompt_payload.get("status") != "pass"
+        or bool(missing)
+        or analysis.get("has_common_corruptions") is True
+    )
+
+    cases = cache_payload.get("cases") if isinstance(cache_payload.get("cases"), list) else []
+    case_summaries: dict[str, dict[str, Any]] = {}
+    cache_failures: dict[str, list[dict[str, Any]]] = {}
+    cache_hit_proven_by_case: dict[str, bool] = {}
+    for case in cases:
+        if not isinstance(case, dict):
+            continue
+        name = case.get("name")
+        if not isinstance(name, str):
+            continue
+        failures = [
+            item
+            for item in (case.get("failures") or [])
+            if isinstance(item, dict)
+        ]
+        cache_failures[name] = failures
+        cache_hit_proven_by_case[name] = False
+        case_summaries[name] = {
+            "status": case.get("status"),
+            "artifact": case.get("artifact"),
+            "failure_count": len(failures),
+            "failures": failures,
+        }
+
+    pooloff_failed = bool(cache_failures.get("pooloff")) or (
+        case_summaries.get("pooloff", {}).get("status") not in {None, "pass"}
+    )
+    poolon_failed = bool(cache_failures.get("poolon")) or (
+        case_summaries.get("poolon", {}).get("status") not in {None, "pass"}
+    )
+    return {
+        "artifact": DSV4_SOURCE_SAME_PROMPT_NOCACHE_REL,
+        "cache_comparison_artifact": DSV4_SOURCE_CACHE_COMPARISON_REL,
+        "present": same_present and cache_present,
+        "same_prompt_nocache": {
+            "status": same_prompt_payload.get("status") if same_present else "missing",
+            "content": same_content[:1000],
+            "missing_identifiers": missing,
+            "has_common_corruptions": analysis.get("has_common_corruptions") is True,
+            "usage": probe.get("usage"),
+        },
+        "same_prompt_nocache_failed": same_nocache_failed,
+        "cache_enabled_pooloff_failed": pooloff_failed,
+        "cache_enabled_poolon_failed": poolon_failed,
+        "pool_quant_is_not_differentiator": pooloff_failed and poolon_failed,
+        "cache_hit_restore_not_proven_by_short_prompt": (
+            same_nocache_failed and pooloff_failed and poolon_failed
+        ),
+        "cache_case_summaries": case_summaries,
+        "cache_hit_proven_by_case": cache_hit_proven_by_case,
+    }
+
+
 def _contract_checks(payload: dict[str, Any], required: tuple[str, ...]) -> tuple[bool, dict[str, bool]]:
     checks = payload.get("checks") or {}
     required_checks = {key: checks.get(key) is True for key in required}
@@ -923,6 +1003,8 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     dsv4_live_logprob_context_matrix = _load(root, DSV4_LIVE_LOGPROB_CONTEXT_MATRIX_REL)
     dsv4_live_cache_context_identifier = _load(root, DSV4_LIVE_CACHE_CONTEXT_IDENTIFIER_REL)
     dsv4_source_nocache_identifier = _load(root, DSV4_SOURCE_NOCACHE_IDENTIFIER_REL)
+    dsv4_source_same_prompt_nocache = _load(root, DSV4_SOURCE_SAME_PROMPT_NOCACHE_REL)
+    dsv4_source_cache_comparison = _load(root, DSV4_SOURCE_CACHE_COMPARISON_REL)
     api_cache_contract = _load(root, API_CACHE_CONTRACT_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
     max_output_context_contract = _load(root, MAX_OUTPUT_CONTEXT_CONTRACT_REL)
@@ -1451,6 +1533,13 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "current_source_nocache_identifier_probe": _dsv4_source_nocache_identifier_detail(
                 dsv4_source_nocache_identifier, root
             ),
+            "current_source_same_prompt_cache_boundary": (
+                _dsv4_source_same_prompt_cache_boundary_detail(
+                    dsv4_source_same_prompt_nocache,
+                    dsv4_source_cache_comparison,
+                    root,
+                )
+            ),
         }
     )
     _add(
@@ -1467,6 +1556,8 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             DSV4_LIVE_LOGPROB_CONTEXT_MATRIX_REL,
             DSV4_LIVE_CACHE_CONTEXT_IDENTIFIER_REL,
             DSV4_SOURCE_NOCACHE_IDENTIFIER_REL,
+            DSV4_SOURCE_SAME_PROMPT_NOCACHE_REL,
+            DSV4_SOURCE_CACHE_COMPARISON_REL,
             "docs/internal/release-gates/20260520_sisyphus_dsv4_identifier_gate_jang_affine_current/result.json",
         ],
         caveat=(

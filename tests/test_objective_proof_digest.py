@@ -1135,6 +1135,90 @@ def test_objective_proof_digest_surfaces_dsv4_source_nocache_identifier_pass(tmp
     assert probe["probe_elapsed_sec"] == 31.717
 
 
+def test_objective_proof_digest_surfaces_dsv4_same_prompt_cache_boundary(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-live-identifier-sameprompt-nocache-source-20260523.json",
+        {
+            "status": "fail",
+            "health_before": {
+                "native_cache": {
+                    "prefix": False,
+                    "paged": False,
+                    "block_disk_l2": False,
+                    "pool_quant": {"enabled": False, "env": "0"},
+                    "generic_turboquant_kv": {"enabled": False},
+                }
+            },
+            "probe": {
+                "analysis": {
+                    "content": "THREE.ScScene\nTHREE.WebWebGLRenderer\nTHREE.PerspectiveCamera\nTHREE.BBoxGeometry",
+                    "missing_identifiers": [
+                        "THREE.Scene",
+                        "THREE.WebGLRenderer",
+                        "THREE.BoxGeometry",
+                    ],
+                    "has_common_corruptions": True,
+                },
+                "usage": {"completion_tokens": 32},
+            },
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-live-identifier-cache-source-comparison-20260523.json",
+        {
+            "status": "fail",
+            "cases": [
+                {
+                    "name": "pooloff",
+                    "status": "fail",
+                    "artifact": "build/current-dsv4-live-identifier-cache-source-pooloff-20260523.json",
+                    "failures": [
+                        {
+                            "label": "cold_cache_allowed",
+                            "missing": ["THREE.Scene"],
+                            "content": "THREE.ScScene",
+                        }
+                    ],
+                },
+                {
+                    "name": "poolon",
+                    "status": "fail",
+                    "artifact": "build/current-dsv4-live-identifier-cache-source-poolon-20260523.json",
+                    "failures": [
+                        {
+                            "label": "cold_cache_allowed",
+                            "missing": ["THREE.Scene"],
+                            "content": "THREE.ScScene",
+                        }
+                    ],
+                },
+            ],
+        },
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    quality = rows["DSV4 long-output/code/file-generation quality is release-cleared"]
+    boundary = quality["details"]["current_source_same_prompt_cache_boundary"]
+    assert quality["status"] == "open"
+    assert boundary["same_prompt_nocache_failed"] is True
+    assert boundary["cache_enabled_pooloff_failed"] is True
+    assert boundary["cache_enabled_poolon_failed"] is True
+    assert boundary["pool_quant_is_not_differentiator"] is True
+    assert boundary["cache_hit_restore_not_proven_by_short_prompt"] is True
+    assert boundary["same_prompt_nocache"]["missing_identifiers"] == [
+        "THREE.Scene",
+        "THREE.WebGLRenderer",
+        "THREE.BoxGeometry",
+    ]
+
+
 def test_objective_proof_digest_downgrades_pass_rows_with_missing_evidence(tmp_path):
     from tests.cross_matrix.summarize_objective_proof import build_digest
 
