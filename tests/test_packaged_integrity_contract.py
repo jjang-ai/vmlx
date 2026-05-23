@@ -57,6 +57,7 @@ def test_packaged_integrity_accepts_current_release_gate_unit_count(monkeypatch,
     monkeypatch.setattr(runner, "_sha256", lambda _path: "hash")
     monkeypatch.setattr(runner, "_check_packaged_renderer_dsv4_cache_ui", lambda _root: True)
     monkeypatch.setattr(runner, "_check_packaged_renderer_max_thinking_tokens", lambda _root: True)
+    monkeypatch.setattr(runner, "_check_packaged_user_data_isolation_bootstrap", lambda _root: True)
 
     artifact = runner.build_artifact(tmp_path)
 
@@ -103,6 +104,7 @@ def test_packaged_integrity_sets_clean_jang_source_env_for_bundle_checks(monkeyp
     monkeypatch.setattr(runner, "_sha256", lambda _path: "hash")
     monkeypatch.setattr(runner, "_check_packaged_renderer_dsv4_cache_ui", lambda _root: True)
     monkeypatch.setattr(runner, "_check_packaged_renderer_max_thinking_tokens", lambda _root: True)
+    monkeypatch.setattr(runner, "_check_packaged_user_data_isolation_bootstrap", lambda _root: True)
 
     artifact = runner.build_artifact(tmp_path, jang_tools_source=clean_jang)
 
@@ -169,6 +171,59 @@ def test_packaged_integrity_checks_packaged_max_thinking_tokens_wiring(monkeypat
     artifact = runner.build_artifact(tmp_path)
 
     assert "packaged_renderer_max_thinking_tokens_wired" in artifact["checks"]
+
+
+def test_packaged_integrity_checks_packaged_user_data_isolation_bootstrap(monkeypatch, tmp_path):
+    def fake_run(_root: Path, name: str, _cwd_rel: Path, _cmd: list[str]):
+        if name == "release_gate_unit_contracts":
+            return _result(name, 0, ["34 passed in 0.07s"], passed=runner.MIN_RELEASE_GATE_UNIT_TESTS)
+        if name == "bundled_python_verifier":
+            return _result(
+                name,
+                0,
+                [
+                    "  ok   bundled vmlx_engine version matches package.json",
+                    "  ok   bundled critical vmlx_engine files match source content",
+                    "  ok   bundled critical jang_tools files match source content",
+                    "  ok   bundled-python console-script shebangs are relocatable",
+                    "bundled-python: all critical imports ok",
+                ],
+            )
+        if name == "release_gate_skip_app":
+            return _result(name, 1, [_expected_open_digest_line()])
+        raise AssertionError(name)
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    monkeypatch.setattr(runner, "_sha256", lambda _path: "hash")
+    monkeypatch.setattr(runner, "_check_packaged_renderer_dsv4_cache_ui", lambda _root: True)
+    monkeypatch.setattr(runner, "_check_packaged_renderer_max_thinking_tokens", lambda _root: True)
+    monkeypatch.setattr(runner, "_check_packaged_user_data_isolation_bootstrap", lambda _root: True)
+
+    artifact = runner.build_artifact(tmp_path)
+
+    assert "packaged_user_data_isolation_bootstrap" in artifact["checks"]
+
+
+def test_packaged_user_data_isolation_check_rejects_missing_user_data_override(tmp_path):
+    app_asar = tmp_path / runner.PACKAGED_RENDERER_ASAR
+    app_asar.parent.mkdir(parents=True)
+    app_asar.write_bytes(b"requestSingleInstanceLock\n")
+
+    assert runner._check_packaged_user_data_isolation_bootstrap(tmp_path) is False
+
+
+def test_packaged_user_data_isolation_check_accepts_early_user_data_override(tmp_path):
+    app_asar = tmp_path / runner.PACKAGED_RENDERER_ASAR
+    app_asar.parent.mkdir(parents=True)
+    app_asar.write_bytes(
+        b"--vmlx-user-data-dir\n"
+        b"VMLX_USER_DATA_DIR\n"
+        b"VMLINUX_USER_DATA_DIR\n"
+        b"setPath(\"userData\"\n"
+        b"requestSingleInstanceLock\n"
+    )
+
+    assert runner._check_packaged_user_data_isolation_bootstrap(tmp_path) is True
 
 
 def test_packaged_renderer_max_thinking_tokens_check_rejects_missing_request_wiring(tmp_path):

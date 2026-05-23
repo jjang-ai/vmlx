@@ -48,11 +48,19 @@ PACKAGED_RENDERER_REQUIRED_MAX_THINKING_STRINGS = (
     b"max_thinking_tokens",
     b"thinking_budget",
 )
+PACKAGED_USER_DATA_ISOLATION_STRINGS = (
+    b"--vmlx-user-data-dir",
+    b"VMLX_USER_DATA_DIR",
+    b"VMLINUX_USER_DATA_DIR",
+    b"requestSingleInstanceLock",
+)
 
 SOURCE_HASH_FILES = (
     "panel/scripts/release-gate-python-app.py",
     "panel/scripts/verify-bundled-python.sh",
     "panel/scripts/bundle-python.sh",
+    "panel/src/main/index.ts",
+    "panel/src/main/user-data-dir.ts",
     "panel/package.json",
     "pyproject.toml",
     "tests/test_release_gate_python_app.py",
@@ -154,6 +162,18 @@ def _check_packaged_renderer_max_thinking_tokens(root: Path) -> bool:
     return all(marker in data for marker in PACKAGED_RENDERER_REQUIRED_MAX_THINKING_STRINGS)
 
 
+def _check_packaged_user_data_isolation_bootstrap(root: Path) -> bool:
+    app_asar = root / PACKAGED_RENDERER_ASAR
+    if not app_asar.exists():
+        return False
+    data = app_asar.read_bytes()
+    if not all(marker in data for marker in PACKAGED_USER_DATA_ISOLATION_STRINGS):
+        return False
+    set_path_index = data.find(b"setPath")
+    lock_index = data.find(b"requestSingleInstanceLock")
+    return set_path_index >= 0 and lock_index >= 0 and set_path_index < lock_index
+
+
 def _run(root: Path, name: str, cwd_rel: Path, cmd: list[str]) -> dict[str, Any]:
     started = time.monotonic()
     proc = subprocess.run(
@@ -237,6 +257,9 @@ def build_artifact(
         ),
         "packaged_renderer_max_thinking_tokens_wired": (
             _check_packaged_renderer_max_thinking_tokens(root)
+        ),
+        "packaged_user_data_isolation_bootstrap": (
+            _check_packaged_user_data_isolation_bootstrap(root)
         ),
         "dry_release_gate_fails_only_on_known_objectives": release_gate_ok,
     }

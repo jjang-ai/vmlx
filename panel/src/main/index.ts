@@ -1,3 +1,4 @@
+import './user-data-dir'
 import { app, BrowserWindow, ipcMain, dialog, shell, session } from 'electron'
 import { join } from 'path'
 import { readFileSync } from 'fs'

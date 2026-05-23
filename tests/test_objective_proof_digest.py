@@ -1619,6 +1619,30 @@ def test_objective_proof_digest_accepts_dsv4_quality_clearance_artifact(tmp_path
     )
     _write_json(
         tmp_path,
+        "build/current-dsv4-live-identifier-list-nocache-source-20260523.json",
+        {
+            "status": "pass",
+            "health_before": {
+                "native_cache": {
+                    "prefix": False,
+                    "paged": False,
+                    "block_disk_l2": False,
+                    "pool_quant": {"enabled": False, "env": "0"},
+                    "generic_turboquant_kv": {"enabled": False},
+                }
+            },
+            "probe": {
+                "content": "THREE.Scene\nTHREE.WebGLRenderer\nTHREE.PerspectiveCamera",
+                "identifier_counts": {
+                    "THREE.Scene": 1,
+                    "THREE.WebGLRenderer": 1,
+                    "THREE.PerspectiveCamera": 1,
+                },
+            },
+        },
+    )
+    _write_json(
+        tmp_path,
         "docs/internal/release-gates/20260520_sisyphus_dsv4_identifier_gate_jang_affine_current/result.json",
         {"ok": True},
     )
