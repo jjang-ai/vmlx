@@ -29,6 +29,8 @@ from tests.cross_matrix.run_production_family_audit import (
     is_non_length_stop,
     normalize_python_executable,
     normalize_short_answer,
+    family_matches_expected,
+    sampling_loop_risk_summary,
     simple_loop_score,
     static_audit,
 )
@@ -156,12 +158,103 @@ def test_hy3_affine_rows_track_generation_and_quantization_contract():
         assert static["registry"]["tool_parser"] == "hunyuan"
         assert static["registry"]["cache_type"] == "kv"
         assert static["registry"]["think_in_template"] is False
-        assert static["generation"]["max_new_tokens"] is None
-        assert static["generation"]["temperature"] == 0.9
+        assert static["generation"]["max_new_tokens"] == 2048
+        assert static["generation"]["temperature"] == 0.0
         assert static["generation"]["top_p"] == 1
+        assert static["generation"]["top_k"] == 0
+        assert static["sampling_loop_risk"]["max_new_tokens"] == 2048
+        assert static["sampling_loop_risk"]["output_cap_source"] == "jang_config.chat.sampling_defaults.max_new_tokens"
+        assert static["sampling_loop_risk"]["reasoning_default_mode"] == "no_think"
+        assert "bundle omits repetition_penalty; engine must omit it rather than invent a hidden floor" in static["sampling_loop_risk"]["review_notes"]
         assert static["jang"]["quantization"]["group_size"] == 128
         assert static["jang"]["runtime"]["bundle_has_mtp"] is False
         assert not static["issues"]
+
+
+def test_static_audit_surfaces_sampling_loop_risk_fields_without_forcing_defaults(tmp_path):
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "hy_v3"}))
+    (tmp_path / "generation_config.json").write_text(
+        json.dumps(
+            {
+                "temperature": 0.9,
+                "top_p": 1.0,
+                "top_k": -1,
+            }
+        )
+    )
+    (tmp_path / "jang_config.json").write_text(
+        json.dumps(
+            {
+                "model_family": "hy_v3",
+                "chat": {
+                    "reasoning": {"supported": True},
+                    "sampling_defaults": {
+                        "temperature": 0.9,
+                        "top_p": 1.0,
+                        "top_k": -1,
+                    },
+                },
+            }
+        )
+    )
+    row = ModelRow(
+        id="hy3_tmp",
+        label="tmp hy3",
+        path=str(tmp_path),
+        family="hy_v3",
+        expect_reasoning=True,
+        expect_tool_parser="hunyuan",
+    )
+
+    static = static_audit(row)
+    risk = static["sampling_loop_risk"]
+
+    assert static["generation"]["top_k"] == -1
+    assert static["generation"]["repetition_penalty"] is None
+    assert risk["status"] == "review"
+    assert risk["output_cap_source"] == "engine_fallback_4096"
+    assert risk["top_k_disabled"] is True
+    assert risk["repetition_sources"] == {}
+    assert any("max_new_tokens" in note for note in risk["review_notes"])
+    assert any("repetition_penalty" in note for note in risk["review_notes"])
+    assert any("Auto must stay model/template-owned" in note for note in risk["review_notes"])
+
+
+def test_sampling_loop_risk_prefers_jang_chat_defaults_over_generation_config():
+    risk = sampling_loop_risk_summary(
+        gen={
+            "max_new_tokens": 8192,
+            "temperature": 0.7,
+            "top_p": 0.95,
+            "top_k": 40,
+            "repetition_penalty": 1.1,
+        },
+        sampling={
+            "max_new_tokens": 4096,
+            "temperature": 0.6,
+            "top_p": 0.9,
+            "top_k": 0,
+            "repetition_penalty_chat": 1.05,
+            "repetition_penalty_thinking": 1.0,
+        },
+        reasoning={"supported": True, "default_mode": "chat"},
+        registry={"reasoning_parser": "qwen3"},
+    )
+
+    assert risk["status"] == "review"
+    assert risk["output_cap_source"] == "jang_config.chat.sampling_defaults.max_new_tokens"
+    assert risk["max_new_tokens"] == 4096
+    assert risk["temperature"] == 0.6
+    assert risk["top_p"] == 0.9
+    assert risk["top_k"] == 0
+    assert risk["top_k_disabled"] is True
+    assert risk["repetition_sources"] == {
+        "jang_config.chat.sampling_defaults.repetition_penalty_chat": 1.05,
+        "jang_config.chat.sampling_defaults.repetition_penalty_thinking": 1.0,
+        "generation_config.repetition_penalty": 1.1,
+    }
+    assert risk["reasoning_default_mode"] == "chat"
+    assert risk["review_notes"] == ["bundle disables top_k with a non-positive sentinel"]
 
 
 def test_ling_rows_do_not_expect_reasoning():
@@ -170,6 +263,12 @@ def test_ling_rows_do_not_expect_reasoning():
     assert rows["ling_flash_tq"].expect_reasoning is False
     assert rows["ling_flash_tq2_crack"].expect_reasoning is False
     assert rows["ling_flash_mxfp4_crack"].expect_reasoning is False
+
+
+def test_static_audit_accepts_registry_family_aliases_for_ling_and_nemotron():
+    assert family_matches_expected("bailing_hybrid", "ling")
+    assert family_matches_expected("nemotron_omni", "nemotron_h")
+    assert not family_matches_expected("minimax", "ling")
 
 
 def test_zaya_static_audit_exposes_cache_subtype_when_local_bundle_exists():
@@ -311,6 +410,16 @@ def test_dsv4_decode_speed_gate_tracks_jangtq_and_pure_affine_lanes():
     assert run_decode_speed_gate.ROWS["dsv4_jang_dq2_gate3math6"].path in (
         run_decode_speed_gate.DSV4_AFFINE_MODEL_CANDIDATES
     )
+
+
+def test_dsv4_production_audit_pure_affine_lane_points_at_present_bundle():
+    rows = {row.id: row for row in ROWS}
+
+    row = rows["dsv4_jang_dq2_gate3math6"]
+    assert row.path == "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANG"
+    assert row.family == "deepseek_v4"
+    assert row.cache_profile == "dsv4_composite"
+    assert row.expect_tool_parser == "dsml"
 
 
 def test_dsv4_decode_speed_gate_reads_nested_native_cache_health():

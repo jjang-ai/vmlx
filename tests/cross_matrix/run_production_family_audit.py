@@ -206,20 +206,17 @@ ROWS: list[ModelRow] = [
     ),
     ModelRow(
         id="dsv4_jang_dq2_gate3math6",
-        label="DeepSeek-V4-Flash JANG DQ2 Token8 DownG32 Gate3Math6 NoMTP",
-        path=(
-            "/Users/example/models/JANGQ/"
-            "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP"
-        ),
+        label="DeepSeek-V4-Flash JANG local pure-affine NoMTP artifact",
+        path="/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANG",
         family="deepseek_v4",
         expect_reasoning=True,
         expect_tool_parser="dsml",
         cache_profile="dsv4_composite",
         slow=True,
         notes=[
-            "Current pure-affine JANG DSV4 keeper candidate. Keeps the DQ2 "
-            "speed-class layout with token bookends at 8-bit, routed down "
-            "g32, selected gate 3-bit math layers, and no preserved MTP.",
+            "Current present pure-affine JANG DSV4 keeper candidate. It uses "
+            "the JANG_2L_GS64_ProjLayerBits_Ggs32-Dgs32-Ugs64_bk4_Tok8g64_NoMTP "
+            "profile from jang_config.json.",
             "Must use the DSV4 native SWA+CSA/HCA composite cache path "
             "with deepseek_v4_v7 paged-prefix/L2 serialization; generic "
             "TurboQuant KV is invalid for this family.",
@@ -954,6 +951,109 @@ def _mtp_status(
     }
 
 
+def sampling_loop_risk_summary(
+    *,
+    gen: dict[str, Any],
+    sampling: dict[str, Any],
+    reasoning: dict[str, Any],
+    registry: dict[str, Any],
+) -> dict[str, Any]:
+    """Surface model-owned sampling gaps tied to long-output loop reports.
+
+    This is deliberately evidence-only. It does not prescribe hidden fallback
+    params; it records whether the bundle itself declares the output cap and
+    sampler fields that the app/engine should pick up when requests omit them.
+    """
+
+    def numeric(value: Any) -> float | int | None:
+        return (
+            value
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+            else None
+        )
+
+    max_new_tokens = numeric(sampling.get("max_new_tokens"))
+    output_cap_source = "jang_config.chat.sampling_defaults.max_new_tokens"
+    if max_new_tokens is None:
+        max_new_tokens = numeric(gen.get("max_new_tokens"))
+        output_cap_source = "generation_config.max_new_tokens"
+    if max_new_tokens is None or max_new_tokens <= 0:
+        output_cap_source = "engine_fallback_4096"
+
+    repetition_sources = {
+        f"jang_config.chat.sampling_defaults.{key}": sampling.get(key)
+        for key in (
+            "repetition_penalty_chat",
+            "repetition_penalty_thinking",
+            "repetition_penalty",
+        )
+        if numeric(sampling.get(key)) is not None
+    }
+    if numeric(gen.get("repetition_penalty")) is not None:
+        repetition_sources["generation_config.repetition_penalty"] = gen.get(
+            "repetition_penalty"
+        )
+
+    top_k = (
+        sampling.get("top_k")
+        if numeric(sampling.get("top_k")) is not None
+        else gen.get("top_k")
+    )
+    top_k_disabled = numeric(top_k) is not None and int(top_k) <= 0
+    supports_reasoning = bool(
+        reasoning.get("supported")
+        or registry.get("reasoning_parser")
+        or registry.get("think_in_template")
+    )
+    default_mode = reasoning.get("default_mode") or reasoning.get("default")
+
+    review_notes: list[str] = []
+    if output_cap_source == "engine_fallback_4096":
+        review_notes.append(
+            "bundle omits positive max_new_tokens; omitted requests rely on bounded engine fallback 4096"
+        )
+    if not repetition_sources:
+        review_notes.append(
+            "bundle omits repetition_penalty; engine must omit it rather than invent a hidden floor"
+        )
+    if top_k_disabled:
+        review_notes.append("bundle disables top_k with a non-positive sentinel")
+    if supports_reasoning and not default_mode:
+        review_notes.append(
+            "reasoning-capable bundle has no explicit chat.reasoning.default_mode; Auto must stay model/template-owned"
+        )
+
+    return {
+        "output_cap_source": output_cap_source,
+        "max_new_tokens": (
+            int(max_new_tokens)
+            if isinstance(max_new_tokens, (int, float)) and max_new_tokens > 0
+            else None
+        ),
+        "temperature": sampling.get("temperature", gen.get("temperature")),
+        "top_p": sampling.get("top_p", gen.get("top_p")),
+        "top_k": top_k,
+        "top_k_disabled": top_k_disabled,
+        "min_p": sampling.get("min_p", gen.get("min_p")),
+        "repetition_sources": repetition_sources,
+        "reasoning_supported": supports_reasoning,
+        "reasoning_default_mode": default_mode,
+        "review_notes": review_notes,
+        "status": "review" if review_notes else "covered",
+    }
+
+
+FAMILY_EXPECTATION_ALIASES = {
+    "bailing_hybrid": {"bailing_hybrid", "ling"},
+    "nemotron_omni": {"nemotron_omni", "nemotron_h", "nemotron"},
+}
+
+
+def family_matches_expected(expected: str, actual: Any) -> bool:
+    actual_s = str(actual or "")
+    return actual_s in FAMILY_EXPECTATION_ALIASES.get(expected, {expected})
+
+
 def static_audit(row: ModelRow) -> dict[str, Any]:
     model_dir = resolve_model_dir(row.path)
     cfg = read_json(model_dir / "config.json")
@@ -990,6 +1090,12 @@ def static_audit(row: ModelRow) -> dict[str, Any]:
     sampling = chat.get("sampling_defaults") if isinstance(chat.get("sampling_defaults"), dict) else {}
     safetensors_summary = summarize_safetensors(model_dir)
     mtp = _mtp_status(model_dir, cfg, jang, safetensors_summary)
+    sampling_risk = sampling_loop_risk_summary(
+        gen=gen,
+        sampling=sampling,
+        reasoning=reasoning,
+        registry=registry,
+    )
 
     eos = {
         "config": cfg.get("eos_token_id"),
@@ -1078,7 +1184,7 @@ def static_audit(row: ModelRow) -> dict[str, Any]:
     )
     if row.expect_reasoning and not has_reasoning_surface:
         issues.append("expected reasoning model but no reasoning metadata/template found")
-    if registry.get("family_name") and registry.get("family_name") != row.family:
+    if registry.get("family_name") and not family_matches_expected(row.family, registry.get("family_name")):
         issues.append(
             "registry family mismatch: "
             f"expected {row.family}, got {registry.get('family_name')}"
@@ -1143,7 +1249,11 @@ def static_audit(row: ModelRow) -> dict[str, Any]:
             "max_new_tokens": gen.get("max_new_tokens"),
             "temperature": gen.get("temperature"),
             "top_p": gen.get("top_p"),
+            "top_k": gen.get("top_k"),
+            "min_p": gen.get("min_p"),
+            "repetition_penalty": gen.get("repetition_penalty"),
         },
+        "sampling_loop_risk": sampling_risk,
         "jang": {
             "weight_format": jang.get("weight_format"),
             "mxtq_bits": jang.get("mxtq_bits"),
