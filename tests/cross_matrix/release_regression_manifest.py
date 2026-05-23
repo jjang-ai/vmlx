@@ -70,6 +70,22 @@ EXPECTED_CURRENT_GENERATION_DEFAULTS_CHECKS = (
     "legacy_count_floor_still_nontrivial",
 )
 
+EXPECTED_CURRENT_API_SURFACE_CHECKS = (
+    "openai_chat_completions_sampling_defaults",
+    "openai_responses_sampling_defaults",
+    "legacy_completions_output_caps_override_server_default",
+    "chat_and_responses_output_caps_override_server_default",
+    "prompt_context_caps_stay_separate_from_output_caps",
+    "anthropic_adapter_bundle_defaults",
+    "ollama_adapter_streaming_done_behavior",
+    "chat_and_responses_streaming_cache_detail_usage",
+    "server_cache_and_tool_surfaces_named",
+    "panel_request_builder_sampling_and_output_overrides",
+    "panel_ollama_gateway_omits_disabled_sentinels",
+    "panel_chat_override_policy_preserves_explicit_values",
+    "all_required_panel_api_markers_present",
+)
+
 
 REQUIRED_RELEASE_DOMAINS = {
     "chat_ui_settings",
@@ -668,6 +684,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
     cache_architecture_matrix = _validate_current_cache_architecture_matrix_artifact(root)
     parser_registry_matrix = _validate_current_parser_registry_matrix_artifact(root)
     generation_defaults_matrix = _validate_current_generation_defaults_matrix_artifact(root)
+    api_surface_matrix = _validate_current_api_surface_matrix_artifact(root)
     regression_suite_ok = (
         regression_suite["status"] == "pass"
         and not regression_suite["failed_steps"]
@@ -706,6 +723,14 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         and not generation_defaults_matrix["failed_checks"]
         and not generation_defaults_matrix["missing_expected_checks"]
     )
+    api_surface_matrix_ok = (
+        api_surface_matrix["status"] == "pass"
+        and not api_surface_matrix["missing_nested_checks"]
+        and not api_surface_matrix["missing_nested_markers"]
+        and not api_surface_matrix["missing_panel_markers"]
+        and not api_surface_matrix["failed_checks"]
+        and not api_surface_matrix["missing_expected_checks"]
+    )
 
     return {
         "status": "pass"
@@ -718,6 +743,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
             and cache_architecture_matrix_ok
             and parser_registry_matrix_ok
             and generation_defaults_matrix_ok
+            and api_surface_matrix_ok
         )
         else "fail",
         "missing": missing,
@@ -728,6 +754,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "cache_architecture_matrix": cache_architecture_matrix,
         "parser_registry_matrix": parser_registry_matrix,
         "generation_defaults_matrix": generation_defaults_matrix,
+        "api_surface_matrix": api_surface_matrix,
     }
 
 
@@ -943,6 +970,58 @@ def _validate_current_generation_defaults_matrix_artifact(root: Path) -> dict[st
             "status": str(payload.get("status")),
             "checks": checks,
             "missing_markers": [str(item) for item in payload.get("missing_markers", [])],
+            "failed_checks": failed_checks,
+            "missing_expected_checks": missing_expected_checks,
+        }
+    )
+    return result
+
+
+def _validate_current_api_surface_matrix_artifact(root: Path) -> dict[str, Any]:
+    artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["api-chat-responses-anthropic-ollama-parity"]
+    result: dict[str, Any] = {
+        "artifact": artifact,
+        "status": "missing",
+        "checks": {},
+        "missing_nested_checks": [],
+        "missing_nested_markers": [],
+        "missing_panel_markers": [],
+        "failed_checks": list(EXPECTED_CURRENT_API_SURFACE_CHECKS),
+        "missing_expected_checks": list(EXPECTED_CURRENT_API_SURFACE_CHECKS),
+    }
+    path = root / artifact
+    if not path.exists():
+        return result
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - diagnostic helper reports load failures
+        result["status"] = f"load_error:{type(exc).__name__}"
+        return result
+
+    checks = {
+        str(name): bool(value)
+        for name, value in dict(payload.get("checks", {})).items()
+    }
+    missing_expected_checks = [
+        name for name in EXPECTED_CURRENT_API_SURFACE_CHECKS if name not in checks
+    ]
+    failed_checks = [
+        name for name in EXPECTED_CURRENT_API_SURFACE_CHECKS if checks.get(name) is not True
+    ]
+    result.update(
+        {
+            "status": str(payload.get("status")),
+            "checks": checks,
+            "missing_nested_checks": [
+                str(item) for item in payload.get("missing_nested_checks", [])
+            ],
+            "missing_nested_markers": [
+                str(item) for item in payload.get("missing_nested_markers", [])
+            ],
+            "missing_panel_markers": [
+                str(item) for item in payload.get("missing_panel_markers", [])
+            ],
             "failed_checks": failed_checks,
             "missing_expected_checks": missing_expected_checks,
         }
