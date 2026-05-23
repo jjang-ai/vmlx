@@ -49,6 +49,7 @@ DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-2
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = "build/current-dsv4-live-identifier-canary-20260523.json"
 DSV4_CURRENT_IDENTIFIER_MATRIX_REL = "build/current-dsv4-live-identifier-matrix-20260523.json"
 DSV4_INSTALLED_TOKENIZER_ROUNDTRIP_REL = "build/current-dsv4-installed-tokenizer-roundtrip-20260523.json"
+DSV4_LIVE_LOGPROBS_COPY_REL = "build/current-dsv4-live-logprobs-copy-20260523.json"
 API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260521.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260521.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-20260521.json"
@@ -465,6 +466,63 @@ def _dsv4_tokenizer_roundtrip_detail(payload: dict[str, Any], root: Path) -> dic
     }
 
 
+def _dsv4_logprob_copy_detail(payload: dict[str, Any], root: Path) -> dict[str, Any]:
+    path_present = _path_present(root, DSV4_LIVE_LOGPROBS_COPY_REL)
+    response = payload.get("response") if isinstance(payload.get("response"), dict) else {}
+    choices = response.get("choices") if isinstance(response.get("choices"), list) else []
+    first_choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+    logprobs = first_choice.get("logprobs") if isinstance(first_choice.get("logprobs"), dict) else {}
+    entries = logprobs.get("content") if isinstance(logprobs.get("content"), list) else []
+    tokens = [entry.get("token") for entry in entries if isinstance(entry, dict)]
+    wrong_entry: dict[str, Any] = {}
+    wrong_index: int | None = None
+    for idx, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("token") == "c":
+            prev_tokens = tokens[max(0, idx - 4) : idx]
+            next_token = tokens[idx + 1] if idx + 1 < len(tokens) else None
+            if prev_tokens[-2:] == [".P", "ers"] and next_token == "pective":
+                wrong_entry = entry
+                wrong_index = idx
+                break
+    top_logprobs = (
+        wrong_entry.get("top_logprobs")
+        if isinstance(wrong_entry.get("top_logprobs"), list)
+        else []
+    )
+    top_tokens = [
+        item.get("token")
+        for item in top_logprobs
+        if isinstance(item, dict) and isinstance(item.get("token"), str)
+    ]
+    wrong_rank = top_tokens.index("c") + 1 if "c" in top_tokens else None
+    correct_rank = top_tokens.index("pective") + 1 if "pective" in top_tokens else None
+    return {
+        "artifact": DSV4_LIVE_LOGPROBS_COPY_REL,
+        "present": path_present,
+        "status": (
+            "review"
+            if path_present and wrong_entry
+            else ("pass" if path_present and payload.get("status") == "pass" else "missing")
+        ),
+        "content": (payload.get("content") if isinstance(payload.get("content"), str) else "")[:1000],
+        "identifier_counts": payload.get("identifier_counts") or {},
+        "logprob_entry_count": payload.get("logprob_entry_count"),
+        "tokens": tokens,
+        "wrong_token_index": wrong_index,
+        "wrong_token": wrong_entry.get("token") if wrong_entry else None,
+        "wrong_token_logprob": wrong_entry.get("logprob") if wrong_entry else None,
+        "correct_token": "pective" if "pective" in top_tokens else None,
+        "wrong_token_rank": wrong_rank,
+        "correct_token_rank": correct_rank,
+        "model_preferred_wrong_token": (
+            wrong_rank == 1 and correct_rank is not None and correct_rank > wrong_rank
+        ),
+        "top_logprobs_at_wrong_token": top_logprobs,
+    }
+
+
 def _contract_checks(payload: dict[str, Any], required: tuple[str, ...]) -> tuple[bool, dict[str, bool]]:
     checks = payload.get("checks") or {}
     required_checks = {key: checks.get(key) is True for key in required}
@@ -714,6 +772,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     dsv4_current_identifier_canary = _load(root, DSV4_CURRENT_IDENTIFIER_CANARY_REL)
     dsv4_current_identifier_matrix = _load(root, DSV4_CURRENT_IDENTIFIER_MATRIX_REL)
     dsv4_installed_tokenizer_roundtrip = _load(root, DSV4_INSTALLED_TOKENIZER_ROUNDTRIP_REL)
+    dsv4_live_logprobs_copy = _load(root, DSV4_LIVE_LOGPROBS_COPY_REL)
     api_cache_contract = _load(root, API_CACHE_CONTRACT_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
     max_output_context_contract = _load(root, MAX_OUTPUT_CONTEXT_CONTRACT_REL)
@@ -1230,6 +1289,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "current_installed_tokenizer_roundtrip": _dsv4_tokenizer_roundtrip_detail(
                 dsv4_installed_tokenizer_roundtrip, root
             ),
+            "current_installed_logprob_copy_probe": _dsv4_logprob_copy_detail(
+                dsv4_live_logprobs_copy, root
+            ),
         }
     )
     _add(
@@ -1242,6 +1304,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "build/current-dsv4-identifier-count-ablation-20260521/result.json",
             DSV4_CURRENT_IDENTIFIER_MATRIX_REL,
             DSV4_INSTALLED_TOKENIZER_ROUNDTRIP_REL,
+            DSV4_LIVE_LOGPROBS_COPY_REL,
             "docs/internal/release-gates/20260520_sisyphus_dsv4_identifier_gate_jang_affine_current/result.json",
         ],
         caveat=(

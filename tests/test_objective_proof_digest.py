@@ -242,6 +242,32 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path,
+        "build/current-dsv4-live-logprobs-copy-20260523.json",
+        {
+            "status": "pass",
+            "content": "THREE.Scene\nTHREE.WebGLRenderer\nTHREE.PerspectiveCamera",
+            "identifier_counts": {"THREE.PerspectiveCamera": 1},
+            "logprob_entry_count": 6,
+            "response": {
+                "choices": [
+                    {
+                        "logprobs": {
+                            "content": [
+                                {"token": "TH", "logprob": -0.01, "top_logprobs": []},
+                                {"token": "REE", "logprob": -0.01, "top_logprobs": []},
+                                {"token": ".P", "logprob": -0.01, "top_logprobs": []},
+                                {"token": "ers", "logprob": -0.01, "top_logprobs": []},
+                                {"token": "pective", "logprob": -0.01, "top_logprobs": []},
+                                {"token": "Camera", "logprob": -0.01, "top_logprobs": []},
+                            ]
+                        }
+                    }
+                ]
+            },
+        },
+    )
+    _write_json(
+        tmp_path,
         "tests/test_engine_audit.py",
         {"fixture": "engine-audit"},
     )
@@ -802,6 +828,60 @@ def test_objective_proof_digest_surfaces_dsv4_tokenizer_roundtrip_boundary(tmp_p
     assert tokenizer["failed_inputs"] == []
     assert tokenizer["rows"][0]["tokens"] == ["TH", "REE", ".P", "ers", "pective", "Camera"]
     assert tokenizer["rows"][1]["tokens"] == ["TH", "REE", ".P", "ers", "c", "pective", "Camera"]
+
+
+def test_objective_proof_digest_surfaces_dsv4_logprob_corruption_boundary(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-live-logprobs-copy-20260523.json",
+        {
+            "status": "pass",
+            "content": "THREE.Scene\nTHREE.WebGLRenderer\nTHREE.PerscpectiveCamera",
+            "identifier_counts": {"THREE.PerspectiveCamera": 0},
+            "logprob_entry_count": 18,
+            "response": {
+                "choices": [
+                    {
+                        "logprobs": {
+                            "content": [
+                                {"token": "TH", "logprob": -0.01, "top_logprobs": []},
+                                {"token": "REE", "logprob": -0.01, "top_logprobs": []},
+                                {"token": ".P", "logprob": -0.01, "top_logprobs": []},
+                                {"token": "ers", "logprob": -0.002, "top_logprobs": []},
+                                {
+                                    "token": "c",
+                                    "logprob": -0.549,
+                                    "top_logprobs": [
+                                        {"token": "c", "logprob": -0.549},
+                                        {"token": "pective", "logprob": -2.065},
+                                    ],
+                                },
+                                {"token": "pective", "logprob": -0.048, "top_logprobs": []},
+                                {"token": "Camera", "logprob": -0.002, "top_logprobs": []},
+                            ]
+                        }
+                    }
+                ]
+            },
+        },
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    quality = rows["DSV4 long-output/code/file-generation quality is release-cleared"]
+    logprobs = quality["details"]["current_installed_logprob_copy_probe"]
+    assert quality["status"] == "open"
+    assert logprobs["status"] == "review"
+    assert logprobs["wrong_token"] == "c"
+    assert logprobs["correct_token"] == "pective"
+    assert logprobs["wrong_token_rank"] == 1
+    assert logprobs["correct_token_rank"] == 2
+    assert logprobs["model_preferred_wrong_token"] is True
+    assert logprobs["tokens"] == ["TH", "REE", ".P", "ers", "c", "pective", "Camera"]
 
 
 def test_objective_proof_digest_downgrades_pass_rows_with_missing_evidence(tmp_path):
