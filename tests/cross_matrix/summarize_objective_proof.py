@@ -54,6 +54,9 @@ DSV4_LIVE_LOGPROB_CONTEXT_MATRIX_REL = "build/current-dsv4-live-logprob-context-
 DSV4_LIVE_CACHE_CONTEXT_IDENTIFIER_REL = (
     "build/current-dsv4-live-cache-context-identifier-probe-20260523.json"
 )
+DSV4_SOURCE_NOCACHE_IDENTIFIER_REL = (
+    "build/current-dsv4-live-identifier-list-nocache-source-20260523.json"
+)
 API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260521.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260521.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-20260521.json"
@@ -633,6 +636,40 @@ def _dsv4_cache_context_identifier_detail(payload: dict[str, Any], root: Path) -
     }
 
 
+def _dsv4_source_nocache_identifier_detail(payload: dict[str, Any], root: Path) -> dict[str, Any]:
+    path_present = _path_present(root, DSV4_SOURCE_NOCACHE_IDENTIFIER_REL)
+    probe = payload.get("probe") if isinstance(payload.get("probe"), dict) else {}
+    counts = probe.get("identifier_counts") if isinstance(probe.get("identifier_counts"), dict) else {}
+    health = payload.get("health_before") if isinstance(payload.get("health_before"), dict) else {}
+    native_cache = health.get("native_cache") if isinstance(health.get("native_cache"), dict) else {}
+    pool_quant = (
+        native_cache.get("pool_quant") if isinstance(native_cache.get("pool_quant"), dict) else {}
+    )
+    generic_tq = (
+        native_cache.get("generic_turboquant_kv")
+        if isinstance(native_cache.get("generic_turboquant_kv"), dict)
+        else {}
+    )
+    content = probe.get("content") if isinstance(probe.get("content"), str) else ""
+    return {
+        "artifact": DSV4_SOURCE_NOCACHE_IDENTIFIER_REL,
+        "present": path_present,
+        "status": payload.get("status") if path_present else "missing",
+        "probe_elapsed_sec": payload.get("probe_elapsed_sec"),
+        "usage": probe.get("usage"),
+        "identifier_counts": counts,
+        "all_identifiers_present": bool(counts) and all(
+            isinstance(value, int) and value > 0 for value in counts.values()
+        ),
+        "content": content[:1000],
+        "native_cache_prefix": native_cache.get("prefix") is True,
+        "native_cache_paged": native_cache.get("paged") is True,
+        "native_cache_block_disk_l2": native_cache.get("block_disk_l2") is True,
+        "native_cache_pool_quant_enabled": pool_quant.get("enabled") is True,
+        "generic_turboquant_kv_enabled": generic_tq.get("enabled") is True,
+    }
+
+
 def _contract_checks(payload: dict[str, Any], required: tuple[str, ...]) -> tuple[bool, dict[str, bool]]:
     checks = payload.get("checks") or {}
     required_checks = {key: checks.get(key) is True for key in required}
@@ -885,6 +922,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     dsv4_live_logprobs_copy = _load(root, DSV4_LIVE_LOGPROBS_COPY_REL)
     dsv4_live_logprob_context_matrix = _load(root, DSV4_LIVE_LOGPROB_CONTEXT_MATRIX_REL)
     dsv4_live_cache_context_identifier = _load(root, DSV4_LIVE_CACHE_CONTEXT_IDENTIFIER_REL)
+    dsv4_source_nocache_identifier = _load(root, DSV4_SOURCE_NOCACHE_IDENTIFIER_REL)
     api_cache_contract = _load(root, API_CACHE_CONTRACT_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
     max_output_context_contract = _load(root, MAX_OUTPUT_CONTEXT_CONTRACT_REL)
@@ -1410,6 +1448,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "current_installed_unique_prefix_identifier_probe": _dsv4_cache_context_identifier_detail(
                 dsv4_live_cache_context_identifier, root
             ),
+            "current_source_nocache_identifier_probe": _dsv4_source_nocache_identifier_detail(
+                dsv4_source_nocache_identifier, root
+            ),
         }
     )
     _add(
@@ -1425,6 +1466,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             DSV4_LIVE_LOGPROBS_COPY_REL,
             DSV4_LIVE_LOGPROB_CONTEXT_MATRIX_REL,
             DSV4_LIVE_CACHE_CONTEXT_IDENTIFIER_REL,
+            DSV4_SOURCE_NOCACHE_IDENTIFIER_REL,
             "docs/internal/release-gates/20260520_sisyphus_dsv4_identifier_gate_jang_affine_current/result.json",
         ],
         caveat=(

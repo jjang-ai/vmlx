@@ -1086,6 +1086,55 @@ def test_objective_proof_digest_surfaces_dsv4_unique_prefix_identifier_probe(tmp
     assert probe["corrupt_identifiers_by_probe"]["list_unique_prefix"] == ["THUEE.WebGLRenderer"]
 
 
+def test_objective_proof_digest_surfaces_dsv4_source_nocache_identifier_pass(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-live-identifier-list-nocache-source-20260523.json",
+        {
+            "status": "pass",
+            "probe_elapsed_sec": 31.717,
+            "health_before": {
+                "native_cache": {
+                    "prefix": False,
+                    "paged": False,
+                    "block_disk_l2": False,
+                    "pool_quant": {"enabled": False, "env": "0"},
+                    "generic_turboquant_kv": {"enabled": False},
+                }
+            },
+            "probe": {
+                "content": "THREE.Scene\nTHREE.WebGLRenderer\nTHREE.PerspectiveCamera\nTHREE.BoxGeometry\nTHREE.MeshBasicMaterial",
+                "identifier_counts": {
+                    "THREE.Scene": 1,
+                    "THREE.WebGLRenderer": 1,
+                    "THREE.PerspectiveCamera": 1,
+                    "THREE.BoxGeometry": 1,
+                    "THREE.MeshBasicMaterial": 1,
+                },
+                "usage": {"completion_tokens": 32},
+            },
+        },
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    quality = rows["DSV4 long-output/code/file-generation quality is release-cleared"]
+    probe = quality["details"]["current_source_nocache_identifier_probe"]
+    assert quality["status"] == "open"
+    assert probe["status"] == "pass"
+    assert probe["all_identifiers_present"] is True
+    assert probe["native_cache_prefix"] is False
+    assert probe["native_cache_paged"] is False
+    assert probe["native_cache_block_disk_l2"] is False
+    assert probe["native_cache_pool_quant_enabled"] is False
+    assert probe["generic_turboquant_kv_enabled"] is False
+    assert probe["probe_elapsed_sec"] == 31.717
+
+
 def test_objective_proof_digest_downgrades_pass_rows_with_missing_evidence(tmp_path):
     from tests.cross_matrix.summarize_objective_proof import build_digest
 
