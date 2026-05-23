@@ -297,10 +297,11 @@ def test_panel_names_dsv4_cache_as_native_composite_not_generic_paged_kv():
 
     form = Path("panel/src/renderer/src/components/sessions/SessionConfigForm.tsx").read_text()
 
-    assert "const pagedCacheSectionTitle = dsv4Active" in form
-    assert "DSV4 Native Cache" in form
-    assert "const pagedCacheToggleLabel = dsv4Active" in form
-    assert "Native Composite Prefix Cache" in form
+    assert "const pagedCacheSectionTitle = t('sessions.config.pagedKVCache')" in form
+    assert "DSV4 Native Cache" not in form
+    assert "const pagedCacheToggleLabel = dsv4Active" not in form
+    assert "DSV4 Native Composite Prefix Cache" in form
+    assert "DSV4 generic paged-KV controls are hidden" in form
     assert "not generic paged KV" in form
 
 
@@ -340,8 +341,11 @@ def test_dsv4_ui_defaults_composite_cache_off_but_exposes_diagnostic_opt_in():
     assert "checked={effectivePrefixCacheEnabled}" in form
     assert "cacheControlUpdatesForDsv4CompositeToggle" in form
     assert "applyDsv4CompositeCacheToggle" in form
+    assert "cacheControlUpdatesForDsv4PoolQuantToggle" in form
+    assert "applyDsv4PoolQuantToggle" in form
     assert "disabled={!dsv4Active && cachePolicy.pagedCacheDisabled}" in form
-    assert "DSV4 Composite Prefix Cache" in form
+    assert "DSV4 Native Composite Prefix Cache" in form
+    assert "DSV4 Composite Prefix Cache" not in form
     assert "checked={dsv4Active ? true : config.enablePrefixCache}" not in form
     assert "hidden={isImage || dsv4Active}" in form
     assert "const showVideoControls = !dsv4Active" in form

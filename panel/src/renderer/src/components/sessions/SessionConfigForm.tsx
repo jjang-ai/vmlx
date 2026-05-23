@@ -5,6 +5,7 @@ import { useTranslation } from '../../i18n'
 import {
   cacheControlUpdatesForDsv4BlockDiskToggle,
   cacheControlUpdatesForDsv4CompositeToggle,
+  cacheControlUpdatesForDsv4PoolQuantToggle,
   cacheControlUpdatesForBlockDiskToggle,
   cacheControlUpdatesForDiskToggle,
   cacheControlUpdatesForPagedToggle,
@@ -364,6 +365,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   }
   const applyDsv4CompositeCacheToggle = (enabled: boolean) => {
     applyCacheControlUpdates(cacheControlUpdatesForDsv4CompositeToggle(enabled))
+  }
+  const applyDsv4PoolQuantToggle = (enabled: boolean) => {
+    applyCacheControlUpdates(cacheControlUpdatesForDsv4PoolQuantToggle(enabled))
   }
   const browseMcpConfig = async () => {
     const result = await window.api.sessions.browseMcpConfig()
@@ -952,9 +956,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {dsv4Active && (
           <CheckField
             label="DSV4 CSA/HCA Pool Codec"
-            tooltip="Diagnostic DSV4_POOL_QUANT=1 native CSA/HCA pool codec. This changes DSV4 native cache compression only; it does not enable prefix reuse. Keep off for production correctness unless testing native pool compression."
-            checked={!!config.dsv4PoolQuant}
-            onChange={v => onChange('dsv4PoolQuant', v)}
+            tooltip="Diagnostic DSV4_POOL_QUANT=1 native CSA/HCA pool codec. Turning this on also enables the DSV4 Native Composite Prefix Cache prerequisites so the launch can actually emit DSV4_POOL_QUANT=1. Keep off for production correctness unless testing native pool compression."
+            checked={dsv4CompositeCacheOptIn && !!config.dsv4PoolQuant}
+            onChange={applyDsv4PoolQuantToggle}
           />
         )}
 
