@@ -59,6 +59,7 @@ def test_max_output_context_contract_covers_all_public_api_surfaces():
     assert "keeps Responses maxTokens as output budget only, never prompt context" in required
     assert "per-chat maxTokens below or above the server startup default remain request scoped for Responses" in required
     assert "does not invent Responses sampler or output-budget values when chat overrides are absent" in required
+    assert "cleared persisted chat maxTokens null stays Auto for Chat Completions and Responses" in required
     assert "chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap" in required
     assert "clears legacy session maxTokens=32768 before launch can reuse it" in required
     assert "switching chats never carries a previous chat maxTokens into Auto Chat Completions" in required

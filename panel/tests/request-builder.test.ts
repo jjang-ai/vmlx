@@ -250,6 +250,18 @@ describe('buildRequestBody — Chat Completions API', () => {
         }
     })
 
+    it('cleared persisted chat maxTokens null stays Auto for Chat Completions and Responses', () => {
+        const completions = buildRequestBody('completions', 'gpt-4', messages, { maxTokens: null as any }, false, false)
+        const responses = buildRequestBody('responses', 'gpt-4', messages, { maxTokens: null as any }, false, false)
+
+        expect(completions.max_tokens).toBeUndefined()
+        expect(completions.max_output_tokens).toBeUndefined()
+        expect(completions.max_prompt_tokens).toBeUndefined()
+        expect(responses.max_output_tokens).toBeUndefined()
+        expect(responses.max_tokens).toBeUndefined()
+        expect(responses.max_prompt_tokens).toBeUndefined()
+    })
+
     it('Auto chat maxTokens omits per-request output caps so server default can apply', () => {
         const autoCompletions = buildRequestBody('completions', 'gpt-4', messages, {}, false, false)
         const disabledCompletions = buildRequestBody('completions', 'gpt-4', messages, { maxTokens: 0 }, false, false)

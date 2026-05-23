@@ -101,6 +101,7 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     "does not invent Responses sampler or output-budget values when chat overrides are absent",
     "omits invalid persisted maxTokens values instead of poisoning Chat Completions",
     "omits invalid persisted maxTokens values instead of poisoning Responses",
+    "cleared persisted chat maxTokens null stays Auto for Chat Completions and Responses",
     "chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap",
     "chat:setOverrides rejects non-finite or non-numeric maxTokens instead of poisoning server defaults",
     "chat maxTokens save path cannot mutate session startup maxTokens",
@@ -330,6 +331,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "does not invent Responses sampler or output-budget values when chat overrides are absent" not in missing_markers
             and "omits invalid persisted maxTokens values instead of poisoning Chat Completions" not in missing_markers
             and "omits invalid persisted maxTokens values instead of poisoning Responses" not in missing_markers
+            and "cleared persisted chat maxTokens null stays Auto for Chat Completions and Responses" not in missing_markers
             and "switching chats never carries a previous chat maxTokens into Auto Chat Completions" not in missing_markers
             and "switching chats never carries a previous chat maxTokens into Auto Responses" not in missing_markers
         ),
