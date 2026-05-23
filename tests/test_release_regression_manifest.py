@@ -2,8 +2,10 @@ from pathlib import Path
 import shlex
 
 from tests.cross_matrix.release_regression_manifest import (
+    CURRENT_POST_BUDGET_EDGE_ARTIFACTS,
     REQUIRED_RELEASE_DOMAINS,
     build_manifest,
+    validate_current_proof_sweep_artifacts,
 )
 
 
@@ -96,26 +98,37 @@ def test_release_regression_manifest_tracks_server_chat_max_output_boundary():
 def test_release_regression_manifest_tracks_current_post_budget_edge_proof_sweep():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}
-    expected_artifacts = {
-        "chat-settings-max-output-context-ui": "build/current-max-output-context-contract-20260523-dsv4-budget-edge.json",
-        "panel-session-cache-settings-family-gating": "build/current-panel-settings-contract-proof-20260523-post-budget-edge.json",
-        "generation-defaults-no-hidden-forcing": "build/current-generation-defaults-contract-20260523-post-budget-edge.json",
-        "parser-registry-tool-reasoning-parity": "build/current-parser-registry-contract-20260523-post-budget-edge.json",
-        "reasoning-template-no-think-tag-leak": "build/current-reasoning-template-contract-20260523-post-budget-edge.json",
-        "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-20260523-post-budget-edge.json",
-        "api-chat-responses-anthropic-ollama-parity": "build/current-api-surface-contract-20260523-post-budget-edge.json",
-        "cache-architecture-family-classification": "build/current-cache-architecture-contract-20260523-post-budget-edge.json",
-        "model-artifact-format-detection": "build/current-model-artifact-format-contract-20260523-post-budget-edge.json",
-        "model-family-detection-noheavy": "build/current-model-family-detection-contract-20260523-post-budget-edge.json",
-        "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-20260523-post-budget-edge.json",
-        "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260523-post-budget-edge.json",
-        "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-20260523-post-budget-edge.json",
-        "packaged-release-integrity": "build/current-packaged-integrity-contract-20260523-post-budget-edge-refreshed.json",
-        "public-release-surface-preflight": "build/current-release-surface-contract-20260523-post-budget-edge.json",
-    }
 
-    for row_id, artifact in expected_artifacts.items():
+    for row_id, artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.items():
         assert artifact in rows[row_id]["artifacts"], row_id
+
+
+def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp_path):
+    for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
+        path = tmp_path / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["status"] == "pass"
+    assert result["missing"] == []
+    assert result["not_pass"] == []
+
+
+def test_release_regression_manifest_rejects_missing_or_failing_current_artifacts(tmp_path):
+    artifacts = list(CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values())
+    for artifact in artifacts[1:]:
+        path = tmp_path / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        status = "fail" if artifact == artifacts[1] else "pass"
+        path.write_text(f'{{"status":"{status}","failed":["example"]}}\n', encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["status"] == "fail"
+    assert result["missing"] == [artifacts[0]]
+    assert result["not_pass"] == [{"artifact": artifacts[1], "status": "fail"}]
 
 
 def test_release_regression_manifest_tracks_legacy_completions_output_boundary():

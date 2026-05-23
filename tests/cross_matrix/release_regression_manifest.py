@@ -9,6 +9,8 @@ live-model, or packaged-app only.
 from __future__ import annotations
 
 from copy import deepcopy
+import json
+from pathlib import Path
 from typing import Any
 
 
@@ -29,6 +31,24 @@ REQUIRED_RELEASE_DOMAINS = {
     "performance",
     "release_surface",
     "pr_intake",
+}
+
+CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
+    "chat-settings-max-output-context-ui": "build/current-max-output-context-contract-20260523-dsv4-budget-edge.json",
+    "panel-session-cache-settings-family-gating": "build/current-panel-settings-contract-proof-20260523-post-budget-edge.json",
+    "generation-defaults-no-hidden-forcing": "build/current-generation-defaults-contract-20260523-post-budget-edge.json",
+    "parser-registry-tool-reasoning-parity": "build/current-parser-registry-contract-20260523-post-budget-edge.json",
+    "reasoning-template-no-think-tag-leak": "build/current-reasoning-template-contract-20260523-post-budget-edge.json",
+    "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-20260523-post-budget-edge.json",
+    "api-chat-responses-anthropic-ollama-parity": "build/current-api-surface-contract-20260523-post-budget-edge.json",
+    "cache-architecture-family-classification": "build/current-cache-architecture-contract-20260523-post-budget-edge.json",
+    "model-artifact-format-detection": "build/current-model-artifact-format-contract-20260523-post-budget-edge.json",
+    "model-family-detection-noheavy": "build/current-model-family-detection-contract-20260523-post-budget-edge.json",
+    "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-20260523-post-budget-edge.json",
+    "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260523-post-budget-edge.json",
+    "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-20260523-post-budget-edge.json",
+    "packaged-release-integrity": "build/current-packaged-integrity-contract-20260523-post-budget-edge-refreshed.json",
+    "public-release-surface-preflight": "build/current-release-surface-contract-20260523-post-budget-edge.json",
 }
 
 
@@ -555,4 +575,28 @@ def build_manifest() -> dict[str, Any]:
     return {
         "version": 1,
         "rows": deepcopy(_ROWS),
+    }
+
+
+def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
+    missing: list[str] = []
+    not_pass: list[dict[str, str]] = []
+
+    for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
+        path = root / artifact
+        if not path.exists():
+            missing.append(artifact)
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            status = str(payload.get("status"))
+        except Exception as exc:  # noqa: BLE001 - diagnostic helper reports load failures
+            status = f"load_error:{type(exc).__name__}"
+        if status != "pass":
+            not_pass.append({"artifact": artifact, "status": status})
+
+    return {
+        "status": "pass" if not missing and not not_pass else "fail",
+        "missing": missing,
+        "not_pass": not_pass,
     }
