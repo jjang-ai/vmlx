@@ -5881,6 +5881,9 @@ async def health():
                 if result.get("speculative_decoding") is None:
                     result["speculative_decoding"] = {}
                 if isinstance(result.get("speculative_decoding"), dict):
+                    _accept_hist = getattr(
+                        bg, "_spec_batched_accept_histogram", {}
+                    )
                     result["speculative_decoding"]["batched"] = {
                         "enabled": should_use_speculative_batched(
                             is_mllm=getattr(_engine, "is_mllm", False)
@@ -5888,6 +5891,14 @@ async def health():
                         "steps": getattr(bg, "_spec_batched_steps", 0),
                         "tokens_emitted": getattr(bg, "_spec_batched_tokens", 0),
                         "acceptance_rate": getattr(bg, "_spec_batched_acceptance_ema", 0.0),
+                        # Per-n_accept histogram (issue #134 follow-up).
+                        # Diagnostic: index = n_accept value, value = round count.
+                        # Lets ops debug workload-specific acceptance patterns
+                        # (e.g. code shows partial accepts, JSON shows full).
+                        "accept_histogram": (
+                            {str(k): v for k, v in _accept_hist.items()}
+                            if _accept_hist else {}
+                        ),
                     }
             except Exception:
                 pass

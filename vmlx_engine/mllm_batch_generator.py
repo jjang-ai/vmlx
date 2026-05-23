@@ -2984,6 +2984,12 @@ class MLLMBatchGenerator:
         self._spec_batched_steps: int = 0
         self._spec_batched_tokens: int = 0
         self._spec_batched_acceptance_ema: float = 0.0
+        # Per-n-accept histogram for diagnostics: index = n_accept value,
+        # value = count of rounds with that n_accept. Length K+1 typically.
+        # Reset each /health probe? No — cumulative across server lifetime.
+        # Used for debugging workload-specific acceptance patterns
+        # (e.g. partial-accept frequency vs full-accept on code vs JSON).
+        self._spec_batched_accept_histogram: Dict[int, int] = {}
         # Adaptive auto-disable: when EMA acceptance rate drops below
         # threshold for too many consecutive steps, fall back to standard
         # _step until probing re-enables. Prevents PLD from hurting
@@ -6688,6 +6694,12 @@ class MLLMBatchGenerator:
                 primary_tokens.append(primary)
                 extras_per_row.append(list(row_drafts[:n]))
 
+            # Update accept histogram for telemetry
+            hist = getattr(self, "_spec_batched_accept_histogram", None)
+            if hist is not None:
+                for n in n_accept:
+                    hist[n] = hist.get(n, 0) + 1
+
             # Debug dump: first N attempts to /tmp/vmlx_pld_debug.log
             # (VMLX_PLD_DEBUG=N env var). Helps diagnose acceptance issues.
             if getattr(self, "_spec_batched_debug_remaining", 0) > 0:
@@ -6763,8 +6775,13 @@ class MLLMBatchGenerator:
                         # SSM restore to snapshot (replay didn't write back)
                         self._restore_ssm_rows(batch.cache, ssm_snapshot, [i])
 
-            # Pure-attention KV rewind: per-row offset adjustment by (K - n_accept[i])
+            # Pure-attention KV rewind: per-row offset adjustment by (K - n_accept[i]).
             # For hybrid the per-row replay already updated offsets via writeback.
+            # CRITICAL B=1 FIX: truncate keys/values tensor to the new offset.
+            # Just resetting offset alone leaves the rejected drafts at positions
+            # N+1..N+K in the tensor — some MLX attention paths read the full
+            # tensor (not just :offset), causing model to attend to stale verify
+            # content and produce corrupted output (live finding on smolvlm).
             if not is_hybrid:
                 shortfalls = [K - n_accept[i] for i in range(B)]
                 if any(s > 0 for s in shortfalls):
@@ -6783,9 +6800,21 @@ class MLLMBatchGenerator:
                             for i in range(B, len(cur)):
                                 new_off.append(int(cur[i]))
                             layer.offset = mx.array(new_off)
+                            # B=1 fast path: truncate tensor to avoid stale verify content
+                            if B == 1 and hasattr(layer, "keys") and layer.keys is not None:
+                                new_seq = new_off[0]
+                                if layer.keys.shape[2] > new_seq:
+                                    layer.keys = layer.keys[..., :new_seq, :]
+                                    layer.values = layer.values[..., :new_seq, :]
                         else:
                             worst = max(shortfalls)
                             layer.offset = max(0, int(layer.offset) - worst)
+                            # Scalar offset (single-request path); truncate
+                            if hasattr(layer, "keys") and layer.keys is not None:
+                                new_seq = int(layer.offset)
+                                if layer.keys.shape[2] > new_seq:
+                                    layer.keys = layer.keys[..., :new_seq, :]
+                                    layer.values = layer.values[..., :new_seq, :]
                         if hasattr(layer, "_idx"):
                             if isinstance(layer.offset, mx.array):
                                 try:

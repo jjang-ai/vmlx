@@ -1868,15 +1868,26 @@ class MLLMScheduler:
         # full-accept path is safer (no rollback) but still has the multi-token
         # vs single-token forward semantics mismatch.
         #
-        # Until the cache-state divergence is root-caused and fixed, hybrid
-        # PLD is opt-in via VMLX_ENABLE_MLLM_PLD_HYBRID=1. Non-hybrid MLLM
-        # paths (if any) activate normally on --enable-pld.
+        # Until the cache-state divergence is root-caused and fixed, MLLM
+        # batched PLD is OPT-IN only via VMLX_ENABLE_MLLM_PLD=1.
+        #
+        # LIVE VALIDATION FINDING (post-PR #150): even on pure-attention MLLM
+        # models (smolvlm), T=0 byte-equality FAILS when PLD is enabled.
+        # Output drifts token-level: "TheTheThe number number is is", etc.
+        # Root cause not pinned but suspected: multi-token verify forward
+        # produces different logits than the model's sequential single-token
+        # decode for the same input position. Affects both hybrid (Mamba) and
+        # pure-attention MLLM paths.
+        #
+        # Simple-engine PLD (PR #149's Scheduler path) is unaffected — it
+        # was validated as PR #26's +4-7% baseline before this work.
         config_pld_enabled = bool(getattr(self.config, "pld_enabled", False))
         is_hybrid_model = getattr(self.batch_generator, "_is_hybrid", False)
+        mllm_opt_in = os.getenv("VMLX_ENABLE_MLLM_PLD", "0") == "1"
+        # Backward compat: VMLX_ENABLE_MLLM_PLD_HYBRID=1 also enables (covers
+        # the earlier hybrid-only opt-in).
         hybrid_opt_in = os.getenv("VMLX_ENABLE_MLLM_PLD_HYBRID", "0") == "1"
-        pld_enabled = config_pld_enabled and (
-            not is_hybrid_model or hybrid_opt_in
-        )
+        pld_enabled = config_pld_enabled and (mllm_opt_in or hybrid_opt_in)
         if pld_enabled:
             try:
                 excluded = self._build_pld_excluded_token_ids()
@@ -1885,8 +1896,9 @@ class MLLMScheduler:
                     excluded_token_ids=excluded,
                 )
                 logger.info(
-                    "[PLD] MLLM batched PLD enabled — K=%d, hybrid=%s, "
-                    "excluded_token_ids=%d",
+                    "[PLD] MLLM batched PLD enabled (opt-in) — K=%d, "
+                    "hybrid=%s, excluded_token_ids=%d. "
+                    "WARNING: experimental, may produce non-deterministic output.",
                     2 if is_hybrid_model else 5,
                     is_hybrid_model,
                     len(excluded) if excluded else 0,
@@ -1896,11 +1908,11 @@ class MLLMScheduler:
                     "[PLD] MLLM PLD wiring failed, falling back to standard "
                     "decode: %s", exc,
                 )
-        elif config_pld_enabled and is_hybrid_model:
+        elif config_pld_enabled:
             logger.info(
-                "[PLD] MLLM batched PLD disabled on hybrid model "
-                "(cache-state divergence in Mamba multi-token vs single-token "
-                "forwards). Set VMLX_ENABLE_MLLM_PLD_HYBRID=1 to override."
+                "[PLD] MLLM batched PLD disabled by default "
+                "(live validation revealed T=0 output divergence). "
+                "Set VMLX_ENABLE_MLLM_PLD=1 to override (experimental)."
             )
         self._current_sampler_params = new_params
 
