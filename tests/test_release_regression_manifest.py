@@ -7,6 +7,7 @@ from tests.cross_matrix.release_regression_manifest import (
     CURRENT_POST_BUDGET_EDGE_ARTIFACTS,
     CURRENT_REGRESSION_SUITE_ARTIFACT,
     EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS,
+    EXPECTED_CURRENT_GENERATION_DEFAULTS_CHECKS,
     EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS,
     EXPECTED_CURRENT_OPEN_REQUIREMENTS,
     EXPECTED_CURRENT_MODEL_FAMILY_ROWS,
@@ -116,6 +117,7 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
     model_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-artifact-format-detection"]
     cache_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["cache-architecture-family-classification"]
     parser_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["parser-registry-tool-reasoning-parity"]
+    generation_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["generation-defaults-no-hidden-forcing"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
         path = tmp_path / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -169,6 +171,20 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                         "status": "pass",
                         "checks": {
                             name: True for name in EXPECTED_CURRENT_PARSER_REGISTRY_CHECKS
+                        },
+                        "missing_markers": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == generation_artifact:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_GENERATION_DEFAULTS_CHECKS
                         },
                         "missing_markers": [],
                     }
@@ -235,6 +251,14 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
         "artifact": parser_artifact,
         "status": "pass",
         "checks": {name: True for name in EXPECTED_CURRENT_PARSER_REGISTRY_CHECKS},
+        "missing_markers": [],
+        "failed_checks": [],
+        "missing_expected_checks": [],
+    }
+    assert result["generation_defaults_matrix"] == {
+        "artifact": generation_artifact,
+        "status": "pass",
+        "checks": {name: True for name in EXPECTED_CURRENT_GENERATION_DEFAULTS_CHECKS},
         "missing_markers": [],
         "failed_checks": [],
         "missing_expected_checks": [],
@@ -586,11 +610,119 @@ def test_release_regression_manifest_rejects_incomplete_current_parser_registry_
     ]
 
 
+def test_release_regression_manifest_rejects_incomplete_current_generation_defaults_matrix(tmp_path):
+    generation_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["generation-defaults-no-hidden-forcing"]
+    for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
+        path = tmp_path / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if artifact == CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-family-detection-noheavy"]:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "matched_rows": EXPECTED_CURRENT_MODEL_FAMILY_ROWS,
+                        "missing_rows": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-artifact-format-detection"]:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS
+                        },
+                        "missing_markers": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == CURRENT_POST_BUDGET_EDGE_ARTIFACTS["cache-architecture-family-classification"]:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS
+                        },
+                        "missing_markers": [],
+                        "missing_api_checks": [],
+                        "missing_api_command_markers": [],
+                        "missing_panel_markers": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == CURRENT_POST_BUDGET_EDGE_ARTIFACTS["parser-registry-tool-reasoning-parity"]:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_PARSER_REGISTRY_CHECKS
+                        },
+                        "missing_markers": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == generation_artifact:
+            checks = {name: True for name in EXPECTED_CURRENT_GENERATION_DEFAULTS_CHECKS[:-1]}
+            checks[EXPECTED_CURRENT_GENERATION_DEFAULTS_CHECKS[-1]] = False
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": checks,
+                        "missing_markers": [
+                            "test_request_output_caps_override_server_default_without_touching_context_cap"
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        else:
+            path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
+    regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
+    regression_suite.parent.mkdir(parents=True, exist_ok=True)
+    regression_suite.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "failed_steps": [],
+                "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["status"] == "fail"
+    assert result["generation_defaults_matrix"]["artifact"] == generation_artifact
+    assert result["generation_defaults_matrix"]["status"] == "pass"
+    assert result["generation_defaults_matrix"]["missing_markers"] == [
+        "test_request_output_caps_override_server_default_without_touching_context_cap"
+    ]
+    assert result["generation_defaults_matrix"]["failed_checks"] == [
+        EXPECTED_CURRENT_GENERATION_DEFAULTS_CHECKS[-1]
+    ]
+
+
 def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_path):
     model_family_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-family-detection-noheavy"]
     model_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-artifact-format-detection"]
     cache_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["cache-architecture-family-classification"]
     parser_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["parser-registry-tool-reasoning-parity"]
+    generation_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["generation-defaults-no-hidden-forcing"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
         path = tmp_path / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -644,6 +776,20 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
                         "status": "pass",
                         "checks": {
                             name: True for name in EXPECTED_CURRENT_PARSER_REGISTRY_CHECKS
+                        },
+                        "missing_markers": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == generation_artifact:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_GENERATION_DEFAULTS_CHECKS
                         },
                         "missing_markers": [],
                     }
@@ -711,6 +857,14 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
             "artifact": parser_artifact,
             "status": "pass",
             "checks": {name: True for name in EXPECTED_CURRENT_PARSER_REGISTRY_CHECKS},
+            "missing_markers": [],
+            "failed_checks": [],
+            "missing_expected_checks": [],
+        },
+        "generation_defaults_matrix": {
+            "artifact": generation_artifact,
+            "status": "pass",
+            "checks": {name: True for name in EXPECTED_CURRENT_GENERATION_DEFAULTS_CHECKS},
             "missing_markers": [],
             "failed_checks": [],
             "missing_expected_checks": [],
