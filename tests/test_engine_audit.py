@@ -1317,6 +1317,129 @@ class TestServerSamplingResolution:
         assert chat_captured[1]["max_tokens"] == 512
         assert chat_captured[1]["max_prompt_tokens"] == 2048
 
+    def test_ollama_nonstream_num_predict_overrides_server_default_without_touching_context_cap(
+        self,
+        monkeypatch,
+    ):
+        """Ollama non-stream num_predict must stay request-scoped too.
+
+        `/api/chat`, templated `/api/generate`, and raw `/api/generate` take
+        different server paths when stream=false. All three still map
+        `options.num_predict` to an output cap, map `num_ctx` to prompt/context,
+        and leave the server startup max output default unchanged for later
+        omitted requests.
+        """
+        from fastapi.testclient import TestClient
+
+        import vmlx_engine.server as server
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class FakeTokenizer:
+            has_thinking = False
+
+        class FakeEngine:
+            is_mllm = False
+            tokenizer = FakeTokenizer()
+            preserve_native_tool_format = False
+
+            async def generate(self, **kwargs):
+                raw_captured.append(dict(kwargs))
+                return GenerationOutput(
+                    text="ok",
+                    prompt_tokens=2,
+                    completion_tokens=1,
+                    finish_reason="stop",
+                )
+
+        chat_captured: list[dict] = []
+        raw_captured: list[dict] = []
+
+        async def fake_await_chat(*args, **kwargs):
+            chat_captured.append(dict(kwargs["chat_kwargs"]))
+            return GenerationOutput(
+                text="ok",
+                prompt_tokens=3,
+                completion_tokens=1,
+                finish_reason="stop",
+            )
+
+        monkeypatch.setattr(server, "_engine", FakeEngine())
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_name", "ollama-nonstream-cap-model")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+        monkeypatch.setattr(server, "_api_key", None, raising=False)
+        monkeypatch.setattr(server, "_default_temperature", None)
+        monkeypatch.setattr(server, "_default_top_p", None)
+        monkeypatch.setattr(server, "_default_top_k", None)
+        monkeypatch.setattr(server, "_default_min_p", None)
+        monkeypatch.setattr(server, "_default_repetition_penalty", None)
+        monkeypatch.setattr(server, "_default_max_tokens", 768)
+        monkeypatch.setattr(server, "_default_max_tokens_explicit", True, raising=False)
+        monkeypatch.setattr(server, "_max_prompt_tokens", 32768)
+        monkeypatch.setattr(
+            server,
+            "_await_chat_with_disconnect_abort",
+            fake_await_chat,
+        )
+        server._jang_sampling_defaults_cache.clear()
+        server._generation_defaults_cache.clear()
+
+        client = TestClient(server.app)
+
+        chat_explicit = client.post(
+            "/api/chat",
+            json={
+                "model": "ollama-nonstream-cap-model",
+                "messages": [{"role": "user", "content": "chat"}],
+                "stream": False,
+                "options": {"num_predict": 44, "num_ctx": 4096},
+            },
+        )
+        generate_templated_explicit = client.post(
+            "/api/generate",
+            json={
+                "model": "ollama-nonstream-cap-model",
+                "prompt": "templated",
+                "stream": False,
+                "options": {"num_predict": 55, "num_ctx": 8192},
+            },
+        )
+        generate_raw_explicit = client.post(
+            "/api/generate",
+            json={
+                "model": "ollama-nonstream-cap-model",
+                "prompt": "raw",
+                "raw": True,
+                "stream": False,
+                "options": {"num_predict": 66, "num_ctx": 12288},
+            },
+        )
+        chat_default = client.post(
+            "/api/chat",
+            json={
+                "model": "ollama-nonstream-cap-model",
+                "messages": [{"role": "user", "content": "default"}],
+                "stream": False,
+                "options": {"num_ctx": 2048},
+            },
+        )
+
+        assert chat_explicit.status_code == 200
+        assert generate_templated_explicit.status_code == 200
+        assert generate_raw_explicit.status_code == 200
+        assert chat_default.status_code == 200
+        assert chat_captured[0]["max_tokens"] == 44
+        assert chat_captured[0]["max_prompt_tokens"] == 4096
+        assert chat_captured[1]["max_tokens"] == 55
+        assert chat_captured[1]["max_prompt_tokens"] == 8192
+        assert raw_captured[0]["max_tokens"] == 66
+        assert raw_captured[0]["max_prompt_tokens"] == 12288
+        assert chat_captured[2]["max_tokens"] == 768
+        assert chat_captured[2]["max_prompt_tokens"] == 2048
+        assert server._default_max_tokens == 768
+        assert server._default_max_tokens_explicit is True
+
     def test_prompt_context_aliases_clamp_without_rewriting_output_caps(
         self,
         monkeypatch,

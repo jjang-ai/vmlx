@@ -624,6 +624,8 @@ def test_release_regression_manifest_tracks_max_output_context_with_runner_artif
     assert "Legacy /v1/completions max_tokens" in joined
     assert "non-streaming and streaming" in joined
     assert "Prompt/context aliases clamp" in joined
+    assert "Ollama gateway non-stream num_predict remains request-scoped" in joined
+    assert "current-max-output-context-contract-20260523-ollama-nonstream-caps.json" in joined
     assert "malformed num_predict" in joined
     assert "malformed context" in joined
     assert "Max Context Tokens" in joined

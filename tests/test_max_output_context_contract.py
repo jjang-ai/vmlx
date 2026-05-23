@@ -24,6 +24,7 @@ def test_max_output_context_contract_covers_all_public_api_surfaces():
     assert "test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap" in joined_commands
     assert "test_legacy_completions_streaming_output_cap_overrides_server_default_without_touching_context_cap" in joined_commands
     assert "test_anthropic_messages_streaming_max_tokens_overrides_server_default_without_touching_context_cap" in joined_commands
+    assert "test_ollama_nonstream_num_predict_overrides_server_default_without_touching_context_cap" in joined_commands
     assert "test_prompt_context_aliases_clamp_without_rewriting_output_caps" in joined_commands
     assert "test_anthropic_messages_omitted_max_tokens_uses_bundle_default" in joined_commands
     assert "test_ollama_generate_default_uses_chat_template_request_shape" in joined_commands
@@ -41,6 +42,7 @@ def test_max_output_context_contract_covers_all_public_api_surfaces():
     assert "test_legacy_completions_output_cap_overrides_server_default_without_touching_context_cap" in required
     assert "test_legacy_completions_streaming_output_cap_overrides_server_default_without_touching_context_cap" in required
     assert "test_anthropic_messages_streaming_max_tokens_overrides_server_default_without_touching_context_cap" in required
+    assert "test_ollama_nonstream_num_predict_overrides_server_default_without_touching_context_cap" in required
     assert "test_explicit_server_max_tokens_overrides_bundle_max_new_tokens" in required
     assert "test_omitted_server_max_tokens_uses_bundle_max_new_tokens" in required
     assert "test_omitted_server_max_tokens_without_bundle_default_is_bounded" in required
