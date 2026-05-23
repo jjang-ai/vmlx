@@ -30,6 +30,7 @@ from tests.cross_matrix.run_production_family_audit import (
     normalize_python_executable,
     normalize_short_answer,
     family_matches_expected,
+    production_family_audit_summary,
     sampling_loop_risk_summary,
     simple_loop_score,
     static_audit,
@@ -255,6 +256,48 @@ def test_sampling_loop_risk_prefers_jang_chat_defaults_over_generation_config():
     }
     assert risk["reasoning_default_mode"] == "chat"
     assert risk["review_notes"] == ["bundle disables top_k with a non-positive sentinel"]
+
+
+def test_production_family_audit_summary_surfaces_missing_and_review_rows():
+    results = {
+        "rows": [
+            {
+                "static": {
+                    "id": "present_ok",
+                    "exists": True,
+                    "issues": [],
+                    "sampling_loop_risk": {"status": "covered"},
+                }
+            },
+            {
+                "static": {
+                    "id": "missing_model",
+                    "exists": False,
+                    "issues": ["registry family mismatch"],
+                    "sampling_loop_risk": {"status": "review"},
+                }
+            },
+            {
+                "static": {
+                    "id": "present_review",
+                    "exists": True,
+                    "issues": ["needs live proof"],
+                    "sampling_loop_risk": {"status": "review"},
+                },
+                "live": {"status": "DEFERRED"},
+            },
+        ]
+    }
+
+    summary = production_family_audit_summary(results)
+
+    assert summary == {
+        "row_count": 3,
+        "missing_rows": ["missing_model"],
+        "issue_rows": ["missing_model", "present_review"],
+        "sampling_review_rows": ["missing_model", "present_review"],
+        "live_status_counts": {"DEFERRED": 1},
+    }
 
 
 def test_ling_rows_do_not_expect_reasoning():

@@ -3313,6 +3313,43 @@ def finalize_live_status(row: ModelRow, result: dict[str, Any]) -> None:
     result["status"] = "FAIL"
 
 
+def production_family_audit_summary(results: dict[str, Any]) -> dict[str, Any]:
+    rows = [row for row in results.get("rows", []) if isinstance(row, dict)]
+    missing_rows: list[str] = []
+    issue_rows: list[str] = []
+    sampling_review_rows: list[str] = []
+    live_status_counts: dict[str, int] = {}
+
+    for item in rows:
+        static = item.get("static") if isinstance(item.get("static"), dict) else {}
+        row_id = static.get("id")
+        if not isinstance(row_id, str):
+            continue
+        if static.get("exists") is False:
+            missing_rows.append(row_id)
+        if static.get("issues"):
+            issue_rows.append(row_id)
+        sampling_risk = (
+            static.get("sampling_loop_risk")
+            if isinstance(static.get("sampling_loop_risk"), dict)
+            else {}
+        )
+        if sampling_risk.get("status") == "review":
+            sampling_review_rows.append(row_id)
+        live = item.get("live") if isinstance(item.get("live"), dict) else None
+        if live is not None:
+            status = str(live.get("status") or "UNKNOWN")
+            live_status_counts[status] = live_status_counts.get(status, 0) + 1
+
+    return {
+        "row_count": len(rows),
+        "missing_rows": missing_rows,
+        "issue_rows": issue_rows,
+        "sampling_review_rows": sampling_review_rows,
+        "live_status_counts": live_status_counts,
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rows", help="Comma-separated row IDs. Default: all.")
@@ -3366,6 +3403,7 @@ def main() -> None:
         if args.live and args.keep_running:
             print("--keep-running set; stopping after first live row")
             break
+    results["summary"] = production_family_audit_summary(results)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
