@@ -163,6 +163,12 @@ def build_suite_artifact(
             "--out",
             "build/current-api-surface-contract-20260521.json",
         ],
+        "packaged_integrity_contracts": [
+            sys.executable,
+            "tests/cross_matrix/run_packaged_integrity_contract.py",
+            "--out",
+            "build/current-packaged-integrity-contract-20260523-post-budget-edge-refreshed.json",
+        ],
         "release_regression_manifest": [
             sys.executable,
             "tests/cross_matrix/run_release_regression_manifest.py",
@@ -187,12 +193,6 @@ def build_suite_artifact(
             "tests/cross_matrix/run_mcp_policy_contract.py",
             "--out",
             "build/current-mcp-policy-contract-20260521.json",
-        ],
-        "packaged_integrity_contracts": [
-            sys.executable,
-            "tests/cross_matrix/run_packaged_integrity_contract.py",
-            "--out",
-            "build/current-packaged-integrity-contract-20260521.json",
         ],
         "release_surface_contracts": [
             sys.executable,
