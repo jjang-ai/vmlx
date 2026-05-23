@@ -59,10 +59,16 @@ def init_distributed(
     os.environ["RANK"] = str(rank)
     os.environ["WORLD_SIZE"] = str(world_size)
 
-    group = mx.distributed.init(strict=True, backend="ring")
+    # Backend selection: "ring" (TCP, default), "jaccl" (Thunderbolt RDMA via
+    # libjaccl.dylib shipped inside the mlx wheel — Apple TN3205, macOS 26.2+),
+    # "mpi", "nccl", "any". For 2-node TP on Apple Silicon with Thunderbolt
+    # cables, set VMLX_BACKEND=jaccl + the standard JACCL env vars
+    # (MLX_RANK, MLX_IBV_DEVICES, MLX_JACCL_COORDINATOR).
+    backend = os.environ.get("VMLX_BACKEND", "ring")
+    group = mx.distributed.init(strict=True, backend=backend)
     logger.info(
-        "Distributed initialized: rank %d/%d",
-        group.rank(), group.size(),
+        "Distributed initialized: rank %d/%d  backend=%s",
+        group.rank(), group.size(), backend,
     )
     return group
 
