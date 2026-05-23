@@ -2037,6 +2037,14 @@ def text_quality_summary(text: str) -> dict[str, Any]:
     }
 
 
+def live_loop_probe_name(row: ModelRow) -> str | None:
+    if row.family == "bailing_hybrid":
+        return "ling_multilingual_loop_trigger"
+    if row.family == "minimax":
+        return "minimax_multilingual_loop_trigger"
+    return None
+
+
 def blocking_runtime_log_findings(row: ModelRow, log_text: str) -> list[dict[str, str]]:
     """Return runtime log findings that make a live row fail.
 
@@ -2841,9 +2849,15 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
                 },
             )
 
-    if row.family == "bailing_hybrid":
-        code, ling_resp, ling_elapsed = request_json(
-            "ling_multilingual_loop_trigger",
+    loop_probe = live_loop_probe_name(row)
+    if loop_probe:
+        artifact_name = (
+            "ling_multilingual_game_prompt"
+            if row.family == "bailing_hybrid"
+            else "minimax_multilingual_game_prompt"
+        )
+        code, loop_resp, loop_elapsed = request_json(
+            loop_probe,
             "POST",
             "/v1/chat/completions",
             {
@@ -2870,44 +2884,44 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
             },
             timeout=300,
         )
-        ling_content, ling_reasoning, ling_finish = extract_chat_text(ling_resp)
-        ling_full = f"{ling_reasoning}\n{ling_content}".strip()
-        ling_loop_score = simple_loop_score(ling_full)
-        ling_quality = text_quality_summary(ling_full)
-        ling_artifact = write_probe_output(
+        loop_content, loop_reasoning, loop_finish = extract_chat_text(loop_resp)
+        loop_full = f"{loop_reasoning}\n{loop_content}".strip()
+        loop_score = simple_loop_score(loop_full)
+        loop_quality = text_quality_summary(loop_full)
+        loop_artifact = write_probe_output(
             row.id,
-            "ling_multilingual_game_prompt",
+            artifact_name,
             {
                 "code": code,
-                "finish": ling_finish,
-                "content": ling_content,
-                "reasoning": ling_reasoning,
-                "loop_score": ling_loop_score,
-                "quality": ling_quality,
-                "raw_response": ling_resp,
-                "elapsed_sec": ling_elapsed,
+                "finish": loop_finish,
+                "content": loop_content,
+                "reasoning": loop_reasoning,
+                "loop_score": loop_score,
+                "quality": loop_quality,
+                "raw_response": loop_resp,
+                "elapsed_sec": loop_elapsed,
             },
         )
         check(
-            "ling_multilingual_loop_trigger",
+            loop_probe,
             code == 200
-            and len(ling_full) >= 120
-            and not has_duplicate_block(ling_full)
-            and ling_loop_score < 0.25
-            and ling_full.count("👀") < 8
-            and ling_quality["word_count"] >= 20
-            and ling_quality["digit_line_ratio"] < 0.35,
+            and len(loop_full) >= 120
+            and not has_duplicate_block(loop_full)
+            and loop_score < 0.25
+            and loop_full.count("👀") < 8
+            and loop_quality["word_count"] >= 20
+            and loop_quality["digit_line_ratio"] < 0.35,
             {
                 "code": code,
-                "finish": ling_finish,
-                "content_chars": len(ling_content),
-                "reasoning_chars": len(ling_reasoning),
-                "loop_score": ling_loop_score,
-                "quality": ling_quality,
-                "elapsed_sec": ling_elapsed,
-                "artifact": ling_artifact,
-                "head": ling_full[:300],
-                "tail": ling_full[-300:],
+                "finish": loop_finish,
+                "content_chars": len(loop_content),
+                "reasoning_chars": len(loop_reasoning),
+                "loop_score": loop_score,
+                "quality": loop_quality,
+                "elapsed_sec": loop_elapsed,
+                "artifact": loop_artifact,
+                "head": loop_full[:300],
+                "tail": loop_full[-300:],
             },
         )
 
