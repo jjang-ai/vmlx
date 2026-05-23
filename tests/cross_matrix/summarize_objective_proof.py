@@ -11,15 +11,25 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tests.cross_matrix.run_max_output_context_contract import (
+    SOURCE_HASH_FILES as MAX_OUTPUT_CONTEXT_SOURCE_HASH_FILES,
+)
 
 
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260521.json")
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260521.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260521.json"
+MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-20260521.json"
 DSV4_DEFAULT_CACHE_TOOL_LOOP_REL = "build/current-dsv4-default-cache-tool-loop/result.json"
 DSV4_QUALITY_CLEARANCE_CHECKS = (
     "identifier_integrity",
@@ -65,6 +75,27 @@ PANEL_SETTINGS_CONTRACT_CHECKS = (
     "non_dsv4_cache_toggles_preserved",
     "i18n_max_output_context_copy",
     "panel_typecheck",
+)
+MAX_OUTPUT_CONTEXT_CONTRACT_CHECKS = (
+    "server_default_output_cap_uses_max_tokens",
+    "startup_output_cap_is_default_not_request_ceiling",
+    "request_output_caps_can_go_below_or_above_startup_default",
+    "request_output_caps_do_not_mutate_server_default",
+    "legacy_completions_output_cap_overrides_server_default",
+    "chat_max_tokens_overrides_server_default_per_request",
+    "responses_max_output_tokens_overrides_server_default_per_request",
+    "anthropic_messages_preserves_bundle_and_explicit_output_caps",
+    "ollama_num_predict_maps_only_positive_output_caps",
+    "prompt_context_caps_do_not_rewrite_output_cap",
+    "panel_server_default_output_maps_to_max_tokens",
+    "panel_max_context_maps_to_max_prompt_tokens",
+    "stale_32768_session_output_caps_are_migrated",
+    "chat_output_cap_remains_per_chat_override",
+    "request_builders_omit_auto_output_cap",
+    "new_chat_output_caps_are_not_inherited_or_made_sticky",
+    "all_family_max_token_precedence_stays_uniform",
+    "wake_reload_and_cli_preserve_explicitness",
+    "all_required_max_output_context_markers_present",
 )
 PANEL_SETTINGS_SOURCE_HASH_FILES = (
     "panel/src/main/sessions.ts",
@@ -300,6 +331,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     quality_clearance = _load(root, DSV4_QUALITY_CLEARANCE_REL)
     api_cache_contract = _load(root, API_CACHE_CONTRACT_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
+    max_output_context_contract = _load(root, MAX_OUTPUT_CONTEXT_CONTRACT_REL)
 
     requirements: list[dict[str, Any]] = []
     cache_checks = cache.get("checks") or {}
@@ -521,23 +553,41 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         ["build/v1546-dsv4-app-tool-cap-nocache-proof-20260521090706/summary.json"],
         details=cap_checks,
     )
+    max_output_context_ok, max_output_context_checks = _contract_checks(
+        max_output_context_contract, MAX_OUTPUT_CONTEXT_CONTRACT_CHECKS
+    )
+    max_output_context_hash_ok, max_output_context_hash_details = _source_hash_status(
+        root,
+        max_output_context_contract,
+        MAX_OUTPUT_CONTEXT_SOURCE_HASH_FILES,
+    )
+    ui_max_output_context_ok = (
+        all(
+            ui_visible.get(key)
+            for key in (
+                "server_default_max_output_visible",
+                "max_context_visible",
+                "generation_defaults_visible",
+            )
+        )
+        and ui_cli.get("has_max_tokens_flag_after_reset") is False
+        and ui_cli.get("has_max_prompt_tokens_flag_after_reset") is False
+    )
     _add(
         requirements,
         "Server default max output and max context are distinct and map to correct CLI flags",
         _status(
-            all(
-                ui_visible.get(key)
-                for key in (
-                    "server_default_max_output_visible",
-                    "max_context_visible",
-                    "generation_defaults_visible",
-                )
-            )
-            and ui_cli.get("has_max_tokens_flag_after_reset") is False
-            and ui_cli.get("has_max_prompt_tokens_flag_after_reset") is False
+            ui_max_output_context_ok
+            and max_output_context_ok
+            and max_output_context_hash_ok
         ),
-        ["build/dev-ui-smoke-20260521/summary.json"],
+        [
+            "build/dev-ui-smoke-20260521/summary.json",
+            MAX_OUTPUT_CONTEXT_CONTRACT_REL,
+        ],
         details={
+            "contract_status": max_output_context_contract.get("status"),
+            "contract_checks": max_output_context_checks,
             "visible_assertions": {
                 key: ui_visible.get(key)
                 for key in (
@@ -553,6 +603,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                     "has_max_prompt_tokens_flag_after_reset",
                 )
             },
+            **max_output_context_hash_details,
         },
     )
     panel_settings_ok, panel_settings_checks = _contract_checks(

@@ -321,6 +321,29 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
             "source_hashes": panel_source_hashes,
         },
     )
+    from tests.cross_matrix.summarize_objective_proof import (
+        MAX_OUTPUT_CONTEXT_CONTRACT_CHECKS,
+        MAX_OUTPUT_CONTEXT_SOURCE_HASH_FILES,
+    )
+
+    for rel in MAX_OUTPUT_CONTEXT_SOURCE_HASH_FILES:
+        if not (tmp_path / rel).exists():
+            _write_json(tmp_path, rel, {"fixture": rel})
+    _write_json(
+        tmp_path,
+        "build/current-max-output-context-contract-20260521.json",
+        {
+            "status": "pass",
+            "checks": {
+                key: True
+                for key in MAX_OUTPUT_CONTEXT_CONTRACT_CHECKS
+            },
+            "source_hashes": {
+                rel: _sha256(tmp_path / rel)
+                for rel in MAX_OUTPUT_CONTEXT_SOURCE_HASH_FILES
+            },
+        },
+    )
 
 
 def test_objective_proof_digest_keeps_dsv4_long_quality_open(tmp_path):
@@ -488,6 +511,38 @@ def test_objective_proof_digest_accepts_panel_settings_contract_artifact(tmp_pat
     assert row["status"] == "pass"
     assert row["details"]["contract_checks"]["dsv4_explicit_prefix_off_disables_native_flags"] is True
     assert row["details"]["contract_checks"]["max_output_context_cli_split"] is True
+    assert row["details"]["missing_evidence"] == []
+    assert row["details"]["stale_source_hashes"] == []
+
+
+def test_objective_proof_digest_requires_max_output_context_contract_artifact(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    (tmp_path / "build/current-max-output-context-contract-20260521.json").unlink()
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Server default max output and max context are distinct and map to correct CLI flags"]
+    assert row["status"] == "open"
+    assert row["details"]["missing_evidence"] == [
+        "build/current-max-output-context-contract-20260521.json"
+    ]
+
+
+def test_objective_proof_digest_accepts_max_output_context_contract_artifact(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Server default max output and max context are distinct and map to correct CLI flags"]
+    assert row["status"] == "pass"
+    assert row["details"]["contract_checks"]["request_output_caps_do_not_mutate_server_default"] is True
+    assert row["details"]["contract_checks"]["new_chat_output_caps_are_not_inherited_or_made_sticky"] is True
     assert row["details"]["missing_evidence"] == []
     assert row["details"]["stale_source_hashes"] == []
 
