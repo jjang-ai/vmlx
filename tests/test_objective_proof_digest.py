@@ -736,6 +736,36 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path,
+        "build/current-qwen-forward-path-ab-1024-vlm-loader-20260523.json",
+        {
+            "comparison": [
+                {
+                    "prompt_tokens": 1024,
+                    "text_pp_tok_s": 940.67,
+                    "vlm_pp_tok_s": 301.68,
+                    "text_over_vlm": 3.11,
+                }
+            ],
+            "generation_defaults_policy": "raw-forward-only; no sampler or generation kwargs are accepted",
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-qwen-forward-path-ab-4096-vlm-loader-20260523.json",
+        {
+            "comparison": [
+                {
+                    "prompt_tokens": 4096,
+                    "text_pp_tok_s": 930.43,
+                    "vlm_pp_tok_s": 296.75,
+                    "text_over_vlm": 3.13,
+                }
+            ],
+            "generation_defaults_policy": "raw-forward-only; no sampler or generation kwargs are accepted",
+        },
+    )
+    _write_json(
+        tmp_path,
         "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json",
         {
             "speedup_vs_baseline": 1.83,
@@ -1743,6 +1773,36 @@ def test_objective_proof_digest_surfaces_qwen_vlm_route_ab_trials(tmp_path):
             ]
         },
     )
+    _write_json(
+        tmp_path,
+        "build/current-qwen-forward-path-ab-1024-vlm-loader-20260523.json",
+        {
+            "comparison": [
+                {
+                    "prompt_tokens": 1024,
+                    "text_pp_tok_s": 940.6765926229684,
+                    "vlm_pp_tok_s": 301.6848317127802,
+                    "text_over_vlm": 3.118077190962461,
+                }
+            ],
+            "generation_defaults_policy": "raw-forward-only; no sampler or generation kwargs are accepted",
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-qwen-forward-path-ab-4096-vlm-loader-20260523.json",
+        {
+            "comparison": [
+                {
+                    "prompt_tokens": 4096,
+                    "text_pp_tok_s": 930.4369734441283,
+                    "vlm_pp_tok_s": 296.7579107615906,
+                    "text_over_vlm": 3.1353400859855185,
+                }
+            ],
+            "generation_defaults_policy": "raw-forward-only; no sampler or generation kwargs are accepted",
+        },
+    )
 
     digest = build_digest(tmp_path)
     rows = {item["requirement"]: item for item in digest["requirements"]}
@@ -1751,6 +1811,7 @@ def test_objective_proof_digest_surfaces_qwen_vlm_route_ab_trials(tmp_path):
     prefix_split = row["details"]["native_mtp_hybrid_long_prefix_split_trial"]
     kvnone = row["details"]["native_mtp_kvnone_trial"]
     route_trace = row["details"]["native_mtp_vlm_route_trace"]
+    forward_ab = row["details"]["raw_forward_path_ab"]
     assert row["status"] == "open"
     assert prefix_split["clears_prompt_processing_floor"] is False
     assert prefix_split["min_pp_wall_tok_s"] == 284.58
@@ -1760,6 +1821,10 @@ def test_objective_proof_digest_surfaces_qwen_vlm_route_ab_trials(tmp_path):
     assert route_trace["diagnosis"]["uses_vlm_language_copy"] is True
     assert route_trace["diagnosis"]["force_text_rope_1d"] is True
     assert route_trace["diagnosis"]["supports_return_logits"] is True
+    assert forward_ab["raw_forward_only"] is True
+    assert forward_ab["min_text_over_vlm"] == 3.118077190962461
+    assert forward_ab["comparisons"][0]["prompt_tokens"] == 1024
+    assert forward_ab["comparisons"][1]["prompt_tokens"] == 4096
 
 
 def test_objective_proof_digest_accepts_qwen_native_mtp_decode_ab_when_equivalent_and_faster(tmp_path):
